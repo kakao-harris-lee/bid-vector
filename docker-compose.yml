@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: bid_vector_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: bid_vector_db
+      MYSQL_USER: biduser
+      MYSQL_PASSWORD: bidpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: bid_vector_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: bid_vector_api
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql+pymysql://biduser:bidpassword@db:3306/bid_vector_db
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  mysql_data:
+  redis_data:
