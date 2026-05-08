@@ -1,8 +1,9 @@
-.PHONY: help install dev test lint format clean docker-build docker-up docker-down
+.PHONY: help install install-browser dev test lint format clean docker-build docker-up docker-down
 
 help:
 	@echo "Available commands:"
 	@echo "  make install      - Install dependencies"
+	@echo "  make install-browser - Install Chromium for live crawling"
 	@echo "  make dev          - Run development server"
 	@echo "  make test         - Run tests"
 	@echo "  make lint         - Run linting checks"
@@ -14,6 +15,9 @@ help:
 
 install:
 	pip install -r requirements.txt
+
+install-browser:
+	python -m playwright install chromium
 
 dev:
 	python run.py

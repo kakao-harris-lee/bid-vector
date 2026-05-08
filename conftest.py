@@ -1,7 +1,12 @@
 """Test configuration and fixtures"""
+import os
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("ENVIRONMENT", "test")
 
 from app.core.database import Base
 from app.core.config import settings

@@ -1,21 +1,23 @@
 """Analytics routes"""
-from typing import List
-from datetime import datetime, timedelta
+from datetime import timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.single_user import ensure_operator_account
+from app.core.time import utc_now
 from app.models.models import Analytics, Bid, Project
-from app.schemas.schemas import AnalyticsEventRequest
+from app.schemas.schemas import AnalyticsEventRequest, AnalyticsSummaryResponse, OperatorStatsResponse
 
 router = APIRouter()
 
 
 @router.post("/event")
-def log_event(event: AnalyticsEventRequest, user_id: int = None, db: Session = Depends(get_db)):
-    """Log an analytics event"""
+def log_event(event: AnalyticsEventRequest, db: Session = Depends(get_db)):
+    """Log an analytics event for the singleton operator."""
+    operator = ensure_operator_account(db)
     analytics = Analytics(
-        user_id=user_id,
+        user_id=operator.id,
         event_type=event.event_type,
         event_data=str(event.event_data),
     )
@@ -25,48 +27,61 @@ def log_event(event: AnalyticsEventRequest, user_id: int = None, db: Session = D
     return {"status": "logged"}
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=AnalyticsSummaryResponse)
 def get_analytics_summary(
     days: int = Query(7, ge=1, le=90),
     db: Session = Depends(get_db)
 ):
-    """Get analytics summary for specified period"""
-    date_from = datetime.utcnow() - timedelta(days=days)
+    """Get repository-wide analytics summary for the singleton workflow."""
+    operator = ensure_operator_account(db)
+    date_from = utc_now() - timedelta(days=days)
 
-    # Count events
-    total_bids = db.query(Bid).filter(Bid.created_at >= date_from).count()
+    total_bids = db.query(Bid).filter(Bid.user_id == operator.id, Bid.created_at >= date_from).count()
     total_projects = db.query(Project).filter(Project.created_at >= date_from).count()
-    total_events = db.query(Analytics).filter(Analytics.timestamp >= date_from).count()
+    total_events = db.query(Analytics).filter(Analytics.user_id == operator.id, Analytics.timestamp >= date_from).count()
 
     return {
+        "operator_id": operator.id,
         "period_days": days,
         "total_bids": total_bids,
         "total_projects": total_projects,
         "total_events": total_events,
+        "mode": "single_operator",
     }
 
 
-@router.get("/user-stats/{user_id}")
-def get_user_stats(user_id: int, days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db)):
-    """Get user-specific statistics"""
-    date_from = datetime.utcnow() - timedelta(days=days)
+def _build_operator_stats(operator_id: int, days: int, db: Session) -> dict:
+    date_from = utc_now() - timedelta(days=days)
 
-    # Count user activities
-    user_bids = db.query(Bid).filter(
-        (Bid.user_id == user_id) & (Bid.created_at >= date_from)
+    total_bids = db.query(Bid).filter(
+        (Bid.user_id == operator_id) & (Bid.created_at >= date_from)
     ).count()
 
-    user_events = db.query(Analytics).filter(
-        (Analytics.user_id == user_id) & (Analytics.timestamp >= date_from)
+    total_events = db.query(Analytics).filter(
+        (Analytics.user_id == operator_id) & (Analytics.timestamp >= date_from)
     ).count()
-
-    # Calculate average bid amount
-    avg_bid = db.query(Bid).filter(Bid.user_id == user_id).count()
 
     return {
-        "user_id": user_id,
+        "operator_id": operator_id,
         "period_days": days,
-        "total_bids": user_bids,
-        "total_events": user_events,
-        "bids_count": avg_bid,
+        "total_bids": total_bids,
+        "total_events": total_events,
+        "bids_count": db.query(Bid).filter(Bid.user_id == operator_id).count(),
+        "mode": "single_operator",
     }
+
+
+@router.get("/operator-stats", response_model=OperatorStatsResponse)
+def get_operator_stats(days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db)):
+    """Get singleton operator statistics."""
+    operator = ensure_operator_account(db)
+    return _build_operator_stats(operator.id, days, db)
+
+
+@router.get("/user-stats/{user_id}", response_model=OperatorStatsResponse, deprecated=True)
+def get_user_stats(user_id: int, days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db)):
+    """Legacy compatibility alias for the new single-operator stats view."""
+    operator = ensure_operator_account(db)
+    payload = _build_operator_stats(operator.id, days, db)
+    payload["requested_user_id"] = user_id
+    return payload

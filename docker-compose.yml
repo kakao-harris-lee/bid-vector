@@ -1,52 +1,36 @@
-version: '3.8'
-
 services:
   db:
-    image: mysql:8.0
+    image: pgvector/pgvector:pg16
     container_name: bid_vector_db
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: bid_vector_db
-      MYSQL_USER: biduser
-      MYSQL_PASSWORD: bidpassword
+      POSTGRES_DB: bid_vector_db
+      POSTGRES_USER: biduser
+      POSTGRES_PASSWORD: bidpassword
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    container_name: bid_vector_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "pg_isready -U biduser -d bid_vector_db"]
       timeout: 5s
       retries: 10
 
   api:
     build: .
     container_name: bid_vector_api
+    init: true
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
-      DATABASE_URL: mysql+pymysql://biduser:bidpassword@db:3306/bid_vector_db
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db
     ports:
       - "8000:8000"
+    shm_size: "1gb"
     volumes:
       - .:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
-  mysql_data:
-  redis_data:
+  postgres_data:

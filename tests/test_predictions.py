@@ -2,6 +2,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.models.models import PricePrediction, User
+
 
 def test_price_prediction(client):
     """Test price prediction endpoint"""
@@ -100,3 +102,38 @@ def test_document_analysis(client):
     assert "complexity_score" in data
     assert "estimated_effort" in data
     assert isinstance(data["key_requirements"], list)
+
+
+def test_price_prediction_bootstraps_single_operator_account(client, test_db):
+    """Prediction persistence should auto-bind to the singleton operator account."""
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Prediction Bootstrap Project",
+            "description": "Operator persistence check",
+            "requirements": "Need prediction persistence",
+            "budget_estimate": 20000.0,
+            "category": "software",
+        }
+    )
+
+    project_id = project_response.json()["id"]
+
+    response = client.post(
+        "/api/v1/predictions/price",
+        json={
+            "project_id": project_id,
+            "budget_estimate": 20000.0,
+            "category": "software",
+            "description": "Prediction bootstrap project",
+        }
+    )
+
+    assert response.status_code == 200
+
+    users = test_db.query(User).all()
+    predictions = test_db.query(PricePrediction).all()
+
+    assert len(users) == 1
+    assert len(predictions) == 1
+    assert predictions[0].user_id == users[0].id

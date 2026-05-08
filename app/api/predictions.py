@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.single_user import ensure_operator_account
 from app.models.models import Project, PricePrediction
 from app.schemas.schemas import (
     PricePredictionRequest,
@@ -22,11 +23,9 @@ router = APIRouter()
 @router.post("/price", response_model=PricePredictionResponse)
 def predict_project_price(
     request: PricePredictionRequest,
-    user_id: int,
     db: Session = Depends(get_db)
 ):
-    """Predict project price using AI model"""
-    # Verify project exists
+    """Predict project price for the singleton operator."""
     project = db.query(Project).filter(Project.id == request.project_id).first()
     if not project:
         raise HTTPException(
@@ -34,16 +33,15 @@ def predict_project_price(
             detail="Project not found"
         )
 
-    # Get prediction
     prediction = predict_price(
         budget=request.budget_estimate,
         category=request.category,
         description=request.description,
     )
 
-    # Save prediction to database
+    operator = ensure_operator_account(db)
     db_prediction = PricePrediction(
-        user_id=user_id,
+        user_id=operator.id,
         project_id=request.project_id,
         predicted_price=prediction["predicted_price"],
         price_range_min=prediction["price_range_min"],
@@ -60,11 +58,9 @@ def predict_project_price(
 @router.post("/bid-recommendation", response_model=BidRecommendationResponse)
 def get_bid_recommendation_endpoint(
     request: BidRecommendationRequest,
-    user_id: int,
     db: Session = Depends(get_db)
 ):
-    """Get AI-powered bid recommendation"""
-    # Verify project exists
+    """Get AI-powered bid recommendation for the singleton operator."""
     project = db.query(Project).filter(Project.id == request.project_id).first()
     if not project:
         raise HTTPException(
@@ -72,7 +68,6 @@ def get_bid_recommendation_endpoint(
             detail="Project not found"
         )
 
-    # Get recommendation
     recommendation = get_bid_recommendation(
         project_data={
             "budget": project.budget_estimate,
@@ -88,11 +83,9 @@ def get_bid_recommendation_endpoint(
 @router.post("/analyze-document", response_model=DocumentAnalysisResponse)
 def analyze_project_document(
     request: DocumentAnalysisRequest,
-    user_id: int,
     db: Session = Depends(get_db)
 ):
-    """Analyze project document and extract requirements"""
-    # Verify project exists
+    """Analyze a project document within the singleton operator workflow."""
     project = db.query(Project).filter(Project.id == request.project_id).first()
     if not project:
         raise HTTPException(
@@ -100,7 +93,6 @@ def analyze_project_document(
             detail="Project not found"
         )
 
-    # Analyze document
     analysis = analyze_document(
         content=request.document_content,
         document_type=request.document_type,

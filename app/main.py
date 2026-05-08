@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api import routes
+from app.services.project_similarity import ensure_project_vector_schema
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up application...")
     Base.metadata.create_all(bind=engine)
+    ensure_project_vector_schema(engine)
 
     yield
 
