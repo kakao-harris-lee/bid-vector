@@ -82,6 +82,180 @@ class OperatorOverviewResponse(BaseModel):
     profile_configured: bool
 
 
+class OperatorStrategyUpdate(BaseModel):
+    focus_categories: Optional[List[str]] = None
+    focus_regions: Optional[List[str]] = None
+    exclude_regions: Optional[List[str]] = None
+    required_keywords: Optional[List[str]] = None
+    exclude_keywords: Optional[List[str]] = None
+    min_budget_estimate: Optional[float] = Field(default=None, ge=0.0)
+    max_budget_estimate: Optional[float] = Field(default=None, ge=0.0)
+    minimum_match_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    minimum_probability_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    notify_only_high_priority: Optional[bool] = None
+    max_recommended_candidates: Optional[int] = Field(default=None, ge=1, le=100)
+
+
+class OperatorStrategyResponse(BaseModel):
+    operator_id: int
+    focus_categories: List[str] = Field(default_factory=list)
+    focus_regions: List[str] = Field(default_factory=list)
+    exclude_regions: List[str] = Field(default_factory=list)
+    required_keywords: List[str] = Field(default_factory=list)
+    exclude_keywords: List[str] = Field(default_factory=list)
+    min_budget_estimate: float
+    max_budget_estimate: float
+    minimum_match_score: float = Field(ge=0.0, le=1.0)
+    minimum_probability_score: float = Field(ge=0.0, le=1.0)
+    notify_only_high_priority: bool
+    max_recommended_candidates: int = Field(ge=1, le=100)
+    strategy_configured: bool
+
+
+class OperatorStrategyCandidateItem(BaseModel):
+    project_id: int
+    title: str
+    category: Optional[str] = None
+    budget_estimate: float
+    deadline: Optional[datetime] = None
+    matched_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(ge=0.0, le=1.0)
+    priority_score: float = Field(ge=0.0, le=1.0)
+    action: Literal["bid_now", "review", "skip"]
+    recommended_amount: float
+    analysis_summary: str
+    strategy_reasons: List[str] = Field(default_factory=list)
+
+
+class OperatorStrategyCandidatesResponse(BaseModel):
+    operator_id: int
+    evaluated_project_count: int = Field(ge=0)
+    returned_candidate_count: int = Field(ge=0)
+    high_priority_only: bool
+    candidates: List[OperatorStrategyCandidateItem] = Field(default_factory=list)
+
+
+class OperatorStrategyMonitorRequest(BaseModel):
+    limit: Optional[int] = Field(default=None, ge=1, le=100)
+    high_priority_only: Optional[bool] = None
+    max_active_bids: int = Field(default=3, ge=1)
+    current_workload_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    same_category_only: bool = True
+    similar_limit: int = Field(default=3, ge=1, le=10)
+    min_similarity: float = Field(default=0.15, ge=0.0, le=1.0)
+
+
+class OperatorStrategyMonitorResultItem(BaseModel):
+    project_id: int
+    title: str
+    decision_record_id: int
+    notification_id: Optional[int] = None
+    action: Literal["bid_now", "review", "skip"]
+    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    priority_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(ge=0.0, le=1.0)
+    matched_score: float = Field(ge=0.0, le=1.0)
+    recommended_amount: float
+    analysis_summary: str
+    is_new_candidate: bool = False
+    notification_created: bool = False
+    strategy_reasons: List[str] = Field(default_factory=list)
+
+
+class OperatorStrategyMonitorResponse(BaseModel):
+    monitor_run_id: Optional[int] = None
+    task_id: Optional[str] = None
+    trigger_source: Optional[str] = None
+    previous_run_id: Optional[int] = None
+    operator_id: int
+    evaluated_project_count: int = Field(ge=0)
+    selected_candidate_count: int = Field(ge=0)
+    persisted_candidate_count: int = Field(ge=0)
+    notification_count: int = Field(ge=0)
+    new_candidate_count: int = Field(ge=0)
+    continuing_candidate_count: int = Field(ge=0)
+    dropped_candidate_count: int = Field(ge=0)
+    high_priority_only: bool
+    limit_applied: int = Field(ge=1, le=100)
+    new_candidate_project_ids: List[int] = Field(default_factory=list)
+    continuing_candidate_project_ids: List[int] = Field(default_factory=list)
+    dropped_candidate_project_ids: List[int] = Field(default_factory=list)
+    results: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
+
+
+class OperatorStrategyMonitorTaskResponse(BaseModel):
+    task_id: str
+    monitor_run_id: int
+    task_name: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    detail: str
+    poll_url: str
+
+
+class OperatorStrategyMonitorTaskStatusResponse(BaseModel):
+    task_id: str
+    monitor_run_id: Optional[int] = None
+    task_name: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    raw_status: str
+    ready: bool
+    successful: bool
+    detail: str
+    error: Optional[str] = None
+    result: Optional[OperatorStrategyMonitorResponse] = None
+
+
+class OperatorStrategyRunResponse(BaseModel):
+    id: int
+    operator_id: int
+    task_id: Optional[str] = None
+    trigger_source: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    high_priority_only: bool
+    limit_applied: int = Field(ge=1, le=100)
+    evaluated_project_count: int = Field(ge=0)
+    selected_candidate_count: int = Field(ge=0)
+    persisted_candidate_count: int = Field(ge=0)
+    notification_count: int = Field(ge=0)
+    error_message: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class OperatorStrategyRunListResponse(BaseModel):
+    operator_id: int
+    result_count: int = Field(ge=0)
+    runs: List[OperatorStrategyRunResponse] = Field(default_factory=list)
+
+
+class OperatorStrategyRunDetailResponse(BaseModel):
+    id: int
+    operator_id: int
+    task_id: Optional[str] = None
+    trigger_source: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    high_priority_only: bool
+    limit_applied: int = Field(ge=1, le=100)
+    evaluated_project_count: int = Field(ge=0)
+    selected_candidate_count: int = Field(ge=0)
+    persisted_candidate_count: int = Field(ge=0)
+    notification_count: int = Field(ge=0)
+    error_message: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    previous_run_id: Optional[int] = None
+    new_candidate_count: int = Field(ge=0)
+    continuing_candidate_count: int = Field(ge=0)
+    dropped_candidate_count: int = Field(ge=0)
+    request_payload: dict = Field(default_factory=dict)
+    result: Optional[OperatorStrategyMonitorResponse] = None
+    new_candidates: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
+    continuing_candidates: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
+    dropped_candidates: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
+
+
 # Authentication Schemas
 class TokenResponse(BaseModel):
     access_token: str
@@ -98,6 +272,10 @@ class ProjectBase(BaseModel):
     requirements: str
     budget_estimate: float
     category: str
+    notice_number: Optional[str] = None
+    source_url: Optional[str] = None
+    issuing_agency: Optional[str] = None
+    demand_agency: Optional[str] = None
 
 
 class ProjectCreate(ProjectBase):
@@ -214,6 +392,29 @@ class PricePredictionRequest(BaseModel):
     budget_estimate: float
     category: str
     description: str
+    agency_name: Optional[str] = None
+
+
+class PricePredictionScenario(BaseModel):
+    label: Literal["conservative", "base", "aggressive"]
+    bid_rate: float
+    predicted_price: float
+    confidence_weight: float = Field(ge=0.0, le=1.0)
+
+
+class PricePredictionReservePattern(BaseModel):
+    sample_count: int = Field(ge=0)
+    average_reserve_span_rate: float = Field(ge=0.0)
+    average_selected_number: float = Field(ge=0.0)
+    frequent_selected_numbers: List[int] = Field(default_factory=list)
+
+
+class PricePredictionFeedbackCalibration(BaseModel):
+    sample_count: int = Field(ge=0)
+    agency_match_sample_count: int = Field(ge=0)
+    average_signed_error_rate: float
+    average_absolute_error_rate: float = Field(ge=0.0)
+    applied_adjustment_rate: float
 
 
 class PricePredictionResponse(BaseModel):
@@ -222,6 +423,14 @@ class PricePredictionResponse(BaseModel):
     price_range_max: float
     confidence_score: float
     model_version: str
+    pricing_mode: Literal["historical_blend", "heuristic"] = "heuristic"
+    historical_sample_size: int = Field(default=0, ge=0)
+    agency_match_sample_size: int = Field(default=0, ge=0)
+    predicted_bid_rate: float = 0.0
+    bid_rate_candidates: List[PricePredictionScenario] = Field(default_factory=list)
+    reserve_price_context: Optional[PricePredictionReservePattern] = None
+    feedback_calibration: Optional[PricePredictionFeedbackCalibration] = None
+    explanation: str = ""
 
 
 # Bid Recommendation Schemas
@@ -285,6 +494,41 @@ class OperatorStatsResponse(BaseModel):
     bids_count: int
     requested_user_id: Optional[int] = None
     mode: Literal["single_operator"] = "single_operator"
+
+
+class PredictionFeedbackItem(BaseModel):
+    project_id: int
+    project_title: str
+    tender_result_id: int
+    result_status: str
+    announced_at: Optional[datetime] = None
+    winning_amount: float
+    winning_rate: float
+    latest_prediction_id: Optional[int] = None
+    predicted_price: Optional[float] = None
+    prediction_delta_amount: Optional[float] = None
+    prediction_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    latest_decision_record_id: Optional[int] = None
+    recommended_amount: Optional[float] = None
+    recommendation_delta_amount: Optional[float] = None
+    recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    recommendation_improved_vs_prediction: Optional[bool] = None
+
+
+class PredictionFeedbackResponse(BaseModel):
+    operator_id: int
+    period_days: int
+    result_count: int = Field(ge=0)
+    prediction_sample_count: int = Field(ge=0)
+    recommendation_sample_count: int = Field(ge=0)
+    average_prediction_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    prediction_within_1_percent_count: int = Field(ge=0)
+    prediction_within_3_percent_count: int = Field(ge=0)
+    recommendation_within_1_percent_count: int = Field(ge=0)
+    recommendation_within_3_percent_count: int = Field(ge=0)
+    recommendation_better_than_prediction_count: int = Field(ge=0)
+    items: List[PredictionFeedbackItem] = Field(default_factory=list)
 
 
 class LegacyAdminStatsResponse(BaseModel):
@@ -366,6 +610,22 @@ class ClassificationResponse(BaseModel):
     reasons: List[str]
 
 
+class OpportunityAnalysisRequest(BaseModel):
+    project_id: int
+    agency_name: Optional[str] = None
+    current_active_bids: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Optional what-if override. When omitted, the service counts active bid decisions from the DB.",
+    )
+    max_active_bids: int = Field(default=3, ge=1)
+    current_workload_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    same_category_only: bool = True
+    similar_limit: int = Field(default=3, ge=1, le=10)
+    min_similarity: float = Field(default=0.15, ge=0.0, le=1.0)
+    user_historical_data: Optional[dict] = None
+
+
 class BidDecisionRequest(BaseModel):
     project_id: int
     recommended_amount: float
@@ -385,6 +645,38 @@ class BidDecisionResponse(BaseModel):
     recommended_amount: float
     probability_score: float
     reasoning: str
+
+
+class OpportunityMarketInsights(BaseModel):
+    average_bid: float
+    median_bid: float
+    std_dev: float
+    min_bid: float
+    max_bid: float
+    competitiveness_score: float = Field(ge=0.0, le=1.0)
+
+
+class OpportunityAnalysisResponse(BaseModel):
+    project_id: int
+    project_title: str
+    operator_id: int
+    matched: bool
+    matched_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(ge=0.0, le=1.0)
+    recommended_amount: float
+    deadline_hours_remaining: Optional[int] = None
+    current_active_bids: int = Field(ge=0)
+    max_active_bids: int = Field(ge=1)
+    current_workload_score: float = Field(ge=0.0, le=1.0)
+    analysis_summary: str
+    strengths: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
+    market_insights: OpportunityMarketInsights
+    classification: ClassificationResponse
+    price_prediction: PricePredictionResponse
+    bid_recommendation: BidRecommendationResponse
+    similar_projects: ProjectSimilaritySearchResponse
+    decision: BidDecisionResponse
 
 
 class BidDecisionSaveRequest(BidDecisionRequest):

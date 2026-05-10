@@ -7,6 +7,7 @@ import json
 import math
 from typing import Any, Iterable
 
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -37,6 +38,31 @@ def ensure_project_vector_schema(engine) -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.exec_driver_sql(statement)
+
+
+def ensure_project_metadata_schema(engine) -> None:
+    """Ensure project metadata columns used for crawl linkage exist in already-created databases."""
+    inspector = inspect(engine)
+    if "projects" not in set(inspector.get_table_names()):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("projects")}
+    column_statements = {
+        "notice_number": "VARCHAR(100)",
+        "source_url": "TEXT",
+        "issuing_agency": "VARCHAR(255)",
+        "demand_agency": "VARCHAR(255)",
+    }
+
+    with engine.begin() as connection:
+        for column_name, ddl in column_statements.items():
+            if column_name not in existing_columns:
+                connection.exec_driver_sql(f"ALTER TABLE projects ADD COLUMN {column_name} {ddl}")
+
+        if engine.dialect.name in {"sqlite", "postgresql"}:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_projects_notice_number ON projects (notice_number)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_projects_issuing_agency ON projects (issuing_agency)")
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_projects_demand_agency ON projects (demand_agency)")
 
 
 class ProjectSimilarityService:
@@ -177,6 +203,13 @@ class ProjectSimilarityService:
     def build_semantic_text(self, project: Project) -> str:
         """Build a rich semantic description used for embeddings and retrieval."""
         parts = [self._classifier._build_project_semantic_text(project)]
+
+        if project.notice_number:
+            parts.append(f"공고번호 {project.notice_number}")
+        if project.issuing_agency:
+            parts.append(f"공고기관 {project.issuing_agency}")
+        if project.demand_agency:
+            parts.append(f"수요기관 {project.demand_agency}")
 
         if project.budget_estimate:
             parts.append(f"예산 {float(project.budget_estimate):.0f}")

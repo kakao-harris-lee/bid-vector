@@ -35,6 +35,10 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         budget_min=project.budget_min,
         budget_max=project.budget_max,
         category=project.category,
+        notice_number=project.notice_number,
+        source_url=project.source_url,
+        issuing_agency=project.issuing_agency,
+        demand_agency=project.demand_agency,
         deadline=project.deadline,
     )
     db.add(db_project)

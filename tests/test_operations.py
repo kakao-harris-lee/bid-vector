@@ -1,9 +1,10 @@
 """Tests for operations skeleton endpoints."""
 
+from datetime import UTC, datetime, timedelta
 import json
 
 from app.core.config import settings
-from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, HistoricalData, Notification, Project, TenderResult, User
+from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, HistoricalData, Notification, PricePrediction, Project, TenderResult, User
 from app.schemas.schemas import CrawlRequest
 from app.services.classifier import NoticeClassifierService
 from app.services.koneps.collector import KonepsCollectorService
@@ -357,6 +358,324 @@ def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):
     assert tender_result.winning_amount == 119000000.0
     assert tender_result.winning_rate == 95.2
     assert tender_result.result_status == "개찰완료"
+
+def test_crawl_endpoint_creates_project_and_links_history_feedback_records(client, test_db, monkeypatch):
+    """Crawled notices should auto-create a project and bind history/tender feedback rows to it."""
+    fake_response = {
+        "job_status": "completed",
+        "source": "koneps",
+        "collected_count": 1,
+        "items": [
+            {
+                "notice_number": "R26BK01510410",
+                "title": "프로젝트 자동 연결 AI 통합 구축",
+                "base_amount": 125000000.0,
+                "estimated_amount": 121500000.0,
+                "closing_at": "2026-05-13T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510410",
+                "metadata": {
+                    "issuing_agency": "조달청",
+                    "opening_status": "개찰완료",
+                    "opening_demand_agency": "서울특별시교육청",
+                    "contract_method": "제한경쟁",
+                    "opening_announced_at": "2026-05-13T18:05:00",
+                    "winning_company": "주식회사 연결 테스트",
+                    "winning_amount": 119500000.0,
+                    "winning_rate": 95.6,
+                },
+            }
+        ],
+        "metadata": {
+            "resolved_mode": "live",
+        },
+    }
+
+    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+    )
+
+    assert response.status_code == 200
+
+    project = test_db.query(Project).one()
+    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510410").one()
+    tender_result = test_db.query(TenderResult).one()
+    crawl_job = test_db.query(CrawlJob).one()
+
+    assert project.title == "프로젝트 자동 연결 AI 통합 구축"
+    assert project.category == "software"
+    assert project.budget_estimate == 121500000.0
+    assert project.status == "awarded"
+    assert "공고번호: R26BK01510410" in project.description
+    assert "수요기관: 서울특별시교육청" in project.description
+    assert "면허요건: SW001" in project.requirements
+    assert "지역요건: 서울" in project.requirements
+
+    assert historical_record.project_id == project.id
+    assert tender_result.project_id == project.id
+    assert crawl_job.project_id == project.id
+
+
+def test_crawl_endpoint_maps_cancelled_failed_and_re_notice_project_statuses(client, test_db, monkeypatch):
+    """Crawled notice lifecycle text should map to richer internal project statuses."""
+    fake_response = {
+        "job_status": "completed",
+        "source": "koneps",
+        "collected_count": 3,
+        "items": [
+            {
+                "notice_number": "R26BK01510412",
+                "title": "재공고 AI 통합 구축",
+                "base_amount": 111000000.0,
+                "estimated_amount": 109000000.0,
+                "closing_at": "2026-05-16T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510412",
+                "metadata": {"opening_status": "재공고"},
+            },
+            {
+                "notice_number": "R26BK01510413",
+                "title": "유찰 AI 데이터 사업",
+                "base_amount": 112000000.0,
+                "estimated_amount": 110000000.0,
+                "closing_at": "2026-05-09T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510413",
+                "metadata": {"opening_status": "유찰"},
+            },
+            {
+                "notice_number": "R26BK01510414",
+                "title": "취소 AI 데이터 사업",
+                "base_amount": 113000000.0,
+                "estimated_amount": 111000000.0,
+                "closing_at": "2026-05-16T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510414",
+                "metadata": {"opening_status": "공고취소"},
+            },
+        ],
+        "metadata": {"resolved_mode": "live"},
+    }
+
+    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+    )
+
+    assert response.status_code == 200
+    projects = {project.title: project.status for project in test_db.query(Project).all()}
+    assert projects["재공고 AI 통합 구축"] == "re_notice"
+    assert projects["유찰 AI 데이터 사업"] == "failed"
+    assert projects["취소 AI 데이터 사업"] == "cancelled"
+
+
+def test_crawl_endpoint_links_matching_manual_project_and_upserts_tender_result(client, test_db, monkeypatch):
+    """Matching manual projects should be reused and repeated crawls should not duplicate the same tender result."""
+    existing_project = Project(
+        title="수동 등록 AI 통합 구축",
+        description="기존 메모",
+        requirements="기존 요구사항",
+        budget_estimate=120500000.0,
+        category="software",
+        deadline=datetime(2026, 5, 14, 18, 0, tzinfo=UTC),
+        status="open",
+    )
+    test_db.add(existing_project)
+    test_db.commit()
+    test_db.refresh(existing_project)
+
+    fake_response = {
+        "job_status": "completed",
+        "source": "koneps",
+        "collected_count": 1,
+        "items": [
+            {
+                "notice_number": "R26BK01510411",
+                "title": "수동 등록 AI 통합 구축",
+                "base_amount": 124000000.0,
+                "estimated_amount": 121000000.0,
+                "closing_at": "2026-05-14T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510411",
+                "metadata": {
+                    "opening_status": "개찰완료",
+                    "opening_demand_agency": "서울특별시교육청",
+                    "opening_announced_at": "2026-05-14T18:05:00",
+                    "winning_company": "주식회사 수동 연결 테스트",
+                    "winning_amount": 118000000.0,
+                    "winning_rate": 95.1,
+                },
+            }
+        ],
+        "metadata": {
+            "resolved_mode": "live",
+        },
+    }
+
+    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+
+    for _ in range(2):
+        response = client.post(
+            "/api/v1/operations/crawl",
+            json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        )
+        assert response.status_code == 200
+
+    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510411").one()
+    tender_results = test_db.query(TenderResult).all()
+    projects = test_db.query(Project).order_by(Project.id.asc()).all()
+    test_db.refresh(existing_project)
+
+    assert len(projects) == 1
+    assert historical_record.project_id == existing_project.id
+    assert existing_project.status == "awarded"
+    assert "기존 메모" in existing_project.description
+    assert "공고번호: R26BK01510411" in existing_project.description
+    assert "면허요건: SW001" in existing_project.requirements
+    assert len(tender_results) == 1
+    assert tender_results[0].project_id == existing_project.id
+
+
+def test_crawl_endpoint_matches_existing_project_by_notice_number_and_source_url(client, test_db, monkeypatch):
+    """Explicit notice metadata should let crawled notices link even when titles differ."""
+    existing_project = Project(
+        title="내부 검토용 프로젝트명",
+        description="기존 수동 메모",
+        requirements="내부 요구사항",
+        budget_estimate=121000000.0,
+        category="software",
+        notice_number="R26BK01510415",
+        source_url="http://ebid.example.com/detail/R26BK01510415?from=manual",
+        issuing_agency="조달청",
+        demand_agency="서울특별시교육청",
+        deadline=datetime(2026, 5, 15, 18, 0, tzinfo=UTC),
+        status="open",
+    )
+    test_db.add(existing_project)
+    test_db.commit()
+    test_db.refresh(existing_project)
+
+    fake_response = {
+        "job_status": "completed",
+        "source": "koneps",
+        "collected_count": 1,
+        "items": [
+            {
+                "notice_number": "R26BK01510415",
+                "title": "실제 KONEPS 제목은 조금 다른 AI 통합 구축",
+                "base_amount": 124000000.0,
+                "estimated_amount": 121500000.0,
+                "closing_at": "2026-05-15T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510415",
+                "metadata": {
+                    "issuing_agency": "조달청",
+                    "opening_demand_agency": "서울특별시교육청",
+                    "opening_status": "개찰완료",
+                    "opening_announced_at": "2026-05-15T18:05:00",
+                    "winning_company": "주식회사 메타매칭 테스트",
+                    "winning_amount": 119000000.0,
+                    "winning_rate": 95.3,
+                },
+            }
+        ],
+        "metadata": {"resolved_mode": "live"},
+    }
+
+    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+    )
+
+    assert response.status_code == 200
+    test_db.refresh(existing_project)
+    projects = test_db.query(Project).all()
+    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510415").one()
+    tender_result = test_db.query(TenderResult).one()
+
+    assert len(projects) == 1
+    assert existing_project.title == "내부 검토용 프로젝트명"
+    assert existing_project.notice_number == "R26BK01510415"
+    assert historical_record.project_id == existing_project.id
+    assert tender_result.project_id == existing_project.id
+
+
+def test_crawl_endpoint_matches_existing_project_by_agency_and_similar_title(client, test_db, monkeypatch):
+    """Agency metadata should help link near-identical titles that are not exact text matches."""
+    existing_project = Project(
+        title="서울 AI 데이터 통합 플랫폼",
+        description="수동 등록 공고\n공고기관: 조달청\n수요기관: 서울특별시교육청",
+        requirements="SW001 보유 업체\n서울 수행 가능",
+        budget_estimate=123000000.0,
+        category="software",
+        issuing_agency="조달청",
+        demand_agency="서울특별시교육청",
+        deadline=datetime(2026, 5, 17, 18, 0, tzinfo=UTC),
+        status="open",
+    )
+    test_db.add(existing_project)
+    test_db.commit()
+    test_db.refresh(existing_project)
+
+    fake_response = {
+        "job_status": "completed",
+        "source": "koneps",
+        "collected_count": 1,
+        "items": [
+            {
+                "notice_number": "R26BK01510416",
+                "title": "서울 AI 데이터 통합 플랫폼 구축",
+                "base_amount": 125000000.0,
+                "estimated_amount": 123500000.0,
+                "closing_at": "2026-05-17T18:00:00",
+                "business_type": "기술용역",
+                "region": "서울",
+                "license_codes": ["SW001"],
+                "source_url": "http://ebid.example.com/detail/R26BK01510416",
+                "metadata": {
+                    "issuing_agency": "조달청",
+                    "opening_demand_agency": "서울특별시교육청",
+                    "opening_status": "재공고",
+                },
+            }
+        ],
+        "metadata": {"resolved_mode": "live"},
+    }
+
+    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+    )
+
+    assert response.status_code == 200
+    test_db.refresh(existing_project)
+    projects = test_db.query(Project).all()
+    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510416").one()
+
+    assert len(projects) == 1
+    assert historical_record.project_id == existing_project.id
+    assert existing_project.status == "re_notice"
 
 
 def test_crawl_async_endpoint_returns_pollable_task(client, test_db, monkeypatch):
@@ -1036,6 +1355,344 @@ def test_list_bid_decisions_filters_persisted_records(client, test_db):
     assert len(filtered_payload) == 1
     assert filtered_payload[0]["project_id"] == second_project.id
     assert filtered_payload[0]["decision_status"] == "submitted"
+
+
+def test_opportunity_analysis_endpoint_returns_multi_angle_analysis(client, test_db):
+    """Opportunity analysis should combine fit, market, similarity, and decision guidance in one response."""
+    user = User(
+        username="analysis-operator",
+        email="analysis-operator@example.com",
+        hashed_password="hashed",
+        full_name="Analysis Operator",
+        company="Analysis Corp",
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    profile = CompanyProfile(
+        user_id=user.id,
+        business_type="software",
+        license_codes="SW001",
+        region_codes="전국",
+        annual_revenue=1200000000.0,
+        capacity_score=0.92,
+        total_awards=6,
+    )
+    target_project = Project(
+        title="AI 민원 데이터 분석 플랫폼 구축",
+        description="민원 데이터 분석과 시각화, 대시보드 자동화가 포함된 플랫폼 구축",
+        requirements="SW001 보유 업체, 전국 수행 가능, 운영지원 포함",
+        budget_estimate=130000000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=18),
+    )
+    similar_project = Project(
+        title="AI 데이터 대시보드 구축",
+        description="데이터 분석과 시각화 중심의 대시보드 시스템 개발",
+        requirements="전국 수행 가능, 분석 보고서 자동화",
+        budget_estimate=118000000.0,
+        category="software",
+    )
+    second_similar_project = Project(
+        title="공공기관 AI 리포트 자동화",
+        description="리포트 자동화와 데이터 분석 기능을 포함한 정보화 사업",
+        requirements="운영지원, 분석 대시보드",
+        budget_estimate=125000000.0,
+        category="software",
+    )
+    test_db.add_all([profile, target_project, similar_project, second_similar_project])
+    test_db.commit()
+    test_db.refresh(target_project)
+
+    response = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={
+            "project_id": target_project.id,
+            "current_workload_score": 0.2,
+            "similar_limit": 3,
+            "min_similarity": 0.15,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["project_id"] == target_project.id
+    assert payload["project_title"] == target_project.title
+    assert payload["classification"]["matched"] is True
+    assert payload["matched"] is True
+    assert payload["matched_score"] >= 0.65
+    assert payload["price_prediction"]["predicted_price"] > 0
+    assert payload["bid_recommendation"]["recommended_bid"] > 0
+    assert payload["recommended_amount"] > 0
+    assert payload["market_insights"]["competitiveness_score"] >= 0.0
+    assert payload["similar_projects"]["result_count"] >= 1
+    assert payload["decision"]["action"] in {"bid_now", "review"}
+    assert payload["probability_score"] >= 0.6
+    assert payload["analysis_summary"]
+    assert payload["strengths"]
+
+
+def test_opportunity_analysis_reflects_existing_active_bid_load(client, test_db):
+    """Opportunity analysis should count existing active bid decisions and surface workload risks."""
+    user = User(
+        username="analysis-load-operator",
+        email="analysis-load-operator@example.com",
+        hashed_password="hashed",
+        full_name="Analysis Load Operator",
+        company="Analysis Load Corp",
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    profile = CompanyProfile(
+        user_id=user.id,
+        business_type="software",
+        license_codes="SW001",
+        region_codes="전국",
+        annual_revenue=900000000.0,
+        capacity_score=0.88,
+        total_awards=4,
+    )
+    target_project = Project(
+        title="AI 통합 운영 대시보드 구축",
+        description="공공기관 운영 데이터 통합 및 시각화 고도화",
+        requirements="SW001 보유 업체, 전국 수행 가능",
+        budget_estimate=140000000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=5),
+    )
+    active_project = Project(
+        title="기존 활성 입찰 프로젝트",
+        description="이미 진행 중인 검토 건",
+        requirements="운영지원",
+        budget_estimate=80000000.0,
+        category="software",
+    )
+    test_db.add_all([profile, target_project, active_project])
+    test_db.commit()
+    test_db.refresh(target_project)
+    test_db.refresh(active_project)
+
+    active_record = BidDecisionRecord(
+        project_id=active_project.id,
+        operator_id=user.id,
+        pursue_bid=True,
+        action="review",
+        decision_status="reviewing",
+        recommended_amount=76000000.0,
+        probability_score=0.61,
+        matched_score=0.7,
+        priority_score=0.58,
+        current_active_bids=1,
+        max_active_bids=1,
+        current_workload_score=0.7,
+        reasoning="기존 활성 입찰 건입니다.",
+    )
+    similar_project = Project(
+        title="AI 통합 현황판 구축",
+        description="통합 현황판과 데이터 시각화 기능 개발",
+        requirements="전국 수행 가능",
+        budget_estimate=135000000.0,
+        category="software",
+    )
+    test_db.add_all([active_record, similar_project])
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={
+            "project_id": target_project.id,
+            "max_active_bids": 1,
+            "current_workload_score": 0.95,
+            "similar_limit": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_active_bids"] == 1
+    assert any("실행 부담" in item or "마감 시간" in item for item in payload["risk_flags"])
+    assert payload["decision"]["action"] in {"review", "skip"}
+    assert payload["decision"]["priority_score"] <= 0.8
+
+
+def test_opportunity_analysis_uses_agency_weighted_price_history(client, test_db):
+    """Opportunity analysis should forward agency context into price prediction and surface reserve-pattern metadata."""
+    user = User(
+        username="analysis-agency-operator",
+        email="analysis-agency-operator@example.com",
+        hashed_password="hashed",
+        full_name="Analysis Agency Operator",
+        company="Analysis Agency Corp",
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    profile = CompanyProfile(
+        user_id=user.id,
+        business_type="software",
+        license_codes="SW001",
+        region_codes="전국",
+        annual_revenue=1000000000.0,
+        capacity_score=0.9,
+        total_awards=5,
+    )
+    project = Project(
+        title="AI 학교 데이터 통합 분석 플랫폼 구축",
+        description="교육청 통합 데이터 분석 및 시각화 구축",
+        requirements="SW001 보유 업체, 전국 수행 가능",
+        budget_estimate=125000000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=14),
+    )
+    test_db.add_all([profile, project])
+    test_db.commit()
+    test_db.refresh(project)
+
+    test_db.add_all([
+        HistoricalData(
+            notice_number="AN-AGENCY-1",
+            agency_name="서울특별시교육청",
+            category="software",
+            base_amount=125000000.0,
+            predicted_price=116250000.0,
+            bid_rate=0.93,
+            reserve_prices="[120000000.0, 121000000.0, 122000000.0]",
+            selected_numbers="[1, 4, 7, 12]",
+        ),
+        HistoricalData(
+            notice_number="AN-AGENCY-2",
+            agency_name="서울특별시교육청",
+            category="software",
+            base_amount=125000000.0,
+            predicted_price=115625000.0,
+            bid_rate=0.925,
+            reserve_prices="[119500000.0, 120500000.0, 121500000.0]",
+            selected_numbers="[1, 5, 7, 11]",
+        ),
+        HistoricalData(
+            notice_number="AN-AGENCY-3",
+            agency_name="조달청",
+            category="software",
+            base_amount=125000000.0,
+            predicted_price=121250000.0,
+            bid_rate=0.97,
+            reserve_prices="[118000000.0, 121000000.0, 123000000.0]",
+            selected_numbers="[2, 4, 8, 12]",
+        ),
+    ])
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={
+            "project_id": project.id,
+            "agency_name": "서울특별시교육청",
+            "current_workload_score": 0.2,
+            "similar_limit": 3,
+            "min_similarity": 0.15,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["price_prediction"]["pricing_mode"] == "historical_blend"
+    assert payload["price_prediction"]["agency_match_sample_size"] == 2
+    assert payload["price_prediction"]["reserve_price_context"]["sample_count"] == 3
+    assert 1 in payload["price_prediction"]["reserve_price_context"]["frequent_selected_numbers"]
+
+
+def test_opportunity_analysis_applies_feedback_calibration_bias(client, test_db):
+    """Opportunity analysis should surface feedback-derived calibration when past tender results exist."""
+    user = User(
+        username="analysis-feedback-operator",
+        email="analysis-feedback-operator@example.com",
+        hashed_password="hashed",
+        full_name="Analysis Feedback Operator",
+        company="Analysis Feedback Corp",
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    profile = CompanyProfile(
+        user_id=user.id,
+        business_type="software",
+        license_codes="SW001",
+        region_codes="전국",
+        annual_revenue=1100000000.0,
+        capacity_score=0.91,
+        total_awards=6,
+    )
+    source_project = Project(
+        title="과거 피드백 학습용 프로젝트",
+        description="최근 예측 오차를 학습하는 기준 프로젝트",
+        requirements="SW001 보유 업체",
+        budget_estimate=100000000.0,
+        category="software",
+    )
+    target_project = Project(
+        title="피드백 보정이 필요한 신규 프로젝트",
+        description="과거 오차를 반영해 예측을 보정해야 하는 프로젝트",
+        requirements="SW001 보유 업체, 전국 수행 가능",
+        budget_estimate=100000000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=20),
+    )
+    test_db.add_all([profile, source_project, target_project])
+    test_db.commit()
+    test_db.refresh(source_project)
+    test_db.refresh(target_project)
+
+    test_db.add_all([
+        PricePrediction(
+            user_id=user.id,
+            project_id=source_project.id,
+            predicted_price=105000000.0,
+            price_range_min=100000000.0,
+            price_range_max=110000000.0,
+            confidence_score=0.8,
+            model_version="v1.1-historical",
+        ),
+        HistoricalData(
+            project_id=source_project.id,
+            notice_number="AN-CAL-1",
+            agency_name="서울특별시교육청",
+            category="software",
+            base_amount=100000000.0,
+            predicted_price=100000000.0,
+            bid_rate=1.0,
+        ),
+        TenderResult(
+            project_id=source_project.id,
+            winning_company="피드백 학습 낙찰사",
+            winning_amount=100000000.0,
+            winning_rate=95.0,
+            result_status="awarded",
+        ),
+    ])
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={
+            "project_id": target_project.id,
+            "agency_name": "서울특별시교육청",
+            "current_workload_score": 0.15,
+            "similar_limit": 3,
+            "min_similarity": 0.15,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["price_prediction"]["feedback_calibration"]["sample_count"] == 1
+    assert payload["price_prediction"]["feedback_calibration"]["agency_match_sample_count"] == 1
+    assert payload["price_prediction"]["feedback_calibration"]["applied_adjustment_rate"] < 0
+    assert payload["price_prediction"]["model_version"].endswith("+feedback")
 
 
 def test_notify_telegram_skeleton(client):

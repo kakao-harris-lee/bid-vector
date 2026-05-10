@@ -10,7 +10,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.core.security import get_password_hash
-from app.models.models import CompanyProfile, User
+from app.models.models import CompanyProfile, OperatorStrategy, User
 
 DEFAULT_OPERATOR_USERNAME = "operator"
 DEFAULT_OPERATOR_EMAIL = "operator@local.bid-vector"
@@ -119,3 +119,56 @@ def ensure_operator_profile(db: Session) -> CompanyProfile:
     db.commit()
     db.refresh(profile)
     return profile
+
+
+def get_operator_strategy(db: Session, allow_fallback: bool = True) -> OperatorStrategy | None:
+    """Resolve the canonical watch strategy used for operator monitoring."""
+    operator = get_operator_account(db)
+    if operator:
+        strategy = db.query(OperatorStrategy).filter(OperatorStrategy.user_id == operator.id).first()
+        if strategy:
+            return strategy
+
+    if not allow_fallback:
+        return None
+
+    strategies = db.query(OperatorStrategy).order_by(OperatorStrategy.id.asc()).limit(2).all()
+    if len(strategies) == 1:
+        return strategies[0]
+    return None
+
+
+def ensure_operator_strategy(db: Session) -> OperatorStrategy:
+    """Ensure the operator has a persisted watch strategy that can be edited from the UI."""
+    operator = ensure_operator_account(db)
+
+    direct_strategy = get_operator_strategy(db, allow_fallback=False)
+    if direct_strategy:
+        return direct_strategy
+
+    fallback_strategy = get_operator_strategy(db, allow_fallback=True)
+    if fallback_strategy:
+        if fallback_strategy.user_id != operator.id:
+            fallback_strategy.user_id = operator.id
+            db.commit()
+            db.refresh(fallback_strategy)
+        return fallback_strategy
+
+    strategy = OperatorStrategy(
+        user_id=operator.id,
+        focus_categories="",
+        focus_regions="",
+        exclude_regions="",
+        required_keywords="",
+        exclude_keywords="",
+        min_budget_estimate=0.0,
+        max_budget_estimate=0.0,
+        minimum_match_score=0.6,
+        minimum_probability_score=0.55,
+        notify_only_high_priority=True,
+        max_recommended_candidates=10,
+    )
+    db.add(strategy)
+    db.commit()
+    db.refresh(strategy)
+    return strategy

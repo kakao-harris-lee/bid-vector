@@ -4,15 +4,17 @@ from typing import Any
 
 from app.core.database import SessionLocal
 from app.models.models import CrawlJob
-from app.schemas.schemas import CrawlRequest
+from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService
+from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.project_similarity import ProjectSimilarityService
 from app.tasks.celery_app import celery_app
 
 COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
 PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
+OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
 
 
 @celery_app.task(name=COLLECT_KONEPS_NOTICES_TASK_NAME)
@@ -110,6 +112,29 @@ def rebuild_project_embeddings(
         db.close()
 
 
+@celery_app.task(name=OPERATOR_STRATEGY_MONITOR_TASK_NAME)
+def monitor_operator_strategy(
+    request_payload: dict[str, Any] | None = None,
+    monitor_run_id: int | None = None,
+    trigger_source: str = StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
+) -> dict:
+    """Execute the stored operator strategy and persist bid decisions in a background task."""
+    request = OperatorStrategyMonitorRequest(**(request_payload or {}))
+    db = SessionLocal()
+    try:
+        return StrategyMonitoringService().execute_monitoring(
+            db,
+            request=request,
+            trigger_source=trigger_source,
+            existing_run_id=monitor_run_id,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def enqueue_project_embedding_rebuild(
     *,
     limit: int = 100,
@@ -125,6 +150,20 @@ def enqueue_project_embedding_rebuild(
         category=category,
         project_status=project_status,
         force=force,
+    )
+
+
+def enqueue_operator_strategy_monitor(
+    *,
+    request: OperatorStrategyMonitorRequest,
+    monitor_run_id: int | None = None,
+    trigger_source: str = StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
+):
+    """Queue an operator strategy monitoring task and return the async task handle."""
+    return monitor_operator_strategy.delay(
+        request_payload=request.model_dump(mode="json"),
+        monitor_run_id=monitor_run_id,
+        trigger_source=trigger_source,
     )
 
 
@@ -173,6 +212,48 @@ def get_koneps_notice_collection_task_status(task_id: str) -> dict[str, Any]:
         "successful": successful,
         "detail": detail,
         "crawl_job_id": crawl_job_id,
+        "error": None,
+        "result": result if successful and isinstance(result, dict) else None,
+    }
+
+    if raw_status == "FAILURE" and result is not None:
+        payload["error"] = str(result)
+
+    return payload
+
+
+def get_operator_strategy_monitor_task_status(task_id: str) -> dict[str, Any]:
+    """Read and normalize the current state of an operator strategy monitoring task."""
+    async_result = celery_app.AsyncResult(task_id)
+    raw_status = str(getattr(async_result, "state", getattr(async_result, "status", "PENDING")) or "PENDING").upper()
+    ready = bool(async_result.ready()) if hasattr(async_result, "ready") else raw_status in {"SUCCESS", "FAILURE", "REVOKED"}
+    successful = bool(async_result.successful()) if hasattr(async_result, "successful") else raw_status == "SUCCESS"
+    result = getattr(async_result, "result", None)
+    normalized_status = _normalize_celery_status(raw_status)
+
+    detail = {
+        "PENDING": "Task is queued or unknown to the current result backend.",
+        "STARTED": "Task is currently executing the operator strategy monitor.",
+        "SUCCESS": "Task completed successfully.",
+        "FAILURE": "Task failed while executing the operator strategy monitor.",
+        "RETRY": "Task is retrying after a temporary failure.",
+        "REVOKED": "Task was cancelled before completion.",
+    }.get(raw_status, "Task status is available.")
+
+    monitor_run_id: int | None = None
+    if isinstance(result, dict) and isinstance(result.get("monitor_run_id"), int):
+        monitor_run_id = int(result["monitor_run_id"])
+        result.setdefault("task_id", task_id)
+
+    payload: dict[str, Any] = {
+        "task_id": task_id,
+        "monitor_run_id": monitor_run_id,
+        "task_name": OPERATOR_STRATEGY_MONITOR_TASK_NAME,
+        "status": normalized_status,
+        "raw_status": raw_status,
+        "ready": ready,
+        "successful": successful,
+        "detail": detail,
         "error": None,
         "result": result if successful and isinstance(result, dict) else None,
     }

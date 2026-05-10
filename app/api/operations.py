@@ -20,6 +20,8 @@ from app.schemas.schemas import (
     CrawlResponse,
     CrawlTaskResponse,
     CrawlTaskStatusResponse,
+    OpportunityAnalysisRequest,
+    OpportunityAnalysisResponse,
     TelegramActionResponse,
     TelegramCallbackUpdateRequest,
     TelegramNotificationRequest,
@@ -32,6 +34,7 @@ from app.services.koneps.collector import KonepsCollectorService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService, TelegramUpdateProcessor
+from app.services.opportunity_analysis import OpportunityAnalysisService
 from app.tasks.jobs import enqueue_koneps_notice_collection, get_koneps_notice_collection_task_status
 
 router = APIRouter()
@@ -150,6 +153,13 @@ def classify_notice(request: ClassificationRequest, db: Session = Depends(get_db
 
     service = NoticeClassifierService()
     return service.classify(project=project, profile=profile)
+
+
+@router.post("/opportunity-analysis", response_model=OpportunityAnalysisResponse)
+def analyze_opportunity(request: OpportunityAnalysisRequest, db: Session = Depends(get_db)):
+    """Run a multi-angle analysis and return the recommended bid action for one project."""
+    project = _get_project_or_404(db, request.project_id)
+    return OpportunityAnalysisService().analyze_project(db, project, request)
 
 
 @router.post("/allocate", response_model=BidDecisionResponse, deprecated=True)

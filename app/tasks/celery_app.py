@@ -68,6 +68,33 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
 
 from app.core.config import settings
 
+OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
+
+
+def build_operator_strategy_monitor_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for operator strategy monitoring."""
+    if not settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED:
+        return {}
+
+    return {
+        "operator_strategy_monitor_periodic": {
+            "task": OPERATOR_STRATEGY_MONITOR_TASK_NAME,
+            "schedule": float(max(1, settings.OPERATOR_STRATEGY_MONITOR_INTERVAL_MINUTES) * 60),
+            "kwargs": {
+                "request_payload": {
+                    "limit": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_LIMIT,
+                    "high_priority_only": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_HIGH_PRIORITY_ONLY,
+                    "max_active_bids": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_MAX_ACTIVE_BIDS,
+                    "current_workload_score": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_CURRENT_WORKLOAD_SCORE,
+                    "same_category_only": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_SAME_CATEGORY_ONLY,
+                    "similar_limit": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_SIMILAR_LIMIT,
+                    "min_similarity": settings.OPERATOR_STRATEGY_MONITOR_SCHEDULE_MIN_SIMILARITY,
+                },
+                "trigger_source": "scheduled",
+            },
+        }
+    }
+
 
 celery_app = Celery(
     "bid_vector",
@@ -84,4 +111,5 @@ celery_app.conf.update(
     task_always_eager=settings.CELERY_BROKER_URL.startswith("memory://"),
     task_store_eager_result=True,
     task_ignore_result=False,
+    beat_schedule=build_operator_strategy_monitor_beat_schedule(),
 )

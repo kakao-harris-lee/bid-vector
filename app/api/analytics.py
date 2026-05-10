@@ -7,7 +7,13 @@ from app.core.database import get_db
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import Analytics, Bid, Project
-from app.schemas.schemas import AnalyticsEventRequest, AnalyticsSummaryResponse, OperatorStatsResponse
+from app.schemas.schemas import (
+    AnalyticsEventRequest,
+    AnalyticsSummaryResponse,
+    OperatorStatsResponse,
+    PredictionFeedbackResponse,
+)
+from app.services.prediction_feedback import PredictionFeedbackService
 
 router = APIRouter()
 
@@ -76,6 +82,16 @@ def get_operator_stats(days: int = Query(30, ge=1, le=365), db: Session = Depend
     """Get singleton operator statistics."""
     operator = ensure_operator_account(db)
     return _build_operator_stats(operator.id, days, db)
+
+
+@router.get("/prediction-feedback", response_model=PredictionFeedbackResponse)
+def get_prediction_feedback(
+    days: int = Query(90, ge=1, le=365),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Compare stored prediction and recommendation amounts against actual tender results."""
+    return PredictionFeedbackService().build_feedback(db, days=days, limit=limit)
 
 
 @router.get("/user-stats/{user_id}", response_model=OperatorStatsResponse, deprecated=True)

@@ -72,6 +72,37 @@ def test_get_project(client):
     assert data["title"] == "Test Project"
 
 
+def test_create_project_accepts_notice_and_agency_metadata(client):
+    """Manual project creation should persist crawl-link metadata for later matching."""
+    response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "메타데이터 수동 등록 프로젝트",
+            "description": "수동 등록된 공고 메모",
+            "requirements": "내부 검토용 요구사항",
+            "budget_estimate": 125000000.0,
+            "category": "software",
+            "notice_number": "R26BK01510420",
+            "source_url": "http://ebid.example.com/detail/R26BK01510420",
+            "issuing_agency": "조달청",
+            "demand_agency": "서울특별시교육청",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["notice_number"] == "R26BK01510420"
+    assert payload["source_url"] == "http://ebid.example.com/detail/R26BK01510420"
+    assert payload["issuing_agency"] == "조달청"
+    assert payload["demand_agency"] == "서울특별시교육청"
+
+    detail = client.get(f"/api/v1/projects/{payload['id']}")
+    assert detail.status_code == 200
+    detail_payload = detail.json()
+    assert detail_payload["notice_number"] == "R26BK01510420"
+    assert detail_payload["issuing_agency"] == "조달청"
+
+
 def test_get_nonexistent_project(client):
     """Test getting non-existent project"""
     response = client.get("/api/v1/projects/9999")

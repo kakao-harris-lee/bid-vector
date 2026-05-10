@@ -1,5 +1,11 @@
 """Tests for operator-first auth, analytics, and legacy admin compatibility."""
 
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from app.models.models import BidDecisionRecord, PricePrediction, TenderResult
+
 
 def _bootstrap_operator(client, username: str = "solo-operator", email: str = "solo@example.com", password: str = "password123"):
     response = client.post(
@@ -130,6 +136,139 @@ def test_operator_analytics_endpoints_report_single_user_stats(client):
     assert legacy_stats_payload["operator_id"] == operator_id
     assert legacy_stats_payload["requested_user_id"] == 999
     assert legacy_stats_payload["mode"] == "single_operator"
+
+
+def test_prediction_feedback_endpoint_summarizes_accuracy_against_tender_results(client, test_db):
+    """Prediction feedback endpoint should compare latest predictions and decisions with actual winning amounts."""
+    bootstrap = _bootstrap_operator(client, username="feedback-operator", email="feedback@example.com")
+    operator_id = bootstrap.json()["id"]
+
+    first_project = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Feedback Project One",
+            "description": "Used for prediction feedback analytics",
+            "requirements": "Collect winning amount feedback",
+            "budget_estimate": 110000000.0,
+            "category": "software",
+        },
+    ).json()["id"]
+    second_project = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Feedback Project Two",
+            "description": "Used for recommendation feedback analytics",
+            "requirements": "Collect decision feedback",
+            "budget_estimate": 100000000.0,
+            "category": "software",
+        },
+    ).json()["id"]
+
+    test_db.add_all([
+        PricePrediction(
+            user_id=operator_id,
+            project_id=first_project,
+            predicted_price=101000000.0,
+            price_range_min=99000000.0,
+            price_range_max=103000000.0,
+            confidence_score=0.82,
+            model_version="v1.1-historical",
+        ),
+        PricePrediction(
+            user_id=operator_id,
+            project_id=second_project,
+            predicted_price=90000000.0,
+            price_range_min=88000000.0,
+            price_range_max=94000000.0,
+            confidence_score=0.74,
+            model_version="v1.1-historical",
+        ),
+        BidDecisionRecord(
+            project_id=first_project,
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="bid_now",
+            decision_status="submitted",
+            recommended_amount=102000000.0,
+            probability_score=0.9,
+            matched_score=0.84,
+            priority_score=0.91,
+            current_active_bids=0,
+            max_active_bids=3,
+            current_workload_score=0.1,
+            reasoning="첫 번째 피드백 검증용 추천값입니다.",
+        ),
+        BidDecisionRecord(
+            project_id=second_project,
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="review",
+            decision_status="reviewing",
+            recommended_amount=95000000.0,
+            probability_score=0.72,
+            matched_score=0.8,
+            priority_score=0.69,
+            current_active_bids=1,
+            max_active_bids=3,
+            current_workload_score=0.25,
+            reasoning="두 번째 피드백 검증용 추천값입니다.",
+        ),
+        TenderResult(
+            project_id=first_project,
+            winning_company="테스트 주식회사",
+            winning_amount=103000000.0,
+            winning_rate=95.2,
+            result_status="awarded",
+            announced_at=datetime.now(UTC) - timedelta(days=3),
+        ),
+        TenderResult(
+            project_id=second_project,
+            winning_company="추천 개선 주식회사",
+            winning_amount=100000000.0,
+            winning_rate=94.8,
+            result_status="awarded",
+            announced_at=datetime.now(UTC) - timedelta(days=2),
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/prediction-feedback", params={"days": 30, "limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == operator_id
+    assert payload["result_count"] == 2
+    assert payload["prediction_sample_count"] == 2
+    assert payload["recommendation_sample_count"] == 2
+    assert payload["average_prediction_error_rate"] == pytest.approx(0.0597, abs=0.0001)
+    assert payload["average_recommendation_error_rate"] == pytest.approx(0.0299, abs=0.0001)
+    assert payload["prediction_within_1_percent_count"] == 0
+    assert payload["prediction_within_3_percent_count"] == 1
+    assert payload["recommendation_within_1_percent_count"] == 1
+    assert payload["recommendation_within_3_percent_count"] == 1
+    assert payload["recommendation_better_than_prediction_count"] == 2
+    assert payload["items"][0]["project_id"] == second_project
+    assert payload["items"][0]["recommendation_improved_vs_prediction"] is True
+    assert payload["items"][1]["project_id"] == first_project
+    assert payload["items"][1]["prediction_error_rate"] == pytest.approx(0.0194, abs=0.0001)
+
+
+def test_prediction_feedback_endpoint_returns_empty_summary_when_no_linked_results_exist(client):
+    """Prediction feedback endpoint should return an empty but well-formed payload when no comparisons are available."""
+    bootstrap = _bootstrap_operator(client, username="empty-feedback-operator", email="empty-feedback@example.com")
+    operator_id = bootstrap.json()["id"]
+
+    response = client.get("/api/v1/analytics/prediction-feedback")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == operator_id
+    assert payload["result_count"] == 0
+    assert payload["prediction_sample_count"] == 0
+    assert payload["recommendation_sample_count"] == 0
+    assert payload["average_prediction_error_rate"] is None
+    assert payload["average_recommendation_error_rate"] is None
+    assert payload["items"] == []
 
 
 def test_legacy_admin_routes_return_single_operator_snapshot(client):

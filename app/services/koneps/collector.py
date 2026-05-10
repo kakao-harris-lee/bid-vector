@@ -6,15 +6,16 @@ from html import unescape
 from math import ceil
 from time import sleep
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.models import CrawlJob, HistoricalData, TenderResult
+from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.core.time import ensure_utc, utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
+from app.services.project_similarity import ProjectSimilarityService
 
 
 class KonepsCollectorService:
@@ -131,6 +132,9 @@ class KonepsCollectorService:
         crawl_job.error_message = metadata.get("fallback_reason")
         crawl_job.completed_at = utc_now()
 
+        project_similarity = ProjectSimilarityService()
+        linked_project_ids: set[int] = set()
+
         for item in items:
             item_metadata = item.get("metadata", {})
             historical_record = (
@@ -142,15 +146,26 @@ class KonepsCollectorService:
                 historical_record = HistoricalData(notice_number=item.get("notice_number"))
                 db.add(historical_record)
 
+            project = self._resolve_project_for_item(
+                db,
+                item=item,
+                request=request,
+                historical_record=historical_record,
+                project_similarity=project_similarity,
+            )
+            if project is not None:
+                historical_record.project_id = project.id
+                linked_project_ids.add(int(project.id))
+
             historical_record.agency_name = (
                 item_metadata.get("opening_demand_agency")
                 or item_metadata.get("demand_agency")
                 or item_metadata.get("issuing_agency")
                 or ""
             )
-            historical_record.category = item.get("business_type") or request.category or ""
+            historical_record.category = self._resolve_project_category(item, request)
             historical_record.base_amount = item.get("base_amount") or 0.0
-            historical_record.predicted_price = item.get("estimated_amount") or 0.0
+            historical_record.predicted_price = item.get("estimated_amount") or item.get("base_amount") or 0.0
             historical_record.bid_rate = item_metadata.get("winning_rate") or 0.0
             historical_record.reserve_prices = json.dumps(
                 item_metadata.get("reserve_prices", []),
@@ -176,14 +191,18 @@ class KonepsCollectorService:
                 )
             )
             if has_tender_result:
-                tender_result = TenderResult(
-                    winning_company=item_metadata.get("winning_company") or "",
-                    winning_amount=item_metadata.get("winning_amount") or 0.0,
-                    winning_rate=item_metadata.get("winning_rate") or 0.0,
-                    result_status=item_metadata.get("opening_status") or crawl_job.status,
-                    announced_at=self._coerce_datetime(item_metadata.get("opening_announced_at")),
+                tender_result = self._resolve_tender_result(
+                    db,
+                    project_id=project.id if project is not None else historical_record.project_id,
+                    item_metadata=item_metadata,
+                    crawl_job_status=crawl_job.status,
                 )
-                db.add(tender_result)
+
+                if tender_result.project_id is None and historical_record.project_id is not None:
+                    tender_result.project_id = historical_record.project_id
+
+        if len(linked_project_ids) == 1:
+            crawl_job.project_id = next(iter(linked_project_ids))
 
         db.add(crawl_job)
         db.commit()
@@ -1076,6 +1095,416 @@ class KonepsCollectorService:
             except ValueError:
                 return self._extract_datetime(value)
         return None
+
+    def _resolve_project_for_item(
+        self,
+        db: Session,
+        *,
+        item: dict[str, Any],
+        request: CrawlRequest,
+        historical_record: HistoricalData,
+        project_similarity: ProjectSimilarityService,
+    ) -> Project | None:
+        """Find or create a project row for a crawled notice and keep it enriched with crawl metadata."""
+        project: Project | None = None
+        if historical_record.project_id is not None:
+            project = db.query(Project).filter(Project.id == historical_record.project_id).first()
+
+        if project is None:
+            project = self._find_matching_project(db, item=item, request=request)
+
+        is_new_project = project is None
+        if project is None:
+            project = Project(
+                title=item.get("title") or item.get("notice_number") or "KONEPS notice",
+                description="",
+                requirements="",
+                budget_estimate=0.0,
+                category=self._resolve_project_category(item, request),
+            )
+            db.add(project)
+            db.flush()
+
+        self._update_project_from_item(project, item=item, request=request)
+        project_similarity.refresh_project_embedding(db, project, force=is_new_project)
+        return project
+
+    def _find_matching_project(
+        self,
+        db: Session,
+        *,
+        item: dict[str, Any],
+        request: CrawlRequest,
+    ) -> Project | None:
+        """Heuristically link a crawled notice to an existing project using explicit keys first."""
+        target_title = self._normalize_title(item.get("title"))
+        target_notice_number = self._normalize_notice_number(item.get("notice_number"))
+        target_source_url = self._normalize_source_url(item.get("source_url"))
+        target_agencies = self._extract_item_agency_keys(item)
+        target_category = self._resolve_project_category(item, request)
+        target_budget = self._resolve_budget_estimate(item)
+        target_deadline = self._coerce_datetime(item.get("closing_at"))
+
+        query = db.query(Project)
+        if target_category:
+            query = query.filter(Project.category == target_category)
+
+        candidates = query.all()
+
+        if target_notice_number:
+            for candidate in candidates:
+                candidate_notice_number = self._normalize_notice_number(
+                    candidate.notice_number or self._extract_project_notice_number(candidate)
+                )
+                if candidate_notice_number and candidate_notice_number == target_notice_number:
+                    return candidate
+
+        if target_source_url:
+            for candidate in candidates:
+                candidate_source_url = self._normalize_source_url(
+                    candidate.source_url or self._extract_project_source_url(candidate)
+                )
+                if candidate_source_url and candidate_source_url == target_source_url:
+                    return candidate
+
+        if not target_title:
+            return None
+
+        best_candidate: Project | None = None
+        best_score = -1
+        for candidate in candidates:
+            candidate_title = self._normalize_title(candidate.title)
+            title_exact = candidate_title == target_title
+            title_overlap = not title_exact and bool(candidate_title) and (
+                target_title in candidate_title or candidate_title in target_title
+            )
+            if not title_exact and not title_overlap:
+                continue
+
+            budget_match = self._is_budget_compatible(candidate, target_budget)
+            deadline_match = self._is_deadline_compatible(candidate.deadline, target_deadline)
+            agency_overlap = len(self._extract_project_agency_keys(candidate) & target_agencies)
+
+            matches = (
+                (title_exact and agency_overlap > 0)
+                or (title_exact and budget_match and deadline_match)
+                or (title_overlap and agency_overlap > 0 and budget_match and deadline_match)
+            )
+            if not matches:
+                continue
+
+            score = (6 if title_exact else 3) + (3 if agency_overlap > 0 else 0) + (2 if budget_match else 0) + (1 if deadline_match else 0)
+            if score > best_score:
+                best_candidate = candidate
+                best_score = score
+
+        return best_candidate
+
+    def _update_project_from_item(self, project: Project, *, item: dict[str, Any], request: CrawlRequest) -> None:
+        """Apply crawled notice details onto a project without discarding user-entered context."""
+        item_metadata = item.get("metadata", {})
+        resolved_category = self._resolve_project_category(item, request)
+        budget_estimate = self._resolve_budget_estimate(item)
+        budget_values = [
+            float(amount)
+            for amount in (item.get("base_amount"), item.get("estimated_amount"), budget_estimate)
+            if amount not in (None, "", 0, 0.0)
+        ]
+        description_lines = [
+            f"공고번호: {item.get('notice_number')}" if item.get("notice_number") else None,
+            f"공고기관: {item_metadata.get('issuing_agency')}" if item_metadata.get("issuing_agency") else None,
+            f"수요기관: {item_metadata.get('opening_demand_agency') or item_metadata.get('demand_agency')}"
+            if item_metadata.get("opening_demand_agency") or item_metadata.get("demand_agency")
+            else None,
+            f"공고원문: {item.get('source_url')}" if item.get("source_url") else None,
+            f"업무구분: {item.get('business_type')}" if item.get("business_type") else None,
+            f"개찰상태: {item_metadata.get('opening_status')}" if item_metadata.get("opening_status") else None,
+        ]
+        requirement_lines = [
+            f"지역요건: {item.get('region')}" if item.get("region") else None,
+            f"면허요건: {' '.join(item.get('license_codes') or [])}" if item.get("license_codes") else None,
+            f"기초금액: {float(item.get('base_amount')):.0f}" if item.get("base_amount") else None,
+            f"추정금액: {float(item.get('estimated_amount')):.0f}" if item.get("estimated_amount") else None,
+            f"계약방법: {item_metadata.get('contract_method')}" if item_metadata.get("contract_method") else None,
+        ]
+
+        if item.get("title") and self._should_replace_project_title(project.title, item.get("title")):
+            project.title = str(item.get("title")).strip()
+        notice_number = item.get("notice_number")
+        if notice_number and (
+            not project.notice_number
+            or self._normalize_notice_number(project.notice_number) == self._normalize_notice_number(notice_number)
+        ):
+            project.notice_number = str(notice_number).strip()
+        source_url = item.get("source_url")
+        if source_url and (
+            not project.source_url
+            or self._normalize_source_url(project.source_url) == self._normalize_source_url(source_url)
+        ):
+            project.source_url = str(source_url).strip()
+        issuing_agency = item_metadata.get("issuing_agency")
+        if issuing_agency and (
+            not project.issuing_agency
+            or self._normalize_agency_name(project.issuing_agency) == self._normalize_agency_name(issuing_agency)
+        ):
+            project.issuing_agency = str(issuing_agency).strip()
+        demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get("demand_agency")
+        if demand_agency and (
+            not project.demand_agency
+            or self._normalize_agency_name(project.demand_agency) == self._normalize_agency_name(demand_agency)
+        ):
+            project.demand_agency = str(demand_agency).strip()
+        project.description = self._merge_text_lines(project.description, description_lines)
+        project.requirements = self._merge_text_lines(project.requirements, requirement_lines)
+        project.category = resolved_category or project.category
+        project.budget_estimate = budget_estimate or float(project.budget_estimate or 0.0)
+        project.budget_min = min(budget_values) if budget_values else project.budget_min
+        project.budget_max = max(budget_values) if budget_values else project.budget_max
+
+        closing_at = self._coerce_datetime(item.get("closing_at"))
+        if closing_at is not None:
+            project.deadline = closing_at
+
+        resolved_status = self._resolve_project_status(item)
+        if resolved_status:
+            project.status = resolved_status
+
+        db_title = project.title or item.get("notice_number") or "KONEPS notice"
+        project.title = db_title.strip()
+
+    def _resolve_tender_result(
+        self,
+        db: Session,
+        *,
+        project_id: int | None,
+        item_metadata: dict[str, Any],
+        crawl_job_status: str,
+    ) -> TenderResult:
+        """Upsert a tender result snapshot so repeated crawls do not duplicate the same award record."""
+        announced_at = self._coerce_datetime(item_metadata.get("opening_announced_at"))
+        winning_company = item_metadata.get("winning_company") or ""
+        winning_amount = item_metadata.get("winning_amount") or 0.0
+        winning_rate = item_metadata.get("winning_rate") or 0.0
+        result_status = item_metadata.get("opening_status") or crawl_job_status
+
+        tender_result: TenderResult | None = None
+        if project_id is not None:
+            candidates = (
+                db.query(TenderResult)
+                .filter(TenderResult.project_id == project_id)
+                .order_by(TenderResult.id.desc())
+                .all()
+            )
+            for candidate in candidates:
+                if announced_at is not None and candidate.announced_at == announced_at:
+                    tender_result = candidate
+                    break
+                if (
+                    candidate.winning_company == winning_company
+                    and float(candidate.winning_amount or 0.0) == float(winning_amount or 0.0)
+                    and float(candidate.winning_rate or 0.0) == float(winning_rate or 0.0)
+                ):
+                    tender_result = candidate
+                    break
+
+        if tender_result is None:
+            tender_result = TenderResult(project_id=project_id)
+            db.add(tender_result)
+
+        tender_result.project_id = project_id
+        tender_result.winning_company = winning_company
+        tender_result.winning_amount = winning_amount
+        tender_result.winning_rate = winning_rate
+        tender_result.result_status = result_status
+        tender_result.announced_at = announced_at
+        return tender_result
+
+    def _resolve_project_category(self, item: dict[str, Any], request: CrawlRequest) -> str:
+        """Resolve the internal project category for a crawled notice."""
+        request_category = str(request.category or "").strip().lower()
+        if request_category and request_category not in {"general", "기타", "other"}:
+            return request_category
+
+        business_type = str(item.get("business_type") or "").strip().lower()
+        category_map = {
+            "소프트웨어": "software",
+            "software": "software",
+            "기술용역": "technical-service",
+            "technical-service": "technical-service",
+            "일반용역": "service",
+            "service": "service",
+            "general-service": "service",
+            "물품": "goods",
+            "goods": "goods",
+            "공사": "construction",
+            "construction": "construction",
+        }
+        return category_map.get(business_type, request_category or business_type or "other")
+
+    def _resolve_budget_estimate(self, item: dict[str, Any]) -> float:
+        """Prefer the most actionable estimate while falling back to the available base amount."""
+        for value in (item.get("estimated_amount"), item.get("base_amount")):
+            if value not in (None, "", 0, 0.0):
+                return float(value)
+        return 0.0
+
+    def _resolve_project_status(self, item: dict[str, Any]) -> str:
+        """Map crawl timing and opening metadata to an internal project lifecycle state."""
+        item_metadata = item.get("metadata", {})
+        status_text = " ".join(
+            str(value or "")
+            for value in (
+                item_metadata.get("opening_status"),
+                item_metadata.get("status"),
+                item_metadata.get("opening_bid_classification"),
+                item_metadata.get("opening_bid_progress_order"),
+                item.get("title"),
+            )
+        )
+        normalized_status_text = self._normalize_status_text(status_text)
+
+        if any(keyword in normalized_status_text for keyword in ("취소", "공고취소", "입찰취소", "개찰취소", "정정취소")):
+            return "cancelled"
+        if any(keyword in normalized_status_text for keyword in ("재공고", "재입찰", "재안내", "2차공고", "3차공고")):
+            return "re_notice"
+        if any(keyword in normalized_status_text for keyword in ("유찰", "무응찰", "무투찰", "개찰불성립", "낙찰자없음")):
+            return "failed"
+        if any(
+            item_metadata.get(key)
+            for key in ("winning_company", "winning_amount", "winning_rate", "opening_announced_at")
+        ):
+            return "awarded"
+        if any(keyword in normalized_status_text for keyword in ("낙찰", "계약완료")):
+            return "awarded"
+        if any(keyword in normalized_status_text for keyword in ("마감", "종료", "개찰완료", "개찰진행", "개찰대기")):
+            return "closed"
+
+        closing_at = self._coerce_datetime(item.get("closing_at"))
+        if closing_at is not None and closing_at <= utc_now():
+            return "closed"
+        return "open"
+
+    def _normalize_status_text(self, value: Any) -> str:
+        """Normalize crawl status text for keyword-based lifecycle mapping."""
+        return re.sub(r"\s+", "", str(value or "").strip().lower())
+
+    def _merge_text_lines(self, existing: str | None, new_lines: list[str | None]) -> str:
+        """Append unique crawl-derived text fragments while keeping any manual notes intact."""
+        merged_lines = [line.strip() for line in str(existing or "").splitlines() if line and line.strip()]
+        merged_text = "\n".join(merged_lines)
+
+        for line in new_lines:
+            if not line:
+                continue
+            normalized_line = str(line).strip()
+            if not normalized_line:
+                continue
+            if normalized_line in merged_lines:
+                continue
+            if normalized_line in merged_text:
+                continue
+            merged_lines.append(normalized_line)
+            merged_text = "\n".join(merged_lines)
+
+        return "\n".join(merged_lines)
+
+    def _normalize_title(self, value: Any) -> str:
+        """Normalize a notice title for strict duplicate detection."""
+        return re.sub(r"[^0-9a-z가-힣]+", "", str(value or "").strip().lower())
+
+    def _normalize_notice_number(self, value: Any) -> str:
+        """Normalize notice numbers for direct key matching."""
+        return re.sub(r"\s+", "", str(value or "").strip().upper())
+
+    def _normalize_source_url(self, value: Any) -> str:
+        """Normalize a URL so detail links can be compared across formatting differences."""
+        if not value:
+            return ""
+        parsed = urlparse(str(value).strip())
+        if not parsed.scheme and not parsed.netloc:
+            return str(value).strip().rstrip("/").lower()
+        netloc = parsed.netloc.lower()
+        path = parsed.path.rstrip("/")
+        return f"{netloc}{path}".strip().lower()
+
+    def _normalize_agency_name(self, value: Any) -> str:
+        """Normalize agency names for cross-source matching."""
+        return "".join(str(value or "").strip().lower().split())
+
+    def _extract_item_agency_keys(self, item: dict[str, Any]) -> set[str]:
+        """Extract normalized agency names from a crawled notice payload."""
+        item_metadata = item.get("metadata", {})
+        return {
+            normalized
+            for normalized in (
+                self._normalize_agency_name(item_metadata.get("issuing_agency")),
+                self._normalize_agency_name(item_metadata.get("opening_demand_agency")),
+                self._normalize_agency_name(item_metadata.get("demand_agency")),
+            )
+            if normalized
+        }
+
+    def _extract_project_agency_keys(self, project: Project) -> set[str]:
+        """Extract normalized agency names from a stored project, including labeled notes."""
+        agency_values = [project.issuing_agency, project.demand_agency]
+        project_text = "\n".join(filter(None, [project.description, project.requirements]))
+        for label in ("공고기관", "수요기관"):
+            label_match = re.search(rf"{label}\s*[:：]\s*([^\n]+)", project_text)
+            if label_match:
+                agency_values.append(label_match.group(1).strip())
+
+        return {
+            normalized
+            for normalized in (self._normalize_agency_name(value) for value in agency_values)
+            if normalized
+        }
+
+    def _extract_project_notice_number(self, project: Project) -> str | None:
+        """Read a notice number from explicit project metadata or free-form notes."""
+        if project.notice_number:
+            return project.notice_number
+
+        project_text = "\n".join(filter(None, [project.description, project.requirements]))
+        label_match = re.search(r"공고번호\s*[:：]\s*([A-Za-z0-9\-]+)", project_text)
+        if label_match:
+            return label_match.group(1).strip()
+        return self._extract_notice_number(project_text)
+
+    def _extract_project_source_url(self, project: Project) -> str | None:
+        """Read a source URL from explicit project metadata or free-form notes."""
+        if project.source_url:
+            return project.source_url
+
+        project_text = "\n".join(filter(None, [project.description, project.requirements]))
+        url_match = re.search(r"https?://[^\s]+", project_text)
+        if url_match:
+            return url_match.group(0).strip()
+        return None
+
+    def _is_budget_compatible(self, project: Project, target_budget: float) -> bool:
+        """Return whether an existing project's budget is close enough to a crawled notice."""
+        if target_budget <= 0:
+            return True
+
+        candidate_budget = float(project.budget_estimate or project.budget_max or project.budget_min or 0.0)
+        if candidate_budget <= 0:
+            return True
+
+        difference_ratio = abs(candidate_budget - target_budget) / max(candidate_budget, target_budget)
+        return difference_ratio <= 0.15
+
+    def _is_deadline_compatible(self, existing_deadline: datetime | None, target_deadline: datetime | None) -> bool:
+        """Return whether existing and crawled deadlines are close enough to represent the same notice."""
+        if existing_deadline is None or target_deadline is None:
+            return True
+        return abs((ensure_utc(existing_deadline) - ensure_utc(target_deadline)).total_seconds()) <= 60 * 60 * 24 * 7
+
+    def _should_replace_project_title(self, existing_title: str | None, new_title: Any) -> bool:
+        """Prefer the crawled title only when the current one is missing or obviously synthetic."""
+        existing = str(existing_title or "").strip()
+        if not existing:
+            return True
+        return existing.startswith("KONEPS notice") or existing.startswith("KONEPS-")
 
     def _build_mock_items(
         self,

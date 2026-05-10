@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.single_user import ensure_operator_account
-from app.models.models import Project, PricePrediction
+from app.models.models import HistoricalData, Project, PricePrediction
 from app.schemas.schemas import (
     PricePredictionRequest,
     PricePredictionResponse,
@@ -16,8 +16,17 @@ from app.schemas.schemas import (
 from app.ai.price_prediction import predict_price
 from app.ai.bid_recommendation import get_bid_recommendation
 from app.ai.document_analyzer import analyze_document
+from app.services.prediction_feedback import PredictionFeedbackService
 
 router = APIRouter()
+
+
+def _load_price_history(db: Session, *, category: str | None, limit: int = 80) -> list[HistoricalData]:
+    """Load recent historical price samples for the given project category."""
+    query = db.query(HistoricalData)
+    if category:
+        query = query.filter(HistoricalData.category == category)
+    return query.order_by(HistoricalData.opened_at.desc(), HistoricalData.created_at.desc()).limit(limit).all()
 
 
 @router.post("/price", response_model=PricePredictionResponse)
@@ -33,13 +42,23 @@ def predict_project_price(
             detail="Project not found"
         )
 
+    operator = ensure_operator_account(db)
+    feedback_calibration = PredictionFeedbackService().build_calibration_context(
+        db,
+        operator_id=operator.id,
+        category=request.category or project.category,
+        agency_name=request.agency_name,
+    )
+
     prediction = predict_price(
         budget=request.budget_estimate,
         category=request.category,
         description=request.description,
+        historical_records=_load_price_history(db, category=request.category or project.category),
+        agency_name=request.agency_name,
+        feedback_calibration=feedback_calibration,
     )
 
-    operator = ensure_operator_account(db)
     db_prediction = PricePrediction(
         user_id=operator.id,
         project_id=request.project_id,
@@ -47,7 +66,7 @@ def predict_project_price(
         price_range_min=prediction["price_range_min"],
         price_range_max=prediction["price_range_max"],
         confidence_score=prediction["confidence_score"],
-        model_version="v1.0",
+        model_version=prediction["model_version"],
     )
     db.add(db_prediction)
     db.commit()
