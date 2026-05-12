@@ -169,6 +169,7 @@ To reduce drift between training outputs and runtime settings, the repository no
 - `apply-manifest --rebuild-embeddings` temporarily applies the manifest's embedding model path in-process and rebuilds stored project vectors
 - `apply-manifest --restart-compose --rebuild-embeddings-via-api` rolls the manifest into Docker Compose, waits for `/health`, and queues the remote embedding backfill through `/api/v1/ml/backfills/project-embeddings`
 - `create-manifest --predictor-backtest-report <report.json>` embeds rolling backtest evidence and creates a predictor promotion gate
+- Queued price-predictor training writes `dataset-quality.json` and `artifact-comparison.json` under `models/training-runs/<release-tag>/`, then passes the comparison report into the manifest promotion gate when manifest creation is enabled
 - New manifests include artifact checksums, an HMAC-SHA256 signature, local retention policy metadata, and optional remote object-storage publishing via `ML_RELEASE_OBJECT_STORAGE_URL`
 - Applying a manifest validates the embedded predictor promotion gate. Failed gates block rollout unless `--skip-promotion-gate` is passed.
 
@@ -310,7 +311,7 @@ ML API endpoints enqueue work only. With the default `memory://` broker, ML jobs
 
 - `POST /api/v1/ml/backfills/project-embeddings` - Queue a project embedding backfill on the ML backfill queue
 - `GET /api/v1/ml/backfills/project-embeddings/tasks/{task_id}` - Check embedding backfill status
-- `POST /api/v1/ml/training/price-predictor` - Queue price-predictor training on the dedicated training queue
+- `POST /api/v1/ml/training/price-predictor` - Queue price-predictor training on the dedicated training queue, writing dataset quality and artifact comparison reports
 - `GET /api/v1/ml/training/price-predictor/tasks/{task_id}` - Check training status and fetch artifact/manifest output when complete
 - `POST /api/v1/ml/reevaluations/decision-experiments/{experiment_run_id}` - Queue decision experiment re-evaluation
 - `GET /api/v1/ml/reevaluations/decision-experiments/tasks/{task_id}` - Check re-evaluation status

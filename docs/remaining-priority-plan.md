@@ -25,16 +25,15 @@
 
 현재 검증 상태:
 
-- `pytest -q` 기준 전체 `136 passed, 1 skipped`
+- `pytest -q` 기준 전체 `143 passed, 1 skipped`
 - `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 
 ## 남은 핵심 과제 요약
 
 ### 1. 예측 엔진 운영화
 
-실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세는 들어갔다. 이제 모델 학습/검증 파이프라인과 gate 기준 운영 보정이 남았다.
+실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세와 training 산출물 검증 리포트는 들어갔다. 이제 gate 기준 운영 보정이 남았다.
 
-- 모델 아티팩트 학습/검증 파이프라인 고도화
 - promotion gate 기준을 실제 운영 데이터에 맞춰 보정
 - predictor 성능 추세를 릴리즈 의사결정 카드로 확장
 
@@ -178,7 +177,7 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 - operations dashboard가 notification/Telegram 전송률, 실패 원인, 최근 실패를 반환한다.
 - operations dashboard가 ML release manifest, signature 상태, predictor promotion gate, backtest sample/error summary를 반환한다.
 
-### 1순위 — 모델 학습/검증 고도화
+### 완료 — 모델 학습/검증 고도화
 
 모델 릴리즈/게이트/관측성은 운영 카드까지 연결됐다. 다음은 학습 데이터 품질과 artifact 비교 리포트를 강화하는 단계다.
 
@@ -191,6 +190,26 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 #### 1순위 완료 기준
 
 - 학습 산출물이 release manifest와 gate에서 바로 검증 가능한 리포트를 남겨야 한다.
+
+#### 구현된 결과
+
+- price predictor training run이 `dataset-quality.json`을 생성해 sample depth, project/agency diversity, linked result coverage, reserve pattern coverage, bid-rate variance를 검증한다.
+- training run이 `artifact-comparison.json`을 생성해 historical / LSTM / ensemble artifact를 rolling holdout 기준으로 비교한다.
+- manifest 생성 시 artifact comparison report가 predictor promotion gate 입력으로 연결된다.
+
+### 1순위 — 실험 추천 운영 루프 고도화
+
+실험 run의 적용/보류/실패 이력은 dashboard payload로 정리됐다. 다음은 장기 적용 결과를 추천 로직에 다시 반영하는 단계다.
+
+#### 1순위 작업 범위
+
+- 장기 적용 결과를 experiment recommendation score에 반영
+- 반복 실패/보류 segment의 추천 감점
+- 성공 적용 segment의 후속 실험 제안 강화
+
+#### 1순위 완료 기준
+
+- 실험 추천이 최근 지표뿐 아니라 과거 적용 결과의 신뢰도를 함께 반영해야 한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -274,17 +293,17 @@ decision analytics, prediction observability, operations dashboard 기반과 wor
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — 모델 학습/검증 고도화
+### 완료 — 모델 학습/검증 고도화
 
 - 학습 dataset 품질 검증
 - 모델 artifact 비교 리포트
 
-### 묶음 B — 실험 운영 루프 고도화
+### 묶음 A — 실험 운영 루프 고도화
 
 - 장기 적용 결과를 다음 recommendation ranking에 반영
 - 반복 적용/롤백 패턴 기반 실험 추천 억제
 
-### 묶음 C — 운영 credential/IAM rollout 검증
+### 묶음 B — 운영 credential/IAM rollout 검증
 
 - object storage 실제 credential 기준 publish/apply 경로 점검
 - 운영 환경 manifest signature required 모드 검증
