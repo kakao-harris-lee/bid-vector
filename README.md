@@ -224,6 +224,8 @@ For a production-style task path, the compose file now includes an optional `tas
 
 When `CELERY_BROKER_URL` is switched away from `memory://` and `CELERY_RESULT_BACKEND` is still left at `cache+memory://`, the FastAPI settings layer now automatically upgrades the result backend to `db+${DATABASE_URL}` so task polling works against PostgreSQL without an extra Redis dependency.
 
+`GET /api/v1/analytics/operations-dashboard` includes a `tasks` summary for this stack: redacted broker/backend diagnostics, queue-to-task route mapping, worker runtime settings, stale queued/running task detection, failed/retry task counts, and task health cards.
+
 For Docker Compose, the broker URL should point at the internal RabbitMQ service:
 
 ```bash
@@ -341,7 +343,7 @@ Set `PRICE_PREDICTION_PREFERRED_PREDICTOR=auto` to enable rolling backtest selec
 - `GET /api/v1/analytics/operator-stats` - Get singleton operator statistics
 - `GET /api/v1/analytics/prediction-feedback` - Compare stored predictions and bid-decision recommendations against linked tender results
 - `GET /api/v1/analytics/prediction-observability` - Compare predictor selection, fallback, guardrail, linked-result accuracy metrics, and time-bucketed performance trend
-- `GET /api/v1/analytics/operations-dashboard` - Return card-ready crawl health and strategy monitoring performance metrics
+- `GET /api/v1/analytics/operations-dashboard` - Return card-ready crawl health, strategy monitoring, and task/broker performance metrics
 - `GET /api/v1/analytics/decision-insights` - Summarize persisted bid decision signals such as priority, margin, complexity, and workload source
 - `GET /api/v1/analytics/decision-funnel` - Track how initial bid decisions move from review/bid_now into submitted workflow states, including trend and segment breakdowns
 - `GET /api/v1/analytics/decision-recommendations` - Convert funnel signals into actionable recommendations plus bounded experiment plans
@@ -354,7 +356,7 @@ Set `PRICE_PREDICTION_PREFERRED_PREDICTOR=auto` to enable rolling backtest selec
 - `POST /api/v1/analytics/decision-experiments/{experiment_run_id}/apply-strategy` - Apply successful workload/category experiments to persisted strategy tuning values with dry-run and force support
 - `GET /api/v1/analytics/user-stats/{user_id}` - Deprecated compatibility alias for operator statistics
 
-The prediction feedback analytics endpoint summarizes how close the latest stored `predicted_price` and `recommended_amount` were to the final `winning_amount` for projects that already have a linked `TenderResult`. It reports average absolute error rates, counts within 1% and 3%, and whether the latest bid-decision recommendation outperformed the raw price prediction. The prediction observability endpoint groups persisted prediction metadata by predictor and pricing mode, including fallback frequency, guardrail frequency, linked-result absolute error rates, and backtest selector metadata. The operations dashboard endpoint summarizes crawl success/failure, recent failure reasons, strategy monitoring completion, candidate selection, persistence, and notification rates for dashboard cards.
+The prediction feedback analytics endpoint summarizes how close the latest stored `predicted_price` and `recommended_amount` were to the final `winning_amount` for projects that already have a linked `TenderResult`. It reports average absolute error rates, counts within 1% and 3%, and whether the latest bid-decision recommendation outperformed the raw price prediction. The prediction observability endpoint groups persisted prediction metadata by predictor and pricing mode, including fallback frequency, guardrail frequency, linked-result absolute error rates, and backtest selector metadata. The operations dashboard endpoint summarizes crawl success/failure, recent failure reasons, strategy monitoring completion, candidate selection, persistence, notification rates, task queue risk, broker/backend health, and worker separation state for dashboard cards.
 
 Decision analytics now also include persisted funnel telemetry, current-vs-previous period comparisons, segment breakdowns by category / workload source / agency, recommendation payloads with `experiment_plan`, and saved experiment runs that can be evaluated later against baseline target and guardrail metrics. Experiment run responses include dashboard-ready `application_status`, `application_history`, and `next_actions` payloads so the UI can distinguish ready, applied, blocked, and unsupported runs. Successful experiments can feed back into strategy settings: threshold experiments adjust `bid_now_threshold` / `review_threshold`, workload experiments adjust `auto_workload_penalty_multiplier`, and category focus experiments adjust `category_priority_overrides`.
 

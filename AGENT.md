@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `136 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `137 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -36,6 +36,7 @@
 - Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, WebSocket realtime event stream
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
 - 크롤 성공률 / 전략 모니터링 성과 / 최근 실패 원인을 묶은 operations dashboard analytics
+- operations dashboard의 task/broker 진단 payload, queue route 진단, stale/failed/retry task 집계 및 task health 카드
 - `docker compose` 복구, healthcheck/env wiring 정리, CPU-only PyTorch + pip cache 기반 Docker build 최적화
 - runtime / embedding / training / dev 의존성 분리 및 멀티타깃 Docker build 정리
 - manifest 기반 ML artifact promotion 서비스/CLI 및 embedding rebuild 자동화
@@ -48,7 +49,8 @@
 ### 아직 핵심적으로 남은 범위
 
 - `LSTM` / `Ensemble` 학습 파이프라인 및 모델 아티팩트 관리 고도화
-- production-grade task/broker 운영 정책 고도화
+- realtime 이벤트 인증/다중 프로세스 pub/sub 확장
+- 모델 학습/릴리즈, Telegram 전송률 등 추가 운영 카드 확장
 
 ## 작업 원칙
 
@@ -188,7 +190,7 @@
 
 남은 작업:
 
-- production 환경의 worker queue 지연, 실패율, 재시도, broker health 관측성 강화
+- production 환경의 task/broker 상태는 operations dashboard payload와 카드로 노출됨
 - 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 ### G. 분석 / 대시보드 집계 — prediction / operations reporting 기반 완료, 카드 확장 단계
@@ -197,20 +199,20 @@
 
 - overview / summary / prediction feedback
 - prediction observability: predictor별 정확도, fallback 빈도, guardrail 빈도, pricing mode breakdown, 기간 버킷 성능 추세
-- operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율
+- operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율, task/broker health, stale/failed/retry task 집계
 - decision insights / funnel / recommendations / experiments
 
 남은 작업:
 
-- 추가 카드가 필요하면 모델 학습/릴리즈, Telegram 전송률, worker queue 지연 집계 확장
+- 추가 카드가 필요하면 모델 학습/릴리즈, Telegram 전송률 집계 확장
 
 ## 현재 권장 실행 순서
 
-1. `F. production-grade task/broker 운영 정책 고도화`
-2. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
-3. `G. worker queue / Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
-4. `D. 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강`
-5. `C. 모델 학습/검증 파이프라인 고도화`
+1. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
+2. `G. Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
+3. `D. 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강`
+4. `C. 모델 학습/검증 파이프라인 고도화`
+5. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 

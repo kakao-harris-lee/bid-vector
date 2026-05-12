@@ -1104,11 +1104,91 @@ class StrategyOperationsSummary(BaseModel):
     recent_failures: List[StrategyFailureItem] = Field(default_factory=list)
 
 
+class TaskBrokerHealth(BaseModel):
+    url: str
+    transport: str
+    health_status: Literal["healthy", "watch", "critical", "info"]
+    detail: str
+
+
+class TaskResultBackendHealth(BaseModel):
+    url: str
+    transport: str
+    health_status: Literal["healthy", "watch", "critical", "info"]
+    detail: str
+
+
+class TaskRuntimeHealth(BaseModel):
+    eager_mode: bool
+    inline_ml_tasks_allowed: bool
+    worker_concurrency: int = Field(ge=0)
+    worker_prefetch_multiplier: int = Field(ge=0)
+    worker_max_tasks_per_child: int = Field(ge=0)
+    task_time_limit_seconds: int = Field(ge=0)
+    task_soft_time_limit_seconds: int = Field(ge=0)
+    result_expires_seconds: int = Field(ge=0)
+    task_track_started: bool
+    worker_send_task_events: bool
+    task_send_sent_event: bool
+    broker_connection_retry_on_startup: bool
+    broker_connection_max_retries: int = Field(ge=0)
+    broker_publish_max_retries: int = Field(ge=0)
+    health_status: Literal["healthy", "watch", "critical", "info"]
+    detail: str
+
+
+class TaskQueueDiagnostic(BaseModel):
+    queue: str
+    task_count: int = Field(ge=0)
+    task_names: List[str] = Field(default_factory=list)
+
+
+class TaskOperationsItem(BaseModel):
+    source: str
+    record_id: int
+    task_id: Optional[str] = None
+    task_name: str
+    queue: str
+    status: str
+    detail: str
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    age_seconds: Optional[int] = Field(default=None, ge=0)
+
+
+class TaskOperationsSummary(BaseModel):
+    broker: TaskBrokerHealth
+    result_backend: TaskResultBackendHealth
+    runtime: TaskRuntimeHealth
+    queues: List[TaskQueueDiagnostic] = Field(default_factory=list)
+    tracked_task_count: int = Field(ge=0)
+    queued_count: int = Field(ge=0)
+    running_count: int = Field(ge=0)
+    active_count: int = Field(ge=0)
+    completed_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    retry_count: int = Field(ge=0)
+    failure_rate: float = Field(ge=0.0, le=1.0)
+    stale_task_threshold_seconds: int = Field(ge=0)
+    stale_task_count: int = Field(ge=0)
+    average_queue_wait_seconds: Optional[float] = Field(default=None, ge=0.0)
+    average_runtime_seconds: Optional[float] = Field(default=None, ge=0.0)
+    backlog_status: Literal["healthy", "watch", "critical", "info"]
+    failure_status: Literal["healthy", "watch", "critical", "info"]
+    risk_flags: List[str] = Field(default_factory=list)
+    recent_delayed_tasks: List[TaskOperationsItem] = Field(default_factory=list)
+    recent_failures: List[TaskOperationsItem] = Field(default_factory=list)
+    recent_retries: List[TaskOperationsItem] = Field(default_factory=list)
+
+
 class OperationsDashboardResponse(BaseModel):
     operator_id: int
     period_days: int
     crawl: CrawlOperationsSummary
     strategy: StrategyOperationsSummary
+    tasks: TaskOperationsSummary
     cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 

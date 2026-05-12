@@ -72,7 +72,7 @@
 
 ## 권장 우선순위
 
-### 1순위 — production task/broker 운영 관측성
+### 완료 — production task/broker 운영 관측성
 
 비동기 작업은 API 요청 경로에서 분리됐고 compose task profile도 준비됐다. 다음 큰 빈틈은 worker queue 지연, 실패율, 재시도, broker health를 운영 화면이 바로 볼 수 있게 만드는 것이다.
 
@@ -102,6 +102,27 @@
 
 - 운영 화면이 worker/broker 상태를 카드로 표시할 수 있어야 한다.
 - queued/stale/failed 작업 위험이 API 응답에서 명확히 드러나야 한다.
+
+#### 구현된 결과
+
+- `GET /api/v1/analytics/operations-dashboard`가 `tasks` summary를 함께 반환한다.
+- Celery broker/result backend URL은 credential을 마스킹해서 노출한다.
+- queue route, worker runtime 설정, stale/failed/retry task 집계와 `task_broker_health`, `task_stale_queue`, `task_failure_rate` 카드가 추가됐다.
+
+### 1순위 — realtime 운영화
+
+WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작하지만, 운영 환경에서는 인증과 다중 프로세스 fanout 경로가 아직 약하다.
+
+#### 1순위 작업 범위
+
+- WebSocket 인증
+- 다중 프로세스 pub/sub fanout
+- 이벤트 재연결/누락 보정 정책 정리
+
+#### 1순위 완료 기준
+
+- dashboard client가 인증된 realtime stream만 구독할 수 있어야 한다.
+- 여러 API worker가 떠 있어도 동일한 이벤트가 안정적으로 전달되어야 한다.
 
 ### 2순위 — 실험 운영 고도화
 
@@ -196,20 +217,21 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — task/broker 운영 관측성
-
-- worker queue 지연 / 실패율 / 재시도 카드
-- broker health 점검 payload
-
-### 묶음 B — realtime 운영화
+### 묶음 A — realtime 운영화
 
 - WebSocket 인증
 - 다중 프로세스 pub/sub fanout
 
-### 묶음 C — realtime 운영화
+### 묶음 B — 추가 운영 카드
 
-- WebSocket 인증
-- 다중 프로세스 pub/sub fanout
+- Telegram 전송률
+- 모델 릴리즈 상태
+- training/backtest 결과 카드
+
+### 묶음 C — 실험 이력 관측성
+
+- 성공 / 실패 / 보류 실험 이력 기반 정렬
+- 적용 이력 필터와 중복 적용 감사 payload
 
 ## 범위 재정의 / 비우선 항목
 
