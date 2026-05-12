@@ -34,6 +34,12 @@ from app.schemas.schemas import (
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.notifications.manager import OperatorNotificationService
+from app.services.operator_strategy_tuning import (
+    clamp_auto_workload_penalty_multiplier,
+    dump_category_priority_overrides,
+    get_strategy_auto_workload_penalty_multiplier,
+    get_strategy_category_priority_overrides,
+)
 from app.tasks.jobs import enqueue_operator_strategy_monitor, get_operator_strategy_monitor_task_status
 
 router = APIRouter()
@@ -86,6 +92,8 @@ def _is_strategy_configured(
     minimum_probability_score: float,
     bid_now_threshold: float,
     review_threshold: float,
+    auto_workload_penalty_multiplier: float,
+    category_priority_overrides: dict[str, float],
     notify_only_high_priority: bool,
     max_recommended_candidates: int,
 ) -> bool:
@@ -101,6 +109,8 @@ def _is_strategy_configured(
         round(minimum_probability_score, 4) != 0.55,
         round(bid_now_threshold, 4) != DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
         round(review_threshold, 4) != DEFAULT_OPERATOR_REVIEW_THRESHOLD,
+        round(auto_workload_penalty_multiplier, 4) != 1.0,
+        bool(category_priority_overrides),
         notify_only_high_priority is False,
         max_recommended_candidates != 10,
     ])
@@ -127,6 +137,8 @@ def _build_operator_strategy_response(
     minimum_probability_score: float,
     bid_now_threshold: float,
     review_threshold: float,
+    auto_workload_penalty_multiplier: float,
+    category_priority_overrides: dict[str, float],
     notify_only_high_priority: bool,
     max_recommended_candidates: int,
 ) -> OperatorStrategyResponse:
@@ -147,6 +159,8 @@ def _build_operator_strategy_response(
         minimum_probability_score=minimum_probability_score,
         bid_now_threshold=bid_now_threshold,
         review_threshold=review_threshold,
+        auto_workload_penalty_multiplier=auto_workload_penalty_multiplier,
+        category_priority_overrides=category_priority_overrides,
         notify_only_high_priority=notify_only_high_priority,
         max_recommended_candidates=max_recommended_candidates,
         strategy_configured=_is_strategy_configured(
@@ -161,6 +175,8 @@ def _build_operator_strategy_response(
             minimum_probability_score=minimum_probability_score,
             bid_now_threshold=bid_now_threshold,
             review_threshold=review_threshold,
+            auto_workload_penalty_multiplier=auto_workload_penalty_multiplier,
+            category_priority_overrides=category_priority_overrides,
             notify_only_high_priority=notify_only_high_priority,
             max_recommended_candidates=max_recommended_candidates,
         ),
@@ -255,6 +271,8 @@ def get_operator_strategy_endpoint(db: Session = Depends(get_db)):
         minimum_probability_score=float(strategy.minimum_probability_score or 0.0),
         bid_now_threshold=float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD),
         review_threshold=float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD),
+        auto_workload_penalty_multiplier=get_strategy_auto_workload_penalty_multiplier(strategy),
+        category_priority_overrides=get_strategy_category_priority_overrides(strategy),
         notify_only_high_priority=bool(strategy.notify_only_high_priority),
         max_recommended_candidates=int(strategy.max_recommended_candidates or 10),
     )
@@ -303,6 +321,14 @@ def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depe
         strategy.bid_now_threshold = request.bid_now_threshold
     if request.review_threshold is not None:
         strategy.review_threshold = request.review_threshold
+    if request.auto_workload_penalty_multiplier is not None:
+        strategy.auto_workload_penalty_multiplier = clamp_auto_workload_penalty_multiplier(
+            request.auto_workload_penalty_multiplier
+        )
+    if request.category_priority_overrides is not None:
+        strategy.category_priority_overrides = dump_category_priority_overrides(
+            request.category_priority_overrides
+        )
     if request.notify_only_high_priority is not None:
         strategy.notify_only_high_priority = request.notify_only_high_priority
     if request.max_recommended_candidates is not None:
@@ -324,6 +350,8 @@ def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depe
         minimum_probability_score=float(strategy.minimum_probability_score or 0.0),
         bid_now_threshold=float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD),
         review_threshold=float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD),
+        auto_workload_penalty_multiplier=get_strategy_auto_workload_penalty_multiplier(strategy),
+        category_priority_overrides=get_strategy_category_priority_overrides(strategy),
         notify_only_high_priority=bool(strategy.notify_only_high_priority),
         max_recommended_candidates=int(strategy.max_recommended_candidates or 10),
     )

@@ -13,6 +13,10 @@ from app.core.single_user import (
 )
 from app.models.models import BidDecisionRecord, Project
 from app.schemas.schemas import BidDecisionRequest
+from app.services.operator_strategy_tuning import (
+    DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
+    get_strategy_auto_workload_penalty_multiplier,
+)
 
 
 class BidDecisionService:
@@ -35,7 +39,7 @@ class BidDecisionService:
 
     def evaluate_opportunity(self, request: BidDecisionRequest, db: Session | None = None) -> dict:
         """Score a notice for a single user and decide whether to pursue it."""
-        bid_now_threshold, review_threshold = self._resolve_thresholds(db)
+        bid_now_threshold, review_threshold, auto_workload_penalty_multiplier = self._resolve_strategy_settings(db)
         urgency_score = self._compute_urgency_score(request.deadline_hours_remaining)
         active_load_ratio = self._compute_active_load_ratio(
             current_active_bids=request.current_active_bids,
@@ -59,6 +63,8 @@ class BidDecisionService:
             max_active_bids=request.max_active_bids,
             workload_score=request.current_workload_score,
         )
+        if request.workload_source == "auto":
+            load_penalty = round(load_penalty * auto_workload_penalty_multiplier, 4)
         complexity_penalty = self._compute_complexity_penalty(execution_complexity_score)
 
         opportunity_score = (
@@ -85,6 +91,10 @@ class BidDecisionService:
 
         if request.workload_source == "auto":
             reasons.append(f"현재 진행 중인 입찰 현황을 바탕으로 업무부하 점수 {request.current_workload_score:.2f}를 자동 산정했습니다.")
+            if round(auto_workload_penalty_multiplier, 4) != DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER:
+                reasons.append(
+                    f"자동 업무부하 감점 배율 {auto_workload_penalty_multiplier:.2f}를 적용했습니다."
+                )
         elif request.current_workload_score > 0:
             reasons.append(f"입력된 업무부하 점수 {request.current_workload_score:.2f}를 반영했습니다.")
 
@@ -133,6 +143,7 @@ class BidDecisionService:
                 "active_load_ratio": round(active_load_ratio, 2),
                 "workload_score_used": round(float(request.current_workload_score), 2),
                 "opportunity_score": round(opportunity_score, 2),
+                "auto_workload_penalty_multiplier": round(float(auto_workload_penalty_multiplier), 4),
                 "load_penalty": round(load_penalty, 2),
                 "execution_complexity_penalty": round(complexity_penalty, 2),
                 "total_penalty": round(total_penalty, 2),
@@ -479,8 +490,17 @@ class BidDecisionService:
 
     def _resolve_thresholds(self, db: Session | None) -> tuple[float, float]:
         """Resolve bid-now/review thresholds from persisted operator strategy when available."""
+        bid_now_threshold, review_threshold, _ = self._resolve_strategy_settings(db)
+        return bid_now_threshold, review_threshold
+
+    def _resolve_strategy_settings(self, db: Session | None) -> tuple[float, float, float]:
+        """Resolve persisted operator decision settings used by scoring."""
         if db is None:
-            return self.BID_NOW_THRESHOLD, self.REVIEW_THRESHOLD
+            return (
+                self.BID_NOW_THRESHOLD,
+                self.REVIEW_THRESHOLD,
+                DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
+            )
 
         strategy = ensure_operator_strategy(db)
         bid_now_threshold = self._normalize_unit_score(
@@ -493,7 +513,8 @@ class BidDecisionService:
         )
         if review_threshold > bid_now_threshold:
             review_threshold = bid_now_threshold
-        return bid_now_threshold, review_threshold
+        auto_workload_penalty_multiplier = get_strategy_auto_workload_penalty_multiplier(strategy)
+        return bid_now_threshold, review_threshold, auto_workload_penalty_multiplier
 
 
 # Backward-compatible alias while the route name migrates from allocation to bid decision.

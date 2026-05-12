@@ -80,7 +80,7 @@ env/
 logs/
 
 # Models cache
-models/
+/models/
 *.pkl
 *.h5
 

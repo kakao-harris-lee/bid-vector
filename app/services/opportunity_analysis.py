@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_recommendation
 from app.ai.price_prediction import get_price_insights, predict_price
-from app.core.single_user import ensure_operator_account, ensure_operator_profile
+from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy
 from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, Project
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
@@ -15,6 +15,7 @@ from app.services.classifier import NoticeClassifierService
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.operator_strategy_tuning import resolve_category_priority_override
 
 
 class OpportunityAnalysisService:
@@ -50,6 +51,7 @@ class OpportunityAnalysisService:
         """Build a multi-angle bid opportunity analysis for one project."""
         operator = ensure_operator_account(db)
         profile = ensure_operator_profile(db)
+        strategy = ensure_operator_strategy(db)
 
         classification = self.classifier.classify(project=project, profile=profile)
         similar_projects = self.similarity_service.find_similar_projects(
@@ -126,6 +128,17 @@ class OpportunityAnalysisService:
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
         )
+        category_priority_override = resolve_category_priority_override(strategy, project.category)
+        matched_score = self._apply_category_priority_override(
+            float(classification["score"]),
+            category_priority_override * 0.5,
+        )
+        probability_score = self._apply_category_priority_override(
+            probability_score,
+            category_priority_override,
+        )
+        if not classification.get("matched", False):
+            probability_score = min(probability_score, 0.49)
         expected_margin_score = self._estimate_expected_margin_score(
             project=project,
             recommended_amount=recommended_amount,
@@ -147,7 +160,7 @@ class OpportunityAnalysisService:
                 project_id=project.id,
                 recommended_amount=recommended_amount,
                 probability_score=probability_score,
-                matched_score=float(classification["score"]),
+                matched_score=matched_score,
                 deadline_hours_remaining=deadline_hours_remaining,
                 current_active_bids=current_active_bids,
                 max_active_bids=request.max_active_bids,
@@ -179,13 +192,21 @@ class OpportunityAnalysisService:
             expected_margin_score=expected_margin_score,
             execution_complexity_score=execution_complexity_score,
         )
+        if category_priority_override > 0:
+            strengths.append(
+                f"운영 전략에서 {project.category or '미분류'} 카테고리를 우선 검토 대상으로 보정했습니다."
+            )
+        elif category_priority_override < 0:
+            risk_flags.append(
+                f"운영 전략에서 {project.category or '미분류'} 카테고리 우선순위를 낮춰 보수적으로 평가했습니다."
+            )
 
         return {
             "project_id": project.id,
             "project_title": project.title,
             "operator_id": operator.id,
             "matched": bool(classification["matched"]),
-            "matched_score": round(float(classification["score"]), 2),
+            "matched_score": matched_score,
             "probability_score": probability_score,
             "recommended_amount": recommended_amount,
             "deadline_hours_remaining": deadline_hours_remaining,
@@ -193,6 +214,9 @@ class OpportunityAnalysisService:
             "max_active_bids": request.max_active_bids,
             "current_workload_score": current_workload_score,
             "workload_source": workload_source,
+            "strategy_adjustments": {
+                "category_priority_override": round(float(category_priority_override), 4),
+            },
             "analysis_summary": self._build_summary(
                 project=project,
                 decision=decision,
@@ -400,6 +424,10 @@ class OpportunityAnalysisService:
             probability_score -= 0.05
 
         return round(max(0.0, min(1.0, probability_score)), 2)
+
+    def _apply_category_priority_override(self, score: float, override: float) -> float:
+        """Apply a bounded category priority offset to an analysis score."""
+        return round(max(0.0, min(1.0, float(score) + float(override))), 2)
 
     def _estimate_expected_margin_score(
         self,

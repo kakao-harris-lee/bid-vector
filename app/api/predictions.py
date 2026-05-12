@@ -65,6 +65,22 @@ def predict_project_price(
         price_range_max=prediction["price_range_max"],
         confidence_score=prediction["confidence_score"],
         model_version=prediction["model_version"],
+        predictor_name=prediction.get("predictor_name", "historical_statistical"),
+        predictor_family=prediction.get("predictor_family", "statistical"),
+        fallback_reason=prediction.get("fallback_reason"),
+        selector_name=prediction.get("selector_name", "configured_preference"),
+        selection_reason=prediction.get("selection_reason"),
+        backtest_sample_count=int(prediction.get("backtest_sample_count", 0) or 0),
+        backtest_average_absolute_error_rate=prediction.get("backtest_average_absolute_error_rate"),
+        training_window_size=int(prediction.get("training_window_size", 0) or 0),
+        pricing_mode=prediction.get("pricing_mode", "heuristic"),
+        historical_sample_size=int(prediction.get("historical_sample_size", 0) or 0),
+        agency_match_sample_size=int(prediction.get("agency_match_sample_size", 0) or 0),
+        predicted_bid_rate=float(prediction.get("predicted_bid_rate", 0.0) or 0.0),
+        guardrail_applied=bool(prediction.get("guardrail_applied", False)),
+        guardrail_reason=prediction.get("guardrail_reason"),
+        floor_bid_rate=prediction.get("floor_bid_rate"),
+        floor_price=prediction.get("floor_price"),
     )
     db.add(db_prediction)
     db.commit()

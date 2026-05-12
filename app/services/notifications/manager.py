@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.time import utc_now
 from app.models.models import Bid, BidDecisionRecord, Notification, Project
 from app.services.notifications.telegram import TelegramNotificationService
+from app.services.realtime import realtime_event_manager
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,22 @@ class OperatorNotificationService:
                 message,
                 reply_markup=self.telegram.build_bid_decision_reply_markup(decision_record.id),
             )
+        realtime_event_manager.publish_event(
+            "bid_decision.notification",
+            {
+                "notification_id": int(notification.id),
+                "operator_id": int(operator_id),
+                "project_id": int(project.id),
+                "decision_record_id": int(decision_record.id),
+                "action": decision_record.action,
+                "decision_status": decision_record.decision_status,
+                "priority_score": float(decision_record.priority_score or 0.0),
+                "probability_score": float(decision_record.probability_score or 0.0),
+                "recommended_amount": float(decision_record.recommended_amount or 0.0),
+                "title": notification.title,
+                "type": notification.type,
+            },
+        )
         return notification
 
     def create_bid_submission_notification(
@@ -80,6 +97,20 @@ class OperatorNotificationService:
             notification_type=self.BID_SUBMISSION_TYPE,
         )
         self._deliver_telegram_message(message)
+        realtime_event_manager.publish_event(
+            "bid_submission.notification",
+            {
+                "notification_id": int(notification.id),
+                "operator_id": int(operator_id),
+                "project_id": int(project.id),
+                "bid_id": int(bid.id),
+                "decision_record_id": int(decision_record.id),
+                "bid_amount": float(bid.bid_amount or 0.0),
+                "decision_status": decision_record.decision_status,
+                "title": notification.title,
+                "type": notification.type,
+            },
+        )
         return notification
 
     def should_deliver_bid_decision_to_telegram(self, decision_record: BidDecisionRecord) -> bool:

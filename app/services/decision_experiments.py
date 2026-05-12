@@ -14,9 +14,17 @@ from app.models.models import DecisionExperimentRun
 from app.schemas.schemas import (
     DecisionExperimentRunCreateRequest,
     DecisionExperimentRunUpdateRequest,
+    DecisionExperimentStrategyApplyRequest,
     DecisionExperimentThresholdApplyRequest,
 )
 from app.services.decision_analytics import DecisionAnalyticsService
+from app.services.operator_strategy_tuning import (
+    clamp_auto_workload_penalty_multiplier,
+    clamp_category_priority_override,
+    dump_category_priority_overrides,
+    get_strategy_auto_workload_penalty_multiplier,
+    get_strategy_category_priority_overrides,
+)
 
 
 class DecisionExperimentService:
@@ -27,6 +35,7 @@ class DecisionExperimentService:
     COUNT_DROP_RATIO = 0.2
     ACTIVE_PENDING_GROWTH_RATIO = 0.2
     THRESHOLD_APPLICATION_PREFIX = "Threshold 적용:"
+    STRATEGY_APPLICATION_PREFIX = "Strategy 적용:"
 
     def __init__(self) -> None:
         self.analytics = DecisionAnalyticsService()
@@ -229,6 +238,57 @@ class DecisionExperimentService:
                 "Threshold adjustment preview generated."
                 if request.dry_run
                 else f"Applied {len(threshold_updates)} threshold adjustment(s) to the operator strategy."
+            ),
+        }
+
+    def apply_strategy_adjustments(
+        self,
+        db: Session,
+        *,
+        run_id: int,
+        request: DecisionExperimentStrategyApplyRequest,
+    ) -> dict[str, Any]:
+        """Convert workload/category experiments into persisted operator strategy tuning."""
+        run = self._get_run_or_raise(db, run_id=run_id)
+        strategy = ensure_operator_strategy(db)
+        current_tuning = self._current_strategy_tuning(strategy)
+        strategy_updates = self._build_strategy_adjustments(run, current_tuning=current_tuning)
+        if not strategy_updates:
+            raise ValueError("This experiment does not map to a supported strategy adjustment yet")
+
+        if not request.dry_run:
+            if self._run_has_applied_strategy(run) and not request.force:
+                raise ValueError("Strategy adjustments were already applied for this experiment run")
+            if str(run.outcome or "") != "success" and not request.force:
+                raise ValueError("Strategy adjustments can only be applied after a successful experiment outcome")
+
+            self._apply_strategy_updates(strategy, strategy_updates)
+            run.notes = self._merge_notes(
+                run.notes,
+                self._build_strategy_application_note(
+                    strategy_updates,
+                    append_note=request.append_note,
+                ),
+            )
+            db.commit()
+            db.refresh(run)
+            db.refresh(strategy)
+
+        strategy_tuning = self._current_strategy_tuning(strategy)
+        return {
+            "operator_id": int(run.operator_id),
+            "run_id": int(run.id),
+            "experiment_key": str(run.experiment_key),
+            "recommendation_key": str(run.recommendation_key),
+            "applied": not request.dry_run,
+            "dry_run": bool(request.dry_run),
+            "latest_outcome": str(run.outcome) if run.outcome else None,
+            "strategy_updates": strategy_updates,
+            "strategy_tuning": strategy_tuning,
+            "detail": (
+                "Strategy adjustment preview generated."
+                if request.dry_run
+                else f"Applied {len(strategy_updates)} strategy adjustment(s) to the operator strategy."
             ),
         }
 
@@ -610,6 +670,111 @@ class DecisionExperimentService:
         strategy.bid_now_threshold = float(updated_values["bid_now_threshold"])
         strategy.review_threshold = float(updated_values["review_threshold"])
 
+    def _current_strategy_tuning(self, strategy) -> dict[str, Any]:
+        """Serialize workload/category tuning settings into a stable snapshot."""
+        return {
+            "auto_workload_penalty_multiplier": get_strategy_auto_workload_penalty_multiplier(strategy),
+            "category_priority_overrides": get_strategy_category_priority_overrides(strategy),
+        }
+
+    def _build_strategy_adjustments(
+        self,
+        run: DecisionExperimentRun,
+        *,
+        current_tuning: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Translate supported experiment keys into concrete strategy tuning updates."""
+        experiment_key = str(run.experiment_key or "")
+
+        if experiment_key == "exp-workload-auto-calibration":
+            previous_value = float(current_tuning["auto_workload_penalty_multiplier"])
+            suggested_value = clamp_auto_workload_penalty_multiplier(max(0.5, previous_value - 0.15))
+            return [
+                {
+                    "parameter": "auto_workload_penalty_multiplier",
+                    "label": "AUTO_WORKLOAD_PENALTY_MULTIPLIER",
+                    "direction": "decrease",
+                    "previous_value": round(previous_value, 4),
+                    "suggested_value": round(suggested_value, 4),
+                    "delta": round(suggested_value - previous_value, 4),
+                    "rationale": "자동 산정 업무부하 후보의 제출 전환율이 낮아 감점 배율을 낮추고 후보 탐색 폭을 넓힙니다.",
+                }
+            ]
+
+        if experiment_key == "exp-category-focus-shift":
+            source_summary = self._strategy_source_summary(run)
+            best_category = self._clean_category_name(source_summary.get("best_category"))
+            worst_category = self._clean_category_name(source_summary.get("worst_category"))
+            if best_category is None and worst_category is None:
+                return []
+
+            previous_overrides = dict(current_tuning["category_priority_overrides"])
+            suggested_overrides = dict(previous_overrides)
+            changed_deltas: dict[str, float] = {}
+
+            if best_category is not None:
+                previous_best_value = self._category_override_for(previous_overrides, best_category)
+                suggested_best_value = clamp_category_priority_override(previous_best_value + 0.03)
+                suggested_overrides[best_category] = suggested_best_value
+                changed_deltas[best_category] = round(suggested_best_value - previous_best_value, 4)
+
+            if worst_category is not None and worst_category.lower() != str(best_category or "").lower():
+                previous_worst_value = self._category_override_for(previous_overrides, worst_category)
+                suggested_worst_value = clamp_category_priority_override(previous_worst_value - 0.03)
+                suggested_overrides[worst_category] = suggested_worst_value
+                changed_deltas[worst_category] = round(suggested_worst_value - previous_worst_value, 4)
+
+            return [
+                {
+                    "parameter": "category_priority_overrides",
+                    "label": "CATEGORY_PRIORITY_OVERRIDES",
+                    "direction": "replace",
+                    "previous_value": previous_overrides,
+                    "suggested_value": suggested_overrides,
+                    "delta": changed_deltas,
+                    "rationale": "제출 전환이 좋은 카테고리는 우선순위를 높이고 저조한 카테고리는 보수적으로 평가합니다.",
+                }
+            ]
+
+        return []
+
+    def _apply_strategy_updates(self, strategy, strategy_updates: list[dict[str, Any]]) -> None:
+        """Persist suggested workload/category tuning values onto the operator strategy row."""
+        for update in strategy_updates:
+            parameter = str(update["parameter"])
+            if parameter == "auto_workload_penalty_multiplier":
+                strategy.auto_workload_penalty_multiplier = clamp_auto_workload_penalty_multiplier(
+                    update["suggested_value"]
+                )
+            elif parameter == "category_priority_overrides":
+                strategy.category_priority_overrides = dump_category_priority_overrides(
+                    update["suggested_value"]
+                )
+
+    def _strategy_source_summary(self, run: DecisionExperimentRun) -> dict[str, Any]:
+        """Choose the best available metrics snapshot for strategy application."""
+        latest_evaluation = self._load_json(run.latest_evaluation, fallback={})
+        if isinstance(latest_evaluation, dict):
+            current_summary = latest_evaluation.get("current_summary")
+            if isinstance(current_summary, dict):
+                return current_summary
+
+        baseline_summary = self._load_json(run.baseline_summary, fallback={})
+        return baseline_summary if isinstance(baseline_summary, dict) else {}
+
+    def _clean_category_name(self, raw_value: Any) -> str | None:
+        """Normalize category labels from experiment snapshots."""
+        category = str(raw_value or "").strip()
+        return category or None
+
+    def _category_override_for(self, overrides: dict[str, float], category: str) -> float:
+        """Read an existing category override using case-insensitive matching."""
+        normalized_category = category.strip().lower()
+        for key, value in overrides.items():
+            if key.strip().lower() == normalized_category:
+                return float(value)
+        return 0.0
+
     def _bounded_review_threshold(self, proposed_value: float, *, bid_now_threshold: float) -> float:
         """Keep review threshold inside a sane range below the bid-now threshold."""
         upper_bound = max(0.0, min(1.0, float(bid_now_threshold) - 0.01))
@@ -634,6 +799,10 @@ class DecisionExperimentService:
         """Return whether this experiment run already wrote threshold updates into its notes."""
         return self.THRESHOLD_APPLICATION_PREFIX in str(run.notes or "")
 
+    def _run_has_applied_strategy(self, run: DecisionExperimentRun) -> bool:
+        """Return whether this experiment run already wrote strategy tuning updates into its notes."""
+        return self.STRATEGY_APPLICATION_PREFIX in str(run.notes or "")
+
     def _build_threshold_application_note(
         self,
         threshold_updates: list[dict[str, Any]],
@@ -646,6 +815,32 @@ class DecisionExperimentService:
             for item in threshold_updates
         )
         base_note = f"{self.THRESHOLD_APPLICATION_PREFIX} {summary}"
+        extra_note = str(append_note or "").strip()
+        if extra_note:
+            return f"{base_note} | {extra_note}"
+        return base_note
+
+    def _build_strategy_application_note(
+        self,
+        strategy_updates: list[dict[str, Any]],
+        *,
+        append_note: str | None,
+    ) -> str:
+        """Build one audit-friendly notes line for applied strategy tuning changes."""
+        summary_parts: list[str] = []
+        for item in strategy_updates:
+            if item["parameter"] == "auto_workload_penalty_multiplier":
+                summary_parts.append(
+                    f"{item['label']} {float(item['previous_value']):.4f}→{float(item['suggested_value']):.4f}"
+                )
+            elif item["parameter"] == "category_priority_overrides":
+                changed = ", ".join(
+                    f"{category} {delta:+.4f}"
+                    for category, delta in dict(item.get("delta") or {}).items()
+                )
+                summary_parts.append(f"{item['label']} {changed or 'no-op'}")
+
+        base_note = f"{self.STRATEGY_APPLICATION_PREFIX} {', '.join(summary_parts)}"
         extra_note = str(append_note or "").strip()
         if extra_note:
             return f"{base_note} | {extra_note}"

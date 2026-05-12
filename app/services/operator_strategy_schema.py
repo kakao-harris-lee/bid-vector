@@ -17,6 +17,8 @@ def ensure_operator_strategy_schema(engine) -> None:
     column_statements = {
         "bid_now_threshold": f"FLOAT DEFAULT {DEFAULT_OPERATOR_BID_NOW_THRESHOLD}",
         "review_threshold": f"FLOAT DEFAULT {DEFAULT_OPERATOR_REVIEW_THRESHOLD}",
+        "auto_workload_penalty_multiplier": "FLOAT DEFAULT 1.0",
+        "category_priority_overrides": "TEXT DEFAULT '{}'",
     }
 
     with engine.begin() as connection:
@@ -33,4 +35,14 @@ def ensure_operator_strategy_schema(engine) -> None:
             connection.exec_driver_sql(
                 f"UPDATE operator_strategies SET review_threshold = {DEFAULT_OPERATOR_REVIEW_THRESHOLD} "
                 "WHERE review_threshold IS NULL"
+            )
+        if "auto_workload_penalty_multiplier" not in existing_columns:
+            connection.exec_driver_sql(
+                "UPDATE operator_strategies SET auto_workload_penalty_multiplier = 1.0 "
+                "WHERE auto_workload_penalty_multiplier IS NULL"
+            )
+        if "category_priority_overrides" not in existing_columns:
+            connection.exec_driver_sql(
+                "UPDATE operator_strategies SET category_priority_overrides = '{}' "
+                "WHERE category_priority_overrides IS NULL"
             )

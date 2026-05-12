@@ -13,6 +13,8 @@ from app.schemas.schemas import (
     DecisionExperimentRunCreateRequest,
     DecisionExperimentRunDetailResponse,
     DecisionExperimentRunListResponse,
+    DecisionExperimentStrategyApplyRequest,
+    DecisionExperimentStrategyApplyResponse,
     DecisionExperimentRunUpdateRequest,
     DecisionExperimentThresholdApplyRequest,
     DecisionExperimentThresholdApplyResponse,
@@ -21,11 +23,15 @@ from app.schemas.schemas import (
     DecisionInsightsResponse,
     MLTaskResponse,
     OperatorStatsResponse,
+    OperationsDashboardResponse,
     PredictionFeedbackResponse,
+    PredictionObservabilityResponse,
 )
+from app.services.analytics_reporting import AnalyticsReportingService
 from app.services.decision_analytics import DecisionAnalyticsService
 from app.services.decision_experiments import DecisionExperimentService
 from app.services.prediction_feedback import PredictionFeedbackService
+from app.services.prediction_reporting import PredictionReportingService
 from app.tasks.jobs import (
     enqueue_decision_experiment_reevaluation,
     get_decision_experiment_reevaluation_task_status,
@@ -114,6 +120,25 @@ def get_prediction_feedback(
 ):
     """Compare stored prediction and recommendation amounts against actual tender results."""
     return PredictionFeedbackService().build_feedback(db, days=days, limit=limit)
+
+
+@router.get("/prediction-observability", response_model=PredictionObservabilityResponse)
+def get_prediction_observability(
+    days: int = Query(90, ge=1, le=365),
+    db: Session = Depends(get_db),
+):
+    """Summarize predictor selection, fallback, guardrails, and result accuracy."""
+    return PredictionReportingService().build_observability(db, days=days)
+
+
+@router.get("/operations-dashboard", response_model=OperationsDashboardResponse)
+def get_operations_dashboard(
+    days: int = Query(30, ge=1, le=365),
+    recent_limit: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Return dashboard cards for crawl health and strategy monitoring performance."""
+    return AnalyticsReportingService().build_operations_dashboard(db, days=days, recent_limit=recent_limit)
 
 
 @router.get("/decision-insights", response_model=DecisionInsightsResponse)
@@ -238,6 +263,26 @@ def apply_decision_experiment_thresholds(
     """Apply one successful experiment's threshold recommendation to the operator strategy."""
     try:
         return DecisionExperimentService().apply_threshold_adjustments(
+            db,
+            run_id=experiment_run_id,
+            request=request,
+        )
+    except ValueError as exc:
+        _raise_decision_experiment_http_error(exc)
+
+
+@router.post(
+    "/decision-experiments/{experiment_run_id}/apply-strategy",
+    response_model=DecisionExperimentStrategyApplyResponse,
+)
+def apply_decision_experiment_strategy(
+    experiment_run_id: int,
+    request: DecisionExperimentStrategyApplyRequest,
+    db: Session = Depends(get_db),
+):
+    """Apply one successful experiment's workload/category tuning to the operator strategy."""
+    try:
+        return DecisionExperimentService().apply_strategy_adjustments(
             db,
             run_id=experiment_run_id,
             request=request,

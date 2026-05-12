@@ -169,6 +169,8 @@ def ensure_operator_strategy(db: Session) -> OperatorStrategy:
         minimum_probability_score=0.55,
         bid_now_threshold=DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
         review_threshold=DEFAULT_OPERATOR_REVIEW_THRESHOLD,
+        auto_workload_penalty_multiplier=1.0,
+        category_priority_overrides="{}",
         notify_only_high_priority=True,
         max_recommended_candidates=10,
     )

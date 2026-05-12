@@ -12,7 +12,7 @@ The product is being aligned around a **single operator workflow** rather than a
 - **Document Analysis**: Automatic requirement extraction and complexity analysis
 - **Operator Notifications**: Telegram alerts plus persisted web notifications with callback/polling support
 - **Single Operator Workspace**: Centralized operator profile, workload overview, and bid planning surface
-- **Decision Analytics & Experiment Tracking**: Funnel analytics, recommendation experiments, and outcome evaluation APIs
+- **Decision Analytics & Experiment Tracking**: Funnel analytics, recommendation experiments, outcome evaluation, and strategy feedback APIs
 
 ## Technology Stack
 
@@ -278,7 +278,7 @@ ML API endpoints enqueue work only. With the default `memory://` broker, ML jobs
 - `GET /api/v1/operator/profile` - Get the singleton operator profile and company fit settings
 - `PUT /api/v1/operator/profile` - Update company fit settings used by classification and planning
 - `GET /api/v1/operator/strategy` - Get the singleton operator's watch strategy for monitoring and alerts
-- `PUT /api/v1/operator/strategy` - Update watch rules such as focus categories, regions, keywords, budgets, and thresholds
+- `PUT /api/v1/operator/strategy` - Update watch rules such as focus categories, regions, keywords, budgets, thresholds, automatic workload penalty multiplier, and category priority overrides
 - `GET /api/v1/operator/strategy/candidates` - Preview currently open projects that match the stored strategy and are ranked by bid priority
 - `POST /api/v1/operator/strategy/monitor` - Execute the stored strategy, persist bid decisions for selected candidates, and create operator notifications/Telegram alerts when applicable
 - `POST /api/v1/operator/strategy/monitor/async` - Queue the strategy monitor in the background and return a pollable task id
@@ -329,12 +329,16 @@ If the caller provides an optional `agency_name`, same-agency history receives a
 
 When recent linked `TenderResult` rows already exist for the same category, the prediction service now also computes a lightweight `feedback_calibration` bias from past signed prediction errors. That bias is applied automatically to the new `predicted_price` and scenario band so the service can gradually correct category-level overestimation or underestimation.
 
+Set `PRICE_PREDICTION_PREFERRED_PREDICTOR=auto` to enable rolling backtest selection. In that mode the service compares currently runnable predictors over the recent historical holdout window, selects the lowest average absolute bid-rate error, and returns selector/backtest metadata in the prediction response.
+
 ### Analytics
 
 - `POST /api/v1/analytics/event` - Log an operator analytics event
 - `GET /api/v1/analytics/summary` - Get operator workflow analytics summary
 - `GET /api/v1/analytics/operator-stats` - Get singleton operator statistics
 - `GET /api/v1/analytics/prediction-feedback` - Compare stored predictions and bid-decision recommendations against linked tender results
+- `GET /api/v1/analytics/prediction-observability` - Compare predictor selection, fallback, guardrail, and linked-result accuracy metrics
+- `GET /api/v1/analytics/operations-dashboard` - Return card-ready crawl health and strategy monitoring performance metrics
 - `GET /api/v1/analytics/decision-insights` - Summarize persisted bid decision signals such as priority, margin, complexity, and workload source
 - `GET /api/v1/analytics/decision-funnel` - Track how initial bid decisions move from review/bid_now into submitted workflow states, including trend and segment breakdowns
 - `GET /api/v1/analytics/decision-recommendations` - Convert funnel signals into actionable recommendations plus bounded experiment plans
@@ -342,11 +346,20 @@ When recent linked `TenderResult` rows already exist for the same category, the 
 - `GET /api/v1/analytics/decision-experiments` - List tracked decision experiment runs for the operator dashboard
 - `GET /api/v1/analytics/decision-experiments/{experiment_run_id}` - Inspect one experiment run with its baseline summary and latest evaluation
 - `POST /api/v1/analytics/decision-experiments/{experiment_run_id}/evaluate` - Queue current-vs-baseline re-evaluation and return a pollable task id
+- `PATCH /api/v1/analytics/decision-experiments/{experiment_run_id}` - Manually update experiment lifecycle state, outcome, and notes
+- `POST /api/v1/analytics/decision-experiments/{experiment_run_id}/apply-thresholds` - Apply a successful threshold experiment to persisted bid/review thresholds with dry-run and force support
+- `POST /api/v1/analytics/decision-experiments/{experiment_run_id}/apply-strategy` - Apply successful workload/category experiments to persisted strategy tuning values with dry-run and force support
 - `GET /api/v1/analytics/user-stats/{user_id}` - Deprecated compatibility alias for operator statistics
 
-The prediction feedback analytics endpoint summarizes how close the latest stored `predicted_price` and `recommended_amount` were to the final `winning_amount` for projects that already have a linked `TenderResult`. It reports average absolute error rates, counts within 1% and 3%, and whether the latest bid-decision recommendation outperformed the raw price prediction.
+The prediction feedback analytics endpoint summarizes how close the latest stored `predicted_price` and `recommended_amount` were to the final `winning_amount` for projects that already have a linked `TenderResult`. It reports average absolute error rates, counts within 1% and 3%, and whether the latest bid-decision recommendation outperformed the raw price prediction. The prediction observability endpoint groups persisted prediction metadata by predictor and pricing mode, including fallback frequency, guardrail frequency, linked-result absolute error rates, and backtest selector metadata. The operations dashboard endpoint summarizes crawl success/failure, recent failure reasons, strategy monitoring completion, candidate selection, persistence, and notification rates for dashboard cards.
 
-Decision analytics now also include persisted funnel telemetry, current-vs-previous period comparisons, segment breakdowns by category / workload source / agency, recommendation payloads with `experiment_plan`, and saved experiment runs that can be evaluated later against baseline target and guardrail metrics.
+Decision analytics now also include persisted funnel telemetry, current-vs-previous period comparisons, segment breakdowns by category / workload source / agency, recommendation payloads with `experiment_plan`, and saved experiment runs that can be evaluated later against baseline target and guardrail metrics. Successful experiments can feed back into strategy settings: threshold experiments adjust `bid_now_threshold` / `review_threshold`, workload experiments adjust `auto_workload_penalty_multiplier`, and category focus experiments adjust `category_priority_overrides`.
+
+### Realtime
+
+- `WS /api/v1/realtime/events` - Stream normalized dashboard events for bid-decision notifications, bid submissions, crawl completion/failure, and strategy monitor completion/failure
+
+Realtime events use a common envelope: `event_id`, `event_type`, `created_at`, and `payload`. Clients can send `{"event_type": "ping"}` and receive a `pong` event for connection health checks.
 
 ### Legacy Admin
 
@@ -492,8 +505,12 @@ Key variables:
 - `CLASSIFIER_EMBEDDING_MODEL` - Sentence-Transformers model name for semantic classification
 - `CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY` - Keep embedding model loading offline-only; when the model is not cached locally the API falls back immediately instead of hanging on downloads
 - `CLASSIFIER_SEMANTIC_MATCH_THRESHOLD` - Base threshold used when blending semantic similarity into the classification score
+- `PRICE_PREDICTION_PREFERRED_PREDICTOR` - Predictor preference (`historical`, `lstm`, `ensemble`, or `auto` for rolling backtest selection)
+- `PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS` - Enable artifact-backed LSTM/Ensemble predictors when configured
 - `PRICE_PREDICTION_LSTM_MODEL_PATH` - Filesystem path to the current LSTM JSON artifact used by predictor inference
 - `PRICE_PREDICTION_ENSEMBLE_MODEL_PATH` - Filesystem path to the current ensemble JSON artifact used by predictor inference
+- `PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES` - Minimum prior samples required before a holdout point can be used in predictor backtests
+- `PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE` - Number of recent historical points used for rolling auto-selection backtests
 - `KONEPS_HEADLESS` - Run KONEPS crawling without a visible browser window
 - `KONEPS_TIMEOUT_MS` - Browser action timeout for Playwright
 - `KONEPS_MAX_ITEMS` - Maximum items returned per crawl request

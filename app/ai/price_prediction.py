@@ -13,6 +13,7 @@ from app.ai.predictors import (
     LSTMBidRatePredictor,
     PricePredictionContext,
 )
+from app.ai.predictor_backtest import build_predictor_backtest_report
 from app.ai.predictors.historical import clamp_bid_rate
 from app.core.config import settings
 
@@ -41,6 +42,9 @@ _PREDICTOR_KEY_ALIASES = {
     "sequence": "lstm",
     "ensemble": "ensemble",
     "ensemble_blend": "ensemble",
+    "auto": "auto",
+    "best": "auto",
+    "backtest": "auto",
 }
 
 
@@ -61,7 +65,7 @@ def predict_price(
         agency_name=agency_name,
     )
 
-    predictor, fallback_reason = _select_predictor(context)
+    predictor, fallback_reason, selection_metadata = _select_predictor(context)
     prediction, used_predictor, fallback_reason = _run_predictor(
         context=context,
         predictor=predictor,
@@ -77,28 +81,52 @@ def predict_price(
         prediction,
         predictor=used_predictor,
         fallback_reason=fallback_reason,
+        selection_metadata=selection_metadata,
     )
 
 
-def _select_predictor(context: PricePredictionContext) -> tuple[BasePricePredictor, str | None]:
+def _select_predictor(context: PricePredictionContext) -> tuple[BasePricePredictor, str | None, dict[str, Any]]:
     """Choose the configured predictor or fall back to the stable baseline."""
     registry = _build_predictor_registry()
     preferred_key = _normalize_predictor_key(settings.PRICE_PREDICTION_PREFERRED_PREDICTOR)
     historical_predictor = registry["historical"]
     requested_predictor = registry.get(preferred_key)
 
+    if preferred_key == "auto":
+        return _select_predictor_by_backtest(context, registry=registry, historical_predictor=historical_predictor)
+
     if requested_predictor is None:
         return historical_predictor, (
             f"Unknown predictor preference '{settings.PRICE_PREDICTION_PREFERRED_PREDICTOR}'. "
             "Falling back to the historical baseline."
-        )
+        ), {
+            "selector_name": "configured_preference",
+            "selection_reason": "unknown predictor preference",
+            "backtest_sample_count": 0,
+            "backtest_average_absolute_error_rate": None,
+        }
 
     availability = requested_predictor.check_availability(context)
     if availability.available:
-        return requested_predictor, None
+        return requested_predictor, None, {
+            "selector_name": "configured_preference",
+            "selection_reason": f"Configured preference selected {requested_predictor.name}.",
+            "backtest_sample_count": 0,
+            "backtest_average_absolute_error_rate": None,
+        }
     if requested_predictor.name == historical_predictor.name:
-        return historical_predictor, None
-    return historical_predictor, f"Requested {requested_predictor.name} predictor is unavailable: {availability.reason}"
+        return historical_predictor, None, {
+            "selector_name": "configured_preference",
+            "selection_reason": "Configured historical baseline selected.",
+            "backtest_sample_count": 0,
+            "backtest_average_absolute_error_rate": None,
+        }
+    return historical_predictor, f"Requested {requested_predictor.name} predictor is unavailable: {availability.reason}", {
+        "selector_name": "configured_preference",
+        "selection_reason": f"Configured {requested_predictor.name} predictor was unavailable; historical baseline selected.",
+        "backtest_sample_count": 0,
+        "backtest_average_absolute_error_rate": None,
+    }
 
 
 def _build_predictor_registry() -> dict[str, BasePricePredictor]:
@@ -107,6 +135,39 @@ def _build_predictor_registry() -> dict[str, BasePricePredictor]:
         "historical": HistoricalStatisticalPredictor(),
         "lstm": LSTMBidRatePredictor(),
         "ensemble": EnsembleBidRatePredictor(),
+    }
+
+
+def _select_predictor_by_backtest(
+    context: PricePredictionContext,
+    *,
+    registry: dict[str, BasePricePredictor],
+    historical_predictor: BasePricePredictor,
+) -> tuple[BasePricePredictor, str | None, dict[str, Any]]:
+    """Select the best currently runnable predictor from a rolling backtest."""
+    report = build_predictor_backtest_report(context, registry)
+    best_key = str(report.get("best_predictor_key") or "")
+    selected_predictor = registry.get(best_key) or historical_predictor
+    best_error = report.get("best_average_absolute_error_rate")
+    best_result = next(
+        (result for result in report.get("results", []) if result.get("predictor_key") == best_key),
+        None,
+    )
+    sample_count = int(best_result.get("sample_count", 0) or 0) if isinstance(best_result, dict) else 0
+    selection_reason = (
+        f"Auto selector chose {selected_predictor.name} from {sample_count} backtest sample(s)"
+        if best_key
+        else "Auto selector could not find an eligible backtest winner; historical baseline selected."
+    )
+    if best_error is not None:
+        selection_reason = f"{selection_reason} with average absolute bid-rate error {float(best_error):.4f}."
+
+    return selected_predictor, None, {
+        "selector_name": "rolling_backtest",
+        "selection_reason": selection_reason,
+        "backtest_sample_count": sample_count,
+        "backtest_average_absolute_error_rate": best_error,
+        "backtest_report": report,
     }
 
 
@@ -152,12 +213,19 @@ def _attach_predictor_metadata(
     *,
     predictor: BasePricePredictor,
     fallback_reason: str | None,
+    selection_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Attach predictor selection metadata to a normalized payload."""
     annotated_prediction = dict(prediction)
     annotated_prediction["predictor_name"] = predictor.name
     annotated_prediction["predictor_family"] = predictor.family
     annotated_prediction["fallback_reason"] = fallback_reason
+    annotated_prediction["selector_name"] = selection_metadata.get("selector_name", "configured_preference")
+    annotated_prediction["selection_reason"] = selection_metadata.get("selection_reason")
+    annotated_prediction["backtest_sample_count"] = int(selection_metadata.get("backtest_sample_count", 0) or 0)
+    annotated_prediction["backtest_average_absolute_error_rate"] = selection_metadata.get("backtest_average_absolute_error_rate")
+    if selection_metadata.get("backtest_report") is not None:
+        annotated_prediction["backtest_report"] = selection_metadata["backtest_report"]
     annotated_prediction["training_window_size"] = int(annotated_prediction.get("historical_sample_size", 0) or 0)
     return annotated_prediction
 

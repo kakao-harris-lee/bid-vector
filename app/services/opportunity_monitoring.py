@@ -14,6 +14,7 @@ from app.schemas.schemas import BidDecisionSaveRequest, OpportunityAnalysisReque
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.opportunity_analysis import OpportunityAnalysisService
+from app.services.realtime import realtime_event_manager
 
 
 @dataclass
@@ -447,6 +448,19 @@ class StrategyMonitoringService:
         monitor_run.error_message = None
         monitor_run.completed_at = utc_now()
         db.commit()
+        realtime_event_manager.publish_event(
+            "strategy_monitor.completed",
+            {
+                "monitor_run_id": int(monitor_run.id),
+                "operator_id": int(monitor_run.operator_id),
+                "trigger_source": monitor_run.trigger_source,
+                "evaluated_project_count": int(monitor_run.evaluated_project_count or 0),
+                "selected_candidate_count": int(monitor_run.selected_candidate_count or 0),
+                "persisted_candidate_count": int(monitor_run.persisted_candidate_count or 0),
+                "notification_count": int(monitor_run.notification_count or 0),
+                "new_candidate_count": int(response.get("new_candidate_count") or 0),
+            },
+        )
 
     def _mark_run_failed(self, db: Session, *, run_id: int, error_message: str) -> None:
         """Persist failure metadata for a monitoring run after rollback-safe recovery."""
@@ -458,6 +472,15 @@ class StrategyMonitoringService:
         monitor_run.error_message = error_message
         monitor_run.completed_at = utc_now()
         db.commit()
+        realtime_event_manager.publish_event(
+            "strategy_monitor.failed",
+            {
+                "monitor_run_id": int(monitor_run.id),
+                "operator_id": int(monitor_run.operator_id),
+                "trigger_source": monitor_run.trigger_source,
+                "error_message": monitor_run.error_message,
+            },
+        )
 
     def _collect_candidate_evaluations(
         self,

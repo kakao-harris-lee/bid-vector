@@ -16,6 +16,7 @@ from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.core.time import ensure_utc, utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.realtime import realtime_event_manager
 
 
 class KonepsCollectorService:
@@ -114,6 +115,18 @@ class KonepsCollectorService:
         db.add(crawl_job)
         db.commit()
         db.refresh(crawl_job)
+        realtime_event_manager.publish_event(
+            "crawl.completed" if crawl_job.status == "completed" else "crawl.fallback",
+            {
+                "crawl_job_id": int(crawl_job.id),
+                "project_id": int(crawl_job.project_id) if crawl_job.project_id is not None else None,
+                "status": crawl_job.status,
+                "source": crawl_job.source,
+                "target_date": crawl_job.target_date,
+                "result_count": int(crawl_job.result_count or 0),
+                "error_message": crawl_job.error_message,
+            },
+        )
         return crawl_job
 
     def persist_crawl_results(
@@ -207,6 +220,18 @@ class KonepsCollectorService:
         db.add(crawl_job)
         db.commit()
         db.refresh(crawl_job)
+        realtime_event_manager.publish_event(
+            "crawl.failed",
+            {
+                "crawl_job_id": int(crawl_job.id),
+                "project_id": int(crawl_job.project_id) if crawl_job.project_id is not None else None,
+                "status": crawl_job.status,
+                "source": crawl_job.source,
+                "target_date": crawl_job.target_date,
+                "result_count": int(crawl_job.result_count or 0),
+                "error_message": crawl_job.error_message,
+            },
+        )
         return crawl_job
 
     def mark_crawl_job_failed(self, db: Session, crawl_job: CrawlJob, error_message: str) -> CrawlJob:

@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `125 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose --profile tasks config` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `135 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -23,15 +23,18 @@
 - 나라장터 수집 mock/live 경로, `CrawlJob` / `HistoricalData` / `TenderResult` 적재, `Project` 연결
 - 규칙 기반 + 의미 기반 분류, pgvector 기반 유사 공고 검색
 - 가격 예측 데이터셋 추출, 통계 기반 예측, feedback calibration, reserve pattern, guardrail 응답 필드
+- persisted prediction metadata 기반 predictor / fallback / guardrail / linked-result accuracy observability API
+- `PRICE_PREDICTION_PREFERRED_PREDICTOR=auto` 기반 rolling backtest predictor selection
 - predictor abstraction 및 `HistoricalStatisticalPredictor`, artifact-backed `LSTMBidRatePredictor` / `EnsembleBidRatePredictor` 추론
 - opportunity analysis / bid recommendation / persisted bid decision engine
 - `BidDecisionRecord` 기반 우선순위 / 추진 결정, score breakdown, margin / complexity / workload 반영
 - 결정 상세 / 타임라인 / 퍼널 / 트렌드 / 세그먼트 / 기간 비교 / 추천 analytics
 - 추천을 실험 계획으로 확장한 `decision-recommendations`
 - 실험 실행 이력 / 평가 API (`decision-experiments`) 및 baseline vs current 비교
-- 실험 run 수동 상태 변경 / 메모 갱신 / threshold 적용 feedback loop
-- Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback
+- 실험 run 수동 상태 변경 / 메모 갱신 / threshold, workload, category 적용 feedback loop
+- Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, WebSocket realtime event stream
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
+- 크롤 성공률 / 전략 모니터링 성과 / 최근 실패 원인을 묶은 operations dashboard analytics
 - `docker compose` 복구, healthcheck/env wiring 정리, CPU-only PyTorch + pip cache 기반 Docker build 최적화
 - runtime / embedding / training / dev 의존성 분리 및 멀티타깃 Docker build 정리
 - manifest 기반 ML artifact promotion 서비스/CLI 및 embedding rebuild 자동화
@@ -44,11 +47,8 @@
 ### 아직 핵심적으로 남은 범위
 
 - `LSTM` / `Ensemble` 학습 파이프라인 및 모델 아티팩트 관리 고도화
-- 예측기 성능 비교 / 백테스트 / predictor selection 자동화
-- threshold 외 workload/category 계열 실험 결과 반영 범위 확장
-- `docker compose up -d` 실패 원인 해결과 production-grade task/broker 정리
-- WebSocket 기반 실시간 이벤트 전송
-- 운영 대시보드용 모델 정확도 / 크롤 성공률 / fallback 빈도 집계 API 보강
+- 실험 적용 결과의 대시보드 action payload / 이력 관측성 강화
+- production-grade task/broker 운영 정책 고도화
 
 ## 작업 원칙
 
@@ -112,11 +112,13 @@
 - 통계 기반 historical predictor
 - fallback / predictor 메타데이터 / guardrail 응답 구조
 - artifact-backed `LSTM` / `Ensemble` predictor 추론
+- rolling backtest 기반 `auto` predictor selection
+- predictor observability API
 
 남은 작업:
 
-- 모델 아티팩트 저장/로드 전략 정리
-- predictor selection, 백테스트, 정확도 비교 API 추가
+- 모델 아티팩트 학습/검증 파이프라인 고도화
+- backtest 결과를 release promotion gate와 장기 성능 추세에 연결
 
 우선 검토 파일:
 
@@ -139,11 +141,12 @@
 - 실험 run 저장 / baseline snapshot / evaluate API
 - 실험 수동 종료 / 롤백 / 메모 수정 API
 - 성공 실험의 threshold 적용 feedback loop
+- workload auto-calibration / category focus-shift 실험의 operator strategy 적용 feedback loop
 
 남은 작업:
 
-- workload / category 계열 실험 결과를 운영 설정으로 반영하는 범위 확장
 - 운영 화면에서 바로 쓰기 좋은 action payload 정리
+- 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강
 
 우선 검토 파일:
 
@@ -153,18 +156,18 @@
 - `app/api/analytics.py`
 - `app/schemas/schemas.py`
 
-### E. 알림 채널 — Telegram 완료, WebSocket 미완료
+### E. 알림 채널 — Telegram / WebSocket 기반 완료, 이벤트 범위 확장 단계
 
 이미 구현됨:
 
 - Telegram 메시지 포맷 / callback / polling / 상태 동기화
 - 웹 알림 fallback 및 운영자 notification 조회
+- WebSocket 연결 관리 레이어 및 realtime event envelope
+- 추천 / 투찰 / 크롤 / 전략 모니터링 완료·실패 이벤트 브로드캐스트
 
 남은 작업:
 
-- WebSocket 연결 관리 레이어
-- 신규 후보 / 추천 / 실패 이벤트 브로드캐스트
-- Telegram / WebSocket 공통 event schema 정리
+- 필요 시 이벤트 인증/권한 검사 및 다중 프로세스 pub/sub 연계
 
 ### F. 비동기 / 실행 인프라 — compose 복구 완료, 운영 정리 필요
 
@@ -179,34 +182,34 @@
 - optional RabbitMQ broker + Celery worker/beat compose profile 추가
 - 외부 broker 사용 시 PostgreSQL result backend 자동 연동
 - worker/beat가 현재 task 모듈을 명시 import하도록 정리
+- ML backfill / training / decision experiment re-evaluation API는 task id만 반환하고 실제 실행을 worker queue로 분리
+- release manifest 서명, local retention/archive, optional file/S3 object storage publish 경로 구현
 
 남은 작업:
 
-- 백필 / 학습 / 재평가 작업을 API 요청 경로에서 완전히 분리
-- training 컨테이너와 embedding 런타임 사이의 artifact promotion 자동화 스크립트/manifest 고도화
-- 기본 CLI/manifest 경로는 구현됨 (`scripts/promote_ml_release.py`)
-- 다음 단계는 release manifest 서명/보관 정책, `.env` 갱신 자동화, remote object storage 연계
+- production 환경의 worker queue 지연, 실패율, 재시도, broker health 관측성 강화
+- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
-### G. 분석 / 대시보드 집계 — decision analytics는 강함, prediction reporting 잔여
+### G. 분석 / 대시보드 집계 — prediction / operations reporting 기반 완료, 카드 확장 단계
 
 이미 구현됨:
 
 - overview / summary / prediction feedback
+- prediction observability: predictor별 정확도, fallback 빈도, guardrail 빈도, pricing mode breakdown
+- operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율
 - decision insights / funnel / recommendations / experiments
 
 남은 작업:
 
-- 모델별 정확도 비교 집계
-- fallback 빈도 / guardrail 적용 빈도 집계
-- 크롤 성공률 / 전략 성과 / 최근 기간 카드형 응답 정리
+- 추가 카드가 필요하면 모델 학습/릴리즈, Telegram 전송률, worker queue 지연 집계 확장
 
 ## 현재 권장 실행 순서
 
-1. `C. 예측 성능 비교 / 백테스트 / selection 자동화`
-2. `F. 백필 / 학습 / 재평가 작업의 API 경로 분리`
-3. `E. WebSocket 실시간 이벤트`
-4. `G. 운영 보고용 집계 API`
-5. `D. workload/category 실험 반영 범위 확장`
+1. `C. backtest 결과를 ML release promotion gate와 장기 추세에 연결`
+2. `D. 실험 적용 이력 / action payload 관측성 강화`
+3. `F. production-grade task/broker 운영 정책 고도화`
+4. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
+5. `G. worker queue / Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 
@@ -274,14 +277,14 @@
 
 ## 추천 작업 순서
 
-1. `app/ai/price_prediction.py`와 predictor 계층 위에 backtest / predictor accuracy 집계를 설계
-2. 모델 정확도 / fallback / guardrail 집계를 `app/api/analytics.py`에 추가
+1. predictor backtest / `auto` selection은 `app/ai/predictor_backtest.py`와 `app/ai/price_prediction.py`에 구현됨
+2. 모델 정확도 / fallback / guardrail 집계는 `app/api/analytics.py`의 `prediction-observability`로 제공 중
 3. `docker-compose.yml`, `app/tasks/`를 정리해 무거운 작업을 운영 경로로 분리
    - 기본 compose는 `api-runtime`
    - semantic/embedding 재색인은 `api-embedding`
    - 학습/데이터셋 정리는 `api-training`
-4. WebSocket 실시간 이벤트 레이어를 추가하고 notification payload를 정규화
-5. `app/services/decision_experiments.py`에서 threshold 외 실험 결과 반영 범위를 workload/category까지 확장
+4. WebSocket 실시간 이벤트 레이어와 notification/crawl/strategy event payload는 구현됨
+5. `app/services/decision_experiments.py`에서 실험 적용 이력과 대시보드 action payload를 보강
 
 ## 실행 전 확인 체크리스트
 

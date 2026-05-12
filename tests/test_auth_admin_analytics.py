@@ -1655,6 +1655,236 @@ def test_decision_experiment_apply_thresholds_updates_operator_strategy_and_deci
     assert after_response.json()["action"] == "skip"
 
 
+def test_decision_experiment_apply_strategy_updates_auto_workload_penalty(client):
+    """Successful workload experiments should tune automatic workload penalties used by decision scoring."""
+    _bootstrap_operator(client, username="decision-workload-apply-operator", email="decision-workload-apply@example.com")
+    now = datetime.now(UTC)
+    auto_workload_payload = {
+        "project_id": 1001,
+        "recommended_amount": 95000000.0,
+        "budget_estimate": 100000000.0,
+        "probability_score": 0.65,
+        "matched_score": 0.65,
+        "deadline_hours_remaining": 48,
+        "current_active_bids": 2,
+        "max_active_bids": 3,
+        "current_workload_score": 0.8,
+        "competitiveness_score": 0.5,
+        "expected_margin_score": 0.6,
+        "workload_source": "auto",
+    }
+
+    before_response = client.post("/api/v1/operations/bid-decision", json=auto_workload_payload)
+    assert before_response.status_code == 200
+    assert before_response.json()["action"] == "skip"
+
+    create_response = client.post(
+        "/api/v1/analytics/decision-experiments",
+        json={
+            "experiment_key": "exp-workload-auto-calibration",
+            "recommendation_key": "workload-auto-calibration",
+            "priority_rank": 2,
+            "title": "자동 업무부하 감점 보정 실험",
+            "hypothesis": "자동 업무부하 감점이 과도하면 후보 전환율이 낮아집니다.",
+            "suggested_change": "AUTO_WORKLOAD_PENALTY_MULTIPLIER를 낮춥니다.",
+            "target_metric": "auto_submission_rate",
+            "expected_direction": "increase",
+            "success_criteria": "auto_submission_rate 개선",
+            "guardrail_metric": "active_pending_count",
+            "minimum_decision_sample": 3,
+            "duration_days": 7,
+            "baseline_days": 7,
+            "rollback_trigger": "active_pending_count 급증 시 롤백",
+            "started_at": (now - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run"]["id"]
+
+    complete_response = client.patch(
+        f"/api/v1/analytics/decision-experiments/{run_id}",
+        json={"status": "completed", "outcome": "success"},
+    )
+    assert complete_response.status_code == 200
+
+    apply_response = client.post(
+        f"/api/v1/analytics/decision-experiments/{run_id}/apply-strategy",
+        json={"dry_run": False},
+    )
+    assert apply_response.status_code == 200
+    apply_payload = apply_response.json()
+    assert apply_payload["strategy_updates"][0]["parameter"] == "auto_workload_penalty_multiplier"
+    assert apply_payload["strategy_updates"][0]["previous_value"] == pytest.approx(1.0, abs=0.0001)
+    assert apply_payload["strategy_updates"][0]["suggested_value"] == pytest.approx(0.85, abs=0.0001)
+    assert apply_payload["strategy_tuning"]["auto_workload_penalty_multiplier"] == pytest.approx(0.85, abs=0.0001)
+
+    strategy_response = client.get("/api/v1/operator/strategy")
+    assert strategy_response.status_code == 200
+    assert strategy_response.json()["auto_workload_penalty_multiplier"] == pytest.approx(0.85, abs=0.0001)
+
+    after_response = client.post("/api/v1/operations/bid-decision", json=auto_workload_payload)
+    assert after_response.status_code == 200
+    after_payload = after_response.json()
+    assert after_payload["action"] == "review"
+    assert after_payload["score_breakdown"]["auto_workload_penalty_multiplier"] == pytest.approx(0.85, abs=0.0001)
+
+
+def test_decision_experiment_apply_strategy_updates_category_priority_overrides(client, test_db):
+    """Successful category experiments should tune category priority offsets used by opportunity analysis."""
+    bootstrap = _bootstrap_operator(client, username="decision-category-apply-operator", email="decision-category-apply@example.com")
+    operator_id = bootstrap.json()["id"]
+    now = datetime.now(UTC)
+
+    profile_response = client.put(
+        "/api/v1/operator/profile",
+        json={
+            "business_type": "software",
+            "license_codes": ["SW001"],
+            "region_codes": ["전국"],
+            "annual_revenue": 500000000.0,
+            "capacity_score": 0.8,
+            "total_awards": 3,
+        },
+    )
+    assert profile_response.status_code == 200
+
+    baseline_project_ids = [
+        client.post(
+            "/api/v1/projects/",
+            json={
+                "title": "Category Apply Software Baseline",
+                "description": "software category success sample",
+                "requirements": "SW001 소프트웨어 사업자",
+                "budget_estimate": 100000000.0,
+                "category": "software",
+            },
+        ).json()["id"],
+        client.post(
+            "/api/v1/projects/",
+            json={
+                "title": "Category Apply Security Baseline",
+                "description": "security category waiting sample",
+                "requirements": "보안 관제",
+                "budget_estimate": 100000000.0,
+                "category": "security",
+            },
+        ).json()["id"],
+    ]
+
+    test_db.add_all([
+        BidDecisionRecord(
+            project_id=baseline_project_ids[0],
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="bid_now",
+            decision_status="submitted",
+            initial_action="bid_now",
+            initial_decision_status="planned",
+            first_decided_at=now - timedelta(days=2),
+            recommended_amount=95000000.0,
+            probability_score=0.84,
+            matched_score=0.8,
+            priority_score=0.82,
+            current_active_bids=0,
+            max_active_bids=3,
+            current_workload_score=0.1,
+            workload_source="provided",
+            reasoning="software category submitted sample",
+            created_at=now - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
+        ),
+        BidDecisionRecord(
+            project_id=baseline_project_ids[1],
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="review",
+            decision_status="reviewing",
+            initial_action="review",
+            initial_decision_status="reviewing",
+            first_decided_at=now - timedelta(days=2),
+            recommended_amount=95000000.0,
+            probability_score=0.65,
+            matched_score=0.68,
+            priority_score=0.55,
+            current_active_bids=1,
+            max_active_bids=3,
+            current_workload_score=0.3,
+            workload_source="provided",
+            reasoning="security category pending sample",
+            created_at=now - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
+        ),
+    ])
+    test_db.commit()
+
+    target_project_id = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Category Apply Target Software",
+            "description": "software opportunity for priority override validation",
+            "requirements": "SW001 소프트웨어 사업자 전국 수행",
+            "budget_estimate": 120000000.0,
+            "category": "software",
+        },
+    ).json()["id"]
+
+    before_analysis = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={"project_id": target_project_id, "max_active_bids": 3},
+    )
+    assert before_analysis.status_code == 200
+    assert before_analysis.json()["strategy_adjustments"]["category_priority_override"] == pytest.approx(0.0, abs=0.0001)
+
+    create_response = client.post(
+        "/api/v1/analytics/decision-experiments",
+        json={
+            "experiment_key": "exp-category-focus-shift",
+            "recommendation_key": "category-focus-shift",
+            "priority_rank": 3,
+            "title": "카테고리 우선순위 조정 실험",
+            "hypothesis": "전환율이 높은 카테고리에 후보 탐색을 집중합니다.",
+            "suggested_change": "CATEGORY_PRIORITY_OVERRIDES를 조정합니다.",
+            "target_metric": "overall_submission_rate",
+            "expected_direction": "increase",
+            "success_criteria": "전체 제출 전환율 개선",
+            "guardrail_metric": "active_pending_count",
+            "minimum_decision_sample": 2,
+            "duration_days": 21,
+            "baseline_days": 7,
+            "rollback_trigger": "active_pending_count 급증 시 롤백",
+            "started_at": (now - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run"]["id"]
+
+    complete_response = client.patch(
+        f"/api/v1/analytics/decision-experiments/{run_id}",
+        json={"status": "completed", "outcome": "success"},
+    )
+    assert complete_response.status_code == 200
+
+    apply_response = client.post(
+        f"/api/v1/analytics/decision-experiments/{run_id}/apply-strategy",
+        json={"dry_run": False},
+    )
+    assert apply_response.status_code == 200
+    apply_payload = apply_response.json()
+    assert apply_payload["strategy_updates"][0]["parameter"] == "category_priority_overrides"
+    assert apply_payload["strategy_tuning"]["category_priority_overrides"]["software"] == pytest.approx(0.03, abs=0.0001)
+    assert apply_payload["strategy_tuning"]["category_priority_overrides"]["security"] == pytest.approx(-0.03, abs=0.0001)
+
+    after_analysis = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={"project_id": target_project_id, "max_active_bids": 3},
+    )
+    assert after_analysis.status_code == 200
+    after_payload = after_analysis.json()
+    assert after_payload["strategy_adjustments"]["category_priority_override"] == pytest.approx(0.03, abs=0.0001)
+    assert after_payload["probability_score"] >= before_analysis.json()["probability_score"]
+    assert any("우선 검토 대상" in strength for strength in after_payload["strengths"])
+
+
 def test_legacy_admin_routes_return_single_operator_snapshot(client):
     """Legacy admin routes should now expose singleton operator state instead of multi-user administration."""
     bootstrap = _bootstrap_operator(client, username="admin-operator", email="admin@example.com", password="adminpass123")

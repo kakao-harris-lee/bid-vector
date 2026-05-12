@@ -187,6 +187,28 @@ def test_predict_price_uses_ensemble_predictor_when_artifact_is_configured(monke
     assert "ensemble이" in prediction["explanation"]
 
 
+def test_predict_price_auto_selector_uses_backtest_metadata(monkeypatch):
+    """Auto predictor selection should run a rolling backtest and expose selector metadata."""
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "auto")
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", False)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES", 3)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE", 3)
+
+    prediction = predict_price(
+        budget=100000000.0,
+        category="software",
+        description="auto selector backtest metadata",
+        historical_records=_build_bid_rate_history(8, base_rate=0.91, step=0.001),
+    )
+
+    assert prediction["predictor_name"] == "historical_statistical"
+    assert prediction["selector_name"] == "rolling_backtest"
+    assert prediction["backtest_sample_count"] == 3
+    assert prediction["backtest_average_absolute_error_rate"] is not None
+    assert prediction["selection_reason"]
+    assert prediction["backtest_report"]["best_predictor_key"] == "historical"
+
+
 def test_price_prediction_endpoint_exposes_predictor_metadata(client, test_db):
     """The API response should surface the selected predictor metadata."""
     project_response = client.post(

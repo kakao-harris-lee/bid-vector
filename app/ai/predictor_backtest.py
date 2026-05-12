@@ -1,0 +1,201 @@
+"""Rolling backtest helpers for price predictor selection."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.historical import read_record_value
+from app.core.config import settings
+
+
+def build_predictor_backtest_report(
+    context: PricePredictionContext,
+    registry: dict[str, BasePricePredictor],
+) -> dict[str, Any]:
+    """Compare runnable predictors against recent historical bid-rate holdouts."""
+    chronological_records = _sort_historical_records(context.historical_records)
+    holdout_size = min(
+        max(1, int(settings.PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE or 1)),
+        max(0, len(chronological_records) - 1),
+    )
+    min_training_size = max(1, int(settings.PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES or 1))
+    if len(chronological_records) <= min_training_size:
+        return {
+            "status": "insufficient_data",
+            "holdout_size": 0,
+            "min_training_size": min_training_size,
+            "results": [],
+            "best_predictor_key": None,
+            "best_predictor_name": None,
+            "best_average_absolute_error_rate": None,
+        }
+
+    holdout_records = chronological_records[-holdout_size:]
+    training_prefix = chronological_records[:-holdout_size]
+    results: list[dict[str, Any]] = []
+    for predictor_key, predictor in registry.items():
+        result = _backtest_one_predictor(
+            predictor_key=predictor_key,
+            predictor=predictor,
+            base_context=context,
+            training_prefix=training_prefix,
+            holdout_records=holdout_records,
+            min_training_size=min_training_size,
+        )
+        results.append(result)
+
+    eligible_results = [
+        result
+        for result in results
+        if result["status"] == "completed" and result["sample_count"] > 0 and result["average_absolute_error_rate"] is not None
+    ]
+    best_result = min(
+        eligible_results,
+        key=lambda result: (
+            float(result["average_absolute_error_rate"]),
+            -int(result["sample_count"]),
+            str(result["predictor_key"]),
+        ),
+        default=None,
+    )
+
+    return {
+        "status": "completed" if best_result is not None else "no_eligible_predictor",
+        "holdout_size": holdout_size,
+        "min_training_size": min_training_size,
+        "results": results,
+        "best_predictor_key": best_result["predictor_key"] if best_result else None,
+        "best_predictor_name": best_result["predictor_name"] if best_result else None,
+        "best_average_absolute_error_rate": best_result["average_absolute_error_rate"] if best_result else None,
+    }
+
+
+def _backtest_one_predictor(
+    *,
+    predictor_key: str,
+    predictor: BasePricePredictor,
+    base_context: PricePredictionContext,
+    training_prefix: list[object],
+    holdout_records: list[object],
+    min_training_size: int,
+) -> dict[str, Any]:
+    """Evaluate one predictor across a rolling historical holdout."""
+    absolute_errors: list[float] = []
+    skipped_reasons: list[str] = []
+    rolling_training_records = list(training_prefix)
+
+    for holdout_record in holdout_records:
+        actual_bid_rate = _resolve_bid_rate(holdout_record)
+        budget = _resolve_budget(holdout_record, fallback=base_context.budget)
+        if actual_bid_rate is None or budget <= 0:
+            skipped_reasons.append("holdout record has no usable bid rate or budget")
+            rolling_training_records.append(holdout_record)
+            continue
+        if len(rolling_training_records) < min_training_size:
+            skipped_reasons.append("not enough training samples before holdout")
+            rolling_training_records.append(holdout_record)
+            continue
+
+        evaluation_context = PricePredictionContext(
+            budget=budget,
+            category=base_context.category,
+            description=base_context.description,
+            historical_records=tuple(rolling_training_records),
+            agency_name=base_context.agency_name,
+        )
+        availability = predictor.check_availability(evaluation_context)
+        if not availability.available:
+            skipped_reasons.append(str(availability.reason or "predictor unavailable"))
+            rolling_training_records.append(holdout_record)
+            continue
+
+        try:
+            prediction = predictor.predict(evaluation_context)
+        except Exception as exc:
+            skipped_reasons.append(f"prediction failed: {exc}")
+            rolling_training_records.append(holdout_record)
+            continue
+
+        predicted_bid_rate = _resolve_prediction_bid_rate(prediction, budget=budget)
+        if predicted_bid_rate is None:
+            skipped_reasons.append("prediction returned no usable bid rate")
+            rolling_training_records.append(holdout_record)
+            continue
+        absolute_errors.append(abs(predicted_bid_rate - actual_bid_rate))
+        rolling_training_records.append(holdout_record)
+
+    return {
+        "predictor_key": predictor_key,
+        "predictor_name": predictor.name,
+        "predictor_family": predictor.family,
+        "status": "completed" if absolute_errors else "skipped",
+        "sample_count": len(absolute_errors),
+        "average_absolute_error_rate": _average(absolute_errors),
+        "max_absolute_error_rate": round(max(absolute_errors), 6) if absolute_errors else None,
+        "skipped_count": len(skipped_reasons),
+        "skipped_reasons": _top_reasons(skipped_reasons),
+    }
+
+
+def _sort_historical_records(records: tuple[object, ...]) -> list[object]:
+    """Return records in oldest-first order when timestamps are available."""
+    indexed_records = list(enumerate(records))
+
+    def sort_key(indexed_record: tuple[int, object]) -> tuple[str, int]:
+        index, record = indexed_record
+        opened_at = read_record_value(record, "opened_at") or read_record_value(record, "created_at")
+        if opened_at is None:
+            return "", index
+        return opened_at.isoformat() if hasattr(opened_at, "isoformat") else str(opened_at), index
+
+    if any(read_record_value(record, "opened_at") or read_record_value(record, "created_at") for _, record in indexed_records):
+        return [record for _, record in sorted(indexed_records, key=sort_key)]
+    return list(records)
+
+
+def _resolve_bid_rate(record: object) -> float | None:
+    """Resolve a usable actual bid rate from a historical record."""
+    bid_rate = float(read_record_value(record, "bid_rate") or 0.0)
+    if bid_rate <= 0:
+        predicted_price = float(read_record_value(record, "predicted_price") or 0.0)
+        base_amount = float(read_record_value(record, "base_amount") or 0.0)
+        if predicted_price > 0 and base_amount > 0:
+            bid_rate = predicted_price / base_amount
+    if 0.5 <= bid_rate <= 1.5:
+        return bid_rate
+    return None
+
+
+def _resolve_budget(record: object, *, fallback: float) -> float:
+    """Resolve the base amount used for a holdout prediction."""
+    budget = float(read_record_value(record, "base_amount") or 0.0)
+    return budget if budget > 0 else float(fallback or 0.0)
+
+
+def _resolve_prediction_bid_rate(prediction: dict[str, Any], *, budget: float) -> float | None:
+    """Resolve the predicted bid rate from a normalized prediction payload."""
+    bid_rate = float(prediction.get("predicted_bid_rate") or 0.0)
+    if bid_rate <= 0 and budget > 0:
+        bid_rate = float(prediction.get("predicted_price") or 0.0) / budget
+    if 0.0 < bid_rate < 2.0:
+        return bid_rate
+    return None
+
+
+def _average(values: list[float]) -> float | None:
+    """Return a rounded average while preserving empty sets."""
+    if not values:
+        return None
+    return round(sum(values) / len(values), 6)
+
+
+def _top_reasons(reasons: list[str], *, limit: int = 3) -> list[str]:
+    """Return the most common skip reasons in stable order."""
+    counts: dict[str, int] = {}
+    for reason in reasons:
+        counts[reason] = counts.get(reason, 0) + 1
+    return [
+        reason
+        for reason, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]

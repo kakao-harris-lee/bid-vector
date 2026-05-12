@@ -1,7 +1,7 @@
 """Pydantic schemas for request/response"""
 import json
 from datetime import date, datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
 try:  # pragma: no cover - optional dependency fallback
     import email_validator  # noqa: F401
@@ -95,6 +95,8 @@ class OperatorStrategyUpdate(BaseModel):
     minimum_probability_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     bid_now_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     review_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    auto_workload_penalty_multiplier: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    category_priority_overrides: Optional[Dict[str, float]] = None
     notify_only_high_priority: Optional[bool] = None
     max_recommended_candidates: Optional[int] = Field(default=None, ge=1, le=100)
 
@@ -112,6 +114,8 @@ class OperatorStrategyResponse(BaseModel):
     minimum_probability_score: float = Field(ge=0.0, le=1.0)
     bid_now_threshold: float = Field(ge=0.0, le=1.0)
     review_threshold: float = Field(ge=0.0, le=1.0)
+    auto_workload_penalty_multiplier: float = Field(ge=0.0, le=2.0)
+    category_priority_overrides: Dict[str, float] = Field(default_factory=dict)
     notify_only_high_priority: bool
     max_recommended_candidates: int = Field(ge=1, le=100)
     strategy_configured: bool
@@ -463,6 +467,11 @@ class PricePredictionResponse(BaseModel):
     predictor_name: str = "historical_statistical"
     predictor_family: str = "statistical"
     fallback_reason: Optional[str] = None
+    selector_name: str = "configured_preference"
+    selection_reason: Optional[str] = None
+    backtest_sample_count: int = Field(default=0, ge=0)
+    backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    backtest_report: Optional[dict] = None
     training_window_size: int = Field(default=0, ge=0)
     pricing_mode: Literal["historical_blend", "heuristic"] = "heuristic"
     historical_sample_size: int = Field(default=0, ge=0)
@@ -801,6 +810,40 @@ class DecisionExperimentThresholdApplyResponse(BaseModel):
     detail: str
 
 
+class DecisionStrategyTuningSnapshot(BaseModel):
+    auto_workload_penalty_multiplier: float = Field(ge=0.0, le=2.0)
+    category_priority_overrides: Dict[str, float] = Field(default_factory=dict)
+
+
+class DecisionStrategyAdjustmentItem(BaseModel):
+    parameter: Literal["auto_workload_penalty_multiplier", "category_priority_overrides"]
+    label: str
+    direction: Literal["increase", "decrease", "replace"]
+    previous_value: Union[float, Dict[str, float]]
+    suggested_value: Union[float, Dict[str, float]]
+    delta: Optional[Union[float, Dict[str, float]]] = None
+    rationale: str
+
+
+class DecisionExperimentStrategyApplyRequest(BaseModel):
+    dry_run: bool = False
+    force: bool = False
+    append_note: Optional[str] = None
+
+
+class DecisionExperimentStrategyApplyResponse(BaseModel):
+    operator_id: int
+    run_id: int
+    experiment_key: str
+    recommendation_key: str
+    applied: bool
+    dry_run: bool
+    latest_outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    strategy_updates: List[DecisionStrategyAdjustmentItem] = Field(default_factory=list)
+    strategy_tuning: DecisionStrategyTuningSnapshot
+    detail: str
+
+
 class DecisionExperimentRunResponse(BaseModel):
     id: int
     operator_id: int
@@ -909,6 +952,124 @@ class PredictionFeedbackResponse(BaseModel):
     recommendation_within_3_percent_count: int = Field(ge=0)
     recommendation_better_than_prediction_count: int = Field(ge=0)
     items: List[PredictionFeedbackItem] = Field(default_factory=list)
+
+
+class PredictionPredictorBreakdownItem(BaseModel):
+    predictor_name: str
+    predictor_family: str
+    prediction_count: int = Field(ge=0)
+    selection_rate: float = Field(ge=0.0, le=1.0)
+    fallback_count: int = Field(ge=0)
+    fallback_rate: float = Field(ge=0.0, le=1.0)
+    guardrail_count: int = Field(ge=0)
+    guardrail_rate: float = Field(ge=0.0, le=1.0)
+    accuracy_sample_count: int = Field(ge=0)
+    average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    within_1_percent_count: int = Field(ge=0)
+    within_3_percent_count: int = Field(ge=0)
+    average_confidence_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_training_window_size: Optional[float] = Field(default=None, ge=0.0)
+    average_predicted_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+
+
+class PredictionPricingModeBreakdownItem(BaseModel):
+    pricing_mode: str
+    prediction_count: int = Field(ge=0)
+    selection_rate: float = Field(ge=0.0, le=1.0)
+    fallback_count: int = Field(ge=0)
+    fallback_rate: float = Field(ge=0.0, le=1.0)
+    guardrail_count: int = Field(ge=0)
+    guardrail_rate: float = Field(ge=0.0, le=1.0)
+
+
+class PredictionObservabilityResponse(BaseModel):
+    operator_id: int
+    period_days: int
+    prediction_count: int = Field(ge=0)
+    fallback_count: int = Field(ge=0)
+    fallback_rate: float = Field(ge=0.0, le=1.0)
+    guardrail_count: int = Field(ge=0)
+    guardrail_rate: float = Field(ge=0.0, le=1.0)
+    accuracy_sample_count: int = Field(ge=0)
+    average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    within_1_percent_count: int = Field(ge=0)
+    within_3_percent_count: int = Field(ge=0)
+    predictor_breakdown: List[PredictionPredictorBreakdownItem] = Field(default_factory=list)
+    pricing_mode_breakdown: List[PredictionPricingModeBreakdownItem] = Field(default_factory=list)
+    fallback_reason_breakdown: dict[str, int] = Field(default_factory=dict)
+    guardrail_reason_breakdown: dict[str, int] = Field(default_factory=dict)
+
+
+class OperationsDashboardCard(BaseModel):
+    key: str
+    label: str
+    value: float
+    unit: Literal["ratio", "count"]
+    status: Literal["healthy", "watch", "critical", "info"]
+    detail: str
+
+
+class CrawlFailureItem(BaseModel):
+    crawl_job_id: int
+    source: str
+    target_date: Optional[str] = None
+    status: str
+    error_message: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class CrawlOperationsSummary(BaseModel):
+    job_count: int = Field(ge=0)
+    completed_count: int = Field(ge=0)
+    fallback_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    success_rate: float = Field(ge=0.0, le=1.0)
+    failure_rate: float = Field(ge=0.0, le=1.0)
+    average_result_count: Optional[float] = Field(default=None, ge=0.0)
+    total_result_count: int = Field(ge=0)
+    last_success_at: Optional[datetime] = None
+    last_failure_at: Optional[datetime] = None
+    failure_reason_breakdown: dict[str, int] = Field(default_factory=dict)
+    recent_failures: List[CrawlFailureItem] = Field(default_factory=list)
+
+
+class StrategyFailureItem(BaseModel):
+    run_id: int
+    trigger_source: str
+    status: str
+    error_message: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class StrategyOperationsSummary(BaseModel):
+    run_count: int = Field(ge=0)
+    completed_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    running_count: int = Field(ge=0)
+    completion_rate: float = Field(ge=0.0, le=1.0)
+    failure_rate: float = Field(ge=0.0, le=1.0)
+    evaluated_project_count: int = Field(ge=0)
+    selected_candidate_count: int = Field(ge=0)
+    persisted_candidate_count: int = Field(ge=0)
+    notification_count: int = Field(ge=0)
+    selection_rate: float = Field(ge=0.0, le=1.0)
+    persistence_rate: float = Field(ge=0.0, le=1.0)
+    notification_rate: float = Field(ge=0.0, le=1.0)
+    average_selected_candidates: Optional[float] = Field(default=None, ge=0.0)
+    last_completed_at: Optional[datetime] = None
+    last_failure_at: Optional[datetime] = None
+    failure_reason_breakdown: dict[str, int] = Field(default_factory=dict)
+    recent_failures: List[StrategyFailureItem] = Field(default_factory=list)
+
+
+class OperationsDashboardResponse(BaseModel):
+    operator_id: int
+    period_days: int
+    crawl: CrawlOperationsSummary
+    strategy: StrategyOperationsSummary
+    cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 
 class LegacyAdminStatsResponse(BaseModel):
@@ -1033,6 +1194,7 @@ class BidDecisionScoreBreakdown(BaseModel):
     active_load_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
     workload_score_used: float = Field(default=0.0, ge=0.0, le=1.0)
     opportunity_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    auto_workload_penalty_multiplier: float = Field(default=1.0, ge=0.0, le=2.0)
     load_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
     execution_complexity_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
     total_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -1077,6 +1239,7 @@ class OpportunityAnalysisResponse(BaseModel):
     max_active_bids: int = Field(ge=1)
     current_workload_score: float = Field(ge=0.0, le=1.0)
     workload_source: Literal["provided", "auto"] = "provided"
+    strategy_adjustments: Dict[str, float] = Field(default_factory=dict)
     analysis_summary: str
     strengths: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)

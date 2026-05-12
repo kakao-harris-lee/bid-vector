@@ -1,4 +1,4 @@
-# 기획 대비 잔여 과제 우선순위 및 실행 계획 (2026-05-11)
+# 기획 대비 잔여 과제 우선순위 및 실행 계획 (2026-05-12)
 
 ## 현재 기준선
 
@@ -9,53 +9,54 @@
 - 나라장터 수집 mock/live 경로와 `CrawlJob` / `HistoricalData` / `TenderResult` 적재
 - 규칙 기반 + 의미 기반 분류, pgvector 기반 유사 공고 검색
 - prediction dataset 추출, 통계 기반 historical predictor, feedback calibration, reserve pattern, guardrail 응답 필드
-- predictor abstraction 및 `HistoricalStatisticalPredictor`, `LSTMBidRatePredictor`, `EnsembleBidRatePredictor` skeleton
+- predictor abstraction 및 artifact-backed `HistoricalStatisticalPredictor`, `LSTMBidRatePredictor`, `EnsembleBidRatePredictor` 추론
+- persisted prediction metadata 기반 predictor / fallback / guardrail / linked-result accuracy observability API
+- rolling backtest 기반 `auto` predictor selection
 - `BidDecisionRecord` 기반 입찰 추진 결정, score breakdown, margin / complexity / workload 반영
 - decision detail / timeline / funnel / recommendation analytics
 - recommendation → experiment plan 확장
 - persisted `decision-experiments` 생성 / 목록 / 상세 / evaluate API
-- Telegram 알림 / callback / polling / web notification fallback
+- successful threshold / workload / category experiment apply feedback loop
+- Telegram 알림 / callback / polling / web notification fallback / WebSocket realtime events
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
+- 크롤 성공률 / 전략 성과 / 최근 실패 원인 기반 operations dashboard analytics
 
 현재 검증 상태:
 
-- `pytest -q` 기준 전체 `113 passed`
+- `pytest -q` 기준 전체 `135 passed, 1 skipped`
+- `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 
 ## 남은 핵심 과제 요약
 
 ### 1. 예측 엔진 운영화
 
-실제 advanced predictor 추론은 들어갔고, 이제 운영 비교/선택 체계를 마무리할 차례다.
+실제 advanced predictor 추론과 rolling backtest `auto` 선택은 들어갔다. 이제 backtest 결과를 릴리즈 승격과 장기 성능 추세에 연결할 차례다.
 
-- 모델 아티팩트 저장/로드 전략
-- predictor selection 정책 및 백테스트 체계
-- predictor 정확도 / fallback / guardrail 비교 집계
+- 모델 아티팩트 학습/검증 파이프라인 고도화
+- backtest 결과를 release promotion gate로 사용
+- predictor 장기 성능 추세 저장/비교
 
 ### 2. 실험 운영 자동화
 
-추천 실험 계획과 persisted experiment run은 이미 있고, 수동 제어와 threshold feedback loop까지 연결됐다. 이제 반영 범위를 더 넓혀야 한다.
+추천 실험 계획과 persisted experiment run은 이미 있고, 수동 제어 및 threshold / workload / category feedback loop까지 연결됐다. 이제 대시보드 action payload와 적용 이력 관측성을 정리할 차례다.
 
-- workload / category 계열 실험 결과 반영
 - 대시보드 action payload 정리
 - 실험 적용 이력 관측성 강화
 
 ### 3. 실행 인프라 안정화
 
-- `docker compose up -d` 실패 원인 해결
-- production-grade broker / result backend 정리
-- 백필 / 학습 / 재평가 작업을 API 요청 경로에서 분리
+- production-grade broker / result backend 운영 관측성 정리
+- 실제 credential/IAM 기준 release manifest object storage rollout 검증
 
 ### 4. 실시간 웹 이벤트
 
-- WebSocket 연결 관리 레이어
-- 신규 후보 / 추천 / 실패 이벤트 브로드캐스트
-- Telegram / WebSocket 공통 event schema 정리
+- 이벤트 인증/권한 검사
+- 다중 프로세스/다중 worker 배포 시 pub/sub fanout
+- 필요 시 event replay 범위와 retention 정책 정리
 
 ### 5. 운영 보고용 집계 보강
 
-- predictor별 정확도 비교 집계
-- fallback / guardrail 적용 빈도 집계
-- 크롤 성공률 / 전략 성과 / 최근 기간 카드형 집계 API
+- worker queue 지연 / Telegram 전송률 / 모델 릴리즈 상태 카드 확장
 
 ## 우선순위 선정 기준
 
@@ -69,49 +70,46 @@
 
 ## 권장 우선순위
 
-### 1순위 — 예측 엔진 운영화 (backtest / selection / observability)
+### 1순위 — predictor release gate와 장기 성능 추세
 
-현재 가장 가치가 큰 다음 확장은 실제로 동작하는 predictor 위에 비교·선택·관측성을 얹는 것이다.
+rolling backtest `auto` 선택은 들어갔지만, 이 결과가 모델 릴리즈 승격 조건이나 장기 성능 추세로 저장되지는 않는다. 다음 큰 빈틈은 predictor 선택 품질을 운영 배포 판단과 연결하는 것이다.
 
 #### 이유
 
-- 기존 데이터셋 추출, guardrail, fallback 구조와 advanced predictor 추론이 이미 준비되어 있다.
-- 가장 큰 제품 가치 상승 지점이기도 하다.
-- 현재 analytics / decision engine과도 자연스럽게 연결된다.
+- predictor별 backtest metadata가 이미 응답과 저장소에 남는다.
+- manifest promotion 경로가 있으므로 승격 조건을 얹기 좋다.
+- 잘못된 predictor 승격은 낙찰가 추천 품질에 직접 영향을 준다.
 
 #### 1순위 작업 범위
 
-- predictor별 backtest 입력/출력 규약 정리
-- predictor selection / fallback selector 고도화
-- predictor 메타데이터 기반 정확도 비교 API 준비
-- artifact 관리 전략 정리
+- rolling backtest 결과를 release promotion gate 조건으로 사용
+- predictor별 장기 성능 추세 저장/조회
+- manifest apply 단계에서 최소 표본/오차율/guardrail 조건 검증
+- 실패 시 운영자가 볼 수 있는 차단 사유 정리
 
 #### 1순위 우선 검토 파일
 
-- `app/services/prediction_dataset.py`
+- `scripts/promote_ml_release.py`
+- `app/ai/predictor_backtest.py`
 - `app/ai/price_prediction.py`
-- `app/ai/predictors/base.py`
-- `app/ai/predictors/historical.py`
-- `app/ai/predictors/lstm.py`
-- `app/ai/predictors/ensemble.py`
+- `app/services/prediction_reporting.py`
 - `tests/test_prediction_predictors.py`
 - `tests/test_predictions.py`
 
 #### 1순위 완료 기준
 
-- 데이터가 충분할 때 advanced predictor가 안전하게 선택/비교되어야 한다.
-- 데이터/모델이 부족할 때 historical predictor로 안전하게 fallback 되어야 한다.
-- 응답과 집계만 보고 어떤 predictor가 선택됐는지 추적 가능해야 한다.
+- promotion이 backtest 품질 기준을 통과하지 못하면 명확히 차단되어야 한다.
+- predictor 성능 추세를 운영 API 또는 manifest 검증 로그에서 비교할 수 있어야 한다.
 
 ### 2순위 — 실험 운영 고도화
 
-실험 계획과 실행 이력은 저장되고, 수동 제어와 threshold 적용까지 가능하므로 이제 반영 범위를 넓히는 단계다.
+실험 계획과 실행 이력은 저장되고, 수동 제어와 threshold/workload/category 적용까지 가능하다. 이제 운영 화면에서 바로 쓰기 좋은 payload와 이력 집계를 다듬는 단계다.
 
 #### 2순위 작업 범위
 
-- workload / category 실험 결과를 운영 설정 반영 후보로 변환
 - 성공 / 실패 / 보류 실험 이력 기반 정렬 개선
 - 적용 이력/중복 적용 방지 집계 보강
+- dashboard action payload 구조 정리
 
 #### 2순위 우선 검토 파일
 
@@ -122,8 +120,8 @@
 
 #### 2순위 완료 기준
 
-- 운영자가 실험을 단순 조회만이 아니라 실제로 종료/롤백하고 threshold에 반영할 수 있어야 한다.
-- 실험 결과가 다음 추천 로직과 운영 설정 변경에 연결 가능한 구조가 되어야 한다.
+- 운영자가 적용 가능한 실험과 이미 적용된 실험을 쉽게 구분할 수 있어야 한다.
+- 실험 적용 결과가 다음 추천 로직과 운영 설정 변경에 감사 가능한 형태로 남아야 한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -131,9 +129,8 @@
 
 #### 3순위 작업 범위
 
-- `docker compose up -d` 실패 원인 복구
-- Celery broker / result backend 전략 정리
-- 수집 백필 / 데이터셋 리프레시 / 모델 평가 작업 분리
+- Celery broker / result backend 운영 정책 정리
+- 수집 백필 / 데이터셋 리프레시 / 모델 평가 작업 관측성 보강
 - 상태 조회 / 실패 로그 / 마지막 성공 시각 정리
 
 #### 3순위 우선 검토 파일
@@ -147,47 +144,46 @@
 
 #### 3순위 완료 기준
 
-- 로컬 개발 환경에서 compose 기동이 재현 가능해야 한다.
-- 무거운 작업이 API 요청 경로에서 분리되어야 한다.
+- 로컬 개발 환경에서 compose 설정이 재현 가능해야 한다.
+- 무거운 작업은 API 요청 경로 밖에서 실행되고, 상태 조회가 가능해야 한다.
 
-### 4순위 — WebSocket 실시간 이벤트
+### 4순위 — WebSocket 실시간 이벤트 운영화
 
-Telegram은 이미 운영 가능한 수준이므로, 웹 대시보드 실시간 채널이 다음 단계다.
+WebSocket 기본 레이어와 주요 이벤트 브로드캐스트는 구현됐다. 운영 배포에서는 인증과 다중 프로세스 fanout이 남는다.
 
 #### 4순위 작업 범위
 
-- 연결 관리 레이어
-- 신규 후보 / 추천 / 실패 / 전략 모니터링 이벤트 push
-- notification payload와 실시간 event payload 정규화
+- WebSocket 인증/권한 검사
+- Redis/RabbitMQ/PostgreSQL notify 등 다중 프로세스 pub/sub 선택
+- event replay/retention 정책 정리
 
 #### 4순위 우선 검토 파일
 
-- 신규 `app/services/realtime.py`
-- 신규 `app/api/realtime.py` 또는 `app/api/routes.py` 확장
+- `app/services/realtime.py`
+- `app/api/realtime.py`
 - `app/main.py`
-- 신규 `tests/test_realtime.py`
+- `tests/test_realtime.py`
 
 #### 4순위 완료 기준
 
-- polling 없이 핵심 이벤트를 푸시할 수 있어야 한다.
-- 연결이 없더라도 기존 persisted notification 흐름은 유지되어야 한다.
+- 운영 배포에서 여러 API 프로세스 사이 이벤트가 누락되지 않아야 한다.
+- 인증되지 않은 클라이언트가 이벤트 스트림을 열 수 없어야 한다.
 
-### 5순위 — 운영 보고용 집계 API 보강
+### 5순위 — 운영 보고용 집계 API 확장
 
-decision analytics는 이미 강하지만, prediction/infra 관측성은 더 필요하다.
+decision analytics, prediction observability, operations dashboard 기반이 생겼고, 남은 것은 worker/외부 채널/릴리즈 상태 카드 확장이다.
 
 #### 5순위 작업 범위
 
-- predictor별 정확도 비교 API
-- fallback / guardrail 적용 빈도 집계
-- 크롤 성공률 / 전략 성과 / 기간별 카드형 집계
+- worker queue 지연 / 실패율 / 재시도 카드
+- Telegram 전송률 / 실패 원인 카드
+- 모델 릴리즈 / manifest 상태 카드
 
 #### 5순위 우선 검토 파일
 
 - `app/api/analytics.py`
-- `app/api/operator.py`
-- 신규 `app/services/analytics_reporting.py`
-- 신규 `tests/test_analytics_reporting.py`
+- `app/services/analytics_reporting.py`
+- `tests/test_analytics_reporting.py`
 
 #### 5순위 완료 기준
 
@@ -198,21 +194,20 @@ decision analytics는 이미 강하지만, prediction/infra 관측성은 더 필
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — predictor 비교/선택 체계
+### 묶음 A — predictor release gate
 
-- predictor backtest 입력/출력 스키마 정리
-- historical vs lstm vs ensemble 비교 기준 확정
-- predictor별 테스트 fixture 설계
+- rolling backtest 결과를 manifest promotion 조건으로 사용
+- predictor 장기 성능 추세 저장
 
-### 묶음 B — prediction observability
+### 묶음 B — 실험 운영 payload
 
-- fallback 빈도 / guardrail 빈도 / predictor 선택 비율 집계
-- 정확도 비교 API 설계 및 구현
+- 적용 가능/적용 완료 실험 action payload 정리
+- 실험 적용 이력 집계 보강
 
-### 묶음 C — 실험 반영 범위 확장
+### 묶음 C — realtime 운영화
 
-- workload / category 계열 실험 결과 반영
-- 적용 이력/중복 적용 방지 정리
+- WebSocket 인증
+- 다중 프로세스 pub/sub fanout
 
 ## 범위 재정의 / 비우선 항목
 
