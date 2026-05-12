@@ -96,6 +96,7 @@ class MLReleasePromotionRequest:
     embedding_model_path: str | None = None
     lstm_artifact_path: str | None = None
     ensemble_artifact_path: str | None = None
+    predictor_backtest_report_path: str | None = None
     git_sha: str | None = None
     notes: str | None = None
     rebuild_limit: int = 100
@@ -140,6 +141,15 @@ class MLReleasePromotionService:
         if ensemble_metadata is not None:
             recommended_env["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] = ensemble_metadata["path"]
 
+        predictor_backtest_report = self._load_predictor_backtest_report(request.predictor_backtest_report_path)
+        predictor_promotion_gate = self._build_predictor_promotion_gate(
+            predictor_backtest_report,
+            has_predictor_artifact=bool(effective_lstm_path or ensemble_metadata is not None),
+        )
+        best_predictor_key = str(predictor_promotion_gate.get("best_predictor_key") or "").strip()
+        if best_predictor_key:
+            recommended_env["PRICE_PREDICTION_PREFERRED_PREDICTOR"] = best_predictor_key
+
         manifest = {
             "manifest_schema_version": "2",
             "release_tag": release_tag,
@@ -155,6 +165,9 @@ class MLReleasePromotionService:
                 },
             },
             "recommended_env": recommended_env,
+            "promotion_gate": {
+                "predictor_backtest": predictor_promotion_gate,
+            },
             "rebuild": {
                 "recommended_force": bool(request.force_rebuild),
                 "default_limit": int(request.rebuild_limit),
@@ -225,16 +238,22 @@ class MLReleasePromotionService:
         category: str | None = None,
         project_status: str | None = None,
         force: bool | None = None,
+        skip_promotion_gate: bool = False,
     ) -> dict[str, Any]:
         """Load a manifest, surface its runtime settings, and optionally rebuild embeddings."""
         manifest, manifest_path = self.load_release_manifest(manifest_ref)
         recommended_env = dict(manifest.get("recommended_env") or {})
+        promotion_gate = self._resolve_manifest_promotion_gate(manifest)
+        if not skip_promotion_gate and not bool(promotion_gate.get("passed")):
+            reasons = "; ".join(str(reason) for reason in promotion_gate.get("reasons", []))
+            raise ValueError(f"Release manifest failed predictor promotion gate: {reasons or 'unknown failure'}")
 
         response: dict[str, Any] = {
             "release_tag": manifest.get("release_tag"),
             "manifest_path": str(manifest_path),
             "recommended_docker_target": manifest.get("recommended_docker_target"),
             "recommended_env": recommended_env,
+            "promotion_gate": promotion_gate,
             "rebuild_requested": rebuild_embeddings,
             "rebuild_result": None,
         }
@@ -539,6 +558,209 @@ class MLReleasePromotionService:
             raise RuntimeError(
                 f"Remote embedding rebuild failed with HTTP {exc.code} at {target_url}: {error_body}"
             ) from exc
+
+    def _load_predictor_backtest_report(self, raw_path: str | None) -> dict[str, Any] | None:
+        """Load an optional predictor backtest report JSON file for release gating."""
+        if not raw_path:
+            return None
+        path = self._resolve_existing_path(raw_path, expect_directory=False)
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Predictor backtest report is not valid JSON: {path}") from exc
+        if not isinstance(report, dict):
+            raise ValueError(f"Predictor backtest report must decode to a JSON object: {path}")
+        report["report_path"] = self._to_portable_path(path)
+        return report
+
+    def _build_predictor_promotion_gate(
+        self,
+        backtest_report: dict[str, Any] | None,
+        *,
+        has_predictor_artifact: bool,
+    ) -> dict[str, Any]:
+        """Build a deterministic pass/fail gate from predictor backtest evidence."""
+        thresholds = {
+            "require_report": bool(settings.ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT),
+            "min_sample_count": int(settings.ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT or 0),
+            "max_average_absolute_error_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE),
+            "max_guardrail_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE),
+            "max_fallback_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE),
+        }
+        if not has_predictor_artifact:
+            return {
+                "status": "not_applicable",
+                "passed": True,
+                "thresholds": thresholds,
+                "metrics": {},
+                "best_predictor_key": None,
+                "best_predictor_name": None,
+                "reasons": ["No predictor artifact is included in this manifest."],
+            }
+
+        if backtest_report is None:
+            passed = not thresholds["require_report"]
+            return {
+                "status": "missing_report" if not passed else "not_configured",
+                "passed": passed,
+                "thresholds": thresholds,
+                "metrics": {},
+                "best_predictor_key": None,
+                "best_predictor_name": None,
+                "reasons": [
+                    "Predictor backtest report is required but was not provided."
+                    if not passed
+                    else "Predictor backtest report was not provided; gate is informational."
+                ],
+            }
+
+        metrics = self._extract_predictor_gate_metrics(backtest_report)
+        reasons: list[str] = []
+        source_status = str(backtest_report.get("status") or "").strip() or "unknown"
+        if source_status != "completed":
+            reasons.append(f"Backtest status is {source_status}, expected completed.")
+        if int(metrics["sample_count"]) < thresholds["min_sample_count"]:
+            reasons.append(
+                f"Backtest sample count {metrics['sample_count']} is below required {thresholds['min_sample_count']}."
+            )
+
+        average_error_rate = metrics["average_absolute_error_rate"]
+        if average_error_rate is None:
+            reasons.append("Backtest average absolute error rate is missing.")
+        elif float(average_error_rate) > thresholds["max_average_absolute_error_rate"]:
+            reasons.append(
+                "Backtest average absolute error rate "
+                f"{float(average_error_rate):.4f} exceeds {thresholds['max_average_absolute_error_rate']:.4f}."
+            )
+
+        guardrail_rate = metrics.get("guardrail_rate")
+        if guardrail_rate is not None and float(guardrail_rate) > thresholds["max_guardrail_rate"]:
+            reasons.append(
+                f"Guardrail rate {float(guardrail_rate):.4f} exceeds {thresholds['max_guardrail_rate']:.4f}."
+            )
+
+        fallback_rate = metrics.get("fallback_rate")
+        if fallback_rate is not None and float(fallback_rate) > thresholds["max_fallback_rate"]:
+            reasons.append(
+                f"Fallback rate {float(fallback_rate):.4f} exceeds {thresholds['max_fallback_rate']:.4f}."
+            )
+
+        passed = not reasons
+        return {
+            "status": "passed" if passed else "failed",
+            "passed": passed,
+            "source_status": source_status,
+            "thresholds": thresholds,
+            "metrics": metrics,
+            "best_predictor_key": metrics.get("best_predictor_key"),
+            "best_predictor_name": metrics.get("best_predictor_name"),
+            "report_path": backtest_report.get("report_path"),
+            "reasons": reasons or ["Predictor backtest gate passed."],
+        }
+
+    def _extract_predictor_gate_metrics(self, backtest_report: dict[str, Any]) -> dict[str, Any]:
+        """Normalize supported backtest report shapes into promotion-gate metrics."""
+        best_predictor_key = str(backtest_report.get("best_predictor_key") or "").strip() or None
+        best_result = self._find_backtest_result(backtest_report, best_predictor_key=best_predictor_key)
+        resolved_best_predictor_key = (
+            best_predictor_key
+            or (str(best_result.get("predictor_key") or "").strip() if best_result else None)
+            or None
+        )
+        resolved_best_predictor_name = (
+            str(backtest_report.get("best_predictor_name") or "").strip()
+            or (str(best_result.get("predictor_name") or "").strip() if best_result else "")
+            or None
+        )
+        sample_count = self._first_int(
+            backtest_report.get("sample_count"),
+            best_result.get("sample_count") if best_result else None,
+            backtest_report.get("holdout_size"),
+        )
+        average_error_rate = self._first_float(
+            backtest_report.get("average_absolute_error_rate"),
+            backtest_report.get("best_average_absolute_error_rate"),
+            best_result.get("average_absolute_error_rate") if best_result else None,
+        )
+        guardrail_rate = self._first_float(backtest_report.get("guardrail_rate"))
+        fallback_rate = self._first_float(backtest_report.get("fallback_rate"))
+        return {
+            "sample_count": sample_count,
+            "average_absolute_error_rate": average_error_rate,
+            "guardrail_rate": guardrail_rate,
+            "fallback_rate": fallback_rate,
+            "best_predictor_key": resolved_best_predictor_key,
+            "best_predictor_name": resolved_best_predictor_name,
+        }
+
+    def _find_backtest_result(
+        self,
+        backtest_report: dict[str, Any],
+        *,
+        best_predictor_key: str | None,
+    ) -> dict[str, Any] | None:
+        """Return the backtest result row matching the selected predictor."""
+        results = backtest_report.get("results")
+        if not isinstance(results, list):
+            return None
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            if best_predictor_key and str(result.get("predictor_key") or "") == best_predictor_key:
+                return result
+        completed_results = [
+            result
+            for result in results
+            if isinstance(result, dict)
+            and result.get("status") == "completed"
+            and result.get("average_absolute_error_rate") is not None
+        ]
+        if not completed_results:
+            return None
+        return min(
+            completed_results,
+            key=lambda result: (
+                float(result.get("average_absolute_error_rate") or 1.0),
+                -int(result.get("sample_count") or 0),
+            ),
+        )
+
+    def _resolve_manifest_promotion_gate(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Read or reconstruct the predictor promotion gate from a manifest."""
+        gate_container = manifest.get("promotion_gate")
+        if isinstance(gate_container, dict):
+            predictor_gate = gate_container.get("predictor_backtest")
+            if isinstance(predictor_gate, dict):
+                return predictor_gate
+
+        artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
+        predictors = artifacts.get("predictors") if isinstance(artifacts, dict) else {}
+        has_predictor_artifact = False
+        if isinstance(predictors, dict):
+            has_predictor_artifact = any(isinstance(predictors.get(key), dict) for key in ("lstm", "ensemble"))
+        return self._build_predictor_promotion_gate(None, has_predictor_artifact=has_predictor_artifact)
+
+    def _first_int(self, *values: Any) -> int:
+        """Return the first value that can be interpreted as a non-negative integer."""
+        for value in values:
+            if value is None:
+                continue
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    def _first_float(self, *values: Any) -> float | None:
+        """Return the first value that can be interpreted as a float."""
+        for value in values:
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def _build_storage_policy(self) -> dict[str, Any]:
         """Describe the release manifest storage and retention policy."""

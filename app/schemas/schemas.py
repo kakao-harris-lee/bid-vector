@@ -982,6 +982,18 @@ class PredictionPricingModeBreakdownItem(BaseModel):
     guardrail_rate: float = Field(ge=0.0, le=1.0)
 
 
+class PredictionPerformanceTrendItem(BaseModel):
+    bucket_start: datetime
+    bucket_end: datetime
+    prediction_count: int = Field(ge=0)
+    fallback_rate: float = Field(ge=0.0, le=1.0)
+    guardrail_rate: float = Field(ge=0.0, le=1.0)
+    accuracy_sample_count: int = Field(ge=0)
+    average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    backtest_sample_count: int = Field(ge=0)
+    average_backtest_error_rate: Optional[float] = Field(default=None, ge=0.0)
+
+
 class PredictionObservabilityResponse(BaseModel):
     operator_id: int
     period_days: int
@@ -996,6 +1008,7 @@ class PredictionObservabilityResponse(BaseModel):
     within_3_percent_count: int = Field(ge=0)
     predictor_breakdown: List[PredictionPredictorBreakdownItem] = Field(default_factory=list)
     pricing_mode_breakdown: List[PredictionPricingModeBreakdownItem] = Field(default_factory=list)
+    performance_trend: List[PredictionPerformanceTrendItem] = Field(default_factory=list)
     fallback_reason_breakdown: dict[str, int] = Field(default_factory=dict)
     guardrail_reason_breakdown: dict[str, int] = Field(default_factory=dict)
 

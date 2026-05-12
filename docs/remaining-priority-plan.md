@@ -12,6 +12,7 @@
 - predictor abstraction 및 artifact-backed `HistoricalStatisticalPredictor`, `LSTMBidRatePredictor`, `EnsembleBidRatePredictor` 추론
 - persisted prediction metadata 기반 predictor / fallback / guardrail / linked-result accuracy observability API
 - rolling backtest 기반 `auto` predictor selection
+- release manifest predictor promotion gate 및 predictor 성능 추세 API
 - `BidDecisionRecord` 기반 입찰 추진 결정, score breakdown, margin / complexity / workload 반영
 - decision detail / timeline / funnel / recommendation analytics
 - recommendation → experiment plan 확장
@@ -23,18 +24,18 @@
 
 현재 검증 상태:
 
-- `pytest -q` 기준 전체 `135 passed, 1 skipped`
+- `pytest -q` 기준 전체 `136 passed, 1 skipped`
 - `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 
 ## 남은 핵심 과제 요약
 
 ### 1. 예측 엔진 운영화
 
-실제 advanced predictor 추론과 rolling backtest `auto` 선택은 들어갔다. 이제 backtest 결과를 릴리즈 승격과 장기 성능 추세에 연결할 차례다.
+실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세는 들어갔다. 이제 모델 학습/검증 파이프라인과 gate 기준 운영 보정이 남았다.
 
 - 모델 아티팩트 학습/검증 파이프라인 고도화
-- backtest 결과를 release promotion gate로 사용
-- predictor 장기 성능 추세 저장/비교
+- promotion gate 기준을 실제 운영 데이터에 맞춰 보정
+- predictor 성능 추세를 릴리즈 의사결정 카드로 확장
 
 ### 2. 실험 운영 자동화
 
@@ -70,36 +71,34 @@
 
 ## 권장 우선순위
 
-### 1순위 — predictor release gate와 장기 성능 추세
+### 1순위 — 실험 운영 payload와 적용 이력 관측성
 
-rolling backtest `auto` 선택은 들어갔지만, 이 결과가 모델 릴리즈 승격 조건이나 장기 성능 추세로 저장되지는 않는다. 다음 큰 빈틈은 predictor 선택 품질을 운영 배포 판단과 연결하는 것이다.
+threshold/workload/category 실험 적용은 가능해졌지만, 운영 화면이 바로 사용할 수 있는 action payload와 적용 이력 집계는 아직 얇다. 다음 큰 빈틈은 적용 가능/완료/차단 상태를 명확히 보여주는 것이다.
 
 #### 이유
 
-- predictor별 backtest metadata가 이미 응답과 저장소에 남는다.
-- manifest promotion 경로가 있으므로 승격 조건을 얹기 좋다.
-- 잘못된 predictor 승격은 낙찰가 추천 품질에 직접 영향을 준다.
+- 실험 적용 endpoint는 이미 있으므로 상태 집계를 얹기 쉽다.
+- 운영자가 어떤 실험을 적용할지 빠르게 판단할 수 있어야 한다.
+- 중복 적용/force 적용 이력을 대시보드에서 감지해야 한다.
 
 #### 1순위 작업 범위
 
-- rolling backtest 결과를 release promotion gate 조건으로 사용
-- predictor별 장기 성능 추세 저장/조회
-- manifest apply 단계에서 최소 표본/오차율/guardrail 조건 검증
-- 실패 시 운영자가 볼 수 있는 차단 사유 정리
+- 적용 가능/적용 완료/적용 차단 experiment action payload 정리
+- threshold/workload/category 적용 이력 집계
+- force 적용과 dry-run 미리보기 결과를 대시보드가 읽기 좋은 형태로 정리
 
 #### 1순위 우선 검토 파일
 
-- `scripts/promote_ml_release.py`
-- `app/ai/predictor_backtest.py`
-- `app/ai/price_prediction.py`
-- `app/services/prediction_reporting.py`
-- `tests/test_prediction_predictors.py`
-- `tests/test_predictions.py`
+- `app/services/decision_experiments.py`
+- `app/services/decision_analytics.py`
+- `app/api/analytics.py`
+- `app/schemas/schemas.py`
+- `tests/test_auth_admin_analytics.py`
 
 #### 1순위 완료 기준
 
-- promotion이 backtest 품질 기준을 통과하지 못하면 명확히 차단되어야 한다.
-- predictor 성능 추세를 운영 API 또는 manifest 검증 로그에서 비교할 수 있어야 한다.
+- 운영자가 적용할 수 있는 다음 action과 차단 사유를 API 응답만으로 알 수 있어야 한다.
+- 이미 적용된 실험과 아직 적용 가능한 실험이 명확히 구분되어야 한다.
 
 ### 2순위 — 실험 운영 고도화
 
@@ -194,15 +193,15 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — predictor release gate
-
-- rolling backtest 결과를 manifest promotion 조건으로 사용
-- predictor 장기 성능 추세 저장
-
-### 묶음 B — 실험 운영 payload
+### 묶음 A — 실험 운영 payload
 
 - 적용 가능/적용 완료 실험 action payload 정리
 - 실험 적용 이력 집계 보강
+
+### 묶음 B — production task/broker 관측성
+
+- worker queue 지연 / 실패율 / 재시도 카드
+- broker health 점검 payload
 
 ### 묶음 C — realtime 운영화
 

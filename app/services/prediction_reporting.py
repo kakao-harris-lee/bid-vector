@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.single_user import ensure_operator_account
-from app.core.time import utc_now
+from app.core.time import ensure_utc, utc_now
 from app.models.models import PricePrediction, TenderResult
 
 
 class PredictionReportingService:
     """Aggregate persisted prediction metadata for operator reporting."""
 
-    def build_observability(self, db: Session, *, days: int = 90) -> dict[str, Any]:
+    def build_observability(self, db: Session, *, days: int = 90, trend_bucket_days: int = 14) -> dict[str, Any]:
         """Summarize predictor selection, guardrails, fallback, and result accuracy."""
         operator = ensure_operator_account(db)
-        date_from = utc_now() - timedelta(days=days)
+        now = utc_now()
+        date_from = now - timedelta(days=days)
+        resolved_trend_bucket_days = max(1, int(trend_bucket_days or 14))
 
         predictions = (
             db.query(PricePrediction)
@@ -42,6 +44,7 @@ class PredictionReportingService:
         guardrail_reason_breakdown: dict[str, int] = {}
         predictor_groups: dict[str, dict[str, Any]] = {}
         pricing_mode_groups: dict[str, dict[str, Any]] = {}
+        trend_groups: dict[int, dict[str, Any]] = {}
 
         for prediction in predictions:
             predictor_name = self._clean_text(prediction.predictor_name, fallback="historical_statistical")
@@ -63,6 +66,20 @@ class PredictionReportingService:
             error_rate = self._resolve_prediction_error_rate(prediction, tender_results_by_project)
             if error_rate is not None:
                 error_rates.append(error_rate)
+            trend_group = self._trend_group_for_prediction(
+                trend_groups,
+                prediction=prediction,
+                date_from=date_from,
+                now=now,
+                bucket_days=resolved_trend_bucket_days,
+            )
+            self._accumulate_trend_metrics(
+                trend_group,
+                prediction=prediction,
+                error_rate=error_rate,
+                has_fallback=has_fallback,
+                has_guardrail=has_guardrail,
+            )
 
             predictor_group = predictor_groups.setdefault(
                 predictor_name,
@@ -103,6 +120,10 @@ class PredictionReportingService:
             "pricing_mode_breakdown": [
                 self._serialize_pricing_mode_group(group, total_count=total_count)
                 for group in sorted(pricing_mode_groups.values(), key=lambda item: (-item["prediction_count"], item["pricing_mode"]))
+            ],
+            "performance_trend": [
+                self._serialize_trend_group(group)
+                for group in sorted(trend_groups.values(), key=lambda item: item["bucket_start"])
             ],
             "fallback_reason_breakdown": dict(sorted(fallback_reason_breakdown.items(), key=lambda item: (-item[1], item[0]))),
             "guardrail_reason_breakdown": dict(sorted(guardrail_reason_breakdown.items(), key=lambda item: (-item[1], item[0]))),
@@ -212,6 +233,72 @@ class PredictionReportingService:
             "fallback_rate": self._rate(int(group["fallback_count"]), prediction_count),
             "guardrail_count": int(group["guardrail_count"]),
             "guardrail_rate": self._rate(int(group["guardrail_count"]), prediction_count),
+        }
+
+    def _trend_group_for_prediction(
+        self,
+        trend_groups: dict[int, dict[str, Any]],
+        *,
+        prediction: PricePrediction,
+        date_from: datetime,
+        now: datetime,
+        bucket_days: int,
+    ) -> dict[str, Any]:
+        """Return the trend bucket accumulator for one prediction timestamp."""
+        created_at = ensure_utc(prediction.created_at)
+        elapsed_seconds = max(0.0, (created_at - date_from).total_seconds())
+        bucket_seconds = max(1, bucket_days) * 86400
+        bucket_index = int(elapsed_seconds // bucket_seconds)
+        bucket_start = date_from + timedelta(days=bucket_index * bucket_days)
+        bucket_end = min(now, bucket_start + timedelta(days=bucket_days))
+        return trend_groups.setdefault(
+            bucket_index,
+            {
+                "bucket_start": bucket_start,
+                "bucket_end": bucket_end,
+                "prediction_count": 0,
+                "fallback_count": 0,
+                "guardrail_count": 0,
+                "accuracy_error_rates": [],
+                "backtest_error_rates": [],
+                "backtest_sample_counts": [],
+            },
+        )
+
+    def _accumulate_trend_metrics(
+        self,
+        group: dict[str, Any],
+        *,
+        prediction: PricePrediction,
+        error_rate: float | None,
+        has_fallback: bool,
+        has_guardrail: bool,
+    ) -> None:
+        """Accumulate one prediction into a time-bucket trend group."""
+        group["prediction_count"] += 1
+        group["fallback_count"] += int(has_fallback)
+        group["guardrail_count"] += int(has_guardrail)
+        if error_rate is not None:
+            group["accuracy_error_rates"].append(error_rate)
+        if prediction.backtest_average_absolute_error_rate is not None:
+            group["backtest_error_rates"].append(float(prediction.backtest_average_absolute_error_rate))
+        if prediction.backtest_sample_count is not None and int(prediction.backtest_sample_count or 0) > 0:
+            group["backtest_sample_counts"].append(float(prediction.backtest_sample_count))
+
+    def _serialize_trend_group(self, group: dict[str, Any]) -> dict[str, Any]:
+        """Convert one time bucket into API-ready trend metrics."""
+        prediction_count = int(group["prediction_count"])
+        error_rates = group["accuracy_error_rates"]
+        return {
+            "bucket_start": group["bucket_start"],
+            "bucket_end": group["bucket_end"],
+            "prediction_count": prediction_count,
+            "fallback_rate": self._rate(int(group["fallback_count"]), prediction_count),
+            "guardrail_rate": self._rate(int(group["guardrail_count"]), prediction_count),
+            "accuracy_sample_count": len(error_rates),
+            "average_absolute_error_rate": self._average(error_rates),
+            "backtest_sample_count": int(sum(group["backtest_sample_counts"])),
+            "average_backtest_error_rate": self._average(group["backtest_error_rates"]),
         }
 
     def _clean_text(self, value: Any, *, fallback: str) -> str:

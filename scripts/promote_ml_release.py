@@ -34,6 +34,11 @@ def _build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--embedding-model-path", default="", help="Local embedding model snapshot directory.")
     create_parser.add_argument("--lstm-artifact-path", default="", help="Persisted LSTM artifact JSON path.")
     create_parser.add_argument("--ensemble-artifact-path", default="", help="Persisted ensemble artifact JSON path.")
+    create_parser.add_argument(
+        "--predictor-backtest-report",
+        default="",
+        help="Optional predictor backtest report JSON used for release promotion gating.",
+    )
     create_parser.add_argument("--git-sha", default="", help="Git SHA recorded in the manifest.")
     create_parser.add_argument("--notes", default="", help="Optional operator note stored in the manifest.")
     create_parser.add_argument("--rebuild-limit", type=int, default=100, help="Suggested default rebuild batch size.")
@@ -113,6 +118,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Publish the signed manifest and artifacts to ML_RELEASE_OBJECT_STORAGE_URL.",
     )
+    apply_parser.add_argument(
+        "--skip-promotion-gate",
+        action="store_true",
+        help="Bypass predictor promotion-gate failure checks when applying the manifest.",
+    )
     apply_parser.add_argument("--limit", type=int, default=None, help="Override rebuild batch size.")
     apply_parser.add_argument("--offset", type=int, default=None, help="Override rebuild offset.")
     apply_parser.add_argument("--category", default=None, help="Override rebuild category filter.")
@@ -140,6 +150,7 @@ def main() -> int:
                 embedding_model_path=_clean_optional(args.embedding_model_path),
                 lstm_artifact_path=_clean_optional(args.lstm_artifact_path),
                 ensemble_artifact_path=_clean_optional(args.ensemble_artifact_path),
+                predictor_backtest_report_path=_clean_optional(args.predictor_backtest_report),
                 git_sha=_clean_optional(args.git_sha),
                 notes=_clean_optional(args.notes),
                 rebuild_limit=int(args.rebuild_limit),
@@ -164,6 +175,7 @@ def main() -> int:
             None,
             manifest_ref=args.manifest,
             rebuild_embeddings=False,
+            skip_promotion_gate=bool(args.skip_promotion_gate),
         )
         if args.write_env_file:
             payload["env_file_update"] = service.write_manifest_env_file(
@@ -215,6 +227,7 @@ def main() -> int:
             category=_clean_optional(args.category),
             project_status=_clean_optional(args.project_status),
             force=force_override,
+            skip_promotion_gate=bool(args.skip_promotion_gate),
         )
         if args.write_env_file:
             payload["env_file_update"] = service.write_manifest_env_file(

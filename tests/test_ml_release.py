@@ -93,6 +93,41 @@ def _write_ensemble_artifact(
     return path
 
 
+def _write_predictor_backtest_report(
+    path: Path,
+    *,
+    status: str = "completed",
+    sample_count: int = 6,
+    average_error_rate: float = 0.012,
+    best_predictor_key: str = "ensemble",
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": status,
+                "holdout_size": sample_count,
+                "best_predictor_key": best_predictor_key,
+                "best_predictor_name": f"{best_predictor_key}_blend",
+                "best_average_absolute_error_rate": average_error_rate,
+                "results": [
+                    {
+                        "predictor_key": best_predictor_key,
+                        "predictor_name": f"{best_predictor_key}_blend",
+                        "predictor_family": best_predictor_key,
+                        "status": "completed",
+                        "sample_count": sample_count,
+                        "average_absolute_error_rate": average_error_rate,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
     """Manifest creation should validate artifacts and store repo-relative runtime paths."""
     repo_root = tmp_path / "repo"
@@ -102,6 +137,9 @@ def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
         repo_root / "models" / "predictors" / "ensemble" / "release-1.json",
         linked_lstm_artifact_path="../lstm/release-1.json",
     )
+    backtest_report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "release-1-backtest.json"
+    )
 
     service = MLReleasePromotionService(repo_root=repo_root)
     manifest = service.create_release_manifest(
@@ -110,6 +148,7 @@ def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
             embedding_model_path=str(embedding_dir),
             lstm_artifact_path=str(lstm_path),
             ensemble_artifact_path=str(ensemble_path),
+            predictor_backtest_report_path=str(backtest_report_path),
             git_sha="abc123def",
             rebuild_limit=250,
             category="software",
@@ -124,6 +163,10 @@ def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
     assert persisted["recommended_env"]["CLASSIFIER_EMBEDDING_MODEL"] == "models/embeddings/ko-sbert-v3"
     assert persisted["recommended_env"]["PRICE_PREDICTION_LSTM_MODEL_PATH"] == "models/predictors/lstm/release-1.json"
     assert persisted["recommended_env"]["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] == "models/predictors/ensemble/release-1.json"
+    assert persisted["recommended_env"]["PRICE_PREDICTION_PREFERRED_PREDICTOR"] == "ensemble"
+    assert persisted["promotion_gate"]["predictor_backtest"]["passed"] is True
+    assert persisted["promotion_gate"]["predictor_backtest"]["metrics"]["sample_count"] == 6
+    assert persisted["promotion_gate"]["predictor_backtest"]["metrics"]["average_absolute_error_rate"] == pytest.approx(0.012)
     assert persisted["artifacts"]["predictors"]["ensemble"]["resolved_lstm_artifact_path"] == "models/predictors/lstm/release-1.json"
     assert persisted["rebuild"]["default_limit"] == 250
     assert persisted["rebuild"]["default_category"] == "software"
@@ -150,6 +193,40 @@ def test_release_manifest_signature_detects_tampering(tmp_path):
 
     with pytest.raises(ValueError, match="signature verification failed"):
         service.load_release_manifest("2026-05-11-signed")
+
+
+def test_apply_release_manifest_blocks_failed_predictor_promotion_gate(tmp_path, monkeypatch):
+    """Applying predictor artifacts should fail when the embedded backtest gate does not pass."""
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "weak.json")
+    backtest_report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "weak-backtest.json",
+        sample_count=3,
+        average_error_rate=0.06,
+        best_predictor_key="lstm",
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT", 5)
+    monkeypatch.setattr(settings, "ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE", 0.03)
+
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-weak-predictor",
+            lstm_artifact_path=str(lstm_path),
+            predictor_backtest_report_path=str(backtest_report_path),
+        )
+    )
+
+    assert manifest["promotion_gate"]["predictor_backtest"]["passed"] is False
+    with pytest.raises(ValueError, match="failed predictor promotion gate"):
+        service.apply_release_manifest(None, manifest_ref="2026-05-11-weak-predictor")
+
+    bypassed = service.apply_release_manifest(
+        None,
+        manifest_ref="2026-05-11-weak-predictor",
+        skip_promotion_gate=True,
+    )
+    assert bypassed["promotion_gate"]["passed"] is False
 
 
 def test_publish_release_manifest_to_file_object_storage(tmp_path, monkeypatch):

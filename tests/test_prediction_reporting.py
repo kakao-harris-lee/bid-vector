@@ -57,6 +57,10 @@ def test_prediction_observability_endpoint_aggregates_predictor_accuracy_and_gua
             model_version="v1-historical",
             predictor_name="historical_statistical",
             predictor_family="statistical",
+            selector_name="backtest",
+            selection_reason="rolling backtest selected historical predictor",
+            backtest_sample_count=5,
+            backtest_average_absolute_error_rate=0.012,
             training_window_size=4,
             pricing_mode="historical_blend",
             historical_sample_size=4,
@@ -75,6 +79,10 @@ def test_prediction_observability_endpoint_aggregates_predictor_accuracy_and_gua
             predictor_name="historical_statistical",
             predictor_family="statistical",
             fallback_reason="Requested lstm_sequence predictor is unavailable.",
+            selector_name="backtest",
+            selection_reason="rolling backtest fell back to historical predictor",
+            backtest_sample_count=5,
+            backtest_average_absolute_error_rate=0.018,
             training_window_size=2,
             pricing_mode="heuristic",
             historical_sample_size=2,
@@ -95,6 +103,10 @@ def test_prediction_observability_endpoint_aggregates_predictor_accuracy_and_gua
             model_version="v2-ensemble",
             predictor_name="ensemble_blend",
             predictor_family="ensemble",
+            selector_name="backtest",
+            selection_reason="rolling backtest selected ensemble predictor",
+            backtest_sample_count=6,
+            backtest_average_absolute_error_rate=0.009,
             training_window_size=12,
             pricing_mode="historical_blend",
             historical_sample_size=12,
@@ -129,7 +141,10 @@ def test_prediction_observability_endpoint_aggregates_predictor_accuracy_and_gua
     ])
     test_db.commit()
 
-    response = client.get("/api/v1/analytics/prediction-observability", params={"days": 30})
+    response = client.get(
+        "/api/v1/analytics/prediction-observability",
+        params={"days": 30, "trend_bucket_days": 30},
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -163,3 +178,8 @@ def test_prediction_observability_endpoint_aggregates_predictor_accuracy_and_gua
     pricing_modes = {item["pricing_mode"]: item for item in payload["pricing_mode_breakdown"]}
     assert pricing_modes["historical_blend"]["prediction_count"] == 2
     assert pricing_modes["heuristic"]["prediction_count"] == 1
+
+    trend = payload["performance_trend"]
+    assert sum(item["prediction_count"] for item in trend) == 3
+    assert sum(item["backtest_sample_count"] for item in trend) == 16
+    assert any(item["average_backtest_error_rate"] == pytest.approx(0.013, abs=0.0001) for item in trend)

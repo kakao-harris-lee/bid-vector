@@ -125,10 +125,15 @@ def get_prediction_feedback(
 @router.get("/prediction-observability", response_model=PredictionObservabilityResponse)
 def get_prediction_observability(
     days: int = Query(90, ge=1, le=365),
+    trend_bucket_days: int = Query(14, ge=1, le=90),
     db: Session = Depends(get_db),
 ):
     """Summarize predictor selection, fallback, guardrails, and result accuracy."""
-    return PredictionReportingService().build_observability(db, days=days)
+    return PredictionReportingService().build_observability(
+        db,
+        days=days,
+        trend_bucket_days=trend_bucket_days,
+    )
 
 
 @router.get("/operations-dashboard", response_model=OperationsDashboardResponse)

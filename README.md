@@ -168,7 +168,9 @@ To reduce drift between training outputs and runtime settings, the repository no
 - `apply-manifest --write-env-file .env` writes the recommended runtime keys directly into a dotenv file
 - `apply-manifest --rebuild-embeddings` temporarily applies the manifest's embedding model path in-process and rebuilds stored project vectors
 - `apply-manifest --restart-compose --rebuild-embeddings-via-api` rolls the manifest into Docker Compose, waits for `/health`, and queues the remote embedding backfill through `/api/v1/ml/backfills/project-embeddings`
+- `create-manifest --predictor-backtest-report <report.json>` embeds rolling backtest evidence and creates a predictor promotion gate
 - New manifests include artifact checksums, an HMAC-SHA256 signature, local retention policy metadata, and optional remote object-storage publishing via `ML_RELEASE_OBJECT_STORAGE_URL`
+- Applying a manifest validates the embedded predictor promotion gate. Failed gates block rollout unless `--skip-promotion-gate` is passed.
 
 Example flow:
 
@@ -177,7 +179,8 @@ python scripts/promote_ml_release.py create-manifest \
    --release-tag 2026-05-11-embedding-v4 \
    --embedding-model-path models/embeddings/ko-sbert-v4 \
    --lstm-artifact-path models/predictors/lstm/2026-05-11.json \
-   --ensemble-artifact-path models/predictors/ensemble/2026-05-11.json
+   --ensemble-artifact-path models/predictors/ensemble/2026-05-11.json \
+   --predictor-backtest-report models/reports/2026-05-11-backtest.json
 
 python scripts/promote_ml_release.py apply-manifest --manifest 2026-05-11-embedding-v4
 
@@ -337,7 +340,7 @@ Set `PRICE_PREDICTION_PREFERRED_PREDICTOR=auto` to enable rolling backtest selec
 - `GET /api/v1/analytics/summary` - Get operator workflow analytics summary
 - `GET /api/v1/analytics/operator-stats` - Get singleton operator statistics
 - `GET /api/v1/analytics/prediction-feedback` - Compare stored predictions and bid-decision recommendations against linked tender results
-- `GET /api/v1/analytics/prediction-observability` - Compare predictor selection, fallback, guardrail, and linked-result accuracy metrics
+- `GET /api/v1/analytics/prediction-observability` - Compare predictor selection, fallback, guardrail, linked-result accuracy metrics, and time-bucketed performance trend
 - `GET /api/v1/analytics/operations-dashboard` - Return card-ready crawl health and strategy monitoring performance metrics
 - `GET /api/v1/analytics/decision-insights` - Summarize persisted bid decision signals such as priority, margin, complexity, and workload source
 - `GET /api/v1/analytics/decision-funnel` - Track how initial bid decisions move from review/bid_now into submitted workflow states, including trend and segment breakdowns
@@ -498,6 +501,11 @@ Key variables:
 - `ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE` - Require existing manifests to contain a valid signature before loading
 - `ML_RELEASE_OBJECT_STORAGE_URL` - Optional `file://...` or `s3://bucket/prefix` target for manifest/artifact publishing
 - `ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH` - Automatically publish manifests and referenced artifacts after creation
+- `ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT` - Require predictor manifests to include a backtest report before rollout
+- `ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT` - Minimum backtest samples required by the predictor promotion gate
+- `ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE` - Maximum average absolute bid-rate error allowed by the promotion gate
+- `ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE` - Maximum optional guardrail rate allowed when the backtest report provides it
+- `ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE` - Maximum optional fallback rate allowed when the backtest report provides it
 - `JWT_SECRET_KEY` - Secret key for tokens
 - `DEBUG` - Debug mode (true/false)
 - `ENVIRONMENT` - Environment (development/production)

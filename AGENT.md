@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `135 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `136 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -113,12 +113,13 @@
 - fallback / predictor 메타데이터 / guardrail 응답 구조
 - artifact-backed `LSTM` / `Ensemble` predictor 추론
 - rolling backtest 기반 `auto` predictor selection
-- predictor observability API
+- predictor observability API와 기간 버킷 성능 추세
+- release manifest predictor promotion gate
 
 남은 작업:
 
 - 모델 아티팩트 학습/검증 파이프라인 고도화
-- backtest 결과를 release promotion gate와 장기 성능 추세에 연결
+- promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정
 
 우선 검토 파일:
 
@@ -195,7 +196,7 @@
 이미 구현됨:
 
 - overview / summary / prediction feedback
-- prediction observability: predictor별 정확도, fallback 빈도, guardrail 빈도, pricing mode breakdown
+- prediction observability: predictor별 정확도, fallback 빈도, guardrail 빈도, pricing mode breakdown, 기간 버킷 성능 추세
 - operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율
 - decision insights / funnel / recommendations / experiments
 
@@ -205,11 +206,11 @@
 
 ## 현재 권장 실행 순서
 
-1. `C. backtest 결과를 ML release promotion gate와 장기 추세에 연결`
-2. `D. 실험 적용 이력 / action payload 관측성 강화`
-3. `F. production-grade task/broker 운영 정책 고도화`
-4. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
-5. `G. worker queue / Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
+1. `D. 실험 적용 이력 / action payload 관측성 강화`
+2. `F. production-grade task/broker 운영 정책 고도화`
+3. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
+4. `G. worker queue / Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
+5. `C. 모델 학습/검증 파이프라인 고도화`
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 
@@ -278,7 +279,7 @@
 ## 추천 작업 순서
 
 1. predictor backtest / `auto` selection은 `app/ai/predictor_backtest.py`와 `app/ai/price_prediction.py`에 구현됨
-2. 모델 정확도 / fallback / guardrail 집계는 `app/api/analytics.py`의 `prediction-observability`로 제공 중
+2. 모델 정확도 / fallback / guardrail / 기간 추세 집계는 `app/api/analytics.py`의 `prediction-observability`로 제공 중
 3. `docker-compose.yml`, `app/tasks/`를 정리해 무거운 작업을 운영 경로로 분리
    - 기본 compose는 `api-runtime`
    - semantic/embedding 재색인은 `api-embedding`
