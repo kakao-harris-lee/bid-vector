@@ -844,6 +844,23 @@ class DecisionExperimentStrategyApplyResponse(BaseModel):
     detail: str
 
 
+class DecisionExperimentApplicationHistoryItem(BaseModel):
+    apply_type: Literal["thresholds", "strategy"]
+    note: str
+
+
+class DecisionExperimentActionItem(BaseModel):
+    action: Literal["evaluate", "mark_success", "rollback", "apply_thresholds", "apply_strategy"]
+    label: str
+    method: Literal["POST", "PATCH"]
+    path: str
+    enabled: bool
+    reason: str
+    payload: dict = Field(default_factory=dict)
+    dry_run_supported: bool = False
+    force_supported: bool = False
+
+
 class DecisionExperimentRunResponse(BaseModel):
     id: int
     operator_id: int
@@ -870,6 +887,12 @@ class DecisionExperimentRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_evaluation: Optional[DecisionExperimentEvaluation] = None
+    supported_apply_types: List[Literal["thresholds", "strategy"]] = Field(default_factory=list)
+    applied_apply_types: List[Literal["thresholds", "strategy"]] = Field(default_factory=list)
+    application_status: Literal["not_supported", "not_ready", "ready", "partially_applied", "applied", "blocked"]
+    application_detail: str
+    application_history: List[DecisionExperimentApplicationHistoryItem] = Field(default_factory=list)
+    next_actions: List[DecisionExperimentActionItem] = Field(default_factory=list)
 
 
 class DecisionExperimentRunListResponse(BaseModel):
@@ -878,6 +901,10 @@ class DecisionExperimentRunListResponse(BaseModel):
     active_count: int = Field(ge=0)
     completed_count: int = Field(ge=0)
     rolled_back_count: int = Field(ge=0)
+    applicable_count: int = Field(default=0, ge=0)
+    ready_to_apply_count: int = Field(default=0, ge=0)
+    applied_count: int = Field(default=0, ge=0)
+    blocked_count: int = Field(default=0, ge=0)
     runs: List[DecisionExperimentRunResponse] = Field(default_factory=list)
 
 

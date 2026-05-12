@@ -32,6 +32,7 @@
 - 추천을 실험 계획으로 확장한 `decision-recommendations`
 - 실험 실행 이력 / 평가 API (`decision-experiments`) 및 baseline vs current 비교
 - 실험 run 수동 상태 변경 / 메모 갱신 / threshold, workload, category 적용 feedback loop
+- 실험 run별 `application_status`, `application_history`, `next_actions` 기반 dashboard action payload
 - Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, WebSocket realtime event stream
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
 - 크롤 성공률 / 전략 모니터링 성과 / 최근 실패 원인을 묶은 operations dashboard analytics
@@ -47,7 +48,6 @@
 ### 아직 핵심적으로 남은 범위
 
 - `LSTM` / `Ensemble` 학습 파이프라인 및 모델 아티팩트 관리 고도화
-- 실험 적용 결과의 대시보드 action payload / 이력 관측성 강화
 - production-grade task/broker 운영 정책 고도화
 
 ## 작업 원칙
@@ -143,10 +143,10 @@
 - 실험 수동 종료 / 롤백 / 메모 수정 API
 - 성공 실험의 threshold 적용 feedback loop
 - workload auto-calibration / category focus-shift 실험의 operator strategy 적용 feedback loop
+- 적용 가능/완료/차단 상태와 action payload를 포함한 실험 응답
 
 남은 작업:
 
-- 운영 화면에서 바로 쓰기 좋은 action payload 정리
 - 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강
 
 우선 검토 파일:
@@ -206,10 +206,10 @@
 
 ## 현재 권장 실행 순서
 
-1. `D. 실험 적용 이력 / action payload 관측성 강화`
-2. `F. production-grade task/broker 운영 정책 고도화`
-3. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
-4. `G. worker queue / Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
+1. `F. production-grade task/broker 운영 정책 고도화`
+2. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
+3. `G. worker queue / Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
+4. `D. 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강`
 5. `C. 모델 학습/검증 파이프라인 고도화`
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
@@ -285,7 +285,7 @@
    - semantic/embedding 재색인은 `api-embedding`
    - 학습/데이터셋 정리는 `api-training`
 4. WebSocket 실시간 이벤트 레이어와 notification/crawl/strategy event payload는 구현됨
-5. `app/services/decision_experiments.py`에서 실험 적용 이력과 대시보드 action payload를 보강
+5. `app/services/decision_experiments.py`의 action payload는 구현됐고, 다음은 성공/실패/보류 실험 이력 기반 정렬 보강
 
 ## 실행 전 확인 체크리스트
 

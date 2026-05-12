@@ -1238,6 +1238,15 @@ def test_decision_experiment_run_endpoints_create_list_and_detail(client, test_d
     assert create_payload["run"]["status"] == "running"
     assert create_payload["run"]["outcome"] is None
     assert create_payload["run"]["notes"] == "dashboard에서 바로 실행한 테스트 실험"
+    assert create_payload["run"]["supported_apply_types"] == ["thresholds"]
+    assert create_payload["run"]["applied_apply_types"] == []
+    assert create_payload["run"]["application_status"] == "not_ready"
+    assert create_payload["run"]["application_history"] == []
+    actions = {item["action"]: item for item in create_payload["run"]["next_actions"]}
+    assert actions["evaluate"]["enabled"] is True
+    assert actions["apply_thresholds"]["enabled"] is False
+    assert actions["apply_thresholds"]["dry_run_supported"] is True
+    assert actions["apply_thresholds"]["force_supported"] is True
     assert create_payload["baseline_summary"]["decision_count"] == 4
     assert create_payload["baseline_summary"]["submitted_count"] == 1
     assert create_payload["baseline_summary"]["review_submission_rate"] == pytest.approx(0.3333, abs=0.0001)
@@ -1254,6 +1263,10 @@ def test_decision_experiment_run_endpoints_create_list_and_detail(client, test_d
     assert list_payload["active_count"] == 1
     assert list_payload["completed_count"] == 0
     assert list_payload["rolled_back_count"] == 0
+    assert list_payload["applicable_count"] == 1
+    assert list_payload["ready_to_apply_count"] == 0
+    assert list_payload["applied_count"] == 0
+    assert list_payload["blocked_count"] == 0
     assert list_payload["runs"][0]["id"] == run_id
     assert list_payload["runs"][0]["latest_evaluation"] is None
 
@@ -1568,6 +1581,10 @@ def test_decision_experiment_patch_endpoint_updates_notes_and_rolls_back_run(cli
     assert payload["run"]["outcome"] == "rollback"
     assert payload["run"]["ended_at"] is not None
     assert "manual rollback executed from dashboard" in payload["run"]["notes"]
+    assert payload["run"]["application_status"] == "blocked"
+    actions = {item["action"]: item for item in payload["run"]["next_actions"]}
+    assert actions["evaluate"]["enabled"] is False
+    assert actions["apply_thresholds"]["enabled"] is False
 
 
 def test_decision_experiment_apply_thresholds_updates_operator_strategy_and_decision_logic(client):
@@ -1626,6 +1643,12 @@ def test_decision_experiment_apply_thresholds_updates_operator_strategy_and_deci
     assert complete_response.status_code == 200
     assert complete_response.json()["run"]["status"] == "completed"
     assert complete_response.json()["run"]["outcome"] == "success"
+    complete_run = complete_response.json()["run"]
+    assert complete_run["application_status"] == "ready"
+    threshold_actions = {item["action"]: item for item in complete_run["next_actions"]}
+    assert threshold_actions["apply_thresholds"]["enabled"] is True
+    assert threshold_actions["apply_thresholds"]["path"].endswith(f"/{run_id}/apply-thresholds")
+    assert threshold_actions["apply_thresholds"]["payload"] == {"dry_run": False, "force": False}
 
     apply_response = client.post(
         f"/api/v1/analytics/decision-experiments/{run_id}/apply-thresholds",
@@ -1653,6 +1676,17 @@ def test_decision_experiment_apply_thresholds_updates_operator_strategy_and_deci
     after_response = client.post("/api/v1/operations/bid-decision", json=marginal_payload)
     assert after_response.status_code == 200
     assert after_response.json()["action"] == "skip"
+
+    detail_response = client.get(f"/api/v1/analytics/decision-experiments/{run_id}")
+    assert detail_response.status_code == 200
+    detail_run = detail_response.json()["run"]
+    assert detail_run["application_status"] == "applied"
+    assert detail_run["applied_apply_types"] == ["thresholds"]
+    assert detail_run["application_history"][0]["apply_type"] == "thresholds"
+    assert "Threshold 적용:" in detail_run["application_history"][0]["note"]
+    post_apply_actions = {item["action"]: item for item in detail_run["next_actions"]}
+    assert post_apply_actions["apply_thresholds"]["enabled"] is False
+    assert "이미 적용" in post_apply_actions["apply_thresholds"]["reason"]
 
 
 def test_decision_experiment_apply_strategy_updates_auto_workload_penalty(client):
@@ -1717,6 +1751,14 @@ def test_decision_experiment_apply_strategy_updates_auto_workload_penalty(client
     assert apply_payload["strategy_updates"][0]["previous_value"] == pytest.approx(1.0, abs=0.0001)
     assert apply_payload["strategy_updates"][0]["suggested_value"] == pytest.approx(0.85, abs=0.0001)
     assert apply_payload["strategy_tuning"]["auto_workload_penalty_multiplier"] == pytest.approx(0.85, abs=0.0001)
+
+    detail_response = client.get(f"/api/v1/analytics/decision-experiments/{run_id}")
+    assert detail_response.status_code == 200
+    detail_run = detail_response.json()["run"]
+    assert detail_run["supported_apply_types"] == ["strategy"]
+    assert detail_run["applied_apply_types"] == ["strategy"]
+    assert detail_run["application_status"] == "applied"
+    assert detail_run["application_history"][0]["apply_type"] == "strategy"
 
     strategy_response = client.get("/api/v1/operator/strategy")
     assert strategy_response.status_code == 200

@@ -18,6 +18,7 @@
 - recommendation → experiment plan 확장
 - persisted `decision-experiments` 생성 / 목록 / 상세 / evaluate API
 - successful threshold / workload / category experiment apply feedback loop
+- experiment run별 application status / history / next action payload
 - Telegram 알림 / callback / polling / web notification fallback / WebSocket realtime events
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
 - 크롤 성공률 / 전략 성과 / 최근 실패 원인 기반 operations dashboard analytics
@@ -39,10 +40,10 @@
 
 ### 2. 실험 운영 자동화
 
-추천 실험 계획과 persisted experiment run은 이미 있고, 수동 제어 및 threshold / workload / category feedback loop까지 연결됐다. 이제 대시보드 action payload와 적용 이력 관측성을 정리할 차례다.
+추천 실험 계획과 persisted experiment run은 이미 있고, 수동 제어 및 threshold / workload / category feedback loop, dashboard action payload까지 연결됐다. 이제 성공/실패/보류 이력 기반 정렬과 장기 관측성 보강 단계다.
 
-- 대시보드 action payload 정리
-- 실험 적용 이력 관측성 강화
+- 성공 / 실패 / 보류 실험 이력 기반 정렬 개선
+- 적용 결과의 기간별 집계와 운영 카드 확장
 
 ### 3. 실행 인프라 안정화
 
@@ -71,34 +72,36 @@
 
 ## 권장 우선순위
 
-### 1순위 — 실험 운영 payload와 적용 이력 관측성
+### 1순위 — production task/broker 운영 관측성
 
-threshold/workload/category 실험 적용은 가능해졌지만, 운영 화면이 바로 사용할 수 있는 action payload와 적용 이력 집계는 아직 얇다. 다음 큰 빈틈은 적용 가능/완료/차단 상태를 명확히 보여주는 것이다.
+비동기 작업은 API 요청 경로에서 분리됐고 compose task profile도 준비됐다. 다음 큰 빈틈은 worker queue 지연, 실패율, 재시도, broker health를 운영 화면이 바로 볼 수 있게 만드는 것이다.
 
 #### 이유
 
-- 실험 적용 endpoint는 이미 있으므로 상태 집계를 얹기 쉽다.
-- 운영자가 어떤 실험을 적용할지 빠르게 판단할 수 있어야 한다.
-- 중복 적용/force 적용 이력을 대시보드에서 감지해야 한다.
+- task가 queued 상태로 남는 문제는 운영에서 바로 감지되어야 한다.
+- broker/result backend 상태는 수집/알림/재평가 신뢰도에 직접 연결된다.
+- 이미 operations dashboard 골격이 있어 카드 확장으로 자연스럽게 붙일 수 있다.
 
 #### 1순위 작업 범위
 
-- 적용 가능/적용 완료/적용 차단 experiment action payload 정리
-- threshold/workload/category 적용 이력 집계
-- force 적용과 dry-run 미리보기 결과를 대시보드가 읽기 좋은 형태로 정리
+- Celery queue/backend 설정 진단 payload
+- 최근 task 실패/지연/재시도 집계
+- broker health와 worker 분리 운영 상태 카드
+- operations dashboard에 task health 카드 추가
 
 #### 1순위 우선 검토 파일
 
-- `app/services/decision_experiments.py`
-- `app/services/decision_analytics.py`
+- `app/tasks/celery_app.py`
+- `app/tasks/jobs.py`
+- `app/services/analytics_reporting.py`
 - `app/api/analytics.py`
 - `app/schemas/schemas.py`
-- `tests/test_auth_admin_analytics.py`
+- `tests/test_analytics_reporting.py`
 
 #### 1순위 완료 기준
 
-- 운영자가 적용할 수 있는 다음 action과 차단 사유를 API 응답만으로 알 수 있어야 한다.
-- 이미 적용된 실험과 아직 적용 가능한 실험이 명확히 구분되어야 한다.
+- 운영 화면이 worker/broker 상태를 카드로 표시할 수 있어야 한다.
+- queued/stale/failed 작업 위험이 API 응답에서 명확히 드러나야 한다.
 
 ### 2순위 — 실험 운영 고도화
 
@@ -108,7 +111,7 @@ threshold/workload/category 실험 적용은 가능해졌지만, 운영 화면�
 
 - 성공 / 실패 / 보류 실험 이력 기반 정렬 개선
 - 적용 이력/중복 적용 방지 집계 보강
-- dashboard action payload 구조 정리
+- 실험 이력 필터/정렬 payload 구조 정리
 
 #### 2순위 우선 검토 파일
 
@@ -193,15 +196,15 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — 실험 운영 payload
-
-- 적용 가능/적용 완료 실험 action payload 정리
-- 실험 적용 이력 집계 보강
-
-### 묶음 B — production task/broker 관측성
+### 묶음 A — task/broker 운영 관측성
 
 - worker queue 지연 / 실패율 / 재시도 카드
 - broker health 점검 payload
+
+### 묶음 B — realtime 운영화
+
+- WebSocket 인증
+- 다중 프로세스 pub/sub fanout
 
 ### 묶음 C — realtime 운영화
 

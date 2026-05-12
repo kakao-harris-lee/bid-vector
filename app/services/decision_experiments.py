@@ -30,6 +30,15 @@ from app.services.operator_strategy_tuning import (
 class DecisionExperimentService:
     """Manage saved experiment plans and compare their performance against a baseline."""
 
+    THRESHOLD_EXPERIMENT_KEYS = {
+        "exp-review-threshold-tighten",
+        "exp-review-threshold-relax",
+        "exp-bid-now-threshold-tighten",
+    }
+    STRATEGY_EXPERIMENT_KEYS = {
+        "exp-workload-auto-calibration",
+        "exp-category-focus-shift",
+    }
     RATE_SUCCESS_DELTA = 0.1
     RATE_GUARDRAIL_DROP = -0.05
     COUNT_DROP_RATIO = 0.2
@@ -100,6 +109,10 @@ class DecisionExperimentService:
             "active_count": sum(1 for run in serialized_runs if run["status"] in {"planned", "running"}),
             "completed_count": sum(1 for run in serialized_runs if run["status"] == "completed"),
             "rolled_back_count": sum(1 for run in serialized_runs if run["status"] == "rolled_back"),
+            "applicable_count": sum(1 for run in serialized_runs if run["application_status"] != "not_supported"),
+            "ready_to_apply_count": sum(1 for run in serialized_runs if run["application_status"] == "ready"),
+            "applied_count": sum(1 for run in serialized_runs if run["application_status"] == "applied"),
+            "blocked_count": sum(1 for run in serialized_runs if run["application_status"] == "blocked"),
             "runs": serialized_runs,
         }
 
@@ -476,6 +489,13 @@ class DecisionExperimentService:
         if latest_evaluation == {}:
             latest_evaluation = None
         notes = str(run.notes or "").strip() or None
+        supported_apply_types = self._supported_apply_types(run)
+        applied_apply_types = self._applied_apply_types(run)
+        application_status, application_detail = self._resolve_application_state(
+            run,
+            supported_apply_types=supported_apply_types,
+            applied_apply_types=applied_apply_types,
+        )
         return {
             "id": int(run.id),
             "operator_id": int(run.operator_id),
@@ -502,7 +522,170 @@ class DecisionExperimentService:
             "created_at": ensure_utc(run.created_at),
             "updated_at": ensure_utc(run.updated_at),
             "latest_evaluation": latest_evaluation,
+            "supported_apply_types": supported_apply_types,
+            "applied_apply_types": applied_apply_types,
+            "application_status": application_status,
+            "application_detail": application_detail,
+            "application_history": self._application_history(run),
+            "next_actions": self._build_run_actions(
+                run,
+                application_status=application_status,
+                supported_apply_types=supported_apply_types,
+                applied_apply_types=applied_apply_types,
+            ),
         }
+
+    def _supported_apply_types(self, run: DecisionExperimentRun) -> list[str]:
+        """Return apply mechanisms supported by this experiment key."""
+        experiment_key = str(run.experiment_key or "")
+        supported: list[str] = []
+        if experiment_key in self.THRESHOLD_EXPERIMENT_KEYS:
+            supported.append("thresholds")
+        if experiment_key in self.STRATEGY_EXPERIMENT_KEYS:
+            supported.append("strategy")
+        return supported
+
+    def _applied_apply_types(self, run: DecisionExperimentRun) -> list[str]:
+        """Return apply mechanisms already written into the run notes."""
+        applied: list[str] = []
+        if self._run_has_applied_thresholds(run):
+            applied.append("thresholds")
+        if self._run_has_applied_strategy(run):
+            applied.append("strategy")
+        return applied
+
+    def _resolve_application_state(
+        self,
+        run: DecisionExperimentRun,
+        *,
+        supported_apply_types: list[str],
+        applied_apply_types: list[str],
+    ) -> tuple[str, str]:
+        """Resolve a compact dashboard status for applying experiment output."""
+        if not supported_apply_types:
+            return "not_supported", "이 실험 유형은 아직 자동 적용 대상이 아닙니다."
+
+        supported_set = set(supported_apply_types)
+        applied_set = set(applied_apply_types)
+        if supported_set and supported_set.issubset(applied_set):
+            return "applied", "지원되는 적용 작업이 모두 완료되었습니다."
+        if applied_set:
+            return "partially_applied", "일부 적용 작업은 완료되었고 남은 적용 작업이 있습니다."
+
+        outcome = str(run.outcome or "")
+        status = str(run.status or "planned")
+        if outcome == "success":
+            return "ready", "성공한 실험으로 운영 전략에 적용할 수 있습니다."
+        if status == "rolled_back" or outcome in {"rollback", "inconclusive"}:
+            return "blocked", "롤백 또는 결론 없음 상태라 기본 적용은 차단됩니다. 필요한 경우 force 적용만 가능합니다."
+        return "not_ready", "성공 outcome이 확정되기 전까지 운영 전략 적용은 대기 상태입니다."
+
+    def _application_history(self, run: DecisionExperimentRun) -> list[dict[str, str]]:
+        """Extract audit-friendly application notes from the free-form run notes."""
+        history: list[dict[str, str]] = []
+        for note_line in str(run.notes or "").splitlines():
+            note = note_line.strip()
+            if not note:
+                continue
+            if self.THRESHOLD_APPLICATION_PREFIX in note:
+                history.append({"apply_type": "thresholds", "note": note})
+            if self.STRATEGY_APPLICATION_PREFIX in note:
+                history.append({"apply_type": "strategy", "note": note})
+        return history
+
+    def _build_run_actions(
+        self,
+        run: DecisionExperimentRun,
+        *,
+        application_status: str,
+        supported_apply_types: list[str],
+        applied_apply_types: list[str],
+    ) -> list[dict[str, Any]]:
+        """Return dashboard-ready action metadata for one experiment run."""
+        run_id = int(run.id)
+        status = str(run.status or "planned")
+        applied_set = set(applied_apply_types)
+        actions = [
+            {
+                "action": "evaluate",
+                "label": "Re-evaluate experiment",
+                "method": "POST",
+                "path": f"/api/v1/analytics/decision-experiments/{run_id}/evaluate",
+                "enabled": status != "rolled_back",
+                "reason": "현재 baseline 대비 실험 성과를 다시 계산합니다." if status != "rolled_back" else "롤백된 실험은 재평가보다 새 실험 생성이 안전합니다.",
+                "payload": {},
+                "dry_run_supported": False,
+                "force_supported": False,
+            },
+            {
+                "action": "mark_success",
+                "label": "Mark as successful",
+                "method": "PATCH",
+                "path": f"/api/v1/analytics/decision-experiments/{run_id}",
+                "enabled": status != "rolled_back" and str(run.outcome or "") != "success",
+                "reason": "운영자가 실험 성공을 확정합니다." if status != "rolled_back" else "롤백된 실험은 성공 처리할 수 없습니다.",
+                "payload": {"status": "completed", "outcome": "success"},
+                "dry_run_supported": False,
+                "force_supported": False,
+            },
+            {
+                "action": "rollback",
+                "label": "Rollback experiment",
+                "method": "PATCH",
+                "path": f"/api/v1/analytics/decision-experiments/{run_id}",
+                "enabled": status != "rolled_back",
+                "reason": "실험을 롤백 상태로 전환합니다." if status != "rolled_back" else "이미 롤백된 실험입니다.",
+                "payload": {"status": "rolled_back"},
+                "dry_run_supported": False,
+                "force_supported": False,
+            },
+        ]
+
+        if "thresholds" in supported_apply_types:
+            already_applied = "thresholds" in applied_set
+            enabled = application_status == "ready" and not already_applied
+            actions.append(
+                {
+                    "action": "apply_thresholds",
+                    "label": "Apply threshold adjustment",
+                    "method": "POST",
+                    "path": f"/api/v1/analytics/decision-experiments/{run_id}/apply-thresholds",
+                    "enabled": enabled,
+                    "reason": self._apply_action_reason(run, already_applied=already_applied, enabled=enabled),
+                    "payload": {"dry_run": False, "force": False},
+                    "dry_run_supported": True,
+                    "force_supported": True,
+                }
+            )
+
+        if "strategy" in supported_apply_types:
+            already_applied = "strategy" in applied_set
+            enabled = application_status == "ready" and not already_applied
+            actions.append(
+                {
+                    "action": "apply_strategy",
+                    "label": "Apply strategy tuning",
+                    "method": "POST",
+                    "path": f"/api/v1/analytics/decision-experiments/{run_id}/apply-strategy",
+                    "enabled": enabled,
+                    "reason": self._apply_action_reason(run, already_applied=already_applied, enabled=enabled),
+                    "payload": {"dry_run": False, "force": False},
+                    "dry_run_supported": True,
+                    "force_supported": True,
+                }
+            )
+
+        return actions
+
+    def _apply_action_reason(self, run: DecisionExperimentRun, *, already_applied: bool, enabled: bool) -> str:
+        """Return a concise explanation for an apply action's enabled state."""
+        if already_applied:
+            return "이미 적용된 실험입니다. 재적용하려면 force가 필요합니다."
+        if enabled:
+            return "성공 outcome이 확정되어 적용할 수 있습니다."
+        if str(run.outcome or "") != "success":
+            return "성공 outcome이 확정되기 전까지 적용할 수 없습니다."
+        return "현재 상태에서는 적용할 수 없습니다."
 
     def _get_run_or_raise(self, db: Session, *, run_id: int) -> DecisionExperimentRun:
         """Load one run that belongs to the singleton operator or raise a clear error."""
