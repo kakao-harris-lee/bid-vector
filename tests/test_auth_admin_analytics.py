@@ -1101,6 +1101,259 @@ def test_decision_recommendations_endpoint_returns_actionable_threshold_and_segm
     assert category_rec["experiment_plan"]["duration_days"] == 21
 
 
+def test_decision_recommendations_rank_with_experiment_history(client, test_db):
+    """Prior experiment outcomes should adjust recommendation ranking and urgency."""
+    bootstrap = _bootstrap_operator(
+        client,
+        username="decision-recommendation-history-operator",
+        email="decision-recommendation-history@example.com",
+    )
+    operator_id = bootstrap.json()["id"]
+    now = datetime.now(UTC)
+
+    decision_specs = [
+        {
+            "title": "History Current Provided A",
+            "category": "software",
+            "demand_agency": "서울특별시교육청",
+            "workload_source": "provided",
+            "initial_action": "bid_now",
+            "initial_status": "planned",
+            "current_action": "bid_now",
+            "current_status": "submitted",
+            "first_decided_at": now - timedelta(days=5),
+            "updated_at": now - timedelta(days=4),
+        },
+        {
+            "title": "History Current Provided B",
+            "category": "software",
+            "demand_agency": "서울특별시교육청",
+            "workload_source": "provided",
+            "initial_action": "bid_now",
+            "initial_status": "planned",
+            "current_action": "bid_now",
+            "current_status": "submitted",
+            "first_decided_at": now - timedelta(days=4),
+            "updated_at": now - timedelta(days=3),
+        },
+        {
+            "title": "History Current Auto Review A",
+            "category": "security",
+            "demand_agency": "국토교통부",
+            "workload_source": "auto",
+            "initial_action": "review",
+            "initial_status": "reviewing",
+            "current_action": "review",
+            "current_status": "reviewing",
+            "first_decided_at": now - timedelta(days=3),
+            "updated_at": now - timedelta(days=2),
+        },
+        {
+            "title": "History Current Auto Review B",
+            "category": "security",
+            "demand_agency": "국토교통부",
+            "workload_source": "auto",
+            "initial_action": "review",
+            "initial_status": "reviewing",
+            "current_action": "skip",
+            "current_status": "skipped",
+            "first_decided_at": now - timedelta(days=2),
+            "updated_at": now - timedelta(days=2),
+        },
+        {
+            "title": "History Current Auto Review C",
+            "category": "security",
+            "demand_agency": "국토교통부",
+            "workload_source": "auto",
+            "initial_action": "review",
+            "initial_status": "reviewing",
+            "current_action": "review",
+            "current_status": "reviewing",
+            "first_decided_at": now - timedelta(days=1),
+            "updated_at": now - timedelta(days=1),
+        },
+        {
+            "title": "History Previous Review Submit A",
+            "category": "security",
+            "demand_agency": "국토교통부",
+            "workload_source": "auto",
+            "initial_action": "review",
+            "initial_status": "reviewing",
+            "current_action": "bid_now",
+            "current_status": "submitted",
+            "first_decided_at": now - timedelta(days=23),
+            "updated_at": now - timedelta(days=22),
+        },
+        {
+            "title": "History Previous Review Submit B",
+            "category": "security",
+            "demand_agency": "국토교통부",
+            "workload_source": "auto",
+            "initial_action": "review",
+            "initial_status": "reviewing",
+            "current_action": "bid_now",
+            "current_status": "submitted",
+            "first_decided_at": now - timedelta(days=22),
+            "updated_at": now - timedelta(days=21),
+        },
+        {
+            "title": "History Previous Review Submit C",
+            "category": "software",
+            "demand_agency": "서울특별시교육청",
+            "workload_source": "provided",
+            "initial_action": "review",
+            "initial_status": "reviewing",
+            "current_action": "bid_now",
+            "current_status": "submitted",
+            "first_decided_at": now - timedelta(days=21),
+            "updated_at": now - timedelta(days=20),
+        },
+    ]
+
+    project_ids = [
+        client.post(
+            "/api/v1/projects/",
+            json={
+                "title": spec["title"],
+                "description": "Used for recommendation history ranking",
+                "requirements": "Need historical experiment context",
+                "budget_estimate": 100000000.0,
+                "category": spec["category"],
+                "demand_agency": spec["demand_agency"],
+            },
+        ).json()["id"]
+        for spec in decision_specs
+    ]
+
+    test_db.add_all([
+        BidDecisionRecord(
+            project_id=project_id,
+            operator_id=operator_id,
+            pursue_bid=spec["current_status"] != "skipped",
+            action=spec["current_action"],
+            decision_status=spec["current_status"],
+            initial_action=spec["initial_action"],
+            initial_decision_status=spec["initial_status"],
+            first_decided_at=spec["first_decided_at"],
+            recommended_amount=95000000.0,
+            probability_score=0.75,
+            matched_score=0.78,
+            priority_score=0.72,
+            expected_margin_score=0.7,
+            current_active_bids=0,
+            max_active_bids=3,
+            current_workload_score=0.12 if spec["workload_source"] == "provided" else 0.48,
+            workload_source=spec["workload_source"],
+            reasoning="추천 이력 보정 검증용 decision record",
+            created_at=spec["first_decided_at"],
+            updated_at=spec["updated_at"],
+        )
+        for project_id, spec in zip(project_ids, decision_specs, strict=True)
+    ])
+    test_db.add_all([
+        DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key="exp-review-threshold-tighten",
+            recommendation_key="review-threshold-tighten",
+            status="failed",
+            outcome=None,
+            priority_rank=1,
+            title="Failed review threshold",
+            hypothesis="review threshold failed",
+            suggested_change="raise review threshold",
+            target_metric="review_submission_rate",
+            expected_direction="increase",
+            success_criteria="improve review rate",
+            guardrail_metric="overall_submission_rate",
+            minimum_decision_sample=3,
+            duration_days=7,
+            baseline_days=7,
+            rollback_trigger="guardrail drops",
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=12),
+            ended_at=now - timedelta(days=6),
+            created_at=now - timedelta(days=12),
+            updated_at=now - timedelta(days=6),
+        ),
+        DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key="exp-review-threshold-tighten",
+            recommendation_key="review-threshold-tighten",
+            status="rolled_back",
+            outcome="rollback",
+            priority_rank=1,
+            title="Rolled back review threshold",
+            hypothesis="review threshold rollback",
+            suggested_change="raise review threshold",
+            target_metric="review_submission_rate",
+            expected_direction="increase",
+            success_criteria="improve review rate",
+            guardrail_metric="overall_submission_rate",
+            minimum_decision_sample=3,
+            duration_days=7,
+            baseline_days=7,
+            rollback_trigger="guardrail drops",
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=5),
+            ended_at=now - timedelta(days=1),
+            created_at=now - timedelta(days=5),
+            updated_at=now - timedelta(days=1),
+        ),
+        DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key="exp-workload-auto-calibration",
+            recommendation_key="workload-auto-calibration",
+            status="completed",
+            outcome="success",
+            priority_rank=2,
+            title="Applied workload calibration",
+            hypothesis="workload calibration succeeded",
+            suggested_change="reduce workload penalty",
+            target_metric="auto_submission_rate",
+            expected_direction="increase",
+            success_criteria="improve auto rate",
+            guardrail_metric="active_pending_count",
+            minimum_decision_sample=3,
+            duration_days=7,
+            baseline_days=7,
+            rollback_trigger="pending grows",
+            notes="Strategy 적용: auto_workload_penalty_multiplier 1.0 -> 0.85",
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=10),
+            ended_at=now - timedelta(days=2),
+            created_at=now - timedelta(days=10),
+            updated_at=now - timedelta(days=2),
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/decision-recommendations",
+        params={"days": 14, "breakdown_limit": 5, "trend_bucket_days": 7, "recommendation_limit": 5},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["experiment_history"]["run_count"] == 3
+    assert payload["experiment_history"]["applied_count"] == 1
+    assert payload["recommended_next_experiment"]["experiment_key"] == "exp-workload-auto-calibration"
+
+    recommendations = {item["key"]: item for item in payload["recommendations"]}
+    review_rec = recommendations["review-threshold-tighten"]
+    workload_rec = recommendations["workload-auto-calibration"]
+    assert workload_rec["history_adjustment"]["status"] == "promoted"
+    assert workload_rec["history_adjustment"]["applied_count"] == 1
+    assert review_rec["history_adjustment"]["status"] == "deprioritized"
+    assert review_rec["history_adjustment"]["rollback_count"] == 1
+    assert review_rec["history_adjustment"]["failed_count"] == 1
+    assert review_rec["severity"] == "watch"
+    assert workload_rec["priority_score"] > review_rec["priority_score"]
+    assert payload["recommendations"][0]["key"] == "workload-auto-calibration"
+
+
 def test_decision_experiment_run_endpoints_create_list_and_detail(client, test_db):
     """Decision experiment endpoints should persist a planned experiment with baseline analytics and list it for dashboard tracking."""
     bootstrap = _bootstrap_operator(client, username="decision-experiment-operator", email="decision-experiment@example.com")

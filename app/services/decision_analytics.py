@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import BidDecisionRecord
+from app.models.models import BidDecisionRecord, DecisionExperimentRun
 
 
 class DecisionAnalyticsService:
@@ -24,6 +24,9 @@ class DecisionAnalyticsService:
     BID_NOW_RATE_TIGHTEN_THRESHOLD = 0.5
     WORKLOAD_GAP_ACTION_THRESHOLD = 0.35
     CATEGORY_GAP_ACTION_THRESHOLD = 0.3
+    EXPERIMENT_HISTORY_MIN_LOOKBACK_DAYS = 90
+    EXPERIMENT_HISTORY_MAX_LOOKBACK_DAYS = 365
+    EXPERIMENT_APPLICATION_MARKERS = ("Threshold 적용:", "Strategy 적용:")
 
     def build_insights(self, db: Session, *, days: int = 30, limit: int = 10) -> dict[str, Any]:
         """Summarize persisted bid-decision signals for tuning and operator review."""
@@ -169,9 +172,18 @@ class DecisionAnalyticsService:
             ]
             if recommendation is not None
         ]
+        experiment_history = self._build_recommendation_experiment_history(
+            db,
+            operator_id=int(funnel["operator_id"]),
+            days=days,
+        )
+        recommendations = self._apply_experiment_history_to_recommendations(
+            recommendations,
+            experiment_history=experiment_history,
+        )
 
         if not recommendations:
-            recommendations.append({
+            recommendations.append(self._with_default_recommendation_priority({
                 "key": "stable-funnel",
                 "severity": "info",
                 "title": "전환 퍼널이 비교적 안정적입니다.",
@@ -182,7 +194,7 @@ class DecisionAnalyticsService:
                     "review_submission_rate": funnel.get("review_submission_rate"),
                     "bid_now_submission_rate": funnel.get("bid_now_submission_rate"),
                 },
-            })
+            }))
 
         recommendations = recommendations[:recommendation_limit]
         experiments: list[dict[str, Any]] = []
@@ -211,10 +223,225 @@ class DecisionAnalyticsService:
             "experiment_count": len(experiments),
             "headline": self._build_recommendation_headline(funnel, recommendations),
             "comparison": funnel["comparison"],
+            "experiment_history": experiment_history,
             "recommended_next_experiment": experiments[0] if experiments else None,
             "experiments": experiments,
             "recommendations": enriched_recommendations,
         }
+
+    def _build_recommendation_experiment_history(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        days: int,
+    ) -> dict[str, Any]:
+        """Summarize prior experiment outcomes for recommendation ranking."""
+        lookback_days = max(self.EXPERIMENT_HISTORY_MIN_LOOKBACK_DAYS, int(days) * 6)
+        lookback_days = min(self.EXPERIMENT_HISTORY_MAX_LOOKBACK_DAYS, lookback_days)
+        date_from = utc_now() - timedelta(days=lookback_days)
+        runs = (
+            db.query(DecisionExperimentRun)
+            .filter(
+                DecisionExperimentRun.operator_id == operator_id,
+                DecisionExperimentRun.updated_at >= date_from,
+            )
+            .order_by(DecisionExperimentRun.updated_at.desc(), DecisionExperimentRun.id.desc())
+            .all()
+        )
+        by_recommendation: dict[str, list[DecisionExperimentRun]] = {}
+        for run in runs:
+            key = str(run.recommendation_key or "").strip()
+            if not key:
+                continue
+            by_recommendation.setdefault(key, []).append(run)
+
+        recommendation_summaries = {
+            key: self._summarize_experiment_runs_for_recommendation(key, key_runs)
+            for key, key_runs in sorted(by_recommendation.items())
+        }
+        return {
+            "operator_id": operator_id,
+            "lookback_days": lookback_days,
+            "run_count": len(runs),
+            "evaluated_count": sum(1 for run in runs if str(run.outcome or "") in {"success", "rollback", "inconclusive"}),
+            "success_count": sum(1 for run in runs if str(run.outcome or "") == "success"),
+            "rollback_count": sum(1 for run in runs if str(run.outcome or "") == "rollback"),
+            "inconclusive_count": sum(1 for run in runs if str(run.outcome or "") == "inconclusive"),
+            "pending_count": sum(1 for run in runs if str(run.outcome or "") in {"", "watch", "insufficient_data"}),
+            "failed_count": sum(1 for run in runs if str(run.status or "") == "failed"),
+            "applied_count": sum(1 for run in runs if self._experiment_run_applied(run)),
+            "recommendation_summaries": recommendation_summaries,
+        }
+
+    def _apply_experiment_history_to_recommendations(
+        self,
+        recommendations: list[dict[str, Any]],
+        *,
+        experiment_history: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Attach prior-run context and sort recommendations by adjusted priority."""
+        summaries = experiment_history.get("recommendation_summaries")
+        if not isinstance(summaries, dict):
+            summaries = {}
+
+        enriched: list[dict[str, Any]] = []
+        for original_index, recommendation in enumerate(recommendations):
+            key = str(recommendation.get("key") or "")
+            history_summary = summaries.get(key) if isinstance(summaries.get(key), dict) else None
+            base_score = self._base_recommendation_priority_score(recommendation, original_index=original_index)
+            adjustment = self._build_history_adjustment(history_summary)
+            priority_score = max(0.0, round(base_score + float(adjustment["priority_delta"]), 2))
+            adjusted_recommendation = {
+                **recommendation,
+                "severity": self._adjust_recommendation_severity(
+                    str(recommendation.get("severity") or "info"),
+                    adjustment=adjustment,
+                ),
+                "priority_score": priority_score,
+                "history_adjustment": adjustment,
+                "_original_index": original_index,
+            }
+            adjusted_recommendation["supporting_metrics"] = {
+                **(recommendation.get("supporting_metrics") or {}),
+                "experiment_history": history_summary or {},
+            }
+            enriched.append(adjusted_recommendation)
+
+        ordered = sorted(
+            enriched,
+            key=lambda item: (
+                -float(item.get("priority_score") or 0.0),
+                int(item.get("_original_index", 0)),
+                str(item.get("key") or ""),
+            ),
+        )
+        for item in ordered:
+            item.pop("_original_index", None)
+        return ordered
+
+    def _with_default_recommendation_priority(self, recommendation: dict[str, Any]) -> dict[str, Any]:
+        """Attach neutral ranking metadata to fallback recommendations."""
+        return {
+            **recommendation,
+            "priority_score": self._base_recommendation_priority_score(recommendation, original_index=0),
+            "history_adjustment": self._build_history_adjustment(None),
+        }
+
+    def _summarize_experiment_runs_for_recommendation(
+        self,
+        recommendation_key: str,
+        runs: list[DecisionExperimentRun],
+    ) -> dict[str, Any]:
+        """Build one recommendation-key experiment history summary."""
+        success_runs = [run for run in runs if str(run.outcome or "") == "success"]
+        rollback_runs = [run for run in runs if str(run.outcome or "") == "rollback"]
+        failed_runs = [run for run in runs if str(run.status or "") == "failed"]
+        pending_runs = [run for run in runs if str(run.outcome or "") in {"", "watch", "insufficient_data"}]
+        applied_runs = [run for run in runs if self._experiment_run_applied(run)]
+        evaluated_count = len(success_runs) + len(rollback_runs) + sum(
+            1 for run in runs if str(run.outcome or "") == "inconclusive"
+        )
+        latest_run = max(runs, key=lambda run: (run.updated_at, int(run.id or 0))) if runs else None
+        return {
+            "recommendation_key": recommendation_key,
+            "run_count": len(runs),
+            "evaluated_count": evaluated_count,
+            "success_count": len(success_runs),
+            "rollback_count": len(rollback_runs),
+            "failed_count": len(failed_runs),
+            "pending_count": len(pending_runs),
+            "applied_count": len(applied_runs),
+            "success_rate": self._rate(len(success_runs), evaluated_count),
+            "latest_run_id": int(latest_run.id) if latest_run is not None else None,
+            "latest_status": str(latest_run.status or "") if latest_run is not None else None,
+            "latest_outcome": str(latest_run.outcome) if latest_run is not None and latest_run.outcome else None,
+            "latest_updated_at": latest_run.updated_at if latest_run is not None else None,
+        }
+
+    def _build_history_adjustment(self, history_summary: dict[str, Any] | None) -> dict[str, Any]:
+        """Translate experiment history into a priority adjustment."""
+        if not history_summary:
+            return {
+                "status": "neutral",
+                "priority_delta": 0.0,
+                "reason": "아직 이 추천 유형의 실험 이력이 없습니다.",
+                "recent_run_count": 0,
+                "success_count": 0,
+                "rollback_count": 0,
+                "failed_count": 0,
+                "pending_count": 0,
+                "applied_count": 0,
+            }
+
+        run_count = int(history_summary.get("run_count") or 0)
+        success_count = int(history_summary.get("success_count") or 0)
+        rollback_count = int(history_summary.get("rollback_count") or 0)
+        failed_count = int(history_summary.get("failed_count") or 0)
+        pending_count = int(history_summary.get("pending_count") or 0)
+        applied_count = int(history_summary.get("applied_count") or 0)
+        negative_count = rollback_count + failed_count
+        if applied_count > 0 and success_count > 0:
+            status = "promoted"
+            priority_delta = 14.0
+            reason = "성공 후 운영 전략에 적용된 실험 이력이 있어 후속 실험 우선순위를 높였습니다."
+        elif negative_count >= 2 and success_count == 0:
+            status = "deprioritized"
+            priority_delta = -55.0
+            reason = "반복 실패 또는 롤백 이력이 있어 같은 유형의 실험을 뒤로 미뤘습니다."
+        elif negative_count > success_count:
+            status = "deprioritized"
+            priority_delta = -35.0
+            reason = "실패/롤백 이력이 성공 이력보다 많아 우선순위를 낮췄습니다."
+        elif pending_count >= 2 and success_count == 0:
+            status = "deprioritized"
+            priority_delta = -20.0
+            reason = "보류 또는 표본 부족 이력이 반복되어 추가 추천 강도를 낮췄습니다."
+        elif success_count > 0:
+            status = "promoted"
+            priority_delta = 8.0
+            reason = "성공한 실험 이력이 있어 같은 계열의 후속 실험 신뢰도를 높였습니다."
+        else:
+            status = "neutral"
+            priority_delta = 0.0
+            reason = "이력상 우선순위를 조정할 충분한 신호가 없습니다."
+
+        return {
+            "status": status,
+            "priority_delta": priority_delta,
+            "reason": reason,
+            "recent_run_count": run_count,
+            "success_count": success_count,
+            "rollback_count": rollback_count,
+            "failed_count": failed_count,
+            "pending_count": pending_count,
+            "applied_count": applied_count,
+        }
+
+    def _base_recommendation_priority_score(self, recommendation: dict[str, Any], *, original_index: int) -> float:
+        """Return a stable base score before historical adjustment."""
+        severity_score = {
+            "action": 100.0,
+            "watch": 70.0,
+            "info": 40.0,
+        }.get(str(recommendation.get("severity") or "info"), 40.0)
+        return severity_score - (float(original_index) * 0.01)
+
+    def _adjust_recommendation_severity(self, severity: str, *, adjustment: dict[str, Any]) -> str:
+        """Downgrade visible urgency for heavily penalized recommendations."""
+        if adjustment.get("status") != "deprioritized":
+            return severity if severity in {"info", "watch", "action"} else "info"
+        priority_delta = float(adjustment.get("priority_delta") or 0.0)
+        if priority_delta <= -45.0 and severity == "action":
+            return "watch"
+        if priority_delta <= -45.0 and severity == "watch":
+            return "info"
+        return severity if severity in {"info", "watch", "action"} else "info"
+
+    def _experiment_run_applied(self, run: DecisionExperimentRun) -> bool:
+        """Return whether an experiment run has been applied to operator settings."""
+        notes = str(run.notes or "")
+        return any(marker in notes for marker in self.EXPERIMENT_APPLICATION_MARKERS)
 
     def _load_recent_decisions(self, db: Session, *, operator_id: int, days: int) -> list[BidDecisionRecord]:
         """Return recent decision rows ordered newest first."""

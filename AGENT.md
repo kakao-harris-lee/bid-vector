@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `143 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `144 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -34,6 +34,7 @@
 - 실험 run 수동 상태 변경 / 메모 갱신 / threshold, workload, category 적용 feedback loop
 - 실험 run별 `application_status`, `application_history`, `next_actions` 기반 dashboard action payload
 - 성공 / 실패 / 보류 실험 이력 기반 review bucket, priority sort, 필터/카운트 payload
+- experiment run 이력 기반 `decision-recommendations` priority score / history adjustment
 - Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, 인증된 WebSocket realtime event stream
 - PostgreSQL `LISTEN/NOTIFY` 기반 optional realtime fanout backend
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
@@ -53,7 +54,7 @@
 ### 아직 핵심적으로 남은 범위
 
 - promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정
-- 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화
+- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 ## 작업 원칙
 
@@ -150,10 +151,11 @@
 - workload auto-calibration / category focus-shift 실험의 operator strategy 적용 feedback loop
 - 적용 가능/완료/차단 상태와 action payload를 포함한 실험 응답
 - 성공 / 실패 / 보류 이력 기반 review bucket, 우선순위 정렬, outcome/application 필터와 집계 payload
+- 장기 experiment run 이력을 반영한 recommendation ranking, 성공 적용 boost, 반복 실패/보류 감점
 
 남은 작업:
 
-- 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화
+- 장기 적용 결과를 category/threshold 세부 파라미터 추천값 산식에 더 직접 반영
 
 우선 검토 파일:
 
@@ -210,12 +212,12 @@
 
 남은 작업:
 
-- 모델 학습/검증 파이프라인 및 artifact 비교 리포트 고도화
+- promotion gate 기준 운영 보정 및 release policy preset 정리
 
 ## 현재 권장 실행 순서
 
-1. `D. 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화`
-2. `C. promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정`
+1. `C. promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정`
+2. `D. 장기 적용 결과를 category/threshold 세부 파라미터 추천값 산식에 더 직접 반영`
 3. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.

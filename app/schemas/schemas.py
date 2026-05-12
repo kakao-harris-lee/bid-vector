@@ -696,6 +696,18 @@ class DecisionRecommendationExperiment(BaseModel):
     rollback_trigger: str
 
 
+class DecisionRecommendationHistoryAdjustment(BaseModel):
+    status: Literal["neutral", "promoted", "deprioritized"]
+    priority_delta: float
+    reason: str
+    recent_run_count: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    rollback_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    applied_count: int = Field(ge=0)
+
+
 class DecisionRecommendationItem(BaseModel):
     key: str
     severity: Literal["info", "watch", "action"]
@@ -703,6 +715,8 @@ class DecisionRecommendationItem(BaseModel):
     summary: str
     suggested_adjustment: Optional[str] = None
     supporting_metrics: dict = Field(default_factory=dict)
+    priority_score: float = Field(default=0.0, ge=0.0)
+    history_adjustment: DecisionRecommendationHistoryAdjustment
     experiment_plan: Optional[DecisionRecommendationExperiment] = None
 
 
@@ -721,6 +735,7 @@ class DecisionRecommendationResponse(BaseModel):
     experiment_count: int = Field(ge=0)
     headline: str
     comparison: DecisionFunnelComparisonSummary
+    experiment_history: dict = Field(default_factory=dict)
     recommended_next_experiment: Optional[DecisionRecommendationExperiment] = None
     experiments: List[DecisionRecommendationExperiment] = Field(default_factory=list)
     recommendations: List[DecisionRecommendationItem] = Field(default_factory=list)

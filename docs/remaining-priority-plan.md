@@ -25,7 +25,7 @@
 
 현재 검증 상태:
 
-- `pytest -q` 기준 전체 `143 passed, 1 skipped`
+- `pytest -q` 기준 전체 `144 passed, 1 skipped`
 - `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 
 ## 남은 핵심 과제 요약
@@ -197,7 +197,7 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 - training run이 `artifact-comparison.json`을 생성해 historical / LSTM / ensemble artifact를 rolling holdout 기준으로 비교한다.
 - manifest 생성 시 artifact comparison report가 predictor promotion gate 입력으로 연결된다.
 
-### 1순위 — 실험 추천 운영 루프 고도화
+### 완료 — 실험 추천 운영 루프 고도화
 
 실험 run의 적용/보류/실패 이력은 dashboard payload로 정리됐다. 다음은 장기 적용 결과를 추천 로직에 다시 반영하는 단계다.
 
@@ -210,6 +210,26 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 #### 1순위 완료 기준
 
 - 실험 추천이 최근 지표뿐 아니라 과거 적용 결과의 신뢰도를 함께 반영해야 한다.
+
+#### 구현된 결과
+
+- `GET /api/v1/analytics/decision-recommendations`가 최근 experiment run 이력을 함께 요약해 `experiment_history`를 반환한다.
+- 각 recommendation이 `priority_score`, `history_adjustment`, supporting metric 내 `experiment_history`를 포함한다.
+- 성공 후 적용된 실험 계열은 후속 추천 우선순위가 올라가고, 반복 실패/롤백/보류 계열은 우선순위와 urgency가 낮아진다.
+
+### 1순위 — promotion gate 운영 보정
+
+모델 학습 산출물 리포트와 manifest gate 연결은 들어갔다. 다음은 운영 데이터에 맞는 gate 기준과 릴리즈 정책을 더 구체화하는 단계다.
+
+#### 1순위 작업 범위
+
+- promotion gate threshold를 운영 데이터 분포와 release tier에 맞춰 보정
+- artifact comparison report의 dataset quality 상태를 gate reason에 더 직접 반영
+- 릴리즈 정책별 require_report / min sample / max error 기준 preset 정리
+
+#### 1순위 완료 기준
+
+- manifest gate 판단이 단일 고정 threshold가 아니라 운영 정책에 맞는 기준을 명확히 노출해야 한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -298,10 +318,15 @@ decision analytics, prediction observability, operations dashboard 기반과 wor
 - 학습 dataset 품질 검증
 - 모델 artifact 비교 리포트
 
-### 묶음 A — 실험 운영 루프 고도화
+### 완료 — 실험 운영 루프 고도화
 
 - 장기 적용 결과를 다음 recommendation ranking에 반영
 - 반복 적용/롤백 패턴 기반 실험 추천 억제
+
+### 묶음 A — promotion gate 운영 보정
+
+- 운영 데이터 분포 기반 gate threshold 보정
+- release tier별 gate policy preset 정리
 
 ### 묶음 B — 운영 credential/IAM rollout 검증
 
