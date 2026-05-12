@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `140 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `141 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -33,6 +33,7 @@
 - 실험 실행 이력 / 평가 API (`decision-experiments`) 및 baseline vs current 비교
 - 실험 run 수동 상태 변경 / 메모 갱신 / threshold, workload, category 적용 feedback loop
 - 실험 run별 `application_status`, `application_history`, `next_actions` 기반 dashboard action payload
+- 성공 / 실패 / 보류 실험 이력 기반 review bucket, priority sort, 필터/카운트 payload
 - Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, 인증된 WebSocket realtime event stream
 - PostgreSQL `LISTEN/NOTIFY` 기반 optional realtime fanout backend
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
@@ -134,7 +135,7 @@
 - `tests/test_prediction_predictors.py`
 - `tests/test_predictions.py`
 
-### D. 입찰 추진 결정 / 실험 분석 — 핵심 완료, 운영 자동화 확장 필요
+### D. 입찰 추진 결정 / 실험 분석 — 핵심 완료, 운영 자동화 확장 단계
 
 이미 구현됨:
 
@@ -146,10 +147,11 @@
 - 성공 실험의 threshold 적용 feedback loop
 - workload auto-calibration / category focus-shift 실험의 operator strategy 적용 feedback loop
 - 적용 가능/완료/차단 상태와 action payload를 포함한 실험 응답
+- 성공 / 실패 / 보류 이력 기반 review bucket, 우선순위 정렬, outcome/application 필터와 집계 payload
 
 남은 작업:
 
-- 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강
+- 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화
 
 우선 검토 파일:
 
@@ -210,9 +212,9 @@
 
 ## 현재 권장 실행 순서
 
-1. `D. 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강`
-2. `G. Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
-3. `C. 모델 학습/검증 파이프라인 고도화`
+1. `G. Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
+2. `C. 모델 학습/검증 파이프라인 고도화`
+3. `D. 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화`
 4. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.

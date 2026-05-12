@@ -892,19 +892,52 @@ class DecisionExperimentRunResponse(BaseModel):
     application_status: Literal["not_supported", "not_ready", "ready", "partially_applied", "applied", "blocked"]
     application_detail: str
     application_history: List[DecisionExperimentApplicationHistoryItem] = Field(default_factory=list)
+    review_bucket: Literal[
+        "ready_to_apply",
+        "blocked",
+        "failed",
+        "needs_evaluation",
+        "collecting_data",
+        "partially_applied",
+        "scheduled",
+        "applied",
+        "unsupported",
+    ]
+    review_priority: int = Field(ge=0)
+    review_reason: str
     next_actions: List[DecisionExperimentActionItem] = Field(default_factory=list)
 
 
 class DecisionExperimentRunListResponse(BaseModel):
     operator_id: int
     result_count: int = Field(ge=0)
+    total_match_count: int = Field(default=0, ge=0)
+    sort: Literal[
+        "needs_attention",
+        "created_desc",
+        "created_asc",
+        "priority",
+        "last_evaluated_desc",
+        "application",
+    ] = "needs_attention"
     active_count: int = Field(ge=0)
     completed_count: int = Field(ge=0)
     rolled_back_count: int = Field(ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    success_count: int = Field(default=0, ge=0)
+    pending_count: int = Field(default=0, ge=0)
+    inconclusive_count: int = Field(default=0, ge=0)
+    rollback_count: int = Field(default=0, ge=0)
     applicable_count: int = Field(default=0, ge=0)
     ready_to_apply_count: int = Field(default=0, ge=0)
     applied_count: int = Field(default=0, ge=0)
+    partially_applied_count: int = Field(default=0, ge=0)
     blocked_count: int = Field(default=0, ge=0)
+    not_ready_count: int = Field(default=0, ge=0)
+    not_supported_count: int = Field(default=0, ge=0)
+    application_status_counts: dict[str, int] = Field(default_factory=dict)
+    outcome_counts: dict[str, int] = Field(default_factory=dict)
+    review_bucket_counts: dict[str, int] = Field(default_factory=dict)
     runs: List[DecisionExperimentRunResponse] = Field(default_factory=list)
 
 

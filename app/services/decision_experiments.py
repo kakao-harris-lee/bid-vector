@@ -89,31 +89,57 @@ class DecisionExperimentService:
         db.refresh(run)
         return self.get_run_detail(db, run_id=int(run.id))
 
-    def list_runs(self, db: Session, *, limit: int = 20, run_status: str | None = None) -> dict[str, Any]:
+    def list_runs(
+        self,
+        db: Session,
+        *,
+        limit: int = 20,
+        run_status: str | None = None,
+        outcome: str | None = None,
+        application_status: str | None = None,
+        sort: str = "needs_attention",
+    ) -> dict[str, Any]:
         """Return recent experiment runs for dashboard and operator review."""
         operator = ensure_operator_account(db)
         query = db.query(DecisionExperimentRun).filter(DecisionExperimentRun.operator_id == operator.id)
         if run_status:
             query = query.filter(DecisionExperimentRun.status == run_status)
+        if outcome:
+            query = query.filter(DecisionExperimentRun.outcome == outcome)
 
-        runs = (
-            query
-            .order_by(DecisionExperimentRun.created_at.desc(), DecisionExperimentRun.id.desc())
-            .limit(limit)
-            .all()
-        )
+        runs = query.order_by(DecisionExperimentRun.created_at.desc(), DecisionExperimentRun.id.desc()).all()
         serialized_runs = [self._serialize_run(run) for run in runs]
+        if application_status:
+            serialized_runs = [
+                run for run in serialized_runs
+                if str(run["application_status"]) == application_status
+            ]
+        serialized_runs = self._sort_serialized_runs(serialized_runs, sort=sort)
+        limited_runs = serialized_runs[:limit]
         return {
             "operator_id": operator.id,
-            "result_count": len(serialized_runs),
-            "active_count": sum(1 for run in serialized_runs if run["status"] in {"planned", "running"}),
-            "completed_count": sum(1 for run in serialized_runs if run["status"] == "completed"),
-            "rolled_back_count": sum(1 for run in serialized_runs if run["status"] == "rolled_back"),
-            "applicable_count": sum(1 for run in serialized_runs if run["application_status"] != "not_supported"),
-            "ready_to_apply_count": sum(1 for run in serialized_runs if run["application_status"] == "ready"),
-            "applied_count": sum(1 for run in serialized_runs if run["application_status"] == "applied"),
-            "blocked_count": sum(1 for run in serialized_runs if run["application_status"] == "blocked"),
-            "runs": serialized_runs,
+            "result_count": len(limited_runs),
+            "total_match_count": len(serialized_runs),
+            "sort": self._normalize_run_sort(sort),
+            "active_count": sum(1 for run in limited_runs if run["status"] in {"planned", "running"}),
+            "completed_count": sum(1 for run in limited_runs if run["status"] == "completed"),
+            "rolled_back_count": sum(1 for run in limited_runs if run["status"] == "rolled_back"),
+            "failed_count": sum(1 for run in limited_runs if run["status"] == "failed"),
+            "success_count": sum(1 for run in limited_runs if run.get("outcome") == "success"),
+            "pending_count": sum(1 for run in limited_runs if run.get("outcome") in {None, "watch", "insufficient_data"}),
+            "inconclusive_count": sum(1 for run in limited_runs if run.get("outcome") == "inconclusive"),
+            "rollback_count": sum(1 for run in limited_runs if run.get("outcome") == "rollback"),
+            "applicable_count": sum(1 for run in limited_runs if run["application_status"] != "not_supported"),
+            "ready_to_apply_count": sum(1 for run in limited_runs if run["application_status"] == "ready"),
+            "applied_count": sum(1 for run in limited_runs if run["application_status"] == "applied"),
+            "partially_applied_count": sum(1 for run in limited_runs if run["application_status"] == "partially_applied"),
+            "blocked_count": sum(1 for run in limited_runs if run["application_status"] == "blocked"),
+            "not_ready_count": sum(1 for run in limited_runs if run["application_status"] == "not_ready"),
+            "not_supported_count": sum(1 for run in limited_runs if run["application_status"] == "not_supported"),
+            "application_status_counts": self._count_by_key(limited_runs, "application_status"),
+            "outcome_counts": self._count_by_key(limited_runs, "outcome", missing="pending"),
+            "review_bucket_counts": self._count_by_key(limited_runs, "review_bucket"),
+            "runs": limited_runs,
         }
 
     def get_run_detail(self, db: Session, *, run_id: int) -> dict[str, Any]:
@@ -527,6 +553,21 @@ class DecisionExperimentService:
             "application_status": application_status,
             "application_detail": application_detail,
             "application_history": self._application_history(run),
+            "review_bucket": self._review_bucket(
+                run,
+                latest_evaluation=latest_evaluation,
+                application_status=application_status,
+            ),
+            "review_priority": self._review_priority(
+                run,
+                latest_evaluation=latest_evaluation,
+                application_status=application_status,
+            ),
+            "review_reason": self._review_reason(
+                run,
+                latest_evaluation=latest_evaluation,
+                application_status=application_status,
+            ),
             "next_actions": self._build_run_actions(
                 run,
                 application_status=application_status,
@@ -676,6 +717,178 @@ class DecisionExperimentService:
             )
 
         return actions
+
+    def _sort_serialized_runs(self, runs: list[dict[str, Any]], *, sort: str) -> list[dict[str, Any]]:
+        """Sort runs for dashboard review queues."""
+        normalized_sort = self._normalize_run_sort(sort)
+        if normalized_sort == "created_desc":
+            return sorted(runs, key=lambda item: (self._datetime_sort_key(item.get("created_at")), int(item["id"])), reverse=True)
+        if normalized_sort == "created_asc":
+            return sorted(runs, key=lambda item: (self._datetime_sort_key(item.get("created_at")), int(item["id"])))
+        if normalized_sort == "priority":
+            return sorted(
+                runs,
+                key=lambda item: (
+                    int(item.get("priority_rank") or 999),
+                    -self._datetime_sort_key(item.get("created_at")),
+                    -int(item["id"]),
+                ),
+            )
+        if normalized_sort == "last_evaluated_desc":
+            return sorted(
+                runs,
+                key=lambda item: (
+                    self._datetime_sort_key(item.get("last_evaluated_at")),
+                    self._datetime_sort_key(item.get("updated_at")),
+                    int(item["id"]),
+                ),
+                reverse=True,
+            )
+        if normalized_sort == "application":
+            return sorted(
+                runs,
+                key=lambda item: (
+                    self._application_status_rank(str(item.get("application_status") or "")),
+                    int(item.get("priority_rank") or 999),
+                    -self._datetime_sort_key(item.get("updated_at")),
+                    -int(item["id"]),
+                ),
+            )
+        return sorted(
+            runs,
+            key=lambda item: (
+                int(item.get("review_priority") or 999),
+                int(item.get("priority_rank") or 999),
+                -self._datetime_sort_key(item.get("updated_at")),
+                -int(item["id"]),
+            ),
+        )
+
+    def _normalize_run_sort(self, sort: str) -> str:
+        """Normalize supported experiment list sort modes."""
+        normalized = str(sort or "needs_attention").strip().lower()
+        supported = {
+            "needs_attention",
+            "created_desc",
+            "created_asc",
+            "priority",
+            "last_evaluated_desc",
+            "application",
+        }
+        return normalized if normalized in supported else "needs_attention"
+
+    def _review_bucket(
+        self,
+        run: DecisionExperimentRun,
+        *,
+        latest_evaluation: dict[str, Any] | None,
+        application_status: str,
+    ) -> str:
+        """Resolve a coarse dashboard queue bucket for one run."""
+        if application_status == "ready":
+            return "ready_to_apply"
+        if application_status == "partially_applied":
+            return "partially_applied"
+        if application_status == "applied":
+            return "applied"
+        if application_status == "blocked":
+            return "blocked"
+        if application_status == "not_supported":
+            return "unsupported"
+
+        status = str(run.status or "planned")
+        outcome = str(run.outcome or "")
+        recommended_action = str((latest_evaluation or {}).get("recommended_action") or "")
+        if status == "failed":
+            return "failed"
+        if outcome in {"insufficient_data", "watch"} or recommended_action in {"collect_more_data", "continue"}:
+            return "collecting_data"
+        if status in {"running", "completed"}:
+            return "needs_evaluation"
+        return "scheduled"
+
+    def _review_priority(
+        self,
+        run: DecisionExperimentRun,
+        *,
+        latest_evaluation: dict[str, Any] | None,
+        application_status: str,
+    ) -> int:
+        """Return a stable low-is-urgent priority for dashboard sorting."""
+        bucket = self._review_bucket(run, latest_evaluation=latest_evaluation, application_status=application_status)
+        bucket_rank = {
+            "ready_to_apply": 10,
+            "blocked": 20,
+            "failed": 25,
+            "needs_evaluation": 30,
+            "collecting_data": 40,
+            "partially_applied": 50,
+            "scheduled": 60,
+            "applied": 70,
+            "unsupported": 80,
+        }
+        return bucket_rank.get(bucket, 90)
+
+    def _review_reason(
+        self,
+        run: DecisionExperimentRun,
+        *,
+        latest_evaluation: dict[str, Any] | None,
+        application_status: str,
+    ) -> str:
+        """Explain why a run is in its dashboard review bucket."""
+        bucket = self._review_bucket(run, latest_evaluation=latest_evaluation, application_status=application_status)
+        if bucket == "ready_to_apply":
+            return "성공 outcome이 확정되어 운영 설정 적용 검토가 필요합니다."
+        if bucket == "blocked":
+            return "롤백 또는 결론 없음 상태라 적용이 차단되었습니다."
+        if bucket == "failed":
+            return "실험 실행 또는 평가가 실패했습니다. 오류 원인 확인이 필요합니다."
+        if bucket == "needs_evaluation":
+            return "실험이 진행 또는 완료 상태지만 최신 평가가 없습니다."
+        if bucket == "collecting_data":
+            sample_size = int((latest_evaluation or {}).get("sample_size") or 0)
+            minimum_sample = int(run.minimum_decision_sample or 1)
+            return f"현재 표본 {sample_size}건으로 최소 기준 {minimum_sample}건까지 더 관찰해야 합니다."
+        if bucket == "partially_applied":
+            return "일부 적용은 끝났고 남은 적용 작업 검토가 필요합니다."
+        if bucket == "scheduled":
+            return "아직 시작 예정인 실험입니다."
+        if bucket == "applied":
+            return "지원되는 적용 작업이 완료되어 감사 이력만 확인하면 됩니다."
+        return "자동 적용 대상이 아니므로 수동 검토 대상입니다."
+
+    def _application_status_rank(self, application_status: str) -> int:
+        """Return stable ordering for application-oriented sorting."""
+        ranks = {
+            "ready": 10,
+            "partially_applied": 20,
+            "blocked": 30,
+            "not_ready": 40,
+            "applied": 50,
+            "not_supported": 60,
+        }
+        return ranks.get(application_status, 90)
+
+    def _count_by_key(self, runs: list[dict[str, Any]], key: str, *, missing: str = "unknown") -> dict[str, int]:
+        """Count runs by one serialized field for dashboard chips."""
+        counts: dict[str, int] = {}
+        for run in runs:
+            value = run.get(key)
+            label = str(value if value is not None else missing)
+            counts[label] = counts.get(label, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: item[0]))
+
+    def _datetime_sort_key(self, value: Any) -> float:
+        """Return a comparable timestamp for optional datetime-like values."""
+        if value is None:
+            return 0.0
+        if isinstance(value, datetime):
+            return float(value.timestamp())
+        try:
+            return float(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+        except (TypeError, ValueError):
+            return 0.0
 
     def _apply_action_reason(self, run: DecisionExperimentRun, *, already_applied: bool, enabled: bool) -> str:
         """Return a concise explanation for an apply action's enabled state."""

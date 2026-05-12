@@ -1,11 +1,12 @@
 """Tests for operator-first auth, analytics, and legacy admin compatibility."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.core.security import get_password_hash, verify_password
-from app.models.models import BidDecisionRecord, PricePrediction, TenderResult
+from app.models.models import BidDecisionRecord, DecisionExperimentRun, PricePrediction, TenderResult
 
 
 def _bootstrap_operator(client, username: str = "solo-operator", email: str = "solo@example.com", password: str = "password123"):
@@ -1535,6 +1536,175 @@ def test_decision_experiment_evaluate_endpoint_completes_successful_run(client, 
     assert filtered_payload["result_count"] == 1
     assert filtered_payload["completed_count"] == 1
     assert filtered_payload["runs"][0]["id"] == run_id
+
+
+def test_decision_experiment_list_sorts_and_filters_operational_review_queue(client, test_db):
+    """Experiment list should expose dashboard-ready review buckets, counts, and filters."""
+    bootstrap = _bootstrap_operator(
+        client,
+        username="decision-experiment-review-operator",
+        email="decision-experiment-review@example.com",
+    )
+    operator_id = bootstrap.json()["id"]
+    now = datetime.now(UTC)
+
+    def make_run(
+        *,
+        experiment_key: str,
+        recommendation_key: str,
+        title: str,
+        status: str,
+        outcome: str | None,
+        priority_rank: int,
+        notes: str = "",
+        created_offset_hours: int = 1,
+    ) -> DecisionExperimentRun:
+        return DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key=experiment_key,
+            recommendation_key=recommendation_key,
+            status=status,
+            outcome=outcome,
+            priority_rank=priority_rank,
+            title=title,
+            hypothesis=f"{title} hypothesis",
+            suggested_change=f"{title} change",
+            target_metric="review_submission_rate",
+            expected_direction="increase",
+            success_criteria="metric improves",
+            guardrail_metric="overall_submission_rate",
+            minimum_decision_sample=3,
+            duration_days=7,
+            baseline_days=7,
+            rollback_trigger="guardrail drops",
+            notes=notes,
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=3),
+            ended_at=now - timedelta(days=1) if status in {"completed", "rolled_back", "failed"} else None,
+            created_at=now - timedelta(hours=created_offset_hours),
+            updated_at=now - timedelta(minutes=created_offset_hours),
+        )
+
+    ready_run = make_run(
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="ready-threshold",
+        title="Ready threshold run",
+        status="completed",
+        outcome="success",
+        priority_rank=3,
+        created_offset_hours=5,
+    )
+    blocked_run = make_run(
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="blocked-threshold",
+        title="Blocked threshold run",
+        status="rolled_back",
+        outcome="rollback",
+        priority_rank=1,
+        created_offset_hours=4,
+    )
+    failed_run = make_run(
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="failed-threshold",
+        title="Failed threshold run",
+        status="failed",
+        outcome=None,
+        priority_rank=1,
+        created_offset_hours=3,
+    )
+    collecting_run = make_run(
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="collecting-threshold",
+        title="Collecting threshold run",
+        status="running",
+        outcome="watch",
+        priority_rank=2,
+        created_offset_hours=2,
+    )
+    applied_run = make_run(
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="applied-threshold",
+        title="Applied threshold run",
+        status="completed",
+        outcome="success",
+        priority_rank=2,
+        notes="Threshold 적용: review_threshold 0.45 -> 0.49",
+        created_offset_hours=1,
+    )
+    unsupported_run = make_run(
+        experiment_key="exp-custom-unsupported",
+        recommendation_key="unsupported-custom",
+        title="Unsupported custom run",
+        status="completed",
+        outcome="success",
+        priority_rank=1,
+        created_offset_hours=6,
+    )
+
+    test_db.add_all([ready_run, blocked_run, failed_run, collecting_run, applied_run, unsupported_run])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/decision-experiments", params={"limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sort"] == "needs_attention"
+    assert payload["result_count"] == 6
+    assert payload["total_match_count"] == 6
+    assert payload["success_count"] == 3
+    assert payload["pending_count"] == 2
+    assert payload["rollback_count"] == 1
+    assert payload["ready_to_apply_count"] == 1
+    assert payload["applied_count"] == 1
+    assert payload["blocked_count"] == 1
+    assert payload["not_ready_count"] == 2
+    assert payload["not_supported_count"] == 1
+    assert payload["application_status_counts"] == {
+        "applied": 1,
+        "blocked": 1,
+        "not_ready": 2,
+        "not_supported": 1,
+        "ready": 1,
+    }
+    assert payload["review_bucket_counts"] == {
+        "applied": 1,
+        "blocked": 1,
+        "collecting_data": 1,
+        "failed": 1,
+        "ready_to_apply": 1,
+        "unsupported": 1,
+    }
+
+    ordered_buckets = [run["review_bucket"] for run in payload["runs"]]
+    assert ordered_buckets == [
+        "ready_to_apply",
+        "blocked",
+        "failed",
+        "collecting_data",
+        "applied",
+        "unsupported",
+    ]
+    assert payload["runs"][0]["review_priority"] < payload["runs"][1]["review_priority"]
+    assert "적용 검토" in payload["runs"][0]["review_reason"]
+
+    ready_response = client.get(
+        "/api/v1/analytics/decision-experiments",
+        params={"application_status": "ready", "limit": 10},
+    )
+    assert ready_response.status_code == 200
+    ready_payload = ready_response.json()
+    assert ready_payload["result_count"] == 1
+    assert ready_payload["runs"][0]["recommendation_key"] == "ready-threshold"
+
+    success_response = client.get(
+        "/api/v1/analytics/decision-experiments",
+        params={"outcome": "success", "sort": "application", "limit": 10},
+    )
+    assert success_response.status_code == 200
+    success_payload = success_response.json()
+    assert success_payload["sort"] == "application"
+    assert [run["application_status"] for run in success_payload["runs"]] == ["ready", "applied", "not_supported"]
 
 
 def test_decision_experiment_patch_endpoint_updates_notes_and_rolls_back_run(client):

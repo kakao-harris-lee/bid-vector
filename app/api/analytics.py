@@ -205,10 +205,20 @@ def create_decision_experiment_run(
 def list_decision_experiment_runs(
     limit: int = Query(20, ge=1, le=100),
     run_status: str | None = Query(default=None, alias="status"),
+    outcome: str | None = Query(default=None),
+    application_status: str | None = Query(default=None),
+    sort: str = Query(default="needs_attention"),
     db: Session = Depends(get_db),
 ):
     """Return recent decision experiment runs for dashboard status tracking."""
-    return DecisionExperimentService().list_runs(db, limit=limit, run_status=run_status)
+    return DecisionExperimentService().list_runs(
+        db,
+        limit=limit,
+        run_status=run_status,
+        outcome=outcome,
+        application_status=application_status,
+        sort=sort,
+    )
 
 
 @router.get("/decision-experiments/{experiment_run_id}", response_model=DecisionExperimentRunDetailResponse)

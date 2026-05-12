@@ -130,7 +130,7 @@ WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작�
 - `REALTIME_FANOUT_BACKEND=postgres` 설정 시 PostgreSQL `LISTEN/NOTIFY` 기반 fanout listener가 앱 lifecycle에서 시작/종료된다.
 - manager는 local broadcast와 cross-process fanout 수신을 분리하고, 자기 프로세스가 발행한 fanout echo는 무시한다.
 
-### 1순위 — 실험 운영 고도화
+### 완료 — 실험 운영 고도화
 
 실험 계획과 실행 이력은 저장되고, 수동 제어와 threshold/workload/category 적용까지 가능하다. 이제 운영 화면에서 바로 쓰기 좋은 payload와 이력 집계를 다듬는 단계다.
 
@@ -151,6 +151,26 @@ WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작�
 
 - 운영자가 적용 가능한 실험과 이미 적용된 실험을 쉽게 구분할 수 있어야 한다.
 - 실험 적용 결과가 다음 추천 로직과 운영 설정 변경에 감사 가능한 형태로 남아야 한다.
+
+#### 구현된 결과
+
+- `GET /api/v1/analytics/decision-experiments`가 `sort`, `outcome`, `application_status` 필터를 지원한다.
+- 각 run은 `review_bucket`, `review_priority`, `review_reason`을 포함한다.
+- list response는 success/pending/rollback/application/review bucket count를 함께 반환한다.
+
+### 1순위 — 추가 운영 카드 확장
+
+prediction observability, operations dashboard, task/broker, realtime 운영화가 정리됐다. 다음은 외부 채널과 모델 릴리즈 상태를 같은 dashboard 카드 체계에 묶는 단계다.
+
+#### 1순위 작업 범위
+
+- Telegram 전송률 / 실패 원인 집계
+- 모델 릴리즈 상태 카드
+- training/backtest 결과 카드
+
+#### 1순위 완료 기준
+
+- 운영자가 알림 채널과 모델 릴리즈 상태를 operations dashboard에서 같이 확인할 수 있어야 한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -228,21 +248,21 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — 실험 이력 관측성
-
-- 성공 / 실패 / 보류 실험 이력 기반 정렬
-- 적용 이력 필터와 중복 적용 감사 payload
-
-### 묶음 B — 추가 운영 카드
+### 묶음 A — 추가 운영 카드
 
 - Telegram 전송률
 - 모델 릴리즈 상태
 - training/backtest 결과 카드
 
-### 묶음 C — 모델 학습/검증 고도화
+### 묶음 B — 모델 학습/검증 고도화
 
 - 학습 dataset 품질 검증
 - 모델 artifact 비교 리포트
+
+### 묶음 C — 실험 운영 루프 고도화
+
+- 장기 적용 결과를 다음 recommendation ranking에 반영
+- 반복 적용/롤백 패턴 기반 실험 추천 억제
 
 ## 범위 재정의 / 비우선 항목
 
