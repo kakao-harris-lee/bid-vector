@@ -8,10 +8,11 @@ from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_r
 from app.ai.price_prediction import get_price_insights, predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_profile
 from app.core.time import ensure_utc, utc_now
-from app.models.models import Bid, BidDecisionRecord, HistoricalData, Project
+from app.models.models import Bid, BidDecisionRecord, Project
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
+from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 from app.services.project_similarity import ProjectSimilarityService
 
@@ -21,9 +22,26 @@ class OpportunityAnalysisService:
 
     ACTIVE_DECISION_STATUSES = ("planned", "reviewing")
     DEFAULT_SIMILARITY_SCORE = 0.35
+    EXECUTION_COMPLEXITY_KEYWORDS = (
+        "통합",
+        "고도화",
+        "운영",
+        "유지관리",
+        "24시간",
+        "대규모",
+        "다기관",
+        "클라우드",
+        "센터",
+        "실시간",
+        "연계",
+        "보안",
+        "이관",
+        "플랫폼",
+    )
 
     def __init__(self) -> None:
         self.classifier = NoticeClassifierService()
+        self.dataset_service = PredictionDatasetService()
         self.decision_service = BidDecisionService()
         self.feedback_service = PredictionFeedbackService()
         self.similarity_service = ProjectSimilarityService()
@@ -91,10 +109,11 @@ class OpportunityAnalysisService:
         market_insights["competitiveness_score"] = round(float(competitiveness_score), 4)
 
         deadline_hours_remaining = self._compute_deadline_hours_remaining(project)
-        current_active_bids = (
-            request.current_active_bids
-            if request.current_active_bids is not None
-            else self._count_current_active_bids(db, operator.id, exclude_project_id=project.id)
+        current_active_bids, current_workload_score, workload_source = self._resolve_workload_context(
+            db,
+            operator_id=operator.id,
+            request=request,
+            exclude_project_id=project.id,
         )
 
         probability_score = self._estimate_probability_score(
@@ -107,6 +126,21 @@ class OpportunityAnalysisService:
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
         )
+        expected_margin_score = self._estimate_expected_margin_score(
+            project=project,
+            recommended_amount=recommended_amount,
+            price_prediction=price_prediction,
+            competitiveness_score=float(competitiveness_score),
+            capacity_score=float(profile.capacity_score or 0.0),
+        )
+        execution_complexity_score = self._estimate_execution_complexity_score(
+            project=project,
+            classification=classification,
+            deadline_hours_remaining=deadline_hours_remaining,
+            current_active_bids=current_active_bids,
+            max_active_bids=request.max_active_bids,
+            capacity_score=float(profile.capacity_score or 0.0),
+        )
 
         decision = self.decision_service.evaluate_opportunity(
             BidDecisionRequest(
@@ -117,8 +151,14 @@ class OpportunityAnalysisService:
                 deadline_hours_remaining=deadline_hours_remaining,
                 current_active_bids=current_active_bids,
                 max_active_bids=request.max_active_bids,
-                current_workload_score=request.current_workload_score,
-            )
+                current_workload_score=current_workload_score,
+                budget_estimate=float(project.budget_estimate or 0.0),
+                competitiveness_score=float(competitiveness_score),
+                expected_margin_score=expected_margin_score,
+                execution_complexity_score=execution_complexity_score,
+                workload_source=workload_source,
+            ),
+            db=db,
         )
 
         strengths = self._build_strengths(
@@ -127,6 +167,7 @@ class OpportunityAnalysisService:
             similar_projects=similar_projects,
             competitiveness_score=competitiveness_score,
             probability_score=probability_score,
+            expected_margin_score=expected_margin_score,
         )
         risk_flags = self._build_risk_flags(
             classification=classification,
@@ -135,6 +176,8 @@ class OpportunityAnalysisService:
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
             deadline_hours_remaining=deadline_hours_remaining,
+            expected_margin_score=expected_margin_score,
+            execution_complexity_score=execution_complexity_score,
         )
 
         return {
@@ -148,7 +191,8 @@ class OpportunityAnalysisService:
             "deadline_hours_remaining": deadline_hours_remaining,
             "current_active_bids": current_active_bids,
             "max_active_bids": request.max_active_bids,
-            "current_workload_score": request.current_workload_score,
+            "current_workload_score": current_workload_score,
+            "workload_source": workload_source,
             "analysis_summary": self._build_summary(
                 project=project,
                 decision=decision,
@@ -199,12 +243,13 @@ class OpportunityAnalysisService:
         insights["competitiveness_score"] = 0.0
         return insights
 
-    def _load_price_history(self, db: Session, project: Project, *, limit: int = 40) -> list[HistoricalData]:
+    def _load_price_history(self, db: Session, project: Project, *, limit: int = 40) -> list[dict[str, object]]:
         """Load recent historical bid-rate samples for price prediction."""
-        query = db.query(HistoricalData)
-        if project.category:
-            query = query.filter(HistoricalData.category == project.category)
-        return query.order_by(HistoricalData.opened_at.desc(), HistoricalData.created_at.desc()).limit(limit).all()
+        return self.dataset_service.load_historical_series(
+            db,
+            category=project.category,
+            limit=limit,
+        )
 
     def _resolve_recommended_amount(self, project: Project, price_prediction: dict, bid_recommendation: dict) -> float:
         """Clamp the bid recommendation into a sensible, budget-aware range."""
@@ -227,13 +272,86 @@ class OpportunityAnalysisService:
 
     def _count_current_active_bids(self, db: Session, operator_id: int, *, exclude_project_id: int | None = None) -> int:
         """Count other active bid decisions already on the operator's plate."""
+        return len(self._load_current_active_bid_records(db, operator_id, exclude_project_id=exclude_project_id))
+
+    def _load_current_active_bid_records(
+        self,
+        db: Session,
+        operator_id: int,
+        *,
+        exclude_project_id: int | None = None,
+    ) -> list[BidDecisionRecord]:
+        """Return active bid-decision records currently occupying operator capacity."""
         query = db.query(BidDecisionRecord).filter(
             BidDecisionRecord.operator_id == operator_id,
             BidDecisionRecord.decision_status.in_(self.ACTIVE_DECISION_STATUSES),
         )
         if exclude_project_id is not None:
             query = query.filter(BidDecisionRecord.project_id != exclude_project_id)
-        return int(query.count())
+        return query.all()
+
+    def _resolve_workload_context(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        request: OpportunityAnalysisRequest,
+        exclude_project_id: int | None = None,
+    ) -> tuple[int, float, str]:
+        """Resolve active bid count and workload score from explicit input or stored active decisions."""
+        active_records = self._load_current_active_bid_records(
+            db,
+            operator_id,
+            exclude_project_id=exclude_project_id,
+        )
+        current_active_bids = (
+            int(request.current_active_bids)
+            if request.current_active_bids is not None
+            else len(active_records)
+        )
+
+        if request.current_workload_score is not None:
+            normalized_workload = max(0.0, min(1.0, float(request.current_workload_score)))
+            return current_active_bids, round(normalized_workload, 2), "provided"
+
+        auto_workload_score = self._estimate_current_workload_score(
+            active_records=active_records,
+            current_active_bids=current_active_bids,
+            max_active_bids=request.max_active_bids,
+        )
+        return current_active_bids, auto_workload_score, "auto"
+
+    def _estimate_current_workload_score(
+        self,
+        *,
+        active_records: list[BidDecisionRecord],
+        current_active_bids: int,
+        max_active_bids: int,
+    ) -> float:
+        """Estimate current workload from persisted active bid decisions when the caller omits it."""
+        if current_active_bids <= 0:
+            return 0.0
+
+        safe_max = max(1, max_active_bids)
+        active_load_ratio = min(1.0, current_active_bids / safe_max)
+
+        if not active_records:
+            return round(active_load_ratio * 0.65, 2)
+
+        average_priority = sum(float(record.priority_score or 0.0) for record in active_records) / len(active_records)
+        urgent_ratio = sum(
+            1 for record in active_records
+            if record.deadline_hours_remaining is not None and int(record.deadline_hours_remaining) <= 24
+        ) / len(active_records)
+        review_ratio = sum(1 for record in active_records if str(record.decision_status) == "reviewing") / len(active_records)
+
+        workload_score = (
+            active_load_ratio * 0.5
+            + average_priority * 0.25
+            + urgent_ratio * 0.15
+            + review_ratio * 0.1
+        )
+        return round(max(0.0, min(1.0, workload_score)), 2)
 
     def _compute_deadline_hours_remaining(self, project: Project) -> int | None:
         """Convert a project deadline into remaining whole hours."""
@@ -283,6 +401,95 @@ class OpportunityAnalysisService:
 
         return round(max(0.0, min(1.0, probability_score)), 2)
 
+    def _estimate_expected_margin_score(
+        self,
+        *,
+        project: Project,
+        recommended_amount: float,
+        price_prediction: dict,
+        competitiveness_score: float,
+        capacity_score: float,
+    ) -> float:
+        """Estimate a profitability proxy from budget retention, floor headroom, and execution confidence."""
+        budget_estimate = float(project.budget_estimate or 0.0)
+        if budget_estimate <= 0:
+            return 0.5
+
+        recommended_rate = max(0.0, min(1.0, float(recommended_amount or 0.0) / budget_estimate))
+        floor_bid_rate = max(0.0, min(1.0, float(price_prediction.get("floor_bid_rate", 0.0) or 0.0)))
+        predicted_bid_rate = max(
+            0.0,
+            min(1.0, float(price_prediction.get("predicted_bid_rate", recommended_rate) or recommended_rate)),
+        )
+        price_confidence = max(0.0, min(1.0, float(price_prediction.get("confidence_score", 0.0) or 0.0)))
+        normalized_capacity = self._normalize_capacity_score(capacity_score)
+
+        if floor_bid_rate > 0:
+            floor_headroom = max(0.0, min(1.0, (recommended_rate - floor_bid_rate) / max(1e-6, 1.0 - floor_bid_rate)))
+        else:
+            floor_headroom = recommended_rate
+
+        prediction_alignment = max(0.0, 1.0 - min(abs(recommended_rate - predicted_bid_rate) / 0.12, 1.0))
+
+        expected_margin_score = (
+            recommended_rate * 0.35
+            + floor_headroom * 0.2
+            + prediction_alignment * 0.2
+            + price_confidence * 0.15
+            + normalized_capacity * 0.1
+        )
+        return round(max(0.0, min(1.0, expected_margin_score)), 2)
+
+    def _estimate_execution_complexity_score(
+        self,
+        *,
+        project: Project,
+        classification: dict,
+        deadline_hours_remaining: int | None,
+        current_active_bids: int,
+        max_active_bids: int,
+        capacity_score: float,
+    ) -> float:
+        """Estimate delivery complexity from project scale, wording, schedule pressure, and current capacity."""
+        project_budget = max(float(project.budget_estimate or 0.0), float(project.budget_max or 0.0))
+        if project_budget >= 500_000_000:
+            budget_signal = 0.92
+        elif project_budget >= 200_000_000:
+            budget_signal = 0.78
+        elif project_budget >= 100_000_000:
+            budget_signal = 0.62
+        else:
+            budget_signal = 0.38
+
+        project_text = " ".join(part for part in [project.title or "", project.description or "", project.requirements or ""] if part).lower()
+        keyword_hits = sum(1 for keyword in self.EXECUTION_COMPLEXITY_KEYWORDS if keyword in project_text)
+        keyword_signal = min(1.0, 0.24 + (keyword_hits * 0.08))
+
+        if deadline_hours_remaining is None:
+            deadline_signal = 0.3
+        elif deadline_hours_remaining <= 6:
+            deadline_signal = 1.0
+        elif deadline_hours_remaining <= 24:
+            deadline_signal = 0.78
+        elif deadline_hours_remaining <= 72:
+            deadline_signal = 0.52
+        else:
+            deadline_signal = 0.24
+
+        active_load_ratio = min(1.0, current_active_bids / max(1, max_active_bids))
+        match_friction = max(0.0, min(1.0, 1.0 - float(classification.get("score", 0.0) or 0.0)))
+        capacity_friction = max(0.0, min(1.0, 1.0 - self._normalize_capacity_score(capacity_score)))
+
+        complexity_score = (
+            budget_signal * 0.3
+            + keyword_signal * 0.25
+            + deadline_signal * 0.15
+            + active_load_ratio * 0.1
+            + match_friction * 0.1
+            + capacity_friction * 0.1
+        )
+        return round(max(0.0, min(1.0, complexity_score)), 2)
+
     def _build_strengths(
         self,
         *,
@@ -291,6 +498,7 @@ class OpportunityAnalysisService:
         similar_projects: dict,
         competitiveness_score: float,
         probability_score: float,
+        expected_margin_score: float,
     ) -> list[str]:
         """Highlight the strongest reasons to pursue the bid."""
         strengths: list[str] = []
@@ -298,6 +506,8 @@ class OpportunityAnalysisService:
             strengths.append("업체 자격·지역·역량 기준을 전반적으로 충족합니다.")
         if competitiveness_score >= 0.75:
             strengths.append("추천 투찰가가 비교 기준 대비 경쟁력 있는 구간에 있습니다.")
+        if expected_margin_score >= 0.72:
+            strengths.append("예상 수익성 여력이 비교적 양호한 편입니다.")
         if float(price_prediction.get("confidence_score", 0.0)) >= 0.75:
             strengths.append("가격 예측 신뢰도가 양호해 투찰 범위 판단에 활용할 수 있습니다.")
         if int(similar_projects.get("result_count", 0) or 0) > 0:
@@ -315,6 +525,8 @@ class OpportunityAnalysisService:
         current_active_bids: int,
         max_active_bids: int,
         deadline_hours_remaining: int | None,
+        expected_margin_score: float,
+        execution_complexity_score: float,
     ) -> list[str]:
         """Highlight the main risks or constraints that still need human review."""
         risks: list[str] = []
@@ -329,6 +541,12 @@ class OpportunityAnalysisService:
 
         if float(price_prediction.get("confidence_score", 0.0)) < 0.75:
             risks.append("가격 예측 신뢰도가 아직 보수적 수준입니다.")
+
+        if expected_margin_score <= 0.45:
+            risks.append("추천 투찰가 기준 예상 수익 여력이 낮아 손익 검토가 필요합니다.")
+
+        if execution_complexity_score >= 0.72:
+            risks.append("통합 범위와 일정 압박을 감안할 때 실행 복잡도가 높은 편입니다.")
 
         if current_active_bids >= max_active_bids:
             risks.append("현재 진행 중인 입찰 건수가 한도에 도달해 실행 부담이 큽니다.")

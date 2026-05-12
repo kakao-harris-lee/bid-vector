@@ -375,6 +375,30 @@ def test_predict_price_applies_feedback_calibration_bias():
     assert calibrated["model_version"].endswith("+feedback")
     assert "피드백 보정률 -2.00%" in calibrated["explanation"]
 
+
+def test_predict_price_applies_minimum_bid_rate_guardrail():
+    """Configured bid-rate floors should clamp unrealistically low price scenarios."""
+    prediction = predict_price(
+        budget=100000000.0,
+        category="construction",
+        description="낙찰하한 가드레일 검증 테스트",
+        historical_records=[
+            {"bid_rate": 0.78},
+            {"bid_rate": 0.81},
+            {"bid_rate": 0.82},
+        ],
+    )
+
+    assert prediction["guardrail_applied"] is True
+    assert prediction["guardrail_reason"]
+    assert prediction["floor_bid_rate"] is not None
+    assert prediction["floor_price"] is not None
+    assert prediction["predicted_bid_rate"] >= prediction["floor_bid_rate"]
+    assert prediction["price_range_min"] >= prediction["floor_price"]
+    assert all(item["bid_rate"] >= prediction["floor_bid_rate"] for item in prediction["bid_rate_candidates"])
+    assert prediction["model_version"].endswith("+guardrail")
+    assert "가드레일" in prediction["explanation"]
+
 def test_price_prediction_endpoint_applies_feedback_calibration_from_recent_results(client, test_db):
     """Prediction endpoint should derive a calibration bias from recent linked tender results."""
     client.get("/api/v1/operator/profile")
@@ -457,3 +481,62 @@ def test_price_prediction_endpoint_applies_feedback_calibration_from_recent_resu
     assert data["feedback_calibration"]["applied_adjustment_rate"] < 0
     assert data["predicted_price"] < baseline["predicted_price"]
     assert data["model_version"].endswith("+feedback")
+
+
+def test_price_prediction_endpoint_surfaces_guardrail_metadata(client, test_db):
+    """Prediction endpoint should expose bid-rate floor metadata when guardrails are applied."""
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Construction Guardrail Project",
+            "description": "낙찰하한 검증용 공고",
+            "requirements": "건설 카테고리 예측",
+            "budget_estimate": 100000000.0,
+            "category": "construction",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    test_db.add_all([
+        HistoricalData(
+            notice_number="CONST-GUARD-1",
+            category="construction",
+            base_amount=100000000.0,
+            predicted_price=79000000.0,
+            bid_rate=0.79,
+        ),
+        HistoricalData(
+            notice_number="CONST-GUARD-2",
+            category="construction",
+            base_amount=100000000.0,
+            predicted_price=81000000.0,
+            bid_rate=0.81,
+        ),
+        HistoricalData(
+            notice_number="CONST-GUARD-3",
+            category="construction",
+            base_amount=100000000.0,
+            predicted_price=82000000.0,
+            bid_rate=0.82,
+        ),
+    ])
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/predictions/price",
+        json={
+            "project_id": project_id,
+            "budget_estimate": 100000000.0,
+            "category": "construction",
+            "description": "낙찰하한 검증용 공고",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["guardrail_applied"] is True
+    assert data["floor_bid_rate"] is not None
+    assert data["floor_price"] is not None
+    assert data["predicted_bid_rate"] >= data["floor_bid_rate"]
+    assert data["price_range_min"] >= data["floor_price"]
+    assert data["model_version"].endswith("+guardrail")

@@ -39,7 +39,6 @@ class StrategyMonitoringService:
     ACTIVE_PROJECT_STATUSES = ("open", "re_notice")
     DEFAULT_LIMIT = 10
     DEFAULT_MAX_ACTIVE_BIDS = 3
-    DEFAULT_WORKLOAD_SCORE = 0.0
     DEFAULT_SAME_CATEGORY_ONLY = True
     DEFAULT_SIMILAR_LIMIT = 3
     DEFAULT_MIN_SIMILARITY = 0.15
@@ -74,7 +73,7 @@ class StrategyMonitoringService:
             strategy=strategy,
             high_priority_only=resolved_high_priority_only,
             max_active_bids=self.DEFAULT_MAX_ACTIVE_BIDS,
-            current_workload_score=self.DEFAULT_WORKLOAD_SCORE,
+            current_workload_score=None,
             same_category_only=self.DEFAULT_SAME_CATEGORY_ONLY,
             similar_limit=self.DEFAULT_SIMILAR_LIMIT,
             min_similarity=self.DEFAULT_MIN_SIMILARITY,
@@ -174,7 +173,18 @@ class StrategyMonitoringService:
                         deadline_hours_remaining=refreshed_analysis.get("deadline_hours_remaining"),
                         current_active_bids=int(refreshed_analysis.get("current_active_bids") or 0),
                         max_active_bids=int(refreshed_analysis.get("max_active_bids") or request.max_active_bids),
-                        current_workload_score=float(refreshed_analysis.get("current_workload_score") or request.current_workload_score),
+                        current_workload_score=self._resolve_current_workload_score(
+                            refreshed_analysis,
+                            fallback=request.current_workload_score,
+                        ),
+                        budget_estimate=float(project.budget_estimate or 0.0),
+                        competitiveness_score=self._resolve_competitiveness_score(refreshed_analysis),
+                        expected_margin_score=self._resolve_expected_margin_score(refreshed_analysis),
+                        execution_complexity_score=self._resolve_execution_complexity_score(refreshed_analysis),
+                        workload_source=str(
+                            refreshed_analysis.get("workload_source")
+                            or ("provided" if request.current_workload_score is not None else "auto")
+                        ),
                     ),
                 )
                 is_new_candidate = project.id not in previous_candidate_project_ids
@@ -456,7 +466,7 @@ class StrategyMonitoringService:
         strategy: OperatorStrategy,
         high_priority_only: bool,
         max_active_bids: int,
-        current_workload_score: float,
+        current_workload_score: float | None,
         same_category_only: bool,
         similar_limit: int,
         min_similarity: float,
@@ -514,7 +524,7 @@ class StrategyMonitoringService:
         project: Project,
         *,
         max_active_bids: int,
-        current_workload_score: float,
+        current_workload_score: float | None,
         same_category_only: bool,
         similar_limit: int,
         min_similarity: float,
@@ -684,3 +694,36 @@ class StrategyMonitoringService:
             "continuing_candidates": [current_by_project[project_id] for project_id in continuing_candidate_project_ids],
             "dropped_candidates": [previous_by_project[project_id] for project_id in dropped_candidate_project_ids],
         }
+
+    def _resolve_current_workload_score(self, analysis: dict, *, fallback: float | None) -> float:
+        """Resolve a concrete workload score for persistence, preserving explicit zero values."""
+        analysis_workload = analysis.get("current_workload_score")
+        if analysis_workload is not None:
+            return float(analysis_workload)
+        if fallback is not None:
+            return float(fallback)
+        return 0.0
+
+    def _resolve_competitiveness_score(self, analysis: dict) -> float:
+        """Extract competitiveness safely from an analysis payload for decision persistence."""
+        market_insights = analysis.get("market_insights")
+        if isinstance(market_insights, dict) and market_insights.get("competitiveness_score") is not None:
+            return float(market_insights.get("competitiveness_score") or 0.0)
+        decision = analysis.get("decision")
+        if isinstance(decision, dict) and decision.get("competitiveness_score") is not None:
+            return float(decision.get("competitiveness_score") or 0.0)
+        return 0.5
+
+    def _resolve_expected_margin_score(self, analysis: dict) -> float:
+        """Extract expected-margin metadata from analysis payloads for persistence."""
+        decision = analysis.get("decision")
+        if isinstance(decision, dict) and decision.get("expected_margin_score") is not None:
+            return float(decision.get("expected_margin_score") or 0.0)
+        return 0.5
+
+    def _resolve_execution_complexity_score(self, analysis: dict) -> float:
+        """Extract execution-complexity metadata from analysis payloads for persistence."""
+        decision = analysis.get("decision")
+        if isinstance(decision, dict) and decision.get("execution_complexity_score") is not None:
+            return float(decision.get("execution_complexity_score") or 0.0)
+        return 0.35

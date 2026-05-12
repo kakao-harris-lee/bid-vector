@@ -2,43 +2,45 @@
 
 from __future__ import annotations
 
-import json
-from math import sqrt
 from typing import Any, Dict, Iterable
 
 import numpy as np
 
-_T_CRITICAL_95 = {
-    1: 12.706,
-    2: 4.303,
-    3: 3.182,
-    4: 2.776,
-    5: 2.571,
-    6: 2.447,
-    7: 2.365,
-    8: 2.306,
-    9: 2.262,
-    10: 2.228,
-    11: 2.201,
-    12: 2.179,
-    13: 2.16,
-    14: 2.145,
-    15: 2.131,
-    16: 2.12,
-    17: 2.11,
-    18: 2.101,
-    19: 2.093,
-    20: 2.086,
-    21: 2.08,
-    22: 2.074,
-    23: 2.069,
-    24: 2.064,
-    25: 2.06,
-    26: 2.056,
-    27: 2.052,
-    28: 2.048,
-    29: 2.045,
-    30: 2.042,
+from app.ai.predictors import (
+    BasePricePredictor,
+    EnsembleBidRatePredictor,
+    HistoricalStatisticalPredictor,
+    LSTMBidRatePredictor,
+    PricePredictionContext,
+)
+from app.ai.predictors.historical import clamp_bid_rate
+from app.core.config import settings
+
+_CATEGORY_FLOOR_RATE_ALIASES = {
+    "general-service": "service",
+    "service": "service",
+    "일반용역": "service",
+    "technical-service": "technical-service",
+    "기술용역": "technical-service",
+    "goods": "goods",
+    "물품": "goods",
+    "construction": "construction",
+    "공사": "construction",
+    "software": "software",
+    "소프트웨어": "software",
+}
+
+_PREDICTOR_KEY_ALIASES = {
+    "default": "historical",
+    "historical": "historical",
+    "historical_blend": "historical",
+    "historical_statistical": "historical",
+    "statistical": "historical",
+    "lstm": "lstm",
+    "lstm_sequence": "lstm",
+    "sequence": "lstm",
+    "ensemble": "ensemble",
+    "ensemble_blend": "ensemble",
 }
 
 
@@ -50,250 +52,114 @@ def predict_price(
     agency_name: str | None = None,
     feedback_calibration: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Predict project price using a heuristic baseline plus optional historical bid-rate blending."""
-    heuristic_prediction = _build_heuristic_prediction(budget=budget, category=category, description=description)
-    historical_summary = _summarize_historical_records(historical_records or [], agency_name=agency_name)
-
-    if float(budget or 0.0) <= 0:
-        return _apply_feedback_calibration(heuristic_prediction, feedback_calibration)
-
-    if historical_summary["sample_size"] <= 0:
-        return _apply_feedback_calibration(heuristic_prediction, feedback_calibration)
-
-    prediction = _build_historical_prediction(
+    """Predict project price using the configured predictor stack with safe fallback."""
+    context = PricePredictionContext(
         budget=float(budget or 0.0),
-        heuristic_prediction=heuristic_prediction,
-        historical_summary=historical_summary,
+        category=str(category or "other"),
+        description=str(description or ""),
+        historical_records=tuple(historical_records or ()),
+        agency_name=agency_name,
     )
-    return _apply_feedback_calibration(prediction, feedback_calibration)
+
+    predictor, fallback_reason = _select_predictor(context)
+    prediction, used_predictor, fallback_reason = _run_predictor(
+        context=context,
+        predictor=predictor,
+        fallback_reason=fallback_reason,
+    )
+    prediction = _apply_feedback_calibration(prediction, feedback_calibration)
+    prediction = _apply_prediction_guardrails(
+        prediction,
+        budget=context.budget,
+        category=context.category,
+    )
+    return _attach_predictor_metadata(
+        prediction,
+        predictor=used_predictor,
+        fallback_reason=fallback_reason,
+    )
 
 
-def _build_heuristic_prediction(budget: float, category: str, description: str) -> Dict[str, Any]:
-    """Fallback prediction when no useful historical samples exist."""
-    category_multipliers = {
-        "software": 1.2,
-        "hardware": 1.0,
-        "design": 0.9,
-        "consulting": 1.1,
-        "infrastructure": 1.3,
-        "other": 1.0,
-    }
+def _select_predictor(context: PricePredictionContext) -> tuple[BasePricePredictor, str | None]:
+    """Choose the configured predictor or fall back to the stable baseline."""
+    registry = _build_predictor_registry()
+    preferred_key = _normalize_predictor_key(settings.PRICE_PREDICTION_PREFERRED_PREDICTOR)
+    historical_predictor = registry["historical"]
+    requested_predictor = registry.get(preferred_key)
 
-    normalized_budget = float(budget or 0.0)
-    multiplier = category_multipliers.get((category or "other").lower(), 1.0)
-    complexity_factor = min(len(description or "") / 500, 1.5)
-    predicted_price = normalized_budget * multiplier * (0.8 + complexity_factor)
-    confidence_score = min(0.9 if len(description or "") > 200 else 0.7, 0.95)
+    if requested_predictor is None:
+        return historical_predictor, (
+            f"Unknown predictor preference '{settings.PRICE_PREDICTION_PREFERRED_PREDICTOR}'. "
+            "Falling back to the historical baseline."
+        )
 
-    price_range_min = round(predicted_price * 0.8, 2)
-    price_range_max = round(predicted_price * 1.2, 2)
-    predicted_bid_rate = round(predicted_price / normalized_budget, 4) if normalized_budget > 0 else 0.0
+    availability = requested_predictor.check_availability(context)
+    if availability.available:
+        return requested_predictor, None
+    if requested_predictor.name == historical_predictor.name:
+        return historical_predictor, None
+    return historical_predictor, f"Requested {requested_predictor.name} predictor is unavailable: {availability.reason}"
 
+
+def _build_predictor_registry() -> dict[str, BasePricePredictor]:
+    """Build the in-process predictor registry."""
     return {
-        "predicted_price": round(predicted_price, 2),
-        "price_range_min": price_range_min,
-        "price_range_max": price_range_max,
-        "confidence_score": confidence_score,
-        "model_version": "v1.0",
-        "pricing_mode": "heuristic",
-        "historical_sample_size": 0,
-        "agency_match_sample_size": 0,
-        "predicted_bid_rate": predicted_bid_rate,
-        "bid_rate_candidates": [
-            {
-                "label": "conservative",
-                "bid_rate": round(price_range_min / normalized_budget, 4) if normalized_budget > 0 else 0.0,
-                "predicted_price": price_range_min,
-                "confidence_weight": 0.22,
-            },
-            {
-                "label": "base",
-                "bid_rate": predicted_bid_rate,
-                "predicted_price": round(predicted_price, 2),
-                "confidence_weight": 0.56,
-            },
-            {
-                "label": "aggressive",
-                "bid_rate": round(price_range_max / normalized_budget, 4) if normalized_budget > 0 else 0.0,
-                "predicted_price": price_range_max,
-                "confidence_weight": 0.22,
-            },
-        ],
-        "reserve_price_context": None,
-        "feedback_calibration": None,
-        "explanation": "히스토리컬 데이터가 부족해 카테고리·설명 길이 기반 휴리스틱 시나리오를 사용했습니다.",
+        "historical": HistoricalStatisticalPredictor(),
+        "lstm": LSTMBidRatePredictor(),
+        "ensemble": EnsembleBidRatePredictor(),
     }
 
 
-def _build_historical_prediction(
+def _normalize_predictor_key(value: Any) -> str:
+    """Normalize a predictor preference value into a registry key."""
+    normalized_value = str(value or "historical").strip().lower()
+    return _PREDICTOR_KEY_ALIASES.get(normalized_value, normalized_value)
+
+
+def _run_predictor(
     *,
-    budget: float,
-    heuristic_prediction: Dict[str, Any],
-    historical_summary: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Blend historical bid-rate samples with the heuristic baseline."""
-    sample_size = int(historical_summary["sample_size"])
-    mean_rate = float(historical_summary["mean_bid_rate"])
-    median_rate = float(historical_summary["median_bid_rate"])
-    std_rate = float(historical_summary["std_bid_rate"])
-    agency_match_sample_size = int(historical_summary.get("agency_match_sample_size", 0) or 0)
-    reserve_pattern = historical_summary.get("reserve_price_context")
-    heuristic_rate = float(heuristic_prediction.get("predicted_bid_rate", 0.0) or 0.0)
-
-    if sample_size == 1:
-        std_rate = max(std_rate, abs(mean_rate - heuristic_rate) * 0.5, 0.015)
-
-    t_value = _get_t_critical(sample_size - 1) if sample_size > 1 else _T_CRITICAL_95[1]
-    margin = t_value * (std_rate / sqrt(sample_size)) if sample_size > 1 else std_rate
-
-    if sample_size >= 5:
-        base_rate = (mean_rate * 0.62) + (median_rate * 0.23) + (heuristic_rate * 0.15)
-    elif sample_size >= 2:
-        base_rate = (mean_rate * 0.5) + (median_rate * 0.2) + (heuristic_rate * 0.3)
-    else:
-        base_rate = (mean_rate * 0.45) + (heuristic_rate * 0.55)
-
-    spread = max(std_rate * 0.6, margin * 0.4, 0.01)
-    conservative_rate = _clamp_bid_rate(base_rate - spread)
-    base_rate = _clamp_bid_rate(base_rate)
-    aggressive_rate = _clamp_bid_rate(base_rate + (spread * 0.8))
-
-    candidates = [
-        {
-            "label": "conservative",
-            "bid_rate": round(conservative_rate, 4),
-            "predicted_price": round(budget * conservative_rate, 2),
-            "confidence_weight": 0.24,
-        },
-        {
-            "label": "base",
-            "bid_rate": round(base_rate, 4),
-            "predicted_price": round(budget * base_rate, 2),
-            "confidence_weight": 0.52,
-        },
-        {
-            "label": "aggressive",
-            "bid_rate": round(aggressive_rate, 4),
-            "predicted_price": round(budget * aggressive_rate, 2),
-            "confidence_weight": 0.24,
-        },
-    ]
-
-    confidence_score = _estimate_historical_confidence(
-        sample_size=sample_size,
-        std_rate=std_rate,
-        margin=margin,
-    )
-
-    return {
-        "predicted_price": round(budget * base_rate, 2),
-        "price_range_min": min(candidate["predicted_price"] for candidate in candidates),
-        "price_range_max": max(candidate["predicted_price"] for candidate in candidates),
-        "confidence_score": confidence_score,
-        "model_version": "v1.1-historical",
-        "pricing_mode": "historical_blend",
-        "historical_sample_size": sample_size,
-        "agency_match_sample_size": agency_match_sample_size,
-        "predicted_bid_rate": round(base_rate, 4),
-        "bid_rate_candidates": candidates,
-        "reserve_price_context": reserve_pattern,
-        "feedback_calibration": None,
-        "explanation": _build_historical_explanation(
-            sample_size=sample_size,
-            base_rate=base_rate,
-            agency_match_sample_size=agency_match_sample_size,
-            reserve_pattern=reserve_pattern,
-        ),
-    }
+    context: PricePredictionContext,
+    predictor: BasePricePredictor,
+    fallback_reason: str | None,
+) -> tuple[dict[str, Any], BasePricePredictor, str | None]:
+    """Run the selected predictor and recover to the historical baseline on failure."""
+    try:
+        return predictor.predict(context), predictor, fallback_reason
+    except Exception as exc:
+        historical_predictor = HistoricalStatisticalPredictor()
+        if predictor.name == historical_predictor.name:
+            raise
+        merged_reason = _merge_fallback_reason(
+            fallback_reason,
+            f"Requested {predictor.name} predictor failed during inference: {exc}",
+        )
+        return historical_predictor.predict(context), historical_predictor, merged_reason
 
 
-def _summarize_historical_records(historical_records: Iterable[object], *, agency_name: str | None = None) -> Dict[str, Any]:
-    """Extract usable bid-rate samples from historical records."""
-    bid_rates: list[float] = []
-    weights: list[float] = []
-    agency_match_sample_size = 0
-    reserve_span_rates: list[float] = []
-    selected_numbers: list[int] = []
-    normalized_target_agency = _normalize_agency_name(agency_name)
-
-    for record in historical_records:
-        raw_bid_rate = _read_record_value(record, "bid_rate")
-        bid_rate = float(raw_bid_rate or 0.0)
-        if bid_rate <= 0:
-            predicted_price = float(_read_record_value(record, "predicted_price") or 0.0)
-            base_amount = float(_read_record_value(record, "base_amount") or 0.0)
-            if predicted_price > 0 and base_amount > 0:
-                bid_rate = predicted_price / base_amount
-
-        if 0.5 <= bid_rate <= 1.5:
-            bid_rates.append(bid_rate)
-            weight, matched_agency = _resolve_record_weight(record, normalized_target_agency)
-            weights.append(weight)
-            if matched_agency:
-                agency_match_sample_size += 1
-
-        reserve_prices = _coerce_numeric_list(_read_record_value(record, "reserve_prices"))
-        base_amount = float(_read_record_value(record, "base_amount") or 0.0)
-        if len(reserve_prices) >= 2 and base_amount > 0:
-            reserve_span_rates.append((max(reserve_prices) - min(reserve_prices)) / base_amount)
-
-        selected_numbers.extend(_coerce_integer_list(_read_record_value(record, "selected_numbers")))
-
-    if not bid_rates:
-        return {
-            "sample_size": 0,
-            "mean_bid_rate": 0.0,
-            "median_bid_rate": 0.0,
-            "std_bid_rate": 0.0,
-            "agency_match_sample_size": 0,
-            "reserve_price_context": None,
-        }
-
-    weighted_mean = float(np.average(bid_rates, weights=weights)) if weights else float(np.mean(bid_rates))
-    weighted_median = _weighted_median(bid_rates, weights) if weights else float(np.median(bid_rates))
-    weighted_std = _weighted_std(bid_rates, weights, weighted_mean) if len(bid_rates) > 1 else 0.0
-
-    return {
-        "sample_size": len(bid_rates),
-        "mean_bid_rate": weighted_mean,
-        "median_bid_rate": weighted_median,
-        "std_bid_rate": weighted_std,
-        "agency_match_sample_size": agency_match_sample_size,
-        "reserve_price_context": _build_reserve_pattern_context(
-            reserve_span_rates=reserve_span_rates,
-            selected_numbers=selected_numbers,
-        ),
-    }
+def _merge_fallback_reason(existing_reason: str | None, new_reason: str) -> str:
+    """Combine fallback reasons without repeating the same message."""
+    cleaned_existing = str(existing_reason or "").strip()
+    cleaned_new = str(new_reason or "").strip()
+    if not cleaned_existing:
+        return cleaned_new
+    if not cleaned_new or cleaned_new in cleaned_existing:
+        return cleaned_existing
+    return f"{cleaned_existing} {cleaned_new}"
 
 
-def _estimate_historical_confidence(*, sample_size: int, std_rate: float, margin: float) -> float:
-    """Estimate confidence from sample depth and rate stability."""
-    sample_score = min(sample_size / 12, 1.0)
-    stability_score = max(0.0, 1.0 - min(std_rate / 0.06, 1.0))
-    margin_penalty = min(margin / 0.08, 1.0) * 0.07
-    confidence = 0.54 + (sample_score * 0.2) + (stability_score * 0.18) - margin_penalty
-    return round(max(0.45, min(0.95, confidence)), 2)
-
-
-def _read_record_value(record: object, key: str) -> Any:
-    """Read values from either ORM objects or dictionaries."""
-    if isinstance(record, dict):
-        return record.get(key)
-    return getattr(record, key, None)
-
-
-def _clamp_bid_rate(value: float) -> float:
-    """Keep scenario bid rates inside a realistic bidding band."""
-    return max(0.7, min(1.4, float(value)))
-
-
-def _get_t_critical(degrees_of_freedom: int) -> float:
-    """Return an approximate 95% t critical value without requiring SciPy."""
-    if degrees_of_freedom <= 1:
-        return _T_CRITICAL_95[1]
-    if degrees_of_freedom >= 30:
-        return _T_CRITICAL_95[30]
-    return _T_CRITICAL_95[degrees_of_freedom]
+def _attach_predictor_metadata(
+    prediction: dict[str, Any],
+    *,
+    predictor: BasePricePredictor,
+    fallback_reason: str | None,
+) -> dict[str, Any]:
+    """Attach predictor selection metadata to a normalized payload."""
+    annotated_prediction = dict(prediction)
+    annotated_prediction["predictor_name"] = predictor.name
+    annotated_prediction["predictor_family"] = predictor.family
+    annotated_prediction["fallback_reason"] = fallback_reason
+    annotated_prediction["training_window_size"] = int(annotated_prediction.get("historical_sample_size", 0) or 0)
+    return annotated_prediction
 
 
 def _apply_feedback_calibration(prediction: Dict[str, Any], feedback_calibration: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -314,7 +180,7 @@ def _apply_feedback_calibration(prediction: Dict[str, Any], feedback_calibration
     factor = max(0.5, 1.0 + adjustment_rate)
     calibrated_candidates: list[dict[str, Any]] = []
     for candidate in prediction.get("bid_rate_candidates", []):
-        calibrated_bid_rate = _clamp_bid_rate(float(candidate.get("bid_rate", 0.0) or 0.0) * factor)
+        calibrated_bid_rate = clamp_bid_rate(float(candidate.get("bid_rate", 0.0) or 0.0) * factor)
         calibrated_candidates.append({
             **candidate,
             "bid_rate": round(calibrated_bid_rate, 4),
@@ -346,142 +212,118 @@ def _apply_feedback_calibration(prediction: Dict[str, Any], feedback_calibration
     return calibrated_prediction
 
 
-def _resolve_record_weight(record: object, normalized_target_agency: str) -> tuple[float, bool]:
-    """Assign a higher weight to same-agency historical rows."""
-    if not normalized_target_agency:
-        return 1.0, False
+def _apply_prediction_guardrails(prediction: Dict[str, Any], *, budget: float, category: str | None) -> Dict[str, Any]:
+    """Apply minimum bid-rate guardrails after all statistical adjustments."""
+    guarded_prediction = dict(prediction)
+    floor_bid_rate = _resolve_floor_bid_rate(category)
+    floor_price = round(float(budget or 0.0) * floor_bid_rate, 2) if floor_bid_rate is not None and budget > 0 else None
 
-    record_agency = _normalize_agency_name(_read_record_value(record, "agency_name"))
-    if not record_agency:
-        return 1.0, False
-    if record_agency == normalized_target_agency:
-        return 3.0, True
-    if normalized_target_agency in record_agency or record_agency in normalized_target_agency:
-        return 1.8, False
-    return 1.0, False
+    guarded_prediction["guardrail_applied"] = False
+    guarded_prediction["guardrail_reason"] = None
+    guarded_prediction["floor_bid_rate"] = round(floor_bid_rate, 4) if floor_bid_rate is not None else None
+    guarded_prediction["floor_price"] = floor_price
 
+    if floor_bid_rate is None or budget <= 0:
+        return guarded_prediction
 
-def _normalize_agency_name(value: Any) -> str:
-    """Normalize agency names for fuzzy equality checks."""
-    return "".join(str(value or "").strip().lower().split())
+    guarded_candidates: list[dict[str, Any]] = []
+    applied_labels: list[str] = []
+    for candidate in prediction.get("bid_rate_candidates", []):
+        label = str(candidate.get("label") or "base")
+        original_bid_rate = float(candidate.get("bid_rate", 0.0) or 0.0)
+        guarded_bid_rate = max(original_bid_rate, floor_bid_rate)
+        if guarded_bid_rate > original_bid_rate + 1e-9:
+            applied_labels.append(label)
+        guarded_candidates.append({
+            **candidate,
+            "bid_rate": round(guarded_bid_rate, 4),
+            "predicted_price": round(float(budget) * guarded_bid_rate, 2),
+        })
 
+    if guarded_candidates:
+        base_candidate = next(
+            (candidate for candidate in guarded_candidates if candidate.get("label") == "base"),
+            guarded_candidates[0],
+        )
+        guarded_prediction["bid_rate_candidates"] = guarded_candidates
+        guarded_prediction["predicted_bid_rate"] = round(float(base_candidate.get("bid_rate", 0.0) or 0.0), 4)
+        guarded_prediction["predicted_price"] = round(float(base_candidate.get("predicted_price", 0.0) or 0.0), 2)
+        guarded_prediction["price_range_min"] = min(candidate["predicted_price"] for candidate in guarded_candidates)
+        guarded_prediction["price_range_max"] = max(candidate["predicted_price"] for candidate in guarded_candidates)
+    else:
+        original_bid_rate = float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
+        guarded_bid_rate = max(original_bid_rate, floor_bid_rate)
+        if guarded_bid_rate > original_bid_rate + 1e-9:
+            applied_labels.append("base")
+        guarded_prediction["predicted_bid_rate"] = round(guarded_bid_rate, 4)
+        guarded_prediction["predicted_price"] = round(float(budget) * guarded_bid_rate, 2)
+        guarded_prediction["price_range_min"] = max(float(prediction.get("price_range_min", 0.0) or 0.0), floor_price or 0.0)
+        guarded_prediction["price_range_max"] = max(float(prediction.get("price_range_max", 0.0) or 0.0), guarded_prediction["predicted_price"])
 
-def _weighted_median(values: list[float], weights: list[float]) -> float:
-    """Compute a weighted median for historical bid rates."""
-    if not values:
-        return 0.0
-    if not weights:
-        return float(np.median(values))
+    if not applied_labels:
+        return guarded_prediction
 
-    sorted_pairs = sorted(zip(values, weights), key=lambda item: item[0])
-    cumulative_weight = 0.0
-    total_weight = float(sum(weights))
-    threshold = total_weight / 2
-    for value, weight in sorted_pairs:
-        cumulative_weight += float(weight)
-        if cumulative_weight >= threshold:
-            return float(value)
-    return float(sorted_pairs[-1][0])
-
-
-def _weighted_std(values: list[float], weights: list[float], mean_value: float) -> float:
-    """Compute a weighted standard deviation."""
-    if not values:
-        return 0.0
-    if not weights:
-        return float(np.std(values))
-    variance = np.average((np.array(values) - mean_value) ** 2, weights=np.array(weights))
-    return float(sqrt(float(variance)))
-
-
-def _coerce_numeric_list(raw_value: Any) -> list[float]:
-    """Coerce a JSON string or list of numbers into floats."""
-    parsed = _coerce_sequence(raw_value)
-    numbers: list[float] = []
-    for item in parsed:
-        try:
-            numbers.append(float(item))
-        except (TypeError, ValueError):
-            continue
-    return numbers
-
-
-def _coerce_integer_list(raw_value: Any) -> list[int]:
-    """Coerce a JSON string or list of numbers into integers."""
-    parsed = _coerce_sequence(raw_value)
-    numbers: list[int] = []
-    for item in parsed:
-        try:
-            numbers.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return numbers
+    unique_labels = list(dict.fromkeys(applied_labels))
+    guardrail_reason = (
+        f"업종별 최소 투찰률 {floor_bid_rate:.2%} 가드레일을 적용해 "
+        f"{', '.join(unique_labels)} 시나리오를 보정했습니다."
+    )
+    guarded_prediction["guardrail_applied"] = True
+    guarded_prediction["guardrail_reason"] = guardrail_reason
+    guarded_prediction["model_version"] = _append_model_version_suffix(
+        str(guarded_prediction.get("model_version", "v1.0")),
+        "guardrail",
+    )
+    guarded_prediction["explanation"] = _append_explanation_note(
+        str(guarded_prediction.get("explanation", "") or ""),
+        guardrail_reason,
+    )
+    return guarded_prediction
 
 
-def _coerce_sequence(raw_value: Any) -> list[Any]:
-    """Parse list-like values coming from ORM rows or dictionaries."""
-    if raw_value is None:
-        return []
-    if isinstance(raw_value, list):
-        return raw_value
-    if isinstance(raw_value, str):
-        try:
-            parsed = json.loads(raw_value)
-        except json.JSONDecodeError:
-            return []
-        return parsed if isinstance(parsed, list) else []
-    return []
+def _resolve_floor_bid_rate(category: str | None) -> float | None:
+    """Resolve a configured minimum bid-rate floor for the given category."""
+    normalized_category = _normalize_category_key(category)
+    configured_floor_rates = settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES or {}
+    for raw_category, raw_floor_rate in configured_floor_rates.items():
+        if _normalize_category_key(raw_category) == normalized_category:
+            return max(0.0, float(raw_floor_rate or 0.0))
+
+    default_floor_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MINIMUM_BID_RATE or 0.0))
+    return default_floor_rate or None
 
 
-def _build_reserve_pattern_context(*, reserve_span_rates: list[float], selected_numbers: list[int]) -> Dict[str, Any] | None:
-    """Summarize reserve price and selected-number patterns from historical openings."""
-    sample_count = len(reserve_span_rates)
-    if sample_count == 0 and not selected_numbers:
-        return None
-
-    number_counts: dict[int, int] = {}
-    for number in selected_numbers:
-        if number < 0:
-            continue
-        number_counts[number] = number_counts.get(number, 0) + 1
-
-    frequent_selected_numbers = [
-        number
-        for number, _count in sorted(number_counts.items(), key=lambda item: (-item[1], item[0]))[:4]
-    ]
-
-    return {
-        "sample_count": sample_count,
-        "average_reserve_span_rate": round(float(np.mean(reserve_span_rates)), 4) if reserve_span_rates else 0.0,
-        "average_selected_number": round(float(np.mean(selected_numbers)), 2) if selected_numbers else 0.0,
-        "frequent_selected_numbers": frequent_selected_numbers,
-    }
+def _normalize_category_key(value: Any) -> str:
+    """Normalize category labels for configuration lookups."""
+    normalized_value = str(value or "").strip().lower()
+    return _CATEGORY_FLOOR_RATE_ALIASES.get(normalized_value, normalized_value)
 
 
-def _build_historical_explanation(
-    *,
-    sample_size: int,
-    base_rate: float,
-    agency_match_sample_size: int,
-    reserve_pattern: Dict[str, Any] | None,
-) -> str:
-    """Build a natural-language summary for weighted historical price prediction."""
-    details: list[str] = []
-    if agency_match_sample_size > 0:
-        details.append(f"동일 기관 이력 {agency_match_sample_size}건에 추가 가중치를 적용했고")
-    reserve_sample_count = int(reserve_pattern.get("sample_count", 0) or 0) if reserve_pattern else 0
-    if reserve_sample_count > 0:
-        details.append(f"예비가격 패턴 {reserve_sample_count}건도 함께 참고했습니다")
+def _append_model_version_suffix(model_version: str, suffix: str) -> str:
+    """Append a model-version suffix once without duplicating it."""
+    token = f"+{suffix}"
+    if token in model_version:
+        return model_version
+    if suffix == "guardrail" and model_version.endswith("+feedback"):
+        return f"{model_version[:-len('+feedback')]}{token}+feedback"
+    return f"{model_version}{token}"
 
-    detail_text = f" {' '.join(details)}" if details else ""
-    return (
-        f"최근 히스토리컬 데이터 {sample_size}건의 사정률 분포를 반영해 기준 사정률 {base_rate:.4f}와 "
-        f"보수/기준/공격 시나리오를 계산했습니다.{detail_text}"
-    ).strip()
+
+def _append_explanation_note(explanation: str, note: str) -> str:
+    """Append a readable note to an explanation sentence."""
+    cleaned_explanation = str(explanation or "").strip()
+    cleaned_note = str(note or "").strip()
+    if not cleaned_note:
+        return cleaned_explanation
+    if not cleaned_explanation:
+        return cleaned_note
+    if cleaned_explanation.endswith("."):
+        return f"{cleaned_explanation} {cleaned_note}"
+    return f"{cleaned_explanation} {cleaned_note}"
 
 
 def get_price_insights(historical_bids: list) -> Dict:
-    """Get market insights from historical bid data"""
+    """Get market insights from historical bid data."""
     if not historical_bids:
         return {"average_bid": 0, "median_bid": 0, "std_dev": 0}
 

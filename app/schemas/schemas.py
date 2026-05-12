@@ -1,12 +1,13 @@
 """Pydantic schemas for request/response"""
-from datetime import datetime
+import json
+from datetime import date, datetime
 from typing import List, Literal, Optional
 
 try:  # pragma: no cover - optional dependency fallback
     import email_validator  # noqa: F401
-    from pydantic import BaseModel, ConfigDict, EmailStr, Field
+    from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 except ImportError:  # pragma: no cover - exercised in lightweight test environments
-    from pydantic import BaseModel, ConfigDict, Field
+    from pydantic import BaseModel, ConfigDict, Field, field_validator
 
     EmailStr = str
 
@@ -92,6 +93,8 @@ class OperatorStrategyUpdate(BaseModel):
     max_budget_estimate: Optional[float] = Field(default=None, ge=0.0)
     minimum_match_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     minimum_probability_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     notify_only_high_priority: Optional[bool] = None
     max_recommended_candidates: Optional[int] = Field(default=None, ge=1, le=100)
 
@@ -107,6 +110,8 @@ class OperatorStrategyResponse(BaseModel):
     max_budget_estimate: float
     minimum_match_score: float = Field(ge=0.0, le=1.0)
     minimum_probability_score: float = Field(ge=0.0, le=1.0)
+    bid_now_threshold: float = Field(ge=0.0, le=1.0)
+    review_threshold: float = Field(ge=0.0, le=1.0)
     notify_only_high_priority: bool
     max_recommended_candidates: int = Field(ge=1, le=100)
     strategy_configured: bool
@@ -139,7 +144,7 @@ class OperatorStrategyMonitorRequest(BaseModel):
     limit: Optional[int] = Field(default=None, ge=1, le=100)
     high_priority_only: Optional[bool] = None
     max_active_bids: int = Field(default=3, ge=1)
-    current_workload_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    current_workload_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     same_category_only: bool = True
     similar_limit: int = Field(default=3, ge=1, le=10)
     min_similarity: float = Field(default=0.15, ge=0.0, le=1.0)
@@ -358,6 +363,38 @@ class ProjectEmbeddingBatchRefreshTaskStatusResponse(BaseModel):
     result: Optional[ProjectEmbeddingBatchRefreshResponse] = None
 
 
+class MLTaskResponse(BaseModel):
+    task_id: str
+    task_name: str
+    queue: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    detail: str
+    poll_url: str
+
+
+class MLTaskStatusResponse(BaseModel):
+    task_id: str
+    task_name: str
+    queue: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    raw_status: str
+    ready: bool
+    successful: bool
+    detail: str
+    error: Optional[str] = None
+    result: Optional[dict] = None
+
+
+class PricePredictionTrainingRequest(BaseModel):
+    release_tag: Optional[str] = None
+    category: Optional[str] = None
+    agency_name: Optional[str] = None
+    limit: int = Field(default=500, ge=1, le=5000)
+    notes: Optional[str] = None
+    create_manifest: bool = True
+    publish_remote: bool = True
+
+
 # Bid Schemas
 class BidBase(BaseModel):
     bid_amount: float
@@ -423,6 +460,10 @@ class PricePredictionResponse(BaseModel):
     price_range_max: float
     confidence_score: float
     model_version: str
+    predictor_name: str = "historical_statistical"
+    predictor_family: str = "statistical"
+    fallback_reason: Optional[str] = None
+    training_window_size: int = Field(default=0, ge=0)
     pricing_mode: Literal["historical_blend", "heuristic"] = "heuristic"
     historical_sample_size: int = Field(default=0, ge=0)
     agency_match_sample_size: int = Field(default=0, ge=0)
@@ -430,6 +471,10 @@ class PricePredictionResponse(BaseModel):
     bid_rate_candidates: List[PricePredictionScenario] = Field(default_factory=list)
     reserve_price_context: Optional[PricePredictionReservePattern] = None
     feedback_calibration: Optional[PricePredictionFeedbackCalibration] = None
+    guardrail_applied: bool = False
+    guardrail_reason: Optional[str] = None
+    floor_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    floor_price: Optional[float] = Field(default=None, ge=0.0)
     explanation: str = ""
 
 
@@ -494,6 +539,341 @@ class OperatorStatsResponse(BaseModel):
     bids_count: int
     requested_user_id: Optional[int] = None
     mode: Literal["single_operator"] = "single_operator"
+
+
+class DecisionInsightsRecentItem(BaseModel):
+    decision_record_id: int
+    project_id: int
+    action: Literal["bid_now", "review", "skip"]
+    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    priority_score: float = Field(ge=0.0, le=1.0)
+    expected_margin_score: float = Field(ge=0.0, le=1.0)
+    execution_complexity_score: float = Field(ge=0.0, le=1.0)
+    competitiveness_score: float = Field(ge=0.0, le=1.0)
+    budget_capture_score: float = Field(ge=0.0, le=1.0)
+    updated_at: datetime
+
+
+class DecisionInsightsResponse(BaseModel):
+    operator_id: int
+    period_days: int
+    result_count: int = Field(ge=0)
+    high_priority_count: int = Field(ge=0)
+    bid_now_count: int = Field(ge=0)
+    review_count: int = Field(ge=0)
+    skip_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    auto_workload_count: int = Field(ge=0)
+    provided_workload_count: int = Field(ge=0)
+    average_priority_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_expected_margin_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_execution_complexity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_competitiveness_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_budget_capture_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    status_breakdown: dict[str, int] = Field(default_factory=dict)
+    action_breakdown: dict[str, int] = Field(default_factory=dict)
+    recent_decisions: List[DecisionInsightsRecentItem] = Field(default_factory=list)
+
+
+class DecisionFunnelRecentSubmissionItem(BaseModel):
+    decision_record_id: int
+    project_id: int
+    project_title: str
+    initial_action: Literal["bid_now", "review", "skip"]
+    initial_decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    current_action: Literal["bid_now", "review", "skip"]
+    current_decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    priority_score: float = Field(ge=0.0, le=1.0)
+    recommended_amount: float
+    first_decided_at: Optional[datetime] = None
+    submitted_at: datetime
+    hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+
+
+class DecisionFunnelTrendItem(BaseModel):
+    bucket_start: date
+    bucket_end: date
+    decision_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    active_pending_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    entry_bid_now_count: int = Field(ge=0)
+    entry_review_count: int = Field(ge=0)
+    entry_skip_count: int = Field(ge=0)
+    submitted_after_bid_now_count: int = Field(ge=0)
+    submitted_after_review_count: int = Field(ge=0)
+    submitted_after_skip_count: int = Field(ge=0)
+    submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_priority_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_expected_margin_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+
+
+class DecisionFunnelBreakdownItem(BaseModel):
+    segment: str
+    decision_count: int = Field(ge=0)
+    project_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    active_pending_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    entry_bid_now_count: int = Field(ge=0)
+    entry_review_count: int = Field(ge=0)
+    entry_skip_count: int = Field(ge=0)
+    submitted_after_bid_now_count: int = Field(ge=0)
+    submitted_after_review_count: int = Field(ge=0)
+    submitted_after_skip_count: int = Field(ge=0)
+    submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_priority_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_expected_margin_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+
+
+class DecisionFunnelPeriodSummary(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    decision_count: int = Field(ge=0)
+    project_count: int = Field(ge=0)
+    active_pending_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    entry_bid_now_count: int = Field(ge=0)
+    entry_review_count: int = Field(ge=0)
+    entry_skip_count: int = Field(ge=0)
+    direct_submitted_count: int = Field(ge=0)
+    submitted_after_bid_now_count: int = Field(ge=0)
+    submitted_after_review_count: int = Field(ge=0)
+    submitted_after_skip_count: int = Field(ge=0)
+    overall_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    workflow_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+
+
+class DecisionFunnelComparisonSummary(BaseModel):
+    current_period_start: datetime
+    current_period_end: datetime
+    previous_period_start: datetime
+    previous_period_end: datetime
+    decision_count_delta: int
+    project_count_delta: int
+    submitted_count_delta: int
+    active_pending_count_delta: int
+    skipped_count_delta: int
+    overall_submission_rate_delta: Optional[float] = None
+    workflow_submission_rate_delta: Optional[float] = None
+    bid_now_submission_rate_delta: Optional[float] = None
+    review_submission_rate_delta: Optional[float] = None
+    average_hours_to_submit_delta: Optional[float] = None
+
+
+class DecisionRecommendationExperiment(BaseModel):
+    experiment_key: str
+    recommendation_key: str
+    priority_rank: int = Field(ge=1, le=20)
+    title: str
+    hypothesis: str
+    suggested_change: str
+    target_metric: str
+    expected_direction: Literal["increase", "decrease", "stabilize"]
+    success_criteria: str
+    guardrail_metric: str
+    minimum_decision_sample: int = Field(ge=1)
+    duration_days: int = Field(ge=1, le=30)
+    rollback_trigger: str
+
+
+class DecisionRecommendationItem(BaseModel):
+    key: str
+    severity: Literal["info", "watch", "action"]
+    title: str
+    summary: str
+    suggested_adjustment: Optional[str] = None
+    supporting_metrics: dict = Field(default_factory=dict)
+    experiment_plan: Optional[DecisionRecommendationExperiment] = None
+
+
+class DecisionRecommendationResponse(BaseModel):
+    operator_id: int
+    period_days: int
+    decision_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    active_pending_count: int = Field(ge=0)
+    overall_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    workflow_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    recommendation_count: int = Field(ge=0)
+    recommendation_limit_applied: int = Field(default=5, ge=1, le=20)
+    experiment_count: int = Field(ge=0)
+    headline: str
+    comparison: DecisionFunnelComparisonSummary
+    recommended_next_experiment: Optional[DecisionRecommendationExperiment] = None
+    experiments: List[DecisionRecommendationExperiment] = Field(default_factory=list)
+    recommendations: List[DecisionRecommendationItem] = Field(default_factory=list)
+
+
+class DecisionExperimentMetricSnapshot(BaseModel):
+    window_start: datetime
+    window_end: datetime
+    decision_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    active_pending_count: int = Field(ge=0)
+    overall_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    workflow_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    auto_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    provided_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    best_category: Optional[str] = None
+    best_category_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    worst_category: Optional[str] = None
+    worst_category_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class DecisionExperimentEvaluation(BaseModel):
+    evaluated_at: datetime
+    sample_size: int = Field(ge=0)
+    minimum_sample_reached: bool
+    target_metric: str
+    baseline_target_value: Optional[float] = None
+    current_target_value: Optional[float] = None
+    target_delta: Optional[float] = None
+    guardrail_metric: str
+    baseline_guardrail_value: Optional[float] = None
+    current_guardrail_value: Optional[float] = None
+    guardrail_delta: Optional[float] = None
+    outcome: Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
+    recommended_action: Literal["collect_more_data", "continue", "complete", "rollback"]
+    summary: str
+    current_summary: DecisionExperimentMetricSnapshot
+
+
+class DecisionExperimentRunCreateRequest(DecisionRecommendationExperiment):
+    baseline_days: int = Field(default=14, ge=1, le=90)
+    started_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class DecisionExperimentRunUpdateRequest(BaseModel):
+    status: Optional[Literal["planned", "running", "completed", "rolled_back"]] = None
+    outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    replace_notes: Optional[str] = None
+    append_note: Optional[str] = None
+    ended_at: Optional[datetime] = None
+
+
+class DecisionStrategyThresholdSnapshot(BaseModel):
+    bid_now_threshold: float = Field(ge=0.0, le=1.0)
+    review_threshold: float = Field(ge=0.0, le=1.0)
+
+
+class DecisionThresholdAdjustmentItem(BaseModel):
+    parameter: Literal["bid_now_threshold", "review_threshold"]
+    label: str
+    direction: Literal["increase", "decrease"]
+    previous_value: float = Field(ge=0.0, le=1.0)
+    suggested_value: float = Field(ge=0.0, le=1.0)
+    delta: float
+    rationale: str
+
+
+class DecisionExperimentThresholdApplyRequest(BaseModel):
+    dry_run: bool = False
+    force: bool = False
+    append_note: Optional[str] = None
+
+
+class DecisionExperimentThresholdApplyResponse(BaseModel):
+    operator_id: int
+    run_id: int
+    experiment_key: str
+    recommendation_key: str
+    applied: bool
+    dry_run: bool
+    latest_outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    threshold_updates: List[DecisionThresholdAdjustmentItem] = Field(default_factory=list)
+    strategy_thresholds: DecisionStrategyThresholdSnapshot
+    detail: str
+
+
+class DecisionExperimentRunResponse(BaseModel):
+    id: int
+    operator_id: int
+    experiment_key: str
+    recommendation_key: str
+    status: Literal["planned", "running", "completed", "rolled_back", "failed"]
+    outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    priority_rank: int = Field(ge=1, le=20)
+    title: str
+    hypothesis: str
+    suggested_change: str
+    target_metric: str
+    expected_direction: Literal["increase", "decrease", "stabilize"]
+    success_criteria: str
+    guardrail_metric: str
+    minimum_decision_sample: int = Field(ge=1)
+    duration_days: int = Field(ge=1, le=30)
+    baseline_days: int = Field(ge=1, le=90)
+    rollback_trigger: str
+    notes: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    last_evaluated_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    latest_evaluation: Optional[DecisionExperimentEvaluation] = None
+
+
+class DecisionExperimentRunListResponse(BaseModel):
+    operator_id: int
+    result_count: int = Field(ge=0)
+    active_count: int = Field(ge=0)
+    completed_count: int = Field(ge=0)
+    rolled_back_count: int = Field(ge=0)
+    runs: List[DecisionExperimentRunResponse] = Field(default_factory=list)
+
+
+class DecisionExperimentRunDetailResponse(BaseModel):
+    run: DecisionExperimentRunResponse
+    baseline_summary: DecisionExperimentMetricSnapshot
+
+
+class DecisionFunnelResponse(BaseModel):
+    operator_id: int
+    period_days: int
+    decision_count: int = Field(ge=0)
+    project_count: int = Field(ge=0)
+    active_pending_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    entry_bid_now_count: int = Field(ge=0)
+    entry_review_count: int = Field(ge=0)
+    entry_skip_count: int = Field(ge=0)
+    direct_submitted_count: int = Field(ge=0)
+    submitted_after_bid_now_count: int = Field(ge=0)
+    submitted_after_review_count: int = Field(ge=0)
+    submitted_after_skip_count: int = Field(ge=0)
+    overall_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    workflow_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+    current_period_start: datetime
+    current_period_end: datetime
+    previous_period: DecisionFunnelPeriodSummary
+    comparison: DecisionFunnelComparisonSummary
+    trend_bucket_days: int = Field(default=7, ge=1, le=30)
+    breakdown_limit_applied: int = Field(default=5, ge=1, le=20)
+    trend: List[DecisionFunnelTrendItem] = Field(default_factory=list)
+    category_breakdown: List[DecisionFunnelBreakdownItem] = Field(default_factory=list)
+    workload_source_breakdown: List[DecisionFunnelBreakdownItem] = Field(default_factory=list)
+    agency_breakdown: List[DecisionFunnelBreakdownItem] = Field(default_factory=list)
+    recent_submissions: List[DecisionFunnelRecentSubmissionItem] = Field(default_factory=list)
 
 
 class PredictionFeedbackItem(BaseModel):
@@ -619,7 +999,7 @@ class OpportunityAnalysisRequest(BaseModel):
         description="Optional what-if override. When omitted, the service counts active bid decisions from the DB.",
     )
     max_active_bids: int = Field(default=3, ge=1)
-    current_workload_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    current_workload_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     same_category_only: bool = True
     similar_limit: int = Field(default=3, ge=1, le=10)
     min_similarity: float = Field(default=0.15, ge=0.0, le=1.0)
@@ -635,6 +1015,27 @@ class BidDecisionRequest(BaseModel):
     current_active_bids: int = Field(default=0, ge=0)
     max_active_bids: int = Field(default=3, ge=1)
     current_workload_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    budget_estimate: Optional[float] = Field(default=None, ge=0.0)
+    competitiveness_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    expected_margin_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    execution_complexity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    workload_source: Literal["provided", "auto"] = "provided"
+
+
+class BidDecisionScoreBreakdown(BaseModel):
+    probability_signal: float = Field(default=0.0, ge=0.0, le=1.0)
+    matched_signal: float = Field(default=0.0, ge=0.0, le=1.0)
+    urgency_signal: float = Field(default=0.0, ge=0.0, le=1.0)
+    competitiveness_signal: float = Field(default=0.5, ge=0.0, le=1.0)
+    budget_capture_signal: float = Field(default=0.5, ge=0.0, le=1.0)
+    expected_margin_signal: float = Field(default=0.5, ge=0.0, le=1.0)
+    execution_complexity_signal: float = Field(default=0.35, ge=0.0, le=1.0)
+    active_load_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
+    workload_score_used: float = Field(default=0.0, ge=0.0, le=1.0)
+    opportunity_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    load_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
+    execution_complexity_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
+    total_penalty: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class BidDecisionResponse(BaseModel):
@@ -644,6 +1045,13 @@ class BidDecisionResponse(BaseModel):
     priority_score: float
     recommended_amount: float
     probability_score: float
+    urgency_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    competitiveness_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    budget_capture_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    expected_margin_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    execution_complexity_score: float = Field(default=0.35, ge=0.0, le=1.0)
+    workload_source: Literal["provided", "auto"] = "provided"
+    score_breakdown: BidDecisionScoreBreakdown = Field(default_factory=BidDecisionScoreBreakdown)
     reasoning: str
 
 
@@ -668,6 +1076,7 @@ class OpportunityAnalysisResponse(BaseModel):
     current_active_bids: int = Field(ge=0)
     max_active_bids: int = Field(ge=1)
     current_workload_score: float = Field(ge=0.0, le=1.0)
+    workload_source: Literal["provided", "auto"] = "provided"
     analysis_summary: str
     strengths: List[str] = Field(default_factory=list)
     risk_flags: List[str] = Field(default_factory=list)
@@ -690,7 +1099,15 @@ class BidDecisionRecordResponse(BaseModel):
     pursue_bid: bool
     action: Literal["bid_now", "review", "skip"]
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    initial_action: Literal["bid_now", "review", "skip"] = "skip"
+    initial_decision_status: Literal["planned", "reviewing", "submitted", "skipped"] = "planned"
+    first_decided_at: Optional[datetime] = None
     priority_score: float
+    urgency_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    competitiveness_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    budget_capture_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    expected_margin_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    execution_complexity_score: float = Field(default=0.0, ge=0.0, le=1.0)
     recommended_amount: float
     probability_score: float
     matched_score: float
@@ -698,10 +1115,66 @@ class BidDecisionRecordResponse(BaseModel):
     current_active_bids: int
     max_active_bids: int
     current_workload_score: float
+    workload_source: Literal["provided", "auto"] = "provided"
+    score_breakdown: BidDecisionScoreBreakdown = Field(default_factory=BidDecisionScoreBreakdown)
     reasoning: str
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("score_breakdown", mode="before")
+    @classmethod
+    def _parse_score_breakdown(cls, value):
+        if value is None or value == "":
+            return {}
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return value
+
+    @field_validator("initial_action", mode="before")
+    @classmethod
+    def _normalize_initial_action(cls, value):
+        return value or "skip"
+
+    @field_validator("initial_decision_status", mode="before")
+    @classmethod
+    def _normalize_initial_decision_status(cls, value):
+        return value or "planned"
+
+
+class BidDecisionProjectSnapshot(BaseModel):
+    id: int
+    title: str
+    category: Optional[str] = None
+    status: str
+    budget_estimate: float
+    deadline: Optional[datetime] = None
+    notice_number: Optional[str] = None
+    source_url: Optional[str] = None
+    issuing_agency: Optional[str] = None
+    demand_agency: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BidDecisionDetailResponse(BaseModel):
+    record: BidDecisionRecordResponse
+    project: BidDecisionProjectSnapshot
+    timeline_count: int = Field(ge=0)
+    timeline_limit_applied: int = Field(ge=1, le=100)
+    timeline: List[BidDecisionRecordResponse] = Field(default_factory=list)
+
+
+class BidDecisionTimelineResponse(BaseModel):
+    operator_id: int
+    project: BidDecisionProjectSnapshot
+    result_count: int = Field(ge=0)
+    limit_applied: int = Field(ge=1, le=100)
+    latest_decision_record_id: Optional[int] = None
+    timeline: List[BidDecisionRecordResponse] = Field(default_factory=list)
 
 
 # Backward-compatible aliases while the domain language migrates away from multi-user allocation.

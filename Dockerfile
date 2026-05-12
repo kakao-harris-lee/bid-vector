@@ -1,23 +1,54 @@
-FROM mcr.microsoft.com/playwright/python:v1.52.0-noble
+# syntax=docker/dockerfile:1.7
+FROM mcr.microsoft.com/playwright/python:v1.52.0-noble AS python-base
 
 WORKDIR /app
 
 # Runtime defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Copy requirements
-COPY requirements.txt .
+# Copy dependency manifests first for better layer caching.
+COPY requirements/ ./requirements/
+COPY requirements.txt ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip setuptools wheel
 
-# Copy application code
+FROM python-base AS deps-runtime
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install -r requirements/runtime.txt
+
+FROM deps-runtime AS deps-embedding
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu && \
+    python -m pip install -r requirements/ml-embedding.txt
+
+FROM deps-runtime AS deps-training
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install -r requirements/ml-training.txt
+
+FROM deps-embedding AS deps-ml-full
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install -r requirements/ml-training.txt
+
+FROM deps-runtime AS api-runtime
 COPY . .
-
-# Expose port
 EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-# Run application
+FROM deps-embedding AS api-embedding
+COPY . .
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM deps-training AS api-training
+COPY . .
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM deps-ml-full AS api-ml-full
+COPY . .
+EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.single_user import (
+    DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
+    DEFAULT_OPERATOR_REVIEW_THRESHOLD,
     ensure_operator_account,
     ensure_operator_profile,
     ensure_operator_strategy,
@@ -82,6 +84,8 @@ def _is_strategy_configured(
     max_budget_estimate: float,
     minimum_match_score: float,
     minimum_probability_score: float,
+    bid_now_threshold: float,
+    review_threshold: float,
     notify_only_high_priority: bool,
     max_recommended_candidates: int,
 ) -> bool:
@@ -95,9 +99,19 @@ def _is_strategy_configured(
         max_budget_estimate > 0,
         round(minimum_match_score, 4) != 0.6,
         round(minimum_probability_score, 4) != 0.55,
+        round(bid_now_threshold, 4) != DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
+        round(review_threshold, 4) != DEFAULT_OPERATOR_REVIEW_THRESHOLD,
         notify_only_high_priority is False,
         max_recommended_candidates != 10,
     ])
+
+
+def _validate_strategy_thresholds(*, bid_now_threshold: float, review_threshold: float) -> None:
+    if review_threshold > bid_now_threshold:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="review_threshold cannot be greater than bid_now_threshold",
+        )
 
 
 def _build_operator_strategy_response(
@@ -111,9 +125,15 @@ def _build_operator_strategy_response(
     max_budget_estimate: float,
     minimum_match_score: float,
     minimum_probability_score: float,
+    bid_now_threshold: float,
+    review_threshold: float,
     notify_only_high_priority: bool,
     max_recommended_candidates: int,
 ) -> OperatorStrategyResponse:
+    _validate_strategy_thresholds(
+        bid_now_threshold=bid_now_threshold,
+        review_threshold=review_threshold,
+    )
     return OperatorStrategyResponse(
         operator_id=operator.id,
         focus_categories=focus_categories,
@@ -125,6 +145,8 @@ def _build_operator_strategy_response(
         max_budget_estimate=max_budget_estimate,
         minimum_match_score=minimum_match_score,
         minimum_probability_score=minimum_probability_score,
+        bid_now_threshold=bid_now_threshold,
+        review_threshold=review_threshold,
         notify_only_high_priority=notify_only_high_priority,
         max_recommended_candidates=max_recommended_candidates,
         strategy_configured=_is_strategy_configured(
@@ -137,6 +159,8 @@ def _build_operator_strategy_response(
             max_budget_estimate=max_budget_estimate,
             minimum_match_score=minimum_match_score,
             minimum_probability_score=minimum_probability_score,
+            bid_now_threshold=bid_now_threshold,
+            review_threshold=review_threshold,
             notify_only_high_priority=notify_only_high_priority,
             max_recommended_candidates=max_recommended_candidates,
         ),
@@ -229,6 +253,8 @@ def get_operator_strategy_endpoint(db: Session = Depends(get_db)):
         max_budget_estimate=float(strategy.max_budget_estimate or 0.0),
         minimum_match_score=float(strategy.minimum_match_score or 0.0),
         minimum_probability_score=float(strategy.minimum_probability_score or 0.0),
+        bid_now_threshold=float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD),
+        review_threshold=float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD),
         notify_only_high_priority=bool(strategy.notify_only_high_priority),
         max_recommended_candidates=int(strategy.max_recommended_candidates or 10),
     )
@@ -239,6 +265,21 @@ def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depe
     """Update the singleton operator's watch rules used for monitoring and prioritization."""
     operator = ensure_operator_account(db)
     strategy = ensure_operator_strategy(db)
+
+    next_bid_now_threshold = float(
+        request.bid_now_threshold
+        if request.bid_now_threshold is not None
+        else strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD
+    )
+    next_review_threshold = float(
+        request.review_threshold
+        if request.review_threshold is not None
+        else strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD
+    )
+    _validate_strategy_thresholds(
+        bid_now_threshold=next_bid_now_threshold,
+        review_threshold=next_review_threshold,
+    )
 
     if request.focus_categories is not None:
         strategy.focus_categories = join_multi_value_text(request.focus_categories)
@@ -258,6 +299,10 @@ def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depe
         strategy.minimum_match_score = request.minimum_match_score
     if request.minimum_probability_score is not None:
         strategy.minimum_probability_score = request.minimum_probability_score
+    if request.bid_now_threshold is not None:
+        strategy.bid_now_threshold = request.bid_now_threshold
+    if request.review_threshold is not None:
+        strategy.review_threshold = request.review_threshold
     if request.notify_only_high_priority is not None:
         strategy.notify_only_high_priority = request.notify_only_high_priority
     if request.max_recommended_candidates is not None:
@@ -277,6 +322,8 @@ def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depe
         max_budget_estimate=float(strategy.max_budget_estimate or 0.0),
         minimum_match_score=float(strategy.minimum_match_score or 0.0),
         minimum_probability_score=float(strategy.minimum_probability_score or 0.0),
+        bid_now_threshold=float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD),
+        review_threshold=float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD),
         notify_only_high_priority=bool(strategy.notify_only_high_priority),
         max_recommended_candidates=int(strategy.max_recommended_candidates or 10),
     )

@@ -10,16 +10,16 @@ The product is being aligned around a **single operator workflow** rather than a
 - **Bid Recommendation Engine**: AI-powered bidding recommendations based on historical data
 - **Hybrid Notice Classification**: Rule-based filtering plus semantic similarity scoring for operator-company fit
 - **Document Analysis**: Automatic requirement extraction and complexity analysis
-- **Real-time Notifications**: WebSocket-based notification system
+- **Operator Notifications**: Telegram alerts plus persisted web notifications with callback/polling support
 - **Single Operator Workspace**: Centralized operator profile, workload overview, and bid planning surface
-- **Analytics & Reporting**: Operator-centric analytics module
+- **Decision Analytics & Experiment Tracking**: Funnel analytics, recommendation experiments, and outcome evaluation APIs
 
 ## Technology Stack
 
 - **Backend**: FastAPI 0.104+
 - **Database**: PostgreSQL 16+ with pgvector
-- **Background Jobs**: Celery-ready task scaffold with in-memory defaults (no Redis dependency)
-- **ML Libraries**: scikit-learn, sentence-transformers, transformers
+- **Background Jobs**: Celery with in-memory local defaults plus an optional RabbitMQ broker + PostgreSQL result-backend path
+- **ML Profiles**: slim runtime / embedding runtime / training runtime / full ML runtime
 - **Container**: Docker & Docker Compose
 
 ## Project Structure
@@ -47,7 +47,8 @@ bid-vector/
 │   ├── schemas/          # Pydantic schemas
 │   ├── services/         # Business logic
 │   └── main.py           # Application entry
-├── requirements.txt      # Python dependencies
+├── requirements.txt      # Full development dependency bundle
+├── requirements/         # Split runtime / embedding / training / dev dependencies
 ├── Dockerfile            # Container configuration
 ├── docker-compose.yml    # Service orchestration
 └── README.md            # This file
@@ -81,6 +82,17 @@ bid-vector/
    ```bash
    pip install -r requirements.txt
    ```
+
+   `requirements.txt` installs the full developer bundle. If you want a slimmer local setup, the dependency groups are now split like this:
+
+   ```bash
+   pip install -r requirements/runtime.txt
+   pip install -r requirements/ml-embedding.txt
+   pip install -r requirements/ml-training.txt
+   pip install -r requirements/dev.txt
+   ```
+
+   On Linux/Docker, preinstalling a CPU-only PyTorch wheel before `requirements/ml-embedding.txt` avoids large CUDA downloads.
 
 4. **Install the Playwright browser for live crawling**
 
@@ -122,27 +134,133 @@ bid-vector/
 1. **Build and run with Docker Compose**
 
    ```bash
-   docker-compose up -d
+   cp .env.example .env
+   docker compose up -d --build
    ```
 
    The API image is based on the official Playwright Python image, so Chromium and the required Linux browser dependencies are already available for `execution_mode=live` inside the container. The bundled database now uses a PostgreSQL image with `pgvector` preinstalled, and Docker initializes the `vector` extension automatically.
+   Compose reads `.env`, keeps PostgreSQL data in a named volume, and now exposes healthchecks for both the database and API so startup sequencing is more reliable.
+   The Dockerfile now exposes separate image targets for `api-runtime`, `api-embedding`, `api-training`, and `api-ml-full`. The default compose path uses the slimmer `api-runtime` target, while the embedding target preinstalls a CPU-only PyTorch wheel and uses the BuildKit pip cache to avoid huge CUDA downloads.
 
-2. **Check services**
+   Because the `api` service bind-mounts the repository into `/app`, code-only changes usually do **not** require a full rebuild. Use `docker compose up -d` for normal restarts, and reserve `docker compose up -d --build` for dependency or Dockerfile changes.
+
+   You can override the build target with `API_DOCKER_TARGET`:
 
    ```bash
-   docker-compose ps
+   # Slim default API
+   docker compose up -d --build
+
+   # API with sentence-transformer embedding runtime
+   API_DOCKER_TARGET=api-embedding docker compose up -d --build
+
+   # API with both embedding and training stacks
+   API_DOCKER_TARGET=api-ml-full docker compose up -d --build
    ```
 
-3. **View logs**
+    Dedicated rollout and queue-separation playbooks live in `docs/ml-image-separation.md` and `docs/ml-task-separation.md`.
+
+## Manifest-Backed ML Promotion
+
+To reduce drift between training outputs and runtime settings, the repository now includes `scripts/promote_ml_release.py`.
+
+- `create-manifest` validates local embedding snapshots and predictor artifacts, then writes `models/manifests/<release-tag>.json`
+- `apply-manifest` prints the recommended runtime env values from an existing manifest
+- `apply-manifest --write-env-file .env` writes the recommended runtime keys directly into a dotenv file
+- `apply-manifest --rebuild-embeddings` temporarily applies the manifest's embedding model path in-process and rebuilds stored project vectors
+- `apply-manifest --restart-compose --rebuild-embeddings-via-api` rolls the manifest into Docker Compose, waits for `/health`, and queues the remote embedding backfill through `/api/v1/ml/backfills/project-embeddings`
+- New manifests include artifact checksums, an HMAC-SHA256 signature, local retention policy metadata, and optional remote object-storage publishing via `ML_RELEASE_OBJECT_STORAGE_URL`
+
+Example flow:
+
+```bash
+python scripts/promote_ml_release.py create-manifest \
+   --release-tag 2026-05-11-embedding-v4 \
+   --embedding-model-path models/embeddings/ko-sbert-v4 \
+   --lstm-artifact-path models/predictors/lstm/2026-05-11.json \
+   --ensemble-artifact-path models/predictors/ensemble/2026-05-11.json
+
+python scripts/promote_ml_release.py apply-manifest --manifest 2026-05-11-embedding-v4
+
+python scripts/promote_ml_release.py apply-manifest \
+   --manifest 2026-05-11-embedding-v4 \
+   --write-env-file .env \
+   --rebuild-embeddings \
+   --force
+
+python scripts/promote_ml_release.py apply-manifest \
+   --manifest 2026-05-11-embedding-v4 \
+   --write-env-file .env \
+   --restart-compose \
+   --rebuild-embeddings-via-api \
+   --force
+```
+
+Equivalent shortcuts are available in the `Makefile` via `make ml-release-manifest`, `make ml-release-apply`, `make ml-release-rebuild`, and `make ml-release-rollout`. If you set `ENV_FILE=.env`, the apply/rebuild targets also update the dotenv file in place.
+
+## Dependency Profiles and Image Targets
+
+| Profile / target | Includes | Typical use |
+| --- | --- | --- |
+| `requirements/runtime.txt` / `api-runtime` | FastAPI, DB, crawler, Telegram, numpy-based inference | Default API, health checks, production baseline |
+| `requirements/ml-embedding.txt` / `api-embedding` | sentence-transformers, transformers, CPU-only torch in Docker | semantic classification, project embedding rebuild |
+| `requirements/ml-training.txt` / `api-training` | pandas, scikit-learn | offline training and dataset preparation |
+| `requirements/dev.txt` | pytest, black, flake8 | local/containerized developer tooling |
+| `requirements.txt` / `api-ml-full` | everything above | full-stack local experimentation |
+
+### Optional broker-backed task stack
+
+The default repository experience keeps `CELERY_BROKER_URL=memory://`, so lightweight ops async endpoints can run eagerly for local development. ML endpoints are stricter: they return queued task handles and do not execute backfill/training/re-evaluation work inside the API process unless `CELERY_ALLOW_INLINE_ML_TASKS=true` is explicitly set.
+
+For a production-style task path, the compose file now includes an optional `tasks` profile with separated queues and workers:
+
+- `rabbitmq` - durable AMQP broker for queued work
+- `worker` - ops-only Celery worker for crawling, Telegram polling, and operator strategy monitoring
+- `ml-worker` - ML backfill/re-evaluation worker for embedding backfills and experiment re-evaluation
+- `training-worker` - training-only worker built from the training image target and consuming only the training queue
+- `beat` - periodic scheduler for `jobs.monitor_operator_strategy` and Celery backend cleanup
+
+When `CELERY_BROKER_URL` is switched away from `memory://` and `CELERY_RESULT_BACKEND` is still left at `cache+memory://`, the FastAPI settings layer now automatically upgrades the result backend to `db+${DATABASE_URL}` so task polling works against PostgreSQL without an extra Redis dependency.
+
+For Docker Compose, the broker URL should point at the internal RabbitMQ service:
+
+```bash
+CELERY_BROKER_URL=amqp://bidvector:bidvector@rabbitmq:5672/bidvector
+```
+
+The repository shortcut below injects that broker URL and starts the optional task profile:
+
+```bash
+make docker-up-tasks
+```
+
+ML API endpoints enqueue work only. With the default `memory://` broker, ML jobs remain `queued` instead of executing inside the API process; use the RabbitMQ-backed task profile for actual out-of-process execution. If background embedding refreshes need the real sentence-transformer model instead of the hashed fallback, set `ML_WORKER_DOCKER_TARGET=api-ml-full` or another image target that includes the embedding stack.
+
+### Quick Docker Operations
+
+1. **Check services**
 
    ```bash
-   docker-compose logs -f api
+   docker compose ps
    ```
 
-4. **Stop services**
+2. **View logs**
 
    ```bash
-   docker-compose down
+   docker compose logs -f api
+   ```
+
+   For the optional broker-backed task stack:
+
+   ```bash
+   make docker-logs-tasks
+   ```
+
+3. **Stop services**
+
+   ```bash
+   docker compose down
+   # Optional full reset including Postgres volume
+   docker compose down -v
    ```
 
 ## API Endpoints
@@ -179,9 +297,18 @@ bid-vector/
 - `PUT /api/v1/projects/{id}` - Update project
 - `GET /api/v1/projects/{id}/similar` - Find similar procurement notices using stored project embeddings
 - `POST /api/v1/projects/{id}/embedding/refresh` - Rebuild one project's semantic embedding and vector metadata
-- `POST /api/v1/projects/embeddings/rebuild` - Batch refresh stored project embeddings for existing notices
+- `POST /api/v1/projects/embeddings/rebuild` - Deprecated compatibility alias that queues an embedding backfill instead of running inline
 - `POST /api/v1/projects/embeddings/rebuild/async` - Queue a batch embedding rebuild task and return a pollable task id
 - `GET /api/v1/projects/embeddings/rebuild/tasks/{task_id}` - Check async embedding rebuild progress and fetch the final batch summary
+
+### ML Jobs
+
+- `POST /api/v1/ml/backfills/project-embeddings` - Queue a project embedding backfill on the ML backfill queue
+- `GET /api/v1/ml/backfills/project-embeddings/tasks/{task_id}` - Check embedding backfill status
+- `POST /api/v1/ml/training/price-predictor` - Queue price-predictor training on the dedicated training queue
+- `GET /api/v1/ml/training/price-predictor/tasks/{task_id}` - Check training status and fetch artifact/manifest output when complete
+- `POST /api/v1/ml/reevaluations/decision-experiments/{experiment_run_id}` - Queue decision experiment re-evaluation
+- `GET /api/v1/ml/reevaluations/decision-experiments/tasks/{task_id}` - Check re-evaluation status
 
 ### Bids
 
@@ -208,9 +335,18 @@ When recent linked `TenderResult` rows already exist for the same category, the 
 - `GET /api/v1/analytics/summary` - Get operator workflow analytics summary
 - `GET /api/v1/analytics/operator-stats` - Get singleton operator statistics
 - `GET /api/v1/analytics/prediction-feedback` - Compare stored predictions and bid-decision recommendations against linked tender results
+- `GET /api/v1/analytics/decision-insights` - Summarize persisted bid decision signals such as priority, margin, complexity, and workload source
+- `GET /api/v1/analytics/decision-funnel` - Track how initial bid decisions move from review/bid_now into submitted workflow states, including trend and segment breakdowns
+- `GET /api/v1/analytics/decision-recommendations` - Convert funnel signals into actionable recommendations plus bounded experiment plans
+- `POST /api/v1/analytics/decision-experiments` - Persist one experiment plan as an executable tracked run with a saved baseline snapshot
+- `GET /api/v1/analytics/decision-experiments` - List tracked decision experiment runs for the operator dashboard
+- `GET /api/v1/analytics/decision-experiments/{experiment_run_id}` - Inspect one experiment run with its baseline summary and latest evaluation
+- `POST /api/v1/analytics/decision-experiments/{experiment_run_id}/evaluate` - Queue current-vs-baseline re-evaluation and return a pollable task id
 - `GET /api/v1/analytics/user-stats/{user_id}` - Deprecated compatibility alias for operator statistics
 
 The prediction feedback analytics endpoint summarizes how close the latest stored `predicted_price` and `recommended_amount` were to the final `winning_amount` for projects that already have a linked `TenderResult`. It reports average absolute error rates, counts within 1% and 3%, and whether the latest bid-decision recommendation outperformed the raw price prediction.
+
+Decision analytics now also include persisted funnel telemetry, current-vs-previous period comparisons, segment breakdowns by category / workload source / agency, recommendation payloads with `experiment_plan`, and saved experiment runs that can be evaluated later against baseline target and guardrail metrics.
 
 ### Legacy Admin
 
@@ -228,6 +364,8 @@ The prediction feedback analytics endpoint summarizes how close the latest store
 - `POST /api/v1/operations/bid-decision` - Decide whether the single user should pursue a bid now based on fit, probability, urgency, and current workload
 - `POST /api/v1/operations/bid-decisions` - Evaluate and persist a bid decision record with workflow status (`planned`, `reviewing`, `submitted`, `skipped`)
 - `GET /api/v1/operations/bid-decisions` - List persisted bid decision records for the singleton operator
+- `GET /api/v1/operations/bid-decisions/{decision_record_id}` - Get one persisted bid decision with project snapshot and recent timeline
+- `GET /api/v1/operations/projects/{project_id}/bid-decision-timeline` - Fetch recent bid decision history for one project
 - `POST /api/v1/operations/notify/telegram` - Build and best-effort send a Telegram notification payload
 - `POST /api/v1/operations/telegram/callback` - Process Telegram inline button callbacks (`투찰`, `검토`, `보류`) for persisted bid decisions
 - `POST /api/v1/operations/telegram/webhook` - Process raw Telegram webhook updates for `/start` messages and inline button callbacks
@@ -308,8 +446,27 @@ See `.env.example` for all available options.
 Key variables:
 
 - `DATABASE_URL` - PostgreSQL connection string
-- `CELERY_BROKER_URL` - Optional task broker URL (defaults to in-memory for local development)
-- `CELERY_RESULT_BACKEND` - Optional task result backend (defaults to in-memory cache for local development)
+- `DATABASE_USER` / `DATABASE_PASSWORD` / `DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_NAME` - When all are set, they now deterministically compose `DATABASE_URL` (used by Docker Compose to swap `localhost` for `db` safely)
+- `CELERY_BROKER_URL` - Optional task broker URL (defaults to `memory://` for local development; use an AMQP URL for the optional RabbitMQ worker path)
+- `CELERY_RESULT_BACKEND` - Optional task result backend (defaults to `cache+memory://`, but automatically upgrades to `db+${DATABASE_URL}` when the broker is external unless you set an explicit backend)
+- `CELERY_TASK_DEFAULT_QUEUE` - Default Celery queue name shared by API, worker, and beat
+- `CELERY_OPS_QUEUE` - Queue for operational jobs such as crawling, Telegram polling, and strategy monitoring
+- `CELERY_ML_BACKFILL_QUEUE` - Queue for ML backfill work such as project embedding rebuilds
+- `CELERY_ML_TRAINING_QUEUE` - Queue consumed only by the training worker
+- `CELERY_ML_REEVALUATION_QUEUE` - Queue for ML/analytics re-evaluation jobs
+- `CELERY_ALLOW_INLINE_ML_TASKS` - Keep false in normal environments so ML jobs never execute in the API request path
+- `CELERY_WORKER_CONCURRENCY` - Worker process count used by broker-backed execution
+- `CELERY_WORKER_PREFETCH_MULTIPLIER` - Prefetch multiplier; the default `1` keeps long-running jobs fairer across workers
+- `CELERY_WORKER_MAX_TASKS_PER_CHILD` - Recycle worker children after a fixed number of tasks to limit memory creep
+- `CELERY_TASK_TIME_LIMIT_SECONDS` / `CELERY_TASK_SOFT_TIME_LIMIT_SECONDS` - Hard/soft execution limits for background tasks
+- `CELERY_RESULT_EXPIRES_SECONDS` - Result-retention window used by Celery's backend cleanup task
+- `CELERY_TASK_TRACK_STARTED` - Emit `STARTED` status updates for long-running jobs
+- `CELERY_WORKER_SEND_TASK_EVENTS` / `CELERY_TASK_SEND_SENT_EVENT` - Enable worker/task events for monitoring and troubleshooting
+- `CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP` - Retry broker connection while worker/beat are booting
+- `CELERY_BROKER_CONNECTION_MAX_RETRIES` - Maximum broker reconnect attempts during startup
+- `CELERY_BROKER_PUBLISH_MAX_RETRIES` - Producer-side publish retry ceiling for transient broker failures
+- `CELERY_RABBITMQ_USER` / `CELERY_RABBITMQ_PASSWORD` / `CELERY_RABBITMQ_VHOST` - Optional RabbitMQ compose defaults used by the `tasks` profile
+- `CELERY_RABBITMQ_PORT` / `CELERY_RABBITMQ_MANAGEMENT_PORT` - RabbitMQ AMQP and management UI ports exposed by Docker Compose
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED` - Enable periodic operator strategy monitoring
 - `OPERATOR_STRATEGY_MONITOR_INTERVAL_MINUTES` - Monitoring interval used by the periodic scheduler/beat entry
 - `OPERATOR_STRATEGY_MONITOR_RUN_ON_STARTUP` - When using the in-process scheduler, execute one monitoring cycle immediately at startup
@@ -320,6 +477,14 @@ Key variables:
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_SAME_CATEGORY_ONLY` - Whether scheduled runs restrict similar-project analysis to the same category
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_SIMILAR_LIMIT` - Similar-project lookup depth used during scheduled monitoring
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_MIN_SIMILARITY` - Minimum similarity threshold used during scheduled monitoring
+- `ML_RELEASE_MANIFEST_DIR` - Local directory for signed release manifests
+- `ML_RELEASE_MANIFEST_ARCHIVE_DIR` - Local archive directory for manifests moved out by retention
+- `ML_RELEASE_MANIFEST_RETENTION_LIMIT` - Number of recent local manifests to retain before archiving older files
+- `ML_RELEASE_MANIFEST_SIGNING_KEY` - HMAC signing key for release manifests; required in production
+- `ML_RELEASE_MANIFEST_SIGNING_KEY_ID` - Human-readable signing key identifier stored in signatures
+- `ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE` - Require existing manifests to contain a valid signature before loading
+- `ML_RELEASE_OBJECT_STORAGE_URL` - Optional `file://...` or `s3://bucket/prefix` target for manifest/artifact publishing
+- `ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH` - Automatically publish manifests and referenced artifacts after creation
 - `JWT_SECRET_KEY` - Secret key for tokens
 - `DEBUG` - Debug mode (true/false)
 - `ENVIRONMENT` - Environment (development/production)
@@ -327,6 +492,8 @@ Key variables:
 - `CLASSIFIER_EMBEDDING_MODEL` - Sentence-Transformers model name for semantic classification
 - `CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY` - Keep embedding model loading offline-only; when the model is not cached locally the API falls back immediately instead of hanging on downloads
 - `CLASSIFIER_SEMANTIC_MATCH_THRESHOLD` - Base threshold used when blending semantic similarity into the classification score
+- `PRICE_PREDICTION_LSTM_MODEL_PATH` - Filesystem path to the current LSTM JSON artifact used by predictor inference
+- `PRICE_PREDICTION_ENSEMBLE_MODEL_PATH` - Filesystem path to the current ensemble JSON artifact used by predictor inference
 - `KONEPS_HEADLESS` - Run KONEPS crawling without a visible browser window
 - `KONEPS_TIMEOUT_MS` - Browser action timeout for Playwright
 - `KONEPS_MAX_ITEMS` - Maximum items returned per crawl request
@@ -340,11 +507,13 @@ Key variables:
 - `TELEGRAM_POLLING_LIMIT` - Default maximum number of Telegram updates pulled per sync/poll cycle
 - `TELEGRAM_POLLING_TIMEOUT_SECONDS` - Default long-poll timeout for manual sync or background polling
 
+`API_DOCKER_TARGET` is also read by Docker Compose as a build-time selector (`api-runtime`, `api-embedding`, `api-training`, `api-ml-full`). The FastAPI settings object ignores it inside the container, so it is safe to keep it in `.env`.
+
 To receive messages, the target account should start a chat with the configured bot at least once. Otherwise Telegram will politely pretend the bot is shouting into the void.
 
-With the default `memory://` task broker, embedding rebuild and KONEPS crawl jobs run eagerly in-process so the async task APIs remain usable without a separate worker. For truly out-of-process execution, point Celery at a real broker/backend and run a worker process.
+With the default `memory://` task broker, KONEPS crawl and other lightweight ops jobs can still run eagerly in-process for local development. Embedding backfill, training, and re-evaluation jobs stay queued by default so they cannot consume API request capacity. For actual ML execution, switch `CELERY_BROKER_URL` to RabbitMQ or another real broker, then run the optional worker stack.
 
-Periodic strategy monitoring now follows the same rule: with the default in-memory broker, the API process can run an in-process scheduler from startup when `OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED=true`. When you switch to a real broker, the Celery app also exposes a beat schedule entry for `jobs.monitor_operator_strategy`, so a standard worker + beat deployment can take over without changing the monitoring logic.
+Periodic strategy monitoring now follows the same rule: with the default in-memory broker, the API process can run an in-process scheduler from startup when `OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED=true`. When you switch to a real broker, the Celery app exposes the same `jobs.monitor_operator_strategy` schedule through Celery beat, so the separate `beat` + `worker` services can take over without changing the monitoring logic.
 
 ## Troubleshooting
 

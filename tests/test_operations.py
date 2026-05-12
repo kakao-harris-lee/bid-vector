@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import json
 
 from app.core.config import settings
+from app.core.single_user import ensure_operator_account
 from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, HistoricalData, Notification, PricePrediction, Project, TenderResult, User
 from app.schemas.schemas import CrawlRequest
 from app.services.classifier import NoticeClassifierService
@@ -1172,6 +1173,76 @@ def test_bid_decision_skeleton(client):
     assert data["project_id"] == 1
 
 
+def test_bid_decision_response_exposes_breakdown_and_budget_capture(client):
+    """Bid-decision responses should expose the upgraded score breakdown for operator review."""
+    response = client.post(
+        "/api/v1/operations/bid-decision",
+        json={
+            "project_id": 11,
+            "recommended_amount": 94000000.0,
+            "budget_estimate": 100000000.0,
+            "probability_score": 0.87,
+            "matched_score": 0.8,
+            "competitiveness_score": 0.82,
+            "deadline_hours_remaining": 8,
+            "current_active_bids": 1,
+            "max_active_bids": 3,
+            "current_workload_score": 0.15,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "bid_now"
+    assert payload["workload_source"] == "provided"
+    assert payload["competitiveness_score"] == 0.82
+    assert payload["budget_capture_score"] == 0.94
+    assert payload["expected_margin_score"] == 0.94
+    assert payload["execution_complexity_score"] == 0.35
+    assert payload["score_breakdown"]["competitiveness_signal"] == 0.82
+    assert payload["score_breakdown"]["budget_capture_signal"] == 0.94
+    assert payload["score_breakdown"]["expected_margin_signal"] == 0.94
+    assert payload["score_breakdown"]["execution_complexity_signal"] == 0.35
+    assert payload["score_breakdown"]["load_penalty"] > 0
+    assert payload["score_breakdown"]["total_penalty"] >= payload["score_breakdown"]["load_penalty"]
+    assert payload["score_breakdown"]["opportunity_score"] >= payload["priority_score"]
+
+
+def test_bid_decision_high_execution_complexity_reduces_priority(client):
+    """High execution complexity should materially lower priority even when other signals stay strong."""
+    base_payload = {
+        "project_id": 21,
+        "recommended_amount": 118000000.0,
+        "budget_estimate": 130000000.0,
+        "probability_score": 0.86,
+        "matched_score": 0.82,
+        "competitiveness_score": 0.8,
+        "deadline_hours_remaining": 12,
+        "current_active_bids": 1,
+        "max_active_bids": 3,
+        "current_workload_score": 0.2,
+        "expected_margin_score": 0.74,
+    }
+
+    low_complexity = client.post(
+        "/api/v1/operations/bid-decision",
+        json={**base_payload, "execution_complexity_score": 0.32},
+    )
+    high_complexity = client.post(
+        "/api/v1/operations/bid-decision",
+        json={**base_payload, "execution_complexity_score": 0.94},
+    )
+
+    assert low_complexity.status_code == 200
+    assert high_complexity.status_code == 200
+
+    low_payload = low_complexity.json()
+    high_payload = high_complexity.json()
+    assert low_payload["priority_score"] > high_payload["priority_score"]
+    assert high_payload["score_breakdown"]["execution_complexity_penalty"] > 0
+    assert high_payload["score_breakdown"]["total_penalty"] > low_payload["score_breakdown"]["total_penalty"]
+
+
 def test_allocate_legacy_route_remains_available(client):
     """Legacy allocation route should remain as a compatibility alias."""
     response = client.post(
@@ -1228,18 +1299,239 @@ def test_bid_decision_persistence_creates_record(client, test_db):
     assert payload["decision_status"] == "planned"
     assert payload["action"] == "bid_now"
     assert payload["pursue_bid"] is True
+    assert payload["initial_action"] == "bid_now"
+    assert payload["initial_decision_status"] == "planned"
+    assert payload["first_decided_at"] is not None
+    assert payload["expected_margin_score"] > 0.0
+    assert payload["execution_complexity_score"] >= 0.0
+    assert payload["score_breakdown"]["expected_margin_signal"] == payload["expected_margin_score"]
+    assert payload["workload_source"] == "provided"
 
     record = test_db.query(BidDecisionRecord).one()
     assert record.project_id == project.id
     assert record.operator_id == payload["operator_id"]
     assert record.decision_status == "planned"
     assert record.priority_score >= 0.7
+    assert record.initial_action == "bid_now"
+    assert record.initial_decision_status == "planned"
+    assert record.first_decided_at is not None
+    assert record.expected_margin_score == payload["expected_margin_score"]
+    assert record.score_breakdown
 
     notification = test_db.query(Notification).one()
     assert notification.type == "recommendation"
     assert f"프로젝트 {project.id}" in notification.title
     assert "입찰 판단 알림" in notification.message
     assert "우선순위" in notification.message
+
+
+def test_list_bid_decisions_includes_persisted_breakdown_metadata(client, test_db):
+    """Listing persisted decisions should expose the stored score breakdown metadata."""
+    project = Project(
+        title="영속화 점수 메타데이터 공고",
+        description="저장된 decision breakdown 반환 검증",
+        requirements="즉시 추진 판단 근거를 남겨야 함",
+        budget_estimate=102000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    save_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project.id,
+            "recommended_amount": 95500000.0,
+            "probability_score": 0.88,
+            "matched_score": 0.82,
+            "deadline_hours_remaining": 9,
+            "current_active_bids": 1,
+            "max_active_bids": 4,
+            "current_workload_score": 0.18,
+        },
+    )
+
+    assert save_response.status_code == 200
+
+    list_response = client.get("/api/v1/operations/bid-decisions", params={"project_id": project.id})
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert len(payload) == 1
+    assert payload[0]["project_id"] == project.id
+    assert payload[0]["expected_margin_score"] > 0.0
+    assert payload[0]["execution_complexity_score"] >= 0.0
+    assert payload[0]["score_breakdown"]["expected_margin_signal"] == payload[0]["expected_margin_score"]
+    assert payload[0]["score_breakdown"]["total_penalty"] >= payload[0]["score_breakdown"]["load_penalty"]
+
+
+def test_get_bid_decision_detail_returns_project_snapshot_and_timeline(client, test_db):
+    """Decision detail endpoint should return the current record plus project-level decision history."""
+    project = Project(
+        title="상세 decision timeline 공고",
+        description="decision detail 응답 검증",
+        requirements="과거 판단 이력을 함께 조회해야 함",
+        budget_estimate=112000000.0,
+        category="software",
+        notice_number="DETAIL-001",
+        issuing_agency="조달청",
+        demand_agency="서울특별시교육청",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    operator = ensure_operator_account(test_db)
+    older_record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=operator.id,
+        pursue_bid=True,
+        action="bid_now",
+        decision_status="submitted",
+        recommended_amount=103000000.0,
+        probability_score=0.78,
+        matched_score=0.76,
+        priority_score=0.74,
+        urgency_score=0.6,
+        competitiveness_score=0.67,
+        budget_capture_score=0.92,
+        expected_margin_score=0.71,
+        execution_complexity_score=0.42,
+        deadline_hours_remaining=30,
+        current_active_bids=0,
+        max_active_bids=3,
+        current_workload_score=0.14,
+        workload_source="provided",
+        score_breakdown=json.dumps({"expected_margin_signal": 0.71, "total_penalty": 0.08}, ensure_ascii=False),
+        reasoning="기존 제출 이력입니다.",
+        created_at=datetime.now(UTC) - timedelta(days=2),
+        updated_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    test_db.add(older_record)
+    test_db.commit()
+    test_db.refresh(older_record)
+
+    save_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project.id,
+            "recommended_amount": 105500000.0,
+            "probability_score": 0.89,
+            "matched_score": 0.84,
+            "deadline_hours_remaining": 7,
+            "current_active_bids": 1,
+            "max_active_bids": 4,
+            "current_workload_score": 0.18,
+        },
+    )
+
+    assert save_response.status_code == 200
+    decision_id = save_response.json()["id"]
+
+    detail_response = client.get(
+        f"/api/v1/operations/bid-decisions/{decision_id}",
+        params={"timeline_limit": 10},
+    )
+
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    assert payload["record"]["id"] == decision_id
+    assert payload["project"]["id"] == project.id
+    assert payload["project"]["title"] == project.title
+    assert payload["project"]["notice_number"] == "DETAIL-001"
+    assert payload["project"]["issuing_agency"] == "조달청"
+    assert payload["timeline_count"] == 2
+    assert payload["timeline_limit_applied"] == 10
+    assert [item["id"] for item in payload["timeline"]] == [decision_id, older_record.id]
+    assert payload["timeline"][0]["score_breakdown"]["expected_margin_signal"] == payload["timeline"][0]["expected_margin_score"]
+    assert payload["timeline"][1]["decision_status"] == "submitted"
+
+
+def test_project_bid_decision_timeline_returns_limited_recent_history(client, test_db):
+    """Project timeline endpoint should report total history while limiting returned rows."""
+    project = Project(
+        title="프로젝트 기준 decision timeline 공고",
+        description="timeline endpoint 검증",
+        requirements="최근 판단 이력을 확인해야 함",
+        budget_estimate=99000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    operator = ensure_operator_account(test_db)
+    older_record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=operator.id,
+        pursue_bid=False,
+        action="skip",
+        decision_status="skipped",
+        recommended_amount=91000000.0,
+        probability_score=0.31,
+        matched_score=0.43,
+        priority_score=0.28,
+        urgency_score=0.25,
+        competitiveness_score=0.45,
+        budget_capture_score=0.92,
+        expected_margin_score=0.48,
+        execution_complexity_score=0.39,
+        deadline_hours_remaining=96,
+        current_active_bids=3,
+        max_active_bids=3,
+        current_workload_score=0.91,
+        workload_source="provided",
+        score_breakdown=json.dumps({"expected_margin_signal": 0.48, "total_penalty": 0.29}, ensure_ascii=False),
+        reasoning="기존 보류 이력입니다.",
+        created_at=datetime.now(UTC) - timedelta(days=3),
+        updated_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    newer_record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=operator.id,
+        pursue_bid=True,
+        action="review",
+        decision_status="reviewing",
+        recommended_amount=93500000.0,
+        probability_score=0.63,
+        matched_score=0.71,
+        priority_score=0.59,
+        urgency_score=0.55,
+        competitiveness_score=0.61,
+        budget_capture_score=0.94,
+        expected_margin_score=0.64,
+        execution_complexity_score=0.52,
+        deadline_hours_remaining=24,
+        current_active_bids=1,
+        max_active_bids=3,
+        current_workload_score=0.26,
+        workload_source="auto",
+        score_breakdown=json.dumps({"expected_margin_signal": 0.64, "total_penalty": 0.12}, ensure_ascii=False),
+        reasoning="최신 검토 이력입니다.",
+        created_at=datetime.now(UTC) - timedelta(days=1),
+        updated_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    test_db.add_all([older_record, newer_record])
+    test_db.commit()
+    test_db.refresh(older_record)
+    test_db.refresh(newer_record)
+
+    response = client.get(
+        f"/api/v1/operations/projects/{project.id}/bid-decision-timeline",
+        params={"limit": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == operator.id
+    assert payload["project"]["id"] == project.id
+    assert payload["project"]["title"] == project.title
+    assert payload["result_count"] == 2
+    assert payload["limit_applied"] == 1
+    assert payload["latest_decision_record_id"] == newer_record.id
+    assert len(payload["timeline"]) == 1
+    assert payload["timeline"][0]["id"] == newer_record.id
+    assert payload["timeline"][0]["workload_source"] == "auto"
 
 
 def test_bid_decision_persistence_updates_existing_active_record(client, test_db):
@@ -1516,6 +1808,97 @@ def test_opportunity_analysis_reflects_existing_active_bid_load(client, test_db)
     assert any("실행 부담" in item or "마감 시간" in item for item in payload["risk_flags"])
     assert payload["decision"]["action"] in {"review", "skip"}
     assert payload["decision"]["priority_score"] <= 0.8
+
+
+def test_opportunity_analysis_auto_computes_workload_when_omitted(client, test_db):
+    """Opportunity analysis should derive workload from active bid decisions when the caller omits it."""
+    user = User(
+        username="analysis-auto-workload-operator",
+        email="analysis-auto-workload-operator@example.com",
+        hashed_password="hashed",
+        full_name="Analysis Auto Workload Operator",
+        company="Analysis Auto Workload Corp",
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    profile = CompanyProfile(
+        user_id=user.id,
+        business_type="software",
+        license_codes="SW001",
+        region_codes="전국",
+        annual_revenue=950000000.0,
+        capacity_score=0.9,
+        total_awards=5,
+    )
+    target_project = Project(
+        title="AI 자동 workload 분석 대상 공고",
+        description="전국 수행 가능한 AI 데이터 분석 플랫폼 구축",
+        requirements="SW001 보유 업체, 전국 수행 가능, 데이터 분석 포함",
+        budget_estimate=135000000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=20),
+    )
+    active_project = Project(
+        title="기존 검토 중인 활성 입찰",
+        description="기존 검토 부하를 만드는 활성 입찰",
+        requirements="SW001 보유 업체",
+        budget_estimate=92000000.0,
+        category="software",
+    )
+    similar_project = Project(
+        title="AI 분석 자동화 유사 공고",
+        description="AI 데이터 분석과 자동화 대시보드 구축",
+        requirements="전국 수행 가능, SW001 보유 업체",
+        budget_estimate=128000000.0,
+        category="software",
+    )
+    test_db.add_all([profile, target_project, active_project, similar_project])
+    test_db.commit()
+    test_db.refresh(target_project)
+    test_db.refresh(active_project)
+
+    active_record = BidDecisionRecord(
+        project_id=active_project.id,
+        operator_id=user.id,
+        pursue_bid=True,
+        action="review",
+        decision_status="reviewing",
+        recommended_amount=87000000.0,
+        probability_score=0.72,
+        matched_score=0.74,
+        priority_score=0.68,
+        deadline_hours_remaining=12,
+        current_active_bids=1,
+        max_active_bids=2,
+        current_workload_score=0.55,
+        reasoning="기존 검토 건입니다.",
+    )
+    test_db.add(active_record)
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/operations/opportunity-analysis",
+        json={
+            "project_id": target_project.id,
+            "max_active_bids": 2,
+            "similar_limit": 3,
+            "min_similarity": 0.15,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_active_bids"] == 1
+    assert payload["workload_source"] == "auto"
+    assert payload["current_workload_score"] > 0.0
+    assert payload["decision"]["workload_source"] == "auto"
+    assert payload["decision"]["expected_margin_score"] > 0.0
+    assert payload["decision"]["execution_complexity_score"] > 0.0
+    assert payload["decision"]["score_breakdown"]["active_load_ratio"] == 0.5
+    assert payload["decision"]["score_breakdown"]["workload_score_used"] == payload["current_workload_score"]
+    assert payload["decision"]["score_breakdown"]["execution_complexity_penalty"] >= 0.0
 
 
 def test_opportunity_analysis_uses_agency_weighted_price_history(client, test_db):

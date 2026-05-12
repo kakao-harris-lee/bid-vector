@@ -1,20 +1,41 @@
 """Background jobs."""
 
 from typing import Any
+from uuid import uuid4
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.models import CrawlJob
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
 from app.services.koneps.collector import KonepsCollectorService
+from app.services.ml_training import PricePredictionTrainingService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.project_similarity import ProjectSimilarityService
-from app.tasks.celery_app import celery_app
+from app.services.decision_experiments import DecisionExperimentService
+from app.tasks.celery_app import (
+    COLLECT_KONEPS_NOTICES_TASK_NAME,
+    DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
+    OPERATOR_STRATEGY_MONITOR_TASK_NAME,
+    PRICE_PREDICTOR_TRAINING_TASK_NAME,
+    PROJECT_EMBEDDING_REBUILD_TASK_NAME,
+    celery_app,
+)
 
-COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
-PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
-OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
+
+class _QueuedOnlyTaskHandle:
+    """Task handle used when ML work must not execute inside the API process."""
+
+    def __init__(self, task_id: str) -> None:
+        self.id = task_id
+
+
+def _enqueue_ml_task(task, *, kwargs: dict[str, Any], queue: str):
+    """Queue an ML task, refusing eager in-process execution unless explicitly allowed."""
+    if settings.uses_in_memory_celery and not settings.CELERY_ALLOW_INLINE_ML_TASKS:
+        return _QueuedOnlyTaskHandle(str(uuid4()))
+    return task.apply_async(kwargs=kwargs, queue=queue)
 
 
 @celery_app.task(name=COLLECT_KONEPS_NOTICES_TASK_NAME)
@@ -112,6 +133,26 @@ def rebuild_project_embeddings(
         db.close()
 
 
+@celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)
+def train_price_predictor(request_payload: dict[str, Any] | None = None) -> dict:
+    """Run price-predictor training in the dedicated ML training queue."""
+    db = SessionLocal()
+    try:
+        return PricePredictionTrainingService().train_price_predictor(db, request_payload=request_payload)
+    finally:
+        db.close()
+
+
+@celery_app.task(name=DECISION_EXPERIMENT_REEVALUATION_TASK_NAME)
+def reevaluate_decision_experiment(experiment_run_id: int) -> dict:
+    """Re-evaluate a decision experiment outside the API request path."""
+    db = SessionLocal()
+    try:
+        return DecisionExperimentService().evaluate_run(db, run_id=int(experiment_run_id))
+    finally:
+        db.close()
+
+
 @celery_app.task(name=OPERATOR_STRATEGY_MONITOR_TASK_NAME)
 def monitor_operator_strategy(
     request_payload: dict[str, Any] | None = None,
@@ -144,12 +185,34 @@ def enqueue_project_embedding_rebuild(
     force: bool = False,
 ):
     """Queue a project embedding rebuild task and return the async task handle."""
-    return rebuild_project_embeddings.delay(
-        limit=limit,
-        offset=offset,
-        category=category,
-        project_status=project_status,
-        force=force,
+    return _enqueue_ml_task(
+        rebuild_project_embeddings,
+        kwargs={
+            "limit": limit,
+            "offset": offset,
+            "category": category,
+            "project_status": project_status,
+            "force": force,
+        },
+        queue=settings.CELERY_ML_BACKFILL_QUEUE,
+    )
+
+
+def enqueue_price_predictor_training(*, request_payload: dict[str, Any]):
+    """Queue a price predictor training task and return the async task handle."""
+    return _enqueue_ml_task(
+        train_price_predictor,
+        kwargs={"request_payload": request_payload},
+        queue=settings.CELERY_ML_TRAINING_QUEUE,
+    )
+
+
+def enqueue_decision_experiment_reevaluation(*, experiment_run_id: int):
+    """Queue a decision experiment re-evaluation task and return the async task handle."""
+    return _enqueue_ml_task(
+        reevaluate_decision_experiment,
+        kwargs={"experiment_run_id": int(experiment_run_id)},
+        queue=settings.CELERY_ML_REEVALUATION_QUEUE,
     )
 
 
@@ -160,10 +223,13 @@ def enqueue_operator_strategy_monitor(
     trigger_source: str = StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
 ):
     """Queue an operator strategy monitoring task and return the async task handle."""
-    return monitor_operator_strategy.delay(
-        request_payload=request.model_dump(mode="json"),
-        monitor_run_id=monitor_run_id,
-        trigger_source=trigger_source,
+    return monitor_operator_strategy.apply_async(
+        kwargs={
+            "request_payload": request.model_dump(mode="json"),
+            "monitor_run_id": monitor_run_id,
+            "trigger_source": trigger_source,
+        },
+        queue=settings.CELERY_OPS_QUEUE,
     )
 
 
@@ -173,9 +239,12 @@ def enqueue_koneps_notice_collection(
     crawl_job_id: int | None = None,
 ):
     """Queue a KONEPS crawl task and return the async task handle."""
-    return collect_koneps_notices.delay(
-        request_payload=request.model_dump(mode="json"),
-        crawl_job_id=crawl_job_id,
+    return collect_koneps_notices.apply_async(
+        kwargs={
+            "request_payload": request.model_dump(mode="json"),
+            "crawl_job_id": crawl_job_id,
+        },
+        queue=settings.CELERY_OPS_QUEUE,
     )
 
 
@@ -297,6 +366,74 @@ def get_project_embedding_rebuild_task_status(task_id: str) -> dict[str, Any]:
     if raw_status == "FAILURE" and result is not None:
         payload["error"] = str(result)
 
+    return payload
+
+
+def get_price_predictor_training_task_status(task_id: str) -> dict[str, Any]:
+    """Read and normalize the current state of a queued price-predictor training task."""
+    return _build_generic_task_status(
+        task_id,
+        task_name=PRICE_PREDICTOR_TRAINING_TASK_NAME,
+        queue=settings.CELERY_ML_TRAINING_QUEUE,
+        pending_detail="Task is queued or unknown to the current result backend.",
+        started_detail="Task is currently training price predictor artifacts.",
+        success_detail="Task completed successfully.",
+        failure_detail="Task failed while training price predictor artifacts.",
+    )
+
+
+def get_decision_experiment_reevaluation_task_status(task_id: str) -> dict[str, Any]:
+    """Read and normalize the current state of a queued decision-experiment re-evaluation task."""
+    return _build_generic_task_status(
+        task_id,
+        task_name=DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
+        queue=settings.CELERY_ML_REEVALUATION_QUEUE,
+        pending_detail="Task is queued or unknown to the current result backend.",
+        started_detail="Task is currently re-evaluating the decision experiment.",
+        success_detail="Task completed successfully.",
+        failure_detail="Task failed while re-evaluating the decision experiment.",
+    )
+
+
+def _build_generic_task_status(
+    task_id: str,
+    *,
+    task_name: str,
+    queue: str,
+    pending_detail: str,
+    started_detail: str,
+    success_detail: str,
+    failure_detail: str,
+) -> dict[str, Any]:
+    """Read a Celery task status into a stable poll response."""
+    async_result = celery_app.AsyncResult(task_id)
+    raw_status = str(getattr(async_result, "state", getattr(async_result, "status", "PENDING")) or "PENDING").upper()
+    ready = bool(async_result.ready()) if hasattr(async_result, "ready") else raw_status in {"SUCCESS", "FAILURE", "REVOKED"}
+    successful = bool(async_result.successful()) if hasattr(async_result, "successful") else raw_status == "SUCCESS"
+    result = getattr(async_result, "result", None)
+    detail = {
+        "PENDING": pending_detail,
+        "STARTED": started_detail,
+        "SUCCESS": success_detail,
+        "FAILURE": failure_detail,
+        "RETRY": "Task is retrying after a temporary failure.",
+        "REVOKED": "Task was cancelled before completion.",
+    }.get(raw_status, "Task status is available.")
+
+    payload: dict[str, Any] = {
+        "task_id": task_id,
+        "task_name": task_name,
+        "queue": queue,
+        "status": _normalize_celery_status(raw_status),
+        "raw_status": raw_status,
+        "ready": ready,
+        "successful": successful,
+        "detail": detail,
+        "error": None,
+        "result": result if successful and isinstance(result, dict) else None,
+    }
+    if raw_status == "FAILURE" and result is not None:
+        payload["error"] = str(result)
     return payload
 
 

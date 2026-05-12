@@ -8,7 +8,6 @@ from app.core.database import get_db
 from app.models.models import Project
 from app.schemas.schemas import (
     ProjectCreate,
-    ProjectEmbeddingBatchRefreshResponse,
     ProjectEmbeddingBatchRefreshTaskResponse,
     ProjectEmbeddingBatchRefreshTaskStatusResponse,
     ProjectEmbeddingRefreshResponse,
@@ -71,37 +70,15 @@ def list_projects(
     return projects
 
 
-@router.post("/embeddings/rebuild", response_model=ProjectEmbeddingBatchRefreshResponse)
-def rebuild_project_embeddings(
-    limit: int = Query(default=100, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-    category: str | None = Query(default=None),
-    project_status: str | None = Query(default=None),
-    force: bool = Query(default=False),
-    db: Session = Depends(get_db),
-):
-    """Rebuild semantic embeddings for a filtered batch of projects."""
-    response = ProjectSimilarityService().rebuild_project_embeddings(
-        db,
-        limit=limit,
-        offset=offset,
-        category=category,
-        project_status=project_status,
-        force=force,
-    )
-    db.commit()
-    return response
-
-
-@router.post("/embeddings/rebuild/async", response_model=ProjectEmbeddingBatchRefreshTaskResponse)
-def rebuild_project_embeddings_async(
-    limit: int = Query(default=100, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
-    category: str | None = Query(default=None),
-    project_status: str | None = Query(default=None),
-    force: bool = Query(default=False),
-):
-    """Queue a batch embedding rebuild task and return a pollable task id."""
+def _enqueue_project_embedding_rebuild_response(
+    *,
+    limit: int,
+    offset: int,
+    category: str | None,
+    project_status: str | None,
+    force: bool,
+) -> dict:
+    """Queue a project embedding rebuild and shape the pollable API response."""
     async_result = enqueue_project_embedding_rebuild(
         limit=limit,
         offset=offset,
@@ -117,6 +94,51 @@ def rebuild_project_embeddings_async(
         "detail": status_payload["detail"],
         "poll_url": f"/api/v1/projects/embeddings/rebuild/tasks/{async_result.id}",
     }
+
+
+@router.post(
+    "/embeddings/rebuild",
+    response_model=ProjectEmbeddingBatchRefreshTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+)
+def rebuild_project_embeddings(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    category: str | None = Query(default=None),
+    project_status: str | None = Query(default=None),
+    force: bool = Query(default=False),
+):
+    """Queue a semantic embedding backfill without running it inside the API request."""
+    return _enqueue_project_embedding_rebuild_response(
+        limit=limit,
+        offset=offset,
+        category=category,
+        project_status=project_status,
+        force=force,
+    )
+
+
+@router.post(
+    "/embeddings/rebuild/async",
+    response_model=ProjectEmbeddingBatchRefreshTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def rebuild_project_embeddings_async(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    category: str | None = Query(default=None),
+    project_status: str | None = Query(default=None),
+    force: bool = Query(default=False),
+):
+    """Queue a batch embedding rebuild task and return a pollable task id."""
+    return _enqueue_project_embedding_rebuild_response(
+        limit=limit,
+        offset=offset,
+        category=category,
+        project_status=project_status,
+        force=force,
+    )
 
 
 @router.get("/embeddings/rebuild/tasks/{task_id}", response_model=ProjectEmbeddingBatchRefreshTaskStatusResponse)

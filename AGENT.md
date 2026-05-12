@@ -10,21 +10,45 @@
 ## 현재 저장소 기준선
 
 - 백엔드 프레임워크: FastAPI
-- 데이터 계층: SQLAlchemy 기반 PostgreSQL 설정
-- 비동기 준비: PostgreSQL 중심 구조, Celery 스캐폴드는 선택적으로 유지
-- 현재 구현 범위:
-  - 인증 API
-  - 프로젝트/입찰 API
-  - 가격 예측, 입찰 추천, 문서 분석 AI 모듈
-  - 운영자/분석 API
-- 아직 본격 구현이 필요한 범위:
-  - 나라장터 실시간 크롤러
-  - 맞춤형 공고 분류기
-  - 사정률 예측 고도화(LSTM/Ensemble/T-분포 보정)
-  - 단일 사용자 입찰 우선순위 / 추진 결정 로직
-  - 텔레그램 알림 및 제어
-  - WebSocket 알림
-  - Celery 비동기 작업 파이프라인
+- 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
+- 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
+- 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `125 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose --profile tasks config` 해석 확인 완료
+- Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
+
+### 현재까지 완료된 범위
+
+- 인증 / 운영자 프로필 / 전략 설정 API
+- 프로젝트 / 입찰 CRUD 및 운영자 overview / notification 조회
+- 나라장터 수집 mock/live 경로, `CrawlJob` / `HistoricalData` / `TenderResult` 적재, `Project` 연결
+- 규칙 기반 + 의미 기반 분류, pgvector 기반 유사 공고 검색
+- 가격 예측 데이터셋 추출, 통계 기반 예측, feedback calibration, reserve pattern, guardrail 응답 필드
+- predictor abstraction 및 `HistoricalStatisticalPredictor`, artifact-backed `LSTMBidRatePredictor` / `EnsembleBidRatePredictor` 추론
+- opportunity analysis / bid recommendation / persisted bid decision engine
+- `BidDecisionRecord` 기반 우선순위 / 추진 결정, score breakdown, margin / complexity / workload 반영
+- 결정 상세 / 타임라인 / 퍼널 / 트렌드 / 세그먼트 / 기간 비교 / 추천 analytics
+- 추천을 실험 계획으로 확장한 `decision-recommendations`
+- 실험 실행 이력 / 평가 API (`decision-experiments`) 및 baseline vs current 비교
+- 실험 run 수동 상태 변경 / 메모 갱신 / threshold 적용 feedback loop
+- Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback
+- 전략 모니터링 preview / execute / history 및 in-process scheduler
+- `docker compose` 복구, healthcheck/env wiring 정리, CPU-only PyTorch + pip cache 기반 Docker build 최적화
+- runtime / embedding / training / dev 의존성 분리 및 멀티타깃 Docker build 정리
+- manifest 기반 ML artifact promotion 서비스/CLI 및 embedding rebuild 자동화
+- manifest 추천값의 `.env` 반영 자동화 (`--write-env-file`)
+- manifest apply 후 compose 재기동 + health 확인 + API 기반 embedding rebuild rollout 자동화
+- Celery worker가 `app.tasks.jobs`를 명시적으로 import 하도록 정리해 out-of-process worker/beat 경로에서 task 등록 누락을 방지
+- 외부 broker 사용 시 `CELERY_RESULT_BACKEND` 기본값을 PostgreSQL(`db+${DATABASE_URL}`)로 자동 승격하도록 정리
+- optional `tasks` compose profile(`rabbitmq`, `worker`, `beat`) 및 관련 Makefile/문서 경로 추가
+
+### 아직 핵심적으로 남은 범위
+
+- `LSTM` / `Ensemble` 학습 파이프라인 및 모델 아티팩트 관리 고도화
+- 예측기 성능 비교 / 백테스트 / predictor selection 자동화
+- threshold 외 workload/category 계열 실험 결과 반영 범위 확장
+- `docker compose up -d` 실패 원인 해결과 production-grade task/broker 정리
+- WebSocket 기반 실시간 이벤트 전송
+- 운영 대시보드용 모델 정확도 / 크롤 성공률 / fallback 빈도 집계 API 보강
 
 ## 작업 원칙
 
@@ -50,323 +74,141 @@
    - 비즈니스 로직은 라우트에서 직접 키우지 말고 함수/서비스로 분리
    - 테스트는 `tests/`에 추가
 
-## 기능 구현 우선순위
+## 기능 상태 및 남은 작업
 
-### 1순위: 데이터 수집 기반 마련
+### A. 데이터 수집 및 적재 — 기반 완료, 운영 고도화 필요
 
-- `app/services/collector/` 또는 `app/services/koneps/` 계열 모듈 추가
-- 나라장터 공고/개찰 데이터 수집기 구현
-- 수집 대상:
-  - 공고번호
-  - 공고명
-  - 기초금액
-  - 추정가격
-  - 입찰 마감일
-  - 업종 제한
-  - 지역 제한
-  - 개찰 결과
-  - 복수예비가격 15개
-  - 선택 번호 4개
+이미 구현됨:
 
-권장 스택:
+- `app/services/koneps/collector.py` 기반 mock/live 수집 경로
+- `HistoricalData`, `TenderResult`, `CrawlJob`, `Project` 연결 적재
+- 수집 API / 작업 상태 / 기본 회귀 테스트
 
-- Playwright 우선
-- 필요 시 BeautifulSoup 보조 사용
+남은 작업:
 
-### 2순위: 맞춤형 공고 분류기
+- live 수집 안정화(retry, backoff, selector drift 대응)
+- 백필/주기 수집 작업 분리
+- 수집 성공률 / 실패 원인 / 마지막 성공 시각 집계
 
-- 업체 프로필과 공고문 적합도 계산 기능 추가
-- 초기 버전은 규칙 기반 + 키워드 매칭으로 시작 가능
-- 고도화 시 Sentence-Transformers 임베딩 기반 유사도 분석 도입
+### B. 맞춤형 공고 분류 및 유사도 — 기반 완료, 정밀도 보정 단계
 
-필수 판단 기준:
+이미 구현됨:
 
-- 업무 구분(물품/용역/공사)
-- 면허/업종 코드 일치
-- 지역 제한 충족 여부
-- 추정가격 vs 업체 수행 가능 범위
+- 규칙 기반 적합도 계산
+- 운영자 프로필 기반 필터링
+- Sentence-Transformers + pgvector 유사 공고 검색
 
-### 3순위: 사정률 예측 엔진 고도화
+남은 작업:
 
-현재 `app/ai/price_prediction.py`는 플레이스홀더 성격이 강합니다.
-향후 아래 방향으로 확장합니다.
+- 면허/지역/업종 false positive 보정
+- 분류 점수 calibration
+- 설명 가능한 세부 reason 확장
 
-- 시계열 입력 기반 사정률 예측
-- 발주처/업종별 분리 학습 가능 구조
-- 데이터 부족 시 T-분포 보정
-- 결과는 최소 아래 필드를 반환
-  - 예측 사정률
-  - 상위 후보 3개
-  - 신뢰도
-  - 계산 근거 요약
+### C. 사정률 예측 엔진 — 현재 최우선 확장 영역
 
-### 4순위: 단일 사용자 입찰 우선순위 / 추진 결정 로직
+이미 구현됨:
 
-- 운영자 기준 과거 투찰/검토 이력 조회
-- 적합도, 낙찰 확률, 마감 임박도를 조합해 우선순위 계산
-- 동일 공고에 대한 중복 검토/중복 투찰 방지 필요
-- 입찰 추진 결과는 별도 테이블 또는 추적 가능한 저장 구조로 관리
+- 학습용 데이터셋 추출 서비스
+- 통계 기반 historical predictor
+- fallback / predictor 메타데이터 / guardrail 응답 구조
+- artifact-backed `LSTM` / `Ensemble` predictor 추론
 
-권장 신규 엔터티:
+남은 작업:
 
-- `HistoricalData`
-- `CompanyProfile`
-- `Allocation`
-- `TenderResult`
+- 모델 아티팩트 저장/로드 전략 정리
+- predictor selection, 백테스트, 정확도 비교 API 추가
 
-### 5순위: 텔레그램/실시간 알림
+우선 검토 파일:
 
-- `python-telegram-bot` 기반 알림 모듈 추가
-- 적격 공고 탐지 시 아래 정보 전송
-  - 공고번호
-  - 사업명
-  - 기초금액
-  - AI 추천가
-  - 예상 낙찰 확률
-- 인라인 액션 예시
-  - 상세보기
-  - 투찰완료 기록
-  - 관심제외
-
-동시에 WebSocket 알림도 고려합니다.
-
-## 기능별 구현 계획
-
-### A. 나라장터 실시간 크롤러
-
-#### 1단계: 수집 도메인 고정
-
-- `CrawlRequest`, `CrawlResponse`를 실제 필드 중심으로 구조화
-- 수집 결과 아이템 스키마를 별도로 정의
-- `app/services/koneps/collector.py`에 요청 정규화, mock 수집 결과 생성, 결과 매핑 함수 추가
-- `app/api/operations.py`에서 수집 API를 안정적으로 노출
-
-대상 파일:
-
-- `app/schemas/schemas.py`
-- `app/services/koneps/collector.py`
-- `app/api/operations.py`
-- `tests/test_operations.py`
-
-완료 기준:
-
-- 수집 API가 공고번호/사업명/기초금액/예정가격/마감일/업종/지역/URL을 반환할 수 있어야 함
-- 실제 Playwright 연결 전에도 mock 결과로 API/테스트 검증 가능해야 함
-
-#### 2단계: Playwright 기반 실제 수집
-
-- 검색 조건 조합 함수 구현
-- 목록 페이지 탐색 및 페이지네이션 처리
-- 상세 페이지 진입 전 목록 기준 최소 메타데이터 확보
-- Anti-Bot 대응을 위한 user-agent, timeout, retry, backoff 적용
-
-완료 기준:
-
-- 특정 날짜/카테고리/키워드 기준으로 실제 공고 목록이 수집되어야 함
-
-#### 3단계: 개찰 결과 수집 고도화
-
-- 개찰 결과 페이지 파싱
-- 복수예비가격 15개 수집
-- 선택 번호 4개 수집
-- `HistoricalData`, `TenderResult`, `CrawlJob` 저장 연결
-
-완료 기준:
-
-- 예측 엔진이 사용할 수 있는 historical/opening 데이터가 DB에 누적되어야 함
-
-### B. 맞춤형 공고 분류기
-
-#### 1단계: 규칙 기반 분류기
-
-- `CompanyProfile` 기반 업종/지역/예산 적합도 점수 계산
-- 프로젝트와 업체 간 기본 필터 통과 여부를 설명 가능한 이유 목록으로 반환
-
-대상 파일:
-
-- `app/services/classifier.py`
-- `app/models/models.py`
-- `app/schemas/schemas.py`
-- `tests/test_operations.py` 또는 전용 분류 테스트
-
-완료 기준:
-
-- 분류 결과에 `matched`, `score`, `reasons`가 일관되게 포함되어야 함
-
-#### 2단계: 자격/면허 기반 고도화
-
-- 면허 코드 일치 여부 반영
-- 지역 제한 반영
-- 업체 수행 능력 범위 반영
-
-#### 3단계: 의미 기반 임베딩 분류
-
-- Sentence-Transformers 임베딩 적용
-- 공고문 전문과 업체 역량 요약 간 유사도 계산
-- 룰 기반 점수와 임베딩 점수 혼합
-
-완료 기준:
-
-- 규칙 기반 false positive를 줄이고, 의미 기반 유사도까지 반영한 추천 점수를 제공해야 함
-
-### C. 사정률 예측 엔진
-
-#### 1단계: 데이터 입력 구조 정리
-
-- `HistoricalData`에서 발주처/업종/기간별 시계열 추출 함수 작성
-- 기존 `price_prediction.py` 플레이스홀더를 입력-출력 구조 중심으로 리팩터링
-
-대상 파일:
-
+- `app/services/prediction_dataset.py`
 - `app/ai/price_prediction.py`
-- `app/services/` 하위 데이터 조회 유틸
+- `app/ai/predictors/base.py`
+- `app/ai/predictors/historical.py`
+- `app/ai/predictors/lstm.py`
+- `app/ai/predictors/ensemble.py`
+- `tests/test_prediction_predictors.py`
 - `tests/test_predictions.py`
 
-완료 기준:
+### D. 입찰 추진 결정 / 실험 분석 — 핵심 완료, 운영 자동화 확장 필요
 
-- 예측 함수가 단순 budget 기반이 아니라 historical series를 받을 수 있는 구조가 되어야 함
+이미 구현됨:
 
-#### 2단계: 통계 기반 1차 예측
+- `BidDecisionRecord` 기반 추진 결정 엔진과 영속화
+- 상세 / 타임라인 / 퍼널 / 추천 analytics
+- recommendation → experiment plan 확장
+- 실험 run 저장 / baseline snapshot / evaluate API
+- 실험 수동 종료 / 롤백 / 메모 수정 API
+- 성공 실험의 threshold 적용 feedback loop
 
-- 최근 구간 평균, 표준편차, 이상치 제거 로직 추가
-- 데이터 적을 때 T-분포 보정 적용
-- 상위 사정률 후보 3개 반환
+남은 작업:
 
-#### 3단계: LSTM/Ensemble 도입
+- workload / category 계열 실험 결과를 운영 설정으로 반영하는 범위 확장
+- 운영 화면에서 바로 쓰기 좋은 action payload 정리
 
-- 발주처별 시계열 학습
-- 업종별 하한율과 결합하여 투찰금액 후보 생성
-- 설명 가능한 feature summary 반환
-
-완료 기준:
-
-- 예측 사정률/후보 3개/신뢰도/계산 근거가 API 응답에 포함되어야 함
-
-### D. 단일 사용자 입찰 우선순위 / 추진 결정 로직
-
-#### 1단계: 입찰 추진 우선순위 계산
-
-- 적합도 점수와 낙찰 확률 기반 우선순위 계산
-- 마감 임박도와 현재 진행 중인 건수 반영
-- 즉시 투찰 / 추가 검토 / 보류 판단 규칙 정리
-
-대상 파일:
+우선 검토 파일:
 
 - `app/services/allocation.py`
-- `app/models/models.py`
-- `app/api/operations.py`
-- `tests/test_operations.py`
+- `app/services/decision_analytics.py`
+- `app/services/decision_experiments.py`
+- `app/api/analytics.py`
+- `app/schemas/schemas.py`
 
-완료 기준:
+### E. 알림 채널 — Telegram 완료, WebSocket 미완료
 
-- 동일 입력에 대해 항상 동일한 입찰 추진 결정 결과를 반환해야 함
+이미 구현됨:
 
-#### 2단계: DB 영속화
+- Telegram 메시지 포맷 / callback / polling / 상태 동기화
+- 웹 알림 fallback 및 운영자 notification 조회
 
-- 입찰 추진 결정 저장
-- 상태(`planned`, `reviewing`, `submitted`, `skipped`) 관리
+남은 작업:
 
-#### 3단계: 예측 엔진 연동
+- WebSocket 연결 관리 레이어
+- 신규 후보 / 추천 / 실패 이벤트 브로드캐스트
+- Telegram / WebSocket 공통 event schema 정리
 
-- 예측 확률과 분류 점수를 결합해 우선순위 자동 조정
-- 진행 중인 입찰 수와 마감 일정 기반 재정렬 로직 추가
+### F. 비동기 / 실행 인프라 — compose 복구 완료, 운영 정리 필요
 
-완료 기준:
+이미 구현됨:
 
-- 추천 금액과 입찰 추진 결정이 분리 저장되고 이력 추적이 가능해야 함
+- Celery 스캐폴드
+- in-process scheduler 기반 전략 모니터링 실행
+- task 상태 조회용 기본 경로
+- `docker compose` 복구 및 로컬 smoke test/컨테이너 테스트 검증
+- Docker build에서 CPU-only PyTorch wheel과 pip cache를 사용하도록 최적화
+- 기본 API 이미지를 `api-runtime` 타깃으로 슬림화하고, `api-embedding` / `api-training` / `api-ml-full`로 분리
+- optional RabbitMQ broker + Celery worker/beat compose profile 추가
+- 외부 broker 사용 시 PostgreSQL result backend 자동 연동
+- worker/beat가 현재 task 모듈을 명시 import하도록 정리
 
-### E. 텔레그램 알림 및 제어
+남은 작업:
 
-#### 1단계: 메시지 템플릿화
+- 백필 / 학습 / 재평가 작업을 API 요청 경로에서 완전히 분리
+- training 컨테이너와 embedding 런타임 사이의 artifact promotion 자동화 스크립트/manifest 고도화
+- 기본 CLI/manifest 경로는 구현됨 (`scripts/promote_ml_release.py`)
+- 다음 단계는 release manifest 서명/보관 정책, `.env` 갱신 자동화, remote object storage 연계
 
-- `TelegramNotificationService`에서 공고 요약/추천가/확률 메시지 포맷 정리
-- 설정 미존재 시 graceful fallback 유지
+### G. 분석 / 대시보드 집계 — decision analytics는 강함, prediction reporting 잔여
 
-대상 파일:
+이미 구현됨:
 
-- `app/services/notifications/telegram.py`
-- `app/api/operations.py`
+- overview / summary / prediction feedback
+- decision insights / funnel / recommendations / experiments
 
-완료 기준:
+남은 작업:
 
-- 텔레그램 설정이 없더라도 메시지 생성과 API 응답은 실패하지 않아야 함
+- 모델별 정확도 비교 집계
+- fallback 빈도 / guardrail 적용 빈도 집계
+- 크롤 성공률 / 전략 성과 / 최근 기간 카드형 응답 정리
 
-#### 2단계: 실제 Bot 연동
+## 현재 권장 실행 순서
 
-- `python-telegram-bot` 연결
-- 인라인 버튼 구성
-- 클릭 이벤트에 따른 상태 업데이트 설계
+1. `C. 예측 성능 비교 / 백테스트 / selection 자동화`
+2. `F. 백필 / 학습 / 재평가 작업의 API 경로 분리`
+3. `E. WebSocket 실시간 이벤트`
+4. `G. 운영 보고용 집계 API`
+5. `D. workload/category 실험 반영 범위 확장`
 
-#### 3단계: 입찰 추진 결정/분류/예측 결과 연동
-
-- 적격 공고 발생 시 자동 발송
-- 사용자가 관심 제외/투찰 완료를 선택할 수 있게 확장
-
-완료 기준:
-
-- 알림이 단순 텍스트가 아니라 actionable notification이 되어야 함
-
-### F. WebSocket 실시간 알림
-
-#### 1단계: 연결 관리 레이어
-
-- 운영자 연결 세션 관리
-- 이벤트 브로드캐스트 인터페이스 정의
-
-#### 2단계: 운영 이벤트 연결
-
-- 신규 공고 감지
-- 추천가 생성
-- 입찰 추진 결정 완료
-- 관리자 경고
-
-완료 기준:
-
-- 핵심 이벤트가 API polling 없이도 전달되어야 함
-
-### G. Celery 배치 파이프라인
-
-#### 1단계: 작업 분리
-
-- 수집 작업
-- 텔레그램 발송 작업
-- 예측 재계산 작업
-
-대상 파일:
-
-- `app/tasks/celery_app.py`
-- `app/tasks/jobs.py`
-
-#### 2단계: 스케줄링 및 재시도
-
-- 주기 수집
-- 실패 재시도
-- 작업 상태 로깅
-
-완료 기준:
-
-- 무거운 작업이 API 응답 경로에서 분리되어야 함
-
-### H. 관리자/분석 기능 확장
-
-#### 1단계: 운영 관측성 보강
-
-- 수집 성공/실패 통계
-- 분류/예측 호출 수
-- 운영자 입찰 추진 현황 요약
-
-#### 2단계: 대시보드 데이터셋 정리
-
-- 관리자 화면에서 바로 사용할 aggregate API 제공
-
-완료 기준:
-
-- 운영자가 "무슨 공고가 들어왔고 어떤 우선순위가 매겨졌고 어떤 예측이 나왔는지"를 한 번에 볼 수 있어야 함
-
-## 현재 진행 기준
-
-- 지금 착수 우선순위는 `A → B → D → E → C → G → F → H` 순서로 진행합니다.
-- 즉, 먼저 데이터를 안정적으로 수집하고, 그 다음 분류/입찰 추진 결정/알림 흐름을 붙인 뒤, 예측 엔진을 고도화합니다.
+`A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 
 ## 설계 지침
 
@@ -382,11 +224,13 @@
 기존 `User`, `Project`, `Bid`, `PricePrediction`, `Notification`, `Analytics`를 유지하면서,
 아래 확장을 우선 검토합니다.
 
-- 업체 프로필/자격 정보
-- 과거 개찰 데이터 저장소
-- 발주처 메타데이터
-- 입찰 추진 결정 기록
-- 크롤링 실행 이력 및 실패 로그
+- 업체 프로필/자격 정보 (`CompanyProfile`)
+- 과거 개찰 데이터 저장소 (`HistoricalData`, `TenderResult`)
+- 발주처/프로젝트 메타데이터 및 임베딩 정보
+- 입찰 추진 결정 기록 (`BidDecisionRecord`)
+- 의사결정 실험 실행 이력 (`DecisionExperimentRun`)
+- 크롤링 실행 이력 및 실패 로그 (`CrawlJob`)
+- 운영자 전략 실행 이력 (`OperatorStrategyRun`)
 
 ### 비동기/배치 처리
 
@@ -401,7 +245,7 @@
 
 ## 코드 스타일 및 품질 기준
 
-- Python 3.11 기준
+- Python 3.11+ 기준, 현재 검증 환경은 Python 3.12
 - 타입 힌트 우선
 - 함수는 가능한 한 순수 함수로 설계
 - 예외 메시지는 디버깅 가능한 수준으로 작성
@@ -430,15 +274,14 @@
 
 ## 추천 작업 순서
 
-1. 현재 모델/스키마 갭 분석
-2. 크롤링용 데이터 모델 추가
-3. 나라장터 수집기 프로토타입 구현
-4. 과거 데이터 적재 파이프라인 구현
-5. 사정률 예측 로직 고도화
-6. 입찰 추진 결정 로직 구현
-7. 텔레그램 및 WebSocket 알림 연결
-8. Celery 배치 작업 분리
-9. 테스트/운영 문서 보강
+1. `app/ai/price_prediction.py`와 predictor 계층 위에 backtest / predictor accuracy 집계를 설계
+2. 모델 정확도 / fallback / guardrail 집계를 `app/api/analytics.py`에 추가
+3. `docker-compose.yml`, `app/tasks/`를 정리해 무거운 작업을 운영 경로로 분리
+   - 기본 compose는 `api-runtime`
+   - semantic/embedding 재색인은 `api-embedding`
+   - 학습/데이터셋 정리는 `api-training`
+4. WebSocket 실시간 이벤트 레이어를 추가하고 notification payload를 정규화
+5. `app/services/decision_experiments.py`에서 threshold 외 실험 결과 반영 범위를 workload/category까지 확장
 
 ## 실행 전 확인 체크리스트
 

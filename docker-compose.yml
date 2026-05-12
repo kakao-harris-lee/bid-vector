@@ -2,35 +2,233 @@ services:
   db:
     image: pgvector/pgvector:pg16
     container_name: bid_vector_db
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: bid_vector_db
-      POSTGRES_USER: biduser
-      POSTGRES_PASSWORD: bidpassword
+      POSTGRES_DB: ${DATABASE_NAME:-bid_vector_db}
+      POSTGRES_USER: ${DATABASE_USER:-biduser}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
     ports:
-      - "5432:5432"
+      - "${DATABASE_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U biduser -d bid_vector_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-biduser} -d ${DATABASE_NAME:-bid_vector_db}"]
+      interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: bid_vector_rabbitmq
+    restart: unless-stopped
+    profiles:
+      - tasks
+    environment:
+      RABBITMQ_DEFAULT_USER: ${CELERY_RABBITMQ_USER:-bidvector}
+      RABBITMQ_DEFAULT_PASS: ${CELERY_RABBITMQ_PASSWORD:-bidvector}
+      RABBITMQ_DEFAULT_VHOST: ${CELERY_RABBITMQ_VHOST:-bidvector}
+    ports:
+      - "${CELERY_RABBITMQ_PORT:-5672}:5672"
+      - "${CELERY_RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   api:
-    build: .
+    build:
+      context: .
+      target: ${API_DOCKER_TARGET:-api-runtime}
     container_name: bid_vector_api
+    restart: unless-stopped
     init: true
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-bid_vector_db}
+      DATABASE_USER: ${DATABASE_USER:-biduser}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-memory://}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-cache+memory://}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      MODEL_CACHE_DIR: /app/models
+      CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PYTHONPATH: /app
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     shm_size: "1gb"
     volumes:
       - .:/app
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: .
+      target: ${API_DOCKER_TARGET:-api-runtime}
+    container_name: bid_vector_worker
+    restart: unless-stopped
+    init: true
+    profiles:
+      - tasks
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-bid_vector_db}
+      DATABASE_USER: ${DATABASE_USER:-biduser}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-cache+memory://}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      MODEL_CACHE_DIR: /app/models
+      CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PYTHONPATH: /app
+    shm_size: "1gb"
+    volumes:
+      - .:/app
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_OPS_QUEUE:-bid_vector_ops},${CELERY_TASK_DEFAULT_QUEUE:-bid_vector}
+
+  ml-worker:
+    build:
+      context: .
+      target: ${ML_WORKER_DOCKER_TARGET:-api-ml-full}
+    container_name: bid_vector_ml_worker
+    restart: unless-stopped
+    init: true
+    profiles:
+      - tasks
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-bid_vector_db}
+      DATABASE_USER: ${DATABASE_USER:-biduser}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-cache+memory://}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      MODEL_CACHE_DIR: /app/models
+      CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PYTHONPATH: /app
+    shm_size: "1gb"
+    volumes:
+      - .:/app
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_ML_BACKFILL_QUEUE:-bid_vector_ml_backfill},${CELERY_ML_REEVALUATION_QUEUE:-bid_vector_ml_reevaluation}
+
+  training-worker:
+    build:
+      context: .
+      target: ${TRAINING_WORKER_DOCKER_TARGET:-api-training}
+    container_name: bid_vector_training_worker
+    restart: unless-stopped
+    init: true
+    profiles:
+      - tasks
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-bid_vector_db}
+      DATABASE_USER: ${DATABASE_USER:-biduser}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-cache+memory://}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      MODEL_CACHE_DIR: /app/models
+      CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
+      PYTHONPATH: /app
+    shm_size: "1gb"
+    volumes:
+      - .:/app
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_ML_TRAINING_QUEUE:-bid_vector_ml_training}
+
+  beat:
+    build:
+      context: .
+      target: ${API_DOCKER_TARGET:-api-runtime}
+    container_name: bid_vector_beat
+    restart: unless-stopped
+    init: true
+    profiles:
+      - tasks
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-bid_vector_db}
+      DATABASE_USER: ${DATABASE_USER:-biduser}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-cache+memory://}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      MODEL_CACHE_DIR: /app/models
+      CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PYTHONPATH: /app
+    shm_size: "1gb"
+    volumes:
+      - .:/app
+      - celery_beat_data:/tmp
+    command: celery -A app.tasks.celery_app.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
 
 volumes:
   postgres_data:
+  rabbitmq_data:
+  celery_beat_data:

@@ -10,10 +10,12 @@ from app.core.single_user import ensure_operator_account, get_operator_profile
 from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, Project
 from app.schemas.schemas import (
     BackgroundJobResponse,
+    BidDecisionDetailResponse,
     BidDecisionRecordResponse,
     BidDecisionRequest,
     BidDecisionResponse,
     BidDecisionSaveRequest,
+    BidDecisionTimelineResponse,
     ClassificationRequest,
     ClassificationResponse,
     CrawlRequest,
@@ -164,10 +166,10 @@ def analyze_opportunity(request: OpportunityAnalysisRequest, db: Session = Depen
 
 @router.post("/allocate", response_model=BidDecisionResponse, deprecated=True)
 @router.post("/bid-decision", response_model=BidDecisionResponse)
-def decide_bid_pursuit(request: BidDecisionRequest):
+def decide_bid_pursuit(request: BidDecisionRequest, db: Session = Depends(get_db)):
     """Prioritize whether the single user should pursue a bid opportunity now."""
     service = BidDecisionService()
-    return service.evaluate_opportunity(request)
+    return service.evaluate_opportunity(request, db=db)
 
 
 @router.post("/bid-decisions", response_model=BidDecisionRecordResponse)
@@ -207,6 +209,30 @@ def list_bid_decisions(
         .limit(limit)
         .all()
     )
+
+
+@router.get("/projects/{project_id}/bid-decision-timeline", response_model=BidDecisionTimelineResponse)
+def get_project_bid_decision_timeline(
+    project_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Return recent persisted bid-decision history for one project."""
+    project = _get_project_or_404(db, project_id)
+    return BidDecisionService().get_project_timeline(db, project=project, limit=limit)
+
+
+@router.get("/bid-decisions/{decision_record_id}", response_model=BidDecisionDetailResponse)
+def get_bid_decision_detail(
+    decision_record_id: int,
+    timeline_limit: int = Query(default=10, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Return one persisted bid decision with project context and same-project history."""
+    try:
+        return BidDecisionService().get_decision_detail(db, decision_record_id=decision_record_id, timeline_limit=timeline_limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/notify/telegram", response_model=BackgroundJobResponse)

@@ -16,6 +16,8 @@ DEFAULT_OPERATOR_USERNAME = "operator"
 DEFAULT_OPERATOR_EMAIL = "operator@local.bid-vector"
 DEFAULT_OPERATOR_FULL_NAME = "Primary Operator"
 DEFAULT_OPERATOR_PASSWORD = "change-me-now"
+DEFAULT_OPERATOR_BID_NOW_THRESHOLD = 0.7
+DEFAULT_OPERATOR_REVIEW_THRESHOLD = 0.45
 
 
 def split_multi_value_text(raw_value: str | None) -> list[str]:
@@ -165,6 +167,8 @@ def ensure_operator_strategy(db: Session) -> OperatorStrategy:
         max_budget_estimate=0.0,
         minimum_match_score=0.6,
         minimum_probability_score=0.55,
+        bid_now_threshold=DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
+        review_threshold=DEFAULT_OPERATOR_REVIEW_THRESHOLD,
         notify_only_high_priority=True,
         max_recommended_candidates=10,
     )

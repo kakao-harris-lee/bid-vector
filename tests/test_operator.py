@@ -61,6 +61,8 @@ def test_get_operator_strategy_bootstraps_defaults(client):
     assert payload["min_budget_estimate"] == 0.0
     assert payload["minimum_match_score"] == 0.6
     assert payload["minimum_probability_score"] == 0.55
+    assert payload["bid_now_threshold"] == 0.7
+    assert payload["review_threshold"] == 0.45
     assert payload["notify_only_high_priority"] is True
     assert payload["strategy_configured"] is False
 
@@ -79,6 +81,8 @@ def test_update_operator_strategy_persists_watch_rules(client):
             "max_budget_estimate": 180000000.0,
             "minimum_match_score": 0.67,
             "minimum_probability_score": 0.62,
+            "bid_now_threshold": 0.74,
+            "review_threshold": 0.5,
             "notify_only_high_priority": False,
             "max_recommended_candidates": 7,
         },
@@ -95,6 +99,8 @@ def test_update_operator_strategy_persists_watch_rules(client):
     assert payload["max_budget_estimate"] == 180000000.0
     assert payload["minimum_match_score"] == 0.67
     assert payload["minimum_probability_score"] == 0.62
+    assert payload["bid_now_threshold"] == 0.74
+    assert payload["review_threshold"] == 0.5
     assert payload["notify_only_high_priority"] is False
     assert payload["max_recommended_candidates"] == 7
     assert payload["strategy_configured"] is True
@@ -996,8 +1002,67 @@ def test_submit_bid_promotes_existing_decision_to_submitted(client, test_db):
     record = test_db.query(BidDecisionRecord).one()
     assert record.id == decision_payload["id"]
     assert record.decision_status == "submitted"
+    assert record.initial_action == "bid_now"
+    assert record.initial_decision_status == "planned"
+    assert record.first_decided_at is not None
     assert record.recommended_amount == 82500.0
     assert "제출 상태" in record.reasoning
+
+
+def test_submit_bid_preserves_initial_review_path_for_funnel_analytics(client, test_db):
+    """Submitting after a review decision should preserve the original review path for funnel analytics."""
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Review Funnel Preservation Project",
+            "description": "Preserve initial review action before submission",
+            "requirements": "Track review-to-submit workflow",
+            "budget_estimate": 91000.0,
+            "category": "software",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    decision_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project_id,
+            "recommended_amount": 87000.0,
+            "probability_score": 0.58,
+            "matched_score": 0.62,
+            "deadline_hours_remaining": 48,
+            "current_active_bids": 1,
+            "max_active_bids": 3,
+            "current_workload_score": 0.18,
+        },
+    )
+
+    assert decision_response.status_code == 200
+    decision_payload = decision_response.json()
+    assert decision_payload["action"] == "review"
+    assert decision_payload["decision_status"] == "reviewing"
+    assert decision_payload["initial_action"] == "review"
+    assert decision_payload["initial_decision_status"] == "reviewing"
+
+    bid_response = client.post(
+        "/api/v1/bids/",
+        json={
+            "project_id": project_id,
+            "bid_amount": 86500.0,
+            "proposed_timeline": 10,
+            "description": "Submitting after review queue confirmation.",
+        },
+    )
+
+    assert bid_response.status_code == 200
+
+    record = test_db.query(BidDecisionRecord).one()
+    assert record.id == decision_payload["id"]
+    assert record.decision_status == "submitted"
+    assert record.action == "bid_now"
+    assert record.initial_action == "review"
+    assert record.initial_decision_status == "reviewing"
+    assert record.first_decided_at is not None
 
 
 def test_operator_can_list_and_mark_notifications_from_web(client):

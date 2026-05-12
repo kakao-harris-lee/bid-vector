@@ -2,8 +2,23 @@
 from typing import List
 from urllib.parse import quote_plus
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
+DEFAULT_CELERY_BROKER_URL = "memory://"
+DEFAULT_CELERY_RESULT_BACKEND = "cache+memory://"
+
+
+def _to_celery_database_result_backend(database_url: str) -> str:
+    """Translate a SQLAlchemy URL into Celery's database backend format."""
+    normalized_database_url = (database_url or "").strip()
+    if not normalized_database_url:
+        return DEFAULT_CELERY_RESULT_BACKEND
+    if normalized_database_url.startswith("db+"):
+        return normalized_database_url
+    return f"db+{normalized_database_url}"
 
 
 class Settings(BaseSettings):
@@ -36,8 +51,26 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # Background jobs
-    CELERY_BROKER_URL: str = "memory://"
-    CELERY_RESULT_BACKEND: str = "cache+memory://"
+    CELERY_BROKER_URL: str = DEFAULT_CELERY_BROKER_URL
+    CELERY_RESULT_BACKEND: str = DEFAULT_CELERY_RESULT_BACKEND
+    CELERY_TASK_DEFAULT_QUEUE: str = "bid_vector"
+    CELERY_OPS_QUEUE: str = "bid_vector_ops"
+    CELERY_ML_BACKFILL_QUEUE: str = "bid_vector_ml_backfill"
+    CELERY_ML_TRAINING_QUEUE: str = "bid_vector_ml_training"
+    CELERY_ML_REEVALUATION_QUEUE: str = "bid_vector_ml_reevaluation"
+    CELERY_ALLOW_INLINE_ML_TASKS: bool = False
+    CELERY_WORKER_CONCURRENCY: int = 2
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
+    CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 100
+    CELERY_TASK_TIME_LIMIT_SECONDS: int = 1800
+    CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: int = 1500
+    CELERY_RESULT_EXPIRES_SECONDS: int = 86400
+    CELERY_TASK_TRACK_STARTED: bool = True
+    CELERY_WORKER_SEND_TASK_EVENTS: bool = True
+    CELERY_TASK_SEND_SENT_EVENT: bool = True
+    CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP: bool = True
+    CELERY_BROKER_CONNECTION_MAX_RETRIES: int = 100
+    CELERY_BROKER_PUBLISH_MAX_RETRIES: int = 3
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED: bool = False
     OPERATOR_STRATEGY_MONITOR_INTERVAL_MINUTES: int = 30
     OPERATOR_STRATEGY_MONITOR_RUN_ON_STARTUP: bool = False
@@ -49,12 +82,38 @@ class Settings(BaseSettings):
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_SIMILAR_LIMIT: int = 3
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_MIN_SIMILARITY: float = 0.15
 
+    # ML release governance
+    ML_RELEASE_MANIFEST_DIR: str = "models/manifests"
+    ML_RELEASE_MANIFEST_ARCHIVE_DIR: str = "models/manifests/archive"
+    ML_RELEASE_MANIFEST_RETENTION_LIMIT: int = 20
+    ML_RELEASE_MANIFEST_SIGNING_KEY: str = ""
+    ML_RELEASE_MANIFEST_SIGNING_KEY_ID: str = "local"
+    ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE: bool = False
+    ML_RELEASE_OBJECT_STORAGE_URL: str = ""
+    ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH: bool = False
+
     # AI Features
     MODEL_CACHE_DIR: str = "./models"
     ENABLE_PRICE_PREDICTION: bool = True
     ENABLE_BID_RECOMMENDATION: bool = True
     ENABLE_DOCUMENT_ANALYSIS: bool = True
     ENABLE_SEMANTIC_CLASSIFICATION: bool = True
+    PREDICTION_DEFAULT_MINIMUM_BID_RATE: float = 0.0
+    PREDICTION_CATEGORY_MINIMUM_BID_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            "software": 0.87,
+            "service": 0.87,
+            "technical-service": 0.88,
+            "goods": 0.84,
+            "construction": 0.87,
+        }
+    )
+    PRICE_PREDICTION_PREFERRED_PREDICTOR: str = "historical"
+    PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
+    PRICE_PREDICTION_LSTM_MODEL_PATH: str = ""
+    PRICE_PREDICTION_ENSEMBLE_MODEL_PATH: str = ""
+    PRICE_PREDICTION_LSTM_MIN_SAMPLES: int = 24
+    PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES: int = 32
     CLASSIFIER_EMBEDDING_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: bool = True
     CLASSIFIER_SEMANTIC_MATCH_THRESHOLD: float = 0.35
@@ -91,12 +150,14 @@ class Settings(BaseSettings):
         "http://localhost:8080",
     ]
 
+    @property
+    def uses_in_memory_celery(self) -> bool:
+        """Return whether Celery should execute eagerly against the in-memory transport."""
+        return (self.CELERY_BROKER_URL or "").strip().lower().startswith("memory://")
+
     @model_validator(mode="after")
     def _compose_database_url(self) -> "Settings":
-        """Allow split DATABASE_* env vars to override the default DATABASE_URL."""
-        default_database_url = "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
-        if self.DATABASE_URL and self.DATABASE_URL != default_database_url:
-            return self
+        """Allow split DATABASE_* env vars to compose DATABASE_URL deterministically."""
         if all([
             self.DATABASE_USER,
             self.DATABASE_PASSWORD is not None,
@@ -109,6 +170,16 @@ class Settings(BaseSettings):
                 f"postgresql+psycopg://{self.DATABASE_USER}:{encoded_password}"
                 f"@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_NAME}"
             )
+        elif self.DATABASE_URL and self.DATABASE_URL != DEFAULT_DATABASE_URL:
+            pass
+
+        if (not self.uses_in_memory_celery) and (
+            not self.CELERY_RESULT_BACKEND or self.CELERY_RESULT_BACKEND == DEFAULT_CELERY_RESULT_BACKEND
+        ):
+            self.CELERY_RESULT_BACKEND = _to_celery_database_result_backend(self.DATABASE_URL)
+        elif self.uses_in_memory_celery and not self.CELERY_RESULT_BACKEND:
+            self.CELERY_RESULT_BACKEND = DEFAULT_CELERY_RESULT_BACKEND
+
         return self
 
 

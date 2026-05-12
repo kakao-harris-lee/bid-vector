@@ -5,19 +5,33 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
-os.environ.setdefault("ENVIRONMENT", "test")
+TEST_DATABASE_URL = "sqlite:///./test.db"
+
+# Force test processes to use the lightweight SQLite database even when Docker
+# Compose injects PostgreSQL split env vars for the application runtime or they
+# are present in the local `.env` file loaded by pydantic-settings.
+os.environ["DATABASE_USER"] = ""
+os.environ["DATABASE_PASSWORD"] = ""
+os.environ["DATABASE_HOST"] = ""
+os.environ["DATABASE_PORT"] = "0"
+os.environ["DATABASE_NAME"] = ""
+
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ["ENVIRONMENT"] = "test"
+os.environ["CELERY_BROKER_URL"] = "memory://"
+os.environ["CELERY_RESULT_BACKEND"] = "cache+memory://"
+os.environ["CELERY_ALLOW_INLINE_ML_TASKS"] = "false"
+os.environ["ML_RELEASE_OBJECT_STORAGE_URL"] = ""
+os.environ["ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH"] = "false"
 
 from app.core.database import Base
-from app.core.config import settings
 
 
 @pytest.fixture
 def test_db():
     """Create test database session"""
     # Use SQLite for tests
-    test_db_url = "sqlite:///./test.db"
-    engine = create_engine(test_db_url, connect_args={"check_same_thread": False})
+    engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 
     Base.metadata.create_all(bind=engine)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

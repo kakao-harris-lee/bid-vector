@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api import routes
+from app.services.bid_decision_schema import ensure_bid_decision_schema
+from app.services.operator_strategy_schema import ensure_operator_strategy_schema
 from app.services.project_similarity import ensure_project_metadata_schema, ensure_project_vector_schema
 from app.services.strategy_scheduler import strategy_scheduler
 
@@ -23,6 +25,8 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up application...")
     Base.metadata.create_all(bind=engine)
+    ensure_bid_decision_schema(engine)
+    ensure_operator_strategy_schema(engine)
     ensure_project_metadata_schema(engine)
     ensure_project_vector_schema(engine)
     await strategy_scheduler.start()

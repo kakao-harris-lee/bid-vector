@@ -25,7 +25,7 @@ class OperatorStrategyScheduler:
 
     def should_run_inprocess(self) -> bool:
         """Use an in-process loop when the broker is in-memory and cannot back Celery beat/worker."""
-        return self.is_enabled() and settings.CELERY_BROKER_URL.startswith("memory://")
+        return self.is_enabled() and settings.uses_in_memory_celery
 
     def build_request(self) -> OperatorStrategyMonitorRequest:
         """Build the configured periodic monitoring request payload."""

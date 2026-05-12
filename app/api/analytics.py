@@ -1,21 +1,43 @@
 """Analytics routes"""
 from datetime import timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import Analytics, Bid, Project
+from app.models.models import Analytics, Bid, BidDecisionRecord, Project
 from app.schemas.schemas import (
     AnalyticsEventRequest,
+    DecisionRecommendationResponse,
+    DecisionExperimentRunCreateRequest,
+    DecisionExperimentRunDetailResponse,
+    DecisionExperimentRunListResponse,
+    DecisionExperimentRunUpdateRequest,
+    DecisionExperimentThresholdApplyRequest,
+    DecisionExperimentThresholdApplyResponse,
+    DecisionFunnelResponse,
     AnalyticsSummaryResponse,
+    DecisionInsightsResponse,
+    MLTaskResponse,
     OperatorStatsResponse,
     PredictionFeedbackResponse,
 )
+from app.services.decision_analytics import DecisionAnalyticsService
+from app.services.decision_experiments import DecisionExperimentService
 from app.services.prediction_feedback import PredictionFeedbackService
+from app.tasks.jobs import (
+    enqueue_decision_experiment_reevaluation,
+    get_decision_experiment_reevaluation_task_status,
+)
 
 router = APIRouter()
+
+
+def _raise_decision_experiment_http_error(exc: ValueError) -> None:
+    detail = str(exc)
+    status_code = status.HTTP_404_NOT_FOUND if "not found" in detail.lower() else status.HTTP_400_BAD_REQUEST
+    raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/event")
@@ -92,6 +114,136 @@ def get_prediction_feedback(
 ):
     """Compare stored prediction and recommendation amounts against actual tender results."""
     return PredictionFeedbackService().build_feedback(db, days=days, limit=limit)
+
+
+@router.get("/decision-insights", response_model=DecisionInsightsResponse)
+def get_decision_insights(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """Summarize persisted bid-decision signals for tuning and operator review."""
+    return DecisionAnalyticsService().build_insights(db, days=days, limit=limit)
+
+
+@router.get("/decision-funnel", response_model=DecisionFunnelResponse)
+def get_decision_funnel(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=50),
+    breakdown_limit: int = Query(5, ge=1, le=20),
+    trend_bucket_days: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    """Summarize how persisted decision records progress through the operator workflow."""
+    return DecisionAnalyticsService().build_funnel(
+        db,
+        days=days,
+        limit=limit,
+        breakdown_limit=breakdown_limit,
+        trend_bucket_days=trend_bucket_days,
+    )
+
+
+@router.get("/decision-recommendations", response_model=DecisionRecommendationResponse)
+def get_decision_recommendations(
+    days: int = Query(30, ge=1, le=365),
+    breakdown_limit: int = Query(5, ge=1, le=20),
+    trend_bucket_days: int = Query(7, ge=1, le=30),
+    recommendation_limit: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Return actionable tuning recommendations derived from the decision funnel analytics."""
+    return DecisionAnalyticsService().build_recommendations(
+        db,
+        days=days,
+        breakdown_limit=breakdown_limit,
+        trend_bucket_days=trend_bucket_days,
+        recommendation_limit=recommendation_limit,
+    )
+
+
+@router.post("/decision-experiments", response_model=DecisionExperimentRunDetailResponse)
+def create_decision_experiment_run(
+    request: DecisionExperimentRunCreateRequest,
+    db: Session = Depends(get_db),
+):
+    """Persist one experiment plan so the operator can track execution and later evaluate outcomes."""
+    return DecisionExperimentService().create_run(db, request=request)
+
+
+@router.get("/decision-experiments", response_model=DecisionExperimentRunListResponse)
+def list_decision_experiment_runs(
+    limit: int = Query(20, ge=1, le=100),
+    run_status: str | None = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+):
+    """Return recent decision experiment runs for dashboard status tracking."""
+    return DecisionExperimentService().list_runs(db, limit=limit, run_status=run_status)
+
+
+@router.get("/decision-experiments/{experiment_run_id}", response_model=DecisionExperimentRunDetailResponse)
+def get_decision_experiment_run_detail(experiment_run_id: int, db: Session = Depends(get_db)):
+    """Return one persisted experiment run with its baseline snapshot and latest evaluation."""
+    try:
+        return DecisionExperimentService().get_run_detail(db, run_id=experiment_run_id)
+    except ValueError as exc:
+        _raise_decision_experiment_http_error(exc)
+
+
+@router.post(
+    "/decision-experiments/{experiment_run_id}/evaluate",
+    response_model=MLTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def evaluate_decision_experiment_run(experiment_run_id: int, db: Session = Depends(get_db)):
+    """Queue experiment re-evaluation instead of running it inside the API request."""
+    try:
+        DecisionExperimentService().get_run_detail(db, run_id=experiment_run_id)
+    except ValueError as exc:
+        _raise_decision_experiment_http_error(exc)
+    async_result = enqueue_decision_experiment_reevaluation(experiment_run_id=experiment_run_id)
+    status_payload = get_decision_experiment_reevaluation_task_status(async_result.id)
+    return {
+        "task_id": async_result.id,
+        "task_name": status_payload["task_name"],
+        "queue": status_payload["queue"],
+        "status": status_payload["status"],
+        "detail": status_payload["detail"],
+        "poll_url": f"/api/v1/ml/reevaluations/decision-experiments/tasks/{async_result.id}",
+    }
+
+
+@router.patch("/decision-experiments/{experiment_run_id}", response_model=DecisionExperimentRunDetailResponse)
+def update_decision_experiment_run(
+    experiment_run_id: int,
+    request: DecisionExperimentRunUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """Manually update a persisted experiment run's notes or lifecycle state."""
+    try:
+        return DecisionExperimentService().update_run(db, run_id=experiment_run_id, request=request)
+    except ValueError as exc:
+        _raise_decision_experiment_http_error(exc)
+
+
+@router.post(
+    "/decision-experiments/{experiment_run_id}/apply-thresholds",
+    response_model=DecisionExperimentThresholdApplyResponse,
+)
+def apply_decision_experiment_thresholds(
+    experiment_run_id: int,
+    request: DecisionExperimentThresholdApplyRequest,
+    db: Session = Depends(get_db),
+):
+    """Apply one successful experiment's threshold recommendation to the operator strategy."""
+    try:
+        return DecisionExperimentService().apply_threshold_adjustments(
+            db,
+            run_id=experiment_run_id,
+            request=request,
+        )
+    except ValueError as exc:
+        _raise_decision_experiment_http_error(exc)
 
 
 @router.get("/user-stats/{user_id}", response_model=OperatorStatsResponse, deprecated=True)

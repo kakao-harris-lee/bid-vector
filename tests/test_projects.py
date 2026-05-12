@@ -274,8 +274,8 @@ def test_refresh_single_project_embedding_endpoint(client, test_db):
     assert refreshed.embedding_updated_at is not None
 
 
-def test_rebuild_project_embeddings_endpoint_filters_projects(client):
-    """Batch refresh endpoint should rebuild only the requested project slice."""
+def test_rebuild_project_embeddings_endpoint_queues_backfill(client):
+    """Legacy batch refresh endpoint should only enqueue work from the API process."""
     software_ids = []
     for index in range(2):
         created = client.post(
@@ -290,7 +290,7 @@ def test_rebuild_project_embeddings_endpoint_filters_projects(client):
         ).json()
         software_ids.append(created["id"])
 
-    construction_id = client.post(
+    client.post(
         "/api/v1/projects/",
         json={
             "title": "건설 임베딩 재빌드 제외",
@@ -299,22 +299,24 @@ def test_rebuild_project_embeddings_endpoint_filters_projects(client):
             "budget_estimate": 99000000.0,
             "category": "construction",
         },
-    ).json()["id"]
+    )
 
     response = client.post(
         "/api/v1/projects/embeddings/rebuild?category=software&force=true&limit=10"
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     payload = response.json()
-    assert payload["processed_count"] == 2
-    assert payload["category"] == "software"
-    assert payload["project_status"] is None
-    assert payload["force"] is True
-    assert payload["vector_storage_enabled"] is False
-    assert sorted(payload["project_ids"]) == sorted(software_ids)
-    assert all(item["category"] == "software" for item in payload["results"])
-    assert construction_id not in payload["project_ids"]
+    assert payload["task_name"] == "jobs.rebuild_project_embeddings"
+    assert payload["status"] == "queued"
+    assert payload["task_id"]
+    assert payload["poll_url"].endswith(payload["task_id"])
+
+    status_response = client.get(payload["poll_url"])
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["raw_status"] == "PENDING"
+    assert status_payload["result"] is None
 
 
 def test_rebuild_project_embeddings_task_returns_batch_summary(test_db):
@@ -366,10 +368,10 @@ def test_rebuild_project_embeddings_async_endpoint_returns_pollable_task(client)
         "/api/v1/projects/embeddings/rebuild/async?category=software&force=true&limit=10"
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     payload = response.json()
     assert payload["task_name"] == "jobs.rebuild_project_embeddings"
-    assert payload["status"] == "completed"
+    assert payload["status"] == "queued"
     assert payload["task_id"]
     assert payload["poll_url"].endswith(payload["task_id"])
 
@@ -401,12 +403,9 @@ def test_rebuild_project_embeddings_task_status_endpoint_returns_result(client):
     payload = response.json()
     assert payload["task_id"] == task_id
     assert payload["task_name"] == "jobs.rebuild_project_embeddings"
-    assert payload["status"] == "completed"
-    assert payload["raw_status"] == "SUCCESS"
-    assert payload["ready"] is True
-    assert payload["successful"] is True
+    assert payload["status"] == "queued"
+    assert payload["raw_status"] == "PENDING"
+    assert payload["ready"] is False
+    assert payload["successful"] is False
     assert payload["error"] is None
-    assert payload["result"]["processed_count"] == 2
-    assert payload["result"]["force"] is True
-    assert payload["result"]["category"] == "software"
-    assert sorted(payload["result"]["project_ids"]) == sorted(software_ids)
+    assert payload["result"] is None
