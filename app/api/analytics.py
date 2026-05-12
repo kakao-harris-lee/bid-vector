@@ -39,6 +39,8 @@ from app.tasks.jobs import (
 
 router = APIRouter()
 
+INTERNAL_TELEMETRY_EVENT_TYPES = {"telegram.delivery"}
+
 
 def _raise_decision_experiment_http_error(exc: ValueError) -> None:
     detail = str(exc)
@@ -72,7 +74,15 @@ def get_analytics_summary(
 
     total_bids = db.query(Bid).filter(Bid.user_id == operator.id, Bid.created_at >= date_from).count()
     total_projects = db.query(Project).filter(Project.created_at >= date_from).count()
-    total_events = db.query(Analytics).filter(Analytics.user_id == operator.id, Analytics.timestamp >= date_from).count()
+    total_events = (
+        db.query(Analytics)
+        .filter(
+            Analytics.user_id == operator.id,
+            Analytics.timestamp >= date_from,
+            ~Analytics.event_type.in_(INTERNAL_TELEMETRY_EVENT_TYPES),
+        )
+        .count()
+    )
 
     return {
         "operator_id": operator.id,
@@ -92,7 +102,9 @@ def _build_operator_stats(operator_id: int, days: int, db: Session) -> dict:
     ).count()
 
     total_events = db.query(Analytics).filter(
-        (Analytics.user_id == operator_id) & (Analytics.timestamp >= date_from)
+        (Analytics.user_id == operator_id)
+        & (Analytics.timestamp >= date_from)
+        & (~Analytics.event_type.in_(INTERNAL_TELEMETRY_EVENT_TYPES))
     ).count()
 
     return {

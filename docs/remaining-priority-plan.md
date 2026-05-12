@@ -158,7 +158,7 @@ WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작�
 - 각 run은 `review_bucket`, `review_priority`, `review_reason`을 포함한다.
 - list response는 success/pending/rollback/application/review bucket count를 함께 반환한다.
 
-### 1순위 — 추가 운영 카드 확장
+### 완료 — 추가 운영 카드 확장
 
 prediction observability, operations dashboard, task/broker, realtime 운영화가 정리됐다. 다음은 외부 채널과 모델 릴리즈 상태를 같은 dashboard 카드 체계에 묶는 단계다.
 
@@ -171,6 +171,26 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 #### 1순위 완료 기준
 
 - 운영자가 알림 채널과 모델 릴리즈 상태를 operations dashboard에서 같이 확인할 수 있어야 한다.
+
+#### 구현된 결과
+
+- Telegram delivery 결과가 `telegram.delivery` analytics event로 저장된다.
+- operations dashboard가 notification/Telegram 전송률, 실패 원인, 최근 실패를 반환한다.
+- operations dashboard가 ML release manifest, signature 상태, predictor promotion gate, backtest sample/error summary를 반환한다.
+
+### 1순위 — 모델 학습/검증 고도화
+
+모델 릴리즈/게이트/관측성은 운영 카드까지 연결됐다. 다음은 학습 데이터 품질과 artifact 비교 리포트를 강화하는 단계다.
+
+#### 1순위 작업 범위
+
+- 학습 dataset 품질 검증
+- 모델 artifact 비교 리포트
+- training 결과와 release gate 입력 간 연결 강화
+
+#### 1순위 완료 기준
+
+- 학습 산출물이 release manifest와 gate에서 바로 검증 가능한 리포트를 남겨야 한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -223,9 +243,9 @@ WebSocket 기본 레이어와 주요 이벤트 브로드캐스트가 있고, 운
 - 기본 WebSocket 인증은 operator access token 기반이다.
 - `REALTIME_FANOUT_BACKEND=postgres` 설정으로 여러 API worker 간 이벤트 fanout이 가능하다.
 
-### 5순위 — 운영 보고용 집계 API 확장
+### 완료 — 운영 보고용 집계 API 확장
 
-decision analytics, prediction observability, operations dashboard 기반이 생겼고, 남은 것은 worker/외부 채널/릴리즈 상태 카드 확장이다.
+decision analytics, prediction observability, operations dashboard 기반과 worker/외부 채널/릴리즈 상태 카드가 구현됐다.
 
 #### 5순위 작업 범위
 
@@ -244,25 +264,30 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 - 운영 화면이 별도 후처리 없이 카드/차트 구성이 가능해야 한다.
 - 모델 정확도와 전략 성과를 같은 축으로 비교할 수 있어야 한다.
 
+#### 구현된 결과
+
+- worker queue 지연 / 실패율 / 재시도 카드
+- Telegram 전송률 / 실패 원인 카드
+- 모델 릴리즈 / manifest / predictor backtest gate 카드
+
 ## 바로 다음 구현 묶음
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — 추가 운영 카드
-
-- Telegram 전송률
-- 모델 릴리즈 상태
-- training/backtest 결과 카드
-
-### 묶음 B — 모델 학습/검증 고도화
+### 묶음 A — 모델 학습/검증 고도화
 
 - 학습 dataset 품질 검증
 - 모델 artifact 비교 리포트
 
-### 묶음 C — 실험 운영 루프 고도화
+### 묶음 B — 실험 운영 루프 고도화
 
 - 장기 적용 결과를 다음 recommendation ranking에 반영
 - 반복 적용/롤백 패턴 기반 실험 추천 억제
+
+### 묶음 C — 운영 credential/IAM rollout 검증
+
+- object storage 실제 credential 기준 publish/apply 경로 점검
+- 운영 환경 manifest signature required 모드 검증
 
 ## 범위 재정의 / 비우선 항목
 

@@ -1216,12 +1216,80 @@ class TaskOperationsSummary(BaseModel):
     recent_retries: List[TaskOperationsItem] = Field(default_factory=list)
 
 
+class TelegramDeliveryFailureItem(BaseModel):
+    event_id: int
+    notification_id: Optional[int] = None
+    source: str
+    status: str
+    detail: str
+    timestamp: datetime
+
+
+class NotificationOperationsSummary(BaseModel):
+    notification_count: int = Field(ge=0)
+    unread_count: int = Field(ge=0)
+    decision_notification_count: int = Field(ge=0)
+    bid_submission_notification_count: int = Field(ge=0)
+    telegram_configured: bool
+    telegram_delivery_attempt_count: int = Field(ge=0)
+    telegram_sent_count: int = Field(ge=0)
+    telegram_failed_count: int = Field(ge=0)
+    telegram_pending_configuration_count: int = Field(ge=0)
+    telegram_skipped_count: int = Field(ge=0)
+    telegram_success_rate: float = Field(ge=0.0, le=1.0)
+    telegram_status: Literal["healthy", "watch", "critical", "info"]
+    telegram_detail: str
+    telegram_status_counts: dict[str, int] = Field(default_factory=dict)
+    telegram_failure_reason_breakdown: dict[str, int] = Field(default_factory=dict)
+    recent_telegram_failures: List[TelegramDeliveryFailureItem] = Field(default_factory=list)
+
+
+class MLReleaseManifestSummaryItem(BaseModel):
+    manifest_path: str
+    release_tag: str
+    validated_on: Optional[datetime] = None
+    signature_status: Literal["verified", "missing", "invalid"]
+    gate_status: str
+    gate_passed: Optional[bool] = None
+    backtest_sample_count: int = Field(ge=0)
+    backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    best_predictor_key: Optional[str] = None
+    best_predictor_name: Optional[str] = None
+    recommended_docker_target: Optional[str] = None
+    remote_storage_enabled: bool = False
+    detail: str = ""
+
+
+class MLReleaseOperationsSummary(BaseModel):
+    manifest_dir: str
+    manifest_count: int = Field(ge=0)
+    remote_storage_configured: bool
+    remote_auto_publish: bool
+    retention_limit: int = Field(ge=0)
+    status: Literal["healthy", "watch", "critical", "info"]
+    detail: str
+    latest_release_tag: Optional[str] = None
+    latest_manifest_path: Optional[str] = None
+    latest_validated_on: Optional[datetime] = None
+    latest_signature_status: Literal["verified", "missing", "invalid"]
+    latest_gate_status: str
+    latest_gate_passed: Optional[bool] = None
+    latest_best_predictor_key: Optional[str] = None
+    latest_backtest_sample_count: int = Field(ge=0)
+    latest_backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    backtest_status: Literal["healthy", "watch", "critical", "info"]
+    backtest_detail: str
+    recent_manifests: List[MLReleaseManifestSummaryItem] = Field(default_factory=list)
+
+
 class OperationsDashboardResponse(BaseModel):
     operator_id: int
     period_days: int
     crawl: CrawlOperationsSummary
     strategy: StrategyOperationsSummary
     tasks: TaskOperationsSummary
+    notifications: NotificationOperationsSummary
+    ml_release: MLReleaseOperationsSummary
     cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 

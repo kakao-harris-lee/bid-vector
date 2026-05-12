@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `141 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `142 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -39,6 +39,7 @@
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
 - 크롤 성공률 / 전략 모니터링 성과 / 최근 실패 원인을 묶은 operations dashboard analytics
 - operations dashboard의 task/broker 진단 payload, queue route 진단, stale/failed/retry task 집계 및 task health 카드
+- operations dashboard의 Telegram 전송률/실패 원인, ML release manifest/signature/promotion gate/backtest 카드
 - `docker compose` 복구, healthcheck/env wiring 정리, CPU-only PyTorch + pip cache 기반 Docker build 최적화
 - runtime / embedding / training / dev 의존성 분리 및 멀티타깃 Docker build 정리
 - manifest 기반 ML artifact promotion 서비스/CLI 및 embedding rebuild 자동화
@@ -51,7 +52,7 @@
 ### 아직 핵심적으로 남은 범위
 
 - `LSTM` / `Ensemble` 학습 파이프라인 및 모델 아티팩트 관리 고도화
-- 모델 학습/릴리즈, Telegram 전송률 등 추가 운영 카드 확장
+- 모델 학습/검증 파이프라인 및 artifact 비교 리포트 고도화
 
 ## 작업 원칙
 
@@ -203,19 +204,18 @@
 
 - overview / summary / prediction feedback
 - prediction observability: predictor별 정확도, fallback 빈도, guardrail 빈도, pricing mode breakdown, 기간 버킷 성능 추세
-- operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율, task/broker health, stale/failed/retry task 집계
+- operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율, task/broker health, stale/failed/retry task 집계, Telegram 전송률, ML release gate/backtest 상태
 - decision insights / funnel / recommendations / experiments
 
 남은 작업:
 
-- 추가 카드가 필요하면 모델 학습/릴리즈, Telegram 전송률 집계 확장
+- 모델 학습/검증 파이프라인 및 artifact 비교 리포트 고도화
 
 ## 현재 권장 실행 순서
 
-1. `G. Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
-2. `C. 모델 학습/검증 파이프라인 고도화`
-3. `D. 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화`
-4. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
+1. `C. 모델 학습/검증 파이프라인 고도화`
+2. `D. 실험 추천 로직에 장기 적용 결과를 다시 반영하는 운영 루프 고도화`
+3. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 

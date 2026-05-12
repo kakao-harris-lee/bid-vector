@@ -1,12 +1,13 @@
 """Notification persistence helpers for the single-operator workflow."""
 
+import json
 import logging
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.time import utc_now
-from app.models.models import Bid, BidDecisionRecord, Notification, Project
+from app.models.models import Analytics, Bid, BidDecisionRecord, Notification, Project
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.realtime import realtime_event_manager
 
@@ -51,7 +52,11 @@ class OperatorNotificationService:
 
         if self.should_deliver_bid_decision_to_telegram(decision_record):
             self._deliver_telegram_message(
-                message,
+                db,
+                operator_id=operator_id,
+                notification_id=int(notification.id),
+                source="bid_decision",
+                message=message,
                 reply_markup=self.telegram.build_bid_decision_reply_markup(decision_record.id),
             )
         realtime_event_manager.publish_event(
@@ -96,7 +101,13 @@ class OperatorNotificationService:
             message=message,
             notification_type=self.BID_SUBMISSION_TYPE,
         )
-        self._deliver_telegram_message(message)
+        self._deliver_telegram_message(
+            db,
+            operator_id=operator_id,
+            notification_id=int(notification.id),
+            source="bid_submission",
+            message=message,
+        )
         realtime_event_manager.publish_event(
             "bid_submission.notification",
             {
@@ -124,22 +135,75 @@ class OperatorNotificationService:
 
     def _deliver_telegram_message(
         self,
+        db: Session,
+        *,
+        operator_id: int,
+        notification_id: int,
+        source: str,
         message: str,
         reply_markup: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
         """Best-effort Telegram delivery so the web flow still succeeds on failures."""
         if not self.telegram.is_configured():
-            return None
+            delivery = {
+                "sent": False,
+                "status": "pending_configuration",
+                "detail": "Telegram is not configured yet.",
+            }
+            self._record_telegram_delivery(
+                db,
+                operator_id=operator_id,
+                notification_id=notification_id,
+                source=source,
+                delivery=delivery,
+            )
+            return delivery
 
         try:
-            return self.telegram.send_message(message, reply_markup=reply_markup)
+            delivery = self.telegram.send_message(message, reply_markup=reply_markup)
         except RuntimeError as exc:
             logger.warning("Telegram delivery failed: %s", exc)
-            return {
+            delivery = {
                 "sent": False,
                 "status": "failed",
                 "detail": str(exc),
             }
+        self._record_telegram_delivery(
+            db,
+            operator_id=operator_id,
+            notification_id=notification_id,
+            source=source,
+            delivery=delivery,
+        )
+        return delivery
+
+    def _record_telegram_delivery(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        notification_id: int,
+        source: str,
+        delivery: dict[str, object],
+    ) -> None:
+        """Persist Telegram delivery telemetry for operations dashboard reporting."""
+        event = Analytics(
+            user_id=operator_id,
+            event_type="telegram.delivery",
+            event_data=json.dumps(
+                {
+                    "notification_id": int(notification_id),
+                    "source": source,
+                    "sent": bool(delivery.get("sent")),
+                    "status": str(delivery.get("status") or "unknown"),
+                    "detail": str(delivery.get("detail") or ""),
+                    "telegram_message_id": delivery.get("telegram_message_id"),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        db.add(event)
+        db.commit()
 
     def _upsert_notification(
         self,

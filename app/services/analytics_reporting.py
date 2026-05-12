@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -11,7 +13,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import CrawlJob, OperatorStrategyRun
+from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun
+from app.services.ml_release import MLReleasePromotionService
 from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
@@ -51,13 +54,28 @@ class AnalyticsReportingService:
         crawl_summary = self._build_crawl_summary(crawl_jobs, recent_limit=recent_limit)
         strategy_summary = self._build_strategy_summary(strategy_runs, recent_limit=recent_limit)
         task_summary = self._build_task_summary(crawl_jobs, strategy_runs, recent_limit=recent_limit)
+        notification_summary = self._build_notification_summary(
+            db,
+            operator_id=int(operator.id),
+            date_from=date_from,
+            recent_limit=recent_limit,
+        )
+        ml_release_summary = self._build_ml_release_summary(recent_limit=recent_limit)
         return {
             "operator_id": operator.id,
             "period_days": days,
             "crawl": crawl_summary,
             "strategy": strategy_summary,
             "tasks": task_summary,
-            "cards": self._build_cards(crawl_summary, strategy_summary, task_summary),
+            "notifications": notification_summary,
+            "ml_release": ml_release_summary,
+            "cards": self._build_cards(
+                crawl_summary,
+                strategy_summary,
+                task_summary,
+                notification_summary,
+                ml_release_summary,
+            ),
         }
 
     def _build_crawl_summary(self, crawl_jobs: list[CrawlJob], *, recent_limit: int) -> dict[str, Any]:
@@ -255,11 +273,144 @@ class AnalyticsReportingService:
             ],
         }
 
+    def _build_notification_summary(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        date_from,
+        recent_limit: int,
+    ) -> dict[str, Any]:
+        """Aggregate web notification and Telegram delivery telemetry."""
+        notifications = (
+            db.query(Notification)
+            .filter(
+                Notification.user_id == operator_id,
+                Notification.created_at >= date_from,
+            )
+            .order_by(Notification.created_at.desc(), Notification.id.desc())
+            .all()
+        )
+        telegram_events = (
+            db.query(Analytics)
+            .filter(
+                Analytics.user_id == operator_id,
+                Analytics.event_type == "telegram.delivery",
+                Analytics.timestamp >= date_from,
+            )
+            .order_by(Analytics.timestamp.desc(), Analytics.id.desc())
+            .all()
+        )
+        event_payloads = [
+            {
+                "event_id": int(event.id),
+                "timestamp": event.timestamp,
+                **self._load_event_payload(event.event_data),
+            }
+            for event in telegram_events
+        ]
+        sent_count = sum(1 for item in event_payloads if bool(item.get("sent")))
+        failed_count = sum(1 for item in event_payloads if str(item.get("status") or "") == "failed")
+        pending_configuration_count = sum(
+            1 for item in event_payloads if str(item.get("status") or "") == "pending_configuration"
+        )
+        skipped_count = sum(1 for item in event_payloads if str(item.get("status") or "").startswith("skipped"))
+        delivery_attempt_count = len(event_payloads)
+        success_rate = self._rate(sent_count, delivery_attempt_count)
+        status, detail = self._telegram_delivery_status(
+            notification_count=len(notifications),
+            delivery_attempt_count=delivery_attempt_count,
+            sent_count=sent_count,
+            failed_count=failed_count,
+            pending_configuration_count=pending_configuration_count,
+            success_rate=success_rate,
+        )
+        recent_failures = [
+            item for item in event_payloads
+            if str(item.get("status") or "") in {"failed", "pending_configuration"}
+        ][:recent_limit]
+        return {
+            "notification_count": len(notifications),
+            "unread_count": sum(1 for item in notifications if not bool(item.is_read)),
+            "decision_notification_count": sum(1 for item in notifications if str(item.type or "") == "recommendation"),
+            "bid_submission_notification_count": sum(1 for item in notifications if str(item.type or "") == "bid_update"),
+            "telegram_configured": bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID),
+            "telegram_delivery_attempt_count": delivery_attempt_count,
+            "telegram_sent_count": sent_count,
+            "telegram_failed_count": failed_count,
+            "telegram_pending_configuration_count": pending_configuration_count,
+            "telegram_skipped_count": skipped_count,
+            "telegram_success_rate": success_rate,
+            "telegram_status": status,
+            "telegram_detail": detail,
+            "telegram_status_counts": self._count_payloads_by_key(event_payloads, "status"),
+            "telegram_failure_reason_breakdown": self._reason_breakdown(
+                [
+                    str(item.get("detail") or "")
+                    for item in event_payloads
+                    if str(item.get("status") or "") in {"failed", "pending_configuration"}
+                    and item.get("detail")
+                ]
+            ),
+            "recent_telegram_failures": [
+                {
+                    "event_id": int(item["event_id"]),
+                    "notification_id": self._optional_int(item.get("notification_id")),
+                    "source": str(item.get("source") or "unknown"),
+                    "status": str(item.get("status") or "unknown"),
+                    "detail": str(item.get("detail") or ""),
+                    "timestamp": item["timestamp"],
+                }
+                for item in recent_failures
+            ],
+        }
+
+    def _build_ml_release_summary(self, *, recent_limit: int) -> dict[str, Any]:
+        """Summarize local ML release manifests and predictor promotion gates."""
+        manifest_dir = self._ml_manifest_dir()
+        manifest_paths = sorted(
+            manifest_dir.glob("*.json") if manifest_dir.exists() else [],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        recent_manifests = [
+            self._read_manifest_summary(path)
+            for path in manifest_paths[:recent_limit]
+        ]
+        latest = recent_manifests[0] if recent_manifests else None
+        status, detail = self._ml_release_status(latest, manifest_count=len(manifest_paths))
+        backtest_status, backtest_detail = self._ml_backtest_status(latest)
+        return {
+            "manifest_dir": str(manifest_dir),
+            "manifest_count": len(manifest_paths),
+            "remote_storage_configured": bool(settings.ML_RELEASE_OBJECT_STORAGE_URL),
+            "remote_auto_publish": bool(settings.ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH),
+            "retention_limit": int(settings.ML_RELEASE_MANIFEST_RETENTION_LIMIT or 0),
+            "status": status,
+            "detail": detail,
+            "latest_release_tag": latest.get("release_tag") if latest else None,
+            "latest_manifest_path": latest.get("manifest_path") if latest else None,
+            "latest_validated_on": latest.get("validated_on") if latest else None,
+            "latest_signature_status": latest.get("signature_status") if latest else "missing",
+            "latest_gate_status": latest.get("gate_status") if latest else "missing",
+            "latest_gate_passed": latest.get("gate_passed") if latest else None,
+            "latest_best_predictor_key": latest.get("best_predictor_key") if latest else None,
+            "latest_backtest_sample_count": int(latest.get("backtest_sample_count") or 0) if latest else 0,
+            "latest_backtest_average_absolute_error_rate": (
+                latest.get("backtest_average_absolute_error_rate") if latest else None
+            ),
+            "backtest_status": backtest_status,
+            "backtest_detail": backtest_detail,
+            "recent_manifests": recent_manifests,
+        }
+
     def _build_cards(
         self,
         crawl_summary: dict[str, Any],
         strategy_summary: dict[str, Any],
         task_summary: dict[str, Any],
+        notification_summary: dict[str, Any],
+        ml_release_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Build dashboard card payloads from detailed summaries."""
         return [
@@ -334,6 +485,30 @@ class AnalyticsReportingService:
                 "status": task_summary["failure_status"],
                 "detail": f"{task_summary['failed_count']} failed from {task_summary['tracked_task_count']} tracked task(s).",
             },
+            {
+                "key": "telegram_delivery_rate",
+                "label": "Telegram delivery rate",
+                "value": notification_summary["telegram_success_rate"],
+                "unit": "ratio",
+                "status": notification_summary["telegram_status"],
+                "detail": notification_summary["telegram_detail"],
+            },
+            {
+                "key": "ml_release_gate",
+                "label": "ML release gate",
+                "value": 1 if ml_release_summary["status"] == "healthy" else 0,
+                "unit": "count",
+                "status": ml_release_summary["status"],
+                "detail": ml_release_summary["detail"],
+            },
+            {
+                "key": "ml_backtest_samples",
+                "label": "Backtest samples",
+                "value": ml_release_summary["latest_backtest_sample_count"],
+                "unit": "count",
+                "status": ml_release_summary["backtest_status"],
+                "detail": ml_release_summary["backtest_detail"],
+            },
         ]
 
     def _latest_completed_at(self, rows: list[Any]):
@@ -376,6 +551,160 @@ class AnalyticsReportingService:
         if value >= 0.1:
             return "watch"
         return "healthy"
+
+    def _telegram_delivery_status(
+        self,
+        *,
+        notification_count: int,
+        delivery_attempt_count: int,
+        sent_count: int,
+        failed_count: int,
+        pending_configuration_count: int,
+        success_rate: float,
+    ) -> tuple[str, str]:
+        """Convert Telegram delivery telemetry into a dashboard status."""
+        configured = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
+        if not configured:
+            if notification_count > 0 or pending_configuration_count > 0:
+                return "watch", "Telegram is not configured while operator notifications are being created."
+            return "info", "Telegram is not configured and no delivery attempts were recorded."
+        if delivery_attempt_count == 0:
+            return "info", "Telegram is configured, but no eligible delivery attempts were recorded in this window."
+        if failed_count > 0 or success_rate < 0.9:
+            return (
+                "critical",
+                f"{sent_count}/{delivery_attempt_count} Telegram delivery attempt(s) succeeded.",
+            )
+        if success_rate < 1.0:
+            return "watch", f"{sent_count}/{delivery_attempt_count} Telegram delivery attempt(s) succeeded."
+        return "healthy", f"All {delivery_attempt_count} Telegram delivery attempt(s) succeeded."
+
+    def _load_event_payload(self, raw_payload: Any) -> dict[str, Any]:
+        """Parse analytics event payloads stored as JSON text."""
+        if isinstance(raw_payload, dict):
+            return raw_payload
+        try:
+            payload = json.loads(str(raw_payload or "{}"))
+        except json.JSONDecodeError:
+            return {"detail": str(raw_payload or "")}
+        return payload if isinstance(payload, dict) else {}
+
+    def _count_payloads_by_key(self, payloads: list[dict[str, Any]], key: str) -> dict[str, int]:
+        """Count arbitrary payload values by one key."""
+        counts: dict[str, int] = {}
+        for payload in payloads:
+            value = str(payload.get(key) or "unknown")
+            counts[value] = counts.get(value, 0) + 1
+        return dict(sorted(counts.items(), key=lambda item: item[0]))
+
+    def _optional_int(self, value: Any) -> int | None:
+        """Return int(value) when available."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _ml_manifest_dir(self) -> Path:
+        """Resolve the local release manifest directory."""
+        raw_path = Path(settings.ML_RELEASE_MANIFEST_DIR)
+        if raw_path.is_absolute():
+            return raw_path
+        return Path(__file__).resolve().parents[2] / raw_path
+
+    def _read_manifest_summary(self, path: Path) -> dict[str, Any]:
+        """Read one release manifest into a compact operations summary."""
+        summary: dict[str, Any] = {
+            "manifest_path": str(path),
+            "release_tag": path.stem,
+            "validated_on": None,
+            "signature_status": "missing",
+            "gate_status": "missing",
+            "gate_passed": None,
+            "backtest_sample_count": 0,
+            "backtest_average_absolute_error_rate": None,
+            "best_predictor_key": None,
+            "best_predictor_name": None,
+            "detail": "",
+        }
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            summary.update({
+                "signature_status": "invalid",
+                "gate_status": "invalid",
+                "gate_passed": False,
+                "detail": f"Manifest could not be read: {exc}",
+            })
+            return summary
+        if not isinstance(manifest, dict):
+            summary.update({
+                "signature_status": "invalid",
+                "gate_status": "invalid",
+                "gate_passed": False,
+                "detail": "Manifest JSON is not an object.",
+            })
+            return summary
+
+        summary["release_tag"] = str(manifest.get("release_tag") or path.stem)
+        summary["validated_on"] = manifest.get("validated_on")
+        summary["recommended_docker_target"] = manifest.get("recommended_docker_target")
+        summary["remote_storage_enabled"] = bool((manifest.get("remote_storage") or {}).get("enabled"))
+        summary["signature_status"] = self._manifest_signature_status(manifest, path)
+
+        gate_container = manifest.get("promotion_gate") if isinstance(manifest.get("promotion_gate"), dict) else {}
+        gate = gate_container.get("predictor_backtest") if isinstance(gate_container, dict) else {}
+        gate = gate if isinstance(gate, dict) else {}
+        metrics = gate.get("metrics") if isinstance(gate.get("metrics"), dict) else {}
+        summary.update({
+            "gate_status": str(gate.get("status") or "missing"),
+            "gate_passed": bool(gate.get("passed")) if "passed" in gate else None,
+            "backtest_sample_count": int(metrics.get("sample_count") or 0),
+            "backtest_average_absolute_error_rate": metrics.get("average_absolute_error_rate"),
+            "best_predictor_key": gate.get("best_predictor_key") or metrics.get("best_predictor_key"),
+            "best_predictor_name": gate.get("best_predictor_name") or metrics.get("best_predictor_name"),
+            "detail": "; ".join(str(reason) for reason in gate.get("reasons", []) if reason) if gate else "",
+        })
+        return summary
+
+    def _manifest_signature_status(self, manifest: dict[str, Any], path: Path) -> str:
+        """Return verified/missing/invalid for one release manifest signature."""
+        if not isinstance(manifest.get("signature"), dict):
+            return "invalid" if settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE else "missing"
+        try:
+            MLReleasePromotionService().verify_release_manifest(manifest, manifest_path=path)
+        except ValueError:
+            return "invalid"
+        return "verified"
+
+    def _ml_release_status(self, latest: dict[str, Any] | None, *, manifest_count: int) -> tuple[str, str]:
+        """Convert release manifest state into a dashboard status."""
+        if manifest_count == 0 or latest is None:
+            return "watch", "No ML release manifest was found."
+        if latest.get("signature_status") == "invalid":
+            return "critical", f"Latest manifest {latest.get('release_tag')} has an invalid signature."
+        if latest.get("gate_passed") is False:
+            return "critical", f"Latest manifest {latest.get('release_tag')} failed the predictor promotion gate."
+        if latest.get("signature_status") == "missing":
+            return "watch", f"Latest manifest {latest.get('release_tag')} is not signed."
+        return "healthy", f"Latest manifest {latest.get('release_tag')} is signed and passed its release gate."
+
+    def _ml_backtest_status(self, latest: dict[str, Any] | None) -> tuple[str, str]:
+        """Convert latest predictor backtest metadata into a dashboard status."""
+        if latest is None:
+            return "info", "No predictor backtest metadata is available."
+        sample_count = int(latest.get("backtest_sample_count") or 0)
+        gate_passed = latest.get("gate_passed")
+        if gate_passed is False:
+            return "critical", "Latest predictor promotion gate failed."
+        if sample_count <= 0:
+            return "info", "Latest manifest has no predictor backtest samples."
+        required = int(settings.ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT or 0)
+        if sample_count < required:
+            return "watch", f"Latest backtest has {sample_count} sample(s), below required {required}."
+        error_rate = latest.get("backtest_average_absolute_error_rate")
+        if error_rate is None:
+            return "watch", f"Latest backtest has {sample_count} sample(s), but no error-rate metric."
+        return "healthy", f"Latest backtest has {sample_count} sample(s) at {float(error_rate):.4f} average error."
 
     def _tracked_task_records(
         self,

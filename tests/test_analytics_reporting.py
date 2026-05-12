@@ -1,11 +1,12 @@
 """Tests for operational dashboard reporting."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.core.config import settings
-from app.models.models import CrawlJob, OperatorStrategyRun
+from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun
 
 
 def _bootstrap_operator(client):
@@ -196,3 +197,123 @@ def test_operations_dashboard_reports_external_broker_and_stale_tasks(client, te
     cards = {card["key"]: card for card in payload["cards"]}
     assert cards["task_broker_health"]["status"] == "healthy"
     assert cards["task_stale_queue"]["status"] == "critical"
+
+
+def test_operations_dashboard_reports_telegram_and_ml_release_cards(client, test_db, tmp_path, monkeypatch):
+    """Operations dashboard should summarize Telegram delivery telemetry and release manifests."""
+    operator = _bootstrap_operator(client)
+    operator_id = operator["id"]
+    now = datetime.now(UTC)
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "12345")
+    monkeypatch.setattr(settings, "ML_RELEASE_MANIFEST_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE", False)
+
+    manifest_path = tmp_path / "2026-05-12-release.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "release_tag": "2026-05-12-release",
+                "validated_on": now.isoformat(),
+                "recommended_docker_target": "api-training",
+                "promotion_gate": {
+                    "predictor_backtest": {
+                        "status": "passed",
+                        "passed": True,
+                        "best_predictor_key": "ensemble",
+                        "best_predictor_name": "ensemble_blend",
+                        "metrics": {
+                            "sample_count": 8,
+                            "average_absolute_error_rate": 0.012,
+                            "best_predictor_key": "ensemble",
+                            "best_predictor_name": "ensemble_blend",
+                        },
+                        "reasons": ["Predictor backtest gate passed."],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    test_db.add_all([
+        Notification(
+            user_id=operator_id,
+            title="입찰 판단 · 프로젝트 1",
+            message="decision notification",
+            type="recommendation",
+            is_read=False,
+            created_at=now - timedelta(hours=3),
+        ),
+        Notification(
+            user_id=operator_id,
+            title="투찰 완료 · 프로젝트 1",
+            message="bid notification",
+            type="bid_update",
+            is_read=True,
+            created_at=now - timedelta(hours=2),
+        ),
+        Analytics(
+            user_id=operator_id,
+            event_type="telegram.delivery",
+            event_data=json.dumps({
+                "notification_id": 1,
+                "source": "bid_decision",
+                "sent": True,
+                "status": "sent",
+                "detail": "Telegram delivery succeeded.",
+            }),
+            timestamp=now - timedelta(hours=2),
+        ),
+        Analytics(
+            user_id=operator_id,
+            event_type="telegram.delivery",
+            event_data=json.dumps({
+                "notification_id": 2,
+                "source": "bid_submission",
+                "sent": False,
+                "status": "failed",
+                "detail": "Telegram API rejected the message.",
+            }),
+            timestamp=now - timedelta(hours=1),
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    notifications = payload["notifications"]
+    assert notifications["notification_count"] == 2
+    assert notifications["unread_count"] == 1
+    assert notifications["decision_notification_count"] == 1
+    assert notifications["bid_submission_notification_count"] == 1
+    assert notifications["telegram_configured"] is True
+    assert notifications["telegram_delivery_attempt_count"] == 2
+    assert notifications["telegram_sent_count"] == 1
+    assert notifications["telegram_failed_count"] == 1
+    assert notifications["telegram_success_rate"] == pytest.approx(0.5, abs=0.0001)
+    assert notifications["telegram_status"] == "critical"
+    assert notifications["telegram_status_counts"] == {"failed": 1, "sent": 1}
+    assert notifications["recent_telegram_failures"][0]["source"] == "bid_submission"
+
+    ml_release = payload["ml_release"]
+    assert ml_release["manifest_count"] == 1
+    assert ml_release["latest_release_tag"] == "2026-05-12-release"
+    assert ml_release["latest_signature_status"] == "missing"
+    assert ml_release["latest_gate_status"] == "passed"
+    assert ml_release["latest_gate_passed"] is True
+    assert ml_release["latest_best_predictor_key"] == "ensemble"
+    assert ml_release["latest_backtest_sample_count"] == 8
+    assert ml_release["latest_backtest_average_absolute_error_rate"] == pytest.approx(0.012, abs=0.0001)
+    assert ml_release["status"] == "watch"
+    assert ml_release["backtest_status"] == "healthy"
+
+    cards = {card["key"]: card for card in payload["cards"]}
+    assert cards["telegram_delivery_rate"]["status"] == "critical"
+    assert cards["telegram_delivery_rate"]["value"] == pytest.approx(0.5, abs=0.0001)
+    assert cards["ml_release_gate"]["status"] == "watch"
+    assert cards["ml_backtest_samples"]["status"] == "healthy"

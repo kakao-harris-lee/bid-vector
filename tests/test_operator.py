@@ -1,10 +1,11 @@
 """Tests for the singleton operator workflow."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from app.core.config import settings
 from app.models.models import OperatorStrategyRun
-from app.models.models import Bid, BidDecisionRecord, Notification, Project, User
+from app.models.models import Analytics, Bid, BidDecisionRecord, Notification, Project, User
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.strategy_scheduler import OperatorStrategyScheduler
@@ -1174,6 +1175,11 @@ def test_bid_decision_triggers_telegram_delivery_when_configured(client, test_db
     callback_data = reply_markup["inline_keyboard"][0][0]["callback_data"]
     assert callback_data.startswith("bid-decision:")
     assert callback_data.endswith(":submit")
+    delivery_event = test_db.query(Analytics).filter(Analytics.event_type == "telegram.delivery").one()
+    delivery_payload = json.loads(delivery_event.event_data)
+    assert delivery_payload["status"] == "sent"
+    assert delivery_payload["sent"] is True
+    assert delivery_payload["source"] == "bid_decision"
 
 
 def test_low_priority_bid_decision_stays_on_web_without_telegram(client, test_db, monkeypatch):
