@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `137 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `140 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -33,7 +33,8 @@
 - 실험 실행 이력 / 평가 API (`decision-experiments`) 및 baseline vs current 비교
 - 실험 run 수동 상태 변경 / 메모 갱신 / threshold, workload, category 적용 feedback loop
 - 실험 run별 `application_status`, `application_history`, `next_actions` 기반 dashboard action payload
-- Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, WebSocket realtime event stream
+- Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, 인증된 WebSocket realtime event stream
+- PostgreSQL `LISTEN/NOTIFY` 기반 optional realtime fanout backend
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
 - 크롤 성공률 / 전략 모니터링 성과 / 최근 실패 원인을 묶은 operations dashboard analytics
 - operations dashboard의 task/broker 진단 payload, queue route 진단, stale/failed/retry task 집계 및 task health 카드
@@ -49,7 +50,6 @@
 ### 아직 핵심적으로 남은 범위
 
 - `LSTM` / `Ensemble` 학습 파이프라인 및 모델 아티팩트 관리 고도화
-- realtime 이벤트 인증/다중 프로세스 pub/sub 확장
 - 모델 학습/릴리즈, Telegram 전송률 등 추가 운영 카드 확장
 
 ## 작업 원칙
@@ -166,11 +166,13 @@
 - Telegram 메시지 포맷 / callback / polling / 상태 동기화
 - 웹 알림 fallback 및 운영자 notification 조회
 - WebSocket 연결 관리 레이어 및 realtime event envelope
+- WebSocket operator access token 인증
+- optional PostgreSQL `LISTEN/NOTIFY` fanout backend 및 lifecycle start/stop
 - 추천 / 투찰 / 크롤 / 전략 모니터링 완료·실패 이벤트 브로드캐스트
 
 남은 작업:
 
-- 필요 시 이벤트 인증/권한 검사 및 다중 프로세스 pub/sub 연계
+- 필요 시 이벤트 범위 확대 및 frontend reconnect/replay 정책 조율
 
 ### F. 비동기 / 실행 인프라 — compose 복구 완료, 운영 정리 필요
 
@@ -208,11 +210,10 @@
 
 ## 현재 권장 실행 순서
 
-1. `E. realtime 이벤트 인증/다중 프로세스 pub/sub 확장`
+1. `D. 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강`
 2. `G. Telegram 전송률 / 모델 릴리즈 카드 집계 확장`
-3. `D. 성공 / 실패 / 보류 실험 이력 기반 정렬 및 관측성 보강`
-4. `C. 모델 학습/검증 파이프라인 고도화`
-5. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
+3. `C. 모델 학습/검증 파이프라인 고도화`
+4. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 

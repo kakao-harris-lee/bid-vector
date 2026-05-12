@@ -109,7 +109,7 @@
 - Celery broker/result backend URL은 credential을 마스킹해서 노출한다.
 - queue route, worker runtime 설정, stale/failed/retry task 집계와 `task_broker_health`, `task_stale_queue`, `task_failure_rate` 카드가 추가됐다.
 
-### 1순위 — realtime 운영화
+### 완료 — realtime 운영화
 
 WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작하지만, 운영 환경에서는 인증과 다중 프로세스 fanout 경로가 아직 약하다.
 
@@ -124,24 +124,30 @@ WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작�
 - dashboard client가 인증된 realtime stream만 구독할 수 있어야 한다.
 - 여러 API worker가 떠 있어도 동일한 이벤트가 안정적으로 전달되어야 한다.
 
-### 2순위 — 실험 운영 고도화
+#### 구현된 결과
+
+- `WS /api/v1/realtime/events`는 기본적으로 operator access token을 요구한다.
+- `REALTIME_FANOUT_BACKEND=postgres` 설정 시 PostgreSQL `LISTEN/NOTIFY` 기반 fanout listener가 앱 lifecycle에서 시작/종료된다.
+- manager는 local broadcast와 cross-process fanout 수신을 분리하고, 자기 프로세스가 발행한 fanout echo는 무시한다.
+
+### 1순위 — 실험 운영 고도화
 
 실험 계획과 실행 이력은 저장되고, 수동 제어와 threshold/workload/category 적용까지 가능하다. 이제 운영 화면에서 바로 쓰기 좋은 payload와 이력 집계를 다듬는 단계다.
 
-#### 2순위 작업 범위
+#### 1순위 작업 범위
 
 - 성공 / 실패 / 보류 실험 이력 기반 정렬 개선
 - 적용 이력/중복 적용 방지 집계 보강
 - 실험 이력 필터/정렬 payload 구조 정리
 
-#### 2순위 우선 검토 파일
+#### 1순위 우선 검토 파일
 
 - `app/services/decision_analytics.py`
 - `app/services/decision_experiments.py`
 - `app/api/analytics.py`
 - `app/schemas/schemas.py`
 
-#### 2순위 완료 기준
+#### 1순위 완료 기준
 
 - 운영자가 적용 가능한 실험과 이미 적용된 실험을 쉽게 구분할 수 있어야 한다.
 - 실험 적용 결과가 다음 추천 로직과 운영 설정 변경에 감사 가능한 형태로 남아야 한다.
@@ -170,9 +176,9 @@ WebSocket realtime stream은 단일 프로세스 개발 환경에서는 동작�
 - 로컬 개발 환경에서 compose 설정이 재현 가능해야 한다.
 - 무거운 작업은 API 요청 경로 밖에서 실행되고, 상태 조회가 가능해야 한다.
 
-### 4순위 — WebSocket 실시간 이벤트 운영화
+### 완료 — WebSocket 실시간 이벤트 운영화
 
-WebSocket 기본 레이어와 주요 이벤트 브로드캐스트는 구현됐다. 운영 배포에서는 인증과 다중 프로세스 fanout이 남는다.
+WebSocket 기본 레이어와 주요 이벤트 브로드캐스트가 있고, 운영 배포를 위한 인증과 PostgreSQL fanout 경로도 추가됐다.
 
 #### 4순위 작업 범위
 
@@ -191,6 +197,11 @@ WebSocket 기본 레이어와 주요 이벤트 브로드캐스트는 구현됐�
 
 - 운영 배포에서 여러 API 프로세스 사이 이벤트가 누락되지 않아야 한다.
 - 인증되지 않은 클라이언트가 이벤트 스트림을 열 수 없어야 한다.
+
+#### 구현된 결과
+
+- 기본 WebSocket 인증은 operator access token 기반이다.
+- `REALTIME_FANOUT_BACKEND=postgres` 설정으로 여러 API worker 간 이벤트 fanout이 가능하다.
 
 ### 5순위 — 운영 보고용 집계 API 확장
 
@@ -217,10 +228,10 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 
 다음 턴에는 아래 순서가 가장 효율적이다.
 
-### 묶음 A — realtime 운영화
+### 묶음 A — 실험 이력 관측성
 
-- WebSocket 인증
-- 다중 프로세스 pub/sub fanout
+- 성공 / 실패 / 보류 실험 이력 기반 정렬
+- 적용 이력 필터와 중복 적용 감사 payload
 
 ### 묶음 B — 추가 운영 카드
 
@@ -228,10 +239,10 @@ decision analytics, prediction observability, operations dashboard 기반이 생
 - 모델 릴리즈 상태
 - training/backtest 결과 카드
 
-### 묶음 C — 실험 이력 관측성
+### 묶음 C — 모델 학습/검증 고도화
 
-- 성공 / 실패 / 보류 실험 이력 기반 정렬
-- 적용 이력 필터와 중복 적용 감사 payload
+- 학습 dataset 품질 검증
+- 모델 artifact 비교 리포트
 
 ## 범위 재정의 / 비우선 항목
 

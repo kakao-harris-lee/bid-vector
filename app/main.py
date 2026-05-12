@@ -13,6 +13,7 @@ from app.services.bid_decision_schema import ensure_bid_decision_schema
 from app.services.operator_strategy_schema import ensure_operator_strategy_schema
 from app.services.prediction_schema import ensure_price_prediction_metadata_schema
 from app.services.project_similarity import ensure_project_metadata_schema, ensure_project_vector_schema
+from app.services.realtime import realtime_event_manager
 from app.services.strategy_scheduler import strategy_scheduler
 
 # Configure logging
@@ -31,12 +32,14 @@ async def lifespan(app: FastAPI):
     ensure_price_prediction_metadata_schema(engine)
     ensure_project_metadata_schema(engine)
     ensure_project_vector_schema(engine)
+    await realtime_event_manager.start()
     await strategy_scheduler.start()
 
     yield
 
     # Shutdown
     await strategy_scheduler.stop()
+    await realtime_event_manager.stop()
     logger.info("Shutting down application...")
 
 

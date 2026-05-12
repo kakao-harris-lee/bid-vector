@@ -364,7 +364,7 @@ Decision analytics now also include persisted funnel telemetry, current-vs-previ
 
 - `WS /api/v1/realtime/events` - Stream normalized dashboard events for bid-decision notifications, bid submissions, crawl completion/failure, and strategy monitor completion/failure
 
-Realtime events use a common envelope: `event_id`, `event_type`, `created_at`, and `payload`. Clients can send `{"event_type": "ping"}` and receive a `pong` event for connection health checks.
+Realtime events use a common envelope: `event_id`, `event_type`, `created_at`, and `payload`. The WebSocket stream requires an operator access token by default; pass it as `?token=<access_token>` or an `Authorization: Bearer <access_token>` header. Clients can send `{"event_type": "ping"}` and receive a `pong` event for connection health checks. Single-process deployments use local fanout; set `REALTIME_FANOUT_BACKEND=postgres` to relay events between API workers through PostgreSQL `LISTEN/NOTIFY`.
 
 ### Legacy Admin
 
@@ -483,6 +483,10 @@ Key variables:
 - `CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP` - Retry broker connection while worker/beat are booting
 - `CELERY_BROKER_CONNECTION_MAX_RETRIES` - Maximum broker reconnect attempts during startup
 - `CELERY_BROKER_PUBLISH_MAX_RETRIES` - Producer-side publish retry ceiling for transient broker failures
+- `REALTIME_REQUIRE_AUTH` - Require an operator access token for dashboard WebSocket connections
+- `REALTIME_FANOUT_BACKEND` - Realtime event fanout backend: `local` for one API process or `postgres` for PostgreSQL `LISTEN/NOTIFY` fanout across workers
+- `REALTIME_POSTGRES_CHANNEL` - PostgreSQL notification channel used when `REALTIME_FANOUT_BACKEND=postgres`
+- `REALTIME_HISTORY_LIMIT` - Number of recent realtime events retained in each API process for diagnostics/replay metadata
 - `CELERY_RABBITMQ_USER` / `CELERY_RABBITMQ_PASSWORD` / `CELERY_RABBITMQ_VHOST` - Optional RabbitMQ compose defaults used by the `tasks` profile
 - `CELERY_RABBITMQ_PORT` / `CELERY_RABBITMQ_MANAGEMENT_PORT` - RabbitMQ AMQP and management UI ports exposed by Docker Compose
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED` - Enable periodic operator strategy monitoring
