@@ -110,6 +110,54 @@ class MLReleasePromotionRequest:
 class MLReleasePromotionService:
     """Create, validate, and apply manifest-backed ML artifact promotions."""
 
+    PREDICTOR_GATE_POLICY_PRESETS: dict[str, dict[str, Any]] = {
+        "advisory": {
+            "label": "Advisory rollout",
+            "require_report": False,
+            "min_sample_count": 1,
+            "max_average_absolute_error_rate": 0.06,
+            "max_guardrail_rate": 0.5,
+            "max_fallback_rate": 0.5,
+            "min_dataset_quality_status": "failed",
+            "block_on_missing_dataset_quality": False,
+        },
+        "canary": {
+            "label": "Canary rollout",
+            "require_report": True,
+            "min_sample_count": 3,
+            "max_average_absolute_error_rate": 0.04,
+            "max_guardrail_rate": 0.35,
+            "max_fallback_rate": 0.35,
+            "min_dataset_quality_status": "warning",
+            "block_on_missing_dataset_quality": False,
+        },
+        "standard": {
+            "label": "Standard rollout",
+            "require_report": None,
+            "min_sample_count": None,
+            "max_average_absolute_error_rate": None,
+            "max_guardrail_rate": None,
+            "max_fallback_rate": None,
+            "min_dataset_quality_status": "warning",
+            "block_on_missing_dataset_quality": False,
+        },
+        "strict": {
+            "label": "Strict rollout",
+            "require_report": True,
+            "min_sample_count": 10,
+            "max_average_absolute_error_rate": 0.02,
+            "max_guardrail_rate": 0.15,
+            "max_fallback_rate": 0.1,
+            "min_dataset_quality_status": "passed",
+            "block_on_missing_dataset_quality": True,
+        },
+    }
+    DATASET_QUALITY_ORDER = {
+        "failed": 0,
+        "warning": 1,
+        "passed": 2,
+    }
+
     def __init__(self, repo_root: str | Path | None = None) -> None:
         self.repo_root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
         self.repo_root = self.repo_root.resolve()
@@ -580,13 +628,7 @@ class MLReleasePromotionService:
         has_predictor_artifact: bool,
     ) -> dict[str, Any]:
         """Build a deterministic pass/fail gate from predictor backtest evidence."""
-        thresholds = {
-            "require_report": bool(settings.ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT),
-            "min_sample_count": int(settings.ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT or 0),
-            "max_average_absolute_error_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE),
-            "max_guardrail_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE),
-            "max_fallback_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE),
-        }
+        thresholds = self._build_predictor_gate_thresholds()
         if not has_predictor_artifact:
             return {
                 "status": "not_applicable",
@@ -645,6 +687,15 @@ class MLReleasePromotionService:
                 f"Fallback rate {float(fallback_rate):.4f} exceeds {thresholds['max_fallback_rate']:.4f}."
             )
 
+        dataset_quality_status = metrics.get("dataset_quality_status")
+        dataset_quality_reason = self._dataset_quality_gate_reason(
+            dataset_quality_status,
+            min_status=str(thresholds["min_dataset_quality_status"]),
+            block_on_missing=bool(thresholds["block_on_missing_dataset_quality"]),
+        )
+        if dataset_quality_reason:
+            reasons.append(dataset_quality_reason)
+
         passed = not reasons
         return {
             "status": "passed" if passed else "failed",
@@ -684,11 +735,24 @@ class MLReleasePromotionService:
         )
         guardrail_rate = self._first_float(backtest_report.get("guardrail_rate"))
         fallback_rate = self._first_float(backtest_report.get("fallback_rate"))
+        dataset_quality = backtest_report.get("dataset_quality")
+        dataset_quality = dataset_quality if isinstance(dataset_quality, dict) else {}
+        dataset_quality_status = (
+            str(backtest_report.get("dataset_quality_status") or "").strip().lower()
+            or str(dataset_quality.get("status") or "").strip().lower()
+            or None
+        )
+        dataset_quality_score = self._first_float(
+            backtest_report.get("dataset_quality_score"),
+            dataset_quality.get("score"),
+        )
         return {
             "sample_count": sample_count,
             "average_absolute_error_rate": average_error_rate,
             "guardrail_rate": guardrail_rate,
             "fallback_rate": fallback_rate,
+            "dataset_quality_status": dataset_quality_status,
+            "dataset_quality_score": dataset_quality_score,
             "best_predictor_key": resolved_best_predictor_key,
             "best_predictor_name": resolved_best_predictor_name,
         }
@@ -724,6 +788,86 @@ class MLReleasePromotionService:
                 -int(result.get("sample_count") or 0),
             ),
         )
+
+    def _build_predictor_gate_thresholds(self) -> dict[str, Any]:
+        """Resolve effective predictor gate thresholds from policy and env settings."""
+        policy = self._normalize_predictor_gate_policy(settings.ML_RELEASE_PREDICTOR_GATE_POLICY)
+        preset = self.PREDICTOR_GATE_POLICY_PRESETS[policy]
+        configured = {
+            "require_report": bool(settings.ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT),
+            "min_sample_count": int(settings.ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT or 0),
+            "max_average_absolute_error_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE),
+            "max_guardrail_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE),
+            "max_fallback_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE),
+        }
+        if policy == "standard":
+            effective = dict(configured)
+        else:
+            effective = {
+                "require_report": bool(preset["require_report"]),
+                "min_sample_count": int(preset["min_sample_count"]),
+                "max_average_absolute_error_rate": float(preset["max_average_absolute_error_rate"]),
+                "max_guardrail_rate": float(preset["max_guardrail_rate"]),
+                "max_fallback_rate": float(preset["max_fallback_rate"]),
+            }
+
+        configured_min_dataset_quality = str(
+            settings.ML_RELEASE_PREDICTOR_GATE_MIN_DATASET_QUALITY_STATUS or ""
+        ).strip().lower()
+        effective["policy"] = policy
+        effective["policy_label"] = preset["label"]
+        effective["configured_thresholds"] = configured
+        effective["min_dataset_quality_status"] = (
+            configured_min_dataset_quality
+            if configured_min_dataset_quality in self.DATASET_QUALITY_ORDER
+            else str(preset["min_dataset_quality_status"])
+        )
+        effective["block_on_missing_dataset_quality"] = bool(preset["block_on_missing_dataset_quality"])
+        return effective
+
+    def _normalize_predictor_gate_policy(self, value: Any) -> str:
+        """Normalize one release gate policy value into a supported preset key."""
+        policy = str(value or "standard").strip().lower().replace("-", "_")
+        aliases = {
+            "default": "standard",
+            "production": "standard",
+            "prod": "standard",
+            "permissive": "advisory",
+            "informational": "advisory",
+            "shadow": "advisory",
+            "preview": "canary",
+            "conservative": "strict",
+        }
+        policy = aliases.get(policy, policy)
+        return policy if policy in self.PREDICTOR_GATE_POLICY_PRESETS else "standard"
+
+    def _dataset_quality_gate_reason(
+        self,
+        dataset_quality_status: Any,
+        *,
+        min_status: str,
+        block_on_missing: bool,
+    ) -> str | None:
+        """Return a failure reason when dataset quality is below the active gate policy."""
+        required = str(min_status or "warning").strip().lower()
+        required_rank = self.DATASET_QUALITY_ORDER.get(required)
+        if required_rank is None:
+            return None
+
+        current = str(dataset_quality_status or "").strip().lower()
+        if not current:
+            if block_on_missing:
+                return f"Dataset quality status is missing, but policy requires at least {required}."
+            return None
+
+        current_rank = self.DATASET_QUALITY_ORDER.get(current)
+        if current_rank is None:
+            if block_on_missing:
+                return f"Dataset quality status '{current}' is unknown, but policy requires at least {required}."
+            return None
+        if current_rank < required_rank:
+            return f"Dataset quality status '{current}' is below required '{required}'."
+        return None
 
     def _resolve_manifest_promotion_gate(self, manifest: dict[str, Any]) -> dict[str, Any]:
         """Read or reconstruct the predictor promotion gate from a manifest."""

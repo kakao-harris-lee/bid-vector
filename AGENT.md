@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `144 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `146 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -42,6 +42,7 @@
 - operations dashboard의 task/broker 진단 payload, queue route 진단, stale/failed/retry task 집계 및 task health 카드
 - operations dashboard의 Telegram 전송률/실패 원인, ML release manifest/signature/promotion gate/backtest 카드
 - price predictor training run의 dataset 품질 리포트, artifact 비교 리포트, manifest promotion gate 입력 연결
+- predictor promotion gate의 standard/canary/strict/advisory policy preset 및 dataset quality gate reason
 - `docker compose` 복구, healthcheck/env wiring 정리, CPU-only PyTorch + pip cache 기반 Docker build 최적화
 - runtime / embedding / training / dev 의존성 분리 및 멀티타깃 Docker build 정리
 - manifest 기반 ML artifact promotion 서비스/CLI 및 embedding rebuild 자동화
@@ -53,7 +54,6 @@
 
 ### 아직 핵심적으로 남은 범위
 
-- promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정
 - 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 ## 작업 원칙
@@ -122,10 +122,11 @@
 - predictor observability API와 기간 버킷 성능 추세
 - release manifest predictor promotion gate
 - training 산출물 dataset 품질 리포트 및 artifact 비교 리포트
+- release policy preset 기반 promotion gate threshold 및 dataset quality status 검증
 
 남은 작업:
 
-- promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정
+- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 우선 검토 파일:
 
@@ -212,13 +213,12 @@
 
 남은 작업:
 
-- promotion gate 기준 운영 보정 및 release policy preset 정리
+- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 ## 현재 권장 실행 순서
 
-1. `C. promotion gate 기준을 실제 운영 데이터/릴리즈 정책에 맞춰 보정`
+1. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 2. `D. 장기 적용 결과를 category/threshold 세부 파라미터 추천값 산식에 더 직접 반영`
-3. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 

@@ -25,16 +25,15 @@
 
 현재 검증 상태:
 
-- `pytest -q` 기준 전체 `144 passed, 1 skipped`
+- `pytest -q` 기준 전체 `146 passed, 1 skipped`
 - `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 
 ## 남은 핵심 과제 요약
 
 ### 1. 예측 엔진 운영화
 
-실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세와 training 산출물 검증 리포트는 들어갔다. 이제 gate 기준 운영 보정이 남았다.
+실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세, training 산출물 검증 리포트, gate policy preset이 들어갔다. 이제 실제 운영 credential/IAM 기준 rollout 검증이 남았다.
 
-- promotion gate 기준을 실제 운영 데이터에 맞춰 보정
 - predictor 성능 추세를 릴리즈 의사결정 카드로 확장
 
 ### 2. 실험 운영 자동화
@@ -217,7 +216,7 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 - 각 recommendation이 `priority_score`, `history_adjustment`, supporting metric 내 `experiment_history`를 포함한다.
 - 성공 후 적용된 실험 계열은 후속 추천 우선순위가 올라가고, 반복 실패/롤백/보류 계열은 우선순위와 urgency가 낮아진다.
 
-### 1순위 — promotion gate 운영 보정
+### 완료 — promotion gate 운영 보정
 
 모델 학습 산출물 리포트와 manifest gate 연결은 들어갔다. 다음은 운영 데이터에 맞는 gate 기준과 릴리즈 정책을 더 구체화하는 단계다.
 
@@ -230,6 +229,27 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 #### 1순위 완료 기준
 
 - manifest gate 판단이 단일 고정 threshold가 아니라 운영 정책에 맞는 기준을 명확히 노출해야 한다.
+
+#### 구현된 결과
+
+- predictor promotion gate가 `standard`, `canary`, `strict`, `advisory` rollout policy preset을 지원한다.
+- gate threshold payload가 active policy, policy label, configured threshold, dataset quality floor를 함께 노출한다.
+- artifact comparison report의 `dataset_quality_status`가 gate metrics와 failure reason에 반영된다.
+- operations dashboard의 ML release summary가 latest gate policy와 dataset quality status를 반환한다.
+
+### 1순위 — 운영 credential/IAM rollout 검증
+
+release manifest object storage publish/apply 경로는 구현됐다. 다음은 실제 운영 credential/IAM 기준에서 실패 원인을 명확히 드러내는 rollout 검증 경로를 정리하는 단계다.
+
+#### 1순위 작업 범위
+
+- object storage credential/IAM preflight 검증
+- manifest signature required 모드 운영 체크
+- publish/apply 실패 원인 payload 정리
+
+#### 1순위 완료 기준
+
+- 운영자가 rollout 전에 credential, bucket/prefix, signature requirement 문제를 사전에 확인할 수 있어야 한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -323,12 +343,12 @@ decision analytics, prediction observability, operations dashboard 기반과 wor
 - 장기 적용 결과를 다음 recommendation ranking에 반영
 - 반복 적용/롤백 패턴 기반 실험 추천 억제
 
-### 묶음 A — promotion gate 운영 보정
+### 완료 — promotion gate 운영 보정
 
 - 운영 데이터 분포 기반 gate threshold 보정
 - release tier별 gate policy preset 정리
 
-### 묶음 B — 운영 credential/IAM rollout 검증
+### 묶음 A — 운영 credential/IAM rollout 검증
 
 - object storage 실제 credential 기준 publish/apply 경로 점검
 - 운영 환경 manifest signature required 모드 검증

@@ -170,6 +170,7 @@ To reduce drift between training outputs and runtime settings, the repository no
 - `apply-manifest --restart-compose --rebuild-embeddings-via-api` rolls the manifest into Docker Compose, waits for `/health`, and queues the remote embedding backfill through `/api/v1/ml/backfills/project-embeddings`
 - `create-manifest --predictor-backtest-report <report.json>` embeds rolling backtest evidence and creates a predictor promotion gate
 - Queued price-predictor training writes `dataset-quality.json` and `artifact-comparison.json` under `models/training-runs/<release-tag>/`, then passes the comparison report into the manifest promotion gate when manifest creation is enabled
+- Predictor promotion gates support `standard`, `canary`, `strict`, and `advisory` rollout policies through `ML_RELEASE_PREDICTOR_GATE_POLICY`; gate payloads include the active policy and dataset quality status when the report provides it
 - New manifests include artifact checksums, an HMAC-SHA256 signature, local retention policy metadata, and optional remote object-storage publishing via `ML_RELEASE_OBJECT_STORAGE_URL`
 - Applying a manifest validates the embedded predictor promotion gate. Failed gates block rollout unless `--skip-promotion-gate` is passed.
 
@@ -508,6 +509,8 @@ Key variables:
 - `ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE` - Require existing manifests to contain a valid signature before loading
 - `ML_RELEASE_OBJECT_STORAGE_URL` - Optional `file://...` or `s3://bucket/prefix` target for manifest/artifact publishing
 - `ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH` - Automatically publish manifests and referenced artifacts after creation
+- `ML_RELEASE_PREDICTOR_GATE_POLICY` - Release gate policy preset (`standard`, `canary`, `strict`, or `advisory`)
+- `ML_RELEASE_PREDICTOR_GATE_MIN_DATASET_QUALITY_STATUS` - Optional dataset quality floor (`failed`, `warning`, or `passed`) overriding the policy default
 - `ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT` - Require predictor manifests to include a backtest report before rollout
 - `ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT` - Minimum backtest samples required by the predictor promotion gate
 - `ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE` - Maximum average absolute bid-rate error allowed by the promotion gate

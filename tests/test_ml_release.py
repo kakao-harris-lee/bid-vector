@@ -100,6 +100,7 @@ def _write_predictor_backtest_report(
     sample_count: int = 6,
     average_error_rate: float = 0.012,
     best_predictor_key: str = "ensemble",
+    dataset_quality_status: str | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -110,6 +111,7 @@ def _write_predictor_backtest_report(
                 "best_predictor_key": best_predictor_key,
                 "best_predictor_name": f"{best_predictor_key}_blend",
                 "best_average_absolute_error_rate": average_error_rate,
+                **({"dataset_quality_status": dataset_quality_status} if dataset_quality_status is not None else {}),
                 "results": [
                     {
                         "predictor_key": best_predictor_key,
@@ -165,6 +167,7 @@ def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
     assert persisted["recommended_env"]["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] == "models/predictors/ensemble/release-1.json"
     assert persisted["recommended_env"]["PRICE_PREDICTION_PREFERRED_PREDICTOR"] == "ensemble"
     assert persisted["promotion_gate"]["predictor_backtest"]["passed"] is True
+    assert persisted["promotion_gate"]["predictor_backtest"]["thresholds"]["policy"] == "standard"
     assert persisted["promotion_gate"]["predictor_backtest"]["metrics"]["sample_count"] == 6
     assert persisted["promotion_gate"]["predictor_backtest"]["metrics"]["average_absolute_error_rate"] == pytest.approx(0.012)
     assert persisted["artifacts"]["predictors"]["ensemble"]["resolved_lstm_artifact_path"] == "models/predictors/lstm/release-1.json"
@@ -227,6 +230,63 @@ def test_apply_release_manifest_blocks_failed_predictor_promotion_gate(tmp_path,
         skip_promotion_gate=True,
     )
     assert bypassed["promotion_gate"]["passed"] is False
+
+
+def test_predictor_promotion_gate_blocks_failed_dataset_quality(tmp_path):
+    """Training comparison reports with failed dataset quality should block standard rollout."""
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "dataset-quality.json")
+    backtest_report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "failed-dataset-quality.json",
+        sample_count=6,
+        average_error_rate=0.012,
+        best_predictor_key="lstm",
+        dataset_quality_status="failed",
+    )
+
+    manifest = MLReleasePromotionService(repo_root=repo_root).create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-failed-dataset-quality",
+            lstm_artifact_path=str(lstm_path),
+            predictor_backtest_report_path=str(backtest_report_path),
+        )
+    )
+
+    gate = manifest["promotion_gate"]["predictor_backtest"]
+    assert gate["passed"] is False
+    assert gate["thresholds"]["min_dataset_quality_status"] == "warning"
+    assert gate["metrics"]["dataset_quality_status"] == "failed"
+    assert any("Dataset quality status 'failed'" in reason for reason in gate["reasons"])
+
+
+def test_predictor_promotion_gate_canary_policy_uses_release_tier_thresholds(tmp_path, monkeypatch):
+    """Canary rollout policy should expose and apply its own gate preset."""
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "canary.json")
+    backtest_report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "canary-backtest.json",
+        sample_count=3,
+        average_error_rate=0.035,
+        best_predictor_key="lstm",
+        dataset_quality_status="warning",
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_PREDICTOR_GATE_POLICY", "canary")
+
+    manifest = MLReleasePromotionService(repo_root=repo_root).create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-canary-predictor",
+            lstm_artifact_path=str(lstm_path),
+            predictor_backtest_report_path=str(backtest_report_path),
+        )
+    )
+
+    gate = manifest["promotion_gate"]["predictor_backtest"]
+    assert gate["passed"] is True
+    assert gate["thresholds"]["policy"] == "canary"
+    assert gate["thresholds"]["require_report"] is True
+    assert gate["thresholds"]["min_sample_count"] == 3
+    assert gate["thresholds"]["max_average_absolute_error_rate"] == pytest.approx(0.04)
+    assert gate["metrics"]["dataset_quality_status"] == "warning"
 
 
 def test_publish_release_manifest_to_file_object_storage(tmp_path, monkeypatch):

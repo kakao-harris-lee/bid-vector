@@ -1266,8 +1266,10 @@ class MLReleaseManifestSummaryItem(BaseModel):
     signature_status: Literal["verified", "missing", "invalid"]
     gate_status: str
     gate_passed: Optional[bool] = None
+    gate_policy: Optional[str] = None
     backtest_sample_count: int = Field(ge=0)
     backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    dataset_quality_status: Optional[str] = None
     best_predictor_key: Optional[str] = None
     best_predictor_name: Optional[str] = None
     recommended_docker_target: Optional[str] = None
@@ -1289,7 +1291,9 @@ class MLReleaseOperationsSummary(BaseModel):
     latest_signature_status: Literal["verified", "missing", "invalid"]
     latest_gate_status: str
     latest_gate_passed: Optional[bool] = None
+    latest_gate_policy: Optional[str] = None
     latest_best_predictor_key: Optional[str] = None
+    latest_dataset_quality_status: Optional[str] = None
     latest_backtest_sample_count: int = Field(ge=0)
     latest_backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
     backtest_status: Literal["healthy", "watch", "critical", "info"]

@@ -394,7 +394,9 @@ class AnalyticsReportingService:
             "latest_signature_status": latest.get("signature_status") if latest else "missing",
             "latest_gate_status": latest.get("gate_status") if latest else "missing",
             "latest_gate_passed": latest.get("gate_passed") if latest else None,
+            "latest_gate_policy": latest.get("gate_policy") if latest else None,
             "latest_best_predictor_key": latest.get("best_predictor_key") if latest else None,
+            "latest_dataset_quality_status": latest.get("dataset_quality_status") if latest else None,
             "latest_backtest_sample_count": int(latest.get("backtest_sample_count") or 0) if latest else 0,
             "latest_backtest_average_absolute_error_rate": (
                 latest.get("backtest_average_absolute_error_rate") if latest else None
@@ -620,8 +622,10 @@ class AnalyticsReportingService:
             "signature_status": "missing",
             "gate_status": "missing",
             "gate_passed": None,
+            "gate_policy": None,
             "backtest_sample_count": 0,
             "backtest_average_absolute_error_rate": None,
+            "dataset_quality_status": None,
             "best_predictor_key": None,
             "best_predictor_name": None,
             "detail": "",
@@ -658,8 +662,10 @@ class AnalyticsReportingService:
         summary.update({
             "gate_status": str(gate.get("status") or "missing"),
             "gate_passed": bool(gate.get("passed")) if "passed" in gate else None,
+            "gate_policy": (gate.get("thresholds") or {}).get("policy") if isinstance(gate.get("thresholds"), dict) else None,
             "backtest_sample_count": int(metrics.get("sample_count") or 0),
             "backtest_average_absolute_error_rate": metrics.get("average_absolute_error_rate"),
+            "dataset_quality_status": metrics.get("dataset_quality_status"),
             "best_predictor_key": gate.get("best_predictor_key") or metrics.get("best_predictor_key"),
             "best_predictor_name": gate.get("best_predictor_name") or metrics.get("best_predictor_name"),
             "detail": "; ".join(str(reason) for reason in gate.get("reasons", []) if reason) if gate else "",

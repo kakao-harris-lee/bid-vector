@@ -221,11 +221,16 @@ def test_operations_dashboard_reports_telegram_and_ml_release_cards(client, test
                     "predictor_backtest": {
                         "status": "passed",
                         "passed": True,
+                        "thresholds": {
+                            "policy": "standard",
+                            "min_dataset_quality_status": "warning",
+                        },
                         "best_predictor_key": "ensemble",
                         "best_predictor_name": "ensemble_blend",
                         "metrics": {
                             "sample_count": 8,
                             "average_absolute_error_rate": 0.012,
+                            "dataset_quality_status": "passed",
                             "best_predictor_key": "ensemble",
                             "best_predictor_name": "ensemble_blend",
                         },
@@ -306,6 +311,8 @@ def test_operations_dashboard_reports_telegram_and_ml_release_cards(client, test
     assert ml_release["latest_signature_status"] == "missing"
     assert ml_release["latest_gate_status"] == "passed"
     assert ml_release["latest_gate_passed"] is True
+    assert ml_release["latest_gate_policy"] == "standard"
+    assert ml_release["latest_dataset_quality_status"] == "passed"
     assert ml_release["latest_best_predictor_key"] == "ensemble"
     assert ml_release["latest_backtest_sample_count"] == 8
     assert ml_release["latest_backtest_average_absolute_error_rate"] == pytest.approx(0.012, abs=0.0001)
