@@ -27,6 +27,35 @@ class DecisionAnalyticsService:
     EXPERIMENT_HISTORY_MIN_LOOKBACK_DAYS = 90
     EXPERIMENT_HISTORY_MAX_LOOKBACK_DAYS = 365
     EXPERIMENT_APPLICATION_MARKERS = ("Threshold 적용:", "Strategy 적용:")
+    THRESHOLD_PARAMETER_DELTAS = {
+        "review-threshold-tighten": {
+            "parameter": "review_threshold",
+            "label": "REVIEW_THRESHOLD",
+            "direction": "increase",
+            "base_delta": 0.04,
+            "min_delta": 0.02,
+            "max_delta": 0.06,
+        },
+        "review-threshold-relax": {
+            "parameter": "review_threshold",
+            "label": "REVIEW_THRESHOLD",
+            "direction": "decrease",
+            "base_delta": 0.03,
+            "min_delta": 0.015,
+            "max_delta": 0.05,
+        },
+        "bid-now-threshold-tighten": {
+            "parameter": "bid_now_threshold",
+            "label": "BID_NOW_THRESHOLD",
+            "direction": "increase",
+            "base_delta": 0.03,
+            "min_delta": 0.015,
+            "max_delta": 0.05,
+        },
+    }
+    CATEGORY_PARAMETER_BASE_DELTA = 0.03
+    CATEGORY_PARAMETER_MIN_DELTA = 0.015
+    CATEGORY_PARAMETER_MAX_DELTA = 0.05
 
     def build_insights(self, db: Session, *, days: int = 30, limit: int = 10) -> dict[str, Any]:
         """Summarize persisted bid-decision signals for tuning and operator review."""
@@ -306,6 +335,11 @@ class DecisionAnalyticsService:
                 **(recommendation.get("supporting_metrics") or {}),
                 "experiment_history": history_summary or {},
             }
+            adjusted_recommendation = self._attach_parameter_recommendation(
+                adjusted_recommendation,
+                adjustment=adjustment,
+                history_summary=history_summary,
+            )
             enriched.append(adjusted_recommendation)
 
         ordered = sorted(
@@ -326,6 +360,7 @@ class DecisionAnalyticsService:
             **recommendation,
             "priority_score": self._base_recommendation_priority_score(recommendation, original_index=0),
             "history_adjustment": self._build_history_adjustment(None),
+            "parameter_recommendation": {},
         }
 
     def _summarize_experiment_runs_for_recommendation(
@@ -437,6 +472,195 @@ class DecisionAnalyticsService:
         if priority_delta <= -45.0 and severity == "watch":
             return "info"
         return severity if severity in {"info", "watch", "action"} else "info"
+
+    def _attach_parameter_recommendation(
+        self,
+        recommendation: dict[str, Any],
+        *,
+        adjustment: dict[str, Any],
+        history_summary: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Attach concrete parameter deltas adjusted by long-running experiment history."""
+        parameter_recommendation = self._build_parameter_recommendation(
+            recommendation,
+            adjustment=adjustment,
+            history_summary=history_summary,
+        )
+        if not parameter_recommendation:
+            return {
+                **recommendation,
+                "parameter_recommendation": {},
+            }
+
+        supporting_metrics = {
+            **(recommendation.get("supporting_metrics") or {}),
+            "parameter_recommendation": parameter_recommendation,
+        }
+        return {
+            **recommendation,
+            "suggested_adjustment": self._render_parameter_adjustment(
+                recommendation,
+                parameter_recommendation=parameter_recommendation,
+            ),
+            "supporting_metrics": supporting_metrics,
+            "parameter_recommendation": parameter_recommendation,
+        }
+
+    def _build_parameter_recommendation(
+        self,
+        recommendation: dict[str, Any],
+        *,
+        adjustment: dict[str, Any],
+        history_summary: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build concrete threshold/category parameter suggestions from historical outcomes."""
+        key = str(recommendation.get("key") or "")
+        multiplier = self._parameter_delta_multiplier(adjustment)
+        confidence = self._parameter_confidence(adjustment)
+        history_counts = self._parameter_history_counts(history_summary)
+        history_reason = str(adjustment.get("reason") or "")
+
+        threshold_spec = self.THRESHOLD_PARAMETER_DELTAS.get(key)
+        if threshold_spec is not None:
+            base_delta = float(threshold_spec["base_delta"])
+            recommended_delta = self._bounded_parameter_delta(
+                base_delta * multiplier,
+                min_delta=float(threshold_spec["min_delta"]),
+                max_delta=float(threshold_spec["max_delta"]),
+            )
+            return {
+                "type": "threshold",
+                "parameter": threshold_spec["parameter"],
+                "label": threshold_spec["label"],
+                "direction": threshold_spec["direction"],
+                "base_delta": base_delta,
+                "recommended_delta": recommended_delta,
+                "min_delta": float(threshold_spec["min_delta"]),
+                "max_delta": float(threshold_spec["max_delta"]),
+                "delta_multiplier": round(multiplier, 4),
+                "confidence": confidence,
+                "history_status": str(adjustment.get("status") or "neutral"),
+                "history_reason": history_reason,
+                "history_counts": history_counts,
+            }
+
+        if key == "category-focus-shift":
+            metrics = recommendation.get("supporting_metrics") or {}
+            base_delta = self.CATEGORY_PARAMETER_BASE_DELTA
+            recommended_delta = self._bounded_parameter_delta(
+                base_delta * multiplier,
+                min_delta=self.CATEGORY_PARAMETER_MIN_DELTA,
+                max_delta=self.CATEGORY_PARAMETER_MAX_DELTA,
+            )
+            return {
+                "type": "category_priority",
+                "parameter": "category_priority_overrides",
+                "label": "CATEGORY_PRIORITY_OVERRIDES",
+                "direction": "replace",
+                "base_delta": base_delta,
+                "best_category": metrics.get("best_category"),
+                "worst_category": metrics.get("worst_category"),
+                "best_category_delta": recommended_delta,
+                "worst_category_delta": -recommended_delta,
+                "min_delta": self.CATEGORY_PARAMETER_MIN_DELTA,
+                "max_delta": self.CATEGORY_PARAMETER_MAX_DELTA,
+                "delta_multiplier": round(multiplier, 4),
+                "confidence": confidence,
+                "history_status": str(adjustment.get("status") or "neutral"),
+                "history_reason": history_reason,
+                "history_counts": history_counts,
+            }
+
+        return {}
+
+    def _parameter_delta_multiplier(self, adjustment: dict[str, Any]) -> float:
+        """Return the parameter-change scale implied by historical outcomes."""
+        status = str(adjustment.get("status") or "neutral")
+        priority_delta = float(adjustment.get("priority_delta") or 0.0)
+        applied_count = int(adjustment.get("applied_count") or 0)
+        success_count = int(adjustment.get("success_count") or 0)
+        if status == "promoted" and applied_count > 0:
+            return 1.25
+        if status == "promoted" and success_count > 0:
+            return 1.15
+        if status == "deprioritized":
+            if priority_delta <= -45.0:
+                return 0.5
+            if priority_delta <= -30.0:
+                return 0.65
+            return 0.75
+        return 1.0
+
+    def _parameter_confidence(self, adjustment: dict[str, Any]) -> float:
+        """Return a compact confidence score for the adjusted parameter suggestion."""
+        status = str(adjustment.get("status") or "neutral")
+        priority_delta = float(adjustment.get("priority_delta") or 0.0)
+        applied_count = int(adjustment.get("applied_count") or 0)
+        if status == "promoted" and applied_count > 0:
+            return 0.78
+        if status == "promoted":
+            return 0.68
+        if status == "deprioritized" and priority_delta <= -45.0:
+            return 0.35
+        if status == "deprioritized":
+            return 0.42
+        return 0.55
+
+    def _parameter_history_counts(self, history_summary: dict[str, Any] | None) -> dict[str, int]:
+        """Serialize history counts used by parameter recommendation formulas."""
+        if not history_summary:
+            return {
+                "run_count": 0,
+                "success_count": 0,
+                "rollback_count": 0,
+                "failed_count": 0,
+                "pending_count": 0,
+                "applied_count": 0,
+            }
+        return {
+            "run_count": int(history_summary.get("run_count") or 0),
+            "success_count": int(history_summary.get("success_count") or 0),
+            "rollback_count": int(history_summary.get("rollback_count") or 0),
+            "failed_count": int(history_summary.get("failed_count") or 0),
+            "pending_count": int(history_summary.get("pending_count") or 0),
+            "applied_count": int(history_summary.get("applied_count") or 0),
+        }
+
+    def _bounded_parameter_delta(self, value: float, *, min_delta: float, max_delta: float) -> float:
+        """Clamp parameter deltas into a small operationally safe range."""
+        return round(max(float(min_delta), min(float(value), float(max_delta))), 4)
+
+    def _render_parameter_adjustment(
+        self,
+        recommendation: dict[str, Any],
+        *,
+        parameter_recommendation: dict[str, Any],
+    ) -> str:
+        """Render operator-facing text from the concrete parameter recommendation."""
+        parameter_type = str(parameter_recommendation.get("type") or "")
+        history_reason = str(parameter_recommendation.get("history_reason") or "").strip()
+        if parameter_type == "threshold":
+            label = str(parameter_recommendation.get("label") or "")
+            direction = str(parameter_recommendation.get("direction") or "increase")
+            direction_text = "상향" if direction == "increase" else "하향"
+            delta = float(parameter_recommendation.get("recommended_delta") or 0.0)
+            return (
+                f"`{label}`를 {delta:.3f} {direction_text}하는 실험을 권장합니다. "
+                f"{history_reason}"
+            ).strip()
+
+        if parameter_type == "category_priority":
+            best_category = parameter_recommendation.get("best_category") or "고성과 카테고리"
+            worst_category = parameter_recommendation.get("worst_category") or "저성과 카테고리"
+            best_delta = float(parameter_recommendation.get("best_category_delta") or 0.0)
+            worst_delta = float(parameter_recommendation.get("worst_category_delta") or 0.0)
+            return (
+                f"`{best_category}` 우선순위 override를 {best_delta:+.3f}, "
+                f"`{worst_category}` override를 {worst_delta:+.3f} 조정하는 실험을 권장합니다. "
+                f"{history_reason}"
+            ).strip()
+
+        return str(recommendation.get("suggested_adjustment") or "")
 
     def _experiment_run_applied(self, run: DecisionExperimentRun) -> bool:
         """Return whether an experiment run has been applied to operator settings."""
@@ -713,15 +937,19 @@ class DecisionAnalyticsService:
         """Translate one tuning recommendation into a lightweight experiment plan."""
         key = str(recommendation.get("key") or "")
         metrics = recommendation.get("supporting_metrics") or {}
+        parameter_recommendation = recommendation.get("parameter_recommendation")
+        if not isinstance(parameter_recommendation, dict):
+            parameter_recommendation = {}
 
         if key == "review-threshold-tighten":
+            delta = float(parameter_recommendation.get("recommended_delta") or 0.04)
             return {
                 "experiment_key": "exp-review-threshold-tighten",
                 "recommendation_key": key,
                 "priority_rank": priority_rank,
                 "title": "Review threshold 상향 실험",
                 "hypothesis": "review 후보 진입 기준을 높이면 review 대기열 품질이 개선되어 제출 전환율이 올라갑니다.",
-                "suggested_change": "`REVIEW_THRESHOLD`를 0.03~0.05 높이고, 복잡도 상위 케이스는 review 진입에서 한 단계 더 엄격하게 거릅니다.",
+                "suggested_change": f"`REVIEW_THRESHOLD`를 {delta:.3f} 높이고, 복잡도 상위 케이스는 review 진입에서 한 단계 더 엄격하게 거릅니다.",
                 "target_metric": "review_submission_rate",
                 "expected_direction": "increase",
                 "success_criteria": "review_submission_rate가 최소 +0.10p 개선되고 active_pending_count가 증가하지 않으면 성공으로 간주합니다.",
@@ -729,16 +957,18 @@ class DecisionAnalyticsService:
                 "minimum_decision_sample": max(4, int(metrics.get("entry_review_count") or 4)),
                 "duration_days": 14,
                 "rollback_trigger": "overall_submission_rate가 0.05p 이상 하락하거나 review 후보 수가 절반 이하로 줄면 롤백합니다.",
+                "parameter_recommendation": parameter_recommendation,
             }
 
         if key == "review-threshold-relax":
+            delta = float(parameter_recommendation.get("recommended_delta") or 0.03)
             return {
                 "experiment_key": "exp-review-threshold-relax",
                 "recommendation_key": key,
                 "priority_rank": priority_rank,
                 "title": "Review threshold 완화 실험",
                 "hypothesis": "review 기준을 조금 낮추면 제출 품질을 크게 해치지 않으면서 더 많은 유의미 후보를 검토 큐에 올릴 수 있습니다.",
-                "suggested_change": "`REVIEW_THRESHOLD`를 0.02~0.04 낮추고 review 후보 수 변화와 전환율을 함께 추적합니다.",
+                "suggested_change": f"`REVIEW_THRESHOLD`를 {delta:.3f} 낮추고 review 후보 수 변화와 전환율을 함께 추적합니다.",
                 "target_metric": "decision_count",
                 "expected_direction": "increase",
                 "success_criteria": "review 후보 수가 늘면서 review_submission_rate가 0.60 이상 유지되면 성공으로 간주합니다.",
@@ -746,16 +976,18 @@ class DecisionAnalyticsService:
                 "minimum_decision_sample": max(4, int(metrics.get("entry_review_count") or 4)),
                 "duration_days": 14,
                 "rollback_trigger": "review_submission_rate가 0.15p 이상 하락하면 즉시 롤백합니다.",
+                "parameter_recommendation": parameter_recommendation,
             }
 
         if key == "bid-now-threshold-tighten":
+            delta = float(parameter_recommendation.get("recommended_delta") or 0.03)
             return {
                 "experiment_key": "exp-bid-now-threshold-tighten",
                 "recommendation_key": key,
                 "priority_rank": priority_rank,
                 "title": "즉시 투찰 기준 상향 실험",
                 "hypothesis": "bid_now 기준을 높이면 즉시 추진 후보의 질이 개선되어 제출 완료 비율이 높아집니다.",
-                "suggested_change": "`BID_NOW_THRESHOLD`를 0.02~0.05 높이고 복잡도 상위 케이스는 review로 유도합니다.",
+                "suggested_change": f"`BID_NOW_THRESHOLD`를 {delta:.3f} 높이고 복잡도 상위 케이스는 review로 유도합니다.",
                 "target_metric": "bid_now_submission_rate",
                 "expected_direction": "increase",
                 "success_criteria": "bid_now_submission_rate가 +0.10p 이상 개선되고 submitted_count가 유지되면 성공으로 봅니다.",
@@ -763,6 +995,7 @@ class DecisionAnalyticsService:
                 "minimum_decision_sample": max(4, int(metrics.get("entry_bid_now_count") or 4)),
                 "duration_days": 14,
                 "rollback_trigger": "submitted_count가 20% 이상 감소하면 롤백합니다.",
+                "parameter_recommendation": parameter_recommendation,
             }
 
         if key == "workload-auto-calibration":
@@ -783,13 +1016,17 @@ class DecisionAnalyticsService:
             }
 
         if key == "category-focus-shift":
+            best_delta = float(parameter_recommendation.get("best_category_delta") or 0.03)
+            worst_delta = float(parameter_recommendation.get("worst_category_delta") or -0.03)
+            best_category = parameter_recommendation.get("best_category") or metrics.get("best_category") or "고성과 카테고리"
+            worst_category = parameter_recommendation.get("worst_category") or metrics.get("worst_category") or "저성과 카테고리"
             return {
                 "experiment_key": "exp-category-focus-shift",
                 "recommendation_key": key,
                 "priority_rank": priority_rank,
                 "title": "카테고리별 기준 차등화 실험",
                 "hypothesis": "전환이 약한 카테고리에 더 엄격한 기준을 적용하고 강한 카테고리에 더 많은 탐색 용량을 주면 전체 제출 효율이 개선됩니다.",
-                "suggested_change": "저성과 카테고리에는 확률/적합도 기준을 0.03~0.05 높이고, 고성과 카테고리는 모니터링 우선순위를 1단계 올립니다.",
+                "suggested_change": f"`{best_category}` category override를 {best_delta:+.3f}, `{worst_category}` override를 {worst_delta:+.3f} 조정합니다.",
                 "target_metric": "worst_category_submission_rate",
                 "expected_direction": "increase",
                 "success_criteria": "저성과 카테고리 제출 전환율이 +0.10p 이상 개선되거나 전체 submission_rate가 유지되면 성공으로 봅니다.",
@@ -797,6 +1034,7 @@ class DecisionAnalyticsService:
                 "minimum_decision_sample": 4,
                 "duration_days": 21,
                 "rollback_trigger": "고성과 카테고리 제출 전환율이 0.10p 이상 하락하면 롤백합니다.",
+                "parameter_recommendation": parameter_recommendation,
             }
 
         return None

@@ -1097,8 +1097,12 @@ def test_decision_recommendations_endpoint_returns_actionable_threshold_and_segm
     assert "software" in category_rec["summary"]
     assert category_rec["supporting_metrics"]["worst_category"] == "security"
     assert category_rec["supporting_metrics"]["best_category"] == "software"
+    assert category_rec["parameter_recommendation"]["type"] == "category_priority"
+    assert category_rec["parameter_recommendation"]["best_category_delta"] == pytest.approx(0.03, abs=0.0001)
+    assert category_rec["parameter_recommendation"]["worst_category_delta"] == pytest.approx(-0.03, abs=0.0001)
     assert category_rec["experiment_plan"]["experiment_key"] == "exp-category-focus-shift"
     assert category_rec["experiment_plan"]["duration_days"] == 21
+    assert category_rec["experiment_plan"]["parameter_recommendation"]["best_category_delta"] == pytest.approx(0.03, abs=0.0001)
 
 
 def test_decision_recommendations_rank_with_experiment_history(client, test_db):
@@ -1350,6 +1354,11 @@ def test_decision_recommendations_rank_with_experiment_history(client, test_db):
     assert review_rec["history_adjustment"]["rollback_count"] == 1
     assert review_rec["history_adjustment"]["failed_count"] == 1
     assert review_rec["severity"] == "watch"
+    assert review_rec["parameter_recommendation"]["type"] == "threshold"
+    assert review_rec["parameter_recommendation"]["base_delta"] == pytest.approx(0.04, abs=0.0001)
+    assert review_rec["parameter_recommendation"]["recommended_delta"] == pytest.approx(0.02, abs=0.0001)
+    assert review_rec["experiment_plan"]["parameter_recommendation"]["recommended_delta"] == pytest.approx(0.02, abs=0.0001)
+    assert "0.020" in review_rec["suggested_adjustment"]
     assert workload_rec["priority_score"] > review_rec["priority_score"]
     assert payload["recommendations"][0]["key"] == "workload-auto-calibration"
 
@@ -2112,6 +2121,111 @@ def test_decision_experiment_apply_thresholds_updates_operator_strategy_and_deci
     assert "이미 적용" in post_apply_actions["apply_thresholds"]["reason"]
 
 
+def test_decision_experiment_apply_threshold_uses_history_adjusted_delta(client, test_db):
+    """Repeated failed threshold experiments should reduce the next concrete threshold delta."""
+    bootstrap = _bootstrap_operator(
+        client,
+        username="decision-threshold-history-apply-operator",
+        email="decision-threshold-history-apply@example.com",
+    )
+    operator_id = bootstrap.json()["id"]
+    now = datetime.now(UTC)
+
+    test_db.add_all([
+        DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key="exp-review-threshold-tighten",
+            recommendation_key="review-threshold-tighten",
+            status="failed",
+            outcome=None,
+            priority_rank=1,
+            title="Failed threshold apply history",
+            hypothesis="threshold failed",
+            suggested_change="raise review threshold",
+            target_metric="review_submission_rate",
+            expected_direction="increase",
+            success_criteria="improve review rate",
+            guardrail_metric="overall_submission_rate",
+            minimum_decision_sample=3,
+            duration_days=7,
+            baseline_days=7,
+            rollback_trigger="guardrail drops",
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=20),
+            ended_at=now - timedelta(days=14),
+            created_at=now - timedelta(days=20),
+            updated_at=now - timedelta(days=14),
+        ),
+        DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key="exp-review-threshold-tighten",
+            recommendation_key="review-threshold-tighten",
+            status="rolled_back",
+            outcome="rollback",
+            priority_rank=1,
+            title="Rolled back threshold apply history",
+            hypothesis="threshold rolled back",
+            suggested_change="raise review threshold",
+            target_metric="review_submission_rate",
+            expected_direction="increase",
+            success_criteria="improve review rate",
+            guardrail_metric="overall_submission_rate",
+            minimum_decision_sample=3,
+            duration_days=7,
+            baseline_days=7,
+            rollback_trigger="guardrail drops",
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=12),
+            ended_at=now - timedelta(days=6),
+            created_at=now - timedelta(days=12),
+            updated_at=now - timedelta(days=6),
+        ),
+    ])
+    current_run = DecisionExperimentRun(
+        operator_id=operator_id,
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="review-threshold-tighten",
+        status="completed",
+        outcome="success",
+        priority_rank=1,
+        title="Current threshold apply",
+        hypothesis="threshold improvement",
+        suggested_change="raise review threshold",
+        target_metric="review_submission_rate",
+        expected_direction="increase",
+        success_criteria="improve review rate",
+        guardrail_metric="overall_submission_rate",
+        minimum_decision_sample=3,
+        duration_days=7,
+        baseline_days=7,
+        rollback_trigger="guardrail drops",
+        baseline_summary=json.dumps({}),
+        latest_evaluation=json.dumps({}),
+        started_at=now - timedelta(days=3),
+        ended_at=now - timedelta(days=1),
+        created_at=now - timedelta(days=3),
+        updated_at=now - timedelta(days=1),
+    )
+    test_db.add(current_run)
+    test_db.commit()
+    test_db.refresh(current_run)
+
+    apply_response = client.post(
+        f"/api/v1/analytics/decision-experiments/{current_run.id}/apply-thresholds",
+        json={"dry_run": True},
+    )
+
+    assert apply_response.status_code == 200
+    update = apply_response.json()["threshold_updates"][0]
+    assert update["parameter"] == "review_threshold"
+    assert update["previous_value"] == pytest.approx(0.45, abs=0.0001)
+    assert update["suggested_value"] == pytest.approx(0.47, abs=0.0001)
+    assert update["delta"] == pytest.approx(0.02, abs=0.0001)
+    assert "배율 0.50" in update["rationale"]
+
+
 def test_decision_experiment_apply_strategy_updates_auto_workload_penalty(client):
     """Successful workload experiments should tune automatic workload penalties used by decision scoring."""
     _bootstrap_operator(client, username="decision-workload-apply-operator", email="decision-workload-apply@example.com")
@@ -2348,6 +2462,93 @@ def test_decision_experiment_apply_strategy_updates_category_priority_overrides(
     assert after_payload["strategy_adjustments"]["category_priority_override"] == pytest.approx(0.03, abs=0.0001)
     assert after_payload["probability_score"] >= before_analysis.json()["probability_score"]
     assert any("우선 검토 대상" in strength for strength in after_payload["strengths"])
+
+
+def test_decision_experiment_apply_category_uses_success_history_adjusted_delta(client, test_db):
+    """Successful applied category experiments should increase the next category override delta."""
+    bootstrap = _bootstrap_operator(
+        client,
+        username="decision-category-history-apply-operator",
+        email="decision-category-history-apply@example.com",
+    )
+    operator_id = bootstrap.json()["id"]
+    now = datetime.now(UTC)
+
+    test_db.add(
+        DecisionExperimentRun(
+            operator_id=operator_id,
+            experiment_key="exp-category-focus-shift",
+            recommendation_key="category-focus-shift",
+            status="completed",
+            outcome="success",
+            priority_rank=3,
+            title="Applied category history",
+            hypothesis="category focus worked",
+            suggested_change="adjust category priority overrides",
+            target_metric="overall_submission_rate",
+            expected_direction="increase",
+            success_criteria="overall rate improved",
+            guardrail_metric="active_pending_count",
+            minimum_decision_sample=3,
+            duration_days=14,
+            baseline_days=7,
+            rollback_trigger="pending grows",
+            notes="Strategy 적용: CATEGORY_PRIORITY_OVERRIDES software +0.0300, security -0.0300",
+            baseline_summary=json.dumps({}),
+            latest_evaluation=json.dumps({}),
+            started_at=now - timedelta(days=30),
+            ended_at=now - timedelta(days=20),
+            created_at=now - timedelta(days=30),
+            updated_at=now - timedelta(days=20),
+        )
+    )
+    current_run = DecisionExperimentRun(
+        operator_id=operator_id,
+        experiment_key="exp-category-focus-shift",
+        recommendation_key="category-focus-shift",
+        status="completed",
+        outcome="success",
+        priority_rank=3,
+        title="Current category apply",
+        hypothesis="category focus still works",
+        suggested_change="adjust category priority overrides",
+        target_metric="overall_submission_rate",
+        expected_direction="increase",
+        success_criteria="overall rate improves",
+        guardrail_metric="active_pending_count",
+        minimum_decision_sample=3,
+        duration_days=14,
+        baseline_days=7,
+        rollback_trigger="pending grows",
+        baseline_summary=json.dumps({
+            "best_category": "software",
+            "best_category_submission_rate": 0.8,
+            "worst_category": "security",
+            "worst_category_submission_rate": 0.2,
+        }),
+        latest_evaluation=json.dumps({}),
+        started_at=now - timedelta(days=3),
+        ended_at=now - timedelta(days=1),
+        created_at=now - timedelta(days=3),
+        updated_at=now - timedelta(days=1),
+    )
+    test_db.add(current_run)
+    test_db.commit()
+    test_db.refresh(current_run)
+
+    apply_response = client.post(
+        f"/api/v1/analytics/decision-experiments/{current_run.id}/apply-strategy",
+        json={"dry_run": True},
+    )
+
+    assert apply_response.status_code == 200
+    update = apply_response.json()["strategy_updates"][0]
+    assert update["parameter"] == "category_priority_overrides"
+    assert update["delta"]["software"] == pytest.approx(0.0375, abs=0.0001)
+    assert update["delta"]["security"] == pytest.approx(-0.0375, abs=0.0001)
+    assert update["suggested_value"]["software"] == pytest.approx(0.0375, abs=0.0001)
+    assert update["suggested_value"]["security"] == pytest.approx(-0.0375, abs=0.0001)
+    assert "배율 1.25" in update["rationale"]
 
 
 def test_legacy_admin_routes_return_single_operator_snapshot(client):

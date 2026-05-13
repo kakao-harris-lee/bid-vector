@@ -45,6 +45,15 @@ class DecisionExperimentService:
     ACTIVE_PENDING_GROWTH_RATIO = 0.2
     THRESHOLD_APPLICATION_PREFIX = "Threshold 적용:"
     STRATEGY_APPLICATION_PREFIX = "Strategy 적용:"
+    PARAMETER_HISTORY_LOOKBACK_DAYS = 365
+    THRESHOLD_PARAMETER_DELTAS = {
+        "exp-review-threshold-tighten": (0.04, 0.02, 0.06),
+        "exp-review-threshold-relax": (0.03, 0.015, 0.05),
+        "exp-bid-now-threshold-tighten": (0.03, 0.015, 0.05),
+    }
+    CATEGORY_PARAMETER_BASE_DELTA = 0.03
+    CATEGORY_PARAMETER_MIN_DELTA = 0.015
+    CATEGORY_PARAMETER_MAX_DELTA = 0.05
 
     def __init__(self) -> None:
         self.analytics = DecisionAnalyticsService()
@@ -240,7 +249,12 @@ class DecisionExperimentService:
         run = self._get_run_or_raise(db, run_id=run_id)
         strategy = ensure_operator_strategy(db)
         current_thresholds = self._current_strategy_thresholds(strategy)
-        threshold_updates = self._build_threshold_adjustments(run, current_thresholds=current_thresholds)
+        parameter_policy = self._build_run_parameter_policy(db, run)
+        threshold_updates = self._build_threshold_adjustments(
+            run,
+            current_thresholds=current_thresholds,
+            parameter_policy=parameter_policy,
+        )
         if not threshold_updates:
             raise ValueError("This experiment does not map to a supported threshold adjustment yet")
 
@@ -291,7 +305,12 @@ class DecisionExperimentService:
         run = self._get_run_or_raise(db, run_id=run_id)
         strategy = ensure_operator_strategy(db)
         current_tuning = self._current_strategy_tuning(strategy)
-        strategy_updates = self._build_strategy_adjustments(run, current_tuning=current_tuning)
+        parameter_policy = self._build_run_parameter_policy(db, run)
+        strategy_updates = self._build_strategy_adjustments(
+            run,
+            current_tuning=current_tuning,
+            parameter_policy=parameter_policy,
+        )
         if not strategy_updates:
             raise ValueError("This experiment does not map to a supported strategy adjustment yet")
 
@@ -975,11 +994,83 @@ class DecisionExperimentService:
             "review_threshold": round(review_threshold, 4),
         }
 
+    def _build_run_parameter_policy(self, db: Session, run: DecisionExperimentRun) -> dict[str, Any]:
+        """Summarize prior same-recommendation outcomes into a concrete parameter delta policy."""
+        recommendation_key = str(run.recommendation_key or "").strip()
+        if not recommendation_key:
+            adjustment = self.analytics._build_history_adjustment(None)
+            return self._parameter_policy_from_adjustment(adjustment, history_summary=None)
+
+        date_from = utc_now() - timedelta(days=self.PARAMETER_HISTORY_LOOKBACK_DAYS)
+        prior_runs = (
+            db.query(DecisionExperimentRun)
+            .filter(
+                DecisionExperimentRun.operator_id == int(run.operator_id),
+                DecisionExperimentRun.recommendation_key == recommendation_key,
+                DecisionExperimentRun.id != int(run.id),
+                DecisionExperimentRun.updated_at >= date_from,
+            )
+            .order_by(DecisionExperimentRun.updated_at.desc(), DecisionExperimentRun.id.desc())
+            .all()
+        )
+        history_summary = (
+            self.analytics._summarize_experiment_runs_for_recommendation(recommendation_key, prior_runs)
+            if prior_runs
+            else None
+        )
+        adjustment = self.analytics._build_history_adjustment(history_summary)
+        return self._parameter_policy_from_adjustment(adjustment, history_summary=history_summary)
+
+    def _parameter_policy_from_adjustment(
+        self,
+        adjustment: dict[str, Any],
+        *,
+        history_summary: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Convert a history adjustment into an apply-time parameter delta scale."""
+        multiplier = self.analytics._parameter_delta_multiplier(adjustment)
+        return {
+            "status": str(adjustment.get("status") or "neutral"),
+            "multiplier": round(multiplier, 4),
+            "reason": str(adjustment.get("reason") or ""),
+            "history_summary": history_summary or {},
+            "history_adjustment": adjustment,
+        }
+
+    def _policy_delta(
+        self,
+        experiment_key: str,
+        *,
+        parameter_policy: dict[str, Any],
+        base_delta: float | None = None,
+        min_delta: float | None = None,
+        max_delta: float | None = None,
+    ) -> float:
+        """Return the concrete parameter delta for one experiment after history scaling."""
+        if base_delta is None or min_delta is None or max_delta is None:
+            base_delta, min_delta, max_delta = self.THRESHOLD_PARAMETER_DELTAS.get(
+                experiment_key,
+                (0.03, 0.015, 0.05),
+            )
+        multiplier = float(parameter_policy.get("multiplier") or 1.0)
+        return round(max(float(min_delta), min(float(base_delta) * multiplier, float(max_delta))), 4)
+
+    def _parameter_rationale(self, base_rationale: str, *, parameter_policy: dict[str, Any]) -> str:
+        """Append history-policy context to an apply recommendation rationale."""
+        reason = str(parameter_policy.get("reason") or "").strip()
+        status = str(parameter_policy.get("status") or "neutral")
+        multiplier = float(parameter_policy.get("multiplier") or 1.0)
+        return (
+            f"{base_rationale} 장기 적용 이력 상태는 {status}이며 "
+            f"추천 변화 폭 배율 {multiplier:.2f}를 적용했습니다. {reason}"
+        ).strip()
+
     def _build_threshold_adjustments(
         self,
         run: DecisionExperimentRun,
         *,
         current_thresholds: dict[str, float],
+        parameter_policy: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Translate supported experiment keys into concrete threshold updates."""
         experiment_key = str(run.experiment_key or "")
@@ -987,8 +1078,9 @@ class DecisionExperimentService:
         review_threshold = float(current_thresholds["review_threshold"])
 
         if experiment_key == "exp-review-threshold-tighten":
+            delta = self._policy_delta(experiment_key, parameter_policy=parameter_policy)
             suggested_value = self._bounded_review_threshold(
-                review_threshold + 0.04,
+                review_threshold + delta,
                 bid_now_threshold=bid_now_threshold,
             )
             return [
@@ -998,13 +1090,17 @@ class DecisionExperimentService:
                     direction="increase",
                     previous_value=review_threshold,
                     suggested_value=suggested_value,
-                    rationale="review 진입 품질을 높여 낮은 전환율을 개선하도록 threshold를 상향합니다.",
+                    rationale=self._parameter_rationale(
+                        "review 진입 품질을 높여 낮은 전환율을 개선하도록 threshold를 상향합니다.",
+                        parameter_policy=parameter_policy,
+                    ),
                 )
             ]
 
         if experiment_key == "exp-review-threshold-relax":
+            delta = self._policy_delta(experiment_key, parameter_policy=parameter_policy)
             suggested_value = self._bounded_review_threshold(
-                review_threshold - 0.03,
+                review_threshold - delta,
                 bid_now_threshold=bid_now_threshold,
             )
             return [
@@ -1014,13 +1110,17 @@ class DecisionExperimentService:
                     direction="decrease",
                     previous_value=review_threshold,
                     suggested_value=suggested_value,
-                    rationale="review 후보 풀을 넓혀 더 많은 탐색 기회를 확보하도록 threshold를 완화합니다.",
+                    rationale=self._parameter_rationale(
+                        "review 후보 풀을 넓혀 더 많은 탐색 기회를 확보하도록 threshold를 완화합니다.",
+                        parameter_policy=parameter_policy,
+                    ),
                 )
             ]
 
         if experiment_key == "exp-bid-now-threshold-tighten":
+            delta = self._policy_delta(experiment_key, parameter_policy=parameter_policy)
             suggested_value = self._bounded_bid_now_threshold(
-                bid_now_threshold + 0.03,
+                bid_now_threshold + delta,
                 review_threshold=review_threshold,
             )
             return [
@@ -1030,7 +1130,10 @@ class DecisionExperimentService:
                     direction="increase",
                     previous_value=bid_now_threshold,
                     suggested_value=suggested_value,
-                    rationale="즉시 투찰 후보의 질을 높이기 위해 bid_now 승격 기준을 보수적으로 조정합니다.",
+                    rationale=self._parameter_rationale(
+                        "즉시 투찰 후보의 질을 높이기 위해 bid_now 승격 기준을 보수적으로 조정합니다.",
+                        parameter_policy=parameter_policy,
+                    ),
                 )
             ]
 
@@ -1078,6 +1181,7 @@ class DecisionExperimentService:
         run: DecisionExperimentRun,
         *,
         current_tuning: dict[str, Any],
+        parameter_policy: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Translate supported experiment keys into concrete strategy tuning updates."""
         experiment_key = str(run.experiment_key or "")
@@ -1107,16 +1211,23 @@ class DecisionExperimentService:
             previous_overrides = dict(current_tuning["category_priority_overrides"])
             suggested_overrides = dict(previous_overrides)
             changed_deltas: dict[str, float] = {}
+            category_delta = self._policy_delta(
+                experiment_key,
+                parameter_policy=parameter_policy,
+                base_delta=self.CATEGORY_PARAMETER_BASE_DELTA,
+                min_delta=self.CATEGORY_PARAMETER_MIN_DELTA,
+                max_delta=self.CATEGORY_PARAMETER_MAX_DELTA,
+            )
 
             if best_category is not None:
                 previous_best_value = self._category_override_for(previous_overrides, best_category)
-                suggested_best_value = clamp_category_priority_override(previous_best_value + 0.03)
+                suggested_best_value = clamp_category_priority_override(previous_best_value + category_delta)
                 suggested_overrides[best_category] = suggested_best_value
                 changed_deltas[best_category] = round(suggested_best_value - previous_best_value, 4)
 
             if worst_category is not None and worst_category.lower() != str(best_category or "").lower():
                 previous_worst_value = self._category_override_for(previous_overrides, worst_category)
-                suggested_worst_value = clamp_category_priority_override(previous_worst_value - 0.03)
+                suggested_worst_value = clamp_category_priority_override(previous_worst_value - category_delta)
                 suggested_overrides[worst_category] = suggested_worst_value
                 changed_deltas[worst_category] = round(suggested_worst_value - previous_worst_value, 4)
 
@@ -1128,7 +1239,10 @@ class DecisionExperimentService:
                     "previous_value": previous_overrides,
                     "suggested_value": suggested_overrides,
                     "delta": changed_deltas,
-                    "rationale": "제출 전환이 좋은 카테고리는 우선순위를 높이고 저조한 카테고리는 보수적으로 평가합니다.",
+                    "rationale": self._parameter_rationale(
+                        "제출 전환이 좋은 카테고리는 우선순위를 높이고 저조한 카테고리는 보수적으로 평가합니다.",
+                        parameter_policy=parameter_policy,
+                    ),
                 }
             ]
 

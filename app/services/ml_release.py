@@ -35,6 +35,79 @@ class RemoteObjectStorageClient:
     def enabled(self) -> bool:
         return bool(self.base_url)
 
+    def describe(self) -> dict[str, Any]:
+        """Return non-secret connection metadata for release diagnostics."""
+        scheme = self.parsed.scheme.lower()
+        provider = "file" if scheme in {"", "file"} else scheme
+        description: dict[str, Any] = {
+            "enabled": self.enabled,
+            "provider": provider if self.enabled else None,
+            "base_url": self._redacted_base_url() if self.enabled else "",
+        }
+        if provider == "s3":
+            description["bucket"] = self.parsed.netloc
+            description["prefix"] = self.parsed.path.strip("/")
+        elif provider == "file" and self.enabled:
+            description["path"] = str(self._local_base_path())
+        return description
+
+    def preflight(
+        self,
+        *,
+        probe_write: bool = True,
+        probe_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate object-storage configuration and optional write permission."""
+        checks: list[dict[str, Any]] = []
+        description = self.describe()
+
+        if not self.enabled:
+            checks.append(
+                self._check(
+                    "object_storage_configured",
+                    False,
+                    "not_configured",
+                    "ML_RELEASE_OBJECT_STORAGE_URL is not configured.",
+                )
+            )
+            return self._finalize_preflight(description, checks)
+
+        scheme = self.parsed.scheme.lower()
+        if scheme not in {"", "file", "s3"}:
+            checks.append(
+                self._check(
+                    "object_storage_provider",
+                    False,
+                    "unsupported",
+                    f"Unsupported ML_RELEASE_OBJECT_STORAGE_URL scheme: {scheme or 'path'}.",
+                    provider=scheme or "path",
+                )
+            )
+            return self._finalize_preflight(description, checks)
+
+        checks.append(
+            self._check(
+                "object_storage_configured",
+                True,
+                "passed",
+                "Object storage URL is configured.",
+                **description,
+            )
+        )
+        if scheme in {"", "file"}:
+            checks.extend(
+                self._preflight_file_storage(
+                    probe_write=probe_write, probe_name=probe_name
+                )
+            )
+        elif scheme == "s3":
+            checks.extend(
+                self._preflight_s3_storage(
+                    probe_write=probe_write, probe_name=probe_name
+                )
+            )
+        return self._finalize_preflight(description, checks)
+
     def put_file(self, source_path: str | Path, *, object_name: str) -> dict[str, Any]:
         """Upload one local file under the configured object prefix."""
         if not self.enabled:
@@ -58,26 +131,361 @@ class RemoteObjectStorageClient:
             }
         if scheme == "s3":
             return self._put_s3(source, object_name=object_name)
-        raise ValueError(f"Unsupported ML_RELEASE_OBJECT_STORAGE_URL scheme: {scheme or 'path'}")
+        raise ValueError(
+            f"Unsupported ML_RELEASE_OBJECT_STORAGE_URL scheme: {scheme or 'path'}"
+        )
+
+    def _preflight_file_storage(
+        self,
+        *,
+        probe_write: bool,
+        probe_name: str | None,
+    ) -> list[dict[str, Any]]:
+        """Check local or mounted object-storage path readiness."""
+        checks: list[dict[str, Any]] = []
+        base_path = self._local_base_path()
+        if base_path.exists() and not base_path.is_dir():
+            return [
+                self._check(
+                    "object_storage_target",
+                    False,
+                    "invalid_target",
+                    f"Object storage target exists but is not a directory: {base_path}",
+                    path=str(base_path),
+                )
+            ]
+
+        checks.append(
+            self._check(
+                "object_storage_target",
+                True,
+                "passed",
+                "File object storage target can be resolved.",
+                path=str(base_path),
+                exists=base_path.exists(),
+            )
+        )
+        if not probe_write:
+            checks.append(
+                self._check(
+                    "object_storage_write_probe",
+                    True,
+                    "skipped",
+                    "Object storage write probe was skipped.",
+                )
+            )
+            return checks
+
+        object_name = probe_name or self._default_preflight_object_name()
+        destination = self._local_destination(object_name)
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                json.dumps(
+                    {"probe": "ml-release-rollout", "created_at": utc_now().isoformat()}
+                ),
+                encoding="utf-8",
+            )
+            bytes_written = destination.stat().st_size
+            destination.unlink(missing_ok=True)
+        except OSError as exc:
+            checks.append(
+                self._check(
+                    "object_storage_write_probe",
+                    False,
+                    "write_failed",
+                    f"File object storage write probe failed: {exc}",
+                    object_name=object_name,
+                    path=str(destination),
+                )
+            )
+            return checks
+
+        checks.append(
+            self._check(
+                "object_storage_write_probe",
+                True,
+                "passed",
+                "File object storage write/delete probe succeeded.",
+                object_name=object_name,
+                path=str(destination),
+                bytes=bytes_written,
+            )
+        )
+        return checks
+
+    def _preflight_s3_storage(
+        self,
+        *,
+        probe_write: bool,
+        probe_name: str | None,
+    ) -> list[dict[str, Any]]:
+        """Check S3 bucket reachability and optional write permission."""
+        checks: list[dict[str, Any]] = []
+        bucket = self.parsed.netloc
+        prefix = self.parsed.path.strip("/")
+        if not bucket:
+            return [
+                self._check(
+                    "object_storage_target",
+                    False,
+                    "invalid_target",
+                    "S3 object storage URL must include a bucket name.",
+                )
+            ]
+
+        try:
+            import boto3  # type: ignore[import-not-found]
+            from botocore.exceptions import (  # type: ignore[import-not-found]
+                BotoCoreError,
+                ClientError,
+                NoCredentialsError,
+                PartialCredentialsError,
+            )
+        except ImportError as exc:  # pragma: no cover - depends on deployment extras
+            return [
+                self._check(
+                    "object_storage_dependency",
+                    False,
+                    "dependency_missing",
+                    "boto3 and botocore are required when ML_RELEASE_OBJECT_STORAGE_URL uses s3://.",
+                    error=str(exc),
+                )
+            ]
+
+        try:
+            client = boto3.client("s3")
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+        ) as exc:  # pragma: no cover - depends on deployed env
+            return [
+                self._check(
+                    "object_storage_credentials",
+                    False,
+                    "credentials_missing",
+                    "S3 credentials were not found or are incomplete for the active environment.",
+                    error=str(exc),
+                )
+            ]
+        except BotoCoreError as exc:  # pragma: no cover - depends on deployed env
+            return [
+                self._check(
+                    "object_storage_target",
+                    False,
+                    "connection_failed",
+                    f"S3 client initialization failed: {exc}",
+                    bucket=bucket,
+                    prefix=prefix,
+                )
+            ]
+
+        try:
+            client.head_bucket(Bucket=bucket)
+        except (
+            NoCredentialsError
+        ) as exc:  # pragma: no cover - depends on deployed credential chain
+            checks.append(
+                self._check(
+                    "object_storage_credentials",
+                    False,
+                    "credentials_missing",
+                    "S3 credentials were not found for the active environment.",
+                    error=str(exc),
+                )
+            )
+            return checks
+        except (
+            PartialCredentialsError
+        ) as exc:  # pragma: no cover - depends on deployed credential chain
+            checks.append(
+                self._check(
+                    "object_storage_credentials",
+                    False,
+                    "credentials_incomplete",
+                    "S3 credentials are incomplete for the active environment.",
+                    error=str(exc),
+                )
+            )
+            return checks
+        except ClientError as exc:  # pragma: no cover - depends on remote AWS behavior
+            checks.append(
+                self._s3_client_error_check(
+                    "object_storage_target", exc, bucket=bucket, prefix=prefix
+                )
+            )
+            return checks
+        except (
+            BotoCoreError
+        ) as exc:  # pragma: no cover - depends on remote AWS behavior
+            checks.append(
+                self._check(
+                    "object_storage_target",
+                    False,
+                    "connection_failed",
+                    f"S3 bucket preflight failed: {exc}",
+                    bucket=bucket,
+                    prefix=prefix,
+                )
+            )
+            return checks
+
+        checks.append(
+            self._check(
+                "object_storage_target",
+                True,
+                "passed",
+                "S3 bucket is reachable.",
+                bucket=bucket,
+                prefix=prefix,
+            )
+        )
+        if not probe_write:
+            checks.append(
+                self._check(
+                    "object_storage_write_probe",
+                    True,
+                    "skipped",
+                    "Object storage write probe was skipped.",
+                    bucket=bucket,
+                    prefix=prefix,
+                )
+            )
+            return checks
+
+        object_name = probe_name or self._default_preflight_object_name()
+        key = self._s3_key(object_name)
+        try:
+            client.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=json.dumps(
+                    {"probe": "ml-release-rollout", "created_at": utc_now().isoformat()}
+                ).encode("utf-8"),
+                ContentType="application/json",
+            )
+            client.delete_object(Bucket=bucket, Key=key)
+        except (
+            NoCredentialsError
+        ) as exc:  # pragma: no cover - depends on deployed credential chain
+            checks.append(
+                self._check(
+                    "object_storage_credentials",
+                    False,
+                    "credentials_missing",
+                    "S3 credentials were not found for the active environment.",
+                    error=str(exc),
+                )
+            )
+            return checks
+        except (
+            PartialCredentialsError
+        ) as exc:  # pragma: no cover - depends on deployed credential chain
+            checks.append(
+                self._check(
+                    "object_storage_credentials",
+                    False,
+                    "credentials_incomplete",
+                    "S3 credentials are incomplete for the active environment.",
+                    error=str(exc),
+                )
+            )
+            return checks
+        except ClientError as exc:  # pragma: no cover - depends on remote AWS behavior
+            checks.append(
+                self._s3_client_error_check(
+                    "object_storage_write_probe",
+                    exc,
+                    bucket=bucket,
+                    prefix=prefix,
+                    object_name=object_name,
+                    key=key,
+                )
+            )
+            return checks
+        except (
+            BotoCoreError
+        ) as exc:  # pragma: no cover - depends on remote AWS behavior
+            checks.append(
+                self._check(
+                    "object_storage_write_probe",
+                    False,
+                    "write_failed",
+                    f"S3 write/delete probe failed: {exc}",
+                    bucket=bucket,
+                    prefix=prefix,
+                    object_name=object_name,
+                    key=key,
+                )
+            )
+            return checks
+
+        checks.append(
+            self._check(
+                "object_storage_write_probe",
+                True,
+                "passed",
+                "S3 write/delete probe succeeded.",
+                bucket=bucket,
+                prefix=prefix,
+                object_name=object_name,
+                key=key,
+            )
+        )
+        return checks
+
+    def _s3_client_error_check(
+        self,
+        name: str,
+        exc: Exception,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Normalize S3 ClientError details into a rollout check."""
+        response = getattr(exc, "response", {}) if exc is not None else {}
+        error_payload = response.get("Error", {}) if isinstance(response, dict) else {}
+        metadata = (
+            response.get("ResponseMetadata", {}) if isinstance(response, dict) else {}
+        )
+        code = str(error_payload.get("Code") or "unknown")
+        status_code = (
+            metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+        )
+        normalized_status = (
+            "access_denied" if code in {"403", "AccessDenied"} else "request_failed"
+        )
+        if code in {"404", "NoSuchBucket", "NotFound"}:
+            normalized_status = "not_found"
+        return self._check(
+            name,
+            False,
+            normalized_status,
+            f"S3 object storage preflight failed with {code}.",
+            error_code=code,
+            http_status_code=status_code,
+            **extra,
+        )
+
+    def _local_base_path(self) -> Path:
+        """Resolve the configured file object-storage base path."""
+        if self.parsed.scheme == "file":
+            return Path(parse.unquote(self.parsed.path)).resolve()
+        return Path(self.base_url).resolve()
 
     def _local_destination(self, object_name: str) -> Path:
         """Resolve a local object-storage destination."""
-        if self.parsed.scheme == "file":
-            base_path = Path(parse.unquote(self.parsed.path))
-        else:
-            base_path = Path(self.base_url)
-        return (base_path / object_name).resolve()
+        return (self._local_base_path() / object_name).resolve()
 
     def _put_s3(self, source: Path, *, object_name: str) -> dict[str, Any]:
         """Upload one object to S3 when boto3 is available at runtime."""
         try:
             import boto3  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - depends on deployment extras
-            raise RuntimeError("boto3 is required when ML_RELEASE_OBJECT_STORAGE_URL uses s3://") from exc
+            raise RuntimeError(
+                "boto3 is required when ML_RELEASE_OBJECT_STORAGE_URL uses s3://"
+            ) from exc
 
         bucket = self.parsed.netloc
-        prefix = self.parsed.path.strip("/")
-        key = f"{prefix}/{object_name}".strip("/")
+        key = self._s3_key(object_name)
         boto3.client("s3").upload_file(str(source), bucket, key)
         return {
             "enabled": True,
@@ -85,6 +493,71 @@ class RemoteObjectStorageClient:
             "object_name": object_name,
             "uri": f"s3://{bucket}/{key}",
             "bytes": source.stat().st_size,
+        }
+
+    def _s3_key(self, object_name: str) -> str:
+        """Build the S3 object key under the configured prefix."""
+        prefix = self.parsed.path.strip("/")
+        return f"{prefix}/{object_name}".strip("/")
+
+    def _redacted_base_url(self) -> str:
+        """Hide URL credentials before returning diagnostics."""
+        if not self.base_url:
+            return ""
+        if not self.parsed.netloc or not (self.parsed.username or self.parsed.password):
+            return self.base_url
+        hostname = self.parsed.hostname or ""
+        if self.parsed.port:
+            hostname = f"{hostname}:{self.parsed.port}"
+        return parse.urlunparse(
+            (
+                self.parsed.scheme,
+                hostname,
+                self.parsed.path,
+                self.parsed.params,
+                self.parsed.query,
+                self.parsed.fragment,
+            )
+        )
+
+    def _default_preflight_object_name(self) -> str:
+        """Return a short-lived object name for rollout write probes."""
+        return f"preflight/ml-release-{int(time.time())}-{os.getpid()}.json"
+
+    def _check(
+        self,
+        name: str,
+        passed: bool,
+        status: str,
+        detail: str,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Build one object-storage preflight check."""
+        return {
+            "name": name,
+            "passed": bool(passed),
+            "status": status,
+            "detail": detail,
+            **extra,
+        }
+
+    def _finalize_preflight(
+        self,
+        description: dict[str, Any],
+        checks: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Build a compact object-storage preflight result."""
+        passed = all(bool(check.get("passed")) for check in checks)
+        return {
+            **description,
+            "status": "passed" if passed else "failed",
+            "passed": passed,
+            "checks": checks,
+            "failure_reasons": [
+                str(check.get("detail"))
+                for check in checks
+                if not bool(check.get("passed")) and check.get("detail")
+            ],
         }
 
 
@@ -159,18 +632,34 @@ class MLReleasePromotionService:
     }
 
     def __init__(self, repo_root: str | Path | None = None) -> None:
-        self.repo_root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
+        self.repo_root = (
+            Path(repo_root)
+            if repo_root is not None
+            else Path(__file__).resolve().parents[2]
+        )
         self.repo_root = self.repo_root.resolve()
 
-    def create_release_manifest(self, request: MLReleasePromotionRequest) -> dict[str, Any]:
+    def create_release_manifest(
+        self, request: MLReleasePromotionRequest
+    ) -> dict[str, Any]:
         """Validate provided artifacts and persist one release manifest."""
         release_tag = self._normalize_release_tag(request.release_tag)
-        embedding_metadata = self._validate_embedding_model_path(request.embedding_model_path)
+        embedding_metadata = self._validate_embedding_model_path(
+            request.embedding_model_path
+        )
         lstm_metadata = self._validate_lstm_artifact(request.lstm_artifact_path)
-        ensemble_metadata = self._validate_ensemble_artifact(request.ensemble_artifact_path)
+        ensemble_metadata = self._validate_ensemble_artifact(
+            request.ensemble_artifact_path
+        )
 
-        if embedding_metadata is None and lstm_metadata is None and ensemble_metadata is None:
-            raise ValueError("At least one embedding or predictor artifact path must be provided.")
+        if (
+            embedding_metadata is None
+            and lstm_metadata is None
+            and ensemble_metadata is None
+        ):
+            raise ValueError(
+                "At least one embedding or predictor artifact path must be provided."
+            )
 
         auto_lstm_path = None
         if lstm_metadata is None and ensemble_metadata is not None:
@@ -181,20 +670,30 @@ class MLReleasePromotionService:
             recommended_env["CLASSIFIER_EMBEDDING_MODEL"] = embedding_metadata["path"]
             recommended_env["CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY"] = True
 
-        effective_lstm_path = lstm_metadata["path"] if lstm_metadata is not None else auto_lstm_path
+        effective_lstm_path = (
+            lstm_metadata["path"] if lstm_metadata is not None else auto_lstm_path
+        )
         if effective_lstm_path or ensemble_metadata is not None:
             recommended_env["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"] = True
         if effective_lstm_path:
             recommended_env["PRICE_PREDICTION_LSTM_MODEL_PATH"] = effective_lstm_path
         if ensemble_metadata is not None:
-            recommended_env["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] = ensemble_metadata["path"]
+            recommended_env["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] = ensemble_metadata[
+                "path"
+            ]
 
-        predictor_backtest_report = self._load_predictor_backtest_report(request.predictor_backtest_report_path)
+        predictor_backtest_report = self._load_predictor_backtest_report(
+            request.predictor_backtest_report_path
+        )
         predictor_promotion_gate = self._build_predictor_promotion_gate(
             predictor_backtest_report,
-            has_predictor_artifact=bool(effective_lstm_path or ensemble_metadata is not None),
+            has_predictor_artifact=bool(
+                effective_lstm_path or ensemble_metadata is not None
+            ),
         )
-        best_predictor_key = str(predictor_promotion_gate.get("best_predictor_key") or "").strip()
+        best_predictor_key = str(
+            predictor_promotion_gate.get("best_predictor_key") or ""
+        ).strip()
         if best_predictor_key:
             recommended_env["PRICE_PREDICTION_PREFERRED_PREDICTOR"] = best_predictor_key
 
@@ -204,7 +703,9 @@ class MLReleasePromotionService:
             "git_sha": str(request.git_sha).strip() or None,
             "validated_on": utc_now().isoformat(),
             "notes": str(request.notes).strip() or None,
-            "recommended_docker_target": "api-embedding" if embedding_metadata is not None else "api-runtime",
+            "recommended_docker_target": (
+                "api-embedding" if embedding_metadata is not None else "api-runtime"
+            ),
             "artifacts": {
                 "embedding_model": embedding_metadata,
                 "predictors": {
@@ -235,44 +736,243 @@ class MLReleasePromotionService:
             encoding="utf-8",
         )
         manifest["manifest_path"] = str(manifest_path)
-        manifest["retention"] = self.enforce_manifest_retention(current_manifest_path=manifest_path)
+        manifest["retention"] = self.enforce_manifest_retention(
+            current_manifest_path=manifest_path
+        )
         if request.publish_remote or settings.ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH:
             manifest["remote_storage"] = self.publish_release_manifest(manifest_path)
         return manifest
 
-    def load_release_manifest(self, manifest_ref: str | Path) -> tuple[dict[str, Any], Path]:
+    def load_release_manifest(
+        self, manifest_ref: str | Path
+    ) -> tuple[dict[str, Any], Path]:
         """Load one persisted release manifest by path or release tag."""
         manifest_path = self._resolve_manifest_path(manifest_ref)
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
-            raise ValueError(f"Release manifest was not found: {manifest_path}") from exc
+            raise ValueError(
+                f"Release manifest was not found: {manifest_path}"
+            ) from exc
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Release manifest is not valid JSON: {manifest_path}") from exc
+            raise ValueError(
+                f"Release manifest is not valid JSON: {manifest_path}"
+            ) from exc
 
         if not isinstance(manifest, dict):
-            raise ValueError(f"Release manifest must decode to a JSON object: {manifest_path}")
+            raise ValueError(
+                f"Release manifest must decode to a JSON object: {manifest_path}"
+            )
         self.verify_release_manifest(manifest, manifest_path=manifest_path)
         return manifest, manifest_path
 
-    def verify_release_manifest(self, manifest: dict[str, Any], *, manifest_path: Path | None = None) -> dict[str, Any]:
+    def verify_release_manifest(
+        self,
+        manifest: dict[str, Any],
+        *,
+        manifest_path: Path | None = None,
+        require_signature: bool | None = None,
+    ) -> dict[str, Any]:
         """Verify a manifest signature when present or required by policy."""
+        signature_required = (
+            bool(settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE)
+            if require_signature is None
+            else bool(require_signature)
+        )
         signature = manifest.get("signature")
         if not isinstance(signature, dict):
-            if settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE:
+            if signature_required:
                 location = f": {manifest_path}" if manifest_path is not None else ""
-                raise ValueError(f"Release manifest is missing a required signature{location}")
+                raise ValueError(
+                    f"Release manifest is missing a required signature{location}"
+                )
             return {"verified": False, "reason": "signature_missing"}
 
-        expected = self._sign_manifest({key: value for key, value in manifest.items() if key != "signature"})
-        if not hmac.compare_digest(str(signature.get("digest") or ""), str(expected.get("digest") or "")):
+        expected = self._sign_manifest(
+            {key: value for key, value in manifest.items() if key != "signature"}
+        )
+        if not hmac.compare_digest(
+            str(signature.get("digest") or ""), str(expected.get("digest") or "")
+        ):
             location = f": {manifest_path}" if manifest_path is not None else ""
-            raise ValueError(f"Release manifest signature verification failed{location}")
+            raise ValueError(
+                f"Release manifest signature verification failed{location}"
+            )
         return {
             "verified": True,
             "algorithm": signature.get("algorithm"),
             "key_id": signature.get("key_id"),
             "payload_sha256": signature.get("payload_sha256"),
+        }
+
+    def preflight_release_rollout(
+        self,
+        manifest_ref: str | Path | None = None,
+        *,
+        require_signature: bool | None = None,
+        probe_write: bool = True,
+    ) -> dict[str, Any]:
+        """Validate manifest signature/artifacts and object-storage readiness before rollout."""
+        checks: list[dict[str, Any]] = []
+        manifest_summary: dict[str, Any] = {
+            "configured": bool(manifest_ref),
+            "path": None,
+            "release_tag": None,
+            "signature_status": None,
+            "artifact_count": 0,
+        }
+        signature_required = (
+            bool(settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE)
+            if require_signature is None
+            else bool(require_signature)
+        )
+
+        manifest: dict[str, Any] | None = None
+        manifest_path: Path | None = None
+        if manifest_ref:
+            manifest_path = self._resolve_manifest_path(manifest_ref)
+            manifest_summary["path"] = str(manifest_path)
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                checks.append(
+                    self._rollout_check(
+                        "manifest_load",
+                        False,
+                        "not_found",
+                        f"Release manifest was not found: {manifest_path}",
+                        error=str(exc),
+                    )
+                )
+            except json.JSONDecodeError as exc:
+                checks.append(
+                    self._rollout_check(
+                        "manifest_load",
+                        False,
+                        "invalid_json",
+                        f"Release manifest is not valid JSON: {manifest_path}",
+                        error=str(exc),
+                    )
+                )
+            else:
+                if not isinstance(manifest, dict):
+                    checks.append(
+                        self._rollout_check(
+                            "manifest_load",
+                            False,
+                            "invalid_json",
+                            f"Release manifest must decode to a JSON object: {manifest_path}",
+                        )
+                    )
+                    manifest = None
+                else:
+                    manifest_summary["release_tag"] = str(
+                        manifest.get("release_tag") or manifest_path.stem
+                    )
+                    checks.append(
+                        self._rollout_check(
+                            "manifest_load",
+                            True,
+                            "passed",
+                            "Release manifest can be loaded.",
+                            manifest_path=str(manifest_path),
+                        )
+                    )
+
+        if manifest is not None and manifest_path is not None:
+            try:
+                verification = self.verify_release_manifest(
+                    manifest,
+                    manifest_path=manifest_path,
+                    require_signature=signature_required,
+                )
+            except ValueError as exc:
+                manifest_summary["signature_status"] = "invalid"
+                checks.append(
+                    self._rollout_check(
+                        "manifest_signature",
+                        False,
+                        "invalid",
+                        str(exc),
+                        required=signature_required,
+                    )
+                )
+            else:
+                signature_status = (
+                    "verified" if verification.get("verified") else "missing"
+                )
+                manifest_summary["signature_status"] = signature_status
+                checks.append(
+                    self._rollout_check(
+                        "manifest_signature",
+                        True,
+                        signature_status,
+                        (
+                            "Release manifest signature is verified."
+                            if verification.get("verified")
+                            else "Release manifest has no signature and signature is not required."
+                        ),
+                        required=signature_required,
+                        **verification,
+                    )
+                )
+
+            artifact_checks = self._manifest_artifact_preflight_checks(manifest)
+            manifest_summary["artifact_count"] = len(artifact_checks)
+            checks.extend(artifact_checks)
+
+            promotion_gate = self._resolve_manifest_promotion_gate(manifest)
+            gate_passed = bool(promotion_gate.get("passed"))
+            checks.append(
+                self._rollout_check(
+                    "predictor_promotion_gate",
+                    gate_passed,
+                    str(
+                        promotion_gate.get("status")
+                        or ("passed" if gate_passed else "failed")
+                    ),
+                    (
+                        "Predictor promotion gate passed."
+                        if gate_passed
+                        else "Predictor promotion gate failed: "
+                        + "; ".join(
+                            str(reason)
+                            for reason in promotion_gate.get("reasons", [])
+                            if reason
+                        )
+                    ),
+                    policy=(
+                        promotion_gate.get("thresholds", {}).get("policy")
+                        if isinstance(promotion_gate.get("thresholds"), dict)
+                        else None
+                    ),
+                )
+            )
+
+        storage_preflight = RemoteObjectStorageClient(
+            settings.ML_RELEASE_OBJECT_STORAGE_URL
+        ).preflight(
+            probe_write=probe_write,
+        )
+        checks.extend(storage_preflight.get("checks", []))
+        passed = all(bool(check.get("passed")) for check in checks)
+        return {
+            "status": "passed" if passed else "failed",
+            "passed": passed,
+            "signature_required": signature_required,
+            "probe_write": bool(probe_write),
+            "manifest": manifest_summary,
+            "object_storage": {
+                key: value
+                for key, value in storage_preflight.items()
+                if key not in {"checks", "failure_reasons"}
+            },
+            "checks": checks,
+            "failure_reasons": [
+                str(check.get("detail"))
+                for check in checks
+                if not bool(check.get("passed")) and check.get("detail")
+            ],
         }
 
     def apply_release_manifest(
@@ -293,8 +993,12 @@ class MLReleasePromotionService:
         recommended_env = dict(manifest.get("recommended_env") or {})
         promotion_gate = self._resolve_manifest_promotion_gate(manifest)
         if not skip_promotion_gate and not bool(promotion_gate.get("passed")):
-            reasons = "; ".join(str(reason) for reason in promotion_gate.get("reasons", []))
-            raise ValueError(f"Release manifest failed predictor promotion gate: {reasons or 'unknown failure'}")
+            reasons = "; ".join(
+                str(reason) for reason in promotion_gate.get("reasons", [])
+            )
+            raise ValueError(
+                f"Release manifest failed predictor promotion gate: {reasons or 'unknown failure'}"
+            )
 
         response: dict[str, Any] = {
             "release_tag": manifest.get("release_tag"),
@@ -309,9 +1013,13 @@ class MLReleasePromotionService:
         if not rebuild_embeddings:
             return response
         if db is None:
-            raise ValueError("A database session is required when rebuild_embeddings=True.")
+            raise ValueError(
+                "A database session is required when rebuild_embeddings=True."
+            )
         if not recommended_env.get("CLASSIFIER_EMBEDDING_MODEL"):
-            raise ValueError("The selected manifest does not include a local embedding model path to rebuild from.")
+            raise ValueError(
+                "The selected manifest does not include a local embedding model path to rebuild from."
+            )
 
         rebuild_settings = self._resolve_rebuild_settings(
             manifest,
@@ -327,7 +1035,9 @@ class MLReleasePromotionService:
         try:
             from app.services.project_similarity import ProjectSimilarityService
 
-            with self._temporary_settings(temporary_settings), self._temporary_working_directory(self.repo_root):
+            with self._temporary_settings(
+                temporary_settings
+            ), self._temporary_working_directory(self.repo_root):
                 rebuild_result = ProjectSimilarityService().rebuild_project_embeddings(
                     db,
                     limit=int(rebuild_settings["limit"]),
@@ -383,7 +1093,11 @@ class MLReleasePromotionService:
         target_path = target_path.resolve()
         file_previously_existed = target_path.exists()
 
-        existing_lines = target_path.read_text(encoding="utf-8").splitlines() if file_previously_existed else []
+        existing_lines = (
+            target_path.read_text(encoding="utf-8").splitlines()
+            if file_previously_existed
+            else []
+        )
         updated_lines: list[str] = []
         applied_keys: list[str] = []
 
@@ -402,7 +1116,9 @@ class MLReleasePromotionService:
             updated_lines.append(f"{key}={env_updates[key]}")
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+        target_path.write_text(
+            "\n".join(updated_lines).rstrip() + "\n", encoding="utf-8"
+        )
 
         return {
             "env_file_path": str(target_path),
@@ -417,39 +1133,85 @@ class MLReleasePromotionService:
         if not client.enabled:
             return {
                 "enabled": False,
+                "status": "not_configured",
                 "detail": "ML_RELEASE_OBJECT_STORAGE_URL is not configured.",
                 "objects": [],
             }
 
+        preflight = self.preflight_release_rollout(
+            manifest_ref,
+            require_signature=settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE,
+            probe_write=True,
+        )
+        if not preflight["passed"]:
+            reasons = "; ".join(
+                str(reason) for reason in preflight.get("failure_reasons", []) if reason
+            )
+            return {
+                "enabled": True,
+                "status": "failed",
+                "base_url": client.describe().get("base_url"),
+                "release_tag": preflight.get("manifest", {}).get("release_tag"),
+                "preflight": preflight,
+                "object_count": 0,
+                "objects": [],
+                "failure_reasons": list(preflight.get("failure_reasons", [])),
+                "detail": f"Release rollout preflight failed: {reasons or 'unknown failure'}",
+            }
+
         manifest, manifest_path = self.load_release_manifest(manifest_ref)
         release_tag = str(manifest.get("release_tag") or manifest_path.stem)
-        objects = [
-            client.put_file(manifest_path, object_name=f"manifests/{manifest_path.name}"),
-        ]
+        objects: list[dict[str, Any]] = []
 
-        for artifact in self._iter_manifest_artifact_paths(manifest):
-            artifact_path = self._resolve_portable_path(artifact["path"])
-            if artifact_path.is_dir():
-                bundle_path = self._archive_artifact_directory(
-                    artifact_path,
-                    release_tag=release_tag,
-                    artifact_key=artifact["key"],
+        try:
+            objects.append(
+                client.put_file(
+                    manifest_path, object_name=f"manifests/{manifest_path.name}"
                 )
-                object_name = f"artifacts/{release_tag}/{artifact['key']}.tar.gz"
-                objects.append(client.put_file(bundle_path, object_name=object_name))
-            elif artifact_path.is_file():
-                object_name = f"artifacts/{release_tag}/{artifact['key']}/{artifact_path.name}"
-                objects.append(client.put_file(artifact_path, object_name=object_name))
+            )
+            for artifact in self._iter_manifest_artifact_paths(manifest):
+                artifact_path = self._resolve_portable_path(artifact["path"])
+                if artifact_path.is_dir():
+                    bundle_path = self._archive_artifact_directory(
+                        artifact_path,
+                        release_tag=release_tag,
+                        artifact_key=artifact["key"],
+                    )
+                    object_name = f"artifacts/{release_tag}/{artifact['key']}.tar.gz"
+                    objects.append(
+                        client.put_file(bundle_path, object_name=object_name)
+                    )
+                elif artifact_path.is_file():
+                    object_name = f"artifacts/{release_tag}/{artifact['key']}/{artifact_path.name}"
+                    objects.append(
+                        client.put_file(artifact_path, object_name=object_name)
+                    )
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "status": "failed",
+                "base_url": settings.ML_RELEASE_OBJECT_STORAGE_URL,
+                "release_tag": release_tag,
+                "preflight": preflight,
+                "object_count": len(objects),
+                "objects": objects,
+                "failure_reasons": [str(exc)],
+                "detail": f"Release object upload failed: {exc}",
+            }
 
         return {
             "enabled": True,
+            "status": "passed",
             "base_url": settings.ML_RELEASE_OBJECT_STORAGE_URL,
             "release_tag": release_tag,
+            "preflight": preflight,
             "object_count": len(objects),
             "objects": objects,
         }
 
-    def enforce_manifest_retention(self, *, current_manifest_path: Path | None = None) -> dict[str, Any]:
+    def enforce_manifest_retention(
+        self, *, current_manifest_path: Path | None = None
+    ) -> dict[str, Any]:
         """Archive older manifests according to the configured local retention limit."""
         retention_limit = int(settings.ML_RELEASE_MANIFEST_RETENTION_LIMIT or 0)
         manifest_dir = self._manifest_dir()
@@ -462,14 +1224,21 @@ class MLReleasePromotionService:
                 "archived_paths": [],
             }
 
-        current_path = current_manifest_path.resolve() if current_manifest_path is not None else None
+        current_path = (
+            current_manifest_path.resolve()
+            if current_manifest_path is not None
+            else None
+        )
         candidates = [
             path
             for path in manifest_dir.glob("*.json")
-            if path.is_file() and (current_path is None or path.resolve() != current_path)
+            if path.is_file()
+            and (current_path is None or path.resolve() != current_path)
         ]
-        candidates.sort(key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
-        archive_candidates = candidates[max(retention_limit - 1, 0):]
+        candidates.sort(
+            key=lambda path: (path.stat().st_mtime, path.name), reverse=True
+        )
+        archive_candidates = candidates[max(retention_limit - 1, 0) :]
         archived_paths: list[str] = []
         if archive_candidates:
             archive_dir.mkdir(parents=True, exist_ok=True)
@@ -477,7 +1246,9 @@ class MLReleasePromotionService:
         for path in archive_candidates:
             destination = archive_dir / path.name
             if destination.exists():
-                destination = archive_dir / f"{path.stem}-{int(time.time())}{path.suffix}"
+                destination = (
+                    archive_dir / f"{path.stem}-{int(time.time())}{path.suffix}"
+                )
             path.rename(destination)
             archived_paths.append(str(destination))
 
@@ -495,7 +1266,9 @@ class MLReleasePromotionService:
         build: bool = True,
     ) -> dict[str, Any]:
         """Restart one or more compose services from the repository root."""
-        resolved_services = [service for service in (services or ["api"]) if str(service or "").strip()]
+        resolved_services = [
+            service for service in (services or ["api"]) if str(service or "").strip()
+        ]
         command = ["docker", "compose", "up", "-d"]
         if build:
             command.append("--build")
@@ -535,7 +1308,9 @@ class MLReleasePromotionService:
 
         while True:
             try:
-                with request.urlopen(url, timeout=max(1.0, min(timeout_seconds, 10.0))) as response:
+                with request.urlopen(
+                    url, timeout=max(1.0, min(timeout_seconds, 10.0))
+                ) as response:
                     body = response.read().decode("utf-8", errors="replace")
                     return {
                         "url": url,
@@ -543,7 +1318,9 @@ class MLReleasePromotionService:
                         "body": body,
                         "elapsed_seconds": round(time.monotonic() - started_at, 2),
                     }
-            except Exception as exc:  # pragma: no cover - exercised via timeout/error branches in runtime use
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - exercised via timeout/error branches in runtime use
                 last_error = str(exc)
 
             if time.monotonic() - started_at >= timeout_seconds:
@@ -569,7 +1346,9 @@ class MLReleasePromotionService:
         manifest, _ = self.load_release_manifest(manifest_ref)
         recommended_env = dict(manifest.get("recommended_env") or {})
         if not recommended_env.get("CLASSIFIER_EMBEDDING_MODEL"):
-            raise ValueError("The selected manifest does not include an embedding model, so remote rebuild is unavailable.")
+            raise ValueError(
+                "The selected manifest does not include an embedding model, so remote rebuild is unavailable."
+            )
 
         rebuild_settings = self._resolve_rebuild_settings(
             manifest,
@@ -607,7 +1386,9 @@ class MLReleasePromotionService:
                 f"Remote embedding rebuild failed with HTTP {exc.code} at {target_url}: {error_body}"
             ) from exc
 
-    def _load_predictor_backtest_report(self, raw_path: str | None) -> dict[str, Any] | None:
+    def _load_predictor_backtest_report(
+        self, raw_path: str | None
+    ) -> dict[str, Any] | None:
         """Load an optional predictor backtest report JSON file for release gating."""
         if not raw_path:
             return None
@@ -615,9 +1396,13 @@ class MLReleasePromotionService:
         try:
             report = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Predictor backtest report is not valid JSON: {path}") from exc
+            raise ValueError(
+                f"Predictor backtest report is not valid JSON: {path}"
+            ) from exc
         if not isinstance(report, dict):
-            raise ValueError(f"Predictor backtest report must decode to a JSON object: {path}")
+            raise ValueError(
+                f"Predictor backtest report must decode to a JSON object: {path}"
+            )
         report["report_path"] = self._to_portable_path(path)
         return report
 
@@ -650,9 +1435,11 @@ class MLReleasePromotionService:
                 "best_predictor_key": None,
                 "best_predictor_name": None,
                 "reasons": [
-                    "Predictor backtest report is required but was not provided."
-                    if not passed
-                    else "Predictor backtest report was not provided; gate is informational."
+                    (
+                        "Predictor backtest report is required but was not provided."
+                        if not passed
+                        else "Predictor backtest report was not provided; gate is informational."
+                    )
                 ],
             }
 
@@ -676,13 +1463,19 @@ class MLReleasePromotionService:
             )
 
         guardrail_rate = metrics.get("guardrail_rate")
-        if guardrail_rate is not None and float(guardrail_rate) > thresholds["max_guardrail_rate"]:
+        if (
+            guardrail_rate is not None
+            and float(guardrail_rate) > thresholds["max_guardrail_rate"]
+        ):
             reasons.append(
                 f"Guardrail rate {float(guardrail_rate):.4f} exceeds {thresholds['max_guardrail_rate']:.4f}."
             )
 
         fallback_rate = metrics.get("fallback_rate")
-        if fallback_rate is not None and float(fallback_rate) > thresholds["max_fallback_rate"]:
+        if (
+            fallback_rate is not None
+            and float(fallback_rate) > thresholds["max_fallback_rate"]
+        ):
             reasons.append(
                 f"Fallback rate {float(fallback_rate):.4f} exceeds {thresholds['max_fallback_rate']:.4f}."
             )
@@ -709,18 +1502,32 @@ class MLReleasePromotionService:
             "reasons": reasons or ["Predictor backtest gate passed."],
         }
 
-    def _extract_predictor_gate_metrics(self, backtest_report: dict[str, Any]) -> dict[str, Any]:
+    def _extract_predictor_gate_metrics(
+        self, backtest_report: dict[str, Any]
+    ) -> dict[str, Any]:
         """Normalize supported backtest report shapes into promotion-gate metrics."""
-        best_predictor_key = str(backtest_report.get("best_predictor_key") or "").strip() or None
-        best_result = self._find_backtest_result(backtest_report, best_predictor_key=best_predictor_key)
+        best_predictor_key = (
+            str(backtest_report.get("best_predictor_key") or "").strip() or None
+        )
+        best_result = self._find_backtest_result(
+            backtest_report, best_predictor_key=best_predictor_key
+        )
         resolved_best_predictor_key = (
             best_predictor_key
-            or (str(best_result.get("predictor_key") or "").strip() if best_result else None)
+            or (
+                str(best_result.get("predictor_key") or "").strip()
+                if best_result
+                else None
+            )
             or None
         )
         resolved_best_predictor_name = (
             str(backtest_report.get("best_predictor_name") or "").strip()
-            or (str(best_result.get("predictor_name") or "").strip() if best_result else "")
+            or (
+                str(best_result.get("predictor_name") or "").strip()
+                if best_result
+                else ""
+            )
             or None
         )
         sample_count = self._first_int(
@@ -770,7 +1577,10 @@ class MLReleasePromotionService:
         for result in results:
             if not isinstance(result, dict):
                 continue
-            if best_predictor_key and str(result.get("predictor_key") or "") == best_predictor_key:
+            if (
+                best_predictor_key
+                and str(result.get("predictor_key") or "") == best_predictor_key
+            ):
                 return result
         completed_results = [
             result
@@ -791,14 +1601,24 @@ class MLReleasePromotionService:
 
     def _build_predictor_gate_thresholds(self) -> dict[str, Any]:
         """Resolve effective predictor gate thresholds from policy and env settings."""
-        policy = self._normalize_predictor_gate_policy(settings.ML_RELEASE_PREDICTOR_GATE_POLICY)
+        policy = self._normalize_predictor_gate_policy(
+            settings.ML_RELEASE_PREDICTOR_GATE_POLICY
+        )
         preset = self.PREDICTOR_GATE_POLICY_PRESETS[policy]
         configured = {
             "require_report": bool(settings.ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT),
-            "min_sample_count": int(settings.ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT or 0),
-            "max_average_absolute_error_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE),
-            "max_guardrail_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE),
-            "max_fallback_rate": float(settings.ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE),
+            "min_sample_count": int(
+                settings.ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT or 0
+            ),
+            "max_average_absolute_error_rate": float(
+                settings.ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE
+            ),
+            "max_guardrail_rate": float(
+                settings.ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE
+            ),
+            "max_fallback_rate": float(
+                settings.ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE
+            ),
         }
         if policy == "standard":
             effective = dict(configured)
@@ -806,14 +1626,18 @@ class MLReleasePromotionService:
             effective = {
                 "require_report": bool(preset["require_report"]),
                 "min_sample_count": int(preset["min_sample_count"]),
-                "max_average_absolute_error_rate": float(preset["max_average_absolute_error_rate"]),
+                "max_average_absolute_error_rate": float(
+                    preset["max_average_absolute_error_rate"]
+                ),
                 "max_guardrail_rate": float(preset["max_guardrail_rate"]),
                 "max_fallback_rate": float(preset["max_fallback_rate"]),
             }
 
-        configured_min_dataset_quality = str(
-            settings.ML_RELEASE_PREDICTOR_GATE_MIN_DATASET_QUALITY_STATUS or ""
-        ).strip().lower()
+        configured_min_dataset_quality = (
+            str(settings.ML_RELEASE_PREDICTOR_GATE_MIN_DATASET_QUALITY_STATUS or "")
+            .strip()
+            .lower()
+        )
         effective["policy"] = policy
         effective["policy_label"] = preset["label"]
         effective["configured_thresholds"] = configured
@@ -822,7 +1646,9 @@ class MLReleasePromotionService:
             if configured_min_dataset_quality in self.DATASET_QUALITY_ORDER
             else str(preset["min_dataset_quality_status"])
         )
-        effective["block_on_missing_dataset_quality"] = bool(preset["block_on_missing_dataset_quality"])
+        effective["block_on_missing_dataset_quality"] = bool(
+            preset["block_on_missing_dataset_quality"]
+        )
         return effective
 
     def _normalize_predictor_gate_policy(self, value: Any) -> str:
@@ -869,7 +1695,9 @@ class MLReleasePromotionService:
             return f"Dataset quality status '{current}' is below required '{required}'."
         return None
 
-    def _resolve_manifest_promotion_gate(self, manifest: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_manifest_promotion_gate(
+        self, manifest: dict[str, Any]
+    ) -> dict[str, Any]:
         """Read or reconstruct the predictor promotion gate from a manifest."""
         gate_container = manifest.get("promotion_gate")
         if isinstance(gate_container, dict):
@@ -877,12 +1705,20 @@ class MLReleasePromotionService:
             if isinstance(predictor_gate, dict):
                 return predictor_gate
 
-        artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), dict) else {}
+        artifacts = (
+            manifest.get("artifacts")
+            if isinstance(manifest.get("artifacts"), dict)
+            else {}
+        )
         predictors = artifacts.get("predictors") if isinstance(artifacts, dict) else {}
         has_predictor_artifact = False
         if isinstance(predictors, dict):
-            has_predictor_artifact = any(isinstance(predictors.get(key), dict) for key in ("lstm", "ensemble"))
-        return self._build_predictor_promotion_gate(None, has_predictor_artifact=has_predictor_artifact)
+            has_predictor_artifact = any(
+                isinstance(predictors.get(key), dict) for key in ("lstm", "ensemble")
+            )
+        return self._build_predictor_promotion_gate(
+            None, has_predictor_artifact=has_predictor_artifact
+        )
 
     def _first_int(self, *values: Any) -> int:
         """Return the first value that can be interpreted as a non-negative integer."""
@@ -913,14 +1749,20 @@ class MLReleasePromotionService:
             "local_archive_dir": self._to_portable_path(self._manifest_archive_dir()),
             "retention_limit": int(settings.ML_RELEASE_MANIFEST_RETENTION_LIMIT or 0),
             "remote_storage_configured": bool(settings.ML_RELEASE_OBJECT_STORAGE_URL),
-            "remote_auto_publish": bool(settings.ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH),
+            "remote_auto_publish": bool(
+                settings.ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH
+            ),
         }
 
-    def _sign_manifest(self, manifest_without_signature: dict[str, Any]) -> dict[str, Any]:
+    def _sign_manifest(
+        self, manifest_without_signature: dict[str, Any]
+    ) -> dict[str, Any]:
         """Build a deterministic HMAC signature for one manifest payload."""
         canonical_payload = self._canonical_manifest_payload(manifest_without_signature)
         signing_key = self._manifest_signing_key()
-        digest = hmac.new(signing_key.encode("utf-8"), canonical_payload, hashlib.sha256).hexdigest()
+        digest = hmac.new(
+            signing_key.encode("utf-8"), canonical_payload, hashlib.sha256
+        ).hexdigest()
         return {
             "algorithm": "HMAC-SHA256",
             "key_id": settings.ML_RELEASE_MANIFEST_SIGNING_KEY_ID,
@@ -929,7 +1771,9 @@ class MLReleasePromotionService:
             "digest": digest,
         }
 
-    def _canonical_manifest_payload(self, manifest_without_signature: dict[str, Any]) -> bytes:
+    def _canonical_manifest_payload(
+        self, manifest_without_signature: dict[str, Any]
+    ) -> bytes:
         """Serialize a manifest without incidental whitespace for signing."""
         return json.dumps(
             manifest_without_signature,
@@ -945,28 +1789,86 @@ class MLReleasePromotionService:
         if configured_key:
             return configured_key
         if settings.ENVIRONMENT == "production":
-            raise ValueError("ML_RELEASE_MANIFEST_SIGNING_KEY is required in production.")
+            raise ValueError(
+                "ML_RELEASE_MANIFEST_SIGNING_KEY is required in production."
+            )
         return str(settings.JWT_SECRET_KEY or "development-manifest-signing-key")
 
-    def _iter_manifest_artifact_paths(self, manifest: dict[str, Any]) -> list[dict[str, str]]:
+    def _iter_manifest_artifact_paths(
+        self, manifest: dict[str, Any]
+    ) -> list[dict[str, str]]:
         """Return artifact path references from a release manifest."""
         artifacts = manifest.get("artifacts") or {}
         results: list[dict[str, str]] = []
         embedding_model = artifacts.get("embedding_model")
         if isinstance(embedding_model, dict) and embedding_model.get("path"):
-            results.append({"key": "embedding_model", "path": str(embedding_model["path"])})
+            results.append(
+                {"key": "embedding_model", "path": str(embedding_model["path"])}
+            )
 
         predictors = artifacts.get("predictors") if isinstance(artifacts, dict) else {}
         if isinstance(predictors, dict):
             for predictor_key in ("lstm", "ensemble"):
                 predictor = predictors.get(predictor_key)
                 if isinstance(predictor, dict) and predictor.get("path"):
-                    results.append({"key": predictor_key, "path": str(predictor["path"])})
-                if predictor_key == "ensemble" and isinstance(predictor, dict) and predictor.get("resolved_lstm_artifact_path"):
-                    results.append({"key": "linked_lstm", "path": str(predictor["resolved_lstm_artifact_path"])})
+                    results.append(
+                        {"key": predictor_key, "path": str(predictor["path"])}
+                    )
+                if (
+                    predictor_key == "ensemble"
+                    and isinstance(predictor, dict)
+                    and predictor.get("resolved_lstm_artifact_path")
+                ):
+                    results.append(
+                        {
+                            "key": "linked_lstm",
+                            "path": str(predictor["resolved_lstm_artifact_path"]),
+                        }
+                    )
         return results
 
-    def _archive_artifact_directory(self, path: Path, *, release_tag: str, artifact_key: str) -> Path:
+    def _manifest_artifact_preflight_checks(
+        self, manifest: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Verify that all manifest artifact references resolve before publish/apply rollout."""
+        checks: list[dict[str, Any]] = []
+        for artifact in self._iter_manifest_artifact_paths(manifest):
+            artifact_path = self._resolve_portable_path(artifact["path"])
+            exists = artifact_path.exists()
+            path_type = (
+                "directory"
+                if artifact_path.is_dir()
+                else "file" if artifact_path.is_file() else "missing"
+            )
+            checks.append(
+                self._rollout_check(
+                    f"artifact_path:{artifact['key']}",
+                    exists,
+                    "passed" if exists else "not_found",
+                    (
+                        f"Manifest artifact '{artifact['key']}' is available."
+                        if exists
+                        else f"Manifest artifact '{artifact['key']}' was not found: {artifact_path}"
+                    ),
+                    artifact_key=artifact["key"],
+                    path=str(artifact_path),
+                    path_type=path_type,
+                )
+            )
+        if not checks:
+            checks.append(
+                self._rollout_check(
+                    "artifact_path",
+                    True,
+                    "not_applicable",
+                    "Release manifest does not reference local artifact paths.",
+                )
+            )
+        return checks
+
+    def _archive_artifact_directory(
+        self, path: Path, *, release_tag: str, artifact_key: str
+    ) -> Path:
         """Create a tarball for one directory artifact before object-storage upload."""
         bundle_dir = self._manifest_dir() / "bundles"
         bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -1002,6 +1904,23 @@ class MLReleasePromotionService:
             }
         raise ValueError(f"Artifact path must be a file or directory: {path}")
 
+    def _rollout_check(
+        self,
+        name: str,
+        passed: bool,
+        status: str,
+        detail: str,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Build one rollout preflight check payload."""
+        return {
+            "name": name,
+            "passed": bool(passed),
+            "status": status,
+            "detail": detail,
+            **extra,
+        }
+
     def _sha256_file(self, path: Path) -> str:
         """Hash one file without loading it fully into memory."""
         digest = hashlib.sha256()
@@ -1024,7 +1943,9 @@ class MLReleasePromotionService:
             configured_path = self.repo_root / configured_path
         return configured_path.resolve()
 
-    def _manifest_settings_overrides(self, recommended_env: dict[str, Any]) -> dict[str, Any]:
+    def _manifest_settings_overrides(
+        self, recommended_env: dict[str, Any]
+    ) -> dict[str, Any]:
         """Map one manifest's env recommendation into in-process setting overrides."""
         overrides = {
             "ENABLE_SEMANTIC_CLASSIFICATION": True,
@@ -1056,7 +1977,11 @@ class MLReleasePromotionService:
     def _parse_env_key(self, line: str) -> str | None:
         """Extract an env key from one dotenv line while ignoring comments and blanks."""
         stripped_line = str(line or "").strip()
-        if not stripped_line or stripped_line.startswith("#") or "=" not in stripped_line:
+        if (
+            not stripped_line
+            or stripped_line.startswith("#")
+            or "=" not in stripped_line
+        ):
             return None
         key, _, _ = stripped_line.partition("=")
         normalized_key = key.strip()
@@ -1075,16 +2000,36 @@ class MLReleasePromotionService:
         """Resolve rebuild settings by combining manifest defaults with explicit overrides."""
         rebuild_defaults = manifest.get("rebuild") or {}
         return {
-            "limit": int(limit if limit is not None else rebuild_defaults.get("default_limit", 100)),
-            "offset": int(offset if offset is not None else rebuild_defaults.get("default_offset", 0)),
-            "category": category if category is not None else rebuild_defaults.get("default_category"),
-            "project_status": (
-                project_status if project_status is not None else rebuild_defaults.get("default_project_status")
+            "limit": int(
+                limit
+                if limit is not None
+                else rebuild_defaults.get("default_limit", 100)
             ),
-            "force": bool(force if force is not None else rebuild_defaults.get("recommended_force", True)),
+            "offset": int(
+                offset
+                if offset is not None
+                else rebuild_defaults.get("default_offset", 0)
+            ),
+            "category": (
+                category
+                if category is not None
+                else rebuild_defaults.get("default_category")
+            ),
+            "project_status": (
+                project_status
+                if project_status is not None
+                else rebuild_defaults.get("default_project_status")
+            ),
+            "force": bool(
+                force
+                if force is not None
+                else rebuild_defaults.get("recommended_force", True)
+            ),
         }
 
-    def _validate_embedding_model_path(self, raw_path: str | None) -> dict[str, Any] | None:
+    def _validate_embedding_model_path(
+        self, raw_path: str | None
+    ) -> dict[str, Any] | None:
         """Validate one local sentence-transformer snapshot directory."""
         if not raw_path:
             return None
@@ -1122,17 +2067,23 @@ class MLReleasePromotionService:
             "integrity": self._path_integrity_metadata(path),
         }
 
-    def _validate_ensemble_artifact(self, raw_path: str | None) -> dict[str, Any] | None:
+    def _validate_ensemble_artifact(
+        self, raw_path: str | None
+    ) -> dict[str, Any] | None:
         """Validate one persisted ensemble JSON artifact and its optional LSTM linkage."""
         if not raw_path:
             return None
         path = self._resolve_existing_path(raw_path, expect_directory=False)
         artifact = load_ensemble_artifact(path)
         resolved_lstm_artifact_path = None
-        raw_lstm_artifact_path = str(artifact.get("lstm_artifact_path") or "").strip() or None
+        raw_lstm_artifact_path = (
+            str(artifact.get("lstm_artifact_path") or "").strip() or None
+        )
 
         if raw_lstm_artifact_path:
-            dependent_path = self._resolve_dependency_path(raw_lstm_artifact_path, base_path=path.parent)
+            dependent_path = self._resolve_dependency_path(
+                raw_lstm_artifact_path, base_path=path.parent
+            )
             load_lstm_artifact(dependent_path)
             resolved_lstm_artifact_path = self._to_portable_path(dependent_path)
 

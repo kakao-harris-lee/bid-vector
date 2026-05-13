@@ -1,9 +1,11 @@
-.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-down docker-logs docker-logs-tasks ml-release-manifest ml-release-apply ml-release-rebuild ml-release-rollout
+.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-down docker-logs docker-logs-tasks ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
 
 REBUILD_LIMIT ?= 100
 REBUILD_OFFSET ?= 0
 REBUILD_FORCE ?= true
 ENV_FILE ?=
+REQUIRE_SIGNATURE ?= false
+WRITE_PROBE ?= true
 CELERY_COMPOSE_BROKER_URL ?= amqp://bidvector:bidvector@rabbitmq:5672/bidvector
 
 help:
@@ -29,6 +31,7 @@ help:
 	@echo "  make docker-down  - Stop Docker containers"
 	@echo "  make docker-logs-tasks - Tail API + ops/ML/training worker + beat + RabbitMQ logs"
 	@echo "  make ml-release-manifest - Validate artifacts and write a release manifest"
+	@echo "  make ml-release-preflight - Check manifest signature/artifacts and object storage before rollout"
 	@echo "  make ml-release-apply - Print the runtime settings stored in a manifest"
 	@echo "  make ml-release-rebuild - Apply a manifest and rebuild project embeddings"
 	@echo "  make ml-release-rollout - Apply a manifest, restart compose, and queue remote embedding backfill"
@@ -102,6 +105,9 @@ docker-logs-tasks:
 
 ml-release-manifest:
 	python scripts/promote_ml_release.py create-manifest --release-tag "$(RELEASE_TAG)" --embedding-model-path "$(EMBEDDING_MODEL_PATH)" --lstm-artifact-path "$(LSTM_ARTIFACT_PATH)" --ensemble-artifact-path "$(ENSEMBLE_ARTIFACT_PATH)" --git-sha "$(GIT_SHA)" --notes "$(NOTES)" --rebuild-limit $(REBUILD_LIMIT) --rebuild-offset $(REBUILD_OFFSET) --category "$(REBUILD_CATEGORY)" --project-status "$(REBUILD_PROJECT_STATUS)" $(if $(filter true,$(PUBLISH_REMOTE)),--publish-remote)
+
+ml-release-preflight:
+	python scripts/promote_ml_release.py preflight-rollout --manifest "$(MANIFEST_REF)" $(if $(filter true,$(REQUIRE_SIGNATURE)),--require-signature) $(if $(filter false,$(WRITE_PROBE)),--no-write-probe)
 
 ml-release-apply:
 	python scripts/promote_ml_release.py apply-manifest --manifest "$(MANIFEST_REF)" $(if $(ENV_FILE),--write-env-file "$(ENV_FILE)") $(if $(filter true,$(PUBLISH_REMOTE)),--publish-remote)

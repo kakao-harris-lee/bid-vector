@@ -168,11 +168,13 @@ To reduce drift between training outputs and runtime settings, the repository no
 - `apply-manifest --write-env-file .env` writes the recommended runtime keys directly into a dotenv file
 - `apply-manifest --rebuild-embeddings` temporarily applies the manifest's embedding model path in-process and rebuilds stored project vectors
 - `apply-manifest --restart-compose --rebuild-embeddings-via-api` rolls the manifest into Docker Compose, waits for `/health`, and queues the remote embedding backfill through `/api/v1/ml/backfills/project-embeddings`
+- `preflight-rollout --manifest <release-tag>` checks manifest signature/artifact paths and object-storage bucket/prefix write access before publish/apply rollout
 - `create-manifest --predictor-backtest-report <report.json>` embeds rolling backtest evidence and creates a predictor promotion gate
 - Queued price-predictor training writes `dataset-quality.json` and `artifact-comparison.json` under `models/training-runs/<release-tag>/`, then passes the comparison report into the manifest promotion gate when manifest creation is enabled
 - Predictor promotion gates support `standard`, `canary`, `strict`, and `advisory` rollout policies through `ML_RELEASE_PREDICTOR_GATE_POLICY`; gate payloads include the active policy and dataset quality status when the report provides it
 - New manifests include artifact checksums, an HMAC-SHA256 signature, local retention policy metadata, and optional remote object-storage publishing via `ML_RELEASE_OBJECT_STORAGE_URL`
 - Applying a manifest validates the embedded predictor promotion gate. Failed gates block rollout unless `--skip-promotion-gate` is passed.
+- Remote publish failures return structured `status`, `detail`, `failure_reasons`, and `preflight` payloads; CLI publish/preflight exits non-zero when rollout checks fail.
 
 Example flow:
 
@@ -185,6 +187,10 @@ python scripts/promote_ml_release.py create-manifest \
    --predictor-backtest-report models/reports/2026-05-11-backtest.json
 
 python scripts/promote_ml_release.py apply-manifest --manifest 2026-05-11-embedding-v4
+
+python scripts/promote_ml_release.py preflight-rollout \
+   --manifest 2026-05-11-embedding-v4 \
+   --require-signature
 
 python scripts/promote_ml_release.py apply-manifest \
    --manifest 2026-05-11-embedding-v4 \
@@ -200,7 +206,7 @@ python scripts/promote_ml_release.py apply-manifest \
    --force
 ```
 
-Equivalent shortcuts are available in the `Makefile` via `make ml-release-manifest`, `make ml-release-apply`, `make ml-release-rebuild`, and `make ml-release-rollout`. If you set `ENV_FILE=.env`, the apply/rebuild targets also update the dotenv file in place.
+Equivalent shortcuts are available in the `Makefile` via `make ml-release-manifest`, `make ml-release-preflight`, `make ml-release-apply`, `make ml-release-rebuild`, and `make ml-release-rollout`. If you set `ENV_FILE=.env`, the apply/rebuild targets also update the dotenv file in place.
 
 ## Dependency Profiles and Image Targets
 
@@ -360,7 +366,7 @@ Set `PRICE_PREDICTION_PREFERRED_PREDICTOR=auto` to enable rolling backtest selec
 
 The prediction feedback analytics endpoint summarizes how close the latest stored `predicted_price` and `recommended_amount` were to the final `winning_amount` for projects that already have a linked `TenderResult`. It reports average absolute error rates, counts within 1% and 3%, and whether the latest bid-decision recommendation outperformed the raw price prediction. The prediction observability endpoint groups persisted prediction metadata by predictor and pricing mode, including fallback frequency, guardrail frequency, linked-result absolute error rates, and backtest selector metadata. The operations dashboard endpoint summarizes crawl success/failure, recent failure reasons, strategy monitoring completion, candidate selection, persistence, notification rates, task queue risk, broker/backend health, worker separation state, Telegram delivery health, and ML release manifest/promotion-gate status for dashboard cards.
 
-Decision analytics now also include persisted funnel telemetry, current-vs-previous period comparisons, segment breakdowns by category / workload source / agency, recommendation payloads with `experiment_plan`, `priority_score`, and `history_adjustment`, and saved experiment runs that can be evaluated later against baseline target and guardrail metrics. Experiment run responses include dashboard-ready `application_status`, `application_history`, `next_actions`, `review_bucket`, `review_priority`, and `review_reason` payloads so the UI can distinguish ready, applied, blocked, pending, failed, and unsupported runs. Successful experiments can feed back into strategy settings: threshold experiments adjust `bid_now_threshold` / `review_threshold`, workload experiments adjust `auto_workload_penalty_multiplier`, and category focus experiments adjust `category_priority_overrides`.
+Decision analytics now also include persisted funnel telemetry, current-vs-previous period comparisons, segment breakdowns by category / workload source / agency, recommendation payloads with `experiment_plan`, `priority_score`, `history_adjustment`, and concrete `parameter_recommendation` deltas, plus saved experiment runs that can be evaluated later against baseline target and guardrail metrics. Experiment run responses include dashboard-ready `application_status`, `application_history`, `next_actions`, `review_bucket`, `review_priority`, and `review_reason` payloads so the UI can distinguish ready, applied, blocked, pending, failed, and unsupported runs. Successful experiments can feed back into strategy settings: threshold experiments adjust `bid_now_threshold` / `review_threshold`, workload experiments adjust `auto_workload_penalty_multiplier`, and category focus experiments adjust `category_priority_overrides`; repeated success, rollback, failure, or pending history now scales the concrete threshold/category delta before recommendation and apply.
 
 ### Realtime
 

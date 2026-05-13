@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `146 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: 로컬 `pytest -q` 기준 `151 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -35,6 +35,7 @@
 - 실험 run별 `application_status`, `application_history`, `next_actions` 기반 dashboard action payload
 - 성공 / 실패 / 보류 실험 이력 기반 review bucket, priority sort, 필터/카운트 payload
 - experiment run 이력 기반 `decision-recommendations` priority score / history adjustment
+- 장기 experiment run 이력 기반 category/threshold `parameter_recommendation`, confidence, apply-time delta scaling
 - Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, 인증된 WebSocket realtime event stream
 - PostgreSQL `LISTEN/NOTIFY` 기반 optional realtime fanout backend
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
@@ -48,13 +49,14 @@
 - manifest 기반 ML artifact promotion 서비스/CLI 및 embedding rebuild 자동화
 - manifest 추천값의 `.env` 반영 자동화 (`--write-env-file`)
 - manifest apply 후 compose 재기동 + health 확인 + API 기반 embedding rebuild rollout 자동화
+- ML release rollout preflight: manifest signature required 모드, artifact 경로, file/S3 object storage credential/IAM write probe, 실패 원인 payload
 - Celery worker가 `app.tasks.jobs`를 명시적으로 import 하도록 정리해 out-of-process worker/beat 경로에서 task 등록 누락을 방지
 - 외부 broker 사용 시 `CELERY_RESULT_BACKEND` 기본값을 PostgreSQL(`db+${DATABASE_URL}`)로 자동 승격하도록 정리
 - optional `tasks` compose profile(`rabbitmq`, `worker`, `beat`) 및 관련 Makefile/문서 경로 추가
 
 ### 아직 핵심적으로 남은 범위
 
-- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
+- 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
 
 ## 작업 원칙
 
@@ -126,7 +128,7 @@
 
 남은 작업:
 
-- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
+- 운영 배포 시 `preflight-rollout`을 실제 credential/IAM 환경에서 실행해 bucket/prefix 권한을 확인
 
 우선 검토 파일:
 
@@ -153,10 +155,11 @@
 - 적용 가능/완료/차단 상태와 action payload를 포함한 실험 응답
 - 성공 / 실패 / 보류 이력 기반 review bucket, 우선순위 정렬, outcome/application 필터와 집계 payload
 - 장기 experiment run 이력을 반영한 recommendation ranking, 성공 적용 boost, 반복 실패/보류 감점
+- 장기 적용 결과를 반영한 category/threshold 세부 `parameter_recommendation` 및 threshold/category apply delta scaling
 
 남은 작업:
 
-- 장기 적용 결과를 category/threshold 세부 파라미터 추천값 산식에 더 직접 반영
+- 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
 
 우선 검토 파일:
 
@@ -200,7 +203,7 @@
 남은 작업:
 
 - production 환경의 task/broker 상태는 operations dashboard payload와 카드로 노출됨
-- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
+- 운영 배포 시 `preflight-rollout`을 실제 credential/IAM 환경에서 실행
 
 ### G. 분석 / 대시보드 집계 — prediction / operations reporting 기반 완료, 카드 확장 단계
 
@@ -213,12 +216,12 @@
 
 남은 작업:
 
-- 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
+- 실제 운영 credential/IAM 기준 object storage rollout preflight 실행 결과를 운영 절차에 반영
 
 ## 현재 권장 실행 순서
 
-1. 실제 운영 credential/IAM 기준 object storage rollout 절차 검증
-2. `D. 장기 적용 결과를 category/threshold 세부 파라미터 추천값 산식에 더 직접 반영`
+1. 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
+2. 필요 시 A/B 분류 정확도 보정 또는 realtime replay/retention 정책 정리
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 

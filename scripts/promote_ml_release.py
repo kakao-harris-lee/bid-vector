@@ -30,21 +30,53 @@ def _build_parser() -> argparse.ArgumentParser:
         "create-manifest",
         help="Validate artifacts and write a release manifest under models/manifests/.",
     )
-    create_parser.add_argument("--release-tag", required=True, help="Release tag used for the manifest filename.")
-    create_parser.add_argument("--embedding-model-path", default="", help="Local embedding model snapshot directory.")
-    create_parser.add_argument("--lstm-artifact-path", default="", help="Persisted LSTM artifact JSON path.")
-    create_parser.add_argument("--ensemble-artifact-path", default="", help="Persisted ensemble artifact JSON path.")
+    create_parser.add_argument(
+        "--release-tag",
+        required=True,
+        help="Release tag used for the manifest filename.",
+    )
+    create_parser.add_argument(
+        "--embedding-model-path",
+        default="",
+        help="Local embedding model snapshot directory.",
+    )
+    create_parser.add_argument(
+        "--lstm-artifact-path", default="", help="Persisted LSTM artifact JSON path."
+    )
+    create_parser.add_argument(
+        "--ensemble-artifact-path",
+        default="",
+        help="Persisted ensemble artifact JSON path.",
+    )
     create_parser.add_argument(
         "--predictor-backtest-report",
         default="",
         help="Optional predictor backtest report JSON used for release promotion gating.",
     )
-    create_parser.add_argument("--git-sha", default="", help="Git SHA recorded in the manifest.")
-    create_parser.add_argument("--notes", default="", help="Optional operator note stored in the manifest.")
-    create_parser.add_argument("--rebuild-limit", type=int, default=100, help="Suggested default rebuild batch size.")
-    create_parser.add_argument("--rebuild-offset", type=int, default=0, help="Suggested default rebuild offset.")
-    create_parser.add_argument("--category", default="", help="Suggested default project category filter.")
-    create_parser.add_argument("--project-status", default="", help="Suggested default project status filter.")
+    create_parser.add_argument(
+        "--git-sha", default="", help="Git SHA recorded in the manifest."
+    )
+    create_parser.add_argument(
+        "--notes", default="", help="Optional operator note stored in the manifest."
+    )
+    create_parser.add_argument(
+        "--rebuild-limit",
+        type=int,
+        default=100,
+        help="Suggested default rebuild batch size.",
+    )
+    create_parser.add_argument(
+        "--rebuild-offset",
+        type=int,
+        default=0,
+        help="Suggested default rebuild offset.",
+    )
+    create_parser.add_argument(
+        "--category", default="", help="Suggested default project category filter."
+    )
+    create_parser.add_argument(
+        "--project-status", default="", help="Suggested default project status filter."
+    )
     create_parser.add_argument(
         "--no-force-rebuild",
         action="store_true",
@@ -54,6 +86,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publish-remote",
         action="store_true",
         help="Publish the signed manifest and artifacts to ML_RELEASE_OBJECT_STORAGE_URL.",
+    )
+
+    preflight_parser = subparsers.add_parser(
+        "preflight-rollout",
+        help="Check manifest signature/artifacts and object-storage IAM before rollout.",
+    )
+    preflight_parser.add_argument(
+        "--manifest",
+        required=True,
+        help="Release tag or direct path to the manifest JSON file.",
+    )
+    preflight_parser.add_argument(
+        "--require-signature",
+        action="store_true",
+        help="Validate as if ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE=true.",
+    )
+    preflight_parser.add_argument(
+        "--no-write-probe",
+        action="store_true",
+        help="Skip the object-storage write/delete probe.",
     )
 
     apply_parser = subparsers.add_parser(
@@ -123,19 +175,38 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass predictor promotion-gate failure checks when applying the manifest.",
     )
-    apply_parser.add_argument("--limit", type=int, default=None, help="Override rebuild batch size.")
-    apply_parser.add_argument("--offset", type=int, default=None, help="Override rebuild offset.")
-    apply_parser.add_argument("--category", default=None, help="Override rebuild category filter.")
-    apply_parser.add_argument("--project-status", default=None, help="Override rebuild status filter.")
+    apply_parser.add_argument(
+        "--limit", type=int, default=None, help="Override rebuild batch size."
+    )
+    apply_parser.add_argument(
+        "--offset", type=int, default=None, help="Override rebuild offset."
+    )
+    apply_parser.add_argument(
+        "--category", default=None, help="Override rebuild category filter."
+    )
+    apply_parser.add_argument(
+        "--project-status", default=None, help="Override rebuild status filter."
+    )
     force_group = apply_parser.add_mutually_exclusive_group()
-    force_group.add_argument("--force", action="store_true", help="Force an embedding rebuild.")
-    force_group.add_argument("--no-force", action="store_true", help="Reuse cached embeddings when possible.")
+    force_group.add_argument(
+        "--force", action="store_true", help="Force an embedding rebuild."
+    )
+    force_group.add_argument(
+        "--no-force", action="store_true", help="Reuse cached embeddings when possible."
+    )
 
     return parser
 
 
 def _serialize_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def _remote_storage_failed(payload: Any) -> bool:
+    return isinstance(payload, dict) and payload.get("status") in {
+        "failed",
+        "not_configured",
+    }
 
 
 def main() -> int:
@@ -150,7 +221,9 @@ def main() -> int:
                 embedding_model_path=_clean_optional(args.embedding_model_path),
                 lstm_artifact_path=_clean_optional(args.lstm_artifact_path),
                 ensemble_artifact_path=_clean_optional(args.ensemble_artifact_path),
-                predictor_backtest_report_path=_clean_optional(args.predictor_backtest_report),
+                predictor_backtest_report_path=_clean_optional(
+                    args.predictor_backtest_report
+                ),
                 git_sha=_clean_optional(args.git_sha),
                 notes=_clean_optional(args.notes),
                 rebuild_limit=int(args.rebuild_limit),
@@ -162,7 +235,16 @@ def main() -> int:
             )
         )
         print(_serialize_payload(payload))
-        return 0
+        return 2 if _remote_storage_failed(payload.get("remote_storage")) else 0
+
+    if args.command == "preflight-rollout":
+        payload = service.preflight_release_rollout(
+            args.manifest,
+            require_signature=True if args.require_signature else None,
+            probe_write=not bool(args.no_write_probe),
+        )
+        print(_serialize_payload(payload))
+        return 0 if payload.get("passed") else 2
 
     force_override = None
     if args.force:
@@ -171,6 +253,7 @@ def main() -> int:
         force_override = False
 
     if not args.rebuild_embeddings:
+        remote_storage_failed = False
         payload = service.apply_release_manifest(
             None,
             manifest_ref=args.manifest,
@@ -184,6 +267,7 @@ def main() -> int:
             )
         if args.publish_remote:
             payload["remote_storage"] = service.publish_release_manifest(args.manifest)
+            remote_storage_failed = _remote_storage_failed(payload["remote_storage"])
         if args.restart_compose:
             payload["compose_restart"] = service.restart_compose_services(
                 services=args.compose_service or ["api"],
@@ -212,12 +296,13 @@ def main() -> int:
                 timeout_seconds=float(args.health_timeout_seconds),
             )
         print(_serialize_payload(payload))
-        return 0
+        return 2 if remote_storage_failed else 0
 
     from app.core.database import SessionLocal
 
     db = SessionLocal()
     try:
+        remote_storage_failed = False
         payload = service.apply_release_manifest(
             db,
             manifest_ref=args.manifest,
@@ -236,6 +321,7 @@ def main() -> int:
             )
         if args.publish_remote:
             payload["remote_storage"] = service.publish_release_manifest(args.manifest)
+            remote_storage_failed = _remote_storage_failed(payload["remote_storage"])
         if args.restart_compose:
             payload["compose_restart"] = service.restart_compose_services(
                 services=args.compose_service or ["api"],
@@ -247,7 +333,7 @@ def main() -> int:
                     timeout_seconds=float(args.health_timeout_seconds),
                 )
         print(_serialize_payload(payload))
-        return 0
+        return 2 if remote_storage_failed else 0
     finally:
         db.close()
 

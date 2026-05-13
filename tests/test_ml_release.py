@@ -16,8 +16,12 @@ from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotio
 
 def _write_embedding_snapshot(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
-    (path / "config.json").write_text(json.dumps({"model_type": "bert"}), encoding="utf-8")
-    (path / "modules.json").write_text(json.dumps([{"idx": 0, "name": "0"}]), encoding="utf-8")
+    (path / "config.json").write_text(
+        json.dumps({"model_type": "bert"}), encoding="utf-8"
+    )
+    (path / "modules.json").write_text(
+        json.dumps([{"idx": 0, "name": "0"}]), encoding="utf-8"
+    )
     return path
 
 
@@ -111,7 +115,11 @@ def _write_predictor_backtest_report(
                 "best_predictor_key": best_predictor_key,
                 "best_predictor_name": f"{best_predictor_key}_blend",
                 "best_average_absolute_error_rate": average_error_rate,
-                **({"dataset_quality_status": dataset_quality_status} if dataset_quality_status is not None else {}),
+                **(
+                    {"dataset_quality_status": dataset_quality_status}
+                    if dataset_quality_status is not None
+                    else {}
+                ),
                 "results": [
                     {
                         "predictor_key": best_predictor_key,
@@ -133,8 +141,12 @@ def _write_predictor_backtest_report(
 def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
     """Manifest creation should validate artifacts and store repo-relative runtime paths."""
     repo_root = tmp_path / "repo"
-    embedding_dir = _write_embedding_snapshot(repo_root / "models" / "embeddings" / "ko-sbert-v3")
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "release-1.json")
+    embedding_dir = _write_embedding_snapshot(
+        repo_root / "models" / "embeddings" / "ko-sbert-v3"
+    )
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "release-1.json"
+    )
     ensemble_path = _write_ensemble_artifact(
         repo_root / "models" / "predictors" / "ensemble" / "release-1.json",
         linked_lstm_artifact_path="../lstm/release-1.json",
@@ -162,25 +174,53 @@ def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
     persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["manifest_path"] == str(manifest_path)
     assert persisted["recommended_docker_target"] == "api-embedding"
-    assert persisted["recommended_env"]["CLASSIFIER_EMBEDDING_MODEL"] == "models/embeddings/ko-sbert-v3"
-    assert persisted["recommended_env"]["PRICE_PREDICTION_LSTM_MODEL_PATH"] == "models/predictors/lstm/release-1.json"
-    assert persisted["recommended_env"]["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] == "models/predictors/ensemble/release-1.json"
-    assert persisted["recommended_env"]["PRICE_PREDICTION_PREFERRED_PREDICTOR"] == "ensemble"
+    assert (
+        persisted["recommended_env"]["CLASSIFIER_EMBEDDING_MODEL"]
+        == "models/embeddings/ko-sbert-v3"
+    )
+    assert (
+        persisted["recommended_env"]["PRICE_PREDICTION_LSTM_MODEL_PATH"]
+        == "models/predictors/lstm/release-1.json"
+    )
+    assert (
+        persisted["recommended_env"]["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"]
+        == "models/predictors/ensemble/release-1.json"
+    )
+    assert (
+        persisted["recommended_env"]["PRICE_PREDICTION_PREFERRED_PREDICTOR"]
+        == "ensemble"
+    )
     assert persisted["promotion_gate"]["predictor_backtest"]["passed"] is True
-    assert persisted["promotion_gate"]["predictor_backtest"]["thresholds"]["policy"] == "standard"
-    assert persisted["promotion_gate"]["predictor_backtest"]["metrics"]["sample_count"] == 6
-    assert persisted["promotion_gate"]["predictor_backtest"]["metrics"]["average_absolute_error_rate"] == pytest.approx(0.012)
-    assert persisted["artifacts"]["predictors"]["ensemble"]["resolved_lstm_artifact_path"] == "models/predictors/lstm/release-1.json"
+    assert (
+        persisted["promotion_gate"]["predictor_backtest"]["thresholds"]["policy"]
+        == "standard"
+    )
+    assert (
+        persisted["promotion_gate"]["predictor_backtest"]["metrics"]["sample_count"]
+        == 6
+    )
+    assert persisted["promotion_gate"]["predictor_backtest"]["metrics"][
+        "average_absolute_error_rate"
+    ] == pytest.approx(0.012)
+    assert (
+        persisted["artifacts"]["predictors"]["ensemble"]["resolved_lstm_artifact_path"]
+        == "models/predictors/lstm/release-1.json"
+    )
     assert persisted["rebuild"]["default_limit"] == 250
     assert persisted["rebuild"]["default_category"] == "software"
     assert persisted["signature"]["algorithm"] == "HMAC-SHA256"
-    assert persisted["artifacts"]["embedding_model"]["integrity"]["checksum_algorithm"] == "sha256-tree"
+    assert (
+        persisted["artifacts"]["embedding_model"]["integrity"]["checksum_algorithm"]
+        == "sha256-tree"
+    )
 
 
 def test_release_manifest_signature_detects_tampering(tmp_path):
     """Manifest loading should reject signed payloads that were modified after creation."""
     repo_root = tmp_path / "repo"
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "signed.json")
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "signed.json"
+    )
     service = MLReleasePromotionService(repo_root=repo_root)
     manifest = service.create_release_manifest(
         MLReleasePromotionRequest(
@@ -191,17 +231,25 @@ def test_release_manifest_signature_detects_tampering(tmp_path):
 
     manifest_path = Path(manifest["manifest_path"])
     persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
-    persisted["recommended_env"]["PRICE_PREDICTION_LSTM_MODEL_PATH"] = "models/predictors/lstm/tampered.json"
-    manifest_path.write_text(json.dumps(persisted, ensure_ascii=False), encoding="utf-8")
+    persisted["recommended_env"][
+        "PRICE_PREDICTION_LSTM_MODEL_PATH"
+    ] = "models/predictors/lstm/tampered.json"
+    manifest_path.write_text(
+        json.dumps(persisted, ensure_ascii=False), encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="signature verification failed"):
         service.load_release_manifest("2026-05-11-signed")
 
 
-def test_apply_release_manifest_blocks_failed_predictor_promotion_gate(tmp_path, monkeypatch):
+def test_apply_release_manifest_blocks_failed_predictor_promotion_gate(
+    tmp_path, monkeypatch
+):
     """Applying predictor artifacts should fail when the embedded backtest gate does not pass."""
     repo_root = tmp_path / "repo"
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "weak.json")
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "weak.json"
+    )
     backtest_report_path = _write_predictor_backtest_report(
         repo_root / "models" / "reports" / "weak-backtest.json",
         sample_count=3,
@@ -209,7 +257,9 @@ def test_apply_release_manifest_blocks_failed_predictor_promotion_gate(tmp_path,
         best_predictor_key="lstm",
     )
     monkeypatch.setattr(settings, "ML_RELEASE_PREDICTOR_GATE_MIN_SAMPLE_COUNT", 5)
-    monkeypatch.setattr(settings, "ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE", 0.03)
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_PREDICTOR_GATE_MAX_AVERAGE_ABSOLUTE_ERROR_RATE", 0.03
+    )
 
     service = MLReleasePromotionService(repo_root=repo_root)
     manifest = service.create_release_manifest(
@@ -235,7 +285,9 @@ def test_apply_release_manifest_blocks_failed_predictor_promotion_gate(tmp_path,
 def test_predictor_promotion_gate_blocks_failed_dataset_quality(tmp_path):
     """Training comparison reports with failed dataset quality should block standard rollout."""
     repo_root = tmp_path / "repo"
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "dataset-quality.json")
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "dataset-quality.json"
+    )
     backtest_report_path = _write_predictor_backtest_report(
         repo_root / "models" / "reports" / "failed-dataset-quality.json",
         sample_count=6,
@@ -256,13 +308,19 @@ def test_predictor_promotion_gate_blocks_failed_dataset_quality(tmp_path):
     assert gate["passed"] is False
     assert gate["thresholds"]["min_dataset_quality_status"] == "warning"
     assert gate["metrics"]["dataset_quality_status"] == "failed"
-    assert any("Dataset quality status 'failed'" in reason for reason in gate["reasons"])
+    assert any(
+        "Dataset quality status 'failed'" in reason for reason in gate["reasons"]
+    )
 
 
-def test_predictor_promotion_gate_canary_policy_uses_release_tier_thresholds(tmp_path, monkeypatch):
+def test_predictor_promotion_gate_canary_policy_uses_release_tier_thresholds(
+    tmp_path, monkeypatch
+):
     """Canary rollout policy should expose and apply its own gate preset."""
     repo_root = tmp_path / "repo"
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "canary.json")
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "canary.json"
+    )
     backtest_report_path = _write_predictor_backtest_report(
         repo_root / "models" / "reports" / "canary-backtest.json",
         sample_count=3,
@@ -293,7 +351,9 @@ def test_publish_release_manifest_to_file_object_storage(tmp_path, monkeypatch):
     """Configured file object storage should receive the signed manifest and artifact objects."""
     repo_root = tmp_path / "repo"
     object_store = tmp_path / "object-store"
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "remote.json")
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "remote.json"
+    )
     service = MLReleasePromotionService(repo_root=repo_root)
     manifest = service.create_release_manifest(
         MLReleasePromotionRequest(
@@ -302,13 +362,145 @@ def test_publish_release_manifest_to_file_object_storage(tmp_path, monkeypatch):
         )
     )
 
-    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", object_store.as_uri())
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_OBJECT_STORAGE_URL", object_store.as_uri()
+    )
     result = service.publish_release_manifest(manifest["manifest_path"])
 
     assert result["enabled"] is True
+    assert result["status"] == "passed"
+    assert result["preflight"]["passed"] is True
     assert result["object_count"] == 2
     assert (object_store / "manifests" / "2026-05-11-remote-storage.json").exists()
-    assert (object_store / "artifacts" / "2026-05-11-remote-storage" / "lstm" / "remote.json").exists()
+    assert (
+        object_store
+        / "artifacts"
+        / "2026-05-11-remote-storage"
+        / "lstm"
+        / "remote.json"
+    ).exists()
+
+
+def test_preflight_release_rollout_checks_file_storage_and_signature(
+    tmp_path, monkeypatch
+):
+    """Rollout preflight should validate signature, artifacts, and write access before publish."""
+    repo_root = tmp_path / "repo"
+    object_store = tmp_path / "object-store"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "preflight.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-preflight",
+            lstm_artifact_path=str(lstm_path),
+        )
+    )
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_OBJECT_STORAGE_URL", object_store.as_uri()
+    )
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"],
+        require_signature=True,
+    )
+
+    assert result["passed"] is True
+    assert result["signature_required"] is True
+    assert result["manifest"]["signature_status"] == "verified"
+    assert result["manifest"]["artifact_count"] >= 1
+    assert result["object_storage"]["provider"] == "file"
+    assert not list(object_store.glob("preflight/*.json"))
+    check_names = {check["name"] for check in result["checks"]}
+    assert "manifest_signature" in check_names
+    assert "artifact_path:lstm" in check_names
+    assert "object_storage_write_probe" in check_names
+
+
+def test_preflight_release_rollout_reports_missing_required_signature(
+    tmp_path, monkeypatch
+):
+    """Required-signature preflight should fail with a structured reason before rollout."""
+    repo_root = tmp_path / "repo"
+    object_store = tmp_path / "object-store"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "unsigned.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-unsigned-preflight",
+            lstm_artifact_path=str(lstm_path),
+        )
+    )
+    manifest_path = Path(manifest["manifest_path"])
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    persisted.pop("signature")
+    manifest_path.write_text(
+        json.dumps(persisted, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_OBJECT_STORAGE_URL", object_store.as_uri()
+    )
+
+    result = service.preflight_release_rollout(
+        "2026-05-11-unsigned-preflight",
+        require_signature=True,
+        probe_write=False,
+    )
+
+    assert result["passed"] is False
+    assert result["manifest"]["signature_status"] == "invalid"
+    assert any(
+        "missing a required signature" in reason for reason in result["failure_reasons"]
+    )
+    signature_check = next(
+        check for check in result["checks"] if check["name"] == "manifest_signature"
+    )
+    assert signature_check["required"] is True
+    assert signature_check["status"] == "invalid"
+
+
+def test_preflight_release_rollout_reports_unsupported_object_storage_scheme(
+    tmp_path, monkeypatch
+):
+    """Unsupported object-storage URLs should be surfaced as preflight failures."""
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "unsupported.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-unsupported-storage",
+            lstm_artifact_path=str(lstm_path),
+        )
+    )
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_OBJECT_STORAGE_URL", "gs://bucket/releases"
+    )
+
+    result = service.preflight_release_rollout(
+        "2026-05-11-unsupported-storage",
+        probe_write=False,
+    )
+
+    assert result["passed"] is False
+    assert result["object_storage"]["provider"] == "gs"
+    assert any(
+        "Unsupported ML_RELEASE_OBJECT_STORAGE_URL scheme" in reason
+        for reason in result["failure_reasons"]
+    )
+
+    publish_result = service.publish_release_manifest("2026-05-11-unsupported-storage")
+    assert publish_result["status"] == "failed"
+    assert publish_result["object_count"] == 0
+    assert publish_result["preflight"]["passed"] is False
+    assert any(
+        "Unsupported ML_RELEASE_OBJECT_STORAGE_URL scheme" in reason
+        for reason in publish_result["failure_reasons"]
+    )
 
 
 class _FakeEmbeddingModel:
@@ -316,10 +508,14 @@ class _FakeEmbeddingModel:
         return [[1.0, 0.0, 0.0] for _ in texts]
 
 
-def test_apply_release_manifest_can_rebuild_embeddings_with_temporary_overrides(test_db, tmp_path, monkeypatch):
+def test_apply_release_manifest_can_rebuild_embeddings_with_temporary_overrides(
+    test_db, tmp_path, monkeypatch
+):
     """Applying a manifest should temporarily switch embedding settings and rebuild vectors."""
     repo_root = tmp_path / "repo"
-    embedding_dir = _write_embedding_snapshot(repo_root / "models" / "embeddings" / "ko-sbert-v4")
+    embedding_dir = _write_embedding_snapshot(
+        repo_root / "models" / "embeddings" / "ko-sbert-v4"
+    )
     service = MLReleasePromotionService(repo_root=repo_root)
     service.create_release_manifest(
         MLReleasePromotionRequest(
@@ -342,7 +538,11 @@ def test_apply_release_manifest_can_rebuild_embeddings_with_temporary_overrides(
     original_model_name = settings.CLASSIFIER_EMBEDDING_MODEL
     monkeypatch.setattr(settings, "ENVIRONMENT", "test")
     monkeypatch.setattr(settings, "ENABLE_SEMANTIC_CLASSIFICATION", True)
-    monkeypatch.setattr(NoticeClassifierService, "_get_embedding_model", lambda self: _FakeEmbeddingModel())
+    monkeypatch.setattr(
+        NoticeClassifierService,
+        "_get_embedding_model",
+        lambda self: _FakeEmbeddingModel(),
+    )
 
     result = service.apply_release_manifest(
         test_db,
@@ -362,7 +562,9 @@ def test_apply_release_manifest_can_rebuild_embeddings_with_temporary_overrides(
 def test_create_release_manifest_auto_infers_lstm_env_from_ensemble_link(tmp_path):
     """Ensemble manifests should surface linked LSTM artifacts even when only the ensemble path is provided."""
     repo_root = tmp_path / "repo"
-    _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "linked-lstm.json")
+    _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "linked-lstm.json"
+    )
     ensemble_path = _write_ensemble_artifact(
         repo_root / "models" / "predictors" / "ensemble" / "linked-ensemble.json",
         linked_lstm_artifact_path="../lstm/linked-lstm.json",
@@ -377,15 +579,28 @@ def test_create_release_manifest_auto_infers_lstm_env_from_ensemble_link(tmp_pat
     )
 
     assert manifest["recommended_docker_target"] == "api-runtime"
-    assert manifest["recommended_env"]["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"] is True
-    assert manifest["recommended_env"]["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] == "models/predictors/ensemble/linked-ensemble.json"
-    assert manifest["recommended_env"]["PRICE_PREDICTION_LSTM_MODEL_PATH"] == "models/predictors/lstm/linked-lstm.json"
+    assert (
+        manifest["recommended_env"]["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"]
+        is True
+    )
+    assert (
+        manifest["recommended_env"]["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"]
+        == "models/predictors/ensemble/linked-ensemble.json"
+    )
+    assert (
+        manifest["recommended_env"]["PRICE_PREDICTION_LSTM_MODEL_PATH"]
+        == "models/predictors/lstm/linked-lstm.json"
+    )
 
 
-def test_write_manifest_env_file_updates_existing_keys_and_appends_missing_ones(tmp_path):
+def test_write_manifest_env_file_updates_existing_keys_and_appends_missing_ones(
+    tmp_path,
+):
     """Applying a manifest to a dotenv file should replace known keys and append missing ones."""
     repo_root = tmp_path / "repo"
-    embedding_dir = _write_embedding_snapshot(repo_root / "models" / "embeddings" / "ko-sbert-v5")
+    embedding_dir = _write_embedding_snapshot(
+        repo_root / "models" / "embeddings" / "ko-sbert-v5"
+    )
     service = MLReleasePromotionService(repo_root=repo_root)
     service.create_release_manifest(
         MLReleasePromotionRequest(
@@ -420,7 +635,9 @@ def test_write_manifest_env_file_updates_existing_keys_and_appends_missing_ones(
 def test_write_manifest_env_file_can_create_new_dotenv(tmp_path):
     """When the target dotenv file does not exist yet, the service should create it."""
     repo_root = tmp_path / "repo"
-    lstm_path = _write_lstm_artifact(repo_root / "models" / "predictors" / "lstm" / "release-2.json")
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "release-2.json"
+    )
     service = MLReleasePromotionService(repo_root=repo_root)
     service.create_release_manifest(
         MLReleasePromotionRequest(
@@ -439,7 +656,10 @@ def test_write_manifest_env_file_can_create_new_dotenv(tmp_path):
     assert result["created"] is True
     assert "API_DOCKER_TARGET=api-runtime" in content
     assert "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS=true" in content
-    assert "PRICE_PREDICTION_LSTM_MODEL_PATH=models/predictors/lstm/release-2.json" in content
+    assert (
+        "PRICE_PREDICTION_LSTM_MODEL_PATH=models/predictors/lstm/release-2.json"
+        in content
+    )
 
 
 def test_restart_compose_services_runs_expected_command(tmp_path, monkeypatch):
@@ -467,7 +687,9 @@ def test_restart_compose_services_runs_expected_command(tmp_path, monkeypatch):
 def test_trigger_remote_embedding_rebuild_uses_manifest_defaults(tmp_path, monkeypatch):
     """Remote rebuild should call the API endpoint with manifest-derived default query parameters."""
     repo_root = tmp_path / "repo"
-    embedding_dir = _write_embedding_snapshot(repo_root / "models" / "embeddings" / "ko-sbert-v6")
+    embedding_dir = _write_embedding_snapshot(
+        repo_root / "models" / "embeddings" / "ko-sbert-v6"
+    )
     service = MLReleasePromotionService(repo_root=repo_root)
     service.create_release_manifest(
         MLReleasePromotionRequest(

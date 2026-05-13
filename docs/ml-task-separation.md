@@ -44,3 +44,12 @@
 - `s3://bucket/prefix`: `boto3`가 설치되어 있고 IAM/환경 credential이 설정된 경우 S3에 업로드한다.
 
 `scripts/promote_ml_release.py create-manifest --publish-remote` 또는 `apply-manifest --publish-remote`를 사용하면 signed manifest와 참조 artifact가 함께 업로드된다.
+
+운영 rollout 전에는 `scripts/promote_ml_release.py preflight-rollout --manifest <release-tag> --require-signature`로 아래 조건을 먼저 확인한다.
+
+- manifest JSON 로드 및 HMAC signature 검증
+- manifest가 참조하는 artifact 경로 실존 여부
+- `file://` target 또는 `s3://bucket/prefix` 연결 가능 여부
+- object storage write/delete probe를 통한 credential/IAM 권한
+
+preflight payload는 실패한 check별 `status`, `detail`, `failure_reasons`를 반환하므로 bucket/prefix 오류, IAM 거부, signature required 모드 누락을 publish/apply 전에 구분할 수 있다.

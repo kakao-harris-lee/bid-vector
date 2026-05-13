@@ -694,6 +694,7 @@ class DecisionRecommendationExperiment(BaseModel):
     minimum_decision_sample: int = Field(ge=1)
     duration_days: int = Field(ge=1, le=30)
     rollback_trigger: str
+    parameter_recommendation: dict = Field(default_factory=dict)
 
 
 class DecisionRecommendationHistoryAdjustment(BaseModel):
@@ -717,6 +718,7 @@ class DecisionRecommendationItem(BaseModel):
     supporting_metrics: dict = Field(default_factory=dict)
     priority_score: float = Field(default=0.0, ge=0.0)
     history_adjustment: DecisionRecommendationHistoryAdjustment
+    parameter_recommendation: dict = Field(default_factory=dict)
     experiment_plan: Optional[DecisionRecommendationExperiment] = None
 
 

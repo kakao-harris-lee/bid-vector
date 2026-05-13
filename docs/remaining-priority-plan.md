@@ -12,7 +12,7 @@
 - predictor abstraction 및 artifact-backed `HistoricalStatisticalPredictor`, `LSTMBidRatePredictor`, `EnsembleBidRatePredictor` 추론
 - persisted prediction metadata 기반 predictor / fallback / guardrail / linked-result accuracy observability API
 - rolling backtest 기반 `auto` predictor selection
-- release manifest predictor promotion gate 및 predictor 성능 추세 API
+- release manifest predictor promotion gate, predictor 성능 추세 API, rollout preflight
 - `BidDecisionRecord` 기반 입찰 추진 결정, score breakdown, margin / complexity / workload 반영
 - decision detail / timeline / funnel / recommendation analytics
 - recommendation → experiment plan 확장
@@ -25,28 +25,27 @@
 
 현재 검증 상태:
 
-- `pytest -q` 기준 전체 `146 passed, 1 skipped`
+- `pytest -q` 기준 전체 `151 passed, 1 skipped`
 - `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 
 ## 남은 핵심 과제 요약
 
 ### 1. 예측 엔진 운영화
 
-실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세, training 산출물 검증 리포트, gate policy preset이 들어갔다. 이제 실제 운영 credential/IAM 기준 rollout 검증이 남았다.
+실제 advanced predictor 추론, rolling backtest `auto` 선택, manifest promotion gate, 기간 버킷 성능 추세, training 산출물 검증 리포트, gate policy preset, rollout preflight가 들어갔다. 배포 절차에서는 실제 운영 credential/IAM 값으로 preflight를 실행하면 된다.
 
-- predictor 성능 추세를 릴리즈 의사결정 카드로 확장
+- 운영 배포 환경에서 `preflight-rollout` 실행
 
 ### 2. 실험 운영 자동화
 
-추천 실험 계획과 persisted experiment run은 이미 있고, 수동 제어 및 threshold / workload / category feedback loop, dashboard action payload까지 연결됐다. 이제 성공/실패/보류 이력 기반 정렬과 장기 관측성 보강 단계다.
+추천 실험 계획과 persisted experiment run은 이미 있고, 수동 제어 및 threshold / workload / category feedback loop, dashboard action payload, 이력 기반 recommendation ranking, category/threshold 세부 `parameter_recommendation`까지 연결됐다.
 
-- 성공 / 실패 / 보류 실험 이력 기반 정렬 개선
-- 적용 결과의 기간별 집계와 운영 카드 확장
+- 장기 적용 이력 기반 추천 변화 폭 / confidence / 추천 사유 payload 반영 완료
 
 ### 3. 실행 인프라 안정화
 
-- production-grade broker / result backend 운영 관측성 정리
-- 실제 credential/IAM 기준 release manifest object storage rollout 검증
+- production-grade broker / result backend 운영 관측성은 operations dashboard에 연결됨
+- release manifest object storage rollout preflight는 운영 credential/IAM 환경에서 실행 필요
 
 ### 4. 실시간 웹 이벤트
 
@@ -56,7 +55,7 @@
 
 ### 5. 운영 보고용 집계 보강
 
-- worker queue 지연 / Telegram 전송률 / 모델 릴리즈 상태 카드 확장
+- worker queue 지연 / Telegram 전송률 / 모델 릴리즈 상태 카드는 구현됨
 
 ## 우선순위 선정 기준
 
@@ -237,7 +236,7 @@ prediction observability, operations dashboard, task/broker, realtime 운영화�
 - artifact comparison report의 `dataset_quality_status`가 gate metrics와 failure reason에 반영된다.
 - operations dashboard의 ML release summary가 latest gate policy와 dataset quality status를 반환한다.
 
-### 1순위 — 운영 credential/IAM rollout 검증
+### 완료 — 운영 credential/IAM rollout 검증
 
 release manifest object storage publish/apply 경로는 구현됐다. 다음은 실제 운영 credential/IAM 기준에서 실패 원인을 명확히 드러내는 rollout 검증 경로를 정리하는 단계다.
 
@@ -250,6 +249,40 @@ release manifest object storage publish/apply 경로는 구현됐다. 다음은 
 #### 1순위 완료 기준
 
 - 운영자가 rollout 전에 credential, bucket/prefix, signature requirement 문제를 사전에 확인할 수 있어야 한다.
+
+#### 구현된 결과
+
+- `preflight-rollout` CLI와 `make ml-release-preflight`가 manifest 로드, signature required 모드, artifact 경로, object storage write/delete probe를 검증한다.
+- `file://` target과 `s3://bucket/prefix` target에 대해 bucket/prefix, credential/IAM, write/delete 실패를 check별 `status`, `detail`, `failure_reasons`로 반환한다.
+- `publish_release_manifest`가 원격 publish 전에 동일 preflight를 실행해 실패 원인을 구조화된 payload로 드러낸다.
+
+### 완료 — 실험 세부 추천값 산식 보강
+
+장기 experiment run 이력은 recommendation ranking에 반영됐다. 다음은 성공/실패/보류 적용 결과를 category/threshold 세부 파라미터 추천값 자체에 더 직접 반영하는 단계다.
+
+#### 1순위 작업 범위
+
+- 성공 적용 segment의 category focus / threshold delta 추천값 보정
+- 반복 실패/보류 segment의 추천 변화 폭 제한
+- 적용 이력별 confidence와 추천 사유 payload 정리
+
+#### 1순위 우선 검토 파일
+
+- `app/services/decision_analytics.py`
+- `app/services/decision_experiments.py`
+- `app/schemas/schemas.py`
+- `tests/test_decision_analytics.py`
+
+#### 1순위 완료 기준
+
+- recommendation ranking뿐 아니라 실제 추천 파라미터가 장기 적용 결과를 반영해야 한다.
+
+#### 구현된 결과
+
+- `GET /api/v1/analytics/decision-recommendations`가 threshold/category 추천에 `parameter_recommendation`을 포함한다.
+- 성공 적용 이력은 추천 delta를 키우고, 반복 실패/롤백/보류 이력은 추천 변화 폭과 confidence를 낮춘다.
+- experiment plan의 `suggested_change`와 `parameter_recommendation`이 같은 delta를 공유한다.
+- threshold/category 실험 적용 API가 과거 동일 recommendation 이력을 조회해 실제 apply delta를 동적으로 조정한다.
 
 ### 3순위 — 실행 인프라 및 배치 경로 안정화
 
@@ -348,10 +381,20 @@ decision analytics, prediction observability, operations dashboard 기반과 wor
 - 운영 데이터 분포 기반 gate threshold 보정
 - release tier별 gate policy preset 정리
 
-### 묶음 A — 운영 credential/IAM rollout 검증
+### 완료 — 묶음 A 운영 credential/IAM rollout 검증
 
 - object storage 실제 credential 기준 publish/apply 경로 점검
 - 운영 환경 manifest signature required 모드 검증
+
+### 완료 — 묶음 B 실험 세부 추천값 산식 보강
+
+- 장기 적용 결과를 category/threshold 추천값 산식에 직접 반영
+- 성공/실패/보류 패턴별 추천 변화 폭과 confidence 보정
+
+### 묶음 C — 운영 배포 preflight 실환경 실행
+
+- 운영 object storage credential/IAM으로 `preflight-rollout` 실행
+- bucket/prefix, signature required, write/delete probe 실패 원인을 배포 체크리스트에 반영
 
 ## 범위 재정의 / 비우선 항목
 
