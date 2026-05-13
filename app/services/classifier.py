@@ -130,14 +130,15 @@ class NoticeClassifierService:
             reasons.append("업체 프로필이 없어 기본 점수만 반환합니다.")
             return {"matched": False, "score": 0.0, "reasons": reasons}
 
-        assessments = [
-            self._assess_business_type(project, profile),
-            self._assess_license(project, profile),
-            self._assess_region(project, profile),
-            self._assess_budget(project, profile),
-            self._assess_capability(project, profile),
-            self._assess_semantic_similarity(project, profile),
-        ]
+        axis_assessments = {
+            "business_type": self._assess_business_type(project, profile),
+            "license": self._assess_license(project, profile),
+            "region": self._assess_region(project, profile),
+            "budget": self._assess_budget(project, profile),
+            "capability": self._assess_capability(project, profile),
+            "semantic_similarity": self._assess_semantic_similarity(project, profile),
+        }
+        assessments = list(axis_assessments.values())
 
         for assessment in assessments:
             reasons.extend(assessment.reasons)
@@ -146,11 +147,36 @@ class NoticeClassifierService:
         penalties = sum(assessment.penalty for assessment in assessments)
         score = max(0.0, min(1.0, positive_score - penalties))
         matched = all(assessment.passed for assessment in assessments) and score >= self.MATCH_THRESHOLD
+        blocking_axes = [axis for axis, assessment in axis_assessments.items() if not assessment.passed]
 
         if not reasons:
             reasons.append("추가 판별 데이터가 필요합니다.")
 
-        return {"matched": matched, "score": round(score, 2), "reasons": reasons}
+        return {
+            "matched": matched,
+            "score": round(score, 2),
+            "reasons": reasons,
+            "criteria": self._serialize_assessments(axis_assessments),
+            "score_breakdown": {
+                "positive_score": round(positive_score, 4),
+                "penalty": round(penalties, 4),
+                "final_score": round(score, 4),
+                "match_threshold": self.MATCH_THRESHOLD,
+                "blocking_axes": blocking_axes,
+            },
+        }
+
+    def _serialize_assessments(self, assessments: dict[str, RuleAssessment]) -> dict[str, dict]:
+        """Expose axis-level scoring so operators can see why a candidate was rejected."""
+        return {
+            axis: {
+                "score": round(assessment.score, 4),
+                "penalty": round(assessment.penalty, 4),
+                "passed": assessment.passed,
+                "reasons": assessment.reasons,
+            }
+            for axis, assessment in assessments.items()
+        }
 
     def _assess_business_type(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
         """Evaluate whether the company business type fits the project category."""
@@ -409,6 +435,7 @@ class NoticeClassifierService:
         similarity, source = self._compute_semantic_similarity(project_text, profile_text)
         source_label = "임베딩 모델" if source == "sentence-transformers" else "fallback 유사도"
         threshold = settings.CLASSIFIER_SEMANTIC_MATCH_THRESHOLD
+        has_semantic_context = self._has_enough_semantic_context(project_text, profile_text)
 
         if similarity >= threshold + 0.2:
             return RuleAssessment(
@@ -434,9 +461,9 @@ class NoticeClassifierService:
         if similarity <= 0.03:
             return RuleAssessment(
                 score=0.0,
-                passed=True,
+                passed=not has_semantic_context,
                 penalty=self.SEMANTIC_VERY_LOW_PENALTY,
-                reasons=[f"의미 유사도가 매우 낮아 규칙 기반 점수의 false positive 가능성을 줄이기 위해 큰 감점을 반영했습니다. ({source_label}: {similarity:.2f})"],
+                reasons=[f"의미 유사도가 매우 낮아 규칙 기반 점수의 false positive 가능성을 줄이기 위해 {'차단 신호와 ' if has_semantic_context else ''}큰 감점을 반영했습니다. ({source_label}: {similarity:.2f})"],
             )
 
         if similarity <= 0.1:
@@ -648,6 +675,13 @@ class NoticeClassifierService:
                 continue
             normalized_tokens.append(normalized_token)
         return normalized_tokens
+
+    def _has_enough_semantic_context(self, project_text: str, profile_text: str) -> bool:
+        """Return whether both sides have enough tokens to treat a very low similarity as a blocker."""
+        return (
+            len(set(self._tokenize_semantic_text(project_text))) >= 4
+            and len(set(self._tokenize_semantic_text(profile_text))) >= 4
+        )
 
     def _estimate_company_capability(self, profile: CompanyProfile) -> float:
         """Estimate company execution capability using profile score and delivery history."""

@@ -19,6 +19,42 @@ from app.services.project_similarity import ProjectSimilarityService
 from app.services.realtime import realtime_event_manager
 
 
+class KonepsLiveCollectionError(RuntimeError):
+    """Wrap live crawl failures with retry attempts and crawl-stage metadata."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        attempts: list[dict[str, Any]] | None = None,
+        original_error: Exception | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.attempts = attempts or []
+        self.original_error = original_error
+
+
+def format_crawl_error_message(metadata: dict[str, Any]) -> str | None:
+    """Return a compact crawl-job error message with live failure category context."""
+    if not isinstance(metadata, dict):
+        return None
+
+    reason = metadata.get("fallback_reason")
+    if not reason:
+        return None
+
+    live_failure = metadata.get("live_failure") if isinstance(metadata.get("live_failure"), dict) else {}
+    stage = metadata.get("fallback_failure_stage") or live_failure.get("stage")
+    category = metadata.get("fallback_failure_category") or live_failure.get("category")
+
+    if stage or category:
+        failure_label = "/".join(str(value) for value in (stage, category) if value)
+        return f"[{failure_label}] {reason}"
+    return str(reason)
+
+
 class KonepsCollectorService:
     """Collect KONEPS notices/opening data."""
 
@@ -59,6 +95,7 @@ class KonepsCollectorService:
     OPENING_RESULT_SEARCH_BUTTON_ID = "mf_wfm_container_btnS0001"
     OPENING_RESULT_GRID_ID = "mf_wfm_container_onbsRsltClsfInqyGrd"
     OPENING_RESULT_DATA_LIST_KEY = "mf_wfm_container_dlOnbsRsltClsfListOutL"
+    LIVE_FAILURE_RETRYABLE_CATEGORIES = {"network", "timeout", "unknown"}
 
     def collect_notices(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect KONEPS notices with live mode support and safe fallback."""
@@ -78,11 +115,27 @@ class KonepsCollectorService:
                 response_metadata.update(live_result["metadata"])
                 job_status = "completed"
             except Exception as exc:  # pragma: no cover - fallback path is covered via monkeypatch test
-                items = self._build_mock_items(normalized_request, mode="fallback_mock", fallback_reason=str(exc))
+                failure_payload = self._live_failure_payload(exc, stage="live_collection")
+                fallback_item_metadata = {
+                    "fallback_failure_category": failure_payload["category"],
+                    "fallback_failure_stage": failure_payload["stage"],
+                    "fallback_retryable": failure_payload["retryable"],
+                }
+                items = self._build_mock_items(
+                    normalized_request,
+                    mode="fallback_mock",
+                    fallback_reason=failure_payload["detail"],
+                    fallback_metadata=fallback_item_metadata,
+                )
                 response_metadata.update(
                     {
                         "resolved_mode": "fallback_mock",
-                        "fallback_reason": str(exc),
+                        "fallback_reason": failure_payload["detail"],
+                        "fallback_failure_category": failure_payload["category"],
+                        "fallback_failure_stage": failure_payload["stage"],
+                        "fallback_retryable": failure_payload["retryable"],
+                        "live_failure": failure_payload,
+                        "live_retry_attempts": failure_payload.get("attempts", []),
                         "search_entry_url": settings.KONEPS_HOME_URL,
                     }
                 )
@@ -142,7 +195,7 @@ class KonepsCollectorService:
 
         crawl_job.status = response.get("job_status", "completed")
         crawl_job.result_count = response.get("collected_count", len(items))
-        crawl_job.error_message = metadata.get("fallback_reason")
+        crawl_job.error_message = format_crawl_error_message(metadata)
         crawl_job.completed_at = utc_now()
 
         project_similarity = ProjectSimilarityService()
@@ -244,6 +297,118 @@ class KonepsCollectorService:
         db.refresh(crawl_job)
         return crawl_job
 
+    def _live_collection_error(
+        self,
+        *,
+        stage: str,
+        attempts: list[dict[str, Any]],
+        original_error: Exception,
+    ) -> KonepsLiveCollectionError:
+        """Build a live crawl exception with retry context attached."""
+        attempt_count = len(attempts)
+        detail = str(original_error) or type(original_error).__name__
+        message = f"KONEPS {stage} failed after {attempt_count} attempt(s): {detail}"
+        return KonepsLiveCollectionError(
+            message,
+            stage=stage,
+            attempts=attempts,
+            original_error=original_error,
+        )
+
+    def _build_live_retry_attempt(
+        self,
+        *,
+        stage: str,
+        attempt_index: int,
+        exc: Exception,
+        final_attempt: bool,
+    ) -> dict[str, Any]:
+        """Build one retry-attempt payload for operations diagnostics."""
+        failure_payload = self._live_failure_payload(exc, stage=stage)
+        next_delay_seconds = None if final_attempt else self._retry_delay_seconds(attempt_index)
+        return {
+            "attempt": attempt_index + 1,
+            "stage": stage,
+            "category": failure_payload["category"],
+            "retryable": failure_payload["retryable"],
+            "exception_type": failure_payload["exception_type"],
+            "error_message": failure_payload["error_message"],
+            "next_retry_delay_seconds": next_delay_seconds,
+            "final_attempt": final_attempt,
+        }
+
+    def _live_failure_payload(self, exc: Exception, *, stage: str) -> dict[str, Any]:
+        """Classify a live crawl exception into a stable operations payload."""
+        original_error = getattr(exc, "original_error", None) or exc
+        resolved_stage = str(getattr(exc, "stage", stage) or stage)
+        attempts = getattr(exc, "attempts", None)
+        category = self._classify_live_failure(original_error)
+        retryable = category in self.LIVE_FAILURE_RETRYABLE_CATEGORIES
+        detail = str(exc) or str(original_error) or type(original_error).__name__
+
+        payload: dict[str, Any] = {
+            "stage": resolved_stage,
+            "category": category,
+            "retryable": retryable,
+            "detail": detail,
+            "error_message": str(original_error) or detail,
+            "exception_type": type(original_error).__name__,
+        }
+        if attempts:
+            payload["attempt_count"] = len(attempts)
+            payload["attempts"] = attempts
+        return payload
+
+    def _classify_live_failure(self, exc: Exception) -> str:
+        """Map browser/network/parser errors to operator-actionable categories."""
+        lowered_message = str(exc or "").lower()
+        exception_name = type(exc).__name__.lower()
+
+        if any(marker in lowered_message for marker in ("captcha", "access denied", "forbidden", "403", "blocked")):
+            return "access_denied"
+        if any(marker in lowered_message for marker in (
+            "browser not available",
+            "executable doesn't exist",
+            "playwright install",
+            "failed to launch",
+            "target page, context or browser has been closed",
+        )):
+            return "browser_runtime"
+        if any(marker in lowered_message for marker in (
+            "err_name_not_resolved",
+            "err_connection",
+            "econn",
+            "net::",
+            "network",
+            "connection reset",
+            "connection refused",
+        )):
+            return "network"
+        if any(marker in lowered_message for marker in ("no notice items", "no result", "empty result")):
+            return "no_data"
+        if any(marker in lowered_message for marker in (
+            "could not be located",
+            "selector",
+            "locator",
+            "strict mode violation",
+            "waiting for",
+        )):
+            return "selector_drift"
+        if "timeout" in lowered_message or "timeout" in exception_name:
+            return "timeout"
+        return "unknown"
+
+    def _retry_delay_seconds(self, attempt_index: int) -> float:
+        """Return linear backoff delay for the next retry attempt."""
+        return (settings.KONEPS_RETRY_BACKOFF_MS * (attempt_index + 1)) / 1000
+
+    def _close_browser_context(self, context: Any) -> None:
+        """Best-effort browser context cleanup without masking crawl failures."""
+        try:
+            context.close()
+        except Exception:
+            return
+
     def _normalize_request(self, request: CrawlRequest) -> CrawlRequest:
         """Normalize optional request fields for downstream collection logic."""
         normalized_source = (request.source or "koneps").strip().lower()
@@ -300,7 +465,17 @@ class KonepsCollectorService:
             opening_rows = self._collect_opening_result_rows(request)
             parsed_items, opening_result_metadata = self._merge_opening_result_rows(parsed_items, opening_rows)
         except Exception as exc:
-            opening_result_metadata["opening_result_error"] = str(exc)
+            failure_payload = self._live_failure_payload(exc, stage="opening_result")
+            opening_result_metadata.update(
+                {
+                    "opening_result_error": failure_payload["detail"],
+                    "opening_result_failure_category": failure_payload["category"],
+                    "opening_result_failure_stage": failure_payload["stage"],
+                    "opening_result_retryable": failure_payload["retryable"],
+                    "opening_result_failure": failure_payload,
+                    "opening_result_retry_attempts": failure_payload.get("attempts", []),
+                }
+            )
 
         return {
             "items": parsed_items[: request.max_items],
@@ -322,6 +497,7 @@ class KonepsCollectorService:
             browser = playwright.chromium.launch(headless=settings.KONEPS_HEADLESS)
             try:
                 last_error: Exception | None = None
+                attempts: list[dict[str, Any]] = []
                 for attempt in range(settings.KONEPS_RETRY_COUNT + 1):
                     context = browser.new_context(
                         user_agent=settings.KONEPS_USER_AGENT,
@@ -332,17 +508,34 @@ class KonepsCollectorService:
                         page.set_default_timeout(settings.KONEPS_TIMEOUT_MS)
                         self._open_opening_result_page(page, request)
                         rows = self._read_opening_result_rows(page)
-                        context.close()
+                        self._close_browser_context(context)
                         return rows
                     except Exception as exc:  # pragma: no cover - exercised by live browser only
                         last_error = exc
-                        context.close()
-                        if attempt >= settings.KONEPS_RETRY_COUNT:
-                            raise
-                        sleep((settings.KONEPS_RETRY_BACKOFF_MS * (attempt + 1)) / 1000)
+                        self._close_browser_context(context)
+                        final_attempt = attempt >= settings.KONEPS_RETRY_COUNT
+                        attempts.append(
+                            self._build_live_retry_attempt(
+                                stage="opening_result",
+                                attempt_index=attempt,
+                                exc=exc,
+                                final_attempt=final_attempt,
+                            )
+                        )
+                        if final_attempt:
+                            raise self._live_collection_error(
+                                stage="opening_result",
+                                attempts=attempts,
+                                original_error=exc,
+                            ) from exc
+                        sleep(self._retry_delay_seconds(attempt))
 
                 if last_error:
-                    raise last_error
+                    raise self._live_collection_error(
+                        stage="opening_result",
+                        attempts=attempts,
+                        original_error=last_error,
+                    ) from last_error
                 raise RuntimeError("Failed to collect KONEPS opening-result rows")
             finally:
                 browser.close()
@@ -486,6 +679,7 @@ class KonepsCollectorService:
             browser = playwright.chromium.launch(headless=settings.KONEPS_HEADLESS)
             try:
                 last_error: Exception | None = None
+                attempts: list[dict[str, Any]] = []
                 for attempt in range(settings.KONEPS_RETRY_COUNT + 1):
                     context = browser.new_context(
                         user_agent=settings.KONEPS_USER_AGENT,
@@ -496,17 +690,34 @@ class KonepsCollectorService:
                         page.set_default_timeout(settings.KONEPS_TIMEOUT_MS)
                         self._open_live_search_results(page, request)
                         snapshots = self._collect_result_page_snapshots(page, request)
-                        context.close()
+                        self._close_browser_context(context)
                         return snapshots
                     except Exception as exc:  # pragma: no cover - exercised indirectly in fallback path
                         last_error = exc
-                        context.close()
-                        if attempt >= settings.KONEPS_RETRY_COUNT:
-                            raise
-                        sleep((settings.KONEPS_RETRY_BACKOFF_MS * (attempt + 1)) / 1000)
+                        self._close_browser_context(context)
+                        final_attempt = attempt >= settings.KONEPS_RETRY_COUNT
+                        attempts.append(
+                            self._build_live_retry_attempt(
+                                stage="notice_search",
+                                attempt_index=attempt,
+                                exc=exc,
+                                final_attempt=final_attempt,
+                            )
+                        )
+                        if final_attempt:
+                            raise self._live_collection_error(
+                                stage="notice_search",
+                                attempts=attempts,
+                                original_error=exc,
+                            ) from exc
+                        sleep(self._retry_delay_seconds(attempt))
 
                 if last_error:
-                    raise last_error
+                    raise self._live_collection_error(
+                        stage="notice_search",
+                        attempts=attempts,
+                        original_error=last_error,
+                    ) from last_error
                 raise RuntimeError("Failed to gather KONEPS live page snapshots")
             finally:
                 browser.close()
@@ -1536,11 +1747,13 @@ class KonepsCollectorService:
         request: CrawlRequest,
         mode: str = "mock",
         fallback_reason: str | None = None,
+        fallback_metadata: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build deterministic mock notice data while live crawling is under construction."""
         closing_at = utc_now() + timedelta(days=3)
         target_stamp = request.target_date.replace("-", "")
         source_root = settings.KONEPS_BASE_URL.rstrip("/")
+        fallback_metadata = fallback_metadata or {}
 
         mock_items = [
             CrawlNoticeItem(
@@ -1559,6 +1772,7 @@ class KonepsCollectorService:
                     "request_delay_ms": settings.KONEPS_REQUEST_DELAY_MS,
                     "fallback_reason": fallback_reason,
                     "search_entry_url": settings.KONEPS_HOME_URL,
+                    **fallback_metadata,
                 },
             ),
             CrawlNoticeItem(
@@ -1577,6 +1791,7 @@ class KonepsCollectorService:
                     "request_delay_ms": settings.KONEPS_REQUEST_DELAY_MS,
                     "fallback_reason": fallback_reason,
                     "search_entry_url": settings.KONEPS_HOME_URL,
+                    **fallback_metadata,
                 },
             ),
         ]

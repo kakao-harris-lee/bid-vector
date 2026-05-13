@@ -32,7 +32,7 @@ from app.schemas.schemas import (
 )
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
-from app.services.koneps.collector import KonepsCollectorService
+from app.services.koneps.collector import KonepsCollectorService, format_crawl_error_message
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService, TelegramUpdateProcessor
@@ -79,7 +79,7 @@ def _sync_crawl_job_from_task_status(db: Session, crawl_job: CrawlJob, task_stat
         metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
         crawl_job.status = str(result.get("job_status", "completed")) if isinstance(result, dict) else "completed"
         crawl_job.result_count = int(result.get("collected_count", crawl_job.result_count or 0)) if isinstance(result, dict) else crawl_job.result_count
-        crawl_job.error_message = str(metadata.get("fallback_reason")) if isinstance(metadata, dict) and metadata.get("fallback_reason") else None
+        crawl_job.error_message = format_crawl_error_message(metadata) if isinstance(metadata, dict) else None
         crawl_job.completed_at = utc_now()
 
     db.add(crawl_job)

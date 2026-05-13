@@ -110,6 +110,59 @@ def test_realtime_manager_broadcasts_normalized_events():
     assert manager.recent_events()[-1]["event_type"] == "test.event"
 
 
+def test_realtime_manager_replays_requested_recent_events():
+    """Realtime manager should replay retained local events after a known event id."""
+    manager = RealtimeEventManager(history_limit=3)
+    first = manager.publish_event("first.event", {"order": 1})
+    second = manager.publish_event("second.event", {"order": 2})
+    third = manager.publish_event("third.event", {"order": 3})
+    websocket = _FakeWebSocket()
+
+    async def exercise_manager():
+        await manager.connect(
+            websocket,  # type: ignore[arg-type]
+            client_context={
+                "replay_requested": True,
+                "after_event_id": first["event_id"],
+                "replay_limit": 10,
+            },
+        )
+
+    asyncio.run(exercise_manager())
+
+    ack = websocket.sent[0]
+    assert ack["payload"]["replay"]["requested"] is True
+    assert ack["payload"]["replayed_event_count"] == 2
+    assert ack["payload"]["replay"]["after_event_id_found"] is True
+    assert [event["event_id"] for event in websocket.sent[1:]] == [second["event_id"], third["event_id"]]
+
+
+def test_realtime_manager_marks_replay_gap_when_after_event_was_evicted():
+    """Reconnect acknowledgements should flag when local retention cannot prove continuity."""
+    manager = RealtimeEventManager(history_limit=2)
+    evicted = manager.publish_event("evicted.event", {"order": 1})
+    retained_second = manager.publish_event("retained.second", {"order": 2})
+    retained_third = manager.publish_event("retained.third", {"order": 3})
+    websocket = _FakeWebSocket()
+
+    async def exercise_manager():
+        await manager.connect(
+            websocket,  # type: ignore[arg-type]
+            client_context={
+                "replay_requested": True,
+                "after_event_id": evicted["event_id"],
+            },
+        )
+
+    asyncio.run(exercise_manager())
+
+    ack = websocket.sent[0]
+    assert ack["payload"]["replay"]["after_event_id_found"] is False
+    assert ack["payload"]["replay"]["retention_scope"] == "local_process_memory"
+    assert ack["payload"]["replay"]["cross_worker_backfill"] is False
+    assert [event["event_id"] for event in websocket.sent[1:]] == [retained_second["event_id"], retained_third["event_id"]]
+
+
 def test_realtime_manager_uses_fanout_backend_for_cross_process_events():
     """Realtime manager should publish local events and accept remote fanout events."""
     fanout = _FakeFanoutBackend()

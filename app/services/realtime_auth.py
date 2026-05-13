@@ -18,11 +18,13 @@ class RealtimeAuthenticationError(Exception):
 
 def authenticate_realtime_websocket(websocket: WebSocket, db: Session) -> dict[str, Any]:
     """Validate the dashboard WebSocket token and return a small client context."""
+    replay_context = _extract_replay_context(websocket)
     if not settings.REALTIME_REQUIRE_AUTH:
         return {
             "authenticated": False,
             "operator_id": None,
             "username": None,
+            **replay_context,
         }
 
     raw_token = _extract_websocket_token(websocket)
@@ -46,6 +48,7 @@ def authenticate_realtime_websocket(websocket: WebSocket, db: Session) -> dict[s
         "authenticated": True,
         "operator_id": int(operator.id),
         "username": operator.username,
+        **replay_context,
     }
 
 
@@ -60,3 +63,15 @@ def _extract_websocket_token(websocket: WebSocket) -> str | None:
         return authorization.split(" ", 1)[1].strip() or None
 
     return None
+
+
+def _extract_replay_context(websocket: WebSocket) -> dict[str, Any]:
+    """Extract optional replay controls from WebSocket query params."""
+    replay_value = str(websocket.query_params.get("replay") or "").strip().lower()
+    replay_requested = replay_value in {"1", "true", "yes", "y", "on"}
+    replay_limit = websocket.query_params.get("replay_limit")
+    return {
+        "replay_requested": replay_requested,
+        "after_event_id": websocket.query_params.get("after_event_id") or None,
+        "replay_limit": replay_limit,
+    }

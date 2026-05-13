@@ -168,7 +168,115 @@ def test_live_crawl_falls_back_to_mock(monkeypatch):
     assert response["collected_count"] == 2
     assert response["items"][0]["metadata"]["mode"] == "fallback_mock"
     assert "browser not available" in response["items"][0]["metadata"]["fallback_reason"]
+    assert response["items"][0]["metadata"]["fallback_failure_category"] == "browser_runtime"
     assert response["metadata"]["resolved_mode"] == "fallback_mock"
+    assert response["metadata"]["fallback_failure_category"] == "browser_runtime"
+    assert response["metadata"]["fallback_failure_stage"] == "live_collection"
+    assert response["metadata"]["fallback_retryable"] is False
+
+
+def test_live_crawl_fallback_includes_retry_attempts(monkeypatch):
+    """Live fallback metadata should preserve retry attempts for operations diagnostics."""
+    service = KonepsCollectorService()
+    timeout_error = TimeoutError("Timeout 30000ms exceeded while loading KONEPS")
+    attempts = [
+        service._build_live_retry_attempt(stage="notice_search", attempt_index=0, exc=timeout_error, final_attempt=False),
+        service._build_live_retry_attempt(stage="notice_search", attempt_index=1, exc=timeout_error, final_attempt=True),
+    ]
+
+    def fail_collect(_: CrawlRequest):
+        raise service._live_collection_error(
+            stage="notice_search",
+            attempts=attempts,
+            original_error=timeout_error,
+        )
+
+    monkeypatch.setattr(service, "_collect_live_items", fail_collect)
+
+    response = service.collect_notices(
+        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+    )
+
+    assert response["job_status"] == "fallback_mock"
+    assert response["metadata"]["fallback_failure_category"] == "timeout"
+    assert response["metadata"]["fallback_failure_stage"] == "notice_search"
+    assert response["metadata"]["fallback_retryable"] is True
+    assert response["metadata"]["live_failure"]["attempt_count"] == 2
+    assert response["metadata"]["live_retry_attempts"][0]["next_retry_delay_seconds"] == 1.5
+    assert response["metadata"]["live_retry_attempts"][1]["final_attempt"] is True
+
+
+def test_live_crawl_records_opening_result_failure(monkeypatch):
+    """Opening-result failures should not fail the notice crawl but should be classified."""
+    service = KonepsCollectorService()
+    sample_html = """
+    <html>
+        <body>
+            <table>
+                <tbody>
+                    <tr>
+                        <td>20260507-001</td>
+                        <td>AI 소프트웨어 통합 구축</td>
+                        <td>125,000,000</td>
+                        <td>121,500,000</td>
+                        <td>2026-05-10 18:00</td>
+                        <td>서울</td>
+                        <td><a href="https://www.g2b.go.kr/notice/20260507-001">상세보기</a></td>
+                    </tr>
+                </tbody>
+            </table>
+        </body>
+    </html>
+    """
+
+    monkeypatch.setattr(
+        service,
+        "_gather_live_page_snapshots",
+        lambda request: [{
+            "page_number": 1,
+            "url": "https://www.g2b.go.kr/",
+            "html": sample_html,
+        }],
+    )
+
+    def fail_opening_results(_: CrawlRequest):
+        raise ValueError("KONEPS opening-result menu could not be located")
+
+    monkeypatch.setattr(service, "_collect_opening_result_rows", fail_opening_results)
+
+    response = service.collect_notices(
+        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+    )
+
+    assert response["job_status"] == "completed"
+    assert response["metadata"]["opening_result_failure_category"] == "selector_drift"
+    assert response["metadata"]["opening_result_failure_stage"] == "opening_result"
+    assert response["metadata"]["opening_result_retryable"] is False
+    assert "opening-result menu" in response["metadata"]["opening_result_error"]
+
+
+def test_crawl_endpoint_persists_live_fallback_failure_category(client, test_db, monkeypatch):
+    """Persisted fallback crawl jobs should keep the classified live failure label."""
+
+    def fail_fetch(self, request):
+        raise ValueError("KONEPS public search button could not be located")
+
+    monkeypatch.setattr(KonepsCollectorService, "_gather_live_page_snapshots", fail_fetch)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI", "max_items": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_status"] == "fallback_mock"
+    assert payload["metadata"]["fallback_failure_category"] == "selector_drift"
+
+    crawl_job = test_db.query(CrawlJob).one()
+    assert crawl_job.status == "fallback_mock"
+    assert crawl_job.result_count == 1
+    assert "[live_collection/selector_drift]" in (crawl_job.error_message or "")
 
 
 def test_live_crawl_enriches_with_opening_results(monkeypatch):
@@ -887,6 +995,9 @@ def test_classify_endpoint_matches_company_profile(client, test_db):
     assert any("업무 구분" in reason for reason in payload["reasons"])
     assert any("지역" in reason for reason in payload["reasons"])
     assert any("예산" in reason or "연매출" in reason for reason in payload["reasons"])
+    assert payload["criteria"]["business_type"]["passed"] is True
+    assert payload["criteria"]["region"]["passed"] is True
+    assert payload["score_breakdown"]["blocking_axes"] == []
 
 
 def test_classify_endpoint_defaults_to_single_operator_profile(client, test_db):
@@ -1018,6 +1129,8 @@ def test_classify_endpoint_rejects_license_mismatch(client, test_db):
     assert payload["matched"] is False
     assert any("면허" in reason for reason in payload["reasons"])
     assert any("NET001" in reason for reason in payload["reasons"])
+    assert payload["criteria"]["license"]["passed"] is False
+    assert "license" in payload["score_breakdown"]["blocking_axes"]
 
 
 def test_classify_endpoint_rejects_insufficient_capability(client, test_db):
@@ -1119,6 +1232,8 @@ def test_classifier_service_semantic_similarity_can_reduce_false_positive(monkey
     assert result["matched"] is False
     assert result["score"] < service.MATCH_THRESHOLD
     assert any("false positive" in reason or "의미 유사도" in reason for reason in result["reasons"])
+    assert result["criteria"]["semantic_similarity"]["passed"] is False
+    assert "semantic_similarity" in result["score_breakdown"]["blocking_axes"]
 
 
 def test_classifier_service_uses_capacity_score_when_revenue_missing(monkeypatch):

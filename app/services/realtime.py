@@ -201,6 +201,11 @@ class RealtimeEventManager:
         """Return the current number of connected WebSocket clients."""
         return len(self._connections)
 
+    @property
+    def history_limit(self) -> int:
+        """Return the local in-memory replay retention limit."""
+        return int(self._recent_events.maxlen or 0)
+
     def recent_events(self) -> list[dict[str, Any]]:
         """Return a copy of the local event history."""
         return list(self._recent_events)
@@ -222,6 +227,7 @@ class RealtimeEventManager:
     async def connect(self, websocket: WebSocket, *, client_context: dict[str, Any] | None = None) -> None:
         """Accept a WebSocket and send a connection acknowledgement."""
         context = client_context or {}
+        replay_plan = self._build_replay_plan(context)
         await websocket.accept()
         self._connections.add(websocket)
         await websocket.send_json({
@@ -230,12 +236,25 @@ class RealtimeEventManager:
             "created_at": utc_now().isoformat(),
             "payload": {
                 "connection_count": self.connection_count,
-                "replayed_event_count": len(self._recent_events),
+                "replayed_event_count": len(replay_plan["events"]),
+                "available_replay_event_count": len(self._recent_events),
+                "replay": {
+                    "requested": replay_plan["requested"],
+                    "delivered_event_count": len(replay_plan["events"]),
+                    "available_event_count": len(self._recent_events),
+                    "history_limit": self.history_limit,
+                    "after_event_id": replay_plan["after_event_id"],
+                    "after_event_id_found": replay_plan["after_event_id_found"],
+                    "retention_scope": "local_process_memory",
+                    "cross_worker_backfill": False,
+                },
                 "authenticated": bool(context.get("authenticated")),
                 "operator_id": context.get("operator_id"),
                 "fanout_backend": self.fanout_backend_name,
             },
         })
+        for event in replay_plan["events"]:
+            await websocket.send_json(event)
 
     def disconnect(self, websocket: WebSocket) -> None:
         """Remove a WebSocket connection from the active set."""
@@ -335,6 +354,53 @@ class RealtimeEventManager:
             "created_at": str(event.get("created_at") or utc_now().isoformat()),
             "payload": payload if isinstance(payload, dict) else {},
         }
+
+    def _build_replay_plan(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Select retained local events to replay for a reconnecting client."""
+        requested = bool(context.get("replay_requested"))
+        after_event_id = str(context.get("after_event_id") or "").strip() or None
+        replay_limit = self._coerce_replay_limit(context.get("replay_limit"))
+        events = list(self._recent_events)
+        after_event_id_found = after_event_id is None
+
+        if not requested:
+            return {
+                "requested": False,
+                "after_event_id": after_event_id,
+                "after_event_id_found": after_event_id_found,
+                "events": [],
+            }
+
+        if after_event_id:
+            for index, event in enumerate(events):
+                if str(event.get("event_id")) == after_event_id:
+                    events = events[index + 1 :]
+                    after_event_id_found = True
+                    break
+            else:
+                after_event_id_found = False
+
+        if replay_limit is not None:
+            events = events[-replay_limit:]
+
+        return {
+            "requested": True,
+            "after_event_id": after_event_id,
+            "after_event_id_found": after_event_id_found,
+            "events": events,
+        }
+
+    def _coerce_replay_limit(self, raw_limit: Any) -> int | None:
+        """Clamp an optional replay limit to the manager's local retention window."""
+        if raw_limit in (None, ""):
+            return None
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return None
+        if limit <= 0:
+            return 0
+        return min(limit, self.history_limit)
 
 
 realtime_event_manager = RealtimeEventManager()

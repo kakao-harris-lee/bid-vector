@@ -1391,6 +1391,8 @@ class ClassificationResponse(BaseModel):
     matched: bool
     score: float
     reasons: List[str]
+    criteria: dict = Field(default_factory=dict)
+    score_breakdown: dict = Field(default_factory=dict)
 
 
 class OpportunityAnalysisRequest(BaseModel):
