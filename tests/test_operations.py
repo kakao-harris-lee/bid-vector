@@ -5,7 +5,17 @@ import json
 
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
-from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, HistoricalData, Notification, PricePrediction, Project, TenderResult, User
+from app.models.models import (
+    BidDecisionRecord,
+    CompanyProfile,
+    CrawlJob,
+    HistoricalData,
+    Notification,
+    PricePrediction,
+    Project,
+    TenderResult,
+    User,
+)
 from app.schemas.schemas import CrawlRequest
 from app.services.classifier import NoticeClassifierService
 from app.services.koneps.collector import KonepsCollectorService
@@ -29,6 +39,104 @@ def test_crawl_skeleton(client):
     assert data["items"][0]["business_type"] == "software"
     assert data["items"][0]["metadata"]["mode"] == "mock"
     assert data["metadata"]["resolved_mode"] == "mock"
+
+
+def test_openapi_crawl_collects_bid_public_info_and_persists_history(
+    client,
+    test_db,
+    monkeypatch,
+):
+    """OpenAPI source should collect BidPublicInfoService rows through the crawl endpoint."""
+
+    class FakeOpenApiResponse:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "response": {
+                    "header": {"resultCode": "00", "resultMsg": "NORMAL"},
+                    "body": {
+                        "items": {
+                            "item": [
+                                {
+                                    "bidNtceNo": "R26BK01510407",
+                                    "bidNtceOrd": "000",
+                                    "bidNtceNm": "AI 소프트웨어 통합 구축",
+                                    "ntceKindNm": "등록공고",
+                                    "bidNtceDt": "2026-05-13 09:00:00",
+                                    "bidBeginDt": "2026-05-13 10:00:00",
+                                    "bidClseDt": "2026-05-20 10:00:00",
+                                    "opengDt": "2026-05-20 11:00:00",
+                                    "ntceInsttNm": "조달청",
+                                    "dminsttNm": "서울특별시교육청",
+                                    "bidMethdNm": "전자입찰",
+                                    "cntrctCnclsMthdNm": "제한경쟁",
+                                    "asignBdgtAmt": "125000000",
+                                    "presmptPrce": "113636364",
+                                    "bsnsDivNm": "용역",
+                                    "prtcptLmtRgnNm": "서울특별시",
+                                    "bidNtceDtlUrl": "https://www.g2b.go.kr/detail/R26BK01510407",
+                                }
+                            ]
+                        },
+                        "numOfRows": "5",
+                        "pageNo": "1",
+                        "totalCount": "1",
+                    },
+                }
+            }
+
+    captured = {}
+
+    def fake_get(url, params, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return FakeOpenApiResponse()
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={
+            "source": "koneps-openapi",
+            "category": "software",
+            "target_date": "2026-05-13",
+            "max_items": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_status"] == "completed"
+    assert payload["metadata"]["resolved_mode"] == "openapi"
+    assert payload["metadata"]["openapi_operation"] == "getBidPblancListInfoServc"
+    assert payload["items"][0]["notice_number"] == "R26BK01510407"
+    assert payload["items"][0]["base_amount"] == 125000000.0
+    assert captured["params"]["ServiceKey"] == "test-service-key"
+    assert captured["params"]["inqryBgnDt"] == "202605130000"
+    assert captured["params"]["inqryEndDt"] == "202605132359"
+
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01510407")
+        .one()
+    )
+    assert historical_record.category == "software"
+    assert historical_record.base_amount == 125000000.0
+    assert historical_record.predicted_price == 113636364.0
+    assert historical_record.bid_rate == 0.0
+    project = (
+        test_db.query(Project).filter(Project.notice_number == "R26BK01510407").one()
+    )
+    assert historical_record.project_id == project.id
+    assert project.issuing_agency == "조달청"
+    assert project.demand_agency == "서울특별시교육청"
 
 
 def test_live_crawl_parses_html(monkeypatch):
@@ -83,21 +191,25 @@ def test_live_crawl_parses_html(monkeypatch):
     monkeypatch.setattr(
         service,
         "_gather_live_page_snapshots",
-        lambda request: [{
-            "page_number": 1,
-            "url": "https://www.g2b.go.kr/",
-            "html": sample_html,
-            "detail_pages": {
-                "detail-row-1": {
-                    "url": "http://ebid.example.com/detail/R26BK01510407",
-                    "html": detail_html,
-                }
-            },
-        }],
+        lambda request: [
+            {
+                "page_number": 1,
+                "url": "https://www.g2b.go.kr/",
+                "html": sample_html,
+                "detail_pages": {
+                    "detail-row-1": {
+                        "url": "http://ebid.example.com/detail/R26BK01510407",
+                        "html": detail_html,
+                    }
+                },
+            }
+        ],
     )
 
     response = service.collect_notices(
-        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+        CrawlRequest(
+            source="koneps", category="software", execution_mode="live", keyword="AI"
+        )
     )
 
     assert response["job_status"] == "completed"
@@ -106,7 +218,10 @@ def test_live_crawl_parses_html(monkeypatch):
     assert response["items"][0]["title"] == "AI 소프트웨어 통합 구축"
     assert response["items"][0]["base_amount"] == 125000000.0
     assert response["items"][0]["region"] == "서울"
-    assert response["items"][0]["source_url"] == "http://ebid.example.com/detail/R26BK01510407"
+    assert (
+        response["items"][0]["source_url"]
+        == "http://ebid.example.com/detail/R26BK01510407"
+    )
     assert response["items"][0]["license_codes"] == ["SW001"]
     assert response["items"][0]["metadata"]["detail_action_id"] == "detail-row-1"
     assert response["items"][0]["metadata"]["detail_collected"] is True
@@ -140,7 +255,9 @@ def test_live_parser_handles_generic_table_rows():
 
     parsed = service._parse_live_html(
         html=sample_html,
-        request=CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI"),
+        request=CrawlRequest(
+            source="koneps", category="software", execution_mode="live", keyword="AI"
+        ),
         page_url="https://www.g2b.go.kr/",
         page_number=1,
     )
@@ -161,14 +278,21 @@ def test_live_crawl_falls_back_to_mock(monkeypatch):
     monkeypatch.setattr(service, "_gather_live_page_snapshots", fail_fetch)
 
     response = service.collect_notices(
-        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+        CrawlRequest(
+            source="koneps", category="software", execution_mode="live", keyword="AI"
+        )
     )
 
     assert response["job_status"] == "fallback_mock"
     assert response["collected_count"] == 2
     assert response["items"][0]["metadata"]["mode"] == "fallback_mock"
-    assert "browser not available" in response["items"][0]["metadata"]["fallback_reason"]
-    assert response["items"][0]["metadata"]["fallback_failure_category"] == "browser_runtime"
+    assert (
+        "browser not available" in response["items"][0]["metadata"]["fallback_reason"]
+    )
+    assert (
+        response["items"][0]["metadata"]["fallback_failure_category"]
+        == "browser_runtime"
+    )
     assert response["metadata"]["resolved_mode"] == "fallback_mock"
     assert response["metadata"]["fallback_failure_category"] == "browser_runtime"
     assert response["metadata"]["fallback_failure_stage"] == "live_collection"
@@ -180,8 +304,18 @@ def test_live_crawl_fallback_includes_retry_attempts(monkeypatch):
     service = KonepsCollectorService()
     timeout_error = TimeoutError("Timeout 30000ms exceeded while loading KONEPS")
     attempts = [
-        service._build_live_retry_attempt(stage="notice_search", attempt_index=0, exc=timeout_error, final_attempt=False),
-        service._build_live_retry_attempt(stage="notice_search", attempt_index=1, exc=timeout_error, final_attempt=True),
+        service._build_live_retry_attempt(
+            stage="notice_search",
+            attempt_index=0,
+            exc=timeout_error,
+            final_attempt=False,
+        ),
+        service._build_live_retry_attempt(
+            stage="notice_search",
+            attempt_index=1,
+            exc=timeout_error,
+            final_attempt=True,
+        ),
     ]
 
     def fail_collect(_: CrawlRequest):
@@ -194,7 +328,9 @@ def test_live_crawl_fallback_includes_retry_attempts(monkeypatch):
     monkeypatch.setattr(service, "_collect_live_items", fail_collect)
 
     response = service.collect_notices(
-        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+        CrawlRequest(
+            source="koneps", category="software", execution_mode="live", keyword="AI"
+        )
     )
 
     assert response["job_status"] == "fallback_mock"
@@ -202,7 +338,10 @@ def test_live_crawl_fallback_includes_retry_attempts(monkeypatch):
     assert response["metadata"]["fallback_failure_stage"] == "notice_search"
     assert response["metadata"]["fallback_retryable"] is True
     assert response["metadata"]["live_failure"]["attempt_count"] == 2
-    assert response["metadata"]["live_retry_attempts"][0]["next_retry_delay_seconds"] == 1.5
+    assert (
+        response["metadata"]["live_retry_attempts"][0]["next_retry_delay_seconds"]
+        == 1.5
+    )
     assert response["metadata"]["live_retry_attempts"][1]["final_attempt"] is True
 
 
@@ -232,11 +371,13 @@ def test_live_crawl_records_opening_result_failure(monkeypatch):
     monkeypatch.setattr(
         service,
         "_gather_live_page_snapshots",
-        lambda request: [{
-            "page_number": 1,
-            "url": "https://www.g2b.go.kr/",
-            "html": sample_html,
-        }],
+        lambda request: [
+            {
+                "page_number": 1,
+                "url": "https://www.g2b.go.kr/",
+                "html": sample_html,
+            }
+        ],
     )
 
     def fail_opening_results(_: CrawlRequest):
@@ -245,7 +386,9 @@ def test_live_crawl_records_opening_result_failure(monkeypatch):
     monkeypatch.setattr(service, "_collect_opening_result_rows", fail_opening_results)
 
     response = service.collect_notices(
-        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+        CrawlRequest(
+            source="koneps", category="software", execution_mode="live", keyword="AI"
+        )
     )
 
     assert response["job_status"] == "completed"
@@ -255,17 +398,27 @@ def test_live_crawl_records_opening_result_failure(monkeypatch):
     assert "opening-result menu" in response["metadata"]["opening_result_error"]
 
 
-def test_crawl_endpoint_persists_live_fallback_failure_category(client, test_db, monkeypatch):
+def test_crawl_endpoint_persists_live_fallback_failure_category(
+    client, test_db, monkeypatch
+):
     """Persisted fallback crawl jobs should keep the classified live failure label."""
 
     def fail_fetch(self, request):
         raise ValueError("KONEPS public search button could not be located")
 
-    monkeypatch.setattr(KonepsCollectorService, "_gather_live_page_snapshots", fail_fetch)
+    monkeypatch.setattr(
+        KonepsCollectorService, "_gather_live_page_snapshots", fail_fetch
+    )
 
     response = client.post(
         "/api/v1/operations/crawl",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI", "max_items": 1},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+            "max_items": 1,
+        },
     )
 
     assert response.status_code == 200
@@ -345,39 +498,45 @@ def test_live_crawl_enriches_with_opening_results(monkeypatch):
     monkeypatch.setattr(
         service,
         "_gather_live_page_snapshots",
-        lambda request: [{
-            "page_number": 1,
-            "url": "https://www.g2b.go.kr/",
-            "html": sample_html,
-            "detail_pages": {
-                "detail-row-1": {
-                    "url": "http://ebid.example.com/detail/R26BK01510407",
-                    "html": detail_html,
-                }
-            },
-        }],
+        lambda request: [
+            {
+                "page_number": 1,
+                "url": "https://www.g2b.go.kr/",
+                "html": sample_html,
+                "detail_pages": {
+                    "detail-row-1": {
+                        "url": "http://ebid.example.com/detail/R26BK01510407",
+                        "html": detail_html,
+                    }
+                },
+            }
+        ],
     )
     monkeypatch.setattr(
         service,
         "_collect_opening_result_rows",
-        lambda request: [{
-            "bidPbancNo": "R26BK01510407",
-            "bidPbancOrd": "000",
-            "bidPbancNoPbancOrd": "R26BK01510407-000",
-            "bidPbancNm": "AI 소프트웨어 통합 구축",
-            "bidClsfNo": "1",
-            "bidPrgrsOrd": "000",
-            "dmstGrpNm": "서울특별시교육청",
-            "bidPgstCd": "개찰완료",
-            "bizAmt": "119,000,000 KRW",
-            "onbsPrnmntDt": "2026/05/10 18:05",
-            "prcmBsneSeCd": "05",
-            "detail_html": opening_detail_html,
-        }],
+        lambda request: [
+            {
+                "bidPbancNo": "R26BK01510407",
+                "bidPbancOrd": "000",
+                "bidPbancNoPbancOrd": "R26BK01510407-000",
+                "bidPbancNm": "AI 소프트웨어 통합 구축",
+                "bidClsfNo": "1",
+                "bidPrgrsOrd": "000",
+                "dmstGrpNm": "서울특별시교육청",
+                "bidPgstCd": "개찰완료",
+                "bizAmt": "119,000,000 KRW",
+                "onbsPrnmntDt": "2026/05/10 18:05",
+                "prcmBsneSeCd": "05",
+                "detail_html": opening_detail_html,
+            }
+        ],
     )
 
     response = service.collect_notices(
-        CrawlRequest(source="koneps", category="software", execution_mode="live", keyword="AI")
+        CrawlRequest(
+            source="koneps", category="software", execution_mode="live", keyword="AI"
+        )
     )
 
     assert response["job_status"] == "completed"
@@ -441,11 +600,18 @@ def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):
         },
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     response = client.post(
         "/api/v1/operations/crawl",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
@@ -456,10 +622,18 @@ def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):
     assert crawl_job.status == "completed"
     assert crawl_job.result_count == 1
 
-    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510407").one()
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01510407")
+        .one()
+    )
     assert historical_record.agency_name == "서울특별시교육청"
     assert historical_record.base_amount == 125000000.0
-    assert json.loads(historical_record.reserve_prices) == [101000000.0, 102000000.0, 103000000.0]
+    assert json.loads(historical_record.reserve_prices) == [
+        101000000.0,
+        102000000.0,
+        103000000.0,
+    ]
     assert json.loads(historical_record.selected_numbers) == [1, 4, 7, 12]
 
     tender_result = test_db.query(TenderResult).one()
@@ -468,7 +642,10 @@ def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):
     assert tender_result.winning_rate == 95.2
     assert tender_result.result_status == "개찰완료"
 
-def test_crawl_endpoint_creates_project_and_links_history_feedback_records(client, test_db, monkeypatch):
+
+def test_crawl_endpoint_creates_project_and_links_history_feedback_records(
+    client, test_db, monkeypatch
+):
     """Crawled notices should auto-create a project and bind history/tender feedback rows to it."""
     fake_response = {
         "job_status": "completed",
@@ -502,17 +679,28 @@ def test_crawl_endpoint_creates_project_and_links_history_feedback_records(clien
         },
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     response = client.post(
         "/api/v1/operations/crawl",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
 
     project = test_db.query(Project).one()
-    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510410").one()
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01510410")
+        .one()
+    )
     tender_result = test_db.query(TenderResult).one()
     crawl_job = test_db.query(CrawlJob).one()
 
@@ -530,7 +718,9 @@ def test_crawl_endpoint_creates_project_and_links_history_feedback_records(clien
     assert crawl_job.project_id == project.id
 
 
-def test_crawl_endpoint_maps_cancelled_failed_and_re_notice_project_statuses(client, test_db, monkeypatch):
+def test_crawl_endpoint_maps_cancelled_failed_and_re_notice_project_statuses(
+    client, test_db, monkeypatch
+):
     """Crawled notice lifecycle text should map to richer internal project statuses."""
     fake_response = {
         "job_status": "completed",
@@ -577,21 +767,32 @@ def test_crawl_endpoint_maps_cancelled_failed_and_re_notice_project_statuses(cli
         "metadata": {"resolved_mode": "live"},
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     response = client.post(
         "/api/v1/operations/crawl",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
-    projects = {project.title: project.status for project in test_db.query(Project).all()}
+    projects = {
+        project.title: project.status for project in test_db.query(Project).all()
+    }
     assert projects["재공고 AI 통합 구축"] == "re_notice"
     assert projects["유찰 AI 데이터 사업"] == "failed"
     assert projects["취소 AI 데이터 사업"] == "cancelled"
 
 
-def test_crawl_endpoint_links_matching_manual_project_and_upserts_tender_result(client, test_db, monkeypatch):
+def test_crawl_endpoint_links_matching_manual_project_and_upserts_tender_result(
+    client, test_db, monkeypatch
+):
     """Matching manual projects should be reused and repeated crawls should not duplicate the same tender result."""
     existing_project = Project(
         title="수동 등록 AI 통합 구축",
@@ -636,16 +837,27 @@ def test_crawl_endpoint_links_matching_manual_project_and_upserts_tender_result(
         },
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     for _ in range(2):
         response = client.post(
             "/api/v1/operations/crawl",
-            json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+            json={
+                "source": "koneps",
+                "category": "software",
+                "execution_mode": "live",
+                "keyword": "AI",
+            },
         )
         assert response.status_code == 200
 
-    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510411").one()
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01510411")
+        .one()
+    )
     tender_results = test_db.query(TenderResult).all()
     projects = test_db.query(Project).order_by(Project.id.asc()).all()
     test_db.refresh(existing_project)
@@ -660,7 +872,9 @@ def test_crawl_endpoint_links_matching_manual_project_and_upserts_tender_result(
     assert tender_results[0].project_id == existing_project.id
 
 
-def test_crawl_endpoint_matches_existing_project_by_notice_number_and_source_url(client, test_db, monkeypatch):
+def test_crawl_endpoint_matches_existing_project_by_notice_number_and_source_url(
+    client, test_db, monkeypatch
+):
     """Explicit notice metadata should let crawled notices link even when titles differ."""
     existing_project = Project(
         title="내부 검토용 프로젝트명",
@@ -708,17 +922,28 @@ def test_crawl_endpoint_matches_existing_project_by_notice_number_and_source_url
         "metadata": {"resolved_mode": "live"},
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     response = client.post(
         "/api/v1/operations/crawl",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
     test_db.refresh(existing_project)
     projects = test_db.query(Project).all()
-    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510415").one()
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01510415")
+        .one()
+    )
     tender_result = test_db.query(TenderResult).one()
 
     assert len(projects) == 1
@@ -728,7 +953,75 @@ def test_crawl_endpoint_matches_existing_project_by_notice_number_and_source_url
     assert tender_result.project_id == existing_project.id
 
 
-def test_crawl_endpoint_matches_existing_project_by_agency_and_similar_title(client, test_db, monkeypatch):
+def test_crawl_endpoint_keeps_distinct_g2b_detail_links_separate(
+    client, test_db, monkeypatch
+):
+    """G2B detail links carry the notice identity in query parameters."""
+    fake_response = {
+        "job_status": "completed",
+        "source": "koneps-openapi",
+        "collected_count": 2,
+        "items": [
+            {
+                "notice_number": "R26BK01522016",
+                "title": "도로구조물 정기안전점검 보수공사",
+                "base_amount": 161240000.0,
+                "estimated_amount": 143970000.0,
+                "closing_at": "2026-05-21T10:00:00",
+                "business_type": "construction",
+                "source_url": (
+                    "https://www.g2b.go.kr/link/PNPE027_01/single/"
+                    "?bidPbancNo=R26BK01522016&bidPbancOrd=000"
+                ),
+                "metadata": {"issuing_agency": "경기도 용인시 기흥구"},
+            },
+            {
+                "notice_number": "R26BK01523768",
+                "title": "남원태흥 공공주택 전기공사",
+                "base_amount": 1868171000.0,
+                "estimated_amount": 1579637951.0,
+                "closing_at": "2026-06-02T10:00:00",
+                "business_type": "construction",
+                "source_url": (
+                    "https://www.g2b.go.kr/link/PNPE027_01/single/"
+                    "?bidPbancNo=R26BK01523768&bidPbancOrd=000"
+                ),
+                "metadata": {"issuing_agency": "제주특별자치도개발공사"},
+            },
+        ],
+        "metadata": {"resolved_mode": "openapi"},
+    }
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={
+            "source": "koneps-openapi",
+            "category": "construction",
+            "target_date": "2026-05-15",
+            "max_items": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    projects = test_db.query(Project).order_by(Project.notice_number.asc()).all()
+    historical_records = (
+        test_db.query(HistoricalData).order_by(HistoricalData.notice_number.asc()).all()
+    )
+
+    assert [project.notice_number for project in projects] == [
+        "R26BK01522016",
+        "R26BK01523768",
+    ]
+    assert len({record.project_id for record in historical_records}) == 2
+
+
+def test_crawl_endpoint_matches_existing_project_by_agency_and_similar_title(
+    client, test_db, monkeypatch
+):
     """Agency metadata should help link near-identical titles that are not exact text matches."""
     existing_project = Project(
         title="서울 AI 데이터 통합 플랫폼",
@@ -770,17 +1063,28 @@ def test_crawl_endpoint_matches_existing_project_by_agency_and_similar_title(cli
         "metadata": {"resolved_mode": "live"},
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     response = client.post(
         "/api/v1/operations/crawl",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
     test_db.refresh(existing_project)
     projects = test_db.query(Project).all()
-    historical_record = test_db.query(HistoricalData).filter(HistoricalData.notice_number == "R26BK01510416").one()
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01510416")
+        .one()
+    )
 
     assert len(projects) == 1
     assert historical_record.project_id == existing_project.id
@@ -819,11 +1123,18 @@ def test_crawl_async_endpoint_returns_pollable_task(client, test_db, monkeypatch
         },
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     response = client.post(
         "/api/v1/operations/crawl/async",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
@@ -834,12 +1145,16 @@ def test_crawl_async_endpoint_returns_pollable_task(client, test_db, monkeypatch
     assert payload["crawl_job_id"] >= 1
     assert payload["poll_url"].endswith(payload["task_id"])
 
-    crawl_job = test_db.query(CrawlJob).filter(CrawlJob.id == payload["crawl_job_id"]).one()
+    crawl_job = (
+        test_db.query(CrawlJob).filter(CrawlJob.id == payload["crawl_job_id"]).one()
+    )
     assert crawl_job.status == "completed"
     assert crawl_job.result_count == 1
 
 
-def test_crawl_task_status_endpoint_returns_completed_result(client, test_db, monkeypatch):
+def test_crawl_task_status_endpoint_returns_completed_result(
+    client, test_db, monkeypatch
+):
     """Crawl task status endpoint should expose the completed crawl response for eager/fallback tasks."""
     fake_response = {
         "job_status": "completed",
@@ -871,11 +1186,18 @@ def test_crawl_task_status_endpoint_returns_completed_result(client, test_db, mo
         },
     }
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", lambda self, request: fake_response)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+    )
 
     kickoff = client.post(
         "/api/v1/operations/crawl/async",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     ).json()
 
     response = client.get(f"/api/v1/operations/crawl/tasks/{kickoff['task_id']}")
@@ -894,22 +1216,33 @@ def test_crawl_task_status_endpoint_returns_completed_result(client, test_db, mo
     assert payload["result"]["collected_count"] == 1
     assert payload["result"]["metadata"]["crawl_job_id"] == kickoff["crawl_job_id"]
 
-    crawl_job = test_db.query(CrawlJob).filter(CrawlJob.id == kickoff["crawl_job_id"]).one()
+    crawl_job = (
+        test_db.query(CrawlJob).filter(CrawlJob.id == kickoff["crawl_job_id"]).one()
+    )
     assert crawl_job.status == "completed"
     assert crawl_job.result_count == 1
 
 
-def test_crawl_async_endpoint_reports_failed_task_when_collection_fails(client, test_db, monkeypatch):
+def test_crawl_async_endpoint_reports_failed_task_when_collection_fails(
+    client, test_db, monkeypatch
+):
     """Async crawl kickoff should surface failure status when eager/fallback execution fails."""
 
     def raise_collection_error(self, request):
         raise RuntimeError("simulated crawl failure")
 
-    monkeypatch.setattr(KonepsCollectorService, "collect_notices", raise_collection_error)
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", raise_collection_error
+    )
 
     response = client.post(
         "/api/v1/operations/crawl/async",
-        json={"source": "koneps", "category": "software", "execution_mode": "live", "keyword": "AI"},
+        json={
+            "source": "koneps",
+            "category": "software",
+            "execution_mode": "live",
+            "keyword": "AI",
+        },
     )
 
     assert response.status_code == 200
@@ -928,7 +1261,9 @@ def test_crawl_async_endpoint_reports_failed_task_when_collection_fails(client, 
     assert status_payload["result"] is None
     assert "simulated crawl failure" in status_payload["error"]
 
-    crawl_job = test_db.query(CrawlJob).filter(CrawlJob.id == payload["crawl_job_id"]).one()
+    crawl_job = (
+        test_db.query(CrawlJob).filter(CrawlJob.id == payload["crawl_job_id"]).one()
+    )
     assert crawl_job.status == "failed"
     assert "simulated crawl failure" in (crawl_job.error_message or "")
 
@@ -1083,7 +1418,9 @@ def test_classify_endpoint_rejects_region_mismatch(client, test_db):
     payload = response.json()
     assert payload["matched"] is False
     assert payload["score"] < 0.6
-    assert any("제한지역" in reason or "수행지역" in reason for reason in payload["reasons"])
+    assert any(
+        "제한지역" in reason or "수행지역" in reason for reason in payload["reasons"]
+    )
 
 
 def test_classify_endpoint_rejects_license_mismatch(client, test_db):
@@ -1175,7 +1512,9 @@ def test_classify_endpoint_rejects_insufficient_capability(client, test_db):
     assert response.status_code == 200
     payload = response.json()
     assert payload["matched"] is False
-    assert any("수행능력" in reason or "수행 범위" in reason for reason in payload["reasons"])
+    assert any(
+        "수행능력" in reason or "수행 범위" in reason for reason in payload["reasons"]
+    )
 
 
 def test_classifier_service_semantic_similarity_can_boost_borderline_match(monkeypatch):
@@ -1197,7 +1536,11 @@ def test_classifier_service_semantic_similarity_can_boost_borderline_match(monke
         total_awards=1,
     )
 
-    monkeypatch.setattr(service, "_compute_semantic_similarity", lambda project_text, profile_text: (0.82, "mock-embedding"))
+    monkeypatch.setattr(
+        service,
+        "_compute_semantic_similarity",
+        lambda project_text, profile_text: (0.82, "mock-embedding"),
+    )
 
     result = service.classify(project=project, profile=profile)
 
@@ -1225,13 +1568,20 @@ def test_classifier_service_semantic_similarity_can_reduce_false_positive(monkey
         total_awards=4,
     )
 
-    monkeypatch.setattr(service, "_compute_semantic_similarity", lambda project_text, profile_text: (0.02, "mock-embedding"))
+    monkeypatch.setattr(
+        service,
+        "_compute_semantic_similarity",
+        lambda project_text, profile_text: (0.02, "mock-embedding"),
+    )
 
     result = service.classify(project=project, profile=profile)
 
     assert result["matched"] is False
     assert result["score"] < service.MATCH_THRESHOLD
-    assert any("false positive" in reason or "의미 유사도" in reason for reason in result["reasons"])
+    assert any(
+        "false positive" in reason or "의미 유사도" in reason
+        for reason in result["reasons"]
+    )
     assert result["criteria"]["semantic_similarity"]["passed"] is False
     assert "semantic_similarity" in result["score_breakdown"]["blocking_axes"]
 
@@ -1255,7 +1605,11 @@ def test_classifier_service_uses_capacity_score_when_revenue_missing(monkeypatch
         total_awards=3,
     )
 
-    monkeypatch.setattr(service, "_compute_semantic_similarity", lambda project_text, profile_text: (0.72, "mock-embedding"))
+    monkeypatch.setattr(
+        service,
+        "_compute_semantic_similarity",
+        lambda project_text, profile_text: (0.72, "mock-embedding"),
+    )
 
     result = service.classify(project=project, profile=profile)
 
@@ -1319,7 +1673,10 @@ def test_bid_decision_response_exposes_breakdown_and_budget_capture(client):
     assert payload["score_breakdown"]["expected_margin_signal"] == 0.94
     assert payload["score_breakdown"]["execution_complexity_signal"] == 0.35
     assert payload["score_breakdown"]["load_penalty"] > 0
-    assert payload["score_breakdown"]["total_penalty"] >= payload["score_breakdown"]["load_penalty"]
+    assert (
+        payload["score_breakdown"]["total_penalty"]
+        >= payload["score_breakdown"]["load_penalty"]
+    )
     assert payload["score_breakdown"]["opportunity_score"] >= payload["priority_score"]
 
 
@@ -1355,7 +1712,10 @@ def test_bid_decision_high_execution_complexity_reduces_priority(client):
     high_payload = high_complexity.json()
     assert low_payload["priority_score"] > high_payload["priority_score"]
     assert high_payload["score_breakdown"]["execution_complexity_penalty"] > 0
-    assert high_payload["score_breakdown"]["total_penalty"] > low_payload["score_breakdown"]["total_penalty"]
+    assert (
+        high_payload["score_breakdown"]["total_penalty"]
+        > low_payload["score_breakdown"]["total_penalty"]
+    )
 
 
 def test_allocate_legacy_route_remains_available(client):
@@ -1419,7 +1779,10 @@ def test_bid_decision_persistence_creates_record(client, test_db):
     assert payload["first_decided_at"] is not None
     assert payload["expected_margin_score"] > 0.0
     assert payload["execution_complexity_score"] >= 0.0
-    assert payload["score_breakdown"]["expected_margin_signal"] == payload["expected_margin_score"]
+    assert (
+        payload["score_breakdown"]["expected_margin_signal"]
+        == payload["expected_margin_score"]
+    )
     assert payload["workload_source"] == "provided"
 
     record = test_db.query(BidDecisionRecord).one()
@@ -1469,15 +1832,23 @@ def test_list_bid_decisions_includes_persisted_breakdown_metadata(client, test_d
 
     assert save_response.status_code == 200
 
-    list_response = client.get("/api/v1/operations/bid-decisions", params={"project_id": project.id})
+    list_response = client.get(
+        "/api/v1/operations/bid-decisions", params={"project_id": project.id}
+    )
     assert list_response.status_code == 200
     payload = list_response.json()
     assert len(payload) == 1
     assert payload[0]["project_id"] == project.id
     assert payload[0]["expected_margin_score"] > 0.0
     assert payload[0]["execution_complexity_score"] >= 0.0
-    assert payload[0]["score_breakdown"]["expected_margin_signal"] == payload[0]["expected_margin_score"]
-    assert payload[0]["score_breakdown"]["total_penalty"] >= payload[0]["score_breakdown"]["load_penalty"]
+    assert (
+        payload[0]["score_breakdown"]["expected_margin_signal"]
+        == payload[0]["expected_margin_score"]
+    )
+    assert (
+        payload[0]["score_breakdown"]["total_penalty"]
+        >= payload[0]["score_breakdown"]["load_penalty"]
+    )
 
 
 def test_get_bid_decision_detail_returns_project_snapshot_and_timeline(client, test_db):
@@ -1517,7 +1888,9 @@ def test_get_bid_decision_detail_returns_project_snapshot_and_timeline(client, t
         max_active_bids=3,
         current_workload_score=0.14,
         workload_source="provided",
-        score_breakdown=json.dumps({"expected_margin_signal": 0.71, "total_penalty": 0.08}, ensure_ascii=False),
+        score_breakdown=json.dumps(
+            {"expected_margin_signal": 0.71, "total_penalty": 0.08}, ensure_ascii=False
+        ),
         reasoning="기존 제출 이력입니다.",
         created_at=datetime.now(UTC) - timedelta(days=2),
         updated_at=datetime.now(UTC) - timedelta(days=1),
@@ -1557,8 +1930,14 @@ def test_get_bid_decision_detail_returns_project_snapshot_and_timeline(client, t
     assert payload["project"]["issuing_agency"] == "조달청"
     assert payload["timeline_count"] == 2
     assert payload["timeline_limit_applied"] == 10
-    assert [item["id"] for item in payload["timeline"]] == [decision_id, older_record.id]
-    assert payload["timeline"][0]["score_breakdown"]["expected_margin_signal"] == payload["timeline"][0]["expected_margin_score"]
+    assert [item["id"] for item in payload["timeline"]] == [
+        decision_id,
+        older_record.id,
+    ]
+    assert (
+        payload["timeline"][0]["score_breakdown"]["expected_margin_signal"]
+        == payload["timeline"][0]["expected_margin_score"]
+    )
     assert payload["timeline"][1]["decision_status"] == "submitted"
 
 
@@ -1596,7 +1975,9 @@ def test_project_bid_decision_timeline_returns_limited_recent_history(client, te
         max_active_bids=3,
         current_workload_score=0.91,
         workload_source="provided",
-        score_breakdown=json.dumps({"expected_margin_signal": 0.48, "total_penalty": 0.29}, ensure_ascii=False),
+        score_breakdown=json.dumps(
+            {"expected_margin_signal": 0.48, "total_penalty": 0.29}, ensure_ascii=False
+        ),
         reasoning="기존 보류 이력입니다.",
         created_at=datetime.now(UTC) - timedelta(days=3),
         updated_at=datetime.now(UTC) - timedelta(days=2),
@@ -1621,7 +2002,9 @@ def test_project_bid_decision_timeline_returns_limited_recent_history(client, te
         max_active_bids=3,
         current_workload_score=0.26,
         workload_source="auto",
-        score_breakdown=json.dumps({"expected_margin_signal": 0.64, "total_penalty": 0.12}, ensure_ascii=False),
+        score_breakdown=json.dumps(
+            {"expected_margin_signal": 0.64, "total_penalty": 0.12}, ensure_ascii=False
+        ),
         reasoning="최신 검토 이력입니다.",
         created_at=datetime.now(UTC) - timedelta(days=1),
         updated_at=datetime.now(UTC) - timedelta(hours=3),
@@ -1756,7 +2139,9 @@ def test_list_bid_decisions_filters_persisted_records(client, test_db):
     assert submitted_response.status_code == 200
     assert submitted_response.json()["decision_status"] == "submitted"
 
-    filtered = client.get("/api/v1/operations/bid-decisions", params={"decision_status": "submitted"})
+    filtered = client.get(
+        "/api/v1/operations/bid-decisions", params={"decision_status": "submitted"}
+    )
     assert filtered.status_code == 200
     filtered_payload = filtered.json()
     assert len(filtered_payload) == 1
@@ -1920,7 +2305,9 @@ def test_opportunity_analysis_reflects_existing_active_bid_load(client, test_db)
     assert response.status_code == 200
     payload = response.json()
     assert payload["current_active_bids"] == 1
-    assert any("실행 부담" in item or "마감 시간" in item for item in payload["risk_flags"])
+    assert any(
+        "실행 부담" in item or "마감 시간" in item for item in payload["risk_flags"]
+    )
     assert payload["decision"]["action"] in {"review", "skip"}
     assert payload["decision"]["priority_score"] <= 0.8
 
@@ -2012,7 +2399,10 @@ def test_opportunity_analysis_auto_computes_workload_when_omitted(client, test_d
     assert payload["decision"]["expected_margin_score"] > 0.0
     assert payload["decision"]["execution_complexity_score"] > 0.0
     assert payload["decision"]["score_breakdown"]["active_load_ratio"] == 0.5
-    assert payload["decision"]["score_breakdown"]["workload_score_used"] == payload["current_workload_score"]
+    assert (
+        payload["decision"]["score_breakdown"]["workload_score_used"]
+        == payload["current_workload_score"]
+    )
     assert payload["decision"]["score_breakdown"]["execution_complexity_penalty"] >= 0.0
 
 
@@ -2050,38 +2440,40 @@ def test_opportunity_analysis_uses_agency_weighted_price_history(client, test_db
     test_db.commit()
     test_db.refresh(project)
 
-    test_db.add_all([
-        HistoricalData(
-            notice_number="AN-AGENCY-1",
-            agency_name="서울특별시교육청",
-            category="software",
-            base_amount=125000000.0,
-            predicted_price=116250000.0,
-            bid_rate=0.93,
-            reserve_prices="[120000000.0, 121000000.0, 122000000.0]",
-            selected_numbers="[1, 4, 7, 12]",
-        ),
-        HistoricalData(
-            notice_number="AN-AGENCY-2",
-            agency_name="서울특별시교육청",
-            category="software",
-            base_amount=125000000.0,
-            predicted_price=115625000.0,
-            bid_rate=0.925,
-            reserve_prices="[119500000.0, 120500000.0, 121500000.0]",
-            selected_numbers="[1, 5, 7, 11]",
-        ),
-        HistoricalData(
-            notice_number="AN-AGENCY-3",
-            agency_name="조달청",
-            category="software",
-            base_amount=125000000.0,
-            predicted_price=121250000.0,
-            bid_rate=0.97,
-            reserve_prices="[118000000.0, 121000000.0, 123000000.0]",
-            selected_numbers="[2, 4, 8, 12]",
-        ),
-    ])
+    test_db.add_all(
+        [
+            HistoricalData(
+                notice_number="AN-AGENCY-1",
+                agency_name="서울특별시교육청",
+                category="software",
+                base_amount=125000000.0,
+                predicted_price=116250000.0,
+                bid_rate=0.93,
+                reserve_prices="[120000000.0, 121000000.0, 122000000.0]",
+                selected_numbers="[1, 4, 7, 12]",
+            ),
+            HistoricalData(
+                notice_number="AN-AGENCY-2",
+                agency_name="서울특별시교육청",
+                category="software",
+                base_amount=125000000.0,
+                predicted_price=115625000.0,
+                bid_rate=0.925,
+                reserve_prices="[119500000.0, 120500000.0, 121500000.0]",
+                selected_numbers="[1, 5, 7, 11]",
+            ),
+            HistoricalData(
+                notice_number="AN-AGENCY-3",
+                agency_name="조달청",
+                category="software",
+                base_amount=125000000.0,
+                predicted_price=121250000.0,
+                bid_rate=0.97,
+                reserve_prices="[118000000.0, 121000000.0, 123000000.0]",
+                selected_numbers="[2, 4, 8, 12]",
+            ),
+        ]
+    )
     test_db.commit()
 
     response = client.post(
@@ -2100,7 +2492,12 @@ def test_opportunity_analysis_uses_agency_weighted_price_history(client, test_db
     assert payload["price_prediction"]["pricing_mode"] == "historical_blend"
     assert payload["price_prediction"]["agency_match_sample_size"] == 2
     assert payload["price_prediction"]["reserve_price_context"]["sample_count"] == 3
-    assert 1 in payload["price_prediction"]["reserve_price_context"]["frequent_selected_numbers"]
+    assert (
+        1
+        in payload["price_prediction"]["reserve_price_context"][
+            "frequent_selected_numbers"
+        ]
+    )
 
 
 def test_opportunity_analysis_applies_feedback_calibration_bias(client, test_db):
@@ -2145,33 +2542,35 @@ def test_opportunity_analysis_applies_feedback_calibration_bias(client, test_db)
     test_db.refresh(source_project)
     test_db.refresh(target_project)
 
-    test_db.add_all([
-        PricePrediction(
-            user_id=user.id,
-            project_id=source_project.id,
-            predicted_price=105000000.0,
-            price_range_min=100000000.0,
-            price_range_max=110000000.0,
-            confidence_score=0.8,
-            model_version="v1.1-historical",
-        ),
-        HistoricalData(
-            project_id=source_project.id,
-            notice_number="AN-CAL-1",
-            agency_name="서울특별시교육청",
-            category="software",
-            base_amount=100000000.0,
-            predicted_price=100000000.0,
-            bid_rate=1.0,
-        ),
-        TenderResult(
-            project_id=source_project.id,
-            winning_company="피드백 학습 낙찰사",
-            winning_amount=100000000.0,
-            winning_rate=95.0,
-            result_status="awarded",
-        ),
-    ])
+    test_db.add_all(
+        [
+            PricePrediction(
+                user_id=user.id,
+                project_id=source_project.id,
+                predicted_price=105000000.0,
+                price_range_min=100000000.0,
+                price_range_max=110000000.0,
+                confidence_score=0.8,
+                model_version="v1.1-historical",
+            ),
+            HistoricalData(
+                project_id=source_project.id,
+                notice_number="AN-CAL-1",
+                agency_name="서울특별시교육청",
+                category="software",
+                base_amount=100000000.0,
+                predicted_price=100000000.0,
+                bid_rate=1.0,
+            ),
+            TenderResult(
+                project_id=source_project.id,
+                winning_company="피드백 학습 낙찰사",
+                winning_amount=100000000.0,
+                winning_rate=95.0,
+                result_status="awarded",
+            ),
+        ]
+    )
     test_db.commit()
 
     response = client.post(
@@ -2188,8 +2587,14 @@ def test_opportunity_analysis_applies_feedback_calibration_bias(client, test_db)
     assert response.status_code == 200
     payload = response.json()
     assert payload["price_prediction"]["feedback_calibration"]["sample_count"] == 1
-    assert payload["price_prediction"]["feedback_calibration"]["agency_match_sample_count"] == 1
-    assert payload["price_prediction"]["feedback_calibration"]["applied_adjustment_rate"] < 0
+    assert (
+        payload["price_prediction"]["feedback_calibration"]["agency_match_sample_count"]
+        == 1
+    )
+    assert (
+        payload["price_prediction"]["feedback_calibration"]["applied_adjustment_rate"]
+        < 0
+    )
     assert payload["price_prediction"]["model_version"].endswith("+feedback")
 
 
@@ -2210,7 +2615,9 @@ def test_notify_telegram_skeleton(client):
     assert data["status"] in {"ready", "pending_configuration"}
 
 
-def test_notify_telegram_endpoint_attempts_delivery_when_configured(client, monkeypatch):
+def test_notify_telegram_endpoint_attempts_delivery_when_configured(
+    client, monkeypatch
+):
     """Manual Telegram notification endpoint should attempt delivery when configured."""
     deliveries: list[str] = []
 
@@ -2270,7 +2677,9 @@ def test_telegram_callback_updates_bid_decision_state(client, test_db, monkeypat
         }
 
     monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
-    monkeypatch.setattr(TelegramNotificationService, "answer_callback_query", fake_answer)
+    monkeypatch.setattr(
+        TelegramNotificationService, "answer_callback_query", fake_answer
+    )
 
     project = Project(
         title="Telegram Callback Project",
@@ -2309,8 +2718,8 @@ def test_telegram_callback_updates_bid_decision_state(client, test_db, monkeypat
                 "message": {
                     "message_id": 100,
                     "chat": {"id": 1594710346},
-                }
-            }
+                },
+            },
         },
     )
 
@@ -2321,7 +2730,11 @@ def test_telegram_callback_updates_bid_decision_state(client, test_db, monkeypat
     assert payload["decision_status"] == "reviewing"
     assert acknowledgements == [("callback-1", "검토 처리 완료")]
 
-    record = test_db.query(BidDecisionRecord).filter(BidDecisionRecord.id == decision_id).one()
+    record = (
+        test_db.query(BidDecisionRecord)
+        .filter(BidDecisionRecord.id == decision_id)
+        .one()
+    )
     assert record.action == "review"
     assert record.decision_status == "reviewing"
     assert "텔레그램에서 검토 버튼" in record.reasoning
@@ -2394,7 +2807,9 @@ def test_telegram_webhook_rejects_invalid_secret(client, monkeypatch):
     assert "Invalid Telegram webhook secret" in response.json()["detail"]
 
 
-def test_telegram_sync_processes_pending_updates_and_acknowledges_offset(client, test_db, monkeypatch):
+def test_telegram_sync_processes_pending_updates_and_acknowledges_offset(
+    client, test_db, monkeypatch
+):
     """Manual Telegram sync should process getUpdates results and advance the offset."""
     acknowledgements: list[tuple[str, str]] = []
     get_updates_calls: list[dict] = []
@@ -2419,27 +2834,33 @@ def test_telegram_sync_processes_pending_updates_and_acknowledges_offset(client,
         }
 
     def fake_get_updates(self, offset=None, limit=None, timeout_seconds=None):
-        get_updates_calls.append({
-            "offset": offset,
-            "limit": limit,
-            "timeout_seconds": timeout_seconds,
-        })
+        get_updates_calls.append(
+            {
+                "offset": offset,
+                "limit": limit,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
         if offset is None:
-            return [{
-                "update_id": 42,
-                "callback_query": {
-                    "id": "sync-callback-1",
-                    "data": f"bid-decision:{decision_id}:review",
-                    "message": {
-                        "message_id": 100,
-                        "chat": {"id": 1594710346},
+            return [
+                {
+                    "update_id": 42,
+                    "callback_query": {
+                        "id": "sync-callback-1",
+                        "data": f"bid-decision:{decision_id}:review",
+                        "message": {
+                            "message_id": 100,
+                            "chat": {"id": 1594710346},
+                        },
                     },
-                },
-            }]
+                }
+            ]
         return []
 
     monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
-    monkeypatch.setattr(TelegramNotificationService, "answer_callback_query", fake_answer)
+    monkeypatch.setattr(
+        TelegramNotificationService, "answer_callback_query", fake_answer
+    )
     monkeypatch.setattr(TelegramNotificationService, "get_updates", fake_get_updates)
 
     project = Project(
@@ -2484,7 +2905,11 @@ def test_telegram_sync_processes_pending_updates_and_acknowledges_offset(client,
     assert get_updates_calls[1] == {"offset": 43, "limit": 1, "timeout_seconds": 0}
     assert acknowledgements == [("sync-callback-1", "검토 처리 완료")]
 
-    record = test_db.query(BidDecisionRecord).filter(BidDecisionRecord.id == decision_id).one()
+    record = (
+        test_db.query(BidDecisionRecord)
+        .filter(BidDecisionRecord.id == decision_id)
+        .one()
+    )
     assert record.action == "review"
     assert record.decision_status == "reviewing"
 

@@ -382,7 +382,7 @@ Realtime events use a common envelope: `event_id`, `event_type`, `created_at`, a
 
 ### Operations
 
-- `POST /api/v1/operations/crawl` - Collect KONEPS notices (`execution_mode=mock` by default, `live` uses the public homepage search and falls back safely)
+- `POST /api/v1/operations/crawl` - Collect KONEPS notices (`execution_mode=mock` by default, `live` uses the public homepage search and falls back safely; set `source=koneps-openapi` to use the public BidPublicInfoService OpenAPI)
 - `POST /api/v1/operations/crawl/async` - Queue a KONEPS crawl task, persist a `crawl_job_id`, and return a pollable task id
 - `GET /api/v1/operations/crawl/tasks/{task_id}` - Check async KONEPS crawl progress and fetch the final crawl payload when complete
 - `POST /api/v1/operations/classify` - Classify project fit against the singleton operator profile using rule-based filters and semantic similarity (`user_id` is now optional for backward compatibility)
@@ -538,6 +538,11 @@ Key variables:
 - `KONEPS_HEADLESS` - Run KONEPS crawling without a visible browser window
 - `KONEPS_TIMEOUT_MS` - Browser action timeout for Playwright
 - `KONEPS_MAX_ITEMS` - Maximum items returned per crawl request
+- `KONEPS_OPENAPI_BID_PUBLIC_INFO_URL` - Public Data Portal BidPublicInfoService endpoint for notice collection
+- `KONEPS_OPENAPI_SERVICE_KEY` - Public Data Portal service key used when `source=koneps-openapi`
+- `KONEPS_OPENAPI_ENCODED_SERVICE_KEY` - Optional already-URL-encoded service key; used without double-encoding when the configured key is rejected
+- `KONEPS_OPENAPI_MAX_ITEMS` - Maximum items returned per OpenAPI crawl request
+- `KONEPS_OPENAPI_TIMEOUT_SECONDS` - HTTP timeout for KONEPS OpenAPI requests
 - `TELEGRAM_BOT_TOKEN` - Telegram bot token used for real message delivery
 - `TELEGRAM_BOT_USERNAME` - Human-readable Telegram bot username for local operator setup
 - `TELEGRAM_CHAT_ID` - Target Telegram chat/user id that receives bid decisions and submission alerts

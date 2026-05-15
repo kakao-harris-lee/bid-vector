@@ -1,12 +1,14 @@
 """Application configuration"""
+
 from typing import List
 from urllib.parse import quote_plus
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
+DEFAULT_DATABASE_URL = (
+    "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
+)
 DEFAULT_CELERY_BROKER_URL = "memory://"
 DEFAULT_CELERY_RESULT_BACKEND = "cache+memory://"
 
@@ -37,7 +39,9 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     # Database
-    DATABASE_URL: str = "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
+    DATABASE_URL: str = (
+        "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
+    )
     DATABASE_USER: str | None = None
     DATABASE_PASSWORD: str | None = None
     DATABASE_HOST: str | None = None
@@ -127,14 +131,25 @@ class Settings(BaseSettings):
     PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES: int = 32
     PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES: int = 5
     PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE: int = 5
-    CLASSIFIER_EMBEDDING_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    CLASSIFIER_EMBEDDING_MODEL: str = (
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
     CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: bool = True
     CLASSIFIER_SEMANTIC_MATCH_THRESHOLD: float = 0.35
 
     # KONEPS / Crawling
     KONEPS_BASE_URL: str = "https://www.g2b.go.kr"
     KONEPS_HOME_URL: str = "https://www.g2b.go.kr/"
-    KONEPS_NOTICE_LIST_URL: str = "https://www.g2b.go.kr/pt/menu/selectSubFrame.do?framesrc=/ep/tbid/tbidList.do"
+    KONEPS_NOTICE_LIST_URL: str = (
+        "https://www.g2b.go.kr/pt/menu/selectSubFrame.do?framesrc=/ep/tbid/tbidList.do"
+    )
+    KONEPS_OPENAPI_BID_PUBLIC_INFO_URL: str = (
+        "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
+    )
+    KONEPS_OPENAPI_SERVICE_KEY: str = ""
+    KONEPS_OPENAPI_ENCODED_SERVICE_KEY: str = ""
+    KONEPS_OPENAPI_MAX_ITEMS: int = 100
+    KONEPS_OPENAPI_TIMEOUT_SECONDS: int = 20
     KONEPS_HEADLESS: bool = True
     KONEPS_TIMEOUT_MS: int = 30000
     KONEPS_USER_AGENT: str = "bid-vector-bot/0.1"
@@ -171,13 +186,15 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _compose_database_url(self) -> "Settings":
         """Allow split DATABASE_* env vars to compose DATABASE_URL deterministically."""
-        if all([
-            self.DATABASE_USER,
-            self.DATABASE_PASSWORD is not None,
-            self.DATABASE_HOST,
-            self.DATABASE_PORT,
-            self.DATABASE_NAME,
-        ]):
+        if all(
+            [
+                self.DATABASE_USER,
+                self.DATABASE_PASSWORD is not None,
+                self.DATABASE_HOST,
+                self.DATABASE_PORT,
+                self.DATABASE_NAME,
+            ]
+        ):
             encoded_password = quote_plus(self.DATABASE_PASSWORD or "")
             self.DATABASE_URL = (
                 f"postgresql+psycopg://{self.DATABASE_USER}:{encoded_password}"
@@ -187,9 +204,12 @@ class Settings(BaseSettings):
             pass
 
         if (not self.uses_in_memory_celery) and (
-            not self.CELERY_RESULT_BACKEND or self.CELERY_RESULT_BACKEND == DEFAULT_CELERY_RESULT_BACKEND
+            not self.CELERY_RESULT_BACKEND
+            or self.CELERY_RESULT_BACKEND == DEFAULT_CELERY_RESULT_BACKEND
         ):
-            self.CELERY_RESULT_BACKEND = _to_celery_database_result_backend(self.DATABASE_URL)
+            self.CELERY_RESULT_BACKEND = _to_celery_database_result_backend(
+                self.DATABASE_URL
+            )
         elif self.uses_in_memory_celery and not self.CELERY_RESULT_BACKEND:
             self.CELERY_RESULT_BACKEND = DEFAULT_CELERY_RESULT_BACKEND
 

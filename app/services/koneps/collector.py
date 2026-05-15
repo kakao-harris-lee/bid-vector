@@ -1,4 +1,5 @@
 """KONEPS collector service skeleton."""
+
 import json
 import re
 from datetime import datetime, timedelta
@@ -6,8 +7,9 @@ from html import unescape
 from math import ceil
 from time import sleep
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlparse
 
+import requests
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
@@ -45,7 +47,11 @@ def format_crawl_error_message(metadata: dict[str, Any]) -> str | None:
     if not reason:
         return None
 
-    live_failure = metadata.get("live_failure") if isinstance(metadata.get("live_failure"), dict) else {}
+    live_failure = (
+        metadata.get("live_failure")
+        if isinstance(metadata.get("live_failure"), dict)
+        else {}
+    )
     stage = metadata.get("fallback_failure_stage") or live_failure.get("stage")
     category = metadata.get("fallback_failure_category") or live_failure.get("category")
 
@@ -58,9 +64,35 @@ def format_crawl_error_message(metadata: dict[str, Any]) -> str | None:
 class KonepsCollectorService:
     """Collect KONEPS notices/opening data."""
 
+    OPENAPI_SOURCE_ALIASES = {
+        "koneps-openapi",
+        "koneps_api",
+        "koneps-api",
+        "koneps-public-api",
+        "bid-public-info",
+    }
+    OPENAPI_CATEGORY_OPERATIONS = {
+        "construction": "getBidPblancListInfoCnstwk",
+        "공사": "getBidPblancListInfoCnstwk",
+        "service": "getBidPblancListInfoServc",
+        "general-service": "getBidPblancListInfoServc",
+        "technical-service": "getBidPblancListInfoServc",
+        "software": "getBidPblancListInfoServc",
+        "용역": "getBidPblancListInfoServc",
+        "goods": "getBidPblancListInfoThng",
+        "물품": "getBidPblancListInfoThng",
+        "foreign": "getBidPblancListInfoFrgcpt",
+        "frgcpt": "getBidPblancListInfoFrgcpt",
+        "외자": "getBidPblancListInfoFrgcpt",
+    }
+
     HOME_SEARCH_KEYWORD_ID = "mf_wfm_container_wq_uuid_925_wq_uuid_934_searchKeyword"
-    HOME_SEARCH_BUTTON_ID = "mf_wfm_container_wq_uuid_925_wq_uuid_934_btnBidPbancDtlSrch"
-    HOME_SEARCH_TYPE_RADIO_ID = "mf_wfm_container_wq_uuid_925_wq_uuid_934_rbxSrchType_input_0"
+    HOME_SEARCH_BUTTON_ID = (
+        "mf_wfm_container_wq_uuid_925_wq_uuid_934_btnBidPbancDtlSrch"
+    )
+    HOME_SEARCH_TYPE_RADIO_ID = (
+        "mf_wfm_container_wq_uuid_925_wq_uuid_934_rbxSrchType_input_0"
+    )
     HOME_SEARCH_START_DATE_ID = "wq_uuid_1239_ibxStrDay"
     HOME_SEARCH_END_DATE_ID = "wq_uuid_1239_ibxEndDay"
     HOME_SEARCH_RESULT_TABLE_ID = "mf_wfm_container_testTable"
@@ -87,7 +119,9 @@ class KonepsCollectorService:
         "mf_wfm_container_wq_uuid_925_wq_uuid_934_sbxUntyBsneSe_input_4",
         "mf_wfm_container_wq_uuid_925_wq_uuid_934_sbxUntyBsneSe_input_5",
     ]
-    OPENING_RESULT_MENU_ID = "mf_wfm_gnb_wfm_gnbMenu_genMenu1_1_genMenu2_4_genMenu3_0_btnMenu3"
+    OPENING_RESULT_MENU_ID = (
+        "mf_wfm_gnb_wfm_gnbMenu_genMenu1_1_genMenu2_4_genMenu3_0_btnMenu3"
+    )
     OPENING_RESULT_BID_NO_ID = "mf_wfm_container_ibxBidPbancNo"
     OPENING_RESULT_TITLE_ID = "mf_wfm_container_wq_uuid_4242"
     OPENING_RESULT_START_DATE_ID = "wq_uuid_4247_ibxStrDay"
@@ -108,14 +142,23 @@ class KonepsCollectorService:
             "max_items": normalized_request.max_items,
         }
 
-        if normalized_request.execution_mode in {"live", "auto"}:
+        if self._is_openapi_source(normalized_request.source):
+            live_result = self._collect_openapi_items(normalized_request)
+            items = live_result["items"]
+            response_metadata.update(live_result["metadata"])
+            job_status = "completed"
+        elif normalized_request.execution_mode in {"live", "auto"}:
             try:
                 live_result = self._collect_live_items(normalized_request)
                 items = live_result["items"]
                 response_metadata.update(live_result["metadata"])
                 job_status = "completed"
-            except Exception as exc:  # pragma: no cover - fallback path is covered via monkeypatch test
-                failure_payload = self._live_failure_payload(exc, stage="live_collection")
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - fallback path is covered via monkeypatch test
+                failure_payload = self._live_failure_payload(
+                    exc, stage="live_collection"
+                )
                 fallback_item_metadata = {
                     "fallback_failure_category": failure_payload["category"],
                     "fallback_failure_stage": failure_payload["stage"],
@@ -172,7 +215,11 @@ class KonepsCollectorService:
             "crawl.completed" if crawl_job.status == "completed" else "crawl.fallback",
             {
                 "crawl_job_id": int(crawl_job.id),
-                "project_id": int(crawl_job.project_id) if crawl_job.project_id is not None else None,
+                "project_id": (
+                    int(crawl_job.project_id)
+                    if crawl_job.project_id is not None
+                    else None
+                ),
                 "status": crawl_job.status,
                 "source": crawl_job.source,
                 "target_date": crawl_job.target_date,
@@ -209,7 +256,9 @@ class KonepsCollectorService:
                 .first()
             )
             if historical_record is None:
-                historical_record = HistoricalData(notice_number=item.get("notice_number"))
+                historical_record = HistoricalData(
+                    notice_number=item.get("notice_number")
+                )
                 db.add(historical_record)
 
             project = self._resolve_project_for_item(
@@ -231,7 +280,9 @@ class KonepsCollectorService:
             )
             historical_record.category = self._resolve_project_category(item, request)
             historical_record.base_amount = item.get("base_amount") or 0.0
-            historical_record.predicted_price = item.get("estimated_amount") or item.get("base_amount") or 0.0
+            historical_record.predicted_price = (
+                item.get("estimated_amount") or item.get("base_amount") or 0.0
+            )
             historical_record.bid_rate = item_metadata.get("winning_rate") or 0.0
             historical_record.reserve_prices = json.dumps(
                 item_metadata.get("reserve_prices", []),
@@ -259,12 +310,19 @@ class KonepsCollectorService:
             if has_tender_result:
                 tender_result = self._resolve_tender_result(
                     db,
-                    project_id=project.id if project is not None else historical_record.project_id,
+                    project_id=(
+                        project.id
+                        if project is not None
+                        else historical_record.project_id
+                    ),
                     item_metadata=item_metadata,
                     crawl_job_status=crawl_job.status,
                 )
 
-                if tender_result.project_id is None and historical_record.project_id is not None:
+                if (
+                    tender_result.project_id is None
+                    and historical_record.project_id is not None
+                ):
                     tender_result.project_id = historical_record.project_id
 
         if len(linked_project_ids) == 1:
@@ -277,7 +335,11 @@ class KonepsCollectorService:
             "crawl.failed",
             {
                 "crawl_job_id": int(crawl_job.id),
-                "project_id": int(crawl_job.project_id) if crawl_job.project_id is not None else None,
+                "project_id": (
+                    int(crawl_job.project_id)
+                    if crawl_job.project_id is not None
+                    else None
+                ),
                 "status": crawl_job.status,
                 "source": crawl_job.source,
                 "target_date": crawl_job.target_date,
@@ -287,7 +349,9 @@ class KonepsCollectorService:
         )
         return crawl_job
 
-    def mark_crawl_job_failed(self, db: Session, crawl_job: CrawlJob, error_message: str) -> CrawlJob:
+    def mark_crawl_job_failed(
+        self, db: Session, crawl_job: CrawlJob, error_message: str
+    ) -> CrawlJob:
         """Update an existing crawl job when execution fails unexpectedly."""
         crawl_job.status = "failed"
         crawl_job.error_message = error_message
@@ -325,7 +389,9 @@ class KonepsCollectorService:
     ) -> dict[str, Any]:
         """Build one retry-attempt payload for operations diagnostics."""
         failure_payload = self._live_failure_payload(exc, stage=stage)
-        next_delay_seconds = None if final_attempt else self._retry_delay_seconds(attempt_index)
+        next_delay_seconds = (
+            None if final_attempt else self._retry_delay_seconds(attempt_index)
+        )
         return {
             "attempt": attempt_index + 1,
             "stage": stage,
@@ -364,35 +430,50 @@ class KonepsCollectorService:
         lowered_message = str(exc or "").lower()
         exception_name = type(exc).__name__.lower()
 
-        if any(marker in lowered_message for marker in ("captcha", "access denied", "forbidden", "403", "blocked")):
+        if any(
+            marker in lowered_message
+            for marker in ("captcha", "access denied", "forbidden", "403", "blocked")
+        ):
             return "access_denied"
-        if any(marker in lowered_message for marker in (
-            "browser not available",
-            "executable doesn't exist",
-            "playwright install",
-            "failed to launch",
-            "target page, context or browser has been closed",
-        )):
+        if any(
+            marker in lowered_message
+            for marker in (
+                "browser not available",
+                "executable doesn't exist",
+                "playwright install",
+                "failed to launch",
+                "target page, context or browser has been closed",
+            )
+        ):
             return "browser_runtime"
-        if any(marker in lowered_message for marker in (
-            "err_name_not_resolved",
-            "err_connection",
-            "econn",
-            "net::",
-            "network",
-            "connection reset",
-            "connection refused",
-        )):
+        if any(
+            marker in lowered_message
+            for marker in (
+                "err_name_not_resolved",
+                "err_connection",
+                "econn",
+                "net::",
+                "network",
+                "connection reset",
+                "connection refused",
+            )
+        ):
             return "network"
-        if any(marker in lowered_message for marker in ("no notice items", "no result", "empty result")):
+        if any(
+            marker in lowered_message
+            for marker in ("no notice items", "no result", "empty result")
+        ):
             return "no_data"
-        if any(marker in lowered_message for marker in (
-            "could not be located",
-            "selector",
-            "locator",
-            "strict mode violation",
-            "waiting for",
-        )):
+        if any(
+            marker in lowered_message
+            for marker in (
+                "could not be located",
+                "selector",
+                "locator",
+                "strict mode violation",
+                "waiting for",
+            )
+        ):
             return "selector_drift"
         if "timeout" in lowered_message or "timeout" in exception_name:
             return "timeout"
@@ -412,11 +493,18 @@ class KonepsCollectorService:
     def _normalize_request(self, request: CrawlRequest) -> CrawlRequest:
         """Normalize optional request fields for downstream collection logic."""
         normalized_source = (request.source or "koneps").strip().lower()
-        normalized_category = request.category.strip().lower() if request.category else "general"
+        normalized_category = (
+            request.category.strip().lower() if request.category else "general"
+        )
         normalized_keyword = request.keyword.strip() if request.keyword else "AI"
         normalized_target_date = request.target_date or utc_now().date().isoformat()
         normalized_mode = request.execution_mode.strip().lower()
-        normalized_max_items = min(request.max_items, settings.KONEPS_MAX_ITEMS)
+        configured_max_items = (
+            settings.KONEPS_OPENAPI_MAX_ITEMS
+            if self._is_openapi_source(normalized_source)
+            else settings.KONEPS_MAX_ITEMS
+        )
+        normalized_max_items = min(request.max_items, configured_max_items)
 
         return request.model_copy(
             update={
@@ -428,6 +516,341 @@ class KonepsCollectorService:
                 "max_items": normalized_max_items,
             }
         )
+
+    def _is_openapi_source(self, source: str | None) -> bool:
+        """Return whether the crawl request should use the KONEPS OpenAPI path."""
+        return str(source or "").strip().lower() in self.OPENAPI_SOURCE_ALIASES
+
+    def _collect_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
+        """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI."""
+        service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
+        if not service_key:
+            raise ValueError(
+                "KONEPS_OPENAPI_SERVICE_KEY is required for source=koneps-openapi"
+            )
+
+        operation = self._openapi_operation_for_category(request.category)
+        date_token = self._openapi_date_token(request.target_date)
+        page_size = max(1, min(int(request.max_items or 1), 999))
+        url = f"{settings.KONEPS_OPENAPI_BID_PUBLIC_INFO_URL.rstrip('/')}/{operation}"
+        params = {
+            "type": "json",
+            "numOfRows": page_size,
+            "pageNo": 1,
+            "inqryDiv": "1",
+            "inqryBgnDt": f"{date_token}0000",
+            "inqryEndDt": f"{date_token}2359",
+        }
+
+        response, key_variant = self._request_openapi_with_key_variants(
+            url,
+            params=params,
+            service_key=service_key,
+            operation=operation,
+        )
+        if response.status_code >= 400:
+            raise ValueError(
+                f"KONEPS OpenAPI HTTP {response.status_code} for {operation}: "
+                f"{response.text[:300]} Tried service key variants: {key_variant}."
+            )
+        payload = self._load_openapi_json(response)
+        header = self._openapi_header(payload)
+        result_code = str(header.get("resultCode") or "").strip()
+        result_message = str(header.get("resultMsg") or "").strip()
+        if result_code and result_code not in {"00", "03"}:
+            raise ValueError(
+                f"KONEPS OpenAPI returned resultCode={result_code}: {result_message or 'unknown error'}"
+            )
+
+        body = self._openapi_body(payload)
+        raw_items = self._openapi_item_list(body)
+        parsed_items: list[dict[str, Any]] = []
+        seen_notice_numbers: set[str] = set()
+        for raw_item in raw_items:
+            parsed_item = self._build_openapi_notice_item(
+                raw_item,
+                request=request,
+                operation=operation,
+            )
+            if parsed_item is None:
+                continue
+            notice_number = str(parsed_item["notice_number"])
+            if notice_number in seen_notice_numbers:
+                continue
+            seen_notice_numbers.add(notice_number)
+            parsed_items.append(parsed_item)
+            if len(parsed_items) >= request.max_items:
+                break
+
+        return {
+            "items": parsed_items,
+            "metadata": {
+                "resolved_mode": "openapi",
+                "openapi_service": "BidPublicInfoService",
+                "openapi_operation": operation,
+                "openapi_endpoint": settings.KONEPS_OPENAPI_BID_PUBLIC_INFO_URL,
+                "openapi_service_key_variant": key_variant,
+                "openapi_result_code": result_code or "00",
+                "openapi_result_message": result_message,
+                "openapi_total_count": self._safe_int(body.get("totalCount")),
+                "openapi_page_no": self._safe_int(body.get("pageNo")),
+                "openapi_num_of_rows": self._safe_int(body.get("numOfRows")),
+                "query_date": date_token,
+                "query_type": "registration_datetime",
+            },
+        }
+
+    def _request_openapi_with_key_variants(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any],
+        service_key: str,
+        operation: str,
+    ) -> tuple[requests.Response, str]:
+        """Call OpenAPI with raw and URL-encoded key forms used by data.go.kr."""
+        timeout = max(1, int(settings.KONEPS_OPENAPI_TIMEOUT_SECONDS))
+        variants = self._openapi_service_key_variants(service_key)
+        last_response: requests.Response | None = None
+
+        for variant_name, variant_value, value_is_preencoded in variants:
+            if value_is_preencoded:
+                query_string = self._openapi_query_string(
+                    params={**params, "ServiceKey": variant_value},
+                    preencoded_keys={"ServiceKey"},
+                )
+                response = requests.get(f"{url}?{query_string}", timeout=timeout)
+            else:
+                response = requests.get(
+                    url,
+                    params={**params, "ServiceKey": variant_value},
+                    timeout=timeout,
+                )
+            if response.status_code != 401:
+                return response, variant_name
+            last_response = response
+
+        if last_response is None:
+            raise ValueError(
+                f"KONEPS OpenAPI request was not attempted for {operation}."
+            )
+        return last_response, ",".join(name for name, _, _ in variants)
+
+    def _openapi_service_key_variants(
+        self, service_key: str
+    ) -> list[tuple[str, str, bool]]:
+        """Return distinct service key variants without logging the key value."""
+        raw_key = str(service_key or "").strip()
+        encoded_key = quote_plus(raw_key, safe="")
+        configured_encoded_key = str(
+            settings.KONEPS_OPENAPI_ENCODED_SERVICE_KEY or ""
+        ).strip()
+        variants: list[tuple[str, str, bool]] = [("configured", raw_key, False)]
+        if encoded_key != raw_key:
+            variants.append(("url_encoded", encoded_key, True))
+        if configured_encoded_key and configured_encoded_key not in {
+            raw_key,
+            encoded_key,
+        }:
+            variants.append(("configured_encoded", configured_encoded_key, True))
+        return variants
+
+    def _openapi_query_string(
+        self,
+        *,
+        params: dict[str, Any],
+        preencoded_keys: set[str],
+    ) -> str:
+        """Build a query string while preserving already-encoded key values."""
+        query_parts: list[str] = []
+        for key, value in params.items():
+            encoded_key = quote_plus(str(key), safe="")
+            encoded_value = (
+                str(value)
+                if key in preencoded_keys
+                else quote_plus(str(value), safe="")
+            )
+            query_parts.append(f"{encoded_key}={encoded_value}")
+        return "&".join(query_parts)
+
+    def _openapi_operation_for_category(self, category: str | None) -> str:
+        """Choose the BidPublicInfoService operation matching the internal category."""
+        normalized_category = str(category or "").strip().lower()
+        return self.OPENAPI_CATEGORY_OPERATIONS.get(
+            normalized_category,
+            "getBidPblancListInfoServc",
+        )
+
+    def _openapi_date_token(self, target_date: str | None) -> str:
+        """Return YYYYMMDD for OpenAPI date-time query parameters."""
+        raw_value = str(target_date or utc_now().date().isoformat()).strip()
+        compact = re.sub(r"\D", "", raw_value)
+        if len(compact) >= 8:
+            return compact[:8]
+        parsed = self._coerce_datetime(raw_value)
+        if parsed is None:
+            raise ValueError(f"target_date must be parseable as a date: {raw_value}")
+        return parsed.strftime("%Y%m%d")
+
+    def _load_openapi_json(self, response: requests.Response) -> dict[str, Any]:
+        """Decode one OpenAPI response, surfacing non-JSON error bodies clearly."""
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ValueError(
+                f"KONEPS OpenAPI response was not JSON: {response.text[:500]}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError("KONEPS OpenAPI response did not contain a JSON object.")
+        return payload
+
+    def _openapi_header(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Extract the normalized OpenAPI response header."""
+        response = (
+            payload.get("response") if isinstance(payload.get("response"), dict) else {}
+        )
+        header = (
+            response.get("header") if isinstance(response.get("header"), dict) else {}
+        )
+        return dict(header)
+
+    def _openapi_body(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Extract the normalized OpenAPI response body."""
+        response = (
+            payload.get("response") if isinstance(payload.get("response"), dict) else {}
+        )
+        body = response.get("body") if isinstance(response.get("body"), dict) else {}
+        return dict(body)
+
+    def _openapi_item_list(self, body: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return a list of item dictionaries across supported JSON response shapes."""
+        items_container = body.get("items")
+        if isinstance(items_container, dict):
+            raw_items = items_container.get("item", [])
+        else:
+            raw_items = items_container or []
+        if isinstance(raw_items, dict):
+            raw_items = [raw_items]
+        if not isinstance(raw_items, list):
+            return []
+        return [dict(item) for item in raw_items if isinstance(item, dict)]
+
+    def _build_openapi_notice_item(
+        self,
+        raw_item: dict[str, Any],
+        *,
+        request: CrawlRequest,
+        operation: str,
+    ) -> dict[str, Any] | None:
+        """Convert one OpenAPI row into the existing crawl notice payload."""
+        notice_number = str(
+            raw_item.get("bidNtceNo")
+            or raw_item.get("bidPbancNo")
+            or raw_item.get("bfSpecRgstNo")
+            or ""
+        ).strip()
+        if not notice_number:
+            return None
+
+        title = str(
+            raw_item.get("bidNtceNm") or raw_item.get("ntceNm") or notice_number
+        ).strip()
+        base_amount = self._first_openapi_amount(
+            raw_item,
+            [
+                "asignBdgtAmt",
+                "bdgtAmt",
+                "presmptPrce",
+                "presmptAmt",
+                "bssAmt",
+                "bssamt",
+                "bssAmtPurcnstcst",
+            ],
+        )
+        estimated_amount = self._first_openapi_amount(
+            raw_item,
+            ["presmptPrce", "presmptAmt", "asignBdgtAmt", "bdgtAmt"],
+        )
+        business_type = str(
+            raw_item.get("bsnsDivNm")
+            or raw_item.get("prcmBsneSeCd")
+            or request.category
+            or ""
+        ).strip()
+        demand_agency = str(raw_item.get("dminsttNm") or "").strip()
+        issuing_agency = str(raw_item.get("ntceInsttNm") or "").strip()
+        opening_at = (
+            raw_item.get("opengDt")
+            or raw_item.get("opengDate")
+            or raw_item.get("bidOpenDt")
+        )
+        closing_at = (
+            self._coerce_datetime(raw_item.get("bidClseDt"))
+            or self._coerce_datetime(opening_at)
+            or self._coerce_datetime(raw_item.get("bidNtceDt"))
+        )
+        source_url = (
+            str(
+                raw_item.get("bidNtceDtlUrl") or raw_item.get("ntceSpecDocUrl1") or ""
+            ).strip()
+            or None
+        )
+        license_text = " ".join(
+            str(raw_item.get(key) or "")
+            for key in ("indstrytyCd", "indstrytyNm", "lcnsLmtNm", "prtcptLmtRgnNm")
+        )
+
+        return {
+            "notice_number": notice_number,
+            "title": title,
+            "base_amount": float(base_amount or 0.0),
+            "estimated_amount": float(estimated_amount or base_amount or 0.0),
+            "closing_at": closing_at,
+            "business_type": business_type or request.category,
+            "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,
+            "license_codes": self._extract_license_codes(license_text),
+            "source_url": source_url,
+            "metadata": {
+                "mode": "openapi",
+                "openapi_service": "BidPublicInfoService",
+                "openapi_operation": operation,
+                "bid_notice_order": raw_item.get("bidNtceOrd"),
+                "notice_kind": raw_item.get("ntceKindNm"),
+                "registration_type": raw_item.get("rgstTyNm"),
+                "bid_method": raw_item.get("bidMethdNm"),
+                "contract_method": raw_item.get("cntrctCnclsMthdNm"),
+                "business_type": business_type,
+                "demand_agency": demand_agency,
+                "opening_demand_agency": demand_agency,
+                "issuing_agency": issuing_agency,
+                "opening_status": raw_item.get("ntceKindNm"),
+                "opening_scheduled_at": opening_at,
+                "bid_notice_datetime": raw_item.get("bidNtceDt"),
+                "bid_begin_at": raw_item.get("bidBeginDt"),
+                "bid_close_at": raw_item.get("bidClseDt"),
+                "reference_number": raw_item.get("refNo"),
+                "raw_openapi_item": raw_item,
+            },
+        }
+
+    def _first_openapi_amount(
+        self,
+        raw_item: dict[str, Any],
+        candidate_keys: list[str],
+    ) -> float | None:
+        """Return the first parseable amount from one OpenAPI row."""
+        for key in candidate_keys:
+            value = self._coerce_amount(raw_item.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _safe_int(self, value: Any) -> int | None:
+        """Convert optional OpenAPI count fields into integers."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _collect_live_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect live KONEPS items via the public homepage search flow."""
@@ -454,7 +877,9 @@ class KonepsCollectorService:
                 break
 
         if not parsed_items:
-            raise ValueError("No notice items could be parsed from the live KONEPS page")
+            raise ValueError(
+                "No notice items could be parsed from the live KONEPS page"
+            )
 
         opening_result_metadata = {
             "opening_result_grid_id": self.OPENING_RESULT_GRID_ID,
@@ -463,7 +888,9 @@ class KonepsCollectorService:
         }
         try:
             opening_rows = self._collect_opening_result_rows(request)
-            parsed_items, opening_result_metadata = self._merge_opening_result_rows(parsed_items, opening_rows)
+            parsed_items, opening_result_metadata = self._merge_opening_result_rows(
+                parsed_items, opening_rows
+            )
         except Exception as exc:
             failure_payload = self._live_failure_payload(exc, stage="opening_result")
             opening_result_metadata.update(
@@ -473,7 +900,9 @@ class KonepsCollectorService:
                     "opening_result_failure_stage": failure_payload["stage"],
                     "opening_result_retryable": failure_payload["retryable"],
                     "opening_result_failure": failure_payload,
-                    "opening_result_retry_attempts": failure_payload.get("attempts", []),
+                    "opening_result_retry_attempts": failure_payload.get(
+                        "attempts", []
+                    ),
                 }
             )
 
@@ -489,7 +918,9 @@ class KonepsCollectorService:
             },
         }
 
-    def _collect_opening_result_rows(self, request: CrawlRequest) -> list[dict[str, Any]]:
+    def _collect_opening_result_rows(
+        self, request: CrawlRequest
+    ) -> list[dict[str, Any]]:
         """Collect opening-result rows from 개찰결과분류조회 using the live SPA page."""
         from playwright.sync_api import sync_playwright
 
@@ -510,7 +941,9 @@ class KonepsCollectorService:
                         rows = self._read_opening_result_rows(page)
                         self._close_browser_context(context)
                         return rows
-                    except Exception as exc:  # pragma: no cover - exercised by live browser only
+                    except (
+                        Exception
+                    ) as exc:  # pragma: no cover - exercised by live browser only
                         last_error = exc
                         self._close_browser_context(context)
                         final_attempt = attempt >= settings.KONEPS_RETRY_COUNT
@@ -594,7 +1027,9 @@ class KonepsCollectorService:
         )
         return [
             normalized_row
-            for normalized_row in (self._normalize_opening_result_row(row) for row in rows or [])
+            for normalized_row in (
+                self._normalize_opening_result_row(row) for row in rows or []
+            )
             if normalized_row.get("notice_number")
         ]
 
@@ -629,9 +1064,11 @@ class KonepsCollectorService:
                 {
                     "opening_notice_full_number": opening_row.get("notice_full_number"),
                     "opening_status": opening_row.get("status"),
-                    "opening_scheduled_at": opening_row.get("scheduled_at").isoformat()
-                    if opening_row.get("scheduled_at")
-                    else None,
+                    "opening_scheduled_at": (
+                        opening_row.get("scheduled_at").isoformat()
+                        if opening_row.get("scheduled_at")
+                        else None
+                    ),
                     "opening_bid_classification": opening_row.get("bid_classification"),
                     "opening_bid_progress_order": opening_row.get("bid_progress_order"),
                     "opening_demand_agency": opening_row.get("demand_agency"),
@@ -656,7 +1093,9 @@ class KonepsCollectorService:
             if opening_row.get("winning_rate") is not None:
                 item_metadata["winning_rate"] = opening_row["winning_rate"]
             if opening_row.get("announced_at") is not None:
-                item_metadata["opening_announced_at"] = opening_row["announced_at"].isoformat()
+                item_metadata["opening_announced_at"] = opening_row[
+                    "announced_at"
+                ].isoformat()
 
             item["metadata"] = item_metadata
             if not item.get("business_type") and opening_row.get("business_type"):
@@ -671,7 +1110,9 @@ class KonepsCollectorService:
             "opening_result_enriched_count": enriched_count,
         }
 
-    def _gather_live_page_snapshots(self, request: CrawlRequest) -> list[dict[str, Any]]:
+    def _gather_live_page_snapshots(
+        self, request: CrawlRequest
+    ) -> list[dict[str, Any]]:
         """Search the public KONEPS homepage and gather result page snapshots."""
         from playwright.sync_api import sync_playwright
 
@@ -692,7 +1133,9 @@ class KonepsCollectorService:
                         snapshots = self._collect_result_page_snapshots(page, request)
                         self._close_browser_context(context)
                         return snapshots
-                    except Exception as exc:  # pragma: no cover - exercised indirectly in fallback path
+                    except (
+                        Exception
+                    ) as exc:  # pragma: no cover - exercised indirectly in fallback path
                         last_error = exc
                         self._close_browser_context(context)
                         final_attempt = attempt >= settings.KONEPS_RETRY_COUNT
@@ -730,8 +1173,12 @@ class KonepsCollectorService:
         self._set_input_value(page, self.HOME_SEARCH_KEYWORD_ID, request.keyword)
         self._set_checked_state(page, self.HOME_SEARCH_TYPE_RADIO_ID, True)
         self._apply_business_type_filter(page, request.category)
-        self._set_input_value(page, self.HOME_SEARCH_START_DATE_ID, request.target_date.replace("-", "/"))
-        self._set_input_value(page, self.HOME_SEARCH_END_DATE_ID, request.target_date.replace("-", "/"))
+        self._set_input_value(
+            page, self.HOME_SEARCH_START_DATE_ID, request.target_date.replace("-", "/")
+        )
+        self._set_input_value(
+            page, self.HOME_SEARCH_END_DATE_ID, request.target_date.replace("-", "/")
+        )
 
         search_button = page.locator(f"#{self.HOME_SEARCH_BUTTON_ID}")
         if search_button.count() == 0:
@@ -741,9 +1188,13 @@ class KonepsCollectorService:
         page.wait_for_selector(f"#{self.HOME_SEARCH_RESULT_TABLE_ID}")
         page.wait_for_timeout(settings.KONEPS_SEARCH_WAIT_MS)
 
-    def _collect_result_page_snapshots(self, page: Any, request: CrawlRequest) -> list[dict[str, Any]]:
+    def _collect_result_page_snapshots(
+        self, page: Any, request: CrawlRequest
+    ) -> list[dict[str, Any]]:
         """Collect HTML snapshots for the required number of result pages."""
-        expected_pages = max(1, ceil(request.max_items / self.HOME_SEARCH_DEFAULT_PAGE_SIZE))
+        expected_pages = max(
+            1, ceil(request.max_items / self.HOME_SEARCH_DEFAULT_PAGE_SIZE)
+        )
         snapshots: list[dict[str, Any]] = []
 
         for page_number in range(1, expected_pages + 1):
@@ -768,7 +1219,9 @@ class KonepsCollectorService:
 
     def _collect_detail_page_snapshots(self, page: Any) -> dict[str, dict[str, str]]:
         """Open each visible detail link in a new tab and capture its URL and HTML."""
-        detail_links = page.locator(f"#{self.HOME_SEARCH_RESULT_TABLE_ID} a[id$='btnOpenKonepsInfo']")
+        detail_links = page.locator(
+            f"#{self.HOME_SEARCH_RESULT_TABLE_ID} a[id$='btnOpenKonepsInfo']"
+        )
         detail_page_snapshots: dict[str, dict[str, str]] = {}
 
         for index in range(detail_links.count()):
@@ -951,18 +1404,37 @@ class KonepsCollectorService:
         contract_method = cells[12].get_text(" ", strip=True)
         detail_link = cells[4].select_one("a")
         detail_action_id = detail_link.get("id") if detail_link else None
-        detail_snapshot = detail_pages.get(detail_action_id) if detail_pages and detail_action_id else None
-        detail_data = self._parse_detail_html(detail_snapshot["html"]) if detail_snapshot else {}
+        detail_snapshot = (
+            detail_pages.get(detail_action_id)
+            if detail_pages and detail_action_id
+            else None
+        )
+        detail_data = (
+            self._parse_detail_html(detail_snapshot["html"]) if detail_snapshot else {}
+        )
         row_text = " ".join(cell.get_text(" ", strip=True) for cell in cells)
-        region = detail_data.get("region") or self._extract_region([title, issuing_agency, demand_agency, row_text])
-        source_url = detail_snapshot["url"] if detail_snapshot else (page_url or settings.KONEPS_HOME_URL)
+        region = detail_data.get("region") or self._extract_region(
+            [title, issuing_agency, demand_agency, row_text]
+        )
+        source_url = (
+            detail_snapshot["url"]
+            if detail_snapshot
+            else (page_url or settings.KONEPS_HOME_URL)
+        )
         base_amount = detail_data.get("base_amount") or 0.0
         estimated_amount = detail_data.get("estimated_amount")
-        closing_at = detail_data.get("closing_at") or self._extract_datetime(closing_at_text) or self._extract_datetime(opening_at_text)
-        license_codes = detail_data.get("license_codes") or self._extract_license_codes(row_text)
+        closing_at = (
+            detail_data.get("closing_at")
+            or self._extract_datetime(closing_at_text)
+            or self._extract_datetime(opening_at_text)
+        )
+        license_codes = detail_data.get("license_codes") or self._extract_license_codes(
+            row_text
+        )
 
         return CrawlNoticeItem(
-            notice_number=notice_number or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}",
+            notice_number=notice_number
+            or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}",
             title=detail_data.get("title") or title,
             base_amount=base_amount,
             estimated_amount=estimated_amount,
@@ -975,7 +1447,9 @@ class KonepsCollectorService:
                 "mode": "live",
                 "page_number": page_number,
                 "row_index": row_index,
-                "amount_source": "detail_page" if detail_snapshot else "missing_in_list",
+                "amount_source": (
+                    "detail_page" if detail_snapshot else "missing_in_list"
+                ),
                 "posted_at": posted_at_text,
                 "opening_at": detail_data.get("opening_at_text") or opening_at_text,
                 "status": status,
@@ -997,7 +1471,11 @@ class KonepsCollectorService:
 
         for row in soup.select("tr"):
             cells = row.select("th, td")
-            texts = [cell.get_text(" ", strip=True) for cell in cells if cell.get_text(" ", strip=True)]
+            texts = [
+                cell.get_text(" ", strip=True)
+                for cell in cells
+                if cell.get_text(" ", strip=True)
+            ]
             if len(texts) < 2:
                 continue
             for index in range(0, len(texts) - 1, 2):
@@ -1030,43 +1508,88 @@ class KonepsCollectorService:
         if isinstance(detail_html, str) and detail_html.strip():
             detail_data.update(self._parse_opening_detail_html(detail_html))
         if isinstance(row.get("detail"), dict):
-            detail_data.update({key: value for key, value in row["detail"].items() if value not in (None, "", [], {})})
+            detail_data.update(
+                {
+                    key: value
+                    for key, value in row["detail"].items()
+                    if value not in (None, "", [], {})
+                }
+            )
 
-        notice_number = str(row.get("notice_number") or row.get("bidPbancNo") or detail_data.get("notice_number") or "").strip()
-        notice_order = str(row.get("notice_order") or row.get("bidPbancOrd") or detail_data.get("notice_order") or "").strip()
+        notice_number = str(
+            row.get("notice_number")
+            or row.get("bidPbancNo")
+            or detail_data.get("notice_number")
+            or ""
+        ).strip()
+        notice_order = str(
+            row.get("notice_order")
+            or row.get("bidPbancOrd")
+            or detail_data.get("notice_order")
+            or ""
+        ).strip()
         notice_full_number = str(
             row.get("notice_full_number")
             or row.get("bidPbancNoPbancOrd")
             or f"{notice_number}-{notice_order}".strip("-")
         ).strip()
-        opening_amount = self._coerce_amount(row.get("opening_amount") or row.get("bizAmt"))
+        opening_amount = self._coerce_amount(
+            row.get("opening_amount") or row.get("bizAmt")
+        )
 
         return {
             "notice_number": notice_number,
             "notice_order": notice_order,
             "notice_full_number": notice_full_number,
             "title": unescape(
-                str(row.get("title") or row.get("bidPbancNm") or detail_data.get("title") or "")
+                str(
+                    row.get("title")
+                    or row.get("bidPbancNm")
+                    or detail_data.get("title")
+                    or ""
+                )
             ).strip(),
-            "bid_classification": str(row.get("bid_classification") or row.get("bidClsfNo") or "").strip(),
-            "bid_progress_order": str(row.get("bid_progress_order") or row.get("bidPrgrsOrd") or "").strip(),
-            "demand_agency": str(row.get("demand_agency") or row.get("dmstGrpNm") or "").strip(),
-            "status": str(row.get("status") or row.get("bidPgstCd") or detail_data.get("result_status") or "").strip(),
+            "bid_classification": str(
+                row.get("bid_classification") or row.get("bidClsfNo") or ""
+            ).strip(),
+            "bid_progress_order": str(
+                row.get("bid_progress_order") or row.get("bidPrgrsOrd") or ""
+            ).strip(),
+            "demand_agency": str(
+                row.get("demand_agency") or row.get("dmstGrpNm") or ""
+            ).strip(),
+            "status": str(
+                row.get("status")
+                or row.get("bidPgstCd")
+                or detail_data.get("result_status")
+                or ""
+            ).strip(),
             "scheduled_at": self._coerce_datetime(
-                row.get("scheduled_at") or row.get("onbsPrnmntDt") or detail_data.get("announced_at")
+                row.get("scheduled_at")
+                or row.get("onbsPrnmntDt")
+                or detail_data.get("announced_at")
             ),
             "business_type": row.get("business_type")
             or self._map_opening_business_type(row.get("prcmBsneSeCd")),
             "opening_amount": opening_amount,
-            "reserve_prices": detail_data.get("reserve_prices") or row.get("reserve_prices") or [],
-            "selected_numbers": detail_data.get("selected_numbers") or row.get("selected_numbers") or [],
-            "winning_company": detail_data.get("winning_company") or row.get("winning_company"),
-            "winning_amount": detail_data.get("winning_amount")
-            if detail_data.get("winning_amount") is not None
-            else row.get("winning_amount"),
-            "winning_rate": detail_data.get("winning_rate")
-            if detail_data.get("winning_rate") is not None
-            else row.get("winning_rate"),
+            "reserve_prices": detail_data.get("reserve_prices")
+            or row.get("reserve_prices")
+            or [],
+            "selected_numbers": detail_data.get("selected_numbers")
+            or row.get("selected_numbers")
+            or [],
+            "winning_company": detail_data.get("winning_company")
+            or row.get("winning_company"),
+            "winning_amount": (
+                detail_data.get("winning_amount")
+                if detail_data.get("winning_amount") is not None
+                else row.get("winning_amount")
+            ),
+            "winning_rate": (
+                detail_data.get("winning_rate")
+                if detail_data.get("winning_rate") is not None
+                else row.get("winning_rate")
+            ),
             "announced_at": self._coerce_datetime(
                 detail_data.get("announced_at") or row.get("announced_at")
             ),
@@ -1080,7 +1603,11 @@ class KonepsCollectorService:
 
         for row in soup.select("tr"):
             cells = row.select("th, td")
-            texts = [cell.get_text(" ", strip=True) for cell in cells if cell.get_text(" ", strip=True)]
+            texts = [
+                cell.get_text(" ", strip=True)
+                for cell in cells
+                if cell.get_text(" ", strip=True)
+            ]
             if len(texts) < 2:
                 continue
             for index in range(0, len(texts) - 1, 2):
@@ -1090,7 +1617,9 @@ class KonepsCollectorService:
                     field_map[key] = value
 
         all_text = soup.get_text(" ", strip=True)
-        reserve_text = self._find_field_value(field_map, ["복수예비가격", "예비가격", "추첨예비가격"])
+        reserve_text = self._find_field_value(
+            field_map, ["복수예비가격", "예비가격", "추첨예비가격"]
+        )
         if not reserve_text:
             reserve_match = re.search(
                 r"복수예비가격\s*(.*?)(?:선택번호|추첨번호|낙찰자|낙찰업체|낙찰금액|낙찰률|개찰일시|$)",
@@ -1098,7 +1627,9 @@ class KonepsCollectorService:
             )
             reserve_text = reserve_match.group(1) if reserve_match else ""
 
-        selected_text = self._find_field_value(field_map, ["선택번호", "추첨번호", "선정번호"])
+        selected_text = self._find_field_value(
+            field_map, ["선택번호", "추첨번호", "선정번호"]
+        )
         if not selected_text:
             selected_match = re.search(
                 r"(?:선택번호|추첨번호|선정번호)\s*(.*?)(?:낙찰자|낙찰업체|낙찰금액|낙찰률|개찰일시|$)",
@@ -1106,7 +1637,9 @@ class KonepsCollectorService:
             )
             selected_text = selected_match.group(1) if selected_match else ""
 
-        winning_company = self._find_field_value(field_map, ["낙찰업체", "낙찰자", "낙찰자명", "계약상대자"])
+        winning_company = self._find_field_value(
+            field_map, ["낙찰업체", "낙찰자", "낙찰자명", "계약상대자"]
+        )
         winning_amount = self._coerce_amount(
             self._find_field_value(field_map, ["낙찰금액", "낙찰가격", "투찰금액"])
         )
@@ -1120,7 +1653,9 @@ class KonepsCollectorService:
 
         return {
             "reserve_prices": self._extract_amounts(reserve_text)[:15],
-            "selected_numbers": self._extract_integer_tokens(selected_text, max_items=4),
+            "selected_numbers": self._extract_integer_tokens(
+                selected_text, max_items=4
+            ),
             "winning_company": winning_company or None,
             "winning_amount": winning_amount,
             "winning_rate": winning_rate,
@@ -1144,8 +1679,13 @@ class KonepsCollectorService:
 
         combined_text = " ".join(cleaned_cells)
         amounts = self._extract_amounts(combined_text)
-        notice_number = self._extract_notice_number(combined_text) or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}"
-        title = self._extract_title(cleaned_cells, notice_number, link.get_text(strip=True) if link else None)
+        notice_number = (
+            self._extract_notice_number(combined_text)
+            or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}"
+        )
+        title = self._extract_title(
+            cleaned_cells, notice_number, link.get_text(strip=True) if link else None
+        )
 
         if not title:
             return None
@@ -1153,7 +1693,11 @@ class KonepsCollectorService:
         region = self._extract_region(cleaned_cells)
         closing_at = self._extract_datetime(combined_text)
         href = link.get("href") if link else None
-        source_url = urljoin(page_url or settings.KONEPS_BASE_URL, href) if href else (page_url or settings.KONEPS_HOME_URL)
+        source_url = (
+            urljoin(page_url or settings.KONEPS_BASE_URL, href)
+            if href
+            else (page_url or settings.KONEPS_HOME_URL)
+        )
 
         return CrawlNoticeItem(
             notice_number=notice_number,
@@ -1233,7 +1777,9 @@ class KonepsCollectorService:
 
         return None
 
-    def _extract_title(self, cells: list[str], notice_number: str, link_text: str | None) -> str | None:
+    def _extract_title(
+        self, cells: list[str], notice_number: str, link_text: str | None
+    ) -> str | None:
         """Choose the most likely title cell."""
         generic_link_texts = {"상세", "상세보기", "보기", "조회", "바로가기"}
         if link_text and link_text.strip() not in generic_link_texts:
@@ -1253,8 +1799,24 @@ class KonepsCollectorService:
     def _extract_region(self, cells: list[str]) -> str | None:
         """Extract a likely Korean region value."""
         region_keywords = [
-            "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
-            "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주", "전국",
+            "서울",
+            "부산",
+            "대구",
+            "인천",
+            "광주",
+            "대전",
+            "울산",
+            "세종",
+            "경기",
+            "강원",
+            "충북",
+            "충남",
+            "전북",
+            "전남",
+            "경북",
+            "경남",
+            "제주",
+            "전국",
         ]
         for cell in cells:
             for keyword in region_keywords:
@@ -1278,7 +1840,9 @@ class KonepsCollectorService:
         except ValueError:
             return None
 
-    def _extract_integer_tokens(self, text: str, max_items: int | None = None) -> list[int]:
+    def _extract_integer_tokens(
+        self, text: str, max_items: int | None = None
+    ) -> list[int]:
         """Extract integer tokens from text, optionally limiting the result length."""
         numbers = [int(token) for token in re.findall(r"\b\d{1,2}\b", text)]
         if max_items is None:
@@ -1344,7 +1908,11 @@ class KonepsCollectorService:
         """Find or create a project row for a crawled notice and keep it enriched with crawl metadata."""
         project: Project | None = None
         if historical_record.project_id is not None:
-            project = db.query(Project).filter(Project.id == historical_record.project_id).first()
+            project = (
+                db.query(Project)
+                .filter(Project.id == historical_record.project_id)
+                .first()
+            )
 
         if project is None:
             project = self._find_matching_project(db, item=item, request=request)
@@ -1390,9 +1958,13 @@ class KonepsCollectorService:
         if target_notice_number:
             for candidate in candidates:
                 candidate_notice_number = self._normalize_notice_number(
-                    candidate.notice_number or self._extract_project_notice_number(candidate)
+                    candidate.notice_number
+                    or self._extract_project_notice_number(candidate)
                 )
-                if candidate_notice_number and candidate_notice_number == target_notice_number:
+                if (
+                    candidate_notice_number
+                    and candidate_notice_number == target_notice_number
+                ):
                     return candidate
 
         if target_source_url:
@@ -1411,89 +1983,160 @@ class KonepsCollectorService:
         for candidate in candidates:
             candidate_title = self._normalize_title(candidate.title)
             title_exact = candidate_title == target_title
-            title_overlap = not title_exact and bool(candidate_title) and (
-                target_title in candidate_title or candidate_title in target_title
+            title_overlap = (
+                not title_exact
+                and bool(candidate_title)
+                and (target_title in candidate_title or candidate_title in target_title)
             )
             if not title_exact and not title_overlap:
                 continue
 
             budget_match = self._is_budget_compatible(candidate, target_budget)
-            deadline_match = self._is_deadline_compatible(candidate.deadline, target_deadline)
-            agency_overlap = len(self._extract_project_agency_keys(candidate) & target_agencies)
+            deadline_match = self._is_deadline_compatible(
+                candidate.deadline, target_deadline
+            )
+            agency_overlap = len(
+                self._extract_project_agency_keys(candidate) & target_agencies
+            )
 
             matches = (
                 (title_exact and agency_overlap > 0)
                 or (title_exact and budget_match and deadline_match)
-                or (title_overlap and agency_overlap > 0 and budget_match and deadline_match)
+                or (
+                    title_overlap
+                    and agency_overlap > 0
+                    and budget_match
+                    and deadline_match
+                )
             )
             if not matches:
                 continue
 
-            score = (6 if title_exact else 3) + (3 if agency_overlap > 0 else 0) + (2 if budget_match else 0) + (1 if deadline_match else 0)
+            score = (
+                (6 if title_exact else 3)
+                + (3 if agency_overlap > 0 else 0)
+                + (2 if budget_match else 0)
+                + (1 if deadline_match else 0)
+            )
             if score > best_score:
                 best_candidate = candidate
                 best_score = score
 
         return best_candidate
 
-    def _update_project_from_item(self, project: Project, *, item: dict[str, Any], request: CrawlRequest) -> None:
+    def _update_project_from_item(
+        self, project: Project, *, item: dict[str, Any], request: CrawlRequest
+    ) -> None:
         """Apply crawled notice details onto a project without discarding user-entered context."""
         item_metadata = item.get("metadata", {})
         resolved_category = self._resolve_project_category(item, request)
         budget_estimate = self._resolve_budget_estimate(item)
         budget_values = [
             float(amount)
-            for amount in (item.get("base_amount"), item.get("estimated_amount"), budget_estimate)
+            for amount in (
+                item.get("base_amount"),
+                item.get("estimated_amount"),
+                budget_estimate,
+            )
             if amount not in (None, "", 0, 0.0)
         ]
         description_lines = [
-            f"공고번호: {item.get('notice_number')}" if item.get("notice_number") else None,
-            f"공고기관: {item_metadata.get('issuing_agency')}" if item_metadata.get("issuing_agency") else None,
-            f"수요기관: {item_metadata.get('opening_demand_agency') or item_metadata.get('demand_agency')}"
-            if item_metadata.get("opening_demand_agency") or item_metadata.get("demand_agency")
-            else None,
+            (
+                f"공고번호: {item.get('notice_number')}"
+                if item.get("notice_number")
+                else None
+            ),
+            (
+                f"공고기관: {item_metadata.get('issuing_agency')}"
+                if item_metadata.get("issuing_agency")
+                else None
+            ),
+            (
+                f"수요기관: {item_metadata.get('opening_demand_agency') or item_metadata.get('demand_agency')}"
+                if item_metadata.get("opening_demand_agency")
+                or item_metadata.get("demand_agency")
+                else None
+            ),
             f"공고원문: {item.get('source_url')}" if item.get("source_url") else None,
-            f"업무구분: {item.get('business_type')}" if item.get("business_type") else None,
-            f"개찰상태: {item_metadata.get('opening_status')}" if item_metadata.get("opening_status") else None,
+            (
+                f"업무구분: {item.get('business_type')}"
+                if item.get("business_type")
+                else None
+            ),
+            (
+                f"개찰상태: {item_metadata.get('opening_status')}"
+                if item_metadata.get("opening_status")
+                else None
+            ),
         ]
         requirement_lines = [
             f"지역요건: {item.get('region')}" if item.get("region") else None,
-            f"면허요건: {' '.join(item.get('license_codes') or [])}" if item.get("license_codes") else None,
-            f"기초금액: {float(item.get('base_amount')):.0f}" if item.get("base_amount") else None,
-            f"추정금액: {float(item.get('estimated_amount')):.0f}" if item.get("estimated_amount") else None,
-            f"계약방법: {item_metadata.get('contract_method')}" if item_metadata.get("contract_method") else None,
+            (
+                f"면허요건: {' '.join(item.get('license_codes') or [])}"
+                if item.get("license_codes")
+                else None
+            ),
+            (
+                f"기초금액: {float(item.get('base_amount')):.0f}"
+                if item.get("base_amount")
+                else None
+            ),
+            (
+                f"추정금액: {float(item.get('estimated_amount')):.0f}"
+                if item.get("estimated_amount")
+                else None
+            ),
+            (
+                f"계약방법: {item_metadata.get('contract_method')}"
+                if item_metadata.get("contract_method")
+                else None
+            ),
         ]
 
-        if item.get("title") and self._should_replace_project_title(project.title, item.get("title")):
+        if item.get("title") and self._should_replace_project_title(
+            project.title, item.get("title")
+        ):
             project.title = str(item.get("title")).strip()
         notice_number = item.get("notice_number")
         if notice_number and (
             not project.notice_number
-            or self._normalize_notice_number(project.notice_number) == self._normalize_notice_number(notice_number)
+            or self._normalize_notice_number(project.notice_number)
+            == self._normalize_notice_number(notice_number)
         ):
             project.notice_number = str(notice_number).strip()
         source_url = item.get("source_url")
         if source_url and (
             not project.source_url
-            or self._normalize_source_url(project.source_url) == self._normalize_source_url(source_url)
+            or self._normalize_source_url(project.source_url)
+            == self._normalize_source_url(source_url)
         ):
             project.source_url = str(source_url).strip()
         issuing_agency = item_metadata.get("issuing_agency")
         if issuing_agency and (
             not project.issuing_agency
-            or self._normalize_agency_name(project.issuing_agency) == self._normalize_agency_name(issuing_agency)
+            or self._normalize_agency_name(project.issuing_agency)
+            == self._normalize_agency_name(issuing_agency)
         ):
             project.issuing_agency = str(issuing_agency).strip()
-        demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get("demand_agency")
+        demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
+            "demand_agency"
+        )
         if demand_agency and (
             not project.demand_agency
-            or self._normalize_agency_name(project.demand_agency) == self._normalize_agency_name(demand_agency)
+            or self._normalize_agency_name(project.demand_agency)
+            == self._normalize_agency_name(demand_agency)
         ):
             project.demand_agency = str(demand_agency).strip()
-        project.description = self._merge_text_lines(project.description, description_lines)
-        project.requirements = self._merge_text_lines(project.requirements, requirement_lines)
+        project.description = self._merge_text_lines(
+            project.description, description_lines
+        )
+        project.requirements = self._merge_text_lines(
+            project.requirements, requirement_lines
+        )
         project.category = resolved_category or project.category
-        project.budget_estimate = budget_estimate or float(project.budget_estimate or 0.0)
+        project.budget_estimate = budget_estimate or float(
+            project.budget_estimate or 0.0
+        )
         project.budget_min = min(budget_values) if budget_values else project.budget_min
         project.budget_max = max(budget_values) if budget_values else project.budget_max
 
@@ -1537,8 +2180,10 @@ class KonepsCollectorService:
                     break
                 if (
                     candidate.winning_company == winning_company
-                    and float(candidate.winning_amount or 0.0) == float(winning_amount or 0.0)
-                    and float(candidate.winning_rate or 0.0) == float(winning_rate or 0.0)
+                    and float(candidate.winning_amount or 0.0)
+                    == float(winning_amount or 0.0)
+                    and float(candidate.winning_rate or 0.0)
+                    == float(winning_rate or 0.0)
                 ):
                     tender_result = candidate
                     break
@@ -1555,7 +2200,9 @@ class KonepsCollectorService:
         tender_result.announced_at = announced_at
         return tender_result
 
-    def _resolve_project_category(self, item: dict[str, Any], request: CrawlRequest) -> str:
+    def _resolve_project_category(
+        self, item: dict[str, Any], request: CrawlRequest
+    ) -> str:
         """Resolve the internal project category for a crawled notice."""
         request_category = str(request.category or "").strip().lower()
         if request_category and request_category not in {"general", "기타", "other"}:
@@ -1575,7 +2222,9 @@ class KonepsCollectorService:
             "공사": "construction",
             "construction": "construction",
         }
-        return category_map.get(business_type, request_category or business_type or "other")
+        return category_map.get(
+            business_type, request_category or business_type or "other"
+        )
 
     def _resolve_budget_estimate(self, item: dict[str, Any]) -> float:
         """Prefer the most actionable estimate while falling back to the available base amount."""
@@ -1599,20 +2248,37 @@ class KonepsCollectorService:
         )
         normalized_status_text = self._normalize_status_text(status_text)
 
-        if any(keyword in normalized_status_text for keyword in ("취소", "공고취소", "입찰취소", "개찰취소", "정정취소")):
+        if any(
+            keyword in normalized_status_text
+            for keyword in ("취소", "공고취소", "입찰취소", "개찰취소", "정정취소")
+        ):
             return "cancelled"
-        if any(keyword in normalized_status_text for keyword in ("재공고", "재입찰", "재안내", "2차공고", "3차공고")):
+        if any(
+            keyword in normalized_status_text
+            for keyword in ("재공고", "재입찰", "재안내", "2차공고", "3차공고")
+        ):
             return "re_notice"
-        if any(keyword in normalized_status_text for keyword in ("유찰", "무응찰", "무투찰", "개찰불성립", "낙찰자없음")):
+        if any(
+            keyword in normalized_status_text
+            for keyword in ("유찰", "무응찰", "무투찰", "개찰불성립", "낙찰자없음")
+        ):
             return "failed"
         if any(
             item_metadata.get(key)
-            for key in ("winning_company", "winning_amount", "winning_rate", "opening_announced_at")
+            for key in (
+                "winning_company",
+                "winning_amount",
+                "winning_rate",
+                "opening_announced_at",
+            )
         ):
             return "awarded"
         if any(keyword in normalized_status_text for keyword in ("낙찰", "계약완료")):
             return "awarded"
-        if any(keyword in normalized_status_text for keyword in ("마감", "종료", "개찰완료", "개찰진행", "개찰대기")):
+        if any(
+            keyword in normalized_status_text
+            for keyword in ("마감", "종료", "개찰완료", "개찰진행", "개찰대기")
+        ):
             return "closed"
 
         closing_at = self._coerce_datetime(item.get("closing_at"))
@@ -1624,9 +2290,15 @@ class KonepsCollectorService:
         """Normalize crawl status text for keyword-based lifecycle mapping."""
         return re.sub(r"\s+", "", str(value or "").strip().lower())
 
-    def _merge_text_lines(self, existing: str | None, new_lines: list[str | None]) -> str:
+    def _merge_text_lines(
+        self, existing: str | None, new_lines: list[str | None]
+    ) -> str:
         """Append unique crawl-derived text fragments while keeping any manual notes intact."""
-        merged_lines = [line.strip() for line in str(existing or "").splitlines() if line and line.strip()]
+        merged_lines = [
+            line.strip()
+            for line in str(existing or "").splitlines()
+            if line and line.strip()
+        ]
         merged_text = "\n".join(merged_lines)
 
         for line in new_lines:
@@ -1661,7 +2333,22 @@ class KonepsCollectorService:
             return str(value).strip().rstrip("/").lower()
         netloc = parsed.netloc.lower()
         path = parsed.path.rstrip("/")
-        return f"{netloc}{path}".strip().lower()
+        normalized_url = f"{netloc}{path}".strip().lower()
+        significant_query_pairs = [
+            (key.strip().lower(), val.strip().lower())
+            for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+            if key.strip().lower()
+            in {
+                "bidntceno",
+                "bidntceord",
+                "bidpbancno",
+                "bidpbancord",
+            }
+        ]
+        if significant_query_pairs:
+            normalized_query = urlencode(sorted(significant_query_pairs))
+            return f"{normalized_url}?{normalized_query}"
+        return normalized_url
 
     def _normalize_agency_name(self, value: Any) -> str:
         """Normalize agency names for cross-source matching."""
@@ -1683,7 +2370,9 @@ class KonepsCollectorService:
     def _extract_project_agency_keys(self, project: Project) -> set[str]:
         """Extract normalized agency names from a stored project, including labeled notes."""
         agency_values = [project.issuing_agency, project.demand_agency]
-        project_text = "\n".join(filter(None, [project.description, project.requirements]))
+        project_text = "\n".join(
+            filter(None, [project.description, project.requirements])
+        )
         for label in ("공고기관", "수요기관"):
             label_match = re.search(rf"{label}\s*[:：]\s*([^\n]+)", project_text)
             if label_match:
@@ -1691,7 +2380,9 @@ class KonepsCollectorService:
 
         return {
             normalized
-            for normalized in (self._normalize_agency_name(value) for value in agency_values)
+            for normalized in (
+                self._normalize_agency_name(value) for value in agency_values
+            )
             if normalized
         }
 
@@ -1700,7 +2391,9 @@ class KonepsCollectorService:
         if project.notice_number:
             return project.notice_number
 
-        project_text = "\n".join(filter(None, [project.description, project.requirements]))
+        project_text = "\n".join(
+            filter(None, [project.description, project.requirements])
+        )
         label_match = re.search(r"공고번호\s*[:：]\s*([A-Za-z0-9\-]+)", project_text)
         if label_match:
             return label_match.group(1).strip()
@@ -1711,7 +2404,9 @@ class KonepsCollectorService:
         if project.source_url:
             return project.source_url
 
-        project_text = "\n".join(filter(None, [project.description, project.requirements]))
+        project_text = "\n".join(
+            filter(None, [project.description, project.requirements])
+        )
         url_match = re.search(r"https?://[^\s]+", project_text)
         if url_match:
             return url_match.group(0).strip()
@@ -1722,20 +2417,35 @@ class KonepsCollectorService:
         if target_budget <= 0:
             return True
 
-        candidate_budget = float(project.budget_estimate or project.budget_max or project.budget_min or 0.0)
+        candidate_budget = float(
+            project.budget_estimate or project.budget_max or project.budget_min or 0.0
+        )
         if candidate_budget <= 0:
             return True
 
-        difference_ratio = abs(candidate_budget - target_budget) / max(candidate_budget, target_budget)
+        difference_ratio = abs(candidate_budget - target_budget) / max(
+            candidate_budget, target_budget
+        )
         return difference_ratio <= 0.15
 
-    def _is_deadline_compatible(self, existing_deadline: datetime | None, target_deadline: datetime | None) -> bool:
+    def _is_deadline_compatible(
+        self, existing_deadline: datetime | None, target_deadline: datetime | None
+    ) -> bool:
         """Return whether existing and crawled deadlines are close enough to represent the same notice."""
         if existing_deadline is None or target_deadline is None:
             return True
-        return abs((ensure_utc(existing_deadline) - ensure_utc(target_deadline)).total_seconds()) <= 60 * 60 * 24 * 7
+        return (
+            abs(
+                (
+                    ensure_utc(existing_deadline) - ensure_utc(target_deadline)
+                ).total_seconds()
+            )
+            <= 60 * 60 * 24 * 7
+        )
 
-    def _should_replace_project_title(self, existing_title: str | None, new_title: Any) -> bool:
+    def _should_replace_project_title(
+        self, existing_title: str | None, new_title: Any
+    ) -> bool:
         """Prefer the crawled title only when the current one is missing or obviously synthetic."""
         existing = str(existing_title or "").strip()
         if not existing:
@@ -1796,4 +2506,6 @@ class KonepsCollectorService:
             ),
         ]
 
-        return [item.model_dump(mode="json") for item in mock_items[: request.max_items]]
+        return [
+            item.model_dump(mode="json") for item in mock_items[: request.max_items]
+        ]

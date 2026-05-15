@@ -22,12 +22,14 @@ services:
       start_period: 5s
 
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:3.12.14-management-alpine
     container_name: bid_vector_rabbitmq
+    hostname: rabbitmq
     restart: unless-stopped
     profiles:
       - tasks
     environment:
+      RABBITMQ_NODENAME: rabbit@rabbitmq
       RABBITMQ_DEFAULT_USER: ${CELERY_RABBITMQ_USER:-bidvector}
       RABBITMQ_DEFAULT_PASS: ${CELERY_RABBITMQ_PASSWORD:-bidvector}
       RABBITMQ_DEFAULT_VHOST: ${CELERY_RABBITMQ_VHOST:-bidvector}
@@ -39,9 +41,9 @@ services:
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
 
   api:
     build:
