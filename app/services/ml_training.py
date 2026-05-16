@@ -43,6 +43,7 @@ class PricePredictionTrainingService:
             category=category,
             agency_name=agency_name,
             limit=limit,
+            explicit_bid_rate_only=True,
         )
         training_dir = self.repo_root / "models" / "training-runs" / release_tag
         predictor_lstm_dir = self.repo_root / "models" / "predictors" / "lstm"

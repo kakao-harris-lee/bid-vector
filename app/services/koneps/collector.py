@@ -71,6 +71,13 @@ class KonepsCollectorService:
         "koneps-public-api",
         "bid-public-info",
     }
+    SCSBID_OPENAPI_SOURCE_ALIASES = {
+        "koneps-scsbid",
+        "koneps-award-openapi",
+        "koneps-awards",
+        "scsbid",
+        "scsbid-openapi",
+    }
     OPENAPI_CATEGORY_OPERATIONS = {
         "construction": "getBidPblancListInfoCnstwk",
         "공사": "getBidPblancListInfoCnstwk",
@@ -84,6 +91,34 @@ class KonepsCollectorService:
         "foreign": "getBidPblancListInfoFrgcpt",
         "frgcpt": "getBidPblancListInfoFrgcpt",
         "외자": "getBidPblancListInfoFrgcpt",
+    }
+    SCSBID_CATEGORY_OPERATIONS = {
+        "construction": "getScsbidListSttusCnstwk",
+        "공사": "getScsbidListSttusCnstwk",
+        "service": "getScsbidListSttusServc",
+        "general-service": "getScsbidListSttusServc",
+        "technical-service": "getScsbidListSttusServc",
+        "software": "getScsbidListSttusServc",
+        "용역": "getScsbidListSttusServc",
+        "goods": "getScsbidListSttusThng",
+        "물품": "getScsbidListSttusThng",
+        "foreign": "getScsbidListSttusFrgcpt",
+        "frgcpt": "getScsbidListSttusFrgcpt",
+        "외자": "getScsbidListSttusFrgcpt",
+    }
+    SCSBID_RESERVE_DETAIL_OPERATIONS = {
+        "construction": "getOpengResultListInfoCnstwkPreparPcDetail",
+        "공사": "getOpengResultListInfoCnstwkPreparPcDetail",
+        "service": "getOpengResultListInfoServcPreparPcDetail",
+        "general-service": "getOpengResultListInfoServcPreparPcDetail",
+        "technical-service": "getOpengResultListInfoServcPreparPcDetail",
+        "software": "getOpengResultListInfoServcPreparPcDetail",
+        "용역": "getOpengResultListInfoServcPreparPcDetail",
+        "goods": "getOpengResultListInfoThngPreparPcDetail",
+        "물품": "getOpengResultListInfoThngPreparPcDetail",
+        "foreign": "getOpengResultListInfoFrgcptPreparPcDetail",
+        "frgcpt": "getOpengResultListInfoFrgcptPreparPcDetail",
+        "외자": "getOpengResultListInfoFrgcptPreparPcDetail",
     }
 
     HOME_SEARCH_KEYWORD_ID = "mf_wfm_container_wq_uuid_925_wq_uuid_934_searchKeyword"
@@ -144,6 +179,11 @@ class KonepsCollectorService:
 
         if self._is_openapi_source(normalized_request.source):
             live_result = self._collect_openapi_items(normalized_request)
+            items = live_result["items"]
+            response_metadata.update(live_result["metadata"])
+            job_status = "completed"
+        elif self._is_scsbid_openapi_source(normalized_request.source):
+            live_result = self._collect_scsbid_openapi_items(normalized_request)
             items = live_result["items"]
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
@@ -283,7 +323,12 @@ class KonepsCollectorService:
             historical_record.predicted_price = (
                 item.get("estimated_amount") or item.get("base_amount") or 0.0
             )
-            historical_record.bid_rate = item_metadata.get("winning_rate") or 0.0
+            historical_record.bid_rate = (
+                self._normalize_bid_rate_value(
+                    item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
+                )
+                or 0.0
+            )
             historical_record.reserve_prices = json.dumps(
                 item_metadata.get("reserve_prices", []),
                 ensure_ascii=False,
@@ -502,6 +547,7 @@ class KonepsCollectorService:
         configured_max_items = (
             settings.KONEPS_OPENAPI_MAX_ITEMS
             if self._is_openapi_source(normalized_source)
+            or self._is_scsbid_openapi_source(normalized_source)
             else settings.KONEPS_MAX_ITEMS
         )
         normalized_max_items = min(request.max_items, configured_max_items)
@@ -520,6 +566,12 @@ class KonepsCollectorService:
     def _is_openapi_source(self, source: str | None) -> bool:
         """Return whether the crawl request should use the KONEPS OpenAPI path."""
         return str(source or "").strip().lower() in self.OPENAPI_SOURCE_ALIASES
+
+    def _is_scsbid_openapi_source(self, source: str | None) -> bool:
+        """Return whether the crawl request should use the KONEPS award OpenAPI path."""
+        return (
+            str(source or "").strip().lower() in self.SCSBID_OPENAPI_SOURCE_ALIASES
+        )
 
     def _collect_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI."""
@@ -598,6 +650,299 @@ class KonepsCollectorService:
                 "query_date": date_token,
                 "query_type": "registration_datetime",
             },
+        }
+
+    def _collect_scsbid_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
+        """Collect awarded/opening rows from the KONEPS ScsbidInfoService OpenAPI."""
+        service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
+        if not service_key:
+            raise ValueError(
+                "KONEPS_OPENAPI_SERVICE_KEY is required for source=koneps-scsbid"
+            )
+
+        operation = self._scsbid_operation_for_category(request.category)
+        date_token = self._openapi_date_token(request.target_date)
+        page_size = max(1, min(int(request.max_items or 1), 999))
+        url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
+        params = {
+            "type": "json",
+            "numOfRows": page_size,
+            "pageNo": 1,
+            "inqryDiv": "1",
+            "inqryBgnDt": f"{date_token}0000",
+            "inqryEndDt": f"{date_token}2359",
+        }
+
+        response, key_variant = self._request_openapi_with_key_variants(
+            url,
+            params=params,
+            service_key=service_key,
+            operation=operation,
+        )
+        if response.status_code >= 400:
+            raise ValueError(
+                f"KONEPS ScsbidInfoService HTTP {response.status_code} for {operation}: "
+                f"{response.text[:300]} Tried service key variants: {key_variant}."
+            )
+        payload = self._load_openapi_json(response)
+        header = self._openapi_header(payload)
+        result_code = str(header.get("resultCode") or "").strip()
+        result_message = str(header.get("resultMsg") or "").strip()
+        if result_code and result_code not in {"00", "03"}:
+            raise ValueError(
+                f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
+                f"{result_message or 'unknown error'}"
+            )
+
+        body = self._openapi_body(payload)
+        raw_items = self._openapi_item_list(body)
+        parsed_items: list[dict[str, Any]] = []
+        seen_notice_numbers: set[str] = set()
+        reserve_detail_count = 0
+        reserve_detail_error_count = 0
+
+        for raw_item in raw_items:
+            detail: dict[str, Any] = {}
+            notice_number = str(raw_item.get("bidNtceNo") or "").strip()
+            if notice_number:
+                try:
+                    detail = self._fetch_scsbid_reserve_detail(
+                        raw_item,
+                        request=request,
+                        service_key=service_key,
+                    )
+                    if detail.get("reserve_prices"):
+                        reserve_detail_count += 1
+                except Exception as exc:
+                    reserve_detail_error_count += 1
+                    detail = {"reserve_detail_error": str(exc)}
+
+            parsed_item = self._build_scsbid_award_item(
+                raw_item,
+                detail=detail,
+                request=request,
+                operation=operation,
+            )
+            if parsed_item is None:
+                continue
+            notice_number = str(parsed_item["notice_number"])
+            if notice_number in seen_notice_numbers:
+                continue
+            seen_notice_numbers.add(notice_number)
+            parsed_items.append(parsed_item)
+            if len(parsed_items) >= request.max_items:
+                break
+
+        return {
+            "items": parsed_items,
+            "metadata": {
+                "resolved_mode": "scsbid_openapi",
+                "openapi_service": "ScsbidInfoService",
+                "openapi_operation": operation,
+                "openapi_endpoint": settings.KONEPS_OPENAPI_SCSBID_INFO_URL,
+                "openapi_service_key_variant": key_variant,
+                "openapi_result_code": result_code or "00",
+                "openapi_result_message": result_message,
+                "openapi_total_count": self._safe_int(body.get("totalCount")),
+                "openapi_page_no": self._safe_int(body.get("pageNo")),
+                "openapi_num_of_rows": self._safe_int(body.get("numOfRows")),
+                "reserve_detail_collected_count": reserve_detail_count,
+                "reserve_detail_error_count": reserve_detail_error_count,
+                "query_date": date_token,
+                "query_type": "award_registration_datetime",
+            },
+        }
+
+    def _fetch_scsbid_reserve_detail(
+        self,
+        raw_item: dict[str, Any],
+        *,
+        request: CrawlRequest,
+        service_key: str,
+    ) -> dict[str, Any]:
+        """Fetch and summarize reserve-price detail rows for one awarded notice."""
+        operation = self._scsbid_reserve_detail_operation_for_category(
+            request.category
+        )
+        notice_number = str(raw_item.get("bidNtceNo") or "").strip()
+        if not notice_number:
+            return {}
+
+        url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
+        params = {
+            "type": "json",
+            "numOfRows": 100,
+            "pageNo": 1,
+            "inqryDiv": "2",
+            "bidNtceNo": notice_number,
+        }
+        response, key_variant = self._request_openapi_with_key_variants(
+            url,
+            params=params,
+            service_key=service_key,
+            operation=operation,
+        )
+        if response.status_code >= 400:
+            raise ValueError(
+                f"KONEPS ScsbidInfoService HTTP {response.status_code} for {operation}: "
+                f"{response.text[:300]} Tried service key variants: {key_variant}."
+            )
+
+        payload = self._load_openapi_json(response)
+        header = self._openapi_header(payload)
+        result_code = str(header.get("resultCode") or "").strip()
+        result_message = str(header.get("resultMsg") or "").strip()
+        if result_code and result_code not in {"00", "03"}:
+            raise ValueError(
+                f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
+                f"{result_message or 'unknown error'}"
+            )
+
+        body = self._openapi_body(payload)
+        rows = self._openapi_item_list(body)
+        detail = self._summarize_scsbid_reserve_detail(rows)
+        detail.update(
+            {
+                "reserve_detail_operation": operation,
+                "reserve_detail_result_code": result_code or "00",
+                "reserve_detail_result_message": result_message,
+                "reserve_detail_total_count": self._safe_int(body.get("totalCount")),
+            }
+        )
+        return detail
+
+    def _build_scsbid_award_item(
+        self,
+        raw_item: dict[str, Any],
+        *,
+        detail: dict[str, Any],
+        request: CrawlRequest,
+        operation: str,
+    ) -> dict[str, Any] | None:
+        """Convert one ScsbidInfoService row into the existing crawl payload."""
+        notice_number = str(raw_item.get("bidNtceNo") or "").strip()
+        if not notice_number:
+            return None
+
+        title = str(raw_item.get("bidNtceNm") or notice_number).strip()
+        winning_amount = self._coerce_amount(raw_item.get("sucsfbidAmt"))
+        success_rate = self._normalize_bid_rate_value(raw_item.get("sucsfbidRate"))
+        base_amount = (
+            detail.get("base_amount")
+            or detail.get("planned_price")
+            or (
+                winning_amount / success_rate
+                if winning_amount is not None and success_rate
+                else None
+            )
+            or winning_amount
+            or 0.0
+        )
+        planned_price = detail.get("planned_price") or (
+            winning_amount / success_rate
+            if winning_amount is not None and success_rate
+            else None
+        )
+        bid_rate = (
+            winning_amount / base_amount
+            if winning_amount is not None and float(base_amount or 0.0) > 0
+            else success_rate
+        )
+        opened_at = (
+            raw_item.get("rlOpengDt")
+            or raw_item.get("fnlSucsfDate")
+            or raw_item.get("rgstDt")
+        )
+        demand_agency = str(raw_item.get("dminsttNm") or "").strip()
+
+        return {
+            "notice_number": notice_number,
+            "title": title,
+            "base_amount": float(base_amount or 0.0),
+            "estimated_amount": float(planned_price or base_amount or 0.0),
+            "closing_at": self._coerce_datetime(opened_at),
+            "business_type": request.category,
+            "region": self._extract_region([demand_agency, title]),
+            "license_codes": [],
+            "source_url": None,
+            "metadata": {
+                "mode": "scsbid_openapi",
+                "openapi_service": "ScsbidInfoService",
+                "openapi_operation": operation,
+                "bid_notice_order": raw_item.get("bidNtceOrd"),
+                "bid_classification_no": raw_item.get("bidClsfcNo"),
+                "rebid_no": raw_item.get("rbidNo"),
+                "opening_status": "낙찰",
+                "opening_demand_agency": demand_agency,
+                "demand_agency": demand_agency,
+                "opening_scheduled_at": opened_at,
+                "opening_announced_at": opened_at,
+                "participant_count": self._safe_int(raw_item.get("prtcptCnum")),
+                "winning_company": raw_item.get("bidwinnrNm"),
+                "winning_business_no": raw_item.get("bidwinnrBizno"),
+                "winning_amount": winning_amount,
+                "winning_rate": success_rate,
+                "bid_rate": self._normalize_bid_rate_value(bid_rate),
+                "final_success_date": raw_item.get("fnlSucsfDate"),
+                "reserve_prices": detail.get("reserve_prices") or [],
+                "selected_numbers": detail.get("selected_numbers") or [],
+                "planned_price": detail.get("planned_price"),
+                "reserve_detail_error": detail.get("reserve_detail_error"),
+                "raw_openapi_item": raw_item,
+                "raw_reserve_detail_items": detail.get("raw_reserve_detail_items")
+                or [],
+            },
+        }
+
+    def _scsbid_operation_for_category(self, category: str | None) -> str:
+        """Choose the ScsbidInfoService award operation for an internal category."""
+        normalized_category = str(category or "").strip().lower()
+        return self.SCSBID_CATEGORY_OPERATIONS.get(
+            normalized_category,
+            "getScsbidListSttusServc",
+        )
+
+    def _scsbid_reserve_detail_operation_for_category(
+        self, category: str | None
+    ) -> str:
+        """Choose the ScsbidInfoService reserve-detail operation for a category."""
+        normalized_category = str(category or "").strip().lower()
+        return self.SCSBID_RESERVE_DETAIL_OPERATIONS.get(
+            normalized_category,
+            "getOpengResultListInfoServcPreparPcDetail",
+        )
+
+    def _summarize_scsbid_reserve_detail(
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Summarize reserve-detail rows into prices, selected numbers, and prices."""
+        reserve_rows: list[tuple[int, float]] = []
+        selected_numbers: list[int] = []
+        planned_price: float | None = None
+        base_amount: float | None = None
+
+        for row in rows:
+            if planned_price is None:
+                planned_price = self._coerce_amount(row.get("plnprc"))
+            if base_amount is None:
+                base_amount = self._coerce_amount(row.get("bssamt"))
+
+            sequence = self._coerce_int_value(row.get("compnoRsrvtnPrceSno"))
+            reserve_price = self._coerce_amount(row.get("bsisPlnprc"))
+            if sequence is not None and reserve_price is not None:
+                reserve_rows.append((sequence, reserve_price))
+
+            drawn = str(row.get("drwtYn") or "").strip().upper()
+            if sequence is not None and drawn in {"Y", "1", "TRUE", "예", "추첨"}:
+                selected_numbers.append(sequence)
+
+        reserve_rows.sort(key=lambda item: item[0])
+        return {
+            "reserve_prices": [price for _, price in reserve_rows],
+            "selected_numbers": sorted(set(selected_numbers)),
+            "planned_price": planned_price,
+            "base_amount": base_amount,
+            "raw_reserve_detail_items": rows,
         }
 
     def _request_openapi_with_key_variants(
@@ -1837,6 +2182,36 @@ class KonepsCollectorService:
             return float(match.group(1))
         try:
             return float(str(text).strip())
+        except ValueError:
+            return None
+
+    def _normalize_bid_rate_value(self, value: Any) -> float | None:
+        """Normalize percentage-like bid rates into predictor-friendly ratios."""
+        if value in (None, ""):
+            return None
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        else:
+            percentage = self._extract_percentage(str(value))
+            if percentage is not None:
+                numeric = percentage
+            else:
+                try:
+                    numeric = float(str(value).replace(",", "").strip())
+                except ValueError:
+                    return None
+        if numeric <= 0:
+            return None
+        if numeric > 1.5:
+            numeric = numeric / 100.0
+        return round(float(numeric), 6)
+
+    def _coerce_int_value(self, value: Any) -> int | None:
+        """Convert numeric text into an integer when possible."""
+        if value in (None, ""):
+            return None
+        try:
+            return int(float(str(value).replace(",", "").strip()))
         except ValueError:
             return None
 

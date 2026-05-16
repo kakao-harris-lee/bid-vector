@@ -273,6 +273,7 @@ class OpportunityAnalysisService:
             db,
             category=project.category,
             limit=limit,
+            explicit_bid_rate_only=True,
         )
 
     def _resolve_recommended_amount(self, project: Project, price_prediction: dict, bid_recommendation: dict) -> float:

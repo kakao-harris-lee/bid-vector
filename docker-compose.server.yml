@@ -1,0 +1,49 @@
+services:
+  api:
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
+    volumes: []
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-2}
+
+  rabbitmq:
+    profiles: []
+
+  worker:
+    profiles: []
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
+    volumes: []
+
+  ml-worker:
+    profiles: []
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
+    volumes: []
+
+  training-worker:
+    profiles: []
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
+    volumes: []
+
+  beat:
+    profiles: []
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
+    volumes:
+      - celery_beat_data:/tmp

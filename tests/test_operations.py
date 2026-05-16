@@ -139,6 +139,164 @@ def test_openapi_crawl_collects_bid_public_info_and_persists_history(
     assert project.demand_agency == "서울특별시교육청"
 
 
+def test_scsbid_openapi_crawl_collects_awards_and_reserve_details(
+    client,
+    test_db,
+    monkeypatch,
+):
+    """ScsbidInfoService rows should persist award rates and reserve patterns."""
+
+    class FakeOpenApiResponse:
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    captured = []
+
+    def fake_get(url, params, timeout):
+        captured.append({"url": url, "params": params, "timeout": timeout})
+        if "getScsbidListSttusCnstwk" in url:
+            return FakeOpenApiResponse(
+                {
+                    "response": {
+                        "header": {"resultCode": "00", "resultMsg": "NORMAL"},
+                        "body": {
+                            "items": {
+                                "item": [
+                                    {
+                                        "bidNtceNo": "R26BK01599999",
+                                        "bidNtceOrd": "000",
+                                        "bidClsfcNo": "0",
+                                        "rbidNo": "0",
+                                        "bidNtceNm": "테스트 공사 낙찰",
+                                        "prtcptCnum": "12",
+                                        "bidwinnrNm": "테스트 낙찰사",
+                                        "bidwinnrBizno": "1234567890",
+                                        "sucsfbidAmt": "88,123,000",
+                                        "sucsfbidRate": "88.123",
+                                        "rlOpengDt": "2026-05-13 11:00:00",
+                                        "dminsttNm": "서울특별시",
+                                        "rgstDt": "2026-05-13 12:00:00",
+                                        "fnlSucsfDate": "2026-05-13",
+                                    }
+                                ]
+                            },
+                            "numOfRows": "5",
+                            "pageNo": "1",
+                            "totalCount": "1",
+                        },
+                    }
+                }
+            )
+        if "getOpengResultListInfoCnstwkPreparPcDetail" in url:
+            return FakeOpenApiResponse(
+                {
+                    "response": {
+                        "header": {"resultCode": "00", "resultMsg": "NORMAL"},
+                        "body": {
+                            "items": {
+                                "item": [
+                                    {
+                                        "bidNtceNo": "R26BK01599999",
+                                        "bidNtceOrd": "000",
+                                        "bidNtceNm": "테스트 공사 낙찰",
+                                        "plnprc": "100000000",
+                                        "bssamt": "100000000",
+                                        "compnoRsrvtnPrceSno": "1",
+                                        "bsisPlnprc": "99000000",
+                                        "drwtYn": "Y",
+                                    },
+                                    {
+                                        "bidNtceNo": "R26BK01599999",
+                                        "bidNtceOrd": "000",
+                                        "bidNtceNm": "테스트 공사 낙찰",
+                                        "plnprc": "100000000",
+                                        "bssamt": "100000000",
+                                        "compnoRsrvtnPrceSno": "2",
+                                        "bsisPlnprc": "100000000",
+                                        "drwtYn": "N",
+                                    },
+                                    {
+                                        "bidNtceNo": "R26BK01599999",
+                                        "bidNtceOrd": "000",
+                                        "bidNtceNm": "테스트 공사 낙찰",
+                                        "plnprc": "100000000",
+                                        "bssamt": "100000000",
+                                        "compnoRsrvtnPrceSno": "4",
+                                        "bsisPlnprc": "101000000",
+                                        "drwtYn": "Y",
+                                    },
+                                ]
+                            },
+                            "numOfRows": "100",
+                            "pageNo": "1",
+                            "totalCount": "3",
+                        },
+                    }
+                }
+            )
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={
+            "source": "koneps-scsbid",
+            "category": "construction",
+            "target_date": "2026-05-13",
+            "max_items": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_status"] == "completed"
+    assert payload["metadata"]["resolved_mode"] == "scsbid_openapi"
+    assert payload["metadata"]["openapi_operation"] == "getScsbidListSttusCnstwk"
+    assert payload["metadata"]["reserve_detail_collected_count"] == 1
+    assert payload["items"][0]["notice_number"] == "R26BK01599999"
+    assert payload["items"][0]["metadata"]["winning_company"] == "테스트 낙찰사"
+    assert payload["items"][0]["metadata"]["winning_rate"] == 0.88123
+    assert payload["items"][0]["metadata"]["reserve_prices"] == [
+        99000000.0,
+        100000000.0,
+        101000000.0,
+    ]
+    assert payload["items"][0]["metadata"]["selected_numbers"] == [1, 4]
+    assert captured[0]["params"]["ServiceKey"] == "test-service-key"
+    assert captured[0]["params"]["inqryBgnDt"] == "202605130000"
+    assert captured[1]["params"]["bidNtceNo"] == "R26BK01599999"
+
+    historical_record = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "R26BK01599999")
+        .one()
+    )
+    assert historical_record.category == "construction"
+    assert historical_record.base_amount == 100000000.0
+    assert historical_record.predicted_price == 100000000.0
+    assert historical_record.bid_rate == 0.88123
+    assert json.loads(historical_record.reserve_prices) == [
+        99000000.0,
+        100000000.0,
+        101000000.0,
+    ]
+    assert json.loads(historical_record.selected_numbers) == [1, 4]
+
+    tender_result = test_db.query(TenderResult).one()
+    assert tender_result.winning_company == "테스트 낙찰사"
+    assert tender_result.winning_amount == 88123000.0
+    assert tender_result.winning_rate == 0.88123
+    assert tender_result.result_status == "낙찰"
+
+
 def test_live_crawl_parses_html(monkeypatch):
     """Live mode should parse KONEPS result rows when HTML is available."""
     service = KonepsCollectorService()

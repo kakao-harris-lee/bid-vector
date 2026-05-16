@@ -15,6 +15,7 @@ class PredictionDatasetService:
 
     VALID_BID_RATE_MIN = 0.5
     VALID_BID_RATE_MAX = 1.5
+    RESERVE_CONTEXT_BACKFILL_LIMIT = 60
 
     def load_historical_series(
         self,
@@ -23,6 +24,7 @@ class PredictionDatasetService:
         category: str | None = None,
         agency_name: str | None = None,
         limit: int = 120,
+        explicit_bid_rate_only: bool = False,
     ) -> list[dict[str, Any]]:
         """Load a normalized bid-rate series from stored historical rows."""
         query = db.query(HistoricalData)
@@ -30,6 +32,8 @@ class PredictionDatasetService:
             query = query.filter(HistoricalData.category == category)
         if agency_name:
             query = query.filter(HistoricalData.agency_name.ilike(f"%{agency_name.strip()}%"))
+        if explicit_bid_rate_only:
+            query = query.filter(HistoricalData.bid_rate > 0)
 
         records = (
             query.order_by(HistoricalData.opened_at.desc(), HistoricalData.created_at.desc())
@@ -47,7 +51,71 @@ class PredictionDatasetService:
             normalized = self._serialize_series_point(record, tender_result=tender_result)
             if normalized is not None:
                 series.append(normalized)
+
+        if series and not any(item.get("reserve_prices") for item in series):
+            supplemental_records = self._load_reserve_context_backfill_records(
+                db,
+                category=category,
+                agency_name=agency_name,
+                explicit_bid_rate_only=explicit_bid_rate_only,
+                limit=self.RESERVE_CONTEXT_BACKFILL_LIMIT,
+            )
+            if supplemental_records:
+                seen_historical_ids = {
+                    int(item["historical_data_id"])
+                    for item in series
+                    if item.get("historical_data_id") is not None
+                }
+                supplemental_results = self._load_latest_tender_results(
+                    db,
+                    project_ids={
+                        int(record.project_id)
+                        for record in supplemental_records
+                        if record.project_id is not None
+                    },
+                )
+                for record in supplemental_records:
+                    if int(record.id or 0) in seen_historical_ids:
+                        continue
+                    tender_result = (
+                        supplemental_results.get(int(record.project_id))
+                        if record.project_id is not None
+                        else None
+                    )
+                    normalized = self._serialize_series_point(record, tender_result=tender_result)
+                    if normalized is None:
+                        continue
+                    series.append(normalized)
+                    seen_historical_ids.add(int(record.id or 0))
         return series
+
+    def _load_reserve_context_backfill_records(
+        self,
+        db: Session,
+        *,
+        category: str | None,
+        agency_name: str | None,
+        explicit_bid_rate_only: bool,
+        limit: int,
+    ) -> list[HistoricalData]:
+        """Load additional rows with reserve metadata when recent slices do not contain any."""
+        query = db.query(HistoricalData)
+        if category:
+            query = query.filter(HistoricalData.category == category)
+        if agency_name:
+            query = query.filter(HistoricalData.agency_name.ilike(f"%{agency_name.strip()}%"))
+        if explicit_bid_rate_only:
+            query = query.filter(HistoricalData.bid_rate > 0)
+
+        query = query.filter(HistoricalData.reserve_prices.isnot(None))
+        query = query.filter(HistoricalData.reserve_prices != "")
+        query = query.filter(HistoricalData.reserve_prices != "[]")
+
+        return (
+            query.order_by(HistoricalData.opened_at.desc(), HistoricalData.created_at.desc())
+            .limit(max(0, int(limit or 0)))
+            .all()
+        )
 
     def build_training_dataset(
         self,
@@ -56,6 +124,7 @@ class PredictionDatasetService:
         category: str | None = None,
         agency_name: str | None = None,
         limit: int = 120,
+        explicit_bid_rate_only: bool = False,
     ) -> dict[str, Any]:
         """Return a normalized training dataset plus lightweight quality summary."""
         series = self.load_historical_series(
@@ -63,6 +132,7 @@ class PredictionDatasetService:
             category=category,
             agency_name=agency_name,
             limit=limit,
+            explicit_bid_rate_only=explicit_bid_rate_only,
         )
         opened_at_values = [item["opened_at"] for item in series if item.get("opened_at") is not None]
         linked_result_count = sum(1 for item in series if item.get("tender_result_status"))

@@ -1,4 +1,4 @@
-.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-down docker-logs docker-logs-tasks ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
+.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-up-server docker-down docker-logs docker-logs-tasks docker-logs-server ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
 
 REBUILD_LIMIT ?= 100
 REBUILD_OFFSET ?= 0
@@ -28,8 +28,10 @@ help:
 	@echo "  make docker-build-ml-full - Build the full embedding+training image target"
 	@echo "  make docker-up    - Start Docker containers"
 	@echo "  make docker-up-tasks - Start Docker containers plus the optional RabbitMQ/worker/beat task stack"
+	@echo "  make docker-up-server - Start production-like server stack (API + broker + workers + beat)"
 	@echo "  make docker-down  - Stop Docker containers"
 	@echo "  make docker-logs-tasks - Tail API + ops/ML/training worker + beat + RabbitMQ logs"
+	@echo "  make docker-logs-server - Tail logs for the server stack started with docker-up-server"
 	@echo "  make ml-release-manifest - Validate artifacts and write a release manifest"
 	@echo "  make ml-release-preflight - Check manifest signature/artifacts and object storage before rollout"
 	@echo "  make ml-release-apply - Print the runtime settings stored in a manifest"
@@ -94,6 +96,9 @@ docker-up:
 docker-up-tasks:
 	CELERY_BROKER_URL="$(CELERY_COMPOSE_BROKER_URL)" docker compose --profile tasks up -d
 
+docker-up-server:
+	docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
+
 docker-down:
 	docker compose down
 
@@ -102,6 +107,9 @@ docker-logs:
 
 docker-logs-tasks:
 	docker compose logs -f api worker ml-worker training-worker beat rabbitmq
+
+docker-logs-server:
+	docker compose -f docker-compose.yml -f docker-compose.server.yml logs -f api worker ml-worker training-worker beat rabbitmq
 
 ml-release-manifest:
 	python scripts/promote_ml_release.py create-manifest --release-tag "$(RELEASE_TAG)" --embedding-model-path "$(EMBEDDING_MODEL_PATH)" --lstm-artifact-path "$(LSTM_ARTIFACT_PATH)" --ensemble-artifact-path "$(ENSEMBLE_ARTIFACT_PATH)" --git-sha "$(GIT_SHA)" --notes "$(NOTES)" --rebuild-limit $(REBUILD_LIMIT) --rebuild-offset $(REBUILD_OFFSET) --category "$(REBUILD_CATEGORY)" --project-status "$(REBUILD_PROJECT_STATUS)" $(if $(filter true,$(PUBLISH_REMOTE)),--publish-remote)

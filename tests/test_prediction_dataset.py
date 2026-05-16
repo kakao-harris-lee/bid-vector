@@ -97,3 +97,12 @@ def test_prediction_dataset_service_builds_normalized_series_and_summary(test_db
     assert dataset["series"][0]["bid_rate"] == 0.925
     assert dataset["series"][1]["winning_amount"] == 93000000.0
     assert dataset["series"][1]["tender_result_status"] == "awarded"
+
+    explicit_only_dataset = PredictionDatasetService().build_training_dataset(
+        test_db,
+        category="software",
+        limit=10,
+        explicit_bid_rate_only=True,
+    )
+    assert explicit_only_dataset["summary"]["sample_count"] == 1
+    assert explicit_only_dataset["series"][0]["notice_number"] == "DATASET-1"

@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     KONEPS_OPENAPI_BID_PUBLIC_INFO_URL: str = (
         "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
     )
+    KONEPS_OPENAPI_SCSBID_INFO_URL: str = (
+        "https://apis.data.go.kr/1230000/as/ScsbidInfoService"
+    )
     KONEPS_OPENAPI_SERVICE_KEY: str = ""
     KONEPS_OPENAPI_ENCODED_SERVICE_KEY: str = ""
     KONEPS_OPENAPI_MAX_ITEMS: int = 100

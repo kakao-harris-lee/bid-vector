@@ -24,7 +24,12 @@ router = APIRouter()
 
 def _load_price_history(db: Session, *, category: str | None, limit: int = 80) -> list[dict[str, object]]:
     """Load recent historical price samples for the given project category."""
-    return PredictionDatasetService().load_historical_series(db, category=category, limit=limit)
+    return PredictionDatasetService().load_historical_series(
+        db,
+        category=category,
+        limit=limit,
+        explicit_bid_rate_only=True,
+    )
 
 
 @router.post("/price", response_model=PricePredictionResponse)
