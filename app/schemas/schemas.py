@@ -83,6 +83,63 @@ class OperatorOverviewResponse(BaseModel):
     profile_configured: bool
 
 
+class OperatorDashboardCard(BaseModel):
+    key: str
+    label: str
+    value: Union[int, float, str, None] = None
+    unit: str = "count"
+    status: Literal["healthy", "watch", "critical", "info"] = "info"
+    detail: str
+    href: Optional[str] = None
+
+
+class OperatorDashboardDecisionItem(BaseModel):
+    decision_record_id: int
+    project_id: int
+    project_title: str
+    action: Literal["bid_now", "review", "skip"]
+    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    priority_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(ge=0.0, le=1.0)
+    recommended_amount: float
+    updated_at: datetime
+    detail_href: str
+    analysis_href: str
+
+
+class OperatorDashboardRunItem(BaseModel):
+    monitor_run_id: int
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    trigger_source: str
+    persisted_candidate_count: int = Field(ge=0)
+    notification_count: int = Field(ge=0)
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    detail_href: str
+
+
+class OperatorDashboardFeedbackSummary(BaseModel):
+    result_count: int = Field(ge=0)
+    prediction_sample_count: int = Field(ge=0)
+    recommendation_sample_count: int = Field(ge=0)
+    average_prediction_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    recommendation_better_than_prediction_count: int = Field(ge=0)
+    href: str
+
+
+class OperatorDashboardResponse(BaseModel):
+    operator_id: int
+    generated_at: datetime
+    period_days: int
+    overview: OperatorOverviewResponse
+    cards: List[OperatorDashboardCard] = Field(default_factory=list)
+    recent_decisions: List[OperatorDashboardDecisionItem] = Field(default_factory=list)
+    recent_monitor_runs: List[OperatorDashboardRunItem] = Field(default_factory=list)
+    feedback_summary: OperatorDashboardFeedbackSummary
+    action_hrefs: Dict[str, str] = Field(default_factory=dict)
+
+
 class OperatorStrategyUpdate(BaseModel):
     focus_categories: Optional[List[str]] = None
     focus_regions: Optional[List[str]] = None
@@ -1618,9 +1675,9 @@ class TelegramCallbackUpdateRequest(BaseModel):
 class TelegramActionResponse(BaseModel):
     status: str
     detail: str
-    decision_record_id: int
-    action: Literal["bid_now", "review", "skip"]
-    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    decision_record_id: Optional[int] = None
+    action: Optional[Literal["bid_now", "review", "skip"]] = None
+    decision_status: Optional[Literal["planned", "reviewing", "submitted", "skipped"]] = None
 
 
 class TelegramSyncResponse(BaseModel):

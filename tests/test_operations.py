@@ -20,6 +20,7 @@ from app.schemas.schemas import CrawlRequest
 from app.services.classifier import NoticeClassifierService
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.notifications.telegram import TelegramNotificationService
+from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
 
 
 def test_crawl_skeleton(client):
@@ -2939,6 +2940,296 @@ def test_telegram_webhook_processes_start_message(client, monkeypatch):
     assert len(deliveries) == 1
     assert deliveries[0]["chat_id"] == "1594710346"
     assert "감지된 chat id: 1594710346" in deliveries[0]["message"]
+
+
+def test_telegram_webhook_updates_operator_strategy_from_text_command(client, monkeypatch):
+    """Telegram strategy commands should update stored watch rules without leaving the chat."""
+    deliveries: list[dict] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "secret-token")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append({"message": message, "chat_id": chat_id, "reply_markup": reply_markup})
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram delivery succeeded.",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+
+    update_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 601,
+            "message": {
+                "message_id": 100,
+                "text": (
+                    "/strategy_set categories=software,security regions=서울특별시 "
+                    "keywords=AI,데이터 min_budget=90000000 max_budget=180000000 "
+                    "match=0.66 probability=0.61 bid_now=0.77 review=0.52 "
+                    "high_priority=false limit=6"
+                ),
+                "chat": {"id": 1594710346},
+            },
+        },
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["status"] == "processed"
+    strategy_response = client.get("/api/v1/operator/strategy")
+    assert strategy_response.status_code == 200
+    strategy = strategy_response.json()
+    assert strategy["focus_categories"] == ["software", "security"]
+    assert strategy["focus_regions"] == ["서울특별시"]
+    assert strategy["required_keywords"] == ["AI", "데이터"]
+    assert strategy["min_budget_estimate"] == 90000000.0
+    assert strategy["max_budget_estimate"] == 180000000.0
+    assert strategy["minimum_match_score"] == 0.66
+    assert strategy["minimum_probability_score"] == 0.61
+    assert strategy["bid_now_threshold"] == 0.77
+    assert strategy["review_threshold"] == 0.52
+    assert strategy["notify_only_high_priority"] is False
+    assert strategy["max_recommended_candidates"] == 6
+    assert deliveries[-1]["chat_id"] == "1594710346"
+    assert "전략이 업데이트되었습니다." in deliveries[-1]["message"]
+
+    clear_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 602,
+            "message": {
+                "message_id": 101,
+                "text": "/strategy_clear categories budget",
+                "chat": {"id": 1594710346},
+            },
+        },
+    )
+
+    assert clear_response.status_code == 200
+    strategy = client.get("/api/v1/operator/strategy").json()
+    assert strategy["focus_categories"] == []
+    assert strategy["min_budget_estimate"] == 0.0
+    assert strategy["max_budget_estimate"] == 0.0
+    assert strategy["focus_regions"] == ["서울특별시"]
+    assert "전략 항목을 초기화했습니다." in deliveries[-1]["message"]
+
+
+def test_telegram_strategy_buttons_apply_step_edit_after_confirmation(client, monkeypatch):
+    """Strategy edit buttons should stage changes until the operator confirms them."""
+    deliveries: list[dict] = []
+    acknowledgements: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "secret-token")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append({"message": message, "chat_id": chat_id, "reply_markup": reply_markup})
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram delivery succeeded.",
+        }
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        acknowledgements.append((callback_query_id, text))
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram callback acknowledgement succeeded.",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+    monkeypatch.setattr(TelegramNotificationService, "answer_callback_query", fake_answer)
+
+    strategy_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 611,
+            "message": {
+                "message_id": 110,
+                "text": "/strategy",
+                "chat": {"id": 1594710346},
+            },
+        },
+    )
+
+    assert strategy_response.status_code == 200
+    assert strategy_response.json()["status"] == "processed"
+    button_payloads = {
+        button["callback_data"]
+        for row in deliveries[-1]["reply_markup"]["inline_keyboard"]
+        for button in row
+    }
+    assert {
+        "strategy-edit:categories",
+        "strategy-edit:regions",
+        "strategy-edit:keywords",
+        "strategy-edit:budget",
+        "strategy-edit:thresholds",
+        "strategy-edit:notification",
+        "strategy-edit:limit",
+    }.issubset(button_payloads)
+
+    select_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 612,
+            "callback_query": {
+                "id": "strategy-callback-1",
+                "data": "strategy-edit:categories",
+                "message": {
+                    "message_id": 111,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+
+    assert select_response.status_code == 200
+    assert select_response.json()["status"] == "processed"
+    assert "업종 새 값을 입력하세요." in deliveries[-1]["message"]
+    assert deliveries[-1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "strategy-edit:cancel"
+    TelegramStrategyCommandProcessor.PENDING_EDITS.clear()
+
+    value_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 613,
+            "message": {
+                "message_id": 112,
+                "text": "software,security",
+                "chat": {"id": 1594710346},
+            },
+        },
+    )
+
+    assert value_response.status_code == 200
+    assert value_response.json()["status"] == "processed"
+    assert "적용 전 확인" in deliveries[-1]["message"]
+    confirm_payloads = [
+        button["callback_data"]
+        for row in deliveries[-1]["reply_markup"]["inline_keyboard"]
+        for button in row
+    ]
+    assert confirm_payloads == ["strategy-edit:apply", "strategy-edit:cancel"]
+    assert client.get("/api/v1/operator/strategy").json()["focus_categories"] == []
+
+    apply_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 614,
+            "callback_query": {
+                "id": "strategy-callback-2",
+                "data": "strategy-edit:apply",
+                "message": {
+                    "message_id": 113,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+
+    assert apply_response.status_code == 200
+    assert client.get("/api/v1/operator/strategy").json()["focus_categories"] == ["software", "security"]
+    assert "전략이 업데이트되었습니다." in deliveries[-1]["message"]
+    assert acknowledgements == [
+        ("strategy-callback-1", "전략 수정 처리 완료"),
+        ("strategy-callback-2", "전략 수정 처리 완료"),
+    ]
+
+
+def test_telegram_strategy_step_rejects_invalid_value_without_mutation(client, monkeypatch):
+    """Invalid step values should keep the stored strategy unchanged and show an example."""
+    deliveries: list[dict] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "secret-token")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append({"message": message, "chat_id": chat_id, "reply_markup": reply_markup})
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram delivery succeeded.",
+        }
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram callback acknowledgement succeeded.",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+    monkeypatch.setattr(TelegramNotificationService, "answer_callback_query", fake_answer)
+
+    client.put(
+        "/api/v1/operator/strategy",
+        json={"bid_now_threshold": 0.7, "review_threshold": 0.45},
+    )
+    client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 621,
+            "callback_query": {
+                "id": "strategy-callback-3",
+                "data": "strategy-edit:thresholds",
+                "message": {
+                    "message_id": 120,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+    invalid_response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 622,
+            "message": {
+                "message_id": 121,
+                "text": "bid_now=0.60 review=0.80",
+                "chat": {"id": 1594710346},
+            },
+        },
+    )
+
+    assert invalid_response.status_code == 200
+    assert "처리 실패:" in deliveries[-1]["message"]
+    assert "올바른 예시:" in deliveries[-1]["message"]
+    strategy = client.get("/api/v1/operator/strategy").json()
+    assert strategy["bid_now_threshold"] == 0.7
+    assert strategy["review_threshold"] == 0.45
+    client.post(
+        "/api/v1/operations/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-token"},
+        json={
+            "update_id": 623,
+            "callback_query": {
+                "id": "strategy-callback-4",
+                "data": "strategy-edit:cancel",
+                "message": {
+                    "message_id": 122,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
 
 
 def test_telegram_webhook_rejects_invalid_secret(client, monkeypatch):

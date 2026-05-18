@@ -8,6 +8,7 @@ from app.models.models import Project
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
+from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
 
 
 class TelegramUpdateProcessor:
@@ -17,13 +18,14 @@ class TelegramUpdateProcessor:
 
     def __init__(self, telegram_service: TelegramNotificationService | None = None) -> None:
         self.telegram = telegram_service or TelegramNotificationService()
+        self.strategy_processor = TelegramStrategyCommandProcessor()
 
     def process_update(self, db: Session, update: dict) -> dict[str, object]:
         """Process one Telegram update payload."""
         if "callback_query" in update:
             return self._process_callback_query(db, update)
         if "message" in update:
-            return self._process_message(update)
+            return self._process_message(db, update)
         return {
             "status": "ignored",
             "detail": "Unsupported Telegram update type.",
@@ -34,12 +36,30 @@ class TelegramUpdateProcessor:
         callback_query = update.get("callback_query") or {}
         callback_query_id = str(callback_query.get("id") or "")
         callback_data = str(callback_query.get("data") or "")
+        chat_id = self._extract_chat_id(update)
+
+        strategy_reply = self.strategy_processor.process_callback(db, callback_data, chat_id=chat_id)
+        if strategy_reply is not None:
+            if callback_query_id:
+                self.telegram.answer_callback_query(callback_query_id, "전략 수정 처리 완료")
+            if chat_id:
+                self.telegram.send_message(
+                    strategy_reply.message,
+                    reply_markup=strategy_reply.reply_markup,
+                    chat_id=str(chat_id),
+                )
+            return {
+                "status": "processed",
+                "detail": "Telegram strategy callback handled.",
+                "chat_id": chat_id,
+            }
+
         parsed_callback = self.telegram.parse_bid_decision_callback_data(callback_data)
         if parsed_callback is None:
             return {
                 "status": "ignored",
                 "detail": "Unsupported Telegram callback payload.",
-                "chat_id": self._extract_chat_id(update),
+                "chat_id": chat_id,
             }
 
         decision_record_id, requested_action = parsed_callback
@@ -69,13 +89,13 @@ class TelegramUpdateProcessor:
         return {
             "status": "processed",
             "detail": acknowledgement_text,
-            "chat_id": self._extract_chat_id(update),
+            "chat_id": chat_id,
             "decision_record_id": record.id,
             "action": record.action,
             "decision_status": record.decision_status,
         }
 
-    def _process_message(self, update: dict) -> dict[str, object]:
+    def _process_message(self, db: Session, update: dict) -> dict[str, object]:
         message = update.get("message") or {}
         chat_id = self._extract_chat_id(update)
         text = str(message.get("text") or "").strip()
@@ -103,6 +123,19 @@ class TelegramUpdateProcessor:
             return {
                 "status": "processed",
                 "detail": "Telegram start/help message handled.",
+                "chat_id": chat_id,
+            }
+
+        strategy_response = self.strategy_processor.process_text(db, text, chat_id=chat_id)
+        if strategy_response is not None:
+            self.telegram.send_message(
+                strategy_response.message,
+                reply_markup=strategy_response.reply_markup,
+                chat_id=str(chat_id),
+            )
+            return {
+                "status": "processed",
+                "detail": "Telegram strategy command handled.",
                 "chat_id": chat_id,
             }
 

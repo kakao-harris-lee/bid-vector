@@ -332,6 +332,7 @@ With this server override, training queue consumers (`training-worker`) and serv
 - `GET /api/v1/operator/strategy/monitor/tasks/{task_id}` - Check the background strategy monitor status and fetch the final persisted result
 - `GET /api/v1/operator/strategy/monitor/runs` - List recent strategy monitor execution history with status, counts, and trigger source
 - `GET /api/v1/operator/strategy/monitor/runs/{run_id}` - Inspect one strategy monitor run with full payloads and new/continuing/dropped candidate diff details
+- `GET /api/v1/operator/dashboard` - Return a card-ready web dashboard payload connecting analysis entrypoints, recent bid decisions, monitor runs, notifications, and prediction feedback
 - `GET /api/v1/operator/overview` - Get a compact operator dashboard summary
 - `GET /api/v1/operator/notifications` - Get recent Telegram-style notifications for the web dashboard
 - `PUT /api/v1/operator/notifications/{id}/read` - Mark a notification as read on the web dashboard
@@ -427,12 +428,20 @@ Realtime events use a common envelope: `event_id`, `event_type`, `created_at`, a
 - `GET /api/v1/operations/bid-decisions/{decision_record_id}` - Get one persisted bid decision with project snapshot and recent timeline
 - `GET /api/v1/operations/projects/{project_id}/bid-decision-timeline` - Fetch recent bid decision history for one project
 - `POST /api/v1/operations/notify/telegram` - Build and best-effort send a Telegram notification payload
-- `POST /api/v1/operations/telegram/callback` - Process Telegram inline button callbacks (`투찰`, `검토`, `보류`) for persisted bid decisions
-- `POST /api/v1/operations/telegram/webhook` - Process raw Telegram webhook updates for `/start` messages and inline button callbacks
+- `POST /api/v1/operations/telegram/callback` - Process Telegram inline button callbacks for persisted bid decisions and strategy edit confirmations
+- `POST /api/v1/operations/telegram/webhook` - Process raw Telegram webhook updates for `/start`, strategy text commands, strategy edit buttons, and bid decision buttons
 - `POST /api/v1/operations/telegram/sync` - Manually fetch pending Telegram updates via polling and process them immediately
 - `GET /api/v1/operations/telegram/status` - Inspect Telegram webhook/polling diagnostics, pending update visibility, and detected chat ids
 
 `POST /api/v1/operations/allocate` remains as a deprecated compatibility alias while the domain language migrates away from multi-user allocation.
+
+Telegram strategy commands:
+
+- `/strategy` - Show the current watch strategy, short command help, and inline edit buttons for `업종`, `지역`, `키워드`, `예산`, `임계치`, `알림 범위`, and `후보 수`
+- `/strategy_set categories=software,security regions=서울 keywords=AI,데이터 min_budget=90000000 max_budget=180000000 match=0.65 probability=0.60 bid_now=0.75 review=0.50 high_priority=true limit=10` - Update watch rules from chat
+- `/strategy_clear categories regions keywords budget thresholds` - Reset selected watch-rule groups
+
+The `/strategy` edit buttons use a staged flow: choose a field, send the new value, review the parsed change, then tap `적용` or `취소`. Invalid values leave the stored strategy unchanged and reply with the current value plus a valid example. The text commands above remain supported for faster bulk edits.
 
 When a bid decision is saved or a real bid is submitted, the backend now also creates an operator notification record and best-effort sends the same summary to Telegram when bot credentials are configured. The web dashboard still keeps the full recent notification history even if Telegram delivery is unavailable.
 

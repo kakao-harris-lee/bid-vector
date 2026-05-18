@@ -1247,3 +1247,130 @@ def test_operator_overview_reports_single_user_counts(client):
     assert payload["project_count"] >= 0
     assert payload["bid_count"] >= 0
     assert payload["profile_configured"] is False
+
+
+def test_operator_dashboard_returns_card_ready_workflow_payload(client, test_db):
+    """The operator dashboard endpoint should connect analysis, decision, monitoring, and feedback surfaces."""
+    client.put(
+        "/api/v1/operator/profile",
+        json={
+            "business_type": "software",
+            "license_codes": ["SW001"],
+            "region_codes": ["서울특별시"],
+            "annual_revenue": 1500000000.0,
+            "capacity_score": 0.9,
+            "total_awards": 5,
+        },
+    )
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Dashboard Connected Project",
+            "description": "Expose this bid decision on the web dashboard",
+            "requirements": "SW001 and 서울특별시 execution",
+            "budget_estimate": 120000000.0,
+            "category": "software",
+        },
+    )
+    project_id = project_response.json()["id"]
+    decision_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project_id,
+            "recommended_amount": 113000000.0,
+            "probability_score": 0.86,
+            "matched_score": 0.82,
+            "deadline_hours_remaining": 12,
+            "current_active_bids": 0,
+            "max_active_bids": 3,
+            "current_workload_score": 0.0,
+        },
+    )
+    decision_id = decision_response.json()["id"]
+    operator = test_db.query(User).filter(User.username == "operator").one()
+    monitor_run = OperatorStrategyRun(
+        operator_id=operator.id,
+        trigger_source="manual_sync",
+        status="completed",
+        high_priority_only=True,
+        limit_applied=5,
+        request_payload="{}",
+        result_payload="{}",
+        persisted_candidate_count=1,
+        notification_count=1,
+        created_at=datetime.now(UTC),
+        completed_at=datetime.now(UTC),
+    )
+    test_db.add(monitor_run)
+    test_db.commit()
+    test_db.refresh(monitor_run)
+
+    response = client.get("/api/v1/operator/dashboard", params={"days": 30, "limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["overview"]["profile_configured"] is True
+    card_keys = {card["key"] for card in payload["cards"]}
+    assert {
+        "profile_configured",
+        "active_bid_decisions",
+        "unread_notifications",
+        "monitor_failures",
+        "recommendation_error_rate",
+    }.issubset(card_keys)
+    assert payload["action_hrefs"]["opportunity_analysis"] == "/api/v1/operations/opportunity-analysis"
+    assert payload["action_hrefs"]["strategy_monitor_runs"] == "/api/v1/operator/strategy/monitor/runs"
+    assert payload["feedback_summary"]["href"] == "/api/v1/analytics/prediction-feedback"
+    assert payload["recent_decisions"][0]["decision_record_id"] == decision_id
+    assert payload["recent_decisions"][0]["detail_href"].endswith(str(decision_id))
+    assert payload["recent_decisions"][0]["analysis_href"] == "/api/v1/operations/opportunity-analysis"
+    assert payload["recent_monitor_runs"][0]["monitor_run_id"] == monitor_run.id
+    assert payload["recent_monitor_runs"][0]["detail_href"] == f"/api/v1/operator/strategy/monitor/runs/{monitor_run.id}"
+
+
+def test_operator_dashboard_contract_handles_empty_state_and_openapi_schema(client):
+    """The dashboard contract should be stable even before any decisions or monitor runs exist."""
+    response = client.get("/api/v1/operator/dashboard", params={"days": 7, "limit": 3})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {
+        "operator_id",
+        "generated_at",
+        "period_days",
+        "overview",
+        "cards",
+        "recent_decisions",
+        "recent_monitor_runs",
+        "feedback_summary",
+        "action_hrefs",
+    }
+    assert payload["recent_decisions"] == []
+    assert payload["recent_monitor_runs"] == []
+    assert payload["feedback_summary"]["result_count"] == 0
+    assert set(payload["action_hrefs"]) == {
+        "opportunity_analysis",
+        "decision_list",
+        "strategy_candidates",
+        "strategy_monitor",
+        "strategy_monitor_runs",
+        "prediction_feedback",
+        "operations_dashboard",
+    }
+    for card in payload["cards"]:
+        assert {"key", "label", "value", "unit", "status", "detail", "href"}.issubset(card)
+        assert card["status"] in {"healthy", "watch", "critical", "info"}
+
+    openapi = client.get("/openapi.json").json()
+    dashboard_schema = openapi["paths"]["/api/v1/operator/dashboard"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert dashboard_schema["$ref"].endswith("/OperatorDashboardResponse")
+    component = openapi["components"]["schemas"]["OperatorDashboardResponse"]
+    assert {
+        "cards",
+        "recent_decisions",
+        "recent_monitor_runs",
+        "feedback_summary",
+        "action_hrefs",
+    }.issubset(component["properties"])

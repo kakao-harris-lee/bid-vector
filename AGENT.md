@@ -13,7 +13,7 @@
 - 데이터 계층: SQLAlchemy + PostgreSQL/pgvector 중심, 테스트는 SQLite 사용
 - 비동기/스케줄링: in-process strategy scheduler + Celery + optional RabbitMQ/worker/beat profile 공존
 - 운영 방향: Redis를 기본 전제로 두지 않고 PostgreSQL 중심 구조를 유지
-- 현재 검증 상태: 로컬 `pytest -q` 기준 `151 passed, 1 skipped`, `docker compose up -d` + `/health` + `/api/v1/operator/strategy` smoke test 재검증 완료, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 해석 확인 완료
+- 현재 검증 상태: `python3 -m py_compile app/services/notifications/telegram_strategy.py app/services/notifications/update_processor.py app/api/operator.py app/api/operations.py app/api/analytics.py app/schemas/schemas.py` 통과, `pytest -q tests/test_operator.py tests/test_operations.py` 기준 `76 passed`, 로컬 `pytest -q` 기준 `164 passed, 1 skipped`, `docker compose config --quiet` 및 `docker compose --profile tasks config --quiet` 통과
 - Docker 이미지 프로필: `api-runtime`(기본), `api-embedding`, `api-training`, `api-ml-full`
 
 ### 현재까지 완료된 범위
@@ -36,7 +36,8 @@
 - 성공 / 실패 / 보류 실험 이력 기반 review bucket, priority sort, 필터/카운트 payload
 - experiment run 이력 기반 `decision-recommendations` priority score / history adjustment
 - 장기 experiment run 이력 기반 category/threshold `parameter_recommendation`, confidence, apply-time delta scaling
-- Telegram 알림 / callback / polling / 상태 동기화, 웹 알림 fallback, 인증된 WebSocket realtime event stream
+- Telegram 알림 / callback / polling / 상태 동기화, `/strategy` 버튼 기반 단계형 전략 편집, 웹 알림 fallback, 인증된 WebSocket realtime event stream
+- 웹 클라이언트용 operator dashboard API 계약: `GET /api/v1/operator/dashboard`의 `cards`, `recent_decisions`, `recent_monitor_runs`, `feedback_summary`, `action_hrefs`
 - PostgreSQL `LISTEN/NOTIFY` 기반 optional realtime fanout backend
 - 전략 모니터링 preview / execute / history 및 in-process scheduler
 - 크롤 성공률 / 전략 모니터링 성과 / 최근 실패 원인을 묶은 operations dashboard analytics
@@ -56,7 +57,9 @@
 
 ### 아직 핵심적으로 남은 범위
 
+- 실제 KONEPS/Telegram credential 환경에서 수집 → 전략 후보 → 모니터링 → Telegram 알림/버튼 callback → 전략 명령/버튼 편집까지 한 주기 smoke test
 - 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
+- 별도 프론트엔드 저장소가 있다면 `GET /api/v1/operator/dashboard` 계약을 화면 컴포넌트에 연결
 
 ## 작업 원칙
 
@@ -91,12 +94,13 @@
 - `app/services/koneps/collector.py` 기반 mock/live 수집 경로
 - `HistoricalData`, `TenderResult`, `CrawlJob`, `Project` 연결 적재
 - 수집 API / 작업 상태 / 기본 회귀 테스트
+- operations dashboard의 crawl 상태 카드와 실패 원인 집계
 
 남은 작업:
 
 - live 수집 안정화(retry, backoff, selector drift 대응)
 - 백필/주기 수집 작업 분리
-- 수집 성공률 / 실패 원인 / 마지막 성공 시각 집계
+- 실제 KONEPS OpenAPI credential로 운영 smoke test 실행 및 증적 저장
 
 ### B. 맞춤형 공고 분류 및 유사도 — 기반 완료, 정밀도 보정 단계
 
@@ -159,7 +163,7 @@
 
 남은 작업:
 
-- 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
+- 운영 데이터 기반 threshold/category recommendation calibration 지속
 
 우선 검토 파일:
 
@@ -174,6 +178,12 @@
 이미 구현됨:
 
 - Telegram 메시지 포맷 / callback / polling / 상태 동기화
+- `/strategy`, `/strategy_set`, `/strategy_clear` 기반 전략 조회/수정/초기화
+- `/strategy` inline button 기반 단계형 편집
+  - 지원 필드: 업종, 지역, 키워드, 예산, 임계치, 알림 범위, 후보 수
+  - 흐름: 필드 선택 → 새 값 입력 → 검증 → 적용/취소
+  - 잘못된 입력은 기존 전략을 변경하지 않고 현재 값과 예시를 안내
+  - pending edit state는 API multi-worker 환경을 고려해 internal analytics telemetry로 보존
 - 웹 알림 fallback 및 운영자 notification 조회
 - WebSocket 연결 관리 레이어 및 realtime event envelope
 - WebSocket operator access token 인증
@@ -182,6 +192,7 @@
 
 남은 작업:
 
+- 실제 Telegram bot credential/chat id/webhook 또는 polling 환경에서 전략 명령/버튼 편집 smoke test
 - 필요 시 이벤트 범위 확대 및 frontend reconnect/replay 정책 조율
 
 ### F. 비동기 / 실행 인프라 — compose 복구 완료, 운영 정리 필요
@@ -202,26 +213,36 @@
 
 남은 작업:
 
-- production 환경의 task/broker 상태는 operations dashboard payload와 카드로 노출됨
 - 운영 배포 시 `preflight-rollout`을 실제 credential/IAM 환경에서 실행
 
-### G. 분석 / 대시보드 집계 — prediction / operations reporting 기반 완료, 카드 확장 단계
+### G. 분석 / 대시보드 집계 — prediction / operations / operator dashboard 계약 완료, 외부 클라이언트 연결 단계
 
 이미 구현됨:
 
 - overview / summary / prediction feedback
+- operator dashboard: `GET /api/v1/operator/dashboard`
+  - `cards`: 프로필, 진행 중 판단, 미확인 알림, 모니터링 실패, 추천 오차율
+  - `recent_decisions`: 최근 입찰 판단과 `/api/v1/operations/bid-decisions/{id}` 링크
+  - `recent_monitor_runs`: 최근 전략 모니터링 실행과 `/api/v1/operator/strategy/monitor/runs/{run_id}` 링크
+  - `feedback_summary`: prediction feedback 요약과 `/api/v1/analytics/prediction-feedback` 링크
+  - `action_hrefs`: 분석, 후보, 모니터링, 운영 대시보드 진입점
+- OpenAPI/response model 기반 operator dashboard contract test 및 빈 상태 테스트
 - prediction observability: predictor별 정확도, fallback 빈도, guardrail 빈도, pricing mode breakdown, 기간 버킷 성능 추세
 - operations dashboard: 크롤 성공률, 실패 원인, 전략 모니터링 완료율, 후보 선택/저장/알림 비율, task/broker health, stale/failed/retry task 집계, Telegram 전송률, ML release gate/backtest 상태
 - decision insights / funnel / recommendations / experiments
 
 남은 작업:
 
+- 별도 프론트엔드 앱이 있다면 operator dashboard API 계약을 실제 화면 컴포넌트에 연결
+- 실제 KONEPS/Telegram 외부 연동 환경에서 운영 smoke test 결과를 문서화
 - 실제 운영 credential/IAM 기준 object storage rollout preflight 실행 결과를 운영 절차에 반영
 
 ## 현재 권장 실행 순서
 
-1. 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
-2. 필요 시 A/B 분류 정확도 보정 또는 realtime replay/retention 정책 정리
+1. 실제 KONEPS/Telegram credential 환경에서 운영 smoke test 실행
+2. 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
+3. 별도 프론트엔드 앱이 있다면 `GET /api/v1/operator/dashboard` 계약 연결 확인
+4. 필요 시 A/B 분류 정확도 보정 또는 realtime replay/retention 정책 정리
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 
@@ -289,14 +310,16 @@
 
 ## 추천 작업 순서
 
-1. predictor backtest / `auto` selection은 `app/ai/predictor_backtest.py`와 `app/ai/price_prediction.py`에 구현됨
-2. 모델 정확도 / fallback / guardrail / 기간 추세 집계는 `app/api/analytics.py`의 `prediction-observability`로 제공 중
-3. `docker-compose.yml`, `app/tasks/`를 정리해 무거운 작업을 운영 경로로 분리
+1. 운영 smoke test는 `docs/remaining-priority-plan.md`의 KONEPS/Telegram 실행 순서와 증적 기준을 따른다.
+2. ML release preflight는 `make ml-release-preflight MANIFEST_REF=<manifest-ref> REQUIRE_SIGNATURE=true` 또는 `python scripts/promote_ml_release.py preflight-rollout --manifest <manifest-ref> --require-signature`로 실행한다.
+3. predictor backtest / `auto` selection은 `app/ai/predictor_backtest.py`와 `app/ai/price_prediction.py`에 구현됨
+4. 모델 정확도 / fallback / guardrail / 기간 추세 집계는 `app/api/analytics.py`의 `prediction-observability`로 제공 중
+5. `docker-compose.yml`, `app/tasks/`를 정리해 무거운 작업을 운영 경로로 분리
    - 기본 compose는 `api-runtime`
    - semantic/embedding 재색인은 `api-embedding`
    - 학습/데이터셋 정리는 `api-training`
-4. WebSocket 실시간 이벤트 레이어와 notification/crawl/strategy event payload는 구현됨
-5. `app/services/decision_experiments.py`의 action payload는 구현됐고, 다음은 성공/실패/보류 실험 이력 기반 정렬 보강
+6. WebSocket 실시간 이벤트 레이어와 notification/crawl/strategy event payload는 구현됨
+7. `app/services/decision_experiments.py`의 action payload는 구현됐고, 다음은 성공/실패/보류 실험 이력 기반 정렬 보강
 
 ## 실행 전 확인 체크리스트
 
@@ -311,3 +334,5 @@
 - 기획 원본: `first_plan.md`
 - 프로젝트 지침: `.github/copilot-instructions.md`
 - 운영 개요: `README.md`
+- 현재 잔여 과제/운영 증적 기준: `docs/remaining-priority-plan.md`
+- 구현 로드맵 상태: `docs/optimal-bid-analysis-roadmap.md`

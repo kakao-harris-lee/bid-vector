@@ -39,7 +39,7 @@ from app.tasks.jobs import (
 
 router = APIRouter()
 
-INTERNAL_TELEMETRY_EVENT_TYPES = {"telegram.delivery"}
+INTERNAL_TELEMETRY_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
 
 
 def _raise_decision_experiment_http_error(exc: ValueError) -> None:

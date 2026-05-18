@@ -270,13 +270,17 @@ def handle_telegram_callback(update: TelegramCallbackUpdateRequest, db: Session 
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    return {
+    response = {
         "status": str(result["status"]),
         "detail": str(result["detail"]),
-        "decision_record_id": int(result["decision_record_id"]),
-        "action": str(result["action"]),
-        "decision_status": str(result["decision_status"]),
     }
+    if result.get("decision_record_id") is not None:
+        response["decision_record_id"] = int(result["decision_record_id"])
+    if result.get("action") is not None:
+        response["action"] = str(result["action"])
+    if result.get("decision_status") is not None:
+        response["decision_status"] = str(result["decision_status"])
+    return response
 
 
 @router.post("/telegram/webhook", response_model=TelegramSyncResponse)
