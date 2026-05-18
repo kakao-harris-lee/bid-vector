@@ -1,4 +1,4 @@
-.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-up-server docker-down docker-logs docker-logs-tasks docker-logs-server ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
+.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-up-server docker-down docker-logs docker-logs-tasks docker-logs-server production-smoke ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
 
 REBUILD_LIMIT ?= 100
 REBUILD_OFFSET ?= 0
@@ -7,6 +7,9 @@ ENV_FILE ?=
 REQUIRE_SIGNATURE ?= false
 WRITE_PROBE ?= true
 CELERY_COMPOSE_BROKER_URL ?= amqp://bidvector:bidvector@rabbitmq:5672/bidvector
+SMOKE_BASE_URL ?= http://localhost:8000
+SMOKE_WRITE ?= false
+SMOKE_EVIDENCE ?=
 
 help:
 	@echo "Available commands:"
@@ -32,6 +35,7 @@ help:
 	@echo "  make docker-down  - Stop Docker containers"
 	@echo "  make docker-logs-tasks - Tail API + ops/ML/training worker + beat + RabbitMQ logs"
 	@echo "  make docker-logs-server - Tail logs for the server stack started with docker-up-server"
+	@echo "  make production-smoke - Run the short production smoke test script"
 	@echo "  make ml-release-manifest - Validate artifacts and write a release manifest"
 	@echo "  make ml-release-preflight - Check manifest signature/artifacts and object storage before rollout"
 	@echo "  make ml-release-apply - Print the runtime settings stored in a manifest"
@@ -110,6 +114,9 @@ docker-logs-tasks:
 
 docker-logs-server:
 	docker compose -f docker-compose.yml -f docker-compose.server.yml logs -f api worker ml-worker training-worker beat rabbitmq
+
+production-smoke:
+	python scripts/production_smoke_test.py --base-url "$(SMOKE_BASE_URL)" $(if $(filter true,$(SMOKE_WRITE)),--write) $(if $(SMOKE_EVIDENCE),--evidence-out "$(SMOKE_EVIDENCE)")
 
 ml-release-manifest:
 	python scripts/promote_ml_release.py create-manifest --release-tag "$(RELEASE_TAG)" --embedding-model-path "$(EMBEDDING_MODEL_PATH)" --lstm-artifact-path "$(LSTM_ARTIFACT_PATH)" --ensemble-artifact-path "$(ENSEMBLE_ARTIFACT_PATH)" --git-sha "$(GIT_SHA)" --notes "$(NOTES)" --rebuild-limit $(REBUILD_LIMIT) --rebuild-offset $(REBUILD_OFFSET) --category "$(REBUILD_CATEGORY)" --project-status "$(REBUILD_PROJECT_STATUS)" $(if $(filter true,$(PUBLISH_REMOTE)),--publish-remote)

@@ -334,5 +334,6 @@
 - 기획 원본: `first_plan.md`
 - 프로젝트 지침: `.github/copilot-instructions.md`
 - 운영 개요: `README.md`
+- 운영 smoke test 간단 실행 가이드: `docs/production-smoke-test.md`
 - 현재 잔여 과제/운영 증적 기준: `docs/remaining-priority-plan.md`
 - 구현 로드맵 상태: `docs/optimal-bid-analysis-roadmap.md`

@@ -308,6 +308,27 @@ For server deployment, this repository now includes `docker-compose.server.yml` 
    make docker-logs-server
    ```
 
+4. **Run the short smoke test**
+
+   ```bash
+   python scripts/production_smoke_test.py \
+     --base-url http://localhost:8000 \
+     --evidence-out smoke-read.json
+   ```
+
+   To verify real KONEPS/Telegram integration, run the mutating smoke after confirming production credentials:
+
+   ```bash
+   python scripts/production_smoke_test.py \
+     --base-url http://localhost:8000 \
+     --write \
+     --max-items 3 \
+     --monitor-limit 3 \
+     --evidence-out smoke-write.json
+   ```
+
+   The full compact guide is in `docs/production-smoke-test.md`.
+
 With this server override, training queue consumers (`training-worker`) and serving API (`api`) run together, so queued ML training and runtime inference can work on the same host immediately after startup.
 
 ## API Endpoints
