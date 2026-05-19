@@ -3395,8 +3395,32 @@ def test_telegram_status_reports_webhook_and_chat_diagnostics(client, monkeypatc
     assert response.status_code == 200
     payload = response.json()
     assert payload["configured"] is True
+    assert payload["status"] == "healthy"
+    assert payload["detail"] == "Telegram is configured."
     assert payload["delivery_chat_id"] == "1594710346"
     assert payload["pending_update_count"] == 2
     assert payload["webhook_url"].endswith("/telegram/webhook")
     assert payload["has_custom_certificate"] is False
     assert payload["known_chat_ids"] == [987654321, 1594710346]
+
+
+def test_telegram_status_treats_placeholder_settings_as_unconfigured(client, monkeypatch):
+    """Placeholder Telegram secrets should not trigger Telegram API calls."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "replace-with-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "replace-with-target-chat-id")
+
+    def fail_get_updates(self, offset=None, limit=None, timeout_seconds=None):
+        raise AssertionError("placeholder Telegram settings should not call getUpdates")
+
+    monkeypatch.setattr(TelegramNotificationService, "get_updates", fail_get_updates)
+
+    response = client.get("/api/v1/operations/telegram/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["configured"] is False
+    assert payload["status"] == "watch"
+    assert payload["detail"] == "Telegram is not configured."
+    assert payload["pending_update_count"] == 0
+    assert payload["webhook_url"] == ""
+    assert payload["known_chat_ids"] == []

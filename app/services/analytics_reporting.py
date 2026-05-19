@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -15,6 +15,7 @@ from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun
 from app.services.ml_release import MLReleasePromotionService
+from app.services.notifications.telegram import TelegramNotificationService
 from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
@@ -317,7 +318,9 @@ class AnalyticsReportingService:
         skipped_count = sum(1 for item in event_payloads if str(item.get("status") or "").startswith("skipped"))
         delivery_attempt_count = len(event_payloads)
         success_rate = self._rate(sent_count, delivery_attempt_count)
+        telegram_configured = TelegramNotificationService().is_configured()
         status, detail = self._telegram_delivery_status(
+            configured=telegram_configured,
             notification_count=len(notifications),
             delivery_attempt_count=delivery_attempt_count,
             sent_count=sent_count,
@@ -334,7 +337,7 @@ class AnalyticsReportingService:
             "unread_count": sum(1 for item in notifications if not bool(item.is_read)),
             "decision_notification_count": sum(1 for item in notifications if str(item.type or "") == "recommendation"),
             "bid_submission_notification_count": sum(1 for item in notifications if str(item.type or "") == "bid_update"),
-            "telegram_configured": bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID),
+            "telegram_configured": telegram_configured,
             "telegram_delivery_attempt_count": delivery_attempt_count,
             "telegram_sent_count": sent_count,
             "telegram_failed_count": failed_count,
@@ -368,15 +371,10 @@ class AnalyticsReportingService:
     def _build_ml_release_summary(self, *, recent_limit: int) -> dict[str, Any]:
         """Summarize local ML release manifests and predictor promotion gates."""
         manifest_dir = self._ml_manifest_dir()
-        manifest_paths = sorted(
-            manifest_dir.glob("*.json") if manifest_dir.exists() else [],
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        recent_manifests = [
-            self._read_manifest_summary(path)
-            for path in manifest_paths[:recent_limit]
-        ]
+        manifest_paths = list(manifest_dir.glob("*.json") if manifest_dir.exists() else [])
+        manifest_summaries = [self._read_manifest_summary(path) for path in manifest_paths]
+        manifest_summaries.sort(key=self._manifest_recency_key, reverse=True)
+        recent_manifests = manifest_summaries[:recent_limit]
         latest = recent_manifests[0] if recent_manifests else None
         status, detail = self._ml_release_status(latest, manifest_count=len(manifest_paths))
         backtest_status, backtest_detail = self._ml_backtest_status(latest)
@@ -437,7 +435,11 @@ class AnalyticsReportingService:
                 "label": "Strategy run completion",
                 "value": strategy_summary["completion_rate"],
                 "unit": "ratio",
-                "status": self._status_for_rate(strategy_summary["completion_rate"], warning=0.85, critical=0.65),
+                "status": (
+                    "info"
+                    if strategy_summary["run_count"] == 0
+                    else self._status_for_rate(strategy_summary["completion_rate"], warning=0.85, critical=0.65)
+                ),
                 "detail": f"{strategy_summary['run_count']} run(s), {strategy_summary['failed_count']} failed.",
             },
             {
@@ -445,7 +447,11 @@ class AnalyticsReportingService:
                 "label": "Candidate selection rate",
                 "value": strategy_summary["selection_rate"],
                 "unit": "ratio",
-                "status": "healthy" if strategy_summary["selected_candidate_count"] > 0 else "watch",
+                "status": (
+                    "info"
+                    if strategy_summary["evaluated_project_count"] == 0
+                    else "healthy" if strategy_summary["selected_candidate_count"] > 0 else "watch"
+                ),
                 "detail": (
                     f"{strategy_summary['selected_candidate_count']} selected from "
                     f"{strategy_summary['evaluated_project_count']} evaluated project(s)."
@@ -557,6 +563,7 @@ class AnalyticsReportingService:
     def _telegram_delivery_status(
         self,
         *,
+        configured: bool,
         notification_count: int,
         delivery_attempt_count: int,
         sent_count: int,
@@ -565,7 +572,6 @@ class AnalyticsReportingService:
         success_rate: float,
     ) -> tuple[str, str]:
         """Convert Telegram delivery telemetry into a dashboard status."""
-        configured = bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
         if not configured:
             if notification_count > 0 or pending_configuration_count > 0:
                 return "watch", "Telegram is not configured while operator notifications are being created."
@@ -612,6 +618,20 @@ class AnalyticsReportingService:
         if raw_path.is_absolute():
             return raw_path
         return Path(__file__).resolve().parents[2] / raw_path
+
+    def _manifest_recency_key(self, summary: dict[str, Any]) -> tuple[float, str]:
+        """Sort manifests by validation timestamp, falling back to the release tag."""
+        validated_on = summary.get("validated_on")
+        timestamp = 0.0
+        if validated_on:
+            try:
+                parsed = datetime.fromisoformat(str(validated_on).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                timestamp = parsed.timestamp()
+            except ValueError:
+                timestamp = 0.0
+        return timestamp, str(summary.get("release_tag") or summary.get("manifest_path") or "")
 
     def _read_manifest_summary(self, path: Path) -> dict[str, Any]:
         """Read one release manifest into a compact operations summary."""
@@ -687,7 +707,9 @@ class AnalyticsReportingService:
         if manifest_count == 0 or latest is None:
             return "watch", "No ML release manifest was found."
         if latest.get("signature_status") == "invalid":
-            return "critical", f"Latest manifest {latest.get('release_tag')} has an invalid signature."
+            if settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE:
+                return "critical", f"Latest manifest {latest.get('release_tag')} has an invalid signature."
+            return "watch", f"Latest manifest {latest.get('release_tag')} has an invalid optional signature."
         if latest.get("gate_passed") is False:
             return "critical", f"Latest manifest {latest.get('release_tag')} failed the predictor promotion gate."
         if latest.get("signature_status") == "missing":

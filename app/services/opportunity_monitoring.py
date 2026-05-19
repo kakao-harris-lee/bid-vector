@@ -8,7 +8,14 @@ import json
 from sqlalchemy.orm import Session
 
 from app.core.time import utc_now
-from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy, split_multi_value_text
+from app.core.single_user import (
+    DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
+    DEFAULT_OPERATOR_REVIEW_THRESHOLD,
+    ensure_operator_account,
+    ensure_operator_profile,
+    ensure_operator_strategy,
+    split_multi_value_text,
+)
 from app.models.models import OperatorStrategy, OperatorStrategyRun, Project
 from app.schemas.schemas import BidDecisionSaveRequest, OpportunityAnalysisRequest, OperatorStrategyMonitorRequest
 from app.services.allocation import BidDecisionService
@@ -43,6 +50,9 @@ class StrategyMonitoringService:
     DEFAULT_SAME_CATEGORY_ONLY = True
     DEFAULT_SIMILAR_LIMIT = 3
     DEFAULT_MIN_SIMILARITY = 0.15
+    PREVIEW_SCAN_MULTIPLIER = 12
+    PREVIEW_SCAN_FLOOR = 30
+    PREVIEW_SCAN_CEILING = 250
     SYNC_TRIGGER_SOURCE = "manual_sync"
     ASYNC_TRIGGER_SOURCE = "manual_async"
     SCHEDULED_TRIGGER_SOURCE = "scheduled"
@@ -78,6 +88,7 @@ class StrategyMonitoringService:
             same_category_only=self.DEFAULT_SAME_CATEGORY_ONLY,
             similar_limit=self.DEFAULT_SIMILAR_LIMIT,
             min_similarity=self.DEFAULT_MIN_SIMILARITY,
+            scan_limit=self._preview_scan_limit(resolved_limit),
         )
         candidates = [self._serialize_candidate(evaluation) for evaluation in evaluations[:resolved_limit]]
 
@@ -493,9 +504,20 @@ class StrategyMonitoringService:
         same_category_only: bool,
         similar_limit: int,
         min_similarity: float,
+        scan_limit: int | None = None,
     ) -> tuple[list[StrategyCandidateEvaluation], int]:
         """Analyze all currently actionable projects that pass stored watch rules."""
-        open_projects = db.query(Project).filter(Project.status.in_(self.ACTIVE_PROJECT_STATUSES)).all()
+        if not self._has_configured_watch_rules(strategy):
+            return [], 0
+
+        query = (
+            db.query(Project)
+            .filter(Project.status.in_(self.ACTIVE_PROJECT_STATUSES))
+            .order_by(Project.deadline.asc(), Project.id.asc())
+        )
+        if scan_limit is not None:
+            query = query.limit(max(1, int(scan_limit)))
+        open_projects = query.all()
         evaluations: list[StrategyCandidateEvaluation] = []
         evaluated_project_count = 0
 
@@ -540,6 +562,33 @@ class StrategyMonitoringService:
             )
         )
         return evaluations, evaluated_project_count
+
+    def _preview_scan_limit(self, resolved_limit: int) -> int:
+        """Bound preview work so a UI read cannot scan the full production table."""
+        scaled_limit = int(resolved_limit or self.DEFAULT_LIMIT) * self.PREVIEW_SCAN_MULTIPLIER
+        return min(max(scaled_limit, self.PREVIEW_SCAN_FLOOR), self.PREVIEW_SCAN_CEILING)
+
+    def _has_configured_watch_rules(self, strategy: OperatorStrategy) -> bool:
+        """Return whether the operator has set any non-default monitoring criteria."""
+        return any([
+            bool(split_multi_value_text(strategy.focus_categories)),
+            bool(split_multi_value_text(strategy.focus_regions)),
+            bool(split_multi_value_text(strategy.exclude_regions)),
+            bool(split_multi_value_text(strategy.required_keywords)),
+            bool(split_multi_value_text(strategy.exclude_keywords)),
+            float(strategy.min_budget_estimate or 0.0) > 0,
+            float(strategy.max_budget_estimate or 0.0) > 0,
+            round(float(strategy.minimum_match_score or 0.0), 4) != 0.6,
+            round(float(strategy.minimum_probability_score or 0.0), 4) != 0.55,
+            round(float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD), 4)
+            != DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
+            round(float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD), 4)
+            != DEFAULT_OPERATOR_REVIEW_THRESHOLD,
+            round(float(strategy.auto_workload_penalty_multiplier or 1.0), 4) != 1.0,
+            bool(self._load_json(strategy.category_priority_overrides or "{}")),
+            bool(strategy.notify_only_high_priority) is False,
+            int(strategy.max_recommended_candidates or self.DEFAULT_LIMIT) != self.DEFAULT_LIMIT,
+        ])
 
     def _analyze_project(
         self,

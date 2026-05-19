@@ -324,3 +324,70 @@ def test_operations_dashboard_reports_telegram_and_ml_release_cards(client, test
     assert cards["telegram_delivery_rate"]["value"] == pytest.approx(0.5, abs=0.0001)
     assert cards["ml_release_gate"]["status"] == "watch"
     assert cards["ml_backtest_samples"]["status"] == "healthy"
+
+
+def test_operations_dashboard_uses_manifest_validation_time_for_latest_release(
+    client, tmp_path, monkeypatch
+):
+    """The release dashboard should not treat a recently touched old manifest as latest."""
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    monkeypatch.setattr(settings, "ML_RELEASE_MANIFEST_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE", False)
+
+    newer_manifest = {
+        "release_tag": "2026-05-16-price-v1",
+        "validated_on": now.isoformat(),
+        "signature": {"algorithm": "HMAC-SHA256", "digest": "invalid"},
+        "promotion_gate": {
+            "predictor_backtest": {
+                "status": "passed",
+                "passed": True,
+                "thresholds": {"policy": "standard"},
+                "best_predictor_key": "ensemble",
+                "metrics": {
+                    "sample_count": 5,
+                    "average_absolute_error_rate": 0.0028,
+                    "dataset_quality_status": "warning",
+                },
+            }
+        },
+    }
+    older_manifest = {
+        "release_tag": "2026-05-15-price-v1",
+        "validated_on": (now - timedelta(days=1)).isoformat(),
+        "promotion_gate": {
+            "predictor_backtest": {
+                "status": "passed",
+                "passed": True,
+                "thresholds": {"policy": "standard"},
+                "best_predictor_key": "lstm",
+                "metrics": {
+                    "sample_count": 4,
+                    "average_absolute_error_rate": 0.004,
+                    "dataset_quality_status": "passed",
+                },
+            }
+        },
+    }
+    (tmp_path / "2026-05-16-price-v1.json").write_text(
+        json.dumps(newer_manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "2026-05-15-price-v1.json").write_text(
+        json.dumps(older_manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ml_release"]["latest_release_tag"] == "2026-05-16-price-v1"
+    assert payload["ml_release"]["latest_signature_status"] == "invalid"
+    assert payload["ml_release"]["status"] == "watch"
+    cards = {card["key"]: card for card in payload["cards"]}
+    assert cards["ml_release_gate"]["detail"] == (
+        "Latest manifest 2026-05-16-price-v1 has an invalid optional signature."
+    )

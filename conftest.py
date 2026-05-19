@@ -23,6 +23,10 @@ os.environ["CELERY_RESULT_BACKEND"] = "cache+memory://"
 os.environ["CELERY_ALLOW_INLINE_ML_TASKS"] = "false"
 os.environ["ML_RELEASE_OBJECT_STORAGE_URL"] = ""
 os.environ["ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH"] = "false"
+os.environ["PRICE_PREDICTION_PREFERRED_PREDICTOR"] = "historical"
+os.environ["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"] = "false"
+os.environ["PRICE_PREDICTION_LSTM_MODEL_PATH"] = ""
+os.environ["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] = ""
 
 from app.core.database import Base
 

@@ -326,10 +326,21 @@ def sync_telegram_updates(
 def get_telegram_status():
     """Expose Telegram delivery and webhook diagnostics for local debugging."""
     service = TelegramNotificationService()
-    updates = service.get_updates(limit=10, timeout_seconds=0)
-    webhook_info = service.get_webhook_info().get("result", {})
+    status_value = "healthy" if service.is_configured() else "watch"
+    detail = "Telegram is configured." if service.is_configured() else "Telegram is not configured."
+    updates = []
+    webhook_info = {}
+    if service.is_configured():
+        try:
+            updates = service.get_updates(limit=10, timeout_seconds=0)
+            webhook_info = service.get_webhook_info().get("result", {})
+        except RuntimeError as exc:
+            status_value = "error"
+            detail = str(exc)
     return {
         "configured": service.is_configured(),
+        "status": status_value,
+        "detail": detail,
         "delivery_chat_id": service.get_configured_chat_id() or None,
         "pending_update_count": int(webhook_info.get("pending_update_count", 0) or 0),
         "webhook_url": str(webhook_info.get("url", "") or ""),

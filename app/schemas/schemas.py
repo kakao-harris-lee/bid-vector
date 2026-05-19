@@ -1690,6 +1690,8 @@ class TelegramSyncResponse(BaseModel):
 
 class TelegramStatusResponse(BaseModel):
     configured: bool
+    status: Literal["healthy", "watch", "error"] = "healthy"
+    detail: str = ""
     delivery_chat_id: Optional[str] = None
     pending_update_count: int = 0
     webhook_url: str = ""

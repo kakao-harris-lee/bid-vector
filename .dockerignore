@@ -12,6 +12,7 @@ __pycache__/
 htmlcov/
 .DS_Store
 .history/
+.local/
 docs/
 tests/
 AGENT.md

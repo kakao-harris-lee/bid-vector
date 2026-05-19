@@ -16,7 +16,10 @@ class TelegramNotificationService:
 
     def is_configured(self) -> bool:
         """Return whether Telegram settings are available."""
-        return bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
+        return bool(
+            self._has_real_setting(settings.TELEGRAM_BOT_TOKEN)
+            and self._has_real_setting(settings.TELEGRAM_CHAT_ID)
+        )
 
     def send_message(
         self,
@@ -154,6 +157,18 @@ class TelegramNotificationService:
     def get_configured_chat_id(self) -> str:
         """Return the currently configured delivery chat id."""
         return settings.TELEGRAM_CHAT_ID
+
+    def _has_real_setting(self, value: str | None) -> bool:
+        """Treat scaffold placeholder values as missing runtime configuration."""
+        normalized = str(value or "").strip()
+        if not normalized:
+            return False
+        lowered = normalized.lower()
+        return not (
+            lowered.startswith("replace-with-")
+            or lowered.startswith("your-")
+            or lowered in {"changeme", "change-me", "change-me-now"}
+        )
 
     def _post_json(self, method_name: str, payload: dict[str, object]) -> dict[str, object]:
         """POST JSON to the Telegram Bot API and parse the JSON response."""

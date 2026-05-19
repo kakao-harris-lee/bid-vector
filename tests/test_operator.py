@@ -68,6 +68,38 @@ def test_get_operator_strategy_bootstraps_defaults(client):
     assert payload["strategy_configured"] is False
 
 
+def test_strategy_candidate_preview_skips_unconfigured_default_strategy(client, test_db, monkeypatch):
+    """Default watch rules should not scan production projects during a preview read."""
+    test_db.add(
+        Project(
+            title="서울 AI 데이터 통합 플랫폼 구축",
+            description="서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축",
+            requirements="SW001 보유 업체",
+            budget_estimate=130000000.0,
+            category="software",
+            status="open",
+            deadline=datetime.now(UTC) + timedelta(hours=12),
+        )
+    )
+    test_db.commit()
+
+    def fail_analyze(self, db, project, **kwargs):
+        raise AssertionError("unconfigured preview should not analyze projects")
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fail_analyze)
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates",
+        params={"high_priority_only": True, "limit": 3},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["evaluated_project_count"] == 0
+    assert payload["returned_candidate_count"] == 0
+    assert payload["candidates"] == []
+
+
 def test_update_operator_strategy_persists_watch_rules(client):
     """The operator strategy endpoint should persist monitoring-focused watch rules."""
     response = client.put(
