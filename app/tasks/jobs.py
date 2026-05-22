@@ -12,12 +12,14 @@ from app.services.ml_training import PricePredictionTrainingService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService
 from app.services.opportunity_monitoring import StrategyMonitoringService
+from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.decision_experiments import DecisionExperimentService
 from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
+    PAPER_BIDDING_FORWARD_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
     PROJECT_EMBEDDING_REBUILD_TASK_NAME,
     celery_app,
@@ -172,6 +174,26 @@ def monitor_operator_strategy(
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name=PAPER_BIDDING_FORWARD_TASK_NAME)
+def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> dict:
+    """Generate forward paper bids for currently open/re-notice projects."""
+    payload = dict(request_payload or {})
+    db = SessionLocal()
+    try:
+        return PaperBiddingBacktestService().run_forward_paper_bidding(
+            db,
+            category=payload.get("category"),
+            limit=int(payload.get("limit") or 100),
+            scenario=str(payload.get("scenario") or "base"),
+            strategy_version=str(payload.get("strategy_version") or "scheduled-forward-paper"),
+            model_version=str(payload.get("model_version") or "current"),
+            history_limit=int(payload.get("history_limit") or 80),
+            persist=bool(payload.get("persist", True)),
+        )
     finally:
         db.close()
 

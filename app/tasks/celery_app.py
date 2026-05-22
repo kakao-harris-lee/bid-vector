@@ -75,6 +75,7 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
 from app.core.config import settings
 
 OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
+PAPER_BIDDING_FORWARD_TASK_NAME = "jobs.run_forward_paper_bidding"
 COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
 PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
 PRICE_PREDICTOR_TRAINING_TASK_NAME = "ml.train_price_predictor"
@@ -88,6 +89,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         "jobs.send_telegram_notification": {"queue": settings.CELERY_OPS_QUEUE},
         "jobs.poll_telegram_updates": {"queue": settings.CELERY_OPS_QUEUE},
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -130,6 +132,35 @@ def build_operator_strategy_monitor_beat_schedule() -> dict[str, dict[str, objec
     }
 
 
+def build_paper_bidding_forward_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for forward paper-bidding."""
+    if not settings.PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED:
+        return {}
+
+    category = str(settings.PAPER_BIDDING_FORWARD_SCHEDULE_CATEGORY or "").strip() or None
+    scenario = str(settings.PAPER_BIDDING_FORWARD_SCHEDULE_SCENARIO or "base").strip() or "base"
+    if scenario not in {"conservative", "base", "aggressive"}:
+        scenario = "base"
+
+    return {
+        "paper_bidding_forward_periodic": {
+            "task": PAPER_BIDDING_FORWARD_TASK_NAME,
+            "schedule": float(max(1, settings.PAPER_BIDDING_FORWARD_INTERVAL_MINUTES) * 60),
+            "kwargs": {
+                "request_payload": {
+                    "category": category,
+                    "limit": max(1, settings.PAPER_BIDDING_FORWARD_SCHEDULE_LIMIT),
+                    "scenario": scenario,
+                    "strategy_version": "scheduled-forward-paper",
+                    "model_version": "current",
+                    "history_limit": max(1, settings.PAPER_BIDDING_FORWARD_SCHEDULE_HISTORY_LIMIT),
+                    "persist": settings.PAPER_BIDDING_FORWARD_SCHEDULE_PERSIST,
+                },
+            },
+        }
+    }
+
+
 def build_celery_runtime_config() -> dict[str, object]:
     """Build the shared Celery runtime configuration for eager and worker-backed modes."""
     soft_time_limit, hard_time_limit = _normalize_task_time_limits(
@@ -162,7 +193,10 @@ def build_celery_runtime_config() -> dict[str, object]:
         "broker_transport_options": {
             "max_retries": settings.CELERY_BROKER_PUBLISH_MAX_RETRIES,
         },
-        "beat_schedule": build_operator_strategy_monitor_beat_schedule(),
+        "beat_schedule": {
+            **build_operator_strategy_monitor_beat_schedule(),
+            **build_paper_bidding_forward_beat_schedule(),
+        },
     }
 
     if soft_time_limit is not None:

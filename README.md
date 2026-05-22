@@ -339,7 +339,10 @@ With this server override, training queue consumers (`training-worker`) and serv
 - `POST /api/v1/auth/register` - Deprecated compatibility alias for bootstrap
 - `POST /api/v1/auth/session` - Create a login session for the singleton operator account
 - `POST /api/v1/auth/login` - Deprecated compatibility alias for session creation
+- `POST /api/v1/auth/password-reset` - Reset the singleton operator password when `OPERATOR_PASSWORD_RESET_TOKEN` is configured and supplied
 - `GET /api/v1/auth/me` - Get the current operator account
+
+Password reset is disabled by default. Set `OPERATOR_PASSWORD_RESET_TOKEN` in `.env`, recreate the API service so the setting is loaded, reset the password from the dashboard login screen or API endpoint, then clear or rotate the reset token.
 
 ### Operator
 
@@ -571,6 +574,14 @@ Key variables:
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_SAME_CATEGORY_ONLY` - Whether scheduled runs restrict similar-project analysis to the same category
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_SIMILAR_LIMIT` - Similar-project lookup depth used during scheduled monitoring
 - `OPERATOR_STRATEGY_MONITOR_SCHEDULE_MIN_SIMILARITY` - Minimum similarity threshold used during scheduled monitoring
+- `PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED` - Enable periodic forward paper-bidding runs for currently open/re-notice projects
+- `PAPER_BIDDING_FORWARD_RUN_ON_STARTUP` - When using the in-process scheduler, run forward paper-bidding immediately at startup
+- `PAPER_BIDDING_FORWARD_INTERVAL_MINUTES` - Forward paper-bidding scheduler/beat interval
+- `PAPER_BIDDING_FORWARD_SCHEDULE_LIMIT` - Maximum open/re-notice projects included in a scheduled forward run
+- `PAPER_BIDDING_FORWARD_SCHEDULE_CATEGORY` - Optional category filter for scheduled forward runs
+- `PAPER_BIDDING_FORWARD_SCHEDULE_SCENARIO` - Scheduled paper-bid scenario (`conservative`, `base`, or `aggressive`)
+- `PAPER_BIDDING_FORWARD_SCHEDULE_HISTORY_LIMIT` - Historical bid-rate sample limit used during scheduled forward runs
+- `PAPER_BIDDING_FORWARD_SCHEDULE_PERSIST` - Persist scheduled forward paper-bidding runs and generated paper bids
 - `ML_RELEASE_MANIFEST_DIR` - Local directory for signed release manifests
 - `ML_RELEASE_MANIFEST_ARCHIVE_DIR` - Local archive directory for manifests moved out by retention
 - `ML_RELEASE_MANIFEST_RETENTION_LIMIT` - Number of recent local manifests to retain before archiving older files
@@ -587,6 +598,7 @@ Key variables:
 - `ML_RELEASE_PREDICTOR_GATE_MAX_GUARDRAIL_RATE` - Maximum optional guardrail rate allowed when the backtest report provides it
 - `ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE` - Maximum optional fallback rate allowed when the backtest report provides it
 - `JWT_SECRET_KEY` - Secret key for tokens
+- `OPERATOR_PASSWORD_RESET_TOKEN` - Optional server-side token that enables the dashboard password reset form and `/api/v1/auth/password-reset`
 - `DEBUG` - Debug mode (true/false)
 - `ENVIRONMENT` - Environment (development/production)
 - `ENABLE_SEMANTIC_CLASSIFICATION` - Enable sentence-transformer based hybrid notice classification
@@ -624,7 +636,7 @@ To receive messages, the target account should start a chat with the configured 
 
 With the default `memory://` task broker, KONEPS crawl and other lightweight ops jobs can still run eagerly in-process for local development. Embedding backfill, training, and re-evaluation jobs stay queued by default so they cannot consume API request capacity. For actual ML execution, switch `CELERY_BROKER_URL` to RabbitMQ or another real broker, then run the optional worker stack.
 
-Periodic strategy monitoring now follows the same rule: with the default in-memory broker, the API process can run an in-process scheduler from startup when `OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED=true`. When you switch to a real broker, the Celery app exposes the same `jobs.monitor_operator_strategy` schedule through Celery beat, so the separate `beat` + `worker` services can take over without changing the monitoring logic.
+Periodic strategy monitoring and forward paper-bidding now follow the same rule: with the default in-memory broker, the API process can run an in-process scheduler from startup when the corresponding `*_SCHEDULE_ENABLED=true`. When you switch to a real broker, the Celery app exposes `jobs.monitor_operator_strategy` and `jobs.run_forward_paper_bidding` schedules through Celery beat, so the separate `beat` + `worker` services can take over without changing the execution logic.
 
 ## Troubleshooting
 

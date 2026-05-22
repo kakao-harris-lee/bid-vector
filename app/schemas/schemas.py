@@ -1,4 +1,5 @@
 """Pydantic schemas for request/response"""
+
 import json
 from datetime import date, datetime
 from typing import Dict, List, Literal, Optional, Union
@@ -40,6 +41,12 @@ class UserResponse(UserBase):
 class OperatorLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class OperatorPasswordResetRequest(BaseModel):
+    username: Optional[str] = None
+    reset_token: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
 
 
 class OperatorProfileUpdate(BaseModel):
@@ -140,6 +147,136 @@ class OperatorDashboardResponse(BaseModel):
     action_hrefs: Dict[str, str] = Field(default_factory=dict)
 
 
+class DashboardProjectBrief(BaseModel):
+    project_id: int
+    title: str
+    category: Optional[str] = None
+    notice_number: Optional[str] = None
+    issuing_agency: Optional[str] = None
+    demand_agency: Optional[str] = None
+    budget_estimate: float
+    deadline: Optional[datetime] = None
+    status: str
+
+
+class DashboardMetric(BaseModel):
+    key: str
+    label: str
+    value: Union[int, float, str, None] = None
+    unit: str = "count"
+    status: Literal["healthy", "watch", "critical", "info"] = "info"
+    detail: str
+
+
+class DashboardWorkItem(BaseModel):
+    key: str
+    item_type: Literal["opportunity_due", "bid_pending_result", "result_review"]
+    severity: Literal["info", "watch", "critical"]
+    title: str
+    subtitle: str
+    project_id: Optional[int] = None
+    due_at: Optional[datetime] = None
+    status: str
+    href: str
+
+
+class DashboardOpportunityItem(BaseModel):
+    source: Literal["decision", "paper_bid"] = "decision"
+    source_label: str = "입찰 판단"
+    decision_record_id: Optional[int] = None
+    paper_bid_id: Optional[int] = None
+    project: DashboardProjectBrief
+    action: Literal["bid_now", "review", "skip"]
+    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    recommended_amount: float
+    probability_score: float = Field(ge=0.0, le=1.0)
+    matched_score: float = Field(ge=0.0, le=1.0)
+    priority_score: float = Field(ge=0.0, le=1.0)
+    urgency_score: float = Field(ge=0.0, le=1.0)
+    deadline_hours_remaining: Optional[int] = None
+    reasoning: str = ""
+    updated_at: datetime
+    detail_href: str
+
+
+class DashboardBidItem(BaseModel):
+    bid_id: int
+    project: DashboardProjectBrief
+    decision_record_id: Optional[int] = None
+    decision_status: Optional[
+        Literal["planned", "reviewing", "submitted", "skipped"]
+    ] = None
+    bid_amount: float
+    recommended_amount: Optional[float] = None
+    proposed_timeline: int
+    status: Literal["submitted", "reviewed", "accepted", "rejected"]
+    score: Optional[float] = None
+    submitted_at: datetime
+    updated_at: datetime
+    detail_href: str
+
+
+class DashboardResultItem(BaseModel):
+    tender_result_id: int
+    project: DashboardProjectBrief
+    winning_company: Optional[str] = None
+    winning_amount: float
+    winning_rate: float
+    result_status: str
+    award_outcome: Literal["won", "lost", "unknown"] = "unknown"
+    announced_at: Optional[datetime] = None
+    latest_prediction_id: Optional[int] = None
+    predicted_price: Optional[float] = None
+    prediction_delta_amount: Optional[float] = None
+    prediction_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    latest_decision_record_id: Optional[int] = None
+    recommended_amount: Optional[float] = None
+    recommendation_delta_amount: Optional[float] = None
+    recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    detail_href: str
+
+
+class DashboardListMeta(BaseModel):
+    operator_id: int
+    generated_at: datetime
+    returned_count: int = Field(ge=0)
+    limit: int = Field(ge=1)
+
+
+class DashboardOpportunityListResponse(DashboardListMeta):
+    items: List[DashboardOpportunityItem] = Field(default_factory=list)
+
+
+class DashboardBidListResponse(DashboardListMeta):
+    items: List[DashboardBidItem] = Field(default_factory=list)
+
+
+class DashboardResultListResponse(DashboardListMeta):
+    items: List[DashboardResultItem] = Field(default_factory=list)
+
+
+class DashboardSectionSummary(BaseModel):
+    key: Literal["opportunities", "bids", "results"]
+    label: str
+    count: int = Field(ge=0)
+    status: Literal["healthy", "watch", "critical", "info"] = "info"
+    href: str
+
+
+class DashboardSummaryResponse(BaseModel):
+    operator_id: int
+    generated_at: datetime
+    today: date
+    operational_status: DashboardMetric
+    metrics: List[DashboardMetric] = Field(default_factory=list)
+    work_items: List[DashboardWorkItem] = Field(default_factory=list)
+    sections: List[DashboardSectionSummary] = Field(default_factory=list)
+    recent_opportunities: List[DashboardOpportunityItem] = Field(default_factory=list)
+    recent_bids: List[DashboardBidItem] = Field(default_factory=list)
+    recent_results: List[DashboardResultItem] = Field(default_factory=list)
+    realtime_href: str = "/api/v1/realtime/events"
+
+
 class OperatorStrategyUpdate(BaseModel):
     focus_categories: Optional[List[str]] = None
     focus_regions: Optional[List[str]] = None
@@ -152,7 +289,9 @@ class OperatorStrategyUpdate(BaseModel):
     minimum_probability_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     bid_now_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     review_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    auto_workload_penalty_multiplier: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    auto_workload_penalty_multiplier: Optional[float] = Field(
+        default=None, ge=0.0, le=2.0
+    )
     category_priority_overrides: Optional[Dict[str, float]] = None
     notify_only_high_priority: Optional[bool] = None
     max_recommended_candidates: Optional[int] = Field(default=None, ge=1, le=100)
@@ -317,9 +456,15 @@ class OperatorStrategyRunDetailResponse(BaseModel):
     dropped_candidate_count: int = Field(ge=0)
     request_payload: dict = Field(default_factory=dict)
     result: Optional[OperatorStrategyMonitorResponse] = None
-    new_candidates: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
-    continuing_candidates: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
-    dropped_candidates: List[OperatorStrategyMonitorResultItem] = Field(default_factory=list)
+    new_candidates: List[OperatorStrategyMonitorResultItem] = Field(
+        default_factory=list
+    )
+    continuing_candidates: List[OperatorStrategyMonitorResultItem] = Field(
+        default_factory=list
+    )
+    dropped_candidates: List[OperatorStrategyMonitorResultItem] = Field(
+        default_factory=list
+    )
 
 
 # Authentication Schemas
@@ -479,7 +624,9 @@ class BidResponse(BidBase):
     user_id: int
     status: str
     decision_record_id: Optional[int] = None
-    decision_status: Optional[Literal["planned", "reviewing", "submitted", "skipped"]] = None
+    decision_status: Optional[
+        Literal["planned", "reviewing", "submitted", "skipped"]
+    ] = None
     score: Optional[float] = None
     created_at: datetime
 
@@ -633,7 +780,9 @@ class DecisionInsightsResponse(BaseModel):
     provided_workload_count: int = Field(ge=0)
     average_priority_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     average_expected_margin_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    average_execution_complexity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_execution_complexity_score: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0
+    )
     average_competitiveness_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     average_budget_capture_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     status_breakdown: dict[str, int] = Field(default_factory=dict)
@@ -815,7 +964,9 @@ class DecisionExperimentMetricSnapshot(BaseModel):
     best_category: Optional[str] = None
     best_category_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     worst_category: Optional[str] = None
-    worst_category_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    worst_category_submission_rate: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0
+    )
 
 
 class DecisionExperimentEvaluation(BaseModel):
@@ -830,7 +981,9 @@ class DecisionExperimentEvaluation(BaseModel):
     baseline_guardrail_value: Optional[float] = None
     current_guardrail_value: Optional[float] = None
     guardrail_delta: Optional[float] = None
-    outcome: Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
+    outcome: Literal[
+        "insufficient_data", "watch", "success", "rollback", "inconclusive"
+    ]
     recommended_action: Literal["collect_more_data", "continue", "complete", "rollback"]
     summary: str
     current_summary: DecisionExperimentMetricSnapshot
@@ -844,7 +997,9 @@ class DecisionExperimentRunCreateRequest(DecisionRecommendationExperiment):
 
 class DecisionExperimentRunUpdateRequest(BaseModel):
     status: Optional[Literal["planned", "running", "completed", "rolled_back"]] = None
-    outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    outcome: Optional[
+        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
+    ] = None
     replace_notes: Optional[str] = None
     append_note: Optional[str] = None
     ended_at: Optional[datetime] = None
@@ -878,8 +1033,12 @@ class DecisionExperimentThresholdApplyResponse(BaseModel):
     recommendation_key: str
     applied: bool
     dry_run: bool
-    latest_outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
-    threshold_updates: List[DecisionThresholdAdjustmentItem] = Field(default_factory=list)
+    latest_outcome: Optional[
+        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
+    ] = None
+    threshold_updates: List[DecisionThresholdAdjustmentItem] = Field(
+        default_factory=list
+    )
     strategy_thresholds: DecisionStrategyThresholdSnapshot
     detail: str
 
@@ -890,7 +1049,9 @@ class DecisionStrategyTuningSnapshot(BaseModel):
 
 
 class DecisionStrategyAdjustmentItem(BaseModel):
-    parameter: Literal["auto_workload_penalty_multiplier", "category_priority_overrides"]
+    parameter: Literal[
+        "auto_workload_penalty_multiplier", "category_priority_overrides"
+    ]
     label: str
     direction: Literal["increase", "decrease", "replace"]
     previous_value: Union[float, Dict[str, float]]
@@ -912,7 +1073,9 @@ class DecisionExperimentStrategyApplyResponse(BaseModel):
     recommendation_key: str
     applied: bool
     dry_run: bool
-    latest_outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    latest_outcome: Optional[
+        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
+    ] = None
     strategy_updates: List[DecisionStrategyAdjustmentItem] = Field(default_factory=list)
     strategy_tuning: DecisionStrategyTuningSnapshot
     detail: str
@@ -924,7 +1087,9 @@ class DecisionExperimentApplicationHistoryItem(BaseModel):
 
 
 class DecisionExperimentActionItem(BaseModel):
-    action: Literal["evaluate", "mark_success", "rollback", "apply_thresholds", "apply_strategy"]
+    action: Literal[
+        "evaluate", "mark_success", "rollback", "apply_thresholds", "apply_strategy"
+    ]
     label: str
     method: Literal["POST", "PATCH"]
     path: str
@@ -941,7 +1106,9 @@ class DecisionExperimentRunResponse(BaseModel):
     experiment_key: str
     recommendation_key: str
     status: Literal["planned", "running", "completed", "rolled_back", "failed"]
-    outcome: Optional[Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]] = None
+    outcome: Optional[
+        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
+    ] = None
     priority_rank: int = Field(ge=1, le=20)
     title: str
     hypothesis: str
@@ -961,11 +1128,19 @@ class DecisionExperimentRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_evaluation: Optional[DecisionExperimentEvaluation] = None
-    supported_apply_types: List[Literal["thresholds", "strategy"]] = Field(default_factory=list)
-    applied_apply_types: List[Literal["thresholds", "strategy"]] = Field(default_factory=list)
-    application_status: Literal["not_supported", "not_ready", "ready", "partially_applied", "applied", "blocked"]
+    supported_apply_types: List[Literal["thresholds", "strategy"]] = Field(
+        default_factory=list
+    )
+    applied_apply_types: List[Literal["thresholds", "strategy"]] = Field(
+        default_factory=list
+    )
+    application_status: Literal[
+        "not_supported", "not_ready", "ready", "partially_applied", "applied", "blocked"
+    ]
     application_detail: str
-    application_history: List[DecisionExperimentApplicationHistoryItem] = Field(default_factory=list)
+    application_history: List[DecisionExperimentApplicationHistoryItem] = Field(
+        default_factory=list
+    )
     review_bucket: Literal[
         "ready_to_apply",
         "blocked",
@@ -1048,9 +1223,13 @@ class DecisionFunnelResponse(BaseModel):
     breakdown_limit_applied: int = Field(default=5, ge=1, le=20)
     trend: List[DecisionFunnelTrendItem] = Field(default_factory=list)
     category_breakdown: List[DecisionFunnelBreakdownItem] = Field(default_factory=list)
-    workload_source_breakdown: List[DecisionFunnelBreakdownItem] = Field(default_factory=list)
+    workload_source_breakdown: List[DecisionFunnelBreakdownItem] = Field(
+        default_factory=list
+    )
     agency_breakdown: List[DecisionFunnelBreakdownItem] = Field(default_factory=list)
-    recent_submissions: List[DecisionFunnelRecentSubmissionItem] = Field(default_factory=list)
+    recent_submissions: List[DecisionFunnelRecentSubmissionItem] = Field(
+        default_factory=list
+    )
 
 
 class PredictionFeedbackItem(BaseModel):
@@ -1140,9 +1319,15 @@ class PredictionObservabilityResponse(BaseModel):
     average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
     within_1_percent_count: int = Field(ge=0)
     within_3_percent_count: int = Field(ge=0)
-    predictor_breakdown: List[PredictionPredictorBreakdownItem] = Field(default_factory=list)
-    pricing_mode_breakdown: List[PredictionPricingModeBreakdownItem] = Field(default_factory=list)
-    performance_trend: List[PredictionPerformanceTrendItem] = Field(default_factory=list)
+    predictor_breakdown: List[PredictionPredictorBreakdownItem] = Field(
+        default_factory=list
+    )
+    pricing_mode_breakdown: List[PredictionPricingModeBreakdownItem] = Field(
+        default_factory=list
+    )
+    performance_trend: List[PredictionPerformanceTrendItem] = Field(
+        default_factory=list
+    )
     fallback_reason_breakdown: dict[str, int] = Field(default_factory=dict)
     guardrail_reason_breakdown: dict[str, int] = Field(default_factory=dict)
 
@@ -1315,7 +1500,9 @@ class NotificationOperationsSummary(BaseModel):
     telegram_detail: str
     telegram_status_counts: dict[str, int] = Field(default_factory=dict)
     telegram_failure_reason_breakdown: dict[str, int] = Field(default_factory=dict)
-    recent_telegram_failures: List[TelegramDeliveryFailureItem] = Field(default_factory=list)
+    recent_telegram_failures: List[TelegramDeliveryFailureItem] = Field(
+        default_factory=list
+    )
 
 
 class MLReleaseManifestSummaryItem(BaseModel):
@@ -1354,7 +1541,9 @@ class MLReleaseOperationsSummary(BaseModel):
     latest_best_predictor_key: Optional[str] = None
     latest_dataset_quality_status: Optional[str] = None
     latest_backtest_sample_count: int = Field(ge=0)
-    latest_backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    latest_backtest_average_absolute_error_rate: Optional[float] = Field(
+        default=None, ge=0.0
+    )
     backtest_status: Literal["healthy", "watch", "critical", "info"]
     backtest_detail: str
     recent_manifests: List[MLReleaseManifestSummaryItem] = Field(default_factory=list)
@@ -1441,7 +1630,10 @@ class CrawlTaskStatusResponse(BaseModel):
 
 class ClassificationRequest(BaseModel):
     project_id: int
-    user_id: Optional[int] = Field(default=None, description="Legacy compatibility field; omit in single-user mode.")
+    user_id: Optional[int] = Field(
+        default=None,
+        description="Legacy compatibility field; omit in single-user mode.",
+    )
 
 
 class ClassificationResponse(BaseModel):
@@ -1514,7 +1706,9 @@ class BidDecisionResponse(BaseModel):
     expected_margin_score: float = Field(default=0.5, ge=0.0, le=1.0)
     execution_complexity_score: float = Field(default=0.35, ge=0.0, le=1.0)
     workload_source: Literal["provided", "auto"] = "provided"
-    score_breakdown: BidDecisionScoreBreakdown = Field(default_factory=BidDecisionScoreBreakdown)
+    score_breakdown: BidDecisionScoreBreakdown = Field(
+        default_factory=BidDecisionScoreBreakdown
+    )
     reasoning: str
 
 
@@ -1553,7 +1747,9 @@ class OpportunityAnalysisResponse(BaseModel):
 
 
 class BidDecisionSaveRequest(BidDecisionRequest):
-    decision_status: Optional[Literal["planned", "reviewing", "submitted", "skipped"]] = None
+    decision_status: Optional[
+        Literal["planned", "reviewing", "submitted", "skipped"]
+    ] = None
 
 
 class BidDecisionRecordResponse(BaseModel):
@@ -1564,7 +1760,9 @@ class BidDecisionRecordResponse(BaseModel):
     action: Literal["bid_now", "review", "skip"]
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     initial_action: Literal["bid_now", "review", "skip"] = "skip"
-    initial_decision_status: Literal["planned", "reviewing", "submitted", "skipped"] = "planned"
+    initial_decision_status: Literal["planned", "reviewing", "submitted", "skipped"] = (
+        "planned"
+    )
     first_decided_at: Optional[datetime] = None
     priority_score: float
     urgency_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -1580,7 +1778,9 @@ class BidDecisionRecordResponse(BaseModel):
     max_active_bids: int
     current_workload_score: float
     workload_source: Literal["provided", "auto"] = "provided"
-    score_breakdown: BidDecisionScoreBreakdown = Field(default_factory=BidDecisionScoreBreakdown)
+    score_breakdown: BidDecisionScoreBreakdown = Field(
+        default_factory=BidDecisionScoreBreakdown
+    )
     reasoning: str
     created_at: datetime
     updated_at: datetime
@@ -1677,7 +1877,9 @@ class TelegramActionResponse(BaseModel):
     detail: str
     decision_record_id: Optional[int] = None
     action: Optional[Literal["bid_now", "review", "skip"]] = None
-    decision_status: Optional[Literal["planned", "reviewing", "submitted", "skipped"]] = None
+    decision_status: Optional[
+        Literal["planned", "reviewing", "submitted", "skipped"]
+    ] = None
 
 
 class TelegramSyncResponse(BaseModel):
@@ -1697,6 +1899,91 @@ class TelegramStatusResponse(BaseModel):
     webhook_url: str = ""
     has_custom_certificate: bool = False
     known_chat_ids: List[int] = Field(default_factory=list)
+
+
+class BacktestDataAuditResponse(BaseModel):
+    generated_at: str
+    filters: dict = Field(default_factory=dict)
+    table_counts: dict = Field(default_factory=dict)
+    window_counts: dict = Field(default_factory=dict)
+    date_range: dict = Field(default_factory=dict)
+    category_breakdown: List[dict] = Field(default_factory=list)
+
+
+class PaperBiddingRunRequest(BaseModel):
+    category: Optional[str] = None
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    limit: int = Field(default=100, ge=1, le=5000)
+    scenario: Literal["conservative", "base", "aggressive"] = "base"
+    strategy_version: str = "local-backtest"
+    model_version: str = "current"
+    cutoff_hours_before_deadline: int = Field(default=2, ge=0, le=168)
+    history_limit: int = Field(default=80, ge=1, le=500)
+    settle_actions: List[Literal["bid_now", "review", "skip"]] = Field(
+        default_factory=lambda: ["bid_now"]
+    )
+    persist: bool = False
+
+
+class ForwardPaperBiddingRunRequest(BaseModel):
+    category: Optional[str] = None
+    limit: int = Field(default=100, ge=1, le=500)
+    scenario: Literal["conservative", "base", "aggressive"] = "base"
+    strategy_version: str = "forward-paper"
+    model_version: str = "current"
+    history_limit: int = Field(default=80, ge=1, le=500)
+    persist: bool = True
+
+
+class PaperBiddingRunExecutionResponse(BaseModel):
+    run_id: Optional[int] = None
+    request: dict = Field(default_factory=dict)
+    summary: dict = Field(default_factory=dict)
+    items: List[dict] = Field(default_factory=list)
+    settlements: List[dict] = Field(default_factory=list)
+
+
+class PaperBiddingRunListItem(BaseModel):
+    id: int
+    operator_id: int
+    status: str
+    mode: str
+    scenario: str
+    category_filter: Optional[str] = None
+    strategy_version: str
+    model_version: str
+    target_start_at: Optional[datetime] = None
+    target_end_at: Optional[datetime] = None
+    data_cutoff_policy: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    candidate_count: int = Field(ge=0)
+    paper_bid_count: int = Field(ge=0)
+    settled_count: int = Field(ge=0)
+    settlement_overview: dict = Field(default_factory=dict)
+    summary: dict = Field(default_factory=dict)
+
+
+class PaperBiddingRunListResponse(BaseModel):
+    operator_id: int
+    returned_count: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    items: List[PaperBiddingRunListItem] = Field(default_factory=list)
+
+
+class PaperBiddingRunDetailResponse(PaperBiddingRunListItem):
+    request: dict = Field(default_factory=dict)
+    paper_bids: List[dict] = Field(default_factory=list)
+    settlements: List[dict] = Field(default_factory=list)
+
+
+class PaperBiddingSummaryResponse(BaseModel):
+    operator_id: int
+    latest_run: Optional[PaperBiddingRunListItem] = None
+    run_count: int = Field(ge=0)
+    completed_count: int = Field(ge=0)
+    latest_summary: dict = Field(default_factory=dict)
 
 
 class BackgroundJobResponse(BaseModel):

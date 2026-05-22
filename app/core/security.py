@@ -56,14 +56,21 @@ try:  # pragma: no cover - optional dependency fallback
 except ImportError:  # pragma: no cover - exercised in lightweight test environments
     bcrypt_backend = None
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
 from app.core.config import settings
+from app.core.database import get_db
 from app.core.time import utc_now
+from app.models.models import User
 
 PBKDF2_SCHEME = "pbkdf2_sha256"
 _PBKDF2_ROUNDS = 390000
 _PBKDF2_PREFIX = "$pbkdf2-sha256$"
 
 pwd_context = CryptContext(schemes=[PBKDF2_SCHEME, "bcrypt"], deprecated="auto")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def _hash_pbkdf2_password(password: str, *, salt: str | None = None, rounds: int = _PBKDF2_ROUNDS) -> str:
@@ -172,3 +179,43 @@ def verify_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+def get_current_operator_from_bearer(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """Validate a dashboard Bearer token and return the active singleton operator."""
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token_payload = verify_token(credentials.credentials)
+    if not token_payload or token_payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        operator_id = int(token_payload.get("sub"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token subject",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    operator = db.query(User).filter(User.id == operator_id).first()
+    if operator is None or not operator.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Operator is not active",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return operator

@@ -29,6 +29,7 @@ class User(Base):
     strategy_profile = relationship("OperatorStrategy", back_populates="user", uselist=False)
     strategy_runs = relationship("OperatorStrategyRun", back_populates="operator")
     bid_decisions = relationship("BidDecisionRecord", back_populates="operator")
+    paper_bid_runs = relationship("PaperBidRun", back_populates="operator")
     decision_experiment_runs = relationship("DecisionExperimentRun", back_populates="operator")
     allocations = relationship("Allocation", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
@@ -62,6 +63,7 @@ class Project(Base):
     # Relationships
     bids = relationship("Bid", back_populates="project")
     bid_decisions = relationship("BidDecisionRecord", back_populates="project")
+    paper_bids = relationship("PaperBid", back_populates="project")
     allocations = relationship("Allocation", back_populates="project")
     historical_records = relationship("HistoricalData", back_populates="project")
     tender_results = relationship("TenderResult", back_populates="project")
@@ -315,6 +317,99 @@ class TenderResult(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     project = relationship("Project", back_populates="tender_results")
+
+
+class PaperBidRun(Base):
+    """Backtest or forward paper-bidding execution run."""
+    __tablename__ = "paper_bid_runs"
+
+    id = Column(Integer, primary_key=True)
+    operator_id = Column(Integer, ForeignKey("users.id"), index=True)
+    strategy_version = Column(String(100), default="local")
+    model_version = Column(String(100), default="current")
+    status = Column(String(50), default="running", index=True)
+    mode = Column(String(50), default="historical_backtest", index=True)
+    scenario = Column(String(50), default="base")
+    category_filter = Column(String(100), nullable=True, index=True)
+    target_start_at = Column(DateTime(timezone=True), nullable=True)
+    target_end_at = Column(DateTime(timezone=True), nullable=True)
+    data_cutoff_policy = Column(String(100), default="deadline_minus_2h")
+    started_at = Column(DateTime(timezone=True), default=utc_now)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    candidate_count = Column(Integer, default=0)
+    paper_bid_count = Column(Integer, default=0)
+    settled_count = Column(Integer, default=0)
+    request_payload = Column(Text, default="{}")
+    result_payload = Column(Text, default="{}")
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    operator = relationship("User", back_populates="paper_bid_runs")
+    paper_bids = relationship("PaperBid", back_populates="run", cascade="all, delete-orphan")
+
+
+class PaperBid(Base):
+    """Immutable virtual bid generated before settlement."""
+    __tablename__ = "paper_bids"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("paper_bid_runs.id"), index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True)
+    operator_id = Column(Integer, ForeignKey("users.id"), index=True)
+    notice_number = Column(String(100), nullable=True, index=True)
+    action = Column(String(50), default="skip", index=True)
+    decision_status = Column(String(50), default="skipped", index=True)
+    data_cutoff_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    paper_bid_amount = Column(Float, default=0.0)
+    paper_bid_rate = Column(Float, default=0.0)
+    scenario = Column(String(50), default="base")
+    priority_score = Column(Float, default=0.0)
+    probability_score = Column(Float, default=0.0)
+    matched_score = Column(Float, default=0.0)
+    predicted_price = Column(Float, default=0.0)
+    predicted_bid_rate = Column(Float, default=0.0)
+    price_range_min = Column(Float, default=0.0)
+    price_range_max = Column(Float, default=0.0)
+    confidence_score = Column(Float, default=0.0)
+    predictor_name = Column(String(100), default="historical_statistical")
+    predictor_family = Column(String(100), default="statistical")
+    model_version = Column(String(100), default="current")
+    strategy_version = Column(String(100), default="local")
+    input_snapshot_hash = Column(String(64), nullable=True, index=True)
+    reasoning = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    run = relationship("PaperBidRun", back_populates="paper_bids")
+    project = relationship("Project", back_populates="paper_bids")
+    settlement = relationship("PaperBidSettlement", back_populates="paper_bid", uselist=False, cascade="all, delete-orphan")
+
+
+class PaperBidSettlement(Base):
+    """Settlement comparing a paper bid with the final tender result."""
+    __tablename__ = "paper_bid_settlements"
+
+    id = Column(Integer, primary_key=True)
+    paper_bid_id = Column(Integer, ForeignKey("paper_bids.id"), unique=True, index=True)
+    tender_result_id = Column(Integer, ForeignKey("tender_results.id"), nullable=True, index=True)
+    result_status = Column(String(50), default="pending")
+    winning_company = Column(String(255), nullable=True)
+    winning_amount = Column(Float, default=0.0)
+    winning_rate = Column(Float, default=0.0)
+    amount_delta = Column(Float, default=0.0)
+    absolute_error_rate = Column(Float, default=0.0)
+    bid_rate_delta = Column(Float, default=0.0)
+    absolute_bid_rate_error = Column(Float, default=0.0)
+    price_close = Column(Boolean, default=False)
+    price_competitive = Column(Boolean, default=False)
+    would_have_won_price_only = Column(String(50), default="unknown")
+    would_have_won_final = Column(String(50), default="unknown")
+    settlement_reason = Column(Text, default="")
+    settled_at = Column(DateTime(timezone=True), default=utc_now)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    paper_bid = relationship("PaperBid", back_populates="settlement")
+    tender_result = relationship("TenderResult")
 
 
 class CrawlJob(Base):

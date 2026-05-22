@@ -1,10 +1,12 @@
 """Main FastAPI application"""
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -14,11 +16,13 @@ from app.services.operator_strategy_schema import ensure_operator_strategy_schem
 from app.services.prediction_schema import ensure_price_prediction_metadata_schema
 from app.services.project_similarity import ensure_project_metadata_schema, ensure_project_vector_schema
 from app.services.realtime import realtime_event_manager
+from app.services.paper_bidding_scheduler import paper_bidding_forward_scheduler
 from app.services.strategy_scheduler import strategy_scheduler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -34,10 +38,12 @@ async def lifespan(app: FastAPI):
     ensure_project_vector_schema(engine)
     await realtime_event_manager.start()
     await strategy_scheduler.start()
+    await paper_bidding_forward_scheduler.start()
 
     yield
 
     # Shutdown
+    await paper_bidding_forward_scheduler.stop()
     await strategy_scheduler.stop()
     await realtime_event_manager.stop()
     logger.info("Shutting down application...")
@@ -69,6 +75,48 @@ app.include_router(routes.router, prefix="/api/v1")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "bid-vector-api"}
+
+
+def _dashboard_file_response(full_path: str = ""):
+    """Serve the built dashboard SPA when frontend/dist exists."""
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if not index_path.is_file():
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Dashboard frontend has not been built. Run `npm --prefix frontend run build`."},
+        )
+
+    if full_path:
+        dist_root = FRONTEND_DIST_DIR.resolve()
+        requested_path = (FRONTEND_DIST_DIR / full_path).resolve()
+        try:
+            requested_path.relative_to(dist_root)
+        except ValueError:
+            requested_path = index_path
+        if requested_path.is_file():
+            return FileResponse(requested_path)
+
+    return FileResponse(index_path)
+
+
+if (FRONTEND_DIST_DIR / "assets").is_dir():
+    app.mount(
+        "/dashboard/assets",
+        StaticFiles(directory=FRONTEND_DIST_DIR / "assets"),
+        name="dashboard-assets",
+    )
+
+
+@app.get("/dashboard", include_in_schema=False)
+async def dashboard_index():
+    """Serve the mobile dashboard SPA entrypoint."""
+    return _dashboard_file_response()
+
+
+@app.get("/dashboard/{full_path:path}", include_in_schema=False)
+async def dashboard_spa_fallback(full_path: str):
+    """Serve dashboard static files or fall back to the SPA entrypoint."""
+    return _dashboard_file_response(full_path)
 
 
 @app.exception_handler(Exception)

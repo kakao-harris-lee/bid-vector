@@ -1,17 +1,42 @@
 """Authentication routes"""
+
+import hmac
 from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import verify_password, get_password_hash, create_access_token
 from app.core.single_user import ensure_operator_account, get_operator_account
 from app.models.models import User
-from app.schemas.schemas import OperatorLoginRequest, TokenResponse, UserCreate, UserResponse
+from app.schemas.schemas import (
+    OperatorLoginRequest,
+    OperatorPasswordResetRequest,
+    TokenResponse,
+    UserCreate,
+    UserResponse,
+)
 
 router = APIRouter()
+
+
+def _create_session_response(user: User) -> dict:
+    access_token = create_access_token({"sub": str(user.id), "type": "access"})
+    refresh_token = create_access_token(
+        {"sub": str(user.id), "type": "refresh"},
+        expires_delta=timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "operator_id": user.id,
+        "username": user.username,
+    }
 
 
 @router.post("/register", response_model=UserResponse, deprecated=True)
@@ -25,14 +50,16 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
             detail="Single-user mode already has an operator account. Update /api/v1/operator/profile instead.",
         )
 
-    existing_user = db.query(User).filter(
-        (User.username == user.username) | (User.email == user.email)
-    ).first()
+    existing_user = (
+        db.query(User)
+        .filter((User.username == user.username) | (User.email == user.email))
+        .first()
+    )
 
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username or email already exists"
+            detail="Username or email already exists",
         )
 
     db_user = User(
@@ -71,30 +98,53 @@ def login(
 
     if not user or not verify_password(resolved_password, user.hashed_password):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
 
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive"
+            status_code=status.HTTP_403_FORBIDDEN, detail="User account is inactive"
         )
 
-    # Create tokens
-    access_token = create_access_token({"sub": str(user.id), "type": "access"})
-    refresh_token = create_access_token(
-        {"sub": str(user.id), "type": "refresh"},
-        expires_delta=timedelta(days=7)
-    )
+    return _create_session_response(user)
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "operator_id": user.id,
-        "username": user.username,
-    }
+
+@router.post("/password-reset", response_model=TokenResponse)
+def reset_operator_password(
+    request: OperatorPasswordResetRequest, db: Session = Depends(get_db)
+):
+    """Reset the singleton operator password when the server reset token matches."""
+    configured_token = settings.OPERATOR_PASSWORD_RESET_TOKEN.strip()
+    if not configured_token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Password reset is not configured",
+        )
+
+    if not hmac.compare_digest(request.reset_token, configured_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid password reset token",
+        )
+
+    operator = None
+    if request.username is not None:
+        operator = db.query(User).filter(User.username == request.username).first()
+    if operator is None:
+        operator = ensure_operator_account(db)
+
+    if request.username is not None and request.username != operator.username:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Operator account not found",
+        )
+
+    operator.hashed_password = get_password_hash(request.new_password)
+    operator.is_active = True
+    db.commit()
+    db.refresh(operator)
+
+    return _create_session_response(operator)
 
 
 @router.get("/me", response_model=UserResponse)
