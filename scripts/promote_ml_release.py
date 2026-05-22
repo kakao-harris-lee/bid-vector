@@ -151,7 +151,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     apply_parser.add_argument(
         "--wait-for-health-url",
-        default="http://localhost:8000/health",
+        default="http://localhost:3000/health",
         help="HTTP endpoint polled after compose restart and before remote rebuild.",
     )
     apply_parser.add_argument(
@@ -162,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     apply_parser.add_argument(
         "--api-base-url",
-        default="http://localhost:8000",
+        default="http://localhost:3000",
         help="Base URL for the running API when using --rebuild-embeddings-via-api.",
     )
     apply_parser.add_argument(

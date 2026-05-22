@@ -166,8 +166,8 @@ API_DOCKER_TARGET=api-embedding docker compose up -d --build
 예시:
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/ml/backfills/project-embeddings?force=true&limit=100"
-curl "http://localhost:8000/api/v1/ml/backfills/project-embeddings/tasks/<task_id>"
+curl -X POST "http://localhost:3000/api/v1/ml/backfills/project-embeddings?force=true&limit=100"
+curl "http://localhost:3000/api/v1/ml/backfills/project-embeddings/tasks/<task_id>"
 ```
 
 여기서 핵심은:

@@ -4,7 +4,7 @@ set -euo pipefail
 # Backfill KONEPS ScsbidInfoService award/opening-result rows.
 # Defaults intentionally skip goods/foreign rows to match the current service focus.
 
-BASE_URL="${BASE_URL:-http://localhost:8000}"
+BASE_URL="${BASE_URL:-http://localhost:3000}"
 SOURCE="${SOURCE:-koneps-scsbid}"
 START_DATE="${1:-$(date +%F)}"
 END_DATE="${2:-$START_DATE}"

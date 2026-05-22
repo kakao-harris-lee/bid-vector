@@ -5,7 +5,7 @@ set -euo pipefail
 # - Includes: general-service, technical-service, construction
 # - Excludes: goods (납품/물품)
 
-BASE_URL="${BASE_URL:-http://localhost:8000}"
+BASE_URL="${BASE_URL:-http://localhost:3000}"
 SOURCE="${SOURCE:-koneps-openapi}"
 TARGET_DATE="${1:-$(date +%F)}"
 MAX_ITEMS="${2:-100}"

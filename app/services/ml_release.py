@@ -1334,7 +1334,7 @@ class MLReleasePromotionService:
         self,
         manifest_ref: str | Path,
         *,
-        base_url: str = "http://localhost:8000",
+        base_url: str = "http://localhost:3000",
         limit: int | None = None,
         offset: int | None = None,
         category: str | None = None,

@@ -112,7 +112,7 @@ python scripts/production_smoke_test.py \
 
 ```bash
 # 로컬 서버
-python scripts/production_smoke_test.py --base-url http://localhost:8000
+python scripts/production_smoke_test.py --base-url http://localhost:3000
 
 # 운영 API가 프록시에서 Bearer token을 요구하는 경우
 python scripts/production_smoke_test.py \

@@ -7,7 +7,7 @@ ENV_FILE ?=
 REQUIRE_SIGNATURE ?= false
 WRITE_PROBE ?= true
 CELERY_COMPOSE_BROKER_URL ?= amqp://bidvector:bidvector@rabbitmq:5672/bidvector
-SMOKE_BASE_URL ?= http://localhost:8000
+SMOKE_BASE_URL ?= http://localhost:3000
 SMOKE_WRITE ?= false
 SMOKE_EVIDENCE ?=
 

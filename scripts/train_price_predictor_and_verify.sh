@@ -6,7 +6,7 @@ set -euo pipefail
 # 2) poll task status until completion/failure/timeout
 # 3) verify expected artifacts exist and contain valid JSON
 
-BASE_URL="${BASE_URL:-http://localhost:8000}"
+BASE_URL="${BASE_URL:-http://localhost:3000}"
 CATEGORY="${CATEGORY:-construction}"
 LIMIT="${LIMIT:-500}"
 NOTES="${NOTES:-construction data training}"

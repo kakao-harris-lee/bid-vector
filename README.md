@@ -229,13 +229,13 @@ bid-vector/
    ```bash
    python -m app.main
    # Or with uvicorn
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 3000
    ```
 
 8. **Access the API**
-   - API: <http://localhost:8000>
-   - Docs: <http://localhost:8000/docs>
-   - ReDoc: <http://localhost:8000/redoc>
+   - API: <http://localhost:3000>
+   - Docs: <http://localhost:3000/docs>
+   - ReDoc: <http://localhost:3000/redoc>
 
 ### Docker Setup
 
@@ -466,7 +466,7 @@ For server deployment, this repository now includes `docker-compose.server.yml` 
 
    ```bash
    python scripts/production_smoke_test.py \
-     --base-url http://localhost:8000 \
+     --base-url http://localhost:3000 \
      --evidence-out smoke-read.json
    ```
 
@@ -474,7 +474,7 @@ For server deployment, this repository now includes `docker-compose.server.yml` 
 
    ```bash
    python scripts/production_smoke_test.py \
-     --base-url http://localhost:8000 \
+     --base-url http://localhost:3000 \
      --write \
      --max-items 3 \
      --monitor-limit 3 \

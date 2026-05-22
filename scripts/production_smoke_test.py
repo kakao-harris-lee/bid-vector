@@ -376,7 +376,7 @@ def write_evidence(path: str, evidence: dict[str, Any]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run production smoke checks against a bid-vector API.")
-    parser.add_argument("--base-url", default=os.getenv("SMOKE_BASE_URL") or os.getenv("BASE_URL") or "http://localhost:8000")
+    parser.add_argument("--base-url", default=os.getenv("SMOKE_BASE_URL") or os.getenv("BASE_URL") or "http://localhost:3000")
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("SMOKE_TIMEOUT_SECONDS", "20")))
     parser.add_argument("--bearer-token", default=os.getenv("SMOKE_BEARER_TOKEN") or "")
     parser.add_argument("--days", type=int, default=int(os.getenv("SMOKE_DAYS", "1")))

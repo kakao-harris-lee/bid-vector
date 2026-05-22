@@ -44,23 +44,23 @@ RUN npm run build
 FROM deps-runtime AS api-runtime
 COPY . .
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 3000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
 
 FROM deps-embedding AS api-embedding
 COPY . .
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 3000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
 
 FROM deps-training AS api-training
 COPY . .
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 3000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
 
 FROM deps-ml-full AS api-ml-full
 COPY . .
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 3000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
