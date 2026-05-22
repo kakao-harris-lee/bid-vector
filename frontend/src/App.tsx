@@ -56,7 +56,10 @@ const routeConfig: Record<RouteKey, { path: string; label: string; icon: typeof 
   results: { path: "/dashboard/results", label: "결과", icon: Trophy }
 };
 
-const bottomRoutes: RouteKey[] = ["opportunities", "bids", "results"];
+const bottomRoutes: RouteKey[] = ["home", "opportunities", "bids", "results"];
+
+type OpportunityFilter = "all" | "overdue" | "due_today" | "paper" | "decision";
+type OpportunitySort = "deadline" | "priority" | "amount";
 
 function routeFromPath(pathname: string): RouteKey {
   if (pathname.startsWith("/dashboard/bids")) return "bids";
@@ -354,22 +357,11 @@ function HomeView({
     if (activePreview === "results") return summary.recent_results;
     return summary.recent_opportunities;
   }, [activePreview, summary]);
+  const visibleWorkItems = summary.work_items.slice(0, 3);
+  const hasMoreWorkItems = summary.work_items.length > visibleWorkItems.length;
 
   return (
     <>
-      <section className="work-section">
-        <SectionHeader title="오늘 할 일" count={summary.work_items.length} />
-        {summary.work_items.length ? (
-          <div className="work-list">
-            {summary.work_items.map((item) => (
-              <WorkItemCard key={item.key} item={item} onOpen={() => onNavigate(routeFromWorkItem(item))} />
-            ))}
-          </div>
-        ) : (
-          <EmptyState title="오늘 할 일 없음" detail="긴급 항목이 없습니다." />
-        )}
-      </section>
-
       <section className="metric-strip" aria-label="핵심 지표">
         {summary.metrics.map((metric) => (
           <MetricTile key={metric.key} metric={metric} />
@@ -379,6 +371,26 @@ function HomeView({
       <section>
         <SegmentedTabs active={activePreview} onChange={onPreviewChange} sections={summary.sections} />
         <ItemList route={activePreview} items={previewItems} onSelect={onSelect} compact />
+      </section>
+
+      <section className="work-section">
+        <SectionHeader title="오늘 할 일" count={summary.work_items.length} />
+        {summary.work_items.length ? (
+          <>
+            <div className="work-list">
+              {visibleWorkItems.map((item) => (
+                <WorkItemCard key={item.key} item={item} onOpen={() => onNavigate(routeFromWorkItem(item))} />
+              ))}
+            </div>
+            {hasMoreWorkItems ? (
+              <button className="more-action" type="button" onClick={() => onNavigate(routeFromWorkItem(summary.work_items[0]))}>
+                전체 {summary.work_items.length}건 보기
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <EmptyState title="오늘 할 일 없음" detail="긴급 항목이 없습니다." />
+        )}
       </section>
     </>
   );
@@ -403,16 +415,75 @@ function ListView({
   paperSummary: PaperBiddingSummaryResponse | null;
   onSelect: (selection: DetailSelection) => void;
 }) {
-  const items = route === "bids" ? bids : route === "results" ? results : opportunities;
-  const fallbackItems = route === "bids" ? summary.recent_bids : route === "results" ? summary.recent_results : summary.recent_opportunities;
-  const displayItems = items.length ? items : fallbackItems;
+  const [opportunityFilter, setOpportunityFilter] = useState<OpportunityFilter>("all");
+  const [opportunitySort, setOpportunitySort] = useState<OpportunitySort>("deadline");
+  const opportunityItems = useMemo(() => {
+    const sourceItems = opportunities.length ? opportunities : summary.recent_opportunities;
+    return sortOpportunities(filterOpportunities(sourceItems, opportunityFilter), opportunitySort);
+  }, [opportunities, opportunityFilter, opportunitySort, summary.recent_opportunities]);
+  const bidItems = bids.length ? bids : summary.recent_bids;
+  const resultItems = results.length ? results : summary.recent_results;
+  const displayItems = route === "bids" ? bidItems : route === "results" ? resultItems : opportunityItems;
 
   return (
     <section>
       <SectionHeader title={routeConfig[route].label} count={displayItems.length} />
+      {route === "opportunities" ? (
+        <OpportunityToolbar
+          filter={opportunityFilter}
+          sort={opportunitySort}
+          onFilterChange={setOpportunityFilter}
+          onSortChange={setOpportunitySort}
+        />
+      ) : null}
       {route === "results" ? <BacktestSummaryPanel summary={paperSummary} /> : null}
       {loading && !displayItems.length ? <LoadingState /> : <ItemList route={route} items={displayItems} onSelect={onSelect} />}
     </section>
+  );
+}
+
+function OpportunityToolbar({
+  filter,
+  sort,
+  onFilterChange,
+  onSortChange
+}: {
+  filter: OpportunityFilter;
+  sort: OpportunitySort;
+  onFilterChange: (filter: OpportunityFilter) => void;
+  onSortChange: (sort: OpportunitySort) => void;
+}) {
+  const filters: Array<{ key: OpportunityFilter; label: string }> = [
+    { key: "all", label: "전체" },
+    { key: "overdue", label: "마감 지남" },
+    { key: "due_today", label: "오늘 마감" },
+    { key: "paper", label: "페이퍼" },
+    { key: "decision", label: "판단" }
+  ];
+
+  return (
+    <div className="list-toolbar">
+      <div className="filter-chips" aria-label="입찰 후보 필터">
+        {filters.map((item) => (
+          <button
+            key={item.key}
+            className={filter === item.key ? "active" : ""}
+            type="button"
+            onClick={() => onFilterChange(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <label className="sort-select">
+        정렬
+        <select value={sort} onChange={(event) => onSortChange(event.target.value as OpportunitySort)}>
+          <option value="deadline">마감순</option>
+          <option value="priority">점수순</option>
+          <option value="amount">금액순</option>
+        </select>
+      </label>
+    </div>
   );
 }
 
@@ -533,13 +604,13 @@ function OpportunityRow({ item, onSelect }: { item: DashboardOpportunityItem; on
       <div className="row-main">
         <div className="row-title">
           <span>{item.project.title}</span>
-          <StatusBadge status={statusFromDecision(item.decision_status)} label={labelDecisionStatus(item.decision_status)} />
+          <StatusBadge status={statusFromOpportunity(item)} label={labelOpportunityStatus(item)} />
         </div>
         <p>{item.source_label} · {item.project.issuing_agency ?? item.project.category ?? "입찰 후보"}</p>
       </div>
       <div className="row-side">
         <MiniBar value={item.priority_score} />
-        <strong>{formatCurrency(item.recommended_amount)}</strong>
+        <strong>{formatCurrencyCompact(item.recommended_amount)}</strong>
         <small>{formatHours(item.deadline_hours_remaining)}</small>
       </div>
     </button>
@@ -558,7 +629,7 @@ function BidRow({ item, onSelect }: { item: DashboardBidItem; onSelect: () => vo
       </div>
       <div className="row-side">
         <MiniDonut value={item.score ?? 0.64} />
-        <strong>{formatCurrency(item.bid_amount)}</strong>
+        <strong>{formatCurrencyCompact(item.bid_amount)}</strong>
         <small>{item.decision_status ? labelDecisionStatus(item.decision_status) : "판단 없음"}</small>
       </div>
     </button>
@@ -578,7 +649,7 @@ function ResultRow({ item, onSelect }: { item: DashboardResultItem; onSelect: ()
       </div>
       <div className="row-side">
         <MiniBar value={Math.min(errorRate * 10, 1)} tone="amber" />
-        <strong>{formatCurrency(item.winning_amount)}</strong>
+        <strong>{formatCurrencyCompact(item.winning_amount)}</strong>
         <small>오차 {formatPercent(errorRate)}</small>
       </div>
     </button>
@@ -631,7 +702,7 @@ function WorkItemCard({ item, onOpen }: { item: DashboardWorkItem; onOpen: () =>
         <strong>{item.title}</strong>
         <span>{item.subtitle}</span>
       </div>
-      <StatusBadge status={item.severity} label={labelStatus(item.status)} />
+      <StatusBadge status={item.severity} label={labelWorkItemStatus(item)} />
     </button>
   );
 }
@@ -841,6 +912,69 @@ function routeFromWorkItem(item: DashboardWorkItem): RouteKey {
   return "opportunities";
 }
 
+function filterOpportunities(items: DashboardOpportunityItem[], filter: OpportunityFilter): DashboardOpportunityItem[] {
+  if (filter === "overdue") return items.filter(isOpportunityOverdue);
+  if (filter === "due_today") return items.filter(isOpportunityDueToday);
+  if (filter === "paper") return items.filter((item) => item.source === "paper_bid");
+  if (filter === "decision") return items.filter((item) => item.source === "decision");
+  return items;
+}
+
+function sortOpportunities(items: DashboardOpportunityItem[], sort: OpportunitySort): DashboardOpportunityItem[] {
+  const sorted = [...items];
+  if (sort === "priority") {
+    return sorted.sort((a, b) => b.priority_score - a.priority_score);
+  }
+  if (sort === "amount") {
+    return sorted.sort((a, b) => b.recommended_amount - a.recommended_amount);
+  }
+  return sorted.sort(compareOpportunityDeadline);
+}
+
+function compareOpportunityDeadline(a: DashboardOpportunityItem, b: DashboardOpportunityItem): number {
+  const aHours = getOpportunityDeadlineHours(a);
+  const bHours = getOpportunityDeadlineHours(b);
+  if (aHours === null && bHours === null) return b.priority_score - a.priority_score;
+  if (aHours === null) return 1;
+  if (bHours === null) return -1;
+
+  const aOverdue = aHours < 0;
+  const bOverdue = bHours < 0;
+  if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+  const aDistance = aOverdue ? Math.abs(aHours) : aHours;
+  const bDistance = bOverdue ? Math.abs(bHours) : bHours;
+  return aDistance - bDistance;
+}
+
+function getOpportunityDeadlineHours(item: DashboardOpportunityItem): number | null {
+  if (typeof item.deadline_hours_remaining === "number") return item.deadline_hours_remaining;
+  return hoursUntil(item.project.deadline);
+}
+
+function hoursUntil(value?: string | null): number | null {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.ceil((timestamp - Date.now()) / 3_600_000);
+}
+
+function isOpportunityOverdue(item: DashboardOpportunityItem): boolean {
+  const hours = getOpportunityDeadlineHours(item);
+  return hours !== null && hours < 0;
+}
+
+function isOpportunityDueToday(item: DashboardOpportunityItem): boolean {
+  const hours = getOpportunityDeadlineHours(item);
+  return hours !== null && hours >= 0 && hours <= 24;
+}
+
+function statusFromOpportunity(item: DashboardOpportunityItem): DashboardStatus {
+  const hours = getOpportunityDeadlineHours(item);
+  if (hours !== null && hours < 0) return "critical";
+  if (hours !== null && hours <= 24) return "watch";
+  return statusFromDecision(item.decision_status);
+}
+
 function statusFromDecision(status: DashboardOpportunityItem["decision_status"]): DashboardStatus {
   if (status === "planned") return "watch";
   if (status === "reviewing") return "info";
@@ -858,7 +992,7 @@ function statusFromBid(status: DashboardBidItem["status"]): DashboardStatus {
 function statusFromOutcome(status: DashboardResultItem["award_outcome"]): DashboardStatus {
   if (status === "won") return "healthy";
   if (status === "lost") return "critical";
-  return "info";
+  return "watch";
 }
 
 function statusFromSettlement(status: string): DashboardStatus {
@@ -880,6 +1014,14 @@ function labelDecisionStatus(status: string): string {
   return labels[status] ?? status;
 }
 
+function labelOpportunityStatus(item: DashboardOpportunityItem): string {
+  const hours = getOpportunityDeadlineHours(item);
+  if (hours !== null && hours < 0) return "마감 지남";
+  if (hours !== null && hours <= 24) return "오늘 마감";
+  if (item.source === "paper_bid") return "후보";
+  return labelDecisionStatus(item.decision_status);
+}
+
 function labelBidStatus(status: string): string {
   const labels: Record<string, string> = {
     submitted: "제출",
@@ -894,13 +1036,31 @@ function labelOutcome(status: string): string {
   const labels: Record<string, string> = {
     won: "낙찰",
     lost: "미낙찰",
-    unknown: "확인"
+    unknown: "판정 전"
   };
   return labels[status] ?? status;
 }
 
 function labelStatus(status: string): string {
-  return labelDecisionStatus(status) || labelBidStatus(status) || status;
+  const labels: Record<string, string> = {
+    planned: "예정",
+    reviewing: "검토",
+    submitted: "제출",
+    skipped: "보류",
+    reviewed: "검토됨",
+    accepted: "낙찰",
+    rejected: "탈락"
+  };
+  return labels[status] ?? status;
+}
+
+function labelWorkItemStatus(item: DashboardWorkItem): string {
+  if (item.item_type === "opportunity_due") {
+    const hours = hoursUntil(item.due_at);
+    if (hours !== null && hours < 0) return "마감 지남";
+    if (hours !== null && hours <= 24) return "오늘 마감";
+  }
+  return labelStatus(item.status);
 }
 
 function formatMetricValue(metric: DashboardMetric): string {
@@ -916,6 +1076,19 @@ function formatCurrency(value?: number | null): string {
     currency: "KRW",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatCurrencyCompact(value?: number | null): string {
+  if (value === null || value === undefined) return "-";
+  const absolute = Math.abs(value);
+  if (absolute >= 100_000_000) {
+    const formatted = (value / 100_000_000).toFixed(absolute >= 1_000_000_000 ? 1 : 2).replace(/\.?0+$/, "");
+    return `${formatted}억`;
+  }
+  if (absolute >= 10_000) {
+    return `${Math.round(value / 10_000).toLocaleString("ko-KR")}만원`;
+  }
+  return `${Math.round(value).toLocaleString("ko-KR")}원`;
 }
 
 function formatPercent(value?: number | null): string {
@@ -965,7 +1138,11 @@ function formatDateTime(value: string): string {
 
 function formatHours(value?: number | null): string {
   if (value === null || value === undefined) return "마감 미정";
-  if (value < 0) return "마감 지남";
+  if (value < 0) {
+    const overdue = Math.abs(value);
+    if (overdue < 24) return `${overdue}시간 지남`;
+    return `${Math.floor(overdue / 24)}일 지남`;
+  }
   if (value < 24) return `${value}시간`;
   return `${Math.floor(value / 24)}일`;
 }
