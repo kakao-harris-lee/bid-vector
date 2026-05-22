@@ -650,6 +650,10 @@ class PricePredictionScenario(BaseModel):
 class PricePredictionReservePattern(BaseModel):
     sample_count: int = Field(ge=0)
     average_reserve_span_rate: float = Field(ge=0.0)
+    estimated_price_sample_count: int = Field(default=0, ge=0)
+    average_estimated_price_rate: float = Field(default=0.0, ge=0.0)
+    median_estimated_price_rate: float = Field(default=0.0, ge=0.0)
+    median_bid_to_estimated_price_rate: float = Field(default=0.0, ge=0.0)
     average_selected_number: float = Field(ge=0.0)
     frequent_selected_numbers: List[int] = Field(default_factory=list)
 
@@ -681,6 +685,8 @@ class PricePredictionResponse(BaseModel):
     historical_sample_size: int = Field(default=0, ge=0)
     agency_match_sample_size: int = Field(default=0, ge=0)
     predicted_bid_rate: float = 0.0
+    competitive_target_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    procurement_rate_band: Optional[str] = None
     bid_rate_candidates: List[PricePredictionScenario] = Field(default_factory=list)
     reserve_price_context: Optional[PricePredictionReservePattern] = None
     feedback_calibration: Optional[PricePredictionFeedbackCalibration] = None
@@ -688,6 +694,8 @@ class PricePredictionResponse(BaseModel):
     guardrail_reason: Optional[str] = None
     floor_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     floor_price: Optional[float] = Field(default=None, ge=0.0)
+    ceiling_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    ceiling_price: Optional[float] = Field(default=None, ge=0.0)
     explanation: str = ""
 
 

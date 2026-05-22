@@ -160,6 +160,51 @@ def test_cutoff_history_loader_excludes_future_and_current_project_rows(test_db)
     assert [item["historical_data_id"] for item in history] == [old_row.id]
 
 
+def test_cutoff_history_loader_falls_back_to_related_price_category(test_db):
+    target = _project(
+        title="Technical service target",
+        category="technical-service",
+        deadline=_dt(2025, 2, 10),
+    )
+    target.issuing_agency = "No Matching Agency"
+    test_db.add(target)
+    test_db.flush()
+    cutoff = BacktestCutoffService().resolve_data_cutoff_at(
+        target, hours_before_deadline=2
+    )
+    unrelated_construction = HistoricalData(
+        notice_number="CONST-1",
+        agency_name="Other Agency",
+        category="construction",
+        base_amount=100_000_000,
+        predicted_price=90_000_000,
+        bid_rate=0.90,
+        opened_at=cutoff - timedelta(days=5),
+    )
+    related_service = HistoricalData(
+        notice_number="SERVICE-1",
+        agency_name="Other Agency",
+        category="service",
+        base_amount=100_000_000,
+        predicted_price=89_000_000,
+        bid_rate=0.89,
+        opened_at=cutoff - timedelta(days=4),
+    )
+    test_db.add_all([unrelated_construction, related_service])
+    test_db.commit()
+
+    history = BacktestCutoffService().load_price_history_at_cutoff(
+        test_db,
+        category="technical-service",
+        agency_name=target.issuing_agency,
+        cutoff_at=cutoff,
+        exclude_project_id=target.id,
+        limit=10,
+    )
+
+    assert [item["historical_data_id"] for item in history] == [related_service.id]
+
+
 def test_paper_bidding_backtest_persists_run_bids_and_settlements(test_db):
     target = _project(deadline=_dt(2025, 3, 10), created_at=_dt(2025, 2, 1))
     test_db.add(target)

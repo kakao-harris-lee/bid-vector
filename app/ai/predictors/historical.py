@@ -69,6 +69,8 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
 
         return build_historical_prediction(
             budget=float(context.budget or 0.0),
+            category=context.category,
+            description=context.description,
             heuristic_prediction=heuristic_prediction,
             historical_summary=historical_summary,
         )
@@ -138,6 +140,8 @@ def build_heuristic_prediction(budget: float, category: str, description: str) -
 def build_historical_prediction(
     *,
     budget: float,
+    category: str,
+    description: str,
     heuristic_prediction: dict[str, Any],
     historical_summary: dict[str, Any],
 ) -> dict[str, Any]:
@@ -145,6 +149,8 @@ def build_historical_prediction(
     sample_size = int(historical_summary["sample_size"])
     mean_rate = float(historical_summary["mean_bid_rate"])
     median_rate = float(historical_summary["median_bid_rate"])
+    recent_median_rate = float(historical_summary.get("recent_median_bid_rate", 0.0) or 0.0)
+    competitive_quantile_rate = float(historical_summary.get("competitive_quantile_bid_rate", 0.0) or 0.0)
     std_rate = float(historical_summary["std_bid_rate"])
     agency_match_sample_size = int(historical_summary.get("agency_match_sample_size", 0) or 0)
     reserve_pattern = historical_summary.get("reserve_price_context")
@@ -156,17 +162,28 @@ def build_historical_prediction(
     t_value = get_t_critical(sample_size - 1) if sample_size > 1 else _T_CRITICAL_95[1]
     margin = t_value * (std_rate / sqrt(sample_size)) if sample_size > 1 else std_rate
 
-    if sample_size >= 5:
-        base_rate = (mean_rate * 0.62) + (median_rate * 0.23) + (heuristic_rate * 0.15)
-    elif sample_size >= 2:
-        base_rate = (mean_rate * 0.5) + (median_rate * 0.2) + (heuristic_rate * 0.3)
-    else:
-        base_rate = (mean_rate * 0.45) + (heuristic_rate * 0.55)
+    base_rate = select_competitive_base_rate(
+        category=category,
+        description=description,
+        sample_size=sample_size,
+        mean_rate=mean_rate,
+        median_rate=median_rate,
+        recent_median_rate=recent_median_rate,
+        competitive_quantile_rate=competitive_quantile_rate,
+        heuristic_rate=heuristic_rate,
+    )
+    rate_band = resolve_procurement_rate_band(category=category, description=description)
 
     spread = max(std_rate * 0.6, margin * 0.4, 0.01)
     conservative_rate = clamp_bid_rate(base_rate - spread)
     base_rate = clamp_bid_rate(base_rate)
     aggressive_rate = clamp_bid_rate(base_rate + (spread * 0.8))
+    conservative_rate, base_rate, aggressive_rate = apply_procurement_candidate_band(
+        conservative_rate=conservative_rate,
+        base_rate=base_rate,
+        aggressive_rate=aggressive_rate,
+        rate_band=rate_band,
+    )
 
     candidates = [
         {
@@ -212,11 +229,14 @@ def build_historical_prediction(
         "guardrail_reason": None,
         "floor_bid_rate": None,
         "floor_price": None,
+        "competitive_target_bid_rate": round(base_rate, 4),
+        "procurement_rate_band": rate_band,
         "explanation": build_historical_explanation(
             sample_size=sample_size,
             base_rate=base_rate,
             agency_match_sample_size=agency_match_sample_size,
             reserve_pattern=reserve_pattern,
+            rate_band=rate_band,
         ),
     }
 
@@ -227,6 +247,8 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
     weights: list[float] = []
     agency_match_sample_size = 0
     reserve_span_rates: list[float] = []
+    estimated_price_rates: list[float] = []
+    bid_to_estimated_price_rates: list[float] = []
     selected_numbers: list[int] = []
     normalized_target_agency = normalize_agency_name(agency_name)
 
@@ -250,6 +272,17 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
         base_amount = float(read_record_value(record, "base_amount") or 0.0)
         if len(reserve_prices) >= 2 and base_amount > 0:
             reserve_span_rates.append((max(reserve_prices) - min(reserve_prices)) / base_amount)
+            picked_prices = [
+                reserve_prices[number - 1]
+                for number in coerce_integer_list(read_record_value(record, "selected_numbers"))
+                if 1 <= number <= len(reserve_prices)
+            ]
+            if len(picked_prices) >= 2:
+                estimated_price_rate = float(np.mean(picked_prices)) / base_amount
+                if 0.8 <= estimated_price_rate <= 1.2:
+                    estimated_price_rates.append(estimated_price_rate)
+                    if 0.5 <= bid_rate <= 1.5:
+                        bid_to_estimated_price_rates.append(bid_rate / estimated_price_rate)
 
         selected_numbers.extend(coerce_integer_list(read_record_value(record, "selected_numbers")))
 
@@ -258,6 +291,8 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
             "sample_size": 0,
             "mean_bid_rate": 0.0,
             "median_bid_rate": 0.0,
+            "recent_median_bid_rate": 0.0,
+            "competitive_quantile_bid_rate": 0.0,
             "std_bid_rate": 0.0,
             "agency_match_sample_size": 0,
             "reserve_price_context": None,
@@ -266,18 +301,139 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
     weighted_mean_value = float(np.average(bid_rates, weights=weights)) if weights else float(np.mean(bid_rates))
     weighted_median_value = weighted_median(bid_rates, weights) if weights else float(np.median(bid_rates))
     weighted_std_value = weighted_std(bid_rates, weights, weighted_mean_value) if len(bid_rates) > 1 else 0.0
+    recent_window_size = min(10, len(bid_rates))
+    recent_median_value = weighted_median(
+        bid_rates[:recent_window_size],
+        weights[:recent_window_size],
+    )
+    competitive_quantile_value = weighted_quantile(bid_rates, weights, 0.45)
 
     return {
         "sample_size": len(bid_rates),
         "mean_bid_rate": weighted_mean_value,
         "median_bid_rate": weighted_median_value,
+        "recent_median_bid_rate": recent_median_value,
+        "competitive_quantile_bid_rate": competitive_quantile_value,
         "std_bid_rate": weighted_std_value,
         "agency_match_sample_size": agency_match_sample_size,
         "reserve_price_context": build_reserve_pattern_context(
             reserve_span_rates=reserve_span_rates,
+            estimated_price_rates=estimated_price_rates,
+            bid_to_estimated_price_rates=bid_to_estimated_price_rates,
             selected_numbers=selected_numbers,
         ),
     }
+
+
+def select_competitive_base_rate(
+    *,
+    category: str,
+    description: str,
+    sample_size: int,
+    mean_rate: float,
+    median_rate: float,
+    recent_median_rate: float,
+    competitive_quantile_rate: float,
+    heuristic_rate: float,
+) -> float:
+    """Choose the bidding target, avoiding heuristic drag when history is deep."""
+    normalized_category = normalize_category_key(category)
+    robust_median = median_rate or mean_rate
+    recent_target = recent_median_rate or robust_median
+    quantile_target = competitive_quantile_rate or robust_median
+
+    if sample_size >= 10:
+        if normalized_category in {"service", "technical-service", "general-service"}:
+            base_rate = recent_target
+            return apply_procurement_rate_band(base_rate, category=category, description=description)
+        if normalized_category == "construction":
+            base_rate = quantile_target
+            return apply_procurement_rate_band(base_rate, category=category, description=description)
+        base_rate = (robust_median * 0.7) + (recent_target * 0.2) + (mean_rate * 0.1)
+        return apply_procurement_rate_band(base_rate, category=category, description=description)
+    if sample_size >= 5:
+        base_rate = (robust_median * 0.55) + (mean_rate * 0.35) + (heuristic_rate * 0.10)
+        return apply_procurement_rate_band(base_rate, category=category, description=description)
+    if sample_size >= 2:
+        base_rate = (robust_median * 0.45) + (mean_rate * 0.35) + (heuristic_rate * 0.20)
+        return apply_procurement_rate_band(base_rate, category=category, description=description)
+    base_rate = (mean_rate * 0.55) + (heuristic_rate * 0.45)
+    return apply_procurement_rate_band(base_rate, category=category, description=description)
+
+
+def apply_procurement_rate_band(base_rate: float, *, category: str, description: str) -> float:
+    """Apply service subtype bid-rate bands inferred from notice text."""
+    rate_band = resolve_procurement_rate_band(category=category, description=description)
+    if rate_band == "service_high_negotiated":
+        return max(base_rate, 1.0)
+    if rate_band == "service_price_competitive":
+        return min(base_rate, 0.90)
+    return base_rate
+
+
+def apply_procurement_candidate_band(
+    *,
+    conservative_rate: float,
+    base_rate: float,
+    aggressive_rate: float,
+    rate_band: str | None,
+) -> tuple[float, float, float]:
+    """Keep all scenarios consistent with the inferred procurement band."""
+    if rate_band == "service_high_negotiated":
+        return max(conservative_rate, 0.98), max(base_rate, 1.0), max(aggressive_rate, 1.0)
+    if rate_band == "service_price_competitive":
+        return min(conservative_rate, 0.90), min(base_rate, 0.90), min(aggressive_rate, 0.90)
+    return conservative_rate, base_rate, aggressive_rate
+
+
+def resolve_procurement_rate_band(*, category: str, description: str) -> str | None:
+    """Infer broad service bidding bands from the notice text."""
+    normalized_category = normalize_category_key(category)
+    if normalized_category not in {"service", "technical-service", "general-service", "software"}:
+        return None
+
+    normalized_text = str(description or "").strip().lower()
+    if not normalized_text:
+        return None
+
+    price_competitive_keywords = (
+        "폐기물",
+        "기술지도",
+        "사후환경",
+        "환경영향",
+        "pq",
+        "가격입찰",
+        "설계용역",
+        "감리",
+        "건설사업관리",
+        "처리용역",
+        "재활용",
+    )
+    if any(keyword in normalized_text for keyword in price_competitive_keywords):
+        return "service_price_competitive"
+
+    high_negotiated_keywords = (
+        "협상에 의한 계약",
+        "협상",
+        "제안",
+        "위탁",
+        "운영",
+        "홍보",
+        "영상",
+        "콘텐츠",
+        "시스템",
+        "개발",
+        "조사",
+        "출판",
+        "제작",
+        "마스터플랜",
+        "플랫폼",
+        "sns",
+        "서포터",
+    )
+    if any(keyword in normalized_text for keyword in high_negotiated_keywords):
+        return "service_high_negotiated"
+    return None
 
 
 def estimate_historical_confidence(*, sample_size: int, std_rate: float, margin: float) -> float:
@@ -330,6 +486,20 @@ def normalize_agency_name(value: Any) -> str:
     return "".join(str(value or "").strip().lower().split())
 
 
+def normalize_category_key(value: Any) -> str:
+    """Normalize category labels used by category-specific bidding heuristics."""
+    normalized = str(value or "").strip().lower()
+    aliases = {
+        "일반용역": "service",
+        "general-service": "service",
+        "기술용역": "technical-service",
+        "공사": "construction",
+        "물품": "goods",
+        "소프트웨어": "software",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def weighted_median(values: list[float], weights: list[float]) -> float:
     """Compute a weighted median for historical bid rates."""
     if not values:
@@ -341,6 +511,33 @@ def weighted_median(values: list[float], weights: list[float]) -> float:
     cumulative_weight = 0.0
     total_weight = float(sum(weights))
     threshold = total_weight / 2
+    for value, weight in sorted_pairs:
+        cumulative_weight += float(weight)
+        if cumulative_weight >= threshold:
+            return float(value)
+    return float(sorted_pairs[-1][0])
+
+
+def weighted_quantile(values: list[float], weights: list[float], quantile: float) -> float:
+    """Compute a weighted quantile for historical bid rates."""
+    if not values:
+        return 0.0
+    safe_quantile = max(0.0, min(1.0, float(quantile)))
+    if not weights:
+        sorted_values = sorted(values)
+        position = (len(sorted_values) - 1) * safe_quantile
+        lower_index = int(position)
+        upper_index = min(lower_index + 1, len(sorted_values) - 1)
+        fraction = position - lower_index
+        return float((sorted_values[lower_index] * (1 - fraction)) + (sorted_values[upper_index] * fraction))
+
+    sorted_pairs = sorted(zip(values, weights), key=lambda item: item[0])
+    total_weight = float(sum(weight for _value, weight in sorted_pairs))
+    if total_weight <= 0:
+        return float(np.quantile(values, safe_quantile))
+
+    threshold = total_weight * safe_quantile
+    cumulative_weight = 0.0
     for value, weight in sorted_pairs:
         cumulative_weight += float(weight)
         if cumulative_weight >= threshold:
@@ -397,10 +594,16 @@ def coerce_sequence(raw_value: Any) -> list[Any]:
     return []
 
 
-def build_reserve_pattern_context(*, reserve_span_rates: list[float], selected_numbers: list[int]) -> dict[str, Any] | None:
+def build_reserve_pattern_context(
+    *,
+    reserve_span_rates: list[float],
+    estimated_price_rates: list[float],
+    bid_to_estimated_price_rates: list[float],
+    selected_numbers: list[int],
+) -> dict[str, Any] | None:
     """Summarize reserve price and selected-number patterns from historical openings."""
     sample_count = len(reserve_span_rates)
-    if sample_count == 0 and not selected_numbers:
+    if sample_count == 0 and not selected_numbers and not estimated_price_rates:
         return None
 
     number_counts: dict[int, int] = {}
@@ -417,6 +620,14 @@ def build_reserve_pattern_context(*, reserve_span_rates: list[float], selected_n
     return {
         "sample_count": sample_count,
         "average_reserve_span_rate": round(float(np.mean(reserve_span_rates)), 4) if reserve_span_rates else 0.0,
+        "estimated_price_sample_count": len(estimated_price_rates),
+        "average_estimated_price_rate": round(float(np.mean(estimated_price_rates)), 4) if estimated_price_rates else 0.0,
+        "median_estimated_price_rate": round(float(np.median(estimated_price_rates)), 4) if estimated_price_rates else 0.0,
+        "median_bid_to_estimated_price_rate": (
+            round(float(np.median(bid_to_estimated_price_rates)), 4)
+            if bid_to_estimated_price_rates
+            else 0.0
+        ),
         "average_selected_number": round(float(np.mean(selected_numbers)), 2) if selected_numbers else 0.0,
         "frequent_selected_numbers": frequent_selected_numbers,
     }
@@ -428,6 +639,7 @@ def build_historical_explanation(
     base_rate: float,
     agency_match_sample_size: int,
     reserve_pattern: dict[str, Any] | None,
+    rate_band: str | None,
 ) -> str:
     """Build a natural-language summary for weighted historical price prediction."""
     details: list[str] = []
@@ -436,6 +648,10 @@ def build_historical_explanation(
     reserve_sample_count = int(reserve_pattern.get("sample_count", 0) or 0) if reserve_pattern else 0
     if reserve_sample_count > 0:
         details.append(f"예비가격 패턴 {reserve_sample_count}건도 함께 참고했습니다")
+    if rate_band == "service_high_negotiated":
+        details.append("협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다")
+    elif rate_band == "service_price_competitive":
+        details.append("가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다")
 
     detail_text = f" {' '.join(details)}" if details else ""
     return (

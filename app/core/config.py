@@ -132,6 +132,16 @@ class Settings(BaseSettings):
             "construction": 0.87,
         }
     )
+    PREDICTION_DEFAULT_MAXIMUM_BID_RATE: float = 1.0
+    PREDICTION_CATEGORY_MAXIMUM_BID_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            "software": 1.0,
+            "service": 1.0,
+            "technical-service": 1.0,
+            "goods": 1.0,
+            "construction": 0.93,
+        }
+    )
     PRICE_PREDICTION_PREFERRED_PREDICTOR: str = "historical"
     PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
     PRICE_PREDICTION_LSTM_MODEL_PATH: str = ""

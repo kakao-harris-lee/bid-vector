@@ -131,6 +131,107 @@ def test_predict_price_weights_same_agency_and_summarizes_reserve_patterns():
     assert "동일 기관 이력 2건" in prediction["explanation"]
 
 
+def test_predict_price_uses_recent_service_history_without_heuristic_drag():
+    """Deep service history should drive the bid-rate target instead of long-description heuristics."""
+    history = [
+        {
+            "bid_rate": bid_rate,
+            "base_amount": 100000000.0,
+        }
+        for bid_rate in [
+            0.889,
+            0.891,
+            0.890,
+            0.892,
+            0.888,
+            0.893,
+            0.890,
+            0.891,
+            0.889,
+            0.892,
+            0.910,
+            0.914,
+            0.918,
+            0.922,
+            0.926,
+        ]
+    ]
+
+    prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="긴 설명 " * 180,
+        historical_records=history,
+    )
+
+    assert prediction["pricing_mode"] == "historical_blend"
+    assert prediction["competitive_target_bid_rate"] == prediction["predicted_bid_rate"]
+    assert prediction["predicted_bid_rate"] <= 0.893
+    assert prediction["predicted_price"] <= 89300000.0
+
+
+def test_predict_price_applies_service_procurement_rate_bands():
+    """Service notice keywords should separate negotiated and price-competitive target bands."""
+    history = [
+        {"bid_rate": bid_rate, "base_amount": 100000000.0}
+        for bid_rate in [0.91, 0.914, 0.918, 0.922, 0.926, 0.93, 0.934, 0.938, 0.942, 0.946]
+    ]
+
+    negotiated_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="콘텐츠 플랫폼 운영 위탁 용역 협상에 의한 계약",
+        historical_records=history,
+    )
+    competitive_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="건설폐기물 처리용역 가격입찰",
+        historical_records=history,
+    )
+
+    assert negotiated_prediction["procurement_rate_band"] == "service_high_negotiated"
+    assert negotiated_prediction["predicted_bid_rate"] == 1.0
+    assert competitive_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert competitive_prediction["predicted_bid_rate"] == 0.9
+    assert all(item["bid_rate"] <= 0.9 for item in competitive_prediction["bid_rate_candidates"])
+
+
+def test_predict_price_summarizes_selected_reserve_estimated_price_rates():
+    """Selected reserve numbers should expose estimated-price and bid-to-estimate context."""
+    reserve_prices = [99000000.0 + (index * 100000.0) for index in range(15)]
+    prediction = predict_price(
+        budget=100000000.0,
+        category="construction",
+        description="복수예가 컨텍스트 검증",
+        historical_records=[
+            {
+                "bid_rate": 0.904,
+                "base_amount": 100000000.0,
+                "reserve_prices": reserve_prices,
+                "selected_numbers": [1, 4, 7, 12],
+            },
+            {
+                "bid_rate": 0.902,
+                "base_amount": 100000000.0,
+                "reserve_prices": reserve_prices,
+                "selected_numbers": [2, 5, 8, 11],
+            },
+            {
+                "bid_rate": 0.906,
+                "base_amount": 100000000.0,
+                "reserve_prices": reserve_prices,
+                "selected_numbers": [3, 6, 9, 15],
+            },
+        ],
+    )
+
+    context = prediction["reserve_price_context"]
+    assert context["estimated_price_sample_count"] == 3
+    assert context["median_estimated_price_rate"] > 0.99
+    assert context["median_bid_to_estimated_price_rate"] > 0.0
+
+
 def test_bid_recommendation(client):
     """Test bid recommendation endpoint"""
     # Create a project
@@ -399,6 +500,33 @@ def test_predict_price_applies_minimum_bid_rate_guardrail():
     assert prediction["model_version"].endswith("+guardrail")
     assert "가드레일" in prediction["explanation"]
 
+
+def test_predict_price_applies_maximum_bid_rate_guardrail():
+    """Configured bid-rate ceilings should clamp unrealistically high price scenarios."""
+    prediction = predict_price(
+        budget=100000000.0,
+        category="construction",
+        description="상한 가드레일 검증 테스트",
+        historical_records=[
+            {"bid_rate": 1.18},
+            {"bid_rate": 1.21},
+            {"bid_rate": 1.24},
+            {"bid_rate": 1.27},
+            {"bid_rate": 1.30},
+        ],
+    )
+
+    assert prediction["guardrail_applied"] is True
+    assert prediction["guardrail_reason"]
+    assert prediction["ceiling_bid_rate"] == 0.93
+    assert prediction["ceiling_price"] == 93000000.0
+    assert prediction["predicted_bid_rate"] <= prediction["ceiling_bid_rate"]
+    assert prediction["price_range_max"] <= prediction["ceiling_price"]
+    assert all(item["bid_rate"] <= prediction["ceiling_bid_rate"] for item in prediction["bid_rate_candidates"])
+    assert prediction["model_version"].endswith("+guardrail")
+    assert "최대 투찰률" in prediction["guardrail_reason"]
+
+
 def test_price_prediction_endpoint_applies_feedback_calibration_from_recent_results(client, test_db):
     """Prediction endpoint should derive a calibration bias from recent linked tender results."""
     client.get("/api/v1/operator/profile")
@@ -441,8 +569,8 @@ def test_price_prediction_endpoint_applies_feedback_calibration_from_recent_resu
             agency_name="서울특별시교육청",
             category="software",
             base_amount=100000000.0,
-            predicted_price=100000000.0,
-            bid_rate=1.0,
+            predicted_price=96000000.0,
+            bid_rate=0.96,
         ),
         TenderResult(
             project_id=historical_project_id,
@@ -540,3 +668,46 @@ def test_price_prediction_endpoint_surfaces_guardrail_metadata(client, test_db):
     assert data["predicted_bid_rate"] >= data["floor_bid_rate"]
     assert data["price_range_min"] >= data["floor_price"]
     assert data["model_version"].endswith("+guardrail")
+
+
+def test_price_prediction_endpoint_uses_related_category_history_for_technical_service(client, test_db):
+    """Technical-service predictions should fall back to service bid-rate history."""
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Technical Service Price Fallback",
+            "description": "기술용역 가격 fallback 확인",
+            "requirements": "기술용역",
+            "budget_estimate": 100000000.0,
+            "category": "technical-service",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    test_db.add_all([
+        HistoricalData(
+            notice_number=f"SERVICE-FALLBACK-{index}",
+            category="service",
+            base_amount=100000000.0,
+            predicted_price=100000000.0 * bid_rate,
+            bid_rate=bid_rate,
+        )
+        for index, bid_rate in enumerate([0.884, 0.891, 0.897, 0.902], start=1)
+    ])
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/predictions/price",
+        json={
+            "project_id": project_id,
+            "budget_estimate": 100000000.0,
+            "category": "technical-service",
+            "description": "기술용역 가격 fallback 확인",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pricing_mode"] == "historical_blend"
+    assert data["historical_sample_size"] == 4
+    assert data["predicted_bid_rate"] <= data["ceiling_bid_rate"]

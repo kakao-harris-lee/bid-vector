@@ -9,6 +9,27 @@ from sqlalchemy.orm import Session
 
 from app.models.models import HistoricalData, TenderResult
 
+_CATEGORY_ALIASES = {
+    "general-service": "service",
+    "일반용역": "service",
+    "service": "service",
+    "technical-service": "technical-service",
+    "기술용역": "technical-service",
+    "construction": "construction",
+    "공사": "construction",
+    "software": "software",
+    "소프트웨어": "software",
+    "goods": "goods",
+    "물품": "goods",
+}
+
+_RELATED_PRICE_HISTORY_CATEGORIES = {
+    "technical-service": ("service",),
+    "general-service": ("service",),
+    "service": ("technical-service", "general-service"),
+    "software": ("service", "technical-service"),
+}
+
 
 class PredictionDatasetService:
     """Build normalized historical bid-rate series for prediction logic."""
@@ -27,19 +48,36 @@ class PredictionDatasetService:
         explicit_bid_rate_only: bool = False,
     ) -> list[dict[str, Any]]:
         """Load a normalized bid-rate series from stored historical rows."""
-        query = db.query(HistoricalData)
-        if category:
-            query = query.filter(HistoricalData.category == category)
-        if agency_name:
-            query = query.filter(HistoricalData.agency_name.ilike(f"%{agency_name.strip()}%"))
-        if explicit_bid_rate_only:
-            query = query.filter(HistoricalData.bid_rate > 0)
+        category_scope = self._category_scope(category)
+        records: list[HistoricalData] = []
+        seen_historical_ids: set[int] = set()
 
-        records = (
-            query.order_by(HistoricalData.opened_at.desc(), HistoricalData.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        scopes: list[tuple[list[str], str | None]] = []
+        if agency_name:
+            scopes.append((category_scope[:1], agency_name))
+        scopes.append((category_scope[:1], None))
+        if len(category_scope) > 1:
+            scopes.append((category_scope[1:], None))
+        if not scopes:
+            scopes.append(([], agency_name))
+
+        for categories, scoped_agency_name in scopes:
+            if len(records) >= limit:
+                break
+            for record in self._load_records(
+                db,
+                categories=categories,
+                agency_name=scoped_agency_name,
+                explicit_bid_rate_only=explicit_bid_rate_only,
+                exclude_historical_ids=seen_historical_ids,
+                limit=max(1, int(limit or 1)) - len(records),
+            ):
+                record_id = int(record.id or 0)
+                if record_id in seen_historical_ids:
+                    continue
+                records.append(record)
+                seen_historical_ids.add(record_id)
+
         latest_results = self._load_latest_tender_results(
             db,
             project_ids={int(record.project_id) for record in records if record.project_id is not None},
@@ -55,17 +93,13 @@ class PredictionDatasetService:
         if series and not any(item.get("reserve_prices") for item in series):
             supplemental_records = self._load_reserve_context_backfill_records(
                 db,
-                category=category,
+                category_scope=category_scope,
                 agency_name=agency_name,
                 explicit_bid_rate_only=explicit_bid_rate_only,
                 limit=self.RESERVE_CONTEXT_BACKFILL_LIMIT,
+                exclude_historical_ids=seen_historical_ids,
             )
             if supplemental_records:
-                seen_historical_ids = {
-                    int(item["historical_data_id"])
-                    for item in series
-                    if item.get("historical_data_id") is not None
-                }
                 supplemental_results = self._load_latest_tender_results(
                     db,
                     project_ids={
@@ -75,8 +109,6 @@ class PredictionDatasetService:
                     },
                 )
                 for record in supplemental_records:
-                    if int(record.id or 0) in seen_historical_ids:
-                        continue
                     tender_result = (
                         supplemental_results.get(int(record.project_id))
                         if record.project_id is not None
@@ -89,23 +121,53 @@ class PredictionDatasetService:
                     seen_historical_ids.add(int(record.id or 0))
         return series
 
-    def _load_reserve_context_backfill_records(
+    def _load_records(
         self,
         db: Session,
         *,
-        category: str | None,
+        categories: list[str],
         agency_name: str | None,
         explicit_bid_rate_only: bool,
+        exclude_historical_ids: set[int],
         limit: int,
     ) -> list[HistoricalData]:
-        """Load additional rows with reserve metadata when recent slices do not contain any."""
+        """Load one prediction-history scope."""
         query = db.query(HistoricalData)
-        if category:
-            query = query.filter(HistoricalData.category == category)
+        if categories:
+            query = query.filter(HistoricalData.category.in_(categories))
         if agency_name:
             query = query.filter(HistoricalData.agency_name.ilike(f"%{agency_name.strip()}%"))
         if explicit_bid_rate_only:
             query = query.filter(HistoricalData.bid_rate > 0)
+        if exclude_historical_ids:
+            query = query.filter(HistoricalData.id.notin_(exclude_historical_ids))
+
+        return (
+            query.order_by(HistoricalData.opened_at.desc(), HistoricalData.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def _load_reserve_context_backfill_records(
+        self,
+        db: Session,
+        *,
+        category_scope: list[str],
+        agency_name: str | None,
+        explicit_bid_rate_only: bool,
+        exclude_historical_ids: set[int],
+        limit: int,
+    ) -> list[HistoricalData]:
+        """Load additional rows with reserve metadata when recent slices do not contain any."""
+        query = db.query(HistoricalData)
+        if category_scope:
+            query = query.filter(HistoricalData.category.in_(category_scope))
+        if agency_name:
+            query = query.filter(HistoricalData.agency_name.ilike(f"%{agency_name.strip()}%"))
+        if explicit_bid_rate_only:
+            query = query.filter(HistoricalData.bid_rate > 0)
+        if exclude_historical_ids:
+            query = query.filter(HistoricalData.id.notin_(exclude_historical_ids))
 
         query = query.filter(HistoricalData.reserve_prices.isnot(None))
         query = query.filter(HistoricalData.reserve_prices != "")
@@ -116,6 +178,20 @@ class PredictionDatasetService:
             .limit(max(0, int(limit or 0)))
             .all()
         )
+
+    def _category_scope(self, category: str | None) -> list[str]:
+        normalized_category = self._normalize_category(category)
+        if not normalized_category:
+            return []
+        categories = [normalized_category]
+        for related_category in _RELATED_PRICE_HISTORY_CATEGORIES.get(normalized_category, ()):
+            if related_category not in categories:
+                categories.append(related_category)
+        return categories
+
+    def _normalize_category(self, category: str | None) -> str:
+        normalized = str(category or "").strip().lower()
+        return _CATEGORY_ALIASES.get(normalized, normalized)
 
     def build_training_dataset(
         self,

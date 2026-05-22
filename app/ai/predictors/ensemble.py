@@ -9,7 +9,14 @@ from typing import Any
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PredictorAvailability, PricePredictionContext
-from app.ai.predictors.historical import HistoricalStatisticalPredictor, clamp_bid_rate, summarize_historical_records
+from app.ai.predictors.historical import (
+    HistoricalStatisticalPredictor,
+    apply_procurement_candidate_band,
+    apply_procurement_rate_band,
+    clamp_bid_rate,
+    resolve_procurement_rate_band,
+    summarize_historical_records,
+)
 from app.ai.predictors.lstm import extract_bid_rate_series, infer_lstm_sequence_signal, load_lstm_artifact
 from app.core.config import settings
 
@@ -110,6 +117,14 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
     base_rate = clamp_bid_rate(
         sum(float(components[key]) * float(component_weights[key]) for key in component_weights)
     )
+    base_rate = clamp_bid_rate(
+        apply_procurement_rate_band(
+            base_rate,
+            category=context.category,
+            description=context.description,
+        )
+    )
+    rate_band = resolve_procurement_rate_band(category=context.category, description=context.description)
 
     component_values = list(components.values())
     component_spread = float(np.std(component_values)) if len(component_values) > 1 else 0.0
@@ -121,6 +136,12 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
     )
     conservative_rate = clamp_bid_rate(base_rate - spread)
     aggressive_rate = clamp_bid_rate(base_rate + (spread * 0.85))
+    conservative_rate, base_rate, aggressive_rate = apply_procurement_candidate_band(
+        conservative_rate=conservative_rate,
+        base_rate=base_rate,
+        aggressive_rate=aggressive_rate,
+        rate_band=rate_band,
+    )
     candidates = [
         {
             "label": "conservative",
@@ -168,11 +189,14 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
         "guardrail_reason": None,
         "floor_bid_rate": None,
         "floor_price": None,
+        "competitive_target_bid_rate": round(base_rate, 4),
+        "procurement_rate_band": rate_band,
         "explanation": _build_ensemble_explanation(
             components=components,
             component_weights=component_weights,
             artifact=artifact,
             agency_match_sample_size=agency_match_sample_size,
+            rate_band=rate_band,
         ),
     }
 
@@ -234,6 +258,7 @@ def _build_ensemble_explanation(
     component_weights: dict[str, float],
     artifact: dict[str, Any],
     agency_match_sample_size: int,
+    rate_band: str | None,
 ) -> str:
     """Build a natural-language explanation for the ensemble output."""
     ordered_components = [
@@ -246,6 +271,10 @@ def _build_ensemble_explanation(
     )
     if agency_match_sample_size > 0:
         explanation += f" 동일 기관 이력 {agency_match_sample_size}건도 함께 반영했습니다."
+    if rate_band == "service_high_negotiated":
+        explanation += " 협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다."
+    elif rate_band == "service_price_competitive":
+        explanation += " 가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다."
     return explanation
 
 

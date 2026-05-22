@@ -27,6 +27,10 @@ os.environ["PRICE_PREDICTION_PREFERRED_PREDICTOR"] = "historical"
 os.environ["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"] = "false"
 os.environ["PRICE_PREDICTION_LSTM_MODEL_PATH"] = ""
 os.environ["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] = ""
+os.environ["OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED"] = "false"
+os.environ["OPERATOR_STRATEGY_MONITOR_RUN_ON_STARTUP"] = "false"
+os.environ["PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED"] = "false"
+os.environ["PAPER_BIDDING_FORWARD_RUN_ON_STARTUP"] = "false"
 
 from app.core.database import Base
 

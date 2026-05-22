@@ -187,6 +187,37 @@ def test_predict_price_uses_ensemble_predictor_when_artifact_is_configured(monke
     assert "ensemble이" in prediction["explanation"]
 
 
+def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch, tmp_path):
+    """Ensemble output should share the same service subtype target bands as the baseline."""
+    _write_lstm_artifact(tmp_path)
+    ensemble_artifact_path = _write_ensemble_artifact(tmp_path)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES", 8)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MODEL_PATH", ensemble_artifact_path)
+    history = _build_bid_rate_history(12, base_rate=0.912, step=0.001)
+
+    negotiated_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="콘텐츠 플랫폼 운영 위탁 용역 협상에 의한 계약",
+        historical_records=history,
+    )
+    competitive_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="건설폐기물 처리용역 가격입찰",
+        historical_records=history,
+    )
+
+    assert negotiated_prediction["predictor_name"] == "ensemble_blend"
+    assert negotiated_prediction["procurement_rate_band"] == "service_high_negotiated"
+    assert negotiated_prediction["predicted_bid_rate"] == 1.0
+    assert competitive_prediction["predictor_name"] == "ensemble_blend"
+    assert competitive_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert competitive_prediction["predicted_bid_rate"] == 0.9
+
+
 def test_predict_price_auto_selector_uses_backtest_metadata(monkeypatch):
     """Auto predictor selection should run a rolling backtest and expose selector metadata."""
     monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "auto")

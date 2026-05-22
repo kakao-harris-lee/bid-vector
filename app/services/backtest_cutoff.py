@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -11,6 +12,40 @@ from sqlalchemy.orm import Session
 
 from app.core.time import ensure_utc
 from app.models.models import HistoricalData, Project, TenderResult
+
+_CATEGORY_ALIASES = {
+    "general-service": "service",
+    "일반용역": "service",
+    "service": "service",
+    "technical-service": "technical-service",
+    "기술용역": "technical-service",
+    "construction": "construction",
+    "공사": "construction",
+    "software": "software",
+    "소프트웨어": "software",
+    "goods": "goods",
+    "물품": "goods",
+}
+
+_RELATED_PRICE_HISTORY_CATEGORIES = {
+    "technical-service": ("service",),
+    "general-service": ("service",),
+    "service": ("technical-service", "general-service"),
+    "software": ("service", "technical-service"),
+}
+
+_AGENCY_STOP_WORDS = {
+    "공사",
+    "공단",
+    "교육청",
+    "지원청",
+    "광역시",
+    "특별시",
+    "특별자치도",
+    "시",
+    "군",
+    "구",
+}
 
 
 class BacktestCutoffService:
@@ -60,12 +95,73 @@ class BacktestCutoffService:
         explicit_bid_rate_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Load normalized historical rows visible before the cutoff."""
+        seen_ids: set[int] = set()
+        records: list[HistoricalData] = []
+        category_scope = self._category_scope(category)
+
+        scopes: list[tuple[list[str], list[str]]] = []
+        if agency_name:
+            scopes.append((category_scope[:1], [agency_name]))
+            similar_terms = self._agency_similarity_terms(agency_name)
+            if similar_terms:
+                scopes.append((category_scope[:1], similar_terms))
+        scopes.append((category_scope[:1], []))
+        if len(category_scope) > 1:
+            scopes.append((category_scope[1:], []))
+        if not category_scope and agency_name:
+            scopes.append(([], [agency_name]))
+        if not scopes:
+            scopes.append(([], []))
+
+        for categories, agency_terms in scopes:
+            if len(records) >= limit:
+                break
+            next_records = self._query_history_scope(
+                db,
+                categories=categories,
+                agency_terms=agency_terms,
+                cutoff_at=cutoff_at,
+                exclude_project_id=exclude_project_id,
+                explicit_bid_rate_only=explicit_bid_rate_only,
+                exclude_historical_ids=seen_ids,
+                limit=max(1, int(limit or 1)) - len(records),
+            )
+            for record in next_records:
+                record_id = int(record.id or 0)
+                if record_id in seen_ids:
+                    continue
+                records.append(record)
+                seen_ids.add(record_id)
+
+        return [self.serialize_historical_record(record) for record in records]
+
+    def _query_history_scope(
+        self,
+        db: Session,
+        *,
+        categories: list[str],
+        agency_terms: list[str],
+        cutoff_at: datetime,
+        exclude_project_id: int | None,
+        explicit_bid_rate_only: bool,
+        exclude_historical_ids: set[int],
+        limit: int,
+    ) -> list[HistoricalData]:
+        """Fetch one scoped history slice for the fallback ladder."""
         cutoff_at = ensure_utc(cutoff_at)
         query = db.query(HistoricalData)
-        if category:
-            query = query.filter(HistoricalData.category == category)
-        if agency_name:
-            query = query.filter(HistoricalData.agency_name.ilike(f"%{agency_name.strip()}%"))
+        if categories:
+            query = query.filter(HistoricalData.category.in_(categories))
+        cleaned_agency_terms = [term.strip() for term in agency_terms if term and term.strip()]
+        if cleaned_agency_terms:
+            query = query.filter(
+                or_(
+                    *[
+                        HistoricalData.agency_name.ilike(f"%{term}%")
+                        for term in cleaned_agency_terms
+                    ]
+                )
+            )
         if exclude_project_id is not None:
             query = query.filter(
                 or_(
@@ -75,6 +171,8 @@ class BacktestCutoffService:
             )
         if explicit_bid_rate_only:
             query = query.filter(HistoricalData.bid_rate > 0)
+        if exclude_historical_ids:
+            query = query.filter(HistoricalData.id.notin_(exclude_historical_ids))
 
         query = query.filter(
             or_(
@@ -88,7 +186,35 @@ class BacktestCutoffService:
             .limit(max(1, int(limit or 1)))
             .all()
         )
-        return [self.serialize_historical_record(record) for record in records]
+        return records
+
+    def _category_scope(self, category: str | None) -> list[str]:
+        """Return the primary category plus price-history fallback categories."""
+        normalized_category = self._normalize_category(category)
+        if not normalized_category:
+            return []
+
+        categories = [normalized_category]
+        for related_category in _RELATED_PRICE_HISTORY_CATEGORIES.get(normalized_category, ()):
+            if related_category not in categories:
+                categories.append(related_category)
+        return categories
+
+    def _normalize_category(self, category: str | None) -> str:
+        normalized = str(category or "").strip().lower()
+        return _CATEGORY_ALIASES.get(normalized, normalized)
+
+    def _agency_similarity_terms(self, agency_name: str | None) -> list[str]:
+        """Extract broad agency terms for a second-pass similar-agency lookup."""
+        tokens = re.findall(r"[0-9A-Za-z가-힣]+", str(agency_name or ""))
+        terms: list[str] = []
+        for token in tokens:
+            cleaned = token.strip()
+            if len(cleaned) < 2 or cleaned in _AGENCY_STOP_WORDS:
+                continue
+            if cleaned not in terms:
+                terms.append(cleaned)
+        return terms[:3]
 
     def serialize_historical_record(self, record: HistoricalData) -> dict[str, Any]:
         """Convert an ORM row into the predictor's lightweight record shape."""
