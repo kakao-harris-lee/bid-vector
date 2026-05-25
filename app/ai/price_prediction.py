@@ -436,33 +436,63 @@ def _build_guardrail_reason(
 
 
 def _resolve_floor_bid_rate(category: str | None, business_group: str | None = None) -> float | None:
-    """Resolve a configured minimum bid-rate floor for the given category/group."""
+    """Resolve a configured minimum bid-rate floor for the given category/group.
+
+    §4.7 guardrail: when both a group rate and a category rate exist, the group
+    rate can never be LOWER than the category floor — the category floor is the
+    hard lower bound.  Return max(group_rate, category_rate).
+    """
+    configured_floor_rates = settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES or {}
+    normalized_category = _normalize_category_key(category)
+    category_rate: float | None = None
+    for raw_category, raw_floor_rate in configured_floor_rates.items():
+        if _normalize_category_key(raw_category) == normalized_category:
+            category_rate = max(0.0, float(raw_floor_rate or 0.0))
+            break
+
     if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
         group_rates = settings.PREDICTION_GROUP_MINIMUM_BID_RATES or {}
         if business_group in group_rates:
-            return float(group_rates[business_group])
-    configured_floor_rates = settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES or {}
-    normalized_category = _normalize_category_key(category)
-    for raw_category, raw_floor_rate in configured_floor_rates.items():
-        if _normalize_category_key(raw_category) == normalized_category:
-            return max(0.0, float(raw_floor_rate or 0.0))
+            group_rate = float(group_rates[business_group])
+            # Group floor must never undercut category floor (§4.7).
+            if category_rate is not None:
+                return max(group_rate, category_rate)
+            return group_rate
+
+    if category_rate is not None:
+        return category_rate
 
     default_floor_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MINIMUM_BID_RATE or 0.0))
     return default_floor_rate or None
 
 
 def _resolve_ceiling_bid_rate(category: str | None, business_group: str | None = None) -> float | None:
-    """Resolve a configured maximum bid-rate ceiling for the given category/group."""
-    if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
-        group_rates = settings.PREDICTION_GROUP_MAXIMUM_BID_RATES or {}
-        if business_group in group_rates:
-            return float(group_rates[business_group])
+    """Resolve a configured maximum bid-rate ceiling for the given category/group.
+
+    §4.7 guardrail: when both a group rate and a category rate exist, the group
+    ceiling can never be HIGHER than the category ceiling — the category ceiling
+    is the hard upper bound.  Return min(group_rate, category_rate).
+    """
     configured_ceiling_rates = settings.PREDICTION_CATEGORY_MAXIMUM_BID_RATES or {}
     normalized_category = _normalize_category_key(category)
+    category_rate: float | None = None
     for raw_category, raw_ceiling_rate in configured_ceiling_rates.items():
         if _normalize_category_key(raw_category) == normalized_category:
             ceiling_rate = max(0.0, float(raw_ceiling_rate or 0.0))
-            return ceiling_rate or None
+            category_rate = ceiling_rate or None
+            break
+
+    if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
+        group_rates = settings.PREDICTION_GROUP_MAXIMUM_BID_RATES or {}
+        if business_group in group_rates:
+            group_rate = float(group_rates[business_group])
+            # Group ceiling must never exceed category ceiling (§4.7).
+            if category_rate is not None:
+                return min(group_rate, category_rate)
+            return group_rate
+
+    if category_rate is not None:
+        return category_rate
 
     default_ceiling_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MAXIMUM_BID_RATE or 0.0))
     return default_ceiling_rate or None

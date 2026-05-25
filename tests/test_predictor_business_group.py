@@ -89,12 +89,16 @@ def test_select_base_rate_construction_uses_recent_target_weight():
 
 
 def test_select_base_rate_service_emphasizes_competitive_quantile():
-    """service 그룹: 양봉 분포 → competitive_quantile_rate 비중 0.5."""
+    """service 그룹: 양봉 분포 → competitive_quantile_rate 비중 0.5.
+
+    Note: 'OO 청소용역' matches no rate band keyword (returns None), so the
+    pure weighting logic is exercised without service_high_negotiated interference.
+    """
     from app.ai.predictors.historical import select_competitive_base_rate
 
     rate = select_competitive_base_rate(
         category="service",
-        description="OO 연구개발용역",
+        description="OO 청소용역",  # no rate-band keyword → band=None
         sample_size=20,
         mean_rate=0.90,
         median_rate=0.883,
@@ -128,9 +132,11 @@ def test_select_base_rate_falls_back_when_group_missing():
 def test_guardrail_uses_group_key_when_available():
     from app.ai.price_prediction import _resolve_floor_bid_rate, _resolve_ceiling_bid_rate
 
+    # group floor(0.70) must not undercut category floor(0.87) — max() wins
     floor = _resolve_floor_bid_rate(category="service", business_group="service")
+    # group ceiling(1.00) vs category ceiling(1.00) — same for service, min() still correct
     ceiling = _resolve_ceiling_bid_rate(category="construction", business_group="construction")
-    assert floor == 0.70
+    assert floor == 0.87, "category floor(0.87) must take priority over group floor(0.70)"
     assert ceiling == 0.93
 
 
@@ -189,3 +195,30 @@ def test_service_branch_respects_group_ceiling():
     )
     # service_price_competitive의 0.90 상한이 적용되어야 함
     assert rate <= 0.90
+
+
+def test_floor_resolver_clamps_to_category_when_group_lower():
+    """service 그룹 floor(0.70)가 카테고리 floor(0.87)보다 낮으면 카테고리 floor 우선."""
+    from app.ai.price_prediction import _resolve_floor_bid_rate
+    floor = _resolve_floor_bid_rate(category="service", business_group="service")
+    assert floor >= 0.87, "category floor가 group floor보다 우선이어야 함 (§4.7)"
+
+
+def test_service_high_negotiated_floor_preserved_in_group_branch():
+    """service 그룹 분기에서도 service_high_negotiated 카테고리의 1.0 floor를 보존해야 함."""
+    from app.ai.predictors.historical import select_competitive_base_rate
+
+    # 협상에 의한 계약 → service_high_negotiated band → max(base_rate, 1.0) 강제
+    history = [{"bid_rate": 0.85} for _ in range(20)]
+    rate = select_competitive_base_rate(
+        category="service",
+        description="OO 협상에 의한 계약",
+        sample_size=20,
+        mean_rate=0.85,
+        median_rate=0.85,
+        recent_median_rate=0.85,
+        competitive_quantile_rate=0.85,
+        heuristic_rate=0.85,
+        business_group="service",
+    )
+    assert rate >= 1.0, "service_high_negotiated band는 1.0 floor를 적용해야 함"

@@ -399,13 +399,17 @@ def select_competitive_base_rate(
     if business_group == "construction" and sample_size >= 10:
         base_rate = (recent_target * 0.6) + (robust_median * 0.3) + (heuristic_rate * 0.1)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
-        if rate_band == "service_price_competitive":
+        if rate_band == "service_high_negotiated":
+            base_rate = max(base_rate, 1.0)
+        elif rate_band == "service_price_competitive":
             base_rate = min(base_rate, 0.90)
         return base_rate
     if business_group == "service" and sample_size >= 10:
         base_rate = (quantile_target * 0.5) + (robust_median * 0.35) + (heuristic_rate * 0.15)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
-        if rate_band == "service_price_competitive":
+        if rate_band == "service_high_negotiated":
+            base_rate = max(base_rate, 1.0)
+        elif rate_band == "service_price_competitive":
             base_rate = min(base_rate, 0.90)
         return base_rate
 
