@@ -67,3 +67,59 @@ def test_opportunity_analysis_passes_business_type(test_db, monkeypatch):
 
     assert captured.get("business_type_code") == "0411"
     assert captured.get("business_group") == "construction"
+
+
+def test_select_base_rate_construction_uses_recent_target_weight():
+    """construction 그룹: 단봉 분포 → recent_target 비중 0.6."""
+    from app.ai.predictors.historical import select_competitive_base_rate
+
+    rate = select_competitive_base_rate(
+        category="construction",
+        description="OO 건축공사",
+        sample_size=20,
+        mean_rate=0.90,
+        median_rate=0.903,
+        recent_median_rate=0.905,
+        competitive_quantile_rate=0.900,
+        heuristic_rate=0.88,
+        business_group="construction",
+    )
+    # 0.905*0.6 + 0.903*0.3 + 0.88*0.1 = 0.9019
+    assert 0.900 <= rate <= 0.910
+
+
+def test_select_base_rate_service_emphasizes_competitive_quantile():
+    """service 그룹: 양봉 분포 → competitive_quantile_rate 비중 0.5."""
+    from app.ai.predictors.historical import select_competitive_base_rate
+
+    rate = select_competitive_base_rate(
+        category="service",
+        description="OO 연구개발용역",
+        sample_size=20,
+        mean_rate=0.90,
+        median_rate=0.883,
+        recent_median_rate=0.88,
+        competitive_quantile_rate=0.83,
+        heuristic_rate=0.85,
+        business_group="service",
+    )
+    # 0.83*0.5 + 0.883*0.35 + 0.85*0.15 = 0.8516
+    assert 0.83 <= rate <= 0.88
+
+
+def test_select_base_rate_falls_back_when_group_missing():
+    """business_group=None이면 기존 category-keyed 로직 사용."""
+    from app.ai.predictors.historical import select_competitive_base_rate
+
+    rate = select_competitive_base_rate(
+        category="construction",
+        description="OO 공사",
+        sample_size=20,
+        mean_rate=0.90,
+        median_rate=0.903,
+        recent_median_rate=0.905,
+        competitive_quantile_rate=0.900,
+        heuristic_rate=0.88,
+        business_group=None,
+    )
+    assert 0.85 <= rate <= 0.95

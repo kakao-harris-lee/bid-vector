@@ -73,6 +73,7 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
             description=context.description,
             heuristic_prediction=heuristic_prediction,
             historical_summary=historical_summary,
+            business_group=context.business_group,
         )
 
 
@@ -144,6 +145,7 @@ def build_historical_prediction(
     description: str,
     heuristic_prediction: dict[str, Any],
     historical_summary: dict[str, Any],
+    business_group: str | None = None,
 ) -> dict[str, Any]:
     """Blend historical bid-rate samples with the heuristic baseline."""
     sample_size = int(historical_summary["sample_size"])
@@ -171,6 +173,7 @@ def build_historical_prediction(
         recent_median_rate=recent_median_rate,
         competitive_quantile_rate=competitive_quantile_rate,
         heuristic_rate=heuristic_rate,
+        business_group=business_group,
     )
     rate_band = resolve_procurement_rate_band(category=category, description=description)
 
@@ -335,12 +338,20 @@ def select_competitive_base_rate(
     recent_median_rate: float,
     competitive_quantile_rate: float,
     heuristic_rate: float,
+    business_group: str | None = None,
 ) -> float:
     """Choose the bidding target, avoiding heuristic drag when history is deep."""
     normalized_category = normalize_category_key(category)
     robust_median = median_rate or mean_rate
     recent_target = recent_median_rate or robust_median
     quantile_target = competitive_quantile_rate or robust_median
+
+    if business_group == "construction" and sample_size >= 10:
+        base_rate = (recent_target * 0.6) + (robust_median * 0.3) + (heuristic_rate * 0.1)
+        return base_rate
+    if business_group == "service" and sample_size >= 10:
+        base_rate = (quantile_target * 0.5) + (robust_median * 0.35) + (heuristic_rate * 0.15)
+        return base_rate
 
     if sample_size >= 10:
         if normalized_category in {"service", "technical-service", "general-service"}:
