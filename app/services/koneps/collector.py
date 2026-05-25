@@ -1641,6 +1641,26 @@ class KonepsCollectorService:
             )
         )
 
+    @staticmethod
+    def _split_business_type_cell(raw: str | None) -> tuple[str | None, str | None]:
+        """Split 'NNNN 라벨' KONEPS 업종 셀로부터 코드/라벨을 분리.
+
+        - 'NNNN 라벨' → ('NNNN', '라벨')
+        - '라벨' 단독 → (None, '라벨')
+        - 빈 문자열/None → (None, None)
+        """
+        if not raw:
+            return None, None
+        text = str(raw).strip()
+        if not text:
+            return None, None
+        parts = text.split(maxsplit=1)
+        if parts and parts[0].isdigit() and 3 <= len(parts[0]) <= 8:
+            code = parts[0]
+            label = parts[1].strip() if len(parts) > 1 else None
+            return code, (label or None)
+        return None, text
+
     def _apply_business_type_filter(self, page: Any, category: str) -> None:
         """Apply a known 업무구분 filter when the incoming category maps cleanly to KONEPS options."""
         filter_id = self.HOME_SEARCH_CATEGORY_IDS.get(category)
@@ -1739,6 +1759,7 @@ class KonepsCollectorService:
         title_cell = cells[3]
         title = self._extract_koneps_title(title_cell)
         business_type = cells[1].get_text(" ", strip=True)
+        business_type_code, business_type_label = self._split_business_type_cell(business_type)
         status = cells[5].get_text(" ", strip=True)
         procurement_scope = cells[6].get_text(" ", strip=True)
         posted_at_text = cells[7].get_text(" ", strip=True)
@@ -1785,6 +1806,8 @@ class KonepsCollectorService:
             estimated_amount=estimated_amount,
             closing_at=closing_at,
             business_type=detail_data.get("business_type") or business_type,
+            business_type_code=detail_data.get("business_type_code") or business_type_code,
+            business_type_label=detail_data.get("business_type_label") or business_type_label,
             region=region,
             license_codes=license_codes,
             source_url=source_url,

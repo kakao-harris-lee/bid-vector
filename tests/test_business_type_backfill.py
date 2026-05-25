@@ -36,3 +36,36 @@ def test_project_business_type_columns_are_nullable(test_db):
     test_db.refresh(project)
     assert project.business_type_code is None
     assert project.business_type_label is None
+
+
+def test_crawl_notice_item_carries_business_type_code():
+    from app.schemas.schemas import CrawlNoticeItem
+
+    item = CrawlNoticeItem(
+        notice_number="2026-001",
+        title="OO 건축공사",
+        base_amount=100_000_000.0,
+        business_type="공사",
+        business_type_code="0411",
+        business_type_label="건축공사",
+    )
+    assert item.business_type_code == "0411"
+    assert item.business_type_label == "건축공사"
+
+
+def test_extract_business_type_code_from_cell_text():
+    """Collector helper은 KONEPS HTML 셀의 'code 라벨' 형식을 분리해야 한다."""
+    from app.services.koneps.collector import KonepsCollectorService
+
+    service = KonepsCollectorService()
+    code, label = service._split_business_type_cell("0411 건축공사")
+    assert code == "0411"
+    assert label == "건축공사"
+
+    code, label = service._split_business_type_cell("건축공사")
+    assert code is None
+    assert label == "건축공사"
+
+    code, label = service._split_business_type_cell("")
+    assert code is None
+    assert label is None
