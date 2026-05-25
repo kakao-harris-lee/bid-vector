@@ -58,6 +58,8 @@ class Project(Base):
     embedding_payload = Column(Text, default="[]")
     embedding_model = Column(String(255), nullable=True)
     embedding_updated_at = Column(DateTime(timezone=True), nullable=True)
+    business_type_code = Column(String(8), nullable=True, index=True)
+    business_type_label = Column(String(64), nullable=True)
     embedding = Column(VECTOR(384), nullable=True)
 
     # Relationships

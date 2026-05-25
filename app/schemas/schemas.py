@@ -1600,6 +1600,8 @@ class CrawlNoticeItem(BaseModel):
     estimated_amount: Optional[float] = None
     closing_at: Optional[datetime] = None
     business_type: Optional[str] = None
+    business_type_code: Optional[str] = None
+    business_type_label: Optional[str] = None
     region: Optional[str] = None
     license_codes: List[str] = Field(default_factory=list)
     source_url: Optional[str] = None
