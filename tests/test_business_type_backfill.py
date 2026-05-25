@@ -107,3 +107,39 @@ def test_upsert_project_persists_business_type(test_db):
 
     assert project.business_type_code == "0411"
     assert project.business_type_label == "건축공사"
+
+
+def test_backfill_updates_rows_from_detail_html(test_db):
+    """source_url이 있는 row를 상세 페이지에서 코드/라벨 추출해 갱신."""
+    from app.models.models import Project
+    from scripts.backfill_business_type import (
+        BackfillStats,
+        backfill_from_detail_html,
+    )
+
+    project = Project(
+        title="백필 대상 공고 1",
+        description="-",
+        requirements="-",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        source_url="http://koneps.example.com/notice/UPSERT-0411-1",
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    def fake_fetcher(url):
+        return {"business_type_code": "0411", "business_type_label": "건축공사"}
+
+    stats = BackfillStats()
+    backfill_from_detail_html(
+        test_db,
+        fetcher=fake_fetcher,
+        limit=10,
+        stats=stats,
+    )
+    test_db.refresh(project)
+    assert project.business_type_code == "0411"
+    assert project.business_type_label == "건축공사"
+    assert stats.updated_from_detail == 1
+    assert stats.failed == 0

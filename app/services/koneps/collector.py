@@ -1856,17 +1856,42 @@ class KonepsCollectorService:
         estimated_amounts = self._extract_amounts(field_map.get("추정가격", ""))
         license_codes = self._extract_license_codes(field_map.get("면허제한", ""))
         region = self._extract_region([field_map.get("제한지역", "")])
+        business_type_raw = field_map.get("입찰유형") or field_map.get("업무구분")
+        business_type_code, business_type_label = self._split_business_type_cell(
+            business_type_raw
+        )
 
         return {
             "notice_number": field_map.get("입찰공고번호"),
             "title": field_map.get("입찰공고명"),
-            "business_type": field_map.get("입찰유형"),
+            "business_type": business_type_raw,
+            "business_type_code": business_type_code,
+            "business_type_label": business_type_label,
             "base_amount": base_amounts[0] if base_amounts else None,
             "estimated_amount": estimated_amounts[0] if estimated_amounts else None,
             "closing_at": self._extract_datetime(field_map.get("입찰마감일시", "")),
             "opening_at_text": field_map.get("개찰일시"),
             "license_codes": license_codes,
             "region": region,
+        }
+
+    def fetch_detail_html_payload(self, source_url: str) -> dict[str, str | None]:
+        """Fetch + parse a single KONEPS detail page, returning the business-type fields.
+
+        Performs a simple HTTP GET on ``source_url``, parses the HTML with the
+        same ``_parse_detail_html`` helper used during live collection, and
+        returns only the two business-type keys.
+
+        Best-effort: any exception raised by the HTTP call is propagated so
+        callers (e.g. backfill scripts) can record per-row failures.
+        """
+        timeout = max(1, int(getattr(settings, "KONEPS_OPENAPI_TIMEOUT_SECONDS", 30)))
+        response = requests.get(source_url, timeout=timeout)
+        response.raise_for_status()
+        detail = self._parse_detail_html(response.text)
+        return {
+            "business_type_code": detail.get("business_type_code"),
+            "business_type_label": detail.get("business_type_label"),
         }
 
     def _normalize_opening_result_row(self, row: dict[str, Any]) -> dict[str, Any]:
