@@ -63,6 +63,8 @@ docker compose --profile tasks config --quiet
 
 **금지**: 새 기능을 `app/main.py`나 `frontend/src/App.tsx`에 직접 부풀리지 말 것. App.tsx는 Phase 0에서 `features/`로 분할 진행 중입니다.
 
+**한국형 서비스 — 다중 로케일 미지원**: 이 프로젝트는 나라장터(KONEPS) 한정 서비스라 i18n 다중 로케일을 지원하지 않습니다. `frontend/src/shared/i18n/`는 ko 단일 번들만 유지하고 영어/기타 로케일 번들을 추가하지 마세요. UI 문구는 한국어로 작성하고 `ko.json`에 모아 일관성만 관리합니다.
+
 ## 4. 작업 원칙 (Claude Code가 반드시 지킬 것)
 
 1. **테스트 깨면 진행하지 않는다.** 변경 후 관련 pytest/vitest 실행이 그린이어야 함. 실패 시 우선 진단 — 강제로 통과시키지 말 것.

@@ -210,7 +210,7 @@ frontend/
 - 이벤트 타입(`bid_decision.*`, `crawl.*`, `strategy.monitor.*`, `bid.submitted`)에 따라 toast / 카드 invalidate
 - `features/realtime/NotificationDrawer.tsx` — 알림 리스트 + 읽음 처리 (`PUT /api/v1/operator/notifications/{id}/read`)
 - 토큰 만료 처리 (401 시 자동 재로그인 모달)
-- 다국어 메시지 분리 준비 (`shared/i18n/ko.json` 단일 번들로 시작)
+- 한국형(KONEPS) 서비스이므로 **다중 로케일은 지원하지 않습니다.** `shared/i18n/ko.json`은 외부 노출 문구를 한 곳에 모으기 위한 단일 한국어 번들로만 유지하고, 다른 로케일을 추가하지 않습니다.
 - E2E: Playwright로 로그인→strategy 편집→synthetic backtest 실행→결과 확인까지의 happy path 1개
 
 수용 기준:
