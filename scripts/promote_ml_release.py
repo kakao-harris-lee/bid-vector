@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,46 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
+
+
+@dataclass
+class PreflightResult:
+    ok: bool
+    reason: str | None = None
+
+
+def evaluate_preflight_gate(manifest_path: "Path | str") -> PreflightResult:
+    """manifest.summary.group_calibration의 각 그룹 sample_count를 확인해
+    settings.GROUP_CALIBRATION_MIN_SAMPLES 미달 시 거부."""
+    from app.core.config import settings
+
+    path = Path(manifest_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return PreflightResult(ok=False, reason=f"manifest 읽기 실패: {exc}")
+
+    if not isinstance(payload, dict):
+        return PreflightResult(ok=False, reason="manifest가 JSON 객체가 아님")
+
+    calibration = ((payload.get("summary") or {}).get("group_calibration") or {})
+    if not calibration:
+        # 그룹 캘리브레이션 블록이 없으면 gate를 통과시킴 (선택적 블록)
+        return PreflightResult(ok=True)
+
+    threshold = int(settings.GROUP_CALIBRATION_MIN_SAMPLES or 0)
+    failing = [
+        (group, int((stats or {}).get("sample_count") or 0))
+        for group, stats in calibration.items()
+        if int((stats or {}).get("sample_count") or 0) < threshold
+    ]
+    if failing:
+        detail = ", ".join(f"{g}={n}" for g, n in failing)
+        return PreflightResult(
+            ok=False,
+            reason=f"group_calibration sample_count<{threshold}: {detail}",
+        )
+    return PreflightResult(ok=True)
 
 
 def _clean_optional(value: str | None) -> str | None:
