@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -38,6 +38,7 @@ export function routeKeyFromPath(pathname: string): RouteKey {
 export function Shell() {
   const session = useAuthSession();
   const location = useLocation();
+  const navigate = useNavigate();
   const route = routeKeyFromPath(location.pathname);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -62,7 +63,7 @@ export function Shell() {
         <button
           className="flex items-center gap-3 text-left text-sm focus-visible:outline-none"
           type="button"
-          onClick={() => (window.location.href = ROUTE_LABELS.home.path)}
+          onClick={() => navigate(ROUTE_LABELS.home.path)}
         >
           <span className="grid h-9 w-9 place-items-center rounded-md bg-[var(--color-primary)] text-xs font-bold text-[var(--color-primary-foreground)]">
             BV
