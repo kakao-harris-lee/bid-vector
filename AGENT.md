@@ -363,6 +363,56 @@
 - 테스트가 추가되었는가
 - README 또는 관련 운영 문서가 업데이트되었는가
 
+## Git/PR 워크플로 (모든 비-trivial 작업 필수 순서)
+
+**작업 시작 전부터 머지까지 반드시 아래 순서를 지킵니다.** 글로벌 `~/.claude/CLAUDE.md`의 `MANDATORY WORKFLOW`, 프로젝트 `CLAUDE.md` 섹션 11과 같은 규칙입니다.
+
+```
+main 확인 → feature branch 생성 → 작업/커밋 → push → PR 생성 → /code-review → 리뷰 대응 → 머지
+```
+
+### 단계
+
+1. `git status` / `git log -n 10`로 `main`이 `origin/main`과 동기인지 확인합니다.
+2. `git switch -c <type>/<slug>`로 새 브랜치를 만든 뒤 작업을 시작합니다. `main`에 직접 커밋하지 않습니다.
+3. atomic 단위로 커밋하고, `pytest -q && npm --prefix frontend run test && npm --prefix frontend run build`(또는 `/check`)로 회귀를 검증합니다.
+4. `git push -u origin <branch>` → `gh pr create --base main --head <branch> --title ... --body ...`로 PR을 엽니다.
+   - PR 본문: 무엇/왜/테스트 한 방법/수용 기준 체크리스트 포함.
+5. PR을 연 직후 `/code-review`(또는 `/code-review:code-review`)를 실행해 자동 리뷰를 받습니다.
+6. 받은 코멘트는 같은 브랜치에 추가 커밋 + push로 대응합니다. 회귀 방지 테스트도 같이 작성합니다.
+7. 모든 체크가 green이고 리뷰가 처리된 뒤, **사용자가 "merge"/"land"라고 명시했을 때만** 머지합니다.
+
+### 브랜치 네이밍
+
+- `feature/<slug>` — 신규 기능/화면/라우트
+- `fix/<slug>` — 버그 수정
+- `chore/<slug>` — 의존성·빌드·CI
+- `docs/<slug>` — 문서만 변경
+- `refactor/<slug>` — 동작 변경 없는 리팩토링
+
+### 예외 (브랜치/PR 없이 직접 푸시 가능)
+
+다음만 예외입니다. 의심되면 항상 PR 경로로 진입합니다.
+
+- 문서 오타 1줄 수정
+- 명백히 자명한 lint/format fix
+- 사용자가 명시적으로 "PR 없이 직접 푸시"를 지시했을 때
+
+### 이미 main에 커밋된 경우 복구
+
+```bash
+git switch -c feature/<slug>          # 현재 HEAD에서 분리
+git switch main
+git reset --keep origin/main          # main을 origin과 동기화
+git switch feature/<slug>             # 작업 계속
+git push -u origin feature/<slug>
+gh pr create ...
+```
+
+### 다중 작업 동시 진행
+
+여러 작업은 각 작업당 별도 브랜치/PR로 분리합니다. 한 브랜치에 무관한 변경을 섞지 않습니다.
+
 ## 참고 문서
 
 - 기획 원본: `first_plan.md`

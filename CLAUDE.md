@@ -147,9 +147,47 @@ docker compose --profile tasks config --quiet
 
 ## 11. 작업 시작 시 권장 워크플로
 
-1. `git status` / `git log -n 10`로 현재 상태 파악
-2. 관련 docs 1~2개 빠르게 정독 (`docs/web-development-plan.md` 또는 도메인 문서)
-3. 변경 범위가 큰 작업은 `Plan` 서브에이전트로 단계 분해 → 사용자 확인
-4. 구현은 적합한 서브에이전트(`frontend-builder` / `backend-builder`)에 위임
-5. 변경 후 `/check`로 회귀 확인
-6. 사용자에게는 핵심 변경 요약 + 다음 액션만 짧게 보고
+> **모든 비-trivial 작업은 반드시 다음 순서를 지킵니다 (글로벌 `~/.claude/CLAUDE.md`의 MANDATORY WORKFLOW와 일치):**
+>
+> `main 확인 → feature branch 생성 → 작업/커밋 → push → PR 생성 → /code-review → 리뷰 대응 → 머지`
+
+1. **상태 파악**: `git status` / `git log -n 10`로 현재 상태 확인. `main`은 `origin/main`과 동기여야 함.
+2. **컨텍스트 정독**: 관련 docs 1~2개 빠르게 정독 (`docs/web-development-plan.md` 또는 도메인 문서).
+3. **브랜치 생성**: `git switch -c feature/<slug>` (또는 `fix/<slug>`, `chore/<slug>`). 절대 `main`에 직접 커밋 금지.
+4. **계획**: 변경 범위가 큰 작업은 `Plan` 서브에이전트로 단계 분해 → 사용자 확인.
+5. **구현**: 적합한 서브에이전트(`frontend-builder` / `backend-builder`)에 위임. 의미 있는 단위로 atomic commit.
+6. **회귀 검증**: 변경 후 `/check`로 pytest + vitest + build 확인.
+7. **PR 생성**: `git push -u origin <branch>` → `gh pr create`. PR 본문에 무엇/왜/테스트/수용 기준 체크리스트 포함.
+8. **코드 리뷰**: PR을 연 직후 `/code-review`(또는 `/code-review:code-review`) 실행. 자동 리뷰 결과를 PR에 코멘트로 게시.
+9. **리뷰 대응**: 받은 코멘트는 같은 브랜치에 추가 커밋 + push로 처리. 회귀 방지 테스트도 함께.
+10. **머지**: 사용자가 명시적으로 "merge"/"land"라고 지시할 때만 진행.
+11. **보고**: 사용자에게는 핵심 변경 요약 + PR 링크 + 다음 액션만 짧게 보고.
+
+### 브랜치 네이밍
+
+- `feature/<slug>` — 신규 기능, 화면, 라우트
+- `fix/<slug>` — 버그 수정
+- `chore/<slug>` — 의존성 업그레이드, 빌드/CI 변경
+- `docs/<slug>` — 문서만 변경
+- `refactor/<slug>` — 동작 변경 없는 리팩토링
+
+### 예외 (브랜치/PR 없이 main에 직접 푸시 가능)
+
+다음만 예외다. 의심되면 항상 PR 경로로:
+
+- 문서 오타 1줄 수정
+- 명백히 자명한 lint/format fix
+- 사용자가 명시적으로 "PR 없이 직접 푸시"를 지시했을 때
+
+### 이미 main에 커밋된 경우
+
+작업을 시작했는데 main에 커밋해 버렸다면:
+
+```bash
+git switch -c feature/<slug>          # 현재 HEAD에서 새 브랜치 생성
+git switch main
+git reset --keep origin/main          # main을 origin과 동기화
+git switch feature/<slug>             # 작업 계속
+git push -u origin feature/<slug>     # PR 경로로 진입
+gh pr create ...
+```
