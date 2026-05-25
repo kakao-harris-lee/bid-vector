@@ -7,6 +7,7 @@ import {
   BarChart3,
   Beaker,
   CheckCircle2,
+  FlaskConical,
   Clock3,
   FileSearch,
   Gavel,
@@ -36,6 +37,7 @@ export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
 export const PROJECTS_ROUTE_PATH = "/dashboard/projects";
 export const DECISIONS_ROUTE_PATH = "/dashboard/decisions";
 export const EXPERIMENTS_ROUTE_PATH = "/dashboard/experiments";
+export const SYNTHETIC_ROUTE_PATH = "/dashboard/synthetic-backtest";
 
 export function routeKeyFromPath(pathname: string): RouteKey {
   if (pathname.startsWith("/dashboard/bids")) return "bids";
@@ -55,6 +57,7 @@ export function bottomNavKeyForPath(pathname: string): RouteKey | null {
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return null;
   if (pathname.startsWith(DECISIONS_ROUTE_PATH)) return null;
   if (pathname.startsWith(EXPERIMENTS_ROUTE_PATH)) return null;
+  if (pathname.startsWith(SYNTHETIC_ROUTE_PATH)) return null;
   return routeKeyFromPath(pathname);
 }
 
@@ -63,6 +66,7 @@ function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return "공고 탐색";
   if (pathname.startsWith(DECISIONS_ROUTE_PATH)) return "결정 게이트웨이";
   if (pathname.startsWith(EXPERIMENTS_ROUTE_PATH)) return "실험 lifecycle";
+  if (pathname.startsWith(SYNTHETIC_ROUTE_PATH)) return "가상 운영자 백테스트";
   const route = routeKeyFromPath(pathname);
   if (route === "home") return "오늘 할 일";
   return ROUTE_LABELS[route].label;
@@ -94,6 +98,7 @@ export function Shell() {
   const onProjects = location.pathname.startsWith(PROJECTS_ROUTE_PATH);
   const onDecisions = location.pathname.startsWith(DECISIONS_ROUTE_PATH);
   const onExperiments = location.pathname.startsWith(EXPERIMENTS_ROUTE_PATH);
+  const onSynthetic = location.pathname.startsWith(SYNTHETIC_ROUTE_PATH);
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--color-bg)] pb-20 text-[var(--color-fg)]">
@@ -134,6 +139,12 @@ export function Shell() {
             onClick={() => navigate(onExperiments ? ROUTE_LABELS.home.path : EXPERIMENTS_ROUTE_PATH)}
           >
             <Beaker size={18} />
+          </IconButton>
+          <IconButton
+            label="가상 운영자 백테스트"
+            onClick={() => navigate(onSynthetic ? ROUTE_LABELS.home.path : SYNTHETIC_ROUTE_PATH)}
+          >
+            <FlaskConical size={18} />
           </IconButton>
           <IconButton
             label="전략 편집"
