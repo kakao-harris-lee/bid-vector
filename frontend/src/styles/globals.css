@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+/* --------------------------------------------------------------------------
+ * bid-vector 디자인 토큰 (Tailwind v4 CSS-first config)
+ * shadcn 스타일 변수 + 기존 styles.css의 staleness 색을 점진 이주.
+ * ------------------------------------------------------------------------ */
+@theme {
+  --color-bg: oklch(0.99 0.005 240);
+  --color-fg: oklch(0.18 0.02 250);
+  --color-muted: oklch(0.55 0.02 250);
+  --color-border: oklch(0.92 0.005 250);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.18 0.02 250);
+  --color-primary: oklch(0.55 0.18 250);
+  --color-primary-foreground: oklch(0.98 0.005 250);
+  --color-secondary: oklch(0.95 0.01 250);
+  --color-secondary-foreground: oklch(0.25 0.02 250);
+  --color-accent: oklch(0.55 0.16 200);
+  --color-accent-foreground: oklch(0.98 0.005 200);
+  --color-success: oklch(0.62 0.16 145);
+  --color-warn: oklch(0.78 0.16 80);
+  --color-danger: oklch(0.6 0.22 25);
+  --color-info: oklch(0.65 0.1 230);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: "Pretendard Variable", "Pretendard", -apple-system,
+      BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR",
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+}

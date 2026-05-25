@@ -233,9 +233,45 @@ bid-vector/
    ```
 
 8. **Access the API**
-   - API: <http://localhost:3000>
-   - Docs: <http://localhost:3000/docs>
-   - ReDoc: <http://localhost:3000/redoc>
+   - API: <http://localhost:8000>
+   - Docs: <http://localhost:8000/docs>
+   - ReDoc: <http://localhost:8000/redoc>
+
+### Frontend (Vite + React + TS, Tailwind v4, react-query)
+
+`frontend/`는 단일 SPA이며 백엔드의 `/dashboard` 경로에서 정적 빌드를 서빙합니다.
+
+1. **Install Node deps**
+
+   ```bash
+   npm --prefix frontend install
+   ```
+
+2. **Run dev server**
+
+   ```bash
+   npm --prefix frontend run dev
+   # http://localhost:3000  (proxies /api → http://localhost:8000)
+   ```
+
+3. **Run tests / build**
+
+   ```bash
+   npm --prefix frontend run test    # vitest + RTL
+   npm --prefix frontend run build   # tsc --noEmit && vite build → frontend/dist
+   ```
+
+레이아웃은 Phase 0에서 다음과 같이 분리되었습니다:
+
+```text
+frontend/src/
+├── app/            # router, providers, layout (Shell/AuthGate)
+├── features/       # 화면 단위 (auth, dashboard, …)
+├── shared/         # api 클라이언트, ui 컴포넌트(shadcn 스타일), lib, types
+└── styles/         # Tailwind v4 entrypoint (globals.css)
+```
+
+신규 화면은 `frontend/src/features/<area>/`에 추가하고 `frontend/src/app/router.tsx`에 라우트를 등록합니다. 자세한 컨벤션은 `CLAUDE.md`와 `docs/web-development-plan.md` 참고.
 
 ### Docker Setup
 
@@ -643,11 +679,21 @@ Internal project lifecycle tracking is now richer than a simple open/closed spli
 
 ### Running Tests
 
+Backend (pytest):
+
 ```bash
 pytest
 pytest -v  # Verbose
 pytest --cov=app  # With coverage
 ```
+
+Frontend (vitest):
+
+```bash
+npm --prefix frontend run test
+```
+
+회귀 검증 1세트는 `/check` 슬래시 커맨드(`.claude/commands/check.md`)로도 묶어 실행할 수 있습니다.
 
 ### Code Quality
 

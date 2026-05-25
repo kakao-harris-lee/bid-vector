@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "bid-vector 프로젝트 전용 MCP 서버 정의.",
+    "원칙:",
+    "1. 운영 자격증명(KONEPS_OPENAPI_SERVICE_KEY, TELEGRAM_BOT_TOKEN, 운영 DB URL,",
+    "   ML_RELEASE_MANIFEST_SIGNING_KEY)은 절대 이 파일에 직접 노출하지 않는다.",
+    "2. DB는 로컬 dev DB에만 read-only로 붙는다. 마이그레이션/시드는 MCP가 아니라",
+    "   `scripts/*.py`로만 한다.",
+    "3. Filesystem MCP는 repo 루트 한정.",
+    "4. KONEPS mock / Telegram dev는 옵션. 실제 활성화 시점에만 사용자가 직접 enable.",
+    "",
+    "환경 변수 ${VAR} 표기는 사용자 셸에서 export된 값으로 치환된다.",
+    "초기 설정:",
+    "  export BID_VECTOR_DEV_DATABASE_URL=postgresql://biduser:bidpassword@localhost:5432/bid_vector_db",
+    "  (운영 URL을 절대 export하지 말 것)"
+  ],
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/deploy/project/bid-vector"
+      ]
+    },
+    "postgres-dev": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "${BID_VECTOR_DEV_DATABASE_URL}"
+      ],
+      "_comment": [
+        "read-only 모드로만 사용한다.",
+        "운영 DB URL을 BID_VECTOR_DEV_DATABASE_URL로 export하지 말 것.",
+        "마이그레이션/시드는 scripts/ 경로의 스크립트로만."
+      ]
+    }
+  },
+  "_optionalServers": {
+    "koneps-mock": {
+      "_note": "로컬 mock 응답 디렉토리를 노출. 필요 시 mcpServers로 이동해 활성화.",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/deploy/project/bid-vector/tests/fixtures/koneps_mock"
+      ]
+    },
+    "telegram-dev": {
+      "_note": [
+        "Telegram dev bot 호출용. TELEGRAM_DEV_BOT_TOKEN이 설정된 세션에서만 활성화.",
+        "운영 토큰(TELEGRAM_BOT_TOKEN)은 절대 사용하지 말 것."
+      ],
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-telegram-bot"
+      ],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "${TELEGRAM_DEV_BOT_TOKEN}"
+      }
+    }
+  }
+}

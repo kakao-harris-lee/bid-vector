@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
-import type { DashboardSummaryResponse } from "./types";
+import type { DashboardSummaryResponse } from "@/shared/types";
+import { renderApp } from "@/test-utils";
 
 const emptySummary: DashboardSummaryResponse = {
   operator_id: 1,
@@ -38,7 +38,7 @@ const emptySummary: DashboardSummaryResponse = {
   realtime_href: "/api/v1/realtime/events"
 };
 
-function jsonResponse(payload: unknown, status = 200) {
+function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
     status,
@@ -52,12 +52,17 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("App", () => {
+describe("App routing + auth", () => {
   it("logs in and renders the dashboard shell", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/session")) {
-        return jsonResponse({ access_token: "token-123", token_type: "bearer", operator_id: 1, username: "operator" });
+        return jsonResponse({
+          access_token: "token-123",
+          token_type: "bearer",
+          operator_id: 1,
+          username: "operator"
+        });
       }
       if (url.endsWith("/api/v1/dashboard/summary")) {
         return jsonResponse(emptySummary);
@@ -66,7 +71,7 @@ describe("App", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<App />);
+    renderApp();
     await userEvent.type(screen.getByLabelText("아이디"), "operator");
     await userEvent.type(screen.getByLabelText("비밀번호"), "password123");
     await userEvent.click(screen.getByRole("button", { name: "로그인" }));
@@ -79,7 +84,7 @@ describe("App", () => {
   it("shows a login failure message", async () => {
     vi.stubGlobal("fetch", vi.fn(() => jsonResponse({ detail: "Invalid credentials" }, 401)));
 
-    render(<App />);
+    renderApp();
     await userEvent.type(screen.getByLabelText("아이디"), "operator");
     await userEvent.type(screen.getByLabelText("비밀번호"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "로그인" }));
@@ -91,7 +96,12 @@ describe("App", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v1/auth/password-reset")) {
-        return jsonResponse({ access_token: "reset-token", token_type: "bearer", operator_id: 1, username: "operator" });
+        return jsonResponse({
+          access_token: "reset-token",
+          token_type: "bearer",
+          operator_id: 1,
+          username: "operator"
+        });
       }
       if (url.endsWith("/api/v1/dashboard/summary")) {
         return jsonResponse(emptySummary);
@@ -100,7 +110,7 @@ describe("App", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<App />);
+    renderApp();
     await userEvent.click(screen.getByRole("button", { name: "비밀번호 초기화" }));
     await userEvent.type(screen.getByLabelText("아이디"), "operator");
     await userEvent.type(screen.getByLabelText("초기화 토큰"), "server-reset-token");
@@ -132,17 +142,25 @@ describe("App", () => {
         return jsonResponse(emptySummary);
       }
       if (url.endsWith("/api/v1/dashboard/bids")) {
-        return jsonResponse({ operator_id: 1, generated_at: emptySummary.generated_at, returned_count: 0, limit: 50, items: [] });
+        return jsonResponse({
+          operator_id: 1,
+          generated_at: emptySummary.generated_at,
+          returned_count: 0,
+          limit: 50,
+          items: []
+        });
       }
       return jsonResponse({}, 404);
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<App />);
+    renderApp();
     expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "투찰" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/dashboard/bids", expect.anything()));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/v1/dashboard/bids", expect.anything())
+    );
     expect(screen.getByRole("button", { name: "입찰" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "결과" })).toBeInTheDocument();
   });
@@ -155,7 +173,13 @@ describe("App", () => {
         return jsonResponse(emptySummary);
       }
       if (url.endsWith("/api/v1/dashboard/results")) {
-        return jsonResponse({ operator_id: 1, generated_at: emptySummary.generated_at, returned_count: 0, limit: 50, items: [] });
+        return jsonResponse({
+          operator_id: 1,
+          generated_at: emptySummary.generated_at,
+          returned_count: 0,
+          limit: 50,
+          items: []
+        });
       }
       if (url.endsWith("/api/v1/backtests/paper-bidding/summary")) {
         return jsonResponse({
@@ -208,7 +232,7 @@ describe("App", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<App />);
+    renderApp();
     expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "결과" }));
 
