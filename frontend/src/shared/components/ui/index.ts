@@ -9,3 +9,4 @@ export {
 } from "./card";
 export { Badge, type BadgeProps, type BadgeTone } from "./badge";
 export { Input, type InputProps } from "./input";
+export { Toaster, toast, toastApi, type ToastItem, type ToastTone } from "./toast";
