@@ -10,6 +10,7 @@ import { ProjectsScreen, ProjectDetailScreen } from "@/features/projects";
 import { DecisionsScreen } from "@/features/decisions";
 import { ExperimentsScreen } from "@/features/experiments";
 import { SyntheticBacktestScreen } from "@/features/synthetic-backtest";
+import { OperationsScreen } from "@/features/operations";
 
 export function AppRoutes() {
   return (
@@ -33,6 +34,7 @@ export function AppRoutes() {
         <Route path="decisions" element={<DecisionsScreen />} />
         <Route path="experiments" element={<ExperimentsScreen />} />
         <Route path="synthetic-backtest" element={<SyntheticBacktestScreen />} />
+        <Route path="operations" element={<OperationsScreen />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
