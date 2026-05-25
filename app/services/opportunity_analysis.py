@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_recommendation
+from app.ai.business_group import resolve_business_group
 from app.ai.price_prediction import get_price_insights, predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy
 from app.core.time import ensure_utc, utc_now
@@ -76,6 +77,8 @@ class OpportunityAnalysisService:
             agency_name=request.agency_name,
         )
 
+        business_type_code = getattr(project, "business_type_code", None)
+        business_group = resolve_business_group(business_type_code)
         price_prediction = predict_price(
             budget=float(project.budget_estimate or 0.0),
             category=project.category or "other",
@@ -83,6 +86,8 @@ class OpportunityAnalysisService:
             historical_records=self._load_price_history(db, project),
             agency_name=request.agency_name,
             feedback_calibration=feedback_calibration,
+            business_type_code=business_type_code,
+            business_group=business_group,
         )
 
         bid_recommendation = get_bid_recommendation(
