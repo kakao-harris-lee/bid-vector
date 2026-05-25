@@ -38,6 +38,16 @@ export function routeKeyFromPath(pathname: string): RouteKey {
   return "home";
 }
 
+/**
+ * Active key for `BottomNav`. Returns `null` for paths that don't map to a
+ * bottom-tab (e.g. `/dashboard/strategy`), so no tab is highlighted.
+ * `routeKeyFromPath` keeps a `"home"` fallback for other consumers.
+ */
+export function bottomNavKeyForPath(pathname: string): RouteKey | null {
+  if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
+  return routeKeyFromPath(pathname);
+}
+
 function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";
   const route = routeKeyFromPath(pathname);
@@ -50,6 +60,7 @@ export function Shell() {
   const location = useLocation();
   const navigate = useNavigate();
   const route = routeKeyFromPath(location.pathname);
+  const bottomNavRoute = bottomNavKeyForPath(location.pathname);
   const [reloadKey, setReloadKey] = useState(0);
 
   const summary = useQuery({
@@ -120,7 +131,7 @@ export function Shell() {
         </div>
       </main>
 
-      <BottomNav route={route} />
+      <BottomNav route={bottomNavRoute} />
     </div>
   );
 }

@@ -79,7 +79,11 @@ export function ThresholdControl({
             if (raw === "") return;
             setBounded(Number(raw));
           }}
-          onBlur={(event) => setBounded(Number(event.target.value || min))}
+          onBlur={(event) => {
+            const raw = event.target.value;
+            if (raw === "") return;
+            setBounded(Number(raw));
+          }}
           className={cn(
             "h-8 w-20 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 text-right text-xs tabular-nums",
             error && "border-[var(--color-danger)]"

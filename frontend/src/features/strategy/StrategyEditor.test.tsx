@@ -240,4 +240,39 @@ describe("StrategyEditor", () => {
     expect(await screen.findByText("전략 저장 실패")).toBeInTheDocument();
     expect(screen.getByText("전략 저장에 실패했습니다.")).toBeInTheDocument();
   });
+
+  it("/dashboard/strategy 에서는 BottomNav 어떤 탭도 active로 강조되지 않는다", async () => {
+    vi.stubGlobal("fetch", buildFetchMock());
+
+    renderApp();
+
+    expect(
+      await screen.findByRole("heading", { name: "전략 편집", level: 2 })
+    ).toBeInTheDocument();
+
+    const nav = screen.getByRole("navigation", { name: "대시보드 탭" });
+    const activeButtons = Array.from(nav.querySelectorAll('[aria-current="page"]'));
+    expect(activeButtons).toHaveLength(0);
+  });
+
+  it("ThresholdControl: number input 을 비운 채 blur해도 이전 값이 유지된다", async () => {
+    vi.stubGlobal("fetch", buildFetchMock());
+
+    renderApp();
+
+    expect(
+      await screen.findByRole("heading", { name: "전략 편집", level: 2 })
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(findNumberByLabel("즉시 투찰 임계값").value).toBe("0.7");
+    });
+
+    const spin = findNumberByLabel("즉시 투찰 임계값");
+    fireEvent.change(spin, { target: { value: "" } });
+    fireEvent.blur(spin);
+
+    // After blur, value must NOT have snapped to min (0).
+    expect(findNumberByLabel("즉시 투찰 임계값").value).toBe("0.7");
+  });
 });
