@@ -4,11 +4,37 @@ from __future__ import annotations
 
 import json
 from math import sqrt
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+
+
+def load_group_calibration() -> dict[str, dict[str, float | int]]:
+    """Read summary.group_calibration from the active manifest, if present.
+
+    Best-effort: any IO/JSON failure or missing block returns an empty dict so
+    callers can safely fall through to the legacy historical statistics.
+    """
+    from app.core.config import settings
+
+    manifest_path_raw = (settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
+    if not manifest_path_raw:
+        return {}
+    candidate = Path(manifest_path_raw)
+    if not candidate.is_file():
+        return {}
+    try:
+        payload = json.loads(candidate.read_text())
+    except Exception:
+        return {}
+    summary = payload.get("summary") if isinstance(payload, dict) else None
+    if not isinstance(summary, dict):
+        return {}
+    calibration = summary.get("group_calibration")
+    return calibration if isinstance(calibration, dict) else {}
 
 _T_CRITICAL_95 = {
     1: 12.706,
@@ -64,7 +90,24 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
 
         if float(context.budget or 0.0) <= 0:
             return heuristic_prediction
-        if historical_summary["sample_size"] <= 0:
+
+        sample_size = int(historical_summary["sample_size"])
+
+        if sample_size <= 0:
+            calibration = load_group_calibration().get(context.business_group or "") or {}
+            prior_median = calibration.get("median_rate")
+            if prior_median is not None:
+                prior_median = float(prior_median)
+                heuristic_rate = float(heuristic_prediction.get("predicted_bid_rate") or prior_median)
+                blended_rate = round((heuristic_rate * 0.4) + (prior_median * 0.6), 4)
+                budget = float(context.budget or 0.0)
+                heuristic_prediction = {
+                    **heuristic_prediction,
+                    "predicted_bid_rate": blended_rate,
+                    "predicted_price": round(budget * blended_rate, 2),
+                    "price_range_min": round(budget * blended_rate * 0.8, 2),
+                    "price_range_max": round(budget * blended_rate * 1.2, 2),
+                }
             return heuristic_prediction
 
         return build_historical_prediction(
@@ -163,6 +206,13 @@ def build_historical_prediction(
 
     t_value = get_t_critical(sample_size - 1) if sample_size > 1 else _T_CRITICAL_95[1]
     margin = t_value * (std_rate / sqrt(sample_size)) if sample_size > 1 else std_rate
+
+    calibration = load_group_calibration().get(business_group or "") or {}
+    prior_median = calibration.get("median_rate")
+    if sample_size < 5 and prior_median is not None:
+        prior_median = float(prior_median)
+        mean_rate = (float(mean_rate or prior_median) * 0.4) + (prior_median * 0.6)
+        median_rate = (float(median_rate or prior_median) * 0.4) + (prior_median * 0.6)
 
     base_rate = select_competitive_base_rate(
         category=category,

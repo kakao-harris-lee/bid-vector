@@ -139,3 +139,27 @@ def test_guardrail_falls_back_to_category_when_group_missing():
 
     floor = _resolve_floor_bid_rate(category="service", business_group=None)
     assert floor == 0.87
+
+
+def test_predictor_uses_group_calibration_prior(monkeypatch):
+    """manifest group_calibration이 주어지면 base_rate가 prior median에 끌린다."""
+    from app.ai.predictors.historical import HistoricalStatisticalPredictor
+    from app.ai.predictors.base import PricePredictionContext
+
+    monkeypatch.setattr(
+        "app.ai.predictors.historical.load_group_calibration",
+        lambda: {"service": {"median_rate": 0.883, "std": 0.059, "sample_count": 8000}},
+        raising=False,
+    )
+    predictor = HistoricalStatisticalPredictor()
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        description="OO 용역",
+        historical_records=[],  # 데이터 부족 → prior에 더 의존해야 함
+        category="service",
+        business_type_code="0621",
+        business_group="service",
+    )
+    result = predictor.predict(context)
+    bid_rate = float(result.get("predicted_bid_rate") or 0)
+    assert 0.83 <= bid_rate <= 0.93
