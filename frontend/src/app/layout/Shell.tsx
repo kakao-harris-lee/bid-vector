@@ -11,6 +11,7 @@ import {
   LogOut,
   RefreshCw,
   Send,
+  Sliders,
   Trophy
 } from "lucide-react";
 import { Badge } from "@/shared/components/ui";
@@ -28,6 +29,8 @@ export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon:
   results: { path: "/dashboard/results", label: "결과", icon: Trophy }
 };
 
+export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
+
 export function routeKeyFromPath(pathname: string): RouteKey {
   if (pathname.startsWith("/dashboard/bids")) return "bids";
   if (pathname.startsWith("/dashboard/opportunities")) return "opportunities";
@@ -35,11 +38,29 @@ export function routeKeyFromPath(pathname: string): RouteKey {
   return "home";
 }
 
+/**
+ * Active key for `BottomNav`. Returns `null` for paths that don't map to a
+ * bottom-tab (e.g. `/dashboard/strategy`), so no tab is highlighted.
+ * `routeKeyFromPath` keeps a `"home"` fallback for other consumers.
+ */
+export function bottomNavKeyForPath(pathname: string): RouteKey | null {
+  if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
+  return routeKeyFromPath(pathname);
+}
+
+function pageTitleForPath(pathname: string): string {
+  if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";
+  const route = routeKeyFromPath(pathname);
+  if (route === "home") return "오늘 할 일";
+  return ROUTE_LABELS[route].label;
+}
+
 export function Shell() {
   const session = useAuthSession();
   const location = useLocation();
   const navigate = useNavigate();
   const route = routeKeyFromPath(location.pathname);
+  const bottomNavRoute = bottomNavKeyForPath(location.pathname);
   const [reloadKey, setReloadKey] = useState(0);
 
   const summary = useQuery({
@@ -55,7 +76,8 @@ export function Shell() {
   }, [summary.error]);
 
   const headerDate = summary.data?.today ?? new Date().toISOString();
-  const pageTitle = route === "home" ? "오늘 할 일" : ROUTE_LABELS[route].label;
+  const pageTitle = pageTitleForPath(location.pathname);
+  const onStrategy = location.pathname.startsWith(STRATEGY_ROUTE_PATH);
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--color-bg)] pb-20 text-[var(--color-fg)]">
@@ -80,6 +102,12 @@ export function Shell() {
             </Badge>
           ) : null}
           <IconButton
+            label="전략 편집"
+            onClick={() => navigate(onStrategy ? ROUTE_LABELS.home.path : STRATEGY_ROUTE_PATH)}
+          >
+            <Sliders size={18} />
+          </IconButton>
+          <IconButton
             label="새로고침"
             onClick={() => setReloadKey((value) => value + 1)}
             disabled={summary.isFetching}
@@ -93,7 +121,7 @@ export function Shell() {
       </header>
 
       <main className="flex-1">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6">
           {summary.error && (summary.error as { status?: number }).status !== 401 ? (
             <InlineNotice tone="critical">
               {(summary.error as Error).message ?? "대시보드를 불러오지 못했습니다."}
@@ -103,7 +131,7 @@ export function Shell() {
         </div>
       </main>
 
-      <BottomNav route={route} />
+      <BottomNav route={bottomNavRoute} />
     </div>
   );
 }

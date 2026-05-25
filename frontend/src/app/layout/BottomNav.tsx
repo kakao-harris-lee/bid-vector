@@ -5,7 +5,7 @@ import { ROUTE_LABELS } from "./Shell";
 
 const bottomRoutes: RouteKey[] = ["home", "opportunities", "bids", "results"];
 
-export function BottomNav({ route }: { route: RouteKey }) {
+export function BottomNav({ route }: { route: RouteKey | null }) {
   const navigate = useNavigate();
 
   return (
