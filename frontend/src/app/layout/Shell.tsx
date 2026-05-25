@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  FileSearch,
   Gavel,
   ListChecks,
   LogOut,
@@ -30,6 +31,7 @@ export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon:
 };
 
 export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
+export const PROJECTS_ROUTE_PATH = "/dashboard/projects";
 
 export function routeKeyFromPath(pathname: string): RouteKey {
   if (pathname.startsWith("/dashboard/bids")) return "bids";
@@ -40,16 +42,19 @@ export function routeKeyFromPath(pathname: string): RouteKey {
 
 /**
  * Active key for `BottomNav`. Returns `null` for paths that don't map to a
- * bottom-tab (e.g. `/dashboard/strategy`), so no tab is highlighted.
- * `routeKeyFromPath` keeps a `"home"` fallback for other consumers.
+ * bottom-tab (e.g. `/dashboard/strategy`, `/dashboard/projects`), so no tab
+ * is highlighted. `routeKeyFromPath` keeps a `"home"` fallback for other
+ * consumers.
  */
 export function bottomNavKeyForPath(pathname: string): RouteKey | null {
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
+  if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return null;
   return routeKeyFromPath(pathname);
 }
 
 function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";
+  if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return "공고 탐색";
   const route = routeKeyFromPath(pathname);
   if (route === "home") return "오늘 할 일";
   return ROUTE_LABELS[route].label;
@@ -78,6 +83,7 @@ export function Shell() {
   const headerDate = summary.data?.today ?? new Date().toISOString();
   const pageTitle = pageTitleForPath(location.pathname);
   const onStrategy = location.pathname.startsWith(STRATEGY_ROUTE_PATH);
+  const onProjects = location.pathname.startsWith(PROJECTS_ROUTE_PATH);
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--color-bg)] pb-20 text-[var(--color-fg)]">
@@ -101,6 +107,12 @@ export function Shell() {
               {summary.data.operational_status.label}
             </Badge>
           ) : null}
+          <IconButton
+            label="공고 탐색"
+            onClick={() => navigate(onProjects ? ROUTE_LABELS.home.path : PROJECTS_ROUTE_PATH)}
+          >
+            <FileSearch size={18} />
+          </IconButton>
           <IconButton
             label="전략 편집"
             onClick={() => navigate(onStrategy ? ROUTE_LABELS.home.path : STRATEGY_ROUTE_PATH)}

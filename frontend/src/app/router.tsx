@@ -6,6 +6,7 @@ import { OpportunitiesScreen } from "@/features/dashboard/OpportunitiesScreen";
 import { BidsScreen } from "@/features/dashboard/BidsScreen";
 import { ResultsScreen } from "@/features/dashboard/ResultsScreen";
 import { StrategyEditor } from "@/features/strategy";
+import { ProjectsScreen, ProjectDetailScreen } from "@/features/projects";
 
 export function AppRoutes() {
   return (
@@ -24,6 +25,8 @@ export function AppRoutes() {
         <Route path="bids" element={<BidsScreen />} />
         <Route path="results" element={<ResultsScreen />} />
         <Route path="strategy" element={<StrategyEditor />} />
+        <Route path="projects" element={<ProjectsScreen />} />
+        <Route path="projects/:id" element={<ProjectDetailScreen />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
