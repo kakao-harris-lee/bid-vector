@@ -10,6 +10,7 @@ from typing import Any, Iterable, Sequence
 
 from sqlalchemy.orm import Session, selectinload
 
+from app.ai.business_group import resolve_business_group
 from app.ai.price_prediction import predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_strategy, split_multi_value_text
 from app.core.time import ensure_utc, utc_now
@@ -357,6 +358,8 @@ class PaperBiddingBacktestService:
             limit=history_limit,
             explicit_bid_rate_only=True,
         )
+        business_type_code = getattr(project, "business_type_code", None)
+        business_group = resolve_business_group(business_type_code)
         prediction = predict_price(
             budget=budget,
             category=project.category or "other",
@@ -364,6 +367,8 @@ class PaperBiddingBacktestService:
             historical_records=history,
             agency_name=project.issuing_agency or project.demand_agency,
             feedback_calibration=None,
+            business_type_code=business_type_code,
+            business_group=business_group,
         )
         selected_scenario = self._select_scenario(prediction, scenario=scenario)
         paper_bid_amount = round(float(selected_scenario["predicted_price"]), 2)

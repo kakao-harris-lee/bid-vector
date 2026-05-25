@@ -55,6 +55,8 @@ def predict_price(
     historical_records: Iterable[object] | None = None,
     agency_name: str | None = None,
     feedback_calibration: Dict[str, Any] | None = None,
+    business_type_code: str | None = None,
+    business_group: str | None = None,
 ) -> Dict[str, Any]:
     """Predict project price using the configured predictor stack with safe fallback."""
     context = PricePredictionContext(
@@ -63,6 +65,8 @@ def predict_price(
         description=str(description or ""),
         historical_records=tuple(historical_records or ()),
         agency_name=agency_name,
+        business_type_code=business_type_code,
+        business_group=business_group,
     )
 
     predictor, fallback_reason, selection_metadata = _select_predictor(context)
