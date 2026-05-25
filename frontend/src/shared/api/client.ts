@@ -22,6 +22,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const response = await fetch(path, { method, headers: finalHeaders, body: payload, ...rest });
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      // Notify the session-expired modal so the user can re-auth in place
+      // without losing screen state. Existing call sites that wrap 401 still
+      // get the ApiError and can opt out as needed.
+      window.dispatchEvent(new Event("bid-vector:session-expired"));
+    }
     const message = messageForStatus(response.status);
     throw new ApiError(response.status, message);
   }

@@ -79,6 +79,41 @@ export interface DecisionExperimentRunSummary {
   review_reason: string;
 }
 
+export interface DecisionExperimentEvaluation {
+  evaluated_at: string;
+  sample_size: number;
+  minimum_sample_reached: boolean;
+  target_metric: string;
+  baseline_target_value?: number | null;
+  current_target_value?: number | null;
+  target_delta?: number | null;
+  guardrail_metric: string;
+  baseline_guardrail_value?: number | null;
+  current_guardrail_value?: number | null;
+  guardrail_delta?: number | null;
+  outcome: ExperimentOutcome;
+  recommended_action: "collect_more_data" | "continue" | "complete" | "rollback";
+  summary: string;
+}
+
+export interface DecisionExperimentRunDetailResponse {
+  run: DecisionExperimentRunSummary & {
+    latest_evaluation?: DecisionExperimentEvaluation | null;
+  };
+}
+
+export interface MLTaskStatusResponse {
+  task_id: string;
+  task_name: string;
+  queue: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  raw_status: string;
+  ready: boolean;
+  successful: boolean;
+  detail: string;
+  error?: string | null;
+}
+
 export interface DecisionExperimentRunListResponse {
   operator_id: number;
   result_count: number;

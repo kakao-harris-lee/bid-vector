@@ -28,6 +28,7 @@ import { logoutSession, useAuthSession } from "./AuthGate";
 import { BottomNav } from "./BottomNav";
 import { IconButton } from "./IconButton";
 import { NotificationDrawer, useRealtimeEvents } from "@/features/realtime";
+import { SessionExpiredModal } from "./SessionExpiredModal";
 
 export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon: typeof Gavel }> = {
   home: { path: "/dashboard", label: "오늘", icon: ListChecks },
@@ -92,11 +93,9 @@ export function Shell() {
     enabled: Boolean(session?.token)
   });
 
-  useEffect(() => {
-    if (summary.error && (summary.error as { status?: number }).status === 401) {
-      logoutSession();
-    }
-  }, [summary.error]);
+  // 401 is now handled by SessionExpiredModal (triggered from apiRequest via
+  // the `bid-vector:session-expired` event). The Shell no longer hard-logs out
+  // on 401 so the user can re-auth in place without losing screen state.
 
   const headerDate = summary.data?.today ?? new Date().toISOString();
   const pageTitle = pageTitleForPath(location.pathname);
@@ -204,6 +203,7 @@ export function Shell() {
         onClose={() => setNotificationsOpen(false)}
         session={session}
       />
+      <SessionExpiredModal />
     </div>
   );
 }

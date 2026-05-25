@@ -1,8 +1,10 @@
 import { apiRequest } from "./client";
 import { ApiError } from "./session";
 import type {
+  DecisionExperimentRunDetailResponse,
   DecisionExperimentRunListResponse,
-  DecisionExperimentThresholdApplyResponse
+  DecisionExperimentThresholdApplyResponse,
+  MLTaskStatusResponse
 } from "@/shared/types/experiments";
 
 function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {
@@ -47,6 +49,54 @@ export interface ApplyThresholdsRequest {
   dry_run?: boolean;
   force?: boolean;
   append_note?: string;
+}
+
+export function fetchDecisionExperimentDetail(
+  runId: number,
+  token?: string | null
+): Promise<DecisionExperimentRunDetailResponse> {
+  return wrap(
+    apiRequest<DecisionExperimentRunDetailResponse>(
+      `/api/v1/analytics/decision-experiments/${runId}`,
+      { token }
+    ),
+    "실험 상세를 불러오지 못했습니다."
+  );
+}
+
+export interface MLTaskResponse {
+  task_id: string;
+  task_name: string;
+  queue: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  detail: string;
+  poll_url: string;
+}
+
+export function queueDecisionExperimentReevaluation(
+  runId: number,
+  token?: string | null
+): Promise<MLTaskResponse> {
+  return wrap(
+    apiRequest<MLTaskResponse>(
+      `/api/v1/analytics/decision-experiments/${runId}/evaluate`,
+      { method: "POST", token }
+    ),
+    "재평가 큐잉에 실패했습니다."
+  );
+}
+
+export function fetchReevaluationStatus(
+  taskId: string,
+  token?: string | null
+): Promise<MLTaskStatusResponse> {
+  return wrap(
+    apiRequest<MLTaskStatusResponse>(
+      `/api/v1/ml/reevaluations/decision-experiments/tasks/${taskId}`,
+      { token }
+    ),
+    "태스크 상태를 불러오지 못했습니다."
+  );
 }
 
 export function applyExperimentThresholds(

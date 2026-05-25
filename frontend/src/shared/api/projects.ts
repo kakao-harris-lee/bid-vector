@@ -46,6 +46,9 @@ async function rawFetch<T>(
 
   const response = await fetch(path, { ...rest, headers: finalHeaders });
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("bid-vector:session-expired"));
+    }
     throw new ApiError(response.status, errorMessage(response.status));
   }
   if (response.status === 204) return { data: undefined as T, response };
