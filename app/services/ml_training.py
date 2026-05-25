@@ -193,7 +193,39 @@ class PricePredictionTrainingService:
                 "blocking_issue_count": dataset_quality.get("blocking_issue_count", 0),
                 "warning_count": dataset_quality.get("warning_count", 0),
             },
+            "group_calibration": self._build_group_calibration(dataset),
         }
+
+    def _build_group_calibration(self, dataset: dict[str, Any]) -> dict[str, dict[str, float | int]]:
+        """Aggregate per-group winning_rate stats for inclusion in the release manifest."""
+        import statistics
+
+        # Support both "items" (test fixture) and "series" (production dataset builder)
+        items = dataset.get("items") or dataset.get("series") or []
+        groups: dict[str, list[float]] = {}
+        for item in items:
+            group = item.get("business_group")
+            rate = item.get("winning_rate")
+            if not group or rate in (None, ""):
+                continue
+            try:
+                groups.setdefault(group, []).append(float(rate))
+            except (TypeError, ValueError):
+                continue
+        calibration: dict[str, dict[str, float | int]] = {}
+        for group, values in groups.items():
+            if not values:
+                continue
+            sorted_values = sorted(values)
+            n = len(sorted_values)
+            calibration[group] = {
+                "median_rate": round(statistics.median(sorted_values), 6),
+                "std": round(statistics.pstdev(sorted_values), 6) if n > 1 else 0.0,
+                "p25": sorted_values[max(0, n // 4)],
+                "p75": sorted_values[min(n - 1, 3 * n // 4)],
+                "sample_count": n,
+            }
+        return calibration
 
     def _build_dataset_quality_report(
         self,

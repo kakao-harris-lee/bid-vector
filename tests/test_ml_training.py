@@ -98,3 +98,25 @@ def test_price_predictor_training_writes_quality_comparison_and_gate_reports(
     assert gate["passed"] is True
     assert gate["metrics"]["sample_count"] == 3
     assert gate["report_path"] == result["comparison_report_path"]
+
+
+def test_training_summary_includes_group_calibration():
+    """학습 결과 manifest summary에 그룹별 calibration 블록이 포함된다."""
+    from app.services.ml_training import PricePredictionTrainingService
+
+    service = PricePredictionTrainingService()
+    dataset = {
+        "summary": {"sample_count": 4},
+        "items": [
+            {"business_group": "construction", "winning_rate": 0.903},
+            {"business_group": "construction", "winning_rate": 0.902},
+            {"business_group": "service", "winning_rate": 0.881},
+            {"business_group": "service", "winning_rate": 0.930},
+        ],
+    }
+    calibration = service._build_group_calibration(dataset)
+    assert "construction" in calibration
+    assert "service" in calibration
+    assert calibration["construction"]["sample_count"] == 2
+    assert 0.900 <= calibration["construction"]["median_rate"] <= 0.905
+    assert calibration["service"]["sample_count"] == 2

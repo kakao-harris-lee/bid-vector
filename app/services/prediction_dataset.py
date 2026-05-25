@@ -245,6 +245,7 @@ class PredictionDatasetService:
             "project_id": record.project_id,
             "notice_number": record.notice_number,
             "category": record.category,
+            "business_group": self._normalize_category(record.category) or None,
             "agency_name": record.agency_name,
             "base_amount": float(record.base_amount or 0.0),
             "predicted_price": float(record.predicted_price or 0.0),
