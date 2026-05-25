@@ -22,6 +22,19 @@ export interface SyntheticSeedResponse {
   operators: SyntheticOperatorItem[];
 }
 
+export interface SyntheticBacktestSettlementItem {
+  project_id?: number | null;
+  project_title: string;
+  category?: string | null;
+  paper_bid_id?: number | null;
+  decision_action?: string | null;
+  bid_amount?: number | null;
+  winning_amount?: number | null;
+  absolute_bid_rate_error?: number | null;
+  would_have_won: boolean;
+  settled_at?: string | null;
+}
+
 export interface SyntheticBacktestOperatorResult extends SyntheticOperatorItem {
   candidate_count: number;
   paper_bid_count: number;
@@ -30,6 +43,8 @@ export interface SyntheticBacktestOperatorResult extends SyntheticOperatorItem {
   win_rate_on_settled?: number | null;
   bid_submission_rate?: number | null;
   average_absolute_bid_rate_error?: number | null;
+  settlement_sample_count: number;
+  settlement_items: SyntheticBacktestSettlementItem[];
 }
 
 export interface SyntheticBacktestRunResponse {
@@ -49,4 +64,26 @@ export interface SyntheticBacktestRunRequest {
   limit?: number;
   scenario?: string;
   slugs?: string[];
+}
+
+export interface SyntheticBacktestTaskResponse {
+  task_id: string;
+  task_name: string;
+  queue: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  detail: string;
+  poll_url: string;
+}
+
+export interface SyntheticBacktestTaskStatusResponse {
+  task_id: string;
+  task_name: string;
+  queue: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  raw_status: string;
+  ready: boolean;
+  successful: boolean;
+  detail: string;
+  error?: string | null;
+  result?: SyntheticBacktestRunResponse | null;
 }

@@ -22,6 +22,7 @@ from app.tasks.celery_app import (
     PAPER_BIDDING_FORWARD_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
     PROJECT_EMBEDDING_REBUILD_TASK_NAME,
+    SYNTHETIC_BACKTEST_RUN_TASK_NAME,
     celery_app,
 )
 
@@ -178,6 +179,38 @@ def monitor_operator_strategy(
         db.close()
 
 
+@celery_app.task(name=SYNTHETIC_BACKTEST_RUN_TASK_NAME)
+def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> dict:
+    """Run the per-synthetic-operator backtest in a background worker.
+
+    Mirrors the synchronous `/api/v1/synthetic/backtests/run` endpoint but
+    returns the comparison payload as the task result so the frontend can poll
+    `/api/v1/synthetic/backtests/tasks/{task_id}` for completion.
+    """
+    from datetime import datetime
+    from app.services.synthetic_backtest import SyntheticBacktestService
+
+    data = dict(payload or {})
+    start_at_raw = data.get("start_at")
+    end_at_raw = data.get("end_at")
+    start_at = datetime.fromisoformat(start_at_raw) if isinstance(start_at_raw, str) else None
+    end_at = datetime.fromisoformat(end_at_raw) if isinstance(end_at_raw, str) else None
+
+    db = SessionLocal()
+    try:
+        return SyntheticBacktestService().run_for_all(
+            db,
+            start_at=start_at,
+            end_at=end_at,
+            category=data.get("category"),
+            limit=int(data.get("limit") or 100),
+            scenario=str(data.get("scenario") or "base"),
+            slugs=data.get("slugs"),
+        )
+    finally:
+        db.close()
+
+
 @celery_app.task(name=PAPER_BIDDING_FORWARD_TASK_NAME)
 def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> dict:
     """Generate forward paper bids for currently open/re-notice projects."""
@@ -235,6 +268,27 @@ def enqueue_decision_experiment_reevaluation(*, experiment_run_id: int):
         reevaluate_decision_experiment,
         kwargs={"experiment_run_id": int(experiment_run_id)},
         queue=settings.CELERY_ML_REEVALUATION_QUEUE,
+    )
+
+
+def enqueue_synthetic_operator_backtest(*, payload: dict[str, Any]):
+    """Queue a per-synthetic-operator backtest task and return the async task handle."""
+    return run_synthetic_operator_backtest.apply_async(
+        kwargs={"payload": payload},
+        queue=settings.CELERY_OPS_QUEUE,
+    )
+
+
+def get_synthetic_backtest_task_status(task_id: str) -> dict[str, Any]:
+    """Read and normalize the current state of a queued synthetic backtest task."""
+    return _build_generic_task_status(
+        task_id,
+        task_name=SYNTHETIC_BACKTEST_RUN_TASK_NAME,
+        queue=settings.CELERY_OPS_QUEUE,
+        pending_detail="Synthetic backtest is queued.",
+        started_detail="Synthetic backtest is running per operator.",
+        success_detail="Synthetic backtest completed.",
+        failure_detail="Synthetic backtest failed.",
     )
 
 

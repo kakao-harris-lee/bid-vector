@@ -86,7 +86,9 @@ const runResponse: SyntheticBacktestRunResponse = {
       would_have_won_count: 9,
       win_rate_on_settled: 0.6,
       bid_submission_rate: 0.9,
-      average_absolute_bid_rate_error: 0.04
+      average_absolute_bid_rate_error: 0.04,
+      settlement_sample_count: 0,
+      settlement_items: []
     },
     {
       ...seedResponse.operators[1],
@@ -96,7 +98,9 @@ const runResponse: SyntheticBacktestRunResponse = {
       would_have_won_count: 4,
       win_rate_on_settled: 0.8,
       bid_submission_rate: 0.6,
-      average_absolute_bid_rate_error: 0.02
+      average_absolute_bid_rate_error: 0.02,
+      settlement_sample_count: 0,
+      settlement_items: []
     }
   ]
 };

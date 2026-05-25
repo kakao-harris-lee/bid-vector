@@ -3,6 +3,8 @@ import { ApiError } from "./session";
 import type {
   SyntheticBacktestRunRequest,
   SyntheticBacktestRunResponse,
+  SyntheticBacktestTaskResponse,
+  SyntheticBacktestTaskStatusResponse,
   SyntheticOperatorListResponse,
   SyntheticSeedResponse
 } from "@/shared/types/synthetic";
@@ -48,5 +50,32 @@ export function runSyntheticBacktest(
       token
     }),
     "synthetic 백테스트 실행에 실패했습니다."
+  );
+}
+
+export function queueSyntheticBacktest(
+  payload: SyntheticBacktestRunRequest,
+  token?: string | null
+): Promise<SyntheticBacktestTaskResponse> {
+  return wrap(
+    apiRequest<SyntheticBacktestTaskResponse>("/api/v1/synthetic/backtests/run-async", {
+      method: "POST",
+      body: payload,
+      token
+    }),
+    "synthetic 백테스트 비동기 실행에 실패했습니다."
+  );
+}
+
+export function fetchSyntheticBacktestTaskStatus(
+  taskId: string,
+  token?: string | null
+): Promise<SyntheticBacktestTaskStatusResponse> {
+  return wrap(
+    apiRequest<SyntheticBacktestTaskStatusResponse>(
+      `/api/v1/synthetic/backtests/tasks/${taskId}`,
+      { token }
+    ),
+    "synthetic 백테스트 태스크 상태를 불러오지 못했습니다."
   );
 }

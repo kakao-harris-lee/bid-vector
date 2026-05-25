@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.services.synthetic_backtest import SyntheticBacktestService
+from app.tasks.jobs import (
+    enqueue_synthetic_operator_backtest,
+    get_synthetic_backtest_task_status,
+)
 
 router = APIRouter(prefix="/synthetic", tags=["synthetic"])
 
@@ -51,6 +55,19 @@ class SyntheticBacktestRunRequest(BaseModel):
     slugs: Optional[List[str]] = None
 
 
+class SyntheticBacktestSettlementItem(BaseModel):
+    project_id: Optional[int] = None
+    project_title: str = ""
+    category: Optional[str] = None
+    paper_bid_id: Optional[int] = None
+    decision_action: Optional[str] = None
+    bid_amount: Optional[float] = None
+    winning_amount: Optional[float] = None
+    absolute_bid_rate_error: Optional[float] = None
+    would_have_won: bool = False
+    settled_at: Optional[datetime] = None
+
+
 class SyntheticBacktestOperatorResult(SyntheticOperatorItem):
     candidate_count: int = 0
     paper_bid_count: int = 0
@@ -59,6 +76,8 @@ class SyntheticBacktestOperatorResult(SyntheticOperatorItem):
     win_rate_on_settled: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     bid_submission_rate: Optional[float] = None
     average_absolute_bid_rate_error: Optional[float] = None
+    settlement_sample_count: int = 0
+    settlement_items: List[SyntheticBacktestSettlementItem] = Field(default_factory=list)
 
 
 class SyntheticBacktestRunResponse(BaseModel):
@@ -124,6 +143,79 @@ def seed_synthetic_operators_endpoint(
         "purged_count": purged_count,
         "operators": operators,
     }
+
+
+class SyntheticBacktestTaskResponse(BaseModel):
+    task_id: str
+    task_name: str
+    queue: str
+    status: str
+    detail: str
+    poll_url: str
+
+
+class SyntheticBacktestTaskStatusResponse(BaseModel):
+    task_id: str
+    task_name: str
+    queue: str
+    status: str
+    raw_status: str
+    ready: bool
+    successful: bool
+    detail: str
+    error: Optional[str] = None
+    result: Optional[SyntheticBacktestRunResponse] = None
+
+
+@router.post(
+    "/backtests/run-async",
+    response_model=SyntheticBacktestTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def run_synthetic_backtest_async_endpoint(
+    request: SyntheticBacktestRunRequest,
+    db: Session = Depends(get_db),
+):
+    """Queue the synthetic backtest in a Celery worker and return a pollable task id.
+
+    Use when the synchronous path could exceed the API request timeout
+    (12 operators × large `limit`, slow predictor warm-up, etc.).
+    """
+    service = SyntheticBacktestService()
+    operators = service.list_operators(db)
+    if not operators:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No synthetic operators seeded. Seed via POST /operators/seed first.",
+        )
+
+    payload = {
+        "start_at": request.start_at.isoformat() if request.start_at else None,
+        "end_at": request.end_at.isoformat() if request.end_at else None,
+        "category": request.category,
+        "limit": request.limit,
+        "scenario": request.scenario,
+        "slugs": request.slugs,
+    }
+    async_result = enqueue_synthetic_operator_backtest(payload=payload)
+    status_payload = get_synthetic_backtest_task_status(async_result.id)
+    return {
+        "task_id": async_result.id,
+        "task_name": status_payload["task_name"],
+        "queue": status_payload["queue"],
+        "status": status_payload["status"],
+        "detail": status_payload["detail"],
+        "poll_url": f"/api/v1/synthetic/backtests/tasks/{async_result.id}",
+    }
+
+
+@router.get(
+    "/backtests/tasks/{task_id}",
+    response_model=SyntheticBacktestTaskStatusResponse,
+)
+def get_synthetic_backtest_task_status_endpoint(task_id: str):
+    """Inspect the status (+ result) of a queued synthetic backtest task."""
+    return get_synthetic_backtest_task_status(task_id)
 
 
 @router.post("/backtests/run", response_model=SyntheticBacktestRunResponse)
