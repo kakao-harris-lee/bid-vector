@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -74,6 +75,40 @@ def backfill_from_detail_html(
     db.flush()
 
 
+def backfill_from_title_rules(
+    db: Session,
+    *,
+    rules: list[dict[str, str]],
+    limit: int,
+    stats: BackfillStats,
+) -> None:
+    """Match remaining NULL rows by title regex; idempotent."""
+    compiled = [
+        (re.compile(rule["pattern"]), rule["code"], rule.get("label"))
+        for rule in rules
+    ]
+    query = (
+        db.query(Project)
+        .filter(Project.business_type_code.is_(None))
+        .order_by(Project.id.asc())
+        .limit(limit)
+    )
+    for project in query.all():
+        text = " ".join(filter(None, [
+            project.title,
+            project.description,
+            project.demand_agency or "",
+        ]))
+        for pattern, code, label in compiled:
+            if pattern.search(text):
+                project.business_type_code = code
+                if label:
+                    project.business_type_label = label
+                stats.updated_from_title_rule += 1
+                break
+    db.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill Project.business_type_*")
     parser.add_argument("--dry-run", action="store_true")
@@ -83,6 +118,8 @@ def main() -> int:
         type=Path,
         default=Path("reports/business-type-backfill/run.json"),
     )
+    parser.add_argument("--use-title-rules", action="store_true", default=True)
+    parser.add_argument("--skip-detail", action="store_true")
     args = parser.parse_args()
 
     from app.services.koneps.collector import KonepsCollectorService
@@ -95,7 +132,16 @@ def main() -> int:
     stats = BackfillStats()
     db = SessionLocal()
     try:
-        backfill_from_detail_html(db, fetcher=fetcher, limit=args.limit, stats=stats)
+        if not args.skip_detail:
+            backfill_from_detail_html(db, fetcher=fetcher, limit=args.limit, stats=stats)
+        if args.use_title_rules:
+            from app.core.config import settings as runtime_settings
+            backfill_from_title_rules(
+                db,
+                rules=runtime_settings.BUSINESS_TYPE_TITLE_RULES,
+                limit=args.limit,
+                stats=stats,
+            )
         if args.dry_run:
             db.rollback()
         else:

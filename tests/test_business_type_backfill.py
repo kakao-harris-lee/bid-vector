@@ -143,3 +143,28 @@ def test_backfill_updates_rows_from_detail_html(test_db):
     assert project.business_type_label == "건축공사"
     assert stats.updated_from_detail == 1
     assert stats.failed == 0
+
+
+def test_backfill_uses_title_rules_when_detail_missing(test_db):
+    """source_url 없는 row는 title-rule fallback으로 코드 추정."""
+    from app.models.models import Project
+    from scripts.backfill_business_type import backfill_from_title_rules, BackfillStats
+
+    rule_table = [
+        {"pattern": r"건축공사", "code": "0411", "label": "건축공사"},
+        {"pattern": r"연구개발용역|학술연구", "code": "0621", "label": "학술연구용역"},
+    ]
+
+    p1 = Project(title="OO 건축공사", description="-", requirements="-", budget_estimate=1, category="construction")
+    p2 = Project(title="2026 학술연구 용역", description="-", requirements="-", budget_estimate=1, category="service")
+    p3 = Project(title="물품 구매", description="-", requirements="-", budget_estimate=1, category="goods")
+    test_db.add_all([p1, p2, p3])
+    test_db.flush()
+
+    stats = BackfillStats()
+    backfill_from_title_rules(test_db, rules=rule_table, limit=10, stats=stats)
+    test_db.refresh(p1); test_db.refresh(p2); test_db.refresh(p3)
+    assert p1.business_type_code == "0411"
+    assert p2.business_type_code == "0621"
+    assert p3.business_type_code is None
+    assert stats.updated_from_title_rule == 2

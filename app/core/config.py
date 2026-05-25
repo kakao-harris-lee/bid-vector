@@ -149,6 +149,15 @@ class Settings(BaseSettings):
             "goods": ["01", "02"],
         }
     )
+    BUSINESS_TYPE_TITLE_RULES: list[dict[str, str]] = Field(
+        default_factory=lambda: [
+            {"pattern": r"건축공사", "code": "0411", "label": "건축공사"},
+            {"pattern": r"토목공사", "code": "0412", "label": "토목공사"},
+            {"pattern": r"전기공사", "code": "0413", "label": "전기공사"},
+            {"pattern": r"학술연구용역|연구개발용역", "code": "0621", "label": "학술연구용역"},
+            {"pattern": r"일반용역", "code": "0611", "label": "일반용역"},
+        ]
+    )
     BUSINESS_TYPE_COVERAGE_GATE: float = 0.95
     BUSINESS_GROUP_CALIBRATION_ENABLED: bool = True
     PREDICTION_GROUP_MINIMUM_BID_RATES: dict[str, float] = Field(
