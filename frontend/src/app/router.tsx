@@ -8,6 +8,7 @@ import { ResultsScreen } from "@/features/dashboard/ResultsScreen";
 import { StrategyEditor } from "@/features/strategy";
 import { ProjectsScreen, ProjectDetailScreen } from "@/features/projects";
 import { DecisionsScreen } from "@/features/decisions";
+import { ExperimentsScreen } from "@/features/experiments";
 
 export function AppRoutes() {
   return (
@@ -29,6 +30,7 @@ export function AppRoutes() {
         <Route path="projects" element={<ProjectsScreen />} />
         <Route path="projects/:id" element={<ProjectDetailScreen />} />
         <Route path="decisions" element={<DecisionsScreen />} />
+        <Route path="experiments" element={<ExperimentsScreen />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
