@@ -16,6 +16,8 @@ class PricePredictionContext:
     description: str
     historical_records: tuple[object, ...]
     agency_name: str | None = None
+    business_type_code: str | None = None
+    business_group: str | None = None
 
     @property
     def historical_sample_size(self) -> int:
