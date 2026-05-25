@@ -1636,6 +1636,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/synthetic/operators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Synthetic Operators Endpoint
+         * @description Return seeded synthetic operators (`synthetic-*`).
+         */
+        get: operations["list_synthetic_operators_endpoint_api_v1_synthetic_operators_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/operators/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Synthetic Operators Endpoint
+         * @description Idempotent seed/upsert of the 12-archetype synthetic operator catalogue.
+         *
+         *     Optionally purges existing synthetic rows first (`purge=true`).
+         */
+        post: operations["seed_synthetic_operators_endpoint_api_v1_synthetic_operators_seed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/backtests/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Synthetic Backtest Endpoint
+         * @description Run the historical paper-bidding backtest for every synthetic operator.
+         *
+         *     Synchronous for now (small operator count + bounded `limit`). Frontend can
+         *     show a loading state; a Celery wrapper can wrap this later if needed.
+         */
+        post: operations["run_synthetic_backtest_endpoint_api_v1_synthetic_backtests_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -5449,6 +5514,167 @@ export interface components {
             /** Recent Failures */
             recent_failures?: components["schemas"]["StrategyFailureItem"][];
         };
+        /** SyntheticBacktestOperatorResult */
+        SyntheticBacktestOperatorResult: {
+            /** User Id */
+            user_id: number;
+            /** Username */
+            username: string;
+            /** Slug */
+            slug: string;
+            /** Display Name */
+            display_name: string;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /**
+             * Annual Revenue
+             * @default 0
+             */
+            annual_revenue: number;
+            /**
+             * Capacity Score
+             * @default 0
+             */
+            capacity_score: number;
+            /**
+             * Bid Now Threshold
+             * @default 0
+             */
+            bid_now_threshold: number;
+            /**
+             * Review Threshold
+             * @default 0
+             */
+            review_threshold: number;
+            /**
+             * Candidate Count
+             * @default 0
+             */
+            candidate_count: number;
+            /**
+             * Paper Bid Count
+             * @default 0
+             */
+            paper_bid_count: number;
+            /**
+             * Settled Count
+             * @default 0
+             */
+            settled_count: number;
+            /**
+             * Would Have Won Count
+             * @default 0
+             */
+            would_have_won_count: number;
+            /** Win Rate On Settled */
+            win_rate_on_settled?: number | null;
+            /** Bid Submission Rate */
+            bid_submission_rate?: number | null;
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
+        };
+        /** SyntheticBacktestRunRequest */
+        SyntheticBacktestRunRequest: {
+            /** Start At */
+            start_at?: string | null;
+            /** End At */
+            end_at?: string | null;
+            /** Category */
+            category?: string | null;
+            /**
+             * Limit
+             * @default 100
+             */
+            limit: number;
+            /**
+             * Scenario
+             * @default base
+             */
+            scenario: string;
+            /** Slugs */
+            slugs?: string[] | null;
+        };
+        /** SyntheticBacktestRunResponse */
+        SyntheticBacktestRunResponse: {
+            /** Operator Count */
+            operator_count: number;
+            /** Category */
+            category?: string | null;
+            /** Start At */
+            start_at?: string | null;
+            /** End At */
+            end_at?: string | null;
+            /** Limit */
+            limit: number;
+            /** Scenario */
+            scenario: string;
+            /** Results */
+            results?: components["schemas"]["SyntheticBacktestOperatorResult"][];
+        };
+        /** SyntheticOperatorItem */
+        SyntheticOperatorItem: {
+            /** User Id */
+            user_id: number;
+            /** Username */
+            username: string;
+            /** Slug */
+            slug: string;
+            /** Display Name */
+            display_name: string;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /**
+             * Annual Revenue
+             * @default 0
+             */
+            annual_revenue: number;
+            /**
+             * Capacity Score
+             * @default 0
+             */
+            capacity_score: number;
+            /**
+             * Bid Now Threshold
+             * @default 0
+             */
+            bid_now_threshold: number;
+            /**
+             * Review Threshold
+             * @default 0
+             */
+            review_threshold: number;
+        };
+        /** SyntheticOperatorListResponse */
+        SyntheticOperatorListResponse: {
+            /** Operator Count */
+            operator_count: number;
+            /** Operators */
+            operators?: components["schemas"]["SyntheticOperatorItem"][];
+        };
+        /** SyntheticSeedRequest */
+        SyntheticSeedRequest: {
+            /**
+             * Purge
+             * @default false
+             */
+            purge: boolean;
+        };
+        /** SyntheticSeedResponse */
+        SyntheticSeedResponse: {
+            /** Seeded Count */
+            seeded_count: number;
+            /**
+             * Purged Count
+             * @default 0
+             */
+            purged_count: number;
+            /** Operators */
+            operators?: components["schemas"]["SyntheticOperatorItem"][];
+        };
         /** TaskBrokerHealth */
         TaskBrokerHealth: {
             /** Url */
@@ -8626,6 +8852,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelegramStatusResponse"];
+                };
+            };
+        };
+    };
+    list_synthetic_operators_endpoint_api_v1_synthetic_operators_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticOperatorListResponse"];
+                };
+            };
+        };
+    };
+    seed_synthetic_operators_endpoint_api_v1_synthetic_operators_seed_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticSeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_synthetic_backtest_endpoint_api_v1_synthetic_backtests_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticBacktestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticBacktestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

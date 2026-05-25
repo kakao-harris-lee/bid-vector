@@ -1,7 +1,21 @@
 """API route aggregator"""
 from fastapi import APIRouter
 
-from app.api import admin, analytics, auth, backtests, bids, dashboard, ml, operations, operator, predictions, projects, realtime
+from app.api import (
+    admin,
+    analytics,
+    auth,
+    backtests,
+    bids,
+    dashboard,
+    ml,
+    operations,
+    operator,
+    predictions,
+    projects,
+    realtime,
+    synthetic,
+)
 
 router = APIRouter()
 
@@ -18,3 +32,4 @@ router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 router.include_router(admin.router, prefix="/admin", tags=["Legacy Admin"])
 router.include_router(operations.router, prefix="/operations", tags=["Operations"])
 router.include_router(realtime.router, prefix="/realtime", tags=["Realtime"])
+router.include_router(synthetic.router, tags=["Synthetic"])
