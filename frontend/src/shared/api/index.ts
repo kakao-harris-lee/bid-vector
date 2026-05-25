@@ -5,4 +5,5 @@ export * from "./dashboard";
 export * from "./strategy";
 export * from "./projects";
 export * from "./decisions";
+export * from "./experiments";
 export { queryKeys } from "./queryKeys";
