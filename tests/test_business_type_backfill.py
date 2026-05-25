@@ -69,3 +69,41 @@ def test_extract_business_type_code_from_cell_text():
     code, label = service._split_business_type_cell("")
     assert code is None
     assert label is None
+
+
+def test_upsert_project_persists_business_type(test_db):
+    """KonepsCollectorService._update_project_from_item가 business_type 필드를 영속화한다."""
+    from app.models.models import Project
+    from app.schemas.schemas import CrawlRequest
+    from app.services.koneps.collector import KonepsCollectorService
+
+    service = KonepsCollectorService()
+    request = CrawlRequest(source="test", category="construction")
+
+    # Create a fresh project row (mimics the "new project" path in _resolve_project_for_item)
+    project = Project(
+        title="건축공사 upsert 검증",
+        description="",
+        requirements="",
+        budget_estimate=100_000_000.0,
+        category="construction",
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    # Build the item dict the same way CrawlNoticeItem.model_dump(mode="json") would produce
+    item = {
+        "notice_number": "UPSERT-0411-1",
+        "title": "건축공사 upsert 검증",
+        "base_amount": 100_000_000.0,
+        "business_type": "공사",
+        "business_type_code": "0411",
+        "business_type_label": "건축공사",
+    }
+
+    service._update_project_from_item(project, item=item, request=request)
+    test_db.flush()
+    test_db.refresh(project)
+
+    assert project.business_type_code == "0411"
+    assert project.business_type_label == "건축공사"

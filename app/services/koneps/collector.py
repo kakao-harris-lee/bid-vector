@@ -2546,6 +2546,11 @@ class KonepsCollectorService:
         if resolved_status:
             project.status = resolved_status
 
+        if item.get("business_type_code") is not None:
+            project.business_type_code = item.get("business_type_code")
+        if item.get("business_type_label") is not None:
+            project.business_type_label = item.get("business_type_label")
+
         db_title = project.title or item.get("notice_number") or "KONEPS notice"
         project.title = db_title.strip()
 
