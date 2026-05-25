@@ -215,6 +215,39 @@
 
 - 운영 배포 시 `preflight-rollout`을 실제 credential/IAM 환경에서 실행
 
+### H. 웹 프론트엔드 (Vite + React + TS) — Claude Code와 협업 확장 진행 중
+
+이미 구현됨:
+
+- `frontend/` 단일 SPA: 로그인/패스워드 리셋, 요약 대시보드, 입찰/결과 리스트, paper-bidding 요약 카드 (`App.tsx` 1,150 LOC, `api.ts`, `types.ts`, `styles.css`)
+- 백엔드 `/dashboard` 라우트에서 빌드 산출물 서빙 (`app/main.py`)
+- Vitest + Testing Library 셋업 및 App-level smoke test
+
+진행 중 / 남은 작업 (스프린트 단위, 자세한 내용은 `docs/web-development-plan.md`):
+
+- Phase 0 — Tailwind + shadcn/ui + `react-router-dom` + `@tanstack/react-query` 기반 정비, `App.tsx`를 `features/`로 분할
+- Phase 1 — 운영자 전략 편집 UI (`OperatorStrategy` 폼/칩, candidates preview 동시 갱신)
+- Phase 2 — 공고 탐색 UI (리스트/상세/유사공고, 임베딩 재계산)
+- Phase 3 — 결정 게이트웨이 UI (decision funnel/recommendations, 상태 전환)
+- Phase 4 — 실험 lifecycle UI (`decision_experiments` apply/rollback, dry-run 표시)
+- Phase 5 — **가상 운영자 백테스트 비교 대시보드** + 신규 백엔드 API (`app/api/synthetic.py`, `app/services/synthetic_backtest.py`, `tasks/jobs.run_synthetic_operator_backtest`)
+- Phase 6 — 운영 대시보드 카드 시각화 (`/api/v1/analytics/operations-dashboard`)
+- Phase 7 — WebSocket realtime + 알림 드로어 + Playwright happy-path E2E + `styles.css` 폐기 완료
+
+협업 모델 (자세한 내용은 `CLAUDE.md`):
+
+- 서브에이전트: `frontend-builder` / `backend-builder` / `api-reviewer` / `test-runner` / `data-seed-runner`
+- 슬래시 커맨드: `/screen`, `/api-route`, `/sync-types`, `/run-backtest`, `/seed-synthetic`, `/check`
+- MCP: PostgreSQL(dev, read-only), Filesystem, (옵션) KONEPS mock, Telegram (dev token일 때만)
+
+우선 검토 파일:
+
+- `frontend/src/App.tsx` (분할 대상)
+- `frontend/src/api.ts`, `frontend/src/types.ts`
+- `frontend/src/styles.css` (점진 폐기 대상)
+- `docs/web-development-plan.md`
+- `CLAUDE.md`
+
 ### G. 분석 / 대시보드 집계 — prediction / operations / operator dashboard 계약 완료, 외부 클라이언트 연결 단계
 
 이미 구현됨:
@@ -239,10 +272,11 @@
 
 ## 현재 권장 실행 순서
 
-1. 실제 KONEPS/Telegram credential 환경에서 운영 smoke test 실행
-2. 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
-3. 별도 프론트엔드 앱이 있다면 `GET /api/v1/operator/dashboard` 계약 연결 확인
-4. 필요 시 A/B 분류 정확도 보정 또는 realtime replay/retention 정책 정리
+1. 웹 프론트엔드 Phase 0 시작 — `docs/web-development-plan.md`의 기반 정비 작업
+2. 백엔드 Phase 5 신규 API(synthetic backtest) 설계는 Phase 4 후반에 병렬로 시작
+3. 실제 KONEPS/Telegram credential 환경에서 운영 smoke test 실행
+4. 운영 배포 환경에서 `preflight-rollout`을 실제 object storage credential/IAM으로 실행
+5. 필요 시 A/B 분류 정확도 보정 또는 realtime replay/retention 정책 정리
 
 `A/B`는 신규 구축 단계가 아니라 유지보수·정확도 보정 단계로 간주합니다.
 
@@ -337,3 +371,6 @@
 - 운영 smoke test 간단 실행 가이드: `docs/production-smoke-test.md`
 - 현재 잔여 과제/운영 증적 기준: `docs/remaining-priority-plan.md`
 - 구현 로드맵 상태: `docs/optimal-bid-analysis-roadmap.md`
+- first_plan 대비 현재 구현 매핑: `docs/first_plan_implementation_review.md`
+- 웹 프론트엔드 확장 계획: `docs/web-development-plan.md`
+- Claude Code 협업 가이드: `CLAUDE.md`

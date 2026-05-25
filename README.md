@@ -1,57 +1,165 @@
-# 나라 장터 AI 입찰 서비스 (Korea Marketplace AI Bidding Service)
+# 나라 장터 AI 입찰 서비스 (bid-vector)
 
-FastAPI-based backend service for intelligent bidding in the Korea Marketplace platform.
+> 한 업체(단일 운영자)가 나라장터(KONEPS) 공고에서 **낙찰 가능성이 가장 높은 입찰 후보를 자동으로 찾고, 분석하고, 적정 투찰가를 결정해 추진**할 수 있도록 돕는 FastAPI 기반 백엔드 서비스입니다.
 
-The product is being aligned around a **single operator workflow** rather than a multi-tenant marketplace. Public procurement data is collected and scored so one operator can identify, prioritize, and pursue the best bid opportunities quickly.
+`first_plan.md`에서 제시된 5개 모듈(크롤러 / 분류기 / 브레인(AI) / 텔레그램 인터페이스 / DB)을
+기준 삼아 시작되었고, 현재 코드베이스는 그 골격을 충실히 구현한 위에
+**백테스트 · 결정 실험 · 운영 대시보드 · ML 릴리즈 자동화** 레이어를 두텁게 얹은 상태입니다.
 
-## Features
+## 무엇을 하는 시스템인가
 
-- **Price Prediction AI**: ML-based price prediction for projects
-- **Bid Recommendation Engine**: AI-powered bidding recommendations based on historical data
-- **Hybrid Notice Classification**: Rule-based filtering plus semantic similarity scoring for operator-company fit
-- **Document Analysis**: Automatic requirement extraction and complexity analysis
-- **Operator Notifications**: Telegram alerts plus persisted web notifications with callback/polling support
-- **Single Operator Workspace**: Centralized operator profile, workload overview, and bid planning surface
-- **Decision Analytics & Experiment Tracking**: Funnel analytics, recommendation experiments, outcome evaluation, and strategy feedback APIs
+- **공고 수집**: 나라장터 OpenAPI(공고: `BidPublicInfoService`, 낙찰: `ScsbidInfoService`)를 1차 경로로 사용하고,
+  실패 시 라이브 페이지를 Playwright/Requests + BeautifulSoup으로 크롤하는 다중 폴백 구조.
+- **공고 분류·매칭**: 운영자 회사 프로필(업종/면허/지역/시공능력/관심 키워드)과 공고를
+  규칙 기반 필터 + sentence-transformers 임베딩(pgvector)으로 하이브리드 매칭.
+- **사정률/가격 예측**: `Historical(통계) / LSTM / Ensemble` 3종 predictor + rolling backtest 기반
+  자동 선택(`auto`). 카테고리별 낙찰하한 guardrail로 법적 하한 미만 추천을 차단.
+- **결정 엔진**: 확률·매칭·긴급도·경쟁·예산캡처·마진 가중합 + 워크로드/복잡도 페널티로
+  `bid_now / review / skip` 결정을 내고 사유·점수 분해를 영속화.
+- **알림 및 인터랙션**: Telegram 인라인 버튼(`투찰 / 검토 / 보류`) 콜백과 `/strategy` 단계형 편집,
+  웹 알림 fallback, 인증 WebSocket 실시간 스트림.
+- **백테스트·실험·관측**: paper bidding 백테스트, 결정 실험(decision experiments) 기반
+  임계값/카테고리/워크로드 튜닝 피드백 루프, 운영 대시보드(크롤·태스크·Telegram·ML release 카드).
+
+## 현재 구현 / 운영 상태
+
+> ⚠️ **현재 인스턴스는 개발 서버 기준**입니다. 운영 환경(KONEPS/Telegram 실제 자격증명, ML release object storage,
+> 외부 broker)이 아직 일부만 반영되어 있어 다음 작업이 남아 있습니다.
+
+| 구분 | 상태 | 비고 |
+|---|---|---|
+| 모듈 1 — KONEPS 크롤러 | ✅ 구현 완료 | OpenAPI + 라이브 페이지 fallback, `CrawlJob` 메타·재시도 |
+| 모듈 2 — 공고 분류기 | ✅ 구현 완료 | 룰 + 의미 임베딩(`paraphrase-multilingual-MiniLM-L12-v2`, pgvector(384)) |
+| 모듈 3 — 예측/결정 엔진 | ✅ 구현 완료 | 4종 predictor + `auto` 선택, guardrail, `BidDecisionRecord` 영속화 |
+| 모듈 4 — Telegram 인터페이스 | ✅ 구현 완료 | 인라인 버튼 콜백 + `/strategy` 편집 + 폴링/Webhook + 웹 fallback |
+| 모듈 5 — DB | ✅ 구현 완료 | 19개 모델 (운영자/공고/입찰/예측/결정/실험/paper bid/정산/크롤잡 등) |
+| 백테스트·실험 레이어 | ✅ 구현 완료 | `paper_bidding_*`, `decision_experiments`, ML release manifest/promotion gate |
+| Frontend SPA | ✅ 구현 완료 | `frontend/` (Vite + React + TypeScript), `/dashboard` 라우트에서 서빙 |
+| 운영 자격증명 end-to-end 스모크 | ⏳ 진행 중 | 실제 KONEPS/Telegram 키로 수집→모니터→알림→콜백 한 주기 검증 필요 |
+| ML release object storage preflight | ⏳ 진행 중 | 운영 환경 IAM/버킷에서 `preflight-rollout` 실제 실행 필요 |
+| Production compose 배포 | 부분 적용 | `docker-compose.server.yml` 정의는 있으나 현재 서버는 개발 프로파일 |
+
+자세한 매핑은 `docs/first_plan_implementation_review.md` 참고.
+설계 변경 사항 중 가장 중요한 것은 first_plan의 "다중 사용자 공정 분배" → **단일 운영자 결정 엔진**으로의 전환입니다
+(legacy `allocations` 테이블은 남겨두어 추후 다중 운영자 확장 시 복원 가능).
+
+## 아키텍처 개요
+
+```text
+┌──────────────────────────┐    OpenAPI / Playwright            ┌───────────────────┐
+│  KONEPS Collector        │ ─────────────────────────────────▶ │ PostgreSQL +      │
+│  (app/services/koneps/)  │                                    │ pgvector          │
+└────────┬─────────────────┘                                    │ - projects        │
+         │ CrawlJob / HistoricalData / TenderResult / Project   │ - historical_data │
+         ▼                                                      │ - bid_decisions   │
+┌──────────────────────────┐                                    │ - paper_bids …    │
+│  Classifier (rule + sbert)│ ◀──────── Project.embedding ─────│                   │
+│  app/services/classifier  │                                   └────────┬──────────┘
+└────────┬─────────────────┘                                            │
+         │ matched score                                                │
+         ▼                                                              │
+┌──────────────────────────┐    predictor backtest / guardrail          │
+│  Price Predictor         │ ◀──────────── HistoricalData ──────────────┤
+│  app/ai/predictors/*     │                                            │
+│  (historical/lstm/ensemb)│                                            │
+└────────┬─────────────────┘                                            │
+         │ predicted bid rate, scenario band                            │
+         ▼                                                              │
+┌──────────────────────────┐    workload / complexity penalty           │
+│  Bid Decision Engine     │ ─── persist ──────────────────────────────▶│
+│  app/services/allocation │   BidDecisionRecord                        │
+└────────┬─────────────────┘                                            │
+         │ bid_now / review / skip                                      │
+         ▼                                                              │
+┌──────────────────────────┐                                            │
+│  Notifier                │ ─── Telegram inline buttons ── callback ──▶│
+│  app/services/notifications│   WebSocket realtime / Web fallback     │
+└──────────────────────────┘                                            │
+                                                                        │
+┌──────────────────────────┐                                            │
+│  Paper-Bidding Backtest  │ ─── settlements vs TenderResult ──────────▶│
+│  + Decision Experiments  │   feedback into thresholds/strategy        │
+└──────────────────────────┘                                            │
+                                                                        ▼
+                                              ┌────────────────────────────┐
+                                              │  Operator Dashboard / SPA  │
+                                              │  /dashboard (frontend/)    │
+                                              │  /api/v1/operator/dashboard │
+                                              └────────────────────────────┘
+```
+
+## Features (요약)
+
+- **Price Prediction AI** — Historical / LSTM / Ensemble + auto rolling backtest + category floor guardrail
+- **Bid Decision Engine** — 점수·사유 영속화 (`BidDecisionRecord`), workflow 상태(`planned/reviewing/submitted/skipped`)
+- **Hybrid Notice Classification** — 규칙 필터 + sentence-transformer 의미 유사도 + pgvector 유사 공고 검색
+- **Paper Bidding Backtest** — 과거 데이터/현재 오픈 공고로 forward·historical 두 가지 백테스트
+- **Decision Analytics & Experiments** — funnel, segment, recommendation, 임계값/카테고리/워크로드 실험과 apply 피드백
+- **Operator Telegram & Web Notifications** — 인라인 버튼, `/strategy` 단계 편집, 웹 fallback, 인증 WebSocket
+- **Operations Dashboard** — 크롤 성공률, Telegram 전송률, 태스크/브로커 헬스, ML release manifest/promotion gate 카드
+- **ML Release Automation** — manifest 서명/보존/원격 발행/preflight, `.env` 자동 반영, Docker Compose 롤아웃 자동화
+- **Single Operator Workspace** — 운영자 1인 워크플로 기준 회사 프로필·전략·워크로드 캡 모델
 
 ## Technology Stack
 
-- **Backend**: FastAPI 0.104+
-- **Database**: PostgreSQL 16+ with pgvector
-- **Background Jobs**: Celery with in-memory local defaults plus an optional RabbitMQ broker + PostgreSQL result-backend path
-- **ML Profiles**: slim runtime / embedding runtime / training runtime / full ML runtime
-- **Container**: Docker & Docker Compose
+- **Backend**: FastAPI 0.104+, SQLAlchemy 2.x, pydantic 2.x
+- **Database**: PostgreSQL 16 + `pgvector` (테스트는 SQLite)
+- **AI / ML**: sentence-transformers (multilingual MiniLM), numpy, pandas, scikit-learn, optional PyTorch (CPU)
+- **Crawler**: Playwright 1.52, BeautifulSoup4, requests + KONEPS OpenAPI
+- **Background Jobs**: Celery (기본 `memory://`, 옵션으로 RabbitMQ + PostgreSQL result backend)
+- **Realtime**: 자체 WebSocket + 선택적 PostgreSQL `LISTEN/NOTIFY` fanout
+- **Frontend**: Vite + React + TypeScript (`frontend/`), `/dashboard`에서 서빙
+- **Container**: Docker / Docker Compose, 멀티 빌드 타깃 (`api-runtime / api-embedding / api-training / api-ml-full`)
+- **Notifications**: Telegram Bot API (`python-telegram-bot` 21.x)
 
 ## Project Structure
 
 ```text
 bid-vector/
 ├── app/
-│   ├── api/              # API route handlers
-│   │   ├── auth.py       # Single-operator authentication routes
-│   │   ├── operator.py   # Operator profile and overview
-│   │   ├── projects.py   # Project management
-│   │   ├── bids.py       # Bid operations
-│   │   ├── predictions.py # AI predictions
-│   │   ├── analytics.py  # Analytics
-│   │   └── admin.py      # Legacy admin compatibility routes
-│   ├── ai/               # AI/ML modules
+│   ├── api/                  # FastAPI routers (14 modules)
+│   │   ├── auth.py           # Single-operator authentication
+│   │   ├── operator.py       # Operator profile / strategy / dashboard
+│   │   ├── projects.py       # Project CRUD + embedding refresh
+│   │   ├── bids.py           # Real bid submission (auto-sync to decisions)
+│   │   ├── predictions.py    # Price + bid recommendation + document analysis
+│   │   ├── operations.py     # Crawl / classify / opportunity / bid-decision / Telegram
+│   │   ├── analytics.py      # Funnel, segment, experiment, operations dashboard
+│   │   ├── backtests.py      # Paper-bidding backtest endpoints
+│   │   ├── realtime.py       # WebSocket dashboard stream
+│   │   ├── ml.py             # Embedding backfill / predictor training / re-evaluation
+│   │   ├── dashboard.py      # Operator card payloads
+│   │   ├── admin.py          # Legacy admin compatibility
+│   │   └── routes.py         # Router aggregation
+│   ├── ai/
+│   │   ├── predictors/       # base / historical / lstm / ensemble
 │   │   ├── price_prediction.py
+│   │   ├── predictor_backtest.py
 │   │   ├── bid_recommendation.py
 │   │   └── document_analyzer.py
-│   ├── core/             # Core configuration
-│   │   ├── config.py     # Settings
-│   │   ├── database.py   # DB setup
-│   │   └── security.py   # Auth utilities
-│   ├── models/           # SQLAlchemy models
-│   ├── schemas/          # Pydantic schemas
-│   ├── services/         # Business logic
-│   └── main.py           # Application entry
-├── requirements.txt      # Full development dependency bundle
-├── requirements/         # Split runtime / embedding / training / dev dependencies
-├── Dockerfile            # Container configuration
-├── docker-compose.yml    # Service orchestration
-└── README.md            # This file
+│   ├── core/                 # config / database / security / time / vector / single_user
+│   ├── models/models.py      # 19 SQLAlchemy models
+│   ├── schemas/              # Pydantic schemas
+│   ├── services/             # 25 domain modules (collector, classifier,
+│   │                         # allocation, decision_*, paper_bidding_*,
+│   │                         # ml_release, ml_training, notifications/, …)
+│   ├── tasks/                # Celery app + jobs
+│   └── main.py               # FastAPI entrypoint + SPA serving
+├── frontend/                 # Vite + React + TS dashboard (served at /dashboard)
+├── scripts/                  # Crawl shells, backtests, ML release, smoke test
+├── models/                   # Local sentence-transformer cache, predictor artifacts,
+│                             # training-runs/, manifests/
+├── docs/                     # ml-image/task separation, paper-bidding plan,
+│                             # smoke test, first_plan_implementation_review.md, …
+├── requirements/             # runtime / ml-embedding / ml-training / dev
+├── requirements.txt          # Full development bundle
+├── Dockerfile                # Multi-target build (runtime/embedding/training/full)
+├── docker-compose.yml        # Local dev compose
+├── docker-compose.server.yml # Production-style overlay
+├── Makefile                  # Common shortcuts (docker-up-*, ml-release-*, …)
+├── AGENT.md                  # Repo working-rules for AI agents
+├── first_plan.md             # 최초 기획 문서
+└── README.md                 # 이 문서
 ```
 
 ## Setup Instructions
@@ -158,6 +266,52 @@ bid-vector/
    ```
 
     Dedicated rollout and queue-separation playbooks live in `docs/ml-image-separation.md` and `docs/ml-task-separation.md`.
+
+## 가상 운영자 회사 백테스트 (Synthetic Operator Backtest)
+
+운영자 회사 프로필 하나만으로는 낙찰율 비교가 불가능하기 때문에, 12개 아키타입의 가상 업체를
+시드한 뒤 각 운영자별로 `PaperBiddingBacktestService.run_historical_backtest`를 돌려 낙찰율을
+비교하는 워크플로를 추가했습니다.
+
+아키타입 구성: 소프트웨어 3종(소형/중형/대형), 기술용역 2종(감리/설계), 일반용역 2종(청소·위탁/경비·시설),
+물품 2종(사무가구/IT장비), 공사 3종(소형 강원/중형 경기충청/전기통신 전국). 각 운영자는 별도의
+`User` + `CompanyProfile` + `OperatorStrategy` 행으로 시드되며, username은 `synthetic-<slug>` 접두로
+구분되어 canonical `operator` 계정과 충돌하지 않습니다.
+
+```bash
+# 1) 아키타입 카탈로그 미리보기 (DB 변경 없음)
+python scripts/seed_synthetic_operators.py --dry-run
+
+# 2) 12개 운영자 + 프로필 + 전략 시드 (upsert)
+python scripts/seed_synthetic_operators.py
+#   → models/reports/synthetic-operators.json 생성
+
+# 3) 각 운영자별 paper-bidding 백테스트 + 낙찰율 비교 (settle = bid_now)
+python scripts/backtest_synthetic_operators.py \
+    --start-date 2025-01-01 --end-date 2025-12-31 --limit 200
+#   → models/reports/synthetic-operators/<timestamp>/
+#       ├── <slug>.json          (운영자별 상세)
+#       ├── comparison.json      (전체 비교, win_rate desc 정렬)
+#       └── comparison.csv       (스프레드시트용)
+
+# 일부 아키타입만 비교하고 결과를 paper_bid_* 테이블에 영속화
+python scripts/backtest_synthetic_operators.py \
+    --persist --operators sw-mid-metro,cn-mid-gyeonggi,gd-it-equipment-midcap
+
+# 시드된 운영자 목록 확인 / 일괄 제거
+python scripts/seed_synthetic_operators.py --list
+python scripts/seed_synthetic_operators.py --purge
+```
+
+낙찰율 프록시는 `would_have_won_price_only_count / settled_count`이며, comparison 산출물은
+`win_rate_on_settled`(투찰한 건 중 추정 낙찰 비율), `win_rate_on_candidates`(후보 전체 중 추정 낙찰 비율),
+`bid_submission_rate`(후보 중 실제로 투찰한 비율)을 함께 표시해 "투찰을 많이 했지만 낙찰율이 낮은 운영자"와
+"보수적으로 골랐지만 낙찰율이 높은 운영자"를 구분할 수 있습니다.
+
+전략 해석 패치: 이전에는 `PaperBiddingBacktestService`가 항상 canonical `operator`의 전략으로 필터링했지만,
+`_resolve_operator_strategy(operator)`를 추가해 `operator_id`로 받은 운영자 자신의 전략을 우선 사용합니다.
+운영자별 전략이 없으면 기존 `ensure_operator_strategy` fallback이 유지되므로 단일 운영자 워크플로는 그대로
+동작합니다.
 
 ## Manifest-Backed ML Promotion
 
