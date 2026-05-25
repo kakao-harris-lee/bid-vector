@@ -22,12 +22,27 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const response = await fetch(path, { method, headers: finalHeaders, body: payload, ...rest });
 
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      typeof window !== "undefined" &&
+      !isAuthPath(path)
+    ) {
+      // Notify the session-expired modal so the user can re-auth in place
+      // without losing screen state. Auth endpoints (login / password reset)
+      // are excluded — their 401 means bad credentials, not session expiry,
+      // and the auth form handles the message itself.
+      window.dispatchEvent(new Event("bid-vector:session-expired"));
+    }
     const message = messageForStatus(response.status);
     throw new ApiError(response.status, message);
   }
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+function isAuthPath(path: string): boolean {
+  return path.startsWith("/api/v1/auth/");
 }
 
 function messageForStatus(status: number): string {

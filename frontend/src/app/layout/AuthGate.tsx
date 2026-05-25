@@ -11,7 +11,7 @@ import {
 
 const TOKEN_EVENT = "bid-vector:session-change";
 
-function dispatchSessionChange() {
+export function dispatchSessionChange() {
   window.dispatchEvent(new Event(TOKEN_EVENT));
 }
 

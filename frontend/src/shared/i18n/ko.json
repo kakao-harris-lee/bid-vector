@@ -1,0 +1,60 @@
+{
+  "common": {
+    "loading": "불러오는 중…",
+    "save": "저장",
+    "cancel": "닫기",
+    "refresh": "새로고침",
+    "logout": "로그아웃",
+    "next": "다음",
+    "prev": "이전",
+    "reset": "초기화",
+    "no_data": "표시할 데이터가 없습니다."
+  },
+  "dashboard": {
+    "title": "오늘 할 일",
+    "metrics_label": "핵심 지표",
+    "preview_tabs_label": "요약 탭",
+    "bottom_nav_label": "대시보드 탭"
+  },
+  "auth": {
+    "session_expired_title": "세션이 만료되었습니다",
+    "session_expired_message": "다시 로그인해 주세요.",
+    "session_expired_action": "다시 로그인"
+  },
+  "strategy": {
+    "title": "전략 편집",
+    "save_success_title": "전략 저장 완료",
+    "save_failure_title": "전략 저장 실패"
+  },
+  "projects": {
+    "title": "공고 탐색",
+    "search_placeholder": "예) 공항, R26BK...",
+    "no_results": "조건에 맞는 공고가 없습니다. 필터를 완화해 보세요."
+  },
+  "decisions": {
+    "title": "결정 게이트웨이",
+    "status_change_success": "상태 변경 완료",
+    "status_change_failure": "상태 변경 실패"
+  },
+  "experiments": {
+    "title": "실험 lifecycle",
+    "apply_success_title": "임계값 적용 완료",
+    "apply_failure_title": "임계값 적용 실패",
+    "dry_run_label": "Dry-run",
+    "force_apply_label": "Force 적용"
+  },
+  "synthetic": {
+    "title": "가상 운영자 백테스트",
+    "win_rate_caveat": "win_rate는 가격 기준 추정 낙찰. 실제 낙찰이 아님."
+  },
+  "operations": {
+    "title": "운영 대시보드",
+    "auto_refresh_note": "30초마다 자동 갱신 (탭 비활성 시 정지)",
+    "incident_banner": "인시던트"
+  },
+  "notifications": {
+    "drawer_label": "알림 서랍",
+    "empty": "새 알림이 없습니다.",
+    "mark_read": "읽음 처리"
+  }
+}

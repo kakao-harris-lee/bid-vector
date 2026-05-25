@@ -11,6 +11,7 @@ import { ApiError } from "@/shared/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { logoutSession } from "@/app/layout/AuthGate";
 import { formatDateTime, formatPercent } from "@/shared/lib";
+import { ExperimentDetailPanel } from "./ExperimentDetailPanel";
 import type {
   DecisionExperimentRunSummary,
   DecisionExperimentThresholdApplyResponse,
@@ -115,11 +116,14 @@ export function ExperimentsScreen() {
       </ul>
 
       {active ? (
-        <ApplyThresholdsDialog
-          run={active}
-          session={session}
-          onClose={() => setActive(null)}
-        />
+        <>
+          <ExperimentDetailPanel runId={active.id} session={session} />
+          <ApplyThresholdsDialog
+            run={active}
+            session={session}
+            onClose={() => setActive(null)}
+          />
+        </>
       ) : null}
     </section>
   );
