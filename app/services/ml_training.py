@@ -221,8 +221,8 @@ class PricePredictionTrainingService:
             calibration[group] = {
                 "median_rate": round(statistics.median(sorted_values), 6),
                 "std": round(statistics.pstdev(sorted_values), 6) if n > 1 else 0.0,
-                "p25": sorted_values[max(0, n // 4)],
-                "p75": sorted_values[min(n - 1, 3 * n // 4)],
+                "p25": sorted_values[(n - 1) * 1 // 4],
+                "p75": sorted_values[(n - 1) * 3 // 4],
                 "sample_count": n,
             }
         return calibration

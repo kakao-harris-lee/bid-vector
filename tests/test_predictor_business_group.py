@@ -163,3 +163,29 @@ def test_predictor_uses_group_calibration_prior(monkeypatch):
     result = predictor.predict(context)
     bid_rate = float(result.get("predicted_bid_rate") or 0)
     assert 0.83 <= bid_rate <= 0.93
+
+
+def test_service_branch_respects_group_ceiling():
+    """service 분기가 _resolve_ceiling_bid_rate 상한을 초과하지 않음을 검증.
+
+    service_price_competitive 키워드가 포함된 description이면
+    apply_procurement_rate_band()가 cap을 0.90으로 내려야 하지만,
+    현재 service/construction 그룹 분기는 그 함수를 호출하지 않아 bypass된다.
+    수정 후에는 ceiling clamp가 적용돼 0.90을 넘지 않아야 한다.
+    """
+    from app.ai.predictors.historical import select_competitive_base_rate
+
+    # 높은 history rate + service_price_competitive 키워드(폐기물)
+    rate = select_competitive_base_rate(
+        category="service",
+        description="폐기물 처리용역",  # → service_price_competitive band
+        sample_size=20,
+        mean_rate=0.95,
+        median_rate=0.95,
+        recent_median_rate=0.95,
+        competitive_quantile_rate=0.95,
+        heuristic_rate=0.95,
+        business_group="service",
+    )
+    # service_price_competitive의 0.90 상한이 적용되어야 함
+    assert rate <= 0.90
