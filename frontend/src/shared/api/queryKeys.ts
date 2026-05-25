@@ -1,4 +1,5 @@
 import type { ProjectListQuery, SimilarProjectsQuery } from "./projects";
+import type { DecisionFunnelQuery } from "./decisions";
 
 export const queryKeys = {
   dashboard: {
@@ -15,15 +16,20 @@ export const queryKeys = {
     runs: (limit: number) => ["strategy", "runs", { limit }] as const
   },
   projects: {
-    list: (query: ProjectListQuery) => ["projects", "list", normalizeListKey(query)] as const,
+    list: (query: ProjectListQuery) => ["projects", "list", normalizeProjectListKey(query)] as const,
     detail: (id: number) => ["projects", "detail", id] as const,
     similar: (id: number, params: SimilarProjectsQuery) =>
       ["projects", "similar", id, normalizeSimilarKey(params)] as const,
     timeline: (id: number, limit: number) => ["projects", "timeline", id, { limit }] as const
+  },
+  decisions: {
+    funnel: (query: DecisionFunnelQuery) => ["decisions", "funnel", normalizeFunnelKey(query)] as const,
+    recommendations: (query: DecisionFunnelQuery) =>
+      ["decisions", "recommendations", normalizeFunnelKey(query)] as const
   }
 } as const;
 
-function normalizeListKey(query: ProjectListQuery): Record<string, unknown> {
+function normalizeProjectListKey(query: ProjectListQuery): Record<string, unknown> {
   return {
     q: query.q?.trim() || null,
     category: query.category || null,
@@ -41,6 +47,15 @@ function normalizeSimilarKey(params: SimilarProjectsQuery): Record<string, unkno
     limit: params.limit ?? null,
     minSimilarity: params.minSimilarity ?? null,
     sameCategoryOnly: params.sameCategoryOnly ?? null
+  };
+}
+
+function normalizeFunnelKey(query: DecisionFunnelQuery): Record<string, unknown> {
+  return {
+    days: query.days ?? null,
+    limit: query.limit ?? null,
+    breakdownLimit: query.breakdownLimit ?? null,
+    trendBucketDays: query.trendBucketDays ?? null
   };
 }
 

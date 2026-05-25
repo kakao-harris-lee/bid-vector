@@ -1493,6 +1493,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Bid Decision Status
+         * @description Transition a persisted bid decision record between planned/reviewing/submitted/skipped.
+         *
+         *     Lightweight endpoint used by the decisions screen to flip status without
+         *     resubmitting the full BidDecisionSaveRequest payload.
+         */
+        patch: operations["update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch"];
+        trace?: never;
+    };
     "/api/v1/operations/bid-decisions/{decision_record_id}": {
         parameters: {
             query?: never;
@@ -2049,6 +2072,14 @@ export interface components {
              * @default 0
              */
             total_penalty: number;
+        };
+        /** BidDecisionStatusUpdateRequest */
+        BidDecisionStatusUpdateRequest: {
+            /**
+             * Decision Status
+             * @enum {string}
+             */
+            decision_status: "planned" | "reviewing" | "submitted" | "skipped";
         };
         /** BidDecisionTimelineResponse */
         BidDecisionTimelineResponse: {
@@ -8365,6 +8396,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BidDecisionTimelineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionStatusUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
                 };
             };
             /** @description Validation Error */

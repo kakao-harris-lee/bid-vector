@@ -3424,3 +3424,41 @@ def test_telegram_status_treats_placeholder_settings_as_unconfigured(client, mon
     assert payload["pending_update_count"] == 0
     assert payload["webhook_url"] == ""
     assert payload["known_chat_ids"] == []
+
+
+def test_update_bid_decision_status_endpoint_transitions_decision(client):
+    """PATCH /bid-decisions/{id}/status는 decision_status를 안전하게 전이시킨다."""
+    project = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "전이 테스트 공고",
+            "description": "status PATCH 검증",
+            "requirements": "n/a",
+            "budget_estimate": 50_000_000.0,
+            "category": "software",
+        },
+    ).json()
+
+    record = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project["id"],
+            "recommended_amount": 45_000_000.0,
+            "probability_score": 0.7,
+            "matched_score": 0.7,
+            "decision_status": "planned",
+        },
+    ).json()
+
+    patch = client.patch(
+        f"/api/v1/operations/bid-decisions/{record['id']}/status",
+        json={"decision_status": "submitted"},
+    )
+    assert patch.status_code == 200, patch.text
+    assert patch.json()["decision_status"] == "submitted"
+
+    missing = client.patch(
+        "/api/v1/operations/bid-decisions/9999999/status",
+        json={"decision_status": "submitted"},
+    )
+    assert missing.status_code == 404
