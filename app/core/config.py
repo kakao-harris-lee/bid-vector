@@ -142,6 +142,29 @@ class Settings(BaseSettings):
             "construction": 0.93,
         }
     )
+    BUSINESS_GROUP_CODE_PREFIXES: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "construction": ["04"],
+            "service": ["06"],
+            "goods": ["01", "02"],
+        }
+    )
+    BUSINESS_TYPE_COVERAGE_GATE: float = 0.95
+    BUSINESS_GROUP_CALIBRATION_ENABLED: bool = True
+    PREDICTION_GROUP_MINIMUM_BID_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            "construction": 0.87,
+            "service": 0.70,
+            "goods": 0.84,
+        }
+    )
+    PREDICTION_GROUP_MAXIMUM_BID_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            "construction": 0.93,
+            "service": 1.00,
+            "goods": 1.00,
+        }
+    )
     PRICE_PREDICTION_PREFERRED_PREDICTOR: str = "historical"
     PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
     PRICE_PREDICTION_LSTM_MODEL_PATH: str = ""
