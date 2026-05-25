@@ -80,6 +80,7 @@ def predict_price(
         prediction,
         budget=context.budget,
         category=context.category,
+        business_group=business_group,
     )
     return _attach_predictor_metadata(
         prediction,
@@ -284,11 +285,17 @@ def _apply_feedback_calibration(prediction: Dict[str, Any], feedback_calibration
     return calibrated_prediction
 
 
-def _apply_prediction_guardrails(prediction: Dict[str, Any], *, budget: float, category: str | None) -> Dict[str, Any]:
+def _apply_prediction_guardrails(
+    prediction: Dict[str, Any],
+    *,
+    budget: float,
+    category: str | None,
+    business_group: str | None = None,
+) -> Dict[str, Any]:
     """Apply category bid-rate guardrails after all statistical adjustments."""
     guarded_prediction = dict(prediction)
-    floor_bid_rate = _resolve_floor_bid_rate(category)
-    ceiling_bid_rate = _resolve_ceiling_bid_rate(category)
+    floor_bid_rate = _resolve_floor_bid_rate(category, business_group=business_group)
+    ceiling_bid_rate = _resolve_ceiling_bid_rate(category, business_group=business_group)
     if floor_bid_rate is not None and ceiling_bid_rate is not None and ceiling_bid_rate < floor_bid_rate:
         ceiling_bid_rate = floor_bid_rate
     floor_price = round(float(budget or 0.0) * floor_bid_rate, 2) if floor_bid_rate is not None and budget > 0 else None
@@ -428,10 +435,14 @@ def _build_guardrail_reason(
     return " ".join(reasons)
 
 
-def _resolve_floor_bid_rate(category: str | None) -> float | None:
-    """Resolve a configured minimum bid-rate floor for the given category."""
-    normalized_category = _normalize_category_key(category)
+def _resolve_floor_bid_rate(category: str | None, business_group: str | None = None) -> float | None:
+    """Resolve a configured minimum bid-rate floor for the given category/group."""
+    if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
+        group_rates = settings.PREDICTION_GROUP_MINIMUM_BID_RATES or {}
+        if business_group in group_rates:
+            return float(group_rates[business_group])
     configured_floor_rates = settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES or {}
+    normalized_category = _normalize_category_key(category)
     for raw_category, raw_floor_rate in configured_floor_rates.items():
         if _normalize_category_key(raw_category) == normalized_category:
             return max(0.0, float(raw_floor_rate or 0.0))
@@ -440,10 +451,14 @@ def _resolve_floor_bid_rate(category: str | None) -> float | None:
     return default_floor_rate or None
 
 
-def _resolve_ceiling_bid_rate(category: str | None) -> float | None:
-    """Resolve a configured maximum bid-rate ceiling for the given category."""
-    normalized_category = _normalize_category_key(category)
+def _resolve_ceiling_bid_rate(category: str | None, business_group: str | None = None) -> float | None:
+    """Resolve a configured maximum bid-rate ceiling for the given category/group."""
+    if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
+        group_rates = settings.PREDICTION_GROUP_MAXIMUM_BID_RATES or {}
+        if business_group in group_rates:
+            return float(group_rates[business_group])
     configured_ceiling_rates = settings.PREDICTION_CATEGORY_MAXIMUM_BID_RATES or {}
+    normalized_category = _normalize_category_key(category)
     for raw_category, raw_ceiling_rate in configured_ceiling_rates.items():
         if _normalize_category_key(raw_category) == normalized_category:
             ceiling_rate = max(0.0, float(raw_ceiling_rate or 0.0))

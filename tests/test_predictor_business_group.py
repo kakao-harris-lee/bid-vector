@@ -123,3 +123,19 @@ def test_select_base_rate_falls_back_when_group_missing():
         business_group=None,
     )
     assert 0.85 <= rate <= 0.95
+
+
+def test_guardrail_uses_group_key_when_available():
+    from app.ai.price_prediction import _resolve_floor_bid_rate, _resolve_ceiling_bid_rate
+
+    floor = _resolve_floor_bid_rate(category="service", business_group="service")
+    ceiling = _resolve_ceiling_bid_rate(category="construction", business_group="construction")
+    assert floor == 0.70
+    assert ceiling == 0.93
+
+
+def test_guardrail_falls_back_to_category_when_group_missing():
+    from app.ai.price_prediction import _resolve_floor_bid_rate
+
+    floor = _resolve_floor_bid_rate(category="service", business_group=None)
+    assert floor == 0.87
