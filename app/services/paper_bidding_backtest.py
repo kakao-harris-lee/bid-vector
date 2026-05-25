@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.ai.price_prediction import predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_strategy, split_multi_value_text
 from app.core.time import ensure_utc, utc_now
-from app.models.models import PaperBid, PaperBidRun, PaperBidSettlement, Project, TenderResult, User
+from app.models.models import OperatorStrategy, PaperBid, PaperBidRun, PaperBidSettlement, Project, TenderResult, User
 from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
@@ -48,7 +48,7 @@ class PaperBiddingBacktestService:
     ) -> dict[str, Any]:
         """Generate paper bids from historical awards and settle them immediately."""
         operator = self._resolve_operator(db, operator_id=operator_id)
-        strategy = ensure_operator_strategy(db)
+        strategy = self._resolve_operator_strategy(db, operator=operator)
         normalized_settle_actions = self._normalize_actions(settle_actions or self.DEFAULT_SETTLE_ACTIONS)
         normalized_scenario = str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
         start_at = ensure_utc(start_at) if start_at is not None else None
@@ -180,7 +180,7 @@ class PaperBiddingBacktestService:
     ) -> dict[str, Any]:
         """Generate paper bids for currently open/re-notice projects without settlement."""
         operator = self._resolve_operator(db, operator_id=operator_id)
-        strategy = ensure_operator_strategy(db)
+        strategy = self._resolve_operator_strategy(db, operator=operator)
         normalized_scenario = str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
         safe_limit = max(1, int(limit or 1))
         data_cutoff_at = utc_now()
@@ -795,6 +795,22 @@ class PaperBiddingBacktestService:
         if operator is None:
             return ensure_operator_account(db)
         return operator
+
+    def _resolve_operator_strategy(self, db: Session, *, operator: User) -> OperatorStrategy:
+        """Return the strategy belonging to *operator*, falling back to the canonical one.
+
+        ``ensure_operator_strategy`` always resolves the canonical "operator" account, so
+        per-operator backtests (e.g. synthetic operator comparisons) must look up the
+        strategy by ``operator.id`` directly first.
+        """
+        strategy = (
+            db.query(OperatorStrategy)
+            .filter(OperatorStrategy.user_id == int(operator.id))
+            .first()
+        )
+        if strategy is not None:
+            return strategy
+        return ensure_operator_strategy(db)
 
     def _normalize_rate(self, value: float) -> float:
         rate = float(value or 0.0)
