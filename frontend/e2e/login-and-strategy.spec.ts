@@ -1,15 +1,17 @@
 /**
- * Phase 7 happy-path E2E (scaffold). Requires `@playwright/test` to be
- * installed; see `frontend/e2e/README.md` for the install + run contract.
+ * Phase 7 happy-path E2E. Run with `npm --prefix frontend run e2e` after
+ * bootstrapping chromium via `npm run e2e:install`. See `frontend/e2e/README.md`
+ * for the env contract.
  *
  * Intentionally minimal — covers the auth → topbar → strategy save loop.
  */
 
-// @ts-expect-error - @playwright/test is installed on-demand (see README)
 import { expect, test } from "@playwright/test";
 
 test("로그인 → 전략 편집 → 저장 → 토스트", async ({ page }) => {
-  await page.goto("/dashboard");
+  // Vite serves the SPA under `base: "/dashboard/"` — the trailing slash is
+  // required, otherwise the dev server returns its "did you mean ..." redirect.
+  await page.goto("/dashboard/");
 
   // Login form
   await page.getByLabel("아이디").fill(process.env.E2E_USERNAME ?? "operator");
