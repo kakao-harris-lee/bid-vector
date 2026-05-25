@@ -567,7 +567,11 @@ export interface paths {
         };
         /**
          * List Projects
-         * @description List all projects
+         * @description List projects with optional text/agency/budget filters.
+         *
+         *     The response payload stays a list (backward compatible). Total matching
+         *     count is exposed via the `X-Total-Count` response header so the frontend
+         *     can drive pagination without changing the response envelope.
          */
         get: operations["list_projects_api_v1_projects__get"];
         put?: never;
@@ -6675,8 +6679,16 @@ export interface operations {
             query?: {
                 skip?: number;
                 limit?: number;
-                category?: string;
-                status?: string;
+                category?: string | null;
+                status?: string | null;
+                /** @description 제목/공고번호 부분 일치(LIKE) 검색어 */
+                q?: string | null;
+                /** @description 발주/수요 기관명 부분 일치 검색어 */
+                agency?: string | null;
+                /** @description budget_estimate >= 값으로 필터 */
+                budget_min?: number | null;
+                /** @description budget_estimate <= 값으로 필터 */
+                budget_max?: number | null;
             };
             header?: never;
             path?: never;

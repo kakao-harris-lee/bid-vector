@@ -409,3 +409,100 @@ def test_rebuild_project_embeddings_task_status_endpoint_returns_result(client):
     assert payload["successful"] is False
     assert payload["error"] is None
     assert payload["result"] is None
+
+
+def _create_test_project(client, **overrides):
+    payload = {
+        "title": "Filter Test Project",
+        "description": "filterable project description",
+        "requirements": "test",
+        "budget_estimate": 100_000_000.0,
+        "category": "software",
+    }
+    payload.update(overrides)
+    response = client.post("/api/v1/projects/", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_list_projects_supports_text_search_and_returns_total_count(client):
+    _create_test_project(client, title="공항 시스템 구축 사업", notice_number="A-001")
+    _create_test_project(client, title="동대문 도로 공사", notice_number="B-002")
+    _create_test_project(client, title="공항 청소 용역", notice_number="C-003")
+
+    response = client.get("/api/v1/projects/", params={"q": "공항"})
+
+    assert response.status_code == 200
+    titles = [item["title"] for item in response.json()]
+    assert "공항 시스템 구축 사업" in titles
+    assert "공항 청소 용역" in titles
+    assert "동대문 도로 공사" not in titles
+    assert response.headers["X-Total-Count"] == "2"
+
+
+def test_list_projects_filters_by_budget_and_agency(client):
+    _create_test_project(
+        client,
+        title="대형 입찰",
+        budget_estimate=900_000_000.0,
+        issuing_agency="조달청",
+        demand_agency="서울시",
+    )
+    _create_test_project(
+        client,
+        title="중형 입찰",
+        budget_estimate=300_000_000.0,
+        issuing_agency="조달청",
+        demand_agency="부산시",
+    )
+    _create_test_project(
+        client,
+        title="소형 입찰",
+        budget_estimate=50_000_000.0,
+        issuing_agency="국방부",
+        demand_agency="육군본부",
+    )
+
+    budget_filtered = client.get(
+        "/api/v1/projects/",
+        params={"budget_min": 200_000_000, "budget_max": 1_000_000_000},
+    )
+    assert budget_filtered.status_code == 200
+    budget_titles = [item["title"] for item in budget_filtered.json()]
+    assert set(budget_titles) == {"대형 입찰", "중형 입찰"}
+    assert budget_filtered.headers["X-Total-Count"] == "2"
+
+    agency_filtered = client.get(
+        "/api/v1/projects/", params={"agency": "부산"}
+    )
+    assert agency_filtered.status_code == 200
+    agency_titles = [item["title"] for item in agency_filtered.json()]
+    assert agency_titles == ["중형 입찰"]
+    assert agency_filtered.headers["X-Total-Count"] == "1"
+
+
+def test_list_projects_paginates_with_skip_and_limit(client):
+    for index in range(6):
+        _create_test_project(
+            client,
+            title=f"페이지네이션 프로젝트 {index}",
+            notice_number=f"P-{index:03d}",
+        )
+
+    first_page = client.get(
+        "/api/v1/projects/",
+        params={"q": "페이지네이션", "skip": 0, "limit": 2},
+    )
+    assert first_page.status_code == 200
+    assert len(first_page.json()) == 2
+    assert first_page.headers["X-Total-Count"] == "6"
+
+    second_page = client.get(
+        "/api/v1/projects/",
+        params={"q": "페이지네이션", "skip": 2, "limit": 2},
+    )
+    assert second_page.status_code == 200
+    assert len(second_page.json()) == 2
+    first_ids = {item["id"] for item in first_page.json()}
+    second_ids = {item["id"] for item in second_page.json()}
+    assert first_ids.isdisjoint(second_ids)

@@ -1,7 +1,8 @@
 """Project routes"""
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -51,13 +52,37 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=List[ProjectResponse])
 def list_projects(
-    skip: int = 0,
-    limit: int = 100,
-    category: str = None,
-    status: str = None,
-    db: Session = Depends(get_db)
+    response: Response,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    category: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(
+        default=None,
+        description="제목/공고번호 부분 일치(LIKE) 검색어",
+    ),
+    agency: Optional[str] = Query(
+        default=None,
+        description="발주/수요 기관명 부분 일치 검색어",
+    ),
+    budget_min: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        description="budget_estimate >= 값으로 필터",
+    ),
+    budget_max: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        description="budget_estimate <= 값으로 필터",
+    ),
+    db: Session = Depends(get_db),
 ):
-    """List all projects"""
+    """List projects with optional text/agency/budget filters.
+
+    The response payload stays a list (backward compatible). Total matching
+    count is exposed via the `X-Total-Count` response header so the frontend
+    can drive pagination without changing the response envelope.
+    """
     query = db.query(Project)
 
     if category:
@@ -66,7 +91,36 @@ def list_projects(
     if status:
         query = query.filter(Project.status == status)
 
-    projects = query.offset(skip).limit(limit).all()
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(Project.title.ilike(like), Project.notice_number.ilike(like))
+        )
+
+    if agency:
+        agency_like = f"%{agency}%"
+        query = query.filter(
+            or_(
+                Project.issuing_agency.ilike(agency_like),
+                Project.demand_agency.ilike(agency_like),
+            )
+        )
+
+    if budget_min is not None:
+        query = query.filter(Project.budget_estimate >= budget_min)
+
+    if budget_max is not None:
+        query = query.filter(Project.budget_estimate <= budget_max)
+
+    total = query.with_entities(func.count(Project.id)).scalar() or 0
+    response.headers["X-Total-Count"] = str(total)
+
+    projects = (
+        query.order_by(Project.created_at.desc(), Project.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     return projects
 
 
