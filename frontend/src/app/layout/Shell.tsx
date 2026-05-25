@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   BarChart3,
   Beaker,
+  Bell,
   CheckCircle2,
   FlaskConical,
   Clock3,
@@ -26,6 +27,7 @@ import { formatDate } from "@/shared/lib";
 import { logoutSession, useAuthSession } from "./AuthGate";
 import { BottomNav } from "./BottomNav";
 import { IconButton } from "./IconButton";
+import { NotificationDrawer, useRealtimeEvents } from "@/features/realtime";
 
 export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon: typeof Gavel }> = {
   home: { path: "/dashboard", label: "오늘", icon: ListChecks },
@@ -104,6 +106,9 @@ export function Shell() {
   const onExperiments = location.pathname.startsWith(EXPERIMENTS_ROUTE_PATH);
   const onSynthetic = location.pathname.startsWith(SYNTHETIC_ROUTE_PATH);
   const onOperations = location.pathname.startsWith(OPERATIONS_ROUTE_PATH);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  useRealtimeEvents(session);
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--color-bg)] pb-20 text-[var(--color-fg)]">
@@ -164,6 +169,12 @@ export function Shell() {
             <Sliders size={18} />
           </IconButton>
           <IconButton
+            label="알림"
+            onClick={() => setNotificationsOpen(true)}
+          >
+            <Bell size={18} />
+          </IconButton>
+          <IconButton
             label="새로고침"
             onClick={() => setReloadKey((value) => value + 1)}
             disabled={summary.isFetching}
@@ -188,6 +199,11 @@ export function Shell() {
       </main>
 
       <BottomNav route={bottomNavRoute} />
+      <NotificationDrawer
+        open={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        session={session}
+      />
     </div>
   );
 }
