@@ -8,6 +8,9 @@ from app.core.database import get_db
 from app.core.time import utc_now
 from app.core.single_user import ensure_operator_account, get_operator_profile
 from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, Project
+from pydantic import BaseModel
+from typing import Literal
+
 from app.schemas.schemas import (
     BackgroundJobResponse,
     BidDecisionDetailResponse,
@@ -220,6 +223,48 @@ def get_project_bid_decision_timeline(
     """Return recent persisted bid-decision history for one project."""
     project = _get_project_or_404(db, project_id)
     return BidDecisionService().get_project_timeline(db, project=project, limit=limit)
+
+
+class BidDecisionStatusUpdateRequest(BaseModel):
+    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+
+
+@router.patch(
+    "/bid-decisions/{decision_record_id}/status",
+    response_model=BidDecisionRecordResponse,
+)
+def update_bid_decision_status(
+    decision_record_id: int,
+    request: BidDecisionStatusUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """Transition a persisted bid decision record between planned/reviewing/submitted/skipped.
+
+    Lightweight endpoint used by the decisions screen to flip status without
+    resubmitting the full BidDecisionSaveRequest payload.
+    """
+    operator = ensure_operator_account(db)
+    record = (
+        db.query(BidDecisionRecord)
+        .filter(
+            BidDecisionRecord.id == decision_record_id,
+            BidDecisionRecord.operator_id == operator.id,
+        )
+        .first()
+    )
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bid decision record not found",
+        )
+
+    if record.decision_status != request.decision_status:
+        record.decision_status = request.decision_status
+        record.updated_at = utc_now()
+        db.commit()
+        db.refresh(record)
+
+    return record
 
 
 @router.get("/bid-decisions/{decision_record_id}", response_model=BidDecisionDetailResponse)
