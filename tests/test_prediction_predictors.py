@@ -8,6 +8,22 @@ from app.core.config import settings
 from app.models.models import HistoricalData
 
 
+def _build_grouped_history(count_per_group: int, *, base_rate: float = 0.910) -> list[dict]:
+    """Build historical records with alternating business_group values."""
+    records = []
+    groups = ["construction", "service"]
+    for i in range(count_per_group * len(groups)):
+        group = groups[i % len(groups)]
+        rate = round(base_rate + i * 0.001, 6)
+        records.append({
+            "bid_rate": rate,
+            "base_amount": 100_000_000.0,
+            "predicted_price": round(100_000_000.0 * rate, 2),
+            "business_group": group,
+        })
+    return records
+
+
 def _build_bid_rate_history(count: int, *, base_rate: float = 0.914, step: float = 0.0012) -> list[dict[str, float]]:
     return [
         {
@@ -348,3 +364,40 @@ def test_price_prediction_endpoint_can_use_lstm_predictor(client, test_db, monke
     assert data["fallback_reason"] is None
     assert data["model_version"] == "v2.0-lstm"
     assert data["training_window_size"] == 7
+
+
+def test_backtest_report_includes_by_group_dimension(monkeypatch):
+    """Report includes per-group aggregated metrics (construction/service)."""
+    from app.ai.predictor_backtest import build_predictor_backtest_report
+    from app.ai.predictors.base import PricePredictionContext
+    from app.ai.predictors.historical import HistoricalStatisticalPredictor
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES", 4)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE", 4)
+
+    # 12 records total: 6 construction + 6 service, interleaved — last 4 become holdout
+    historical_records = tuple(_build_grouped_history(6, base_rate=0.910))
+
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        category="construction",
+        description="by_group dimension test",
+        historical_records=historical_records,
+    )
+    registry = {"historical": HistoricalStatisticalPredictor()}
+
+    report = build_predictor_backtest_report(context, registry)
+
+    assert "by_group" in report, "report must contain 'by_group' key"
+    by_group = report["by_group"]
+    assert isinstance(by_group, dict), "by_group must be a dict"
+    # both groups must be present (interleaved records ensure at least one holdout each)
+    assert set(by_group.keys()) >= {"construction", "service"}, (
+        f"expected both groups, got {set(by_group.keys())}"
+    )
+    construction = by_group["construction"]
+    assert "sample_count" in construction, "group entry must have sample_count"
+    assert construction["sample_count"] >= 1
+    assert "average_absolute_error_rate" in construction or "mae" in construction, (
+        "group entry must have error metric"
+    )

@@ -949,6 +949,42 @@ class MLReleasePromotionService:
                 )
             )
 
+            # Group calibration sample-count gate
+            calibration = (
+                (manifest.get("summary") or {}).get("group_calibration") or {}
+            )
+            if calibration:
+                min_samples = int(settings.GROUP_CALIBRATION_MIN_SAMPLES or 0)
+                failing_groups = [
+                    (group, int((stats or {}).get("sample_count") or 0))
+                    for group, stats in calibration.items()
+                    if int((stats or {}).get("sample_count") or 0) < min_samples
+                ]
+                if failing_groups:
+                    detail = ", ".join(
+                        f"{g}={n}" for g, n in failing_groups
+                    )
+                    checks.append(
+                        self._rollout_check(
+                            "group_calibration_sample_count",
+                            False,
+                            "failed",
+                            f"group_calibration sample_count < {min_samples}: {detail}",
+                            threshold=min_samples,
+                            failing_groups={g: n for g, n in failing_groups},
+                        )
+                    )
+                else:
+                    checks.append(
+                        self._rollout_check(
+                            "group_calibration_sample_count",
+                            True,
+                            "passed",
+                            f"All group_calibration groups meet sample_count >= {min_samples}.",
+                            threshold=min_samples,
+                        )
+                    )
+
         storage_preflight = RemoteObjectStorageClient(
             settings.ML_RELEASE_OBJECT_STORAGE_URL
         ).preflight(

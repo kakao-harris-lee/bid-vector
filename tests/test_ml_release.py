@@ -745,3 +745,148 @@ def test_trigger_remote_embedding_rebuild_uses_manifest_defaults(tmp_path, monke
         "project_status": "open",
         "force": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Task 18 — Group calibration sample-count preflight gate
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest_with_calibration(path: Path, calibration: dict) -> Path:
+    """Write a minimal manifest JSON with the given group_calibration block."""
+    manifest = {
+        "version": "test",
+        "release_tag": path.stem,
+        "summary": {
+            "group_calibration": calibration,
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_evaluate_preflight_gate_rejects_when_group_below_threshold(
+    tmp_path, monkeypatch
+):
+    """manifest의 group_calibration sample_count가 임계 미만이면 preflight 실패."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "GROUP_CALIBRATION_MIN_SAMPLES", 100)
+    path = _write_manifest_with_calibration(
+        tmp_path / "manifest.json",
+        {
+            "construction": {"median_rate": 0.90, "sample_count": 500},
+            "service": {"median_rate": 0.88, "sample_count": 10},  # below 100
+        },
+    )
+    from scripts.promote_ml_release import evaluate_preflight_gate
+
+    result = evaluate_preflight_gate(path)
+    assert result.ok is False
+    assert result.reason is not None
+    assert "service" in result.reason
+
+
+def test_evaluate_preflight_gate_accepts_when_all_groups_meet_threshold(
+    tmp_path, monkeypatch
+):
+    """全 group sample_count가 임계 이상이면 preflight 통과."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "GROUP_CALIBRATION_MIN_SAMPLES", 100)
+    path = _write_manifest_with_calibration(
+        tmp_path / "manifest.json",
+        {
+            "construction": {"median_rate": 0.90, "sample_count": 500},
+            "service": {"median_rate": 0.88, "sample_count": 200},
+        },
+    )
+    from scripts.promote_ml_release import evaluate_preflight_gate
+
+    result = evaluate_preflight_gate(path)
+    assert result.ok is True
+
+
+def test_preflight_rollout_includes_group_calibration_check_when_below_threshold(
+    tmp_path, monkeypatch
+):
+    """preflight_release_rollout이 group_calibration 미달 그룹을 실패 check로 포함해야 함."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "GROUP_CALIBRATION_MIN_SAMPLES", 100)
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    repo_root = tmp_path / "repo"
+    service = MLReleasePromotionService(repo_root=repo_root)
+
+    # Craft a manifest directly (bypass create_release_manifest to control summary).
+    # Use require_signature=False so we don't need a real signature.
+    manifest_dir = repo_root / "models" / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "test-calib-fail.json"
+    raw = {
+        "release_tag": "test-calib-fail",
+        "summary": {
+            "group_calibration": {
+                "construction": {"median_rate": 0.90, "sample_count": 500},
+                "service": {"median_rate": 0.88, "sample_count": 5},  # below 100
+            }
+        },
+        "artifacts": {},
+    }
+    manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    result = service.preflight_release_rollout(
+        str(manifest_path), require_signature=False, probe_write=False
+    )
+
+    check_names = [check["name"] for check in result["checks"]]
+    assert "group_calibration_sample_count" in check_names, (
+        f"group_calibration_sample_count check missing; got: {check_names}"
+    )
+    calib_check = next(
+        c for c in result["checks"] if c["name"] == "group_calibration_sample_count"
+    )
+    assert calib_check["passed"] is False
+    assert "service" in calib_check["detail"]
+    assert result["passed"] is False
+
+
+def test_preflight_rollout_group_calibration_check_passes_when_sufficient(
+    tmp_path, monkeypatch
+):
+    """全 group sample_count가 임계 이상이면 group_calibration_sample_count check가 통과."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "GROUP_CALIBRATION_MIN_SAMPLES", 100)
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    repo_root = tmp_path / "repo"
+    service = MLReleasePromotionService(repo_root=repo_root)
+
+    manifest_dir = repo_root / "models" / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "test-calib-pass.json"
+    raw = {
+        "release_tag": "test-calib-pass",
+        "summary": {
+            "group_calibration": {
+                "construction": {"median_rate": 0.90, "sample_count": 500},
+                "service": {"median_rate": 0.88, "sample_count": 200},
+            }
+        },
+        "artifacts": {},
+    }
+    manifest_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    result = service.preflight_release_rollout(
+        str(manifest_path), require_signature=False, probe_write=False
+    )
+
+    check_names = [check["name"] for check in result["checks"]]
+    assert "group_calibration_sample_count" in check_names
+    calib_check = next(
+        c for c in result["checks"] if c["name"] == "group_calibration_sample_count"
+    )
+    assert calib_check["passed"] is True

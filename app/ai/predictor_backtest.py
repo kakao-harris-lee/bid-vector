@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
@@ -60,6 +61,15 @@ def build_predictor_backtest_report(
         default=None,
     )
 
+    by_group = _compute_by_group(
+        holdout_records=holdout_records,
+        training_prefix=training_prefix,
+        registry=registry,
+        best_result=best_result,
+        base_context=context,
+        min_training_size=min_training_size,
+    )
+
     return {
         "status": "completed" if best_result is not None else "no_eligible_predictor",
         "holdout_size": holdout_size,
@@ -68,6 +78,7 @@ def build_predictor_backtest_report(
         "best_predictor_key": best_result["predictor_key"] if best_result else None,
         "best_predictor_name": best_result["predictor_name"] if best_result else None,
         "best_average_absolute_error_rate": best_result["average_absolute_error_rate"] if best_result else None,
+        "by_group": by_group,
     }
 
 
@@ -199,3 +210,65 @@ def _top_reasons(reasons: list[str], *, limit: int = 3) -> list[str]:
         reason
         for reason, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
     ]
+
+
+def _group_records_by_business_group(records: list[object]) -> dict[str, list[object]]:
+    """Partition records by their business_group value, skipping None."""
+    groups: dict[str, list[object]] = defaultdict(list)
+    for record in records:
+        group = read_record_value(record, "business_group")
+        if group is not None:
+            groups[str(group)].append(record)
+    return dict(groups)
+
+
+def _compute_by_group(
+    *,
+    holdout_records: list[object],
+    training_prefix: list[object],
+    registry: dict[str, BasePricePredictor],
+    best_result: dict[str, Any] | None,
+    base_context: PricePredictionContext,
+    min_training_size: int,
+) -> dict[str, dict[str, Any]]:
+    """Compute per-business-group backtest metrics using the best available predictor.
+
+    For each group, only holdout records belonging to that group are evaluated.
+    The training prefix is kept intact (all records) so predictor state is not
+    artificially impoverished. Records without a business_group are skipped.
+    """
+    groups = _group_records_by_business_group(holdout_records)
+    if not groups:
+        return {}
+
+    # Prefer the best predictor; fall back to any available predictor.
+    predictor_key: str | None = best_result["predictor_key"] if best_result else None
+    predictor: BasePricePredictor | None = registry.get(predictor_key) if predictor_key else None
+    if predictor is None and registry:
+        predictor_key, predictor = next(iter(registry.items()))
+
+    by_group: dict[str, dict[str, Any]] = {}
+    for group_name, group_holdout_records in sorted(groups.items()):
+        if predictor is None:
+            by_group[group_name] = {
+                "sample_count": 0,
+                "average_absolute_error_rate": None,
+                "skipped_count": len(group_holdout_records),
+            }
+            continue
+
+        result = _backtest_one_predictor(
+            predictor_key=predictor_key,
+            predictor=predictor,
+            base_context=base_context,
+            training_prefix=training_prefix,
+            holdout_records=group_holdout_records,
+            min_training_size=min_training_size,
+        )
+        by_group[group_name] = {
+            "sample_count": result["sample_count"],
+            "average_absolute_error_rate": result["average_absolute_error_rate"],
+            "skipped_count": result["skipped_count"],
+        }
+
+    return by_group
