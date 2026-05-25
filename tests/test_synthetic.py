@@ -59,3 +59,50 @@ def test_backtest_run_requires_seeded_operators(client):
         json={"limit": 5, "scenario": "base"},
     )
     assert response.status_code == 404
+
+
+def test_backtest_run_response_includes_settlement_sample_for_drilldown(client):
+    """Per-operator result must carry the drilldown payload, even if empty."""
+    seed = client.post("/api/v1/synthetic/operators/seed", json={})
+    assert seed.status_code == 200
+
+    response = client.post(
+        "/api/v1/synthetic/backtests/run",
+        json={"limit": 5, "scenario": "base"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    for result in payload["results"]:
+        # Drilldown contract: items list always present + count consistent
+        assert isinstance(result["settlement_items"], list)
+        assert result["settlement_sample_count"] == len(result["settlement_items"])
+
+
+def test_backtest_run_async_endpoint_returns_pollable_task(client):
+    """Async path queues a Celery task; status endpoint reflects it."""
+    seed = client.post("/api/v1/synthetic/operators/seed", json={})
+    assert seed.status_code == 200
+
+    queued = client.post(
+        "/api/v1/synthetic/backtests/run-async",
+        json={"limit": 5, "scenario": "base"},
+    )
+    assert queued.status_code == 202, queued.text
+    payload = queued.json()
+    task_id = payload["task_id"]
+    assert payload["poll_url"].endswith(task_id)
+    assert payload["task_name"] == "jobs.run_synthetic_operator_backtest"
+
+    status_response = client.get(f"/api/v1/synthetic/backtests/tasks/{task_id}")
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["task_id"] == task_id
+    assert status_payload["task_name"] == "jobs.run_synthetic_operator_backtest"
+
+
+def test_backtest_run_async_requires_seeded_operators(client):
+    response = client.post(
+        "/api/v1/synthetic/backtests/run-async",
+        json={"limit": 5, "scenario": "base"},
+    )
+    assert response.status_code == 404

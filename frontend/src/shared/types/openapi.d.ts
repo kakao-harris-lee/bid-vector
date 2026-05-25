@@ -1678,6 +1678,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/synthetic/backtests/run-async": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Synthetic Backtest Async Endpoint
+         * @description Queue the synthetic backtest in a Celery worker and return a pollable task id.
+         *
+         *     Use when the synchronous path could exceed the API request timeout
+         *     (12 operators × large `limit`, slow predictor warm-up, etc.).
+         */
+        post: operations["run_synthetic_backtest_async_endpoint_api_v1_synthetic_backtests_run_async_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/backtests/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Synthetic Backtest Task Status Endpoint
+         * @description Inspect the status (+ result) of a queued synthetic backtest task.
+         */
+        get: operations["get_synthetic_backtest_task_status_endpoint_api_v1_synthetic_backtests_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/backtests/run": {
         parameters: {
             query?: never;
@@ -5574,6 +5617,13 @@ export interface components {
             bid_submission_rate?: number | null;
             /** Average Absolute Bid Rate Error */
             average_absolute_bid_rate_error?: number | null;
+            /**
+             * Settlement Sample Count
+             * @default 0
+             */
+            settlement_sample_count: number;
+            /** Settlement Items */
+            settlement_items?: components["schemas"]["SyntheticBacktestSettlementItem"][];
         };
         /** SyntheticBacktestRunRequest */
         SyntheticBacktestRunRequest: {
@@ -5612,6 +5662,72 @@ export interface components {
             scenario: string;
             /** Results */
             results?: components["schemas"]["SyntheticBacktestOperatorResult"][];
+        };
+        /** SyntheticBacktestSettlementItem */
+        SyntheticBacktestSettlementItem: {
+            /** Project Id */
+            project_id?: number | null;
+            /**
+             * Project Title
+             * @default
+             */
+            project_title: string;
+            /** Category */
+            category?: string | null;
+            /** Paper Bid Id */
+            paper_bid_id?: number | null;
+            /** Decision Action */
+            decision_action?: string | null;
+            /** Bid Amount */
+            bid_amount?: number | null;
+            /** Winning Amount */
+            winning_amount?: number | null;
+            /** Absolute Bid Rate Error */
+            absolute_bid_rate_error?: number | null;
+            /**
+             * Would Have Won
+             * @default false
+             */
+            would_have_won: boolean;
+            /** Settled At */
+            settled_at?: string | null;
+        };
+        /** SyntheticBacktestTaskResponse */
+        SyntheticBacktestTaskResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /** Queue */
+            queue: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail: string;
+            /** Poll Url */
+            poll_url: string;
+        };
+        /** SyntheticBacktestTaskStatusResponse */
+        SyntheticBacktestTaskStatusResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /** Queue */
+            queue: string;
+            /** Status */
+            status: string;
+            /** Raw Status */
+            raw_status: string;
+            /** Ready */
+            ready: boolean;
+            /** Successful */
+            successful: boolean;
+            /** Detail */
+            detail: string;
+            /** Error */
+            error?: string | null;
+            result?: components["schemas"]["SyntheticBacktestRunResponse"] | null;
         };
         /** SyntheticOperatorItem */
         SyntheticOperatorItem: {
@@ -8896,6 +9012,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyntheticSeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_synthetic_backtest_async_endpoint_api_v1_synthetic_backtests_run_async_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticBacktestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticBacktestTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_synthetic_backtest_task_status_endpoint_api_v1_synthetic_backtests_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticBacktestTaskStatusResponse"];
                 };
             };
             /** @description Validation Error */

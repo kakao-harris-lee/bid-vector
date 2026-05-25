@@ -80,6 +80,7 @@ COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
 PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
 PRICE_PREDICTOR_TRAINING_TASK_NAME = "ml.train_price_predictor"
 DECISION_EXPERIMENT_REEVALUATION_TASK_NAME = "ml.reevaluate_decision_experiment"
+SYNTHETIC_BACKTEST_RUN_TASK_NAME = "jobs.run_synthetic_operator_backtest"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -90,6 +91,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         "jobs.poll_telegram_updates": {"queue": settings.CELERY_OPS_QUEUE},
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        SYNTHETIC_BACKTEST_RUN_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},

@@ -4,15 +4,32 @@ import { toastApi } from "@/shared/components/ui";
 import type { RealtimeEvent } from "@/shared/types/notifications";
 import type { AuthSession } from "@/app/layout/AuthGate";
 
+interface InternalRealtimeEvent extends RealtimeEvent {
+  event_id?: string;
+}
+
+interface WelcomeEnvelope {
+  type: "welcome";
+  replay?: {
+    delivered_event_count?: number;
+    after_event_id_found?: boolean;
+  };
+}
+
 /**
  * Subscribe to the backend realtime stream and translate events to cache
- * invalidations + toasts. Kept minimal for Phase 7 — full replay/after_event_id
- * negotiation will come in a follow-up.
+ * invalidations + toasts. Tracks the last seen `event_id` so that on
+ * reconnect the connection requests `?replay=true&after_event_id=...` —
+ * the backend `app/services/realtime.py::_build_replay_plan` then ships any
+ * retained events missed during the disconnect window.
  */
 export function useRealtimeEvents(session: AuthSession | null): void {
   const queryClient = useQueryClient();
   const reconnectTimer = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // lastEventIdRef survives reconnects within the same hook lifecycle so the
+  // resume cursor doesn't reset just because the socket bounced.
+  const lastEventIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!session?.token) return;
@@ -20,33 +37,54 @@ export function useRealtimeEvents(session: AuthSession | null): void {
 
     let cancelled = false;
 
+    const buildUrl = (): string => {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const params = new URLSearchParams();
+      params.set("token", session.token);
+      if (lastEventIdRef.current) {
+        params.set("replay", "true");
+        params.set("after_event_id", lastEventIdRef.current);
+      }
+      return `${proto}//${window.location.host}/api/v1/realtime/events?${params.toString()}`;
+    };
+
     const connect = () => {
       if (cancelled) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${window.location.host}/api/v1/realtime/events?token=${encodeURIComponent(session.token)}`;
       let socket: WebSocket;
       try {
-        socket = new WebSocket(url);
+        socket = new WebSocket(buildUrl());
       } catch {
-        // Browser may refuse the connection (e.g., insecure origin). Skip.
         return;
       }
       wsRef.current = socket;
 
       socket.addEventListener("message", (event) => {
-        let payload: RealtimeEvent | null = null;
+        let payload: InternalRealtimeEvent | WelcomeEnvelope | null = null;
         try {
-          payload = JSON.parse(event.data) as RealtimeEvent;
+          payload = JSON.parse(event.data) as InternalRealtimeEvent | WelcomeEnvelope;
         } catch {
           return;
         }
-        if (!payload?.type) return;
+        if (!payload) return;
+
+        if (isWelcome(payload)) {
+          const replayed = payload.replay?.delivered_event_count ?? 0;
+          if (replayed > 0) {
+            toastApi.info({
+              title: "재연결 — 누락 이벤트 복원",
+              description: `${replayed}건`
+            });
+          }
+          return;
+        }
+
+        if (!payload.type) return;
+        if (payload.event_id) lastEventIdRef.current = payload.event_id;
         applyEvent(queryClient, payload);
       });
 
       socket.addEventListener("close", () => {
         if (cancelled) return;
-        // Exponential backoff would be nicer; for Phase 7 use a fixed 5s.
         reconnectTimer.current = window.setTimeout(connect, 5_000);
       });
 
@@ -70,6 +108,10 @@ export function useRealtimeEvents(session: AuthSession | null): void {
       wsRef.current = null;
     };
   }, [session?.token, queryClient]);
+}
+
+function isWelcome(payload: InternalRealtimeEvent | WelcomeEnvelope): payload is WelcomeEnvelope {
+  return (payload as WelcomeEnvelope).type === "welcome";
 }
 
 function applyEvent(queryClient: ReturnType<typeof useQueryClient>, event: RealtimeEvent) {

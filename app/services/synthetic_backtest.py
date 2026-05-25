@@ -121,6 +121,7 @@ class SyntheticBacktestService:
         category: str | None,
         limit: int,
         scenario: str,
+        settlement_sample: int = 20,
     ) -> dict[str, Any]:
         result = self.backtest_service.run_historical_backtest(
             db,
@@ -141,6 +142,10 @@ class SyntheticBacktestService:
             float(win_count) / float(settled_count) if settled_count else None
         )
         bid_submission_rate = summary.get("bid_submission_rate")
+        raw_settlements = result.get("settlements") or []
+        settlement_items = [
+            _slice_settlement_item(item) for item in raw_settlements[:settlement_sample]
+        ]
         return {
             "candidate_count": int(result.get("candidate_count") or 0),
             "paper_bid_count": int(result.get("paper_bid_count") or 0),
@@ -149,7 +154,44 @@ class SyntheticBacktestService:
             "win_rate_on_settled": win_rate_on_settled,
             "bid_submission_rate": bid_submission_rate,
             "average_absolute_bid_rate_error": summary.get("average_absolute_bid_rate_error"),
+            "settlement_sample_count": len(settlement_items),
+            "settlement_items": settlement_items,
         }
+
+
+def _slice_settlement_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Pick a stable subset of settlement fields for the drilldown payload.
+
+    Avoids shipping the full backtest internals to the dashboard; the few
+    fields here are sufficient to render a settle list + bid-rate error
+    histogram in the UI.
+    """
+    return {
+        "project_id": _int_or_none(item.get("project_id")),
+        "project_title": str(item.get("project_title") or ""),
+        "category": item.get("category"),
+        "paper_bid_id": _int_or_none(item.get("paper_bid_id")),
+        "decision_action": item.get("decision_action"),
+        "bid_amount": _float_or_none(item.get("bid_amount")),
+        "winning_amount": _float_or_none(item.get("winning_amount")),
+        "absolute_bid_rate_error": _float_or_none(item.get("absolute_bid_rate_error")),
+        "would_have_won": bool(item.get("would_have_won")),
+        "settled_at": item.get("settled_at"),
+    }
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def serialize_synthetic_operators(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
