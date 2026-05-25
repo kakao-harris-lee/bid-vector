@@ -98,3 +98,47 @@ def test_price_predictor_training_writes_quality_comparison_and_gate_reports(
     assert gate["passed"] is True
     assert gate["metrics"]["sample_count"] == 3
     assert gate["report_path"] == result["comparison_report_path"]
+
+
+def test_training_summary_includes_group_calibration():
+    """학습 결과 manifest summary에 그룹별 calibration 블록이 포함된다."""
+    from app.services.ml_training import PricePredictionTrainingService
+
+    service = PricePredictionTrainingService()
+    dataset = {
+        "summary": {"sample_count": 4},
+        "items": [
+            {"business_group": "construction", "winning_rate": 0.903},
+            {"business_group": "construction", "winning_rate": 0.902},
+            {"business_group": "service", "winning_rate": 0.881},
+            {"business_group": "service", "winning_rate": 0.930},
+        ],
+    }
+    calibration = service._build_group_calibration(dataset)
+    assert "construction" in calibration
+    assert "service" in calibration
+    assert calibration["construction"]["sample_count"] == 2
+    assert 0.900 <= calibration["construction"]["median_rate"] <= 0.905
+    assert calibration["service"]["sample_count"] == 2
+
+
+def test_group_calibration_p75_not_max_for_small_n():
+    """N=4일 때 p75가 최댓값(index 3)이 아닌 index 2를 가리켜야 한다."""
+    from app.services.ml_training import PricePredictionTrainingService
+
+    service = PricePredictionTrainingService()
+    # "series" key + "winning_rate" 필드 (production 형식)
+    dataset = {
+        "series": [
+            {"business_group": "construction", "winning_rate": 0.85},
+            {"business_group": "construction", "winning_rate": 0.90},
+            {"business_group": "construction", "winning_rate": 0.95},
+            {"business_group": "construction", "winning_rate": 0.99},
+        ]
+    }
+    calib = service._build_group_calibration(dataset)
+    construction = calib.get("construction") or {}
+    # sorted: [0.85, 0.90, 0.95, 0.99]  N=4
+    # correct p75 = sorted[(4-1)*3//4] = sorted[2] = 0.95
+    # buggy p75   = sorted[min(3, 3*4//4)] = sorted[3] = 0.99  (max!)
+    assert construction["p75"] < 0.99

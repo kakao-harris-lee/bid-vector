@@ -4,11 +4,37 @@ from __future__ import annotations
 
 import json
 from math import sqrt
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+
+
+def load_group_calibration() -> dict[str, dict[str, float | int]]:
+    """Read summary.group_calibration from the active manifest, if present.
+
+    Best-effort: any IO/JSON failure or missing block returns an empty dict so
+    callers can safely fall through to the legacy historical statistics.
+    """
+    from app.core.config import settings
+
+    manifest_path_raw = (settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
+    if not manifest_path_raw:
+        return {}
+    candidate = Path(manifest_path_raw)
+    if not candidate.is_file():
+        return {}
+    try:
+        payload = json.loads(candidate.read_text())
+    except Exception:
+        return {}
+    summary = payload.get("summary") if isinstance(payload, dict) else None
+    if not isinstance(summary, dict):
+        return {}
+    calibration = summary.get("group_calibration")
+    return calibration if isinstance(calibration, dict) else {}
 
 _T_CRITICAL_95 = {
     1: 12.706,
@@ -64,7 +90,24 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
 
         if float(context.budget or 0.0) <= 0:
             return heuristic_prediction
-        if historical_summary["sample_size"] <= 0:
+
+        sample_size = int(historical_summary["sample_size"])
+
+        if sample_size <= 0:
+            calibration = load_group_calibration().get(context.business_group or "") or {}
+            prior_median = calibration.get("median_rate")
+            if prior_median is not None:
+                prior_median = float(prior_median)
+                heuristic_rate = float(heuristic_prediction.get("predicted_bid_rate") or prior_median)
+                blended_rate = round((heuristic_rate * 0.4) + (prior_median * 0.6), 4)
+                budget = float(context.budget or 0.0)
+                heuristic_prediction = {
+                    **heuristic_prediction,
+                    "predicted_bid_rate": blended_rate,
+                    "predicted_price": round(budget * blended_rate, 2),
+                    "price_range_min": round(budget * blended_rate * 0.8, 2),
+                    "price_range_max": round(budget * blended_rate * 1.2, 2),
+                }
             return heuristic_prediction
 
         return build_historical_prediction(
@@ -73,6 +116,7 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
             description=context.description,
             heuristic_prediction=heuristic_prediction,
             historical_summary=historical_summary,
+            business_group=context.business_group,
         )
 
 
@@ -144,6 +188,7 @@ def build_historical_prediction(
     description: str,
     heuristic_prediction: dict[str, Any],
     historical_summary: dict[str, Any],
+    business_group: str | None = None,
 ) -> dict[str, Any]:
     """Blend historical bid-rate samples with the heuristic baseline."""
     sample_size = int(historical_summary["sample_size"])
@@ -162,6 +207,13 @@ def build_historical_prediction(
     t_value = get_t_critical(sample_size - 1) if sample_size > 1 else _T_CRITICAL_95[1]
     margin = t_value * (std_rate / sqrt(sample_size)) if sample_size > 1 else std_rate
 
+    calibration = load_group_calibration().get(business_group or "") or {}
+    prior_median = calibration.get("median_rate")
+    if sample_size < 5 and prior_median is not None:
+        prior_median = float(prior_median)
+        mean_rate = (float(mean_rate or prior_median) * 0.4) + (prior_median * 0.6)
+        median_rate = (float(median_rate or prior_median) * 0.4) + (prior_median * 0.6)
+
     base_rate = select_competitive_base_rate(
         category=category,
         description=description,
@@ -171,6 +223,7 @@ def build_historical_prediction(
         recent_median_rate=recent_median_rate,
         competitive_quantile_rate=competitive_quantile_rate,
         heuristic_rate=heuristic_rate,
+        business_group=business_group,
     )
     rate_band = resolve_procurement_rate_band(category=category, description=description)
 
@@ -335,12 +388,30 @@ def select_competitive_base_rate(
     recent_median_rate: float,
     competitive_quantile_rate: float,
     heuristic_rate: float,
+    business_group: str | None = None,
 ) -> float:
     """Choose the bidding target, avoiding heuristic drag when history is deep."""
     normalized_category = normalize_category_key(category)
     robust_median = median_rate or mean_rate
     recent_target = recent_median_rate or robust_median
     quantile_target = competitive_quantile_rate or robust_median
+
+    if business_group == "construction" and sample_size >= 10:
+        base_rate = (recent_target * 0.6) + (robust_median * 0.3) + (heuristic_rate * 0.1)
+        rate_band = resolve_procurement_rate_band(category=category, description=description)
+        if rate_band == "service_high_negotiated":
+            base_rate = max(base_rate, 1.0)
+        elif rate_band == "service_price_competitive":
+            base_rate = min(base_rate, 0.90)
+        return base_rate
+    if business_group == "service" and sample_size >= 10:
+        base_rate = (quantile_target * 0.5) + (robust_median * 0.35) + (heuristic_rate * 0.15)
+        rate_band = resolve_procurement_rate_band(category=category, description=description)
+        if rate_band == "service_high_negotiated":
+            base_rate = max(base_rate, 1.0)
+        elif rate_band == "service_price_competitive":
+            base_rate = min(base_rate, 0.90)
+        return base_rate
 
     if sample_size >= 10:
         if normalized_category in {"service", "technical-service", "general-service"}:
