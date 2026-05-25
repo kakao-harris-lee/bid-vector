@@ -103,6 +103,11 @@ frontend/dist/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright/.cache/
+
 # Tooling state (not project assets)
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
