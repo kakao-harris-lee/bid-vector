@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * Happy-path E2E configuration. Run locally with:
  *
- *   1) Backend up at http://localhost:8000 with `synthetic-operator` 시드된 상태
+ *   1) Backend up at http://localhost:3000 with `synthetic-operator` 시드된 상태
  *   2) `npm --prefix frontend run dev` (port 3000 with /api proxy)
  *   3) `npx --prefix frontend playwright install --with-deps chromium` (once)
  *   4) `npm --prefix frontend run e2e`

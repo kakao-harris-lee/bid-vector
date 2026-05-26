@@ -13,7 +13,7 @@ allowed-tools:
 
 ## 실행 흐름
 
-1. 가능하면 백엔드를 백그라운드로 띄우고 `curl -s http://localhost:8000/openapi.json > /tmp/openapi.json`.
+1. 가능하면 백엔드를 백그라운드로 띄우고 `curl -s http://localhost:3000/openapi.json > /tmp/openapi.json`.
    이미 띄워져 있으면 그 인스턴스를 사용한다.
    백엔드가 띄워져 있지 않고 띄우는 게 부담스러우면 다음 fallback을 사용한다:
 

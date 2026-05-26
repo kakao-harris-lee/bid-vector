@@ -164,6 +164,16 @@ bid-vector/
 
 ## Setup Instructions
 
+### Runtime Ports
+
+| Surface | Default URL | Owner | Notes |
+|---|---|---|---|
+| Bid-vector app/API | <http://localhost:3000> | FastAPI / Docker Compose `api` | `/health`, `/docs`, and all `/api/v1/*` endpoints live here. |
+| Built dashboard route | <http://localhost:3000/dashboard> | FastAPI static serving | Used after `frontend` is built and served by the API container/process. |
+| Frontend dev server | <http://localhost:3001> | `frontend/` Vite | Proxies `/api` requests to `http://localhost:3000`. |
+
+Keep port `3000` reserved for the bid-vector app on this host. KIS Unified STS uses 8001/8002 and should not bind this port.
+
 ### Prerequisites
 
 - Python 3.11+
@@ -233,9 +243,9 @@ bid-vector/
    ```
 
 8. **Access the API**
-   - API: <http://localhost:8000>
-   - Docs: <http://localhost:8000/docs>
-   - ReDoc: <http://localhost:8000/redoc>
+   - API: <http://localhost:3000>
+   - Docs: <http://localhost:3000/docs>
+   - ReDoc: <http://localhost:3000/redoc>
 
 ### Frontend (Vite + React + TS, Tailwind v4, react-query)
 
@@ -251,7 +261,7 @@ bid-vector/
 
    ```bash
    npm --prefix frontend run dev
-   # http://localhost:3000  (proxies /api → http://localhost:8000)
+   # http://localhost:3001  (proxies /api → http://localhost:3000)
    ```
 
 3. **Run tests / build**
@@ -859,7 +869,8 @@ Periodic strategy monitoring and forward paper-bidding now follow the same rule:
 
 ### Port already in use
 
-- Change `API_PORT` in `.env` or use `--port` flag
+- App/API port conflict: change `API_PORT` in `.env` or use the uvicorn `--port` flag. The default app port is `3000`.
+- Frontend dev-server conflict: change the Vite dev-server port in `frontend/vite.config.ts`; the default is `3001`.
 
 ## Deployment
 
