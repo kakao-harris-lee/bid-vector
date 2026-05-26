@@ -110,6 +110,61 @@ python scripts/promote_ml_release.py apply-manifest \
 
 재시작 후 `/health` 응답과 `GET /api/v1/analytics/operations-dashboard`의 `predictor` 블록을 확인한다.
 
+### 6. Celery 워커 재시작 ⚠ 누락 주의
+
+> **2026-05-26 incident**: PR 머지 후 API만 재시작되고 `bid_vector_worker / beat / ml_worker / training_worker` 컨테이너가 5일째 안 재시작된 상태로 paper_bidding이 돌아 `predicted_bid_rate=1.442` 같은 가드레일 우회 결과가 50건 중 47건 발생. worker가 머지 전 코드(Phase B 가드레일/그룹 분기 부재)를 실행 중이었음.
+
+`--restart-compose`는 API 컨테이너만 재시작한다. **Celery 워커/스케줄러는 별도로 재시작해야 새 predictor 코드가 적용된다.**
+
+```bash
+docker restart \
+    bid_vector_worker         \
+    bid_vector_beat           \
+    bid_vector_ml_worker      \
+    bid_vector_training_worker
+
+# 재시작 검증 (모든 워커가 ready 상태인지)
+docker logs --tail 5 bid_vector_worker | grep "celery@.* ready"
+docker logs --tail 5 bid_vector_ml_worker | grep "celery@.* ready"
+docker logs --tail 5 bid_vector_training_worker | grep "celery@.* ready"
+docker logs --tail 5 bid_vector_beat | grep "beat: Starting"
+```
+
+워커 재시작 후 즉시 검증:
+
+```bash
+# in-process로 forward_paper 1 run 수동 trigger
+python -c "
+from app.core.database import SessionLocal
+from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+db = SessionLocal()
+result = PaperBiddingBacktestService().run_forward_paper_bidding(
+    db, persist=True, limit=50, scenario='base',
+    strategy_version='post-release-verify',
+    model_version='current', history_limit=80,
+)
+print(f'run_id={result.get(\"run_id\")}')
+db.close()
+"
+
+# 새 run의 rate 분포 확인 — max는 그룹/카테고리 ceiling 이하여야 함
+psql -c "
+SELECT predictor_name, count(*) AS n,
+       round(avg(predicted_bid_rate)::numeric, 4) AS avg_rate,
+       round(max(predicted_bid_rate)::numeric, 4) AS max_rate,
+       sum(CASE WHEN predicted_bid_rate > 1.0 THEN 1 ELSE 0 END) AS over_1
+FROM paper_bids
+WHERE run_id = (SELECT max(id) FROM paper_bid_runs)
+GROUP BY predictor_name;
+"
+```
+
+- `predictor_name` 대부분이 `ensemble_blend`여야 한다 (`historical_statistical` 50건 = ensemble artifact 로드 실패 또는 새 코드 미반영 신호)
+- `over_1`이 0이어야 한다 (가드레일 정상 작동)
+- `max_rate` ≤ 1.0 (technical-service/service ceiling) 또는 ≤ 0.93 (construction ceiling)
+
+비정상 발견 시 워커 로그(`docker logs bid_vector_worker --tail 200`)에서 import 에러나 settings 로드 실패를 확인하고 컨테이너 이미지 재빌드를 고려한다.
+
 ---
 
 ## 설정 키 레퍼런스
@@ -137,14 +192,12 @@ PREDICTION_GROUP_MINIMUM_BID_RATES='{"construction":0.87,"service":0.72,"goods":
 릴리스 후 예측 품질이 저하되었다고 판단되면:
 
 ```bash
-# 1. 그룹 캘리브레이션 즉시 비활성화 (재배포 불필요 — API 워커 재시작만)
+# 1. 그룹 캘리브레이션 즉시 비활성화 (재배포 불필요)
 BUSINESS_GROUP_CALIBRATION_ENABLED=false
 
-# 2. API 워커 재시작
+# 2. API + Celery 컨테이너 모두 재시작 (워커도 새 환경 변수를 읽어야 함)
 docker compose restart api
-
-# 또는 Compose 전체
-docker compose up -d api
+docker restart bid_vector_worker bid_vector_beat bid_vector_ml_worker bid_vector_training_worker
 ```
 
 이 설정으로 predictor는 카테고리 전용 경로로 폴백한다. DB 변경이나 마이그레이션은 불필요하다.
