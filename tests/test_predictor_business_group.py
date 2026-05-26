@@ -222,3 +222,57 @@ def test_service_high_negotiated_floor_preserved_in_group_branch():
         business_group="service",
     )
     assert rate >= 1.0, "service_high_negotiated band는 1.0 floor를 적용해야 함"
+
+
+def test_construction_group_ceiling_never_bypassed_for_high_history():
+    """REGRESSION: paper_bid id=222 (2026-05-25) returned predicted_bid_rate=1.0043
+    on a construction-category bid before Phase B activation. The group ceiling
+    of 0.93 must clamp ANY predicted_bid_rate and any per-scenario bid_rate.
+
+    Reproduces the production scenario: construction-category project with
+    business_group='construction', high-rate history (would push the model
+    above the ceiling), and verifies the ceiling guardrail kicks in.
+
+    This test freezes Phase B guardrail behavior — no implementation change required.
+    It is a regression lock: a future refactor that silently removes the ceiling clamp
+    will cause this test to fail.
+    """
+    from app.ai.price_prediction import predict_price
+    from app.core.config import settings
+
+    ceiling = float(settings.PREDICTION_GROUP_MAXIMUM_BID_RATES["construction"])  # 0.93
+    epsilon = 1e-4
+
+    # Simple dicts work because read_record_value() handles both dicts and ORM objects.
+    # Only bid_rate is needed to drive summarize_historical_records toward a high value.
+    history = [{"bid_rate": 0.985} for _ in range(60)]
+
+    pred = predict_price(
+        budget=810_072_727.0,
+        category="construction",
+        description="제주대학교 안전환경개선 건축공사",
+        historical_records=history,
+        agency_name="제주대학교",
+        feedback_calibration=None,
+        business_type_code="0411",
+        business_group="construction",
+    )
+
+    rate = float(pred.get("predicted_bid_rate") or 0)
+    assert rate <= ceiling + epsilon, (
+        f"construction ceiling {ceiling} bypassed: predicted_bid_rate={rate}, "
+        f"guardrail_applied={pred.get('guardrail_applied')}, "
+        f"guardrail_reason={pred.get('guardrail_reason')}"
+    )
+    assert pred.get("guardrail_applied") is True, (
+        f"guardrail_applied must be True when history pushes rate above ceiling; "
+        f"predicted_bid_rate={rate}, guardrail_reason={pred.get('guardrail_reason')}"
+    )
+
+    # All per-scenario bid_rates in bid_rate_candidates must also respect the ceiling.
+    for candidate in pred.get("bid_rate_candidates", []):
+        scenario_rate = float(candidate.get("bid_rate") or 0)
+        label = candidate.get("label", "?")
+        assert scenario_rate <= ceiling + epsilon, (
+            f"scenario '{label}' bid_rate {scenario_rate} > ceiling {ceiling}"
+        )
