@@ -142,3 +142,43 @@ def test_group_calibration_p75_not_max_for_small_n():
     # correct p75 = sorted[(4-1)*3//4] = sorted[2] = 0.95
     # buggy p75   = sorted[min(3, 3*4//4)] = sorted[3] = 0.99  (max!)
     assert construction["p75"] < 0.99
+
+
+def test_ensemble_artifact_includes_group_calibration_summary(tmp_path, monkeypatch):
+    """Ensemble artifact 파일에 summary.group_calibration이 포함되어야 runtime이 prior로 읽을 수 있음."""
+    import json
+    from app.services.ml_training import PricePredictionTrainingService
+
+    svc = PricePredictionTrainingService()
+    dataset = {
+        "series": [
+            {"business_group": "construction", "winning_rate": 0.90, "label_rate": 0.90},
+            {"business_group": "construction", "winning_rate": 0.91, "label_rate": 0.91},
+            {"business_group": "construction", "winning_rate": 0.89, "label_rate": 0.89},
+            {"business_group": "service", "winning_rate": 0.88, "label_rate": 0.88},
+            {"business_group": "service", "winning_rate": 0.92, "label_rate": 0.92},
+            {"business_group": "service", "winning_rate": 0.85, "label_rate": 0.85},
+        ]
+    }
+    calibration = svc._build_group_calibration(dataset)
+    assert "construction" in calibration and "service" in calibration
+
+    # The hand-off: _inject_group_calibration_into_ensemble_artifact must write
+    # summary.group_calibration so that runtime load_group_calibration() (which
+    # reads PRICE_PREDICTION_ENSEMBLE_MODEL_PATH) can find it.
+    target = tmp_path / "ensemble.json"
+    base_payload = {
+        "artifact_version": 1,
+        "model_version": "test",
+        "component_weights": {"historical": 1.0},
+    }
+    target.write_text(json.dumps(base_payload), encoding="utf-8")
+    svc._inject_group_calibration_into_ensemble_artifact(
+        ensemble_artifact_path=target,
+        group_calibration=calibration,
+    )
+
+    written = json.loads(target.read_text())
+    assert "summary" in written
+    assert written["summary"]["group_calibration"]["construction"]["sample_count"] == 3
+    assert written["summary"]["group_calibration"]["service"]["sample_count"] == 3

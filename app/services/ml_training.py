@@ -115,6 +115,14 @@ class PricePredictionTrainingService:
         )
         lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
         ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
+        # Phase B: piggy-back group_calibration onto the ensemble artifact so that
+        # runtime load_group_calibration() can consume it via
+        # settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH. The training-summary.json
+        # file is informational only; the ensemble artifact is what the runtime reads.
+        self._inject_group_calibration_into_ensemble_artifact(
+            ensemble_artifact_path=ensemble_artifact_path,
+            group_calibration=summary.get("group_calibration") or {},
+        )
         load_lstm_artifact(lstm_artifact_path)
         load_ensemble_artifact(ensemble_artifact_path)
         comparison_report = self._build_artifact_comparison_report(
@@ -844,6 +852,36 @@ class PricePredictionTrainingService:
             return resolved_path.relative_to(self.repo_root).as_posix()
         except ValueError:
             return str(resolved_path)
+
+    def _inject_group_calibration_into_ensemble_artifact(
+        self,
+        *,
+        ensemble_artifact_path: "Path | str",
+        group_calibration: dict[str, dict[str, float | int]],
+    ) -> None:
+        """Patch the ensemble artifact JSON with summary.group_calibration in place.
+
+        Best-effort: if the artifact doesn't exist or isn't JSON, log and return —
+        this is a runtime feature enhancement, not a training prerequisite.
+        """
+        path = Path(ensemble_artifact_path)
+        if not group_calibration or not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        summary_block = payload.get("summary")
+        if not isinstance(summary_block, dict):
+            summary_block = {}
+        summary_block["group_calibration"] = group_calibration
+        payload["summary"] = summary_block
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def _relative_path_from(self, path: Path, *, base_path: Path) -> str:
         return Path(os.path.relpath(path.resolve(), start=base_path.resolve())).as_posix()
