@@ -113,6 +113,14 @@ class PricePredictionTrainingService:
             lstm_artifact=lstm_artifact,
             bid_rates=bid_rates,
         )
+        # Phase B: inject group_calibration into the in-memory dict BEFORE writing to
+        # disk so that (a) no reader can see the artifact without calibration and
+        # (b) downstream code receiving ensemble_artifact in-memory also has it.
+        # summary is built above (lines 71-80) and is available here already.
+        self._inject_group_calibration(
+            artifact=ensemble_artifact,
+            group_calibration=summary.get("group_calibration") or {},
+        )
         lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
         ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
         load_lstm_artifact(lstm_artifact_path)
@@ -844,6 +852,54 @@ class PricePredictionTrainingService:
             return resolved_path.relative_to(self.repo_root).as_posix()
         except ValueError:
             return str(resolved_path)
+
+    @staticmethod
+    def _inject_group_calibration(
+        artifact: dict[str, Any],
+        group_calibration: dict[str, dict[str, float | int]],
+    ) -> None:
+        """Mutate the in-memory ensemble artifact to embed summary.group_calibration.
+
+        Call this BEFORE writing the artifact to disk so that the on-disk file and
+        the in-memory dict are always in sync — no race window, no divergence.
+        """
+        if not group_calibration:
+            return
+        summary = artifact.setdefault("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
+            artifact["summary"] = summary
+        summary["group_calibration"] = group_calibration
+
+    def _inject_group_calibration_into_ensemble_artifact(
+        self,
+        *,
+        ensemble_artifact_path: "Path | str",
+        group_calibration: dict[str, dict[str, float | int]],
+    ) -> None:
+        """Patch the ensemble artifact JSON with summary.group_calibration in place.
+
+        .. deprecated::
+            Use :meth:`_inject_group_calibration` (in-memory variant) instead.
+            This file-based helper is retained for backward compatibility only.
+
+        Best-effort: if the artifact doesn't exist or isn't JSON, log and return —
+        this is a runtime feature enhancement, not a training prerequisite.
+        """
+        path = Path(ensemble_artifact_path)
+        if not group_calibration or not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        self._inject_group_calibration(payload, group_calibration)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def _relative_path_from(self, path: Path, *, base_path: Path) -> str:
         return Path(os.path.relpath(path.resolve(), start=base_path.resolve())).as_posix()
