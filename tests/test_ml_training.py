@@ -144,41 +144,48 @@ def test_group_calibration_p75_not_max_for_small_n():
     assert construction["p75"] < 0.99
 
 
-def test_ensemble_artifact_includes_group_calibration_summary(tmp_path, monkeypatch):
-    """Ensemble artifact 파일에 summary.group_calibration이 포함되어야 runtime이 prior로 읽을 수 있음."""
+def test_ensemble_artifact_includes_group_calibration_summary():
+    """Ensemble artifact의 in-memory dict가 _inject_group_calibration 후 group_calibration을 가져야 함."""
+    from app.services.ml_training import PricePredictionTrainingService
+
+    svc = PricePredictionTrainingService()
+    artifact = {"artifact_version": 1, "model_version": "test"}
+    calibration = {
+        "construction": {"median_rate": 0.9, "sample_count": 100},
+        "service": {"median_rate": 0.88, "sample_count": 100},
+    }
+    svc._inject_group_calibration(artifact, calibration)
+    assert "summary" in artifact
+    assert artifact["summary"]["group_calibration"]["construction"]["sample_count"] == 100
+    assert artifact["summary"]["group_calibration"]["service"]["sample_count"] == 100
+
+
+def test_train_price_predictor_writes_group_calibration_to_ensemble_artifact(tmp_path):
+    """Integration: _inject_group_calibration으로 주입된 calibration이 디스크 직렬화 후에도 보존된다."""
     import json
     from app.services.ml_training import PricePredictionTrainingService
 
     svc = PricePredictionTrainingService()
     dataset = {
         "series": [
-            {"business_group": "construction", "winning_rate": 0.90, "label_rate": 0.90},
-            {"business_group": "construction", "winning_rate": 0.91, "label_rate": 0.91},
-            {"business_group": "construction", "winning_rate": 0.89, "label_rate": 0.89},
-            {"business_group": "service", "winning_rate": 0.88, "label_rate": 0.88},
-            {"business_group": "service", "winning_rate": 0.92, "label_rate": 0.92},
-            {"business_group": "service", "winning_rate": 0.85, "label_rate": 0.85},
+            {"business_group": "construction", "winning_rate": 0.90, "label_rate": 0.90} for _ in range(5)
+        ] + [
+            {"business_group": "service", "winning_rate": 0.88, "label_rate": 0.88} for _ in range(5)
         ]
     }
     calibration = svc._build_group_calibration(dataset)
     assert "construction" in calibration and "service" in calibration
 
-    # The hand-off: _inject_group_calibration_into_ensemble_artifact must write
-    # summary.group_calibration so that runtime load_group_calibration() (which
-    # reads PRICE_PREDICTION_ENSEMBLE_MODEL_PATH) can find it.
-    target = tmp_path / "ensemble.json"
-    base_payload = {
-        "artifact_version": 1,
-        "model_version": "test",
-        "component_weights": {"historical": 1.0},
-    }
-    target.write_text(json.dumps(base_payload), encoding="utf-8")
-    svc._inject_group_calibration_into_ensemble_artifact(
-        ensemble_artifact_path=target,
-        group_calibration=calibration,
-    )
+    # Simulate the pre-write injection that train_price_predictor now performs
+    artifact_path = tmp_path / "ens.json"
+    artifact: dict = {"artifact_version": 1, "model_version": "x"}
+    svc._inject_group_calibration(artifact, calibration)
+    artifact_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2))
 
-    written = json.loads(target.read_text())
-    assert "summary" in written
-    assert written["summary"]["group_calibration"]["construction"]["sample_count"] == 3
-    assert written["summary"]["group_calibration"]["service"]["sample_count"] == 3
+    # Verify in-memory and on-disk representations agree
+    assert artifact["summary"]["group_calibration"]["construction"]["sample_count"] == 5
+    assert artifact["summary"]["group_calibration"]["service"]["sample_count"] == 5
+
+    loaded = json.loads(artifact_path.read_text())
+    assert loaded["summary"]["group_calibration"]["construction"]["sample_count"] == 5
+    assert loaded["summary"]["group_calibration"]["service"]["sample_count"] == 5

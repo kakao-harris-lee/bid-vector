@@ -113,16 +113,16 @@ class PricePredictionTrainingService:
             lstm_artifact=lstm_artifact,
             bid_rates=bid_rates,
         )
-        lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
-        ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
-        # Phase B: piggy-back group_calibration onto the ensemble artifact so that
-        # runtime load_group_calibration() can consume it via
-        # settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH. The training-summary.json
-        # file is informational only; the ensemble artifact is what the runtime reads.
-        self._inject_group_calibration_into_ensemble_artifact(
-            ensemble_artifact_path=ensemble_artifact_path,
+        # Phase B: inject group_calibration into the in-memory dict BEFORE writing to
+        # disk so that (a) no reader can see the artifact without calibration and
+        # (b) downstream code receiving ensemble_artifact in-memory also has it.
+        # summary is built above (lines 71-80) and is available here already.
+        self._inject_group_calibration(
+            artifact=ensemble_artifact,
             group_calibration=summary.get("group_calibration") or {},
         )
+        lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
+        ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
         load_lstm_artifact(lstm_artifact_path)
         load_ensemble_artifact(ensemble_artifact_path)
         comparison_report = self._build_artifact_comparison_report(
@@ -853,6 +853,24 @@ class PricePredictionTrainingService:
         except ValueError:
             return str(resolved_path)
 
+    @staticmethod
+    def _inject_group_calibration(
+        artifact: dict[str, Any],
+        group_calibration: dict[str, dict[str, float | int]],
+    ) -> None:
+        """Mutate the in-memory ensemble artifact to embed summary.group_calibration.
+
+        Call this BEFORE writing the artifact to disk so that the on-disk file and
+        the in-memory dict are always in sync — no race window, no divergence.
+        """
+        if not group_calibration:
+            return
+        summary = artifact.setdefault("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
+            artifact["summary"] = summary
+        summary["group_calibration"] = group_calibration
+
     def _inject_group_calibration_into_ensemble_artifact(
         self,
         *,
@@ -860,6 +878,10 @@ class PricePredictionTrainingService:
         group_calibration: dict[str, dict[str, float | int]],
     ) -> None:
         """Patch the ensemble artifact JSON with summary.group_calibration in place.
+
+        .. deprecated::
+            Use :meth:`_inject_group_calibration` (in-memory variant) instead.
+            This file-based helper is retained for backward compatibility only.
 
         Best-effort: if the artifact doesn't exist or isn't JSON, log and return —
         this is a runtime feature enhancement, not a training prerequisite.
@@ -873,11 +895,7 @@ class PricePredictionTrainingService:
             return
         if not isinstance(payload, dict):
             return
-        summary_block = payload.get("summary")
-        if not isinstance(summary_block, dict):
-            summary_block = {}
-        summary_block["group_calibration"] = group_calibration
-        payload["summary"] = summary_block
+        self._inject_group_calibration(payload, group_calibration)
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
