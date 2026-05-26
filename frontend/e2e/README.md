@@ -6,11 +6,11 @@ pulled by `npm install` — run the install script once per workstation.
 
 ## Required environment
 
-- Backend `uvicorn app.main:app --port 8000` (or `make dev`) with the
+- Backend `uvicorn app.main:app --port 3000` (or `make dev`) with the
   singleton operator account bootstrapped (`POST /api/v1/auth/bootstrap`) and
   the password matching `E2E_PASSWORD` below.
 - Frontend dev server `npm --prefix frontend run dev` on port 3000 (Vite
-  proxies `/api/*` to `http://localhost:8000`).
+  proxies `/api/*` to `http://localhost:3000`).
 
 ## One-time setup
 

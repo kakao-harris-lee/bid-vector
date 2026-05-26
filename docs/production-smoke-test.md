@@ -17,6 +17,14 @@ Telegram 수신 계정은 봇과 대화를 한 번 시작해야 한다.
 
 ## 2. 서버 기동
 
+기본 로컬 포트는 다음처럼 구분한다.
+
+| Surface | URL | 용도 |
+|---|---|---|
+| Bid-vector app/API | `http://localhost:3000` | `/health`, `/docs`, `/api/v1/*`, smoke test 대상 |
+| Built dashboard route | `http://localhost:3000/dashboard` | 빌드된 SPA를 FastAPI가 정적으로 서빙할 때 사용 |
+| Frontend dev server | `http://localhost:3001` | `npm --prefix frontend run dev`; `/api`는 app/API로 프록시 |
+
 ```bash
 make docker-up-server
 ```

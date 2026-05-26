@@ -105,7 +105,7 @@ python scripts/promote_ml_release.py apply-manifest \
 python scripts/promote_ml_release.py apply-manifest \
     --manifest <tag>             \
     --restart-compose            \
-    --wait-for-health-url http://localhost:8000/health
+    --wait-for-health-url http://localhost:3000/health
 ```
 
 재시작 후 `/health` 응답과 `GET /api/v1/analytics/operations-dashboard`의 `predictor` 블록을 확인한다.
