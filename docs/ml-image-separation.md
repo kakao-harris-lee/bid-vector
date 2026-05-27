@@ -50,12 +50,79 @@
 # 기본 슬림 API
 docker compose up -d --build
 
-# 임베딩 모델이 필요한 경우
+# 임베딩 모델이 필요한 경우 (production 권장)
 API_DOCKER_TARGET=api-embedding docker compose up -d --build
 
 # 학습까지 한 이미지에서 다뤄야 하는 경우
 API_DOCKER_TARGET=api-ml-full docker compose up -d --build
 ```
+
+## Production 권장
+
+운영 환경에서는 **`API_DOCKER_TARGET=api-embedding`**을 기본으로 둔다.
+
+- `api-runtime`은 sentence-transformers가 빠진 슬림 이미지라 `NoticeClassifierService._get_embedding_model()`가 None을 반환 → `fallback-hash-v1` 해시 임베딩 사용
+- 해시 임베딩은 의미 분류/유사도 검색을 사실상 무력화하며, 신규 수집 공고의 카테고리 자동 분류가 비결정적이 됨
+- 2026-05-26 incident: 호스트 DB의 19,824 projects 전부가 `embedding_model='fallback-hash-v1'` 상태로 발견됨 → `api-embedding` 재빌드 + 재임베딩으로 복구
+
+### 사전 준비
+
+`local_files_only=True`로 운영하려면 호스트에 모델을 한 번 받아두고 `models/` 볼륨으로 공유한다.
+
+```bash
+mkdir -p models/sbert
+source .venv/bin/activate
+python - <<'PY'
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+model.save('models/sbert/paraphrase-multilingual-MiniLM-L12-v2')
+PY
+```
+
+`.env`:
+
+```
+API_DOCKER_TARGET=api-embedding
+CLASSIFIER_EMBEDDING_MODEL=/app/models/sbert/paraphrase-multilingual-MiniLM-L12-v2
+CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY=true
+```
+
+`.env` 값을 컨테이너에 반영하려면 `docker compose down && docker compose up -d --build` (단순 `restart`로는 env_file이 재로드되지 않는다).
+
+### 검증
+
+```bash
+docker exec bid_vector_api python -c "
+from app.services.classifier import NoticeClassifierService
+m = NoticeClassifierService()._get_embedding_model()
+print('OK' if m is not None else 'FAIL')
+"
+```
+
+`FAIL`이면 (a) 모델 디렉토리가 컨테이너 안에 실제로 존재하는지 (`docker exec bid_vector_api ls /app/models/sbert/...`), (b) 빌드 타깃이 `api-embedding`인지 (`docker inspect bid_vector_api --format '{{.Config.Image}}'`), (c) `sentence_transformers` 모듈이 컨테이너에 설치돼 있는지 (`docker exec bid_vector_api python -c "import sentence_transformers"`) 순서로 점검.
+
+### 재임베딩
+
+이미지를 `api-embedding`으로 바꾼 직후엔 기존 행이 여전히 `fallback-hash-v1` 임베딩을 가지므로 재임베딩해야 한다.
+
+```bash
+python scripts/promote_ml_release.py apply-manifest --manifest <tag> --rebuild-embeddings --limit 5000
+```
+
+또는 직접 (배치로 나눠 호출 권장 — `limit`은 한 번에 처리할 행 수):
+
+```bash
+docker exec bid_vector_api python -c "
+from app.core.database import SessionLocal
+from app.services.project_similarity import ProjectSimilarityService
+db = SessionLocal()
+result = ProjectSimilarityService().rebuild_project_embeddings(db, limit=5000, force=True)
+print(result)
+db.close()
+"
+```
+
+전체 DB에 대해서는 `limit`을 충분히 크게 잡거나 (offset, limit)로 나눠 반복한다.
 
 ## 추천 아티팩트 레이아웃
 
