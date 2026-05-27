@@ -56,3 +56,12 @@ def test_koneps_schedule_minimum_interval_floor(monkeypatch):
     monkeypatch.setattr(settings, "KONEPS_COLLECTION_INTERVAL_MINUTES", 0)
     entry = build_koneps_collection_beat_schedule()["koneps_collection_periodic"]
     assert entry["schedule"] == 60
+
+
+def test_koneps_schedule_max_items_clamped_to_crawl_request_limit(monkeypatch):
+    """max_items >100 is clamped to 100 to satisfy CrawlRequest.max_items le=100."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "KONEPS_COLLECTION_SCHEDULE_ENABLED", True)
+    monkeypatch.setattr(settings, "KONEPS_COLLECTION_MAX_ITEMS", 500)
+    payload = build_koneps_collection_beat_schedule()["koneps_collection_periodic"]["kwargs"]["request_payload"]
+    assert payload["max_items"] == 100

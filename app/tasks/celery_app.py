@@ -182,7 +182,7 @@ def build_koneps_collection_beat_schedule() -> dict[str, dict[str, object]]:
                     "source": str(settings.KONEPS_COLLECTION_SOURCE or "koneps-openapi").strip() or "koneps-openapi",
                     "category": category,
                     "execution_mode": execution_mode,
-                    "max_items": max(1, int(settings.KONEPS_COLLECTION_MAX_ITEMS)),
+                    "max_items": min(100, max(1, int(settings.KONEPS_COLLECTION_MAX_ITEMS))),
                 },
             },
         }
