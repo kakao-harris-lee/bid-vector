@@ -37,7 +37,7 @@ FROM node:24-bookworm-slim AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci
+    npm ci --legacy-peer-deps
 COPY frontend/ ./
 RUN npm run build
 
