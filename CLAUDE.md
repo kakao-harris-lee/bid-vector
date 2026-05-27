@@ -7,6 +7,18 @@
 > 운영·작업 원칙은 `AGENT.md`,
 > 웹 프론트엔드 확장 계획은 `docs/web-development-plan.md`를 참고하세요.
 
+## 0. 환경 상태 — production이지만 실사용자 없음 (검증 중)
+
+이 호스트는 `ENVIRONMENT=production`으로 설정되어 있지만 **외부 실사용자 트래픽이 없는 단일 검증 환경**이다. 운영자 1인이 직접 검증하면서 운영 데이터로 개발 중이다.
+
+**Claude Code가 작업할 때 의미하는 바:**
+
+- **다운타임은 즉시 가능하다.** `docker compose down && up -d --build` 같이 컨테이너를 통째로 재시작하는 작업도 별도 다운타임 윈도우 협상 없이 진행해도 된다.
+- **DB write 행위(마이그레이션, 백필, 정리 쿼리)는 사용자 명시 승인 후 즉시 실행**한다. staging 우선 같은 단계는 생략한다.
+- **샘플 데이터/시드 정리도 자유롭게 진행**한다 (settled되지 않은 paper_bids 등). 실 입찰 기록(`BidDecisionRecord`, `allocations`)은 그래도 보존한다.
+- 그래도 **시크릿/외부 호출/머지 자체는 사용자 승인 필수**다 (push to remote, gh pr merge, telegram 송신 등).
+- `ENVIRONMENT=production` 자체는 바꾸지 않는다 — 코드의 production-gate(테스트 환경 자동 분기 등)가 실제 운영 path를 타도록 유지해야 검증이 의미 있음.
+
 ## 1. 프로젝트 한 줄 요약
 
 한 업체(단일 운영자)가 나라장터(KONEPS) 공고에서 낙찰 가능성이 가장 높은 입찰 후보를 자동으로 찾고, 적정 투찰가를 결정해 추진하도록 돕는 FastAPI 백엔드 + Vite/React/TS 프론트엔드.
