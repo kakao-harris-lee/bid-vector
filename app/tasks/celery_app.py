@@ -163,6 +163,32 @@ def build_paper_bidding_forward_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_koneps_collection_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for KONEPS notice collection."""
+    if not settings.KONEPS_COLLECTION_SCHEDULE_ENABLED:
+        return {}
+
+    category = str(settings.KONEPS_COLLECTION_CATEGORY or "").strip() or None
+    execution_mode = str(settings.KONEPS_COLLECTION_EXECUTION_MODE or "auto").strip() or "auto"
+    if execution_mode not in {"mock", "live", "auto"}:
+        execution_mode = "auto"
+
+    return {
+        "koneps_collection_periodic": {
+            "task": COLLECT_KONEPS_NOTICES_TASK_NAME,
+            "schedule": float(max(1, settings.KONEPS_COLLECTION_INTERVAL_MINUTES) * 60),
+            "kwargs": {
+                "request_payload": {
+                    "source": str(settings.KONEPS_COLLECTION_SOURCE or "koneps-openapi").strip() or "koneps-openapi",
+                    "category": category,
+                    "execution_mode": execution_mode,
+                    "max_items": min(100, max(1, int(settings.KONEPS_COLLECTION_MAX_ITEMS))),
+                },
+            },
+        }
+    }
+
+
 def build_celery_runtime_config() -> dict[str, object]:
     """Build the shared Celery runtime configuration for eager and worker-backed modes."""
     soft_time_limit, hard_time_limit = _normalize_task_time_limits(
@@ -198,6 +224,7 @@ def build_celery_runtime_config() -> dict[str, object]:
         "beat_schedule": {
             **build_operator_strategy_monitor_beat_schedule(),
             **build_paper_bidding_forward_beat_schedule(),
+            **build_koneps_collection_beat_schedule(),
         },
     }
 
