@@ -81,6 +81,7 @@ PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
 PRICE_PREDICTOR_TRAINING_TASK_NAME = "ml.train_price_predictor"
 DECISION_EXPERIMENT_REEVALUATION_TASK_NAME = "ml.reevaluate_decision_experiment"
 SYNTHETIC_BACKTEST_RUN_TASK_NAME = "jobs.run_synthetic_operator_backtest"
+ENRICH_BUSINESS_TYPE_TASK_NAME = "jobs.enrich_pending_business_types"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -92,6 +93,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SYNTHETIC_BACKTEST_RUN_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -189,6 +191,22 @@ def build_koneps_collection_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_business_type_enrichment_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for business_type enrichment."""
+    if not settings.BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED:
+        return {}
+
+    return {
+        "business_type_enrichment_periodic": {
+            "task": ENRICH_BUSINESS_TYPE_TASK_NAME,
+            "schedule": float(max(1, settings.BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES) * 60),
+            "kwargs": {
+                "limit": max(1, int(settings.BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT)),
+            },
+        }
+    }
+
+
 def build_celery_runtime_config() -> dict[str, object]:
     """Build the shared Celery runtime configuration for eager and worker-backed modes."""
     soft_time_limit, hard_time_limit = _normalize_task_time_limits(
@@ -225,6 +243,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_operator_strategy_monitor_beat_schedule(),
             **build_paper_bidding_forward_beat_schedule(),
             **build_koneps_collection_beat_schedule(),
+            **build_business_type_enrichment_beat_schedule(),
         },
     }
 

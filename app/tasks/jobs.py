@@ -18,6 +18,7 @@ from app.services.decision_experiments import DecisionExperimentService
 from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
+    ENRICH_BUSINESS_TYPE_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
@@ -227,6 +228,22 @@ def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> 
             history_limit=int(payload.get("history_limit") or 80),
             persist=bool(payload.get("persist", True)),
         )
+    finally:
+        db.close()
+
+
+@celery_app.task(name=ENRICH_BUSINESS_TYPE_TASK_NAME)
+def enrich_pending_business_types(limit: int | None = None) -> dict:
+    """Persist business_type_code/label for recently-collected projects."""
+    from app.core.config import settings
+    from app.services.business_type_enrichment import BusinessTypeEnrichmentService
+
+    effective_limit = int(limit if limit is not None else settings.BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT)
+    effective_limit = max(1, effective_limit)
+
+    db = SessionLocal()
+    try:
+        return BusinessTypeEnrichmentService().enrich_pending(db, limit=effective_limit)
     finally:
         db.close()
 
