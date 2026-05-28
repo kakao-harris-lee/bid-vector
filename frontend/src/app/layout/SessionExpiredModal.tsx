@@ -29,6 +29,18 @@ export function SessionExpiredModal() {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, []);
 
+  // Escape key dismiss — without this the modal could only be closed by the
+  // "나중에" button, leaving keyboard users stuck if a background fetch
+  // re-fired the session-expired event after they last dismissed.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
   if (!open || !session?.username) return null;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -55,6 +67,14 @@ export function SessionExpiredModal() {
       aria-modal="true"
       aria-labelledby="session-expired-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={(event) => {
+        // Backdrop click (outside the Card) dismisses. Without this the rest
+        // of the dashboard appears unclickable while the modal is up, which
+        // users misread as "clicks are blocked".
+        if (event.target === event.currentTarget) {
+          setOpen(false);
+        }
+      }}
     >
       <Card className="w-full max-w-sm">
         <CardHeader>
