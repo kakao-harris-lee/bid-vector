@@ -23,6 +23,7 @@ from app.tasks.celery_app import (
     PAPER_BIDDING_FORWARD_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
     PROJECT_EMBEDDING_REBUILD_TASK_NAME,
+    RECLASSIFY_CATEGORIES_TASK_NAME,
     SYNTHETIC_BACKTEST_RUN_TASK_NAME,
     celery_app,
 )
@@ -244,6 +245,22 @@ def enrich_pending_business_types(limit: int | None = None) -> dict:
     db = SessionLocal()
     try:
         return BusinessTypeEnrichmentService().enrich_pending(db, limit=effective_limit)
+    finally:
+        db.close()
+
+
+@celery_app.task(name=RECLASSIFY_CATEGORIES_TASK_NAME)
+def reclassify_pending_categories(limit: int | None = None) -> dict:
+    """Re-assign Project.category for rows stuck at 'general'/'other' via SBERT prototype cosine sim."""
+    from app.core.config import settings
+    from app.services.category_classifier import CategoryClassifierService
+
+    effective_limit = int(limit if limit is not None else settings.CATEGORY_RECLASSIFY_BATCH_LIMIT)
+    effective_limit = max(1, effective_limit)
+
+    db = SessionLocal()
+    try:
+        return CategoryClassifierService().reclassify_pending(db, limit=effective_limit)
     finally:
         db.close()
 
