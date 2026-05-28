@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50
 
+    # Category reclassification — SBERT prototype-based assignment for rows stuck at 'general'/'other'
+    CATEGORY_RECLASSIFY_SCHEDULE_ENABLED: bool = False
+    CATEGORY_RECLASSIFY_INTERVAL_MINUTES: int = 30
+    CATEGORY_RECLASSIFY_BATCH_LIMIT: int = 100
+
     # ML release governance
     ML_RELEASE_MANIFEST_DIR: str = "models/manifests"
     ML_RELEASE_MANIFEST_ARCHIVE_DIR: str = "models/manifests/archive"

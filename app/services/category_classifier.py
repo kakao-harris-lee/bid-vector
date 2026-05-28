@@ -1,0 +1,196 @@
+"""SBERT prototype-based category classifier.
+
+Re-assigns Project.category for rows stuck at 'general' or 'other' using
+cosine similarity against precomputed per-category prototype embeddings.
+Falls back silently if the SBERT model is unavailable (offline / dev).
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+
+
+class CategoryClassifierService:
+    """Re-assign Project.category for rows stuck at 'general'/'other' using SBERT cosine sim.
+
+    Uses precomputed prototype embeddings (one mean vector per category).
+    Falls back silently if SBERT model isn't loadable (offline / dev).
+    """
+
+    DEFAULT_PROTOTYPES: dict[str, list[str]] = {
+        "construction": [
+            "건축공사 신축",
+            "토목공사 도로",
+            "전기공사 설비",
+            "증축 공사 감리",
+            "건설공사 발주",
+            "건축물 보수",
+            "조경 공사",
+        ],
+        "service": [
+            "위탁용역 운영",
+            "일반용역 관리",
+            "체험학습 운영 용역",
+            "교육 행사 운영",
+            "정책 연구 위탁",
+            "행정 지원 용역",
+        ],
+        "technical-service": [
+            "기술용역 감리",
+            "엔지니어링 기술 검토",
+            "기술지원 컨설팅",
+            "공사감리 용역",
+        ],
+        "software": [
+            "정보시스템 구축",
+            "소프트웨어 개발 용역",
+            "SW 시스템 유지관리",
+            "AI 플랫폼 구축",
+            "데이터 분석 시스템 고도화",
+            "웹 서비스 개발",
+        ],
+        "goods": [
+            "물품 구매 입찰",
+            "장비 구매",
+            "기자재 구매",
+            "사무기기 구매",
+            "차량 구매",
+            "의료기기 구매",
+        ],
+    }
+
+    def __init__(self, model=None, prototypes=None):
+        self._model_override = model
+        self._prototype_texts: dict[str, list[str]] = prototypes or self.DEFAULT_PROTOTYPES
+        self._prototype_vectors: dict[str, list[float]] | None = None
+
+    def _ensure_prototypes(self) -> dict[str, list[float]]:
+        """Lazy-build prototype vectors. Returns dict or empty if model unavailable."""
+        if self._prototype_vectors is not None:
+            return self._prototype_vectors
+
+        model = self._resolve_model()
+        if model is None:
+            self._prototype_vectors = {}
+            return self._prototype_vectors
+
+        import numpy as np
+
+        result: dict[str, list[float]] = {}
+        for cat, phrases in self._prototype_texts.items():
+            vectors = model.encode(phrases, normalize_embeddings=True)
+            mean = np.asarray(vectors).mean(axis=0)
+            norm = float(np.linalg.norm(mean)) or 1.0
+            result[cat] = (mean / norm).tolist()
+
+        self._prototype_vectors = result
+        return self._prototype_vectors
+
+    def _resolve_model(self):
+        """Return the embedding model to use, or None if unavailable."""
+        if self._model_override is not None:
+            return self._model_override
+
+        try:
+            from app.services.classifier import NoticeClassifierService
+
+            return NoticeClassifierService._get_embedding_model()
+        except Exception:
+            return None
+
+    def infer_category(
+        self,
+        project_embedding,
+        *,
+        min_similarity: float = 0.30,
+        margin: float = 0.04,
+    ) -> tuple[str | None, float]:
+        """Return (category, similarity) or (None, best_sim) if not confident enough.
+
+        Confident = best_sim >= min_similarity AND best_sim - second_best >= margin.
+        """
+        prototypes = self._ensure_prototypes()
+        if not prototypes or not project_embedding:
+            return (None, 0.0)
+
+        import numpy as np
+
+        emb = np.asarray(project_embedding, dtype=float)
+        emb_norm = float(np.linalg.norm(emb)) or 1.0
+        emb = emb / emb_norm
+
+        sims: list[tuple[str, float]] = []
+        for cat, proto_vec in prototypes.items():
+            proto = np.asarray(proto_vec, dtype=float)
+            sims.append((cat, float(np.dot(emb, proto))))
+
+        sims.sort(key=lambda x: x[1], reverse=True)
+        best_cat, best_sim = sims[0]
+        second_sim = sims[1][1] if len(sims) > 1 else 0.0
+
+        if best_sim < min_similarity or (best_sim - second_sim) < margin:
+            return (None, best_sim)
+
+        return (best_cat, best_sim)
+
+    def reclassify_pending(self, db, *, limit: int = 100) -> dict:
+        """Update Project.category for rows where category IN ('general', 'other')
+        whose embedding gives a confident SBERT match."""
+        from app.models.models import Project
+
+        @dataclass
+        class _Stats:
+            candidates: int = 0
+            updated: int = 0
+            skipped_no_embedding: int = 0
+            skipped_low_confidence: int = 0
+            skipped_model_unavailable: int = 0
+
+        stats = _Stats()
+
+        prototypes = self._ensure_prototypes()
+        if not prototypes:
+            # Model unavailable — count all as skipped
+            total = (
+                db.query(Project)
+                .filter(Project.category.in_(["general", "other"]))
+                .filter(Project.embedding.isnot(None))
+                .count()
+            )
+            stats.skipped_model_unavailable = total
+            return asdict(stats)
+
+        candidates = (
+            db.query(Project)
+            .filter(Project.category.in_(["general", "other"]))
+            .filter(Project.embedding.isnot(None))
+            .order_by(Project.id.desc())
+            .limit(limit)
+            .all()
+        )
+        stats.candidates = len(candidates)
+
+        for project in candidates:
+            embedding = project.embedding
+            if embedding is None:
+                stats.skipped_no_embedding += 1
+                continue
+            try:
+                vec = list(embedding)
+            except Exception:
+                stats.skipped_no_embedding += 1
+                continue
+
+            best, sim = self.infer_category(vec)
+            if best is None:
+                stats.skipped_low_confidence += 1
+                continue
+
+            project.category = best
+            db.add(project)
+            stats.updated += 1
+
+        if stats.updated:
+            db.commit()
+
+        return asdict(stats)
