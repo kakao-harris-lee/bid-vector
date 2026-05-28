@@ -160,12 +160,25 @@ class Settings(BaseSettings):
         }
     )
     BUSINESS_TYPE_TITLE_RULES: list[dict[str, str]] = Field(
+        # Ordered specific → generic. _apply_title_rules breaks on first match,
+        # so put narrower patterns first to avoid the generic 공사/용역 fallback
+        # swallowing them.
         default_factory=lambda: [
-            {"pattern": r"건축공사", "code": "0411", "label": "건축공사"},
-            {"pattern": r"토목공사", "code": "0412", "label": "토목공사"},
-            {"pattern": r"전기공사", "code": "0413", "label": "전기공사"},
-            {"pattern": r"학술연구용역|연구개발용역", "code": "0621", "label": "학술연구용역"},
-            {"pattern": r"일반용역", "code": "0611", "label": "일반용역"},
+            # Specific construction sub-types
+            {"pattern": r"건축\s*공사", "code": "0411", "label": "건축공사"},
+            {"pattern": r"토목\s*공사", "code": "0412", "label": "토목공사"},
+            {"pattern": r"전기\s*공사|전기설비", "code": "0413", "label": "전기공사"},
+            # Specific service sub-types
+            {"pattern": r"학술\s*연구\s*용역|연구\s*개발\s*용역|연구\s*용역", "code": "0621", "label": "학술연구용역"},
+            {"pattern": r"기술\s*용역|기술지원", "code": "0622", "label": "기술용역"},
+            {"pattern": r"일반\s*용역|위탁\s*용역|운영\s*용역|관리\s*용역|체험학습|숙박형", "code": "0611", "label": "일반용역"},
+            # Goods / 물품
+            {"pattern": r"물품\s*구매|장비\s*구매|기기\s*구매|구매\s*입찰", "code": "0211", "label": "물품"},
+            # Generic fallbacks — placed LAST so specific rules above win first.
+            # 공사 catches 증축공사 / 개선공사 / 신축공사 / 보수공사 / etc. mapped to construction default.
+            {"pattern": r"공사", "code": "0411", "label": "건축공사"},
+            # 용역 catches the long tail (감리용역, 처리용역, 발굴용역, etc.) as service default.
+            {"pattern": r"용역", "code": "0611", "label": "일반용역"},
         ]
     )
     BUSINESS_TYPE_COVERAGE_GATE: float = 0.95
