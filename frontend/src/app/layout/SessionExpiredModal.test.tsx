@@ -94,4 +94,41 @@ describe("SessionExpiredModal", () => {
     });
     expect(await screen.findByText("다시 로그인 완료")).toBeInTheDocument();
   });
+
+  it("백드롭 클릭으로 닫힌다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse({}, 401);
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const dialog = await screen.findByRole("dialog", { name: "세션이 만료되었습니다" });
+    // Click on the dialog root itself (the backdrop) — not on the inner Card.
+    fireEvent.click(dialog);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "세션이 만료되었습니다" })).toBeNull();
+    });
+  });
+
+  it("Escape 키로 닫힌다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse({}, 401);
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    await screen.findByRole("dialog", { name: "세션이 만료되었습니다" });
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "세션이 만료되었습니다" })).toBeNull();
+    });
+  });
 });
