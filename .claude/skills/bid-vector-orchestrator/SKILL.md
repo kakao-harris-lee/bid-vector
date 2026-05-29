@@ -12,9 +12,11 @@ bid-vector 프로젝트의 개발 작업을 **전문 에이전트 팀 + 작업 �
 
 | 에이전트 | 책임 영역 | 권한 | 비고 |
 |---|---|---|---|
-| `backend-builder` | `app/`, `tests/`, `alembic/`, `scripts/`(백엔드 의존) | Read/Write/Edit + pytest/py_compile | 프론트 금지 |
+| `backend-builder` | `app/`(ML 제외), `tests/`, `alembic/`, `scripts/`(백엔드 의존) | Read/Write/Edit + pytest/py_compile | 프론트·ML 금지 |
 | `frontend-builder` | `frontend/src/features/`, `shared/`, `app/` | Read/Write/Edit + npm/vitest | 백엔드 금지 |
+| `ml-builder` | `app/ai/`, ML 서비스(`ml_training`/`ml_release`/`prediction_*`), ML 스크립트, ML 테스트 | Read/Write/Edit + pytest/py_compile | guardrail·차원·서명 안전 |
 | `api-reviewer` | 변경 라우터·스키마·서비스 일관성, OpenAPI drift, 테스트 누락 | **Read 전용** | 수정 금지 |
+| `ml-reviewer` | predictor guardrail·pgvector 차원·manifest 서명·leakage·drift 점검 | **Read 전용** | 수정 금지 |
 | `test-runner` | pytest/vitest/playwright 실행·triage | 명령 실행 | **코드 수정 금지** |
 | `data-seed-runner` | 시드/백테스트/preflight 스크립트 실행 | 명령 실행 | **코드 수정 금지** |
 
@@ -76,17 +78,30 @@ Phase 4: 리뷰 지적 사항을 해당 builder에게 재위임
 data-seed-runner (seed-synthetic) → data-seed-runner (run-backtest) → 결과 보고
 ```
 
-### E. ML 모델 릴리스 점검
+### E. ML predictor / 파이프라인 변경 (생성-검증)
 ```
-data-seed-runner (release-preflight) → gate별 PASS/FAIL → 사용자 promote 결정
+Phase 1: ml-builder (predictor/학습/데이터셋 구현 + guardrail 회귀 테스트)
+Phase 2 (병렬): test-runner (관련 pytest) + ml-reviewer (guardrail/차원/leakage 리뷰)
+Phase 3: ML을 노출하는 API가 필요하면 → backend-builder (얇은 라우터, api-route 스킬)
+Phase 4: 리뷰 지적 사항을 ml-builder에 재위임
+```
+
+### F. ML 모델 릴리스
+```
+ml-builder (manifest 작성/모델 학습) → ml-reviewer (서명·promotion gate 사전 검수)
+  → data-seed-runner (release-preflight 스킬 실행) → gate별 PASS/FAIL
+  → 사용자 promote 결정 (승인 필수)
 ```
 
 ## 데이터 흐름 원칙
 
 - **OpenAPI drift**: backend-builder가 스키마를 바꾸면 → frontend-builder가 `sync-types`로 `openapi.d.ts` 갱신 → api-reviewer가 누락 점검.
-- **영역 격리**: builder끼리 서로의 디렉토리를 수정하지 않는다. 필요하면 보고 후 상대 builder에 재위임.
-- **검증 게이트**: test-runner/api-reviewer는 절대 코드를 수정하지 않는다. 문제 발견 시 builder에게 돌려보낸다.
-- **시드/스크립트**: data-seed-runner는 스크립트만 실행하고, 스크립트 수정이 필요하면 backend-builder에 위임 보고.
+- **ML ↔ API 경계**: ML을 노출하는 엔드포인트는 backend-builder가 얇은 라우터를, ml-builder가 predictor 호출 로직을 담당. 라우터/스키마는 backend, predictor 내부는 ML.
+- **pgvector 차원 변경**: ml-builder가 설계 → ml-reviewer가 차원 호환성 승인 → backend-builder가 alembic 마이그레이션 실행.
+- **영역 격리**: builder 3종(backend/frontend/ml)은 서로의 디렉토리를 수정하지 않는다. 필요하면 보고 후 상대 builder에 재위임.
+- **검증 게이트**: test-runner/api-reviewer/ml-reviewer는 절대 코드를 수정하지 않는다. 문제 발견 시 해당 builder에게 돌려보낸다.
+- **ML 안전 게이트**: predictor 변경은 ml-reviewer 통과 전 머지 금지. guardrail 우회·차원 무단 변경·서명 누락은 blocking.
+- **시드/스크립트**: data-seed-runner는 스크립트만 실행하고, 스크립트 수정이 필요하면 backend-builder(일반) 또는 ml-builder(ML)에 위임 보고.
 
 ## 위임 시 프롬프트 규칙
 
