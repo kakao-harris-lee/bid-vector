@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 이 문서는 **Claude Code**가 이 저장소에서 작업할 때 자동으로 읽는 진입 컨텍스트입니다.
-일반 사용자 시스템 가이드(`AGENT.md`)는 별도로 유지되며, 본 파일은 Claude Code 전용 규칙·도구·서브에이전트·슬래시 커맨드·MCP 매핑에 집중합니다.
+일반 사용자 시스템 가이드(`AGENT.md`)는 별도로 유지되며, 본 파일은 Claude Code 전용 규칙·도구·서브에이전트·스킬·MCP 매핑에 집중합니다.
 
 > 단일 출처: 기획·구현 매핑은 `docs/first_plan_implementation_review.md`,
 > 운영·작업 원칙은 `AGENT.md`,
@@ -57,7 +57,7 @@ docker compose config --quiet
 docker compose --profile tasks config --quiet
 ```
 
-`/check` 슬래시 커맨드는 위 명령들을 한 번에 실행합니다.
+`check` 스킬은 위 명령들을 한 번에 실행합니다.
 
 ## 3. 디렉토리 규칙 (어디에 무엇이 들어가나)
 
@@ -83,7 +83,7 @@ docker compose --profile tasks config --quiet
 2. **현재 구현을 존중한다.** `first_plan.md`보다 코드가 우선. 충돌이 있으면 호환 가능한 중간 단계를 먼저 설계.
 3. **단일 운영자 모델을 깨지 말 것.** legacy `allocations` 테이블은 유지하되 새 로직은 `BidDecisionRecord` 기준으로 작성.
 4. **synthetic 운영자는 username 접두 `synthetic-`로 한정.** canonical `operator` 계정과 절대 충돌시키지 말 것.
-5. **타입/스키마를 동기화한다.** 백엔드 API 변경 시 `/sync-types` 또는 직접 `frontend/src/shared/types/openapi.d.ts` 갱신.
+5. **타입/스키마를 동기화한다.** 백엔드 API 변경 시 `sync-types` 스킬 또는 직접 `frontend/src/shared/types/openapi.d.ts` 갱신.
 6. **시크릿은 코드에 절대 쓰지 않는다.** `.env`/`.env.example`만 사용.
 7. **predictor guardrail은 우회하지 않는다.** 카테고리 낙찰하한 미만 추천은 항상 차단.
 8. **메모리 broker에서도 동작해야 한다.** 새 Celery 태스크는 `memory://`에서 eager 실행이 가능해야 함.
@@ -104,19 +104,26 @@ docker compose --profile tasks config --quiet
 
 원칙: 한 에이전트가 다른 에이전트의 책임 영역을 건드리지 않게 프롬프트에 영역을 명시합니다.
 
-## 6. 슬래시 커맨드
+## 6. 스킬 (Skills)
 
-`.claude/commands/`에 마크다운으로 정의된 (또는 정의할) 단축 명령:
+작업 절차는 `.claude/skills/<name>/SKILL.md`에 스킬로 정의됩니다. 슬래시 커맨드가
+아니라 **스킬**이므로, 요청 키워드가 매칭되면 (또는 `Skill` 도구로) 자동 트리거됩니다.
 
-- `/screen <feature> <ScreenName>` — `features/<feature>/<ScreenName>.tsx`, `<ScreenName>.test.tsx`, `index.ts` + 라우트 등록 + react-query 훅 placeholder
-- `/api-route <name>` — `app/api/<name>.py`, `app/schemas/<name>.py`, `tests/test_<name>.py` 스캐폴드 + `routes.py` 등록
-- `/sync-types` — 백엔드 OpenAPI(`/openapi.json`) → `frontend/src/shared/types/openapi.d.ts` 재생성
-- `/run-backtest [slugs]` — 활성 venv로 `scripts/backtest_synthetic_operators.py` 실행
-- `/seed-synthetic [--purge]` — `scripts/seed_synthetic_operators.py` 실행
-- `/check` — `pytest -q && npm --prefix frontend run test && npm --prefix frontend run build`
-- `/release-preflight <manifest-ref>` — `python scripts/promote_ml_release.py preflight-rollout --manifest <manifest-ref> --require-signature`
+**작업 스킬:**
 
-새 슬래시 커맨드를 만들 땐 같은 폴더에 `<name>.md`를 추가하고 사용 예와 인자를 명시합니다.
+- `screen <feature> <ScreenName>` — `features/<feature>/<ScreenName>.tsx`, `<ScreenName>.test.tsx`, `index.ts` + 라우트 등록 + react-query 훅 placeholder
+- `api-route <name>` — `app/api/<name>.py`, `app/schemas/<name>.py`, `app/services/<name>.py`, `tests/test_<name>.py` 스캐폴드 + `routes.py` 등록
+- `sync-types` — 백엔드 OpenAPI(`/openapi.json`) → `frontend/src/shared/types/openapi.d.ts` 재생성
+- `run-backtest [slugs]` — 활성 venv로 `scripts/backtest_synthetic_operators.py` 실행
+- `seed-synthetic [--purge]` — `scripts/seed_synthetic_operators.py` 실행
+- `check` — `pytest -q && npm --prefix frontend run test && npm --prefix frontend run build`
+- `release-preflight <manifest-ref>` — `python scripts/promote_ml_release.py preflight-rollout --manifest <manifest-ref> --require-signature`
+
+**오케스트레이터 스킬:**
+
+- `bid-vector-orchestrator` — 위 작업 스킬과 §5의 전문 에이전트를 시나리오별로 조율하는 상위 하네스. 비-trivial 개발 작업(풀스택 기능, 리뷰, 검증 루프)을 시작할 때 트리거.
+
+새 스킬을 만들 땐 `.claude/skills/<name>/SKILL.md`에 `name`·`description`(트리거 키워드 포함) frontmatter와 워크플로우를 작성합니다. **슬래시 커맨드(`.claude/commands/`)는 더 이상 사용하지 않습니다.**
 
 ## 7. MCP 서버 (개발 환경 한정)
 
@@ -155,7 +162,7 @@ docker compose --profile tasks config --quiet
 - [ ] 새 화면은 `features/<area>/`에 두고 라우트 등록
 - [ ] `frontend/src/styles.css`에 새 규칙 추가하지 않음 (Tailwind/shadcn로 작성)
 - [ ] README 또는 `docs/<topic>.md` 갱신 (사용자가 인지해야 할 변화)
-- [ ] OpenAPI 변경 시 `/sync-types` 실행 → `openapi.d.ts` 커밋
+- [ ] OpenAPI 변경 시 `sync-types` 스킬 실행 → `openapi.d.ts` 커밋
 - [ ] 시크릿/개인정보 로깅하지 않음
 - [ ] 본 PR이 어느 Phase의 어느 수용 기준을 충족하는지 설명 본문에 명시
 
@@ -170,7 +177,7 @@ docker compose --profile tasks config --quiet
 3. **브랜치 생성**: `git switch -c feature/<slug>` (또는 `fix/<slug>`, `chore/<slug>`). 절대 `main`에 직접 커밋 금지.
 4. **계획**: 변경 범위가 큰 작업은 `Plan` 서브에이전트로 단계 분해 → 사용자 확인.
 5. **구현**: 적합한 서브에이전트(`frontend-builder` / `backend-builder`)에 위임. 의미 있는 단위로 atomic commit.
-6. **회귀 검증**: 변경 후 `/check`로 pytest + vitest + build 확인.
+6. **회귀 검증**: 변경 후 `check` 스킬로 pytest + vitest + build 확인.
 7. **PR 생성**: `git push -u origin <branch>` → `gh pr create`. PR 본문에 무엇/왜/테스트/수용 기준 체크리스트 포함.
 8. **코드 리뷰**: PR을 연 직후 `/code-review`(또는 `/code-review:code-review`) 실행. 자동 리뷰 결과를 PR에 코멘트로 게시.
 9. **리뷰 대응**: 받은 코멘트는 같은 브랜치에 추가 커밋 + push로 처리. 회귀 방지 테스트도 함께.

@@ -1,28 +1,20 @@
 ---
-description: 새 프론트엔드 화면 스캐폴드 (features/<area>/<Screen>.tsx + 테스트 + 라우트 등록)
-argument-hint: "<feature-area> <ScreenName>"
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
+name: screen
+description: 새 프론트엔드 화면 스캐폴드 (features/<area>/<Screen>.tsx + 테스트 + 라우트 등록). "새 화면 만들어줘", "프론트 컴포넌트 스캐폴드", "feature 화면 추가" 요청 시 사용. 인자로 feature-area + ScreenName 전달.
 ---
 
-# /screen
+# screen
 
 새 프론트엔드 화면을 `frontend/src/features/<area>/`에 스캐폴드하고 라우터에 등록한다.
 
-## 사용
+> 프론트엔드 구현 작업이므로 `frontend-builder` 에이전트가 이 스킬을 따라 실행한다.
 
-```
-/screen strategy StrategyEditor
-/screen synthetic-backtest ComparisonTable
-```
+## 입력
 
-인자:
 1. `<feature-area>` — `features/` 하위 폴더명 (kebab-case). 예: `strategy`, `decisions`, `synthetic-backtest`
 2. `<ScreenName>` — 컴포넌트 이름 (PascalCase). 예: `StrategyEditor`, `ComparisonTable`
+
+예: `strategy StrategyEditor`, `synthetic-backtest ComparisonTable`
 
 ## 생성 파일
 

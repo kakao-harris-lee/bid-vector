@@ -1,12 +1,13 @@
 ---
-description: 백엔드 pytest + 프론트엔드 vitest + 프론트엔드 build 회귀 검증 1세트
-allowed-tools:
-  - Bash
+name: check
+description: 백엔드 pytest + 프론트엔드 vitest + 프론트엔드 build 회귀 검증 1세트. "회귀 검증", "전체 테스트 돌려줘", "머지 전 체크", "/check" 요청 시 사용.
 ---
 
-# /check
+# check
 
 PR 머지 전 회귀 검증 1세트를 실행한다.
+
+> 명령 실행·triage 전담이므로 `test-runner` 에이전트가 이 스킬을 따라 실행할 수 있다.
 
 ## 실행 명령 (순서대로)
 
@@ -25,7 +26,7 @@ npm --prefix frontend run build
 ## 보고 양식
 
 ```
-## /check results
+## check results
 
 | Suite | Status | Detail |
 |---|---|---|

@@ -55,7 +55,7 @@ tools:
 
 - 라우터/스키마 변경이 OpenAPI 응답 형태를 바꾸는가?
 - 그렇다면 `frontend/src/shared/types/openapi.d.ts` 갱신이 이번 PR에 포함되었는가?
-- 안 되어 있으면 `/sync-types` 실행을 권고하라.
+- 안 되어 있으면 `sync-types` 스킬 실행을 권고하라.
 
 ### 6. 보안 / 시크릿
 
@@ -81,7 +81,7 @@ APPROVE | APPROVE WITH NITS | REQUEST CHANGES
 ### OpenAPI drift
 - 변경된 응답: <라우트 경로>
 - 프론트 타입 갱신 필요: yes/no
-- 권고: `/sync-types` 실행
+- 권고: `sync-types` 스킬 실행
 
 ### Test coverage gaps
 - <라우트/서비스>에 누락된 케이스: ...

@@ -1,32 +1,24 @@
 ---
-description: 새 백엔드 API 4종(schema/route/service/test) 스캐폴드 + routes.py 등록
-argument-hint: "<name>"
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
+name: api-route
+description: 새 백엔드 API 4종(schema/route/service/test) 스캐폴드 + routes.py 등록. "새 API 만들어줘", "라우트 스캐폴드", "엔드포인트 추가" 요청 시 사용. 인자로 모듈명(snake_case) 전달.
 ---
 
-# /api-route
+# api-route
 
 새 FastAPI 라우트를 4종 세트(schema + route + service + test)로 스캐폴드하고
 `app/api/routes.py`에 등록한다.
 
-## 사용
+> 백엔드 구현 작업이므로 `backend-builder` 에이전트가 이 스킬을 따라 실행한다.
 
-```
-/api-route synthetic
-/api-route operator-strategy-runs
-```
+## 입력
 
-인자:
-1. `<name>` — 모듈명(snake_case 또는 kebab-case). 다음 파일이 만들어진다:
-   - `app/api/<name>.py`
-   - `app/schemas/<name>.py`
-   - `app/services/<name>.py` (이미 있으면 건드리지 않음)
-   - `tests/test_<name>.py`
+- `<name>` — 모듈명(snake_case 또는 kebab-case). 다음 파일이 만들어진다:
+  - `app/api/<name>.py`
+  - `app/schemas/<name>.py`
+  - `app/services/<name>.py` (이미 있으면 건드리지 않음)
+  - `tests/test_<name>.py`
+
+예: `synthetic`, `operator-strategy-runs`
 
 ## 작업 절차
 
@@ -63,3 +55,4 @@ allowed-tools:
 - 생성/수정된 파일 목록
 - 등록된 prefix
 - 사용자가 다음에 채울 부분 (스키마 필드, 비즈니스 로직, 추가 테스트)
+- OpenAPI가 바뀌므로 구현 완료 후 `sync-types` 스킬 권고

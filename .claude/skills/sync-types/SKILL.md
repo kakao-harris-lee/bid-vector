@@ -1,15 +1,14 @@
 ---
-description: 백엔드 OpenAPI 스키마를 frontend/src/shared/types/openapi.d.ts로 동기화
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
+name: sync-types
+description: 백엔드 OpenAPI 스키마를 frontend/src/shared/types/openapi.d.ts로 동기화. "타입 동기화", "openapi.d.ts 갱신", "백엔드 API 타입 프론트에 반영" 요청 시 사용. 백엔드 API 변경 후 필수.
 ---
 
-# /sync-types
+# sync-types
 
 백엔드 OpenAPI(`/openapi.json`)로부터 프론트엔드 타입을 생성한다.
+
+> 백엔드 API 스키마 변경 직후 실행한다. 생성 파일은 `frontend/` 영역이므로
+> `frontend-builder` 또는 메인 에이전트가 실행한다.
 
 ## 실행 흐름
 

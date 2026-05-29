@@ -1,24 +1,17 @@
 ---
-description: ML release manifest preflight (서명/promotion gate/백테스트 상태 확인)
-argument-hint: "<manifest-ref>"
-allowed-tools:
-  - Bash
-  - Read
+name: release-preflight
+description: ML release manifest preflight (서명/promotion gate/백테스트 상태 확인). "릴리스 프리플라이트", "promotion gate 점검", "모델 배포 전 검증" 요청 시 사용. 인자로 manifest-ref 전달.
 ---
 
-# /release-preflight
+# release-preflight
 
 ML release manifest의 promotion gate를 사전 점검한다.
 
-## 사용
+## 입력
 
-```
-/release-preflight latest
-/release-preflight reports/ml-releases/2026-05-20-price-v3.json
-```
+- `<manifest-ref>` — manifest 식별자(파일 경로 또는 release id)
 
-인자:
-1. `<manifest-ref>` — manifest 식별자(파일 경로 또는 release id)
+예: `latest`, `reports/ml-releases/2026-05-20-price-v3.json`
 
 ## 실행
 
