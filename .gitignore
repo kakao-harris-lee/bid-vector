@@ -112,3 +112,6 @@ frontend/playwright/.cache/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .serena/
+
+# API doc pipeline intermediates
+docs/api/.work/
