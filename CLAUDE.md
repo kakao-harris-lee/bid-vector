@@ -97,12 +97,15 @@ docker compose --profile tasks config --quiet
 | 에이전트 | 책임 | 권한 | 호출 예 |
 |---|---|---|---|
 | `frontend-builder` | `frontend/src/features/`/`shared/` 하위 화면·훅 구현 | Read/Write/Edit + npm/vitest 실행 | "Phase 1 StrategyEditor 구현해줘" |
-| `backend-builder` | `app/api/`, `app/services/`, `app/schemas/`, `tests/` 구현 | Read/Write/Edit + pytest/py_compile | "Phase 5 synthetic backtest 라우터 + 서비스 만들어줘" |
+| `backend-builder` | `app/api/`, `app/services/`(ML 제외), `app/schemas/`, `tests/` 구현 | Read/Write/Edit + pytest/py_compile | "Phase 5 synthetic backtest 라우터 + 서비스 만들어줘" |
+| `ml-builder` | `app/ai/`, ML 서비스(`ml_training`/`ml_release`/`prediction_*`), ML 스크립트·테스트 | Read/Write/Edit + pytest/py_compile | "price predictor에 새 feature 추가하고 guardrail 회귀 테스트 붙여줘" |
 | `api-reviewer` | 변경된 라우터·스키마·서비스의 일관성·OpenAPI drift·테스트 누락 점검 | Read 전용 | "이번 PR의 API 변경 리뷰해줘" |
+| `ml-reviewer` | predictor guardrail·pgvector 차원·manifest 서명·데이터 누수·drift 점검 | Read 전용 | "이 predictor 변경 ML 관점에서 리뷰해줘" |
 | `test-runner` | pytest/vitest/playwright 실행, 실패 triage | Read + 명령 실행 (수정 금지) | "전체 테스트 돌리고 실패한 것만 표 만들어줘" |
 | `data-seed-runner` | 시드/리셋 스크립트만 실행 (`seed_synthetic_operators.py` 등) | 명령 실행 | "synthetic 운영자 리시드" |
 
 원칙: 한 에이전트가 다른 에이전트의 책임 영역을 건드리지 않게 프롬프트에 영역을 명시합니다.
+**ML/예측 파이프라인(`app/ai/`, ML 서비스/스크립트)은 `ml-builder`·`ml-reviewer` 소유**이며, backend-builder는 ML을 노출하는 얇은 라우터만 담당합니다.
 
 ## 6. 스킬 (Skills)
 
