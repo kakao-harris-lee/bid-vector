@@ -191,6 +191,53 @@ def test_reclassify_pending_updates_general_rows(test_db):
     assert p.category == "software"
 
 
+def test_match_title_keyword_software_construction_goods():
+    """Title regex shortcuts map common Korean keywords to category."""
+    from app.services.category_classifier import CategoryClassifierService
+
+    svc = CategoryClassifierService(model=None)  # model not needed for keyword path
+    assert svc.match_title_keyword("수소기술사업화 지원 플랫폼 구축") == "software"
+    assert svc.match_title_keyword("AI 데이터 분석 시스템 고도화") == "software"
+    assert svc.match_title_keyword("1차 냉각펌프기기실 로컬에어쿨러 수리") == "goods"
+    assert svc.match_title_keyword("의료기기 구매 입찰") == "goods"
+    assert svc.match_title_keyword("나운1동 도로정비공사 폐기물처리용역") == "technical-service" or \
+        svc.match_title_keyword("나운1동 도로정비공사 폐기물처리용역") == "construction"
+    assert svc.match_title_keyword("학교 위탁용역 운영") == "service"
+    # Fallback when no keyword matches
+    assert svc.match_title_keyword("아무 의미 없는 텍스트") is None
+    assert svc.match_title_keyword(None) is None
+
+
+def test_reclassify_uses_keyword_path_without_model(test_db):
+    """Keyword shortcut works even when SBERT model is unavailable."""
+    from app.models.models import Project
+    from app.services.category_classifier import CategoryClassifierService
+
+    p1 = Project(title="냉각펌프 수리", category="general", status="open")
+    p2 = Project(title="SW사업 적합사업 기준 개발", category="general", status="open")
+    p3 = Project(title="아무런 키워드도 없는 행", category="general", status="open")
+    test_db.add_all([p1, p2, p3])
+    test_db.commit()
+
+    # model=None — no SBERT prototypes. Keyword path still fires.
+    svc = CategoryClassifierService(model=None)
+    svc._resolve_model = lambda: None  # force no model
+    stats = svc.reclassify_pending(test_db, limit=10)
+
+    assert stats["candidates"] == 3
+    assert stats["updated_from_keyword"] == 2
+    assert stats["updated_from_sbert"] == 0
+    assert stats["skipped_model_unavailable"] == 1
+    assert stats["updated"] == 2  # legacy alias
+
+    test_db.refresh(p1)
+    test_db.refresh(p2)
+    test_db.refresh(p3)
+    assert p1.category == "goods"
+    assert p2.category == "software"
+    assert p3.category == "general"  # unchanged
+
+
 def test_reclassify_skips_when_already_specific(test_db):
     from app.models.models import Project
     from app.services.category_classifier import CategoryClassifierService

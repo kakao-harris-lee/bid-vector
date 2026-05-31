@@ -1,12 +1,17 @@
 """SBERT prototype-based category classifier.
 
-Re-assigns Project.category for rows stuck at 'general' or 'other' using
-cosine similarity against precomputed per-category prototype embeddings.
+Re-assigns Project.category for rows stuck at 'general' or 'other' via:
+  1. Fast title-keyword regex pass — high-precision phrases (e.g. "공사",
+     "수리", "SW", "플랫폼") map directly without SBERT.
+  2. SBERT cosine similarity against precomputed per-category prototype
+     embeddings, gated by min_similarity + margin.
+
 Falls back silently if the SBERT model is unavailable (offline / dev).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 
 
@@ -59,10 +64,49 @@ class CategoryClassifierService:
         ],
     }
 
-    def __init__(self, model=None, prototypes=None):
+    # High-precision title regex shortcuts. Ordered specific → generic.
+    # First match wins. Falls through to SBERT only when no regex matches.
+    DEFAULT_TITLE_KEYWORDS: list[tuple[str, str]] = [
+        # software — strong technical indicators
+        (r"소프트웨어|SW사업|시스템\s*구축|플랫폼\s*구축|정보시스템|"
+         r"앱\s*개발|웹\s*서비스|데이터\s*분석.*시스템|시스템.*고도화|AI\s*플랫폼",
+         "software"),
+        # goods — purchase / repair / equipment
+        (r"물품\s*구매|장비\s*구매|기자재\s*구매|구매\s*입찰|"
+         r"기기\s*구매|차량\s*구매|의료기기|수리(?!\s*용역)|장비\s*도입",
+         "goods"),
+        # technical-service — engineering oversight
+        (r"기술용역|엔지니어링|공사\s*감리|감리\s*용역|기술지원|"
+         r"정밀안전점검|기술지도|건설사업관리",
+         "technical-service"),
+        # construction — bare 공사 (already-tagged compound forms handled by predictor band)
+        (r"공사", "construction"),
+        # service — broadest fallback within keyword pass
+        (r"용역|위탁|운영\s*및|체험학습|홍보\s*용역|영상\s*제작|콘텐츠\s*제작",
+         "service"),
+    ]
+
+    def __init__(self, model=None, prototypes=None, title_keywords=None):
         self._model_override = model
         self._prototype_texts: dict[str, list[str]] = prototypes or self.DEFAULT_PROTOTYPES
         self._prototype_vectors: dict[str, list[float]] | None = None
+        raw_keywords = title_keywords if title_keywords is not None else self.DEFAULT_TITLE_KEYWORDS
+        self._title_keyword_rules: list[tuple[re.Pattern[str], str]] = []
+        for pattern, category in raw_keywords:
+            try:
+                self._title_keyword_rules.append((re.compile(pattern), category))
+            except re.error:
+                continue
+
+    def match_title_keyword(self, title: str | None) -> str | None:
+        """Return the first matching category for the title, or None."""
+        text = str(title or "").strip()
+        if not text or not self._title_keyword_rules:
+            return None
+        for pattern, category in self._title_keyword_rules:
+            if pattern.search(text):
+                return category
+        return None
 
     def _ensure_prototypes(self) -> dict[str, list[float]]:
         """Lazy-build prototype vectors. Returns dict or empty if model unavailable."""
@@ -134,14 +178,20 @@ class CategoryClassifierService:
         return (best_cat, best_sim)
 
     def reclassify_pending(self, db, *, limit: int = 100) -> dict:
-        """Update Project.category for rows where category IN ('general', 'other')
-        whose embedding gives a confident SBERT match."""
+        """Update Project.category for rows where category IN ('general', 'other').
+
+        Order:
+          1. Title regex shortcut (high-precision phrases) — fires regardless of
+             SBERT model availability.
+          2. SBERT cosine sim (confidence-gated) for rows the regex didn't match.
+        """
         from app.models.models import Project
 
         @dataclass
         class _Stats:
             candidates: int = 0
-            updated: int = 0
+            updated_from_keyword: int = 0
+            updated_from_sbert: int = 0
             skipped_no_embedding: int = 0
             skipped_low_confidence: int = 0
             skipped_model_unavailable: int = 0
@@ -149,21 +199,11 @@ class CategoryClassifierService:
         stats = _Stats()
 
         prototypes = self._ensure_prototypes()
-        if not prototypes:
-            # Model unavailable — count all as skipped
-            total = (
-                db.query(Project)
-                .filter(Project.category.in_(["general", "other"]))
-                .filter(Project.embedding.isnot(None))
-                .count()
-            )
-            stats.skipped_model_unavailable = total
-            return asdict(stats)
+        model_available = bool(prototypes)
 
         candidates = (
             db.query(Project)
             .filter(Project.category.in_(["general", "other"]))
-            .filter(Project.embedding.isnot(None))
             .order_by(Project.id.desc())
             .limit(limit)
             .all()
@@ -171,6 +211,19 @@ class CategoryClassifierService:
         stats.candidates = len(candidates)
 
         for project in candidates:
+            # 1. Title regex shortcut — works even without SBERT.
+            keyword_match = self.match_title_keyword(project.title)
+            if keyword_match is not None:
+                project.category = keyword_match
+                db.add(project)
+                stats.updated_from_keyword += 1
+                continue
+
+            # 2. SBERT path requires both an embedding and a working model.
+            if not model_available:
+                stats.skipped_model_unavailable += 1
+                continue
+
             embedding = project.embedding
             if embedding is None:
                 stats.skipped_no_embedding += 1
@@ -181,16 +234,19 @@ class CategoryClassifierService:
                 stats.skipped_no_embedding += 1
                 continue
 
-            best, sim = self.infer_category(vec)
+            best, _ = self.infer_category(vec)
             if best is None:
                 stats.skipped_low_confidence += 1
                 continue
 
             project.category = best
             db.add(project)
-            stats.updated += 1
+            stats.updated_from_sbert += 1
 
-        if stats.updated:
+        if stats.updated_from_keyword or stats.updated_from_sbert:
             db.commit()
 
-        return asdict(stats)
+        result = asdict(stats)
+        # legacy alias for any consumer reading a single "updated" field
+        result["updated"] = stats.updated_from_keyword + stats.updated_from_sbert
+        return result
