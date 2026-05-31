@@ -6,6 +6,7 @@ import { HomeScreen } from "@/features/dashboard/HomeScreen";
 import { OpportunitiesScreen } from "@/features/dashboard/OpportunitiesScreen";
 import { BidsScreen } from "@/features/dashboard/BidsScreen";
 import { ResultsScreen } from "@/features/dashboard/ResultsScreen";
+import { GuideScreen } from "@/features/guide";
 
 // Heavier secondary screens are code-split so the initial /dashboard bundle
 // stays under the Vite 500 kB warning threshold once recharts + zod schemas
@@ -53,6 +54,7 @@ export function AppRoutes() {
         }
       >
         <Route index element={<HomeScreen />} />
+        <Route path="guide" element={<GuideScreen />} />
         <Route path="opportunities" element={<OpportunitiesScreen />} />
         <Route path="bids" element={<BidsScreen />} />
         <Route path="results" element={<ResultsScreen />} />
