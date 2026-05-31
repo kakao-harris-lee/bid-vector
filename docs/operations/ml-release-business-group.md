@@ -110,7 +110,27 @@ python scripts/promote_ml_release.py apply-manifest \
 
 재시작 후 `/health` 응답과 `GET /api/v1/analytics/operations-dashboard`의 `predictor` 블록을 확인한다.
 
-### 6. Celery 워커 재시작 ⚠ 누락 주의
+### 6. 호스트 브랜치 확인 ⚠ volume-mount 함정
+
+> **2026-05-31 incident**: PR #34(paper_bid 0-budget fix)를 main에 머지했는데 호스트가 `feature/synthetic-experiment-phase1` 브랜치에 머물러 있어서 워커 컨테이너(`./:/app` 바인드 마운트)가 여전히 feature 브랜치의 옛 코드를 실행. 다음 paper_bid_run이 또 같은 ValueError로 실패. `git checkout main && git pull` + 워커 재시작 후 정상화.
+
+`docker-compose.yml`의 모든 서비스가 `./:/app`으로 호스트 working dir를 바인드 마운트한다. 즉 **컨테이너 실행 코드 = 호스트의 현재 브랜치 파일**.
+
+```bash
+# 1. 현재 브랜치 확인 (main이 아니면 다음 단계 필수)
+git branch --show-current
+
+# 2. main으로 동기화
+git checkout main
+git pull --rebase origin main
+
+# 3. 변경된 파일이 컨테이너에서 보이는지 확인
+docker exec bid_vector_worker grep -c "<fix-marker>" /app/<changed-file>
+```
+
+다른 feature 브랜치 작업 중이면 `git worktree add ../bid-vector-main main`으로 별 디렉토리에 main을 체크아웃하고 그쪽에서 운영 작업을 한다.
+
+### 7. Celery 워커 재시작 ⚠ 누락 주의
 
 > **2026-05-26 incident**: PR 머지 후 API만 재시작되고 `bid_vector_worker / beat / ml_worker / training_worker` 컨테이너가 5일째 안 재시작된 상태로 paper_bidding이 돌아 `predicted_bid_rate=1.442` 같은 가드레일 우회 결과가 50건 중 47건 발생. worker가 머지 전 코드(Phase B 가드레일/그룹 분기 부재)를 실행 중이었음.
 
