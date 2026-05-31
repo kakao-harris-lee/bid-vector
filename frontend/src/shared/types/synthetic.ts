@@ -87,3 +87,75 @@ export interface SyntheticBacktestTaskStatusResponse {
   error?: string | null;
   result?: SyntheticBacktestRunResponse | null;
 }
+
+// --- Experiment Lab (Phase 1) -------------------------------------------------
+// 보조 타입: 생성 파일 `openapi.d.ts`의 SyntheticExperiment* 스키마와 동일한 형태를
+// 화면에서 다루기 쉽게 재선언한다(생성 파일은 수기 수정 금지).
+
+export type SyntheticRunStatus = "queued" | "running" | "completed" | "failed";
+
+/** 실험 정의 실행 파라미터 (persisted as JSON). */
+export interface SyntheticExperimentParams {
+  start_at?: string | null;
+  end_at?: string | null;
+  category?: string | null;
+  limit: number;
+  scenario: string;
+  cutoff_hours?: number | null;
+  history_limit?: number | null;
+  settle_actions: boolean;
+}
+
+/** 실험 생성 요청 본문. */
+export interface SyntheticExperimentCreateRequest {
+  name: string;
+  description?: string | null;
+  params: SyntheticExperimentParams;
+  operator_slugs?: string[] | null;
+}
+
+/** 실험 상세에 임베드되는 경량 런 요약. */
+export interface SyntheticExperimentRunSummary {
+  id: number;
+  experiment_id: number;
+  status: string;
+  task_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  summary?: Record<string, unknown> | null;
+  created_at?: string | null;
+}
+
+/** 실험 정의 + 런 이력. */
+export interface SyntheticExperimentResponse {
+  id: number;
+  name: string;
+  description?: string | null;
+  params: SyntheticExperimentParams;
+  operator_slugs?: string[];
+  created_at?: string | null;
+  updated_at?: string | null;
+  runs?: SyntheticExperimentRunSummary[];
+}
+
+/** 회사별 결과 (폴링 응답에 포함). */
+export interface SyntheticExperimentResultItem {
+  operator_slug: string;
+  metrics?: Record<string, unknown>;
+  settlement_sample?: unknown | null;
+}
+
+/** 폴링 응답: 런 상태 + 완료 시 회사별 결과. */
+export interface SyntheticExperimentRunResponse {
+  id: number;
+  experiment_id: number;
+  status: string;
+  task_id?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  summary?: Record<string, unknown> | null;
+  created_at?: string | null;
+  results?: SyntheticExperimentResultItem[];
+}

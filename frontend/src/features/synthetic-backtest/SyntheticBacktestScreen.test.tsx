@@ -143,6 +143,9 @@ describe("SyntheticBacktestScreen", () => {
 
     renderApp();
 
+    // Experiment Lab wraps the backtest screen under the "비교 / 시드" tab.
+    fireEvent.click(await screen.findByRole("tab", { name: "비교 / 시드" }));
+
     expect(
       await screen.findByRole("heading", { name: "가상 운영자 백테스트", level: 2 })
     ).toBeInTheDocument();
@@ -169,6 +172,9 @@ describe("SyntheticBacktestScreen", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
+
+    // Experiment Lab wraps the backtest screen under the "비교 / 시드" tab.
+    fireEvent.click(await screen.findByRole("tab", { name: "비교 / 시드" }));
 
     expect(
       await screen.findByRole("heading", { name: "가상 운영자 백테스트", level: 2 })

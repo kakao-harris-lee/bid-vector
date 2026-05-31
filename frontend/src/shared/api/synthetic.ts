@@ -5,6 +5,9 @@ import type {
   SyntheticBacktestRunResponse,
   SyntheticBacktestTaskResponse,
   SyntheticBacktestTaskStatusResponse,
+  SyntheticExperimentCreateRequest,
+  SyntheticExperimentResponse,
+  SyntheticExperimentRunResponse,
   SyntheticOperatorListResponse,
   SyntheticSeedResponse
 } from "@/shared/types/synthetic";
@@ -77,5 +80,72 @@ export function fetchSyntheticBacktestTaskStatus(
       { token }
     ),
     "synthetic 백테스트 태스크 상태를 불러오지 못했습니다."
+  );
+}
+
+// --- Experiment Lab (Phase 1) -------------------------------------------------
+
+export function createExperiment(
+  payload: SyntheticExperimentCreateRequest,
+  token?: string | null
+): Promise<SyntheticExperimentResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentResponse>("/api/v1/synthetic/experiments", {
+      method: "POST",
+      body: payload,
+      token
+    }),
+    "실험 생성에 실패했습니다."
+  );
+}
+
+export function fetchExperiments(
+  token?: string | null
+): Promise<SyntheticExperimentResponse[]> {
+  return wrap(
+    apiRequest<SyntheticExperimentResponse[]>("/api/v1/synthetic/experiments", {
+      token
+    }),
+    "실험 목록을 불러오지 못했습니다."
+  );
+}
+
+export function fetchExperiment(
+  id: number,
+  token?: string | null
+): Promise<SyntheticExperimentResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentResponse>(
+      `/api/v1/synthetic/experiments/${id}`,
+      { token }
+    ),
+    "실험 상세를 불러오지 못했습니다."
+  );
+}
+
+export function triggerExperimentRun(
+  id: number,
+  token?: string | null
+): Promise<SyntheticExperimentRunResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentRunResponse>(
+      `/api/v1/synthetic/experiments/${id}/runs`,
+      { method: "POST", token }
+    ),
+    "실험 실행 트리거에 실패했습니다."
+  );
+}
+
+export function fetchExperimentRun(
+  id: number,
+  runId: number,
+  token?: string | null
+): Promise<SyntheticExperimentRunResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentRunResponse>(
+      `/api/v1/synthetic/experiments/${id}/runs/${runId}`,
+      { token }
+    ),
+    "실험 런 상태를 불러오지 못했습니다."
   );
 }
