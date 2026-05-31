@@ -49,29 +49,50 @@ docker compose --profile tasks restart "${services[@]}"
 
 echo "[sync] waiting for services to become ready"
 sleep 3
+
+# Poll a single container until it reports ready (or timeout).
+#   $1: container name
+#   $2: probe — either "health" (Docker healthcheck) or a grep pattern against logs
+#   $3: timeout seconds (default 60)
+wait_for_ready() {
+    local container="$1"
+    local probe="$2"
+    local timeout="${3:-60}"
+    local elapsed=0
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if [ "$probe" = "health" ]; then
+            local status
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || echo "missing")"
+            case "$status" in
+                healthy)  echo "[sync]   $container   healthy (${elapsed}s)"; return 0 ;;
+                unhealthy) echo "[sync]   $container   UNHEALTHY — abort"; return 1 ;;
+                none)     echo "[sync]   $container   running (no healthcheck defined)"; return 0 ;;
+            esac
+        else
+            if docker logs --tail 30 "$container" 2>&1 | grep -q "$probe"; then
+                echo "[sync]   $container  ready (${elapsed}s)"
+                return 0
+            fi
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    echo "[sync]   $container  NOT ready after ${timeout}s (check 'docker logs $container')"
+    return 1
+}
+
+overall_ok=0
 for svc in "${services[@]}"; do
     case "$svc" in
         worker|ml-worker|training-worker)
             container="bid_vector_${svc//-/_}"
-            if docker logs --tail 20 "$container" 2>&1 | grep -q "celery@.* ready"; then
-                echo "[sync]   $container  ready"
-            else
-                echo "[sync]   $container  NOT ready (check 'docker logs $container')"
-            fi
+            wait_for_ready "$container" "celery@.* ready" 60 || overall_ok=1
             ;;
         beat)
-            if docker logs --tail 20 bid_vector_beat 2>&1 | grep -q "beat: Starting"; then
-                echo "[sync]   bid_vector_beat  ready"
-            else
-                echo "[sync]   bid_vector_beat  NOT ready"
-            fi
+            wait_for_ready "bid_vector_beat" "beat: Starting" 60 || overall_ok=1
             ;;
         api)
-            if docker ps --filter "name=bid_vector_api" --filter "health=healthy" --format '{{.Names}}' | grep -q bid_vector_api; then
-                echo "[sync]   bid_vector_api   healthy"
-            else
-                echo "[sync]   bid_vector_api   not yet healthy (check 'docker logs bid_vector_api')"
-            fi
+            wait_for_ready "bid_vector_api" "health" 90 || overall_ok=1
             ;;
         *)
             echo "[sync]   $svc  (no health probe defined)"
@@ -79,4 +100,8 @@ for svc in "${services[@]}"; do
     esac
 done
 
+if [ "$overall_ok" -ne 0 ]; then
+    echo "[sync] done WITH WARNINGS"
+    exit 1
+fi
 echo "[sync] done"
