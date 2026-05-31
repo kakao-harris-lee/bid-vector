@@ -470,3 +470,69 @@ class Analytics(Base):
     event_type = Column(String(100))  # bid_submitted, prediction_made, etc.
     event_data = Column(Text)  # JSON
     timestamp = Column(DateTime(timezone=True), default=utc_now)
+
+
+class SyntheticExperiment(Base):
+    """Saved definition of a synthetic-operator backtest experiment (Lab)."""
+    __tablename__ = "synthetic_experiments"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    description = Column(String(2000), nullable=True)
+    # JSON serialized as Text (mirrors PaperBidRun.request_json/result_payload):
+    # start_at/end_at/category/limit/scenario/cutoff_hours/history_limit/
+    # settle_actions.
+    params_json = Column(Text, default="{}")
+    # JSON serialized list[str] of target synthetic operator slugs. Empty list
+    # means "all seeded synthetic operators".
+    operator_slugs_json = Column(Text, default="[]")
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    runs = relationship(
+        "SyntheticExperimentRun",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        order_by="SyntheticExperimentRun.created_at.desc()",
+    )
+
+
+class SyntheticExperimentRun(Base):
+    """A single asynchronous execution of a synthetic experiment."""
+    __tablename__ = "synthetic_experiment_runs"
+
+    id = Column(Integer, primary_key=True)
+    experiment_id = Column(
+        Integer, ForeignKey("synthetic_experiments.id"), nullable=False, index=True
+    )
+    status = Column(String(50), default="queued", index=True)  # queued/running/completed/failed
+    task_id = Column(String(100), nullable=True, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    error = Column(Text, nullable=True)
+    summary_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    experiment = relationship("SyntheticExperiment", back_populates="runs")
+    results = relationship(
+        "SyntheticExperimentResult",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="SyntheticExperimentResult.operator_slug.asc()",
+    )
+
+
+class SyntheticExperimentResult(Base):
+    """Per-operator metrics persisted from a synthetic experiment run."""
+    __tablename__ = "synthetic_experiment_results"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(
+        Integer, ForeignKey("synthetic_experiment_runs.id"), nullable=False, index=True
+    )
+    operator_slug = Column(String(100), nullable=False, index=True)
+    metrics_json = Column(Text, nullable=False)
+    settlement_sample_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    run = relationship("SyntheticExperimentRun", back_populates="results")

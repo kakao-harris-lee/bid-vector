@@ -2,7 +2,7 @@
 
 import json
 from datetime import date, datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 try:  # pragma: no cover - optional dependency fallback
     import email_validator  # noqa: F401
@@ -2000,3 +2000,97 @@ class BackgroundJobResponse(BaseModel):
     task_name: str
     status: str
     detail: str
+
+
+# --- Synthetic Experiment Lab (Phase 1) ---------------------------------------
+
+
+class SyntheticExperimentParams(BaseModel):
+    """Execution parameters for a synthetic experiment (persisted as JSON).
+
+    Field names mirror the existing synthetic backtest request (``start_at`` /
+    ``end_at`` datetimes, ``scenario`` default ``base``). ``cutoff_hours`` /
+    ``history_limit`` / ``settle_actions`` are persisted with the definition for
+    forward compatibility even though the current engine consumes only the core
+    fields.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    category: Optional[str] = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    scenario: str = "base"
+    cutoff_hours: Optional[int] = Field(default=None, ge=0)
+    history_limit: Optional[int] = Field(default=None, ge=1)
+    settle_actions: bool = False
+
+
+class SyntheticExperimentCreate(BaseModel):
+    """Request payload for creating (saving) a synthetic experiment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    params: SyntheticExperimentParams
+    operator_slugs: Optional[List[str]] = None
+
+
+class SyntheticExperimentRunSummary(BaseModel):
+    """Lightweight run summary embedded in an experiment detail response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    experiment_id: int
+    status: str
+    task_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error: Optional[str] = None
+    summary: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+
+
+class SyntheticExperimentResponse(BaseModel):
+    """Full synthetic experiment detail including run history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: Optional[str] = None
+    params: SyntheticExperimentParams
+    operator_slugs: List[str] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    runs: List[SyntheticExperimentRunSummary] = Field(default_factory=list)
+
+
+class SyntheticExperimentResultItem(BaseModel):
+    """Per-operator result persisted for a synthetic experiment run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    operator_slug: str
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    settlement_sample: Optional[Any] = None
+
+
+class SyntheticExperimentRunResponse(BaseModel):
+    """Detailed status/result payload for a single experiment run (polling)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    experiment_id: int
+    status: str
+    task_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error: Optional[str] = None
+    summary: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    results: List[SyntheticExperimentResultItem] = Field(default_factory=list)

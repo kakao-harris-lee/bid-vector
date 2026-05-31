@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.schemas.schemas import (
+    SyntheticExperimentCreate,
+    SyntheticExperimentResponse,
+    SyntheticExperimentRunResponse,
+)
 from app.services.synthetic_backtest import SyntheticBacktestService
+from app.services.synthetic_experiment import SyntheticExperimentService
 from app.tasks.jobs import (
     enqueue_synthetic_operator_backtest,
     get_synthetic_backtest_task_status,
@@ -244,3 +250,93 @@ def run_synthetic_backtest_endpoint(
         scenario=request.scenario,
         slugs=request.slugs,
     )
+
+
+# --- Experiment Lab (Phase 1): persist definitions + async run/poll ------------
+
+
+@router.post(
+    "/experiments",
+    response_model=SyntheticExperimentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_experiment_endpoint(
+    request: SyntheticExperimentCreate,
+    db: Session = Depends(get_db),
+):
+    """Save a synthetic experiment definition."""
+    service = SyntheticExperimentService(db)
+    experiment = service.create_experiment(
+        name=request.name,
+        description=request.description,
+        params=request.params.model_dump(mode="json"),
+        operator_slugs=request.operator_slugs,
+    )
+    return service.serialize_experiment(experiment)
+
+
+@router.get("/experiments", response_model=List[SyntheticExperimentResponse])
+def list_experiments_endpoint(db: Session = Depends(get_db)):
+    """List saved synthetic experiments (most recent first)."""
+    service = SyntheticExperimentService(db)
+    return [
+        service.serialize_experiment(experiment)
+        for experiment in service.list_experiments()
+    ]
+
+
+@router.get(
+    "/experiments/{experiment_id}",
+    response_model=SyntheticExperimentResponse,
+)
+def get_experiment_endpoint(experiment_id: int, db: Session = Depends(get_db)):
+    """Fetch a synthetic experiment detail including its run history."""
+    service = SyntheticExperimentService(db)
+    experiment = service.get_experiment(experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experiment not found.",
+        )
+    return service.serialize_experiment(experiment)
+
+
+@router.post(
+    "/experiments/{experiment_id}/runs",
+    response_model=SyntheticExperimentRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_experiment_run_endpoint(
+    experiment_id: int,
+    db: Session = Depends(get_db),
+):
+    """Trigger an asynchronous run of a saved experiment."""
+    service = SyntheticExperimentService(db)
+    experiment = service.get_experiment(experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experiment not found.",
+        )
+    run = service.create_run(experiment)
+    return service.serialize_run_detail(run)
+
+
+@router.get(
+    "/experiments/{experiment_id}/runs/{run_id}",
+    response_model=SyntheticExperimentRunResponse,
+)
+def get_experiment_run_endpoint(
+    experiment_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+):
+    """Poll the status/results of a synthetic experiment run."""
+    service = SyntheticExperimentService(db)
+    run = service.get_run(experiment_id, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Run not found.",
+        )
+    return service.serialize_run_detail(run)
