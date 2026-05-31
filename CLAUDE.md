@@ -19,6 +19,35 @@
 - 그래도 **시크릿/외부 호출/머지 자체는 사용자 승인 필수**다 (push to remote, gh pr merge, telegram 송신 등).
 - `ENVIRONMENT=production` 자체는 바꾸지 않는다 — 코드의 production-gate(테스트 환경 자동 분기 등)가 실제 운영 path를 타도록 유지해야 검증이 의미 있음.
 
+### ⚠ Volume-mount 함정 — PR 머지 후 반드시 main으로 체크아웃
+
+`docker-compose.yml`의 모든 서비스가 `./:/app` 으로 호스트 working dir를 바인드 마운트한다. 즉 **컨테이너가 실행하는 코드 = 호스트의 현재 브랜치 파일**이다. 호스트가 feature 브랜치에 머물러 있으면 PR을 main에 머지해도 컨테이너는 여전히 feature 브랜치 코드를 실행한다.
+
+**2026-05-31 incident**: PR #34 (paper_bid fix)를 main에 머지했는데 호스트가 `feature/synthetic-experiment-phase1`에 있어서 fix가 컨테이너에 자동 반영 안 됨. paper_bid_run #14가 또 같은 ValueError로 실패. `git checkout main && git pull` + 워커 재시작 후 정상화.
+
+**PR 머지 후 항상 다음 순서**:
+
+```bash
+# 1. 현재 호스트 브랜치 확인
+git branch --show-current     # main이 아니면 다음 단계 필수
+
+# 2. main으로 체크아웃 + pull
+git checkout main
+git pull --rebase origin main
+
+# 3. 관련 컨테이너 재시작 (volume mount는 자동, 그러나 이미 import된 모듈은 reload 필요)
+docker compose --profile tasks restart worker beat  # 코드만 바뀐 경우
+# 또는
+docker compose --profile tasks restart            # 모든 서비스
+# 또는 이미지 자체가 바뀐 경우 (requirements 변경, Dockerfile 변경)
+docker compose --profile tasks up -d --build
+
+# 4. 검증
+docker exec <container> grep -c "<fix-marker>" /app/<changed-file>  # 새 코드가 들어왔는지
+```
+
+다른 feature 브랜치 작업 중에 main에 핫픽스를 머지해야 한다면 `git stash` 또는 별도 worktree(`git worktree add ../bid-vector-main main`)로 main 체크아웃을 격리하는 게 안전하다.
+
 ## 1. 프로젝트 한 줄 요약
 
 한 업체(단일 운영자)가 나라장터(KONEPS) 공고에서 낙찰 가능성이 가장 높은 입찰 후보를 자동으로 찾고, 적정 투찰가를 결정해 추진하도록 돕는 FastAPI 백엔드 + Vite/React/TS 프론트엔드.
