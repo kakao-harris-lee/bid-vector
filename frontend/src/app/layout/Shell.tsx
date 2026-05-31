@@ -7,6 +7,7 @@ import {
   BarChart3,
   Beaker,
   Bell,
+  BookOpen,
   CheckCircle2,
   FlaskConical,
   Clock3,
@@ -43,6 +44,7 @@ export const DECISIONS_ROUTE_PATH = "/dashboard/decisions";
 export const EXPERIMENTS_ROUTE_PATH = "/dashboard/experiments";
 export const SYNTHETIC_ROUTE_PATH = "/dashboard/synthetic-backtest";
 export const OPERATIONS_ROUTE_PATH = "/dashboard/operations";
+export const GUIDE_ROUTE_PATH = "/dashboard/guide";
 
 export function routeKeyFromPath(pathname: string): RouteKey {
   if (pathname.startsWith("/dashboard/bids")) return "bids";
@@ -58,6 +60,7 @@ export function routeKeyFromPath(pathname: string): RouteKey {
  * consumers.
  */
 export function bottomNavKeyForPath(pathname: string): RouteKey | null {
+  if (pathname.startsWith(GUIDE_ROUTE_PATH)) return null;
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return null;
   if (pathname.startsWith(DECISIONS_ROUTE_PATH)) return null;
@@ -68,6 +71,7 @@ export function bottomNavKeyForPath(pathname: string): RouteKey | null {
 }
 
 function pageTitleForPath(pathname: string): string {
+  if (pathname.startsWith(GUIDE_ROUTE_PATH)) return "이용 가이드";
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return "공고 탐색";
   if (pathname.startsWith(DECISIONS_ROUTE_PATH)) return "결정 게이트웨이";
@@ -105,6 +109,7 @@ export function Shell() {
   const onExperiments = location.pathname.startsWith(EXPERIMENTS_ROUTE_PATH);
   const onSynthetic = location.pathname.startsWith(SYNTHETIC_ROUTE_PATH);
   const onOperations = location.pathname.startsWith(OPERATIONS_ROUTE_PATH);
+  const onGuide = location.pathname.startsWith(GUIDE_ROUTE_PATH);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useRealtimeEvents(session);
@@ -166,6 +171,12 @@ export function Shell() {
             onClick={() => navigate(onStrategy ? ROUTE_LABELS.home.path : STRATEGY_ROUTE_PATH)}
           >
             <Sliders size={18} />
+          </IconButton>
+          <IconButton
+            label="이용 가이드"
+            onClick={() => navigate(onGuide ? ROUTE_LABELS.home.path : GUIDE_ROUTE_PATH)}
+          >
+            <BookOpen size={18} />
           </IconButton>
           <IconButton
             label="알림"
