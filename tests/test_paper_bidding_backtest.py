@@ -371,6 +371,65 @@ def test_backtests_api_forward_run_creates_unsettled_paper_bids(client, test_db)
     assert settlement_overview["next_deadline_at"] is not None
 
 
+def test_forward_paper_skips_zero_budget_project_and_completes(client, test_db):
+    """REGRESSION: a single 0-budget project must not abort the entire run.
+
+    Production paper_bid_run 10 (2026-05-28) and 12 (2026-05-30) both failed
+    completely because project 19908 had budget_estimate=0 — the run aborted
+    after that project, marking the run failed even though preceding projects
+    had already produced valid paper_bids.
+    """
+    headers, _ = _bootstrap_and_auth(client, username="forward-zero-budget")
+
+    good_project = _project(
+        title="Open forward paper project",
+        category="construction",
+        deadline=datetime.now(UTC) + timedelta(days=3),
+        created_at=datetime.now(UTC) - timedelta(days=2),
+        budget=100_000_000,
+    )
+    good_project.status = "open"
+    bad_project = _project(
+        title="Zero budget ebiz4u-link project",
+        category="construction",
+        deadline=datetime.now(UTC) + timedelta(days=3),
+        created_at=datetime.now(UTC) - timedelta(days=1),
+        budget=0,
+    )
+    bad_project.status = "open"
+    test_db.add(good_project)
+    test_db.add(bad_project)
+    test_db.flush()
+
+    for index in range(8):
+        test_db.add(
+            _historical_row(
+                None,
+                opened_at=datetime.now(UTC) - timedelta(days=20 - index),
+                bid_rate=0.88,
+            )
+        )
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/backtests/paper-bidding/forward-runs",
+        headers=headers,
+        json={"category": "construction", "limit": 5, "persist": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    summary = payload["summary"]
+    # Good project produces a paper_bid; bad project is skipped, run completes.
+    assert summary["candidate_count"] == 1
+    assert summary["skipped_invalid_count"] == 1
+    run = (
+        test_db.query(PaperBidRun)
+        .filter(PaperBidRun.id == payload["run_id"])
+        .one()
+    )
+    assert run.status == "completed"
+
+
 def test_forward_paper_scheduler_builds_configured_payload(monkeypatch):
     from app.core.config import settings
     from app.tasks.celery_app import (

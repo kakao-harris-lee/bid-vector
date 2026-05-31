@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections import Counter
 from datetime import datetime
 from typing import Any, Iterable, Sequence
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session, selectinload
 
@@ -213,6 +216,7 @@ class PaperBiddingBacktestService:
         candidate_items: list[dict[str, Any]] = []
         action_counts: Counter[str] = Counter()
         skipped_by_strategy = 0
+        skipped_invalid = 0
 
         try:
             projects = self._load_forward_projects(db, category=category, limit=safe_limit, data_cutoff_at=data_cutoff_at)
@@ -220,16 +224,27 @@ class PaperBiddingBacktestService:
                 if not self._passes_strategy(project, strategy):
                     skipped_by_strategy += 1
                     continue
-                item = self._build_candidate_item(
-                    db,
-                    project=project,
-                    tender_result=None,
-                    data_cutoff_at=data_cutoff_at,
-                    scenario=normalized_scenario,
-                    strategy_version=strategy_version,
-                    cutoff_hours_before_deadline=0,
-                    history_limit=history_limit,
-                )
+                try:
+                    item = self._build_candidate_item(
+                        db,
+                        project=project,
+                        tender_result=None,
+                        data_cutoff_at=data_cutoff_at,
+                        scenario=normalized_scenario,
+                        strategy_version=strategy_version,
+                        cutoff_hours_before_deadline=0,
+                        history_limit=history_limit,
+                    )
+                except ValueError as project_exc:
+                    # A single malformed project (e.g. 0 budget for ebiz4u-link
+                    # imports) must not abort the whole run — skip + count it.
+                    logger.warning(
+                        "forward_paper: skipping project %s due to %s",
+                        getattr(project, "id", "?"),
+                        project_exc,
+                    )
+                    skipped_invalid += 1
+                    continue
                 action_counts[item["action"]] += 1
                 candidate_items.append(item)
                 self._persist_paper_bid(
@@ -247,6 +262,7 @@ class PaperBiddingBacktestService:
                 settlement_items=[],
                 skipped_by_strategy=skipped_by_strategy,
                 action_counts=action_counts,
+                skipped_invalid=skipped_invalid,
             )
             self._complete_run(
                 db,
@@ -486,6 +502,7 @@ class PaperBiddingBacktestService:
         settlement_items: list[dict[str, Any]],
         skipped_by_strategy: int,
         action_counts: Counter[str],
+        skipped_invalid: int = 0,
     ) -> dict[str, Any]:
         rate_errors = [float(item["absolute_bid_rate_error"]) for item in settlement_items]
         amount_errors = [float(item["absolute_error_rate"]) for item in settlement_items]
@@ -495,6 +512,7 @@ class PaperBiddingBacktestService:
             "review_count": int(action_counts.get("review", 0)),
             "skip_count": int(action_counts.get("skip", 0)),
             "skipped_by_strategy_count": skipped_by_strategy,
+            "skipped_invalid_count": skipped_invalid,
             "settled_count": len(settlement_items),
             "action_counts": dict(action_counts),
             "average_absolute_bid_rate_error": self._average(rate_errors),
