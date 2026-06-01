@@ -12,8 +12,9 @@ import { SyntheticBacktestScreen } from "./SyntheticBacktestScreen";
 import { ExperimentForm } from "./ExperimentForm";
 import { ExperimentList } from "./ExperimentList";
 import { ExperimentRunProgress } from "./ExperimentRunProgress";
+import { CustomOperatorManager } from "./CustomOperatorManager";
 
-type LabTab = "experiments" | "compare";
+type LabTab = "experiments" | "companies" | "compare";
 
 export function ExperimentLabScreen() {
   const { session } = useShellContext();
@@ -75,6 +76,15 @@ export function ExperimentLabScreen() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "companies"}
+          className={tabButtonClass("companies")}
+          onClick={() => setTab("companies")}
+        >
+          가상 회사
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "compare"}
           className={tabButtonClass("compare")}
           onClick={() => setTab("compare")}
@@ -82,6 +92,8 @@ export function ExperimentLabScreen() {
           비교 / 시드
         </button>
       </div>
+
+      {tab === "companies" ? <CustomOperatorManager token={token} /> : null}
 
       {tab === "experiments" ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -151,9 +163,9 @@ export function ExperimentLabScreen() {
             ) : null}
           </div>
         </div>
-      ) : (
-        <SyntheticBacktestScreen />
-      )}
+      ) : null}
+
+      {tab === "compare" ? <SyntheticBacktestScreen /> : null}
     </section>
   );
 }

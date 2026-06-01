@@ -1,6 +1,11 @@
 import { apiRequest } from "./client";
 import { ApiError } from "./session";
 import type {
+  CustomOperatorCloneRequest,
+  CustomOperatorCreateRequest,
+  CustomOperatorDeleteResponse,
+  CustomOperatorDetail,
+  CustomOperatorUpdateRequest,
   SyntheticBacktestRunRequest,
   SyntheticBacktestRunResponse,
   SyntheticBacktestTaskResponse,
@@ -147,5 +152,62 @@ export function fetchExperimentRun(
       { token }
     ),
     "실험 런 상태를 불러오지 못했습니다."
+  );
+}
+
+// --- Custom virtual companies (Phase 3) --------------------------------------
+
+export function createCustomOperator(
+  payload: CustomOperatorCreateRequest,
+  token?: string | null
+): Promise<CustomOperatorDetail> {
+  return wrap(
+    apiRequest<CustomOperatorDetail>("/api/v1/synthetic/custom-operators", {
+      method: "POST",
+      body: payload,
+      token
+    }),
+    "커스텀 회사 생성에 실패했습니다."
+  );
+}
+
+export function updateCustomOperator(
+  slug: string,
+  payload: CustomOperatorUpdateRequest,
+  token?: string | null
+): Promise<CustomOperatorDetail> {
+  return wrap(
+    apiRequest<CustomOperatorDetail>(
+      `/api/v1/synthetic/custom-operators/${encodeURIComponent(slug)}`,
+      { method: "PUT", body: payload, token }
+    ),
+    "커스텀 회사 편집에 실패했습니다."
+  );
+}
+
+export function cloneCustomOperator(
+  slug: string,
+  payload: CustomOperatorCloneRequest,
+  token?: string | null
+): Promise<CustomOperatorDetail> {
+  return wrap(
+    apiRequest<CustomOperatorDetail>(
+      `/api/v1/synthetic/custom-operators/${encodeURIComponent(slug)}/clone`,
+      { method: "POST", body: payload, token }
+    ),
+    "커스텀 회사 복제에 실패했습니다."
+  );
+}
+
+export function deleteCustomOperator(
+  slug: string,
+  token?: string | null
+): Promise<CustomOperatorDeleteResponse> {
+  return wrap(
+    apiRequest<CustomOperatorDeleteResponse>(
+      `/api/v1/synthetic/custom-operators/${encodeURIComponent(slug)}`,
+      { method: "DELETE", token }
+    ),
+    "커스텀 회사 삭제에 실패했습니다."
   );
 }

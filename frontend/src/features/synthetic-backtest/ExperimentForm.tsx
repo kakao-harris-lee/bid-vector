@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createExperiment, fetchSyntheticOperators } from "@/shared/api";
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, toastApi } from "@/shared/components/ui";
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, toastApi } from "@/shared/components/ui";
 import type {
   SyntheticExperimentCreateRequest,
   SyntheticExperimentResponse
@@ -225,6 +225,9 @@ export function ExperimentForm({ token, onCreated }: ExperimentFormProps) {
                       onChange={(event) => toggleSlug(operator.slug, event.target.checked)}
                     />
                     <span>{operator.display_name}</span>
+                    <Badge tone={operator.is_custom ? "info" : "muted"}>
+                      {operator.is_custom ? "커스텀" : "프리셋"}
+                    </Badge>
                     <span className="text-xs text-[var(--color-muted)]">({operator.slug})</span>
                   </label>
                 );

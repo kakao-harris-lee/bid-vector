@@ -9,6 +9,11 @@ export interface SyntheticOperatorItem {
   capacity_score: number;
   bid_now_threshold: number;
   review_threshold: number;
+  /**
+   * 커스텀(웹에서 생성)이면 true. 프리셋/canonical operator는 false.
+   * slug가 `custom-`으로 시작하는 회사가 커스텀이다.
+   */
+  is_custom: boolean;
 }
 
 export interface SyntheticOperatorListResponse {
@@ -210,4 +215,89 @@ export interface SyntheticExperimentRunResponse {
   summary?: Record<string, unknown> | null;
   created_at?: string | null;
   results?: SyntheticExperimentResultItem[];
+}
+
+// --- Custom virtual companies (Phase 3) --------------------------------------
+// 생성 파일 `openapi.d.ts`의 CustomOperator{Create,Update,CloneRequest,Detail,
+// DeleteResponse} 스키마와 동형. 화면(빌더/관리)에서 다루기 쉽게 보조 타입으로
+// 재선언한다(생성 파일은 수기 수정 금지).
+
+/**
+ * 회사 메타 + 전략 파라미터(생성/복제 공통 본문 필드).
+ * 텍스트 리스트는 string[]로 전송한다. 모두 optional.
+ */
+export interface CustomOperatorFields {
+  company_name?: string | null;
+  business_type?: string | null;
+  license_codes?: string[] | null;
+  region_codes?: string[] | null;
+  annual_revenue?: number | null;
+  capacity_score?: number | null;
+  focus_categories?: string[] | null;
+  focus_regions?: string[] | null;
+  exclude_regions?: string[] | null;
+  required_keywords?: string[] | null;
+  exclude_keywords?: string[] | null;
+  min_budget_estimate?: number | null;
+  max_budget_estimate?: number | null;
+  minimum_match_score?: number | null;
+  minimum_probability_score?: number | null;
+  bid_now_threshold?: number | null;
+  review_threshold?: number | null;
+  max_recommended_candidates?: number | null;
+}
+
+/** 커스텀 회사 생성 요청 본문 (`name` 필수, slug 선택). */
+export interface CustomOperatorCreateRequest extends CustomOperatorFields {
+  name: string;
+  slug?: string | null;
+}
+
+/** 커스텀 회사 복제 요청 본문 (override; source는 경로 slug). */
+export interface CustomOperatorCloneRequest extends CustomOperatorFields {
+  name?: string | null;
+  slug?: string | null;
+}
+
+/** 커스텀 회사 부분 갱신 요청 본문 (전 필드 optional). */
+export interface CustomOperatorUpdateRequest extends CustomOperatorFields {
+  name?: string | null;
+}
+
+/**
+ * 커스텀 회사 상세 (create/update/clone 응답).
+ * `SyntheticOperatorItem`(is_custom 포함)의 슈퍼셋 + 전략 전 필드(리스트는 string[]).
+ * 폼이 추가 fetch 없이 편집을 렌더할 수 있다.
+ */
+export interface CustomOperatorDetail {
+  user_id: number;
+  username: string;
+  slug: string;
+  is_custom: boolean;
+  display_name: string;
+  company?: string | null;
+  business_type?: string | null;
+  annual_revenue: number;
+  capacity_score: number;
+  license_codes?: string[];
+  region_codes?: string[];
+  focus_categories?: string[];
+  focus_regions?: string[];
+  exclude_regions?: string[];
+  required_keywords?: string[];
+  exclude_keywords?: string[];
+  min_budget_estimate: number;
+  max_budget_estimate: number;
+  minimum_match_score: number;
+  minimum_probability_score: number;
+  bid_now_threshold: number;
+  review_threshold: number;
+  max_recommended_candidates: number;
+}
+
+/** 커스텀 회사 삭제 확인 응답. */
+export interface CustomOperatorDeleteResponse {
+  deleted: boolean;
+  slug: string;
+  username: string;
 }
