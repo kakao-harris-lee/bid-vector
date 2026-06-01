@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchExperimentRun } from "@/shared/api";
+import { experimentRunCsvUrl, fetchExperimentRun } from "@/shared/api";
 import { Badge, type BadgeTone, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import type { SyntheticExperimentRunResponse } from "@/shared/types/synthetic";
 import { Leaderboard } from "./Leaderboard";
@@ -56,9 +56,21 @@ export function ExperimentRunProgress({
 
   return (
     <Card aria-label="실험 실행 진행">
-      <CardHeader className="flex-row items-center justify-between">
+      <CardHeader className="flex-row items-center justify-between gap-2">
         <CardTitle>실행 진행 / 결과</CardTitle>
-        {status ? <Badge tone={statusTone(status)}>{status}</Badge> : null}
+        <div className="flex items-center gap-2">
+          {status === "completed" ? (
+            <a
+              href={experimentRunCsvUrl(experimentId, runId)}
+              download
+              className="inline-flex h-8 items-center rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 text-xs font-medium text-[var(--color-fg)] transition-colors hover:bg-[var(--color-secondary)]"
+              aria-label="런 결과 CSV 다운로드"
+            >
+              CSV 다운로드
+            </a>
+          ) : null}
+          {status ? <Badge tone={statusTone(status)}>{status}</Badge> : null}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
         {run.isLoading ? (

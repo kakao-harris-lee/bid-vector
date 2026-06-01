@@ -76,6 +76,28 @@ describe("ExperimentRunProgress", () => {
     expect(screen.getAllByText(/가격 기준 추정 낙찰/).length).toBeGreaterThanOrEqual(1);
     // settled_count=12가 리더보드 정산 건수 셀에 표기
     expect(screen.getByText("12")).toBeInTheDocument();
+
+    // 완료 시 CSV 다운로드 링크가 export.csv URL을 가리킨다.
+    const csvLink = screen.getByRole("link", { name: "런 결과 CSV 다운로드" });
+    expect(csvLink).toHaveAttribute(
+      "href",
+      "/api/v1/synthetic/experiments/2/runs/9/export.csv"
+    );
+    expect(csvLink).toHaveAttribute("download");
+  });
+
+  it("hides the CSV download link until the run completes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => jsonResponse(queuedRun))
+    );
+
+    renderWithProviders(
+      <ExperimentRunProgress experimentId={2} runId={9} token="token-x" pollIntervalMs={20} />
+    );
+
+    await screen.findByText(/실험을 실행하고 있습니다|준비하고 있습니다/);
+    expect(screen.queryByRole("link", { name: "런 결과 CSV 다운로드" })).toBeNull();
   });
 
   it("renders an error alert when the run fails", async () => {

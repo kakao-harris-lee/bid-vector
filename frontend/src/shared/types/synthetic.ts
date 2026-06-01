@@ -217,6 +217,58 @@ export interface SyntheticExperimentRunResponse {
   results?: SyntheticExperimentResultItem[];
 }
 
+// --- Experiment Lab compare + export (Phase 4) -------------------------------
+// 생성 파일 `openapi.d.ts`의 SyntheticExperimentCompare* 스키마와 동형.
+// 화면(A/B 비교표)에서 다루기 쉽게 보조 타입으로 재선언한다(생성 파일은 수기 수정 금지).
+
+/**
+ * 비교 응답에 임베드되는 런 식별 + 요약. summary는 scenario/limit 등을 담는
+ * 자유 형식 JSON(생성 타입은 빈 레코드라 화면용으로 느슨하게 재선언).
+ */
+export interface SyntheticExperimentCompareRunHeader {
+  id: number;
+  experiment_id: number;
+  summary?: Record<string, unknown> | null;
+}
+
+/**
+ * 한쪽(run A 또는 B)의 회사별 지표 슬라이스.
+ * win_rate_on_settled는 가격 기준 추정(실제 낙찰 아님). 모든 필드 null 가능.
+ */
+export interface SyntheticExperimentCompareSide {
+  win_rate_on_settled?: number | null;
+  settled_count?: number | null;
+  bid_submission_rate?: number | null;
+  average_absolute_bid_rate_error?: number | null;
+}
+
+/** 부호 있는 delta(b-a, 양수=B 높음). 한쪽이 null이면 해당 delta도 null. */
+export interface SyntheticExperimentCompareDelta {
+  win_rate_on_settled?: number | null;
+  bid_submission_rate?: number | null;
+  average_absolute_bid_rate_error?: number | null;
+}
+
+/** 두 런 모두에 존재하는 한 회사의 A/B 지표 + delta. */
+export interface SyntheticExperimentCompareOperator {
+  operator_slug: string;
+  a: SyntheticExperimentCompareSide;
+  b: SyntheticExperimentCompareSide;
+  delta: SyntheticExperimentCompareDelta;
+}
+
+/**
+ * 두 완료 런의 A/B 비교(operator_slug 조인). operators는 교집합(정렬됨),
+ * only_in_a/only_in_b는 한쪽에만 있는 slug. 두 런은 서로 다른 실험일 수 있다.
+ */
+export interface SyntheticExperimentCompareResponse {
+  run_a: SyntheticExperimentCompareRunHeader;
+  run_b: SyntheticExperimentCompareRunHeader;
+  operators?: SyntheticExperimentCompareOperator[];
+  only_in_a?: string[];
+  only_in_b?: string[];
+}
+
 // --- Custom virtual companies (Phase 3) --------------------------------------
 // 생성 파일 `openapi.d.ts`의 CustomOperator{Create,Update,CloneRequest,Detail,
 // DeleteResponse} 스키마와 동형. 화면(빌더/관리)에서 다루기 쉽게 보조 타입으로
