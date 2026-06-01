@@ -188,11 +188,20 @@ def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> di
     Mirrors the synchronous `/api/v1/synthetic/backtests/run` endpoint but
     returns the comparison payload as the task result so the frontend can poll
     `/api/v1/synthetic/backtests/tasks/{task_id}` for completion.
+
+    When the payload carries a ``run_id`` (Experiment Lab execution), the
+    run/result lifecycle is persisted via ``run_experiment_backtest``; the legacy
+    ad-hoc path (no ``run_id``) keeps its original behaviour unchanged.
     """
     from datetime import datetime
     from app.services.synthetic_backtest import SyntheticBacktestService
 
     data = dict(payload or {})
+
+    if data.get("run_id") is not None:
+        from app.services.synthetic_experiment import run_experiment_backtest
+
+        return run_experiment_backtest(data)
     start_at_raw = data.get("start_at")
     end_at_raw = data.get("end_at")
     start_at = datetime.fromisoformat(start_at_raw) if isinstance(start_at_raw, str) else None

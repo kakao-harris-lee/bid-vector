@@ -1744,6 +1744,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/synthetic/experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Experiments Endpoint
+         * @description List saved synthetic experiments (most recent first).
+         */
+        get: operations["list_experiments_endpoint_api_v1_synthetic_experiments_get"];
+        put?: never;
+        /**
+         * Create Experiment Endpoint
+         * @description Save a synthetic experiment definition.
+         */
+        post: operations["create_experiment_endpoint_api_v1_synthetic_experiments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/experiments/{experiment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Experiment Endpoint
+         * @description Fetch a synthetic experiment detail including its run history.
+         */
+        get: operations["get_experiment_endpoint_api_v1_synthetic_experiments__experiment_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/experiments/{experiment_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Experiment Run Endpoint
+         * @description Trigger an asynchronous run of a saved experiment.
+         */
+        post: operations["create_experiment_run_endpoint_api_v1_synthetic_experiments__experiment_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/experiments/{experiment_id}/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Experiment Run Endpoint
+         * @description Poll the status/results of a synthetic experiment run.
+         */
+        get: operations["get_experiment_run_endpoint_api_v1_synthetic_experiments__experiment_id__runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -2313,6 +2397,10 @@ export interface components {
             closing_at?: string | null;
             /** Business Type */
             business_type?: string | null;
+            /** Business Type Code */
+            business_type_code?: string | null;
+            /** Business Type Label */
+            business_type_label?: string | null;
             /** Region */
             region?: string | null;
             /** License Codes */
@@ -5729,6 +5817,139 @@ export interface components {
             error?: string | null;
             result?: components["schemas"]["SyntheticBacktestRunResponse"] | null;
         };
+        /**
+         * SyntheticExperimentCreate
+         * @description Request payload for creating (saving) a synthetic experiment.
+         */
+        SyntheticExperimentCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            params: components["schemas"]["SyntheticExperimentParams"];
+            /** Operator Slugs */
+            operator_slugs?: string[] | null;
+        };
+        /**
+         * SyntheticExperimentParams
+         * @description Execution parameters for a synthetic experiment (persisted as JSON).
+         *
+         *     Field names mirror the existing synthetic backtest request (``start_at`` /
+         *     ``end_at`` datetimes, ``scenario`` default ``base``). ``cutoff_hours`` /
+         *     ``history_limit`` / ``settle_actions`` are persisted with the definition for
+         *     forward compatibility even though the current engine consumes only the core
+         *     fields.
+         */
+        SyntheticExperimentParams: {
+            /** Start At */
+            start_at?: string | null;
+            /** End At */
+            end_at?: string | null;
+            /** Category */
+            category?: string | null;
+            /**
+             * Limit
+             * @default 100
+             */
+            limit: number;
+            /**
+             * Scenario
+             * @default base
+             */
+            scenario: string;
+            /** Cutoff Hours */
+            cutoff_hours?: number | null;
+            /** History Limit */
+            history_limit?: number | null;
+            /**
+             * Settle Actions
+             * @default false
+             */
+            settle_actions: boolean;
+        };
+        /**
+         * SyntheticExperimentResponse
+         * @description Full synthetic experiment detail including run history.
+         */
+        SyntheticExperimentResponse: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            params: components["schemas"]["SyntheticExperimentParams"];
+            /** Operator Slugs */
+            operator_slugs?: string[];
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Runs */
+            runs?: components["schemas"]["SyntheticExperimentRunSummary"][];
+        };
+        /**
+         * SyntheticExperimentResultItem
+         * @description Per-operator result persisted for a synthetic experiment run.
+         */
+        SyntheticExperimentResultItem: {
+            /** Operator Slug */
+            operator_slug: string;
+            /** Metrics */
+            metrics?: Record<string, never>;
+            /** Settlement Sample */
+            settlement_sample?: unknown | null;
+        };
+        /**
+         * SyntheticExperimentRunResponse
+         * @description Detailed status/result payload for a single experiment run (polling).
+         */
+        SyntheticExperimentRunResponse: {
+            /** Id */
+            id: number;
+            /** Experiment Id */
+            experiment_id: number;
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Summary */
+            summary?: Record<string, never> | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Results */
+            results?: components["schemas"]["SyntheticExperimentResultItem"][];
+        };
+        /**
+         * SyntheticExperimentRunSummary
+         * @description Lightweight run summary embedded in an experiment detail response.
+         */
+        SyntheticExperimentRunSummary: {
+            /** Id */
+            id: number;
+            /** Experiment Id */
+            experiment_id: number;
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Summary */
+            summary?: Record<string, never> | null;
+            /** Created At */
+            created_at?: string | null;
+        };
         /** SyntheticOperatorItem */
         SyntheticOperatorItem: {
             /** User Id */
@@ -9109,6 +9330,153 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyntheticBacktestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_experiments_endpoint_api_v1_synthetic_experiments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentResponse"][];
+                };
+            };
+        };
+    };
+    create_experiment_endpoint_api_v1_synthetic_experiments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticExperimentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_experiment_endpoint_api_v1_synthetic_experiments__experiment_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_experiment_run_endpoint_api_v1_synthetic_experiments__experiment_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_experiment_run_endpoint_api_v1_synthetic_experiments__experiment_id__runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentRunResponse"];
                 };
             };
             /** @description Validation Error */
