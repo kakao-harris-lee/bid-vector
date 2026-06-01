@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchExperimentRun } from "@/shared/api";
 import { Badge, type BadgeTone, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
-import { formatPercent } from "@/shared/lib";
 import type { SyntheticExperimentRunResponse } from "@/shared/types/synthetic";
+import { Leaderboard } from "./Leaderboard";
+import { BreakdownView } from "./BreakdownView";
 
 export interface ExperimentRunProgressProps {
   experimentId: number;
@@ -24,14 +25,6 @@ function statusTone(status: string | undefined): BadgeTone {
   if (status === "failed") return "critical";
   if (status === "running") return "info";
   return "muted";
-}
-
-function metricNumber(
-  metrics: Record<string, unknown> | undefined,
-  key: string
-): number | null {
-  const value = metrics?.[key];
-  return typeof value === "number" ? value : null;
 }
 
 function progressLabel(run: SyntheticExperimentRunResponse | undefined): string {
@@ -97,49 +90,14 @@ export function ExperimentRunProgress({
         ) : null}
 
         {data && status === "completed" ? (
-          <>
-            <p className="text-[var(--color-muted)]">
-              win_rate는 가격 기준 추정 낙찰(would_have_won_price_only_count / settled_count). 실제 낙찰이 아님.
-            </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-muted)]">
-                    <th className="py-1">회사(slug)</th>
-                    <th className="py-1 text-right">추정 승률</th>
-                    <th className="py-1 text-right">정산 건수</th>
-                    <th className="py-1 text-right">투찰률</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.map((result) => (
-                    <tr
-                      key={result.operator_slug}
-                      className="border-b border-[var(--color-border)]/60"
-                    >
-                      <td className="py-1 pr-2 text-[var(--color-fg)]">{result.operator_slug}</td>
-                      <td className="py-1 text-right tabular-nums">
-                        {formatPercent(metricNumber(result.metrics, "win_rate_on_settled"))}
-                      </td>
-                      <td className="py-1 text-right tabular-nums">
-                        {metricNumber(result.metrics, "settled_count") ?? "—"}
-                      </td>
-                      <td className="py-1 text-right tabular-nums">
-                        {formatPercent(metricNumber(result.metrics, "bid_submission_rate"))}
-                      </td>
-                    </tr>
-                  ))}
-                  {results.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="py-2 text-center text-[var(--color-muted)]">
-                        결과 데이터가 없습니다.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
+          results.length === 0 ? (
+            <p className="py-2 text-center text-[var(--color-muted)]">결과 데이터가 없습니다.</p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <Leaderboard results={results} />
+              <BreakdownView results={results} />
             </div>
-          </>
+          )
         ) : null}
       </CardContent>
     </Card>

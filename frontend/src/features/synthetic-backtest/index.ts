@@ -3,3 +3,5 @@ export { ExperimentLabScreen } from "./ExperimentLabScreen";
 export { ExperimentForm } from "./ExperimentForm";
 export { ExperimentList } from "./ExperimentList";
 export { ExperimentRunProgress } from "./ExperimentRunProgress";
+export { Leaderboard, type LeaderboardSortKey } from "./Leaderboard";
+export { BreakdownView } from "./BreakdownView";

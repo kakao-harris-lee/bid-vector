@@ -139,11 +139,63 @@ export interface SyntheticExperimentResponse {
   runs?: SyntheticExperimentRunSummary[];
 }
 
+// --- Experiment Lab breakdown (Phase 2) --------------------------------------
+// 생성 파일 `openapi.d.ts`의 SyntheticExperimentBreakdown 스키마와 동형.
+// 화면(리더보드/분해 시각화)에서 다루기 쉽게 보조 타입으로 재선언한다.
+
+/** 예산구간 키 (KRW 기준). */
+export type SyntheticBudgetBand =
+  | "lt_1eok"
+  | "1eok_5eok"
+  | "5eok_10eok"
+  | "10eok_50eok"
+  | "gte_50eok";
+
+/** 카테고리별 정산 집계. win_rate는 가격 기준 추정(would_have_won_count / settled_count). */
+export interface SyntheticCategoryBreakdownItem {
+  category: string;
+  settled_count: number;
+  would_have_won_count: number;
+  /** settled_count=0이면 null. */
+  win_rate?: number | null;
+  avg_abs_bid_rate_error?: number | null;
+}
+
+/** 예산구간별 정산 집계. win_rate는 카테고리와 동일한 가격 기준 추정. */
+export interface SyntheticBudgetBandBreakdownItem {
+  /** SyntheticBudgetBand 중 하나(forward-compat 위해 string 허용). */
+  budget_band: SyntheticBudgetBand | string;
+  settled_count: number;
+  would_have_won_count: number;
+  win_rate?: number | null;
+  avg_abs_bid_rate_error?: number | null;
+}
+
+/** 회사별 정산 분해(카테고리 + 예산구간). 레거시/빈 결과는 빈 배열. */
+export interface SyntheticExperimentBreakdown {
+  by_category?: SyntheticCategoryBreakdownItem[];
+  by_budget_band?: SyntheticBudgetBandBreakdownItem[];
+}
+
+/** 리더보드에서 다루는 회사별 지표(metrics 일부를 명시적으로 타입화). */
+export interface SyntheticExperimentMetrics {
+  operator_slug?: string;
+  candidate_count?: number | null;
+  paper_bid_count?: number | null;
+  settled_count?: number | null;
+  would_have_won_count?: number | null;
+  win_rate_on_settled?: number | null;
+  bid_submission_rate?: number | null;
+  average_absolute_bid_rate_error?: number | null;
+  [key: string]: unknown;
+}
+
 /** 회사별 결과 (폴링 응답에 포함). */
 export interface SyntheticExperimentResultItem {
   operator_slug: string;
-  metrics?: Record<string, unknown>;
+  metrics?: SyntheticExperimentMetrics;
   settlement_sample?: unknown | null;
+  breakdown?: SyntheticExperimentBreakdown;
 }
 
 /** 폴링 응답: 런 상태 + 완료 시 회사별 결과. */

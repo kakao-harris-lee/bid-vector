@@ -69,9 +69,12 @@ describe("ExperimentRunProgress", () => {
       await screen.findByText(/실험을 실행하고 있습니다|준비하고 있습니다/)
     ).toBeInTheDocument();
 
-    // completed: 결과 표 + caveat
-    expect(await screen.findByText("aggressive")).toBeInTheDocument();
-    expect(screen.getByText(/가격 기준 추정 낙찰/)).toBeInTheDocument();
+    // completed: 리더보드 + caveat. slug는 리더보드 행 + 분해 select 옵션에 모두 나오므로
+    // 리더보드 행을 라벨로 특정한다.
+    expect(await screen.findByLabelText("aggressive 랭킹 1위")).toBeInTheDocument();
+    // 리더보드 + 분해 두 카드 모두 caveat를 노출한다.
+    expect(screen.getAllByText(/가격 기준 추정 낙찰/).length).toBeGreaterThanOrEqual(1);
+    // settled_count=12가 리더보드 정산 건수 셀에 표기
     expect(screen.getByText("12")).toBeInTheDocument();
   });
 
