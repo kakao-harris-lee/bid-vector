@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.schemas.schemas import (
     CustomOperatorDeleteResponse,
     CustomOperatorDetail,
     CustomOperatorUpdate,
+    SyntheticExperimentCompareResponse,
     SyntheticExperimentCreate,
     SyntheticExperimentResponse,
     SyntheticExperimentRunResponse,
@@ -190,6 +191,25 @@ def create_custom_operator_endpoint(
     service = SyntheticCustomOperatorService(db)
     try:
         return service.create(request.model_dump(exclude_unset=True))
+    except CustomOperatorError as exc:
+        raise _custom_operator_http_error(exc)
+
+
+@router.get(
+    "/custom-operators/{slug}",
+    response_model=CustomOperatorDetail,
+)
+def get_custom_operator_endpoint(
+    slug: str,
+    db: Session = Depends(get_db),
+):
+    """Fetch a single custom company's full profile+strategy (edit-form prefill).
+
+    Presets/operator are protected (400); a missing custom company returns 404.
+    """
+    service = SyntheticCustomOperatorService(db)
+    try:
+        return service.get(slug)
     except CustomOperatorError as exc:
         raise _custom_operator_http_error(exc)
 
@@ -384,6 +404,32 @@ def list_experiments_endpoint(db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/experiments/compare",
+    response_model=SyntheticExperimentCompareResponse,
+)
+def compare_experiment_runs_endpoint(
+    run_a: int = Query(..., description="Run id for the A (baseline) side."),
+    run_b: int = Query(..., description="Run id for the B (candidate) side."),
+    db: Session = Depends(get_db),
+):
+    """A/B compare two runs' per-operator metrics, joined by ``operator_slug``.
+
+    ``delta`` is ``B - A`` (positive => B higher). The two runs may belong to
+    different experiments -- the join is purely on the slug intersection.
+    Returns 404 when either run id is unknown. ``win_rate_*`` values stay
+    price-only estimates (NOT actual awards).
+    """
+    service = SyntheticExperimentService(db)
+    comparison = service.compare_runs(run_a, run_b)
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or both runs not found.",
+        )
+    return comparison
+
+
+@router.get(
     "/experiments/{experiment_id}",
     response_model=SyntheticExperimentResponse,
 )
@@ -438,3 +484,35 @@ def get_experiment_run_endpoint(
             detail="Run not found.",
         )
     return service.serialize_run_detail(run)
+
+
+@router.get(
+    "/experiments/{experiment_id}/runs/{run_id}/export.csv",
+    response_class=Response,
+    responses={200: {"content": {"text/csv": {}}}},
+)
+def export_experiment_run_csv_endpoint(
+    experiment_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+):
+    """Download a run's per-operator metrics as a CSV attachment.
+
+    A run with no results (e.g. not yet completed) yields a header-only CSV with
+    HTTP 200. Returns 404 when the run is unknown. ``win_rate_*`` columns remain
+    price-only estimates (NOT actual awards).
+    """
+    service = SyntheticExperimentService(db)
+    run = service.get_run(experiment_id, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Run not found.",
+        )
+    csv_body = service.export_run_csv(run)
+    filename = f"experiment-{experiment_id}-run-{run_id}.csv"
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

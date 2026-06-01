@@ -2146,6 +2146,73 @@ class SyntheticExperimentRunResponse(BaseModel):
     results: List[SyntheticExperimentResultItem] = Field(default_factory=list)
 
 
+# --- Experiment Lab (Phase 4): A/B run comparison -----------------------------
+
+
+class SyntheticExperimentCompareRunHeader(BaseModel):
+    """Minimal run identity + summary embedded in a compare response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    experiment_id: int
+    summary: Optional[Dict[str, Any]] = None
+
+
+class SyntheticExperimentCompareSide(BaseModel):
+    """Per-operator metric slice for one side (run A or run B) of a comparison.
+
+    ``win_rate_on_settled`` is a PRICE-ONLY estimate (NOT an actual award), passed
+    through unchanged. Any field may be ``None`` (e.g. no settled rows).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    win_rate_on_settled: Optional[float] = None
+    settled_count: Optional[int] = None
+    bid_submission_rate: Optional[float] = None
+    average_absolute_bid_rate_error: Optional[float] = None
+
+
+class SyntheticExperimentCompareDelta(BaseModel):
+    """Signed (B - A) deltas; positive means run B is higher. ``None`` when either
+    side is missing/None (e.g. a one-sided ``win_rate`` for a group with no
+    settled rows)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    win_rate_on_settled: Optional[float] = None
+    bid_submission_rate: Optional[float] = None
+    average_absolute_bid_rate_error: Optional[float] = None
+
+
+class SyntheticExperimentCompareOperator(BaseModel):
+    """One operator present in BOTH runs, with its A/B metrics and their delta."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    operator_slug: str
+    a: SyntheticExperimentCompareSide
+    b: SyntheticExperimentCompareSide
+    delta: SyntheticExperimentCompareDelta
+
+
+class SyntheticExperimentCompareResponse(BaseModel):
+    """A/B comparison of two completed runs, joined by ``operator_slug``.
+
+    ``operators`` is the slug intersection (sorted); ``only_in_a`` / ``only_in_b``
+    list slugs unique to one side. The two runs may belong to different
+    experiments. All ``win_rate_*`` values remain price-only estimates."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_a: SyntheticExperimentCompareRunHeader
+    run_b: SyntheticExperimentCompareRunHeader
+    operators: List[SyntheticExperimentCompareOperator] = Field(default_factory=list)
+    only_in_a: List[str] = Field(default_factory=list)
+    only_in_b: List[str] = Field(default_factory=list)
+
+
 # --- Synthetic Custom Operators (Phase 3) -------------------------------------
 
 
