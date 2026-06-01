@@ -2069,6 +2069,53 @@ class SyntheticExperimentResponse(BaseModel):
     runs: List[SyntheticExperimentRunSummary] = Field(default_factory=list)
 
 
+class SyntheticExperimentCategoryBreakdown(BaseModel):
+    """Settlement aggregates grouped by project category (Phase 2 Lab).
+
+    ``win_rate`` is the price-only estimate ``would_have_won_count /
+    settled_count`` (NOT an actual award) and is ``None`` when ``settled_count``
+    is 0.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    category: str
+    settled_count: int = 0
+    would_have_won_count: int = 0
+    win_rate: Optional[float] = None
+    avg_abs_bid_rate_error: Optional[float] = None
+
+
+class SyntheticExperimentBudgetBandBreakdown(BaseModel):
+    """Settlement aggregates grouped by budget band (Phase 2 Lab).
+
+    Band keys: ``lt_1eok`` / ``1eok_5eok`` / ``5eok_10eok`` / ``10eok_50eok`` /
+    ``gte_50eok`` (KRW). ``win_rate`` is the same price-only estimate as the
+    category breakdown.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    budget_band: str
+    settled_count: int = 0
+    would_have_won_count: int = 0
+    win_rate: Optional[float] = None
+    avg_abs_bid_rate_error: Optional[float] = None
+
+
+class SyntheticExperimentBreakdown(BaseModel):
+    """Per-operator settlement breakdown (category + budget band)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    by_category: List[SyntheticExperimentCategoryBreakdown] = Field(
+        default_factory=list
+    )
+    by_budget_band: List[SyntheticExperimentBudgetBandBreakdown] = Field(
+        default_factory=list
+    )
+
+
 class SyntheticExperimentResultItem(BaseModel):
     """Per-operator result persisted for a synthetic experiment run."""
 
@@ -2077,6 +2124,9 @@ class SyntheticExperimentResultItem(BaseModel):
     operator_slug: str
     metrics: Dict[str, Any] = Field(default_factory=dict)
     settlement_sample: Optional[Any] = None
+    breakdown: SyntheticExperimentBreakdown = Field(
+        default_factory=SyntheticExperimentBreakdown
+    )
 
 
 class SyntheticExperimentRunResponse(BaseModel):

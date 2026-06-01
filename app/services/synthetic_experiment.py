@@ -30,6 +30,102 @@ RUN_STATUS_RUNNING = "running"
 RUN_STATUS_COMPLETED = "completed"
 RUN_STATUS_FAILED = "failed"
 
+# Budget-band boundaries (KRW). A settlement is placed into the first band whose
+# upper bound it is *strictly* below; the final band catches everything at or
+# above the last boundary. Mirrors common 나라장터 budget tiers (1억/5억/10억/50억).
+BUDGET_BAND_BOUNDARIES: tuple[tuple[str, float], ...] = (
+    ("lt_1eok", 100_000_000.0),
+    ("1eok_5eok", 500_000_000.0),
+    ("5eok_10eok", 1_000_000_000.0),
+    ("10eok_50eok", 5_000_000_000.0),
+)
+BUDGET_BAND_TOP_KEY = "gte_50eok"
+
+# A settlement counts as a (price-only estimated) "win" when its price-only
+# verdict is "plausible" -- IDENTICAL to ``would_have_won_price_only_count`` in
+# the engine summary. This is a price-based ESTIMATE, not an actual award.
+_WIN_VERDICTS = {"plausible"}
+
+
+def _budget_band_key(budget: float) -> str:
+    for key, upper in BUDGET_BAND_BOUNDARIES:
+        if budget < upper:
+            return key
+    return BUDGET_BAND_TOP_KEY
+
+
+def _is_price_only_win(item: dict[str, Any]) -> bool:
+    """Whether a settlement item is a price-only estimated win.
+
+    Accepts both the rich engine settlement (``would_have_won_price_only`` string
+    verdict) and the sliced dashboard item (``would_have_won`` bool) so the
+    breakdown is correct regardless of which shape is fed in.
+    """
+    verdict = item.get("would_have_won_price_only")
+    if verdict is not None:
+        return str(verdict) in _WIN_VERDICTS
+    return bool(item.get("would_have_won"))
+
+
+def _empty_breakdown() -> dict[str, list[dict[str, Any]]]:
+    return {"by_category": [], "by_budget_band": []}
+
+
+def _aggregate_group(items: list[dict[str, Any]]) -> dict[str, Any]:
+    settled_count = len(items)
+    would_have_won_count = sum(1 for entry in items if _is_price_only_win(entry))
+    errors = [
+        float(entry["absolute_bid_rate_error"])
+        for entry in items
+        if entry.get("absolute_bid_rate_error") is not None
+    ]
+    avg_error = round(sum(errors) / len(errors), 6) if errors else None
+    win_rate = (
+        round(would_have_won_count / settled_count, 6) if settled_count else None
+    )
+    return {
+        "settled_count": settled_count,
+        "would_have_won_count": would_have_won_count,
+        "win_rate": win_rate,
+        "avg_abs_bid_rate_error": avg_error,
+    }
+
+
+def compute_breakdown(
+    settlement_items: Optional[list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Group per-operator settlements into category / budget-band breakdowns.
+
+    ``win_rate`` is ``would_have_won_count / settled_count`` where a "win" is the
+    price-only estimate (``would_have_won_price_only == "plausible"``); it is NOT
+    an actual award and ``None`` when there are no settled items in the group.
+    """
+    if not settlement_items:
+        return _empty_breakdown()
+
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    by_band: dict[str, list[dict[str, Any]]] = {}
+    for item in settlement_items:
+        category = item.get("category")
+        category_key = str(category) if category not in (None, "") else "unknown"
+        by_category.setdefault(category_key, []).append(item)
+
+        budget = float(item.get("budget_estimate") or 0.0)
+        by_band.setdefault(_budget_band_key(budget), []).append(item)
+
+    category_rows = [
+        {"category": key, **_aggregate_group(items)}
+        for key, items in sorted(by_category.items())
+    ]
+    # Preserve the canonical band ordering (ascending budget).
+    band_order = [key for key, _ in BUDGET_BAND_BOUNDARIES] + [BUDGET_BAND_TOP_KEY]
+    band_rows = [
+        {"budget_band": key, **_aggregate_group(by_band[key])}
+        for key in band_order
+        if key in by_band
+    ]
+    return {"by_category": category_rows, "by_budget_band": band_rows}
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, default=str, ensure_ascii=False)
@@ -195,11 +291,20 @@ class SyntheticExperimentService:
         run.error = None
         run.summary_json = _json_dumps(summary)
 
+        excluded_metric_keys = {"settlement_items", "breakdown"}
         for item in operator_results:
             metrics = {
-                key: value for key, value in item.items() if key != "settlement_items"
+                key: value
+                for key, value in item.items()
+                if key not in excluded_metric_keys
             }
             settlement_sample = item.get("settlement_items")
+            # Prefer the engine-supplied breakdown (computed over the full,
+            # non-truncated settlement set). Fall back to computing from the
+            # sampled ``settlement_items`` for stubbed/legacy payloads.
+            breakdown = item.get("breakdown")
+            if breakdown is None:
+                breakdown = compute_breakdown(settlement_sample)
             self.db.add(
                 SyntheticExperimentResult(
                     run_id=run.id,
@@ -210,6 +315,7 @@ class SyntheticExperimentService:
                         if settlement_sample is not None
                         else None
                     ),
+                    breakdown_json=_json_dumps(breakdown),
                 )
             )
         self.db.commit()
@@ -264,6 +370,7 @@ class SyntheticExperimentService:
                 "operator_slug": item.operator_slug,
                 "metrics": _json_loads(item.metrics_json) or {},
                 "settlement_sample": _json_loads(item.settlement_sample_json),
+                "breakdown": _json_loads(item.breakdown_json) or _empty_breakdown(),
             }
             for item in run.results
         ]

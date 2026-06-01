@@ -146,6 +146,13 @@ class SyntheticBacktestService:
         settlement_items = [
             _slice_settlement_item(item) for item in raw_settlements[:settlement_sample]
         ]
+        # Breakdown is computed over the FULL settlement set (not the truncated
+        # ``settlement_sample``) so category / budget-band win rates reflect every
+        # settled opportunity. Import locally to avoid a circular import with
+        # ``synthetic_experiment`` (which imports this module).
+        from app.services.synthetic_experiment import compute_breakdown
+
+        breakdown = compute_breakdown(raw_settlements)
         return {
             "candidate_count": int(result.get("candidate_count") or 0),
             "paper_bid_count": int(result.get("paper_bid_count") or 0),
@@ -156,6 +163,7 @@ class SyntheticBacktestService:
             "average_absolute_bid_rate_error": summary.get("average_absolute_bid_rate_error"),
             "settlement_sample_count": len(settlement_items),
             "settlement_items": settlement_items,
+            "breakdown": breakdown,
         }
 
 

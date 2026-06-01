@@ -473,6 +473,12 @@ class PaperBiddingBacktestService:
 
         return {
             "project_id": item["project_id"],
+            # Breakdown keys (Phase 2 Experiment Lab). Additive only -- existing
+            # consumers ignore unknown keys. ``category``/``budget_estimate`` come
+            # straight from the candidate item so the settlement can be grouped by
+            # category and budget band downstream without re-querying the project.
+            "category": item.get("category"),
+            "budget_estimate": float(item.get("budget_estimate") or 0.0),
             "tender_result_id": int(tender_result.id),
             "result_status": str(tender_result.result_status or "awarded"),
             "winning_company": tender_result.winning_company,
