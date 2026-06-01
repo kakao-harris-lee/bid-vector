@@ -22,7 +22,9 @@ SYNTHETIC_USERNAME_PREFIX = "synthetic-"
 
 
 class SyntheticBacktestService:
-    def __init__(self, backtest_service: PaperBiddingBacktestService | None = None) -> None:
+    def __init__(
+        self, backtest_service: PaperBiddingBacktestService | None = None
+    ) -> None:
         self.backtest_service = backtest_service or PaperBiddingBacktestService()
 
     # --- listing ---------------------------------------------------------------
@@ -46,19 +48,30 @@ class SyntheticBacktestService:
                 .filter(OperatorStrategy.user_id == user.id)
                 .first()
             )
-            slug = user.username[len(SYNTHETIC_USERNAME_PREFIX):]
+            slug = user.username[len(SYNTHETIC_USERNAME_PREFIX) :]
             rows.append(
                 {
                     "user_id": int(user.id),
                     "username": user.username,
                     "slug": slug,
+                    # Custom companies (web-defined) carry the ``custom-`` slug
+                    # prefix; presets do not. Sole ``is_custom`` predicate.
+                    "is_custom": slug.startswith("custom-"),
                     "display_name": user.full_name or slug,
                     "company": user.company,
                     "business_type": profile.business_type if profile else None,
-                    "annual_revenue": float(profile.annual_revenue or 0.0) if profile else 0.0,
-                    "capacity_score": float(profile.capacity_score or 0.0) if profile else 0.0,
-                    "bid_now_threshold": float(strategy.bid_now_threshold or 0.0) if strategy else 0.0,
-                    "review_threshold": float(strategy.review_threshold or 0.0) if strategy else 0.0,
+                    "annual_revenue": float(profile.annual_revenue or 0.0)
+                    if profile
+                    else 0.0,
+                    "capacity_score": float(profile.capacity_score or 0.0)
+                    if profile
+                    else 0.0,
+                    "bid_now_threshold": float(strategy.bid_now_threshold or 0.0)
+                    if strategy
+                    else 0.0,
+                    "review_threshold": float(strategy.review_threshold or 0.0)
+                    if strategy
+                    else 0.0,
                 }
             )
         return rows
@@ -160,7 +173,9 @@ class SyntheticBacktestService:
             "would_have_won_count": win_count,
             "win_rate_on_settled": win_rate_on_settled,
             "bid_submission_rate": bid_submission_rate,
-            "average_absolute_bid_rate_error": summary.get("average_absolute_bid_rate_error"),
+            "average_absolute_bid_rate_error": summary.get(
+                "average_absolute_bid_rate_error"
+            ),
             "settlement_sample_count": len(settlement_items),
             "settlement_items": settlement_items,
             "breakdown": breakdown,
@@ -202,6 +217,8 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def serialize_synthetic_operators(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def serialize_synthetic_operators(
+    rows: Iterable[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Public helper for callers that already have the rows shape."""
     return list(rows)

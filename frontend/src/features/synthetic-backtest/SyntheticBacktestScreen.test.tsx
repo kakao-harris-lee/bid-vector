@@ -48,7 +48,8 @@ const seedResponse: SyntheticSeedResponse = {
       annual_revenue: 1_000_000_000,
       capacity_score: 0.9,
       bid_now_threshold: 0.6,
-      review_threshold: 0.4
+      review_threshold: 0.4,
+      is_custom: false
     },
     {
       user_id: 2,
@@ -60,7 +61,8 @@ const seedResponse: SyntheticSeedResponse = {
       annual_revenue: 500_000_000,
       capacity_score: 0.6,
       bid_now_threshold: 0.85,
-      review_threshold: 0.6
+      review_threshold: 0.6,
+      is_custom: false
     }
   ]
 };

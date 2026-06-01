@@ -5,7 +5,7 @@ import { ExperimentForm } from "./ExperimentForm";
 import type { SyntheticOperatorListResponse } from "@/shared/types/synthetic";
 
 const operators: SyntheticOperatorListResponse = {
-  operator_count: 1,
+  operator_count: 2,
   operators: [
     {
       user_id: 11,
@@ -17,7 +17,21 @@ const operators: SyntheticOperatorListResponse = {
       annual_revenue: 1_000_000_000,
       capacity_score: 0.8,
       bid_now_threshold: 0.85,
-      review_threshold: 0.6
+      review_threshold: 0.6,
+      is_custom: false
+    },
+    {
+      user_id: 21,
+      username: "synthetic-custom-우리회사",
+      slug: "custom-우리회사",
+      display_name: "우리회사",
+      company: "우리 주식회사",
+      business_type: "용역",
+      annual_revenue: 500_000_000,
+      capacity_score: 0.5,
+      bid_now_threshold: 0.7,
+      review_threshold: 0.5,
+      is_custom: true
     }
   ]
 };
@@ -47,6 +61,19 @@ describe("ExperimentForm", () => {
     expect(screen.getByLabelText("이름")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /실험 저장/ })).toBeInTheDocument();
     expect(await screen.findByText("공격형")).toBeInTheDocument();
+  });
+
+  it("labels operators with preset/custom badges", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => jsonResponse(operators))
+    );
+
+    renderWithProviders(<ExperimentForm token="token-x" />);
+
+    expect(await screen.findByText("우리회사")).toBeInTheDocument();
+    expect(screen.getByText("커스텀")).toBeInTheDocument();
+    expect(screen.getByText("프리셋")).toBeInTheDocument();
   });
 
   it("blocks submit when the name is empty", async () => {

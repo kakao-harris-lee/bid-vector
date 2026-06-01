@@ -1678,6 +1678,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/synthetic/custom-operators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Custom Operator Endpoint
+         * @description Create a custom synthetic company (`synthetic-custom-<slug>`).
+         *
+         *     Slug collisions return 409. The new company is automatically picked up by
+         *     `list_operators` (slug `custom-*`), so it appears in subsequent backtests.
+         */
+        post: operations["create_custom_operator_endpoint_api_v1_synthetic_custom_operators_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/custom-operators/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Custom Operator Endpoint
+         * @description Partial-update a custom company. Presets/operator are protected (400).
+         */
+        put: operations["update_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__put"];
+        post?: never;
+        /**
+         * Delete Custom Operator Endpoint
+         * @description Delete a custom company. Presets/operator are protected (400); 404 if absent.
+         */
+        delete: operations["delete_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/custom-operators/{slug}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone Custom Operator Endpoint
+         * @description Clone a preset OR custom company (`slug`) into a new custom company.
+         *
+         *     The source is read-only; body fields override the copied values. Missing
+         *     source returns 404.
+         */
+        post: operations["clone_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/backtests/run-async": {
         parameters: {
             query?: never;
@@ -2519,6 +2589,245 @@ export interface components {
             /** Error */
             error?: string | null;
             result?: components["schemas"]["CrawlResponse"] | null;
+        };
+        /**
+         * CustomOperatorCloneRequest
+         * @description Clone a preset/custom company into a new custom one with overrides.
+         */
+        CustomOperatorCloneRequest: {
+            /** Company Name */
+            company_name?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /** License Codes */
+            license_codes?: string[] | null;
+            /** Region Codes */
+            region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
+            /** Focus Categories */
+            focus_categories?: string[] | null;
+            /** Focus Regions */
+            focus_regions?: string[] | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
+            /** Min Budget Estimate */
+            min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
+            /** Minimum Match Score */
+            minimum_match_score?: number | null;
+            /** Minimum Probability Score */
+            minimum_probability_score?: number | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
+            /** Review Threshold */
+            review_threshold?: number | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
+            /** Name */
+            name?: string | null;
+            /** Slug */
+            slug?: string | null;
+        };
+        /**
+         * CustomOperatorCreate
+         * @description Create a new custom synthetic company (``synthetic-custom-<slug>``).
+         */
+        CustomOperatorCreate: {
+            /** Company Name */
+            company_name?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /** License Codes */
+            license_codes?: string[] | null;
+            /** Region Codes */
+            region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
+            /** Focus Categories */
+            focus_categories?: string[] | null;
+            /** Focus Regions */
+            focus_regions?: string[] | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
+            /** Min Budget Estimate */
+            min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
+            /** Minimum Match Score */
+            minimum_match_score?: number | null;
+            /** Minimum Probability Score */
+            minimum_probability_score?: number | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
+            /** Review Threshold */
+            review_threshold?: number | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
+            /** Name */
+            name: string;
+            /**
+             * Slug
+             * @description Optional explicit slug; normalized to [a-z0-9-]. Derived from name when omitted.
+             */
+            slug?: string | null;
+        };
+        /**
+         * CustomOperatorDeleteResponse
+         * @description Confirmation payload for a custom-company delete.
+         */
+        CustomOperatorDeleteResponse: {
+            /**
+             * Deleted
+             * @default true
+             */
+            deleted: boolean;
+            /** Slug */
+            slug: string;
+            /** Username */
+            username: string;
+        };
+        /**
+         * CustomOperatorDetail
+         * @description Detailed custom-company shape returned by create/update/clone.
+         *
+         *     Superset of ``SyntheticOperatorItem`` (the list shape) plus the full strategy
+         *     field set so the Phase 3 form can render without a second fetch.
+         */
+        CustomOperatorDetail: {
+            /** User Id */
+            user_id: number;
+            /** Username */
+            username: string;
+            /** Slug */
+            slug: string;
+            /**
+             * Is Custom
+             * @default true
+             */
+            is_custom: boolean;
+            /** Display Name */
+            display_name: string;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /**
+             * Annual Revenue
+             * @default 0
+             */
+            annual_revenue: number;
+            /**
+             * Capacity Score
+             * @default 0
+             */
+            capacity_score: number;
+            /** License Codes */
+            license_codes?: string[];
+            /** Region Codes */
+            region_codes?: string[];
+            /** Focus Categories */
+            focus_categories?: string[];
+            /** Focus Regions */
+            focus_regions?: string[];
+            /** Exclude Regions */
+            exclude_regions?: string[];
+            /** Required Keywords */
+            required_keywords?: string[];
+            /** Exclude Keywords */
+            exclude_keywords?: string[];
+            /**
+             * Min Budget Estimate
+             * @default 0
+             */
+            min_budget_estimate: number;
+            /**
+             * Max Budget Estimate
+             * @default 0
+             */
+            max_budget_estimate: number;
+            /**
+             * Minimum Match Score
+             * @default 0
+             */
+            minimum_match_score: number;
+            /**
+             * Minimum Probability Score
+             * @default 0
+             */
+            minimum_probability_score: number;
+            /**
+             * Bid Now Threshold
+             * @default 0
+             */
+            bid_now_threshold: number;
+            /**
+             * Review Threshold
+             * @default 0
+             */
+            review_threshold: number;
+            /**
+             * Max Recommended Candidates
+             * @default 0
+             */
+            max_recommended_candidates: number;
+        };
+        /**
+         * CustomOperatorUpdate
+         * @description Partial-update a custom synthetic company (all fields optional).
+         */
+        CustomOperatorUpdate: {
+            /** Company Name */
+            company_name?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /** License Codes */
+            license_codes?: string[] | null;
+            /** Region Codes */
+            region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
+            /** Focus Categories */
+            focus_categories?: string[] | null;
+            /** Focus Regions */
+            focus_regions?: string[] | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
+            /** Min Budget Estimate */
+            min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
+            /** Minimum Match Score */
+            minimum_match_score?: number | null;
+            /** Minimum Probability Score */
+            minimum_probability_score?: number | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
+            /** Review Threshold */
+            review_threshold?: number | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
+            /** Name */
+            name?: string | null;
         };
         /** DashboardBidItem */
         DashboardBidItem: {
@@ -5653,6 +5962,11 @@ export interface components {
             username: string;
             /** Slug */
             slug: string;
+            /**
+             * Is Custom
+             * @default false
+             */
+            is_custom: boolean;
             /** Display Name */
             display_name: string;
             /** Company */
@@ -6021,6 +6335,11 @@ export interface components {
             username: string;
             /** Slug */
             slug: string;
+            /**
+             * Is Custom
+             * @default false
+             */
+            is_custom: boolean;
             /** Display Name */
             display_name: string;
             /** Company */
@@ -9296,6 +9615,140 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyntheticSeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_custom_operator_endpoint_api_v1_synthetic_custom_operators_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomOperatorCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomOperatorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomOperatorUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomOperatorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomOperatorDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__clone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomOperatorCloneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomOperatorDetail"];
                 };
             };
             /** @description Validation Error */
