@@ -88,7 +88,9 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
-    command: uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-3000} --reload
+    # Apply DB migrations before serving so schema is the single source of truth
+    # (alembic). See app/main.py lifespan note and tests/test_schema_drift.py.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-3000} --reload"
 
   worker:
     build:
