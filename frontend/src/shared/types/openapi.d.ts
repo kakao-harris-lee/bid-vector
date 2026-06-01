@@ -5818,6 +5818,68 @@ export interface components {
             result?: components["schemas"]["SyntheticBacktestRunResponse"] | null;
         };
         /**
+         * SyntheticExperimentBreakdown
+         * @description Per-operator settlement breakdown (category + budget band).
+         */
+        SyntheticExperimentBreakdown: {
+            /** By Category */
+            by_category?: components["schemas"]["SyntheticExperimentCategoryBreakdown"][];
+            /** By Budget Band */
+            by_budget_band?: components["schemas"]["SyntheticExperimentBudgetBandBreakdown"][];
+        };
+        /**
+         * SyntheticExperimentBudgetBandBreakdown
+         * @description Settlement aggregates grouped by budget band (Phase 2 Lab).
+         *
+         *     Band keys: ``lt_1eok`` / ``1eok_5eok`` / ``5eok_10eok`` / ``10eok_50eok`` /
+         *     ``gte_50eok`` (KRW). ``win_rate`` is the same price-only estimate as the
+         *     category breakdown.
+         */
+        SyntheticExperimentBudgetBandBreakdown: {
+            /** Budget Band */
+            budget_band: string;
+            /**
+             * Settled Count
+             * @default 0
+             */
+            settled_count: number;
+            /**
+             * Would Have Won Count
+             * @default 0
+             */
+            would_have_won_count: number;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Avg Abs Bid Rate Error */
+            avg_abs_bid_rate_error?: number | null;
+        };
+        /**
+         * SyntheticExperimentCategoryBreakdown
+         * @description Settlement aggregates grouped by project category (Phase 2 Lab).
+         *
+         *     ``win_rate`` is the price-only estimate ``would_have_won_count /
+         *     settled_count`` (NOT an actual award) and is ``None`` when ``settled_count``
+         *     is 0.
+         */
+        SyntheticExperimentCategoryBreakdown: {
+            /** Category */
+            category: string;
+            /**
+             * Settled Count
+             * @default 0
+             */
+            settled_count: number;
+            /**
+             * Would Have Won Count
+             * @default 0
+             */
+            would_have_won_count: number;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Avg Abs Bid Rate Error */
+            avg_abs_bid_rate_error?: number | null;
+        };
+        /**
          * SyntheticExperimentCreate
          * @description Request payload for creating (saving) a synthetic experiment.
          */
@@ -5899,6 +5961,7 @@ export interface components {
             metrics?: Record<string, never>;
             /** Settlement Sample */
             settlement_sample?: unknown | null;
+            breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
         };
         /**
          * SyntheticExperimentRunResponse
