@@ -208,6 +208,25 @@ def test_match_title_keyword_software_construction_goods():
     assert svc.match_title_keyword(None) is None
 
 
+def test_match_title_keyword_repair_does_not_match_compound_korean_nouns():
+    """REGRESSION: '수리' must not match compound nouns like '수리시설' / '개방수리'.
+
+    Production id=20054 was misclassified to goods because '수리시설정비사업'
+    contains '수리'. Tighten boundary so '수리' only matches when adjacent
+    chars are NOT Hangul (i.e., standalone Korean word).
+    """
+    from app.services.category_classifier import CategoryClassifierService
+
+    svc = CategoryClassifierService(model=None)
+    # Compound nouns — must NOT match goods
+    assert svc.match_title_keyword("2026년 옥천군 수리시설정비사업 폐기물처리용역") == "service"
+    # "개방수리" — '방' before '수리' is Hangul → no match → falls through
+    assert svc.match_title_keyword("함정 구명벌 개방수리 단가 계약") != "goods"
+    # Standalone '수리' — SHOULD match goods
+    assert svc.match_title_keyword("냉각펌프 수리") == "goods"
+    assert svc.match_title_keyword("분석기 수리 (긴급)") == "goods"
+
+
 def test_reclassify_uses_keyword_path_without_model(test_db):
     """Keyword shortcut works even when SBERT model is unavailable."""
     from app.models.models import Project
