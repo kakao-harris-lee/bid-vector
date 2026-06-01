@@ -11,11 +11,20 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.schemas.schemas import (
+    CustomOperatorCloneRequest,
+    CustomOperatorCreate,
+    CustomOperatorDeleteResponse,
+    CustomOperatorDetail,
+    CustomOperatorUpdate,
     SyntheticExperimentCreate,
     SyntheticExperimentResponse,
     SyntheticExperimentRunResponse,
 )
 from app.services.synthetic_backtest import SyntheticBacktestService
+from app.services.synthetic_custom_operator import (
+    CustomOperatorError,
+    SyntheticCustomOperatorService,
+)
 from app.services.synthetic_experiment import SyntheticExperimentService
 from app.tasks.jobs import (
     enqueue_synthetic_operator_backtest,
@@ -32,6 +41,9 @@ class SyntheticOperatorItem(BaseModel):
     user_id: int
     username: str
     slug: str
+    # True iff this is a web-defined custom company (slug carries ``custom-``);
+    # presets (12 archetypes) and any future built-ins are False.
+    is_custom: bool = False
     display_name: str
     company: Optional[str] = None
     business_type: Optional[str] = None
@@ -83,7 +95,9 @@ class SyntheticBacktestOperatorResult(SyntheticOperatorItem):
     bid_submission_rate: Optional[float] = None
     average_absolute_bid_rate_error: Optional[float] = None
     settlement_sample_count: int = 0
-    settlement_items: List[SyntheticBacktestSettlementItem] = Field(default_factory=list)
+    settlement_items: List[SyntheticBacktestSettlementItem] = Field(
+        default_factory=list
+    )
 
 
 class SyntheticBacktestRunResponse(BaseModel):
@@ -149,6 +163,90 @@ def seed_synthetic_operators_endpoint(
         "purged_count": purged_count,
         "operators": operators,
     }
+
+
+# --- Custom synthetic companies (Phase 3) --------------------------------------
+
+
+def _custom_operator_http_error(exc: CustomOperatorError) -> HTTPException:
+    """Map a custom-operator domain error to its HTTP status."""
+    return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+
+@router.post(
+    "/custom-operators",
+    response_model=CustomOperatorDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_custom_operator_endpoint(
+    request: CustomOperatorCreate,
+    db: Session = Depends(get_db),
+):
+    """Create a custom synthetic company (`synthetic-custom-<slug>`).
+
+    Slug collisions return 409. The new company is automatically picked up by
+    `list_operators` (slug `custom-*`), so it appears in subsequent backtests.
+    """
+    service = SyntheticCustomOperatorService(db)
+    try:
+        return service.create(request.model_dump(exclude_unset=True))
+    except CustomOperatorError as exc:
+        raise _custom_operator_http_error(exc)
+
+
+@router.put(
+    "/custom-operators/{slug}",
+    response_model=CustomOperatorDetail,
+)
+def update_custom_operator_endpoint(
+    slug: str,
+    request: CustomOperatorUpdate,
+    db: Session = Depends(get_db),
+):
+    """Partial-update a custom company. Presets/operator are protected (400)."""
+    service = SyntheticCustomOperatorService(db)
+    try:
+        return service.update(slug, request.model_dump(exclude_unset=True))
+    except CustomOperatorError as exc:
+        raise _custom_operator_http_error(exc)
+
+
+@router.post(
+    "/custom-operators/{slug}/clone",
+    response_model=CustomOperatorDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def clone_custom_operator_endpoint(
+    slug: str,
+    request: CustomOperatorCloneRequest,
+    db: Session = Depends(get_db),
+):
+    """Clone a preset OR custom company (`slug`) into a new custom company.
+
+    The source is read-only; body fields override the copied values. Missing
+    source returns 404.
+    """
+    service = SyntheticCustomOperatorService(db)
+    try:
+        return service.clone(slug, request.model_dump(exclude_unset=True))
+    except CustomOperatorError as exc:
+        raise _custom_operator_http_error(exc)
+
+
+@router.delete(
+    "/custom-operators/{slug}",
+    response_model=CustomOperatorDeleteResponse,
+)
+def delete_custom_operator_endpoint(
+    slug: str,
+    db: Session = Depends(get_db),
+):
+    """Delete a custom company. Presets/operator are protected (400); 404 if absent."""
+    service = SyntheticCustomOperatorService(db)
+    try:
+        return service.delete(slug)
+    except CustomOperatorError as exc:
+        raise _custom_operator_http_error(exc)
 
 
 class SyntheticBacktestTaskResponse(BaseModel):
