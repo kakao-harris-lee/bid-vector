@@ -533,6 +533,11 @@ class SyntheticExperimentResult(Base):
     operator_slug = Column(String(100), nullable=False, index=True)
     metrics_json = Column(Text, nullable=False)
     settlement_sample_json = Column(Text, nullable=True)
+    # JSON-as-Text breakdown of settlements (Phase 2 Experiment Lab): grouped
+    # category / budget-band win rates. Shape:
+    # {"by_category": [...], "by_budget_band": [...]}. Nullable for pre-Phase-2
+    # rows; serialization falls back to an empty breakdown.
+    breakdown_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     run = relationship("SyntheticExperimentRun", back_populates="results")
