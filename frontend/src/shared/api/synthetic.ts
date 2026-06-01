@@ -10,6 +10,7 @@ import type {
   SyntheticBacktestRunResponse,
   SyntheticBacktestTaskResponse,
   SyntheticBacktestTaskStatusResponse,
+  SyntheticExperimentCompareResponse,
   SyntheticExperimentCreateRequest,
   SyntheticExperimentResponse,
   SyntheticExperimentRunResponse,
@@ -155,6 +156,39 @@ export function fetchExperimentRun(
   );
 }
 
+// --- Experiment Lab compare + export (Phase 4) -------------------------------
+
+/**
+ * 두 완료 런을 operator_slug로 조인한 A/B 비교를 가져온다.
+ * delta는 b-a(양수=B 높음), 한쪽 값이 null이면 해당 delta도 null.
+ * 런이 없으면 404, run_a/run_b 누락이면 422.
+ */
+export function compareExperimentRuns(
+  runA: number,
+  runB: number,
+  token?: string | null
+): Promise<SyntheticExperimentCompareResponse> {
+  const query = new URLSearchParams({
+    run_a: String(runA),
+    run_b: String(runB)
+  });
+  return wrap(
+    apiRequest<SyntheticExperimentCompareResponse>(
+      `/api/v1/synthetic/experiments/compare?${query.toString()}`,
+      { token }
+    ),
+    "실험 런 비교를 불러오지 못했습니다."
+  );
+}
+
+/**
+ * 런 결과 CSV 내보내기 URL을 만든다(text/csv 첨부).
+ * 이 라우터는 인증 토큰이 필요 없으므로 단순 `<a href download>`로 다운로드한다.
+ */
+export function experimentRunCsvUrl(experimentId: number, runId: number): string {
+  return `/api/v1/synthetic/experiments/${experimentId}/runs/${runId}/export.csv`;
+}
+
 // --- Custom virtual companies (Phase 3) --------------------------------------
 
 export function createCustomOperator(
@@ -168,6 +202,23 @@ export function createCustomOperator(
       token
     }),
     "커스텀 회사 생성에 실패했습니다."
+  );
+}
+
+/**
+ * 커스텀 회사 단건 상세를 가져온다(편집 폼 정확 프리필용).
+ * 프리셋/canonical operator slug면 400, 미존재면 404.
+ */
+export function getCustomOperator(
+  slug: string,
+  token?: string | null
+): Promise<CustomOperatorDetail> {
+  return wrap(
+    apiRequest<CustomOperatorDetail>(
+      `/api/v1/synthetic/custom-operators/${encodeURIComponent(slug)}`,
+      { token }
+    ),
+    "커스텀 회사 상세를 불러오지 못했습니다."
   );
 }
 

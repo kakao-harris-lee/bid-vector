@@ -12,6 +12,7 @@ import { SyntheticBacktestScreen } from "./SyntheticBacktestScreen";
 import { ExperimentForm } from "./ExperimentForm";
 import { ExperimentList } from "./ExperimentList";
 import { ExperimentRunProgress } from "./ExperimentRunProgress";
+import { RunComparePanel } from "./RunComparePanel";
 import { CustomOperatorManager } from "./CustomOperatorManager";
 
 type LabTab = "experiments" | "companies" | "compare";
@@ -165,7 +166,12 @@ export function ExperimentLabScreen() {
         </div>
       ) : null}
 
-      {tab === "compare" ? <SyntheticBacktestScreen /> : null}
+      {tab === "compare" ? (
+        <div className="flex flex-col gap-4">
+          <RunComparePanel token={token} />
+          <SyntheticBacktestScreen />
+        </div>
+      ) : null}
     </section>
   );
 }

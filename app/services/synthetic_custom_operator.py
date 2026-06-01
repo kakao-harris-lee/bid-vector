@@ -215,6 +215,19 @@ class SyntheticCustomOperatorService:
         self.db.refresh(user)
         return self.serialize(user)
 
+    # --- read (single) ---------------------------------------------------------
+
+    def get(self, public_slug: str) -> dict[str, Any]:
+        """Fetch a single custom company's full profile+strategy (Phase 4 prefill).
+
+        Presets and the canonical operator are protected (400) -- only custom
+        companies (slug ``custom-*``) are returned. A missing custom company
+        raises 404. The shape matches :meth:`serialize` (the create/update form
+        shape) so the edit form can prefill without a second fetch.
+        """
+        user = self._require_custom_user(public_slug)
+        return self.serialize(user)
+
     # --- update ----------------------------------------------------------------
 
     def update(self, public_slug: str, payload: dict[str, Any]) -> dict[str, Any]:

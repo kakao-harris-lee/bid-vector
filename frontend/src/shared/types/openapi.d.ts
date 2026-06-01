@@ -1708,7 +1708,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Custom Operator Endpoint
+         * @description Fetch a single custom company's full profile+strategy (edit-form prefill).
+         *
+         *     Presets/operator are protected (400); a missing custom company returns 404.
+         */
+        get: operations["get_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__get"];
         /**
          * Update Custom Operator Endpoint
          * @description Partial-update a custom company. Presets/operator are protected (400).
@@ -1838,6 +1844,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/synthetic/experiments/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compare Experiment Runs Endpoint
+         * @description A/B compare two runs' per-operator metrics, joined by ``operator_slug``.
+         *
+         *     ``delta`` is ``B - A`` (positive => B higher). The two runs may belong to
+         *     different experiments -- the join is purely on the slug intersection.
+         *     Returns 404 when either run id is unknown. ``win_rate_*`` values stay
+         *     price-only estimates (NOT actual awards).
+         */
+        get: operations["compare_experiment_runs_endpoint_api_v1_synthetic_experiments_compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/experiments/{experiment_id}": {
         parameters: {
             query?: never;
@@ -1890,6 +1921,30 @@ export interface paths {
          * @description Poll the status/results of a synthetic experiment run.
          */
         get: operations["get_experiment_run_endpoint_api_v1_synthetic_experiments__experiment_id__runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/experiments/{experiment_id}/runs/{run_id}/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Experiment Run Csv Endpoint
+         * @description Download a run's per-operator metrics as a CSV attachment.
+         *
+         *     A run with no results (e.g. not yet completed) yields a header-only CSV with
+         *     HTTP 200. Returns 404 when the run is unknown. ``win_rate_*`` columns remain
+         *     price-only estimates (NOT actual awards).
+         */
+        get: operations["export_experiment_run_csv_endpoint_api_v1_synthetic_experiments__experiment_id__runs__run_id__export_csv_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6194,6 +6249,78 @@ export interface components {
             avg_abs_bid_rate_error?: number | null;
         };
         /**
+         * SyntheticExperimentCompareDelta
+         * @description Signed (B - A) deltas; positive means run B is higher. ``None`` when either
+         *     side is missing/None (e.g. a one-sided ``win_rate`` for a group with no
+         *     settled rows).
+         */
+        SyntheticExperimentCompareDelta: {
+            /** Win Rate On Settled */
+            win_rate_on_settled?: number | null;
+            /** Bid Submission Rate */
+            bid_submission_rate?: number | null;
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
+        };
+        /**
+         * SyntheticExperimentCompareOperator
+         * @description One operator present in BOTH runs, with its A/B metrics and their delta.
+         */
+        SyntheticExperimentCompareOperator: {
+            /** Operator Slug */
+            operator_slug: string;
+            a: components["schemas"]["SyntheticExperimentCompareSide"];
+            b: components["schemas"]["SyntheticExperimentCompareSide"];
+            delta: components["schemas"]["SyntheticExperimentCompareDelta"];
+        };
+        /**
+         * SyntheticExperimentCompareResponse
+         * @description A/B comparison of two completed runs, joined by ``operator_slug``.
+         *
+         *     ``operators`` is the slug intersection (sorted); ``only_in_a`` / ``only_in_b``
+         *     list slugs unique to one side. The two runs may belong to different
+         *     experiments. All ``win_rate_*`` values remain price-only estimates.
+         */
+        SyntheticExperimentCompareResponse: {
+            run_a: components["schemas"]["SyntheticExperimentCompareRunHeader"];
+            run_b: components["schemas"]["SyntheticExperimentCompareRunHeader"];
+            /** Operators */
+            operators?: components["schemas"]["SyntheticExperimentCompareOperator"][];
+            /** Only In A */
+            only_in_a?: string[];
+            /** Only In B */
+            only_in_b?: string[];
+        };
+        /**
+         * SyntheticExperimentCompareRunHeader
+         * @description Minimal run identity + summary embedded in a compare response.
+         */
+        SyntheticExperimentCompareRunHeader: {
+            /** Id */
+            id: number;
+            /** Experiment Id */
+            experiment_id: number;
+            /** Summary */
+            summary?: Record<string, never> | null;
+        };
+        /**
+         * SyntheticExperimentCompareSide
+         * @description Per-operator metric slice for one side (run A or run B) of a comparison.
+         *
+         *     ``win_rate_on_settled`` is a PRICE-ONLY estimate (NOT an actual award), passed
+         *     through unchanged. Any field may be ``None`` (e.g. no settled rows).
+         */
+        SyntheticExperimentCompareSide: {
+            /** Win Rate On Settled */
+            win_rate_on_settled?: number | null;
+            /** Settled Count */
+            settled_count?: number | null;
+            /** Bid Submission Rate */
+            bid_submission_rate?: number | null;
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
+        };
+        /**
          * SyntheticExperimentCreate
          * @description Request payload for creating (saving) a synthetic experiment.
          */
@@ -9661,6 +9788,37 @@ export interface operations {
             };
         };
     };
+    get_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomOperatorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_custom_operator_endpoint_api_v1_synthetic_custom_operators__slug__put: {
         parameters: {
             query?: never;
@@ -9912,6 +10070,40 @@ export interface operations {
             };
         };
     };
+    compare_experiment_runs_endpoint_api_v1_synthetic_experiments_compare_get: {
+        parameters: {
+            query: {
+                /** @description Run id for the A (baseline) side. */
+                run_a: number;
+                /** @description Run id for the B (candidate) side. */
+                run_b: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentCompareResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_experiment_endpoint_api_v1_synthetic_experiments__experiment_id__get: {
         parameters: {
             query?: never;
@@ -9993,6 +10185,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyntheticExperimentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_experiment_run_csv_endpoint_api_v1_synthetic_experiments__experiment_id__runs__run_id__export_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */

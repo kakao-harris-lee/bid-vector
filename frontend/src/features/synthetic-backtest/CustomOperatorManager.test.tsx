@@ -138,4 +138,59 @@ describe("CustomOperatorManager", () => {
     expect(screen.getByLabelText("커스텀 회사 생성")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /회사 생성/ })).toBeInTheDocument();
   });
+
+  it("fetches the full detail to prefill the edit form", async () => {
+    const detailSpy = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        // 편집 진입 시 단건 GET이 호출되어야 한다(목록 GET이 아닌 detail).
+        if (
+          url.includes("/api/v1/synthetic/custom-operators/") &&
+          (init?.method ?? "GET") === "GET"
+        ) {
+          detailSpy(url);
+          return jsonResponse({
+            user_id: 2,
+            username: "synthetic-custom-우리회사",
+            slug: "custom-우리회사",
+            is_custom: true,
+            display_name: "우리회사",
+            company: "우리 주식회사",
+            business_type: "용역",
+            annual_revenue: 500_000_000,
+            capacity_score: 0.5,
+            license_codes: [],
+            region_codes: ["11"],
+            focus_categories: ["용역"],
+            focus_regions: [],
+            exclude_regions: [],
+            required_keywords: ["보안"],
+            exclude_keywords: [],
+            min_budget_estimate: 0,
+            max_budget_estimate: 0,
+            minimum_match_score: 0.3,
+            minimum_probability_score: 0.4,
+            bid_now_threshold: 0.7,
+            review_threshold: 0.5,
+            max_recommended_candidates: 5
+          });
+        }
+        return jsonResponse(operators);
+      })
+    );
+
+    renderWithProviders(<CustomOperatorManager token="token-x" />);
+    await screen.findByText("우리회사");
+
+    fireEvent.click(screen.getByRole("button", { name: "편집" }));
+
+    // 단건 GET이 슬러그로 호출됨.
+    await waitFor(() => expect(detailSpy).toHaveBeenCalledTimes(1));
+    expect(detailSpy.mock.calls[0][0]).toContain("/api/v1/synthetic/custom-operators/");
+
+    // detail 로드 후 편집 폼이 열린다.
+    expect(await screen.findByLabelText("커스텀 회사 편집")).toBeInTheDocument();
+  });
 });

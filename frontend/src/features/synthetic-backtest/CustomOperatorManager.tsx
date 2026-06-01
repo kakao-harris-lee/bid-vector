@@ -5,6 +5,7 @@ import {
   createCustomOperator,
   deleteCustomOperator,
   fetchSyntheticOperators,
+  getCustomOperator,
   updateCustomOperator
 } from "@/shared/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
@@ -23,7 +24,7 @@ export interface CustomOperatorManagerProps {
 
 type Editor =
   | { kind: "create" }
-  | { kind: "edit"; detail: CustomOperatorDetail }
+  | { kind: "edit"; slug: string }
   | null;
 
 const OPERATORS_KEY = ["synthetic", "operators"];
@@ -42,6 +43,15 @@ export function CustomOperatorManager({ token }: CustomOperatorManagerProps) {
     queryKey: OPERATORS_KEY,
     queryFn: () => fetchSyntheticOperators(token),
     enabled: Boolean(token)
+  });
+
+  const editingSlug = editor?.kind === "edit" ? editor.slug : null;
+  // 편집 진입 시 단건 GET으로 전략 전 필드를 정확히 프리필한다(목록은 경량이라
+  // 전략 필드가 비어 있음). 응답이 오기 전까지 폼은 로딩 상태로 둔다.
+  const editDetail = useQuery({
+    queryKey: ["synthetic", "custom-operators", editingSlug],
+    queryFn: () => getCustomOperator(editingSlug as string, token),
+    enabled: Boolean(editingSlug)
   });
 
   const invalidate = () =>
@@ -110,7 +120,7 @@ export function CustomOperatorManager({ token }: CustomOperatorManagerProps) {
     onSuccess: (result) => {
       void invalidate();
       setPendingDelete(null);
-      if (editor?.kind === "edit" && editor.detail.slug === result.slug) {
+      if (editor?.kind === "edit" && editor.slug === result.slug) {
         setEditor(null);
       }
       toastApi.success({ title: "삭제됨", description: `"${result.slug}" 회사를 삭제했습니다.` });
@@ -135,7 +145,7 @@ export function CustomOperatorManager({ token }: CustomOperatorManagerProps) {
     }
     if (editor?.kind === "edit") {
       updateMutation.mutate({
-        slug: editor.detail.slug,
+        slug: editor.slug,
         payload: payload as CustomOperatorUpdateRequest
       });
     }
@@ -143,11 +153,48 @@ export function CustomOperatorManager({ token }: CustomOperatorManagerProps) {
 
   const formPending = createMutation.isPending || updateMutation.isPending;
 
-  if (editor) {
+  if (editor?.kind === "create") {
     return (
       <CustomOperatorForm
-        mode={editor.kind === "create" ? "create" : "edit"}
-        initial={editor.kind === "edit" ? editor.detail : null}
+        mode="create"
+        initial={null}
+        pending={formPending}
+        onSubmit={handleSubmit}
+        onCancel={() => setEditor(null)}
+      />
+    );
+  }
+
+  if (editor?.kind === "edit") {
+    if (editDetail.isLoading || (editDetail.isPending && !editDetail.data)) {
+      return (
+        <Card aria-label="커스텀 회사 편집 로딩">
+          <CardContent className="py-6 text-center text-sm text-[var(--color-muted)]">
+            "{editor.slug}" 회사 전략을 불러오는 중…
+          </CardContent>
+        </Card>
+      );
+    }
+    if (editDetail.isError || !editDetail.data) {
+      return (
+        <Card aria-label="커스텀 회사 편집 오류">
+          <CardContent className="flex flex-col items-center gap-3 py-6 text-center text-sm">
+            <p className="text-[var(--color-fg)]">
+              {editDetail.error instanceof Error
+                ? editDetail.error.message
+                : "회사 상세를 불러오지 못했습니다."}
+            </p>
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditor(null)}>
+              목록으로
+            </Button>
+          </CardContent>
+        </Card>
+      );
+    }
+    return (
+      <CustomOperatorForm
+        mode="edit"
+        initial={editDetail.data}
         pending={formPending}
         onSubmit={handleSubmit}
         onCancel={() => setEditor(null)}
@@ -202,7 +249,7 @@ export function CustomOperatorManager({ token }: CustomOperatorManagerProps) {
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => setEditor({ kind: "edit", detail: toDetail(operator) })}
+                    onClick={() => setEditor({ kind: "edit", slug: operator.slug })}
                   >
                     편집
                   </Button>
@@ -289,37 +336,4 @@ export function CustomOperatorManager({ token }: CustomOperatorManagerProps) {
       </CardContent>
     </Card>
   );
-}
-
-/**
- * 목록(GET /operators)의 경량 항목을 편집 폼이 쓰는 detail 형태로 승격한다.
- * 목록에 없는 전략 필드는 백엔드 기본값(0/빈 배열)으로 채운다 — 편집 시 비운
- * 필드는 미전송(부분 갱신)이므로 서버 값이 유지된다.
- */
-function toDetail(operator: SyntheticOperatorItem): CustomOperatorDetail {
-  return {
-    user_id: operator.user_id,
-    username: operator.username,
-    slug: operator.slug,
-    is_custom: operator.is_custom,
-    display_name: operator.display_name,
-    company: operator.company ?? null,
-    business_type: operator.business_type ?? null,
-    annual_revenue: operator.annual_revenue,
-    capacity_score: operator.capacity_score,
-    license_codes: [],
-    region_codes: [],
-    focus_categories: [],
-    focus_regions: [],
-    exclude_regions: [],
-    required_keywords: [],
-    exclude_keywords: [],
-    min_budget_estimate: 0,
-    max_budget_estimate: 0,
-    minimum_match_score: 0,
-    minimum_probability_score: 0,
-    bid_now_threshold: operator.bid_now_threshold,
-    review_threshold: operator.review_threshold,
-    max_recommended_candidates: 0
-  };
 }

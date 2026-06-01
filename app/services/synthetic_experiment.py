@@ -9,6 +9,8 @@ price-only estimate (NOT actual award) and is passed through unchanged.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 from datetime import datetime
@@ -46,6 +48,43 @@ BUDGET_BAND_TOP_KEY = "gte_50eok"
 # the engine summary. This is a price-based ESTIMATE, not an actual award.
 _WIN_VERDICTS = {"plausible"}
 
+# CSV export columns (Phase 4). ``operator_slug`` is prepended to the CLI
+# comparison columns (see ``scripts.backtest_synthetic_operators._write_comparison_csv``)
+# so each row is self-identifying. ``win_rate_on_settled`` /
+# ``win_rate_on_candidates`` remain PRICE-ONLY estimates (NOT actual awards); the
+# column name is preserved unchanged so downstream readers keep that meaning.
+EXPORT_CSV_COLUMNS: tuple[str, ...] = (
+    "operator_slug",
+    "business_type",
+    "candidate_count",
+    "paper_bid_count",
+    "settled_count",
+    "skipped_by_strategy_count",
+    "would_have_won_price_only_count",
+    "win_rate_on_settled",
+    "win_rate_on_candidates",
+    "bid_submission_rate",
+    "average_absolute_bid_rate_error",
+    "average_absolute_amount_error_rate",
+)
+
+# Per-operator metric keys surfaced in the A/B compare response. ``win_rate_on_settled``
+# is a price-only estimate (NOT an actual award) and is carried through unchanged.
+_COMPARE_METRIC_KEYS: tuple[str, ...] = (
+    "win_rate_on_settled",
+    "settled_count",
+    "bid_submission_rate",
+    "average_absolute_bid_rate_error",
+)
+
+# Subset of compare metrics for which a signed delta (b - a) is computed. A delta
+# is ``None`` when either side is missing/None (e.g. no settled rows -> win_rate None).
+_COMPARE_DELTA_KEYS: tuple[str, ...] = (
+    "win_rate_on_settled",
+    "bid_submission_rate",
+    "average_absolute_bid_rate_error",
+)
+
 
 def _budget_band_key(budget: float) -> str:
     for key, upper in BUDGET_BAND_BOUNDARIES:
@@ -80,9 +119,7 @@ def _aggregate_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         if entry.get("absolute_bid_rate_error") is not None
     ]
     avg_error = round(sum(errors) / len(errors), 6) if errors else None
-    win_rate = (
-        round(would_have_won_count / settled_count, 6) if settled_count else None
-    )
+    win_rate = round(would_have_won_count / settled_count, 6) if settled_count else None
     return {
         "settled_count": settled_count,
         "would_have_won_count": would_have_won_count,
@@ -375,6 +412,117 @@ class SyntheticExperimentService:
             for item in run.results
         ]
         return payload
+
+    # --- Phase 4: CSV export ---------------------------------------------------
+
+    def export_run_csv(self, run: SyntheticExperimentRun) -> str:
+        """Render a run's per-operator metrics as a CSV document (string).
+
+        Columns mirror the CLI comparison CSV (``EXPORT_CSV_COLUMNS``) with
+        ``operator_slug`` prepended. Missing metric keys serialize to an empty
+        cell. A run with no results yields a header-only CSV (still HTTP 200), so
+        not-yet-completed runs export cleanly rather than erroring. ``win_rate_*``
+        columns stay price-only estimates -- the engine values pass through
+        unchanged.
+        """
+        buffer = io.StringIO()
+        writer = csv.DictWriter(
+            buffer, fieldnames=list(EXPORT_CSV_COLUMNS), extrasaction="ignore"
+        )
+        writer.writeheader()
+        for item in run.results:
+            metrics = _json_loads(item.metrics_json) or {}
+            row: dict[str, Any] = {}
+            for column in EXPORT_CSV_COLUMNS:
+                if column == "operator_slug":
+                    value: Any = item.operator_slug
+                else:
+                    value = metrics.get(column)
+                row[column] = "" if value is None else value
+            writer.writerow(row)
+        return buffer.getvalue()
+
+    # --- Phase 4: A/B run comparison -------------------------------------------
+
+    def _fetch_run_by_id(self, run_id: int) -> Optional[SyntheticExperimentRun]:
+        """Fetch a run by id alone (cross-experiment; for A/B comparison)."""
+        return (
+            self.db.query(SyntheticExperimentRun)
+            .filter(SyntheticExperimentRun.id == run_id)
+            .first()
+        )
+
+    def _run_compact_header(self, run: SyntheticExperimentRun) -> dict[str, Any]:
+        """Minimal run header (id + experiment_id + summary) for the compare payload."""
+        return {
+            "id": run.id,
+            "experiment_id": run.experiment_id,
+            "summary": _json_loads(run.summary_json),
+        }
+
+    @staticmethod
+    def _compare_side_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+        """Extract the compare metric subset from a stored per-operator metrics dict."""
+        return {key: metrics.get(key) for key in _COMPARE_METRIC_KEYS}
+
+    @staticmethod
+    def _compare_delta(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+        """Signed (b - a) deltas; ``None`` when either operand is missing/None."""
+        delta: dict[str, Any] = {}
+        for key in _COMPARE_DELTA_KEYS:
+            a_value = a.get(key)
+            b_value = b.get(key)
+            if a_value is None or b_value is None:
+                delta[key] = None
+            else:
+                delta[key] = round(float(b_value) - float(a_value), 6)
+        return delta
+
+    def compare_runs(self, run_a_id: int, run_b_id: int) -> Optional[dict[str, Any]]:
+        """Join two runs' per-operator metrics by ``operator_slug`` and diff them.
+
+        Returns ``None`` when either run is missing (router maps to 404). The two
+        runs may belong to different experiments -- the join is purely on the
+        operator-slug intersection. ``delta`` is ``b - a`` (positive => B higher);
+        ``win_rate_*`` deltas are ``None`` when either side has no settled rows.
+        """
+        run_a = self._fetch_run_by_id(run_a_id)
+        run_b = self._fetch_run_by_id(run_b_id)
+        if run_a is None or run_b is None:
+            return None
+
+        metrics_a = {
+            item.operator_slug: (_json_loads(item.metrics_json) or {})
+            for item in run_a.results
+        }
+        metrics_b = {
+            item.operator_slug: (_json_loads(item.metrics_json) or {})
+            for item in run_b.results
+        }
+
+        shared = sorted(set(metrics_a) & set(metrics_b))
+        operators = []
+        for slug in shared:
+            side_a = self._compare_side_metrics(metrics_a[slug])
+            side_b = self._compare_side_metrics(metrics_b[slug])
+            operators.append(
+                {
+                    "operator_slug": slug,
+                    "a": side_a,
+                    "b": side_b,
+                    "delta": self._compare_delta(side_a, side_b),
+                }
+            )
+
+        only_in_a = sorted(set(metrics_a) - set(metrics_b))
+        only_in_b = sorted(set(metrics_b) - set(metrics_a))
+        return {
+            "run_a": self._run_compact_header(run_a),
+            "run_b": self._run_compact_header(run_b),
+            "operators": operators,
+            "only_in_a": only_in_a,
+            "only_in_b": only_in_b,
+        }
 
 
 def run_experiment_backtest(payload: dict[str, Any]) -> dict[str, Any]:
