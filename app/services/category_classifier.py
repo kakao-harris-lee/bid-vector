@@ -72,8 +72,11 @@ class CategoryClassifierService:
          r"앱\s*개발|웹\s*서비스|데이터\s*분석.*시스템|시스템.*고도화|AI\s*플랫폼",
          "software"),
         # goods — purchase / repair / equipment
+        # "수리" uses Korean word-like boundary (no 한글 neighbor) so it catches
+        # standalone "분석기 수리" / "에어쿨러 수리" but skips compound nouns
+        # like "수리시설" (irrigation facility) / "개방수리" (annexed verb).
         (r"물품\s*구매|장비\s*구매|기자재\s*구매|구매\s*입찰|"
-         r"기기\s*구매|차량\s*구매|의료기기|수리(?!\s*용역)|장비\s*도입",
+         r"기기\s*구매|차량\s*구매|의료기기|(?<![가-힣])수리(?![가-힣])|장비\s*도입",
          "goods"),
         # technical-service — engineering oversight
         (r"기술용역|엔지니어링|공사\s*감리|감리\s*용역|기술지원|"
