@@ -147,7 +147,10 @@ class KonepsTelegramSmokeTestService:
             rate = float(pred.get("predicted_bid_rate") or 0)
             result.data["predicted_bid_rate"] = rate
             result.data["predictor_name"] = pred.get("predictor_name")
-            result.passed = 0.7 <= rate <= 1.1
+            # Upper bound matches the max guardrail ceiling (1.0). A rate above
+            # 1.0 means the ceiling clamp did not apply — the smoke should fail,
+            # not pass, so it can catch that guardrail regression.
+            result.passed = 0.7 <= rate <= 1.0
             result.detail = f"rate={rate:.4f} predictor={pred.get('predictor_name')}"
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"

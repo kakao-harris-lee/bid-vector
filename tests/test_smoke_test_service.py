@@ -64,6 +64,68 @@ def test_smoke_service_skips_downstream_when_collect_fails(monkeypatch):
     assert by_name["telegram_ping"]["passed"] is True
 
 
+@pytest.mark.parametrize(
+    "rate, expected",
+    [
+        (0.69, False),  # below floor band
+        (0.70, True),   # lower edge
+        (0.90, True),   # typical
+        (1.00, True),   # upper edge == max guardrail ceiling
+        (1.01, False),  # above ceiling — clamp didn't apply, smoke must fail
+        (1.10, False),  # old upper bound must no longer pass
+    ],
+)
+def test_predict_price_phase_band_rejects_above_ceiling(monkeypatch, rate, expected):
+    """predict_price phase passes iff 0.7 <= rate <= 1.0 (guardrail ceiling)."""
+    # `_phase_predict_price` imports its deps inside the function from their
+    # origin modules, so patch there (not on app.services.smoke_test).
+    import app.ai.business_group as bg_mod
+    import app.ai.price_prediction as pp_mod
+    import app.services.backtest_cutoff as cutoff_mod
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _StubProject:
+        id = 1
+        budget_estimate = 100_000_000.0
+        title = "t"
+        description = ""
+        requirements = ""
+        category = "소프트웨어"
+        business_type_code = None
+        issuing_agency = None
+        demand_agency = None
+
+    class _StubQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def one(self):
+            return _StubProject()
+
+    class _StubDB:
+        def query(self, *a, **k):
+            return _StubQuery()
+
+    class _StubCutoff:
+        def resolve_data_cutoff_at(self, *a, **k):
+            return None
+
+        def load_price_history_at_cutoff(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
+    monkeypatch.setattr(cutoff_mod, "BacktestCutoffService", _StubCutoff)
+    monkeypatch.setattr(
+        pp_mod,
+        "predict_price",
+        lambda **kw: {"predicted_bid_rate": rate, "predictor_name": "stub"},
+    )
+
+    svc = KonepsTelegramSmokeTestService()
+    res = svc._phase_predict_price(_StubDB(), {"id": 1})
+    assert res.passed is expected
+
+
 def _mk_phase(name, passed, detail, **data):
     from app.services.smoke_test import PhaseResult
     return PhaseResult(name=name, passed=passed, detail=detail, data=data)
