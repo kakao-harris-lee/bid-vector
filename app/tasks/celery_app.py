@@ -76,6 +76,7 @@ from app.core.config import settings
 
 OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
 PAPER_BIDDING_FORWARD_TASK_NAME = "jobs.run_forward_paper_bidding"
+HISTORICAL_BACKTEST_TASK_NAME = "jobs.run_historical_backtest"
 COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
 PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
 PRICE_PREDICTOR_TRAINING_TASK_NAME = "ml.train_price_predictor"
@@ -93,6 +94,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         "jobs.poll_telegram_updates": {"queue": settings.CELERY_OPS_QUEUE},
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        HISTORICAL_BACKTEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SYNTHETIC_BACKTEST_RUN_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
@@ -160,6 +162,38 @@ def build_paper_bidding_forward_beat_schedule() -> dict[str, dict[str, object]]:
                     "model_version": "current",
                     "history_limit": max(1, settings.PAPER_BIDDING_FORWARD_SCHEDULE_HISTORY_LIMIT),
                     "persist": settings.PAPER_BIDDING_FORWARD_SCHEDULE_PERSIST,
+                },
+            },
+        }
+    }
+
+
+def build_historical_backtest_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for historical (settled) paper-bidding."""
+    if not settings.HISTORICAL_BACKTEST_SCHEDULE_ENABLED:
+        return {}
+
+    category = str(settings.HISTORICAL_BACKTEST_SCHEDULE_CATEGORY or "").strip() or None
+    scenario = str(settings.HISTORICAL_BACKTEST_SCHEDULE_SCENARIO or "base").strip() or "base"
+    if scenario not in {"conservative", "base", "aggressive"}:
+        scenario = "base"
+
+    return {
+        "historical_backtest_periodic": {
+            "task": HISTORICAL_BACKTEST_TASK_NAME,
+            "schedule": float(max(1, settings.HISTORICAL_BACKTEST_INTERVAL_MINUTES) * 60),
+            "kwargs": {
+                "request_payload": {
+                    "category": category,
+                    "limit": max(1, int(settings.HISTORICAL_BACKTEST_SCHEDULE_LIMIT)),
+                    "scenario": scenario,
+                    "lookback_days": max(1, int(settings.HISTORICAL_BACKTEST_LOOKBACK_DAYS)),
+                    "history_limit": max(1, int(settings.HISTORICAL_BACKTEST_SCHEDULE_HISTORY_LIMIT)),
+                    "cutoff_hours_before_deadline": max(0, int(settings.HISTORICAL_BACKTEST_SCHEDULE_CUTOFF_HOURS)),
+                    "settle_actions": str(settings.HISTORICAL_BACKTEST_SCHEDULE_SETTLE_ACTIONS or "bid_now,review"),
+                    "strategy_version": "scheduled-historical-backtest",
+                    "model_version": "current",
+                    "persist": bool(settings.HISTORICAL_BACKTEST_SCHEDULE_PERSIST),
                 },
             },
         }
@@ -257,6 +291,7 @@ def build_celery_runtime_config() -> dict[str, object]:
         "beat_schedule": {
             **build_operator_strategy_monitor_beat_schedule(),
             **build_paper_bidding_forward_beat_schedule(),
+            **build_historical_backtest_beat_schedule(),
             **build_koneps_collection_beat_schedule(),
             **build_business_type_enrichment_beat_schedule(),
             **build_category_reclassify_beat_schedule(),
