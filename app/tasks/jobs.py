@@ -19,6 +19,7 @@ from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
     ENRICH_BUSINESS_TYPE_TASK_NAME,
+    HISTORICAL_BACKTEST_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
@@ -236,6 +237,44 @@ def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> 
             strategy_version=str(payload.get("strategy_version") or "scheduled-forward-paper"),
             model_version=str(payload.get("model_version") or "current"),
             history_limit=int(payload.get("history_limit") or 80),
+            persist=bool(payload.get("persist", True)),
+        )
+    finally:
+        db.close()
+
+
+@celery_app.task(name=HISTORICAL_BACKTEST_TASK_NAME)
+def run_historical_backtest(request_payload: dict[str, Any] | None = None) -> dict:
+    """Replay awarded TenderResults as paper_bid + settlement comparison."""
+    from datetime import datetime, timedelta, timezone
+    from app.core.config import settings as runtime_settings
+    from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+
+    payload = dict(request_payload or {})
+    db = SessionLocal()
+    try:
+        lookback = max(1, int(payload.pop("lookback_days", runtime_settings.HISTORICAL_BACKTEST_LOOKBACK_DAYS)))
+        end_at = datetime.now(timezone.utc)
+        start_at = end_at - timedelta(days=lookback)
+        settle_actions_raw = payload.pop("settle_actions", None)
+        if isinstance(settle_actions_raw, str):
+            settle_actions = tuple(s.strip() for s in settle_actions_raw.split(",") if s.strip())
+        elif isinstance(settle_actions_raw, (list, tuple)):
+            settle_actions = tuple(settle_actions_raw)
+        else:
+            settle_actions = ("bid_now", "review")
+        return PaperBiddingBacktestService().run_historical_backtest(
+            db,
+            category=payload.get("category") or None,
+            start_at=start_at,
+            end_at=end_at,
+            limit=int(payload.get("limit") or 100),
+            scenario=str(payload.get("scenario") or "base"),
+            strategy_version=str(payload.get("strategy_version") or "scheduled-historical-backtest"),
+            model_version=str(payload.get("model_version") or "current"),
+            cutoff_hours_before_deadline=int(payload.get("cutoff_hours_before_deadline") or 2),
+            history_limit=int(payload.get("history_limit") or 80),
+            settle_actions=settle_actions,
             persist=bool(payload.get("persist", True)),
         )
     finally:
