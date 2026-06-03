@@ -6,12 +6,15 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from app.models.models import (
+    CompanyProfile,
     HistoricalData,
+    OperatorStrategy,
     PaperBid,
     PaperBidRun,
     PaperBidSettlement,
     Project,
     TenderResult,
+    User,
 )
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.backtest_data_audit import BacktestDataAuditService
@@ -422,12 +425,263 @@ def test_forward_paper_skips_zero_budget_project_and_completes(client, test_db):
     # Good project produces a paper_bid; bad project is skipped, run completes.
     assert summary["candidate_count"] == 1
     assert summary["skipped_invalid_count"] == 1
-    run = (
-        test_db.query(PaperBidRun)
-        .filter(PaperBidRun.id == payload["run_id"])
-        .one()
-    )
+    run = test_db.query(PaperBidRun).filter(PaperBidRun.id == payload["run_id"]).one()
     assert run.status == "completed"
+
+
+def _make_operator_with_profile(
+    db,
+    *,
+    username: str,
+    business_type: str,
+    license_codes: str = "",
+    region_codes: str = "전국",
+    annual_revenue: float = 1_000_000_000,
+    capacity_score: float = 0.85,
+    total_awards: int = 6,
+) -> User:
+    """Create an operator + company profile + permissive strategy for backtests.
+
+    The strategy intentionally has empty filters so ``_passes_strategy`` lets every
+    candidate through and the matched score (driven by the profile) is what varies.
+    """
+    operator = User(
+        username=username,
+        email=f"{username}@example.com",
+        full_name=username,
+        company=username,
+        hashed_password="x",
+        is_active=True,
+    )
+    db.add(operator)
+    db.flush()
+    db.add(
+        CompanyProfile(
+            user_id=operator.id,
+            business_type=business_type,
+            license_codes=license_codes,
+            region_codes=region_codes,
+            annual_revenue=annual_revenue,
+            capacity_score=capacity_score,
+            total_awards=total_awards,
+        )
+    )
+    db.add(
+        OperatorStrategy(
+            user_id=operator.id,
+            focus_categories="",
+            focus_regions="",
+            exclude_regions="",
+            required_keywords="",
+            exclude_keywords="",
+            min_budget_estimate=0.0,
+            max_budget_estimate=0.0,
+            minimum_match_score=0.0,
+            minimum_probability_score=0.0,
+            bid_now_threshold=0.7,
+            review_threshold=0.45,
+            auto_workload_penalty_multiplier=1.0,
+            category_priority_overrides="{}",
+            notify_only_high_priority=False,
+            max_recommended_candidates=10,
+        )
+    )
+    db.flush()
+    return operator
+
+
+def _matched_score_for_operator(db, *, operator_id: int) -> float:
+    result = PaperBiddingBacktestService().run_historical_backtest(
+        db,
+        operator_id=operator_id,
+        category="construction",
+        start_at=_dt(2025, 3, 1),
+        end_at=_dt(2025, 3, 31),
+        limit=5,
+        persist=False,
+        settle_actions=("bid_now", "review"),
+    )
+    assert len(result["items"]) == 1
+    return result["items"][0]
+
+
+def test_backtest_matched_score_reflects_operator_profile_difference(test_db):
+    """REGRESSION: matched_score must depend on each operator's CompanyProfile.
+
+    Previously ``_estimate_matched_score`` only looked at project field presence, so
+    every operator received an identical hardcoded score (0.72 + bonuses). Now the
+    score flows through the real classifier, so a profile that fits the construction
+    tender (matching business type + required license) must score differently from a
+    profile that does not (software business type, no matching license).
+    """
+    target = _project(
+        title="도로 정비 공사 입찰",
+        category="construction",
+        budget=100_000_000,
+        deadline=_dt(2025, 3, 10),
+        created_at=_dt(2025, 2, 1),
+    )
+    # Explicit license requirement so the license axis discriminates between profiles.
+    target.requirements = "전기공사업 면허 보유 필수 (ELE001), 지역제한 서울 소재 업체만 참여 가능"
+    target.description = "서울 지역 도로 정비 및 전기 공사 통합 수행 대규모 프로젝트"
+    test_db.add(target)
+    test_db.flush()
+    for index in range(8):
+        test_db.add(
+            _historical_row(
+                None, opened_at=_dt(2025, 1, 1) + timedelta(days=index), bid_rate=0.88
+            )
+        )
+    test_db.add(
+        TenderResult(
+            project_id=target.id,
+            winning_company="Winner",
+            winning_amount=88_000_000,
+            winning_rate=0.88,
+            result_status="awarded",
+            announced_at=_dt(2025, 3, 11),
+        )
+    )
+
+    fit_operator = _make_operator_with_profile(
+        test_db,
+        username="synthetic-construction-fit",
+        business_type="construction",
+        license_codes="ELE001, 전기공사업",
+        region_codes="서울",
+    )
+    mismatch_operator = _make_operator_with_profile(
+        test_db,
+        username="synthetic-software-mismatch",
+        business_type="software",
+        license_codes="SW001",
+        region_codes="부산",
+    )
+    test_db.commit()
+
+    fit_item = _matched_score_for_operator(test_db, operator_id=fit_operator.id)
+    mismatch_item = _matched_score_for_operator(
+        test_db, operator_id=mismatch_operator.id
+    )
+
+    fit_score = fit_item["matched_score"]
+    mismatch_score = mismatch_item["matched_score"]
+
+    # Core regression assertion: a hardcoded score would make these identical.
+    assert fit_score != mismatch_score
+    # The fitting profile (matching business type, license, region) scores higher.
+    assert fit_score > mismatch_score
+    # Both came through the real classifier path, not the heuristic fallback.
+    assert fit_item["matched_score_source"] == "classifier"
+    assert mismatch_item["matched_score_source"] == "classifier"
+    # Classifier reasons are surfaced for audit.
+    assert fit_item["match_reasons"]
+    assert "[프로필 매칭]" in fit_item["reasoning"]
+
+
+def test_backtest_matched_score_falls_back_to_heuristic_without_profile(
+    test_db, monkeypatch
+):
+    """When no profile resolves, the legacy heuristic path is used and never throws."""
+    target = _project(deadline=_dt(2025, 3, 10), created_at=_dt(2025, 2, 1))
+    test_db.add(target)
+    test_db.flush()
+    for index in range(8):
+        test_db.add(
+            _historical_row(
+                None, opened_at=_dt(2025, 1, 1) + timedelta(days=index), bid_rate=0.88
+            )
+        )
+    test_db.add(
+        TenderResult(
+            project_id=target.id,
+            winning_company="Winner",
+            winning_amount=88_000_000,
+            winning_rate=0.88,
+            result_status="awarded",
+            announced_at=_dt(2025, 3, 11),
+        )
+    )
+    test_db.commit()
+
+    service = PaperBiddingBacktestService()
+    # Force the resolver to return no profile to exercise the fallback branch.
+    monkeypatch.setattr(
+        service, "_resolve_operator_profile", lambda db, *, operator: None
+    )
+
+    result = service.run_historical_backtest(
+        test_db,
+        category="construction",
+        start_at=_dt(2025, 3, 1),
+        end_at=_dt(2025, 3, 31),
+        limit=5,
+        persist=False,
+        settle_actions=("bid_now", "review"),
+    )
+
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["matched_score_source"] == "heuristic"
+    # Heuristic score for a category + agency + requirements project = 0.72+0.08+0.05+0.05.
+    assert item["matched_score"] == 0.9
+    assert item["match_reasons"] == []
+    # Reasoning is the bare decision reasoning (no profile-fit note appended).
+    assert "[프로필 매칭]" not in item["reasoning"]
+
+
+def test_backtest_classifier_failure_falls_back_without_aborting_run(
+    test_db, monkeypatch
+):
+    """A classifier exception must degrade to the heuristic, not abort the run."""
+    target = _project(deadline=_dt(2025, 3, 10), created_at=_dt(2025, 2, 1))
+    test_db.add(target)
+    test_db.flush()
+    for index in range(8):
+        test_db.add(
+            _historical_row(
+                None, opened_at=_dt(2025, 1, 1) + timedelta(days=index), bid_rate=0.88
+            )
+        )
+    test_db.add(
+        TenderResult(
+            project_id=target.id,
+            winning_company="Winner",
+            winning_amount=88_000_000,
+            winning_rate=0.88,
+            result_status="awarded",
+            announced_at=_dt(2025, 3, 11),
+        )
+    )
+    operator = _make_operator_with_profile(
+        test_db,
+        username="synthetic-classifier-boom",
+        business_type="construction",
+    )
+    test_db.commit()
+
+    service = PaperBiddingBacktestService()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("classifier exploded")
+
+    monkeypatch.setattr(service.classifier, "classify", _boom)
+
+    result = service.run_historical_backtest(
+        test_db,
+        operator_id=operator.id,
+        category="construction",
+        start_at=_dt(2025, 3, 1),
+        end_at=_dt(2025, 3, 31),
+        limit=5,
+        persist=False,
+        settle_actions=("bid_now", "review"),
+    )
+
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["matched_score_source"] == "heuristic"
+    assert 0.0 <= item["matched_score"] <= 1.0
 
 
 def test_forward_paper_scheduler_builds_configured_payload(monkeypatch):

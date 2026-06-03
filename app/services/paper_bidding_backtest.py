@@ -15,12 +15,27 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
 from app.ai.price_prediction import predict_price
-from app.core.single_user import ensure_operator_account, ensure_operator_strategy, split_multi_value_text
+from app.core.single_user import (
+    ensure_operator_account,
+    ensure_operator_profile,
+    ensure_operator_strategy,
+    split_multi_value_text,
+)
 from app.core.time import ensure_utc, utc_now
-from app.models.models import OperatorStrategy, PaperBid, PaperBidRun, PaperBidSettlement, Project, TenderResult, User
+from app.models.models import (
+    CompanyProfile,
+    OperatorStrategy,
+    PaperBid,
+    PaperBidRun,
+    PaperBidSettlement,
+    Project,
+    TenderResult,
+    User,
+)
 from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
+from app.services.classifier import NoticeClassifierService
 
 
 class PaperBiddingBacktestService:
@@ -32,6 +47,7 @@ class PaperBiddingBacktestService:
     def __init__(self) -> None:
         self.cutoff_service = BacktestCutoffService()
         self.decision_service = BidDecisionService()
+        self.classifier = NoticeClassifierService()
 
     def run_historical_backtest(
         self,
@@ -53,8 +69,13 @@ class PaperBiddingBacktestService:
         """Generate paper bids from historical awards and settle them immediately."""
         operator = self._resolve_operator(db, operator_id=operator_id)
         strategy = self._resolve_operator_strategy(db, operator=operator)
-        normalized_settle_actions = self._normalize_actions(settle_actions or self.DEFAULT_SETTLE_ACTIONS)
-        normalized_scenario = str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
+        profile = self._resolve_operator_profile(db, operator=operator)
+        normalized_settle_actions = self._normalize_actions(
+            settle_actions or self.DEFAULT_SETTLE_ACTIONS
+        )
+        normalized_scenario = (
+            str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
+        )
         start_at = ensure_utc(start_at) if start_at is not None else None
         end_at = ensure_utc(end_at) if end_at is not None else None
         safe_limit = max(1, int(limit or 1))
@@ -117,6 +138,7 @@ class PaperBiddingBacktestService:
                     strategy_version=strategy_version,
                     cutoff_hours_before_deadline=cutoff_hours_before_deadline,
                     history_limit=history_limit,
+                    profile=profile,
                 )
                 action_counts[item["action"]] += 1
                 candidate_items.append(item)
@@ -133,7 +155,9 @@ class PaperBiddingBacktestService:
                 if item["action"] not in normalized_settle_actions:
                     continue
 
-                settlement = self._build_settlement_item(item=item, tender_result=tender_result)
+                settlement = self._build_settlement_item(
+                    item=item, tender_result=tender_result
+                )
                 settlement_items.append(settlement)
                 self._persist_settlement(
                     db,
@@ -155,11 +179,17 @@ class PaperBiddingBacktestService:
                 persist=persist,
                 summary=summary,
                 candidate_count=len(candidate_items),
-                paper_bid_count=sum(1 for item in candidate_items if item["action"] in normalized_settle_actions),
+                paper_bid_count=sum(
+                    1
+                    for item in candidate_items
+                    if item["action"] in normalized_settle_actions
+                ),
                 settled_count=len(settlement_items),
             )
             return {
-                "run_id": int(run.id) if run is not None and run.id is not None else None,
+                "run_id": int(run.id)
+                if run is not None and run.id is not None
+                else None,
                 "request": request_payload,
                 "summary": summary,
                 "items": candidate_items,
@@ -185,7 +215,10 @@ class PaperBiddingBacktestService:
         """Generate paper bids for currently open/re-notice projects without settlement."""
         operator = self._resolve_operator(db, operator_id=operator_id)
         strategy = self._resolve_operator_strategy(db, operator=operator)
-        normalized_scenario = str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
+        profile = self._resolve_operator_profile(db, operator=operator)
+        normalized_scenario = (
+            str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
+        )
         safe_limit = max(1, int(limit or 1))
         data_cutoff_at = utc_now()
         request_payload = {
@@ -219,7 +252,9 @@ class PaperBiddingBacktestService:
         skipped_invalid = 0
 
         try:
-            projects = self._load_forward_projects(db, category=category, limit=safe_limit, data_cutoff_at=data_cutoff_at)
+            projects = self._load_forward_projects(
+                db, category=category, limit=safe_limit, data_cutoff_at=data_cutoff_at
+            )
             for project in projects:
                 if not self._passes_strategy(project, strategy):
                     skipped_by_strategy += 1
@@ -234,6 +269,7 @@ class PaperBiddingBacktestService:
                         strategy_version=strategy_version,
                         cutoff_hours_before_deadline=0,
                         history_limit=history_limit,
+                        profile=profile,
                     )
                 except ValueError as project_exc:
                     # A single malformed project (e.g. 0 budget for ebiz4u-link
@@ -270,11 +306,17 @@ class PaperBiddingBacktestService:
                 persist=persist,
                 summary=summary,
                 candidate_count=len(candidate_items),
-                paper_bid_count=sum(1 for item in candidate_items if item["action"] in {"bid_now", "review"}),
+                paper_bid_count=sum(
+                    1
+                    for item in candidate_items
+                    if item["action"] in {"bid_now", "review"}
+                ),
                 settled_count=0,
             )
             return {
-                "run_id": int(run.id) if run is not None and run.id is not None else None,
+                "run_id": int(run.id)
+                if run is not None and run.id is not None
+                else None,
                 "request": request_payload,
                 "summary": summary,
                 "items": candidate_items,
@@ -316,7 +358,11 @@ class PaperBiddingBacktestService:
                 continue
             project_id = int(row.project_id or 0)
             current = latest_by_project.get(project_id)
-            if current is None or self._result_time(row) > self._result_time(current) or int(row.id or 0) > int(current.id or 0):
+            if (
+                current is None
+                or self._result_time(row) > self._result_time(current)
+                or int(row.id or 0) > int(current.id or 0)
+            ):
                 latest_by_project[project_id] = row
 
         return sorted(
@@ -339,7 +385,11 @@ class PaperBiddingBacktestService:
             (Project.deadline.is_(None)) | (Project.deadline > data_cutoff_at),
         )
         return (
-            query.order_by(Project.deadline.asc().nullslast(), Project.created_at.desc(), Project.id.desc())
+            query.order_by(
+                Project.deadline.asc().nullslast(),
+                Project.created_at.desc(),
+                Project.id.desc(),
+            )
             .limit(max(1, int(limit or 1)))
             .all()
         )
@@ -355,6 +405,7 @@ class PaperBiddingBacktestService:
         strategy_version: str,
         cutoff_hours_before_deadline: int,
         history_limit: int,
+        profile: CompanyProfile | None = None,
     ) -> dict[str, Any]:
         budget = self._resolve_project_budget(project)
         if budget <= 0:
@@ -379,7 +430,11 @@ class PaperBiddingBacktestService:
         prediction = predict_price(
             budget=budget,
             category=project.category or "other",
-            description=" ".join(part for part in [project.title, project.description, project.requirements] if part),
+            description=" ".join(
+                part
+                for part in [project.title, project.description, project.requirements]
+                if part
+            ),
             historical_records=history,
             agency_name=project.issuing_agency or project.demand_agency,
             feedback_calibration=None,
@@ -388,14 +443,20 @@ class PaperBiddingBacktestService:
         )
         selected_scenario = self._select_scenario(prediction, scenario=scenario)
         paper_bid_amount = round(float(selected_scenario["predicted_price"]), 2)
-        paper_bid_rate = self._normalize_rate(float(selected_scenario.get("bid_rate") or (paper_bid_amount / budget)))
-        matched_score = self._estimate_matched_score(project=project)
+        paper_bid_rate = self._normalize_rate(
+            float(selected_scenario.get("bid_rate") or (paper_bid_amount / budget))
+        )
+        matched_score, match_reasons, match_source = self._resolve_matched_score(
+            project=project, profile=profile
+        )
         probability_score = self._estimate_probability_score(
             matched_score=matched_score,
             prediction=prediction,
             history_count=len(history),
         )
-        deadline_hours_remaining = self._deadline_hours_remaining(project=project, data_cutoff_at=data_cutoff_at)
+        deadline_hours_remaining = self._deadline_hours_remaining(
+            project=project, data_cutoff_at=data_cutoff_at
+        )
         decision = self.decision_service.evaluate_opportunity(
             BidDecisionRequest(
                 project_id=int(project.id),
@@ -407,9 +468,15 @@ class PaperBiddingBacktestService:
                 max_active_bids=3,
                 current_workload_score=0.0,
                 budget_estimate=budget,
-                competitiveness_score=self._estimate_competitiveness_score(paper_bid_rate),
-                expected_margin_score=self._estimate_expected_margin_score(paper_bid_rate),
-                execution_complexity_score=self._estimate_execution_complexity_score(project),
+                competitiveness_score=self._estimate_competitiveness_score(
+                    paper_bid_rate
+                ),
+                expected_margin_score=self._estimate_expected_margin_score(
+                    paper_bid_rate
+                ),
+                execution_complexity_score=self._estimate_execution_complexity_score(
+                    project
+                ),
                 workload_source="provided",
             ),
             db=db,
@@ -433,16 +500,26 @@ class PaperBiddingBacktestService:
             "probability_score": probability_score,
             "matched_score": matched_score,
             "predicted_price": float(prediction.get("predicted_price", 0.0) or 0.0),
-            "predicted_bid_rate": self._normalize_rate(float(prediction.get("predicted_bid_rate", 0.0) or 0.0)),
+            "predicted_bid_rate": self._normalize_rate(
+                float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
+            ),
             "price_range_min": float(prediction.get("price_range_min", 0.0) or 0.0),
             "price_range_max": float(prediction.get("price_range_max", 0.0) or 0.0),
             "confidence_score": float(prediction.get("confidence_score", 0.0) or 0.0),
-            "predictor_name": str(prediction.get("predictor_name") or "historical_statistical"),
-            "predictor_family": str(prediction.get("predictor_family") or "statistical"),
+            "predictor_name": str(
+                prediction.get("predictor_name") or "historical_statistical"
+            ),
+            "predictor_family": str(
+                prediction.get("predictor_family") or "statistical"
+            ),
             "model_version": str(prediction.get("model_version") or "current"),
             "strategy_version": strategy_version,
             "historical_sample_size": len(history),
-            "history_ids": [int(record["historical_data_id"]) for record in history if record.get("historical_data_id") is not None],
+            "history_ids": [
+                int(record["historical_data_id"])
+                for record in history
+                if record.get("historical_data_id") is not None
+            ],
             "input_snapshot_hash": self._build_input_hash(
                 project=project,
                 data_cutoff_at=data_cutoff_at,
@@ -451,10 +528,18 @@ class PaperBiddingBacktestService:
                 paper_bid_amount=paper_bid_amount,
                 strategy_version=strategy_version,
             ),
-            "reasoning": str(decision["reasoning"]),
+            "matched_score_source": match_source,
+            "match_reasons": match_reasons,
+            "reasoning": self._compose_reasoning(
+                decision_reasoning=str(decision["reasoning"]),
+                match_reasons=match_reasons,
+                match_source=match_source,
+            ),
         }
 
-    def _build_settlement_item(self, *, item: dict[str, Any], tender_result: TenderResult) -> dict[str, Any]:
+    def _build_settlement_item(
+        self, *, item: dict[str, Any], tender_result: TenderResult
+    ) -> dict[str, Any]:
         winning_amount = float(tender_result.winning_amount or 0.0)
         budget = float(item["budget_estimate"] or 0.0)
         winning_rate = self._normalize_rate(float(tender_result.winning_rate or 0.0))
@@ -464,12 +549,20 @@ class PaperBiddingBacktestService:
         paper_bid_amount = float(item["paper_bid_amount"] or 0.0)
         paper_bid_rate = self._normalize_rate(float(item["paper_bid_rate"] or 0.0))
         amount_delta = paper_bid_amount - winning_amount
-        absolute_error_rate = abs(amount_delta) / winning_amount if winning_amount > 0 else 0.0
+        absolute_error_rate = (
+            abs(amount_delta) / winning_amount if winning_amount > 0 else 0.0
+        )
         bid_rate_delta = paper_bid_rate - winning_rate
         absolute_bid_rate_error = abs(bid_rate_delta)
         price_close = absolute_bid_rate_error <= 0.003
         price_competitive = absolute_bid_rate_error <= 0.01
-        would_have_won_price_only = "plausible" if price_close else "competitive" if price_competitive else "unlikely"
+        would_have_won_price_only = (
+            "plausible"
+            if price_close
+            else "competitive"
+            if price_competitive
+            else "unlikely"
+        )
 
         return {
             "project_id": item["project_id"],
@@ -510,11 +603,17 @@ class PaperBiddingBacktestService:
         action_counts: Counter[str],
         skipped_invalid: int = 0,
     ) -> dict[str, Any]:
-        rate_errors = [float(item["absolute_bid_rate_error"]) for item in settlement_items]
-        amount_errors = [float(item["absolute_error_rate"]) for item in settlement_items]
+        rate_errors = [
+            float(item["absolute_bid_rate_error"]) for item in settlement_items
+        ]
+        amount_errors = [
+            float(item["absolute_error_rate"]) for item in settlement_items
+        ]
         return {
             "candidate_count": len(candidate_items),
-            "paper_bid_count": int(action_counts.get("bid_now", 0) + action_counts.get("review", 0)),
+            "paper_bid_count": int(
+                action_counts.get("bid_now", 0) + action_counts.get("review", 0)
+            ),
             "review_count": int(action_counts.get("review", 0)),
             "skip_count": int(action_counts.get("skip", 0)),
             "skipped_by_strategy_count": skipped_by_strategy,
@@ -526,16 +625,24 @@ class PaperBiddingBacktestService:
             "within_0_1pct_count": sum(1 for value in rate_errors if value <= 0.001),
             "within_0_3pct_count": sum(1 for value in rate_errors if value <= 0.003),
             "within_1pct_count": sum(1 for value in rate_errors if value <= 0.01),
-            "price_close_count": sum(1 for item in settlement_items if item["price_close"]),
-            "price_competitive_count": sum(1 for item in settlement_items if item["price_competitive"]),
+            "price_close_count": sum(
+                1 for item in settlement_items if item["price_close"]
+            ),
+            "price_competitive_count": sum(
+                1 for item in settlement_items if item["price_competitive"]
+            ),
             "would_have_won_price_only_count": sum(
-                1 for item in settlement_items if item["would_have_won_price_only"] == "plausible"
+                1
+                for item in settlement_items
+                if item["would_have_won_price_only"] == "plausible"
             ),
         }
 
     def _passes_strategy(self, project: Project, strategy) -> bool:
         category = str(project.category or "").strip().lower()
-        focus_categories = [value.lower() for value in split_multi_value_text(strategy.focus_categories)]
+        focus_categories = [
+            value.lower() for value in split_multi_value_text(strategy.focus_categories)
+        ]
         if focus_categories and category not in focus_categories:
             return False
 
@@ -558,11 +665,18 @@ class PaperBiddingBacktestService:
             ]
             if part
         ).lower()
-        required_keywords = [value.lower() for value in split_multi_value_text(strategy.required_keywords)]
-        if required_keywords and not all(keyword in searchable_text for keyword in required_keywords):
+        required_keywords = [
+            value.lower()
+            for value in split_multi_value_text(strategy.required_keywords)
+        ]
+        if required_keywords and not all(
+            keyword in searchable_text for keyword in required_keywords
+        ):
             return False
 
-        exclude_keywords = [value.lower() for value in split_multi_value_text(strategy.exclude_keywords)]
+        exclude_keywords = [
+            value.lower() for value in split_multi_value_text(strategy.exclude_keywords)
+        ]
         if any(keyword in searchable_text for keyword in exclude_keywords):
             return False
         return True
@@ -677,7 +791,9 @@ class PaperBiddingBacktestService:
                 else "execution_time"
             ),
             started_at=utc_now(),
-            request_payload=json.dumps(request_payload, ensure_ascii=False, default=str),
+            request_payload=json.dumps(
+                request_payload, ensure_ascii=False, default=str
+            ),
         )
         db.add(run)
         db.flush()
@@ -706,7 +822,9 @@ class PaperBiddingBacktestService:
         db.commit()
         db.refresh(run)
 
-    def _fail_run(self, db: Session, *, run: PaperBidRun | None, persist: bool, error_message: str) -> None:
+    def _fail_run(
+        self, db: Session, *, run: PaperBidRun | None, persist: bool, error_message: str
+    ) -> None:
         if not persist or run is None:
             return
         run.status = "failed"
@@ -715,7 +833,9 @@ class PaperBiddingBacktestService:
         db.add(run)
         db.commit()
 
-    def _select_scenario(self, prediction: dict[str, Any], *, scenario: str) -> dict[str, Any]:
+    def _select_scenario(
+        self, prediction: dict[str, Any], *, scenario: str
+    ) -> dict[str, Any]:
         candidates = prediction.get("bid_rate_candidates") or []
         for candidate in candidates:
             if str(candidate.get("label") or "") == scenario:
@@ -736,6 +856,56 @@ class PaperBiddingBacktestService:
                 return budget
         return 0.0
 
+    def _resolve_matched_score(
+        self, *, project: Project, profile: CompanyProfile | None
+    ) -> tuple[float, list[str], str]:
+        """Resolve the matched score for *project* against the operator *profile*.
+
+        When a profile is available the real classifier (license/region/budget/
+        capability/semantic axes) drives the score so per-operator profile
+        differences are reflected. When no profile exists or the classifier raises,
+        fall back to the legacy field-presence heuristic so a single bad project can
+        never abort an entire run.
+
+        Returns ``(matched_score, reasons, source)`` where ``source`` is one of
+        ``"classifier"`` or ``"heuristic"`` for audit purposes.
+        """
+        if profile is None:
+            return self._estimate_matched_score(project=project), [], "heuristic"
+
+        try:
+            classification = self.classifier.classify(project=project, profile=profile)
+            score = float(classification.get("score") or 0.0)
+            reasons = [str(reason) for reason in (classification.get("reasons") or [])]
+            return round(max(0.0, min(1.0, score)), 2), reasons, "classifier"
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "paper_bidding_backtest: classifier failed for project %s, "
+                "falling back to heuristic matched score (%s)",
+                getattr(project, "id", "?"),
+                exc,
+            )
+            return self._estimate_matched_score(project=project), [], "heuristic"
+
+    def _compose_reasoning(
+        self, *, decision_reasoning: str, match_reasons: list[str], match_source: str
+    ) -> str:
+        """Append profile-fit reasons to the decision reasoning for audit trails.
+
+        Keeps the existing decision reasoning as the leading text so downstream
+        consumers that only parse the first sentence stay compatible.
+        """
+        base = str(decision_reasoning or "").strip()
+        if match_source != "classifier" or not match_reasons:
+            return base
+        joined = " ".join(
+            reason.strip() for reason in match_reasons if reason and reason.strip()
+        )
+        if not joined:
+            return base
+        fit_note = f"[프로필 매칭] {joined}"
+        return f"{base} {fit_note}".strip() if base else fit_note
+
     def _estimate_matched_score(self, *, project: Project) -> float:
         score = 0.72
         if project.category:
@@ -746,15 +916,21 @@ class PaperBiddingBacktestService:
             score += 0.05
         return round(min(1.0, score), 2)
 
-    def _estimate_probability_score(self, *, matched_score: float, prediction: dict[str, Any], history_count: int) -> float:
-        confidence = max(0.0, min(1.0, float(prediction.get("confidence_score", 0.0) or 0.0)))
+    def _estimate_probability_score(
+        self, *, matched_score: float, prediction: dict[str, Any], history_count: int
+    ) -> float:
+        confidence = max(
+            0.0, min(1.0, float(prediction.get("confidence_score", 0.0) or 0.0))
+        )
         history_signal = min(1.0, max(0.0, history_count / 30))
         probability = matched_score * 0.38 + confidence * 0.42 + history_signal * 0.20
         return round(max(0.0, min(1.0, probability)), 2)
 
     def _estimate_competitiveness_score(self, paper_bid_rate: float) -> float:
         target_rate = 0.88
-        return round(max(0.0, min(1.0, 1.0 - (abs(paper_bid_rate - target_rate) / 0.15))), 2)
+        return round(
+            max(0.0, min(1.0, 1.0 - (abs(paper_bid_rate - target_rate) / 0.15))), 2
+        )
 
     def _estimate_expected_margin_score(self, paper_bid_rate: float) -> float:
         return round(max(0.0, min(1.0, paper_bid_rate)), 2)
@@ -769,10 +945,14 @@ class PaperBiddingBacktestService:
             return 0.52
         return 0.36
 
-    def _deadline_hours_remaining(self, *, project: Project, data_cutoff_at: datetime) -> int | None:
+    def _deadline_hours_remaining(
+        self, *, project: Project, data_cutoff_at: datetime
+    ) -> int | None:
         if project.deadline is None:
             return None
-        seconds = (ensure_utc(project.deadline) - ensure_utc(data_cutoff_at)).total_seconds()
+        seconds = (
+            ensure_utc(project.deadline) - ensure_utc(data_cutoff_at)
+        ).total_seconds()
         return max(0, int(seconds // 3600))
 
     def _decision_status_for_action(self, action: str) -> str:
@@ -800,7 +980,9 @@ class PaperBiddingBacktestService:
             "paper_bid_amount": paper_bid_amount,
             "strategy_version": strategy_version,
         }
-        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        serialized = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, default=str
+        )
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _result_time(self, result: TenderResult) -> datetime:
@@ -825,7 +1007,9 @@ class PaperBiddingBacktestService:
             return ensure_operator_account(db)
         return operator
 
-    def _resolve_operator_strategy(self, db: Session, *, operator: User) -> OperatorStrategy:
+    def _resolve_operator_strategy(
+        self, db: Session, *, operator: User
+    ) -> OperatorStrategy:
         """Return the strategy belonging to *operator*, falling back to the canonical one.
 
         ``ensure_operator_strategy`` always resolves the canonical "operator" account, so
@@ -840,6 +1024,26 @@ class PaperBiddingBacktestService:
         if strategy is not None:
             return strategy
         return ensure_operator_strategy(db)
+
+    def _resolve_operator_profile(
+        self, db: Session, *, operator: User
+    ) -> CompanyProfile | None:
+        """Return the company profile belonging to *operator*, falling back to canonical.
+
+        Mirrors :meth:`_resolve_operator_strategy`. ``ensure_operator_profile`` always
+        resolves the canonical "operator" account, so per-operator backtests (e.g.
+        synthetic operator comparisons) must look up the profile by ``operator.id``
+        directly first so each operator's license/region/budget/capability profile drives
+        its own matched score.
+        """
+        profile = (
+            db.query(CompanyProfile)
+            .filter(CompanyProfile.user_id == int(operator.id))
+            .first()
+        )
+        if profile is not None:
+            return profile
+        return ensure_operator_profile(db)
 
     def _normalize_rate(self, value: float) -> float:
         rate = float(value or 0.0)
