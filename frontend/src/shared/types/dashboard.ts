@@ -49,6 +49,10 @@ export interface DashboardOpportunityItem {
   urgency_score: number;
   deadline_hours_remaining?: number | null;
   reasoning: string;
+  /** 추구 가능 근거 (왜 가능한가). 레거시 항목은 누락될 수 있어 기본 []. */
+  strengths?: string[];
+  /** 리스크 신호 (왜 위험한가). 레거시 항목은 누락될 수 있어 기본 []. */
+  risk_flags?: string[];
   updated_at: string;
   detail_href: string;
 }

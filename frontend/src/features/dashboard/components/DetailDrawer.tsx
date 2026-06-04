@@ -1,7 +1,9 @@
 import { X } from "lucide-react";
 import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
+import { t } from "@/shared/i18n";
 import { IconButton } from "@/app/layout/IconButton";
 import type { DetailSelection } from "../types";
+import { DecisionReasonsCard } from "./DecisionReasonsCard";
 
 export function DetailDrawer({
   selection,
@@ -70,8 +72,22 @@ export function DetailDrawer({
           </>
         ) : null}
       </dl>
+      {selection.kind === "opportunity" ? (
+        <DecisionReasonsCard
+          strengths={selection.item.strengths}
+          riskFlags={selection.item.risk_flags}
+          action={selection.item.action}
+          priorityScore={selection.item.priority_score}
+          probabilityScore={selection.item.probability_score}
+        />
+      ) : null}
       {"reasoning" in selection.item && selection.item.reasoning ? (
-        <p className="drawer-note">{selection.item.reasoning}</p>
+        <details className="drawer-reasoning">
+          <summary className="cursor-pointer text-xs font-medium text-[var(--color-muted)]">
+            {t("decision_reasons.reasoning_toggle")}
+          </summary>
+          <p className="drawer-note">{selection.item.reasoning}</p>
+        </details>
       ) : null}
     </aside>
   );

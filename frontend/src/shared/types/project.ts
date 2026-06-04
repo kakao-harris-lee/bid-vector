@@ -73,6 +73,23 @@ export interface BidDecisionProjectSnapshot {
   demand_agency?: string | null;
 }
 
+export interface BidDecisionScoreBreakdown {
+  probability_signal: number;
+  matched_signal: number;
+  urgency_signal: number;
+  competitiveness_signal: number;
+  budget_capture_signal: number;
+  expected_margin_signal: number;
+  execution_complexity_signal: number;
+  active_load_ratio: number;
+  workload_score_used: number;
+  opportunity_score: number;
+  auto_workload_penalty_multiplier: number;
+  load_penalty: number;
+  execution_complexity_penalty: number;
+  total_penalty: number;
+}
+
 export interface BidDecisionRecordResponse {
   id: number;
   project_id: number;
@@ -84,6 +101,11 @@ export interface BidDecisionRecordResponse {
   probability_score: number;
   matched_score: number;
   reasoning: string;
+  /** 추구 가능 근거 (왜 가능한가). 레거시 레코드는 누락될 수 있어 기본 []. */
+  strengths?: string[];
+  /** 리스크 신호 (왜 위험한가). 레거시 레코드는 누락될 수 있어 기본 []. */
+  risk_flags?: string[];
+  score_breakdown?: BidDecisionScoreBreakdown;
   created_at: string;
   updated_at: string;
 }

@@ -18,6 +18,7 @@ import {
 } from "@/shared/lib";
 import { MiniBar, MiniDonut } from "./Helpers";
 import { StatusBadge } from "./StatusBadge";
+import { ReasonIndicators } from "./ReasonIndicators";
 
 export function OpportunityRow({
   item,
@@ -32,6 +33,7 @@ export function OpportunityRow({
         <div className="row-title">
           <span>{item.project.title}</span>
           <StatusBadge status={statusFromOpportunity(item)} label={labelOpportunityStatus(item)} />
+          <ReasonIndicators strengths={item.strengths} riskFlags={item.risk_flags} />
         </div>
         <p>
           {item.source_label} · {item.project.issuing_agency ?? item.project.category ?? "입찰 후보"}
