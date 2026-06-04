@@ -266,3 +266,36 @@ def test_build_risk_flags_does_not_fire_construction_signals_for_software_projec
     assert SIMILAR_REASON not in risks
     assert REGION_JV_REASON not in risks
     assert REGION_BONUS_REASON not in risks
+
+
+# ---- negation context guard (false-positive defense) -------------------------------------------
+
+
+def test_region_restriction_with_no_negation_word_does_fire():
+    """Sanity baseline: bare '지역 제한' (no negation) should still fire."""
+    project = _make_project(description="지역 제한 요건이 있는 공사 공고입니다.")
+    assert REGION_JV_REASON in _detect_construction_risk_reasons(project)
+
+
+def test_region_restriction_followed_by_negation_does_not_fire():
+    """'지역 제한 없음' / '지역제한 미적용' 부정 문맥은 위험으로 잡지 않는다."""
+    for text in ["지역 제한 없음", "지역제한 없음", "지역 제한 미적용", "지역제한 무관"]:
+        project = _make_project(description=f"전국 입찰 — {text}.")
+        assert REGION_JV_REASON not in _detect_construction_risk_reasons(project), text
+
+
+def test_similar_experience_with_negation_does_not_fire():
+    """'유사실적 불요' / '시공실적 미요구' 부정 문맥은 위험으로 잡지 않는다."""
+    for text in ["유사실적 불요", "유사 실적 없음", "시공실적 미요구", "납품실적 면제"]:
+        project = _make_project(description=f"공사 공고. {text}.")
+        assert SIMILAR_REASON not in _detect_construction_risk_reasons(project), text
+
+
+def test_joint_venture_with_negation_does_not_fire():
+    project = _make_project(description="공동도급 미해당, 단독 입찰 가능.")
+    assert JV_REASON not in _detect_construction_risk_reasons(project)
+
+
+def test_region_bonus_with_negation_does_not_fire():
+    project = _make_project(description="지역 가산점 없음, 전국 동일 기준.")
+    assert REGION_BONUS_REASON not in _detect_construction_risk_reasons(project)

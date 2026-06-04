@@ -77,6 +77,11 @@ def _is_construction_project(project: Project) -> bool:
     return False
 
 
+# 매치 직후 짧은 윈도우 내 부정어가 있으면 신호로 잡지 않음
+# (예: "지역 제한 없음", "유사실적 불요" → 위험 아님)
+_NEGATION_NEAR_MATCH = re.compile(r"\s*(?:없|미적용|불요|무관|면제|미요구|미해당)")
+
+
 def _detect_construction_risk_reasons(project: Project) -> list[str]:
     """Return ordered, deduplicated construction risk reasons matched on the notice text."""
     if not _is_construction_project(project):
@@ -94,9 +99,15 @@ def _detect_construction_risk_reasons(project: Project) -> list[str]:
     for category_id, pattern, reason in _CONSTRUCTION_RISK_PATTERNS:
         if category_id in seen_categories:
             continue
-        if pattern.search(notice_text):
-            matched.append(reason)
-            seen_categories.add(category_id)
+        hit = pattern.search(notice_text)
+        if hit is None:
+            continue
+        # 부정 문맥 가드: 매치 직후 12자 내 부정어가 있으면 잡지 않음
+        tail = notice_text[hit.end():hit.end() + 12]
+        if _NEGATION_NEAR_MATCH.match(tail):
+            continue
+        matched.append(reason)
+        seen_categories.add(category_id)
     return matched
 
 
