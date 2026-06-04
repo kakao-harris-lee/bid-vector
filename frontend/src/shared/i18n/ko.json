@@ -52,7 +52,16 @@
   "decisions": {
     "title": "결정 게이트웨이",
     "status_change_success": "상태 변경 완료",
-    "status_change_failure": "상태 변경 실패"
+    "status_change_failure": "상태 변경 실패",
+    "kpi": {
+      "title": "운영 KPI",
+      "manual_override": "수동 수정",
+      "conversion": "투찰 전환율",
+      "prediction_accuracy": "예측 정확도",
+      "missed_opportunities": "놓친 유효 공고",
+      "no_data": "데이터 없음",
+      "prediction_snapshot_note": "최근 표본 기준 스냅샷입니다."
+    }
   },
   "decision_reasons": {
     "title": "판단 근거",
