@@ -4,6 +4,7 @@ from uuid import uuid4
 
 try:
     from celery import Celery
+    from celery.schedules import crontab
 except ImportError:  # pragma: no cover - exercised in lightweight test environments
     class _FallbackAsyncResult:
         """In-memory async result object for environments without Celery."""
@@ -72,6 +73,14 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
         def AsyncResult(self, task_id: str):
             return self._results.get(task_id, _FallbackAsyncResult(task_id))
 
+    class crontab:  # type: ignore[no-redef]
+        """Minimal crontab shim for environments without Celery installed."""
+
+        def __init__(self, hour: int = 0, minute: int = 0, **kwargs):
+            del kwargs
+            self.hour = {int(hour)}
+            self.minute = {int(minute)}
+
 from app.core.config import settings
 
 OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
@@ -84,6 +93,7 @@ DECISION_EXPERIMENT_REEVALUATION_TASK_NAME = "ml.reevaluate_decision_experiment"
 SYNTHETIC_BACKTEST_RUN_TASK_NAME = "jobs.run_synthetic_operator_backtest"
 ENRICH_BUSINESS_TYPE_TASK_NAME = "jobs.enrich_pending_business_types"
 RECLASSIFY_CATEGORIES_TASK_NAME = "jobs.reclassify_pending_categories"
+SMOKE_TEST_TASK_NAME = "jobs.run_koneps_telegram_smoke_test"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -97,6 +107,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         HISTORICAL_BACKTEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SYNTHETIC_BACKTEST_RUN_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        SMOKE_TEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -256,6 +267,20 @@ def build_category_reclassify_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_smoke_test_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for the daily KONEPS+Telegram smoke test."""
+    if not settings.SMOKE_TEST_SCHEDULE_ENABLED:
+        return {}
+    hour = max(0, min(23, int(settings.SMOKE_TEST_HOUR_UTC)))
+    minute = max(0, min(59, int(settings.SMOKE_TEST_MINUTE)))
+    return {
+        "smoke_test_daily": {
+            "task": SMOKE_TEST_TASK_NAME,
+            "schedule": crontab(hour=hour, minute=minute),
+        }
+    }
+
+
 def build_celery_runtime_config() -> dict[str, object]:
     """Build the shared Celery runtime configuration for eager and worker-backed modes."""
     soft_time_limit, hard_time_limit = _normalize_task_time_limits(
@@ -295,6 +320,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_koneps_collection_beat_schedule(),
             **build_business_type_enrichment_beat_schedule(),
             **build_category_reclassify_beat_schedule(),
+            **build_smoke_test_beat_schedule(),
         },
     }
 

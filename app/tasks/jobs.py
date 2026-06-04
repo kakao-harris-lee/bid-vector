@@ -25,6 +25,7 @@ from app.tasks.celery_app import (
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
     PROJECT_EMBEDDING_REBUILD_TASK_NAME,
     RECLASSIFY_CATEGORIES_TASK_NAME,
+    SMOKE_TEST_TASK_NAME,
     SYNTHETIC_BACKTEST_RUN_TASK_NAME,
     celery_app,
 )
@@ -309,6 +310,20 @@ def reclassify_pending_categories(limit: int | None = None) -> dict:
     db = SessionLocal()
     try:
         return CategoryClassifierService().reclassify_pending(db, limit=effective_limit)
+    finally:
+        db.close()
+
+
+@celery_app.task(name=SMOKE_TEST_TASK_NAME)
+def run_koneps_telegram_smoke_test() -> dict:
+    """Daily KONEPS + Telegram end-to-end smoke test."""
+    from dataclasses import asdict
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    db = SessionLocal()
+    try:
+        report = KonepsTelegramSmokeTestService().run(db)
+        return asdict(report)
     finally:
         db.close()
 
