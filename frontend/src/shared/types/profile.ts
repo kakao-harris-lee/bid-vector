@@ -11,6 +11,8 @@ export interface OperatorProfileResponse {
   region_codes: string[];
   annual_revenue: number;
   capacity_score: number;
+  construction_capacity_amount: number;
+  awarded_contract_limit: number;
   total_awards: number;
   profile_configured: boolean;
 }
@@ -21,6 +23,8 @@ export interface OperatorProfileUpdatePayload {
   region_codes?: string[];
   annual_revenue?: number;
   capacity_score?: number;
+  construction_capacity_amount?: number;
+  awarded_contract_limit?: number;
   total_awards?: number;
 }
 

@@ -23,6 +23,8 @@ const baseProfile: OperatorProfileResponse = {
   region_codes: ["서울"],
   annual_revenue: 5_000_000_000,
   capacity_score: 0.6,
+  construction_capacity_amount: 0,
+  awarded_contract_limit: 0,
   total_awards: 12,
   profile_configured: true
 };
@@ -294,6 +296,8 @@ describe("CompanyInfoEditor", () => {
     expect(profileBody).toHaveProperty("region_codes");
     expect(profileBody).toHaveProperty("annual_revenue");
     expect(profileBody).toHaveProperty("capacity_score");
+    expect(profileBody).toHaveProperty("construction_capacity_amount");
+    expect(profileBody).toHaveProperty("awarded_contract_limit");
     expect(profileBody).toHaveProperty("total_awards");
 
     // Strategy gets only budget + preference fields (partial update).
@@ -312,6 +316,56 @@ describe("CompanyInfoEditor", () => {
     expect(strategyBody).not.toHaveProperty("category_priority_overrides");
 
     expect(await screen.findByText("업체 정보 저장 완료")).toBeInTheDocument();
+  });
+
+  it("시공능력평가액·도급한도 입력값이 profile PUT body에 포함된다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "보유 면허에서 전기공사업 제거" })
+      ).toBeInTheDocument();
+    });
+
+    const capacityInput = screen.getByLabelText(
+      "시공능력평가액 (원, 0=미입력)"
+    ) as HTMLInputElement;
+    const limitInput = screen.getByLabelText(
+      "도급한도 (원, 0=미입력)"
+    ) as HTMLInputElement;
+
+    // Both fields default to 0 (미입력) when profile is fresh.
+    expect(capacityInput.value).toBe("0");
+    expect(limitInput.value).toBe("0");
+
+    await userEvent.clear(capacityInput);
+    await userEvent.type(capacityInput, "12000000000");
+    await userEvent.clear(limitInput);
+    await userEvent.type(limitInput, "8500000000");
+
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => {
+      expect(
+        findCall(
+          fetchMock,
+          (url, init) => url.endsWith("/api/v1/operator/profile") && init?.method === "PUT"
+        )
+      ).toBeDefined();
+    });
+
+    const profileCall = findCall(
+      fetchMock,
+      (url, init) => url.endsWith("/api/v1/operator/profile") && init?.method === "PUT"
+    );
+    const profileBody = parseBody(profileCall?.[1] as RequestInit);
+
+    expect(profileBody).toHaveProperty("construction_capacity_amount", 12_000_000_000);
+    expect(profileBody).toHaveProperty("awarded_contract_limit", 8_500_000_000);
   });
 
   it("두 mutation 중 strategy 저장이 실패하면 danger toast로 표시한다", async () => {

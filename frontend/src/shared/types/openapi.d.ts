@@ -4894,6 +4894,16 @@ export interface components {
             annual_revenue: number;
             /** Capacity Score */
             capacity_score: number;
+            /**
+             * Construction Capacity Amount
+             * @default 0
+             */
+            construction_capacity_amount: number;
+            /**
+             * Awarded Contract Limit
+             * @default 0
+             */
+            awarded_contract_limit: number;
             /** Total Awards */
             total_awards: number;
             /** Profile Configured */
@@ -4919,6 +4929,10 @@ export interface components {
             annual_revenue?: number | null;
             /** Capacity Score */
             capacity_score?: number | null;
+            /** Construction Capacity Amount */
+            construction_capacity_amount?: number | null;
+            /** Awarded Contract Limit */
+            awarded_contract_limit?: number | null;
             /** Total Awards */
             total_awards?: number | null;
         };

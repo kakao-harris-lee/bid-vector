@@ -137,6 +137,17 @@ class CompanyProfile(Base):
     region_codes = Column(Text, default="")
     annual_revenue = Column(Float, default=0.0)
     capacity_score = Column(Float, default=0.0)
+    # 시공능력평가액(원). Construction-only manual annual input used as the
+    # primary budget-fit signal for 공사 카테고리. 0 means "not provided",
+    # in which case the matcher falls back to annual_revenue/capacity_score.
+    construction_capacity_amount = Column(
+        Float, default=0.0, nullable=False, server_default="0"
+    )
+    # 도급한도(원). Maximum simultaneously-held award amount. Persisted for
+    # future capacity tracking; not yet used by the matcher.
+    awarded_contract_limit = Column(
+        Float, default=0.0, nullable=False, server_default="0"
+    )
     total_awards = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

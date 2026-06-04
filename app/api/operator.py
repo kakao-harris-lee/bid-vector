@@ -48,17 +48,37 @@ router = APIRouter()
 INTERNAL_OPERATOR_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
 
 
-def _is_profile_configured(license_codes: list[str], region_codes: list[str], annual_revenue: float, capacity_score: float, total_awards: int) -> bool:
+def _is_profile_configured(
+    license_codes: list[str],
+    region_codes: list[str],
+    annual_revenue: float,
+    capacity_score: float,
+    total_awards: int,
+    construction_capacity_amount: float = 0.0,
+    awarded_contract_limit: float = 0.0,
+) -> bool:
     return any([
         bool(license_codes),
         bool(region_codes),
         annual_revenue > 0,
         capacity_score > 0,
         total_awards > 0,
+        construction_capacity_amount > 0,
+        awarded_contract_limit > 0,
     ])
 
 
-def _build_operator_profile_response(operator: User, license_codes: list[str], region_codes: list[str], business_type: str, annual_revenue: float, capacity_score: float, total_awards: int) -> OperatorProfileResponse:
+def _build_operator_profile_response(
+    operator: User,
+    license_codes: list[str],
+    region_codes: list[str],
+    business_type: str,
+    annual_revenue: float,
+    capacity_score: float,
+    total_awards: int,
+    construction_capacity_amount: float = 0.0,
+    awarded_contract_limit: float = 0.0,
+) -> OperatorProfileResponse:
     return OperatorProfileResponse(
         operator_id=operator.id,
         username=operator.username,
@@ -72,6 +92,8 @@ def _build_operator_profile_response(operator: User, license_codes: list[str], r
         region_codes=region_codes,
         annual_revenue=annual_revenue,
         capacity_score=capacity_score,
+        construction_capacity_amount=construction_capacity_amount,
+        awarded_contract_limit=awarded_contract_limit,
         total_awards=total_awards,
         profile_configured=_is_profile_configured(
             license_codes=license_codes,
@@ -79,6 +101,8 @@ def _build_operator_profile_response(operator: User, license_codes: list[str], r
             annual_revenue=annual_revenue,
             capacity_score=capacity_score,
             total_awards=total_awards,
+            construction_capacity_amount=construction_capacity_amount,
+            awarded_contract_limit=awarded_contract_limit,
         ),
     )
 
@@ -215,6 +239,10 @@ def _build_operator_overview_payload(operator: User, *, days: int, db: Session) 
             annual_revenue=profile.annual_revenue,
             capacity_score=profile.capacity_score,
             total_awards=profile.total_awards,
+            construction_capacity_amount=float(
+                profile.construction_capacity_amount or 0.0
+            ),
+            awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
         ),
     }
 
@@ -245,6 +273,10 @@ def get_operator_profile_endpoint(db: Session = Depends(get_db)):
         annual_revenue=profile.annual_revenue,
         capacity_score=profile.capacity_score,
         total_awards=profile.total_awards,
+        construction_capacity_amount=float(
+            profile.construction_capacity_amount or 0.0
+        ),
+        awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
     )
 
 
@@ -280,6 +312,10 @@ def update_operator_profile(request: OperatorProfileUpdate, db: Session = Depend
         profile.annual_revenue = request.annual_revenue
     if request.capacity_score is not None:
         profile.capacity_score = request.capacity_score
+    if request.construction_capacity_amount is not None:
+        profile.construction_capacity_amount = request.construction_capacity_amount
+    if request.awarded_contract_limit is not None:
+        profile.awarded_contract_limit = request.awarded_contract_limit
     if request.total_awards is not None:
         profile.total_awards = request.total_awards
 
@@ -297,6 +333,10 @@ def update_operator_profile(request: OperatorProfileUpdate, db: Session = Depend
         annual_revenue=profile.annual_revenue,
         capacity_score=profile.capacity_score,
         total_awards=profile.total_awards,
+        construction_capacity_amount=float(
+            profile.construction_capacity_amount or 0.0
+        ),
+        awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
     )
 
 

@@ -30,6 +30,8 @@ const defaultValues: CompanyInfoFormValues = {
   license_codes: [],
   region_codes: [],
   annual_revenue: 0,
+  construction_capacity_amount: 0,
+  awarded_contract_limit: 0,
   total_awards: 0,
   capacity_score: 0.5,
   min_budget_estimate: 0,
@@ -76,6 +78,8 @@ export function CompanyInfoEditor() {
         region_codes: values.region_codes,
         annual_revenue: values.annual_revenue,
         capacity_score: values.capacity_score,
+        construction_capacity_amount: values.construction_capacity_amount,
+        awarded_contract_limit: values.awarded_contract_limit,
         total_awards: values.total_awards
       })
     );
@@ -221,6 +225,22 @@ export function CompanyInfoEditor() {
               error={errors.total_awards?.message}
               min={0}
               step={1}
+            />
+            <NumberField
+              label="시공능력평가액 (원, 0=미입력)"
+              register={form.register("construction_capacity_amount", {
+                valueAsNumber: true
+              })}
+              error={errors.construction_capacity_amount?.message}
+              min={0}
+              step={10_000_000}
+            />
+            <NumberField
+              label="도급한도 (원, 0=미입력)"
+              register={form.register("awarded_contract_limit", { valueAsNumber: true })}
+              error={errors.awarded_contract_limit?.message}
+              min={0}
+              step={10_000_000}
             />
             <div className="sm:col-span-2">
               <Controller
@@ -377,6 +397,8 @@ function toFormValues(
     license_codes: profile.license_codes ?? [],
     region_codes: profile.region_codes ?? [],
     annual_revenue: profile.annual_revenue,
+    construction_capacity_amount: profile.construction_capacity_amount,
+    awarded_contract_limit: profile.awarded_contract_limit,
     total_awards: profile.total_awards,
     capacity_score: profile.capacity_score,
     min_budget_estimate: strategy.min_budget_estimate,
