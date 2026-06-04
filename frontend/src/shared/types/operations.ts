@@ -18,6 +18,9 @@ export type OperationsKpiMissedOpportunityItem =
 export type OperationsKpiReviewTime = components["schemas"]["OperationsKpiReviewTime"];
 export type OperationsKpiRecommendationFeedback =
   components["schemas"]["OperationsKpiRecommendationFeedback"];
+// Settlement-coverage KPI: paper-bid settlement progress (forward subset emphasised).
+export type OperationsKpiSettlementCoverage =
+  components["schemas"]["OperationsKpiSettlementCoverage"];
 
 export interface OperationsDashboardCard {
   key: string;

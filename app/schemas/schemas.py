@@ -1375,6 +1375,22 @@ class OperationsKpiRecommendationFeedback(BaseModel):
     feedback_count: int = Field(ge=0)
 
 
+class OperationsKpiSettlementCoverage(BaseModel):
+    """Settlement-coverage KPI: how far paper-bid settlement has progressed.
+
+    ``forward_*`` fields isolate the ``forward_paper`` run subset, which is the
+    cohort the automated forward-settlement job is responsible for closing.
+    Coverage rates are ``None`` when their denominator (paper-bid count) is zero.
+    """
+
+    total_paper_bids: int = Field(ge=0)
+    settled_count: int = Field(ge=0)
+    coverage_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    forward_paper_bids: int = Field(ge=0)
+    forward_settled_count: int = Field(ge=0)
+    forward_coverage_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
 class OperationsKpiResponse(BaseModel):
     """Roadmap C-1 instrumentation: operating KPIs aggregated in one call."""
 
@@ -1386,6 +1402,7 @@ class OperationsKpiResponse(BaseModel):
     missed_opportunities: OperationsKpiMissedOpportunities
     review_time: OperationsKpiReviewTime
     recommendation_feedback: OperationsKpiRecommendationFeedback
+    settlement_coverage: OperationsKpiSettlementCoverage
 
 
 class PredictionPredictorBreakdownItem(BaseModel):

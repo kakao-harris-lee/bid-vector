@@ -149,6 +149,14 @@ const operationsKpi: OperationsKpiResponse = {
     not_useful_count: 1,
     review_value_rate: 0.75,
     feedback_count: 4
+  },
+  settlement_coverage: {
+    total_paper_bids: 8,
+    settled_count: 5,
+    coverage_rate: 0.625,
+    forward_paper_bids: 3,
+    forward_settled_count: 2,
+    forward_coverage_rate: 0.667
   }
 };
 

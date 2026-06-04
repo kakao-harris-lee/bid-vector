@@ -4672,6 +4672,7 @@ export interface components {
             missed_opportunities: components["schemas"]["OperationsKpiMissedOpportunities"];
             review_time: components["schemas"]["OperationsKpiReviewTime"];
             recommendation_feedback: components["schemas"]["OperationsKpiRecommendationFeedback"];
+            settlement_coverage: components["schemas"]["OperationsKpiSettlementCoverage"];
         };
         /**
          * OperationsKpiReviewTime
@@ -4682,6 +4683,28 @@ export interface components {
             average_review_minutes?: number | null;
             /** Sample Count */
             sample_count: number;
+        };
+        /**
+         * OperationsKpiSettlementCoverage
+         * @description Settlement-coverage KPI: how far paper-bid settlement has progressed.
+         *
+         *     ``forward_*`` fields isolate the ``forward_paper`` run subset, which is the
+         *     cohort the automated forward-settlement job is responsible for closing.
+         *     Coverage rates are ``None`` when their denominator (paper-bid count) is zero.
+         */
+        OperationsKpiSettlementCoverage: {
+            /** Total Paper Bids */
+            total_paper_bids: number;
+            /** Settled Count */
+            settled_count: number;
+            /** Coverage Rate */
+            coverage_rate?: number | null;
+            /** Forward Paper Bids */
+            forward_paper_bids: number;
+            /** Forward Settled Count */
+            forward_settled_count: number;
+            /** Forward Coverage Rate */
+            forward_coverage_rate?: number | null;
         };
         /** OperatorDashboardCard */
         OperatorDashboardCard: {

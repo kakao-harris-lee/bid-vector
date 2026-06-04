@@ -63,28 +63,44 @@ const fullData: OperationsKpiResponse = {
     not_useful_count: 3,
     review_value_rate: 0.75,
     feedback_count: 12
+  },
+  settlement_coverage: {
+    total_paper_bids: 40,
+    settled_count: 26,
+    coverage_rate: 0.65,
+    forward_paper_bids: 10,
+    forward_settled_count: 9,
+    forward_coverage_rate: 0.9
   }
 };
 
 describe("OperationsKpiPanel", () => {
-  it("6개 KPI 그룹을 정상 값과 함께 렌더한다", () => {
+  it("7개 KPI 그룹을 정상 값과 함께 렌더한다", () => {
     renderWithProviders(<OperationsKpiPanel data={fullData} loading={false} error={null} />);
 
     expect(screen.getByRole("heading", { name: /운영 KPI/ })).toBeInTheDocument();
 
-    // 6 KPI groups present (aria-label on each article)
+    // 7 KPI groups present (aria-label on each article)
     const manual = screen.getByLabelText("수동 수정");
     const conversion = screen.getByLabelText("투찰 전환율");
     const accuracy = screen.getByLabelText("예측 정확도");
     const reviewTime = screen.getByLabelText("검토 시간");
     const feedback = screen.getByLabelText("추천 유용성");
     const missed = screen.getByLabelText("놓친 유효 공고");
+    const settlement = screen.getByLabelText("정산 커버리지");
     expect(manual).toBeInTheDocument();
     expect(conversion).toBeInTheDocument();
     expect(accuracy).toBeInTheDocument();
     expect(reviewTime).toBeInTheDocument();
     expect(feedback).toBeInTheDocument();
     expect(missed).toBeInTheDocument();
+    expect(settlement).toBeInTheDocument();
+
+    // settlement coverage: forward rate emphasised + counts, overall rate + counts
+    expect(within(settlement).getByText("90.0%")).toBeInTheDocument();
+    expect(within(settlement).getByText("forward 10건 중 9건 정산")).toBeInTheDocument();
+    expect(within(settlement).getByText("65.0%")).toBeInTheDocument();
+    expect(within(settlement).getByText("전체 40건 중 26건")).toBeInTheDocument();
 
     // review time: average minutes + sample count
     expect(within(reviewTime).getByText("평균 12.4분")).toBeInTheDocument();
@@ -140,6 +156,14 @@ describe("OperationsKpiPanel", () => {
         not_useful_count: 0,
         review_value_rate: null,
         feedback_count: 0
+      },
+      settlement_coverage: {
+        total_paper_bids: 0,
+        settled_count: 0,
+        coverage_rate: null,
+        forward_paper_bids: 0,
+        forward_settled_count: 0,
+        forward_coverage_rate: null
       }
     };
     renderWithProviders(<OperationsKpiPanel data={data} loading={false} error={null} />);
@@ -160,6 +184,39 @@ describe("OperationsKpiPanel", () => {
     const feedback = screen.getByLabelText("추천 유용성");
     expect(within(feedback).getByText("—")).toBeInTheDocument();
     expect(within(feedback).getByText("아직 피드백이 없습니다.")).toBeInTheDocument();
+
+    const settlement = screen.getByLabelText("정산 커버리지");
+    // both forward & overall coverage rates are null → dash
+    expect(within(settlement).getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    expect(within(settlement).getByText("forward 0건 중 0건 정산")).toBeInTheDocument();
+    expect(within(settlement).getByText("전체 0건 중 0건")).toBeInTheDocument();
+    expect(within(settlement).getByText("forward 정산 대상이 아직 없습니다.")).toBeInTheDocument();
+    expect(within(settlement).getByText("집계할 paper bid가 없습니다.")).toBeInTheDocument();
+  });
+
+  it("정산 커버리지: forward_coverage_rate가 null이면 forward 값을 대시로 표시한다", () => {
+    const data: OperationsKpiResponse = {
+      ...fullData,
+      settlement_coverage: {
+        total_paper_bids: 12,
+        settled_count: 4,
+        coverage_rate: 0.333,
+        forward_paper_bids: 0,
+        forward_settled_count: 0,
+        forward_coverage_rate: null
+      }
+    };
+    renderWithProviders(<OperationsKpiPanel data={data} loading={false} error={null} />);
+    const settlement = screen.getByLabelText("정산 커버리지");
+    // forward rate null → dash, but overall rate still renders
+    expect(within(settlement).getByText("—")).toBeInTheDocument();
+    expect(within(settlement).getByText("33.3%")).toBeInTheDocument();
+    // forward 0건 empty-state note
+    expect(within(settlement).getByText("forward 정산 대상이 아직 없습니다.")).toBeInTheDocument();
+    // overall not empty (12건) → no overall empty-state note
+    expect(
+      within(settlement).queryByText("집계할 paper bid가 없습니다.")
+    ).not.toBeInTheDocument();
   });
 
   it("놓친 유효 공고 항목 리스트를 렌더하고 클릭 시 공고 상세로 이동한다", () => {
