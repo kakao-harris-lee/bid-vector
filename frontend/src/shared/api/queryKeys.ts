@@ -1,6 +1,7 @@
 import type { ProjectListQuery, SimilarProjectsQuery } from "./projects";
 import type { DecisionFunnelQuery } from "./decisions";
 import type { ExperimentListQuery } from "./experiments";
+import type { OperationsKpiQuery } from "./operations";
 
 export const queryKeys = {
   dashboard: {
@@ -33,6 +34,9 @@ export const queryKeys = {
   },
   experiments: {
     list: (query: ExperimentListQuery) => ["experiments", "list", normalizeExperimentKey(query)] as const
+  },
+  operations: {
+    kpi: (query: OperationsKpiQuery) => ["operations", "kpi", normalizeOperationsKpiKey(query)] as const
   }
 } as const;
 
@@ -63,6 +67,13 @@ function normalizeFunnelKey(query: DecisionFunnelQuery): Record<string, unknown>
     limit: query.limit ?? null,
     breakdownLimit: query.breakdownLimit ?? null,
     trendBucketDays: query.trendBucketDays ?? null
+  };
+}
+
+function normalizeOperationsKpiKey(query: OperationsKpiQuery): Record<string, unknown> {
+  return {
+    days: query.days ?? null,
+    missedLimit: query.missedLimit ?? null
   };
 }
 

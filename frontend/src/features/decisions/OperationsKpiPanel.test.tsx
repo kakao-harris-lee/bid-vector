@@ -1,0 +1,169 @@
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { renderWithProviders } from "@/test-utils";
+import { OperationsKpiPanel } from "./OperationsKpiPanel";
+import type { OperationsKpiResponse } from "@/shared/types/operations";
+
+const fullData: OperationsKpiResponse = {
+  operator_id: 1,
+  period_days: 30,
+  manual_override: {
+    decision_count: 20,
+    modified_count: 5,
+    modification_rate: 0.25
+  },
+  conversion: {
+    decision_count: 20,
+    submitted_count: 12,
+    overall_submission_rate: 0.6,
+    bid_now_submission_rate: 0.75,
+    review_submission_rate: 0.4,
+    average_hours_to_submit: 18.5
+  },
+  prediction_accuracy: {
+    result_count: 8,
+    prediction_sample_count: 8,
+    recommendation_sample_count: 7,
+    average_prediction_error_rate: 0.021,
+    average_recommendation_error_rate: 0.034,
+    prediction_within_1_percent_count: 3,
+    prediction_within_3_percent_count: 6,
+    recommendation_within_1_percent_count: 2,
+    recommendation_within_3_percent_count: 5
+  },
+  missed_opportunities: {
+    missed_count: 2,
+    items: [
+      {
+        decision_record_id: 501,
+        project_id: 42,
+        project_title: "지나친 유효 공고 A",
+        deadline: "2026-05-20T09:00:00Z",
+        initial_action: "bid_now",
+        decision_status: "planned",
+        priority_score: 0.82
+      },
+      {
+        decision_record_id: 502,
+        project_id: 43,
+        project_title: "지나친 유효 공고 B",
+        deadline: null,
+        initial_action: "review",
+        decision_status: "reviewing",
+        priority_score: 0.55
+      }
+    ]
+  }
+};
+
+describe("OperationsKpiPanel", () => {
+  it("4개 KPI 그룹을 정상 값과 함께 렌더한다", () => {
+    renderWithProviders(<OperationsKpiPanel data={fullData} loading={false} error={null} />);
+
+    expect(screen.getByRole("heading", { name: /운영 KPI/ })).toBeInTheDocument();
+
+    // 4 KPI groups present (aria-label on each article)
+    const manual = screen.getByLabelText("수동 수정");
+    const conversion = screen.getByLabelText("투찰 전환율");
+    const accuracy = screen.getByLabelText("예측 정확도");
+    const missed = screen.getByLabelText("놓친 유효 공고");
+    expect(manual).toBeInTheDocument();
+    expect(conversion).toBeInTheDocument();
+    expect(accuracy).toBeInTheDocument();
+    expect(missed).toBeInTheDocument();
+
+    // manual override: rate as % + counts
+    expect(within(manual).getByText("25.0%")).toBeInTheDocument();
+    expect(within(manual).getByText(/결정 20건 중 5건 수정/)).toBeInTheDocument();
+
+    // conversion: % rates + average hours
+    expect(within(conversion).getByText("60.0%")).toBeInTheDocument();
+    expect(within(conversion).getByText("75.0%")).toBeInTheDocument();
+    expect(within(conversion).getByText("40.0%")).toBeInTheDocument();
+    expect(within(conversion).getByText("평균 18.5시간")).toBeInTheDocument();
+
+    // prediction accuracy: error rates as %
+    expect(within(accuracy).getByText("2.1%")).toBeInTheDocument();
+    expect(within(accuracy).getByText("3.4%")).toBeInTheDocument();
+  });
+
+  it("rate가 null이면 대시(—)로 표시한다", () => {
+    const data: OperationsKpiResponse = {
+      ...fullData,
+      manual_override: { decision_count: 0, modified_count: 0, modification_rate: null },
+      conversion: {
+        decision_count: 0,
+        submitted_count: 0,
+        overall_submission_rate: null,
+        bid_now_submission_rate: null,
+        review_submission_rate: null,
+        average_hours_to_submit: null
+      },
+      prediction_accuracy: {
+        result_count: 0,
+        prediction_sample_count: 0,
+        recommendation_sample_count: 0,
+        average_prediction_error_rate: null,
+        average_recommendation_error_rate: null,
+        prediction_within_1_percent_count: 0,
+        prediction_within_3_percent_count: 0,
+        recommendation_within_1_percent_count: 0,
+        recommendation_within_3_percent_count: 0
+      }
+    };
+    renderWithProviders(<OperationsKpiPanel data={data} loading={false} error={null} />);
+
+    const manual = screen.getByLabelText("수동 수정");
+    // modification rate dash + empty-state note
+    expect(within(manual).getByText("—")).toBeInTheDocument();
+    expect(within(manual).getByText("집계할 결정이 없습니다.")).toBeInTheDocument();
+
+    const accuracy = screen.getByLabelText("예측 정확도");
+    expect(within(accuracy).getByText("정확도 표본이 아직 없습니다.")).toBeInTheDocument();
+  });
+
+  it("놓친 유효 공고 항목 리스트를 렌더하고 클릭 시 공고 상세로 이동한다", () => {
+    renderWithProviders(<OperationsKpiPanel data={fullData} loading={false} error={null} />);
+
+    const missed = screen.getByLabelText("놓친 유효 공고");
+    expect(within(missed).getByText("지나친 유효 공고 A")).toBeInTheDocument();
+    expect(within(missed).getByText("지나친 유효 공고 B")).toBeInTheDocument();
+    // missed_count emphasized
+    expect(within(missed).getByText("2")).toBeInTheDocument();
+    // action badge label
+    expect(within(missed).getByText("투찰")).toBeInTheDocument();
+    expect(within(missed).getByText("검토")).toBeInTheDocument();
+
+    // clicking an item navigates to the project detail route
+    fireEvent.click(within(missed).getByText("지나친 유효 공고 A"));
+    expect(window.location.pathname).toBe("/dashboard/projects/42");
+  });
+
+  it("놓친 유효 공고가 0건이면 빈 상태 문구를 표시한다", () => {
+    const emptyData: OperationsKpiResponse = {
+      ...fullData,
+      missed_opportunities: { missed_count: 0, items: [] }
+    };
+    renderWithProviders(<OperationsKpiPanel data={emptyData} loading={false} error={null} />);
+    const missedEmpty = screen.getByLabelText("놓친 유효 공고");
+    expect(within(missedEmpty).getByText("놓친 유효 공고가 없습니다.")).toBeInTheDocument();
+  });
+
+  it("로딩/에러 상태를 표시한다", () => {
+    const { unmount } = renderWithProviders(
+      <OperationsKpiPanel data={undefined} loading={true} error={null} />
+    );
+    expect(screen.getByText("불러오는 중…")).toBeInTheDocument();
+    unmount();
+    cleanup();
+
+    renderWithProviders(
+      <OperationsKpiPanel
+        data={undefined}
+        loading={false}
+        error={new Error("운영 KPI를 불러오지 못했습니다.")}
+      />
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("운영 KPI를 불러오지 못했습니다.");
+  });
+});

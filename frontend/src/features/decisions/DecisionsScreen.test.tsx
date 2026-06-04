@@ -7,6 +7,7 @@ import type {
   DecisionFunnelResponse,
   DecisionRecommendationResponse
 } from "@/shared/types/decisions";
+import type { OperationsKpiResponse } from "@/shared/types/operations";
 
 const emptySummary: DashboardSummaryResponse = {
   operator_id: 1,
@@ -102,6 +103,45 @@ const recommendations: DecisionRecommendationResponse = {
   recommendations: []
 };
 
+const operationsKpi: OperationsKpiResponse = {
+  operator_id: 1,
+  period_days: 30,
+  manual_override: { decision_count: 10, modified_count: 2, modification_rate: 0.2 },
+  conversion: {
+    decision_count: 10,
+    submitted_count: 5,
+    overall_submission_rate: 0.5,
+    bid_now_submission_rate: 0.5,
+    review_submission_rate: 0.33,
+    average_hours_to_submit: 12.5
+  },
+  prediction_accuracy: {
+    result_count: 4,
+    prediction_sample_count: 4,
+    recommendation_sample_count: 4,
+    average_prediction_error_rate: 0.03,
+    average_recommendation_error_rate: 0.05,
+    prediction_within_1_percent_count: 1,
+    prediction_within_3_percent_count: 3,
+    recommendation_within_1_percent_count: 1,
+    recommendation_within_3_percent_count: 2
+  },
+  missed_opportunities: {
+    missed_count: 1,
+    items: [
+      {
+        decision_record_id: 201,
+        project_id: 31,
+        project_title: "놓친 공고",
+        deadline: "2026-05-15T00:00:00Z",
+        initial_action: "bid_now",
+        decision_status: "planned",
+        priority_score: 0.8
+      }
+    ]
+  }
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -125,6 +165,7 @@ describe("DecisionsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
       if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
       if (url.startsWith("/api/v1/analytics/decision-recommendations"))
         return jsonResponse(recommendations);
@@ -178,6 +219,7 @@ describe("DecisionsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
       if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
       if (url.startsWith("/api/v1/analytics/decision-recommendations"))
         return jsonResponse(recommendations);
@@ -190,6 +232,11 @@ describe("DecisionsScreen", () => {
     expect(
       await screen.findByRole("heading", { name: "결정 게이트웨이", level: 2 })
     ).toBeInTheDocument();
+
+    // 운영 KPI 패널이 함께 렌더되는지 (api mock 기반)
+    expect(await screen.findByRole("heading", { name: /운영 KPI/ })).toBeInTheDocument();
+    expect(await screen.findByLabelText("놓친 유효 공고")).toBeInTheDocument();
+    expect(await screen.findByText("놓친 공고")).toBeInTheDocument();
 
     const categoryTab = await screen.findByRole("tab", { name: "카테고리" });
     expect(categoryTab).toHaveAttribute("aria-selected", "true");

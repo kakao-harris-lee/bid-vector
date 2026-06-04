@@ -2,9 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchDecisionFunnel,
   fetchDecisionRecommendations,
+  fetchOperationsKpi,
   queryKeys,
   updateBidDecisionStatus,
-  type DecisionFunnelQuery
+  type DecisionFunnelQuery,
+  type OperationsKpiQuery
 } from "@/shared/api";
 import type {
   BidDecisionRecord,
@@ -12,6 +14,7 @@ import type {
   DecisionRecommendationResponse,
   DecisionStatus
 } from "@/shared/types/decisions";
+import type { OperationsKpiResponse } from "@/shared/types/operations";
 import type { AuthSession } from "@/app/layout/AuthGate";
 
 export function useDecisionFunnelQuery(session: AuthSession | null, query: DecisionFunnelQuery) {
@@ -29,6 +32,17 @@ export function useDecisionRecommendationsQuery(
   return useQuery<DecisionRecommendationResponse, Error>({
     queryKey: queryKeys.decisions.recommendations(query),
     queryFn: () => fetchDecisionRecommendations(query, session?.token),
+    enabled: Boolean(session?.token)
+  });
+}
+
+export function useOperationsKpiQuery(
+  session: AuthSession | null,
+  query: OperationsKpiQuery = {}
+) {
+  return useQuery<OperationsKpiResponse, Error>({
+    queryKey: queryKeys.operations.kpi(query),
+    queryFn: () => fetchOperationsKpi(query, session?.token),
     enabled: Boolean(session?.token)
   });
 }

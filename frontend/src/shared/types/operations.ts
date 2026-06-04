@@ -1,4 +1,19 @@
+import type { components } from "./openapi.d";
+
 export type OperationsCardStatus = "healthy" | "watch" | "critical" | "info";
+
+// Roadmap C-1 instrumentation KPI bundle (GET /api/v1/analytics/operations-kpi).
+// Aliased from the generated OpenAPI schema (PR #58) so this stays in sync with
+// the backend contract; do not hand-edit openapi.d.ts.
+export type OperationsKpiResponse = components["schemas"]["OperationsKpiResponse"];
+export type OperationsKpiManualOverride = components["schemas"]["OperationsKpiManualOverride"];
+export type OperationsKpiConversion = components["schemas"]["OperationsKpiConversion"];
+export type OperationsKpiPredictionAccuracy =
+  components["schemas"]["OperationsKpiPredictionAccuracy"];
+export type OperationsKpiMissedOpportunities =
+  components["schemas"]["OperationsKpiMissedOpportunities"];
+export type OperationsKpiMissedOpportunityItem =
+  components["schemas"]["OperationsKpiMissedOpportunityItem"];
 
 export interface OperationsDashboardCard {
   key: string;

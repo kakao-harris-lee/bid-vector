@@ -1,6 +1,9 @@
 import { apiRequest } from "./client";
 import { ApiError } from "./session";
-import type { OperationsDashboardResponse } from "@/shared/types/operations";
+import type {
+  OperationsDashboardResponse,
+  OperationsKpiResponse
+} from "@/shared/types/operations";
 
 function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {
   return promise.catch((err) => {
@@ -25,5 +28,29 @@ export function fetchOperationsDashboard(
   return wrap(
     apiRequest<OperationsDashboardResponse>(path, { token }),
     "운영 대시보드를 불러오지 못했습니다."
+  );
+}
+
+export interface OperationsKpiQuery {
+  days?: number;
+  missedLimit?: number;
+}
+
+export function fetchOperationsKpi(
+  options: OperationsKpiQuery = {},
+  token?: string | null
+): Promise<OperationsKpiResponse> {
+  const search = new URLSearchParams();
+  if (typeof options.days === "number") search.set("days", String(options.days));
+  if (typeof options.missedLimit === "number") {
+    search.set("missed_limit", String(options.missedLimit));
+  }
+  const qs = search.toString();
+  const path = qs
+    ? `/api/v1/analytics/operations-kpi?${qs}`
+    : "/api/v1/analytics/operations-kpi";
+  return wrap(
+    apiRequest<OperationsKpiResponse>(path, { token }),
+    "운영 KPI를 불러오지 못했습니다."
   );
 }

@@ -24,8 +24,10 @@ import type {
 import {
   useDecisionFunnelQuery,
   useDecisionRecommendationsQuery,
+  useOperationsKpiQuery,
   useUpdateDecisionStatusMutation
 } from "./hooks";
+import { OperationsKpiPanel } from "./OperationsKpiPanel";
 
 const ACTION_LABEL: Record<DecisionAction, string> = {
   bid_now: "투찰",
@@ -57,6 +59,7 @@ export function DecisionsScreen() {
 
   const funnel = useDecisionFunnelQuery(session, { days });
   const recs = useDecisionRecommendationsQuery(session, { days });
+  const operationsKpi = useOperationsKpiQuery(session, { days, missedLimit: 10 });
   const mutation = useUpdateDecisionStatusMutation(session);
 
   const breakdown = useMemo(() => {
@@ -104,6 +107,12 @@ export function DecisionsScreen() {
       </header>
 
       <FunnelOverview funnel={funnel.data} loading={funnel.isPending} error={funnel.error} />
+
+      <OperationsKpiPanel
+        data={operationsKpi.data}
+        loading={operationsKpi.isPending}
+        error={operationsKpi.error}
+      />
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
