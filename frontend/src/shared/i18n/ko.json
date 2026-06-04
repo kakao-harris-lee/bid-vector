@@ -54,6 +54,25 @@
     "status_change_success": "상태 변경 완료",
     "status_change_failure": "상태 변경 실패"
   },
+  "decision_reasons": {
+    "title": "판단 근거",
+    "strengths_title": "왜 가능한가",
+    "strengths_empty": "표시할 강점이 없습니다.",
+    "risks_title": "왜 위험한가",
+    "risks_empty": "주요 리스크가 감지되지 않았습니다.",
+    "verdict_title": "들어가도 되는가",
+    "priority_label": "우선순위",
+    "probability_label": "낙찰 확률",
+    "verdict_bid_now": "지금 투찰 검토 권장",
+    "verdict_review": "추가 검토 필요",
+    "verdict_skip": "현재 기준 보류 권장",
+    "action_bid_now": "투찰",
+    "action_review": "검토",
+    "action_skip": "보류",
+    "reasoning_toggle": "판단 설명 전문 보기",
+    "indicator_strengths_label": "추구 가능 근거 개수",
+    "indicator_risks_label": "리스크 신호 개수"
+  },
   "experiments": {
     "title": "실험 lifecycle",
     "apply_success_title": "임계값 적용 완료",

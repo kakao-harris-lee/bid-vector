@@ -12,6 +12,7 @@ import {
 import { useShellContext } from "@/app/dashboardContext";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { formatCurrencyCompact, formatDateTime, formatPercent } from "@/shared/lib";
+import { ReasonIndicators } from "@/features/dashboard/components";
 import { ApiError } from "@/shared/api";
 import { logoutSession } from "@/app/layout/AuthGate";
 import type {
@@ -159,8 +160,11 @@ export function DecisionsScreen() {
               className="flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-2"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate font-medium text-[var(--color-fg)]" title={item.project_title}>
-                  {item.project_title}
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-medium text-[var(--color-fg)]" title={item.project_title}>
+                    {item.project_title}
+                  </span>
+                  <ReasonIndicators strengths={item.strengths} riskFlags={item.risk_flags} />
                 </span>
                 <div className="flex items-center gap-1">
                   <Badge tone={ACTION_TONE[item.action]}>{ACTION_LABEL[item.action]}</Badge>

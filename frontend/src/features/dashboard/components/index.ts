@@ -8,3 +8,5 @@ export { ItemList } from "./ItemList";
 export { SegmentedTabs } from "./SegmentedTabs";
 export { DetailDrawer } from "./DetailDrawer";
 export { BacktestSummaryPanel } from "./BacktestSummaryPanel";
+export { DecisionReasonsCard, type DecisionReasonsCardProps } from "./DecisionReasonsCard";
+export { ReasonIndicators, type ReasonIndicatorsProps } from "./ReasonIndicators";

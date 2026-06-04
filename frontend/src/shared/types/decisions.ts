@@ -28,6 +28,10 @@ export interface DecisionFunnelRecentSubmissionItem {
   priority_score: number;
   recommended_amount: number;
   updated_at: string;
+  /** 추구 가능 근거 (왜 가능한가). 백엔드 미노출 시 누락될 수 있어 기본 []. */
+  strengths?: string[];
+  /** 리스크 신호 (왜 위험한가). 백엔드 미노출 시 누락될 수 있어 기본 []. */
+  risk_flags?: string[];
 }
 
 export interface DecisionFunnelComparisonSummary {

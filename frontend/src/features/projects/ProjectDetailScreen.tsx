@@ -9,6 +9,7 @@ import {
   formatPercent
 } from "@/shared/lib";
 import type { BidDecisionRecordResponse } from "@/shared/types/project";
+import { DecisionReasonsCard } from "@/features/dashboard/components";
 import { SimilarPanel } from "./SimilarPanel";
 import { useProjectQuery, useTimelineQuery } from "./hooks";
 
@@ -148,6 +149,16 @@ export function ProjectDetailScreen() {
                   <span>우선순위 {formatPercent(record.priority_score)}</span>
                   <span>{formatCurrencyCompact(record.recommended_amount)}</span>
                 </div>
+                {(record.strengths?.length ?? 0) > 0 || (record.risk_flags?.length ?? 0) > 0 ? (
+                  <DecisionReasonsCard
+                    compact
+                    strengths={record.strengths}
+                    riskFlags={record.risk_flags}
+                    action={record.action}
+                    priorityScore={record.priority_score}
+                    probabilityScore={record.probability_score}
+                  />
+                ) : null}
                 {record.reasoning ? (
                   <p className="text-[var(--color-fg)]">{record.reasoning}</p>
                 ) : null}
