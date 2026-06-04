@@ -1307,6 +1307,69 @@ class PredictionFeedbackResponse(BaseModel):
     items: List[PredictionFeedbackItem] = Field(default_factory=list)
 
 
+class OperationsKpiManualOverride(BaseModel):
+    """Manual-override KPI (d): how often the operator changed a recommendation."""
+
+    decision_count: int = Field(ge=0)
+    modified_count: int = Field(ge=0)
+    modification_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class OperationsKpiConversion(BaseModel):
+    """Conversion KPI (e): recommendation-to-submission rates reused from the funnel."""
+
+    decision_count: int = Field(ge=0)
+    submitted_count: int = Field(ge=0)
+    overall_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bid_now_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_submission_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    average_hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+
+
+class OperationsKpiPredictionAccuracy(BaseModel):
+    """Prediction-accuracy KPI (f): error rates reused from prediction feedback."""
+
+    result_count: int = Field(ge=0)
+    prediction_sample_count: int = Field(ge=0)
+    recommendation_sample_count: int = Field(ge=0)
+    average_prediction_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    prediction_within_1_percent_count: int = Field(ge=0)
+    prediction_within_3_percent_count: int = Field(ge=0)
+    recommendation_within_1_percent_count: int = Field(ge=0)
+    recommendation_within_3_percent_count: int = Field(ge=0)
+
+
+class OperationsKpiMissedOpportunityItem(BaseModel):
+    """One recommended-but-unactioned tender whose deadline has already passed."""
+
+    decision_record_id: int
+    project_id: int
+    project_title: str
+    deadline: Optional[datetime] = None
+    initial_action: str
+    decision_status: str
+    priority_score: float
+
+
+class OperationsKpiMissedOpportunities(BaseModel):
+    """Missed-opportunity KPI (b): bid_now/review recommendations left past deadline."""
+
+    missed_count: int = Field(ge=0)
+    items: List[OperationsKpiMissedOpportunityItem] = Field(default_factory=list)
+
+
+class OperationsKpiResponse(BaseModel):
+    """Roadmap C-1 instrumentation: four operating KPIs aggregated in one call."""
+
+    operator_id: int
+    period_days: int
+    manual_override: OperationsKpiManualOverride
+    conversion: OperationsKpiConversion
+    prediction_accuracy: OperationsKpiPredictionAccuracy
+    missed_opportunities: OperationsKpiMissedOpportunities
+
+
 class PredictionPredictorBreakdownItem(BaseModel):
     predictor_name: str
     predictor_family: str
