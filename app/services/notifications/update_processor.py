@@ -2,19 +2,41 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
-from app.models.models import Project
+from app.core.single_user import ensure_operator_account
+from app.models.models import BidDecisionRecord, Project
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramUpdateProcessor:
     """Process inbound Telegram updates from webhook or polling."""
 
     START_COMMANDS = {"/start", "/help"}
+    TEXT_DECISION_ACTIONS = {
+        "submit": "submit",
+        "bid": "submit",
+        "투찰": "submit",
+        "제출": "submit",
+        "✅ 투찰": "submit",
+        "✅투찰": "submit",
+        "review": "review",
+        "검토": "review",
+        "🕒 검토": "review",
+        "🕒검토": "review",
+        "skip": "skip",
+        "보류": "skip",
+        "스킵": "skip",
+        "⛔ 보류": "skip",
+        "⛔보류": "skip",
+    }
 
     def __init__(self, telegram_service: TelegramNotificationService | None = None) -> None:
         self.telegram = telegram_service or TelegramNotificationService()
@@ -32,16 +54,41 @@ class TelegramUpdateProcessor:
             "chat_id": None,
         }
 
+    def _is_authorized_chat(self, chat_id: int | None) -> bool:
+        """Return whether an inbound chat id may drive decision/strategy actions.
+
+        Only the configured ``TELEGRAM_CHAT_ID`` (when it is a real value) is
+        authorized. A missing/placeholder configuration authorizes no chat so
+        decision and strategy commands are ignored by default. ``/start`` and
+        ``/help`` are handled before this gate so the operator can still
+        discover their chat id.
+        """
+        configured_chat_id = self.telegram.get_authorized_chat_id()
+        if configured_chat_id is None or chat_id is None:
+            return False
+        return str(chat_id) == str(configured_chat_id)
+
     def _process_callback_query(self, db: Session, update: dict) -> dict[str, object]:
         callback_query = update.get("callback_query") or {}
         callback_query_id = str(callback_query.get("id") or "")
         callback_data = str(callback_query.get("data") or "")
         chat_id = self._extract_chat_id(update)
 
+        if not self._is_authorized_chat(chat_id):
+            logger.info(
+                "Ignoring Telegram callback from unauthorized chat: chat_id=%s",
+                chat_id,
+            )
+            return {
+                "status": "ignored",
+                "detail": "unauthorized chat",
+                "chat_id": chat_id,
+            }
+
         strategy_reply = self.strategy_processor.process_callback(db, callback_data, chat_id=chat_id)
         if strategy_reply is not None:
             if callback_query_id:
-                self.telegram.answer_callback_query(callback_query_id, "전략 수정 처리 완료")
+                self._answer_callback_query(callback_query_id, "전략 수정 처리 완료")
             if chat_id:
                 self.telegram.send_message(
                     strategy_reply.message,
@@ -63,6 +110,38 @@ class TelegramUpdateProcessor:
             }
 
         decision_record_id, requested_action = parsed_callback
+        try:
+            return self._apply_bid_decision_action(
+                db,
+                decision_record_id=decision_record_id,
+                requested_action=requested_action,
+                callback_query_id=callback_query_id,
+                chat_id=chat_id,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if callback_query_id:
+                self._answer_callback_query(
+                    callback_query_id,
+                    "처리할 입찰 판단을 찾지 못했습니다",
+                )
+            logger.info("Ignoring Telegram decision callback: %s", detail)
+            return {
+                "status": "ignored",
+                "detail": detail,
+                "chat_id": chat_id,
+            }
+
+    def _apply_bid_decision_action(
+        self,
+        db: Session,
+        *,
+        decision_record_id: int,
+        requested_action: str,
+        callback_query_id: str | None = None,
+        chat_id: int | None = None,
+        send_chat_ack: bool = False,
+    ) -> dict[str, object]:
         decision_service = BidDecisionService()
         record = decision_service.apply_telegram_action(db, decision_record_id, requested_action)
 
@@ -84,7 +163,21 @@ class TelegramUpdateProcessor:
         }[record.action]
 
         if callback_query_id:
-            self.telegram.answer_callback_query(callback_query_id, acknowledgement_text)
+            self._answer_callback_query(callback_query_id, acknowledgement_text)
+
+        if send_chat_ack and chat_id:
+            self.telegram.send_message(
+                self.telegram.build_message(
+                    "입찰 판단 처리",
+                    (
+                        f"공고: {project.title}\n"
+                        f"프로젝트 ID: {project.id}\n"
+                        f"상태: {record.decision_status}\n"
+                        f"결과: {acknowledgement_text}"
+                    ),
+                ),
+                chat_id=str(chat_id),
+            )
 
         return {
             "status": "processed",
@@ -94,6 +187,12 @@ class TelegramUpdateProcessor:
             "action": record.action,
             "decision_status": record.decision_status,
         }
+
+    def _answer_callback_query(self, callback_query_id: str, text: str) -> None:
+        try:
+            self.telegram.answer_callback_query(callback_query_id, text)
+        except RuntimeError as exc:
+            logger.warning("Telegram callback acknowledgement failed: %s", exc)
 
     def _process_message(self, db: Session, update: dict) -> dict[str, object]:
         message = update.get("message") or {}
@@ -126,6 +225,17 @@ class TelegramUpdateProcessor:
                 "chat_id": chat_id,
             }
 
+        if not self._is_authorized_chat(chat_id):
+            logger.info(
+                "Ignoring Telegram message from unauthorized chat: chat_id=%s",
+                chat_id,
+            )
+            return {
+                "status": "ignored",
+                "detail": "unauthorized chat",
+                "chat_id": chat_id,
+            }
+
         strategy_response = self.strategy_processor.process_text(db, text, chat_id=chat_id)
         if strategy_response is not None:
             self.telegram.send_message(
@@ -138,6 +248,14 @@ class TelegramUpdateProcessor:
                 "detail": "Telegram strategy command handled.",
                 "chat_id": chat_id,
             }
+
+        requested_action = self._parse_decision_text_action(text)
+        if requested_action is not None:
+            return self._process_text_decision_action(
+                db,
+                requested_action=requested_action,
+                chat_id=chat_id,
+            )
 
         return {
             "status": "ignored",
@@ -154,6 +272,50 @@ class TelegramUpdateProcessor:
         except (TypeError, ValueError):
             return None
 
+    def _parse_decision_text_action(self, text: str) -> str | None:
+        normalized = " ".join(str(text or "").strip().lower().split())
+        if not normalized:
+            return None
+        return self.TEXT_DECISION_ACTIONS.get(normalized)
+
+    def _process_text_decision_action(
+        self,
+        db: Session,
+        *,
+        requested_action: str,
+        chat_id: int,
+    ) -> dict[str, object]:
+        operator = ensure_operator_account(db)
+        active_statuses = tuple(BidDecisionService.ACTIVE_DECISION_STATUSES)
+        record = (
+            db.query(BidDecisionRecord)
+            .filter(
+                BidDecisionRecord.operator_id == operator.id,
+                BidDecisionRecord.decision_status.in_(active_statuses),
+            )
+            .order_by(BidDecisionRecord.updated_at.desc(), BidDecisionRecord.id.desc())
+            .first()
+        )
+        if record is None:
+            detail = "처리할 활성 입찰 판단이 없습니다."
+            self.telegram.send_message(
+                self.telegram.build_message("입찰 판단 처리", detail),
+                chat_id=str(chat_id),
+            )
+            return {
+                "status": "ignored",
+                "detail": detail,
+                "chat_id": chat_id,
+            }
+
+        return self._apply_bid_decision_action(
+            db,
+            decision_record_id=int(record.id),
+            requested_action=requested_action,
+            chat_id=chat_id,
+            send_chat_ack=True,
+        )
+
 
 class TelegramSyncService:
     """Synchronize Telegram updates using the Bot API polling interface."""
@@ -162,7 +324,12 @@ class TelegramSyncService:
         self.telegram = telegram_service or TelegramNotificationService()
         self.processor = TelegramUpdateProcessor(self.telegram)
 
-    def sync_updates(self, db: Session, limit: int | None = None, timeout_seconds: int | None = None) -> dict[str, object]:
+    def sync_updates(
+        self,
+        db: Session,
+        limit: int | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, object]:
         """Fetch pending Telegram updates, process them, and acknowledge the processed offset."""
         updates = self.telegram.get_updates(limit=limit, timeout_seconds=timeout_seconds)
         if not updates:
@@ -175,22 +342,50 @@ class TelegramSyncService:
             }
 
         processed_update_ids: list[int] = []
+        failed_update_ids: list[int] = []
         known_chat_ids = self.telegram.extract_chat_ids(updates)
         last_update_id: int | None = None
 
         for update in updates:
             update_id = update.get("update_id")
             if isinstance(update_id, int):
-                processed_update_ids.append(update_id)
                 last_update_id = update_id
-            self.processor.process_update(db, update)
+            try:
+                self.processor.process_update(db, update)
+            except Exception as exc:
+                logger.warning(
+                    "Telegram update processing failed: update_id=%s error=%s",
+                    update_id,
+                    exc,
+                )
+                if isinstance(update_id, int):
+                    failed_update_ids.append(update_id)
+                continue
+            if isinstance(update_id, int):
+                processed_update_ids.append(update_id)
 
         if last_update_id is not None:
-            self.telegram.get_updates(offset=last_update_id + 1, limit=1, timeout_seconds=0)
+            try:
+                self.telegram.get_updates(
+                    offset=last_update_id + 1, limit=1, timeout_seconds=0
+                )
+            except Exception as exc:
+                # The Telegram server already advances the offset when it
+                # serves the next getUpdates call, so a failed acknowledgement
+                # here must not drop the work we just processed.
+                logger.warning(
+                    "Telegram offset acknowledgement failed: offset=%s error=%s",
+                    last_update_id + 1,
+                    exc,
+                )
+
+        detail = f"Processed {len(processed_update_ids)} Telegram updates."
+        if failed_update_ids:
+            detail = f"{detail} Failed updates were skipped: {failed_update_ids}."
 
         return {
-            "status": "processed",
-            "detail": f"Processed {len(processed_update_ids)} Telegram updates.",
+            "status": "processed" if processed_update_ids else "error",
+            "detail": detail,
             "processed_count": len(processed_update_ids),
             "processed_update_ids": processed_update_ids,
             "known_chat_ids": known_chat_ids,

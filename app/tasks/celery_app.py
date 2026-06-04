@@ -94,6 +94,7 @@ SYNTHETIC_BACKTEST_RUN_TASK_NAME = "jobs.run_synthetic_operator_backtest"
 ENRICH_BUSINESS_TYPE_TASK_NAME = "jobs.enrich_pending_business_types"
 RECLASSIFY_CATEGORIES_TASK_NAME = "jobs.reclassify_pending_categories"
 SMOKE_TEST_TASK_NAME = "jobs.run_koneps_telegram_smoke_test"
+TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -101,7 +102,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
     return {
         COLLECT_KONEPS_NOTICES_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         "jobs.send_telegram_notification": {"queue": settings.CELERY_OPS_QUEUE},
-        "jobs.poll_telegram_updates": {"queue": settings.CELERY_OPS_QUEUE},
+        TELEGRAM_POLLING_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         HISTORICAL_BACKTEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
@@ -281,6 +282,28 @@ def build_smoke_test_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_telegram_polling_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for Telegram getUpdates polling."""
+    if not settings.TELEGRAM_POLLING_SCHEDULE_ENABLED:
+        return {}
+
+    return {
+        "telegram_polling_periodic": {
+            "task": TELEGRAM_POLLING_TASK_NAME,
+            "schedule": float(
+                max(5, int(settings.TELEGRAM_POLLING_INTERVAL_SECONDS))
+            ),
+            "kwargs": {
+                "limit": max(1, int(settings.TELEGRAM_POLLING_LIMIT)),
+                "timeout_seconds": max(
+                    0,
+                    int(settings.TELEGRAM_POLLING_TIMEOUT_SECONDS),
+                ),
+            },
+        }
+    }
+
+
 def build_celery_runtime_config() -> dict[str, object]:
     """Build the shared Celery runtime configuration for eager and worker-backed modes."""
     soft_time_limit, hard_time_limit = _normalize_task_time_limits(
@@ -321,6 +344,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_business_type_enrichment_beat_schedule(),
             **build_category_reclassify_beat_schedule(),
             **build_smoke_test_beat_schedule(),
+            **build_telegram_polling_beat_schedule(),
         },
     }
 

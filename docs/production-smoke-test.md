@@ -12,6 +12,7 @@
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - webhook을 쓰는 경우 `TELEGRAM_WEBHOOK_SECRET`
+- webhook을 쓰지 않고 버튼/명령을 polling으로 처리하는 경우 `TELEGRAM_POLLING_SCHEDULE_ENABLED=true`
 
 Telegram 수신 계정은 봇과 대화를 한 번 시작해야 한다.
 

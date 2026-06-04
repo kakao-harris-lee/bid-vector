@@ -2899,6 +2899,175 @@ def test_telegram_callback_updates_bid_decision_state(client, test_db, monkeypat
     assert "텔레그램에서 검토 버튼" in record.reasoning
 
 
+def test_telegram_text_action_updates_latest_active_bid_decision(
+    client,
+    test_db,
+    monkeypatch,
+):
+    """Plain Telegram action text should apply to the latest active bid decision."""
+    deliveries: list[dict] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append(
+            {"message": message, "chat_id": chat_id, "reply_markup": reply_markup}
+        )
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram delivery succeeded.",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+
+    operator = ensure_operator_account(test_db)
+    project = Project(
+        title="Telegram Text Action Project",
+        description="Verify text action processing",
+        requirements="React to Telegram text actions",
+        budget_estimate=120000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=operator.id,
+        pursue_bid=True,
+        action="bid_now",
+        decision_status="planned",
+        initial_action="bid_now",
+        initial_decision_status="planned",
+        recommended_amount=115000000.0,
+        probability_score=0.91,
+        matched_score=0.84,
+        priority_score=0.82,
+        reasoning="high-priority text action test",
+    )
+    test_db.add(record)
+    test_db.commit()
+    test_db.refresh(record)
+
+    response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        json={
+            "update_id": 601,
+            "message": {
+                "message_id": 101,
+                "text": "✅ 투찰",
+                "chat": {"id": 1594710346},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "processed"
+    assert payload["processed_count"] == 1
+    assert payload["processed_update_ids"] == [601]
+
+    test_db.refresh(record)
+    assert record.action == "bid_now"
+    assert record.decision_status == "submitted"
+    assert "텔레그램에서 투찰 버튼" in record.reasoning
+    assert deliveries[-1]["chat_id"] == "1594710346"
+    assert "투찰 처리 완료" in deliveries[-1]["message"]
+
+
+def test_telegram_callback_missing_decision_is_ignored_with_ack(
+    client,
+    monkeypatch,
+):
+    """Stale callback data should not crash webhook processing."""
+    acknowledgements: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        acknowledgements.append((callback_query_id, text))
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram callback acknowledgement succeeded.",
+        }
+
+    monkeypatch.setattr(
+        TelegramNotificationService,
+        "answer_callback_query",
+        fake_answer,
+    )
+
+    response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        json={
+            "update_id": 602,
+            "callback_query": {
+                "id": "callback-stale",
+                "data": "bid-decision:999999:submit",
+                "message": {
+                    "message_id": 102,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ignored"
+    assert payload["processed_count"] == 0
+    assert "Bid decision record not found" in payload["detail"]
+    assert acknowledgements == [
+        ("callback-stale", "처리할 입찰 판단을 찾지 못했습니다")
+    ]
+
+
+def test_telegram_callback_ack_failure_does_not_fail_webhook(client, monkeypatch):
+    """Expired Telegram callback query ids should not make webhook processing fail."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        raise RuntimeError("Telegram callback acknowledgement failed")
+
+    monkeypatch.setattr(
+        TelegramNotificationService,
+        "answer_callback_query",
+        fake_answer,
+    )
+
+    response = client.post(
+        "/api/v1/operations/telegram/webhook",
+        json={
+            "update_id": 603,
+            "callback_query": {
+                "id": "callback-expired",
+                "data": "bid-decision:999999:submit",
+                "message": {
+                    "message_id": 103,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ignored"
+    assert "Bid decision record not found" in payload["detail"]
+
+
 def test_telegram_webhook_processes_start_message(client, monkeypatch):
     """Webhook endpoint should process `/start` and reply with chat-id guidance."""
     deliveries: list[dict] = []

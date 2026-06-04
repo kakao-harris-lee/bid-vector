@@ -158,6 +158,18 @@ class TelegramNotificationService:
         """Return the currently configured delivery chat id."""
         return settings.TELEGRAM_CHAT_ID
 
+    def get_authorized_chat_id(self) -> str | None:
+        """Return the configured delivery chat id only when it is a real value.
+
+        Placeholder scaffold values (``replace-with-...`` etc.) and empty
+        strings are treated as "not configured" so inbound decision/strategy
+        actions cannot be authorized against a non-real chat id.
+        """
+        value = settings.TELEGRAM_CHAT_ID
+        if not self._has_real_setting(value):
+            return None
+        return str(value).strip()
+
     def _has_real_setting(self, value: str | None) -> bool:
         """Treat scaffold placeholder values as missing runtime configuration."""
         normalized = str(value or "").strip()
