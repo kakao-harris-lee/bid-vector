@@ -18,6 +18,7 @@ import { companyInfoFormSchema, type CompanyInfoFormValues } from "./schema";
 import {
   BUSINESS_TYPE_OPTIONS,
   LICENSE_CHIPS,
+  RECORD_ONLY_LICENSE_CHIPS,
   REGION_CHIPS,
   type LicenseChip
 } from "./constants";
@@ -400,6 +401,11 @@ function LicenseSuggestions({
   value: string[];
   onChange: (next: string[]) => void;
 }) {
+  // The classifier now recognises every curated chip (including the eight
+  // construction licenses), so by default there is nothing to flag as
+  // record-only. Keep the note conditional in case record-only chips are
+  // reintroduced later.
+  const hasRecordOnly = RECORD_ONLY_LICENSE_CHIPS.length > 0;
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[11px] text-[var(--color-muted)]">
@@ -416,7 +422,9 @@ function LicenseSuggestions({
         ))}
       </div>
       <span className="text-[11px] text-[var(--color-muted)]">
-        ⚠ 표시 없는 면허만 공고 요구 면허와 자동 매칭됩니다. 그 외는 기록용입니다.
+        {hasRecordOnly
+          ? "⚠ 표시 없는 면허만 공고 요구 면허와 자동 매칭됩니다. 그 외는 기록용입니다."
+          : "추천 면허는 모두 공고 요구 면허와 자동 매칭됩니다."}
       </span>
     </div>
   );

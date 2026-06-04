@@ -93,6 +93,18 @@ class NoticeClassifierService:
         "SEC001": ("SEC001", "정보보호전문서비스", "보안관제", "isms"),
         "ELE001": ("ELE001", "전기공사업", "전기"),
         "FIRE001": ("FIRE001", "소방시설", "소방"),
+        # 건설 면허 (front stores the exact "○○공사업" strings; aliases below must
+        # contain them verbatim so profile.license_codes ↔ project requirement
+        # matching works). Bare "건축"/"토목"/"기계"/"가스"/"조경" are deliberately
+        # NOT aliases — they are too generic and would over-match.
+        "ARC001": ("ARC001", "건축공사업"),
+        "CIV001": ("CIV001", "토목공사업"),
+        "CIVARC001": ("CIVARC001", "토목건축공사업"),
+        "LND001": ("LND001", "조경공사업"),
+        "ENV001": ("ENV001", "산업환경설비공사업", "산업·환경설비공사업", "산업·환경설비"),
+        "INT001": ("INT001", "실내건축공사업"),
+        "MEC001": ("MEC001", "기계설비공사업"),
+        "GAS001": ("GAS001", "가스시설공사업"),
     }
     REGION_RESTRICTION_KEYWORDS = (
         "지역제한",
@@ -554,6 +566,15 @@ class NoticeClassifierService:
                 if any(alias.lower() in lowered_text for alias in aliases):
                     extracted.add(canonical)
 
+        # NOTE on substring nesting: alias matching is plain substring matching,
+        # so a longer construction-license name extracts the shorter one too —
+        # e.g. "실내건축공사업"(INT001) and "토목건축공사업"(CIVARC001) both contain
+        # "건축공사업"(ARC001). When a notice and a profile use the same long name,
+        # both sides extract the same superset and the comparison stays symmetric
+        # (still matches correctly). A profile holding ONLY the bare "건축공사업"
+        # vs. a notice requiring "실내건축공사업" correctly mismatches (INT001 missing
+        # from the profile). This recall-first behaviour is covered by the
+        # `_assess_license` nesting tests rather than special-cased here.
         return extracted
 
     def _build_profile_semantic_text(self, profile: CompanyProfile) -> str:

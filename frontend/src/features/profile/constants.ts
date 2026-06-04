@@ -5,7 +5,7 @@
  * `license_codes` must be a token the backend classifier can recognise when it
  * compares against a project's required licenses. The classifier
  * (`app/services/classifier.py::_extract_license_tokens` / `LICENSE_ALIASES`)
- * only normalises a fixed set of license aliases into canonical codes:
+ * normalises a fixed set of license aliases into canonical codes:
  *
  *   SW001  ← 소프트웨어사업자 / SW사업자
  *   NET001 ← 정보통신공사업 / 정보통신공사
@@ -13,13 +13,21 @@
  *   SEC001 ← 정보보호전문서비스 / 보안관제 / ISMS
  *   ELE001 ← 전기공사업 / 전기
  *   FIRE001 ← 소방시설 / 소방
+ *   ARC001 ← 건축공사업
+ *   CIV001 ← 토목공사업
+ *   CIVARC001 ← 토목건축공사업
+ *   LND001 ← 조경공사업
+ *   ENV001 ← 산업환경설비공사업
+ *   INT001 ← 실내건축공사업
+ *   MEC001 ← 기계설비공사업
+ *   GAS001 ← 가스시설공사업
  *
- * Plus any raw `[A-Z]{2,}\d{2,}` code (e.g. typing a code directly). Korean
- * construction-license names that are NOT in that alias table (건축공사업,
- * 토목공사업 등) extract to an empty token set and therefore CANNOT match a
- * project requirement today. We still surface them as chips for record-keeping,
- * but flag them so the operator knows they won't drive matching yet, and we
- * store the canonical code/alias when one exists.
+ * Plus any raw `[A-Z]{2,}\d{2,}` code (e.g. typing a code directly). As of the
+ * construction-license-matching work the backend alias table now covers the
+ * eight common construction licenses above, so every chip we surface here
+ * drives profile↔project license matching. The `matchable` flag is retained on
+ * the chip type for forward compatibility (in case a future chip is stored for
+ * record-keeping only), but all currently curated chips are matchable.
  */
 
 export interface LicenseChip {
@@ -42,24 +50,26 @@ export const MATCHABLE_LICENSE_CHIPS: LicenseChip[] = [
   { label: "소방시설공사업", value: "소방시설", matchable: true },
   { label: "엔지니어링·감리", value: "엔지니어링", matchable: true },
   { label: "소프트웨어사업자", value: "소프트웨어사업자", matchable: true },
-  { label: "정보보호전문서비스", value: "정보보호전문서비스", matchable: true }
+  { label: "정보보호전문서비스", value: "정보보호전문서비스", matchable: true },
+  // Construction licenses — now recognised by the backend classifier
+  // (LICENSE_ALIASES → ARC001/CIV001/CIVARC001/LND001/ENV001/INT001/MEC001/GAS001).
+  { label: "건축공사업", value: "건축공사업", matchable: true },
+  { label: "토목공사업", value: "토목공사업", matchable: true },
+  { label: "토목건축공사업", value: "토목건축공사업", matchable: true },
+  { label: "조경공사업", value: "조경공사업", matchable: true },
+  { label: "산업·환경설비공사업", value: "산업환경설비공사업", matchable: true },
+  { label: "실내건축공사업", value: "실내건축공사업", matchable: true },
+  { label: "기계설비공사업", value: "기계설비공사업", matchable: true },
+  { label: "가스시설공사업", value: "가스시설공사업", matchable: true }
 ];
 
 /**
- * Common construction licenses that the classifier does NOT yet map. Stored
- * verbatim for documentation; they will not influence matching until the
- * backend alias table is extended.
+ * Reserved for licenses the classifier does not (yet) map. The construction
+ * licenses that used to live here are now matchable (see above), so this list
+ * is currently empty. Kept as an export so callers can keep distinguishing
+ * record-only chips if any are reintroduced later.
  */
-export const RECORD_ONLY_LICENSE_CHIPS: LicenseChip[] = [
-  { label: "건축공사업", value: "건축공사업", matchable: false },
-  { label: "토목공사업", value: "토목공사업", matchable: false },
-  { label: "토목건축공사업", value: "토목건축공사업", matchable: false },
-  { label: "조경공사업", value: "조경공사업", matchable: false },
-  { label: "산업·환경설비공사업", value: "산업환경설비공사업", matchable: false },
-  { label: "실내건축공사업", value: "실내건축공사업", matchable: false },
-  { label: "기계설비공사업", value: "기계설비공사업", matchable: false },
-  { label: "가스시설공사업", value: "가스시설공사업", matchable: false }
-];
+export const RECORD_ONLY_LICENSE_CHIPS: LicenseChip[] = [];
 
 export const LICENSE_CHIPS: LicenseChip[] = [
   ...MATCHABLE_LICENSE_CHIPS,

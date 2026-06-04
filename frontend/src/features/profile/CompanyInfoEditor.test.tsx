@@ -213,6 +213,41 @@ describe("CompanyInfoEditor", () => {
     );
   });
 
+  it("건설 면허 추천 칩(건축공사업)도 매칭 가능 칩으로 표시되어 클릭 시 토큰이 추가된다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const addBtn = await screen.findByRole("button", {
+      name: "보유 면허에 건축공사업 추가"
+    });
+    // Construction licenses are now matchable: no ⚠ record-only marker.
+    expect(addBtn).not.toHaveTextContent("⚠");
+
+    await userEvent.click(addBtn);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "보유 면허에서 건축공사업 제거" })
+      ).toBeInTheDocument()
+    );
+  });
+
+  it("모든 추천 면허가 매칭 가능해 ⚠ 기록용 안내 대신 전체 매칭 안내를 보여준다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(
+      await screen.findByText("추천 면허는 모두 공고 요구 면허와 자동 매칭됩니다.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/표시 없는 면허만 공고 요구 면허와 자동 매칭/)
+    ).not.toBeInTheDocument();
+  });
+
   it("저장 시 profile과 strategy를 각자 소유 필드로 호출하고 임계값은 보내지 않는다", async () => {
     const fetchMock = buildFetchMock();
     vi.stubGlobal("fetch", fetchMock);
