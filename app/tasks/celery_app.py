@@ -85,6 +85,7 @@ from app.core.config import settings
 
 OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
 PAPER_BIDDING_FORWARD_TASK_NAME = "jobs.run_forward_paper_bidding"
+FORWARD_SETTLEMENT_TASK_NAME = "jobs.settle_forward_paper_bids"
 HISTORICAL_BACKTEST_TASK_NAME = "jobs.run_historical_backtest"
 COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
 PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
@@ -105,6 +106,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         TELEGRAM_POLLING_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        FORWARD_SETTLEMENT_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         HISTORICAL_BACKTEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SYNTHETIC_BACKTEST_RUN_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
@@ -175,6 +177,31 @@ def build_paper_bidding_forward_beat_schedule() -> dict[str, dict[str, object]]:
                     "history_limit": max(1, settings.PAPER_BIDDING_FORWARD_SCHEDULE_HISTORY_LIMIT),
                     "persist": settings.PAPER_BIDDING_FORWARD_SCHEDULE_PERSIST,
                 },
+            },
+        }
+    }
+
+
+def build_forward_settlement_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for forward paper-bid settlement.
+
+    Forward paper bids are generated without a settlement; this schedule sweeps
+    unsettled forward paper bids whose deadline has passed and whose tender result
+    is now available, then creates the matching ``PaperBidSettlement`` rows.
+    Defaults to OFF; opt-in via ``FORWARD_SETTLEMENT_SCHEDULE_ENABLED``.
+    """
+    if not settings.FORWARD_SETTLEMENT_SCHEDULE_ENABLED:
+        return {}
+
+    return {
+        "forward_settlement_periodic": {
+            "task": FORWARD_SETTLEMENT_TASK_NAME,
+            "schedule": float(
+                max(1, settings.FORWARD_SETTLEMENT_INTERVAL_MINUTES) * 60
+            ),
+            "kwargs": {
+                "limit": max(1, int(settings.FORWARD_SETTLEMENT_LIMIT)),
+                "persist": bool(settings.FORWARD_SETTLEMENT_PERSIST),
             },
         }
     }
@@ -380,6 +407,7 @@ def build_celery_runtime_config() -> dict[str, object]:
         "beat_schedule": {
             **build_operator_strategy_monitor_beat_schedule(),
             **build_paper_bidding_forward_beat_schedule(),
+            **build_forward_settlement_beat_schedule(),
             **build_historical_backtest_beat_schedule(),
             **build_koneps_collection_beat_schedule(),
             **build_scsbid_collection_beat_schedule(),

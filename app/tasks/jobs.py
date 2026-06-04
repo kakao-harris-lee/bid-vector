@@ -19,6 +19,7 @@ from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
     ENRICH_BUSINESS_TYPE_TASK_NAME,
+    FORWARD_SETTLEMENT_TASK_NAME,
     HISTORICAL_BACKTEST_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
@@ -239,6 +240,25 @@ def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> 
             model_version=str(payload.get("model_version") or "current"),
             history_limit=int(payload.get("history_limit") or 80),
             persist=bool(payload.get("persist", True)),
+        )
+    finally:
+        db.close()
+
+
+@celery_app.task(name=FORWARD_SETTLEMENT_TASK_NAME)
+def settle_forward_paper_bids(
+    operator_id: int | None = None,
+    limit: int = 200,
+    persist: bool = True,
+) -> dict:
+    """Settle forward paper bids whose deadline has passed and result is available."""
+    db = SessionLocal()
+    try:
+        return PaperBiddingBacktestService().run_forward_settlement(
+            db,
+            operator_id=int(operator_id) if operator_id is not None else None,
+            limit=int(limit or 200),
+            persist=bool(persist),
         )
     finally:
         db.close()
