@@ -221,7 +221,11 @@ function MissedOpportunitiesCard({ data }: { data: OperationsKpiMissedOpportunit
             <MissedItem
               key={item.decision_record_id}
               item={item}
-              onOpen={() => navigate(`/dashboard/projects/${item.project_id}`)}
+              onOpen={() => {
+                if (item.project_id > 0) {
+                  navigate(`/dashboard/projects/${item.project_id}`);
+                }
+              }}
             />
           ))}
         </ul>
