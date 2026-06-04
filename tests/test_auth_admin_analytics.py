@@ -526,6 +526,92 @@ def test_decision_funnel_endpoint_tracks_entry_paths_and_submission_rates(client
     assert payload["recent_submissions"][1]["current_decision_status"] == "submitted"
 
 
+def test_decision_funnel_recent_submissions_surface_decision_reasons(client, test_db):
+    """recent_submissions must surface strengths/risk_flags parsed from score_breakdown (empty for legacy records)."""
+    bootstrap = _bootstrap_operator(
+        client, username="funnel-reasons-operator", email="funnel-reasons@example.com"
+    )
+    operator_id = bootstrap.json()["id"]
+    now = datetime.now(UTC)
+
+    project_id = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "사유 노출 검증 공고",
+            "description": "decision reasons surfacing",
+            "requirements": "면허 보유",
+            "budget_estimate": 100000000.0,
+            "category": "software",
+        },
+    ).json()["id"]
+
+    strengths = ["업체 자격·지역·역량 기준을 전반적으로 충족합니다.", "낙찰 가능성 점수가 높습니다."]
+    risk_flags = ["마감 시간이 매우 촉박합니다."]
+
+    test_db.add_all([
+        # reasons 보유 (submitted) → funnel에 노출되어야 함
+        BidDecisionRecord(
+            project_id=project_id,
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="bid_now",
+            decision_status="submitted",
+            initial_action="bid_now",
+            initial_decision_status="planned",
+            first_decided_at=now - timedelta(hours=3),
+            recommended_amount=95000000.0,
+            probability_score=0.88,
+            matched_score=0.83,
+            priority_score=0.86,
+            current_active_bids=0,
+            max_active_bids=3,
+            current_workload_score=0.1,
+            reasoning="즉시 투찰 후 제출",
+            score_breakdown=json.dumps(
+                {"opportunity_score": 0.86, "strengths": strengths, "risk_flags": risk_flags},
+                ensure_ascii=False,
+            ),
+            created_at=now - timedelta(hours=3),
+            updated_at=now - timedelta(hours=1),
+        ),
+        # 레거시(키 없는 score_breakdown) submitted → 빈 리스트로 하위호환
+        BidDecisionRecord(
+            project_id=project_id,
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="bid_now",
+            decision_status="submitted",
+            initial_action="bid_now",
+            initial_decision_status="planned",
+            first_decided_at=now - timedelta(hours=6),
+            recommended_amount=94000000.0,
+            probability_score=0.7,
+            matched_score=0.7,
+            priority_score=0.7,
+            current_active_bids=0,
+            max_active_bids=3,
+            current_workload_score=0.1,
+            reasoning="레거시",
+            score_breakdown="{}",
+            created_at=now - timedelta(hours=6),
+            updated_at=now - timedelta(hours=5),
+        ),
+    ])
+    test_db.commit()
+
+    payload = client.get(
+        "/api/v1/analytics/decision-funnel", params={"days": 30, "limit": 5}
+    ).json()
+    # 최신(reasons 보유) 항목
+    reasons_item = payload["recent_submissions"][0]
+    assert reasons_item["strengths"] == strengths
+    assert reasons_item["risk_flags"] == risk_flags
+    # 레거시 항목은 빈 리스트(키 존재, 하위호환)
+    legacy_item = payload["recent_submissions"][1]
+    assert legacy_item["strengths"] == []
+    assert legacy_item["risk_flags"] == []
+
+
 def test_decision_funnel_endpoint_includes_trend_and_segment_breakdowns(client, test_db):
     """Decision funnel endpoint should expose trend buckets plus category/workload/agency breakdowns."""
     bootstrap = _bootstrap_operator(client, username="decision-funnel-breakdown-operator", email="decision-funnel-breakdown@example.com")

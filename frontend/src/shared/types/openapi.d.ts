@@ -3818,6 +3818,10 @@ export interface components {
             submitted_at: string;
             /** Hours To Submit */
             hours_to_submit?: number | null;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
         };
         /** DecisionFunnelResponse */
         DecisionFunnelResponse: {

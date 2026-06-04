@@ -841,6 +841,8 @@ class DecisionFunnelRecentSubmissionItem(BaseModel):
     first_decided_at: Optional[datetime] = None
     submitted_at: datetime
     hours_to_submit: Optional[float] = Field(default=None, ge=0.0)
+    strengths: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
 
 
 class DecisionFunnelTrendItem(BaseModel):

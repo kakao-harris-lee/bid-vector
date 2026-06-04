@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import BidDecisionRecord, DecisionExperimentRun
+from app.schemas.schemas import _extract_decision_reasons
 
 
 class DecisionAnalyticsService:
@@ -755,23 +756,28 @@ class DecisionAnalyticsService:
     def _build_recent_submissions(self, decisions: list[BidDecisionRecord], *, limit: int) -> list[dict[str, Any]]:
         """Serialize recent submitted decisions for the current analysis window."""
         submitted_decisions = [decision for decision in decisions if self._is_submitted(decision)]
-        return [
-            {
-                "decision_record_id": int(decision.id),
-                "project_id": int(decision.project_id),
-                "project_title": str(decision.project.title) if decision.project is not None else f"Project {decision.project_id}",
-                "initial_action": self._entry_action(decision),
-                "initial_decision_status": self._entry_status(decision),
-                "current_action": str(decision.action or self._entry_action(decision)),
-                "current_decision_status": str(decision.decision_status or "submitted"),
-                "priority_score": float(decision.priority_score or 0.0),
-                "recommended_amount": float(decision.recommended_amount or 0.0),
-                "first_decided_at": self._entry_datetime(decision),
-                "submitted_at": decision.updated_at,
-                "hours_to_submit": self._compute_hours_to_submit(decision),
-            }
-            for decision in submitted_decisions[:limit]
-        ]
+        items: list[dict[str, Any]] = []
+        for decision in submitted_decisions[:limit]:
+            strengths, risk_flags = _extract_decision_reasons(decision.score_breakdown)
+            items.append(
+                {
+                    "decision_record_id": int(decision.id),
+                    "project_id": int(decision.project_id),
+                    "project_title": str(decision.project.title) if decision.project is not None else f"Project {decision.project_id}",
+                    "initial_action": self._entry_action(decision),
+                    "initial_decision_status": self._entry_status(decision),
+                    "current_action": str(decision.action or self._entry_action(decision)),
+                    "current_decision_status": str(decision.decision_status or "submitted"),
+                    "priority_score": float(decision.priority_score or 0.0),
+                    "recommended_amount": float(decision.recommended_amount or 0.0),
+                    "first_decided_at": self._entry_datetime(decision),
+                    "submitted_at": decision.updated_at,
+                    "hours_to_submit": self._compute_hours_to_submit(decision),
+                    "strengths": strengths,
+                    "risk_flags": risk_flags,
+                }
+            )
+        return items
 
     def _build_funnel_comparison(
         self,
