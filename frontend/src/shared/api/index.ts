@@ -3,6 +3,8 @@ export * from "./session";
 export * from "./auth";
 export * from "./dashboard";
 export * from "./strategy";
+export * from "./profile";
+export * from "./backtest";
 export * from "./projects";
 export * from "./decisions";
 export * from "./experiments";
