@@ -24,6 +24,7 @@ from app.schemas.schemas import (
     MLTaskResponse,
     OperatorStatsResponse,
     OperationsDashboardResponse,
+    OperationsKpiResponse,
     PredictionFeedbackResponse,
     PredictionObservabilityResponse,
 )
@@ -184,6 +185,16 @@ def get_decision_funnel(
         breakdown_limit=breakdown_limit,
         trend_bucket_days=trend_bucket_days,
     )
+
+
+@router.get("/operations-kpi", response_model=OperationsKpiResponse)
+def get_operations_kpi(
+    days: int = Query(30, ge=1, le=365),
+    missed_limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """Aggregate roadmap operating KPIs (manual override, conversion, accuracy, missed) in one call."""
+    return DecisionAnalyticsService().build_operations_kpi(db, days=days, missed_limit=missed_limit)
 
 
 @router.get("/decision-recommendations", response_model=DecisionRecommendationResponse)

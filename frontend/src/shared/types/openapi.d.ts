@@ -1099,6 +1099,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/operations-kpi": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operations Kpi
+         * @description Aggregate roadmap operating KPIs (manual override, conversion, accuracy, missed) in one call.
+         */
+        get: operations["get_operations_kpi_api_v1_analytics_operations_kpi_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/decision-recommendations": {
         parameters: {
             query?: never;
@@ -4538,6 +4558,104 @@ export interface components {
             ml_release: components["schemas"]["MLReleaseOperationsSummary"];
             /** Cards */
             cards?: components["schemas"]["OperationsDashboardCard"][];
+        };
+        /**
+         * OperationsKpiConversion
+         * @description Conversion KPI (e): recommendation-to-submission rates reused from the funnel.
+         */
+        OperationsKpiConversion: {
+            /** Decision Count */
+            decision_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Overall Submission Rate */
+            overall_submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Average Hours To Submit */
+            average_hours_to_submit?: number | null;
+        };
+        /**
+         * OperationsKpiManualOverride
+         * @description Manual-override KPI (d): how often the operator changed a recommendation.
+         */
+        OperationsKpiManualOverride: {
+            /** Decision Count */
+            decision_count: number;
+            /** Modified Count */
+            modified_count: number;
+            /** Modification Rate */
+            modification_rate?: number | null;
+        };
+        /**
+         * OperationsKpiMissedOpportunities
+         * @description Missed-opportunity KPI (b): bid_now/review recommendations left past deadline.
+         */
+        OperationsKpiMissedOpportunities: {
+            /** Missed Count */
+            missed_count: number;
+            /** Items */
+            items?: components["schemas"]["OperationsKpiMissedOpportunityItem"][];
+        };
+        /**
+         * OperationsKpiMissedOpportunityItem
+         * @description One recommended-but-unactioned tender whose deadline has already passed.
+         */
+        OperationsKpiMissedOpportunityItem: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
+            /** Deadline */
+            deadline?: string | null;
+            /** Initial Action */
+            initial_action: string;
+            /** Decision Status */
+            decision_status: string;
+            /** Priority Score */
+            priority_score: number;
+        };
+        /**
+         * OperationsKpiPredictionAccuracy
+         * @description Prediction-accuracy KPI (f): error rates reused from prediction feedback.
+         */
+        OperationsKpiPredictionAccuracy: {
+            /** Result Count */
+            result_count: number;
+            /** Prediction Sample Count */
+            prediction_sample_count: number;
+            /** Recommendation Sample Count */
+            recommendation_sample_count: number;
+            /** Average Prediction Error Rate */
+            average_prediction_error_rate?: number | null;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
+            /** Prediction Within 1 Percent Count */
+            prediction_within_1_percent_count: number;
+            /** Prediction Within 3 Percent Count */
+            prediction_within_3_percent_count: number;
+            /** Recommendation Within 1 Percent Count */
+            recommendation_within_1_percent_count: number;
+            /** Recommendation Within 3 Percent Count */
+            recommendation_within_3_percent_count: number;
+        };
+        /**
+         * OperationsKpiResponse
+         * @description Roadmap C-1 instrumentation: four operating KPIs aggregated in one call.
+         */
+        OperationsKpiResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Period Days */
+            period_days: number;
+            manual_override: components["schemas"]["OperationsKpiManualOverride"];
+            conversion: components["schemas"]["OperationsKpiConversion"];
+            prediction_accuracy: components["schemas"]["OperationsKpiPredictionAccuracy"];
+            missed_opportunities: components["schemas"]["OperationsKpiMissedOpportunities"];
         };
         /** OperatorDashboardCard */
         OperatorDashboardCard: {
@@ -8777,6 +8895,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DecisionFunnelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_operations_kpi_api_v1_analytics_operations_kpi_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                missed_limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsKpiResponse"];
                 };
             };
             /** @description Validation Error */

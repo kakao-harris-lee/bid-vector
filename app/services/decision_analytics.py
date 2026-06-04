@@ -8,9 +8,10 @@ from typing import Any
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.single_user import ensure_operator_account
-from app.core.time import utc_now
+from app.core.time import ensure_utc, utc_now
 from app.models.models import BidDecisionRecord, DecisionExperimentRun
 from app.schemas.schemas import _extract_decision_reasons
+from app.services.prediction_feedback import PredictionFeedbackService
 
 
 class DecisionAnalyticsService:
@@ -258,6 +259,144 @@ class DecisionAnalyticsService:
             "experiments": experiments,
             "recommendations": enriched_recommendations,
         }
+
+    def build_operations_kpi(
+        self,
+        db: Session,
+        *,
+        days: int = 30,
+        missed_limit: int = 10,
+    ) -> dict[str, Any]:
+        """Aggregate roadmap operating KPIs (d/e/f/b) from existing data in one call.
+
+        Conversion (e) and prediction accuracy (f) reuse ``build_funnel`` and
+        ``build_feedback`` verbatim so the conversion/accuracy logic stays single-sourced.
+        Manual override (d) and missed opportunities (b) are computed here over the same
+        current-period decision set that ``build_funnel`` analyzes.
+        """
+        operator = ensure_operator_account(db)
+        now = utc_now()
+        current_period_start = now - timedelta(days=days)
+        decisions = self._load_decisions_in_range(
+            db,
+            operator_id=operator.id,
+            start_at=current_period_start,
+            end_at=None,
+        )
+
+        funnel = self.build_funnel(db, days=days)
+        feedback = PredictionFeedbackService().build_feedback(db, days=days, limit=100)
+
+        manual_override = self._build_manual_override_kpi(decisions)
+        missed_opportunities = self._build_missed_opportunities_kpi(
+            decisions,
+            now=now,
+            limit=missed_limit,
+        )
+
+        return {
+            "operator_id": operator.id,
+            "period_days": days,
+            "manual_override": manual_override,
+            "conversion": {
+                "decision_count": int(funnel.get("decision_count") or 0),
+                "submitted_count": int(funnel.get("submitted_count") or 0),
+                "overall_submission_rate": funnel.get("overall_submission_rate"),
+                "bid_now_submission_rate": funnel.get("bid_now_submission_rate"),
+                "review_submission_rate": funnel.get("review_submission_rate"),
+                "average_hours_to_submit": funnel.get("average_hours_to_submit"),
+            },
+            "prediction_accuracy": {
+                "result_count": int(feedback.get("result_count") or 0),
+                "prediction_sample_count": int(feedback.get("prediction_sample_count") or 0),
+                "recommendation_sample_count": int(feedback.get("recommendation_sample_count") or 0),
+                "average_prediction_error_rate": feedback.get("average_prediction_error_rate"),
+                "average_recommendation_error_rate": feedback.get("average_recommendation_error_rate"),
+                "prediction_within_1_percent_count": int(feedback.get("prediction_within_1_percent_count") or 0),
+                "prediction_within_3_percent_count": int(feedback.get("prediction_within_3_percent_count") or 0),
+                "recommendation_within_1_percent_count": int(feedback.get("recommendation_within_1_percent_count") or 0),
+                "recommendation_within_3_percent_count": int(feedback.get("recommendation_within_3_percent_count") or 0),
+            },
+            "missed_opportunities": missed_opportunities,
+        }
+
+    def _build_manual_override_kpi(self, decisions: list[BidDecisionRecord]) -> dict[str, Any]:
+        """KPI (d): share of decisions the operator changed from the initial recommendation."""
+        modified_count = sum(1 for decision in decisions if self._is_manually_overridden(decision))
+        return {
+            "decision_count": len(decisions),
+            "modified_count": modified_count,
+            "modification_rate": self._rate(modified_count, len(decisions)),
+        }
+
+    def _is_manually_overridden(self, decision: BidDecisionRecord) -> bool:
+        """Return whether the current action/status diverged from the captured initial values."""
+        initial_action = decision.initial_action
+        initial_status = decision.initial_decision_status
+        action_changed = initial_action is not None and str(decision.action or "") != str(initial_action)
+        status_changed = (
+            initial_status is not None
+            and str(decision.decision_status or "") != str(initial_status)
+        )
+        return action_changed or status_changed
+
+    def _build_missed_opportunities_kpi(
+        self,
+        decisions: list[BidDecisionRecord],
+        *,
+        now,
+        limit: int,
+    ) -> dict[str, Any]:
+        """KPI (b): bid_now/review recommendations still pending past the project deadline."""
+        missed: list[BidDecisionRecord] = [
+            decision for decision in decisions if self._is_missed_opportunity(decision, now=now)
+        ]
+        missed.sort(
+            key=lambda decision: (
+                -float(decision.priority_score or 0.0),
+                self._missed_deadline_sort_key(decision),
+            )
+        )
+        items = [
+            {
+                "decision_record_id": int(decision.id),
+                "project_id": int(decision.project_id),
+                "project_title": (
+                    str(decision.project.title)
+                    if decision.project is not None and decision.project.title is not None
+                    else f"Project {decision.project_id}"
+                ),
+                "deadline": decision.project.deadline if decision.project is not None else None,
+                "initial_action": self._entry_action(decision),
+                "decision_status": str(decision.decision_status or "planned"),
+                "priority_score": float(decision.priority_score or 0.0),
+            }
+            for decision in missed[: max(limit, 0)]
+        ]
+        return {
+            "missed_count": len(missed),
+            "items": items,
+        }
+
+    def _is_missed_opportunity(self, decision: BidDecisionRecord, *, now) -> bool:
+        """Return whether a recommended decision is still pending after its deadline passed."""
+        if self._entry_action(decision) not in {"bid_now", "review"}:
+            return False
+        if str(decision.decision_status or "") not in self.ACTIVE_DECISION_STATUSES:
+            return False
+        if decision.project is None:
+            return False
+        deadline = decision.project.deadline
+        if deadline is None:
+            return False
+        return ensure_utc(deadline) < ensure_utc(now)
+
+    def _missed_deadline_sort_key(self, decision: BidDecisionRecord):
+        """Order missed items by earliest deadline after priority, tolerating null deadlines."""
+        deadline = decision.project.deadline if decision.project is not None else None
+        if deadline is None:
+            return (1, 0.0)
+        return (0, ensure_utc(deadline).timestamp())
 
     def _build_recommendation_experiment_history(
         self,
