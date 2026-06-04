@@ -117,6 +117,15 @@ class Settings(BaseSettings):
     KONEPS_COLLECTION_CATEGORY: str = ""
     KONEPS_COLLECTION_MAX_ITEMS: int = 50
     KONEPS_COLLECTION_EXECUTION_MODE: str = "auto"
+    # KONEPS scsbid (개찰 결과) collection — independent beat schedule.
+    # Re-uses the same collect_koneps_notices task but routes to the scsbid OpenAPI
+    # path via request_payload.source. Default OFF; opt-in via .env.
+    KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED: bool = False
+    KONEPS_SCSBID_COLLECTION_INTERVAL_MINUTES: int = 360
+    KONEPS_SCSBID_COLLECTION_SOURCE: str = "scsbid-openapi"
+    KONEPS_SCSBID_COLLECTION_CATEGORY: str = ""
+    KONEPS_SCSBID_COLLECTION_MAX_ITEMS: int = 50
+    KONEPS_SCSBID_COLLECTION_EXECUTION_MODE: str = "auto"
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50

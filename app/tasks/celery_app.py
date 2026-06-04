@@ -238,6 +238,47 @@ def build_koneps_collection_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_scsbid_collection_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for KONEPS scsbid (open-bid result) collection.
+
+    This is an *independent* beat schedule that re-uses ``collect_koneps_notices`` but
+    drives the collector to the scsbid OpenAPI branch via ``request_payload.source``.
+    Defaults to OFF; opt-in via ``KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED`` in .env.
+    """
+    if not settings.KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED:
+        return {}
+
+    category = str(settings.KONEPS_SCSBID_COLLECTION_CATEGORY or "").strip() or None
+    execution_mode = (
+        str(settings.KONEPS_SCSBID_COLLECTION_EXECUTION_MODE or "auto").strip() or "auto"
+    )
+    if execution_mode not in {"mock", "live", "auto"}:
+        execution_mode = "auto"
+
+    return {
+        "koneps_scsbid_collection_periodic": {
+            "task": COLLECT_KONEPS_NOTICES_TASK_NAME,
+            "schedule": float(
+                max(1, settings.KONEPS_SCSBID_COLLECTION_INTERVAL_MINUTES) * 60
+            ),
+            "kwargs": {
+                "request_payload": {
+                    "source": str(
+                        settings.KONEPS_SCSBID_COLLECTION_SOURCE or "scsbid-openapi"
+                    ).strip()
+                    or "scsbid-openapi",
+                    "category": category,
+                    "execution_mode": execution_mode,
+                    "max_items": min(
+                        100,
+                        max(1, int(settings.KONEPS_SCSBID_COLLECTION_MAX_ITEMS)),
+                    ),
+                },
+            },
+        }
+    }
+
+
 def build_business_type_enrichment_beat_schedule() -> dict[str, dict[str, object]]:
     """Build the periodic schedule entry for business_type enrichment."""
     if not settings.BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED:
@@ -341,6 +382,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_paper_bidding_forward_beat_schedule(),
             **build_historical_backtest_beat_schedule(),
             **build_koneps_collection_beat_schedule(),
+            **build_scsbid_collection_beat_schedule(),
             **build_business_type_enrichment_beat_schedule(),
             **build_category_reclassify_beat_schedule(),
             **build_smoke_test_beat_schedule(),
