@@ -14,6 +14,10 @@ export type OperationsKpiMissedOpportunities =
   components["schemas"]["OperationsKpiMissedOpportunities"];
 export type OperationsKpiMissedOpportunityItem =
   components["schemas"]["OperationsKpiMissedOpportunityItem"];
+// Roadmap C-1 (a) & (c) — added in backend PR #60.
+export type OperationsKpiReviewTime = components["schemas"]["OperationsKpiReviewTime"];
+export type OperationsKpiRecommendationFeedback =
+  components["schemas"]["OperationsKpiRecommendationFeedback"];
 
 export interface OperationsDashboardCard {
   key: string;

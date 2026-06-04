@@ -139,6 +139,16 @@ const operationsKpi: OperationsKpiResponse = {
         priority_score: 0.8
       }
     ]
+  },
+  review_time: {
+    average_review_minutes: 8.2,
+    sample_count: 4
+  },
+  recommendation_feedback: {
+    useful_count: 3,
+    not_useful_count: 1,
+    review_value_rate: 0.75,
+    feedback_count: 4
   }
 };
 

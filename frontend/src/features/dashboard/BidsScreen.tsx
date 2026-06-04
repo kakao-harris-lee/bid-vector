@@ -33,6 +33,7 @@ export function BidsScreen() {
         selection={selected}
         onClose={() => setSelected(null)}
         username={session?.username ?? null}
+        authToken={session?.token ?? null}
       />
     </>
   );

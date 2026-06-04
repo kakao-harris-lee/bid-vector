@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { renderWithProviders } from "@/test-utils";
 import { DecisionReasonsCard } from "./DecisionReasonsCard";
 
@@ -83,5 +83,96 @@ describe("DecisionReasonsCard", () => {
       <DecisionReasonsCard strengths={[]} riskFlags={[]} action="skip" priorityScore={0.4} />
     );
     expect(screen.queryByText("낙찰 확률")).not.toBeInTheDocument();
+  });
+
+  describe("recommendation feedback", () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({}),
+            headers: { get: () => null }
+          } as unknown as Response)
+        )
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("hides the feedback widget when ids are missing", () => {
+      renderWithProviders(
+        <DecisionReasonsCard
+          strengths={[]}
+          riskFlags={[]}
+          action="bid_now"
+          priorityScore={0.7}
+        />
+      );
+      expect(screen.queryByLabelText("추천 피드백")).not.toBeInTheDocument();
+    });
+
+    it("renders thumbs buttons when ids are supplied and toggles selection on click", async () => {
+      const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({}),
+          headers: { get: () => null }
+        } as unknown as Response)
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderWithProviders(
+        <DecisionReasonsCard
+          strengths={[]}
+          riskFlags={[]}
+          action="bid_now"
+          priorityScore={0.7}
+          decisionRecordId={42}
+          projectId={101}
+          authToken="token-feedback"
+        />
+      );
+
+      const widget = screen.getByLabelText("추천 피드백");
+      const usefulButton = within(widget).getByRole("button", { name: "도움됨" });
+      const notUsefulButton = within(widget).getByRole("button", { name: "도움 안 됨" });
+
+      expect(usefulButton).toHaveAttribute("aria-pressed", "false");
+      expect(notUsefulButton).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(usefulButton);
+      expect(usefulButton).toHaveAttribute("aria-pressed", "true");
+      expect(notUsefulButton).toHaveAttribute("aria-pressed", "false");
+
+      // Verify the analytics endpoint was called with the agreed payload.
+      await Promise.resolve();
+      const call = fetchMock.mock.calls.find(
+        ([url]) => String(url) === "/api/v1/analytics/event"
+      );
+      expect(call).toBeDefined();
+      const init = call?.[1] as RequestInit | undefined;
+      expect(init?.method).toBe("POST");
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      expect(body).toMatchObject({
+        event_type: "recommendation_feedback",
+        event_data: {
+          decision_record_id: 42,
+          project_id: 101,
+          verdict: "useful"
+        }
+      });
+
+      // Re-click on 'not_useful' should swap the toggle state.
+      fireEvent.click(notUsefulButton);
+      expect(usefulButton).toHaveAttribute("aria-pressed", "false");
+      expect(notUsefulButton).toHaveAttribute("aria-pressed", "true");
+    });
   });
 });

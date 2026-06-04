@@ -4644,8 +4644,22 @@ export interface components {
             recommendation_within_3_percent_count: number;
         };
         /**
+         * OperationsKpiRecommendationFeedback
+         * @description Recommendation-usefulness KPI (c): operator 👍/👎 votes on recommendations.
+         */
+        OperationsKpiRecommendationFeedback: {
+            /** Useful Count */
+            useful_count: number;
+            /** Not Useful Count */
+            not_useful_count: number;
+            /** Review Value Rate */
+            review_value_rate?: number | null;
+            /** Feedback Count */
+            feedback_count: number;
+        };
+        /**
          * OperationsKpiResponse
-         * @description Roadmap C-1 instrumentation: four operating KPIs aggregated in one call.
+         * @description Roadmap C-1 instrumentation: operating KPIs aggregated in one call.
          */
         OperationsKpiResponse: {
             /** Operator Id */
@@ -4656,6 +4670,18 @@ export interface components {
             conversion: components["schemas"]["OperationsKpiConversion"];
             prediction_accuracy: components["schemas"]["OperationsKpiPredictionAccuracy"];
             missed_opportunities: components["schemas"]["OperationsKpiMissedOpportunities"];
+            review_time: components["schemas"]["OperationsKpiReviewTime"];
+            recommendation_feedback: components["schemas"]["OperationsKpiRecommendationFeedback"];
+        };
+        /**
+         * OperationsKpiReviewTime
+         * @description Review-time KPI (a): minutes between first viewing a tender and deciding.
+         */
+        OperationsKpiReviewTime: {
+            /** Average Review Minutes */
+            average_review_minutes?: number | null;
+            /** Sample Count */
+            sample_count: number;
         };
         /** OperatorDashboardCard */
         OperatorDashboardCard: {

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
@@ -10,6 +11,7 @@ import {
 } from "@/shared/lib";
 import type { BidDecisionRecordResponse } from "@/shared/types/project";
 import { DecisionReasonsCard } from "@/features/dashboard/components";
+import { trackProjectView } from "@/shared/api";
 import { SimilarPanel } from "./SimilarPanel";
 import { useProjectQuery, useTimelineQuery } from "./hooks";
 
@@ -41,6 +43,17 @@ export function ProjectDetailScreen() {
 
   const project = useProjectQuery(session, idIsValid ? projectId : null);
   const timeline = useTimelineQuery(session, idIsValid ? projectId : null, 10);
+
+  // Roadmap C-1 (a): log a `project_view` analytics event whenever the
+  // operator opens a tender detail. Backend keeps only the first view per
+  // (operator, project) for review-time math, so re-fires are harmless.
+  // Best-effort: telemetry failure never affects render.
+  useEffect(() => {
+    if (!idIsValid) return;
+    const token = session?.token;
+    if (!token) return;
+    void trackProjectView(projectId, token);
+  }, [idIsValid, projectId, session?.token]);
 
   if (!idIsValid) {
     return (
@@ -157,6 +170,9 @@ export function ProjectDetailScreen() {
                     action={record.action}
                     priorityScore={record.priority_score}
                     probabilityScore={record.probability_score}
+                    decisionRecordId={record.id}
+                    projectId={projectId}
+                    authToken={session?.token ?? null}
                   />
                 ) : null}
                 {record.reasoning ? (

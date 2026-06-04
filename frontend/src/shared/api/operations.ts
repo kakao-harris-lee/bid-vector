@@ -5,6 +5,9 @@ import type {
   OperationsKpiResponse
 } from "@/shared/types/operations";
 
+/** Recommendation usefulness verdict — value matches backend event_data contract. */
+export type RecommendationFeedbackVerdict = "useful" | "not_useful";
+
 function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {
   return promise.catch((err) => {
     if (err instanceof ApiError && err.status !== 401) {
@@ -52,5 +55,59 @@ export function fetchOperationsKpi(
   return wrap(
     apiRequest<OperationsKpiResponse>(path, { token }),
     "운영 KPI를 불러오지 못했습니다."
+  );
+}
+
+/**
+ * Best-effort analytics event logger.
+ *
+ * Roadmap C-1 instrumentation: client tracks `project_view` and
+ * `recommendation_feedback` so the backend can derive review-time and
+ * recommendation-usefulness KPIs. Telemetry failures must NEVER break UX —
+ * we swallow errors and surface them via console.warn only. If there is no
+ * token, we skip silently (anonymous events aren't supported).
+ */
+export async function logAnalyticsEvent(
+  eventType: string,
+  eventData: Record<string, unknown>,
+  token?: string | null
+): Promise<void> {
+  if (!token) return;
+  try {
+    await apiRequest<unknown>("/api/v1/analytics/event", {
+      method: "POST",
+      token,
+      body: { event_type: eventType, event_data: eventData }
+    });
+  } catch (err) {
+    // Best-effort: never throw to caller. Surface in console for debugging.
+    // eslint-disable-next-line no-console
+    console.warn(`[analytics] ${eventType} 이벤트 송신 실패`, err);
+  }
+}
+
+/** Roadmap C-1 (a) — fire on tender/opportunity detail view. */
+export function trackProjectView(
+  projectId: number,
+  token?: string | null
+): Promise<void> {
+  return logAnalyticsEvent("project_view", { project_id: projectId }, token);
+}
+
+/** Roadmap C-1 (c) — fire on operator 👍/👎 against a recommendation. */
+export function submitRecommendationFeedback(
+  decisionRecordId: number,
+  projectId: number,
+  verdict: RecommendationFeedbackVerdict,
+  token?: string | null
+): Promise<void> {
+  return logAnalyticsEvent(
+    "recommendation_feedback",
+    {
+      decision_record_id: decisionRecordId,
+      project_id: projectId,
+      verdict
+    },
+    token
   );
 }

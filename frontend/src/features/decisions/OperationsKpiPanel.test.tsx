@@ -53,24 +53,48 @@ const fullData: OperationsKpiResponse = {
         priority_score: 0.55
       }
     ]
+  },
+  review_time: {
+    average_review_minutes: 12.4,
+    sample_count: 7
+  },
+  recommendation_feedback: {
+    useful_count: 9,
+    not_useful_count: 3,
+    review_value_rate: 0.75,
+    feedback_count: 12
   }
 };
 
 describe("OperationsKpiPanel", () => {
-  it("4개 KPI 그룹을 정상 값과 함께 렌더한다", () => {
+  it("6개 KPI 그룹을 정상 값과 함께 렌더한다", () => {
     renderWithProviders(<OperationsKpiPanel data={fullData} loading={false} error={null} />);
 
     expect(screen.getByRole("heading", { name: /운영 KPI/ })).toBeInTheDocument();
 
-    // 4 KPI groups present (aria-label on each article)
+    // 6 KPI groups present (aria-label on each article)
     const manual = screen.getByLabelText("수동 수정");
     const conversion = screen.getByLabelText("투찰 전환율");
     const accuracy = screen.getByLabelText("예측 정확도");
+    const reviewTime = screen.getByLabelText("검토 시간");
+    const feedback = screen.getByLabelText("추천 유용성");
     const missed = screen.getByLabelText("놓친 유효 공고");
     expect(manual).toBeInTheDocument();
     expect(conversion).toBeInTheDocument();
     expect(accuracy).toBeInTheDocument();
+    expect(reviewTime).toBeInTheDocument();
+    expect(feedback).toBeInTheDocument();
     expect(missed).toBeInTheDocument();
+
+    // review time: average minutes + sample count
+    expect(within(reviewTime).getByText("평균 12.4분")).toBeInTheDocument();
+    expect(within(reviewTime).getByText("표본 7건")).toBeInTheDocument();
+
+    // recommendation feedback: rate % + counts
+    expect(within(feedback).getByText("75.0%")).toBeInTheDocument();
+    expect(within(feedback).getByText("👍 9")).toBeInTheDocument();
+    expect(within(feedback).getByText("👎 3")).toBeInTheDocument();
+    expect(within(feedback).getByText("피드백 12건")).toBeInTheDocument();
 
     // manual override: rate as % + counts
     expect(within(manual).getByText("25.0%")).toBeInTheDocument();
@@ -109,6 +133,13 @@ describe("OperationsKpiPanel", () => {
         prediction_within_3_percent_count: 0,
         recommendation_within_1_percent_count: 0,
         recommendation_within_3_percent_count: 0
+      },
+      review_time: { average_review_minutes: null, sample_count: 0 },
+      recommendation_feedback: {
+        useful_count: 0,
+        not_useful_count: 0,
+        review_value_rate: null,
+        feedback_count: 0
       }
     };
     renderWithProviders(<OperationsKpiPanel data={data} loading={false} error={null} />);
@@ -120,6 +151,15 @@ describe("OperationsKpiPanel", () => {
 
     const accuracy = screen.getByLabelText("예측 정확도");
     expect(within(accuracy).getByText("정확도 표본이 아직 없습니다.")).toBeInTheDocument();
+
+    const reviewTime = screen.getByLabelText("검토 시간");
+    expect(within(reviewTime).getByText("—")).toBeInTheDocument();
+    expect(within(reviewTime).getByText("표본 0건")).toBeInTheDocument();
+    expect(within(reviewTime).getByText("측정 표본이 아직 없습니다.")).toBeInTheDocument();
+
+    const feedback = screen.getByLabelText("추천 유용성");
+    expect(within(feedback).getByText("—")).toBeInTheDocument();
+    expect(within(feedback).getByText("아직 피드백이 없습니다.")).toBeInTheDocument();
   });
 
   it("놓친 유효 공고 항목 리스트를 렌더하고 클릭 시 공고 상세로 이동한다", () => {
