@@ -80,7 +80,11 @@
     "action_skip": "보류",
     "reasoning_toggle": "판단 설명 전문 보기",
     "indicator_strengths_label": "추구 가능 근거 개수",
-    "indicator_risks_label": "리스크 신호 개수"
+    "indicator_risks_label": "리스크 신호 개수",
+    "feedback_title": "추천 피드백",
+    "feedback_prompt": "이 추천이 도움이 되었나요?",
+    "feedback_useful": "도움됨",
+    "feedback_not_useful": "도움 안 됨"
   },
   "experiments": {
     "title": "실험 lifecycle",

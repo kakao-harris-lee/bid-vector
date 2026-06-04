@@ -9,7 +9,9 @@ import type {
   OperationsKpiMissedOpportunities,
   OperationsKpiMissedOpportunityItem,
   OperationsKpiPredictionAccuracy,
-  OperationsKpiResponse
+  OperationsKpiRecommendationFeedback,
+  OperationsKpiResponse,
+  OperationsKpiReviewTime
 } from "@/shared/types/operations";
 
 const DASH = "—";
@@ -75,10 +77,12 @@ export function OperationsKpiPanel({ data, loading, error }: OperationsKpiPanelP
           </p>
         ) : null}
         {data ? (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
             <ManualOverrideCard data={data.manual_override} />
             <ConversionCard data={data.conversion} />
             <PredictionAccuracyCard data={data.prediction_accuracy} />
+            <ReviewTimeCard data={data.review_time} />
+            <RecommendationFeedbackCard data={data.recommendation_feedback} />
             <MissedOpportunitiesCard data={data.missed_opportunities} />
           </div>
         ) : null}
@@ -267,6 +271,52 @@ function MissedItem({
         </div>
       </button>
     </li>
+  );
+}
+
+function ReviewTimeCard({ data }: { data: OperationsKpiReviewTime }) {
+  const minutes = data.average_review_minutes;
+  const minutesLabel =
+    minutes === null || minutes === undefined ? DASH : `평균 ${minutes.toFixed(1)}분`;
+  return (
+    <KpiGroup
+      title="검토 시간"
+      hint="공고 첫 열람부터 결정까지 평균 소요 시간 (낮을수록 빠른 의사결정)"
+    >
+      <div className="flex items-baseline gap-2">
+        <strong className="text-2xl text-[var(--color-fg)] tabular-nums">{minutesLabel}</strong>
+      </div>
+      <p className="text-[11px] text-[var(--color-muted)]">표본 {formatCount(data.sample_count)}건</p>
+      {data.sample_count === 0 ? (
+        <p className="text-[11px] text-[var(--color-muted)]">측정 표본이 아직 없습니다.</p>
+      ) : null}
+    </KpiGroup>
+  );
+}
+
+function RecommendationFeedbackCard({
+  data
+}: {
+  data: OperationsKpiRecommendationFeedback;
+}) {
+  return (
+    <KpiGroup title="추천 유용성" hint="운영자 👍/👎 피드백 비율 (높을수록 좋음)">
+      <div className="flex items-baseline gap-2">
+        <strong className="text-2xl text-[var(--color-fg)] tabular-nums">
+          {rateOrDash(data.review_value_rate)}
+        </strong>
+      </div>
+      <div className="flex items-center justify-between text-[11px] text-[var(--color-muted)]">
+        <span>👍 {formatCount(data.useful_count)}</span>
+        <span>👎 {formatCount(data.not_useful_count)}</span>
+      </div>
+      <p className="text-[11px] text-[var(--color-muted)]">
+        피드백 {formatCount(data.feedback_count)}건
+      </p>
+      {data.feedback_count === 0 ? (
+        <p className="text-[11px] text-[var(--color-muted)]">아직 피드백이 없습니다.</p>
+      ) : null}
+    </KpiGroup>
   );
 }
 

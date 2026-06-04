@@ -1,6 +1,11 @@
-import { AlertTriangle, CheckCircle2, Target } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, CheckCircle2, Target, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Badge } from "@/shared/components/ui";
 import { t } from "@/shared/i18n";
+import {
+  submitRecommendationFeedback,
+  type RecommendationFeedbackVerdict
+} from "@/shared/api/operations";
 import { MiniBar } from "./Helpers";
 
 export type DecisionAction = "bid_now" | "review" | "skip";
@@ -32,6 +37,15 @@ export interface DecisionReasonsCardProps {
   /** 컴팩트 모드: 패딩/폰트 축소, 타임라인 임베드용 */
   compact?: boolean;
   className?: string;
+  /**
+   * Recommendation feedback (Roadmap C-1 (c)): show 👍/👎 buttons when both
+   * IDs and a token are supplied. Telemetry-only — clicks call
+   * `submitRecommendationFeedback` (best-effort) and toggle visual state.
+   * If omitted, the buttons are hidden so legacy callers stay unchanged.
+   */
+  decisionRecordId?: number | null;
+  projectId?: number | null;
+  authToken?: string | null;
 }
 
 export function DecisionReasonsCard({
@@ -41,10 +55,18 @@ export function DecisionReasonsCard({
   priorityScore,
   probabilityScore,
   compact = false,
-  className
+  className,
+  decisionRecordId,
+  projectId,
+  authToken
 }: DecisionReasonsCardProps) {
   const safeStrengths = strengths ?? [];
   const safeRisks = riskFlags ?? [];
+  const canFeedback =
+    typeof decisionRecordId === "number" &&
+    decisionRecordId > 0 &&
+    typeof projectId === "number" &&
+    projectId > 0;
 
   const sectionGap = compact ? "gap-2" : "gap-3";
   const titleSize = compact ? "text-[11px]" : "text-xs";
@@ -126,6 +148,71 @@ export function DecisionReasonsCard({
           ) : null}
         </div>
       </section>
+
+      {canFeedback ? (
+        <FeedbackButtons
+          decisionRecordId={decisionRecordId as number}
+          projectId={projectId as number}
+          token={authToken ?? null}
+          compact={compact}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function FeedbackButtons({
+  decisionRecordId,
+  projectId,
+  token,
+  compact
+}: {
+  decisionRecordId: number;
+  projectId: number;
+  token: string | null;
+  compact: boolean;
+}) {
+  const [verdict, setVerdict] = useState<RecommendationFeedbackVerdict | null>(null);
+  const handle = (next: RecommendationFeedbackVerdict) => {
+    setVerdict(next);
+    // Fire-and-forget — telemetry must never break UX.
+    void submitRecommendationFeedback(decisionRecordId, projectId, next, token);
+  };
+  const sizeClass = compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-1 text-[11px]";
+  const baseClass =
+    "inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-muted)] hover:border-[var(--color-primary)]";
+  const activeUseful =
+    "border-[var(--color-success)] bg-[color-mix(in_oklch,var(--color-success),white_82%)] text-[color-mix(in_oklch,var(--color-success),black_30%)]";
+  const activeNot =
+    "border-[var(--color-danger)] bg-[color-mix(in_oklch,var(--color-danger),white_82%)] text-[color-mix(in_oklch,var(--color-danger),black_25%)]";
+  return (
+    <div
+      className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] pt-2"
+      aria-label={t("decision_reasons.feedback_title")}
+    >
+      <span className="text-[10px] text-[var(--color-muted)]">
+        {t("decision_reasons.feedback_prompt")}
+      </span>
+      <button
+        type="button"
+        onClick={() => handle("useful")}
+        aria-pressed={verdict === "useful"}
+        aria-label={t("decision_reasons.feedback_useful")}
+        className={`${baseClass} ${sizeClass} ${verdict === "useful" ? activeUseful : ""}`}
+      >
+        <ThumbsUp size={12} aria-hidden="true" />
+        <span>{t("decision_reasons.feedback_useful")}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => handle("not_useful")}
+        aria-pressed={verdict === "not_useful"}
+        aria-label={t("decision_reasons.feedback_not_useful")}
+        className={`${baseClass} ${sizeClass} ${verdict === "not_useful" ? activeNot : ""}`}
+      >
+        <ThumbsDown size={12} aria-hidden="true" />
+        <span>{t("decision_reasons.feedback_not_useful")}</span>
+      </button>
     </div>
   );
 }

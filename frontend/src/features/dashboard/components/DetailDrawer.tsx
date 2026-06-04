@@ -1,19 +1,34 @@
+import { useEffect } from "react";
 import { X } from "lucide-react";
 import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
 import { t } from "@/shared/i18n";
 import { IconButton } from "@/app/layout/IconButton";
+import { trackProjectView } from "@/shared/api/operations";
 import type { DetailSelection } from "../types";
 import { DecisionReasonsCard } from "./DecisionReasonsCard";
 
 export function DetailDrawer({
   selection,
   onClose,
-  username
+  username,
+  authToken
 }: {
   selection: DetailSelection | null;
   onClose: () => void;
   username: string | null;
+  authToken?: string | null;
 }) {
+  // Roadmap C-1 (a): when a tender/opportunity opens in the drawer, log a
+  // `project_view` analytics event. The backend coalesces multiple views into
+  // a single first-view per (operator, project) so we don't have to guard
+  // against repeats here.
+  useEffect(() => {
+    if (!selection) return;
+    const id = selection.item.project?.project_id;
+    if (!id || !authToken) return;
+    void trackProjectView(id, authToken);
+  }, [selection, authToken]);
+
   if (!selection) return null;
 
   const project = selection.item.project;
@@ -79,6 +94,9 @@ export function DetailDrawer({
           action={selection.item.action}
           priorityScore={selection.item.priority_score}
           probabilityScore={selection.item.probability_score}
+          decisionRecordId={selection.item.decision_record_id ?? null}
+          projectId={selection.item.project?.project_id ?? null}
+          authToken={authToken ?? null}
         />
       ) : null}
       {"reasoning" in selection.item && selection.item.reasoning ? (
