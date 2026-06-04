@@ -16,11 +16,17 @@ from app.models.models import (
     TenderResult,
     User,
 )
-from app.schemas.schemas import CrawlRequest
+from app.schemas.schemas import (
+    BidDecisionSaveRequest,
+    CrawlRequest,
+    OpportunityAnalysisRequest,
+)
+from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
+from app.services.opportunity_analysis import OpportunityAnalysisService
 
 
 def test_crawl_skeleton(client):
@@ -3631,3 +3637,239 @@ def test_update_bid_decision_status_endpoint_transitions_decision(client):
         json={"decision_status": "submitted"},
     )
     assert missing.status_code == 404
+
+
+def test_save_decision_merges_reasons_into_score_breakdown(client, test_db):
+    """save_decision should persist strengths/risk_flags into score_breakdown without dropping signals."""
+    project = Project(
+        title="사유 영속화 검증 공고",
+        description="강점/리스크 사유를 결정 레코드에 함께 저장",
+        requirements="즉시 추진 판단 근거 보존",
+        budget_estimate=120000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    record = BidDecisionService().save_decision(
+        test_db,
+        BidDecisionSaveRequest(
+            project_id=project.id,
+            recommended_amount=115000000.0,
+            probability_score=0.88,
+            matched_score=0.82,
+            deadline_hours_remaining=10,
+            current_active_bids=1,
+            max_active_bids=4,
+            current_workload_score=0.2,
+            strengths=["업체 자격·지역·역량 기준을 전반적으로 충족합니다."],
+            risk_flags=["자격·지역·면허 조건이 완전히 맞지 않아 수주 리스크가 있습니다."],
+        ),
+    )
+
+    stored = json.loads(record.score_breakdown)
+    # Existing signal keys must survive the merge.
+    assert "probability_signal" in stored
+    assert "opportunity_score" in stored
+    # Reason lists are merged under dedicated keys.
+    assert stored["strengths"] == ["업체 자격·지역·역량 기준을 전반적으로 충족합니다."]
+    assert stored["risk_flags"] == [
+        "자격·지역·면허 조건이 완전히 맞지 않아 수주 리스크가 있습니다."
+    ]
+
+    # And they round-trip through the response schema (list endpoint).
+    listed = client.get(
+        "/api/v1/operations/bid-decisions", params={"project_id": project.id}
+    )
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert len(payload) == 1
+    assert payload[0]["strengths"] == ["업체 자격·지역·역량 기준을 전반적으로 충족합니다."]
+    assert payload[0]["risk_flags"] == [
+        "자격·지역·면허 조건이 완전히 맞지 않아 수주 리스크가 있습니다."
+    ]
+    # The signal breakdown remains intact alongside the reasons.
+    assert payload[0]["score_breakdown"]["probability_signal"] == stored["probability_signal"]
+
+
+def test_save_decision_without_reasons_stays_backward_compatible(client, test_db):
+    """Records persisted without reasons must serialize empty lists and omit the keys in storage."""
+    project = Project(
+        title="사유 없는 하위호환 공고",
+        description="강점/리스크 미전달 시 빈 리스트로 안전 직렬화",
+        requirements="기존 동작 보존",
+        budget_estimate=90000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    record = BidDecisionService().save_decision(
+        test_db,
+        BidDecisionSaveRequest(
+            project_id=project.id,
+            recommended_amount=88000000.0,
+            probability_score=0.6,
+            matched_score=0.62,
+            deadline_hours_remaining=40,
+        ),
+    )
+
+    stored = json.loads(record.score_breakdown)
+    # Empty reason lists are not written into the blob (keeps legacy shape).
+    assert "strengths" not in stored
+    assert "risk_flags" not in stored
+
+    detail = client.get(f"/api/v1/operations/bid-decisions/{record.id}")
+    assert detail.status_code == 200
+    record_payload = detail.json()["record"]
+    assert record_payload["strengths"] == []
+    assert record_payload["risk_flags"] == []
+
+
+def test_legacy_score_breakdown_serializes_reasons_as_empty_lists(client, test_db):
+    """A pre-existing record whose score_breakdown lacks reason keys stays safe to serialize."""
+    operator = ensure_operator_account(test_db)
+    project = Project(
+        title="레거시 점수 분해 공고",
+        description="기존 score_breakdown에 사유 키가 없는 레코드",
+        requirements="하위호환 직렬화 검증",
+        budget_estimate=70000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    legacy = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=operator.id,
+        pursue_bid=True,
+        action="review",
+        decision_status="reviewing",
+        recommended_amount=68000000.0,
+        probability_score=0.6,
+        matched_score=0.61,
+        priority_score=0.55,
+        current_active_bids=0,
+        max_active_bids=3,
+        current_workload_score=0.0,
+        score_breakdown=json.dumps({"probability_signal": 0.6, "opportunity_score": 0.55}),
+        reasoning="레거시 결정 레코드입니다.",
+    )
+    test_db.add(legacy)
+    test_db.commit()
+    test_db.refresh(legacy)
+
+    listed = client.get(
+        "/api/v1/operations/bid-decisions", params={"project_id": project.id}
+    )
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert len(payload) == 1
+    assert payload[0]["strengths"] == []
+    assert payload[0]["risk_flags"] == []
+    assert payload[0]["score_breakdown"]["probability_signal"] == 0.6
+
+
+def test_opportunity_analysis_reasons_persist_through_save_decision(client, test_db):
+    """Reasons computed by opportunity analysis flow into the persisted decision record and response."""
+    user = User(
+        username="reason-persist-operator",
+        email="reason-persist-operator@example.com",
+        hashed_password="hashed",
+        full_name="Reason Persist Operator",
+        company="Reason Persist Corp",
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    profile = CompanyProfile(
+        user_id=user.id,
+        business_type="software",
+        license_codes="SW001",
+        region_codes="서울특별시",
+        annual_revenue=1200000000.0,
+        capacity_score=0.92,
+        total_awards=6,
+    )
+    matched_project = Project(
+        title="AI 민원 데이터 분석 플랫폼 구축",
+        description="민원 데이터 분석과 시각화, 대시보드 자동화가 포함된 플랫폼 구축",
+        requirements="SW001 보유 업체, 서울특별시 수행 가능, 운영지원 포함",
+        budget_estimate=130000000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=18),
+    )
+    similar_project = Project(
+        title="AI 데이터 대시보드 구축",
+        description="데이터 분석과 시각화 중심의 대시보드 시스템 개발",
+        requirements="서울특별시 수행 가능, 분석 보고서 자동화",
+        budget_estimate=118000000.0,
+        category="software",
+    )
+    mismatch_project = Project(
+        title="부산 토목 시설 유지보수",
+        description="부산 지역 토목 구조물 점검 및 보수 공사",
+        requirements="토목시공 면허 보유, 부산광역시 수행 필수",
+        budget_estimate=140000000.0,
+        category="construction",
+    )
+    test_db.add_all([profile, matched_project, similar_project, mismatch_project])
+    test_db.commit()
+    test_db.refresh(matched_project)
+    test_db.refresh(mismatch_project)
+
+    analysis_service = OpportunityAnalysisService()
+    decision_service = BidDecisionService()
+
+    def _persist(project):
+        analysis = analysis_service.analyze_project(
+            test_db,
+            project,
+            OpportunityAnalysisRequest(project_id=project.id, similar_limit=3, min_similarity=0.15),
+        )
+        record = decision_service.save_decision(
+            test_db,
+            BidDecisionSaveRequest(
+                project_id=project.id,
+                recommended_amount=float(analysis["recommended_amount"]),
+                probability_score=float(analysis["probability_score"]),
+                matched_score=float(analysis["matched_score"]),
+                deadline_hours_remaining=analysis.get("deadline_hours_remaining"),
+                current_active_bids=int(analysis.get("current_active_bids") or 0),
+                max_active_bids=int(analysis.get("max_active_bids") or 3),
+                current_workload_score=float(analysis.get("current_workload_score") or 0.0),
+                budget_estimate=float(project.budget_estimate or 0.0),
+                strengths=list(analysis.get("strengths") or []),
+                risk_flags=list(analysis.get("risk_flags") or []),
+            ),
+        )
+        return analysis, record
+
+    matched_analysis, matched_record = _persist(matched_project)
+    mismatch_analysis, mismatch_record = _persist(mismatch_project)
+
+    assert matched_analysis["matched"] is True
+    assert matched_analysis["strengths"]
+    stored_matched = json.loads(matched_record.score_breakdown)
+    assert stored_matched["strengths"] == matched_analysis["strengths"]
+
+    assert mismatch_analysis["matched"] is False
+    assert any(
+        "자격" in flag or "지역" in flag or "면허" in flag
+        for flag in mismatch_analysis["risk_flags"]
+    )
+    stored_mismatch = json.loads(mismatch_record.score_breakdown)
+    assert stored_mismatch["risk_flags"] == mismatch_analysis["risk_flags"]
+
+    detail = client.get(f"/api/v1/operations/bid-decisions/{mismatch_record.id}")
+    assert detail.status_code == 200
+    detail_record = detail.json()["record"]
+    assert any(
+        "자격" in flag or "지역" in flag or "면허" in flag
+        for flag in detail_record["risk_flags"]
+    )

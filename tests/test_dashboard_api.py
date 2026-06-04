@@ -215,6 +215,58 @@ def test_dashboard_bids_include_latest_decision_status(client, test_db):
     assert item["recommended_amount"] == 112_000_000.0
 
 
+def test_dashboard_opportunities_surface_decision_reasons(client, test_db):
+    """Decision-source opportunity rows should expose strengths/risk_flags from score_breakdown."""
+    import json
+
+    headers, operator_id = _bootstrap_and_auth(client, username="dashboard-reasons")
+    project = Project(
+        title="AI 데이터 통합 플랫폼",
+        description="Dashboard opportunity reasons project",
+        requirements="SW001",
+        budget_estimate=130_000_000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=12),
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    test_db.add(
+        BidDecisionRecord(
+            project_id=project.id,
+            operator_id=operator_id,
+            pursue_bid=True,
+            action="bid_now",
+            decision_status="planned",
+            recommended_amount=126_000_000.0,
+            probability_score=0.88,
+            matched_score=0.82,
+            priority_score=0.9,
+            urgency_score=0.8,
+            score_breakdown=json.dumps(
+                {
+                    "probability_signal": 0.88,
+                    "strengths": ["업체 자격·지역·역량 기준을 전반적으로 충족합니다."],
+                    "risk_flags": ["가격 예측 신뢰도가 아직 보수적 수준입니다."],
+                },
+                ensure_ascii=False,
+            ),
+            reasoning="대시보드 사유 노출 검증용 결정입니다.",
+        )
+    )
+    test_db.commit()
+
+    response = client.get("/api/v1/dashboard/opportunities", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    decision_items = [item for item in payload["items"] if item["source"] == "decision"]
+    assert decision_items
+    item = decision_items[0]
+    assert item["strengths"] == ["업체 자격·지역·역량 기준을 전반적으로 충족합니다."]
+    assert item["risk_flags"] == ["가격 예측 신뢰도가 아직 보수적 수준입니다."]
+
+
 def test_dashboard_opportunities_include_latest_forward_paper_candidates(
     client, test_db
 ):

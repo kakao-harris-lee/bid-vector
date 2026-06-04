@@ -197,6 +197,8 @@ class StrategyMonitoringService:
                             refreshed_analysis.get("workload_source")
                             or ("provided" if request.current_workload_score is not None else "auto")
                         ),
+                        strengths=list(refreshed_analysis.get("strengths") or []),
+                        risk_flags=list(refreshed_analysis.get("risk_flags") or []),
                     ),
                 )
                 is_new_candidate = project.id not in previous_candidate_project_ids

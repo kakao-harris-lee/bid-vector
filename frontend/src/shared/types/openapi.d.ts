@@ -2154,6 +2154,10 @@ export interface components {
              */
             workload_source: "provided" | "auto";
             score_breakdown?: components["schemas"]["BidDecisionScoreBreakdown"];
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
             /** Reasoning */
             reasoning: string;
             /**
@@ -2316,6 +2320,16 @@ export interface components {
             workload_source: "provided" | "auto";
             /** Decision Status */
             decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
+            /**
+             * Strengths
+             * @description Why this notice is pursuable; persisted into score_breakdown.
+             */
+            strengths?: string[];
+            /**
+             * Risk Flags
+             * @description Why this notice is risky; persisted into score_breakdown.
+             */
+            risk_flags?: string[];
         };
         /** BidDecisionScoreBreakdown */
         BidDecisionScoreBreakdown: {
@@ -3002,6 +3016,10 @@ export interface components {
              * @default
              */
             reasoning: string;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
             /**
              * Updated At
              * Format: date-time
