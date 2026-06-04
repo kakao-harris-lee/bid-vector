@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     PAPER_BIDDING_FORWARD_SCHEDULE_SCENARIO: str = "base"
     PAPER_BIDDING_FORWARD_SCHEDULE_HISTORY_LIMIT: int = 80
     PAPER_BIDDING_FORWARD_SCHEDULE_PERSIST: bool = True
+    # Forward paper-bid settlement — sweep unsettled forward paper bids whose
+    # deadline has passed and whose tender result now exists, then create the
+    # matching PaperBidSettlement rows. Default OFF; opt-in via .env.
+    FORWARD_SETTLEMENT_SCHEDULE_ENABLED: bool = False
+    FORWARD_SETTLEMENT_INTERVAL_MINUTES: int = 720  # 12h
+    FORWARD_SETTLEMENT_LIMIT: int = 200
+    FORWARD_SETTLEMENT_PERSIST: bool = True
     HISTORICAL_BACKTEST_SCHEDULE_ENABLED: bool = False
     HISTORICAL_BACKTEST_INTERVAL_MINUTES: int = 1440  # 24h
     HISTORICAL_BACKTEST_LOOKBACK_DAYS: int = 30
