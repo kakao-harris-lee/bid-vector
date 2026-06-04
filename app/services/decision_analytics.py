@@ -521,6 +521,31 @@ class DecisionAnalyticsService:
             "sample_count": len(review_seconds),
         }
 
+    def _dedupe_latest_feedback_verdicts(
+        self,
+        feedback_events: list[Analytics],
+    ) -> dict[int, dict[str, Any]]:
+        """Reduce ``recommendation_feedback`` events to the latest verdict per decision.
+
+        Returns a mapping of ``decision_record_id`` to ``{verdict, project_id,
+        feedback_at}`` for the most recent qualifying event. Events with malformed
+        payloads or verdict values outside ``{useful, not_useful}`` are skipped.
+        Since callers load events oldest-first, the last write wins.
+        """
+        latest_by_decision: dict[int, dict[str, Any]] = {}
+        for event in feedback_events:
+            payload = parse_analytics_event_data(event.event_data)
+            decision_record_id = self._coerce_int(payload.get("decision_record_id"))
+            verdict = str(payload.get("verdict") or "").strip().lower()
+            if decision_record_id is None or verdict not in {"useful", "not_useful"}:
+                continue
+            latest_by_decision[decision_record_id] = {
+                "verdict": verdict,
+                "project_id": self._coerce_int(payload.get("project_id")),
+                "feedback_at": ensure_utc(event.timestamp) if event.timestamp is not None else None,
+            }
+        return latest_by_decision
+
     def _build_recommendation_feedback_kpi(
         self,
         db: Session,
@@ -531,9 +556,8 @@ class DecisionAnalyticsService:
         """KPI (c): operator usefulness votes on recommendations.
 
         Aggregates ``recommendation_feedback`` events, keeping only the latest
-        verdict per ``decision_record_id`` (events are loaded ascending, so a later
-        event overwrites an earlier one). ``review_value_rate`` is the share of
-        useful verdicts among rated decisions.
+        verdict per ``decision_record_id`` via :meth:`_dedupe_latest_feedback_verdicts`.
+        ``review_value_rate`` is the share of useful verdicts among rated decisions.
         """
         feedback_events = self._load_events_in_range(
             db,
@@ -541,26 +565,194 @@ class DecisionAnalyticsService:
             event_type="recommendation_feedback",
             start_at=start_at,
         )
-        latest_verdict_by_decision: dict[int, str] = {}
-        for event in feedback_events:
-            payload = parse_analytics_event_data(event.event_data)
-            decision_record_id = self._coerce_int(payload.get("decision_record_id"))
-            verdict = str(payload.get("verdict") or "").strip().lower()
-            if decision_record_id is None or verdict not in {"useful", "not_useful"}:
-                continue
-            # Events are ordered oldest-first, so the last write wins (latest verdict).
-            latest_verdict_by_decision[decision_record_id] = verdict
+        latest_by_decision = self._dedupe_latest_feedback_verdicts(feedback_events)
 
-        useful_count = sum(1 for verdict in latest_verdict_by_decision.values() if verdict == "useful")
+        useful_count = sum(
+            1 for entry in latest_by_decision.values() if entry["verdict"] == "useful"
+        )
         not_useful_count = sum(
-            1 for verdict in latest_verdict_by_decision.values() if verdict == "not_useful"
+            1 for entry in latest_by_decision.values() if entry["verdict"] == "not_useful"
         )
         return {
             "useful_count": useful_count,
             "not_useful_count": not_useful_count,
             "review_value_rate": self._rate(useful_count, useful_count + not_useful_count),
-            "feedback_count": len(latest_verdict_by_decision),
+            "feedback_count": len(latest_by_decision),
         }
+
+    def build_recommendation_feedback_labels(
+        self,
+        db: Session,
+        *,
+        days: int = 90,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Return false-positive/negative labels collected via recommendation feedback.
+
+        Joins ``recommendation_feedback`` analytics events to their persisted
+        ``BidDecisionRecord`` (and ``Project``) so the operator's verdicts become
+        analyzable training data. Verdicts are deduped per ``decision_record_id``
+        via the shared :meth:`_dedupe_latest_feedback_verdicts` helper. Orphan
+        verdicts whose decision record is missing are skipped.
+        """
+        operator = ensure_operator_account(db)
+        start_at = utc_now() - timedelta(days=days)
+        feedback_events = self._load_events_in_range(
+            db,
+            operator_id=operator.id,
+            event_type="recommendation_feedback",
+            start_at=start_at,
+        )
+        latest_by_decision = self._dedupe_latest_feedback_verdicts(feedback_events)
+
+        if not latest_by_decision:
+            return {
+                "operator_id": operator.id,
+                "period_days": days,
+                "label_count": 0,
+                "useful_count": 0,
+                "not_useful_count": 0,
+                "review_value_rate": None,
+                "by_category": {},
+                "by_action": {},
+                "items": [],
+            }
+
+        decision_ids = list(latest_by_decision.keys())
+        decisions = (
+            db.query(BidDecisionRecord)
+            .options(selectinload(BidDecisionRecord.project))
+            .filter(
+                BidDecisionRecord.operator_id == operator.id,
+                BidDecisionRecord.id.in_(decision_ids),
+            )
+            .all()
+        )
+        decisions_by_id = {int(record.id): record for record in decisions}
+
+        items: list[dict[str, Any]] = []
+        useful_count = 0
+        not_useful_count = 0
+        category_counters: dict[str, dict[str, int]] = {}
+        action_counters: dict[str, dict[str, int]] = {}
+
+        for decision_id, entry in latest_by_decision.items():
+            decision = decisions_by_id.get(decision_id)
+            if decision is None:
+                # Orphan label: feedback pointing to a missing/foreign decision record.
+                continue
+            verdict = entry["verdict"]
+            if verdict == "useful":
+                useful_count += 1
+            else:
+                not_useful_count += 1
+
+            project = decision.project
+            project_category = (
+                str(project.category) if project is not None and project.category else None
+            )
+            project_business_type_code = (
+                str(project.business_type_code)
+                if project is not None and project.business_type_code
+                else None
+            )
+            project_title = (
+                str(project.title)
+                if project is not None and project.title
+                else f"Project {decision.project_id}"
+            )
+
+            self._increment_label_breakdown(
+                category_counters,
+                key=project_category or self.UNKNOWN_CATEGORY,
+                verdict=verdict,
+            )
+            self._increment_label_breakdown(
+                action_counters,
+                key=str(decision.action or "skip"),
+                verdict=verdict,
+            )
+
+            strengths, risk_flags = _extract_decision_reasons(decision.score_breakdown)
+            reasoning_excerpt = self._reasoning_excerpt(decision.reasoning)
+            items.append(
+                {
+                    "decision_record_id": int(decision.id),
+                    "project_id": int(decision.project_id) if decision.project_id is not None else 0,
+                    "project_title": project_title,
+                    "project_category": project_category,
+                    "project_business_type_code": project_business_type_code,
+                    "action": str(decision.action or "skip"),
+                    "decision_status": str(decision.decision_status or "planned"),
+                    "priority_score": float(decision.priority_score or 0.0),
+                    "verdict": verdict,
+                    "feedback_at": entry["feedback_at"],
+                    "reasoning": reasoning_excerpt,
+                    "strengths": strengths,
+                    "risk_flags": risk_flags,
+                }
+            )
+
+        # Newest feedback first; missing timestamps sort last deterministically by id.
+        items.sort(
+            key=lambda item: (
+                item["feedback_at"] is None,
+                -(item["feedback_at"].timestamp() if item["feedback_at"] is not None else 0.0),
+                -int(item["decision_record_id"]),
+            )
+        )
+        clamped_items = items[: max(limit, 0)]
+
+        label_count = useful_count + not_useful_count
+        return {
+            "operator_id": operator.id,
+            "period_days": days,
+            "label_count": label_count,
+            "useful_count": useful_count,
+            "not_useful_count": not_useful_count,
+            "review_value_rate": self._rate(useful_count, label_count),
+            "by_category": self._finalize_label_breakdown(category_counters),
+            "by_action": self._finalize_label_breakdown(action_counters),
+            "items": clamped_items,
+        }
+
+    def _increment_label_breakdown(
+        self,
+        counters: dict[str, dict[str, int]],
+        *,
+        key: str,
+        verdict: str,
+    ) -> None:
+        """Accumulate useful/not_useful counts for one breakdown key."""
+        bucket = counters.setdefault(key, {"useful": 0, "not_useful": 0, "total": 0})
+        bucket[verdict] = bucket.get(verdict, 0) + 1
+        bucket["total"] = bucket.get("total", 0) + 1
+
+    def _finalize_label_breakdown(
+        self, counters: dict[str, dict[str, int]]
+    ) -> dict[str, dict[str, Any]]:
+        """Attach the useful-share rate to each breakdown bucket."""
+        finalized: dict[str, dict[str, Any]] = {}
+        for key, bucket in counters.items():
+            total = int(bucket.get("total", 0))
+            useful = int(bucket.get("useful", 0))
+            not_useful = int(bucket.get("not_useful", 0))
+            finalized[key] = {
+                "useful": useful,
+                "not_useful": not_useful,
+                "total": total,
+                "rate": self._rate(useful, total),
+            }
+        return finalized
+
+    def _reasoning_excerpt(self, reasoning: Any, *, limit: int = 200) -> str:
+        """Return a bounded excerpt of the persisted reasoning text."""
+        if reasoning is None:
+            return ""
+        text = str(reasoning)
+        if len(text) <= limit:
+            return text
+        return text[:limit]
 
     def _coerce_int(self, value: Any) -> int | None:
         """Best-effort coercion of event payload identifiers to int."""

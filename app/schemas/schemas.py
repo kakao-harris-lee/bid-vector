@@ -1413,6 +1413,58 @@ class OperationsKpiResponse(BaseModel):
     settlement_coverage: OperationsKpiSettlementCoverage
 
 
+class RecommendationFeedbackLabelBreakdown(BaseModel):
+    """Useful/not_useful split for a single category or action bucket."""
+
+    useful: int = Field(ge=0)
+    not_useful: int = Field(ge=0)
+    total: int = Field(ge=0)
+    rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class RecommendationFeedbackLabelItem(BaseModel):
+    """One operator-verdict label joined with its decision/project context."""
+
+    decision_record_id: int
+    project_id: int
+    project_title: str
+    project_category: Optional[str] = None
+    project_business_type_code: Optional[str] = None
+    action: Literal["bid_now", "review", "skip"]
+    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    priority_score: float = Field(ge=0.0, le=1.0)
+    verdict: Literal["useful", "not_useful"]
+    feedback_at: Optional[datetime] = None
+    reasoning: str = ""
+    strengths: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
+
+
+class RecommendationFeedbackLabelsResponse(BaseModel):
+    """Recommendation feedback labels exported for ML/QA review.
+
+    Top-level counts mirror :class:`OperationsKpiRecommendationFeedback` so the
+    KPI card and this label export stay numerically consistent. ``by_category``
+    and ``by_action`` group verdicts by the joined project category and the
+    decision's current action; ``items`` is the deduped (latest-per-decision)
+    label rows, newest feedback first.
+    """
+
+    operator_id: int
+    period_days: int
+    label_count: int = Field(ge=0)
+    useful_count: int = Field(ge=0)
+    not_useful_count: int = Field(ge=0)
+    review_value_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    by_category: Dict[str, RecommendationFeedbackLabelBreakdown] = Field(
+        default_factory=dict
+    )
+    by_action: Dict[str, RecommendationFeedbackLabelBreakdown] = Field(
+        default_factory=dict
+    )
+    items: List[RecommendationFeedbackLabelItem] = Field(default_factory=list)
+
+
 class PredictionPredictorBreakdownItem(BaseModel):
     predictor_name: str
     predictor_family: str

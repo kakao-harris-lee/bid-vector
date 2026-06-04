@@ -1119,6 +1119,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/recommendation-feedback-labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Recommendation Feedback Labels
+         * @description Export deduped recommendation-feedback labels joined with decision/project context.
+         */
+        get: operations["get_recommendation_feedback_labels_api_v1_analytics_recommendation_feedback_labels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/decision-recommendations": {
         parameters: {
             query?: never;
@@ -6129,6 +6149,98 @@ export interface components {
             /** Results */
             results?: components["schemas"]["SimilarProjectItem"][];
         };
+        /**
+         * RecommendationFeedbackLabelBreakdown
+         * @description Useful/not_useful split for a single category or action bucket.
+         */
+        RecommendationFeedbackLabelBreakdown: {
+            /** Useful */
+            useful: number;
+            /** Not Useful */
+            not_useful: number;
+            /** Total */
+            total: number;
+            /** Rate */
+            rate?: number | null;
+        };
+        /**
+         * RecommendationFeedbackLabelItem
+         * @description One operator-verdict label joined with its decision/project context.
+         */
+        RecommendationFeedbackLabelItem: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
+            /** Project Category */
+            project_category?: string | null;
+            /** Project Business Type Code */
+            project_business_type_code?: string | null;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "bid_now" | "review" | "skip";
+            /**
+             * Decision Status
+             * @enum {string}
+             */
+            decision_status: "planned" | "reviewing" | "submitted" | "skipped";
+            /** Priority Score */
+            priority_score: number;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "useful" | "not_useful";
+            /** Feedback At */
+            feedback_at?: string | null;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
+        };
+        /**
+         * RecommendationFeedbackLabelsResponse
+         * @description Recommendation feedback labels exported for ML/QA review.
+         *
+         *     Top-level counts mirror :class:`OperationsKpiRecommendationFeedback` so the
+         *     KPI card and this label export stay numerically consistent. ``by_category``
+         *     and ``by_action`` group verdicts by the joined project category and the
+         *     decision's current action; ``items`` is the deduped (latest-per-decision)
+         *     label rows, newest feedback first.
+         */
+        RecommendationFeedbackLabelsResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Period Days */
+            period_days: number;
+            /** Label Count */
+            label_count: number;
+            /** Useful Count */
+            useful_count: number;
+            /** Not Useful Count */
+            not_useful_count: number;
+            /** Review Value Rate */
+            review_value_rate?: number | null;
+            /** By Category */
+            by_category?: {
+                [key: string]: components["schemas"]["RecommendationFeedbackLabelBreakdown"];
+            };
+            /** By Action */
+            by_action?: {
+                [key: string]: components["schemas"]["RecommendationFeedbackLabelBreakdown"];
+            };
+            /** Items */
+            items?: components["schemas"]["RecommendationFeedbackLabelItem"][];
+        };
         /** SimilarProjectItem */
         SimilarProjectItem: {
             /** Project Id */
@@ -8990,6 +9102,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperationsKpiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recommendation_feedback_labels_api_v1_analytics_recommendation_feedback_labels_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationFeedbackLabelsResponse"];
                 };
             };
             /** @description Validation Error */

@@ -28,6 +28,7 @@ from app.schemas.schemas import (
     OperationsKpiResponse,
     PredictionFeedbackResponse,
     PredictionObservabilityResponse,
+    RecommendationFeedbackLabelsResponse,
 )
 from app.services.analytics_reporting import AnalyticsReportingService
 from app.services.decision_analytics import DecisionAnalyticsService
@@ -196,6 +197,21 @@ def get_operations_kpi(
 ):
     """Aggregate roadmap operating KPIs (manual override, conversion, accuracy, missed) in one call."""
     return DecisionAnalyticsService().build_operations_kpi(db, days=days, missed_limit=missed_limit)
+
+
+@router.get(
+    "/recommendation-feedback-labels",
+    response_model=RecommendationFeedbackLabelsResponse,
+)
+def get_recommendation_feedback_labels(
+    days: int = Query(90, ge=1, le=365),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """Export deduped recommendation-feedback labels joined with decision/project context."""
+    return DecisionAnalyticsService().build_recommendation_feedback_labels(
+        db, days=days, limit=limit
+    )
 
 
 @router.get("/decision-recommendations", response_model=DecisionRecommendationResponse)
