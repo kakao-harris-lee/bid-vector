@@ -11,7 +11,7 @@ from app.ai.business_group import resolve_business_group
 from app.ai.price_prediction import get_price_insights, predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy
 from app.core.time import ensure_utc, utc_now
-from app.models.models import Bid, BidDecisionRecord, Project
+from app.models.models import Bid, BidDecisionRecord, CompanyProfile, Project
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
@@ -109,6 +109,41 @@ def _detect_construction_risk_reasons(project: Project) -> list[str]:
         matched.append(reason)
         seen_categories.add(category_id)
     return matched
+
+
+def _detect_awarded_contract_limit_risks(
+    project: Project,
+    profile: CompanyProfile | None,
+) -> list[str]:
+    """Return risk reasons when a construction notice's budget exceeds the operator's awarded contract limit.
+
+    v2 single-notice guard: when the operator has provided an
+    ``awarded_contract_limit`` (도급한도) and the current construction notice's
+    ``budget_estimate`` exceeds that limit, surface a risk reason. Cumulative
+    accounting (sum of already-held awards + this new one) is intentionally
+    out of scope here and tracked as v3.
+
+    Gates (any one returns []):
+      - profile is None
+      - project is not a construction project
+      - profile.awarded_contract_limit is missing / non-positive (treated as "not provided")
+    """
+    if profile is None:
+        return []
+    if not _is_construction_project(project):
+        return []
+
+    limit = float(getattr(profile, "awarded_contract_limit", 0.0) or 0.0)
+    if limit <= 0:
+        return []
+
+    budget = float(getattr(project, "budget_estimate", 0.0) or 0.0)
+    if budget <= limit:
+        return []
+
+    return [
+        f"공고 예산({budget:,.0f}원)이 업체 도급한도({limit:,.0f}원)를 초과해 신규 도급이 어렵습니다."
+    ]
 
 
 class OpportunityAnalysisService:
@@ -289,6 +324,7 @@ class OpportunityAnalysisService:
             expected_margin_score=expected_margin_score,
             execution_complexity_score=execution_complexity_score,
             project=project,
+            profile=profile,
         )
         if category_priority_override > 0:
             strengths.append(
@@ -655,6 +691,7 @@ class OpportunityAnalysisService:
         expected_margin_score: float,
         execution_complexity_score: float,
         project: Project | None = None,
+        profile: CompanyProfile | None = None,
     ) -> list[str]:
         """Highlight the main risks or constraints that still need human review."""
         risks: list[str] = []
@@ -684,6 +721,7 @@ class OpportunityAnalysisService:
 
         if project is not None:
             risks.extend(_detect_construction_risk_reasons(project))
+            risks.extend(_detect_awarded_contract_limit_risks(project, profile))
 
         return risks
 
