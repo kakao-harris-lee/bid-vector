@@ -66,6 +66,10 @@ MIGRATION_OWNED_TABLES = {
 MIGRATION_ADDED_COLUMNS = {
     "projects": {"business_type_code", "business_type_label"},
     "synthetic_experiment_results": {"breakdown_json"},
+    "company_profiles": {
+        "construction_capacity_amount",
+        "awarded_contract_limit",
+    },
 }
 
 ALEMBIC_INTERNAL_TABLES = {"alembic_version"}

@@ -336,12 +336,57 @@ class NoticeClassifierService:
         budget_estimate = float(project.budget_estimate or 0.0)
         annual_revenue = float(profile.annual_revenue or 0.0)
         capacity_score = self._normalize_capacity_score(profile.capacity_score)
+        construction_capacity_amount = float(
+            getattr(profile, "construction_capacity_amount", 0.0) or 0.0
+        )
+        project_type = self._normalize_business_type(project.category)
 
         if budget_estimate <= 0:
             return RuleAssessment(
                 score=0.0,
                 passed=True,
                 reasons=["공고 예산 정보가 없어 예산 적합도는 참고 점수에서 제외했습니다."],
+            )
+
+        # Construction-only: when the operator has filled in 시공능력평가액 it
+        # is the canonical 도급가능규모 indicator and outranks annual_revenue
+        # /capacity_score. The legacy fallbacks below run unchanged when the
+        # field is left at its default (0.0).
+        if project_type == "construction" and construction_capacity_amount > 0:
+            capacity_ratio = construction_capacity_amount / budget_estimate
+            capacity_label = f"시공능력평가액 {construction_capacity_amount:,.0f}원"
+            if capacity_ratio >= 3:
+                return RuleAssessment(
+                    score=self.BUDGET_STRONG_SCORE,
+                    passed=True,
+                    reasons=[
+                        f"{capacity_label}이 공고 예산의 {capacity_ratio:.1f}배 수준으로 도급 가능 규모가 충분합니다."
+                    ],
+                )
+            if capacity_ratio >= 1:
+                return RuleAssessment(
+                    score=self.BUDGET_GOOD_SCORE,
+                    passed=True,
+                    reasons=[
+                        f"{capacity_label}이 공고 예산 이상으로 시공능력 기준 필터를 충족합니다. (배수: {capacity_ratio:.1f})"
+                    ],
+                )
+            if capacity_ratio >= 0.6:
+                return RuleAssessment(
+                    score=self.BUDGET_BORDERLINE_SCORE,
+                    passed=True,
+                    reasons=[
+                        f"{capacity_label}이 공고 예산 대비 다소 타이트하지만 시공능력 기준으로 보수적 통과 처리했습니다. (배수: {capacity_ratio:.1f})"
+                    ],
+                )
+
+            return RuleAssessment(
+                score=0.0,
+                passed=False,
+                penalty=self.BUDGET_MISMATCH_PENALTY,
+                reasons=[
+                    f"{capacity_label}이 공고 예산 대비 부족해 시공능력 기준 필터를 통과하지 못했습니다. (배수: {capacity_ratio:.1f})"
+                ],
             )
 
         if annual_revenue > 0:

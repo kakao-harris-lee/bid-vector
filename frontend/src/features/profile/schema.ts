@@ -13,6 +13,8 @@ export const companyInfoFormSchema = z
     license_codes: chips,
     region_codes: chips,
     annual_revenue: nonNegative,
+    construction_capacity_amount: nonNegative,
+    awarded_contract_limit: nonNegative,
     total_awards: z
       .number({ message: "0 이상의 정수여야 합니다." })
       .int("정수여야 합니다.")

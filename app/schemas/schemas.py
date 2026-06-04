@@ -87,6 +87,12 @@ class OperatorProfileUpdate(BaseModel):
     region_codes: Optional[List[str]] = None
     annual_revenue: Optional[float] = Field(default=None, ge=0.0)
     capacity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    # 시공능력평가액(원). Construction-only manual annual input; 0 means
+    # "not provided" and the matcher falls back to annual_revenue/capacity_score.
+    construction_capacity_amount: Optional[float] = Field(default=None, ge=0.0)
+    # 도급한도(원). Maximum simultaneously-held award amount. Persisted for
+    # future capacity tracking; not yet used by the matcher.
+    awarded_contract_limit: Optional[float] = Field(default=None, ge=0.0)
     total_awards: Optional[int] = Field(default=None, ge=0)
 
 
@@ -103,6 +109,8 @@ class OperatorProfileResponse(BaseModel):
     region_codes: List[str] = Field(default_factory=list)
     annual_revenue: float
     capacity_score: float
+    construction_capacity_amount: float = 0.0
+    awarded_contract_limit: float = 0.0
     total_awards: int
     profile_configured: bool
 
