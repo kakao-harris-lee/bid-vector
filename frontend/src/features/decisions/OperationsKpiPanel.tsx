@@ -11,7 +11,8 @@ import type {
   OperationsKpiPredictionAccuracy,
   OperationsKpiRecommendationFeedback,
   OperationsKpiResponse,
-  OperationsKpiReviewTime
+  OperationsKpiReviewTime,
+  OperationsKpiSettlementCoverage
 } from "@/shared/types/operations";
 
 const DASH = "—";
@@ -83,6 +84,7 @@ export function OperationsKpiPanel({ data, loading, error }: OperationsKpiPanelP
             <PredictionAccuracyCard data={data.prediction_accuracy} />
             <ReviewTimeCard data={data.review_time} />
             <RecommendationFeedbackCard data={data.recommendation_feedback} />
+            <SettlementCoverageCard data={data.settlement_coverage} />
             <MissedOpportunitiesCard data={data.missed_opportunities} />
           </div>
         ) : null}
@@ -315,6 +317,36 @@ function RecommendationFeedbackCard({
       </p>
       {data.feedback_count === 0 ? (
         <p className="text-[11px] text-[var(--color-muted)]">아직 피드백이 없습니다.</p>
+      ) : null}
+    </KpiGroup>
+  );
+}
+
+function SettlementCoverageCard({ data }: { data: OperationsKpiSettlementCoverage }) {
+  const totalPaperBids = data?.total_paper_bids ?? 0;
+  const settledCount = data?.settled_count ?? 0;
+  const forwardPaperBids = data?.forward_paper_bids ?? 0;
+  const forwardSettledCount = data?.forward_settled_count ?? 0;
+  return (
+    <KpiGroup title="정산 커버리지" hint="paper bid가 실제 개찰 결과로 검증된 비율">
+      <div className="flex items-baseline gap-2">
+        <strong className="text-2xl text-[var(--color-fg)] tabular-nums">
+          {rateOrDash(data?.forward_coverage_rate)}
+        </strong>
+        <span className="text-xs text-[var(--color-muted)]">forward</span>
+      </div>
+      <p className="text-[11px] text-[var(--color-muted)]">
+        forward {formatCount(forwardPaperBids)}건 중 {formatCount(forwardSettledCount)}건 정산
+      </p>
+      <StatRow label="전체 정산률" value={rateOrDash(data?.coverage_rate)} />
+      <p className="text-[11px] text-[var(--color-muted)]">
+        전체 {formatCount(totalPaperBids)}건 중 {formatCount(settledCount)}건
+      </p>
+      {forwardPaperBids === 0 ? (
+        <p className="text-[11px] text-[var(--color-muted)]">forward 정산 대상이 아직 없습니다.</p>
+      ) : null}
+      {totalPaperBids === 0 ? (
+        <p className="text-[11px] text-[var(--color-muted)]">집계할 paper bid가 없습니다.</p>
       ) : null}
     </KpiGroup>
   );

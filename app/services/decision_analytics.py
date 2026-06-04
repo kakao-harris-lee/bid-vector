@@ -7,11 +7,19 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
-from app.models.models import Analytics, BidDecisionRecord, DecisionExperimentRun
+from app.models.models import (
+    Analytics,
+    BidDecisionRecord,
+    DecisionExperimentRun,
+    PaperBid,
+    PaperBidRun,
+    PaperBidSettlement,
+)
 from app.schemas.schemas import _extract_decision_reasons
 from app.services.prediction_feedback import PredictionFeedbackService
 
@@ -328,6 +336,11 @@ class DecisionAnalyticsService:
             operator_id=operator.id,
             start_at=current_period_start,
         )
+        settlement_coverage = self._build_settlement_coverage_kpi(
+            db,
+            operator_id=operator.id,
+            start_at=current_period_start,
+        )
 
         return {
             "operator_id": operator.id,
@@ -355,6 +368,81 @@ class DecisionAnalyticsService:
             "missed_opportunities": missed_opportunities,
             "review_time": review_time,
             "recommendation_feedback": recommendation_feedback,
+            "settlement_coverage": settlement_coverage,
+        }
+
+    def _build_settlement_coverage_kpi(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        start_at,
+    ) -> dict[str, Any]:
+        """KPI: how far paper-bid settlement has progressed in the window.
+
+        Counts the operator's :class:`PaperBid` rows created since ``start_at`` and,
+        via an outer join to :class:`PaperBidSettlement`, how many already carry a
+        settlement. The ``forward_paper`` subset (joined through
+        :class:`PaperBidRun`) is reported separately because forward paper bids are
+        the ones the automated forward settlement job is responsible for closing.
+
+        Aggregation runs as two grouped ``count`` queries (overall + per-mode) so
+        no paper bid rows are loaded into Python. Coverage rates return ``None``
+        when their denominator is zero.
+        """
+        settled_flag = case(
+            (PaperBidSettlement.id.isnot(None), 1),
+            else_=0,
+        )
+
+        overall_total, overall_settled = (
+            db.query(
+                func.count(PaperBid.id),
+                func.coalesce(func.sum(settled_flag), 0),
+            )
+            .outerjoin(
+                PaperBidSettlement,
+                PaperBidSettlement.paper_bid_id == PaperBid.id,
+            )
+            .filter(
+                PaperBid.operator_id == operator_id,
+                PaperBid.created_at >= start_at,
+            )
+            .one()
+        )
+
+        forward_total, forward_settled = (
+            db.query(
+                func.count(PaperBid.id),
+                func.coalesce(func.sum(settled_flag), 0),
+            )
+            .join(PaperBidRun, PaperBidRun.id == PaperBid.run_id)
+            .outerjoin(
+                PaperBidSettlement,
+                PaperBidSettlement.paper_bid_id == PaperBid.id,
+            )
+            .filter(
+                PaperBid.operator_id == operator_id,
+                PaperBid.created_at >= start_at,
+                PaperBidRun.mode == "forward_paper",
+            )
+            .one()
+        )
+
+        total_paper_bids = int(overall_total or 0)
+        settled_count = int(overall_settled or 0)
+        forward_paper_bids = int(forward_total or 0)
+        forward_settled_count = int(forward_settled or 0)
+
+        return {
+            "total_paper_bids": total_paper_bids,
+            "settled_count": settled_count,
+            "coverage_rate": self._rate(settled_count, total_paper_bids),
+            "forward_paper_bids": forward_paper_bids,
+            "forward_settled_count": forward_settled_count,
+            "forward_coverage_rate": self._rate(
+                forward_settled_count, forward_paper_bids
+            ),
         }
 
     def _load_events_in_range(
