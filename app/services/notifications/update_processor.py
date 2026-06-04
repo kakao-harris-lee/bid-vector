@@ -54,11 +54,36 @@ class TelegramUpdateProcessor:
             "chat_id": None,
         }
 
+    def _is_authorized_chat(self, chat_id: int | None) -> bool:
+        """Return whether an inbound chat id may drive decision/strategy actions.
+
+        Only the configured ``TELEGRAM_CHAT_ID`` (when it is a real value) is
+        authorized. A missing/placeholder configuration authorizes no chat so
+        decision and strategy commands are ignored by default. ``/start`` and
+        ``/help`` are handled before this gate so the operator can still
+        discover their chat id.
+        """
+        configured_chat_id = self.telegram.get_authorized_chat_id()
+        if configured_chat_id is None or chat_id is None:
+            return False
+        return str(chat_id) == str(configured_chat_id)
+
     def _process_callback_query(self, db: Session, update: dict) -> dict[str, object]:
         callback_query = update.get("callback_query") or {}
         callback_query_id = str(callback_query.get("id") or "")
         callback_data = str(callback_query.get("data") or "")
         chat_id = self._extract_chat_id(update)
+
+        if not self._is_authorized_chat(chat_id):
+            logger.info(
+                "Ignoring Telegram callback from unauthorized chat: chat_id=%s",
+                chat_id,
+            )
+            return {
+                "status": "ignored",
+                "detail": "unauthorized chat",
+                "chat_id": chat_id,
+            }
 
         strategy_reply = self.strategy_processor.process_callback(db, callback_data, chat_id=chat_id)
         if strategy_reply is not None:
@@ -200,6 +225,17 @@ class TelegramUpdateProcessor:
                 "chat_id": chat_id,
             }
 
+        if not self._is_authorized_chat(chat_id):
+            logger.info(
+                "Ignoring Telegram message from unauthorized chat: chat_id=%s",
+                chat_id,
+            )
+            return {
+                "status": "ignored",
+                "detail": "unauthorized chat",
+                "chat_id": chat_id,
+            }
+
         strategy_response = self.strategy_processor.process_text(db, text, chat_id=chat_id)
         if strategy_response is not None:
             self.telegram.send_message(
@@ -329,7 +365,19 @@ class TelegramSyncService:
                 processed_update_ids.append(update_id)
 
         if last_update_id is not None:
-            self.telegram.get_updates(offset=last_update_id + 1, limit=1, timeout_seconds=0)
+            try:
+                self.telegram.get_updates(
+                    offset=last_update_id + 1, limit=1, timeout_seconds=0
+                )
+            except Exception as exc:
+                # The Telegram server already advances the offset when it
+                # serves the next getUpdates call, so a failed acknowledgement
+                # here must not drop the work we just processed.
+                logger.warning(
+                    "Telegram offset acknowledgement failed: offset=%s error=%s",
+                    last_update_id + 1,
+                    exc,
+                )
 
         detail = f"Processed {len(processed_update_ids)} Telegram updates."
         if failed_update_ids:
