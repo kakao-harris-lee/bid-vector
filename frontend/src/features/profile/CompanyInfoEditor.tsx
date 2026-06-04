@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { useEffect, useMemo, useState } from "react";
+import { Controller, useForm, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { ChipInput, ThresholdControl } from "@/shared/components";
@@ -24,6 +24,37 @@ import {
 } from "./constants";
 import type { OperatorProfileResponse } from "@/shared/types/profile";
 import type { OperatorStrategyResponse } from "@/shared/types/strategy";
+
+type EditorMode = "wizard" | "single";
+
+interface WizardStep {
+  key: "basics" | "capacity" | "budget" | "preferences";
+  title: string;
+  description: string;
+}
+
+const WIZARD_STEPS: readonly WizardStep[] = [
+  {
+    key: "basics",
+    title: "기본 · 면허 · 지역",
+    description: "업무 구분과 보유 면허, 수행 지역을 골라 매칭 기준을 만듭니다."
+  },
+  {
+    key: "capacity",
+    title: "공사 능력 · 실적",
+    description: "시공능력평가액·도급한도는 공사 매칭 정확도를 크게 좌우합니다."
+  },
+  {
+    key: "budget",
+    title: "공사 가능 금액",
+    description: "참여 가능한 예산 범위를 입력하세요. 빈 값은 무제한으로 간주합니다."
+  },
+  {
+    key: "preferences",
+    title: "선호 · 제외 조건",
+    description: "중점 카테고리·지역과 필수/제외 키워드를 더해 후보 폭을 좁힙니다."
+  }
+] as const;
 
 const defaultValues: CompanyInfoFormValues = {
   business_type: BUSINESS_TYPE_OPTIONS[0].value,
@@ -60,6 +91,19 @@ export function CompanyInfoEditor() {
     defaultValues: formInitial,
     mode: "onSubmit"
   });
+
+  // Mode is decided once the first profile payload arrives:
+  //   profile_configured === false → guided 4-step wizard
+  //   profile_configured === true  → single-page edit (existing behaviour)
+  // The user can also toggle manually after the initial decision.
+  const [mode, setMode] = useState<EditorMode | null>(null);
+  const [step, setStep] = useState<number>(0);
+
+  useEffect(() => {
+    if (mode !== null) return;
+    if (!profileQuery.data) return;
+    setMode(profileQuery.data.profile_configured ? "single" : "wizard");
+  }, [mode, profileQuery.data]);
 
   useEffect(() => {
     if (profileQuery.data && strategyQuery.data) {
@@ -109,6 +153,11 @@ export function CompanyInfoEditor() {
         title: "업체 정보 저장 완료",
         description: "면허·지역·예산이 매칭에 반영됩니다."
       });
+      // First-time入력 마법사 → single 편집으로 전환.
+      if (mode === "wizard") {
+        setMode("single");
+        setStep(0);
+      }
       return;
     }
 
@@ -137,234 +186,108 @@ export function CompanyInfoEditor() {
 
   const errors = form.formState.errors;
   const saving = profileMutation.isPending || strategyMutation.isPending;
+  const resolvedMode: EditorMode = mode ?? "single";
+  const isWizard = resolvedMode === "wizard";
+  const activeStep = WIZARD_STEPS[Math.min(step, WIZARD_STEPS.length - 1)];
+  const isLastStep = step >= WIZARD_STEPS.length - 1;
+  const stepCount = WIZARD_STEPS.length;
+
+  const toggleMode = () => {
+    if (isWizard) {
+      setMode("single");
+    } else {
+      setStep(0);
+      setMode("wizard");
+    }
+  };
+
+  const goPrev = () => {
+    setStep((current) => Math.max(0, current - 1));
+  };
+
+  const goNext = () => {
+    setStep((current) => Math.min(stepCount - 1, current + 1));
+  };
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_320px]">
       <form onSubmit={submit} className="flex flex-col gap-4" aria-label="업체 정보 편집">
-        <header className="flex items-baseline justify-between">
+        <header className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-lg font-semibold text-[var(--color-fg)]">업체 정보</h2>
-          <span className="text-xs text-[var(--color-muted)]">
-            정확한 5축 입력이 추천 품질을 좌우합니다.
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-[var(--color-muted)]">
+              {isWizard
+                ? `단계 ${step + 1} / ${stepCount} — ${activeStep.title}`
+                : "정확한 5축 입력이 추천 품질을 좌우합니다."}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={toggleMode}
+              aria-pressed={isWizard}
+            >
+              {isWizard ? "전체 보기" : "단계별 가이드"}
+            </Button>
+          </div>
         </header>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>기본 · 면허 · 지역</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-[var(--color-muted)]">업무 구분</span>
-              <select
-                className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 text-sm"
-                aria-label="업무 구분"
-                {...form.register("business_type")}
+        {isWizard ? (
+          <WizardProgress current={step} total={stepCount} steps={WIZARD_STEPS} />
+        ) : null}
+
+        {!isWizard || activeStep.key === "basics" ? (
+          <BasicsCard form={form} errors={errors} />
+        ) : null}
+
+        {!isWizard || activeStep.key === "capacity" ? (
+          <CapacityCard form={form} errors={errors} />
+        ) : null}
+
+        {!isWizard || activeStep.key === "budget" ? (
+          <BudgetCard form={form} errors={errors} />
+        ) : null}
+
+        {!isWizard || activeStep.key === "preferences" ? (
+          <PreferencesCard form={form} />
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {isWizard ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={goPrev}
+                disabled={step === 0 || saving}
               >
-                {BUSINESS_TYPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {errors.business_type ? (
-                <span className="text-[11px] text-[var(--color-danger)]">
-                  {errors.business_type.message}
-                </span>
-              ) : null}
-            </label>
-
-            <Controller
-              control={form.control}
-              name="license_codes"
-              render={({ field }) => (
-                <div className="flex flex-col gap-2">
-                  <ChipInput
-                    label="보유 면허"
-                    value={field.value}
-                    onChange={field.onChange}
-                    placeholder="면허명 또는 코드 입력"
-                  />
-                  <LicenseSuggestions value={field.value} onChange={field.onChange} />
-                </div>
+                이전
+              </Button>
+              {isLastStep ? (
+                <Button type="submit" disabled={saving}>
+                  {saving ? "저장 중" : "저장하고 마치기"}
+                </Button>
+              ) : (
+                <Button type="button" onClick={goNext} disabled={saving}>
+                  다음
+                </Button>
               )}
-            />
-
-            <Controller
-              control={form.control}
-              name="region_codes"
-              render={({ field }) => (
-                <div className="flex flex-col gap-2">
-                  <ChipInput
-                    label="수행 지역"
-                    value={field.value}
-                    onChange={field.onChange}
-                    placeholder="지역명 입력"
-                  />
-                  <RegionSuggestions value={field.value} onChange={field.onChange} />
-                </div>
-              )}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>공사 능력 · 실적</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <NumberField
-              label="연매출 (원)"
-              register={form.register("annual_revenue", { valueAsNumber: true })}
-              error={errors.annual_revenue?.message}
-              min={0}
-              step={10_000_000}
-            />
-            <NumberField
-              label="누적 낙찰 실적 (건)"
-              register={form.register("total_awards", { valueAsNumber: true })}
-              error={errors.total_awards?.message}
-              min={0}
-              step={1}
-            />
-            <NumberField
-              label="시공능력평가액 (원, 0=미입력)"
-              register={form.register("construction_capacity_amount", {
-                valueAsNumber: true
-              })}
-              error={errors.construction_capacity_amount?.message}
-              min={0}
-              step={10_000_000}
-            />
-            <NumberField
-              label="도급한도 (원, 0=미입력)"
-              register={form.register("awarded_contract_limit", { valueAsNumber: true })}
-              error={errors.awarded_contract_limit?.message}
-              min={0}
-              step={10_000_000}
-            />
-            <div className="sm:col-span-2">
-              <Controller
-                control={form.control}
-                name="capacity_score"
-                render={({ field }) => (
-                  <ThresholdControl
-                    label="수행 역량 (0~1)"
-                    value={field.value}
-                    onChange={field.onChange}
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    description="현재 동시 수행 가능한 역량 수준. 1에 가까울수록 여유."
-                    error={errors.capacity_score?.message}
-                  />
-                )}
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>공사 가능 금액</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <NumberField
-              label="최소 금액 (원)"
-              register={form.register("min_budget_estimate", { valueAsNumber: true })}
-              error={errors.min_budget_estimate?.message}
-              min={0}
-              step={1_000_000}
-            />
-            <NumberField
-              label="최대 금액 (원, 0=무제한)"
-              register={form.register("max_budget_estimate", { valueAsNumber: true })}
-              error={errors.max_budget_estimate?.message}
-              min={0}
-              step={1_000_000}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>선호 · 제외 조건</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Controller
-              control={form.control}
-              name="focus_categories"
-              render={({ field }) => (
-                <ChipInput
-                  label="중점 카테고리"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="공사, 용역 ..."
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="focus_regions"
-              render={({ field }) => (
-                <ChipInput
-                  label="중점 지역"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="서울, 경기 ..."
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="exclude_regions"
-              render={({ field }) => (
-                <ChipInput
-                  label="제외 지역"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="제외할 지역"
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="required_keywords"
-              render={({ field }) => (
-                <ChipInput
-                  label="필수 키워드"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="포함되어야 할 단어"
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="exclude_keywords"
-              render={({ field }) => (
-                <ChipInput
-                  label="제외 키워드"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="제외할 단어"
-                />
-              )}
-            />
-          </CardContent>
-        </Card>
-
-        <div className="flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => form.reset(formInitial)}
-            disabled={saving || !form.formState.isDirty}
-          >
-            되돌리기
-          </Button>
-          <Button type="submit" disabled={saving}>
-            {saving ? "저장 중" : "저장"}
-          </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => form.reset(formInitial)}
+                disabled={saving || !form.formState.isDirty}
+              >
+                되돌리기
+              </Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? "저장 중" : "저장"}
+              </Button>
+            </>
+          )}
         </div>
       </form>
 
@@ -372,6 +295,273 @@ export function CompanyInfoEditor() {
         <BacktestPanel />
       </aside>
     </div>
+  );
+}
+
+// ---------- Wizard sub-components ----------
+
+interface WizardProgressProps {
+  current: number;
+  total: number;
+  steps: readonly WizardStep[];
+}
+
+function WizardProgress({ current, total, steps }: WizardProgressProps) {
+  const active = steps[Math.min(current, steps.length - 1)];
+  const pct = Math.round(((current + 1) / total) * 100);
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3"
+      aria-label="등록 마법사 진행 상태"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-medium text-[var(--color-fg)]">
+          {active.title}
+        </span>
+        <span className="text-[11px] text-[var(--color-muted)] tabular-nums">
+          {current + 1} / {total}
+        </span>
+      </div>
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-border)]"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+      >
+        <div
+          className="h-full bg-[var(--color-primary)] transition-[width]"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="text-[11px] text-[var(--color-muted)]">{active.description}</p>
+    </div>
+  );
+}
+
+interface CardProps {
+  form: UseFormReturn<CompanyInfoFormValues>;
+  errors: UseFormReturn<CompanyInfoFormValues>["formState"]["errors"];
+}
+
+function BasicsCard({ form, errors }: CardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>기본 · 면허 · 지역</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-[var(--color-muted)]">업무 구분</span>
+          <select
+            className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 text-sm"
+            aria-label="업무 구분"
+            {...form.register("business_type")}
+          >
+            {BUSINESS_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {errors.business_type ? (
+            <span className="text-[11px] text-[var(--color-danger)]">
+              {errors.business_type.message}
+            </span>
+          ) : null}
+        </label>
+
+        <Controller
+          control={form.control}
+          name="license_codes"
+          render={({ field }) => (
+            <div className="flex flex-col gap-2">
+              <ChipInput
+                label="보유 면허"
+                value={field.value}
+                onChange={field.onChange}
+                placeholder="면허명 또는 코드 입력"
+              />
+              <LicenseSuggestions value={field.value} onChange={field.onChange} />
+            </div>
+          )}
+        />
+
+        <Controller
+          control={form.control}
+          name="region_codes"
+          render={({ field }) => (
+            <div className="flex flex-col gap-2">
+              <ChipInput
+                label="수행 지역"
+                value={field.value}
+                onChange={field.onChange}
+                placeholder="지역명 입력"
+              />
+              <RegionSuggestions value={field.value} onChange={field.onChange} />
+            </div>
+          )}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function CapacityCard({ form, errors }: CardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>공사 능력 · 실적</CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <NumberField
+          label="연매출 (원)"
+          register={form.register("annual_revenue", { valueAsNumber: true })}
+          error={errors.annual_revenue?.message}
+          min={0}
+          step={10_000_000}
+        />
+        <NumberField
+          label="누적 낙찰 실적 (건)"
+          register={form.register("total_awards", { valueAsNumber: true })}
+          error={errors.total_awards?.message}
+          min={0}
+          step={1}
+        />
+        <NumberField
+          label="시공능력평가액 (원, 0=미입력)"
+          register={form.register("construction_capacity_amount", {
+            valueAsNumber: true
+          })}
+          error={errors.construction_capacity_amount?.message}
+          min={0}
+          step={10_000_000}
+        />
+        <NumberField
+          label="도급한도 (원, 0=미입력)"
+          register={form.register("awarded_contract_limit", { valueAsNumber: true })}
+          error={errors.awarded_contract_limit?.message}
+          min={0}
+          step={10_000_000}
+        />
+        <div className="sm:col-span-2">
+          <Controller
+            control={form.control}
+            name="capacity_score"
+            render={({ field }) => (
+              <ThresholdControl
+                label="수행 역량 (0~1)"
+                value={field.value}
+                onChange={field.onChange}
+                min={0}
+                max={1}
+                step={0.05}
+                description="현재 동시 수행 가능한 역량 수준. 1에 가까울수록 여유."
+                error={errors.capacity_score?.message}
+              />
+            )}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BudgetCard({ form, errors }: CardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>공사 가능 금액</CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <NumberField
+          label="최소 금액 (원)"
+          register={form.register("min_budget_estimate", { valueAsNumber: true })}
+          error={errors.min_budget_estimate?.message}
+          min={0}
+          step={1_000_000}
+        />
+        <NumberField
+          label="최대 금액 (원, 0=무제한)"
+          register={form.register("max_budget_estimate", { valueAsNumber: true })}
+          error={errors.max_budget_estimate?.message}
+          min={0}
+          step={1_000_000}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function PreferencesCard({ form }: { form: UseFormReturn<CompanyInfoFormValues> }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>선호 · 제외 조건</CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Controller
+          control={form.control}
+          name="focus_categories"
+          render={({ field }) => (
+            <ChipInput
+              label="중점 카테고리"
+              value={field.value}
+              onChange={field.onChange}
+              placeholder="공사, 용역 ..."
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="focus_regions"
+          render={({ field }) => (
+            <ChipInput
+              label="중점 지역"
+              value={field.value}
+              onChange={field.onChange}
+              placeholder="서울, 경기 ..."
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="exclude_regions"
+          render={({ field }) => (
+            <ChipInput
+              label="제외 지역"
+              value={field.value}
+              onChange={field.onChange}
+              placeholder="제외할 지역"
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="required_keywords"
+          render={({ field }) => (
+            <ChipInput
+              label="필수 키워드"
+              value={field.value}
+              onChange={field.onChange}
+              placeholder="포함되어야 할 단어"
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="exclude_keywords"
+          render={({ field }) => (
+            <ChipInput
+              label="제외 키워드"
+              value={field.value}
+              onChange={field.onChange}
+              placeholder="제외할 단어"
+            />
+          )}
+        />
+      </CardContent>
+    </Card>
   );
 }
 

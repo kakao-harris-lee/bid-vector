@@ -434,4 +434,190 @@ describe("CompanyInfoEditor", () => {
     const activeButtons = Array.from(nav.querySelectorAll('[aria-current="page"]'));
     expect(activeButtons).toHaveLength(0);
   });
+
+  describe("등록 마법사 (profile_configured=false)", () => {
+    const freshProfile: OperatorProfileResponse = {
+      ...baseProfile,
+      license_codes: [],
+      region_codes: [],
+      profile_configured: false
+    };
+
+    it("profile_configured=false면 마법사 모드로 진입하고 첫 단계만 노출한다", async () => {
+      vi.stubGlobal("fetch", buildFetchMock({ profile: freshProfile }));
+
+      renderApp();
+
+      // 첫 단계 카드(기본·면허·지역)만 보여야 한다.
+      expect(
+        await screen.findByRole("heading", { name: "기본 · 면허 · 지역" })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "공사 능력 · 실적" })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "공사 가능 금액" })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "선호 · 제외 조건" })
+      ).not.toBeInTheDocument();
+
+      // 진행 라벨 + Next 버튼.
+      expect(screen.getByText(/단계 1 \/ 4/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "다음" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
+    });
+
+    it("다음/이전 버튼으로 단계가 진행·후퇴한다", async () => {
+      vi.stubGlobal("fetch", buildFetchMock({ profile: freshProfile }));
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "기본 · 면허 · 지역" });
+
+      // Step 1 → 2
+      await userEvent.click(screen.getByRole("button", { name: "다음" }));
+      expect(
+        await screen.findByRole("heading", { name: "공사 능력 · 실적" })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "기본 · 면허 · 지역" })
+      ).not.toBeInTheDocument();
+      expect(screen.getByText(/단계 2 \/ 4/)).toBeInTheDocument();
+
+      // Step 2 → 3
+      await userEvent.click(screen.getByRole("button", { name: "다음" }));
+      expect(
+        await screen.findByRole("heading", { name: "공사 가능 금액" })
+      ).toBeInTheDocument();
+
+      // Step 3 → 4 (마지막)
+      await userEvent.click(screen.getByRole("button", { name: "다음" }));
+      expect(
+        await screen.findByRole("heading", { name: "선호 · 제외 조건" })
+      ).toBeInTheDocument();
+      // 마지막 단계는 "다음" 대신 "저장하고 마치기".
+      expect(
+        screen.queryByRole("button", { name: "다음" })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "저장하고 마치기" })
+      ).toBeInTheDocument();
+
+      // 뒤로 돌아가기 (4 → 3)
+      await userEvent.click(screen.getByRole("button", { name: "이전" }));
+      expect(
+        await screen.findByRole("heading", { name: "공사 가능 금액" })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "선호 · 제외 조건" })
+      ).not.toBeInTheDocument();
+    });
+
+    it("마지막 단계의 '저장하고 마치기' 클릭 시 profile + strategy PUT를 모두 호출한다", async () => {
+      const fetchMock = buildFetchMock({ profile: freshProfile });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "기본 · 면허 · 지역" });
+      await userEvent.click(screen.getByRole("button", { name: "다음" })); // → capacity
+      await userEvent.click(screen.getByRole("button", { name: "다음" })); // → budget
+      await userEvent.click(screen.getByRole("button", { name: "다음" })); // → preferences
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "저장하고 마치기" })
+      );
+
+      await waitFor(() => {
+        expect(
+          findCall(
+            fetchMock,
+            (url, init) =>
+              url.endsWith("/api/v1/operator/profile") && init?.method === "PUT"
+          )
+        ).toBeDefined();
+      });
+
+      const profileCall = findCall(
+        fetchMock,
+        (url, init) =>
+          url.endsWith("/api/v1/operator/profile") && init?.method === "PUT"
+      );
+      const strategyCall = findCall(
+        fetchMock,
+        (url, init) =>
+          url.endsWith("/api/v1/operator/strategy") && init?.method === "PUT"
+      );
+      expect(strategyCall).toBeDefined();
+
+      const profileBody = parseBody(profileCall?.[1] as RequestInit);
+      const strategyBody = parseBody(strategyCall?.[1] as RequestInit);
+
+      // 동일 저장 로직 재사용: profile은 profile 필드만, strategy는 임계값 제외 partial.
+      expect(profileBody).toHaveProperty("business_type");
+      expect(profileBody).toHaveProperty("license_codes");
+      expect(profileBody).toHaveProperty("region_codes");
+      expect(profileBody).toHaveProperty("annual_revenue");
+      expect(profileBody).toHaveProperty("construction_capacity_amount");
+      expect(profileBody).toHaveProperty("awarded_contract_limit");
+      expect(strategyBody).toHaveProperty("min_budget_estimate");
+      expect(strategyBody).toHaveProperty("max_budget_estimate");
+      expect(strategyBody).toHaveProperty("focus_categories");
+      expect(strategyBody).not.toHaveProperty("minimum_match_score");
+      expect(strategyBody).not.toHaveProperty("bid_now_threshold");
+      expect(strategyBody).not.toHaveProperty("review_threshold");
+    });
+
+    it("profile_configured=true면 마법사 미진입 — 모든 카드가 한 번에 보인다", async () => {
+      vi.stubGlobal("fetch", buildFetchMock());
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+
+      expect(
+        screen.getByRole("heading", { name: "기본 · 면허 · 지역" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "공사 능력 · 실적" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "공사 가능 금액" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "선호 · 제외 조건" })
+      ).toBeInTheDocument();
+      // single 모드 액션 버튼.
+      expect(screen.getByRole("button", { name: "저장" })).toBeInTheDocument();
+      // 단계 progress 라벨은 표시되지 않는다.
+      expect(screen.queryByText(/단계 \d+ \/ \d+/)).not.toBeInTheDocument();
+    });
+
+    it("헤더 토글로 single ↔ 마법사 전환이 동작한다", async () => {
+      vi.stubGlobal("fetch", buildFetchMock());
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+      // 처음(profile_configured=true)에는 single 모드 → "단계별 가이드" 버튼.
+      const toGuide = screen.getByRole("button", { name: "단계별 가이드" });
+      await userEvent.click(toGuide);
+
+      // 마법사 진입: 첫 단계만 노출.
+      expect(
+        await screen.findByText(/단계 1 \/ 4/)
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "공사 능력 · 실적" })
+      ).not.toBeInTheDocument();
+
+      // 다시 single 모드로.
+      await userEvent.click(screen.getByRole("button", { name: "전체 보기" }));
+      expect(
+        await screen.findByRole("heading", { name: "공사 능력 · 실적" })
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/단계 \d+ \/ \d+/)).not.toBeInTheDocument();
+    });
+  });
 });
