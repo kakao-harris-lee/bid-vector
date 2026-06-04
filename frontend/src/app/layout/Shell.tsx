@@ -8,6 +8,7 @@ import {
   Beaker,
   Bell,
   BookOpen,
+  Building2,
   CheckCircle2,
   FlaskConical,
   Clock3,
@@ -38,6 +39,7 @@ export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon:
   results: { path: "/dashboard/results", label: "결과", icon: Trophy }
 };
 
+export const PROFILE_ROUTE_PATH = "/dashboard/profile";
 export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
 export const PROJECTS_ROUTE_PATH = "/dashboard/projects";
 export const DECISIONS_ROUTE_PATH = "/dashboard/decisions";
@@ -61,6 +63,7 @@ export function routeKeyFromPath(pathname: string): RouteKey {
  */
 export function bottomNavKeyForPath(pathname: string): RouteKey | null {
   if (pathname.startsWith(GUIDE_ROUTE_PATH)) return null;
+  if (pathname.startsWith(PROFILE_ROUTE_PATH)) return null;
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return null;
   if (pathname.startsWith(DECISIONS_ROUTE_PATH)) return null;
@@ -72,6 +75,7 @@ export function bottomNavKeyForPath(pathname: string): RouteKey | null {
 
 function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(GUIDE_ROUTE_PATH)) return "이용 가이드";
+  if (pathname.startsWith(PROFILE_ROUTE_PATH)) return "업체 정보";
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return "공고 탐색";
   if (pathname.startsWith(DECISIONS_ROUTE_PATH)) return "결정 게이트웨이";
@@ -103,6 +107,7 @@ export function Shell() {
 
   const headerDate = summary.data?.today ?? new Date().toISOString();
   const pageTitle = pageTitleForPath(location.pathname);
+  const onProfile = location.pathname.startsWith(PROFILE_ROUTE_PATH);
   const onStrategy = location.pathname.startsWith(STRATEGY_ROUTE_PATH);
   const onProjects = location.pathname.startsWith(PROJECTS_ROUTE_PATH);
   const onDecisions = location.pathname.startsWith(DECISIONS_ROUTE_PATH);
@@ -165,6 +170,12 @@ export function Shell() {
             onClick={() => navigate(onOperations ? ROUTE_LABELS.home.path : OPERATIONS_ROUTE_PATH)}
           >
             <HeartPulse size={18} />
+          </IconButton>
+          <IconButton
+            label="업체 정보"
+            onClick={() => navigate(onProfile ? ROUTE_LABELS.home.path : PROFILE_ROUTE_PATH)}
+          >
+            <Building2 size={18} />
           </IconButton>
           <IconButton
             label="전략 편집"

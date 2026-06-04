@@ -10,6 +10,9 @@ export const queryKeys = {
     results: () => ["dashboard", "results"] as const,
     paperSummary: () => ["dashboard", "paper-summary"] as const
   },
+  profile: {
+    detail: () => ["profile", "detail"] as const
+  },
   strategy: {
     detail: () => ["strategy", "detail"] as const,
     candidates: (limit?: number, highPriorityOnly?: boolean) =>

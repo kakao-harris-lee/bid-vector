@@ -14,6 +14,9 @@ import { GuideScreen } from "@/features/guide";
 const StrategyEditor = lazy(() =>
   import("@/features/strategy").then((mod) => ({ default: mod.StrategyEditor }))
 );
+const CompanyInfoEditor = lazy(() =>
+  import("@/features/profile").then((mod) => ({ default: mod.CompanyInfoEditor }))
+);
 const ProjectsScreen = lazy(() =>
   import("@/features/projects").then((mod) => ({ default: mod.ProjectsScreen }))
 );
@@ -59,6 +62,7 @@ export function AppRoutes() {
         <Route path="bids" element={<BidsScreen />} />
         <Route path="results" element={<ResultsScreen />} />
         <Route path="strategy" element={<Lazy><StrategyEditor /></Lazy>} />
+        <Route path="profile" element={<Lazy><CompanyInfoEditor /></Lazy>} />
         <Route path="projects" element={<Lazy><ProjectsScreen /></Lazy>} />
         <Route path="projects/:id" element={<Lazy><ProjectDetailScreen /></Lazy>} />
         <Route path="decisions" element={<Lazy><DecisionsScreen /></Lazy>} />
