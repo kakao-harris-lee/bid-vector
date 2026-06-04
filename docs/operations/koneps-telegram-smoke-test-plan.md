@@ -234,6 +234,8 @@ PY
 - 운영자가 "결정/투찰 알림" 카드 메시지 + inline 버튼 수신
 - 사후: 합성 record 삭제됨 (`BidDecisionRecord` 정합성)
 
+> 주의: 이 phase는 송신 smoke이므로 합성 record 삭제 후에는 수신된 inline 버튼이 더 이상 유효하지 않다. 버튼 콜백까지 검증하려면 record를 삭제하기 전에 버튼을 누르거나 별도 callback smoke에서 active record를 유지한다.
+
 ## 5. 실행 순서
 
 1. 사전 조건 체크리스트 모두 통과

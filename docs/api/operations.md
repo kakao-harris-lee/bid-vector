@@ -897,7 +897,7 @@ curl -X POST http://localhost:3000/api/v1/operations/telegram/webhook \
 
 ## POST /api/v1/operations/telegram/sync
 
-대기 중인 텔레그램 업데이트를 수동으로 가져와 즉시 처리합니다(long-poll 방식). webhook을 쓰지 않는 환경이나 밀린 업데이트를 직접 비울 때 사용합니다.
+대기 중인 텔레그램 업데이트를 수동으로 가져와 즉시 처리합니다(long-poll 방식). webhook을 쓰지 않는 환경이나 밀린 업데이트를 직접 비울 때 사용합니다. 운영에서 webhook 없이 버튼/명령을 자동 처리하려면 `TELEGRAM_POLLING_SCHEDULE_ENABLED=true`와 `TELEGRAM_POLLING_INTERVAL_SECONDS`로 Celery beat polling을 켭니다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
