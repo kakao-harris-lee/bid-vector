@@ -28,6 +28,7 @@ from app.schemas.schemas import (
     DashboardOpportunityListResponse,
     DashboardResultListResponse,
     DashboardSummaryResponse,
+    _extract_decision_reasons,
 )
 
 router = APIRouter()
@@ -231,6 +232,7 @@ def _serialize_opportunity(record: BidDecisionRecord, *, now) -> dict:
         if record.deadline_hours_remaining is not None
         else _hours_until(project.deadline if project is not None else None, now=now)
     )
+    strengths, risk_flags = _extract_decision_reasons(record.score_breakdown)
     return {
         "source": "decision",
         "source_label": "입찰 판단",
@@ -246,6 +248,8 @@ def _serialize_opportunity(record: BidDecisionRecord, *, now) -> dict:
         "urgency_score": float(record.urgency_score or 0.0),
         "deadline_hours_remaining": deadline_hours,
         "reasoning": record.reasoning or "",
+        "strengths": strengths,
+        "risk_flags": risk_flags,
         "updated_at": record.updated_at,
         "detail_href": f"/api/v1/operations/bid-decisions/{record.id}",
     }

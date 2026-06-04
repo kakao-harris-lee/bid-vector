@@ -6,11 +6,39 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 try:  # pragma: no cover - optional dependency fallback
     import email_validator  # noqa: F401
-    from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+    from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 except ImportError:  # pragma: no cover - exercised in lightweight test environments
-    from pydantic import BaseModel, ConfigDict, Field, field_validator
+    from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
     EmailStr = str
+
+
+def _extract_decision_reasons(score_breakdown) -> tuple[list[str], list[str]]:
+    """Parse persisted strengths/risk_flags out of a score_breakdown blob.
+
+    The score_breakdown column stores decision signals as JSON text. Decision
+    reasons (strengths/risk_flags) are merged into the same blob so they can be
+    persisted without a schema migration. Older records that predate this merge
+    simply lack the keys and resolve to empty lists.
+    """
+    if score_breakdown is None or score_breakdown == "":
+        return [], []
+    if isinstance(score_breakdown, str):
+        try:
+            parsed = json.loads(score_breakdown)
+        except json.JSONDecodeError:
+            return [], []
+    else:
+        parsed = score_breakdown
+    if not isinstance(parsed, dict):
+        return [], []
+
+    def _as_str_list(value) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if isinstance(item, str) and item]
+
+    return _as_str_list(parsed.get("strengths")), _as_str_list(parsed.get("risk_flags"))
 
 
 # User Schemas
@@ -195,6 +223,8 @@ class DashboardOpportunityItem(BaseModel):
     urgency_score: float = Field(ge=0.0, le=1.0)
     deadline_hours_remaining: Optional[int] = None
     reasoning: str = ""
+    strengths: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
     updated_at: datetime
     detail_href: str
 
@@ -1760,6 +1790,14 @@ class BidDecisionSaveRequest(BidDecisionRequest):
     decision_status: Optional[
         Literal["planned", "reviewing", "submitted", "skipped"]
     ] = None
+    strengths: List[str] = Field(
+        default_factory=list,
+        description="Why this notice is pursuable; persisted into score_breakdown.",
+    )
+    risk_flags: List[str] = Field(
+        default_factory=list,
+        description="Why this notice is risky; persisted into score_breakdown.",
+    )
 
 
 class BidDecisionRecordResponse(BaseModel):
@@ -1791,10 +1829,52 @@ class BidDecisionRecordResponse(BaseModel):
     score_breakdown: BidDecisionScoreBreakdown = Field(
         default_factory=BidDecisionScoreBreakdown
     )
+    strengths: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
     reasoning: str
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hydrate_decision_reasons(cls, data):
+        """Lift strengths/risk_flags out of the persisted score_breakdown blob.
+
+        ORM records expose score_breakdown as JSON text and have no dedicated
+        columns for decision reasons, so derive the list fields from that blob
+        when they are not supplied explicitly.
+        """
+        raw_breakdown = None
+        explicit_strengths = None
+        explicit_risk_flags = None
+        if isinstance(data, dict):
+            raw_breakdown = data.get("score_breakdown")
+            explicit_strengths = data.get("strengths")
+            explicit_risk_flags = data.get("risk_flags")
+        else:
+            raw_breakdown = getattr(data, "score_breakdown", None)
+            explicit_strengths = getattr(data, "strengths", None)
+            explicit_risk_flags = getattr(data, "risk_flags", None)
+
+        if explicit_strengths is not None and explicit_risk_flags is not None:
+            return data
+
+        derived_strengths, derived_risk_flags = _extract_decision_reasons(raw_breakdown)
+
+        if isinstance(data, dict):
+            payload = dict(data)
+        else:
+            payload = {
+                field: getattr(data, field)
+                for field in cls.model_fields
+                if hasattr(data, field)
+            }
+        if explicit_strengths is None:
+            payload["strengths"] = derived_strengths
+        if explicit_risk_flags is None:
+            payload["risk_flags"] = derived_risk_flags
+        return payload
 
     @field_validator("score_breakdown", mode="before")
     @classmethod

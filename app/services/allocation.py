@@ -201,12 +201,39 @@ class BidDecisionService:
         record.max_active_bids = request.max_active_bids
         record.current_workload_score = request.current_workload_score
         record.workload_source = decision.get("workload_source", request.workload_source)
-        record.score_breakdown = json.dumps(decision.get("score_breakdown") or {}, ensure_ascii=False)
+        record.score_breakdown = self._serialize_score_breakdown(
+            decision.get("score_breakdown") or {},
+            strengths=getattr(request, "strengths", None) or [],
+            risk_flags=getattr(request, "risk_flags", None) or [],
+        )
         record.reasoning = decision["reasoning"]
 
         db.commit()
         db.refresh(record)
         return record
+
+    def _serialize_score_breakdown(
+        self,
+        signals: dict,
+        *,
+        strengths: list[str],
+        risk_flags: list[str],
+    ) -> str:
+        """Merge decision reasons into the score-breakdown JSON blob.
+
+        Decision signals and the human-facing strengths/risk_flags share the
+        same Text column so reasons can be persisted without a schema change.
+        Signal keys are preserved as-is; reason lists are stored under the
+        dedicated ``strengths``/``risk_flags`` keys (empty lists stay omitted).
+        """
+        payload: dict = dict(signals or {})
+        normalized_strengths = [str(item) for item in (strengths or []) if str(item)]
+        normalized_risk_flags = [str(item) for item in (risk_flags or []) if str(item)]
+        if normalized_strengths:
+            payload["strengths"] = normalized_strengths
+        if normalized_risk_flags:
+            payload["risk_flags"] = normalized_risk_flags
+        return json.dumps(payload, ensure_ascii=False)
 
     def get_decision_detail(self, db: Session, decision_record_id: int, timeline_limit: int = 10) -> dict:
         """Return one persisted decision record with project context and project-level history."""
