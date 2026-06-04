@@ -37,7 +37,7 @@
     "section_budget": "공사 가능 금액",
     "section_preferences": "선호 · 제외 조건",
     "license_suggestions": "추천 면허 (클릭하면 추가)",
-    "license_match_note": "⚠ 표시 없는 면허만 공고 요구 면허와 자동 매칭됩니다. 그 외는 기록용입니다.",
+    "license_match_note": "추천 면허는 모두 공고 요구 면허와 자동 매칭됩니다.",
     "region_suggestions": "추천 지역 (클릭하면 추가)",
     "backtest_title": "이 프로필로 백테스트",
     "backtest_subtitle": "저장한 면허·지역·예산이 과거 공고 매칭을 어떻게 바꾸는지 즉시 확인합니다.",
