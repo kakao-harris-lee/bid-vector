@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 from datetime import date, timedelta
 from typing import Any
 
@@ -9,9 +11,31 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
-from app.models.models import BidDecisionRecord, DecisionExperimentRun
+from app.models.models import Analytics, BidDecisionRecord, DecisionExperimentRun
 from app.schemas.schemas import _extract_decision_reasons
 from app.services.prediction_feedback import PredictionFeedbackService
+
+
+def parse_analytics_event_data(raw: str | None) -> dict[str, Any]:
+    """Decode a persisted ``Analytics.event_data`` string back into a dict.
+
+    Events written after the JSON round-trip fix store valid JSON. Legacy rows
+    persisted with ``str(dict)`` (Python repr, single quotes) are recovered via
+    ``ast.literal_eval``. Any unparseable or non-mapping payload yields ``{}``.
+    """
+    if not raw:
+        return {}
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        decoded = json.loads(text)
+    except (ValueError, TypeError):
+        try:
+            decoded = ast.literal_eval(text)
+        except (ValueError, SyntaxError, TypeError):
+            return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 class DecisionAnalyticsService:
@@ -293,6 +317,17 @@ class DecisionAnalyticsService:
             now=now,
             limit=missed_limit,
         )
+        review_time = self._build_review_time_kpi(
+            db,
+            operator_id=operator.id,
+            decisions=decisions,
+            start_at=current_period_start,
+        )
+        recommendation_feedback = self._build_recommendation_feedback_kpi(
+            db,
+            operator_id=operator.id,
+            start_at=current_period_start,
+        )
 
         return {
             "operator_id": operator.id,
@@ -318,7 +353,140 @@ class DecisionAnalyticsService:
                 "recommendation_within_3_percent_count": int(feedback.get("recommendation_within_3_percent_count") or 0),
             },
             "missed_opportunities": missed_opportunities,
+            "review_time": review_time,
+            "recommendation_feedback": recommendation_feedback,
         }
+
+    def _load_events_in_range(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        event_type: str,
+        start_at,
+    ) -> list[Analytics]:
+        """Return one operator's analytics events of a single type since ``start_at``."""
+        return (
+            db.query(Analytics)
+            .filter(
+                Analytics.user_id == operator_id,
+                Analytics.event_type == event_type,
+                Analytics.timestamp >= start_at,
+            )
+            .order_by(Analytics.timestamp.asc(), Analytics.id.asc())
+            .all()
+        )
+
+    def _build_review_time_kpi(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        decisions: list[BidDecisionRecord],
+        start_at,
+    ) -> dict[str, Any]:
+        """KPI (a): time between first opening a tender and first deciding on it.
+
+        Joins ``project_view`` events (with ``event_data.project_id``) to the
+        period's decisions on project id, requiring the view to precede the
+        decision's ``first_decided_at``. Only matched decisions contribute to the
+        average; the earliest qualifying view is used per decision.
+        """
+        view_events = self._load_events_in_range(
+            db,
+            operator_id=operator_id,
+            event_type="project_view",
+            start_at=start_at,
+        )
+        earliest_view_by_project: dict[int, Any] = {}
+        for event in view_events:
+            payload = parse_analytics_event_data(event.event_data)
+            project_id = self._coerce_int(payload.get("project_id"))
+            if project_id is None or event.timestamp is None:
+                continue
+            viewed_at = ensure_utc(event.timestamp)
+            existing = earliest_view_by_project.get(project_id)
+            if existing is None or viewed_at < existing:
+                earliest_view_by_project[project_id] = viewed_at
+
+        review_seconds: list[float] = []
+        for decision in decisions:
+            if decision.project_id is None:
+                continue
+            decided_at = decision.first_decided_at
+            if decided_at is None:
+                continue
+            first_view = earliest_view_by_project.get(int(decision.project_id))
+            if first_view is None:
+                continue
+            decided_at = ensure_utc(decided_at)
+            if first_view > decided_at:
+                continue
+            review_seconds.append((decided_at - first_view).total_seconds())
+
+        average_seconds = self._average(review_seconds)
+        average_minutes = (
+            round(average_seconds / 60, 4) if average_seconds is not None else None
+        )
+        return {
+            "average_review_minutes": average_minutes,
+            "sample_count": len(review_seconds),
+        }
+
+    def _build_recommendation_feedback_kpi(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        start_at,
+    ) -> dict[str, Any]:
+        """KPI (c): operator usefulness votes on recommendations.
+
+        Aggregates ``recommendation_feedback`` events, keeping only the latest
+        verdict per ``decision_record_id`` (events are loaded ascending, so a later
+        event overwrites an earlier one). ``review_value_rate`` is the share of
+        useful verdicts among rated decisions.
+        """
+        feedback_events = self._load_events_in_range(
+            db,
+            operator_id=operator_id,
+            event_type="recommendation_feedback",
+            start_at=start_at,
+        )
+        latest_verdict_by_decision: dict[int, str] = {}
+        for event in feedback_events:
+            payload = parse_analytics_event_data(event.event_data)
+            decision_record_id = self._coerce_int(payload.get("decision_record_id"))
+            verdict = str(payload.get("verdict") or "").strip().lower()
+            if decision_record_id is None or verdict not in {"useful", "not_useful"}:
+                continue
+            # Events are ordered oldest-first, so the last write wins (latest verdict).
+            latest_verdict_by_decision[decision_record_id] = verdict
+
+        useful_count = sum(1 for verdict in latest_verdict_by_decision.values() if verdict == "useful")
+        not_useful_count = sum(
+            1 for verdict in latest_verdict_by_decision.values() if verdict == "not_useful"
+        )
+        return {
+            "useful_count": useful_count,
+            "not_useful_count": not_useful_count,
+            "review_value_rate": self._rate(useful_count, useful_count + not_useful_count),
+            "feedback_count": len(latest_verdict_by_decision),
+        }
+
+    def _coerce_int(self, value: Any) -> int | None:
+        """Best-effort coercion of event payload identifiers to int."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if text.lstrip("-").isdigit():
+                return int(text)
+        return None
 
     def _build_manual_override_kpi(self, decisions: list[BidDecisionRecord]) -> dict[str, Any]:
         """KPI (d): share of decisions the operator changed from the initial recommendation."""
