@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy.orm import Session
 
 from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_recommendation
@@ -17,6 +19,85 @@ from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.operator_strategy_tuning import resolve_category_priority_override
+
+
+# Construction-specific risk signals (v1) — keyword/regex heuristics applied only
+# when the notice is classified as construction. Each tuple is
+# (category_id, compiled_pattern, reason_text). Ordered so reasons render in a
+# stable sequence. One reason per category_id is appended to risk_flags even if
+# multiple patterns in the same category match.
+_CONSTRUCTION_RISK_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    # Region-restricted joint-venture is matched FIRST so its more specific
+    # signal wins when the text uses 지역의무공동도급 (which also contains
+    # 공동도급). Categories are deduplicated, so a generic 공동도급 hit will
+    # NOT also trigger when the region variant already matched, but the
+    # opposite would erroneously fire generic-only — hence ordering matters.
+    (
+        "region_joint_venture",
+        re.compile(r"지역\s*의무\s*공동\s*도급|지역\s*의무\s*공동\s*수급|지역\s*제한|지역\s*업체|해당\s*지역\s*소재"),
+        "지역의무공동도급 또는 지역 제한 요건이 명시돼 있어 해당 지역 파트너/소재가 필요합니다.",
+    ),
+    (
+        "joint_venture",
+        re.compile(r"공동\s*도급|공동\s*수급(?:체)?|컨소시엄|\bjv\b"),
+        "공동도급/공동수급체 구성이 요구됩니다. 파트너 확보·지분 협상이 필요합니다.",
+    ),
+    (
+        "similar_experience",
+        re.compile(r"유사\s*실적|동종\s*실적|최근\s*\d+\s*년\s*실적|시공\s*실적|납품\s*실적"),
+        "유사 실적/시공실적 요건이 명시돼 있어 운영자 실적 증빙이 필요합니다.",
+    ),
+    (
+        "region_bonus",
+        re.compile(r"지역\s*가산(?:점)?|소재지\s*가산|본사\s*가산"),
+        "지역 가산점/소재지 가산 조건이 있어 비지역 업체는 점수 불리할 수 있습니다.",
+    ),
+)
+
+
+def _is_construction_project(project: Project) -> bool:
+    """Decide whether to run construction-specific risk heuristics on this notice.
+
+    Construction guard: signals only fire when the project category normalizes
+    to a construction tag. This keeps unrelated software/goods notices that
+    happen to mention 공동도급/유사실적 in different domain contexts from
+    raising construction-flavored risk reasons.
+    """
+    raw_category = (getattr(project, "category", None) or "").strip().lower()
+    if not raw_category:
+        return False
+    # Direct hits + common Korean aliases used across the codebase.
+    if raw_category in {"construction", "공사", "건설"}:
+        return True
+    # Tolerant prefix/suffix forms (e.g. "construction-civil", "건축공사", "토목공사업").
+    if "construction" in raw_category:
+        return True
+    if "공사" in raw_category or "건설" in raw_category:
+        return True
+    return False
+
+
+def _detect_construction_risk_reasons(project: Project) -> list[str]:
+    """Return ordered, deduplicated construction risk reasons matched on the notice text."""
+    if not _is_construction_project(project):
+        return []
+
+    parts = [getattr(project, "title", None) or "",
+             getattr(project, "description", None) or "",
+             getattr(project, "requirements", None) or ""]
+    notice_text = " ".join(part for part in parts if part).lower()
+    if not notice_text:
+        return []
+
+    matched: list[str] = []
+    seen_categories: set[str] = set()
+    for category_id, pattern, reason in _CONSTRUCTION_RISK_PATTERNS:
+        if category_id in seen_categories:
+            continue
+        if pattern.search(notice_text):
+            matched.append(reason)
+            seen_categories.add(category_id)
+    return matched
 
 
 class OpportunityAnalysisService:
@@ -196,6 +277,7 @@ class OpportunityAnalysisService:
             deadline_hours_remaining=deadline_hours_remaining,
             expected_margin_score=expected_margin_score,
             execution_complexity_score=execution_complexity_score,
+            project=project,
         )
         if category_priority_override > 0:
             strengths.append(
@@ -561,6 +643,7 @@ class OpportunityAnalysisService:
         deadline_hours_remaining: int | None,
         expected_margin_score: float,
         execution_complexity_score: float,
+        project: Project | None = None,
     ) -> list[str]:
         """Highlight the main risks or constraints that still need human review."""
         risks: list[str] = []
@@ -587,6 +670,9 @@ class OpportunityAnalysisService:
 
         if deadline_hours_remaining is not None and deadline_hours_remaining <= 6:
             risks.append("마감 시간이 매우 촉박해 즉시 대응 체계가 필요합니다.")
+
+        if project is not None:
+            risks.extend(_detect_construction_risk_reasons(project))
 
         return risks
 
