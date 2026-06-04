@@ -4,7 +4,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.models.models import BidDecisionRecord, PricePrediction, Project, TenderResult
+import json
+
+from app.models.models import (
+    Analytics,
+    BidDecisionRecord,
+    PricePrediction,
+    Project,
+    TenderResult,
+)
 
 
 def _bootstrap_operator(
@@ -386,3 +394,202 @@ def test_operations_kpi_is_safe_with_no_data(client):
     assert accuracy["average_recommendation_error_rate"] is None
 
     assert payload["missed_opportunities"] == {"missed_count": 0, "items": []}
+
+    assert payload["review_time"] == {
+        "average_review_minutes": None,
+        "sample_count": 0,
+    }
+    assert payload["recommendation_feedback"] == {
+        "useful_count": 0,
+        "not_useful_count": 0,
+        "review_value_rate": None,
+        "feedback_count": 0,
+    }
+
+
+def _log_event(client, event_type, event_data):
+    response = client.post(
+        "/api/v1/analytics/event",
+        json={"event_type": event_type, "event_data": event_data},
+    )
+    assert response.status_code == 200
+    return response
+
+
+def test_operations_kpi_review_time_joins_views_to_decisions(client, test_db):
+    """KPI (a): review minutes average only decisions matched to a prior project_view."""
+    operator_id = _bootstrap_operator(
+        client, username="review-time-operator", email="review-time@example.com"
+    ).json()["id"]
+    now = datetime.now(UTC)
+
+    matched_project = _make_project(test_db, title="Matched View")
+    no_view_project = _make_project(test_db, title="No View")
+    view_after_project = _make_project(test_db, title="View After Decision")
+
+    decided_at = now - timedelta(hours=2)
+    test_db.add_all(
+        [
+            # 30 minutes between earliest view and the decision.
+            BidDecisionRecord(
+                project_id=matched_project,
+                operator_id=operator_id,
+                action="bid_now",
+                decision_status="planned",
+                initial_action="bid_now",
+                initial_decision_status="planned",
+                priority_score=0.8,
+                first_decided_at=decided_at,
+                created_at=decided_at,
+                updated_at=decided_at,
+            ),
+            # No matching view event -> excluded from sample.
+            BidDecisionRecord(
+                project_id=no_view_project,
+                operator_id=operator_id,
+                action="review",
+                decision_status="reviewing",
+                initial_action="review",
+                initial_decision_status="reviewing",
+                priority_score=0.6,
+                first_decided_at=now - timedelta(hours=3),
+                created_at=now - timedelta(hours=3),
+                updated_at=now - timedelta(hours=3),
+            ),
+            # View happens AFTER the decision -> excluded.
+            BidDecisionRecord(
+                project_id=view_after_project,
+                operator_id=operator_id,
+                action="review",
+                decision_status="reviewing",
+                initial_action="review",
+                initial_decision_status="reviewing",
+                priority_score=0.5,
+                first_decided_at=now - timedelta(hours=4),
+                created_at=now - timedelta(hours=4),
+                updated_at=now - timedelta(hours=4),
+            ),
+        ]
+    )
+    # Two views for matched project: earliest one (40 min before) must be used.
+    test_db.add_all(
+        [
+            Analytics(
+                user_id=operator_id,
+                event_type="project_view",
+                event_data=json.dumps({"project_id": matched_project}),
+                timestamp=decided_at - timedelta(minutes=40),
+            ),
+            Analytics(
+                user_id=operator_id,
+                event_type="project_view",
+                event_data=json.dumps({"project_id": matched_project}),
+                timestamp=decided_at - timedelta(minutes=30),
+            ),
+            # View strictly after the decision -> must not match.
+            Analytics(
+                user_id=operator_id,
+                event_type="project_view",
+                event_data=json.dumps({"project_id": view_after_project}),
+                timestamp=(now - timedelta(hours=4)) + timedelta(minutes=10),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/operations-kpi", params={"days": 30})
+    assert response.status_code == 200
+    review_time = response.json()["review_time"]
+    # Only the matched decision contributes; earliest view = 40 minutes before.
+    assert review_time["sample_count"] == 1
+    assert review_time["average_review_minutes"] == pytest.approx(40.0, abs=0.0001)
+
+
+def test_operations_kpi_recommendation_feedback_uses_latest_verdict(client, test_db):
+    """KPI (c): only the latest verdict per decision counts; rate excludes empty denom."""
+    operator_id = _bootstrap_operator(
+        client, username="rec-feedback-operator", email="rec-feedback@example.com"
+    ).json()["id"]
+
+    useful_project = _make_project(test_db, title="Useful Rec")
+    flipped_project = _make_project(test_db, title="Flipped Rec")
+    not_useful_project = _make_project(test_db, title="Not Useful Rec")
+
+    useful_decision = BidDecisionRecord(
+        project_id=useful_project,
+        operator_id=operator_id,
+        action="bid_now",
+        decision_status="planned",
+        initial_action="bid_now",
+        initial_decision_status="planned",
+        priority_score=0.8,
+    )
+    flipped_decision = BidDecisionRecord(
+        project_id=flipped_project,
+        operator_id=operator_id,
+        action="review",
+        decision_status="reviewing",
+        initial_action="review",
+        initial_decision_status="reviewing",
+        priority_score=0.6,
+    )
+    not_useful_decision = BidDecisionRecord(
+        project_id=not_useful_project,
+        operator_id=operator_id,
+        action="review",
+        decision_status="reviewing",
+        initial_action="review",
+        initial_decision_status="reviewing",
+        priority_score=0.5,
+    )
+    test_db.add_all([useful_decision, flipped_decision, not_useful_decision])
+    test_db.flush()
+
+    # decision A -> useful (single vote)
+    _log_event(
+        client,
+        "recommendation_feedback",
+        {
+            "decision_record_id": useful_decision.id,
+            "project_id": useful_project,
+            "verdict": "useful",
+        },
+    )
+    # decision B -> useful then not_useful: only the latest (not_useful) counts.
+    _log_event(
+        client,
+        "recommendation_feedback",
+        {
+            "decision_record_id": flipped_decision.id,
+            "project_id": flipped_project,
+            "verdict": "useful",
+        },
+    )
+    _log_event(
+        client,
+        "recommendation_feedback",
+        {
+            "decision_record_id": flipped_decision.id,
+            "project_id": flipped_project,
+            "verdict": "not_useful",
+        },
+    )
+    # decision C -> not_useful
+    _log_event(
+        client,
+        "recommendation_feedback",
+        {
+            "decision_record_id": not_useful_decision.id,
+            "project_id": not_useful_project,
+            "verdict": "not_useful",
+        },
+    )
+
+    response = client.get("/api/v1/analytics/operations-kpi", params={"days": 30})
+    assert response.status_code == 200
+    feedback = response.json()["recommendation_feedback"]
+    # A useful, B not_useful (latest), C not_useful -> 1 useful, 2 not_useful.
+    assert feedback["useful_count"] == 1
+    assert feedback["not_useful_count"] == 2
+    assert feedback["feedback_count"] == 3
+    assert feedback["review_value_rate"] == pytest.approx(1 / 3, abs=0.0001)

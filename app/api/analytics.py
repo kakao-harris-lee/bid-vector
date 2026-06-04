@@ -1,4 +1,5 @@
 """Analytics routes"""
+import json
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -56,7 +57,7 @@ def log_event(event: AnalyticsEventRequest, db: Session = Depends(get_db)):
     analytics = Analytics(
         user_id=operator.id,
         event_type=event.event_type,
-        event_data=str(event.event_data),
+        event_data=json.dumps(event.event_data, ensure_ascii=False),
     )
     db.add(analytics)
     db.commit()

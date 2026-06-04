@@ -1359,8 +1359,24 @@ class OperationsKpiMissedOpportunities(BaseModel):
     items: List[OperationsKpiMissedOpportunityItem] = Field(default_factory=list)
 
 
+class OperationsKpiReviewTime(BaseModel):
+    """Review-time KPI (a): minutes between first viewing a tender and deciding."""
+
+    average_review_minutes: Optional[float] = Field(default=None, ge=0.0)
+    sample_count: int = Field(ge=0)
+
+
+class OperationsKpiRecommendationFeedback(BaseModel):
+    """Recommendation-usefulness KPI (c): operator 👍/👎 votes on recommendations."""
+
+    useful_count: int = Field(ge=0)
+    not_useful_count: int = Field(ge=0)
+    review_value_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    feedback_count: int = Field(ge=0)
+
+
 class OperationsKpiResponse(BaseModel):
-    """Roadmap C-1 instrumentation: four operating KPIs aggregated in one call."""
+    """Roadmap C-1 instrumentation: operating KPIs aggregated in one call."""
 
     operator_id: int
     period_days: int
@@ -1368,6 +1384,8 @@ class OperationsKpiResponse(BaseModel):
     conversion: OperationsKpiConversion
     prediction_accuracy: OperationsKpiPredictionAccuracy
     missed_opportunities: OperationsKpiMissedOpportunities
+    review_time: OperationsKpiReviewTime
+    recommendation_feedback: OperationsKpiRecommendationFeedback
 
 
 class PredictionPredictorBreakdownItem(BaseModel):
