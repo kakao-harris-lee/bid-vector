@@ -1,9 +1,15 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test-utils";
 import { toastApi } from "@/shared/components/ui";
+import { ACTIVE_OPERATOR_STORAGE_KEY } from "@/app/operatorContext";
 import type { DashboardSummaryResponse } from "@/shared/types";
-import type { OperationsDashboardResponse } from "@/shared/types/operations";
+import type {
+  OperationsDashboardResponse,
+  OperationsKpiResponse
+} from "@/shared/types/operations";
+import type { OperatorAccountListResponse } from "@/shared/api";
 
 const emptySummary: DashboardSummaryResponse = {
   operator_id: 1,
@@ -91,6 +97,100 @@ const baseOperations: OperationsDashboardResponse = {
   }
 };
 
+function buildKpi(overrides: Partial<OperationsKpiResponse> = {}): OperationsKpiResponse {
+  return {
+    operator_id: 1,
+    current_operator_id: 1,
+    current_operator_username: "operator",
+    period_days: 30,
+    manual_override: {
+      decision_count: 20,
+      modified_count: 5,
+      modification_rate: 0.25
+    },
+    conversion: {
+      decision_count: 20,
+      submitted_count: 12,
+      overall_submission_rate: 0.6,
+      bid_now_submission_rate: 0.75,
+      review_submission_rate: 0.4,
+      average_hours_to_submit: 18.5
+    },
+    prediction_accuracy: {
+      result_count: 8,
+      prediction_sample_count: 8,
+      recommendation_sample_count: 7,
+      average_prediction_error_rate: 0.021,
+      average_recommendation_error_rate: 0.034,
+      prediction_within_1_percent_count: 3,
+      prediction_within_3_percent_count: 6,
+      recommendation_within_1_percent_count: 2,
+      recommendation_within_3_percent_count: 5
+    },
+    missed_opportunities: {
+      missed_count: 1,
+      items: [
+        {
+          decision_record_id: 501,
+          project_id: 42,
+          project_title: "놓친 공고 샘플",
+          deadline: "2026-05-20T09:00:00Z",
+          initial_action: "bid_now",
+          decision_status: "planned",
+          priority_score: 0.82
+        }
+      ]
+    },
+    review_time: { average_review_minutes: 12.4, sample_count: 7 },
+    recommendation_feedback: {
+      useful_count: 9,
+      not_useful_count: 3,
+      review_value_rate: 0.75,
+      feedback_count: 12
+    },
+    settlement_coverage: {
+      total_paper_bids: 40,
+      settled_count: 26,
+      coverage_rate: 0.65,
+      forward_paper_bids: 10,
+      forward_settled_count: 9,
+      forward_coverage_rate: 0.9
+    },
+    ...overrides
+  };
+}
+
+const privilegedAccounts: OperatorAccountListResponse = {
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  is_privileged: true,
+  operator_count: 2,
+  operators: [
+    {
+      operator_id: 1,
+      username: "operator",
+      full_name: "본사 운영자",
+      company: "본사",
+      business_type: "정보통신",
+      is_canonical: true,
+      is_synthetic: false,
+      is_active: true,
+      profile_configured: true
+    },
+    {
+      operator_id: 11,
+      username: "synthetic-aggressive",
+      full_name: "공격형",
+      company: "Synthetic A",
+      business_type: "정보통신",
+      is_canonical: false,
+      is_synthetic: true,
+      is_active: true,
+      profile_configured: true
+    }
+  ]
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -100,7 +200,40 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   } as unknown as Response);
 }
 
+interface FetchSpy {
+  dashboardCount: number;
+  kpiCalls: string[];
+}
+
+function installFetchMock({
+  kpi = buildKpi(),
+  accounts = privilegedAccounts
+}: {
+  kpi?: OperationsKpiResponse | ((url: string) => OperationsKpiResponse);
+  accounts?: OperatorAccountListResponse;
+} = {}): FetchSpy {
+  const spy: FetchSpy = { dashboardCount: 0, kpiCalls: [] };
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+    if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
+    if (url.startsWith("/api/v1/analytics/operations-dashboard")) {
+      spy.dashboardCount += 1;
+      return jsonResponse(baseOperations);
+    }
+    if (url.startsWith("/api/v1/analytics/operations-kpi")) {
+      spy.kpiCalls.push(url);
+      const payload = typeof kpi === "function" ? kpi(url) : kpi;
+      return jsonResponse(payload);
+    }
+    return jsonResponse({}, 404);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return spy;
+}
+
 beforeEach(() => {
+  window.localStorage.clear();
   window.localStorage.setItem("bid-vector-dashboard-token", "token-operations");
   window.history.pushState({}, "", "/dashboard/operations");
   vi.restoreAllMocks();
@@ -111,13 +244,7 @@ beforeEach(() => {
 
 describe("OperationsScreen", () => {
   it("status별 카드를 알맞은 톤으로 표시하고 critical 카드는 인시던트 배너로 노출", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
-      if (url.startsWith("/api/v1/analytics/operations-dashboard")) return jsonResponse(baseOperations);
-      return jsonResponse({}, 404);
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock();
 
     renderApp();
 
@@ -133,31 +260,115 @@ describe("OperationsScreen", () => {
   });
 
   it("탭이 비활성화되어 있어도 자동 갱신은 멈춰 있고 새로고침 버튼은 동작한다", async () => {
-    let callCount = 0;
     Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
 
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
-      if (url.startsWith("/api/v1/analytics/operations-dashboard")) {
-        callCount += 1;
-        return jsonResponse(baseOperations);
-      }
-      return jsonResponse({}, 404);
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const spy = installFetchMock();
 
     renderApp();
 
     expect(
       await screen.findByRole("heading", { name: "운영 대시보드", level: 2 })
     ).toBeInTheDocument();
-    await waitFor(() => expect(callCount).toBe(1));
+    await waitFor(() => expect(spy.dashboardCount).toBe(1));
 
     // 자동 polling 끄도록 visibilityState=hidden — 다음 인터벌 도래 전에는 추가 호출이 없어야 함
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(callCount).toBe(1);
+    expect(spy.dashboardCount).toBe(1);
 
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+  });
+
+  it("시스템 헬스 카드와 함께 회사별 KPI 7 그룹을 동시에 노출한다", async () => {
+    installFetchMock();
+
+    renderApp();
+
+    // 시스템 헬스 영역 — 크롤/텔레그램/ML release 카드
+    expect(
+      await screen.findByRole("heading", { name: "운영 대시보드", level: 2 })
+    ).toBeInTheDocument();
+    expect(await screen.findByText("크롤 상태")).toBeInTheDocument();
+    expect(screen.getByText("텔레그램 / 알림")).toBeInTheDocument();
+    expect(screen.getByText("ML release")).toBeInTheDocument();
+
+    // 회사별 KPI 패널 + 7 그룹 (aria-label 으로 식별)
+    const kpiSection = await screen.findByRole("region", { name: "회사별 KPI" });
+    expect(within(kpiSection).getByRole("heading", { name: /운영 KPI/ })).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("수동 수정")).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("투찰 전환율")).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("예측 정확도")).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("검토 시간")).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("추천 유용성")).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("놓친 유효 공고")).toBeInTheDocument();
+    expect(within(kpiSection).getByLabelText("정산 커버리지")).toBeInTheDocument();
+  });
+
+  it("KPI 기간 셀렉터를 바꾸면 새 days 값으로 KPI를 재조회한다", async () => {
+    const spy = installFetchMock();
+
+    renderApp();
+
+    // 초기 KPI fetch — default 30일
+    await waitFor(() => expect(spy.kpiCalls.length).toBeGreaterThanOrEqual(1));
+    expect(spy.kpiCalls.some((url) => url.includes("days=30"))).toBe(true);
+
+    const selector = await screen.findByLabelText("KPI 기간 (일)");
+    const before = spy.kpiCalls.length;
+
+    await userEvent.selectOptions(selector, "90");
+
+    // days=90 fetch가 발생해야 함
+    await waitFor(() => {
+      expect(spy.kpiCalls.length).toBeGreaterThan(before);
+      expect(spy.kpiCalls.some((url) => url.includes("days=90"))).toBe(true);
+    });
+  });
+
+  it("회사를 전환하면 KPI도 새 operator_id로 재조회된다", async () => {
+    const spy = installFetchMock();
+
+    renderApp();
+
+    // 초기: operator_id 미지정 (token owner)
+    await waitFor(() => expect(spy.kpiCalls.length).toBeGreaterThanOrEqual(1));
+    expect(spy.kpiCalls.some((url) => !url.includes("operator_id"))).toBe(true);
+
+    const before = spy.kpiCalls.length;
+
+    // 회사 전환 트리거 — Shell 헤더의 OperatorSwitcher
+    const switcher = await screen.findByRole("button", { name: "회사 전환" });
+    await userEvent.click(switcher);
+    const listbox = await screen.findByRole("listbox", { name: "회사 선택" });
+    await userEvent.click(within(listbox).getByText("Synthetic A"));
+
+    // 새 operator_id=11로 KPI fetch가 발생해야 함
+    await waitFor(() => {
+      expect(spy.kpiCalls.length).toBeGreaterThan(before);
+      expect(spy.kpiCalls.some((url) => url.includes("operator_id=11"))).toBe(true);
+    });
+
+    // localStorage에도 영속됨
+    expect(window.localStorage.getItem(ACTIVE_OPERATOR_STORAGE_KEY)).toBe("11");
+  });
+
+  it("KPI fetch가 빈 응답이어도 안전하게 7 그룹을 렌더한다", async () => {
+    installFetchMock({
+      kpi: buildKpi({
+        manual_override: { decision_count: 0, modified_count: 0, modification_rate: null },
+        missed_opportunities: { missed_count: 0, items: [] }
+      })
+    });
+
+    renderApp();
+
+    const kpiSection = await screen.findByRole("region", { name: "회사별 KPI" });
+    expect(within(kpiSection).getByLabelText("수동 수정")).toBeInTheDocument();
+    // 빈 상태 문구 노출
+    expect(
+      within(kpiSection).getByText("집계할 결정이 없습니다.")
+    ).toBeInTheDocument();
+    expect(
+      within(kpiSection).getByText("놓친 유효 공고가 없습니다.")
+    ).toBeInTheDocument();
   });
 });

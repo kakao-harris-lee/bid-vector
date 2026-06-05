@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
 import { fetchOperationsDashboard, queryKeys } from "@/shared/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { formatDateTime, formatPercent } from "@/shared/lib";
+import { OperationsKpiPanel, useOperationsKpiQuery } from "@/features/decisions";
 import type {
   OperationsCardStatus,
   OperationsDashboardCard,
@@ -11,6 +13,8 @@ import type {
 } from "@/shared/types/operations";
 
 const REFRESH_INTERVAL_MS = 30_000;
+const KPI_DAYS_OPTIONS = [7, 30, 90] as const;
+type KpiDays = (typeof KPI_DAYS_OPTIONS)[number];
 
 const TONE: Record<OperationsCardStatus, "info" | "healthy" | "watch" | "critical"> = {
   info: "info",
@@ -22,6 +26,7 @@ const TONE: Record<OperationsCardStatus, "info" | "healthy" | "watch" | "critica
 export function OperationsScreen() {
   const { session, activeOperator } = useShellContext();
   const activeOperatorId = activeOperator.activeOperatorId;
+  const [kpiDays, setKpiDays] = useState<KpiDays>(30);
   const operations = useQuery<OperationsDashboardResponse, Error>({
     queryKey: queryKeys.operations.dashboard(activeOperatorId),
     queryFn: () => fetchOperationsDashboard({ days: 7 }, session?.token, activeOperatorId),
@@ -29,6 +34,13 @@ export function OperationsScreen() {
     refetchInterval: (query) => (document.visibilityState === "visible" ? REFRESH_INTERVAL_MS : false),
     refetchIntervalInBackground: false
   });
+  // 회사별 KPI는 시스템 헬스(7일 고정)와 별도 윈도우를 가진다 — 운영자가 KPI
+  // 패널에서 직접 7/30/90일을 선택할 수 있도록 별도 셀렉터 + 별도 useQuery 호출.
+  const operationsKpi = useOperationsKpiQuery(
+    session,
+    { days: kpiDays, missedLimit: 10 },
+    activeOperatorId
+  );
 
   const criticalCards =
     operations.data?.cards.filter((card) => card.status === "critical") ?? [];
@@ -87,6 +99,39 @@ export function OperationsScreen() {
             {operations.data.cards.map((card) => (
               <SummaryCard key={card.key} card={card} />
             ))}
+          </section>
+
+          <section
+            className="flex flex-col gap-2"
+            aria-label="회사별 KPI"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-[var(--color-muted)]">
+                현재 선택한 회사 기준 — 시스템 헬스(7일)와 별도 윈도우입니다.
+              </p>
+              <label className="flex items-center gap-2 text-xs">
+                KPI 기간
+                <select
+                  value={kpiDays}
+                  onChange={(event) =>
+                    setKpiDays(Number(event.target.value) as KpiDays)
+                  }
+                  aria-label="KPI 기간 (일)"
+                  className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 text-xs"
+                >
+                  {KPI_DAYS_OPTIONS.map((value) => (
+                    <option key={value} value={value}>
+                      {value}일
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <OperationsKpiPanel
+              data={operationsKpi.data}
+              loading={operationsKpi.isPending}
+              error={operationsKpi.error}
+            />
           </section>
 
           <CrawlHealth summary={operations.data.crawl} />
