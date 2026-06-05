@@ -30,8 +30,18 @@ const defaultValues: StrategyFormValues = {
 };
 
 export function StrategyEditor() {
-  const { session } = useShellContext();
-  const query = useStrategyQuery(session);
+  const { session, activeOperator } = useShellContext();
+  // PR #74: GET supports `?operator_id=` for cross-operator reads. PUT stays
+  // self-only; impersonation views render the form read-only.
+  const activeOperatorId = activeOperator.activeOperatorId;
+  const isOwnContext = activeOperatorId === null;
+  const readOnly = !isOwnContext;
+  const currentOperatorLabel = activeOperator.currentOperator
+    ? activeOperator.currentOperator.company ||
+      activeOperator.currentOperator.full_name ||
+      activeOperator.currentOperator.username
+    : null;
+  const query = useStrategyQuery(session, activeOperatorId);
   const mutation = useUpdateStrategyMutation(session);
 
   const formInitial = useMemo<StrategyFormValues>(() => {
@@ -63,6 +73,13 @@ export function StrategyEditor() {
         logoutSession();
         return;
       }
+      if (err instanceof ApiError && err.status === 403) {
+        toastApi.danger({
+          title: "다른 회사 전략은 편집할 수 없습니다.",
+          description: "본인 회사 컨텍스트로 돌아간 뒤 다시 시도하세요."
+        });
+        return;
+      }
       toastApi.danger({
         title: "전략 저장 실패",
         description: err instanceof Error ? err.message : "알 수 없는 오류"
@@ -88,9 +105,22 @@ export function StrategyEditor() {
         <header className="flex items-baseline justify-between">
           <h2 className="text-lg font-semibold text-[var(--color-fg)]">전략 편집</h2>
           <span className="text-xs text-[var(--color-muted)]">
-            저장 시 dry-run으로 영향 후보 수가 즉시 갱신됩니다.
+            {readOnly
+              ? "다른 회사 컨텍스트는 읽기 전용입니다."
+              : "저장 시 dry-run으로 영향 후보 수가 즉시 갱신됩니다."}
           </span>
         </header>
+        {readOnly ? (
+          <div
+            role="note"
+            data-testid="strategy-readonly-notice"
+            className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_88%)] px-3 py-2 text-xs"
+          >
+            현재 회사: {currentOperatorLabel ?? "다른 회사"} · 편집은 본인 회사로 돌아가야
+            가능합니다.
+          </div>
+        ) : null}
+        <fieldset disabled={readOnly} className="contents">
         <Card>
           <CardHeader>
             <CardTitle>대상</CardTitle>
@@ -300,19 +330,22 @@ export function StrategyEditor() {
           </CardContent>
         </Card>
 
-        <div className="flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => form.reset(formInitial)}
-            disabled={mutation.isPending || !form.formState.isDirty}
-          >
-            되돌리기
-          </Button>
-          <Button type="submit" disabled={mutation.isPending}>
-            {mutation.isPending ? "저장 중" : "저장"}
-          </Button>
-        </div>
+        </fieldset>
+        {readOnly ? null : (
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => form.reset(formInitial)}
+              disabled={mutation.isPending || !form.formState.isDirty}
+            >
+              되돌리기
+            </Button>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "저장 중" : "저장"}
+            </Button>
+          </div>
+        )}
       </form>
 
       <aside className="flex flex-col gap-4">

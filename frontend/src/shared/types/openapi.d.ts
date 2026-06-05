@@ -319,12 +319,16 @@ export interface paths {
         };
         /**
          * Get Operator Profile Endpoint
-         * @description Return the singleton operator account and company profile.
+         * @description Return the operator account and company profile for the active context.
          */
         get: operations["get_operator_profile_endpoint_api_v1_operator_profile_get"];
         /**
          * Update Operator Profile
-         * @description Update the singleton operator's account and fit profile settings.
+         * @description Update the active operator's account and fit profile settings.
+         *
+         *     Edits are restricted to the bearer-token owner. Supplying ``?operator_id``
+         *     that differs from the actor's id returns 403; synthetic-company profile
+         *     edits must go through ``/synthetic/custom-operators/{slug}`` instead.
          */
         put: operations["update_operator_profile_api_v1_operator_profile_put"];
         post?: never;
@@ -343,12 +347,16 @@ export interface paths {
         };
         /**
          * Get Operator Strategy Endpoint
-         * @description Return the singleton operator's watch strategy for monitoring and alerting.
+         * @description Return the watch strategy for the active operator context.
          */
         get: operations["get_operator_strategy_endpoint_api_v1_operator_strategy_get"];
         /**
          * Update Operator Strategy
-         * @description Update the singleton operator's watch rules used for monitoring and prioritization.
+         * @description Update the active operator's watch rules used for monitoring and prioritization.
+         *
+         *     Like :func:`update_operator_profile`, edits are restricted to the
+         *     bearer-token owner — ``?operator_id`` mismatched against the actor returns
+         *     403. Cross-operator strategy edits are not supported.
          */
         put: operations["update_operator_strategy_api_v1_operator_strategy_put"];
         post?: never;
@@ -367,7 +375,7 @@ export interface paths {
         };
         /**
          * List Operator Strategy Candidates
-         * @description Preview currently open projects that match the operator's stored watch strategy.
+         * @description Preview currently open projects that match the active operator's watch strategy.
          */
         get: operations["list_operator_strategy_candidates_api_v1_operator_strategy_candidates_get"];
         put?: never;
@@ -507,7 +515,7 @@ export interface paths {
         };
         /**
          * Get Operator Overview
-         * @description Return a compact single-user dashboard summary.
+         * @description Return a compact dashboard summary for the active operator context.
          */
         get: operations["get_operator_overview_api_v1_operator_overview_get"];
         put?: never;
@@ -4970,6 +4978,10 @@ export interface components {
             action_hrefs?: {
                 [key: string]: string;
             };
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorDashboardRunItem */
         OperatorDashboardRunItem: {
@@ -5021,6 +5033,10 @@ export interface components {
             recent_event_count: number;
             /** Profile Configured */
             profile_configured: boolean;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorPasswordResetRequest */
         OperatorPasswordResetRequest: {
@@ -5074,6 +5090,10 @@ export interface components {
             total_awards: number;
             /** Profile Configured */
             profile_configured: boolean;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorProfileUpdate */
         OperatorProfileUpdate: {
@@ -5165,6 +5185,10 @@ export interface components {
             high_priority_only: boolean;
             /** Candidates */
             candidates?: components["schemas"]["OperatorStrategyCandidateItem"][];
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorStrategyMonitorRequest */
         OperatorStrategyMonitorRequest: {
@@ -5358,6 +5382,10 @@ export interface components {
             max_recommended_candidates: number;
             /** Strategy Configured */
             strategy_configured: boolean;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorStrategyRunDetailResponse */
         OperatorStrategyRunDetailResponse: {
@@ -7819,7 +7847,9 @@ export interface operations {
     };
     get_operator_profile_endpoint_api_v1_operator_profile_get: {
         parameters: {
-            query?: never;
+            query?: {
+                operator_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7835,11 +7865,22 @@ export interface operations {
                     "application/json": components["schemas"]["OperatorProfileResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     update_operator_profile_api_v1_operator_profile_put: {
         parameters: {
-            query?: never;
+            query?: {
+                operator_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7872,7 +7913,9 @@ export interface operations {
     };
     get_operator_strategy_endpoint_api_v1_operator_strategy_get: {
         parameters: {
-            query?: never;
+            query?: {
+                operator_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7888,11 +7931,22 @@ export interface operations {
                     "application/json": components["schemas"]["OperatorStrategyResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     update_operator_strategy_api_v1_operator_strategy_put: {
         parameters: {
-            query?: never;
+            query?: {
+                operator_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7928,6 +7982,7 @@ export interface operations {
             query?: {
                 limit?: number | null;
                 high_priority_only?: boolean | null;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -8120,6 +8175,7 @@ export interface operations {
             query?: {
                 days?: number;
                 limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -8151,6 +8207,7 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;

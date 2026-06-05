@@ -10,13 +10,14 @@ from app.core.security import (
     CANONICAL_OPERATOR_USERNAME,
     get_current_operator_optional,
     is_privileged_operator,
+    resolve_target_operator,
 )
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
     ensure_operator_account,
-    ensure_operator_profile,
-    ensure_operator_strategy,
+    ensure_operator_profile_for,
+    ensure_operator_strategy_for,
     join_multi_value_text,
     split_multi_value_text,
 )
@@ -62,6 +63,64 @@ from app.tasks.jobs import enqueue_operator_strategy_monitor, get_operator_strat
 
 router = APIRouter()
 INTERNAL_OPERATOR_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
+
+
+def _resolve_operator_for_read(
+    db: Session,
+    current_operator: User | None,
+    operator_id: int | None,
+) -> User:
+    """Return the target operator that a /operator/* GET endpoint should expose.
+
+    - When no bearer token is supplied the canonical singleton operator is
+      used — this preserves the legacy unauthenticated read path used by
+      existing operator tests and tooling.
+    - When a bearer token is supplied :func:`resolve_target_operator` applies
+      the standard privileged/non-privileged policy and raises 403/404.
+
+    The returned operator is also what populates the ``current_operator_*``
+    envelope fields, matching the convention established by the dashboard /
+    analytics endpoints in PR #70 where ``current_operator_*`` reflects which
+    company the response is scoped to (i.e. the one shown in the switcher).
+    """
+    if current_operator is None:
+        fallback = ensure_operator_account(db)
+        return resolve_target_operator(db, fallback, operator_id)
+    return resolve_target_operator(db, current_operator, operator_id)
+
+
+def _resolve_operator_for_write(
+    db: Session,
+    current_operator: User | None,
+    operator_id: int | None,
+) -> User:
+    """Return the operator that a PUT /operator/* endpoint may mutate.
+
+    Writes are restricted to the bearer-token owner ("self only"). If
+    ``operator_id`` is supplied it must match the actor's id; otherwise the
+    request is rejected with 403. Synthetic-company edits remain available via
+    the dedicated /synthetic/custom-operators/{slug} routes.
+    """
+    actor = current_operator or ensure_operator_account(db)
+    if operator_id is not None and int(operator_id) != int(actor.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot edit another operator's data",
+        )
+    return actor
+
+
+def _operator_context_fields(target: User) -> dict:
+    """Return the standard ``current_operator_*`` envelope fields.
+
+    Convention (from PR #70): ``current_operator_*`` reflects the **target**
+    operator the response is scoped to — i.e. the company the frontend
+    switcher should highlight as active — not the bearer-token owner.
+    """
+    return {
+        "current_operator_id": int(target.id),
+        "current_operator_username": str(target.username or ""),
+    }
 
 
 def _is_profile_configured(
@@ -120,6 +179,8 @@ def _build_operator_profile_response(
             construction_capacity_amount=construction_capacity_amount,
             awarded_contract_limit=awarded_contract_limit,
         ),
+        current_operator_id=int(operator.id),
+        current_operator_username=str(operator.username or ""),
     )
 
 
@@ -223,12 +284,25 @@ def _build_operator_strategy_response(
             notify_only_high_priority=notify_only_high_priority,
             max_recommended_candidates=max_recommended_candidates,
         ),
+        current_operator_id=int(operator.id),
+        current_operator_username=str(operator.username or ""),
     )
 
 
-def _build_operator_overview_payload(operator: User, *, days: int, db: Session) -> dict:
-    """Build the compact dashboard overview shared by overview and dashboard endpoints."""
-    profile = ensure_operator_profile(db)
+def _build_operator_overview_payload(
+    operator: User,
+    *,
+    days: int,
+    db: Session,
+) -> dict:
+    """Build the compact dashboard overview shared by overview and dashboard endpoints.
+
+    Scopes counts/profile lookups by ``operator`` (the target operator) so the
+    payload reflects the company that the request is currently viewing. The
+    ``current_operator_*`` envelope is set to the same target operator to
+    match the convention from PR #70 (dashboard / analytics endpoints).
+    """
+    profile = ensure_operator_profile_for(db, operator)
     date_from = utc_now() - timedelta(days=days)
     license_codes = split_multi_value_text(profile.license_codes)
     region_codes = split_multi_value_text(profile.region_codes)
@@ -260,6 +334,8 @@ def _build_operator_overview_payload(operator: User, *, days: int, db: Session) 
             ),
             awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
         ),
+        "current_operator_id": int(operator.id),
+        "current_operator_username": str(operator.username or ""),
     }
 
 
@@ -275,14 +351,18 @@ def _feedback_status(error_rate: float | None) -> str:
 
 
 @router.get("/profile", response_model=OperatorProfileResponse)
-def get_operator_profile_endpoint(db: Session = Depends(get_db)):
-    """Return the singleton operator account and company profile."""
-    operator = ensure_operator_account(db)
-    profile = ensure_operator_profile(db)
+def get_operator_profile_endpoint(
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Return the operator account and company profile for the active context."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
+    profile = ensure_operator_profile_for(db, target)
     license_codes = split_multi_value_text(profile.license_codes)
     region_codes = split_multi_value_text(profile.region_codes)
     return _build_operator_profile_response(
-        operator=operator,
+        operator=target,
         license_codes=license_codes,
         region_codes=region_codes,
         business_type=profile.business_type,
@@ -297,10 +377,21 @@ def get_operator_profile_endpoint(db: Session = Depends(get_db)):
 
 
 @router.put("/profile", response_model=OperatorProfileResponse)
-def update_operator_profile(request: OperatorProfileUpdate, db: Session = Depends(get_db)):
-    """Update the singleton operator's account and fit profile settings."""
-    operator = ensure_operator_account(db)
-    profile = ensure_operator_profile(db)
+def update_operator_profile(
+    request: OperatorProfileUpdate,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Update the active operator's account and fit profile settings.
+
+    Edits are restricted to the bearer-token owner. Supplying ``?operator_id``
+    that differs from the actor's id returns 403; synthetic-company profile
+    edits must go through ``/synthetic/custom-operators/{slug}`` instead.
+    """
+    actor = _resolve_operator_for_write(db, current_operator, operator_id)
+    operator = actor
+    profile = ensure_operator_profile_for(db, actor)
 
     if request.username is not None and request.username != operator.username:
         existing_username = db.query(User).filter(User.username == request.username, User.id != operator.id).first()
@@ -357,12 +448,16 @@ def update_operator_profile(request: OperatorProfileUpdate, db: Session = Depend
 
 
 @router.get("/strategy", response_model=OperatorStrategyResponse)
-def get_operator_strategy_endpoint(db: Session = Depends(get_db)):
-    """Return the singleton operator's watch strategy for monitoring and alerting."""
-    operator = ensure_operator_account(db)
-    strategy = ensure_operator_strategy(db)
+def get_operator_strategy_endpoint(
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Return the watch strategy for the active operator context."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
+    strategy = ensure_operator_strategy_for(db, target)
     return _build_operator_strategy_response(
-        operator=operator,
+        operator=target,
         focus_categories=split_multi_value_text(strategy.focus_categories),
         focus_regions=split_multi_value_text(strategy.focus_regions),
         exclude_regions=split_multi_value_text(strategy.exclude_regions),
@@ -382,10 +477,21 @@ def get_operator_strategy_endpoint(db: Session = Depends(get_db)):
 
 
 @router.put("/strategy", response_model=OperatorStrategyResponse)
-def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depends(get_db)):
-    """Update the singleton operator's watch rules used for monitoring and prioritization."""
-    operator = ensure_operator_account(db)
-    strategy = ensure_operator_strategy(db)
+def update_operator_strategy(
+    request: OperatorStrategyUpdate,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Update the active operator's watch rules used for monitoring and prioritization.
+
+    Like :func:`update_operator_profile`, edits are restricted to the
+    bearer-token owner — ``?operator_id`` mismatched against the actor returns
+    403. Cross-operator strategy edits are not supported.
+    """
+    actor = _resolve_operator_for_write(db, current_operator, operator_id)
+    operator = actor
+    strategy = ensure_operator_strategy_for(db, actor)
 
     next_bid_now_threshold = float(
         request.bid_now_threshold
@@ -464,10 +570,20 @@ def update_operator_strategy(request: OperatorStrategyUpdate, db: Session = Depe
 def list_operator_strategy_candidates(
     limit: int | None = Query(default=None, ge=1, le=100),
     high_priority_only: bool | None = Query(default=None),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
-    """Preview currently open projects that match the operator's stored watch strategy."""
-    return StrategyMonitoringService().preview_candidates(db, limit=limit, high_priority_only=high_priority_only)
+    """Preview currently open projects that match the active operator's watch strategy."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
+    payload = StrategyMonitoringService().preview_candidates(
+        db,
+        limit=limit,
+        high_priority_only=high_priority_only,
+        operator=target,
+    )
+    payload.update(_operator_context_fields(target))
+    return payload
 
 
 @router.post("/strategy/monitor", response_model=OperatorStrategyMonitorResponse)
@@ -544,10 +660,12 @@ def get_operator_strategy_monitor_status(task_id: str):
 def get_operator_dashboard(
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(5, ge=1, le=20),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Return a card-ready web dashboard payload for analysis, decisions, monitoring, and feedback."""
-    operator = ensure_operator_account(db)
+    operator = _resolve_operator_for_read(db, current_operator, operator_id)
     overview = _build_operator_overview_payload(operator, days=days, db=db)
     date_from = utc_now() - timedelta(days=days)
 
@@ -561,7 +679,9 @@ def get_operator_dashboard(
     )
     failed_monitor_run_count = sum(
         1
-        for run in StrategyMonitoringService().list_recent_runs(db, limit=100, run_status="failed")
+        for run in StrategyMonitoringService().list_recent_runs(
+            db, limit=100, run_status="failed", operator=operator
+        )
         if run.created_at is not None and run.created_at >= date_from
     )
     recent_decisions = (
@@ -571,7 +691,9 @@ def get_operator_dashboard(
         .limit(limit)
         .all()
     )
-    recent_monitor_runs = StrategyMonitoringService().list_recent_runs(db, limit=limit)
+    recent_monitor_runs = StrategyMonitoringService().list_recent_runs(
+        db, limit=limit, operator=operator
+    )
     feedback = PredictionFeedbackService().build_feedback(
         db, days=days, limit=limit, operator=operator
     )
@@ -678,14 +800,20 @@ def get_operator_dashboard(
             "prediction_feedback": "/api/v1/analytics/prediction-feedback",
             "operations_dashboard": "/api/v1/analytics/operations-dashboard",
         },
+        **_operator_context_fields(operator),
     }
 
 
 @router.get("/overview", response_model=OperatorOverviewResponse)
-def get_operator_overview(days: int = Query(7, ge=1, le=90), db: Session = Depends(get_db)):
-    """Return a compact single-user dashboard summary."""
-    operator = ensure_operator_account(db)
-    return _build_operator_overview_payload(operator, days=days, db=db)
+def get_operator_overview(
+    days: int = Query(7, ge=1, le=90),
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Return a compact dashboard summary for the active operator context."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
+    return _build_operator_overview_payload(target, days=days, db=db)
 
 
 _SYNTHETIC_USERNAME_PREFIX = "synthetic-"

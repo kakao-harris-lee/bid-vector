@@ -113,6 +113,8 @@ class OperatorProfileResponse(BaseModel):
     awarded_contract_limit: float = 0.0
     total_awards: int
     profile_configured: bool
+    current_operator_id: int
+    current_operator_username: str
 
 
 class OperatorOverviewResponse(BaseModel):
@@ -124,6 +126,8 @@ class OperatorOverviewResponse(BaseModel):
     unread_notification_count: int
     recent_event_count: int
     profile_configured: bool
+    current_operator_id: int
+    current_operator_username: str
 
 
 class OperatorAccountItem(BaseModel):
@@ -205,6 +209,8 @@ class OperatorDashboardResponse(BaseModel):
     recent_monitor_runs: List[OperatorDashboardRunItem] = Field(default_factory=list)
     feedback_summary: OperatorDashboardFeedbackSummary
     action_hrefs: Dict[str, str] = Field(default_factory=dict)
+    current_operator_id: int
+    current_operator_username: str
 
 
 class DashboardProjectBrief(BaseModel):
@@ -381,6 +387,8 @@ class OperatorStrategyResponse(BaseModel):
     notify_only_high_priority: bool
     max_recommended_candidates: int = Field(ge=1, le=100)
     strategy_configured: bool
+    current_operator_id: int
+    current_operator_username: str
 
 
 class OperatorStrategyCandidateItem(BaseModel):
@@ -404,6 +412,8 @@ class OperatorStrategyCandidatesResponse(BaseModel):
     returned_candidate_count: int = Field(ge=0)
     high_priority_only: bool
     candidates: List[OperatorStrategyCandidateItem] = Field(default_factory=list)
+    current_operator_id: int
+    current_operator_username: str
 
 
 class OperatorStrategyMonitorRequest(BaseModel):

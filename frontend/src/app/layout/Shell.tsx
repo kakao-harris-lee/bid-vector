@@ -294,7 +294,7 @@ function ActiveOperatorContextBar({
           role="note"
           className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_88%)] px-3 py-2 text-xs text-[var(--color-fg)]"
         >
-          프로필 / 전략은 본인 회사만 편집 가능합니다. 현재 선택: {companyLabel ?? "본인"}.
+          현재 보는 회사: {companyLabel ?? "본인"} · 편집은 본인 회사로 돌아가야 가능합니다.
         </div>
       ) : null}
     </div>

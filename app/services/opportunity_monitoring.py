@@ -13,10 +13,12 @@ from app.core.single_user import (
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
     ensure_operator_account,
     ensure_operator_profile,
+    ensure_operator_profile_for,
     ensure_operator_strategy,
+    ensure_operator_strategy_for,
     split_multi_value_text,
 )
-from app.models.models import OperatorStrategy, OperatorStrategyRun, Project
+from app.models.models import OperatorStrategy, OperatorStrategyRun, Project, User
 from app.schemas.schemas import BidDecisionSaveRequest, OpportunityAnalysisRequest, OperatorStrategyMonitorRequest
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
@@ -68,11 +70,23 @@ class StrategyMonitoringService:
         *,
         limit: int | None = None,
         high_priority_only: bool | None = None,
+        operator: User | None = None,
     ) -> dict:
-        """Return strategy-matched candidates ranked by decision priority."""
-        operator = ensure_operator_account(db)
-        ensure_operator_profile(db)
-        strategy = ensure_operator_strategy(db)
+        """Return strategy-matched candidates ranked by decision priority.
+
+        When ``operator`` is provided the preview uses that operator's profile
+        and strategy rows directly (used by ``?operator_id=`` cross-operator
+        context). When ``operator`` is ``None`` the canonical singleton helpers
+        are used to preserve backward-compatible behavior for callers that have
+        not migrated to the new context.
+        """
+        if operator is None:
+            operator = ensure_operator_account(db)
+            ensure_operator_profile(db)
+            strategy = ensure_operator_strategy(db)
+        else:
+            ensure_operator_profile_for(db, operator)
+            strategy = ensure_operator_strategy_for(db, operator)
 
         resolved_limit, resolved_high_priority_only = self._resolve_runtime_options(
             strategy,
@@ -298,9 +312,23 @@ class StrategyMonitoringService:
         db.refresh(monitor_run)
         return monitor_run
 
-    def list_recent_runs(self, db: Session, *, limit: int = 20, run_status: str | None = None) -> list[OperatorStrategyRun]:
-        """Return recent monitoring execution history for the singleton operator."""
-        operator = ensure_operator_account(db)
+    def list_recent_runs(
+        self,
+        db: Session,
+        *,
+        limit: int = 20,
+        run_status: str | None = None,
+        operator: User | None = None,
+    ) -> list[OperatorStrategyRun]:
+        """Return recent monitoring execution history.
+
+        Defaults to the canonical singleton operator when ``operator`` is not
+        provided so legacy callers continue to behave as before. The dashboard
+        endpoint passes the resolved target operator so cross-operator views
+        do not leak the canonical operator's run history.
+        """
+        if operator is None:
+            operator = ensure_operator_account(db)
         query = db.query(OperatorStrategyRun).filter(OperatorStrategyRun.operator_id == operator.id)
         if run_status:
             query = query.filter(OperatorStrategyRun.status == run_status)

@@ -85,20 +85,22 @@ function HomeContent({
   const visibleWorkItems = summary.work_items.slice(0, 3);
   const hasMoreWorkItems = summary.work_items.length > visibleWorkItems.length;
 
-  // `/operator/profile` is canonical-only (PR #70). Only fetch the 5-axis
-  // detail when the active operator is the token owner; otherwise the widget
-  // falls back to metadata-only.
+  // PR #74 makes `/operator/profile?operator_id=` a cross-operator GET for
+  // privileged callers. The 5-axis detail is now fetched regardless of which
+  // company the user is viewing — only the *edit* CTA stays gated to the
+  // token owner. `null` means "fall back to the token owner" so the URL omits
+  // `?operator_id=` entirely.
   const isOwnContext = activeOperatorId === null;
-  const profileQuery = useProfileQuery(isOwnContext ? session : null);
+  const profileQuery = useProfileQuery(session, activeOperatorId);
 
   return (
     <>
       <section aria-label="내 자격 상태 요약">
         <ProfileStatusWidget
           operatorAccount={currentOperator}
-          profile={isOwnContext ? profileQuery.data ?? null : null}
+          profile={profileQuery.data ?? null}
           isOwnContext={isOwnContext}
-          isProfileLoading={isOwnContext && profileQuery.isPending}
+          isProfileLoading={profileQuery.isPending}
           onWizardEnter={onOpenProfile}
           onEdit={onOpenProfile}
         />

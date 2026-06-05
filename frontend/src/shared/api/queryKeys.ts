@@ -27,12 +27,23 @@ export const queryKeys = {
     paperSummary: () => ["dashboard", "paper-summary"] as const
   },
   profile: {
-    detail: () => ["profile", "detail"] as const
+    detail: (operatorId: OperatorScope = null) =>
+      ["profile", "detail", { operatorId }] as const
   },
   strategy: {
-    detail: () => ["strategy", "detail"] as const,
-    candidates: (limit?: number, highPriorityOnly?: boolean) =>
-      ["strategy", "candidates", { limit: limit ?? null, highPriorityOnly: highPriorityOnly ?? null }] as const,
+    detail: (operatorId: OperatorScope = null) =>
+      ["strategy", "detail", { operatorId }] as const,
+    candidates: (
+      limit?: number,
+      highPriorityOnly?: boolean,
+      operatorId: OperatorScope = null
+    ) =>
+      [
+        "strategy",
+        "candidates",
+        { limit: limit ?? null, highPriorityOnly: highPriorityOnly ?? null },
+        { operatorId }
+      ] as const,
     runs: (limit: number) => ["strategy", "runs", { limit }] as const
   },
   projects: {
