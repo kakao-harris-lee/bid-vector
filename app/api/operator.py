@@ -572,7 +572,9 @@ def get_operator_dashboard(
         .all()
     )
     recent_monitor_runs = StrategyMonitoringService().list_recent_runs(db, limit=limit)
-    feedback = PredictionFeedbackService().build_feedback(db, days=days, limit=limit)
+    feedback = PredictionFeedbackService().build_feedback(
+        db, days=days, limit=limit, operator=operator
+    )
     recommendation_error = feedback.get("average_recommendation_error_rate")
 
     return {
