@@ -1580,6 +1580,33 @@ export interface paths {
         patch: operations["update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch"];
         trace?: never;
     };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Bid Decision Action
+         * @description Apply an inline dashboard action (submit/review/skip) to a bid decision record.
+         *
+         *     Reuses :meth:`BidDecisionService.apply_telegram_action` so the dashboard
+         *     and the Telegram inline buttons share the exact same transition rules
+         *     (action / decision_status / pursue_bid / reasoning notes). The optional
+         *     ``operator_id`` query parameter follows the standard operator-context
+         *     pattern: canonical/admin callers can target synthetic operator records,
+         *     non-privileged callers can only act on their own records.
+         */
+        post: operations["apply_bid_decision_action_api_v1_operations_bid_decisions__decision_record_id__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/bid-decisions/{decision_record_id}": {
         parameters: {
             query?: never;
@@ -2101,6 +2128,22 @@ export interface components {
             project_id: number;
             /** Description */
             description: string;
+        };
+        /**
+         * BidDecisionActionRequest
+         * @description Inline dashboard action request for an existing bid-decision record.
+         *
+         *     Mirrors the action vocabulary accepted by
+         *     :meth:`app.services.allocation.BidDecisionService.apply_telegram_action`
+         *     so the dashboard reuses the same transition semantics as the Telegram
+         *     inline buttons.
+         */
+        BidDecisionActionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "submit" | "review" | "skip";
         };
         /** BidDecisionDetailResponse */
         BidDecisionDetailResponse: {
@@ -10001,6 +10044,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["BidDecisionStatusUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_bid_decision_action_api_v1_operations_bid_decisions__decision_record_id__actions_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionActionRequest"];
             };
         };
         responses: {

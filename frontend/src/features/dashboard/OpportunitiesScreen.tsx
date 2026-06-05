@@ -51,7 +51,13 @@ export function OpportunitiesScreen() {
         {loading ? (
           <LoadingState />
         ) : (
-          <ItemList route="opportunities" items={items} onSelect={setSelected} />
+          <ItemList
+            route="opportunities"
+            items={items}
+            onSelect={setSelected}
+            session={session}
+            activeOperatorId={activeOperator.activeOperatorId}
+          />
         )}
       </section>
       <DetailDrawer
@@ -59,6 +65,8 @@ export function OpportunitiesScreen() {
         onClose={() => setSelected(null)}
         username={session?.username ?? null}
         authToken={session?.token ?? null}
+        session={session}
+        activeOperatorId={activeOperator.activeOperatorId}
       />
     </>
   );

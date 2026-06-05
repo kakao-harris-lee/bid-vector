@@ -6,13 +6,18 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.time import utc_now
+from app.core.security import (
+    get_current_operator_from_bearer,
+    resolve_target_operator,
+)
 from app.core.single_user import ensure_operator_account, get_operator_profile
-from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, Project
+from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, Project, User
 from pydantic import BaseModel
 from typing import Literal
 
 from app.schemas.schemas import (
     BackgroundJobResponse,
+    BidDecisionActionRequest,
     BidDecisionDetailResponse,
     BidDecisionRecordResponse,
     BidDecisionRequest,
@@ -265,6 +270,61 @@ def update_bid_decision_status(
         db.refresh(record)
 
     return record
+
+
+@router.post(
+    "/bid-decisions/{decision_record_id}/actions",
+    response_model=BidDecisionRecordResponse,
+)
+def apply_bid_decision_action(
+    decision_record_id: int,
+    request: BidDecisionActionRequest,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User = Depends(get_current_operator_from_bearer),
+):
+    """Apply an inline dashboard action (submit/review/skip) to a bid decision record.
+
+    Reuses :meth:`BidDecisionService.apply_telegram_action` so the dashboard
+    and the Telegram inline buttons share the exact same transition rules
+    (action / decision_status / pursue_bid / reasoning notes). The optional
+    ``operator_id`` query parameter follows the standard operator-context
+    pattern: canonical/admin callers can target synthetic operator records,
+    non-privileged callers can only act on their own records.
+    """
+    operator = resolve_target_operator(db, current_operator, operator_id)
+
+    record = (
+        db.query(BidDecisionRecord)
+        .filter(
+            BidDecisionRecord.id == decision_record_id,
+            BidDecisionRecord.operator_id == operator.id,
+        )
+        .first()
+    )
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bid decision record not found",
+        )
+
+    try:
+        updated = BidDecisionService().apply_telegram_action(
+            db,
+            decision_record_id=record.id,
+            requested_action=request.action,
+        )
+    except ValueError as exc:
+        # apply_telegram_action raises ValueError for unknown ids (already
+        # guarded above) and unsupported actions (already guarded by the
+        # Pydantic Literal). Keep the defensive translation in case the
+        # service contract changes.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return updated
 
 
 @router.get("/bid-decisions/{decision_record_id}", response_model=BidDecisionDetailResponse)

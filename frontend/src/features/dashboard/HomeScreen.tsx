@@ -16,7 +16,7 @@ import {
 import type { DetailSelection } from "./types";
 
 export function HomeScreen() {
-  const { summary, session } = useShellContext();
+  const { summary, session, activeOperator } = useShellContext();
   const navigate = useNavigate();
   const [activePreview, setActivePreview] = useState<RouteKey>("opportunities");
   const [selected, setSelected] = useState<DetailSelection | null>(null);
@@ -34,12 +34,16 @@ export function HomeScreen() {
         onPreviewChange={setActivePreview}
         onNavigate={(route) => navigate(ROUTE_LABELS[route].path)}
         onSelect={setSelected}
+        session={session}
+        activeOperatorId={activeOperator.activeOperatorId}
       />
       <DetailDrawer
         selection={selected}
         onClose={() => setSelected(null)}
         username={session?.username ?? null}
         authToken={session?.token ?? null}
+        session={session}
+        activeOperatorId={activeOperator.activeOperatorId}
       />
     </>
   );
@@ -50,13 +54,17 @@ function HomeContent({
   activePreview,
   onPreviewChange,
   onNavigate,
-  onSelect
+  onSelect,
+  session,
+  activeOperatorId
 }: {
   summary: NonNullable<ReturnType<typeof useShellContext>["summary"]["data"]>;
   activePreview: RouteKey;
   onPreviewChange: (route: RouteKey) => void;
   onNavigate: (route: RouteKey) => void;
   onSelect: (selection: DetailSelection) => void;
+  session: ReturnType<typeof useShellContext>["session"];
+  activeOperatorId: number | null;
 }) {
   const previewItems = useMemo(() => {
     if (activePreview === "bids") return summary.recent_bids;
@@ -77,7 +85,14 @@ function HomeContent({
 
       <section>
         <SegmentedTabs active={activePreview} onChange={onPreviewChange} sections={summary.sections} />
-        <ItemList route={activePreview} items={previewItems} onSelect={onSelect} compact />
+        <ItemList
+          route={activePreview}
+          items={previewItems}
+          onSelect={onSelect}
+          compact
+          session={session}
+          activeOperatorId={activeOperatorId}
+        />
       </section>
 
       <section className="work-section">

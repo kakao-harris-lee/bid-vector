@@ -1,23 +1,40 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
 import { t } from "@/shared/i18n";
 import { IconButton } from "@/app/layout/IconButton";
 import { trackProjectView } from "@/shared/api/operations";
+import type { BidDecisionActionType } from "@/shared/api";
+import type { AuthSession } from "@/app/layout/AuthGate";
 import type { DetailSelection } from "../types";
+import { useApplyBidDecisionActionMutation } from "../hooks";
 import { DecisionReasonsCard } from "./DecisionReasonsCard";
+import { InlineActionButtons } from "./InlineActionButtons";
 
 export function DetailDrawer({
   selection,
   onClose,
   username,
-  authToken
+  authToken,
+  session = null,
+  activeOperatorId = null
 }: {
   selection: DetailSelection | null;
   onClose: () => void;
   username: string | null;
   authToken?: string | null;
+  /**
+   * When supplied, the drawer renders the same inline submit/review/skip
+   * action buttons as `OpportunityRow` for decision-source items. Tests can
+   * omit these to keep the legacy display-only behaviour.
+   */
+  session?: AuthSession | null;
+  activeOperatorId?: number | null;
 }) {
+  const mutation = useApplyBidDecisionActionMutation(session ?? null);
+  const [pendingAction, setPendingAction] = useState<BidDecisionActionType | null>(
+    null
+  );
   // Roadmap C-1 (a): when a tender/opportunity opens in the drawer, log a
   // `project_view` analytics event. The backend coalesces multiple views into
   // a single first-view per (operator, project) so we don't have to guard
@@ -98,6 +115,29 @@ export function DetailDrawer({
           projectId={selection.item.project?.project_id ?? null}
           authToken={authToken ?? null}
         />
+      ) : null}
+      {selection.kind === "opportunity" &&
+      selection.item.source === "decision" &&
+      typeof selection.item.decision_record_id === "number" &&
+      session?.token ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-3">
+          <InlineActionButtons
+            decisionStatus={selection.item.decision_status}
+            pendingAction={pendingAction}
+            onAction={(action) => {
+              if (!selection.item.decision_record_id) return;
+              setPendingAction(action);
+              mutation.mutate(
+                {
+                  decisionRecordId: selection.item.decision_record_id,
+                  action,
+                  operatorId: activeOperatorId
+                },
+                { onSettled: () => setPendingAction(null) }
+              );
+            }}
+          />
+        </div>
       ) : null}
       {"reasoning" in selection.item && selection.item.reasoning ? (
         <details className="drawer-reasoning">

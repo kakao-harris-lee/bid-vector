@@ -3873,3 +3873,333 @@ def test_opportunity_analysis_reasons_persist_through_save_decision(client, test
         "자격" in flag or "지역" in flag or "면허" in flag
         for flag in detail_record["risk_flags"]
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /bid-decisions/{id}/actions — dashboard inline actions
+# ---------------------------------------------------------------------------
+
+
+def _create_operator_user(
+    test_db,
+    *,
+    username: str,
+    password: str = "password123",
+    is_admin: bool = False,
+) -> User:
+    """Create a User + CompanyProfile + OperatorStrategy so the user is fully usable."""
+    from app.core.security import get_password_hash
+    from app.models.models import OperatorStrategy
+
+    user = User(
+        username=username,
+        email=f"{username}@example.com",
+        full_name=username,
+        company=f"{username} Co",
+        hashed_password=get_password_hash(password),
+        is_active=True,
+        is_admin=is_admin,
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+
+    test_db.add(
+        CompanyProfile(
+            user_id=user.id,
+            business_type="software",
+            license_codes="",
+            region_codes="",
+            annual_revenue=0.0,
+            capacity_score=0.0,
+            total_awards=0,
+        )
+    )
+    test_db.add(
+        OperatorStrategy(
+            user_id=user.id,
+            focus_categories="",
+            bid_now_threshold=0.7,
+            review_threshold=0.45,
+        )
+    )
+    test_db.commit()
+    return user
+
+
+def _login_operator(client, username: str, password: str = "password123") -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/session",
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200, response.text
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _seed_action_decision(
+    test_db,
+    *,
+    operator_id: int,
+    action: str = "review",
+    decision_status: str = "reviewing",
+    title: str = "Inline action test project",
+) -> BidDecisionRecord:
+    project = Project(
+        title=title,
+        description="dashboard inline action",
+        requirements="n/a",
+        budget_estimate=50_000_000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=12),
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=operator_id,
+        pursue_bid=True,
+        action=action,
+        decision_status=decision_status,
+        initial_action=action,
+        initial_decision_status=decision_status,
+        recommended_amount=45_000_000.0,
+        probability_score=0.7,
+        matched_score=0.7,
+        priority_score=0.6,
+        urgency_score=0.4,
+        competitiveness_score=0.5,
+        budget_capture_score=0.5,
+        expected_margin_score=0.5,
+        execution_complexity_score=0.4,
+        current_active_bids=0,
+        max_active_bids=3,
+        current_workload_score=0.2,
+        workload_source="provided",
+        score_breakdown="{}",
+        reasoning="seed reasoning",
+    )
+    test_db.add(record)
+    test_db.commit()
+    test_db.refresh(record)
+    return record
+
+
+def test_apply_bid_decision_action_submit_transitions_to_submitted(client, test_db):
+    """submit 액션은 record를 submit/submitted/pursue=True로 일관 전이시킨다."""
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(
+        test_db, operator_id=canonical.id, action="review", decision_status="reviewing"
+    )
+
+    headers = _login_operator(client, "operator")
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{record.id}/actions",
+        json={"action": "submit"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == record.id
+    assert payload["action"] == "bid_now"
+    assert payload["decision_status"] == "submitted"
+    assert payload["pursue_bid"] is True
+    assert "텔레그램에서 투찰 버튼" in payload["reasoning"]
+
+    test_db.refresh(record)
+    assert record.action == "bid_now"
+    assert record.decision_status == "submitted"
+    assert record.pursue_bid is True
+
+
+def test_apply_bid_decision_action_review_transitions_to_reviewing(client, test_db):
+    """review 액션은 record를 review/reviewing/pursue=True로 일관 전이시킨다."""
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(
+        test_db, operator_id=canonical.id, action="bid_now", decision_status="planned"
+    )
+
+    headers = _login_operator(client, "operator")
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{record.id}/actions",
+        json={"action": "review"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["action"] == "review"
+    assert payload["decision_status"] == "reviewing"
+    assert payload["pursue_bid"] is True
+    assert "텔레그램에서 검토 버튼" in payload["reasoning"]
+
+
+def test_apply_bid_decision_action_skip_transitions_to_skipped(client, test_db):
+    """skip 액션은 record를 skip/skipped/pursue=False로 일관 전이시킨다."""
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(
+        test_db, operator_id=canonical.id, action="review", decision_status="reviewing"
+    )
+
+    headers = _login_operator(client, "operator")
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{record.id}/actions",
+        json={"action": "skip"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["action"] == "skip"
+    assert payload["decision_status"] == "skipped"
+    assert payload["pursue_bid"] is False
+    assert "텔레그램에서 보류 버튼" in payload["reasoning"]
+
+
+def test_apply_bid_decision_action_canonical_can_target_synthetic(client, test_db):
+    """canonical bearer + ?operator_id=synthetic → 해당 회사 record에 액션 가능."""
+    canonical = _create_operator_user(test_db, username="operator")
+    synthetic = _create_operator_user(test_db, username="synthetic-sw-small-seoul")
+    canonical_record = _seed_action_decision(
+        test_db, operator_id=canonical.id, title="canonical-owned"
+    )
+    synthetic_record = _seed_action_decision(
+        test_db, operator_id=synthetic.id, title="synthetic-owned"
+    )
+
+    headers = _login_operator(client, "operator")
+
+    # canonical bearer scoping to synthetic can act on synthetic-owned record.
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{synthetic_record.id}/actions",
+        params={"operator_id": synthetic.id},
+        json={"action": "submit"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == synthetic_record.id
+    assert payload["operator_id"] == synthetic.id
+    assert payload["decision_status"] == "submitted"
+
+    # But scoping to synthetic must NOT allow touching a canonical-owned record.
+    cross = client.post(
+        f"/api/v1/operations/bid-decisions/{canonical_record.id}/actions",
+        params={"operator_id": synthetic.id},
+        json={"action": "submit"},
+        headers=headers,
+    )
+    assert cross.status_code == 404
+
+
+def test_apply_bid_decision_action_non_privileged_cannot_cross_operator(client, test_db):
+    """비-canonical/비-admin이 다른 operator의 record에 액션 시도 → 403."""
+    _create_operator_user(test_db, username="operator")
+    synthetic = _create_operator_user(test_db, username="synthetic-sw-small-seoul")
+    other = _create_operator_user(test_db, username="other-operator")
+    synthetic_record = _seed_action_decision(test_db, operator_id=synthetic.id)
+
+    headers = _login_operator(client, "other-operator")
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{synthetic_record.id}/actions",
+        params={"operator_id": synthetic.id},
+        json={"action": "submit"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+    # And without operator_id, non-privileged caller acts on their own scope —
+    # synthetic_record is owned by synthetic, so other-operator gets 404.
+    own_scope = client.post(
+        f"/api/v1/operations/bid-decisions/{synthetic_record.id}/actions",
+        json={"action": "submit"},
+        headers=headers,
+    )
+    assert own_scope.status_code == 404
+
+    # Original synthetic record must remain unchanged.
+    test_db.refresh(synthetic_record)
+    assert synthetic_record.decision_status != "submitted"
+
+
+def test_apply_bid_decision_action_404_for_unknown_record(client, test_db):
+    """존재하지 않는 record_id → 404."""
+    _create_operator_user(test_db, username="operator")
+    headers = _login_operator(client, "operator")
+    response = client.post(
+        "/api/v1/operations/bid-decisions/9999999/actions",
+        json={"action": "submit"},
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+def test_apply_bid_decision_action_422_for_invalid_action(client, test_db):
+    """잘못된 action 문자열은 Pydantic Literal 검증으로 422."""
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(test_db, operator_id=canonical.id)
+
+    headers = _login_operator(client, "operator")
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{record.id}/actions",
+        json={"action": "bid_now"},  # not in {submit, review, skip}
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_apply_bid_decision_action_requires_bearer(client, test_db):
+    """bearer 토큰 없이 요청하면 401."""
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(test_db, operator_id=canonical.id)
+
+    response = client.post(
+        f"/api/v1/operations/bid-decisions/{record.id}/actions",
+        json={"action": "submit"},
+    )
+    assert response.status_code == 401
+
+
+def test_apply_bid_decision_action_does_not_regress_patch_status(client, test_db):
+    """신규 endpoint 도입 후에도 기존 PATCH /status 호출자는 무손상."""
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(
+        test_db, operator_id=canonical.id, action="review", decision_status="planned"
+    )
+
+    # PATCH /status still works without bearer (legacy behavior preserved).
+    patch = client.patch(
+        f"/api/v1/operations/bid-decisions/{record.id}/status",
+        json={"decision_status": "submitted"},
+    )
+    assert patch.status_code == 200, patch.text
+    assert patch.json()["decision_status"] == "submitted"
+
+
+def test_apply_telegram_action_service_contract_unchanged(test_db):
+    """텔레그램 콜백이 의존하는 apply_telegram_action 시그니처/시멘틱 무손상.
+
+    신규 endpoint가 이 메서드를 그대로 재사용하므로, 별도 변경이 없는지
+    회귀 가드. submit/review/skip 각각에 대한 전이가 텔레그램 경로와 동일하게
+    동작해야 한다.
+    """
+    operator = ensure_operator_account(test_db)
+    record = _seed_action_decision(
+        test_db, operator_id=operator.id, action="review", decision_status="reviewing"
+    )
+
+    service = BidDecisionService()
+    updated = service.apply_telegram_action(
+        test_db, decision_record_id=record.id, requested_action="submit"
+    )
+    assert updated.action == "bid_now"
+    assert updated.decision_status == "submitted"
+    assert updated.pursue_bid is True
+
+    # Unsupported action still raises ValueError (defensive contract).
+    import pytest
+
+    with pytest.raises(ValueError):
+        service.apply_telegram_action(
+            test_db, decision_record_id=record.id, requested_action="nope"
+        )

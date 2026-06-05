@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "@/test-utils";
+import { toastApi } from "@/shared/components/ui";
 import { DetailDrawer } from "./DetailDrawer";
 import type { DetailSelection } from "../types";
 import type { DashboardOpportunityItem } from "@/shared/types";
@@ -61,5 +62,103 @@ describe("DetailDrawer", () => {
       <DetailDrawer selection={null} onClose={() => {}} username="operator" />
     );
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(payload),
+    headers: { get: () => null }
+  } as unknown as Response;
+}
+
+describe("DetailDrawer inline actions", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    act(() => {
+      toastApi.clearAll();
+    });
+  });
+
+  it("session/operatorId가 주어지면 액션 버튼 3개를 노출하고 POST한다", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        jsonResponse({
+          id: 7,
+          project_id: 12,
+          operator_id: 11,
+          pursue_bid: true,
+          action: "review",
+          decision_status: "reviewing",
+          initial_action: "bid_now",
+          initial_decision_status: "planned",
+          first_decided_at: null,
+          priority_score: 0.83,
+          urgency_score: 0.4,
+          competitiveness_score: 0.5,
+          budget_capture_score: 0.5,
+          expected_margin_score: 0.5,
+          execution_complexity_score: 0.5,
+          recommended_amount: 470_000_000,
+          probability_score: 0.62,
+          matched_score: 0.71,
+          deadline_hours_remaining: 48,
+          current_active_bids: 0,
+          max_active_bids: 5,
+          current_workload_score: 0.0,
+          workload_source: "auto",
+          score_breakdown: {},
+          strengths: [],
+          risk_flags: [],
+          reasoning: "",
+          created_at: "2026-06-01T00:00:00Z",
+          updated_at: "2026-06-01T00:00:00Z"
+        })
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithProviders(
+      <DetailDrawer
+        selection={selection}
+        onClose={() => {}}
+        username="operator"
+        authToken="test-token"
+        session={{ token: "test-token", username: "operator-1" } as never}
+        activeOperatorId={11}
+      />
+    );
+
+    const group = screen.getByRole("group", { name: "결정 액션" });
+    const reviewBtn = within(group).getByRole("button", { name: "검토로 전환" });
+    fireEvent.click(reviewBtn);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const actionCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/actions")
+    );
+    expect(actionCall).toBeDefined();
+    expect(String(actionCall![0])).toBe(
+      "/api/v1/operations/bid-decisions/7/actions?operator_id=11"
+    );
+    expect(
+      JSON.parse(String((actionCall![1] as RequestInit).body))
+    ).toEqual({ action: "review" });
+
+    expect(await screen.findByText("검토 상태로 전환했습니다")).toBeInTheDocument();
+  });
+
+  it("session이 없으면 액션 버튼이 노출되지 않는다", () => {
+    renderWithProviders(
+      <DetailDrawer
+        selection={selection}
+        onClose={() => {}}
+        username="operator"
+      />
+    );
+
+    expect(screen.queryByRole("group", { name: "결정 액션" })).not.toBeInTheDocument();
   });
 });
