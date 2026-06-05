@@ -102,6 +102,14 @@ export interface DashboardSectionSummary {
 
 export interface DashboardSummaryResponse {
   operator_id: number;
+  /**
+   * Operator the response is actually scoped to. Same as ``operator_id`` when
+   * the caller is reading their own data; differs when a privileged user
+   * impersonates another company via ``?operator_id=``. Optional for backward
+   * compatibility with cached / hand-rolled fixtures.
+   */
+  current_operator_id?: number;
+  current_operator_username?: string;
   generated_at: string;
   today: string;
   operational_status: DashboardMetric;
@@ -116,6 +124,8 @@ export interface DashboardSummaryResponse {
 
 export interface DashboardListResponse<T> {
   operator_id: number;
+  current_operator_id?: number;
+  current_operator_username?: string;
   generated_at: string;
   returned_count: number;
   limit: number;

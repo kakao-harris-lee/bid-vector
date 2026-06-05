@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
-import { fetchOperationsDashboard } from "@/shared/api";
+import { fetchOperationsDashboard, queryKeys } from "@/shared/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { formatDateTime, formatPercent } from "@/shared/lib";
 import type {
@@ -20,10 +20,11 @@ const TONE: Record<OperationsCardStatus, "info" | "healthy" | "watch" | "critica
 };
 
 export function OperationsScreen() {
-  const { session } = useShellContext();
+  const { session, activeOperator } = useShellContext();
+  const activeOperatorId = activeOperator.activeOperatorId;
   const operations = useQuery<OperationsDashboardResponse, Error>({
-    queryKey: ["operations", "dashboard"],
-    queryFn: () => fetchOperationsDashboard({ days: 7 }, session?.token),
+    queryKey: queryKeys.operations.dashboard(activeOperatorId),
+    queryFn: () => fetchOperationsDashboard({ days: 7 }, session?.token, activeOperatorId),
     enabled: Boolean(session?.token),
     refetchInterval: (query) => (document.visibilityState === "visible" ? REFRESH_INTERVAL_MS : false),
     refetchIntervalInBackground: false

@@ -3,12 +3,27 @@ import type { DecisionFunnelQuery } from "./decisions";
 import type { ExperimentListQuery } from "./experiments";
 import type { OperationsKpiQuery } from "./operations";
 
+/**
+ * Active operator-id is appended as a separate key segment so React Query's
+ * fuzzy invalidation (`["dashboard", "summary"]`) still matches every cached
+ * variant. `null` means "fall back to the token owner" — the URL omits the
+ * `operator_id=` query param entirely.
+ */
+type OperatorScope = number | null;
+
 export const queryKeys = {
+  operator: {
+    accounts: () => ["operator", "accounts"] as const
+  },
   dashboard: {
-    summary: () => ["dashboard", "summary"] as const,
-    opportunities: () => ["dashboard", "opportunities"] as const,
-    bids: () => ["dashboard", "bids"] as const,
-    results: () => ["dashboard", "results"] as const,
+    summary: (operatorId: OperatorScope = null) =>
+      ["dashboard", "summary", { operatorId }] as const,
+    opportunities: (operatorId: OperatorScope = null) =>
+      ["dashboard", "opportunities", { operatorId }] as const,
+    bids: (operatorId: OperatorScope = null) =>
+      ["dashboard", "bids", { operatorId }] as const,
+    results: (operatorId: OperatorScope = null) =>
+      ["dashboard", "results", { operatorId }] as const,
     paperSummary: () => ["dashboard", "paper-summary"] as const
   },
   profile: {
@@ -36,7 +51,10 @@ export const queryKeys = {
     list: (query: ExperimentListQuery) => ["experiments", "list", normalizeExperimentKey(query)] as const
   },
   operations: {
-    kpi: (query: OperationsKpiQuery) => ["operations", "kpi", normalizeOperationsKpiKey(query)] as const
+    dashboard: (operatorId: OperatorScope = null) =>
+      ["operations", "dashboard", { operatorId }] as const,
+    kpi: (query: OperationsKpiQuery, operatorId: OperatorScope = null) =>
+      ["operations", "kpi", normalizeOperationsKpiKey(query), { operatorId }] as const
   }
 } as const;
 

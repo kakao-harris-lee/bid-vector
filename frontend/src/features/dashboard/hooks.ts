@@ -8,26 +8,44 @@ import {
 } from "@/shared/api";
 import type { AuthSession } from "@/app/layout/AuthGate";
 
-export function useOpportunitiesQuery(session: AuthSession | null) {
+/**
+ * Dashboard list queries scope themselves to the active operator-id passed
+ * from the Shell context. `null` keeps the historical behaviour (token owner
+ * branch on the backend) so single-user sessions are unaffected. Every key
+ * embeds `operatorId` so React Query reads/writes a separate cache slot per
+ * company — switching companies in the header invalidates the prefix and
+ * triggers a refetch with the new `?operator_id=`.
+ */
+
+export function useOpportunitiesQuery(
+  session: AuthSession | null,
+  operatorId: number | null = null
+) {
   return useQuery({
-    queryKey: queryKeys.dashboard.opportunities(),
-    queryFn: () => fetchOpportunities(session?.token),
+    queryKey: queryKeys.dashboard.opportunities(operatorId),
+    queryFn: () => fetchOpportunities(session?.token, operatorId),
     enabled: Boolean(session?.token)
   });
 }
 
-export function useBidsQuery(session: AuthSession | null) {
+export function useBidsQuery(
+  session: AuthSession | null,
+  operatorId: number | null = null
+) {
   return useQuery({
-    queryKey: queryKeys.dashboard.bids(),
-    queryFn: () => fetchBids(session?.token),
+    queryKey: queryKeys.dashboard.bids(operatorId),
+    queryFn: () => fetchBids(session?.token, operatorId),
     enabled: Boolean(session?.token)
   });
 }
 
-export function useResultsQuery(session: AuthSession | null) {
+export function useResultsQuery(
+  session: AuthSession | null,
+  operatorId: number | null = null
+) {
   return useQuery({
-    queryKey: queryKeys.dashboard.results(),
-    queryFn: () => fetchResults(session?.token),
+    queryKey: queryKeys.dashboard.results(operatorId),
+    queryFn: () => fetchResults(session?.token, operatorId),
     enabled: Boolean(session?.token)
   });
 }

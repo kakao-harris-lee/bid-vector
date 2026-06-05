@@ -17,8 +17,8 @@ import { useOpportunitiesQuery } from "./hooks";
 import type { DetailSelection } from "./types";
 
 export function OpportunitiesScreen() {
-  const { summary, session } = useShellContext();
-  const query = useOpportunitiesQuery(session);
+  const { summary, session, activeOperator } = useShellContext();
+  const query = useOpportunitiesQuery(session, activeOperator.activeOperatorId);
   const [filter, setFilter] = useState<OpportunityFilter>("all");
   const [sort, setSort] = useState<OpportunitySort>("deadline");
   const [selected, setSelected] = useState<DetailSelection | null>(null);

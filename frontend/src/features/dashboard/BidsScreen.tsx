@@ -11,8 +11,8 @@ import { useBidsQuery } from "./hooks";
 import type { DetailSelection } from "./types";
 
 export function BidsScreen() {
-  const { summary, session } = useShellContext();
-  const query = useBidsQuery(session);
+  const { summary, session, activeOperator } = useShellContext();
+  const query = useBidsQuery(session, activeOperator.activeOperatorId);
   const [selected, setSelected] = useState<DetailSelection | null>(null);
 
   if (summary.isPending && !summary.data) return <LoadingState />;

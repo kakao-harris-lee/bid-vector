@@ -11,4 +11,5 @@ export * from "./experiments";
 export * from "./synthetic";
 export * from "./operations";
 export * from "./notifications";
+export * from "./operator";
 export { queryKeys } from "./queryKeys";

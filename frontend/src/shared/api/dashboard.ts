@@ -18,32 +18,57 @@ function wrapError<T>(promise: Promise<T>): Promise<T> {
   });
 }
 
-export function fetchDashboardSummary(token?: string | null): Promise<DashboardSummaryResponse> {
-  return wrapError(apiRequest<DashboardSummaryResponse>("/api/v1/dashboard/summary", { token }));
+function withOperator(path: string, operatorId?: number | null): string {
+  if (typeof operatorId !== "number") return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}operator_id=${operatorId}`;
 }
 
-export function fetchOpportunities(
-  token?: string | null
-): Promise<DashboardListResponse<DashboardOpportunityItem>> {
+export function fetchDashboardSummary(
+  token?: string | null,
+  operatorId?: number | null
+): Promise<DashboardSummaryResponse> {
   return wrapError(
-    apiRequest<DashboardListResponse<DashboardOpportunityItem>>(
-      "/api/v1/dashboard/opportunities",
+    apiRequest<DashboardSummaryResponse>(
+      withOperator("/api/v1/dashboard/summary", operatorId),
       { token }
     )
   );
 }
 
-export function fetchBids(token?: string | null): Promise<DashboardListResponse<DashboardBidItem>> {
+export function fetchOpportunities(
+  token?: string | null,
+  operatorId?: number | null
+): Promise<DashboardListResponse<DashboardOpportunityItem>> {
   return wrapError(
-    apiRequest<DashboardListResponse<DashboardBidItem>>("/api/v1/dashboard/bids", { token })
+    apiRequest<DashboardListResponse<DashboardOpportunityItem>>(
+      withOperator("/api/v1/dashboard/opportunities", operatorId),
+      { token }
+    )
+  );
+}
+
+export function fetchBids(
+  token?: string | null,
+  operatorId?: number | null
+): Promise<DashboardListResponse<DashboardBidItem>> {
+  return wrapError(
+    apiRequest<DashboardListResponse<DashboardBidItem>>(
+      withOperator("/api/v1/dashboard/bids", operatorId),
+      { token }
+    )
   );
 }
 
 export function fetchResults(
-  token?: string | null
+  token?: string | null,
+  operatorId?: number | null
 ): Promise<DashboardListResponse<DashboardResultItem>> {
   return wrapError(
-    apiRequest<DashboardListResponse<DashboardResultItem>>("/api/v1/dashboard/results", { token })
+    apiRequest<DashboardListResponse<DashboardResultItem>>(
+      withOperator("/api/v1/dashboard/results", operatorId),
+      { token }
+    )
   );
 }
 
