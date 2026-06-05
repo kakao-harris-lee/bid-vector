@@ -123,6 +123,39 @@ def ensure_operator_profile(db: Session) -> CompanyProfile:
     return profile
 
 
+def ensure_operator_profile_for(db: Session, operator: User) -> CompanyProfile:
+    """Resolve (or create) a company profile bound to a specific operator.
+
+    Mirrors :func:`ensure_operator_profile` but scoped to ``operator.id`` instead
+    of always anchoring on the canonical singleton account. Used by endpoints
+    that support the ``?operator_id=`` cross-operator context introduced in
+    PR #70 — the canonical operator can view (and bootstrap if missing) the
+    profile rows of synthetic-* companies without falling back to the canonical
+    profile by accident.
+    """
+    direct = (
+        db.query(CompanyProfile)
+        .filter(CompanyProfile.user_id == operator.id)
+        .first()
+    )
+    if direct is not None:
+        return direct
+
+    profile = CompanyProfile(
+        user_id=operator.id,
+        business_type="service",
+        license_codes="",
+        region_codes="",
+        annual_revenue=0.0,
+        capacity_score=0.0,
+        total_awards=0,
+    )
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
 def get_operator_strategy(db: Session, allow_fallback: bool = True) -> OperatorStrategy | None:
     """Resolve the canonical watch strategy used for operator monitoring."""
     operator = get_operator_account(db)
@@ -155,6 +188,47 @@ def ensure_operator_strategy(db: Session) -> OperatorStrategy:
             db.commit()
             db.refresh(fallback_strategy)
         return fallback_strategy
+
+    strategy = OperatorStrategy(
+        user_id=operator.id,
+        focus_categories="",
+        focus_regions="",
+        exclude_regions="",
+        required_keywords="",
+        exclude_keywords="",
+        min_budget_estimate=0.0,
+        max_budget_estimate=0.0,
+        minimum_match_score=0.6,
+        minimum_probability_score=0.55,
+        bid_now_threshold=DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
+        review_threshold=DEFAULT_OPERATOR_REVIEW_THRESHOLD,
+        auto_workload_penalty_multiplier=1.0,
+        category_priority_overrides="{}",
+        notify_only_high_priority=True,
+        max_recommended_candidates=10,
+    )
+    db.add(strategy)
+    db.commit()
+    db.refresh(strategy)
+    return strategy
+
+
+def ensure_operator_strategy_for(db: Session, operator: User) -> OperatorStrategy:
+    """Resolve (or create) a watch strategy bound to a specific operator.
+
+    Mirrors :func:`ensure_operator_strategy` but scoped to ``operator.id``. Used
+    by endpoints that accept ``?operator_id=`` and need the target operator's
+    own strategy row instead of the canonical singleton's. Avoids the canonical
+    fallback path that would otherwise reassign the lone strategy row to the
+    canonical operator.
+    """
+    direct = (
+        db.query(OperatorStrategy)
+        .filter(OperatorStrategy.user_id == operator.id)
+        .first()
+    )
+    if direct is not None:
+        return direct
 
     strategy = OperatorStrategy(
         user_id=operator.id,

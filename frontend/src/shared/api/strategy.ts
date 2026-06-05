@@ -16,9 +16,26 @@ function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {
   });
 }
 
-export function fetchStrategy(token?: string | null): Promise<OperatorStrategyResponse> {
+/**
+ * Append `?operator_id=` only when the caller passes a concrete number.
+ * `null`/`undefined` means "fall back to the token owner" so the URL must omit
+ * the param entirely — mirrors the dashboard pattern (PR #71).
+ */
+function withOperator(path: string, operatorId?: number | null): string {
+  if (typeof operatorId !== "number") return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}operator_id=${operatorId}`;
+}
+
+export function fetchStrategy(
+  token?: string | null,
+  operatorId?: number | null
+): Promise<OperatorStrategyResponse> {
   return wrap(
-    apiRequest<OperatorStrategyResponse>("/api/v1/operator/strategy", { token }),
+    apiRequest<OperatorStrategyResponse>(
+      withOperator("/api/v1/operator/strategy", operatorId),
+      { token }
+    ),
     "전략 정보를 불러오지 못했습니다."
   );
 }
@@ -44,7 +61,8 @@ export interface StrategyCandidatesQuery {
 
 export function fetchStrategyCandidates(
   params: StrategyCandidatesQuery = {},
-  token?: string | null
+  token?: string | null,
+  operatorId?: number | null
 ): Promise<OperatorStrategyCandidatesResponse> {
   const search = new URLSearchParams();
   if (typeof params.limit === "number") search.set("limit", String(params.limit));
@@ -56,7 +74,10 @@ export function fetchStrategyCandidates(
     ? `/api/v1/operator/strategy/candidates?${query}`
     : "/api/v1/operator/strategy/candidates";
   return wrap(
-    apiRequest<OperatorStrategyCandidatesResponse>(path, { token }),
+    apiRequest<OperatorStrategyCandidatesResponse>(
+      withOperator(path, operatorId),
+      { token }
+    ),
     "후보 미리보기를 불러오지 못했습니다."
   );
 }

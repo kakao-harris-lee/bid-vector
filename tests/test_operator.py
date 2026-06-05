@@ -1376,6 +1376,8 @@ def test_operator_dashboard_contract_handles_empty_state_and_openapi_schema(clie
         "recent_monitor_runs",
         "feedback_summary",
         "action_hrefs",
+        "current_operator_id",
+        "current_operator_username",
     }
     assert payload["recent_decisions"] == []
     assert payload["recent_monitor_runs"] == []

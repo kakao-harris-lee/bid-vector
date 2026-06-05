@@ -14,9 +14,26 @@ function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {
   });
 }
 
-export function fetchProfile(token?: string | null): Promise<OperatorProfileResponse> {
+/**
+ * Append `?operator_id=` only when the caller passes a concrete number.
+ * `null`/`undefined` means "fall back to the token owner" so the URL must omit
+ * the param entirely — mirrors the dashboard pattern (PR #71).
+ */
+function withOperator(path: string, operatorId?: number | null): string {
+  if (typeof operatorId !== "number") return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}operator_id=${operatorId}`;
+}
+
+export function fetchProfile(
+  token?: string | null,
+  operatorId?: number | null
+): Promise<OperatorProfileResponse> {
   return wrap(
-    apiRequest<OperatorProfileResponse>("/api/v1/operator/profile", { token }),
+    apiRequest<OperatorProfileResponse>(
+      withOperator("/api/v1/operator/profile", operatorId),
+      { token }
+    ),
     "업체 정보를 불러오지 못했습니다."
   );
 }

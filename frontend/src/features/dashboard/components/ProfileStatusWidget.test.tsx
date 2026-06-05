@@ -143,11 +143,14 @@ describe("ProfileStatusWidget", () => {
     expect(dashes.length).toBeGreaterThanOrEqual(5);
   });
 
-  it("falls back to metadata-only (no 5-axis grid) when not own context", () => {
+  it("renders the 5-axis grid for impersonation contexts but disables the edit CTA", () => {
+    // PR #74: GET supports cross-operator reads, so the widget now shows the
+    // full 5-axis grid for synthetic operators too. The edit CTA is replaced
+    // by a read-only notice because PUT stays self-only on the backend.
     renderWithProviders(
       <ProfileStatusWidget
         operatorAccount={syntheticAccount}
-        profile={null}
+        profile={{ ...fullProfile, operator_id: 11, username: "synthetic-aggressive" }}
         isOwnContext={false}
         onWizardEnter={vi.fn()}
         onEdit={vi.fn()}
@@ -157,14 +160,16 @@ describe("ProfileStatusWidget", () => {
     expect(screen.getByText("Synthetic A")).toBeInTheDocument();
     expect(screen.getByTestId("synthetic-badge")).toBeInTheDocument();
     expect(screen.getByLabelText("프로필 입력 완료")).toBeInTheDocument();
-    expect(screen.getByTestId("other-context-hint")).toHaveTextContent(
-      "5축 상세는 본인 회사만 표시됩니다"
-    );
 
-    // No 5-axis grid and no action buttons for impersonation contexts.
-    expect(screen.queryByLabelText("5축 자격 요약")).not.toBeInTheDocument();
+    // 5-axis grid is now rendered for impersonation contexts too.
+    expect(screen.getByLabelText("5축 자격 요약")).toBeInTheDocument();
+
+    // Edit CTAs are NOT rendered — replaced with a read-only notice.
     expect(screen.queryByRole("button", { name: /편집/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /단계별 입력 시작/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId("other-context-hint")).toHaveTextContent(
+      "편집은 본인 회사로 돌아가야"
+    );
   });
 
   it("shows detail-skeleton when own context is still loading the 5-axis payload", () => {

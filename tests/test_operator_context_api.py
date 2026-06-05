@@ -391,6 +391,324 @@ def test_analytics_endpoints_403_for_non_privileged_cross_operator(client, test_
         assert response.status_code == 403, path
 
 
+# ---------------------------------------------------------------------------
+# /api/v1/operator/* endpoints (profile, strategy, overview, dashboard,
+# strategy/candidates) — cross-operator reads + self-only writes
+# ---------------------------------------------------------------------------
+
+
+_OPERATOR_READ_PATHS = (
+    "/api/v1/operator/profile",
+    "/api/v1/operator/strategy",
+    "/api/v1/operator/strategy/candidates",
+    "/api/v1/operator/dashboard",
+    "/api/v1/operator/overview",
+)
+
+
+def _patch_synthetic_company(test_db, user_id: int) -> None:
+    """Make the synthetic operator's company profile distinguishable in assertions."""
+    profile = (
+        test_db.query(CompanyProfile).filter(CompanyProfile.user_id == user_id).one()
+    )
+    profile.business_type = "construction"
+    profile.license_codes = "CON001"
+    profile.region_codes = "서울특별시"
+    profile.annual_revenue = 9_000_000_000.0
+    profile.capacity_score = 0.88
+    profile.total_awards = 7
+    test_db.commit()
+
+
+def test_operator_read_endpoints_default_to_self(client, test_db):
+    """Without ``?operator_id`` the operator read endpoints report the actor's id."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    for path in _OPERATOR_READ_PATHS:
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, (path, response.text)
+        payload = response.json()
+        assert payload["current_operator_id"] == canonical.id, path
+        assert payload["current_operator_username"] == "operator", path
+        # Each response also carries the canonical scoped ``operator_id`` field.
+        if "operator_id" in payload:
+            assert payload["operator_id"] == canonical.id, path
+
+
+def test_operator_read_endpoints_canonical_can_target_synthetic(client, test_db):
+    """Canonical bearer can scope every /operator/* read to a synthetic operator."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    _patch_synthetic_company(test_db, synthetic.id)
+    headers = _login(client, "operator")
+    for path in _OPERATOR_READ_PATHS:
+        response = client.get(
+            path, params={"operator_id": synthetic.id}, headers=headers
+        )
+        assert response.status_code == 200, (path, response.text)
+        payload = response.json()
+        assert payload["current_operator_id"] == synthetic.id, path
+        assert payload["current_operator_username"] == "synthetic-sw-small-seoul", path
+        if "operator_id" in payload:
+            assert payload["operator_id"] == synthetic.id, path
+
+
+def test_operator_profile_returns_target_company_fields(client, test_db):
+    """/operator/profile?operator_id=synthetic exposes the synthetic company's row."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    _patch_synthetic_company(test_db, synthetic.id)
+    headers = _login(client, "operator")
+    response = client.get(
+        "/api/v1/operator/profile",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    # Profile fields reflect the synthetic operator, not the canonical one.
+    assert payload["operator_id"] == synthetic.id
+    assert payload["username"] == "synthetic-sw-small-seoul"
+    assert payload["business_type"] == "construction"
+    assert payload["license_codes"] == ["CON001"]
+    assert payload["annual_revenue"] == 9_000_000_000.0
+
+
+def test_operator_strategy_returns_target_strategy_row(client, test_db):
+    """/operator/strategy?operator_id=synthetic loads the synthetic strategy row, not canonical."""
+    canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    # Override the synthetic operator's strategy so it differs from canonical.
+    synth_strategy = (
+        test_db.query(OperatorStrategy)
+        .filter(OperatorStrategy.user_id == synthetic.id)
+        .one()
+    )
+    synth_strategy.focus_categories = "construction, infrastructure"
+    synth_strategy.bid_now_threshold = 0.82
+    synth_strategy.review_threshold = 0.5
+    test_db.commit()
+
+    headers = _login(client, "operator")
+    response = client.get(
+        "/api/v1/operator/strategy",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == synthetic.id
+    assert payload["focus_categories"] == ["construction", "infrastructure"]
+    assert payload["bid_now_threshold"] == 0.82
+    assert payload["review_threshold"] == 0.5
+
+    # Canonical's strategy must remain untouched.
+    canonical_strategy = (
+        test_db.query(OperatorStrategy)
+        .filter(OperatorStrategy.user_id == canonical.id)
+        .one()
+    )
+    assert canonical_strategy.focus_categories == ""
+    assert float(canonical_strategy.bid_now_threshold) == 0.7
+
+
+def test_operator_read_endpoints_404_for_unknown_operator(client, test_db):
+    """Unknown ``?operator_id`` values consistently return 404 for /operator/*."""
+    _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    for path in _OPERATOR_READ_PATHS:
+        response = client.get(
+            path, params={"operator_id": 999_999}, headers=headers
+        )
+        assert response.status_code == 404, path
+
+
+def test_operator_read_endpoints_403_for_non_privileged_cross_operator(client, test_db):
+    """Non-privileged callers cannot read another operator's /operator/* data."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "other-operator")
+    for path in _OPERATOR_READ_PATHS:
+        response = client.get(
+            path, params={"operator_id": synthetic.id}, headers=headers
+        )
+        assert response.status_code == 403, path
+
+
+def test_operator_read_endpoints_allow_non_privileged_self_target(client, test_db):
+    """Non-privileged callers may explicitly pass their own id on /operator/*."""
+    _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "other-operator")
+    self_id = (
+        client.get("/api/v1/operator/accounts", headers=headers)
+        .json()["current_operator_id"]
+    )
+    for path in _OPERATOR_READ_PATHS:
+        response = client.get(
+            path, params={"operator_id": self_id}, headers=headers
+        )
+        assert response.status_code == 200, (path, response.text)
+        payload = response.json()
+        assert payload["current_operator_id"] == self_id, path
+
+
+def test_operator_dashboard_admin_can_view_other_operators(client, test_db):
+    """Admin-flagged accounts also count as privileged for /operator/dashboard."""
+    _, synthetic, _ = _seed_canonical_and_synthetic(test_db)
+    _create_user(test_db, username="admin-user", is_admin=True)
+    headers = _login(client, "admin-user")
+    response = client.get(
+        "/api/v1/operator/dashboard",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_operator_id"] == synthetic.id
+    assert payload["current_operator_username"] == "synthetic-sw-small-seoul"
+    assert payload["operator_id"] == synthetic.id
+
+
+def test_operator_read_unauthenticated_falls_back_to_canonical(client, test_db):
+    """Unauthenticated callers retain the legacy canonical-operator behavior for reads."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    for path in _OPERATOR_READ_PATHS:
+        response = client.get(path)
+        assert response.status_code == 200, (path, response.text)
+        payload = response.json()
+        assert payload["current_operator_id"] == canonical.id, path
+
+
+# ---------------------------------------------------------------------------
+# PUT /operator/{profile,strategy} — self-only write policy
+# ---------------------------------------------------------------------------
+
+
+def test_put_operator_profile_forbids_targeting_other_operator(client, test_db):
+    """Canonical bearer must not be allowed to edit a synthetic operator's profile."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    response = client.put(
+        "/api/v1/operator/profile",
+        params={"operator_id": synthetic.id},
+        json={"business_type": "construction"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+    assert "another operator" in response.json()["detail"].lower()
+    # The synthetic profile must remain untouched.
+    profile = (
+        test_db.query(CompanyProfile)
+        .filter(CompanyProfile.user_id == synthetic.id)
+        .one()
+    )
+    assert profile.business_type == "software"
+
+
+def test_put_operator_profile_allows_self_target(client, test_db):
+    """Canonical bearer may PUT its own profile via explicit operator_id=self."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    response = client.put(
+        "/api/v1/operator/profile",
+        params={"operator_id": canonical.id},
+        json={"business_type": "software", "annual_revenue": 1_000_000.0},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_operator_id"] == canonical.id
+    assert payload["operator_id"] == canonical.id
+    assert payload["business_type"] == "software"
+    assert payload["annual_revenue"] == 1_000_000.0
+
+
+def test_put_operator_profile_default_target_is_self(client, test_db):
+    """PUT /operator/profile without operator_id edits the bearer-token owner's row."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    response = client.put(
+        "/api/v1/operator/profile",
+        json={"full_name": "Updated Name"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_operator_id"] == canonical.id
+    assert payload["operator_id"] == canonical.id
+    assert payload["full_name"] == "Updated Name"
+
+
+def test_put_operator_strategy_forbids_targeting_other_operator(client, test_db):
+    """Canonical bearer cannot mutate a synthetic operator's strategy row."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    response = client.put(
+        "/api/v1/operator/strategy",
+        params={"operator_id": synthetic.id},
+        json={"bid_now_threshold": 0.9},
+        headers=headers,
+    )
+    assert response.status_code == 403
+    strategy = (
+        test_db.query(OperatorStrategy)
+        .filter(OperatorStrategy.user_id == synthetic.id)
+        .one()
+    )
+    assert float(strategy.bid_now_threshold) == 0.7
+
+
+def test_put_operator_strategy_allows_self_target(client, test_db):
+    """Canonical can PUT its own strategy row with explicit operator_id=self."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    response = client.put(
+        "/api/v1/operator/strategy",
+        params={"operator_id": canonical.id},
+        json={"focus_categories": ["software"], "bid_now_threshold": 0.75},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_operator_id"] == canonical.id
+    assert payload["operator_id"] == canonical.id
+    assert payload["focus_categories"] == ["software"]
+    assert payload["bid_now_threshold"] == 0.75
+
+
+def test_put_operator_strategy_default_target_is_self(client, test_db):
+    """PUT /operator/strategy without operator_id mutates the actor's strategy."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    response = client.put(
+        "/api/v1/operator/strategy",
+        json={"max_recommended_candidates": 12},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_operator_id"] == canonical.id
+    assert payload["operator_id"] == canonical.id
+    assert payload["max_recommended_candidates"] == 12
+
+
+def test_put_operator_strategy_non_privileged_self_edit_ok(client, test_db):
+    """Non-privileged callers may still edit their own row (writes are self-only, not privileged-only)."""
+    _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "other-operator")
+    self_id = (
+        client.get("/api/v1/operator/accounts", headers=headers)
+        .json()["current_operator_id"]
+    )
+    response = client.put(
+        "/api/v1/operator/strategy",
+        params={"operator_id": self_id},
+        json={"bid_now_threshold": 0.65},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_operator_id"] == self_id
+    assert payload["operator_id"] == self_id
+    assert payload["bid_now_threshold"] == 0.65
+
+
 def test_dashboard_results_full_payload_preserves_existing_fields(client, test_db):
     """Existing /dashboard/results fields must remain present alongside new ones."""
     canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "@/test-utils";
 import type { DashboardSummaryResponse } from "@/shared/types";
@@ -106,11 +106,19 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   } as unknown as Response);
 }
 
-function buildFetchMock(profile: OperatorProfileResponse | null) {
+function buildFetchMock(
+  profile: OperatorProfileResponse | null,
+  impersonatedProfile?: OperatorProfileResponse
+) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/v1/dashboard/summary")) return jsonResponse(summary);
     if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
+    // `?operator_id=<n>` → impersonated GET (cross-operator). PR #74.
+    if (url.startsWith("/api/v1/operator/profile?operator_id=")) {
+      if (impersonatedProfile) return jsonResponse(impersonatedProfile);
+      return jsonResponse({ detail: "not found" }, 404);
+    }
     if (url === "/api/v1/operator/profile") {
       if (profile) return jsonResponse(profile);
       return jsonResponse({ detail: "not found" }, 404);
@@ -164,25 +172,44 @@ describe("HomeScreen + ProfileStatusWidget integration", () => {
     expect(window.location.pathname).toBe("/dashboard/profile");
   });
 
-  it("synthetic 운영자 선택 시 /operator/profile 호출이 발생하지 않고 5축 상세도 노출하지 않는다", async () => {
+  it("synthetic 운영자 컨텍스트는 /operator/profile?operator_id=N 으로 5축을 fetch 하지만 편집 CTA는 비노출한다", async () => {
     window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
-    const fetchMock = buildFetchMock(configuredProfile);
+    const impersonated: OperatorProfileResponse = {
+      ...configuredProfile,
+      operator_id: 11,
+      username: "synthetic-aggressive",
+      company: "Synthetic A"
+    };
+    const fetchMock = buildFetchMock(configuredProfile, impersonated);
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
-    // 자격 상태 위젯 자체는 표시되지만 5축 grid 는 없다.
+    // PR #74 한계 해소: 다른 회사 컨텍스트에서도 5축 grid 가 노출된다.
     expect(await screen.findByLabelText("내 자격 상태")).toBeInTheDocument();
-    expect(screen.queryByLabelText("5축 자격 요약")).not.toBeInTheDocument();
-    expect(await screen.findByText(/5축 상세는 본인 회사만 표시됩니다/)).toBeInTheDocument();
+    expect(await screen.findByLabelText("5축 자격 요약")).toBeInTheDocument();
+    // 편집 CTA 대신 본인 회사 안내 hint 가 보인다 (PUT 은 self-only).
+    expect(await screen.findByText(/편집은 본인 회사로 돌아가야/)).toBeInTheDocument();
+    // 위젯 안에 "편집"/"단계별 입력 시작" 액션 버튼이 없음을 검증한다. 헤더의 "전략
+    // 편집" 아이콘 버튼이 매칭되지 않도록 위젯 컨테이너로 범위를 좁혀 query 한다.
+    const widget = screen.getByLabelText("내 자격 상태");
+    expect(within(widget).queryByRole("button", { name: /편집/ })).not.toBeInTheDocument();
+    expect(
+      within(widget).queryByRole("button", { name: /단계별 입력 시작/ })
+    ).not.toBeInTheDocument();
 
-    // /operator/profile 은 다른 회사 컨텍스트에서 호출하지 않는다 (PR #70 한계).
+    // 다른 회사 컨텍스트는 `?operator_id=` 가 붙은 URL 로만 호출한다.
     await waitFor(() => {
       const calls = fetchMock.mock.calls.filter(
-        ([url]) => String(url) === "/api/v1/operator/profile"
+        ([url]) => String(url) === "/api/v1/operator/profile?operator_id=11"
       );
-      expect(calls.length).toBe(0);
+      expect(calls.length).toBe(1);
     });
+    // 토큰 owner 경로(/operator/profile, no query) 는 호출하지 않는다.
+    const bareCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "/api/v1/operator/profile"
+    );
+    expect(bareCalls.length).toBe(0);
   });
 });

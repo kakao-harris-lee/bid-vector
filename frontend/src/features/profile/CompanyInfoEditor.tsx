@@ -75,9 +75,21 @@ const defaultValues: CompanyInfoFormValues = {
 };
 
 export function CompanyInfoEditor() {
-  const { session } = useShellContext();
-  const profileQuery = useProfileQuery(session);
-  const strategyQuery = useProfileStrategyQuery(session);
+  const { session, activeOperator } = useShellContext();
+  // GET supports cross-operator reads on PR #74 — pass the active operator so
+  // the screen mirrors whichever company the dashboard is scoped to. `null`
+  // (token owner) keeps the URL bare. Edits stay self-only on the backend, so
+  // impersonation views are forced into read-only mode here.
+  const activeOperatorId = activeOperator.activeOperatorId;
+  const isOwnContext = activeOperatorId === null;
+  const currentOperatorLabel = activeOperator.currentOperator
+    ? activeOperator.currentOperator.company ||
+      activeOperator.currentOperator.full_name ||
+      activeOperator.currentOperator.username
+    : null;
+
+  const profileQuery = useProfileQuery(session, activeOperatorId);
+  const strategyQuery = useProfileStrategyQuery(session, activeOperatorId);
   const profileMutation = useUpdateProfileMutation(session);
   const strategyMutation = useUpdateProfileStrategyMutation(session);
 
@@ -96,14 +108,20 @@ export function CompanyInfoEditor() {
   //   profile_configured === false → guided 4-step wizard
   //   profile_configured === true  → single-page edit (existing behaviour)
   // The user can also toggle manually after the initial decision.
+  // For impersonation contexts we never auto-enter the wizard — the editor
+  // stays read-only since PUT is self-only on the backend (PR #74).
   const [mode, setMode] = useState<EditorMode | null>(null);
   const [step, setStep] = useState<number>(0);
 
   useEffect(() => {
     if (mode !== null) return;
     if (!profileQuery.data) return;
+    if (!isOwnContext) {
+      setMode("single");
+      return;
+    }
     setMode(profileQuery.data.profile_configured ? "single" : "wizard");
-  }, [mode, profileQuery.data]);
+  }, [mode, profileQuery.data, isOwnContext]);
 
   useEffect(() => {
     if (profileQuery.data && strategyQuery.data) {
@@ -148,6 +166,14 @@ export function CompanyInfoEditor() {
       return;
     }
 
+    if (errors.some((err) => err instanceof ApiError && err.status === 403)) {
+      toastApi.danger({
+        title: "다른 회사 프로필은 편집할 수 없습니다.",
+        description: "본인 회사 컨텍스트로 돌아간 뒤 다시 시도하세요."
+      });
+      return;
+    }
+
     if (errors.length === 0) {
       toastApi.success({
         title: "업체 정보 저장 완료",
@@ -186,7 +212,10 @@ export function CompanyInfoEditor() {
 
   const errors = form.formState.errors;
   const saving = profileMutation.isPending || strategyMutation.isPending;
-  const resolvedMode: EditorMode = mode ?? "single";
+  const readOnly = !isOwnContext;
+  // Impersonation views collapse to single-page read-only; the wizard CTA is
+  // pointless because we cannot persist edits for other companies.
+  const resolvedMode: EditorMode = readOnly ? "single" : mode ?? "single";
   const isWizard = resolvedMode === "wizard";
   const activeStep = WIZARD_STEPS[Math.min(step, WIZARD_STEPS.length - 1)];
   const isLastStep = step >= WIZARD_STEPS.length - 1;
@@ -216,79 +245,98 @@ export function CompanyInfoEditor() {
           <h2 className="text-lg font-semibold text-[var(--color-fg)]">업체 정보</h2>
           <div className="flex items-center gap-3">
             <span className="text-xs text-[var(--color-muted)]">
-              {isWizard
-                ? `단계 ${step + 1} / ${stepCount} — ${activeStep.title}`
-                : "정확한 5축 입력이 추천 품질을 좌우합니다."}
+              {readOnly
+                ? "다른 회사 컨텍스트는 읽기 전용입니다."
+                : isWizard
+                  ? `단계 ${step + 1} / ${stepCount} — ${activeStep.title}`
+                  : "정확한 5축 입력이 추천 품질을 좌우합니다."}
             </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={toggleMode}
-              aria-pressed={isWizard}
-            >
-              {isWizard ? "전체 보기" : "단계별 가이드"}
-            </Button>
+            {readOnly ? null : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={toggleMode}
+                aria-pressed={isWizard}
+              >
+                {isWizard ? "전체 보기" : "단계별 가이드"}
+              </Button>
+            )}
           </div>
         </header>
+
+        {readOnly ? (
+          <div
+            role="note"
+            data-testid="profile-readonly-notice"
+            className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_88%)] px-3 py-2 text-xs"
+          >
+            현재 회사: {currentOperatorLabel ?? "다른 회사"} · 편집은 본인 회사로 돌아가야
+            가능합니다.
+          </div>
+        ) : null}
 
         {isWizard ? (
           <WizardProgress current={step} total={stepCount} steps={WIZARD_STEPS} />
         ) : null}
 
-        {!isWizard || activeStep.key === "basics" ? (
-          <BasicsCard form={form} errors={errors} />
-        ) : null}
+        <fieldset disabled={readOnly} className="contents">
+          {!isWizard || activeStep.key === "basics" ? (
+            <BasicsCard form={form} errors={errors} />
+          ) : null}
 
-        {!isWizard || activeStep.key === "capacity" ? (
-          <CapacityCard form={form} errors={errors} />
-        ) : null}
+          {!isWizard || activeStep.key === "capacity" ? (
+            <CapacityCard form={form} errors={errors} />
+          ) : null}
 
-        {!isWizard || activeStep.key === "budget" ? (
-          <BudgetCard form={form} errors={errors} />
-        ) : null}
+          {!isWizard || activeStep.key === "budget" ? (
+            <BudgetCard form={form} errors={errors} />
+          ) : null}
 
-        {!isWizard || activeStep.key === "preferences" ? (
-          <PreferencesCard form={form} />
-        ) : null}
+          {!isWizard || activeStep.key === "preferences" ? (
+            <PreferencesCard form={form} />
+          ) : null}
+        </fieldset>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {isWizard ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={goPrev}
-                disabled={step === 0 || saving}
-              >
-                이전
-              </Button>
-              {isLastStep ? (
+        {readOnly ? null : (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {isWizard ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={goPrev}
+                  disabled={step === 0 || saving}
+                >
+                  이전
+                </Button>
+                {isLastStep ? (
+                  <Button type="submit" disabled={saving}>
+                    {saving ? "저장 중" : "저장하고 마치기"}
+                  </Button>
+                ) : (
+                  <Button type="button" onClick={goNext} disabled={saving}>
+                    다음
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => form.reset(formInitial)}
+                  disabled={saving || !form.formState.isDirty}
+                >
+                  되돌리기
+                </Button>
                 <Button type="submit" disabled={saving}>
-                  {saving ? "저장 중" : "저장하고 마치기"}
+                  {saving ? "저장 중" : "저장"}
                 </Button>
-              ) : (
-                <Button type="button" onClick={goNext} disabled={saving}>
-                  다음
-                </Button>
-              )}
-            </>
-          ) : (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => form.reset(formInitial)}
-                disabled={saving || !form.formState.isDirty}
-              >
-                되돌리기
-              </Button>
-              <Button type="submit" disabled={saving}>
-                {saving ? "저장 중" : "저장"}
-              </Button>
-            </>
-          )}
-        </div>
+              </>
+            )}
+          </div>
+        )}
       </form>
 
       <aside className="flex flex-col gap-4">

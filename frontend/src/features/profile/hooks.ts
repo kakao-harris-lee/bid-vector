@@ -19,18 +19,32 @@ import type {
 } from "@/shared/types/strategy";
 import type { AuthSession } from "@/app/layout/AuthGate";
 
-export function useProfileQuery(session: AuthSession | null) {
+/**
+ * Profile detail query.
+ *
+ * When `operatorId` is `null`/`undefined` the request hits `/operator/profile`
+ * without `?operator_id=` so the backend falls back to the token owner. With a
+ * concrete id, privileged callers can read another company's 5-axis detail
+ * (GET = cross-operator on PR #74). Edits stay self-only — see the mutation.
+ */
+export function useProfileQuery(
+  session: AuthSession | null,
+  operatorId: number | null = null
+) {
   return useQuery({
-    queryKey: queryKeys.profile.detail(),
-    queryFn: () => fetchProfile(session?.token),
+    queryKey: queryKeys.profile.detail(operatorId),
+    queryFn: () => fetchProfile(session?.token, operatorId),
     enabled: Boolean(session?.token)
   });
 }
 
-export function useProfileStrategyQuery(session: AuthSession | null) {
+export function useProfileStrategyQuery(
+  session: AuthSession | null,
+  operatorId: number | null = null
+) {
   return useQuery({
-    queryKey: queryKeys.strategy.detail(),
-    queryFn: () => fetchStrategy(session?.token),
+    queryKey: queryKeys.strategy.detail(operatorId),
+    queryFn: () => fetchStrategy(session?.token, operatorId),
     enabled: Boolean(session?.token)
   });
 }
@@ -40,7 +54,10 @@ export function useUpdateProfileMutation(session: AuthSession | null) {
   return useMutation<OperatorProfileResponse, Error, OperatorProfileUpdatePayload>({
     mutationFn: (payload) => updateProfile(payload, session?.token),
     onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.profile.detail(), data);
+      // Seed the canonical (operatorId=null) cache and broadcast-invalidate
+      // every operator-scoped variant so impersonation views see the fresh row.
+      queryClient.setQueryData(queryKeys.profile.detail(null), data);
+      queryClient.invalidateQueries({ queryKey: ["profile"] });
     }
   });
 }
@@ -50,8 +67,8 @@ export function useUpdateProfileStrategyMutation(session: AuthSession | null) {
   return useMutation<OperatorStrategyResponse, Error, OperatorStrategyUpdatePayload>({
     mutationFn: (payload) => updateStrategy(payload, session?.token),
     onSuccess: (data) => {
-      queryClient.setQueryData(queryKeys.strategy.detail(), data);
-      queryClient.invalidateQueries({ queryKey: ["strategy", "candidates"] });
+      queryClient.setQueryData(queryKeys.strategy.detail(null), data);
+      queryClient.invalidateQueries({ queryKey: ["strategy"] });
     }
   });
 }

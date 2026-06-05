@@ -9,6 +9,8 @@ import type {
   OperatorStrategyRunListResponse
 } from "@/shared/types/strategy";
 import type { DashboardSummaryResponse } from "@/shared/types";
+import type { OperatorAccountListResponse } from "@/shared/api";
+import { ACTIVE_OPERATOR_STORAGE_KEY } from "@/app/operatorContext";
 
 const baseStrategy: OperatorStrategyResponse = {
   operator_id: 1,
@@ -82,15 +84,50 @@ interface RouteOverride {
   handler: (init?: RequestInit) => Promise<Response>;
 }
 
+const accountsCatalogue: OperatorAccountListResponse = {
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  is_privileged: true,
+  operator_count: 2,
+  operators: [
+    {
+      operator_id: 1,
+      username: "operator",
+      full_name: "본사 운영자",
+      company: "본사",
+      business_type: "용역",
+      is_canonical: true,
+      is_synthetic: false,
+      is_active: true,
+      profile_configured: true
+    },
+    {
+      operator_id: 11,
+      username: "synthetic-aggressive",
+      full_name: "공격형",
+      company: "Synthetic A",
+      business_type: "용역",
+      is_canonical: false,
+      is_synthetic: true,
+      is_active: true,
+      profile_configured: true
+    }
+  ]
+};
+
 function buildFetchMock({
   strategy = baseStrategy,
   candidates = baseCandidates,
   runs = baseRuns,
+  impersonatedStrategy,
+  accounts = accountsCatalogue,
   overrides = []
 }: {
   strategy?: OperatorStrategyResponse;
   candidates?: OperatorStrategyCandidatesResponse;
   runs?: OperatorStrategyRunListResponse;
+  impersonatedStrategy?: OperatorStrategyResponse;
+  accounts?: OperatorAccountListResponse;
   overrides?: RouteOverride[];
 } = {}) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -99,6 +136,13 @@ function buildFetchMock({
       if (override.matcher(url, init)) return override.handler(init);
     }
     if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+    if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
+    if (
+      url.startsWith("/api/v1/operator/strategy?operator_id=") &&
+      impersonatedStrategy
+    ) {
+      return jsonResponse(impersonatedStrategy);
+    }
     if (url.endsWith("/api/v1/operator/strategy")) return jsonResponse(strategy);
     if (url.startsWith("/api/v1/operator/strategy/candidates")) return jsonResponse(candidates);
     if (url.startsWith("/api/v1/operator/strategy/monitor/runs")) return jsonResponse(runs);
@@ -125,6 +169,7 @@ function findNumberByLabel(label: string): HTMLInputElement {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   window.localStorage.setItem("bid-vector-dashboard-token", "token-strategy");
   window.history.pushState({}, "", "/dashboard/strategy");
   vi.restoreAllMocks();
@@ -274,5 +319,46 @@ describe("StrategyEditor", () => {
 
     // After blur, value must NOT have snapped to min (0).
     expect(findNumberByLabel("즉시 투찰 임계값").value).toBe("0.7");
+  });
+
+  describe("비-본인 컨텍스트 (impersonation, PR #74)", () => {
+    const syntheticStrategy: OperatorStrategyResponse = {
+      ...baseStrategy,
+      operator_id: 11
+    };
+
+    it("/operator/strategy?operator_id=N 으로 fetch 하고 read-only 안내 + 저장 버튼 미노출", async () => {
+      window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
+      const fetchMock = buildFetchMock({ impersonatedStrategy: syntheticStrategy });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "전략 편집", level: 2 });
+
+      // 본인 owner URL (no query) 은 호출하지 않는다.
+      await waitFor(() => {
+        expect(
+          fetchMock.mock.calls.some(
+            ([url]) => String(url) === "/api/v1/operator/strategy?operator_id=11"
+          )
+        ).toBe(true);
+      });
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url) === "/api/v1/operator/strategy")
+      ).toBe(false);
+
+      // read-only 안내 + 저장 버튼 미노출.
+      expect(screen.getByTestId("strategy-readonly-notice")).toHaveTextContent(
+        "현재 회사: Synthetic A"
+      );
+      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "되돌리기" })).not.toBeInTheDocument();
+
+      // number input 비활성.
+      await waitFor(() => {
+        expect(findNumberByLabel("최소 매칭 점수")).toBeDisabled();
+      });
+    });
   });
 });

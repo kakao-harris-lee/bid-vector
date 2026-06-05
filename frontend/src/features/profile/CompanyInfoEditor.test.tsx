@@ -9,6 +9,8 @@ import type {
 } from "@/shared/types/profile";
 import type { OperatorStrategyResponse } from "@/shared/types/strategy";
 import type { DashboardSummaryResponse } from "@/shared/types";
+import type { OperatorAccountListResponse } from "@/shared/api";
+import { ACTIVE_OPERATOR_STORAGE_KEY } from "@/app/operatorContext";
 
 const baseProfile: OperatorProfileResponse = {
   operator_id: 1,
@@ -110,13 +112,50 @@ interface RouteOverride {
   handler: (init?: RequestInit) => Promise<Response>;
 }
 
+const accountsCatalogue: OperatorAccountListResponse = {
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  is_privileged: true,
+  operator_count: 2,
+  operators: [
+    {
+      operator_id: 1,
+      username: "operator",
+      full_name: "운영자",
+      company: "테스트건설",
+      business_type: "공사",
+      is_canonical: true,
+      is_synthetic: false,
+      is_active: true,
+      profile_configured: true
+    },
+    {
+      operator_id: 11,
+      username: "synthetic-aggressive",
+      full_name: "공격형",
+      company: "Synthetic A",
+      business_type: "공사",
+      is_canonical: false,
+      is_synthetic: true,
+      is_active: true,
+      profile_configured: true
+    }
+  ]
+};
+
 function buildFetchMock({
   profile = baseProfile,
   strategy = baseStrategy,
+  impersonatedProfile,
+  impersonatedStrategy,
+  accounts = accountsCatalogue,
   overrides = []
 }: {
   profile?: OperatorProfileResponse;
   strategy?: OperatorStrategyResponse;
+  impersonatedProfile?: OperatorProfileResponse;
+  impersonatedStrategy?: OperatorStrategyResponse;
+  accounts?: OperatorAccountListResponse;
   overrides?: RouteOverride[];
 } = {}) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -125,6 +164,13 @@ function buildFetchMock({
       if (override.matcher(url, init)) return override.handler(init);
     }
     if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+    if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
+    if (url.startsWith("/api/v1/operator/profile?operator_id=") && impersonatedProfile) {
+      return jsonResponse(impersonatedProfile);
+    }
+    if (url.startsWith("/api/v1/operator/strategy?operator_id=") && impersonatedStrategy) {
+      return jsonResponse(impersonatedStrategy);
+    }
     if (url.endsWith("/api/v1/operator/profile")) return jsonResponse(profile);
     if (url.endsWith("/api/v1/operator/strategy")) return jsonResponse(strategy);
     if (url.startsWith("/api/v1/operator/strategy/candidates")) {
@@ -161,6 +207,7 @@ function parseBody(init?: RequestInit): Record<string, unknown> {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   window.localStorage.setItem("bid-vector-dashboard-token", "token-profile");
   window.history.pushState({}, "", "/dashboard/profile");
   vi.restoreAllMocks();
@@ -618,6 +665,69 @@ describe("CompanyInfoEditor", () => {
         await screen.findByRole("heading", { name: "공사 능력 · 실적" })
       ).toBeInTheDocument();
       expect(screen.queryByText(/단계 \d+ \/ \d+/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("비-본인 컨텍스트 (impersonation, PR #74)", () => {
+    const syntheticProfile: OperatorProfileResponse = {
+      ...baseProfile,
+      operator_id: 11,
+      username: "synthetic-aggressive",
+      company: "Synthetic A"
+    };
+    const syntheticStrategy: OperatorStrategyResponse = {
+      ...baseStrategy,
+      operator_id: 11
+    };
+
+    it("/operator/profile?operator_id=N + /strategy?operator_id=N 으로 fetch 하고 read-only 안내를 노출한다", async () => {
+      window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
+      const fetchMock = buildFetchMock({
+        impersonatedProfile: syntheticProfile,
+        impersonatedStrategy: syntheticStrategy
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+
+      // 본인 owner URL (no query) 은 호출하지 않는다.
+      await waitFor(() => {
+        expect(
+          fetchMock.mock.calls.some(
+            ([url]) => String(url) === "/api/v1/operator/profile?operator_id=11"
+          )
+        ).toBe(true);
+      });
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url) === "/api/v1/operator/profile")
+      ).toBe(false);
+
+      // 안내 박스 + 저장/단계별 버튼 미노출.
+      expect(screen.getByTestId("profile-readonly-notice")).toHaveTextContent(
+        "현재 회사: Synthetic A"
+      );
+      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "단계별 가이드" })
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "저장하고 마치기" })).not.toBeInTheDocument();
+
+      // 폼 입력은 disabled — 업무 구분 select 도 비활성.
+      const select = screen.getByLabelText("업무 구분") as HTMLSelectElement;
+      expect(select).toBeDisabled();
+    });
+
+    it("본인 컨텍스트로 돌아가면 저장 버튼이 다시 노출된다", async () => {
+      const fetchMock = buildFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderApp();
+
+      await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+      expect(await screen.findByRole("button", { name: "저장" })).toBeInTheDocument();
+      expect(screen.queryByTestId("profile-readonly-notice")).not.toBeInTheDocument();
     });
   });
 });

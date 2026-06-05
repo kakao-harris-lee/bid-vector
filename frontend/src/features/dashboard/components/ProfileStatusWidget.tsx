@@ -16,31 +16,32 @@ import { formatCurrencyCompact } from "@/shared/lib";
  * Compact dashboard widget that surfaces the operator's 5-axis profile state at
  * the top of HomeScreen.
  *
- * Three rendering branches:
+ * Rendering branches:
  *
  *   (a) `operatorAccount === null`  → skeleton (loading or not authenticated yet).
- *   (b) `isOwnContext === true`     → render the canonical operator's full 5-axis
- *       detail from `profile` (business_type, licenses, regions, annual revenue,
- *       awards, capacity, contract limit). Profile-configured flag drives the
- *       headline badge + "edit" vs "start wizard" CTA. The progress gauge maps
- *       the count of populated axes to a 0–100 % bar.
- *   (c) `isOwnContext === false`    → render the operator account metadata only.
- *       The backend endpoint `/operator/profile` is canonical-only (PR #70 known
- *       limitation), so we never attempt to fetch other companies' 5-axis detail.
- *       We do not expose an edit button — only a hint that 5-axis detail is for
- *       the canonical context.
+ *   (b) 5-axis detail loaded        → render the full 5-axis grid + progress
+ *       gauge for *any* operator (PR #74 made `/operator/profile?operator_id=`
+ *       a cross-operator read for privileged callers). When `isOwnContext` is
+ *       true the bottom row exposes the "edit" / "단계별 입력 시작" CTA. When
+ *       impersonating another company the CTA is replaced by a read-only
+ *       notice that points the user back to their own company to make edits
+ *       (PUT is still self-only on the backend).
+ *
+ * Loading / error fallbacks remain in place — when the detail is still in
+ * flight we show a skeleton; when the fetch errors out we degrade to the
+ * metadata-only CTA so the operator can still navigate to the editor.
  */
 export interface ProfileStatusWidgetProps {
   /** Currently selected operator (from `useActiveOperator().currentOperator`). */
   operatorAccount: OperatorAccountItem | null;
-  /** Canonical-only 5-axis payload. `null` when not own context or still loading. */
+  /** 5-axis payload for the active operator (token owner *or* impersonated). */
   profile: OperatorProfileResponse | null;
   /**
    * `true` when the active operator is the token owner (no operator_id picked).
-   * Drives branch (b) vs (c).
+   * Drives whether the edit CTA is exposed or replaced with a read-only notice.
    */
   isOwnContext: boolean;
-  /** Loading flag — when true and `profile` is absent under own-context, show skeleton. */
+  /** Loading flag — when true and `profile` is absent, show the skeleton. */
   isProfileLoading?: boolean;
   /** CTA: profile_configured=false → start the guided 4-step wizard. */
   onWizardEnter: () => void;
@@ -205,17 +206,14 @@ export function ProfileStatusWidget({
         </div>
       </CardHeader>
       <CardContent className="pt-0">
-        {isOwnContext ? (
-          <OwnContextBody
-            profile={profile}
-            isLoading={isProfileLoading}
-            onWizardEnter={onWizardEnter}
-            onEdit={onEdit}
-            fallbackConfigured={operatorAccount.profile_configured}
-          />
-        ) : (
-          <OtherContextBody />
-        )}
+        <DetailBody
+          profile={profile}
+          isLoading={isProfileLoading}
+          isOwnContext={isOwnContext}
+          onWizardEnter={onWizardEnter}
+          onEdit={onEdit}
+          fallbackConfigured={operatorAccount.profile_configured}
+        />
       </CardContent>
     </Card>
   );
@@ -237,15 +235,17 @@ function ConfiguredBadge({ configured }: { configured: boolean }) {
   );
 }
 
-function OwnContextBody({
+function DetailBody({
   profile,
   isLoading,
+  isOwnContext,
   onWizardEnter,
   onEdit,
   fallbackConfigured
 }: {
   profile: OperatorProfileResponse | null;
   isLoading: boolean;
+  isOwnContext: boolean;
   onWizardEnter: () => void;
   onEdit: () => void;
   fallbackConfigured: boolean;
@@ -255,7 +255,7 @@ function OwnContextBody({
     [profile]
   );
 
-  // Loading own-context detail (no cached payload yet, query still pending).
+  // Detail still in flight — show the loading skeleton in either context.
   if (!cells && isLoading) {
     return (
       <div
@@ -265,28 +265,21 @@ function OwnContextBody({
     );
   }
 
-  // Query errored / never resolved — keep the metadata-only fallback so the
-  // widget still has a useful CTA. We rely on the metadata badge that's already
-  // rendered in the header (via `fallbackConfigured`).
+  // Query errored / never resolved — degrade to the metadata-only CTA so the
+  // widget still has a useful action surface. We rely on the metadata badge
+  // already rendered in the header (via `fallbackConfigured`).
   if (!cells) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-xs text-[var(--color-muted)]">
           5축 상세를 불러오는 중에 문제가 발생했습니다. 잠시 후 새로고침 해 주세요.
         </p>
-        <div className="flex justify-end">
-          {fallbackConfigured ? (
-            <Button variant="outline" size="sm" onClick={onEdit}>
-              <Pencil size={14} aria-hidden="true" />
-              편집
-            </Button>
-          ) : (
-            <Button size="sm" onClick={onWizardEnter}>
-              단계별 입력 시작
-              <ArrowRight size={14} aria-hidden="true" />
-            </Button>
-          )}
-        </div>
+        <ActionFooter
+          isOwnContext={isOwnContext}
+          configured={fallbackConfigured}
+          onEdit={onEdit}
+          onWizardEnter={onWizardEnter}
+        />
       </div>
     );
   }
@@ -348,27 +341,55 @@ function OwnContextBody({
           />
         </div>
       </div>
-      <div className="flex justify-end">
-        {configured ? (
-          <Button variant="outline" size="sm" onClick={onEdit}>
-            <Pencil size={14} aria-hidden="true" />
-            편집
-          </Button>
-        ) : (
-          <Button size="sm" onClick={onWizardEnter}>
-            단계별 입력 시작
-            <ArrowRight size={14} aria-hidden="true" />
-          </Button>
-        )}
-      </div>
+      <ActionFooter
+        isOwnContext={isOwnContext}
+        configured={configured}
+        onEdit={onEdit}
+        onWizardEnter={onWizardEnter}
+      />
     </div>
   );
 }
 
-function OtherContextBody() {
+/**
+ * Bottom-row action bar. For the token owner it exposes the wizard / edit CTA;
+ * for impersonation views it renders a read-only notice so the operator
+ * understands edits must happen on their own company (PR #74 PUT 403 policy).
+ */
+function ActionFooter({
+  isOwnContext,
+  configured,
+  onEdit,
+  onWizardEnter
+}: {
+  isOwnContext: boolean;
+  configured: boolean;
+  onEdit: () => void;
+  onWizardEnter: () => void;
+}) {
+  if (!isOwnContext) {
+    return (
+      <p
+        className="text-right text-xs text-[var(--color-muted)]"
+        data-testid="other-context-hint"
+      >
+        편집은 본인 회사로 돌아가야 가능합니다.
+      </p>
+    );
+  }
   return (
-    <p className="text-xs text-[var(--color-muted)]" data-testid="other-context-hint">
-      5축 상세는 본인 회사만 표시됩니다. 가상 운영자 상세는 가상 백테스트 화면에서 확인하세요.
-    </p>
+    <div className="flex justify-end">
+      {configured ? (
+        <Button variant="outline" size="sm" onClick={onEdit}>
+          <Pencil size={14} aria-hidden="true" />
+          편집
+        </Button>
+      ) : (
+        <Button size="sm" onClick={onWizardEnter}>
+          단계별 입력 시작
+          <ArrowRight size={14} aria-hidden="true" />
+        </Button>
+      )}
+    </div>
   );
 }
