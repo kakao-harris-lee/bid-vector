@@ -10,11 +10,11 @@ import {
   YAxis
 } from "recharts";
 import { useShellContext } from "@/app/dashboardContext";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { formatCurrencyCompact, formatDateTime, formatPercent } from "@/shared/lib";
-import { ReasonIndicators } from "@/features/dashboard/components";
-import { ApiError } from "@/shared/api";
-import { logoutSession } from "@/app/layout/AuthGate";
+import { InlineActionButtons, ReasonIndicators } from "@/features/dashboard/components";
+import { useApplyBidDecisionActionMutation } from "@/features/dashboard/hooks";
+import type { BidDecisionActionType } from "@/shared/api";
 import type {
   DecisionAction,
   DecisionFunnelBreakdownItem,
@@ -24,8 +24,7 @@ import type {
 import {
   useDecisionFunnelQuery,
   useDecisionRecommendationsQuery,
-  useOperationsKpiQuery,
-  useUpdateDecisionStatusMutation
+  useOperationsKpiQuery
 } from "./hooks";
 import { OperationsKpiPanel } from "./OperationsKpiPanel";
 
@@ -48,14 +47,18 @@ const STATUS_LABEL: Record<DecisionStatus, string> = {
   skipped: "보류"
 };
 
-const STATUSES: DecisionStatus[] = ["planned", "reviewing", "submitted", "skipped"];
-
 export function DecisionsScreen() {
   const { session, activeOperator } = useShellContext();
   const [days, setDays] = useState(30);
   const [breakdownDimension, setBreakdownDimension] = useState<"category" | "workload" | "agency">(
     "category"
   );
+  // Track per-row pending action so each "최근 결정" article gets its own
+  // spinner. The shared dashboard mutation hook handles toasts + cache
+  // invalidation; we only manage which row is currently in-flight.
+  const [pendingActionByRecord, setPendingActionByRecord] = useState<
+    Record<number, BidDecisionActionType | null>
+  >({});
 
   const funnel = useDecisionFunnelQuery(session, { days });
   const recs = useDecisionRecommendationsQuery(session, { days });
@@ -64,7 +67,7 @@ export function DecisionsScreen() {
     { days, missedLimit: 10 },
     activeOperator.activeOperatorId
   );
-  const mutation = useUpdateDecisionStatusMutation(session);
+  const actionMutation = useApplyBidDecisionActionMutation(session);
 
   const breakdown = useMemo(() => {
     if (!funnel.data) return [] as DecisionFunnelBreakdownItem[];
@@ -73,20 +76,24 @@ export function DecisionsScreen() {
     return funnel.data.agency_breakdown;
   }, [funnel.data, breakdownDimension]);
 
-  const handleStatusChange = async (decisionRecordId: number, nextStatus: DecisionStatus) => {
-    try {
-      await mutation.mutateAsync({ decisionRecordId, decisionStatus: nextStatus });
-      toastApi.success({ title: "상태 변경 완료", description: STATUS_LABEL[nextStatus] });
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        logoutSession();
-        return;
+  const handleAction = (decisionRecordId: number, action: BidDecisionActionType) => {
+    setPendingActionByRecord((prev) => ({ ...prev, [decisionRecordId]: action }));
+    actionMutation.mutate(
+      {
+        decisionRecordId,
+        action,
+        operatorId: activeOperator.activeOperatorId
+      },
+      {
+        onSettled: () => {
+          setPendingActionByRecord((prev) => {
+            const next = { ...prev };
+            next[decisionRecordId] = null;
+            return next;
+          });
+        }
       }
-      toastApi.danger({
-        title: "상태 변경 실패",
-        description: err instanceof Error ? err.message : "알 수 없는 오류"
-      });
-    }
+    );
   };
 
   return (
@@ -191,21 +198,11 @@ export function DecisionsScreen() {
                 <span className="tabular-nums">{formatCurrencyCompact(item.recommended_amount)}</span>
               </div>
               <div className="flex flex-wrap gap-1 pt-1">
-                {STATUSES.map((status) => {
-                  const active = status === item.decision_status;
-                  return (
-                    <Button
-                      key={status}
-                      type="button"
-                      variant={active ? "primary" : "outline"}
-                      size="sm"
-                      disabled={active || mutation.isPending}
-                      onClick={() => handleStatusChange(item.decision_record_id, status)}
-                    >
-                      {STATUS_LABEL[status]}
-                    </Button>
-                  );
-                })}
+                <InlineActionButtons
+                  decisionStatus={item.decision_status}
+                  pendingAction={pendingActionByRecord[item.decision_record_id] ?? null}
+                  onAction={(action) => handleAction(item.decision_record_id, action)}
+                />
               </div>
             </article>
           ))}

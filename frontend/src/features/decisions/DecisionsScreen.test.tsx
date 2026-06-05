@@ -181,7 +181,45 @@ beforeEach(() => {
 });
 
 describe("DecisionsScreen", () => {
-  it("상태 전환 버튼을 누르면 PATCH 요청 + 낙관적 업데이트", async () => {
+  it("최근 결정 카드에 메인 대시보드와 동일한 3 action 버튼(투찰/검토/보류)을 렌더한다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
+      if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
+      if (url.startsWith("/api/v1/analytics/decision-recommendations"))
+        return jsonResponse(recommendations);
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(
+      await screen.findByRole("heading", { name: "결정 게이트웨이", level: 2 })
+    ).toBeInTheDocument();
+    expect(await screen.findByText("전이 대상 공고")).toBeInTheDocument();
+
+    // 메인 대시보드 InlineActionButtons와 정확히 같은 aria-label 사용 — 3개만 노출되어야 함.
+    const submitButton = await screen.findByRole("button", { name: "투찰로 전환" });
+    const reviewButton = screen.getByRole("button", { name: "검토로 전환" });
+    const skipButton = screen.getByRole("button", { name: "보류 처리" });
+    expect(submitButton).toBeInTheDocument();
+    expect(reviewButton).toBeInTheDocument();
+    expect(skipButton).toBeInTheDocument();
+
+    // 4개짜리 legacy(`예정`/`검토 중`/`제출`/`보류`) 라벨 버튼은 더 이상 없어야 함.
+    expect(screen.queryByRole("button", { name: "예정" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "검토 중" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "제출" })).toBeNull();
+
+    // 현재 decision_status="reviewing"이므로 검토 버튼이 aria-pressed.
+    expect(reviewButton).toHaveAttribute("aria-pressed", "true");
+    expect(submitButton).toHaveAttribute("aria-pressed", "false");
+    expect(skipButton).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("투찰 버튼을 누르면 POST /actions(body action=submit) 요청을 보낸다", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
@@ -190,14 +228,14 @@ describe("DecisionsScreen", () => {
       if (url.startsWith("/api/v1/analytics/decision-recommendations"))
         return jsonResponse(recommendations);
       if (
-        url === "/api/v1/operations/bid-decisions/101/status" &&
-        init?.method === "PATCH"
+        url.startsWith("/api/v1/operations/bid-decisions/101/actions") &&
+        init?.method === "POST"
       ) {
         return jsonResponse({
           id: 101,
           project_id: 11,
           operator_id: 1,
-          action: "review",
+          action: "bid_now",
           decision_status: "submitted",
           priority_score: 0.7,
           recommended_amount: 50_000_000,
@@ -219,20 +257,36 @@ describe("DecisionsScreen", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("전이 대상 공고")).toBeInTheDocument();
 
-    const submitButton = screen.getAllByRole("button", { name: "제출" })[0];
+    const submitButton = await screen.findByRole("button", { name: "투찰로 전환" });
     fireEvent.click(submitButton);
 
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.find(([url, init]) => {
-          return (
-            String(url) === "/api/v1/operations/bid-decisions/101/status" &&
-            (init as RequestInit | undefined)?.method === "PATCH"
-          );
-        })
-      ).toBeDefined()
-    );
-    expect(await screen.findByText("상태 변경 완료")).toBeInTheDocument();
+    const actionCall = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url, init]) => {
+        return (
+          String(url).startsWith("/api/v1/operations/bid-decisions/101/actions") &&
+          (init as RequestInit | undefined)?.method === "POST"
+        );
+      });
+      expect(call).toBeDefined();
+      return call!;
+    });
+
+    // PATCH /status는 더 이상 호출되지 않아야 함.
+    expect(
+      fetchMock.mock.calls.find(([url, init]) => {
+        return (
+          String(url) === "/api/v1/operations/bid-decisions/101/status" &&
+          (init as RequestInit | undefined)?.method === "PATCH"
+        );
+      })
+    ).toBeUndefined();
+
+    const init = actionCall[1] as RequestInit | undefined;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    expect(body).toEqual({ action: "submit" });
+
+    // useApplyBidDecisionActionMutation의 한국어 토스트 — `bid_now`에 매핑됨.
+    expect(await screen.findByText("투찰 결정으로 전환했습니다")).toBeInTheDocument();
   });
 
   it("세그먼트 차원 탭(카테고리/워크로드/기관)이 토글되어 활성 표시가 바뀐다", async () => {
