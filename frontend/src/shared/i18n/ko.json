@@ -14,7 +14,20 @@
     "title": "오늘 할 일",
     "metrics_label": "핵심 지표",
     "preview_tabs_label": "요약 탭",
-    "bottom_nav_label": "대시보드 탭"
+    "bottom_nav_label": "대시보드 탭",
+    "inline_actions": {
+      "label": "결정 액션",
+      "submit": "투찰",
+      "review": "검토",
+      "skip": "보류",
+      "submit_aria": "투찰로 전환",
+      "review_aria": "검토로 전환",
+      "skip_aria": "보류 처리",
+      "pending": "처리 중…",
+      "active_submitted": "투찰 처리됨",
+      "active_reviewing": "검토 중",
+      "active_skipped": "보류됨"
+    }
   },
   "auth": {
     "session_expired_title": "세션이 만료되었습니다",

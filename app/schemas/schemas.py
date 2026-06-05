@@ -2092,6 +2092,18 @@ class BidDecisionRecordResponse(BaseModel):
         return value or "planned"
 
 
+class BidDecisionActionRequest(BaseModel):
+    """Inline dashboard action request for an existing bid-decision record.
+
+    Mirrors the action vocabulary accepted by
+    :meth:`app.services.allocation.BidDecisionService.apply_telegram_action`
+    so the dashboard reuses the same transition semantics as the Telegram
+    inline buttons.
+    """
+
+    action: Literal["submit", "review", "skip"]
+
+
 class BidDecisionProjectSnapshot(BaseModel):
     id: int
     title: str

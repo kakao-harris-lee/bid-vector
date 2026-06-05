@@ -10,3 +10,4 @@ export { DetailDrawer } from "./DetailDrawer";
 export { BacktestSummaryPanel } from "./BacktestSummaryPanel";
 export { DecisionReasonsCard, type DecisionReasonsCardProps } from "./DecisionReasonsCard";
 export { ReasonIndicators, type ReasonIndicatorsProps } from "./ReasonIndicators";
+export { InlineActionButtons, type InlineActionButtonsProps } from "./InlineActionButtons";

@@ -5,6 +5,7 @@ import type {
   ListItem,
   RouteKey
 } from "@/shared/types";
+import type { AuthSession } from "@/app/layout/AuthGate";
 import { EmptyState } from "./Helpers";
 import { BidRow, OpportunityRow, ResultRow } from "./Rows";
 import type { DetailSelection } from "../types";
@@ -13,12 +14,21 @@ export function ItemList({
   route,
   items,
   onSelect,
-  compact = false
+  compact = false,
+  session = null,
+  activeOperatorId = null
 }: {
   route: RouteKey;
   items: ListItem[];
   onSelect: (selection: DetailSelection) => void;
   compact?: boolean;
+  /**
+   * When provided, decision-source opportunity rows render inline action
+   * buttons (submit/review/skip). Tests that don't care about the buttons can
+   * omit both props and the rows fall back to the legacy display-only mode.
+   */
+  session?: AuthSession | null;
+  activeOperatorId?: number | null;
 }) {
   if (!items.length) {
     const emptyState = emptyStateForRoute(route);
@@ -49,6 +59,8 @@ export function ItemList({
               key={`${opportunity.source}:${opportunity.decision_record_id ?? opportunity.paper_bid_id}`}
               item={opportunity}
               onSelect={() => onSelect({ kind: "opportunity", item: opportunity })}
+              session={session}
+              activeOperatorId={activeOperatorId}
             />
           );
         }
