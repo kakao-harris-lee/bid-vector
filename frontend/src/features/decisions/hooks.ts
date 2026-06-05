@@ -1,18 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   fetchDecisionFunnel,
   fetchDecisionRecommendations,
   fetchOperationsKpi,
   queryKeys,
-  updateBidDecisionStatus,
   type DecisionFunnelQuery,
   type OperationsKpiQuery
 } from "@/shared/api";
 import type {
-  BidDecisionRecord,
   DecisionFunnelResponse,
-  DecisionRecommendationResponse,
-  DecisionStatus
+  DecisionRecommendationResponse
 } from "@/shared/types/decisions";
 import type { OperationsKpiResponse } from "@/shared/types/operations";
 import type { AuthSession } from "@/app/layout/AuthGate";
@@ -48,44 +45,10 @@ export function useOperationsKpiQuery(
   });
 }
 
-export function useUpdateDecisionStatusMutation(session: AuthSession | null) {
-  const queryClient = useQueryClient();
-  return useMutation<
-    BidDecisionRecord,
-    Error,
-    { decisionRecordId: number; decisionStatus: DecisionStatus },
-    { previousFunnels: Array<[unknown, DecisionFunnelResponse | undefined]> }
-  >({
-    mutationFn: ({ decisionRecordId, decisionStatus }) =>
-      updateBidDecisionStatus(decisionRecordId, decisionStatus, session?.token),
-    onMutate: async ({ decisionRecordId, decisionStatus }) => {
-      // Optimistic update: flip decision_status on any cached funnel snapshot
-      await queryClient.cancelQueries({ queryKey: ["decisions", "funnel"] });
-      const snapshots = queryClient.getQueriesData<DecisionFunnelResponse>({
-        queryKey: ["decisions", "funnel"]
-      });
-      for (const [key, data] of snapshots) {
-        if (!data) continue;
-        queryClient.setQueryData<DecisionFunnelResponse>(key, {
-          ...data,
-          recent_submissions: data.recent_submissions.map((item) =>
-            item.decision_record_id === decisionRecordId
-              ? { ...item, decision_status: decisionStatus }
-              : item
-          )
-        });
-      }
-      return { previousFunnels: snapshots };
-    },
-    onError: (_err, _variables, context) => {
-      if (!context) return;
-      for (const [key, data] of context.previousFunnels) {
-        queryClient.setQueryData(key as readonly unknown[], data);
-      }
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ["decisions", "funnel"] });
-      void queryClient.invalidateQueries({ queryKey: ["decisions", "recommendations"] });
-    }
-  });
-}
+// NOTE: The legacy `useUpdateDecisionStatusMutation` (PATCH /status) was removed
+// when the DecisionsScreen unified onto the same submit/review/skip action API
+// the main dashboard already uses (POST /actions, see
+// `useApplyBidDecisionActionMutation` in `features/dashboard/hooks.ts`). The
+// underlying `updateBidDecisionStatus` API function is intentionally retained in
+// `shared/api/decisions.ts` because the PATCH /status endpoint still exists on
+// the backend.
