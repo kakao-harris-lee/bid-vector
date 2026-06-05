@@ -19,11 +19,13 @@ function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {
 
 export function fetchOperationsDashboard(
   options: { days?: number; limit?: number } = {},
-  token?: string | null
+  token?: string | null,
+  operatorId?: number | null
 ): Promise<OperationsDashboardResponse> {
   const search = new URLSearchParams();
   if (typeof options.days === "number") search.set("days", String(options.days));
   if (typeof options.limit === "number") search.set("limit", String(options.limit));
+  if (typeof operatorId === "number") search.set("operator_id", String(operatorId));
   const qs = search.toString();
   const path = qs
     ? `/api/v1/analytics/operations-dashboard?${qs}`
@@ -41,13 +43,15 @@ export interface OperationsKpiQuery {
 
 export function fetchOperationsKpi(
   options: OperationsKpiQuery = {},
-  token?: string | null
+  token?: string | null,
+  operatorId?: number | null
 ): Promise<OperationsKpiResponse> {
   const search = new URLSearchParams();
   if (typeof options.days === "number") search.set("days", String(options.days));
   if (typeof options.missedLimit === "number") {
     search.set("missed_limit", String(options.missedLimit));
   }
+  if (typeof operatorId === "number") search.set("operator_id", String(operatorId));
   const qs = search.toString();
   const path = qs
     ? `/api/v1/analytics/operations-kpi?${qs}`

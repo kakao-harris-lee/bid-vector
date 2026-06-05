@@ -12,8 +12,8 @@ import { usePaperSummaryQuery, useResultsQuery } from "./hooks";
 import type { DetailSelection } from "./types";
 
 export function ResultsScreen() {
-  const { summary, session } = useShellContext();
-  const results = useResultsQuery(session);
+  const { summary, session, activeOperator } = useShellContext();
+  const results = useResultsQuery(session, activeOperator.activeOperatorId);
   const paper = usePaperSummaryQuery(session);
   const [selected, setSelected] = useState<DetailSelection | null>(null);
 

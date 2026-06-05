@@ -51,7 +51,7 @@ const STATUS_LABEL: Record<DecisionStatus, string> = {
 const STATUSES: DecisionStatus[] = ["planned", "reviewing", "submitted", "skipped"];
 
 export function DecisionsScreen() {
-  const { session } = useShellContext();
+  const { session, activeOperator } = useShellContext();
   const [days, setDays] = useState(30);
   const [breakdownDimension, setBreakdownDimension] = useState<"category" | "workload" | "agency">(
     "category"
@@ -59,7 +59,11 @@ export function DecisionsScreen() {
 
   const funnel = useDecisionFunnelQuery(session, { days });
   const recs = useDecisionRecommendationsQuery(session, { days });
-  const operationsKpi = useOperationsKpiQuery(session, { days, missedLimit: 10 });
+  const operationsKpi = useOperationsKpiQuery(
+    session,
+    { days, missedLimit: 10 },
+    activeOperator.activeOperatorId
+  );
   const mutation = useUpdateDecisionStatusMutation(session);
 
   const breakdown = useMemo(() => {

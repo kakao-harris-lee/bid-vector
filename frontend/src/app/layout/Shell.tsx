@@ -31,6 +31,8 @@ import { BottomNav } from "./BottomNav";
 import { IconButton } from "./IconButton";
 import { NotificationDrawer, useRealtimeEvents } from "@/features/realtime";
 import { SessionExpiredModal } from "./SessionExpiredModal";
+import { useActiveOperator } from "@/app/operatorContext";
+import { OperatorSwitcher } from "./OperatorSwitcher";
 
 export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon: typeof Gavel }> = {
   home: { path: "/dashboard", label: "오늘", icon: ListChecks },
@@ -94,10 +96,12 @@ export function Shell() {
   const route = routeKeyFromPath(location.pathname);
   const bottomNavRoute = bottomNavKeyForPath(location.pathname);
   const [reloadKey, setReloadKey] = useState(0);
+  const activeOperator = useActiveOperator(session);
+  const activeOperatorId = activeOperator.activeOperatorId;
 
   const summary = useQuery({
-    queryKey: [...queryKeys.dashboard.summary(), reloadKey],
-    queryFn: () => fetchDashboardSummary(session?.token),
+    queryKey: [...queryKeys.dashboard.summary(activeOperatorId), reloadKey],
+    queryFn: () => fetchDashboardSummary(session?.token, activeOperatorId),
     enabled: Boolean(session?.token)
   });
 
@@ -136,6 +140,7 @@ export function Shell() {
           </span>
         </button>
         <div className="flex items-center gap-2">
+          <OperatorSwitcher activeOperator={activeOperator} />
           {summary.data ? (
             <Badge tone={toneFromStatus(summary.data.operational_status.status)}>
               {summary.data.operational_status.label}
@@ -210,12 +215,17 @@ export function Shell() {
 
       <main className="flex-1">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6">
+          <ActiveOperatorContextBar
+            activeOperator={activeOperator}
+            summaryOperatorUsername={summary.data?.current_operator_username ?? null}
+            pathname={location.pathname}
+          />
           {summary.error && (summary.error as { status?: number }).status !== 401 ? (
             <InlineNotice tone="critical">
               {(summary.error as Error).message ?? "대시보드를 불러오지 못했습니다."}
             </InlineNotice>
           ) : null}
-          <Outlet context={{ summary, session, route, reloadKey }} />
+          <Outlet context={{ summary, session, route, reloadKey, activeOperator }} />
         </div>
       </main>
 
@@ -226,6 +236,67 @@ export function Shell() {
         session={session}
       />
       <SessionExpiredModal />
+    </div>
+  );
+}
+
+/**
+ * Header-adjacent context bar that shows the operator the dashboard is
+ * currently scoped to + a banner reminding the user that profile / strategy
+ * editors stay locked to the token owner. Both pieces are read from the
+ * active-operator context and rendered above every screen so the operator
+ * never loses track of "whose data am I looking at?".
+ */
+function ActiveOperatorContextBar({
+  activeOperator,
+  summaryOperatorUsername,
+  pathname
+}: {
+  activeOperator: ReturnType<typeof useActiveOperator>;
+  summaryOperatorUsername: string | null;
+  pathname: string;
+}) {
+  if (!activeOperator.isPrivileged) return null;
+  const { activeOperatorId, currentOperator } = activeOperator;
+  const isImpersonating = activeOperatorId !== null && currentOperator !== null;
+  // Profile / strategy editors hit `/operator/profile` + `/operator/strategy`
+  // which are token-bound on the backend. Show a notice so the operator
+  // understands why those screens still show their own data.
+  const onProfile = pathname.startsWith(PROFILE_ROUTE_PATH);
+  const onStrategy = pathname.startsWith(STRATEGY_ROUTE_PATH);
+  const profileNotice = isImpersonating && (onProfile || onStrategy);
+
+  if (!isImpersonating && !profileNotice) return null;
+
+  const companyLabel = currentOperator
+    ? currentOperator.company || currentOperator.full_name || currentOperator.username
+    : summaryOperatorUsername;
+
+  return (
+    <div className="flex flex-col gap-2" aria-label="활성 운영자 컨텍스트">
+      {isImpersonating ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-xs"
+        >
+          <Badge tone="info">보는 회사</Badge>
+          <span className="font-medium text-[var(--color-fg)]">{companyLabel}</span>
+          {currentOperator?.is_synthetic ? (
+            <span className="text-[var(--color-muted)]">synthetic</span>
+          ) : null}
+          {currentOperator?.business_type ? (
+            <span className="text-[var(--color-muted)]">· {currentOperator.business_type}</span>
+          ) : null}
+        </div>
+      ) : null}
+      {profileNotice ? (
+        <div
+          role="note"
+          className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_88%)] px-3 py-2 text-xs text-[var(--color-fg)]"
+        >
+          프로필 / 전략은 본인 회사만 편집 가능합니다. 현재 선택: {companyLabel ?? "본인"}.
+        </div>
+      ) : null}
     </div>
   );
 }

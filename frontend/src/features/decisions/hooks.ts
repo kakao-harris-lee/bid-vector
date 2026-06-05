@@ -38,11 +38,12 @@ export function useDecisionRecommendationsQuery(
 
 export function useOperationsKpiQuery(
   session: AuthSession | null,
-  query: OperationsKpiQuery = {}
+  query: OperationsKpiQuery = {},
+  operatorId: number | null = null
 ) {
   return useQuery<OperationsKpiResponse, Error>({
-    queryKey: queryKeys.operations.kpi(query),
-    queryFn: () => fetchOperationsKpi(query, session?.token),
+    queryKey: queryKeys.operations.kpi(query, operatorId),
+    queryFn: () => fetchOperationsKpi(query, session?.token, operatorId),
     enabled: Boolean(session?.token)
   });
 }
