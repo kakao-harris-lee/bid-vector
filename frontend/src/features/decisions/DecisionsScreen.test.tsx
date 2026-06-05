@@ -105,6 +105,8 @@ const recommendations: DecisionRecommendationResponse = {
 
 const operationsKpi: OperationsKpiResponse = {
   operator_id: 1,
+  current_operator_id: 1,
+  current_operator_username: "operator",
   period_days: 30,
   manual_override: { decision_count: 10, modified_count: 2, modification_rate: 0.2 },
   conversion: {

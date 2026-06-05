@@ -126,6 +126,30 @@ class OperatorOverviewResponse(BaseModel):
     profile_configured: bool
 
 
+class OperatorAccountItem(BaseModel):
+    """Compact operator-account row used by the company-switcher dropdown."""
+
+    operator_id: int
+    username: str
+    full_name: Optional[str] = None
+    company: Optional[str] = None
+    business_type: Optional[str] = None
+    is_canonical: bool = False
+    is_synthetic: bool = False
+    is_active: bool = True
+    profile_configured: bool = False
+
+
+class OperatorAccountListResponse(BaseModel):
+    """Operator accounts visible to the current bearer-token owner."""
+
+    current_operator_id: int
+    current_operator_username: str
+    is_privileged: bool = False
+    operator_count: int = Field(ge=0)
+    operators: List[OperatorAccountItem] = Field(default_factory=list)
+
+
 class OperatorDashboardCard(BaseModel):
     key: str
     label: str
@@ -276,6 +300,8 @@ class DashboardResultItem(BaseModel):
 
 class DashboardListMeta(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     generated_at: datetime
     returned_count: int = Field(ge=0)
     limit: int = Field(ge=1)
@@ -303,6 +329,8 @@ class DashboardSectionSummary(BaseModel):
 
 class DashboardSummaryResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     generated_at: datetime
     today: date
     operational_status: DashboardMetric
@@ -1403,6 +1431,8 @@ class OperationsKpiResponse(BaseModel):
     """Roadmap C-1 instrumentation: operating KPIs aggregated in one call."""
 
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     manual_override: OperationsKpiManualOverride
     conversion: OperationsKpiConversion
@@ -1749,6 +1779,8 @@ class MLReleaseOperationsSummary(BaseModel):
 
 class OperationsDashboardResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     crawl: CrawlOperationsSummary
     strategy: StrategyOperationsSummary

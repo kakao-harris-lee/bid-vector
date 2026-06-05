@@ -6,6 +6,8 @@ import type { OperationsKpiResponse } from "@/shared/types/operations";
 
 const fullData: OperationsKpiResponse = {
   operator_id: 1,
+  current_operator_id: 1,
+  current_operator_username: "operator",
   period_days: 30,
   manual_override: {
     decision_count: 20,

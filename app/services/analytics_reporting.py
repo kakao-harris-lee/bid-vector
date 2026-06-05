@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun
+from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun, User
 from app.services.ml_release import MLReleasePromotionService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.tasks.celery_app import (
@@ -33,9 +33,17 @@ class AnalyticsReportingService:
     RUNNING_TASK_STATUSES = {"running", "started"}
     STALE_TASK_SECONDS = 15 * 60
 
-    def build_operations_dashboard(self, db: Session, *, days: int = 30, recent_limit: int = 5) -> dict[str, Any]:
+    def build_operations_dashboard(
+        self,
+        db: Session,
+        *,
+        days: int = 30,
+        recent_limit: int = 5,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Return crawl, strategy, and task runtime summaries for one reporting window."""
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         date_from = utc_now() - timedelta(days=days)
         crawl_jobs = (
             db.query(CrawlJob)

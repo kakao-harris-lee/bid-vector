@@ -518,6 +518,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Operator Accounts
+         * @description List operator accounts visible to the current bearer-token owner.
+         *
+         *     Privileged callers (canonical ``operator`` or ``is_admin``) receive the full
+         *     catalogue (canonical + ``synthetic-*``). Non-privileged callers receive only
+         *     their own row so the dropdown collapses to a single self-pick.
+         */
+        get: operations["list_operator_accounts_api_v1_operator_accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operator/notifications": {
         parameters: {
             query?: never;
@@ -2977,6 +3001,10 @@ export interface components {
         DashboardBidListResponse: {
             /** Operator Id */
             operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /**
              * Generated At
              * Format: date-time
@@ -3072,6 +3100,10 @@ export interface components {
         DashboardOpportunityListResponse: {
             /** Operator Id */
             operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /**
              * Generated At
              * Format: date-time
@@ -3149,6 +3181,10 @@ export interface components {
         DashboardResultListResponse: {
             /** Operator Id */
             operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /**
              * Generated At
              * Format: date-time
@@ -3185,6 +3221,10 @@ export interface components {
         DashboardSummaryResponse: {
             /** Operator Id */
             operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /**
              * Generated At
              * Format: date-time
@@ -4569,6 +4609,10 @@ export interface components {
         OperationsDashboardResponse: {
             /** Operator Id */
             operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /** Period Days */
             period_days: number;
             crawl: components["schemas"]["CrawlOperationsSummary"];
@@ -4684,6 +4728,10 @@ export interface components {
         OperationsKpiResponse: {
             /** Operator Id */
             operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /** Period Days */
             period_days: number;
             manual_override: components["schemas"]["OperationsKpiManualOverride"];
@@ -4725,6 +4773,61 @@ export interface components {
             forward_settled_count: number;
             /** Forward Coverage Rate */
             forward_coverage_rate?: number | null;
+        };
+        /**
+         * OperatorAccountItem
+         * @description Compact operator-account row used by the company-switcher dropdown.
+         */
+        OperatorAccountItem: {
+            /** Operator Id */
+            operator_id: number;
+            /** Username */
+            username: string;
+            /** Full Name */
+            full_name?: string | null;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
+            /**
+             * Is Canonical
+             * @default false
+             */
+            is_canonical: boolean;
+            /**
+             * Is Synthetic
+             * @default false
+             */
+            is_synthetic: boolean;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Profile Configured
+             * @default false
+             */
+            profile_configured: boolean;
+        };
+        /**
+         * OperatorAccountListResponse
+         * @description Operator accounts visible to the current bearer-token owner.
+         */
+        OperatorAccountListResponse: {
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
+            /**
+             * Is Privileged
+             * @default false
+             */
+            is_privileged: boolean;
+            /** Operator Count */
+            operator_count: number;
+            /** Operators */
+            operators?: components["schemas"]["OperatorAccountItem"][];
         };
         /** OperatorDashboardCard */
         OperatorDashboardCard: {
@@ -7546,6 +7649,7 @@ export interface operations {
             query?: {
                 status?: string | null;
                 limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -7578,6 +7682,7 @@ export interface operations {
             query?: {
                 status?: string | null;
                 limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -7609,6 +7714,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -7640,6 +7746,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -8024,6 +8131,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_operator_accounts_api_v1_operator_accounts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorAccountListResponse"];
                 };
             };
         };
@@ -8990,6 +9117,7 @@ export interface operations {
             query?: {
                 days?: number;
                 recent_limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -9088,6 +9216,7 @@ export interface operations {
             query?: {
                 days?: number;
                 missed_limit?: number;
+                operator_id?: number | null;
             };
             header?: never;
             path?: never;

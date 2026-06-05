@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, TenderResult
+from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, TenderResult, User
 
 
 class PredictionFeedbackService:
@@ -19,9 +19,17 @@ class PredictionFeedbackService:
 
     MAX_ADJUSTMENT_RATE = 0.08
 
-    def build_feedback(self, db: Session, *, days: int = 90, limit: int = 20) -> dict[str, Any]:
+    def build_feedback(
+        self,
+        db: Session,
+        *,
+        days: int = 90,
+        limit: int = 20,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Compare the latest stored prediction/decision amounts against actual winning amounts."""
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         date_from = utc_now() - timedelta(days=days)
 
         tender_results = self._load_recent_tender_results(db, date_from=date_from)

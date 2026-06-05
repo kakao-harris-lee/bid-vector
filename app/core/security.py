@@ -65,6 +65,8 @@ from app.core.database import get_db
 from app.core.time import utc_now
 from app.models.models import User
 
+CANONICAL_OPERATOR_USERNAME = "operator"
+
 PBKDF2_SCHEME = "pbkdf2_sha256"
 _PBKDF2_ROUNDS = 390000
 _PBKDF2_PREFIX = "$pbkdf2-sha256$"
@@ -219,3 +221,63 @@ def get_current_operator_from_bearer(
         )
 
     return operator
+
+
+def get_current_operator_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """Return the bearer-token operator when supplied, else ``None``.
+
+    Used by endpoints that historically allowed unauthenticated access but now
+    want to layer per-operator scoping on top when a bearer is present.
+    Invalid/expired tokens still raise ``401`` so misconfigured clients fail
+    loudly instead of silently falling back.
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return None
+    return get_current_operator_from_bearer(credentials=credentials, db=db)
+
+
+def is_privileged_operator(operator: User) -> bool:
+    """Return whether the operator can act on behalf of other operator accounts.
+
+    The canonical ``operator`` account (single-user mode) and any admin-flagged
+    account are allowed to fetch dashboard/analytics payloads scoped to other
+    operator IDs (e.g. synthetic-* companies).
+    """
+    return bool(
+        getattr(operator, "is_admin", False)
+        or operator.username == CANONICAL_OPERATOR_USERNAME
+    )
+
+
+def resolve_target_operator(
+    db: Session,
+    current: User,
+    target_id: Optional[int],
+) -> User:
+    """Resolve which operator a dashboard/analytics request should target.
+
+    - ``target_id`` is ``None``  -> return ``current`` (bearer-token owner).
+    - ``target_id`` matches ``current.id`` -> return ``current``.
+    - Otherwise: only canonical ``operator`` accounts and admins may target
+      another operator. Unknown ids return ``404``; unauthorized cross-account
+      access returns ``403``.
+    """
+    if target_id is None or int(target_id) == int(current.id):
+        return current
+
+    if not is_privileged_operator(current):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view another operator's data",
+        )
+
+    target = db.query(User).filter(User.id == int(target_id)).first()
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Operator not found",
+        )
+    return target
