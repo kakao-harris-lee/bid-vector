@@ -2,13 +2,15 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { DashboardWorkItem, RouteKey } from "@/shared/types";
 import { useShellContext } from "@/app/dashboardContext";
-import { ROUTE_LABELS } from "@/app/layout/Shell";
+import { PROFILE_ROUTE_PATH, ROUTE_LABELS } from "@/app/layout/Shell";
+import { useProfileQuery } from "@/features/profile/hooks";
 import {
   DetailDrawer,
   EmptyState,
   ItemList,
   LoadingState,
   MetricTile,
+  ProfileStatusWidget,
   SectionHeader,
   SegmentedTabs,
   WorkItemCard
@@ -36,6 +38,8 @@ export function HomeScreen() {
         onSelect={setSelected}
         session={session}
         activeOperatorId={activeOperator.activeOperatorId}
+        currentOperator={activeOperator.currentOperator}
+        onOpenProfile={() => navigate(PROFILE_ROUTE_PATH)}
       />
       <DetailDrawer
         selection={selected}
@@ -56,7 +60,9 @@ function HomeContent({
   onNavigate,
   onSelect,
   session,
-  activeOperatorId
+  activeOperatorId,
+  currentOperator,
+  onOpenProfile
 }: {
   summary: NonNullable<ReturnType<typeof useShellContext>["summary"]["data"]>;
   activePreview: RouteKey;
@@ -65,6 +71,10 @@ function HomeContent({
   onSelect: (selection: DetailSelection) => void;
   session: ReturnType<typeof useShellContext>["session"];
   activeOperatorId: number | null;
+  currentOperator: ReturnType<
+    typeof useShellContext
+  >["activeOperator"]["currentOperator"];
+  onOpenProfile: () => void;
 }) {
   const previewItems = useMemo(() => {
     if (activePreview === "bids") return summary.recent_bids;
@@ -75,8 +85,25 @@ function HomeContent({
   const visibleWorkItems = summary.work_items.slice(0, 3);
   const hasMoreWorkItems = summary.work_items.length > visibleWorkItems.length;
 
+  // `/operator/profile` is canonical-only (PR #70). Only fetch the 5-axis
+  // detail when the active operator is the token owner; otherwise the widget
+  // falls back to metadata-only.
+  const isOwnContext = activeOperatorId === null;
+  const profileQuery = useProfileQuery(isOwnContext ? session : null);
+
   return (
     <>
+      <section aria-label="내 자격 상태 요약">
+        <ProfileStatusWidget
+          operatorAccount={currentOperator}
+          profile={isOwnContext ? profileQuery.data ?? null : null}
+          isOwnContext={isOwnContext}
+          isProfileLoading={isOwnContext && profileQuery.isPending}
+          onWizardEnter={onOpenProfile}
+          onEdit={onOpenProfile}
+        />
+      </section>
+
       <section className="metric-strip" aria-label="핵심 지표">
         {summary.metrics.map((metric) => (
           <MetricTile key={metric.key} metric={metric} />
