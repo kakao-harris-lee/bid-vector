@@ -6,6 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.security import (
+    CANONICAL_OPERATOR_USERNAME,
+    get_current_operator_optional,
+    is_privileged_operator,
+)
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
@@ -16,9 +21,20 @@ from app.core.single_user import (
     split_multi_value_text,
 )
 from app.core.time import utc_now
-from app.models.models import Analytics, Bid, BidDecisionRecord, Notification, PricePrediction, Project, User
+from app.models.models import (
+    Analytics,
+    Bid,
+    BidDecisionRecord,
+    CompanyProfile,
+    Notification,
+    PricePrediction,
+    Project,
+    User,
+)
 from app.schemas.schemas import (
     NotificationResponse,
+    OperatorAccountItem,
+    OperatorAccountListResponse,
     OperatorDashboardResponse,
     OperatorOverviewResponse,
     OperatorProfileResponse,
@@ -668,6 +684,100 @@ def get_operator_overview(days: int = Query(7, ge=1, le=90), db: Session = Depen
     """Return a compact single-user dashboard summary."""
     operator = ensure_operator_account(db)
     return _build_operator_overview_payload(operator, days=days, db=db)
+
+
+_SYNTHETIC_USERNAME_PREFIX = "synthetic-"
+
+
+def _serialize_operator_account(
+    user: User,
+    *,
+    profile: CompanyProfile | None,
+) -> OperatorAccountItem:
+    """Convert a ``User`` into the compact account row used by the switcher."""
+    business_type = profile.business_type if profile is not None else None
+    return OperatorAccountItem(
+        operator_id=int(user.id),
+        username=str(user.username or ""),
+        full_name=user.full_name,
+        company=user.company,
+        business_type=business_type,
+        is_canonical=user.username == CANONICAL_OPERATOR_USERNAME,
+        is_synthetic=bool(
+            user.username and user.username.startswith(_SYNTHETIC_USERNAME_PREFIX)
+        ),
+        is_active=bool(user.is_active),
+        profile_configured=profile is not None
+        and _is_profile_configured(
+            license_codes=split_multi_value_text(profile.license_codes),
+            region_codes=split_multi_value_text(profile.region_codes),
+            annual_revenue=float(profile.annual_revenue or 0.0),
+            capacity_score=float(profile.capacity_score or 0.0),
+            total_awards=int(profile.total_awards or 0),
+            construction_capacity_amount=float(
+                profile.construction_capacity_amount or 0.0
+            ),
+            awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
+        ),
+    )
+
+
+@router.get("/accounts", response_model=OperatorAccountListResponse)
+def list_operator_accounts(
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """List operator accounts visible to the current bearer-token owner.
+
+    Privileged callers (canonical ``operator`` or ``is_admin``) receive the full
+    catalogue (canonical + ``synthetic-*``). Non-privileged callers receive only
+    their own row so the dropdown collapses to a single self-pick.
+    """
+    actor = current_operator or ensure_operator_account(db)
+    privileged = is_privileged_operator(actor)
+
+    if privileged:
+        users = (
+            db.query(User)
+            .filter(
+                (User.username == CANONICAL_OPERATOR_USERNAME)
+                | (User.username.like(f"{_SYNTHETIC_USERNAME_PREFIX}%"))
+                | (User.id == actor.id)
+            )
+            .order_by(User.id.asc())
+            .all()
+        )
+    else:
+        users = [actor]
+
+    if not users:
+        users = [actor]
+
+    user_ids = [int(user.id) for user in users]
+    profile_rows = (
+        db.query(CompanyProfile).filter(CompanyProfile.user_id.in_(user_ids)).all()
+        if user_ids
+        else []
+    )
+    profile_by_user = {int(row.user_id): row for row in profile_rows}
+
+    operators: list[OperatorAccountItem] = []
+    seen_ids: set[int] = set()
+    for user in users:
+        if int(user.id) in seen_ids:
+            continue
+        seen_ids.add(int(user.id))
+        operators.append(
+            _serialize_operator_account(user, profile=profile_by_user.get(int(user.id)))
+        )
+
+    return OperatorAccountListResponse(
+        current_operator_id=int(actor.id),
+        current_operator_username=str(actor.username or ""),
+        is_privileged=privileged,
+        operator_count=len(operators),
+        operators=operators,
+    )
 
 
 @router.get("/notifications", response_model=list[NotificationResponse])

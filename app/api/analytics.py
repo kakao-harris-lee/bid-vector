@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.security import get_current_operator_optional, resolve_target_operator
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import Analytics, Bid, BidDecisionRecord, Project
+from app.models.models import Analytics, Bid, BidDecisionRecord, Project, User
 from app.schemas.schemas import (
     AnalyticsEventRequest,
     DecisionRecommendationResponse,
@@ -43,6 +44,39 @@ from app.tasks.jobs import (
 router = APIRouter()
 
 INTERNAL_TELEMETRY_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
+
+
+def _resolve_analytics_operator(
+    db: Session,
+    current_operator: User | None,
+    operator_id: int | None,
+) -> User:
+    """Resolve the operator whose data should drive an analytics payload.
+
+    Falls back to the canonical operator when no bearer token is supplied
+    (preserves backward-compatible behavior for unauthenticated callers).
+    With a bearer token, applies the standard ``resolve_target_operator``
+    permission policy (403/404 are raised inside the helper).
+    """
+    if current_operator is None:
+        if operator_id is None:
+            return ensure_operator_account(db)
+        # Unauthenticated callers may not request another operator's data.
+        fallback = ensure_operator_account(db)
+        return resolve_target_operator(db, fallback, operator_id)
+    return resolve_target_operator(db, current_operator, operator_id)
+
+
+def _with_current_operator(payload: dict, operator) -> dict:
+    """Inject ``current_operator_id`` / ``current_operator_username`` into the response.
+
+    Analytics service payloads carry ``operator_id`` already; this helper just
+    makes the actor explicit so the frontend can render which company is
+    currently shown in the dropdown.
+    """
+    payload["current_operator_id"] = int(operator.id)
+    payload["current_operator_username"] = str(operator.username or "")
+    return payload
 
 
 def _raise_decision_experiment_http_error(exc: ValueError) -> None:
@@ -155,10 +189,19 @@ def get_prediction_observability(
 def get_operations_dashboard(
     days: int = Query(30, ge=1, le=365),
     recent_limit: int = Query(5, ge=1, le=20),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Return dashboard cards for crawl health and strategy monitoring performance."""
-    return AnalyticsReportingService().build_operations_dashboard(db, days=days, recent_limit=recent_limit)
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = AnalyticsReportingService().build_operations_dashboard(
+        db,
+        days=days,
+        recent_limit=recent_limit,
+        operator=target_operator,
+    )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/decision-insights", response_model=DecisionInsightsResponse)
@@ -193,10 +236,19 @@ def get_decision_funnel(
 def get_operations_kpi(
     days: int = Query(30, ge=1, le=365),
     missed_limit: int = Query(10, ge=1, le=50),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Aggregate roadmap operating KPIs (manual override, conversion, accuracy, missed) in one call."""
-    return DecisionAnalyticsService().build_operations_kpi(db, days=days, missed_limit=missed_limit)
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = DecisionAnalyticsService().build_operations_kpi(
+        db,
+        days=days,
+        missed_limit=missed_limit,
+        operator=target_operator,
+    )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get(

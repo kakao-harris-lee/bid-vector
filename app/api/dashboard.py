@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_operator_from_bearer
+from app.core.security import get_current_operator_from_bearer, resolve_target_operator
 from app.core.time import ensure_utc, utc_now
 from app.models.models import (
     Bid,
@@ -548,6 +548,8 @@ def _list_meta(
 ) -> DashboardListMeta:
     return DashboardListMeta(
         operator_id=int(operator.id),
+        current_operator_id=int(operator.id),
+        current_operator_username=str(operator.username or ""),
         generated_at=generated_at,
         limit=limit,
         returned_count=returned_count,
@@ -560,10 +562,12 @@ def list_dashboard_opportunities(
         default=None, pattern="^(planned|reviewing|submitted|skipped)$"
     ),
     limit: int = Query(default=50, ge=1, le=100),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
-    operator: User = Depends(get_current_operator_from_bearer),
+    current_operator: User = Depends(get_current_operator_from_bearer),
 ):
     """Return bid-decision candidates for the mobile dashboard opportunity tab."""
+    operator = resolve_target_operator(db, current_operator, operator_id)
     generated_at = utc_now()
     statuses = {status} if status else None
     items = _build_opportunity_items(
@@ -590,10 +594,12 @@ def list_dashboard_bids(
         default=None, pattern="^(submitted|reviewed|accepted|rejected)$"
     ),
     limit: int = Query(default=50, ge=1, le=100),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
-    operator: User = Depends(get_current_operator_from_bearer),
+    current_operator: User = Depends(get_current_operator_from_bearer),
 ):
     """Return submitted bids with their latest linked decision record."""
+    operator = resolve_target_operator(db, current_operator, operator_id)
     generated_at = utc_now()
     query = db.query(Bid).filter(Bid.user_id == operator.id)
     if status:
@@ -620,10 +626,12 @@ def list_dashboard_bids(
 @router.get("/results", response_model=DashboardResultListResponse)
 def list_dashboard_results(
     limit: int = Query(default=50, ge=1, le=100),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
-    operator: User = Depends(get_current_operator_from_bearer),
+    current_operator: User = Depends(get_current_operator_from_bearer),
 ):
     """Return tender results with linked prediction, recommendation, and bid outcome context."""
+    operator = resolve_target_operator(db, current_operator, operator_id)
     generated_at = utc_now()
     results = _load_latest_result_rows(db, limit=limit)
     project_ids = [int(result.project_id) for result in results]
@@ -658,10 +666,12 @@ def list_dashboard_results(
 @router.get("/summary", response_model=DashboardSummaryResponse)
 def get_dashboard_summary(
     limit: int = Query(default=5, ge=1, le=20),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
-    operator: User = Depends(get_current_operator_from_bearer),
+    current_operator: User = Depends(get_current_operator_from_bearer),
 ):
     """Return the mobile-first dashboard home payload centered on today's work."""
+    operator = resolve_target_operator(db, current_operator, operator_id)
     generated_at = utc_now()
     due_until = generated_at + timedelta(hours=24)
 
@@ -911,6 +921,8 @@ def get_dashboard_summary(
 
     return {
         "operator_id": int(operator.id),
+        "current_operator_id": int(operator.id),
+        "current_operator_username": str(operator.username or ""),
         "generated_at": generated_at,
         "today": generated_at.date(),
         "operational_status": operational_status,

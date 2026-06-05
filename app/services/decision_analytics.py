@@ -19,6 +19,7 @@ from app.models.models import (
     PaperBid,
     PaperBidRun,
     PaperBidSettlement,
+    User,
 )
 from app.schemas.schemas import _extract_decision_reasons
 from app.services.prediction_feedback import PredictionFeedbackService
@@ -145,9 +146,11 @@ class DecisionAnalyticsService:
         limit: int = 10,
         breakdown_limit: int = 5,
         trend_bucket_days: int = 7,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Summarize how initial bid decisions progress toward submitted workflow states."""
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         now = utc_now()
         current_period_start = now - timedelta(days=days)
         previous_period_start = current_period_start - timedelta(days=days)
@@ -298,6 +301,7 @@ class DecisionAnalyticsService:
         *,
         days: int = 30,
         missed_limit: int = 10,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Aggregate roadmap operating KPIs (d/e/f/b) from existing data in one call.
 
@@ -306,7 +310,8 @@ class DecisionAnalyticsService:
         Manual override (d) and missed opportunities (b) are computed here over the same
         current-period decision set that ``build_funnel`` analyzes.
         """
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         now = utc_now()
         current_period_start = now - timedelta(days=days)
         decisions = self._load_decisions_in_range(
@@ -316,8 +321,10 @@ class DecisionAnalyticsService:
             end_at=None,
         )
 
-        funnel = self.build_funnel(db, days=days)
-        feedback = PredictionFeedbackService().build_feedback(db, days=days, limit=100)
+        funnel = self.build_funnel(db, days=days, operator=operator)
+        feedback = PredictionFeedbackService().build_feedback(
+            db, days=days, limit=100, operator=operator
+        )
 
         manual_override = self._build_manual_override_kpi(decisions)
         missed_opportunities = self._build_missed_opportunities_kpi(
