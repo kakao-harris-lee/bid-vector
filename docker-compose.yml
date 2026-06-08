@@ -45,6 +45,22 @@ services:
       retries: 12
       start_period: 30s
 
+  # Builds the dashboard SPA (host source -> host frontend/dist) so the api can
+  # serve it. Compose-managed: removes the manual `npm --prefix frontend run build`
+  # step. Runs host code via the same `.:/app` bind mount as every other service,
+  # so the served frontend always matches the current branch (CLAUDE.md §0).
+  frontend-build:
+    image: node:24-bookworm-slim
+    container_name: bid_vector_frontend_build
+    working_dir: /app/frontend
+    restart: "no"
+    volumes:
+      - .:/app
+      # Keep container node_modules isolated from the host's so a Linux/node:24
+      # install never clobbers host-side tooling (vitest/build).
+      - frontend_node_modules:/app/frontend/node_modules
+    command: sh -c "npm ci --legacy-peer-deps && npm run build"
+
   api:
     build:
       context: .
@@ -57,6 +73,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      frontend-build:
+        condition: service_completed_successfully
     environment:
       DATABASE_HOST: db
       DATABASE_PORT: 5432
@@ -236,3 +254,4 @@ volumes:
   postgres_data:
   rabbitmq_data:
   celery_beat_data:
+  frontend_node_modules:
