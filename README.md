@@ -268,8 +268,13 @@ Keep port `3000` reserved for the bid-vector app on this host. KIS Unified STS u
 
    ```bash
    npm --prefix frontend run test    # vitest + RTL
-   npm --prefix frontend run build   # tsc --noEmit && vite build → frontend/dist
+   npm --prefix frontend run build   # tsc --noEmit && vite build → frontend/dist (로컬 개발용)
    ```
+
+   > Docker compose 환경에서는 수동 빌드가 필요 없습니다. `frontend-build` 서비스가
+   > 호스트 소스를 `frontend/dist`로 빌드하고 `api`가 이를 StaticFiles로 서빙합니다.
+   > 프론트 변경 반영: `docker compose run --rm frontend-build` (또는 `docker compose up`이
+   > api 기동 전 자동 실행).
 
 레이아웃은 Phase 0에서 다음과 같이 분리되었습니다:
 

@@ -42,6 +42,11 @@ docker compose --profile tasks restart            # 모든 서비스
 # 또는 이미지 자체가 바뀐 경우 (requirements 변경, Dockerfile 변경)
 docker compose --profile tasks up -d --build
 
+# 3-1. 프론트엔드(frontend/)가 바뀐 경우: 수동 npm build 금지.
+#      compose의 frontend-build 서비스가 호스트 소스를 frontend/dist로 빌드하고
+#      api가 그 dist를 StaticFiles로 서빙한다(StaticFiles는 동적이라 api 재시작 불필요).
+docker compose run --rm frontend-build   # 또는: docker compose up -d frontend-build
+
 # 4. 검증
 docker exec <container> grep -c "<fix-marker>" /app/<changed-file>  # 새 코드가 들어왔는지
 ```
