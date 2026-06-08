@@ -383,8 +383,15 @@ def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object
     training queue (see :func:`build_task_routes`), so the ``training-worker``
     compose service executes it while the ``beat`` service only schedules it.
     Defaults to OFF; opt-in via ``PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED``.
-    The scheduled run passes no ``request_payload`` so the task uses its own
-    defaults (full dataset, limit 500, manifest creation + remote publish).
+
+    The scheduled run is **candidate-only**: it passes ``create_manifest=False``
+    and ``publish_remote=False`` so the weekly job only retrains predictor
+    artifacts + dataset/quality/comparison reports (most recent 500 settled
+    rows, the task default ``limit``). It never creates a release manifest,
+    uploads to remote storage, or activates a model — release/promotion stays a
+    deliberate, gated, manual action (``scripts/promote_ml_release.py``). This
+    keeps the weekly retrain decoupled from the signing-key / object-storage
+    release machinery.
     """
     if not settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED:
         return {}
@@ -397,6 +404,13 @@ def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object
         "price_predictor_training_weekly": {
             "task": PRICE_PREDICTOR_TRAINING_TASK_NAME,
             "schedule": crontab(day_of_week=day_of_week, hour=hour, minute=minute),
+            # Candidate-only: never auto-create/publish/activate a release.
+            "kwargs": {
+                "request_payload": {
+                    "create_manifest": False,
+                    "publish_remote": False,
+                }
+            },
         }
     }
 

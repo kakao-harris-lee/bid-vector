@@ -57,16 +57,23 @@ def test_ml_training_schedule_builds_when_enabled(monkeypatch):
     assert crontab.minute == {0}
 
 
-def test_ml_training_schedule_passes_no_request_payload(monkeypatch):
-    """The scheduled run uses task defaults — no request_payload kwargs override."""
+def test_ml_training_schedule_is_candidate_only(monkeypatch):
+    """Safety invariant: the scheduled run never creates/publishes/activates a release.
+
+    The weekly job must pass create_manifest=False and publish_remote=False so it
+    only retrains candidate artifacts; release/promotion stays manual & gated
+    (scripts/promote_ml_release.py). Pins the no-auto-promotion guarantee against
+    future drift in the scheduled payload.
+    """
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED", True)
     entry = build_price_predictor_training_beat_schedule()[
         "price_predictor_training_weekly"
     ]
-    # No kwargs at all → train_price_predictor(request_payload=None) default path.
-    assert "kwargs" not in entry
+    payload = entry["kwargs"]["request_payload"]
+    assert payload["create_manifest"] is False
+    assert payload["publish_remote"] is False
 
 
 def test_ml_training_schedule_clamps_out_of_range_values(monkeypatch):
