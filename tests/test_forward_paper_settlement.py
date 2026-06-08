@@ -170,9 +170,13 @@ def test_forward_settlement_skips_when_no_tender_result(test_db):
 
     result = PaperBiddingBacktestService().run_forward_settlement(test_db, persist=True)
 
-    assert result["scanned_count"] == 1
+    # A bid whose project has no usable TenderResult is now excluded by the
+    # candidate-level EXISTS filter (instead of being scanned-then-skipped), so
+    # it never consumes scan budget. The essential outcome is unchanged: it is
+    # not settled.
+    assert result["scanned_count"] == 0
     assert result["settled_count"] == 0
-    assert result["skipped_count"] == 1
+    assert result["skipped_count"] == 0
     assert test_db.query(PaperBidSettlement).count() == 0
 
 
@@ -225,10 +229,11 @@ def test_forward_settlement_summary_counts_are_accurate(test_db):
     project_a = _open_project(test_db, title="settleable", deadline=_dt(2025, 2, 1))
     _forward_paper_bid(test_db, run=run, project=project_a)
     _tender_result(test_db, project=project_a, announced_at=_dt(2025, 2, 2))
-    # Skipped: past deadline but no result.
+    # Not a candidate: past deadline but no usable result -> excluded by the
+    # EXISTS filter, so it is neither scanned nor skipped.
     project_b = _open_project(test_db, title="no-result", deadline=_dt(2025, 2, 1))
     _forward_paper_bid(test_db, run=run, project=project_b)
-    # Not scanned: before deadline.
+    # Not a candidate: before deadline (filtered in Python after fetch).
     project_c = _open_project(
         test_db, title="future", deadline=datetime.now(UTC) + timedelta(days=5)
     )
@@ -237,9 +242,11 @@ def test_forward_settlement_summary_counts_are_accurate(test_db):
 
     result = PaperBiddingBacktestService().run_forward_settlement(test_db, persist=True)
 
-    assert result["scanned_count"] == 2
+    # Only the settle-able bid is a candidate now; the resultless bid is no
+    # longer scanned/skipped (EXISTS filter), the future bid is still filtered.
+    assert result["scanned_count"] == 1
     assert result["settled_count"] == 1
-    assert result["skipped_count"] == 1
+    assert result["skipped_count"] == 0
     assert result["summary"]["settled_count"] == 1
     assert test_db.query(PaperBidSettlement).count() == 1
 
@@ -267,6 +274,77 @@ def test_forward_settlement_respects_operator_filter(test_db):
     assert settlements[0].paper_bid_id == (
         test_db.query(PaperBid).filter(PaperBid.operator_id == 1).one().id
     )
+
+
+def test_forward_settlement_does_not_starve_on_resultless_old_bids(test_db):
+    """Old past-deadline bids without a usable result must not eat the scan budget.
+
+    Regression for head-of-line starvation: before the EXISTS candidate filter,
+    ``deadline ASC`` ordering let the oldest resultless bids occupy the bounded
+    scan window, so a genuinely settle-able (but later-ordered) bid past the
+    ``limit`` cap was never reached and ``settled_count`` stayed 0.
+    """
+    run = _forward_run(test_db)
+    limit = 2
+
+    # limit + 2 oldest past-deadline bids with NO usable TenderResult:
+    #   - two with no result at all
+    #   - two with a winning_amount=0 (registration-style) result
+    starved_bids = []
+    for idx in range(limit + 2):
+        old_deadline = _dt(2025, 1, 1) + timedelta(days=idx)
+        project = _open_project(
+            test_db, title=f"resultless-{idx}", deadline=old_deadline
+        )
+        bid = _forward_paper_bid(test_db, run=run, project=project)
+        starved_bids.append(bid)
+        if idx % 2 == 0:
+            # Half get a non-usable (winning_amount=0) registration-style result.
+            _tender_result(
+                test_db,
+                project=project,
+                winning_amount=0,
+                winning_rate=0.0,
+                announced_at=old_deadline + timedelta(days=1),
+            )
+
+    # A newer (later-ordered) settle-able bid WITH a usable result. Its deadline
+    # is past but more recent than every starved bid, so deadline ASC pushes it
+    # behind all of them and past the limit-based scan cap.
+    settleable_deadline = _dt(2025, 6, 1)
+    settleable_project = _open_project(
+        test_db, title="settleable", deadline=settleable_deadline
+    )
+    settleable_bid = _forward_paper_bid(
+        test_db,
+        run=run,
+        project=settleable_project,
+        paper_bid_amount=88_000_000,
+        paper_bid_rate=0.88,
+    )
+    _tender_result(
+        test_db,
+        project=settleable_project,
+        winning_amount=88_100_000,
+        winning_rate=0.881,
+        announced_at=settleable_deadline + timedelta(days=1),
+    )
+    test_db.commit()
+
+    result = PaperBiddingBacktestService().run_forward_settlement(
+        test_db, limit=limit, persist=True
+    )
+
+    # The settle-able bid is reached and settled despite the starved prefix.
+    assert result["settled_count"] >= 1
+
+    settlements = test_db.query(PaperBidSettlement).all()
+    settled_bid_ids = {s.paper_bid_id for s in settlements}
+    assert settleable_bid.id in settled_bid_ids
+
+    # None of the resultless / winning_amount=0 old bids were settled.
+    for bid in starved_bids:
+        assert bid.id not in settled_bid_ids
 
 
 def test_settle_forward_paper_bids_task_runs_under_memory_broker(test_db, monkeypatch):

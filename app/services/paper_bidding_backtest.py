@@ -11,6 +11,7 @@ from typing import Any, Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
+from sqlalchemy import exists
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
@@ -430,6 +431,12 @@ class PaperBiddingBacktestService:
         an existing settlement, a null/future deadline, or no deadline at all are
         excluded. The ``deadline`` comparison is done in Python via ``ensure_utc``
         so naive timestamps (SQLite test rows) are normalised consistently.
+
+        Only bids whose project already has a *usable* ``TenderResult``
+        (``winning_amount > 0``) are loaded, via a correlated ``EXISTS`` filter.
+        This prevents head-of-line starvation: old past-deadline bids that will
+        never receive a result no longer consume the bounded scan budget and
+        starve genuinely settle-able (but later-ordered) bids.
         """
         query = (
             db.query(PaperBid)
@@ -444,6 +451,11 @@ class PaperBiddingBacktestService:
                 PaperBidSettlement.id.is_(None),
                 Project.deadline.isnot(None),
                 (PaperBidRun.mode == "forward_paper") | (PaperBidRun.mode.is_(None)),
+                exists().where(
+                    (TenderResult.project_id == PaperBid.project_id)
+                    & (TenderResult.winning_amount.isnot(None))
+                    & (TenderResult.winning_amount > 0)
+                ),
             )
         )
         if operator_id is not None:
