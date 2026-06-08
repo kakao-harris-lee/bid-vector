@@ -1823,6 +1823,39 @@ class CrawlRequest(BaseModel):
     keyword: Optional[str] = None
     execution_mode: Literal["mock", "live", "auto"] = "mock"
     max_items: int = Field(default=10, ge=1, le=100)
+    # scsbid award coverage — all optional, fully backward compatible.
+    categories: Optional[List[str]] = Field(
+        default=None,
+        description="scsbid multi-category sweep. None falls back to the single `category`.",
+    )
+    start_date: Optional[str] = Field(
+        default=None,
+        description="scsbid award date-window start (YYYYMMDD or ISO).",
+    )
+    end_date: Optional[str] = Field(
+        default=None,
+        description="scsbid award date-window end (YYYYMMDD or ISO).",
+    )
+    lookback_days: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="scsbid rolling window: end=today, start=today-lookback_days.",
+    )
+    page_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=999,
+        description="scsbid numOfRows per page. Defaults to 100.",
+    )
+    max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="scsbid per-category page ceiling. Defaults to 30.",
+    )
+    collect_reserve_detail: bool = Field(
+        default=True,
+        description="When False, skip per-item reserve-price detail fetches.",
+    )
 
 
 class CrawlNoticeItem(BaseModel):

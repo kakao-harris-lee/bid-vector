@@ -2717,6 +2717,42 @@ export interface components {
              * @default 10
              */
             max_items: number;
+            /**
+             * Categories
+             * @description scsbid multi-category sweep. None falls back to the single `category`.
+             */
+            categories?: string[] | null;
+            /**
+             * Start Date
+             * @description scsbid award date-window start (YYYYMMDD or ISO).
+             */
+            start_date?: string | null;
+            /**
+             * End Date
+             * @description scsbid award date-window end (YYYYMMDD or ISO).
+             */
+            end_date?: string | null;
+            /**
+             * Lookback Days
+             * @description scsbid rolling window: end=today, start=today-lookback_days.
+             */
+            lookback_days?: number | null;
+            /**
+             * Page Size
+             * @description scsbid numOfRows per page. Defaults to 100.
+             */
+            page_size?: number | null;
+            /**
+             * Max Pages
+             * @description scsbid per-category page ceiling. Defaults to 30.
+             */
+            max_pages?: number | null;
+            /**
+             * Collect Reserve Detail
+             * @description When False, skip per-item reserve-price detail fetches.
+             * @default true
+             */
+            collect_reserve_detail: boolean;
         };
         /** CrawlResponse */
         CrawlResponse: {
