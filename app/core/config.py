@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     SMOKE_TEST_SCHEDULE_ENABLED: bool = False
     SMOKE_TEST_HOUR_UTC: int = 7   # 07:00 UTC = 16:00 KST
     SMOKE_TEST_MINUTE: int = 0
+    # Price-predictor ML training — weekly Celery-beat schedule (training-worker
+    # executes via the ML training queue). Default OFF; opt-in via .env.
+    # request_payload is left at None → trains the full dataset with task defaults
+    # (limit 500, create_manifest=True, publish_remote=True).
+    PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED: bool = False
+    PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK: int = 0  # 0=Sunday (crontab day_of_week)
+    PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC: int = 18    # 18:00 UTC = 03:00 KST
+    PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE: int = 0
     KONEPS_COLLECTION_SCHEDULE_ENABLED: bool = False
     KONEPS_COLLECTION_INTERVAL_MINUTES: int = 60
     KONEPS_COLLECTION_SOURCE: str = "koneps-openapi"

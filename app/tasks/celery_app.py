@@ -74,12 +74,18 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
             return self._results.get(task_id, _FallbackAsyncResult(task_id))
 
     class crontab:  # type: ignore[no-redef]
-        """Minimal crontab shim for environments without Celery installed."""
+        """Minimal crontab shim for environments without Celery installed.
 
-        def __init__(self, hour: int = 0, minute: int = 0, **kwargs):
+        Stores ``day_of_week`` when supplied so weekly schedules remain
+        introspectable in lightweight test environments. The real Celery
+        ``crontab`` handles the actual scheduling semantics in production.
+        """
+
+        def __init__(self, hour: int = 0, minute: int = 0, day_of_week=None, **kwargs):
             del kwargs
             self.hour = {int(hour)}
             self.minute = {int(minute)}
+            self.day_of_week = {int(day_of_week)} if day_of_week is not None else set()
 
 from app.core.config import settings
 
@@ -370,6 +376,45 @@ def build_smoke_test_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the weekly schedule entry for price-predictor ML training.
+
+    The ``ml.train_price_predictor`` task is routed onto the dedicated ML
+    training queue (see :func:`build_task_routes`), so the ``training-worker``
+    compose service executes it while the ``beat`` service only schedules it.
+    Defaults to OFF; opt-in via ``PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED``.
+
+    The scheduled run is **candidate-only**: it passes ``create_manifest=False``
+    and ``publish_remote=False`` so the weekly job only retrains predictor
+    artifacts + dataset/quality/comparison reports (most recent 500 settled
+    rows, the task default ``limit``). It never creates a release manifest,
+    uploads to remote storage, or activates a model — release/promotion stays a
+    deliberate, gated, manual action (``scripts/promote_ml_release.py``). This
+    keeps the weekly retrain decoupled from the signing-key / object-storage
+    release machinery.
+    """
+    if not settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED:
+        return {}
+
+    day_of_week = max(0, min(6, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK)))
+    hour = max(0, min(23, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC)))
+    minute = max(0, min(59, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE)))
+
+    return {
+        "price_predictor_training_weekly": {
+            "task": PRICE_PREDICTOR_TRAINING_TASK_NAME,
+            "schedule": crontab(day_of_week=day_of_week, hour=hour, minute=minute),
+            # Candidate-only: never auto-create/publish/activate a release.
+            "kwargs": {
+                "request_payload": {
+                    "create_manifest": False,
+                    "publish_remote": False,
+                }
+            },
+        }
+    }
+
+
 def build_telegram_polling_beat_schedule() -> dict[str, dict[str, object]]:
     """Build the periodic schedule entry for Telegram getUpdates polling."""
     if not settings.TELEGRAM_POLLING_SCHEDULE_ENABLED:
@@ -434,6 +479,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_business_type_enrichment_beat_schedule(),
             **build_category_reclassify_beat_schedule(),
             **build_smoke_test_beat_schedule(),
+            **build_price_predictor_training_beat_schedule(),
             **build_telegram_polling_beat_schedule(),
         },
     }
