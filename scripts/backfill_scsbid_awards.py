@@ -42,6 +42,7 @@ class CategoryStats:
     collected: int = 0
     matched_existing: int = 0
     new_projects: int = 0
+    persisted_items: int = 0
 
 
 @dataclass
@@ -51,9 +52,11 @@ class BackfillStats:
     categories: list[str] = field(default_factory=list)
     reserve_detail: bool = True
     persisted: bool = False
+    matched_only: bool = False
     total_collected: int = 0
     total_matched_existing: int = 0
     total_new_projects: int = 0
+    total_persisted_items: int = 0
     api_call_count: int = 0
     per_category: list[dict[str, Any]] = field(default_factory=list)
 
@@ -88,8 +91,16 @@ def run_backfill(
     collect_reserve_detail: bool,
     execution_mode: str,
     persist: bool,
+    matched_only: bool = False,
 ) -> BackfillStats:
-    """Collect scsbid awards for the window and (optionally) persist them."""
+    """Collect scsbid awards for the window and (optionally) persist them.
+
+    When ``matched_only`` is True, only awards whose ``notice_number`` already
+    has a ``Project`` row are persisted. This keeps the run lightweight (no new
+    corpus projects, hence no embedding generation) and targets exactly the
+    outstanding forward paper bids whose result was missing — the rolling
+    schedule accumulates the broader corpus going forward.
+    """
     service = KonepsCollectorService()
     stats = BackfillStats(
         start=start,
@@ -97,6 +108,7 @@ def run_backfill(
         categories=categories,
         reserve_detail=collect_reserve_detail,
         persisted=persist,
+        matched_only=matched_only,
     )
 
     per_category: dict[str, CategoryStats] = {
@@ -133,8 +145,17 @@ def run_backfill(
         cat_stats.new_projects = len(notice_numbers - pre_existing)
 
         if persist:
+            persist_items = items
+            if matched_only:
+                persist_items = [
+                    item
+                    for item in items
+                    if str(item.get("notice_number")) in pre_existing
+                ]
+            cat_stats.persisted_items = len(persist_items)
+            persist_response = {**response, "items": persist_items}
             crawl_job = service.create_crawl_job(db, request)
-            service.persist_crawl_results(db, crawl_job, request, response)
+            service.persist_crawl_results(db, crawl_job, request, persist_response)
 
     stats.per_category = [asdict(value) for value in per_category.values()]
     stats.total_collected = sum(v.collected for v in per_category.values())
@@ -142,6 +163,9 @@ def run_backfill(
         v.matched_existing for v in per_category.values()
     )
     stats.total_new_projects = sum(v.new_projects for v in per_category.values())
+    stats.total_persisted_items = sum(
+        v.persisted_items for v in per_category.values()
+    )
     return stats
 
 
@@ -175,6 +199,15 @@ def main() -> int:
     persistence.add_argument("--dry-run", dest="persist", action="store_false")
     parser.set_defaults(persist=False)
     parser.add_argument(
+        "--matched-only",
+        action="store_true",
+        help=(
+            "Persist only awards whose notice already has a Project row "
+            "(no new corpus projects / embeddings). Targets outstanding "
+            "forward paper bids."
+        ),
+    )
+    parser.add_argument(
         "--audit",
         type=Path,
         default=Path("reports/scsbid-backfill/run.json"),
@@ -197,6 +230,7 @@ def main() -> int:
             collect_reserve_detail=not args.no_reserve_detail,
             execution_mode=args.execution_mode,
             persist=args.persist,
+            matched_only=args.matched_only,
         )
         if args.persist:
             db.commit()

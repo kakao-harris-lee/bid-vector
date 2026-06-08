@@ -8,12 +8,147 @@ pattern); no real KONEPS calls are made under ``ENVIRONMENT=test``.
 
 from __future__ import annotations
 
+import importlib.util
+import pathlib
+import sys
 from datetime import UTC, datetime
 
 from app.core.config import settings
-from app.models.models import Project, TenderResult
+from app.models.models import CrawlJob, Project, TenderResult
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
+
+
+def _load_backfill_module():
+    """Dynamically load scripts/backfill_scsbid_awards.py (not a package)."""
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "backfill_scsbid_awards", repo / "scripts" / "backfill_scsbid_awards.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    # Register before exec so dataclasses can resolve string annotations
+    # (the script uses ``from __future__ import annotations``).
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _patch_collector_for_backfill(monkeypatch, response):
+    """Stub collect/persist so run_backfill is exercised without HTTP/DB writes.
+
+    Returns a dict whose ``items`` key is filled with the notice numbers that
+    actually reached ``persist_crawl_results`` (i.e. survived matched-only).
+    """
+    captured: dict = {}
+    monkeypatch.setattr(
+        KonepsCollectorService, "collect_notices", lambda self, req: response
+    )
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "create_crawl_job",
+        lambda self, db, req: CrawlJob(source="scsbid-openapi"),
+    )
+
+    def _fake_persist(self, db, job, req, resp):
+        captured["items"] = [
+            str(item.get("notice_number")) for item in resp.get("items", [])
+        ]
+        return job
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "persist_crawl_results", _fake_persist
+    )
+    return captured
+
+
+def _backfill_response():
+    return {
+        "items": [
+            {
+                "notice_number": "R-EXIST",
+                "title": "기존 공고",
+                "base_amount": 100_000_000.0,
+                "metadata": {"winning_amount": 95_000_000, "opening_status": "낙찰"},
+            },
+            {
+                "notice_number": "R-NEW",
+                "title": "신규 공고",
+                "base_amount": 100_000_000.0,
+                "metadata": {"winning_amount": 80_000_000, "opening_status": "낙찰"},
+            },
+        ],
+        "metadata": {"scsbid_api_call_count": 3},
+        "collected_count": 2,
+        "job_status": "completed",
+    }
+
+
+def test_backfill_matched_only_persists_only_existing_projects(test_db, monkeypatch):
+    """matched_only must drop awards whose notice has no existing Project."""
+    mod = _load_backfill_module()
+    test_db.add(
+        Project(
+            title="기존 공고",
+            description="-",
+            requirements="-",
+            budget_estimate=100_000_000.0,
+            category="construction",
+            notice_number="R-EXIST",
+        )
+    )
+    test_db.flush()
+    captured = _patch_collector_for_backfill(monkeypatch, _backfill_response())
+
+    stats = mod.run_backfill(
+        test_db,
+        start="20260526",
+        end="20260530",
+        categories=["construction"],
+        page_size=100,
+        max_pages=5,
+        collect_reserve_detail=False,
+        execution_mode="mock",
+        persist=True,
+        matched_only=True,
+    )
+
+    assert captured["items"] == ["R-EXIST"]
+    assert stats.total_persisted_items == 1
+    assert stats.total_matched_existing == 1
+    assert stats.total_new_projects == 1
+
+
+def test_backfill_persist_all_keeps_unmatched_awards(test_db, monkeypatch):
+    """Without matched_only the full feed (incl. new-corpus) is persisted."""
+    mod = _load_backfill_module()
+    test_db.add(
+        Project(
+            title="기존 공고",
+            description="-",
+            requirements="-",
+            budget_estimate=100_000_000.0,
+            category="construction",
+            notice_number="R-EXIST",
+        )
+    )
+    test_db.flush()
+    captured = _patch_collector_for_backfill(monkeypatch, _backfill_response())
+
+    stats = mod.run_backfill(
+        test_db,
+        start="20260526",
+        end="20260530",
+        categories=["construction"],
+        page_size=100,
+        max_pages=5,
+        collect_reserve_detail=False,
+        execution_mode="mock",
+        persist=True,
+        matched_only=False,
+    )
+
+    assert sorted(captured["items"]) == ["R-EXIST", "R-NEW"]
+    assert stats.total_persisted_items == 2
 
 
 class FakeOpenApiResponse:
