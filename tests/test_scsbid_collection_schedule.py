@@ -46,6 +46,42 @@ def test_scsbid_schedule_builds_when_enabled(monkeypatch):
     assert payload["execution_mode"] == "auto"
 
 
+def test_scsbid_schedule_passes_forward_coverage_payload(monkeypatch):
+    """The beat payload carries the multi-category date-window sweep params."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_COLLECTION_CATEGORIES", "construction,service,goods"
+    )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_LOOKBACK_DAYS", 3)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_PAGE_SIZE", 100)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_PAGES", 30)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_RESERVE_DETAIL", True)
+
+    payload = build_scsbid_collection_beat_schedule()[
+        "koneps_scsbid_collection_periodic"
+    ]["kwargs"]["request_payload"]
+
+    assert payload["categories"] == ["construction", "service", "goods"]
+    assert payload["lookback_days"] == 3
+    assert payload["page_size"] == 100
+    assert payload["max_pages"] == 30
+    assert payload["collect_reserve_detail"] is True
+
+
+def test_scsbid_schedule_clamps_page_size_to_openapi_limit(monkeypatch):
+    """page_size above 999 is clamped to satisfy the OpenAPI numOfRows ceiling."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED", True)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_PAGE_SIZE", 5000)
+    payload = build_scsbid_collection_beat_schedule()[
+        "koneps_scsbid_collection_periodic"
+    ]["kwargs"]["request_payload"]
+    assert payload["page_size"] == 999
+
+
 def test_scsbid_source_alias_is_recognized_by_collector():
     """The default scsbid source key must be a KonepsCollectorService alias.
 

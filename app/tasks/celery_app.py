@@ -282,6 +282,12 @@ def build_scsbid_collection_beat_schedule() -> dict[str, dict[str, object]]:
     if execution_mode not in {"mock", "live", "auto"}:
         execution_mode = "auto"
 
+    categories = [
+        token.strip().lower()
+        for token in str(settings.KONEPS_SCSBID_COLLECTION_CATEGORIES or "").split(",")
+        if token.strip()
+    ] or None
+
     return {
         "koneps_scsbid_collection_periodic": {
             "task": COLLECT_KONEPS_NOTICES_TASK_NAME,
@@ -295,10 +301,24 @@ def build_scsbid_collection_beat_schedule() -> dict[str, dict[str, object]]:
                     ).strip()
                     or "scsbid-openapi",
                     "category": category,
+                    "categories": categories,
                     "execution_mode": execution_mode,
                     "max_items": min(
                         100,
                         max(1, int(settings.KONEPS_SCSBID_COLLECTION_MAX_ITEMS)),
+                    ),
+                    "lookback_days": max(
+                        1, int(settings.KONEPS_SCSBID_COLLECTION_LOOKBACK_DAYS)
+                    ),
+                    "page_size": max(
+                        1,
+                        min(999, int(settings.KONEPS_SCSBID_COLLECTION_PAGE_SIZE)),
+                    ),
+                    "max_pages": max(
+                        1, int(settings.KONEPS_SCSBID_COLLECTION_MAX_PAGES)
+                    ),
+                    "collect_reserve_detail": bool(
+                        settings.KONEPS_SCSBID_COLLECTION_RESERVE_DETAIL
                     ),
                 },
             },

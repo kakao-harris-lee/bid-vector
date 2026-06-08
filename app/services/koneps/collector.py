@@ -653,117 +653,241 @@ class KonepsCollectorService:
         }
 
     def _collect_scsbid_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
-        """Collect awarded/opening rows from the KONEPS ScsbidInfoService OpenAPI."""
+        """Collect awarded/opening rows from the KONEPS ScsbidInfoService OpenAPI.
+
+        Sweeps every requested category over a resolved date window with safe
+        pagination, deduping notices across the whole run. The legacy single-day,
+        single-category behaviour is preserved when the new optional request
+        fields are absent.
+        """
         service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
         if not service_key:
             raise ValueError(
                 "KONEPS_OPENAPI_SERVICE_KEY is required for source=koneps-scsbid"
             )
 
-        operation = self._scsbid_operation_for_category(request.category)
-        date_token = self._openapi_date_token(request.target_date)
-        page_size = max(1, min(int(request.max_items or 1), 999))
-        url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
-        params = {
-            "type": "json",
-            "numOfRows": page_size,
-            "pageNo": 1,
-            "inqryDiv": "1",
-            "inqryBgnDt": f"{date_token}0000",
-            "inqryEndDt": f"{date_token}2359",
-        }
+        categories = self._scsbid_categories_for_request(request)
+        begin_token, end_token = self._scsbid_date_window(request)
+        page_size = self._scsbid_page_size(request)
+        max_pages = self._scsbid_max_pages(request)
+        collect_reserve_detail = bool(request.collect_reserve_detail)
+        delay_seconds = self._scsbid_request_delay_seconds()
 
-        response, key_variant = self._request_openapi_with_key_variants(
-            url,
-            params=params,
-            service_key=service_key,
-            operation=operation,
-        )
-        if response.status_code >= 400:
-            raise ValueError(
-                f"KONEPS ScsbidInfoService HTTP {response.status_code} for {operation}: "
-                f"{response.text[:300]} Tried service key variants: {key_variant}."
-            )
-        payload = self._load_openapi_json(response)
-        header = self._openapi_header(payload)
-        result_code = str(header.get("resultCode") or "").strip()
-        result_message = str(header.get("resultMsg") or "").strip()
-        if result_code and result_code not in {"00", "03"}:
-            raise ValueError(
-                f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
-                f"{result_message or 'unknown error'}"
-            )
-
-        body = self._openapi_body(payload)
-        raw_items = self._openapi_item_list(body)
         parsed_items: list[dict[str, Any]] = []
         seen_notice_numbers: set[str] = set()
         reserve_detail_count = 0
         reserve_detail_error_count = 0
+        api_call_count = 0
+        key_variant = ""
+        last_result_code = ""
+        last_result_message = ""
+        category_metadata: list[dict[str, Any]] = []
 
-        for raw_item in raw_items:
-            detail: dict[str, Any] = {}
-            notice_number = str(raw_item.get("bidNtceNo") or "").strip()
-            if notice_number:
-                try:
-                    detail = self._fetch_scsbid_reserve_detail(
-                        raw_item,
-                        request=request,
-                        service_key=service_key,
+        for category in categories:
+            operation = self._scsbid_operation_for_category(category)
+            url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
+            category_total_count: int | None = None
+            category_pages = 0
+
+            for page_no in range(1, max_pages + 1):
+                params = {
+                    "type": "json",
+                    "numOfRows": page_size,
+                    "pageNo": page_no,
+                    "inqryDiv": "1",
+                    "inqryBgnDt": begin_token,
+                    "inqryEndDt": end_token,
+                }
+                if api_call_count > 0 and delay_seconds > 0:
+                    sleep(delay_seconds)
+                response, key_variant = self._request_openapi_with_key_variants(
+                    url,
+                    params=params,
+                    service_key=service_key,
+                    operation=operation,
+                )
+                api_call_count += 1
+                if response.status_code >= 400:
+                    raise ValueError(
+                        f"KONEPS ScsbidInfoService HTTP {response.status_code} for "
+                        f"{operation}: {response.text[:300]} "
+                        f"Tried service key variants: {key_variant}."
                     )
-                    if detail.get("reserve_prices"):
-                        reserve_detail_count += 1
-                except Exception as exc:
-                    reserve_detail_error_count += 1
-                    detail = {"reserve_detail_error": str(exc)}
+                payload = self._load_openapi_json(response)
+                header = self._openapi_header(payload)
+                result_code = str(header.get("resultCode") or "").strip()
+                result_message = str(header.get("resultMsg") or "").strip()
+                if result_code and result_code not in {"00", "03"}:
+                    raise ValueError(
+                        f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
+                        f"{result_message or 'unknown error'}"
+                    )
+                last_result_code = result_code or last_result_code
+                last_result_message = result_message or last_result_message
 
-            parsed_item = self._build_scsbid_award_item(
-                raw_item,
-                detail=detail,
-                request=request,
-                operation=operation,
+                body = self._openapi_body(payload)
+                if category_total_count is None:
+                    category_total_count = self._safe_int(body.get("totalCount"))
+                raw_items = self._openapi_item_list(body)
+                category_pages += 1
+
+                for raw_item in raw_items:
+                    detail: dict[str, Any] = {}
+                    notice_number = str(raw_item.get("bidNtceNo") or "").strip()
+                    if not notice_number:
+                        continue
+                    if notice_number in seen_notice_numbers:
+                        continue
+                    if collect_reserve_detail:
+                        try:
+                            if delay_seconds > 0:
+                                sleep(delay_seconds)
+                            detail = self._fetch_scsbid_reserve_detail(
+                                raw_item,
+                                category=category,
+                                service_key=service_key,
+                            )
+                            api_call_count += 1
+                            if detail.get("reserve_prices"):
+                                reserve_detail_count += 1
+                        except Exception as exc:
+                            reserve_detail_error_count += 1
+                            detail = {"reserve_detail_error": str(exc)}
+
+                    parsed_item = self._build_scsbid_award_item(
+                        raw_item,
+                        detail=detail,
+                        request=request,
+                        operation=operation,
+                        category=category,
+                    )
+                    if parsed_item is None:
+                        continue
+                    notice_number = str(parsed_item["notice_number"])
+                    if notice_number in seen_notice_numbers:
+                        continue
+                    seen_notice_numbers.add(notice_number)
+                    parsed_items.append(parsed_item)
+
+                # Stop conditions: empty/short page or totalCount window reached.
+                if not raw_items:
+                    break
+                if len(raw_items) < page_size:
+                    break
+                if (
+                    category_total_count is not None
+                    and page_no * page_size >= category_total_count
+                ):
+                    break
+
+            category_metadata.append(
+                {
+                    "category": category,
+                    "operation": operation,
+                    "total_count": category_total_count,
+                    "pages_fetched": category_pages,
+                }
             )
-            if parsed_item is None:
-                continue
-            notice_number = str(parsed_item["notice_number"])
-            if notice_number in seen_notice_numbers:
-                continue
-            seen_notice_numbers.add(notice_number)
-            parsed_items.append(parsed_item)
-            if len(parsed_items) >= request.max_items:
-                break
 
         return {
             "items": parsed_items,
             "metadata": {
                 "resolved_mode": "scsbid_openapi",
                 "openapi_service": "ScsbidInfoService",
-                "openapi_operation": operation,
+                "openapi_operation": (
+                    category_metadata[0]["operation"] if category_metadata else None
+                ),
                 "openapi_endpoint": settings.KONEPS_OPENAPI_SCSBID_INFO_URL,
                 "openapi_service_key_variant": key_variant,
-                "openapi_result_code": result_code or "00",
-                "openapi_result_message": result_message,
-                "openapi_total_count": self._safe_int(body.get("totalCount")),
-                "openapi_page_no": self._safe_int(body.get("pageNo")),
-                "openapi_num_of_rows": self._safe_int(body.get("numOfRows")),
+                "openapi_result_code": last_result_code or "00",
+                "openapi_result_message": last_result_message,
+                "openapi_total_count": sum(
+                    int(entry["total_count"] or 0) for entry in category_metadata
+                ),
+                "scsbid_categories": [entry["category"] for entry in category_metadata],
+                "scsbid_category_breakdown": category_metadata,
+                "scsbid_api_call_count": api_call_count,
+                "scsbid_collected_count": len(parsed_items),
+                "reserve_detail_enabled": collect_reserve_detail,
                 "reserve_detail_collected_count": reserve_detail_count,
                 "reserve_detail_error_count": reserve_detail_error_count,
-                "query_date": date_token,
+                "query_date_begin": begin_token,
+                "query_date_end": end_token,
                 "query_type": "award_registration_datetime",
             },
         }
+
+    def _scsbid_categories_for_request(self, request: CrawlRequest) -> list[str]:
+        """Resolve the ordered, de-duplicated category list for a scsbid sweep.
+
+        Priority: ``request.categories`` > ``[request.category]`` > legacy default
+        (empty category, which maps to the 용역 operation). The legacy single
+        category path is preserved when ``categories`` is absent.
+        """
+        if request.categories:
+            raw_categories = [str(value) for value in request.categories]
+        elif request.category:
+            raw_categories = [str(request.category)]
+        else:
+            raw_categories = [str(request.category or "")]
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for value in raw_categories:
+            normalized = value.strip().lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            resolved.append(normalized)
+        return resolved or [""]
+
+    def _scsbid_date_window(self, request: CrawlRequest) -> tuple[str, str]:
+        """Resolve (inqryBgnDt, inqryEndDt) tokens for the scsbid date window.
+
+        Priority: explicit ``start_date``/``end_date`` > ``lookback_days``
+        (end=today) > ``target_date`` single-day (legacy). Returns
+        ``YYYYMMDDHHMM`` tokens.
+        """
+        if request.start_date and request.end_date:
+            begin = self._openapi_date_token(request.start_date)
+            end = self._openapi_date_token(request.end_date)
+        elif request.lookback_days is not None:
+            today = utc_now().date()
+            start_day = today - timedelta(days=max(0, int(request.lookback_days)))
+            begin = start_day.strftime("%Y%m%d")
+            end = today.strftime("%Y%m%d")
+        else:
+            token = self._openapi_date_token(request.target_date)
+            begin = token
+            end = token
+        return f"{begin}0000", f"{end}2359"
+
+    def _scsbid_page_size(self, request: CrawlRequest) -> int:
+        """Resolve numOfRows per page for a scsbid sweep (default 100, <=999)."""
+        configured = request.page_size or settings.KONEPS_SCSBID_COLLECTION_PAGE_SIZE
+        return max(1, min(int(configured or 100), 999))
+
+    def _scsbid_max_pages(self, request: CrawlRequest) -> int:
+        """Resolve the per-category page ceiling for a scsbid sweep (default 30)."""
+        configured = request.max_pages or settings.KONEPS_SCSBID_COLLECTION_MAX_PAGES
+        return max(1, int(configured or 30))
+
+    def _scsbid_request_delay_seconds(self) -> float:
+        """Return the inter-call throttle delay (seconds, never negative)."""
+        return max(
+            0.0,
+            float(settings.KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS or 0.0),
+        )
 
     def _fetch_scsbid_reserve_detail(
         self,
         raw_item: dict[str, Any],
         *,
-        request: CrawlRequest,
+        category: str | None,
         service_key: str,
     ) -> dict[str, Any]:
         """Fetch and summarize reserve-price detail rows for one awarded notice."""
-        operation = self._scsbid_reserve_detail_operation_for_category(
-            request.category
-        )
+        operation = self._scsbid_reserve_detail_operation_for_category(category)
         notice_number = str(raw_item.get("bidNtceNo") or "").strip()
         if not notice_number:
             return {}
@@ -818,11 +942,19 @@ class KonepsCollectorService:
         detail: dict[str, Any],
         request: CrawlRequest,
         operation: str,
+        category: str | None = None,
     ) -> dict[str, Any] | None:
         """Convert one ScsbidInfoService row into the existing crawl payload."""
         notice_number = str(raw_item.get("bidNtceNo") or "").strip()
         if not notice_number:
             return None
+        # Tag the item with the swept category so persist-time category
+        # resolution honours the per-category operation, not request.category.
+        resolved_category = (
+            str(category).strip().lower()
+            if category is not None
+            else (request.category or None)
+        )
 
         title = str(raw_item.get("bidNtceNm") or notice_number).strip()
         winning_amount = self._coerce_amount(raw_item.get("sucsfbidAmt"))
@@ -861,7 +993,7 @@ class KonepsCollectorService:
             "base_amount": float(base_amount or 0.0),
             "estimated_amount": float(planned_price or base_amount or 0.0),
             "closing_at": self._coerce_datetime(opened_at),
-            "business_type": request.category,
+            "business_type": resolved_category or request.category,
             "region": self._extract_region([demand_agency, title]),
             "license_codes": [],
             "source_url": None,

@@ -133,6 +133,14 @@ class Settings(BaseSettings):
     KONEPS_SCSBID_COLLECTION_CATEGORY: str = ""
     KONEPS_SCSBID_COLLECTION_MAX_ITEMS: int = 50
     KONEPS_SCSBID_COLLECTION_EXECUTION_MODE: str = "auto"
+    # scsbid award forward-coverage — multi-category date-window sweep params.
+    KONEPS_SCSBID_COLLECTION_CATEGORIES: str = "construction,service,goods"
+    KONEPS_SCSBID_COLLECTION_LOOKBACK_DAYS: int = 3
+    KONEPS_SCSBID_COLLECTION_PAGE_SIZE: int = 100
+    KONEPS_SCSBID_COLLECTION_MAX_PAGES: int = 30
+    KONEPS_SCSBID_COLLECTION_RESERVE_DETAIL: bool = True
+    # Throttle between scsbid OpenAPI page/category calls (seconds). 0 allowed in tests.
+    KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS: float = 0.2
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50
