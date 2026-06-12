@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 100
     CELERY_TASK_TIME_LIMIT_SECONDS: int = 1800
     CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: int = 1500
+    # Max project ids per deferred-embedding backfill task. Bounds each
+    # rebuild_project_embeddings run so a large catch-up sweep is split across
+    # several tasks instead of one unbounded task that re-creates the time-limit
+    # redelivery loop on the ML backfill queue.
+    EMBEDDING_BACKFILL_CHUNK_SIZE: int = 200
     CELERY_RESULT_EXPIRES_SECONDS: int = 86400
     CELERY_TASK_TRACK_STARTED: bool = True
     CELERY_WORKER_SEND_TASK_EVENTS: bool = True

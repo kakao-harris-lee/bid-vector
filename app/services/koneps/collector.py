@@ -240,13 +240,25 @@ class KonepsCollectorService:
             "metadata": response_metadata,
         }
 
-    def create_crawl_job(self, db: Session, request: CrawlRequest) -> CrawlJob:
-        """Create a crawl job record before execution starts."""
+    def create_crawl_job(
+        self,
+        db: Session,
+        request: CrawlRequest,
+        *,
+        celery_task_id: str | None = None,
+    ) -> CrawlJob:
+        """Create a crawl job record before execution starts.
+
+        ``celery_task_id`` is stamped at INSERT time so the row is immediately
+        recoverable by a redelivered task (closes the orphan window where a
+        SIGKILL between create and stamp would leave an unrecoverable row).
+        """
         crawl_job = CrawlJob(
             source=request.source,
             target_date=request.target_date,
             status="running",
             result_count=0,
+            celery_task_id=str(celery_task_id) if celery_task_id else None,
         )
         db.add(crawl_job)
         db.commit()
@@ -275,8 +287,19 @@ class KonepsCollectorService:
         crawl_job: CrawlJob,
         request: CrawlRequest,
         response: dict[str, Any],
+        *,
+        defer_embeddings: bool = False,
     ) -> CrawlJob:
-        """Persist crawl history and any usable opening-result data."""
+        """Persist crawl history and any usable opening-result data.
+
+        ``defer_embeddings`` is decided by the *caller*, not this method: only the
+        Celery collection task (the single path with a hard time limit) defers
+        embeddings to an async backfill. Synchronous callers (``POST
+        /operations/crawl``, the scsbid backfill script) leave it at the default
+        ``False`` so projects are embedded inline -- otherwise their newly created
+        projects would never be embedded (no inline, no enqueued backfill) and
+        silently drop out of pgvector search/recommendation.
+        """
         items = response.get("items", [])
         metadata = response.get("metadata", {})
 
@@ -287,6 +310,11 @@ class KonepsCollectorService:
 
         project_similarity = ProjectSimilarityService()
         linked_project_ids: set[int] = set()
+        # When deferred (Celery collection task for high-volume scsbid sweeps),
+        # per-item embedding is skipped and the touched project ids are surfaced
+        # for a single async backfill; CPU model inference per item would
+        # otherwise exceed the Celery hard time limit.
+        deferred_embedding_project_ids: set[int] = set()
 
         for item in items:
             item_metadata = item.get("metadata", {})
@@ -301,16 +329,19 @@ class KonepsCollectorService:
                 )
                 db.add(historical_record)
 
-            project = self._resolve_project_for_item(
+            project, embedding_deferred = self._resolve_project_for_item(
                 db,
                 item=item,
                 request=request,
                 historical_record=historical_record,
                 project_similarity=project_similarity,
+                defer_embeddings=defer_embeddings,
             )
             if project is not None:
                 historical_record.project_id = project.id
                 linked_project_ids.add(int(project.id))
+                if embedding_deferred:
+                    deferred_embedding_project_ids.add(int(project.id))
 
             historical_record.agency_name = (
                 item_metadata.get("opening_demand_agency")
@@ -372,6 +403,14 @@ class KonepsCollectorService:
 
         if len(linked_project_ids) == 1:
             crawl_job.project_id = next(iter(linked_project_ids))
+
+        # Surface deferred-embedding project ids so the task layer can enqueue a
+        # single async backfill. The service layer never imports the task module
+        # (avoids a circular import); the orchestration lives in the task.
+        if deferred_embedding_project_ids:
+            response.setdefault("metadata", {})["deferred_embedding_project_ids"] = sorted(
+                deferred_embedding_project_ids
+            )
 
         db.add(crawl_job)
         db.commit()
@@ -2459,8 +2498,15 @@ class KonepsCollectorService:
         request: CrawlRequest,
         historical_record: HistoricalData,
         project_similarity: ProjectSimilarityService,
-    ) -> Project | None:
-        """Find or create a project row for a crawled notice and keep it enriched with crawl metadata."""
+        defer_embeddings: bool = False,
+    ) -> tuple[Project | None, bool]:
+        """Find or create a project row for a crawled notice and keep it enriched with crawl metadata.
+
+        Returns ``(project, embedding_deferred)``. When ``defer_embeddings`` is
+        True the synchronous embedding refresh is skipped (so high-volume scsbid
+        award collection does not exceed the Celery time limit); the caller is
+        expected to enqueue an async backfill for the touched project ids.
+        """
         project: Project | None = None
         if historical_record.project_id is not None:
             project = (
@@ -2485,8 +2531,13 @@ class KonepsCollectorService:
             db.flush()
 
         self._update_project_from_item(project, item=item, request=request)
+        if defer_embeddings:
+            # Persist a project row now; embedding is rebuilt asynchronously.
+            db.flush()
+            return project, True
+
         project_similarity.refresh_project_embedding(db, project, force=is_new_project)
-        return project
+        return project, False
 
     def _find_matching_project(
         self,

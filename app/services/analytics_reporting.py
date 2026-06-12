@@ -753,7 +753,7 @@ class AnalyticsReportingService:
             records.append({
                 "source": "crawl",
                 "record_id": int(job.id),
-                "task_id": None,
+                "task_id": getattr(job, "celery_task_id", None),
                 "task_name": COLLECT_KONEPS_NOTICES_TASK_NAME,
                 "queue": settings.CELERY_OPS_QUEUE,
                 "status": str(job.status or "queued"),

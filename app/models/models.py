@@ -436,6 +436,10 @@ class CrawlJob(Base):
     status = Column(String(50), default="queued")
     result_count = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    # Celery task id that owns this row. Used as an idempotency key so a
+    # redelivered task (acks_late + time-limit SIGKILL) reuses its existing
+    # running row instead of spawning an orphan ``running`` crawl job.
+    celery_task_id = Column(String(155), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

@@ -70,6 +70,7 @@ MIGRATION_ADDED_COLUMNS = {
         "construction_capacity_amount",
         "awarded_contract_limit",
     },
+    "crawl_jobs": {"celery_task_id"},
 }
 
 ALEMBIC_INTERNAL_TABLES = {"alembic_version"}
