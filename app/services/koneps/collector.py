@@ -2556,8 +2556,11 @@ class KonepsCollectorService:
         This version exploits ``ix_projects_notice_number``:
 
         1. **Index fast path** -- when the item carries a notice number, query the
-           index directly for matching ``Project.notice_number`` values. Stored
-           values are already normalized (upper-cased, whitespace-stripped), so
+           index directly (``notice_number.in_(...)``) for matching
+           ``Project.notice_number`` values. The column is persisted in canonical
+           (normalized) form -- ``_update_project_from_item`` writes
+           ``_normalize_notice_number(...)`` and the ``20260612_*`` data migration
+           back-filled legacy rows -- so the indexed equality probe is exact and
            the overwhelming majority of scsbid open-bid items resolve here with a
            handful of indexed rows loaded instead of the whole category.
         2. **Column-NULL notice fallback** -- a small set of legacy projects keep
@@ -2569,6 +2572,15 @@ class KonepsCollectorService:
            authoritatively in steps 1-2; we deliberately no longer fuzzy-merge an
            item into a project whose notice number differs, which previously could
            collapse two distinct tenders on title overlap.
+
+        Invariant (why limiting step 3 to notice-less rows loses nothing):
+        ``_normalize_source_url`` keeps only the ``bidNtceNo``/``bidNtceOrd``
+        (and ``bidPbancNo``/``bidPbancOrd``) query keys, so a KONEPS detail URL
+        *encodes the notice number*. Therefore ``source_url`` equality implies
+        ``notice_number`` equality, and the step-1 notice probe already subsumes
+        any source_url match a notice-bearing project could have offered. Limiting
+        the fuzzy step to notice-less candidates never drops a valid notice-bearing
+        match -- it only avoids re-introducing a full category scan.
 
         Behavioural change: an item with a notice number is no longer matched to an
         existing project that has a *different* notice number via title overlap.
@@ -2798,12 +2810,17 @@ class KonepsCollectorService:
         ):
             project.title = str(item.get("title")).strip()
         notice_number = item.get("notice_number")
-        if notice_number and (
+        # Persist notice_number in canonical (normalized) form so the indexed
+        # ``notice_number.in_(...)`` fast path in ``_find_matching_project`` can
+        # rely on equality. Storing a non-canonical value (lower case / inner
+        # whitespace) would make the index probe miss and create duplicates.
+        normalized_notice_number = self._normalize_notice_number(notice_number)
+        if normalized_notice_number and (
             not project.notice_number
             or self._normalize_notice_number(project.notice_number)
-            == self._normalize_notice_number(notice_number)
+            == normalized_notice_number
         ):
-            project.notice_number = str(notice_number).strip()
+            project.notice_number = normalized_notice_number
         source_url = item.get("source_url")
         if source_url and (
             not project.source_url
