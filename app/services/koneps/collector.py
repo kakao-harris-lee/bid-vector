@@ -287,8 +287,19 @@ class KonepsCollectorService:
         crawl_job: CrawlJob,
         request: CrawlRequest,
         response: dict[str, Any],
+        *,
+        defer_embeddings: bool = False,
     ) -> CrawlJob:
-        """Persist crawl history and any usable opening-result data."""
+        """Persist crawl history and any usable opening-result data.
+
+        ``defer_embeddings`` is decided by the *caller*, not this method: only the
+        Celery collection task (the single path with a hard time limit) defers
+        embeddings to an async backfill. Synchronous callers (``POST
+        /operations/crawl``, the scsbid backfill script) leave it at the default
+        ``False`` so projects are embedded inline -- otherwise their newly created
+        projects would never be embedded (no inline, no enqueued backfill) and
+        silently drop out of pgvector search/recommendation.
+        """
         items = response.get("items", [])
         metadata = response.get("metadata", {})
 
@@ -299,13 +310,10 @@ class KonepsCollectorService:
 
         project_similarity = ProjectSimilarityService()
         linked_project_ids: set[int] = set()
-        # scsbid (open-bid result) collection processes thousands of award rows
-        # per run. Embedding each item synchronously (CPU model inference) blows
-        # past the Celery hard time limit, so we defer embeddings for that source
-        # and hand the touched project ids to the task layer for an async
-        # backfill. KONEPS notice collection keeps inline embeddings (no
-        # regression for bid-eligible notices).
-        defer_embeddings = self._is_scsbid_openapi_source(request.source)
+        # When deferred (Celery collection task for high-volume scsbid sweeps),
+        # per-item embedding is skipped and the touched project ids are surfaced
+        # for a single async backfill; CPU model inference per item would
+        # otherwise exceed the Celery hard time limit.
         deferred_embedding_project_ids: set[int] = set()
 
         for item in items:

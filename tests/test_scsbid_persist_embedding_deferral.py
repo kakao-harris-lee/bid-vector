@@ -9,11 +9,13 @@ Celery hard time limit. With ``task_acks_late=True`` the SIGKILLed task was
 redelivered with the same task id but no ``crawl_job_id``, so each redelivery
 created a fresh orphan ``running`` ``CrawlJob``.
 
-This module asserts the two fixes:
+This module asserts the fixes:
 
-1. scsbid persist defers per-item embeddings (no synchronous
-   ``refresh_project_embedding``) and surfaces the touched project ids so the
-   task layer can enqueue a single async backfill.
+1. ``persist_crawl_results`` defers per-item embeddings only when the *caller*
+   passes ``defer_embeddings=True`` (the Celery collection task), surfacing the
+   touched project ids for a single async backfill. Synchronous callers leave
+   the default ``False`` and embed inline -- otherwise scsbid projects created
+   via ``POST /operations/crawl`` or the backfill script would never be embedded.
 2. KONEPS notice persist keeps inline embeddings (no regression).
 3. ``collect_koneps_notices`` reuses its crawl-job row when redelivered with the
    same Celery task id (idempotency), instead of multiplying orphans.
@@ -57,8 +59,8 @@ def _award_response(notice_number: str, *, source: str) -> dict:
     }
 
 
-def test_scsbid_persist_defers_embeddings_and_surfaces_project_ids(test_db, monkeypatch):
-    """scsbid persist must NOT embed per item; touched ids go to metadata for async backfill."""
+def test_persist_with_defer_embeddings_true_skips_and_surfaces_project_ids(test_db, monkeypatch):
+    """defer_embeddings=True must NOT embed per item; touched ids go to metadata for async backfill."""
     refresh_calls: list[bool] = []
 
     def _spy_refresh(self, db, project, force=False):
@@ -78,9 +80,11 @@ def test_scsbid_persist_defers_embeddings_and_surfaces_project_ids(test_db, monk
     test_db.refresh(crawl_job)
 
     response = _award_response("R-SCSBID-1", source="scsbid-openapi")
-    crawl_job = service.persist_crawl_results(test_db, crawl_job, request, response)
+    crawl_job = service.persist_crawl_results(
+        test_db, crawl_job, request, response, defer_embeddings=True
+    )
 
-    # No synchronous embedding refresh happened for the scsbid source.
+    # No synchronous embedding refresh happened when deferral is requested.
     assert refresh_calls == []
 
     # The new project's id is surfaced for the async backfill.
@@ -88,6 +92,41 @@ def test_scsbid_persist_defers_embeddings_and_surfaces_project_ids(test_db, monk
     deferred = response["metadata"]["deferred_embedding_project_ids"]
     assert deferred == [int(project.id)]
     assert crawl_job.status == "completed"
+
+
+def test_scsbid_persist_default_embeds_inline_no_deferred_metadata(test_db, monkeypatch):
+    """Regression: scsbid persist via a synchronous caller (default defer_embeddings=False)
+    must embed inline and surface NO deferred metadata.
+
+    Guards the blocking regression where ``POST /operations/crawl`` and the scsbid
+    backfill script silently created un-embedded projects because they never
+    consumed ``deferred_embedding_project_ids``.
+    """
+    refresh_calls: list[bool] = []
+
+    def _spy_refresh(self, db, project, force=False):
+        refresh_calls.append(bool(force))
+        return [], "spy-model"
+
+    monkeypatch.setattr(
+        ProjectSimilarityService, "refresh_project_embedding", _spy_refresh
+    )
+
+    service = KonepsCollectorService()
+    request = CrawlRequest(source="scsbid-openapi", category="construction", execution_mode="live")
+    crawl_job = CrawlJob(source="scsbid-openapi", status="running")
+    test_db.add(crawl_job)
+    test_db.commit()
+    test_db.refresh(crawl_job)
+
+    response = _award_response("R-SCSBID-SYNC", source="scsbid-openapi")
+    # Default call (no defer_embeddings) mirrors the synchronous /crawl + script paths.
+    service.persist_crawl_results(test_db, crawl_job, request, response)
+
+    # Inline embedding happened (forced for the freshly created project)...
+    assert refresh_calls == [True]
+    # ...and no async backfill metadata leaked out.
+    assert "deferred_embedding_project_ids" not in response.get("metadata", {})
 
 
 def test_koneps_notice_persist_keeps_inline_embedding(test_db, monkeypatch):
@@ -232,3 +271,42 @@ def test_backfill_force_false_embeds_new_skips_unchanged(test_db):
     # Re-running with no semantic change -> no-op (no additional embed).
     service.refresh_project_embedding(test_db, new_project, force=False)
     assert len(embed_calls) == 1
+
+
+def test_sync_crawl_route_embeds_scsbid_inline(client, test_db, monkeypatch):
+    """End-to-end: synchronous POST /operations/crawl for a scsbid source embeds inline.
+
+    The synchronous route does not pass defer_embeddings, so even a scsbid source
+    must embed its freshly created project inline (no async backfill exists on
+    this path). Guards the blocking regression of un-embedded scsbid projects.
+    """
+    refresh_calls: list[bool] = []
+
+    def _spy_refresh(self, db, project, force=False):
+        refresh_calls.append(bool(force))
+        return [], "spy-model"
+
+    monkeypatch.setattr(
+        ProjectSimilarityService, "refresh_project_embedding", _spy_refresh
+    )
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request: _award_response("R-SCSBID-ROUTE", source="scsbid-openapi"),
+    )
+
+    response = client.post(
+        "/api/v1/operations/crawl",
+        json={
+            "source": "scsbid-openapi",
+            "category": "construction",
+            "execution_mode": "live",
+        },
+    )
+
+    assert response.status_code == 200
+    # Inline embedding fired for the freshly created scsbid project.
+    assert refresh_calls == [True]
+    # No deferred metadata on the synchronous route.
+    assert "deferred_embedding_project_ids" not in response.json().get("metadata", {})
+    assert test_db.query(Project).count() == 1

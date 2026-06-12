@@ -101,14 +101,22 @@ def collect_koneps_notices(
             crawl_job.result_count = 0
             crawl_job.error_message = None
             crawl_job.completed_at = None
-            if task_id:
+            # Only stamp when empty: a manual re-queue / async retry may reuse an
+            # existing row under a new task id; overwriting would let a later
+            # redelivery-match grab the wrong row.
+            if task_id and not crawl_job.celery_task_id:
                 crawl_job.celery_task_id = str(task_id)
             db.add(crawl_job)
             db.commit()
             db.refresh(crawl_job)
 
         result = service.collect_notices(request)
-        crawl_job = service.persist_crawl_results(db, crawl_job, request, result)
+        # Defer embeddings only on this time-limited Celery path; synchronous
+        # callers embed inline (see persist_crawl_results docstring).
+        defer_embeddings = service._is_scsbid_openapi_source(request.source)
+        crawl_job = service.persist_crawl_results(
+            db, crawl_job, request, result, defer_embeddings=defer_embeddings
+        )
         result.setdefault("metadata", {})["crawl_job_id"] = crawl_job.id
 
         deferred_ids = result.get("metadata", {}).get("deferred_embedding_project_ids")
