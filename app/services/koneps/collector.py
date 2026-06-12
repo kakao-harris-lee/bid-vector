@@ -408,9 +408,9 @@ class KonepsCollectorService:
         # single async backfill. The service layer never imports the task module
         # (avoids a circular import); the orchestration lives in the task.
         if deferred_embedding_project_ids:
-            response.setdefault("metadata", {})["deferred_embedding_project_ids"] = sorted(
-                deferred_embedding_project_ids
-            )
+            response.setdefault("metadata", {})[
+                "deferred_embedding_project_ids"
+            ] = sorted(deferred_embedding_project_ids)
 
         db.add(crawl_job)
         db.commit()
@@ -608,9 +608,7 @@ class KonepsCollectorService:
 
     def _is_scsbid_openapi_source(self, source: str | None) -> bool:
         """Return whether the crawl request should use the KONEPS award OpenAPI path."""
-        return (
-            str(source or "").strip().lower() in self.SCSBID_OPENAPI_SOURCE_ALIASES
-        )
+        return str(source or "").strip().lower() in self.SCSBID_OPENAPI_SOURCE_ALIASES
 
     def _collect_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI."""
@@ -1930,7 +1928,9 @@ class KonepsCollectorService:
         title_cell = cells[3]
         title = self._extract_koneps_title(title_cell)
         business_type = cells[1].get_text(" ", strip=True)
-        business_type_code, business_type_label = self._split_business_type_cell(business_type)
+        business_type_code, business_type_label = self._split_business_type_cell(
+            business_type
+        )
         status = cells[5].get_text(" ", strip=True)
         procurement_scope = cells[6].get_text(" ", strip=True)
         posted_at_text = cells[7].get_text(" ", strip=True)
@@ -1977,8 +1977,10 @@ class KonepsCollectorService:
             estimated_amount=estimated_amount,
             closing_at=closing_at,
             business_type=detail_data.get("business_type") or business_type,
-            business_type_code=detail_data.get("business_type_code") or business_type_code,
-            business_type_label=detail_data.get("business_type_label") or business_type_label,
+            business_type_code=detail_data.get("business_type_code")
+            or business_type_code,
+            business_type_label=detail_data.get("business_type_label")
+            or business_type_label,
             region=region,
             license_codes=license_codes,
             source_url=source_url,
@@ -2181,9 +2183,7 @@ class KonepsCollectorService:
                     field_map[key] = value
 
         all_text = soup.get_text(" ", strip=True)
-        reserve_text = self._find_field_value(
-            field_map, ["복수예비가격", "예비가격", "추첨예비가격"]
-        )
+        reserve_text = self._find_field_value(field_map, ["복수예비가격", "예비가격", "추첨예비가격"])
         if not reserve_text:
             reserve_match = re.search(
                 r"복수예비가격\s*(.*?)(?:선택번호|추첨번호|낙찰자|낙찰업체|낙찰금액|낙찰률|개찰일시|$)",
@@ -2191,9 +2191,7 @@ class KonepsCollectorService:
             )
             reserve_text = reserve_match.group(1) if reserve_match else ""
 
-        selected_text = self._find_field_value(
-            field_map, ["선택번호", "추첨번호", "선정번호"]
-        )
+        selected_text = self._find_field_value(field_map, ["선택번호", "추첨번호", "선정번호"])
         if not selected_text:
             selected_match = re.search(
                 r"(?:선택번호|추첨번호|선정번호)\s*(.*?)(?:낙찰자|낙찰업체|낙찰금액|낙찰률|개찰일시|$)",
@@ -2546,7 +2544,41 @@ class KonepsCollectorService:
         item: dict[str, Any],
         request: CrawlRequest,
     ) -> Project | None:
-        """Heuristically link a crawled notice to an existing project using explicit keys first."""
+        """Heuristically link a crawled notice to an existing project using explicit keys first.
+
+        Performance + correctness note (perf/scsbid-find-matching-project-index)
+        ----------------------------------------------------------------------
+        ``notice_number`` is KONEPS's authoritative unique key: two notices with
+        different numbers are *different* tenders. The previous implementation
+        loaded **every** project in the category (thousands of rows) per item and
+        scanned them in Python, capping scsbid award persistence at ~1-2 items/s.
+
+        This version exploits ``ix_projects_notice_number``:
+
+        1. **Index fast path** -- when the item carries a notice number, query the
+           index directly for matching ``Project.notice_number`` values. Stored
+           values are already normalized (upper-cased, whitespace-stripped), so
+           the overwhelming majority of scsbid open-bid items resolve here with a
+           handful of indexed rows loaded instead of the whole category.
+        2. **Column-NULL notice fallback** -- a small set of legacy projects keep
+           their notice number only inside free-form ``description``/``requirements``
+           text (``Project.notice_number IS NULL``). Those few rows are loaded and
+           compared with the existing extraction logic.
+        3. **source_url / title fuzzy** -- restricted to ``notice_number IS NULL``
+           candidates. Projects that *do* carry a notice number are resolved
+           authoritatively in steps 1-2; we deliberately no longer fuzzy-merge an
+           item into a project whose notice number differs, which previously could
+           collapse two distinct tenders on title overlap.
+
+        Behavioural change: an item with a notice number is no longer matched to an
+        existing project that has a *different* notice number via title overlap.
+        This is intentional -- it prevents merging distinct tenders -- and the
+        fuzzy heuristics now apply only to notice-less candidates.
+
+        4. **Notice-less items** (rare; some KONEPS payloads) retain the original
+           full category load + source_url/title fuzzy matching to avoid any
+           regression for that path.
+        """
         target_title = self._normalize_title(item.get("title"))
         target_notice_number = self._normalize_notice_number(item.get("notice_number"))
         target_source_url = self._normalize_source_url(item.get("source_url"))
@@ -2555,17 +2587,36 @@ class KonepsCollectorService:
         target_budget = self._resolve_budget_estimate(item)
         target_deadline = self._coerce_datetime(item.get("closing_at"))
 
-        query = db.query(Project)
-        if target_category:
-            query = query.filter(Project.category == target_category)
-
-        candidates = query.all()
-
         if target_notice_number:
-            for candidate in candidates:
+            # 1. Index fast path: match on the indexed notice_number column.
+            raw_notice = str(item.get("notice_number") or "").strip()
+            notice_variants = {
+                variant for variant in (raw_notice, target_notice_number) if variant
+            }
+            for candidate in (
+                db.query(Project)
+                .filter(Project.notice_number.in_(notice_variants))
+                .all()
+            ):
+                if (
+                    self._normalize_notice_number(candidate.notice_number)
+                    == target_notice_number
+                ):
+                    return candidate
+
+            # 2. Notice number stored only in free-form text (column is NULL).
+            #    These are a small minority, so scanning them is cheap.
+            null_notice_query = db.query(Project).filter(
+                Project.notice_number.is_(None)
+            )
+            if target_category:
+                null_notice_query = null_notice_query.filter(
+                    Project.category == target_category
+                )
+            null_notice_candidates = null_notice_query.all()
+            for candidate in null_notice_candidates:
                 candidate_notice_number = self._normalize_notice_number(
-                    candidate.notice_number
-                    or self._extract_project_notice_number(candidate)
+                    self._extract_project_notice_number(candidate)
                 )
                 if (
                     candidate_notice_number
@@ -2573,6 +2624,49 @@ class KonepsCollectorService:
                 ):
                     return candidate
 
+            # 3. source_url / title fuzzy, restricted to notice-less candidates.
+            #    Projects carrying a (different) notice number are authoritatively
+            #    distinct tenders and must not be fuzzy-merged here.
+            return self._match_by_url_or_title(
+                null_notice_candidates,
+                target_source_url=target_source_url,
+                target_title=target_title,
+                target_agencies=target_agencies,
+                target_budget=target_budget,
+                target_deadline=target_deadline,
+            )
+
+        # 4. Item has no notice number (rare). Preserve the original behaviour:
+        #    full category load + source_url/title fuzzy matching.
+        query = db.query(Project)
+        if target_category:
+            query = query.filter(Project.category == target_category)
+        candidates = query.all()
+        return self._match_by_url_or_title(
+            candidates,
+            target_source_url=target_source_url,
+            target_title=target_title,
+            target_agencies=target_agencies,
+            target_budget=target_budget,
+            target_deadline=target_deadline,
+        )
+
+    def _match_by_url_or_title(
+        self,
+        candidates: list[Project],
+        *,
+        target_source_url: str,
+        target_title: str,
+        target_agencies: set[str],
+        target_budget: float,
+        target_deadline: datetime | None,
+    ) -> Project | None:
+        """Resolve a project from a candidate set via source_url then scored title heuristics.
+
+        Preserves the original matching priority (source_url > title) and the
+        score-based best-match selection, but operates on a caller-supplied
+        candidate list so the fast path can scope it to notice-less rows.
+        """
         if target_source_url:
             for candidate in candidates:
                 candidate_source_url = self._normalize_source_url(
