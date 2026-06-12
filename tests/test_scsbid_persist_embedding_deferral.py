@@ -165,3 +165,70 @@ def test_collect_task_reuses_crawl_job_on_redelivery(test_db, monkeypatch):
 
     # The backfill enqueue fired on each successful run with the touched id.
     assert enqueued and all(ids for ids in enqueued)
+
+
+def test_deferred_backfill_chunks_large_id_sets(monkeypatch):
+    """A large deferred-id set must split into bounded chunks, not one unbounded task."""
+    from app.tasks import jobs
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "EMBEDDING_BACKFILL_CHUNK_SIZE", 200)
+
+    captured: list[dict] = []
+
+    def _fake_enqueue_ml(task, *, kwargs, queue):
+        captured.append({"kwargs": kwargs, "queue": queue})
+        return object()
+
+    monkeypatch.setattr(jobs, "_enqueue_ml_task", _fake_enqueue_ml)
+
+    project_ids = list(range(1, 451))  # 450 ids -> ceil(450/200) == 3 chunks
+    enqueued_count = jobs._enqueue_deferred_embedding_backfill(project_ids)
+
+    assert enqueued_count == 3
+    assert len(captured) == 3
+
+    chunk_sizes = [len(call["kwargs"]["project_ids"]) for call in captured]
+    assert chunk_sizes == [200, 200, 50]
+
+    # force=False mirrors inline semantics (new project embeds, unchanged skips).
+    assert all(call["kwargs"]["force"] is False for call in captured)
+    assert all(call["queue"] == settings.CELERY_ML_BACKFILL_QUEUE for call in captured)
+
+    # Chunks together cover exactly the input ids, with no overlap.
+    flattened = [pid for call in captured for pid in call["kwargs"]["project_ids"]]
+    assert sorted(flattened) == project_ids
+
+
+def test_backfill_force_false_embeds_new_skips_unchanged(test_db):
+    """force=False must embed a fresh project but no-op an unchanged existing one."""
+    embed_calls: list[int] = []
+
+    service = ProjectSimilarityService()
+    # Spy on the actual model-inference entry point so we count real embeds only.
+    original_embed = service._embed_text
+
+    def _counting_embed(text):
+        embed_calls.append(1)
+        return original_embed(text)
+
+    service._embed_text = _counting_embed  # type: ignore[method-assign]
+
+    new_project = Project(
+        title="신규 공고",
+        description="신규 설명",
+        requirements="",
+        budget_estimate=0.0,
+        category="construction",
+    )
+    test_db.add(new_project)
+    test_db.flush()
+
+    # New project (no cached vector) -> embedded even with force=False.
+    service.refresh_project_embedding(test_db, new_project, force=False)
+    assert len(embed_calls) == 1
+    assert new_project.semantic_text
+
+    # Re-running with no semantic change -> no-op (no additional embed).
+    service.refresh_project_embedding(test_db, new_project, force=False)
+    assert len(embed_calls) == 1

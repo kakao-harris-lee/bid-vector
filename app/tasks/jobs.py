@@ -86,20 +86,26 @@ def collect_koneps_notices(
             )
 
         if crawl_job is None:
-            crawl_job = service.create_crawl_job(db, request)
+            # First delivery: stamp the task id in the INSERT so the row is
+            # recoverable immediately (no orphan window) and the realtime event
+            # is published once, already stamped. create_crawl_job commits.
+            crawl_job = service.create_crawl_job(
+                db, request, celery_task_id=task_id
+            )
         else:
+            # Reuse path (explicit crawl_job_id or redelivery match): reset the
+            # row to running and ensure the task id is recorded.
             crawl_job.source = request.source
             crawl_job.target_date = request.target_date
             crawl_job.status = "running"
             crawl_job.result_count = 0
             crawl_job.error_message = None
             crawl_job.completed_at = None
-
-        if task_id and crawl_job.celery_task_id != str(task_id):
-            crawl_job.celery_task_id = str(task_id)
-        db.add(crawl_job)
-        db.commit()
-        db.refresh(crawl_job)
+            if task_id:
+                crawl_job.celery_task_id = str(task_id)
+            db.add(crawl_job)
+            db.commit()
+            db.refresh(crawl_job)
 
         result = service.collect_notices(request)
         crawl_job = service.persist_crawl_results(db, crawl_job, request, result)
@@ -202,26 +208,46 @@ def rebuild_project_embeddings(
         db.close()
 
 
-def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> None:
-    """Queue an async embedding rebuild for projects whose embeddings were deferred.
+def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> int:
+    """Queue async embedding rebuild(s) for projects whose embeddings were deferred.
+
+    The ids are split into bounded chunks (``EMBEDDING_BACKFILL_CHUNK_SIZE``) and
+    enqueued as separate ``rebuild_project_embeddings`` tasks so a large catch-up
+    sweep cannot run as one unbounded task that re-creates the time-limit
+    redelivery loop on the ML backfill queue.
+
+    ``force=False`` mirrors the original inline semantics: a freshly created
+    project (no cached vector) is still embedded, while an unchanged existing
+    project that matched the crawl is a no-op (skipped) — so award rows that map
+    to pre-existing notices do not trigger thousands of needless re-embeds.
 
     Isolated with a try/except so a failed enqueue never breaks a successful
     crawl. Honours the ``CELERY_ALLOW_INLINE_ML_TASKS`` guard: on the in-memory
     eager broker the ML task is not run inline unless explicitly allowed.
+
+    Returns the number of tasks enqueued (0 on empty input or failure).
     """
-    if not project_ids:
-        return
+    normalized = sorted({int(pid) for pid in project_ids})
+    if not normalized:
+        return 0
+
+    chunk_size = max(1, int(settings.EMBEDDING_BACKFILL_CHUNK_SIZE))
+    enqueued = 0
     try:
-        _enqueue_ml_task(
-            rebuild_project_embeddings,
-            kwargs={"project_ids": sorted({int(pid) for pid in project_ids}), "force": True},
-            queue=settings.CELERY_ML_BACKFILL_QUEUE,
-        )
+        for start in range(0, len(normalized), chunk_size):
+            chunk = normalized[start:start + chunk_size]
+            _enqueue_ml_task(
+                rebuild_project_embeddings,
+                kwargs={"project_ids": chunk, "force": False},
+                queue=settings.CELERY_ML_BACKFILL_QUEUE,
+            )
+            enqueued += 1
     except Exception:  # pragma: no cover - defensive: enqueue must not break crawl
         logger.exception(
             "deferred embedding backfill enqueue failed for %d project(s)",
-            len(project_ids),
+            len(normalized),
         )
+    return enqueued
 
 
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)

@@ -240,13 +240,25 @@ class KonepsCollectorService:
             "metadata": response_metadata,
         }
 
-    def create_crawl_job(self, db: Session, request: CrawlRequest) -> CrawlJob:
-        """Create a crawl job record before execution starts."""
+    def create_crawl_job(
+        self,
+        db: Session,
+        request: CrawlRequest,
+        *,
+        celery_task_id: str | None = None,
+    ) -> CrawlJob:
+        """Create a crawl job record before execution starts.
+
+        ``celery_task_id`` is stamped at INSERT time so the row is immediately
+        recoverable by a redelivered task (closes the orphan window where a
+        SIGKILL between create and stamp would leave an unrecoverable row).
+        """
         crawl_job = CrawlJob(
             source=request.source,
             target_date=request.target_date,
             status="running",
             result_count=0,
+            celery_task_id=str(celery_task_id) if celery_task_id else None,
         )
         db.add(crawl_job)
         db.commit()
