@@ -1,7 +1,10 @@
 """Background jobs."""
 
+import logging
 from typing import Any
 from uuid import uuid4
+
+from celery.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -31,6 +34,8 @@ from app.tasks.celery_app import (
     celery_app,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class _QueuedOnlyTaskHandle:
     """Task handle used when ML work must not execute inside the API process."""
@@ -46,20 +51,39 @@ def _enqueue_ml_task(task, *, kwargs: dict[str, Any], queue: str):
     return task.apply_async(kwargs=kwargs, queue=queue)
 
 
-@celery_app.task(name=COLLECT_KONEPS_NOTICES_TASK_NAME)
+@celery_app.task(bind=True, name=COLLECT_KONEPS_NOTICES_TASK_NAME)
 def collect_koneps_notices(
+    self,
     request_payload: dict[str, Any] | None = None,
     crawl_job_id: int | None = None,
 ) -> dict:
-    """Collect KONEPS notices and persist crawl history inside a background task."""
+    """Collect KONEPS notices and persist crawl history inside a background task.
+
+    Idempotency: with ``task_acks_late=True`` a task that is SIGKILLed by the
+    hard time limit is redelivered with the *same* Celery task id but no
+    ``crawl_job_id`` (beat dispatch). Stamping ``celery_task_id`` on the row and
+    reusing it on redelivery prevents an orphan ``running`` crawl-job from being
+    created on every redelivery.
+    """
     request = CrawlRequest(**(request_payload or {}))
     service = KonepsCollectorService()
     db = SessionLocal()
     crawl_job: CrawlJob | None = None
+    task_id = getattr(getattr(self, "request", None), "id", None)
 
     try:
         if crawl_job_id is not None:
             crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+
+        # Redelivery path: no explicit crawl_job_id but a row already exists for
+        # this task id -- reuse it instead of spawning an orphan.
+        if crawl_job is None and task_id:
+            crawl_job = (
+                db.query(CrawlJob)
+                .filter(CrawlJob.celery_task_id == str(task_id))
+                .order_by(CrawlJob.id.desc())
+                .first()
+            )
 
         if crawl_job is None:
             crawl_job = service.create_crawl_job(db, request)
@@ -70,14 +94,44 @@ def collect_koneps_notices(
             crawl_job.result_count = 0
             crawl_job.error_message = None
             crawl_job.completed_at = None
-            db.add(crawl_job)
-            db.commit()
-            db.refresh(crawl_job)
+
+        if task_id and crawl_job.celery_task_id != str(task_id):
+            crawl_job.celery_task_id = str(task_id)
+        db.add(crawl_job)
+        db.commit()
+        db.refresh(crawl_job)
 
         result = service.collect_notices(request)
         crawl_job = service.persist_crawl_results(db, crawl_job, request, result)
         result.setdefault("metadata", {})["crawl_job_id"] = crawl_job.id
+
+        deferred_ids = result.get("metadata", {}).get("deferred_embedding_project_ids")
+        if deferred_ids:
+            _enqueue_deferred_embedding_backfill(list(deferred_ids))
+
         return result
+    except SoftTimeLimitExceeded as exc:
+        # Stop the redelivery loop: mark this run failed and ack the message so
+        # the same payload is not re-run forever past the soft limit.
+        if crawl_job is not None:
+            service.mark_crawl_job_failed(
+                db, crawl_job, f"soft time limit exceeded: {exc}"
+            )
+        logger.warning(
+            "collect_koneps_notices hit soft time limit (task_id=%s source=%s)",
+            task_id,
+            request.source,
+        )
+        return {
+            "job_status": "failed",
+            "source": request.source,
+            "collected_count": 0,
+            "items": [],
+            "metadata": {
+                "crawl_job_id": int(crawl_job.id) if crawl_job is not None else None,
+                "error": "soft_time_limit_exceeded",
+            },
+        }
     except Exception as exc:
         if crawl_job is not None:
             service.mark_crawl_job_failed(db, crawl_job, str(exc))
@@ -120,8 +174,14 @@ def rebuild_project_embeddings(
     category: str | None = None,
     project_status: str | None = None,
     force: bool = False,
+    project_ids: list[int] | None = None,
 ) -> dict:
-    """Refresh stored project embeddings in a batch-friendly task."""
+    """Refresh stored project embeddings in a batch-friendly task.
+
+    When ``project_ids`` is supplied the rebuild targets exactly those rows
+    (used by the deferred-embedding backfill enqueued after scsbid crawl
+    persistence); paging is bypassed in that mode.
+    """
     db = SessionLocal()
     try:
         result = ProjectSimilarityService().rebuild_project_embeddings(
@@ -131,6 +191,7 @@ def rebuild_project_embeddings(
             category=category,
             project_status=project_status,
             force=force,
+            project_ids=project_ids,
         )
         db.commit()
         return result
@@ -139,6 +200,28 @@ def rebuild_project_embeddings(
         raise
     finally:
         db.close()
+
+
+def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> None:
+    """Queue an async embedding rebuild for projects whose embeddings were deferred.
+
+    Isolated with a try/except so a failed enqueue never breaks a successful
+    crawl. Honours the ``CELERY_ALLOW_INLINE_ML_TASKS`` guard: on the in-memory
+    eager broker the ML task is not run inline unless explicitly allowed.
+    """
+    if not project_ids:
+        return
+    try:
+        _enqueue_ml_task(
+            rebuild_project_embeddings,
+            kwargs={"project_ids": sorted({int(pid) for pid in project_ids}), "force": True},
+            queue=settings.CELERY_ML_BACKFILL_QUEUE,
+        )
+    except Exception:  # pragma: no cover - defensive: enqueue must not break crawl
+        logger.exception(
+            "deferred embedding backfill enqueue failed for %d project(s)",
+            len(project_ids),
+        )
 
 
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)

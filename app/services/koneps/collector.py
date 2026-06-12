@@ -287,6 +287,14 @@ class KonepsCollectorService:
 
         project_similarity = ProjectSimilarityService()
         linked_project_ids: set[int] = set()
+        # scsbid (open-bid result) collection processes thousands of award rows
+        # per run. Embedding each item synchronously (CPU model inference) blows
+        # past the Celery hard time limit, so we defer embeddings for that source
+        # and hand the touched project ids to the task layer for an async
+        # backfill. KONEPS notice collection keeps inline embeddings (no
+        # regression for bid-eligible notices).
+        defer_embeddings = self._is_scsbid_openapi_source(request.source)
+        deferred_embedding_project_ids: set[int] = set()
 
         for item in items:
             item_metadata = item.get("metadata", {})
@@ -301,16 +309,19 @@ class KonepsCollectorService:
                 )
                 db.add(historical_record)
 
-            project = self._resolve_project_for_item(
+            project, embedding_deferred = self._resolve_project_for_item(
                 db,
                 item=item,
                 request=request,
                 historical_record=historical_record,
                 project_similarity=project_similarity,
+                defer_embeddings=defer_embeddings,
             )
             if project is not None:
                 historical_record.project_id = project.id
                 linked_project_ids.add(int(project.id))
+                if embedding_deferred:
+                    deferred_embedding_project_ids.add(int(project.id))
 
             historical_record.agency_name = (
                 item_metadata.get("opening_demand_agency")
@@ -372,6 +383,14 @@ class KonepsCollectorService:
 
         if len(linked_project_ids) == 1:
             crawl_job.project_id = next(iter(linked_project_ids))
+
+        # Surface deferred-embedding project ids so the task layer can enqueue a
+        # single async backfill. The service layer never imports the task module
+        # (avoids a circular import); the orchestration lives in the task.
+        if deferred_embedding_project_ids:
+            response.setdefault("metadata", {})["deferred_embedding_project_ids"] = sorted(
+                deferred_embedding_project_ids
+            )
 
         db.add(crawl_job)
         db.commit()
@@ -2459,8 +2478,15 @@ class KonepsCollectorService:
         request: CrawlRequest,
         historical_record: HistoricalData,
         project_similarity: ProjectSimilarityService,
-    ) -> Project | None:
-        """Find or create a project row for a crawled notice and keep it enriched with crawl metadata."""
+        defer_embeddings: bool = False,
+    ) -> tuple[Project | None, bool]:
+        """Find or create a project row for a crawled notice and keep it enriched with crawl metadata.
+
+        Returns ``(project, embedding_deferred)``. When ``defer_embeddings`` is
+        True the synchronous embedding refresh is skipped (so high-volume scsbid
+        award collection does not exceed the Celery time limit); the caller is
+        expected to enqueue an async backfill for the touched project ids.
+        """
         project: Project | None = None
         if historical_record.project_id is not None:
             project = (
@@ -2485,8 +2511,13 @@ class KonepsCollectorService:
             db.flush()
 
         self._update_project_from_item(project, item=item, request=request)
+        if defer_embeddings:
+            # Persist a project row now; embedding is rebuilt asynchronously.
+            db.flush()
+            return project, True
+
         project_similarity.refresh_project_embedding(db, project, force=is_new_project)
-        return project
+        return project, False
 
     def _find_matching_project(
         self,

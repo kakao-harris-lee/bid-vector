@@ -123,9 +123,22 @@ class ProjectSimilarityService:
         category: str | None = None,
         project_status: str | None = None,
         force: bool = False,
+        project_ids: Iterable[int] | None = None,
     ) -> dict[str, Any]:
-        """Refresh stored embeddings for a filtered batch of projects."""
+        """Refresh stored embeddings for a filtered batch of projects.
+
+        When ``project_ids`` is supplied the rebuild targets exactly those rows
+        (used by the async backfill that follows deferred-embedding crawl
+        persistence); ``offset``/``limit`` paging is then bypassed. This is a
+        pure row-selection filter and does not change embedding computation.
+        """
         query = db.query(Project)
+
+        normalized_ids = (
+            sorted({int(pid) for pid in project_ids}) if project_ids is not None else None
+        )
+        if normalized_ids is not None:
+            query = query.filter(Project.id.in_(normalized_ids))
 
         if category:
             query = query.filter(Project.category == category)
@@ -133,7 +146,11 @@ class ProjectSimilarityService:
         if project_status:
             query = query.filter(Project.status == project_status)
 
-        projects = query.order_by(Project.id.asc()).offset(offset).limit(limit).all()
+        query = query.order_by(Project.id.asc())
+        if normalized_ids is None:
+            query = query.offset(offset).limit(limit)
+
+        projects = query.all()
         results = [
             self.refresh_project_embedding_details(db, project, force=force)
             for project in projects
@@ -146,6 +163,7 @@ class ProjectSimilarityService:
             "category": category,
             "project_status": project_status,
             "force": force,
+            "requested_project_ids": normalized_ids,
             "vector_storage_enabled": self._can_persist_pgvector(db),
             "project_ids": [result["project_id"] for result in results],
             "results": results,
