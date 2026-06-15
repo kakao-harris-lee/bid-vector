@@ -122,6 +122,20 @@
     "deadline_label": "마감",
     "direct_submission_title": "직접 제출 안내"
   },
+  "bid_form_draft": {
+    "title": "투찰서 초안 (나라장터 입력 항목)",
+    "subtitle": "아래 항목을 나라장터(KONEPS) 투찰서 화면에 그대로 입력하세요. 자동 제출은 하지 않습니다.",
+    "loading": "투찰서 초안을 불러오는 중…",
+    "error": "투찰서 초안을 불러오지 못했습니다.",
+    "download_csv": "CSV 다운로드",
+    "copy": "초안 복사",
+    "copy_success": "초안을 클립보드에 복사했습니다.",
+    "copy_failure": "클립보드 복사에 실패했습니다.",
+    "download_failure": "CSV 다운로드에 실패했습니다.",
+    "eligibility_label": "적격여부(추정)",
+    "fields_title": "입력 항목",
+    "direct_submission_title": "직접 제출 안내"
+  },
   "decision_reasons": {
     "title": "판단 근거",
     "strengths_title": "왜 가능한가",

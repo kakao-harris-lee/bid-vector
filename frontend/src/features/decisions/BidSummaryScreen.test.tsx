@@ -1,8 +1,9 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test-utils";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type { BidSummaryResponse } from "@/shared/types/bidSummary";
+import type { BidFormDraftResponse } from "@/shared/types/bidFormDraft";
 
 const emptySummary: DashboardSummaryResponse = {
   operator_id: 1,
@@ -91,11 +92,58 @@ const bidSummary: BidSummaryResponse = {
     "이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다."
 };
 
+const bidFormDraft: BidFormDraftResponse = {
+  decision_record_id: 101,
+  operator_id: 1,
+  generated_at: "2026-06-12T00:00:00Z",
+  notice_number: "R26BK00123-001",
+  title: "테스트 공항 시설 공고",
+  demand_agency: "한국공항공사",
+  budget_estimate: 500_000_000,
+  recommended_amount: 430_000_000,
+  recommended_bid_rate: 0.86,
+  category: "construction",
+  business_type_label: "토목공사",
+  deadline: "2026-06-20T05:00:00Z",
+  eligibility_estimate: "적격 추정",
+  eligibility_note:
+    "카테고리 낙찰하한율(참고) 대비 추천 투찰가 위치에서 도출한 추정 라벨입니다.",
+  fields: [
+    {
+      key: "recommended_amount",
+      field_label: "투찰금액",
+      value: "₩430,000,000",
+      raw_value: 430_000_000,
+      note: null
+    },
+    {
+      key: "recommended_bid_rate",
+      field_label: "투찰률",
+      value: "86.0%",
+      raw_value: 0.86,
+      note: "추천 투찰가 / 추정가격 기준입니다."
+    }
+  ],
+  direct_submission_notice:
+    "이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다."
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
     status,
     json: () => Promise.resolve(payload),
+    text: () => Promise.resolve(JSON.stringify(payload)),
+    headers: { get: () => null }
+  } as unknown as Response);
+}
+
+function textResponse(body: string, status = 200): Promise<Response> {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve({}),
+    text: () => Promise.resolve(body),
     headers: { get: () => null }
   } as unknown as Response);
 }
@@ -114,6 +162,9 @@ describe("BidSummaryScreen", () => {
       if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
         return jsonResponse(bidSummary);
       }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
       return jsonResponse({}, 404);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -124,10 +175,10 @@ describe("BidSummaryScreen", () => {
       await screen.findByRole("heading", { name: "투찰 의사결정 요약", level: 2 })
     ).toBeInTheDocument();
 
-    // 추천 투찰가/투찰률
+    // 추천 투찰가/투찰률 (요약 + 초안 두 곳에 나타날 수 있음)
     expect(await screen.findByText("추천 투찰가")).toBeInTheDocument();
-    expect(screen.getByText("₩430,000,000")).toBeInTheDocument();
-    expect(screen.getByText("86.0%")).toBeInTheDocument();
+    expect(screen.getAllByText("₩430,000,000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("86.0%").length).toBeGreaterThan(0);
 
     // 가격 적합도(추정) 라벨 정직성 — "낙찰 확률/가능성" 류 문구가 없어야 함.
     expect(screen.getAllByText("가격 적합도(추정)").length).toBeGreaterThan(0);
@@ -152,10 +203,114 @@ describe("BidSummaryScreen", () => {
     expect(screen.getByText("분야 통계 (백테스트 추정)")).toBeInTheDocument();
     expect(screen.getByText("42건")).toBeInTheDocument();
 
-    // 직접 제출 안내가 눈에 띄게(서버 문구 그대로)
+    // 직접 제출 안내가 눈에 띄게(서버 문구 그대로) — 요약 + 초안 두 곳
     expect(
-      screen.getByText(/실제 나라장터\(KONEPS\) 투찰서 작성·제출은 운영자가 직접 진행/)
+      screen.getAllByText(/실제 나라장터\(KONEPS\) 투찰서 작성·제출은 운영자가 직접 진행/)
+        .length
+    ).toBeGreaterThan(0);
+
+    // 투찰서 초안 — 나라장터 입력 항목 매핑표
+    expect(
+      await screen.findByRole("heading", { name: "투찰서 초안 (나라장터 입력 항목)" })
     ).toBeInTheDocument();
+    expect(screen.getByText("투찰금액")).toBeInTheDocument();
+    expect(screen.getAllByText("₩430,000,000").length).toBeGreaterThan(0);
+    expect(screen.getByText("적격여부(추정)")).toBeInTheDocument();
+    expect(screen.getByText("적격 추정")).toBeInTheDocument();
+    // 자동 제출 아님 — 초안의 정직 안내 문구
+    expect(
+      screen.getByText(/이 투찰서 초안은 참고용입니다/)
+    ).toBeInTheDocument();
+
+    // 액션 버튼
+    expect(screen.getByRole("button", { name: "CSV 다운로드" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "초안 복사" })).toBeInTheDocument();
+  });
+
+  it("CSV 다운로드 버튼은 백엔드 CSV 렌더를 Blob 으로 받아 임시 anchor 로 내려받는다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+        return jsonResponse(bidSummary);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=csv")) {
+        return textResponse("field_label,value\r\n투찰금액,₩430000000\r\n");
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const createObjectURL = vi.fn(() => "blob:mock");
+    const revokeObjectURL = vi.fn();
+    // jsdom 의 URL 에는 createObjectURL/revokeObjectURL 이 없으므로 메서드만 주입.
+    // (전체 URL 객체를 교체하면 react-router 의 new URL() 이 깨짐.)
+    const origCreate = (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+    const origRevoke = (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+    (URL as unknown as { createObjectURL: unknown }).createObjectURL = createObjectURL;
+    (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = revokeObjectURL;
+
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    renderApp();
+
+    const downloadBtn = await screen.findByRole("button", { name: "CSV 다운로드" });
+    // 초안 JSON 이 로드돼 버튼이 활성화될 때까지 대기.
+    await waitFor(() => expect(downloadBtn).not.toBeDisabled());
+    fireEvent.click(downloadBtn);
+
+    await waitFor(() => {
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+    });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock");
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("bid-form-draft?format=csv")
+      )
+    ).toBe(true);
+
+    (URL as unknown as { createObjectURL: unknown }).createObjectURL = origCreate;
+    (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = origRevoke;
+  });
+
+  it("초안 복사 버튼은 백엔드 text 렌더를 클립보드에 기록한다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+        return jsonResponse(bidSummary);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=text")) {
+        return textResponse("[투찰서 초안]\n투찰금액: ₩430,000,000\n");
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    renderApp();
+
+    const copyBtn = await screen.findByRole("button", { name: "초안 복사" });
+    await waitFor(() => expect(copyBtn).not.toBeDisabled());
+    fireEvent.click(copyBtn);
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+    });
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining("투찰금액: ₩430,000,000")
+    );
   });
 
   it("로딩 중에는 로딩 문구를, 404 응답에는 에러 alert을 렌더한다", async () => {
@@ -199,6 +354,9 @@ describe("BidSummaryScreen", () => {
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
       if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
         return jsonResponse(minimal);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
       }
       return jsonResponse({}, 404);
     });
