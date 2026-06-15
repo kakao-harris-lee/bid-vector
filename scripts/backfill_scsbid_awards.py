@@ -127,7 +127,7 @@ def run_backfill(
             max_pages=max_pages,
             collect_reserve_detail=collect_reserve_detail,
         )
-        response = service.collect_notices(request)
+        response = service.collect_notices(request, db=db)
         items = response.get("items", [])
         metadata = response.get("metadata", {})
         stats.api_call_count += int(metadata.get("scsbid_api_call_count") or 0)

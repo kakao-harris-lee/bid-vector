@@ -110,7 +110,7 @@ def collect_koneps_notices(
             db.commit()
             db.refresh(crawl_job)
 
-        result = service.collect_notices(request)
+        result = service.collect_notices(request, db=db)
         # Defer embeddings only on this time-limited Celery path; synchronous
         # callers embed inline (see persist_crawl_results docstring).
         defer_embeddings = service._is_scsbid_openapi_source(request.source)

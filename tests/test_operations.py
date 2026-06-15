@@ -766,7 +766,9 @@ def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -845,7 +847,9 @@ def test_crawl_endpoint_creates_project_and_links_history_feedback_records(
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -933,7 +937,9 @@ def test_crawl_endpoint_maps_cancelled_failed_and_re_notice_project_statuses(
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -1003,7 +1009,9 @@ def test_crawl_endpoint_links_matching_manual_project_and_upserts_tender_result(
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     for _ in range(2):
@@ -1088,7 +1096,9 @@ def test_crawl_endpoint_matches_existing_project_by_notice_number_and_source_url
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -1158,7 +1168,9 @@ def test_crawl_endpoint_keeps_distinct_g2b_detail_links_separate(
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -1229,7 +1241,9 @@ def test_crawl_endpoint_matches_existing_project_by_agency_and_similar_title(
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -1289,7 +1303,9 @@ def test_crawl_async_endpoint_returns_pollable_task(client, test_db, monkeypatch
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     response = client.post(
@@ -1352,7 +1368,9 @@ def test_crawl_task_status_endpoint_returns_completed_result(
     }
 
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, request: fake_response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, request, db=None: fake_response,
     )
 
     kickoff = client.post(
@@ -1393,7 +1411,7 @@ def test_crawl_async_endpoint_reports_failed_task_when_collection_fails(
 ):
     """Async crawl kickoff should surface failure status when eager/fallback execution fails."""
 
-    def raise_collection_error(self, request):
+    def raise_collection_error(self, request, db=None):
         raise RuntimeError("simulated crawl failure")
 
     monkeypatch.setattr(

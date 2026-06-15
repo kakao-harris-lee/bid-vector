@@ -103,7 +103,7 @@ def crawl_notices(request: CrawlRequest, db: Session = Depends(get_db)):
     crawl_job = service.create_crawl_job(db, request)
 
     try:
-        response = service.collect_notices(request)
+        response = service.collect_notices(request, db=db)
         crawl_job = service.persist_crawl_results(db, crawl_job, request, response)
         response.setdefault("metadata", {})["crawl_job_id"] = crawl_job.id
         return response

@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     KONEPS_SCSBID_COLLECTION_PAGE_SIZE: int = 100
     KONEPS_SCSBID_COLLECTION_MAX_PAGES: int = 30
     KONEPS_SCSBID_COLLECTION_RESERVE_DETAIL: bool = True
+    # Skip the per-notice reserve-detail HTTP fetch for awards that already have a
+    # non-empty reserve_prices row persisted. The reserve (예정가) of an opened
+    # award is a settled, immutable value, so re-fetching it on every rolling
+    # window sweep is pure waste; this keeps scheduled runs from re-paying the
+    # per-notice HTTP cost and blowing past the RabbitMQ consumer ack timeout.
+    KONEPS_SCSBID_REUSE_PERSISTED_RESERVE_DETAIL: bool = True
     # Throttle between scsbid OpenAPI page/category calls (seconds). 0 allowed in tests.
     KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS: float = 0.2
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
