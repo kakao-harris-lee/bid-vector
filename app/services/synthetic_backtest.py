@@ -15,6 +15,7 @@ from typing import Any, Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
+from app.core.single_user import split_multi_value_text
 from app.models.models import CompanyProfile, OperatorStrategy, User
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 
@@ -60,6 +61,15 @@ class SyntheticBacktestService:
                     "display_name": user.full_name or slug,
                     "company": user.company,
                     "business_type": profile.business_type if profile else None,
+                    # Focus categories drive the per-operator award window so a
+                    # focus-category operator (e.g. goods) is not starved by the
+                    # global award pool. Internal-only: NOT part of the operator
+                    # list response schema (consumers ignore the extra key).
+                    "focus_categories": list(
+                        split_multi_value_text(
+                            getattr(strategy, "focus_categories", None)
+                        )
+                    ),
                     "annual_revenue": float(profile.annual_revenue or 0.0)
                     if profile
                     else 0.0,
@@ -111,8 +121,12 @@ class SyntheticBacktestService:
                 category=category,
                 limit=limit,
                 scenario=scenario,
+                focus_categories=op.get("focus_categories") or None,
             )
-            results.append({**op, **summary})
+            # ``focus_categories`` is an internal plumbing key, not a response
+            # field -- drop it so the per-operator result matches the schema.
+            op_public = {k: v for k, v in op.items() if k != "focus_categories"}
+            results.append({**op_public, **summary})
 
         return {
             "operator_count": len(operators),
@@ -135,6 +149,7 @@ class SyntheticBacktestService:
         limit: int,
         scenario: str,
         settlement_sample: int = 20,
+        focus_categories: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         result = self.backtest_service.run_historical_backtest(
             db,
@@ -147,6 +162,12 @@ class SyntheticBacktestService:
             strategy_version="synthetic-backtest",
             model_version="current",
             persist=False,
+            # Scope the award window to the operator's focus categories so a
+            # minority-category operator (goods) is not starved by the global
+            # pool. ``run_historical_backtest`` falls back to strategy focus
+            # categories itself, but passing them explicitly keeps this path
+            # robust to future signature defaults.
+            award_categories=list(focus_categories) if focus_categories else None,
         )
         summary = result.get("summary") or {}
         settled_count = int(result.get("settled_count") or 0)

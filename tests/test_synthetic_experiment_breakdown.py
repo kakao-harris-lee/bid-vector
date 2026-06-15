@@ -51,6 +51,27 @@ def _settlement(category, budget, verdict, error):
     }
 
 
+def _settlement_full(
+    category,
+    budget,
+    *,
+    price_verdict="unlikely",
+    final_verdict="unknown",
+    error=0.01,
+    result_time=None,
+):
+    """A settlement carrying BOTH the price-only verdict and the PR3 eligibility
+    gate verdict (+ optional freshness timestamp)."""
+    return {
+        "category": category,
+        "budget_estimate": budget,
+        "would_have_won_price_only": price_verdict,
+        "would_have_won_final": final_verdict,
+        "absolute_bid_rate_error": error,
+        "result_time": result_time,
+    }
+
+
 def test_compute_breakdown_empty_returns_empty_structure():
     assert compute_breakdown([]) == {"by_category": [], "by_budget_band": []}
     assert compute_breakdown(None) == {"by_category": [], "by_budget_band": []}
@@ -81,6 +102,69 @@ def test_compute_breakdown_category_win_rate_and_error():
     assert yongyeok["would_have_won_count"] == 0
     assert yongyeok["win_rate"] == 0.0
     assert yongyeok["avg_abs_bid_rate_error"] == 0.008
+
+
+def test_compute_breakdown_emits_honest_est_price_close_rate_alias():
+    """``win_rate`` and ``est_price_close_rate`` are the SAME price-only value;
+    the honest alias must always accompany the legacy key."""
+    items = [
+        _settlement("공사", 50_000_000, "plausible", 0.002),
+        _settlement("공사", 60_000_000, "unlikely", 0.02),
+    ]
+    gongsa = compute_breakdown(items)["by_category"][0]
+    assert gongsa["win_rate"] == 0.5
+    assert gongsa["est_price_close_rate"] == 0.5
+    assert gongsa["win_rate"] == gongsa["est_price_close_rate"]
+
+
+def test_compute_breakdown_eligible_favorable_rate_excludes_unknown():
+    """``eligible_favorable_rate`` is favorable / (settled - unknown): the
+    eligibility-gate ESTIMATE computed only over judgeable settlements."""
+    items = [
+        # 3 settled in 공사: 1 favorable, 1 outbid, 1 unknown (excluded from denom).
+        _settlement_full("공사", 50_000_000, final_verdict="eligible_favorable"),
+        _settlement_full("공사", 50_000_000, final_verdict="eligible_but_outbid"),
+        _settlement_full("공사", 50_000_000, final_verdict="unknown"),
+    ]
+    gongsa = compute_breakdown(items)["by_category"][0]
+    assert gongsa["settled_count"] == 3
+    assert gongsa["eligible_favorable_count"] == 1
+    assert gongsa["eligibility_unknown_count"] == 1
+    # judged = settled - unknown = 2; rate = 1/2.
+    assert gongsa["eligibility_judged_count"] == 2
+    assert gongsa["eligible_favorable_rate"] == 0.5
+
+
+def test_compute_breakdown_eligible_rate_none_when_all_unknown():
+    """All-``unknown`` group -> judged denominator 0 -> rate is None (honest)."""
+    items = [
+        _settlement_full("물품", 30_000_000, final_verdict="unknown"),
+        _settlement_full("물품", 40_000_000, final_verdict="unknown"),
+    ]
+    goods = compute_breakdown(items)["by_category"][0]
+    assert goods["category"] == "물품"
+    assert goods["settled_count"] == 2
+    assert goods["eligibility_judged_count"] == 0
+    assert goods["eligible_favorable_rate"] is None
+
+
+def test_compute_breakdown_surfaces_latest_result_time_freshness():
+    """Each group reports the newest award time (freshness health signal)."""
+    items = [
+        _settlement_full("공사", 50_000_000, result_time="2026-01-10T00:00:00+00:00"),
+        _settlement_full("공사", 60_000_000, result_time="2026-03-15T00:00:00+00:00"),
+        _settlement_full("공사", 70_000_000, result_time=None),  # ignored
+    ]
+    gongsa = compute_breakdown(items)["by_category"][0]
+    assert gongsa["latest_result_time"] == "2026-03-15T00:00:00+00:00"
+    # settled_count doubles as the sample-size health signal.
+    assert gongsa["settled_count"] == 3
+
+
+def test_compute_breakdown_latest_result_time_none_when_absent():
+    items = [_settlement("용역", 200_000_000, "plausible", 0.001)]
+    yongyeok = compute_breakdown(items)["by_category"][0]
+    assert yongyeok["latest_result_time"] is None
 
 
 def test_compute_breakdown_budget_bands_grouping_and_order():

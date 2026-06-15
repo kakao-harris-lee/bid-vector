@@ -122,7 +122,11 @@ def test_synthetic_operator_uses_own_strategy_and_leaves_canonical_intact(test_d
     test_db.commit()
     canonical_strategy_id = canonical_strategy.id
 
-    # Synthetic operator focuses on "service" only -> skips the construction award.
+    # Synthetic operator focuses on "service" only. Its focus categories now
+    # scope the award window itself (so a minority/recently-backfilled category
+    # is not starved by the global pool), so the construction award is filtered
+    # at the award query -- the operator's own strategy still produces a result
+    # distinct from the catch-all canonical operator.
     synthetic = _make_synthetic_operator(
         test_db, slug="service-only", focus_categories="service"
     )
@@ -148,10 +152,17 @@ def test_synthetic_operator_uses_own_strategy_and_leaves_canonical_intact(test_d
         persist=False,
     )
 
-    # The synthetic operator's own focus filter produces a *different* result.
+    # The synthetic operator's own focus filter produces a *different* result:
+    # the catch-all canonical operator sees the construction award, while the
+    # "service"-focused synthetic operator's award window excludes it entirely
+    # (no service awards in range -> 0 candidates).
     assert canonical_result["summary"]["candidate_count"] == 1
     assert synthetic_result["summary"]["candidate_count"] == 0
-    assert synthetic_result["summary"]["skipped_by_strategy_count"] >= 1
+    # The synthetic operator's award window is scoped to its focus categories, so
+    # the construction award is filtered at the query (the award never enters the
+    # window) rather than skipped post-load. Its focus categories are recorded on
+    # the run request for auditability.
+    assert synthetic_result["request"]["award_categories"] == ["service"]
 
     # Canonical strategy was never reassigned to the synthetic operator, and the
     # synthetic operator's own strategy row is the one that drove its result.
@@ -184,6 +195,160 @@ def test_synthetic_operator_uses_own_strategy_and_leaves_canonical_intact(test_d
         .count()
         == 1
     )
+
+
+def _awarded_project(test_db, *, category: str, announced_at: datetime) -> Project:
+    """Seed one awarded project (+ price history + tender result) in a category."""
+    project = Project(
+        title=f"{category} tender {announced_at:%Y%m%d}",
+        description=f"{category} project",
+        requirements="standard qualification",
+        budget_estimate=100_000_000,
+        category=category,
+        status="awarded",
+        issuing_agency="Seoul",
+        created_at=announced_at - timedelta(days=30),
+        deadline=announced_at - timedelta(days=1),
+    )
+    test_db.add(project)
+    test_db.flush()
+    for index in range(8):
+        test_db.add(
+            HistoricalData(
+                project_id=None,
+                notice_number=f"H-{category}-{announced_at:%Y%m%d}-{index}",
+                agency_name="Seoul",
+                category=category,
+                base_amount=100_000_000,
+                predicted_price=88_000_000,
+                bid_rate=0.88,
+                opened_at=announced_at - timedelta(days=60) + timedelta(days=index),
+            )
+        )
+    test_db.add(
+        TenderResult(
+            project_id=project.id,
+            winning_company="Winner",
+            winning_amount=88_000_000,
+            winning_rate=0.88,
+            result_status="awarded",
+            announced_at=announced_at,
+        )
+    )
+    test_db.commit()
+    return project
+
+
+def test_focus_category_operator_not_starved_by_newer_other_category(test_db):
+    """Regression for the goods-0-match starvation bug.
+
+    A bounded ``limit`` window over the GLOBAL award pool (most-recent-first)
+    would be filled by the many newer construction/service awards, starving a
+    minority/recently-backfilled category. Scoping the window to the operator's
+    focus categories means a goods operator still sees goods awards even when
+    other-category awards are strictly newer and outnumber the window ``limit``.
+    """
+    # Many NEWER construction awards (would dominate a limit=2 global window)...
+    for day in range(1, 6):
+        _awarded_project(
+            test_db, category="construction", announced_at=_dt(2026, 3, day)
+        )
+    # ...and one OLDER goods award the operator should still find.
+    _awarded_project(test_db, category="goods", announced_at=_dt(2026, 1, 15))
+
+    goods_operator = _make_synthetic_operator(
+        test_db, slug="goods-only", focus_categories="goods"
+    )
+
+    service = PaperBiddingBacktestService()
+    result = service.run_historical_backtest(
+        test_db,
+        operator_id=int(goods_operator.id),
+        category=None,
+        start_at=_dt(2026, 1, 1),
+        end_at=_dt(2026, 3, 31),
+        limit=2,  # smaller than the count of newer construction awards
+        persist=False,
+    )
+
+    # The goods award is found (window scoped to focus categories), NOT starved.
+    # (Whether it is then *settled* depends on the decision action thresholds;
+    # the bug being fixed is that the goods award never entered the window at
+    # all -- candidate_count was 0.)
+    assert result["request"]["award_categories"] == ["goods"]
+    assert result["summary"]["candidate_count"] == 1
+    # Every candidate is a goods award -- no construction leaked into the window.
+    assert all(item["category"] == "goods" for item in result["items"])
+    # And no other-category award was skipped post-load: the construction awards
+    # were filtered at the query, not skipped by strategy.
+    assert result["summary"]["skipped_by_strategy_count"] == 0
+
+
+def test_empty_focus_operator_keeps_global_award_pool(test_db):
+    """Regression for the ``elif not category`` global-pool fallback branch.
+
+    A canonical/single operator with EMPTY ``focus_categories`` running with
+    ``category=None`` must keep the GLOBAL award pool (every category in range),
+    and ``request.award_categories`` must be empty -- i.e. the focus-category
+    scoping NEVER narrows an operator that declared no focus. The other
+    starvation tests pass an explicit ``category=`` and so skip this branch; this
+    one covers it directly so a future change to the fallback condition is
+    caught.
+    """
+    _awarded_project(test_db, category="construction", announced_at=_dt(2026, 2, 10))
+    _awarded_project(test_db, category="goods", announced_at=_dt(2026, 2, 12))
+    _awarded_project(test_db, category="service", announced_at=_dt(2026, 2, 14))
+
+    canonical = ensure_operator_account(test_db)
+    canonical_strategy = ensure_operator_strategy(test_db)
+    canonical_strategy.focus_categories = ""  # no focus -> global pool
+    test_db.commit()
+
+    service = PaperBiddingBacktestService()
+    result = service.run_historical_backtest(
+        test_db,
+        operator_id=int(canonical.id),
+        category=None,
+        start_at=_dt(2026, 1, 1),
+        end_at=_dt(2026, 3, 31),
+        limit=10,
+        persist=False,
+    )
+
+    # Empty focus -> no award-category scoping recorded on the request.
+    assert result["request"]["award_categories"] == []
+    # The global pool is preserved: all three categories are present as
+    # candidates (none filtered out by an unintended focus scope).
+    assert result["summary"]["candidate_count"] == 3
+    assert {item["category"] for item in result["items"]} == {
+        "construction",
+        "goods",
+        "service",
+    }
+
+
+def test_load_eligible_awards_category_and_categories_union(test_db):
+    """Passing both ``category`` and ``categories`` yields their UNION (deduped,
+    case-insensitive) -- a thin guard on the filter-set construction."""
+    _awarded_project(test_db, category="construction", announced_at=_dt(2026, 2, 10))
+    _awarded_project(test_db, category="goods", announced_at=_dt(2026, 2, 12))
+    _awarded_project(test_db, category="service", announced_at=_dt(2026, 2, 14))
+
+    service = PaperBiddingBacktestService()
+    awards = service._load_eligible_awards(
+        test_db,
+        category="Construction",  # mixed case -> normalized to construction
+        categories=["goods", "construction"],  # construction duplicated
+        start_at=_dt(2026, 1, 1),
+        end_at=_dt(2026, 3, 31),
+        limit=10,
+    )
+
+    categories = {award.project.category for award in awards}
+    # Union of {construction} and {goods, construction} == {construction, goods};
+    # service is excluded, construction not double-counted.
+    assert categories == {"construction", "goods"}
+    assert len(awards) == 2
 
 
 # --- (b) missing operator_id raises / 404 ------------------------------------

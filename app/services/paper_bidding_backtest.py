@@ -11,7 +11,7 @@ from typing import Any, Iterable, Sequence
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import exists
+from sqlalchemy import exists, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
@@ -78,11 +78,30 @@ class PaperBiddingBacktestService:
         history_limit: int = 80,
         settle_actions: Sequence[str] | None = None,
         persist: bool = False,
+        award_categories: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Generate paper bids from historical awards and settle them immediately."""
+        """Generate paper bids from historical awards and settle them immediately.
+
+        ``award_categories`` scopes the replay award pool to those project
+        categories (in addition to the explicit ``category`` filter). When the
+        caller omits it AND no explicit ``category`` is given, it defaults to the
+        operator strategy's focus categories so a focus-category operator draws
+        its window from its OWN categories — without this, a minority category
+        (e.g. recently-backfilled goods) is starved out of any bounded ``limit``
+        window dominated by service/construction awards.
+        """
         operator = self._resolve_operator(db, operator_id=operator_id)
         strategy = self._resolve_operator_strategy(db, operator=operator)
         profile = self._resolve_operator_profile(db, operator=operator)
+        resolved_award_categories: tuple[str, ...] = ()
+        if award_categories:
+            resolved_award_categories = tuple(
+                str(value).strip() for value in award_categories if str(value).strip()
+            )
+        elif not category:
+            resolved_award_categories = tuple(
+                split_multi_value_text(getattr(strategy, "focus_categories", None))
+            )
         normalized_settle_actions = self._normalize_actions(
             settle_actions or self.DEFAULT_SETTLE_ACTIONS
         )
@@ -95,6 +114,7 @@ class PaperBiddingBacktestService:
 
         request_payload = {
             "category": category,
+            "award_categories": list(resolved_award_categories),
             "start_at": start_at.isoformat() if start_at else None,
             "end_at": end_at.isoformat() if end_at else None,
             "limit": safe_limit,
@@ -133,6 +153,7 @@ class PaperBiddingBacktestService:
                 start_at=start_at,
                 end_at=end_at,
                 limit=safe_limit,
+                categories=resolved_award_categories or None,
             )
             for tender_result in awards:
                 project = tender_result.project
@@ -542,7 +563,36 @@ class PaperBiddingBacktestService:
         start_at: datetime | None,
         end_at: datetime | None,
         limit: int,
+        categories: Sequence[str] | None = None,
     ) -> list[TenderResult]:
+        """Load the most recent settled award per project for the replay window.
+
+        ``categories`` (when given) restricts the pool to those project
+        categories — this is how a focus-category operator draws its window from
+        its OWN categories instead of the global pool. Without it, a minority
+        category (e.g. recently-backfilled goods) is starved out of any bounded
+        ``limit`` window dominated by service/construction awards. ``category``
+        (singular) stays for the explicit single-category path; when both are
+        passed the singular value is appended to the set.
+
+        The category filter is case-insensitive (``func.lower(Project.category)``)
+        so the explicit ``category=`` path matches the same way the downstream
+        ``_passes_strategy`` lower-cased comparison does — no silent miss on a
+        mixed-case stored category.
+
+        Caveat: the window is cut MOST-RECENT-FIRST (this changed from the prior
+        oldest-first ordering). A ``limit``-bounded run therefore keeps the
+        freshest awards, so absolute counts from a bounded run are NOT directly
+        comparable to a pre-change run over the same ``limit``.
+        """
+        category_filter: set[str] = set()
+        if category:
+            category_filter.add(str(category).strip().lower())
+        for value in categories or ():
+            normalized = str(value or "").strip().lower()
+            if normalized:
+                category_filter.add(normalized)
+
         query = (
             db.query(TenderResult)
             .join(Project, Project.id == TenderResult.project_id)
@@ -553,8 +603,10 @@ class PaperBiddingBacktestService:
                 TenderResult.winning_amount > 0,
             )
         )
-        if category:
-            query = query.filter(Project.category == category)
+        if category_filter:
+            query = query.filter(
+                func.lower(Project.category).in_(sorted(category_filter))
+            )
 
         rows = query.all()
         latest_by_project: dict[int, TenderResult] = {}
@@ -573,9 +625,12 @@ class PaperBiddingBacktestService:
             ):
                 latest_by_project[project_id] = row
 
+        # Most-recent-first so a bounded window keeps the freshest awards (and so
+        # a focus-category operator sees its newest settled opportunities).
         return sorted(
             latest_by_project.values(),
             key=lambda result: (self._result_time(result), int(result.id or 0)),
+            reverse=True,
         )[:limit]
 
     def _load_forward_projects(
@@ -796,6 +851,9 @@ class PaperBiddingBacktestService:
             # category and budget band downstream without re-querying the project.
             "category": item.get("category"),
             "budget_estimate": float(item.get("budget_estimate") or 0.0),
+            # Award announcement time (안내일/개찰일) -- used downstream to surface
+            # per-category data freshness so thin/stale categories are visible.
+            "result_time": self._result_time(tender_result).isoformat(),
             "tender_result_id": int(tender_result.id),
             "result_status": str(tender_result.result_status or "awarded"),
             "winning_company": tender_result.winning_company,

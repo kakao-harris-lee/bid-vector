@@ -48,6 +48,13 @@ BUDGET_BAND_TOP_KEY = "gte_50eok"
 # the engine summary. This is a price-based ESTIMATE, not an actual award.
 _WIN_VERDICTS = {"plausible"}
 
+# Eligibility-gate (PR3) final verdict that counts as an estimated favorable win:
+# the bid cleared the 낙찰하한가 AND landed at/under the realized winning amount.
+# ``unknown`` (no 예가/하한 data) is EXCLUDED from the eligibility-rate denominator
+# so the rate stays honest -- it is computed only over settlements we could judge.
+_ELIGIBLE_FAVORABLE_VERDICT = "eligible_favorable"
+_ELIGIBILITY_UNKNOWN_VERDICT = "unknown"
+
 # CSV export columns (Phase 4). ``operator_slug`` is prepended to the CLI
 # comparison columns (see ``scripts.backtest_synthetic_operators._write_comparison_csv``)
 # so each row is self-identifying. ``win_rate_on_settled`` /
@@ -110,6 +117,20 @@ def _empty_breakdown() -> dict[str, list[dict[str, Any]]]:
     return {"by_category": [], "by_budget_band": []}
 
 
+def _latest_result_time(items: list[dict[str, Any]]) -> str | None:
+    """Most recent award time (안내일/개찰일) in the group, ISO string or None.
+
+    Surfaces per-group data freshness so a stale category is visible alongside
+    its (possibly thin) sample. Items without a ``result_time`` are ignored.
+    """
+    times = [
+        str(entry["result_time"])
+        for entry in items
+        if entry.get("result_time") not in (None, "")
+    ]
+    return max(times) if times else None
+
+
 def _aggregate_group(items: list[dict[str, Any]]) -> dict[str, Any]:
     settled_count = len(items)
     would_have_won_count = sum(1 for entry in items if _is_price_only_win(entry))
@@ -119,12 +140,47 @@ def _aggregate_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         if entry.get("absolute_bid_rate_error") is not None
     ]
     avg_error = round(sum(errors) / len(errors), 6) if errors else None
-    win_rate = round(would_have_won_count / settled_count, 6) if settled_count else None
+    # Price-only "close" rate. ``win_rate`` is kept (unchanged) for existing
+    # consumers; ``est_price_close_rate`` is the SAME value under an honest name
+    # ("가격 근접 추정율", NOT an actual award).
+    est_price_close_rate = (
+        round(would_have_won_count / settled_count, 6) if settled_count else None
+    )
+    # Eligibility-gate (PR3) estimate: favorable count over the JUDGEABLE
+    # denominator (settled minus ``unknown``). ``unknown`` settlements (no 예가/
+    # 낙찰하한 data) are excluded so the rate is not diluted by un-scoreable rows.
+    eligible_favorable_count = sum(
+        1
+        for entry in items
+        if str(entry.get("would_have_won_final")) == _ELIGIBLE_FAVORABLE_VERDICT
+    )
+    eligibility_unknown_count = sum(
+        1
+        for entry in items
+        if str(entry.get("would_have_won_final")) == _ELIGIBILITY_UNKNOWN_VERDICT
+    )
+    eligibility_judged_count = settled_count - eligibility_unknown_count
+    eligible_favorable_rate = (
+        round(eligible_favorable_count / eligibility_judged_count, 6)
+        if eligibility_judged_count > 0
+        else None
+    )
     return {
         "settled_count": settled_count,
         "would_have_won_count": would_have_won_count,
-        "win_rate": win_rate,
+        # Price-only estimate (legacy key kept for frontend lockstep).
+        "win_rate": est_price_close_rate,
+        # Honest-named alias of the same price-only estimate.
+        "est_price_close_rate": est_price_close_rate,
+        # Eligibility-gate estimate (unknown excluded from denominator).
+        "eligible_favorable_count": eligible_favorable_count,
+        "eligibility_unknown_count": eligibility_unknown_count,
+        "eligibility_judged_count": eligibility_judged_count,
+        "eligible_favorable_rate": eligible_favorable_rate,
         "avg_abs_bid_rate_error": avg_error,
+        # Per-group health: latest award time (freshness). ``settled_count`` above
+        # already doubles as the sample-size health signal.
+        "latest_result_time": _latest_result_time(items),
     }
 
 
@@ -133,9 +189,22 @@ def compute_breakdown(
 ) -> dict[str, list[dict[str, Any]]]:
     """Group per-operator settlements into category / budget-band breakdowns.
 
-    ``win_rate`` is ``would_have_won_count / settled_count`` where a "win" is the
-    price-only estimate (``would_have_won_price_only == "plausible"``); it is NOT
-    an actual award and ``None`` when there are no settled items in the group.
+    Each group carries TWO honest, separately-named rates:
+
+    * ``win_rate`` / ``est_price_close_rate`` -- the SAME value:
+      ``would_have_won_count / settled_count`` where a "win" is the price-only
+      estimate (``would_have_won_price_only == "plausible"``). NOT an actual
+      award; ``None`` when the group has no settled items. ``win_rate`` is the
+      legacy key kept for frontend lockstep; ``est_price_close_rate`` is its
+      honest-named alias.
+    * ``eligible_favorable_rate`` -- the PR3 eligibility-gate estimate:
+      ``eligible_favorable_count / eligibility_judged_count`` where the
+      denominator EXCLUDES ``unknown`` settlements (no 예가/낙찰하한 data), so the
+      rate is computed only over judgeable rows. ``None`` when nothing is
+      judgeable.
+
+    Each group also carries health fields: ``settled_count`` (sample size) and
+    ``latest_result_time`` (freshness of the newest award in the group).
     """
     if not settlement_items:
         return _empty_breakdown()
