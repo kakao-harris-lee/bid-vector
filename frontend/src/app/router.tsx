@@ -26,6 +26,9 @@ const ProjectDetailScreen = lazy(() =>
 const DecisionsScreen = lazy(() =>
   import("@/features/decisions").then((mod) => ({ default: mod.DecisionsScreen }))
 );
+const BidSummaryScreen = lazy(() =>
+  import("@/features/decisions").then((mod) => ({ default: mod.BidSummaryScreen }))
+);
 const ExperimentsScreen = lazy(() =>
   import("@/features/experiments").then((mod) => ({ default: mod.ExperimentsScreen }))
 );
@@ -66,6 +69,10 @@ export function AppRoutes() {
         <Route path="projects" element={<Lazy><ProjectsScreen /></Lazy>} />
         <Route path="projects/:id" element={<Lazy><ProjectDetailScreen /></Lazy>} />
         <Route path="decisions" element={<Lazy><DecisionsScreen /></Lazy>} />
+        <Route
+          path="decisions/:id/summary"
+          element={<Lazy><BidSummaryScreen /></Lazy>}
+        />
         <Route path="experiments" element={<Lazy><ExperimentsScreen /></Lazy>} />
         <Route path="synthetic-backtest" element={<Lazy><ExperimentLabScreen /></Lazy>} />
         <Route path="operations" element={<Lazy><OperationsScreen /></Lazy>} />
