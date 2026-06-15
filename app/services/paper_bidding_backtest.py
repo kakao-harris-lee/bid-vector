@@ -889,6 +889,11 @@ class PaperBiddingBacktestService:
         minimum-bid-rate floor (``_resolve_floor_bid_rate``). Both are ``None``
         when no estimated price can be derived -- an honest "not enough data"
         signal the gate maps to ``"unknown"``.
+
+        Uses the *category-only* floor (no group-calibrated floor): per §4.7 the
+        category floor is the hard lower bound of any group floor, so scoring with
+        the category floor never disqualifies a bid the predictor's (possibly
+        higher group) floor would have allowed -- it errs on the safe side.
         """
         if project_id is None:
             return (None, None)

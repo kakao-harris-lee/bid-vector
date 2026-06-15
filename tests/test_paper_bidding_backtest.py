@@ -740,6 +740,7 @@ def _settled_historical_for(
     selected_numbers: list[int] | None = None,
     predicted_price: float = 0.0,
     category: str = "construction",
+    opened_at: datetime = _dt(2025, 2, 2),
 ) -> HistoricalData:
     return HistoricalData(
         project_id=project.id,
@@ -757,7 +758,7 @@ def _settled_historical_for(
         selected_numbers=json.dumps(
             selected_numbers if selected_numbers is not None else [1, 2, 3, 4]
         ),
-        opened_at=_dt(2025, 2, 2),
+        opened_at=opened_at,
     )
 
 
@@ -907,3 +908,173 @@ def test_settlement_gate_persists_estimated_and_floor_columns(test_db):
     # Summary carries the additive gate counts without dropping the legacy proxy.
     assert "would_have_won_price_only_count" in result["summary"]
     assert "would_have_won_final_disqualified_count" in result["summary"]
+
+
+def _build_candidate_for_target(test_db, target: Project) -> dict:
+    """Build a candidate item for ``target`` through the real predictor path.
+
+    Seeds unlinked history so the predictor has a sample (the cutoff loader
+    excludes the target's own project_id) and returns the candidate dict.
+    """
+    return PaperBiddingBacktestService()._build_candidate_item(
+        test_db,
+        project=target,
+        tender_result=None,
+        data_cutoff_at=_dt(2025, 3, 9),
+        scenario="base",
+        strategy_version="leak-test",
+        cutoff_hours_before_deadline=0,
+        history_limit=80,
+        profile=None,
+    )
+
+
+def test_candidate_prediction_ignores_target_own_reserve_prices(test_db):
+    """REGRESSION (leakage): the prediction/candidate path must NOT read the
+    target project's own settled reserve_prices / 예정가격.
+
+    Only the *settlement* gate may consume that settled data. Adding a settled
+    HistoricalData row for the target itself (with reserve_prices populated) must
+    leave the candidate's prediction inputs/outputs unchanged -- otherwise future
+    awards would leak into the bid the model recommends.
+    """
+    # Two structurally-identical targets so each gets an isolated history set.
+    baseline_target = _project(
+        title="기준 프로젝트", deadline=_dt(2025, 3, 10), created_at=_dt(2025, 2, 1)
+    )
+    leaky_target = _project(
+        title="기준 프로젝트", deadline=_dt(2025, 3, 10), created_at=_dt(2025, 2, 1)
+    )
+    test_db.add_all([baseline_target, leaky_target])
+    test_db.flush()
+
+    # Identical unlinked history feeds the predictor for BOTH targets.
+    for index in range(8):
+        opened_at = _dt(2025, 1, 1) + timedelta(days=index)
+        test_db.add(_historical_row(None, opened_at=opened_at, bid_rate=0.88))
+
+    # Only the leaky target gets its OWN settled HistoricalData with reserve
+    # prices. Its opened_at is AFTER the bid-decision cutoff (2025-03-09): a
+    # genuine future-award leak, which must never enter ANY candidate's history.
+    # If the predictor read it (via the project_id-exclusion gap), the leaky
+    # candidate's prediction would diverge from the baseline.
+    test_db.add(
+        _settled_historical_for(
+            leaky_target,
+            reserve_prices=[50_000_000, 50_000_000, 50_000_000, 50_000_000],
+            selected_numbers=[1, 2, 3, 4],
+            opened_at=_dt(2025, 3, 15),
+        )
+    )
+    test_db.flush()
+
+    baseline_item = _build_candidate_for_target(test_db, baseline_target)
+    leaky_item = _build_candidate_for_target(test_db, leaky_target)
+
+    # The prediction-derived fields must be identical -- the target's own settled
+    # reserve data did not leak into the candidate.
+    for key in (
+        "predicted_price",
+        "predicted_bid_rate",
+        "paper_bid_amount",
+        "paper_bid_rate",
+        "price_range_min",
+        "price_range_max",
+        "historical_sample_size",
+        "action",
+    ):
+        assert baseline_item[key] == leaky_item[key], f"leakage via {key!r}"
+
+
+def test_derive_estimated_price_falls_back_to_predicted_price(test_db):
+    """``_derive_estimated_price`` falls back to ``predicted_price`` when the
+    selected-reserve mean is unavailable (empty selected_numbers)."""
+    target = _project(deadline=_dt(2025, 2, 1), created_at=_dt(2025, 1, 20))
+    test_db.add(target)
+    test_db.flush()
+    # No selected numbers -> cannot average reserves; predicted_price supplies 예가.
+    record = _settled_historical_for(
+        target,
+        reserve_prices=[90_000_000, 95_000_000, 100_000_000],
+        selected_numbers=[],
+        predicted_price=98_000_000,
+    )
+    test_db.add(record)
+    test_db.flush()
+
+    service = PaperBiddingBacktestService()
+    assert service._derive_estimated_price(record) == 98_000_000
+
+    estimated_price, floor_price = service._resolve_settlement_floor(
+        test_db, project_id=target.id, category="construction"
+    )
+    assert estimated_price == 98_000_000
+    # construction floor 0.87 applied to the predicted_price fallback.
+    assert floor_price == 98_000_000 * 0.87
+
+    result = TenderResult(
+        project_id=target.id,
+        winning_company="Winner",
+        winning_amount=88_000_000,
+        winning_rate=0.88,
+        result_status="awarded",
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.add(result)
+    test_db.flush()
+    item = {
+        "project_id": target.id,
+        "category": "construction",
+        "budget_estimate": 100_000_000,
+        "paper_bid_amount": 90_000_000,  # >= floor (85.26M), > winning 88M
+        "paper_bid_rate": 0.90,
+    }
+    settlement = service._build_settlement_item(
+        test_db, item=item, tender_result=result
+    )
+    assert settlement["estimated_price"] == 98_000_000
+    assert settlement["would_have_won_final"] == "eligible_but_outbid"
+
+
+def test_settlement_gate_unknown_for_category_without_floor_rate(test_db):
+    """Estimated price exists but the category has no configured 낙찰하한율
+    -> floor is None -> gate is ``unknown``; estimated_price persists, floor NULL."""
+    # "other" is not in PREDICTION_CATEGORY_MINIMUM_BID_RATES.
+    target = _project(
+        category="other", deadline=_dt(2025, 2, 1), created_at=_dt(2025, 1, 20)
+    )
+    test_db.add(target)
+    test_db.flush()
+    test_db.add(_settled_historical_for(target, category="other"))
+    result = TenderResult(
+        project_id=target.id,
+        winning_company="Winner",
+        winning_amount=88_000_000,
+        winning_rate=0.88,
+        result_status="awarded",
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.add(result)
+    test_db.flush()
+
+    service = PaperBiddingBacktestService()
+    estimated_price, floor_price = service._resolve_settlement_floor(
+        test_db, project_id=target.id, category="other"
+    )
+    assert estimated_price == 100_000_000
+    assert floor_price is None
+
+    item = {
+        "project_id": target.id,
+        "category": "other",
+        "budget_estimate": 100_000_000,
+        "paper_bid_amount": 88_000_000,
+        "paper_bid_rate": 0.88,
+    }
+    settlement = service._build_settlement_item(
+        test_db, item=item, tender_result=result
+    )
+    # Internal consistency: estimated_price non-NULL, minimum_bid_price NULL, gate unknown.
+    assert settlement["estimated_price"] == 100_000_000
+    assert settlement["minimum_bid_price"] is None
+    assert settlement["would_have_won_final"] == "unknown"
