@@ -7,6 +7,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.time import utc_now
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
@@ -55,6 +56,15 @@ class StrategyMonitoringService:
     PREVIEW_SCAN_MULTIPLIER = 12
     PREVIEW_SCAN_FLOOR = 30
     PREVIEW_SCAN_CEILING = 250
+    # Scheduled monitor scan bound. The configured
+    # OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT is clamped into this range and
+    # also floored to resolved_limit x SCHEDULE_SCAN_MULTIPLIER so a small per-run
+    # limit cannot starve filter-passing candidates while still keeping the
+    # expensive per-candidate ML analysis count bounded (and the periodic task
+    # well under the consumer timeout).
+    SCHEDULE_SCAN_MULTIPLIER = 12
+    SCHEDULE_SCAN_FLOOR = 30
+    SCHEDULE_SCAN_CEILING = 400
     SYNC_TRIGGER_SOURCE = "manual_sync"
     ASYNC_TRIGGER_SOURCE = "manual_async"
     SCHEDULED_TRIGGER_SOURCE = "scheduled"
@@ -155,6 +165,21 @@ class StrategyMonitoringService:
             for item in self._extract_result_items(previous_result_payload)
         }
 
+        # The periodic (non-interactive) schedule bounds its scan to the most
+        # deadline-imminent active notices. A broad-license operator passes the
+        # cheap watch filters on most open rows, so an unbounded scan would run
+        # the expensive per-candidate analysis hundreds of times and hang the
+        # scheduled task past the consumer timeout. Manual sync/async runs are
+        # operator-initiated against a visible run record, so they keep the
+        # full-scan behavior. The deadline-asc ordering inside
+        # _collect_candidate_evaluations means the bound keeps the most urgent
+        # (alert-worthy) opportunities.
+        scan_limit = (
+            self._schedule_scan_limit(resolved_limit)
+            if trigger_source == self.SCHEDULED_TRIGGER_SOURCE
+            else None
+        )
+
         try:
             evaluations, evaluated_project_count = self._collect_candidate_evaluations(
                 db,
@@ -165,6 +190,7 @@ class StrategyMonitoringService:
                 same_category_only=request.same_category_only,
                 similar_limit=request.similar_limit,
                 min_similarity=request.min_similarity,
+                scan_limit=scan_limit,
             )
 
             results: list[dict] = []
@@ -536,7 +562,16 @@ class StrategyMonitoringService:
         min_similarity: float,
         scan_limit: int | None = None,
     ) -> tuple[list[StrategyCandidateEvaluation], int]:
-        """Analyze all currently actionable projects that pass stored watch rules."""
+        """Analyze currently actionable projects that pass stored watch rules.
+
+        When ``scan_limit`` is provided the query loads only the ``scan_limit``
+        most deadline-imminent active notices (``deadline asc``) before applying
+        the cheap watch filters and the expensive per-candidate analysis. This
+        bounds the work for the interactive preview (``_preview_scan_limit``) and
+        the periodic schedule (``_schedule_scan_limit``) so neither can scan the
+        full open-notice table. When ``scan_limit`` is ``None`` (manual
+        sync/async runs) every active project is considered.
+        """
         if not self._has_configured_watch_rules(strategy):
             return [], 0
 
@@ -597,6 +632,23 @@ class StrategyMonitoringService:
         """Bound preview work so a UI read cannot scan the full production table."""
         scaled_limit = int(resolved_limit or self.DEFAULT_LIMIT) * self.PREVIEW_SCAN_MULTIPLIER
         return min(max(scaled_limit, self.PREVIEW_SCAN_FLOOR), self.PREVIEW_SCAN_CEILING)
+
+    def _schedule_scan_limit(self, resolved_limit: int) -> int:
+        """Bound the periodic schedule scan to the most deadline-imminent notices.
+
+        The configured ``OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT`` is the
+        primary bound, clamped into ``[SCHEDULE_SCAN_FLOOR, SCHEDULE_SCAN_CEILING]``.
+        It is additionally floored to ``resolved_limit x SCHEDULE_SCAN_MULTIPLIER``
+        so an unusually small per-run limit cannot starve the candidate pool that
+        survives the watch filters. ``scan_limit`` is applied *before* the cheap
+        watch filters in ``_collect_candidate_evaluations``, so the multiplier
+        keeps enough headroom for the filter pass rate while still capping the
+        number of expensive per-candidate analyses.
+        """
+        configured = int(getattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", 0) or 0)
+        multiplier_floor = int(resolved_limit or self.DEFAULT_LIMIT) * self.SCHEDULE_SCAN_MULTIPLIER
+        candidate = max(configured, multiplier_floor, self.SCHEDULE_SCAN_FLOOR)
+        return min(candidate, self.SCHEDULE_SCAN_CEILING)
 
     def _has_configured_watch_rules(self, strategy: OperatorStrategy) -> bool:
         """Return whether the operator has set any non-default monitoring criteria."""
