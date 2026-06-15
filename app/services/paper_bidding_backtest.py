@@ -15,6 +15,7 @@ from sqlalchemy import exists
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
+from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import _resolve_floor_bid_rate, predict_price
 from app.core.single_user import (
     ensure_operator_account,
@@ -660,6 +661,7 @@ class PaperBiddingBacktestService:
             matched_score=matched_score,
             prediction=prediction,
             history_count=len(history),
+            business_group=business_group,
         )
         deadline_hours_remaining = self._deadline_hours_remaining(
             project=project, data_cutoff_at=data_cutoff_at
@@ -1330,11 +1332,32 @@ class PaperBiddingBacktestService:
         return round(min(1.0, score), 2)
 
     def _estimate_probability_score(
-        self, *, matched_score: float, prediction: dict[str, Any], history_count: int
+        self,
+        *,
+        matched_score: float,
+        prediction: dict[str, Any],
+        history_count: int,
+        business_group: str | None = None,
     ) -> float:
+        """Estimate the낙찰 가능성 (P(win)) signal consumed by the decision engine.
+
+        Prefers the settlement-calibrated curve (summary.probability_calibration in
+        the active ensemble artifact) when present; otherwise falls back to the
+        legacy heuristic so offline / fresh environments keep working unchanged.
+        """
         confidence = max(
             0.0, min(1.0, float(prediction.get("confidence_score", 0.0) or 0.0))
         )
+        calibrated = apply_probability_calibration(
+            {
+                "confidence_score": confidence,
+                "matched_score": matched_score,
+                "historical_sample_size": history_count,
+                "business_group": business_group,
+            }
+        )
+        if calibrated is not None:
+            return calibrated
         history_signal = min(1.0, max(0.0, history_count / 30))
         probability = matched_score * 0.38 + confidence * 0.42 + history_signal * 0.20
         return round(max(0.0, min(1.0, probability)), 2)

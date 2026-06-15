@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_recommendation
 from app.ai.business_group import resolve_business_group
+from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import get_price_insights, predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy
 from app.core.time import ensure_utc, utc_now
@@ -260,6 +261,22 @@ class OpportunityAnalysisService:
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
         )
+        # When a settlement-calibrated curve is published, replace the heuristic
+        # P(낙찰) with the calibrated value computed from the SAME inference-time
+        # signals the backtest path uses. No artifact => keep the heuristic
+        # (offline / fresh environments unchanged). Business gates below still apply.
+        calibrated_probability = apply_probability_calibration(
+            {
+                "confidence_score": float(price_prediction.get("confidence_score", 0.0) or 0.0),
+                "matched_score": float(classification.get("score", 0.0) or 0.0),
+                "historical_sample_size": int(
+                    price_prediction.get("historical_sample_size", 0) or 0
+                ),
+                "business_group": business_group,
+            }
+        )
+        if calibrated_probability is not None:
+            probability_score = calibrated_probability
         category_priority_override = resolve_category_priority_override(strategy, project.category)
         matched_score = self._apply_category_priority_override(
             float(classification["score"]),

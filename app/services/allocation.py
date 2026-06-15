@@ -79,7 +79,7 @@ class BidDecisionService:
         priority_score = max(0.0, min(1.0, opportunity_score - total_penalty))
 
         reasons = [
-            f"낙찰 가능성 점수 {request.probability_score:.2f}를 반영했습니다.",
+            f"가격 적합도(추정) 점수 {request.probability_score:.2f}를 반영했습니다.",
             f"공고 적합도 점수 {request.matched_score:.2f}를 반영했습니다.",
             f"마감 임박도 점수 {urgency_score:.2f}를 반영했습니다.",
             f"시장 경쟁력 점수 {competitiveness_score:.2f}를 반영했습니다.",

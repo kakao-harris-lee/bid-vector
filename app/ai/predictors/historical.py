@@ -36,6 +36,77 @@ def load_group_calibration() -> dict[str, dict[str, float | int]]:
     calibration = summary.get("group_calibration")
     return calibration if isinstance(calibration, dict) else {}
 
+
+def load_probability_calibration() -> dict[str, dict[str, Any]]:
+    """Read summary.probability_calibration from the active ensemble artifact.
+
+    Mirrors :func:`load_group_calibration`: best-effort, any IO/JSON failure or
+    missing block returns an empty dict so callers fall back to the legacy
+    heuristic probability with no crash (offline / fresh environments included).
+    """
+    from app.core.config import settings
+
+    manifest_path_raw = (settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
+    if not manifest_path_raw:
+        return {}
+    candidate = Path(manifest_path_raw)
+    if not candidate.is_file():
+        return {}
+    try:
+        payload = json.loads(candidate.read_text())
+    except Exception:
+        return {}
+    summary = payload.get("summary") if isinstance(payload, dict) else None
+    if not isinstance(summary, dict):
+        return {}
+    calibration = summary.get("probability_calibration")
+    return calibration if isinstance(calibration, dict) else {}
+
+
+def apply_probability_calibration(
+    features: dict[str, Any],
+    *,
+    calibration: dict[str, dict[str, Any]] | None = None,
+) -> float | None:
+    """Map inference-time signals onto a calibrated P(낙찰) via the active curve.
+
+    ``features`` carries only inference-time signals: ``confidence_score``,
+    ``matched_score``, ``historical_sample_size`` and ``business_group``. The same
+    raw heuristic the legacy path used is reconstructed here and then passed through
+    the per-group Platt (or base-rate) curve fitted on settled outcomes.
+
+    Returns ``None`` when no usable calibration artifact exists so callers fall back
+    to the legacy heuristic. Never raises on malformed artifacts.
+    """
+    import math
+
+    table = calibration if calibration is not None else load_probability_calibration()
+    if not table:
+        return None
+
+    group_key = str(features.get("business_group") or "")
+    curve = table.get(group_key) or table.get("__global__")
+    if not isinstance(curve, dict):
+        return None
+
+    confidence = max(0.0, min(1.0, float(features.get("confidence_score", 0.0) or 0.0)))
+    matched = max(0.0, min(1.0, float(features.get("matched_score", 0.0) or 0.0)))
+    history = int(features.get("historical_sample_size", 0) or 0)
+    history_signal = min(1.0, max(0.0, history / 30))
+    raw = matched * 0.38 + confidence * 0.42 + history_signal * 0.20
+    raw = max(0.0, min(1.0, raw))
+
+    try:
+        scale = float(curve.get("scale", 0.0) or 0.0)
+        bias = float(curve.get("bias", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    z = (scale * raw) + bias
+    z = max(-30.0, min(30.0, z))
+    probability = 1.0 / (1.0 + math.exp(-z))
+    return round(max(0.0, min(1.0, probability)), 2)
+
+
 _T_CRITICAL_95 = {
     1: 12.706,
     2: 4.303,

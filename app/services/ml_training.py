@@ -38,12 +38,21 @@ class PricePredictionTrainingService:
         publish_remote = bool(request.get("publish_remote", True))
         create_manifest = bool(request.get("create_manifest", True))
 
-        dataset = PredictionDatasetService().build_training_dataset(
+        dataset_service = PredictionDatasetService()
+        dataset = dataset_service.build_training_dataset(
             db,
             category=category,
             agency_name=agency_name,
             limit=limit,
             explicit_bid_rate_only=True,
+        )
+        # Settlement-derived labels for낙찰-가능성 calibration. Built from PaperBid +
+        # PaperBidSettlement (NOT from `dataset`), so settled outcomes can only ever
+        # be labels here — never price-prediction features.
+        probability_calibration_dataset = (
+            dataset_service.build_probability_calibration_dataset(
+                db, category=category, limit=limit * 5
+            )
         )
         training_dir = self.repo_root / "models" / "training-runs" / release_tag
         predictor_lstm_dir = self.repo_root / "models" / "predictors" / "lstm"
@@ -76,6 +85,7 @@ class PricePredictionTrainingService:
             bid_rates=bid_rates,
             dataset=dataset,
             dataset_quality=dataset_quality,
+            probability_calibration_dataset=probability_calibration_dataset,
         )
         summary_path.write_text(self._dump_json(summary), encoding="utf-8")
 
@@ -120,6 +130,14 @@ class PricePredictionTrainingService:
         self._inject_group_calibration(
             artifact=ensemble_artifact,
             group_calibration=summary.get("group_calibration") or {},
+        )
+        # Same channel/guarantees as group_calibration: injected into the in-memory
+        # ensemble artifact BEFORE it is written to disk, so the on-disk sha256 (and
+        # therefore the signed manifest) covers the probability calibration too.
+        self._inject_summary_block(
+            artifact=ensemble_artifact,
+            key="probability_calibration",
+            block=summary.get("probability_calibration") or {},
         )
         lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
         ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
@@ -180,6 +198,7 @@ class PricePredictionTrainingService:
         bid_rates: list[float],
         dataset: dict[str, Any],
         dataset_quality: dict[str, Any],
+        probability_calibration_dataset: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build an auditable summary for the training run."""
         sample_count = len(bid_rates)
@@ -202,7 +221,184 @@ class PricePredictionTrainingService:
                 "warning_count": dataset_quality.get("warning_count", 0),
             },
             "group_calibration": self._build_group_calibration(dataset),
+            "probability_calibration": self._build_probability_calibration(
+                probability_calibration_dataset or {}
+            ),
         }
+
+    def _build_probability_calibration(
+        self, calibration_dataset: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Fit a per-group logistic (Platt) calibration for the낙찰-가능성 score.
+
+        Mirrors :meth:`_build_group_calibration` in spirit: it consumes the labeled
+        settlement dataset produced by
+        ``PredictionDatasetService.build_probability_calibration_dataset`` and emits a
+        compact, audit-friendly dict keyed by ``business_group`` plus a ``__global__``
+        fallback. Each entry stores Platt scale/bias over the heuristic probability
+        signal so inference can map the raw heuristic onto observed win frequencies.
+
+        **Label policy.** The primary label is the eligibility-gated
+        ``eligible_favorable`` flag (1) vs. any other *adjudicated* eligibility
+        verdict (0); ``unknown`` rows were already dropped upstream (``label is
+        None``). If a group lacks both classes after that filter, it falls back to
+        the price-only ``plausible`` label so a sparse, freshly-backfilled history
+        still yields a usable curve. The fallback is recorded per group so reviewers
+        can audit which curve used which label.
+
+        **No external deps.** Uses numpy/stdlib only — a few Newton steps fit the
+        1-parameter logistic, with an isotonic-free closed-form fallback for
+        degenerate (single-class) groups.
+
+        Returns ``{}`` when there is nothing usable so callers fall through to the
+        legacy heuristic with no behavior change.
+        """
+        items = calibration_dataset.get("items") or []
+        if not items:
+            return {}
+
+        groups: dict[str, list[tuple[float, int, int]]] = {}
+        for item in items:
+            features = item.get("features") or {}
+            raw = self._raw_probability_signal(features)
+            primary = item.get("label")
+            price_only = item.get("price_close_label")
+            try:
+                price_only_int = int(price_only) if price_only is not None else None
+            except (TypeError, ValueError):
+                price_only_int = None
+            group_key = str(features.get("business_group") or "__global__")
+            primary_int: int | None
+            try:
+                primary_int = int(primary) if primary is not None else None
+            except (TypeError, ValueError):
+                primary_int = None
+            # -1 marks a missing label (e.g. would_have_won_final == "unknown")
+            # so the curve fitter can drop it without confusing it with class 0.
+            row = (
+                raw,
+                primary_int if primary_int is not None else -1,
+                price_only_int if price_only_int is not None else -1,
+            )
+            groups.setdefault(group_key, []).append(row)
+            groups.setdefault("__global__", []).append(row)
+
+        calibration: dict[str, Any] = {}
+        for group_key, rows in groups.items():
+            curve = self._fit_group_probability_curve(rows)
+            if curve is not None:
+                calibration[group_key] = curve
+        return calibration
+
+    @staticmethod
+    def _raw_probability_signal(features: dict[str, Any]) -> float:
+        """Reproduce the legacy heuristic probability from inference-time features.
+
+        This is the SAME blend used by ``_estimate_probability_score`` so the fitted
+        Platt curve maps the heuristic onto observed win frequencies. Keeping it here
+        (not importing the backtest service) avoids a circular import and keeps the
+        calibration self-contained.
+        """
+        confidence = max(0.0, min(1.0, float(features.get("confidence_score", 0.0) or 0.0)))
+        matched = max(0.0, min(1.0, float(features.get("matched_score", 0.0) or 0.0)))
+        history = int(features.get("historical_sample_size", 0) or 0)
+        history_signal = min(1.0, max(0.0, history / 30))
+        raw = matched * 0.38 + confidence * 0.42 + history_signal * 0.20
+        return max(0.0, min(1.0, raw))
+
+    def _fit_group_probability_curve(
+        self, rows: list[tuple[float, int, int]]
+    ) -> dict[str, Any] | None:
+        """Fit a 1-parameter logistic over the raw heuristic for one group.
+
+        ``rows`` is a list of ``(raw_signal, primary_label, price_only_label)`` where
+        ``-1`` marks a missing label (e.g. ``would_have_won_final == "unknown"`` was
+        dropped to ``None`` upstream and arrives here as ``-1``).
+        """
+        import math
+
+        primary = [(raw, label) for raw, label, _ in rows if label in (0, 1)]
+        label_source = "eligible_favorable"
+        usable = primary
+        if not primary or len({label for _, label in primary}) < 2:
+            # Fall back to the price-only label when the eligibility-gated labels
+            # are absent or single-class for this group.
+            fallback = [(raw, label) for raw, _, label in rows if label in (0, 1)]
+            if fallback and len({label for _, label in fallback}) >= 2:
+                usable = fallback
+                label_source = "price_close"
+            elif primary:
+                usable = primary
+                label_source = "eligible_favorable"
+            else:
+                usable = fallback or primary
+
+        if not usable:
+            return None
+
+        sample_count = len(usable)
+        positives = sum(1 for _, label in usable if label == 1)
+        base_rate = positives / sample_count if sample_count else 0.0
+
+        # Degenerate single-class group: no slope is identifiable. Emit a flat curve
+        # that simply reports the observed base rate (still better-calibrated than the
+        # raw heuristic, and audit-transparent).
+        if len({label for _, label in usable}) < 2:
+            return {
+                "method": "base_rate",
+                "label_source": label_source,
+                "scale": 0.0,
+                "bias": self._logit(base_rate),
+                "base_rate": round(base_rate, 6),
+                "sample_count": sample_count,
+                "positive_count": positives,
+            }
+
+        # Platt scaling: fit p = sigmoid(scale * raw + bias) via a few Newton steps
+        # on the log-loss. 2 parameters, tiny data — this converges in <10 iters.
+        scale, bias = 1.0, 0.0
+        for _ in range(50):
+            g0 = g1 = 0.0
+            h00 = h01 = h11 = 0.0
+            for raw, label in usable:
+                z = scale * raw + bias
+                p = 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, z))))
+                err = p - label
+                g0 += err * raw
+                g1 += err
+                w = p * (1.0 - p)
+                h00 += w * raw * raw
+                h01 += w * raw
+                h11 += w
+            # Ridge term keeps the Hessian invertible for thin/collinear data.
+            h00 += 1e-6
+            h11 += 1e-6
+            det = h00 * h11 - h01 * h01
+            if abs(det) < 1e-12:
+                break
+            d_scale = (g0 * h11 - g1 * h01) / det
+            d_bias = (g1 * h00 - g0 * h01) / det
+            scale -= d_scale
+            bias -= d_bias
+            if abs(d_scale) < 1e-6 and abs(d_bias) < 1e-6:
+                break
+
+        return {
+            "method": "platt",
+            "label_source": label_source,
+            "scale": round(float(scale), 6),
+            "bias": round(float(bias), 6),
+            "base_rate": round(base_rate, 6),
+            "sample_count": sample_count,
+            "positive_count": positives,
+        }
+
+    @staticmethod
+    def _logit(p: float) -> float:
+        import math
+
+        clamped = min(1.0 - 1e-6, max(1e-6, float(p)))
+        return round(math.log(clamped / (1.0 - clamped)), 6)
 
     def _build_group_calibration(self, dataset: dict[str, Any]) -> dict[str, dict[str, float | int]]:
         """Aggregate per-group winning_rate stats for inclusion in the release manifest."""
@@ -870,6 +1066,27 @@ class PricePredictionTrainingService:
             summary = {}
             artifact["summary"] = summary
         summary["group_calibration"] = group_calibration
+
+    @staticmethod
+    def _inject_summary_block(
+        artifact: dict[str, Any],
+        *,
+        key: str,
+        block: dict[str, Any],
+    ) -> None:
+        """Embed an arbitrary ``summary.<key>`` block into the in-memory artifact.
+
+        Same write-before-disk contract as :meth:`_inject_group_calibration`: call
+        BEFORE serializing so the on-disk sha256 (and the signed manifest) covers it.
+        A falsy ``block`` is a no-op so empty calibration never bloats the artifact.
+        """
+        if not block:
+            return
+        summary = artifact.setdefault("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
+            artifact["summary"] = summary
+        summary[key] = block
 
     def _inject_group_calibration_into_ensemble_artifact(
         self,

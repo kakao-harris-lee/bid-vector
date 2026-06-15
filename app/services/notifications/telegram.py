@@ -234,7 +234,7 @@ class TelegramNotificationService:
             f"판단: {action_label} / 상태: {decision_status}\n"
             f"우선순위: {priority_score:.2f}\n"
             f"추천 금액: {recommended_amount:,.0f}\n"
-            f"낙찰 가능성: {probability_score:.2f}\n"
+            f"가격 적합도(추정): {probability_score:.2f}\n"
             f"판단 근거: {reasoning}"
         )
         return self.build_message("입찰 판단 알림", message, url)

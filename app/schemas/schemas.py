@@ -13,6 +13,14 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
     EmailStr = str
 
 
+# 표시 정직화: 이 점수는 "가격 적합도(추정)" 신호이지 실제 낙찰 확률 P(낙찰)이 아니다.
+# 적격성 게이트(would_have_won_final)는 별도로 판정된다. 학습/보정 시에는
+# summary.probability_calibration 으로 정산 결과에 보정될 수 있으나 라벨은 별개다.
+_PROBABILITY_SCORE_DESCRIPTION = (
+    "가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)"
+)
+
+
 def _extract_decision_reasons(score_breakdown) -> tuple[list[str], list[str]]:
     """Parse persisted strengths/risk_flags out of a score_breakdown blob.
 
@@ -171,7 +179,9 @@ class OperatorDashboardDecisionItem(BaseModel):
     action: Literal["bid_now", "review", "skip"]
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     priority_score: float = Field(ge=0.0, le=1.0)
-    probability_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(
+        ge=0.0, le=1.0, description=_PROBABILITY_SCORE_DESCRIPTION
+    )
     recommended_amount: float
     updated_at: datetime
     detail_href: str
@@ -255,7 +265,9 @@ class DashboardOpportunityItem(BaseModel):
     action: Literal["bid_now", "review", "skip"]
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     recommended_amount: float
-    probability_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(
+        ge=0.0, le=1.0, description=_PROBABILITY_SCORE_DESCRIPTION
+    )
     matched_score: float = Field(ge=0.0, le=1.0)
     priority_score: float = Field(ge=0.0, le=1.0)
     urgency_score: float = Field(ge=0.0, le=1.0)
@@ -398,7 +410,9 @@ class OperatorStrategyCandidateItem(BaseModel):
     budget_estimate: float
     deadline: Optional[datetime] = None
     matched_score: float = Field(ge=0.0, le=1.0)
-    probability_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(
+        ge=0.0, le=1.0, description=_PROBABILITY_SCORE_DESCRIPTION
+    )
     priority_score: float = Field(ge=0.0, le=1.0)
     action: Literal["bid_now", "review", "skip"]
     recommended_amount: float
@@ -434,7 +448,9 @@ class OperatorStrategyMonitorResultItem(BaseModel):
     action: Literal["bid_now", "review", "skip"]
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     priority_score: float = Field(ge=0.0, le=1.0)
-    probability_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(
+        ge=0.0, le=1.0, description=_PROBABILITY_SCORE_DESCRIPTION
+    )
     matched_score: float = Field(ge=0.0, le=1.0)
     recommended_amount: float
     analysis_summary: str
@@ -1938,7 +1954,7 @@ class OpportunityAnalysisRequest(BaseModel):
 class BidDecisionRequest(BaseModel):
     project_id: int
     recommended_amount: float
-    probability_score: float
+    probability_score: float = Field(description=_PROBABILITY_SCORE_DESCRIPTION)
     matched_score: float = Field(default=0.0, ge=0.0, le=1.0)
     deadline_hours_remaining: Optional[int] = Field(default=None, ge=0)
     current_active_bids: int = Field(default=0, ge=0)
@@ -1974,7 +1990,7 @@ class BidDecisionResponse(BaseModel):
     action: Literal["bid_now", "review", "skip"]
     priority_score: float
     recommended_amount: float
-    probability_score: float
+    probability_score: float = Field(description=_PROBABILITY_SCORE_DESCRIPTION)
     urgency_score: float = Field(default=0.0, ge=0.0, le=1.0)
     competitiveness_score: float = Field(default=0.5, ge=0.0, le=1.0)
     budget_capture_score: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -2002,7 +2018,9 @@ class OpportunityAnalysisResponse(BaseModel):
     operator_id: int
     matched: bool
     matched_score: float = Field(ge=0.0, le=1.0)
-    probability_score: float = Field(ge=0.0, le=1.0)
+    probability_score: float = Field(
+        ge=0.0, le=1.0, description=_PROBABILITY_SCORE_DESCRIPTION
+    )
     recommended_amount: float
     deadline_hours_remaining: Optional[int] = None
     current_active_bids: int = Field(ge=0)
@@ -2054,7 +2072,7 @@ class BidDecisionRecordResponse(BaseModel):
     expected_margin_score: float = Field(default=0.0, ge=0.0, le=1.0)
     execution_complexity_score: float = Field(default=0.0, ge=0.0, le=1.0)
     recommended_amount: float
-    probability_score: float
+    probability_score: float = Field(description=_PROBABILITY_SCORE_DESCRIPTION)
     matched_score: float
     deadline_hours_remaining: Optional[int] = None
     current_active_bids: int
