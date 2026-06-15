@@ -173,6 +173,15 @@ class Settings(BaseSettings):
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50
+    # scsbid 개찰결과(award-result) 페이지(예: .../link/PNPE027_01/single/?bidPbancNo=...)
+    # 에는 business_type 정보가 없다. business_type_code는 *수집 시점*에 scsbid 개찰
+    # OpenAPI item에서만 채워지므로, 수집 때 못 받은 개찰결과 URL 프로젝트는 detail HTML
+    # 페치로도 영원히 채울 수 없다(페이지에 값이 없음). 이런 프로젝트를 enrichment 후보에서
+    # 제외해 3분 주기 헛된 HTTP 페치를 막는다. 마커는 source_url 내 부분 문자열로 매칭한다.
+    BUSINESS_TYPE_ENRICHMENT_SKIP_AWARD_RESULT_URLS: bool = True
+    BUSINESS_TYPE_ENRICHMENT_AWARD_RESULT_URL_MARKERS: list[str] = Field(
+        default_factory=lambda: ["PNPE027"]
+    )
 
     # Category reclassification — SBERT prototype-based assignment for rows stuck at 'general'/'other'
     CATEGORY_RECLASSIFY_SCHEDULE_ENABLED: bool = False
