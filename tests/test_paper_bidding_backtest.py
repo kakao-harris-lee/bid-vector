@@ -722,3 +722,188 @@ def test_forward_paper_scheduler_builds_configured_payload(monkeypatch):
         ]
         == "construction"
     )
+
+
+# ---------------------------------------------------------------------------
+# Settlement eligibility gate (낙찰하한가 기준 판정)
+# ---------------------------------------------------------------------------
+#
+# 예정가격 = mean of the *selected* 복수예비가격. With four 100M reserves all
+# selected, ``estimated_price`` == 100M and (construction floor 0.87) the
+# 낙찰하한가 == 87M, so the gate boundaries are easy to reason about.
+
+
+def _settled_historical_for(
+    project: Project,
+    *,
+    reserve_prices: list[float] | None = None,
+    selected_numbers: list[int] | None = None,
+    predicted_price: float = 0.0,
+    category: str = "construction",
+) -> HistoricalData:
+    return HistoricalData(
+        project_id=project.id,
+        notice_number=f"GATE-{project.id}",
+        agency_name="Seoul",
+        category=category,
+        base_amount=100_000_000,
+        predicted_price=predicted_price,
+        bid_rate=0.88,
+        reserve_prices=json.dumps(
+            reserve_prices
+            if reserve_prices is not None
+            else [100_000_000, 100_000_000, 100_000_000, 100_000_000]
+        ),
+        selected_numbers=json.dumps(
+            selected_numbers if selected_numbers is not None else [1, 2, 3, 4]
+        ),
+        opened_at=_dt(2025, 2, 2),
+    )
+
+
+def _settlement_for(
+    test_db, *, paper_bid_amount: float, paper_bid_rate: float, winning_amount: float
+) -> dict:
+    target = _project(deadline=_dt(2025, 2, 1), created_at=_dt(2025, 1, 20))
+    test_db.add(target)
+    test_db.flush()
+    test_db.add(_settled_historical_for(target))
+    result = TenderResult(
+        project_id=target.id,
+        winning_company="Winner",
+        winning_amount=winning_amount,
+        winning_rate=winning_amount / 100_000_000,
+        result_status="awarded",
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.add(result)
+    test_db.flush()
+    item = {
+        "project_id": target.id,
+        "category": "construction",
+        "budget_estimate": 100_000_000,
+        "paper_bid_amount": paper_bid_amount,
+        "paper_bid_rate": paper_bid_rate,
+    }
+    return PaperBiddingBacktestService()._build_settlement_item(
+        test_db, item=item, tender_result=result
+    )
+
+
+def test_settlement_gate_eligible_favorable_above_floor_below_winning(test_db):
+    # 88M >= floor 87M and <= winning 88.1M -> eligible_favorable
+    settlement = _settlement_for(
+        test_db,
+        paper_bid_amount=88_000_000,
+        paper_bid_rate=0.88,
+        winning_amount=88_100_000,
+    )
+    assert settlement["would_have_won_final"] == "eligible_favorable"
+    assert settlement["estimated_price"] == 100_000_000
+    assert settlement["minimum_bid_price"] == 87_000_000
+
+
+def test_settlement_gate_disqualified_below_floor_even_when_price_close(test_db):
+    # 86.9M < floor 87M -> disqualified, EVEN THOUGH the rate is within 0.3%p of
+    # the winning rate (price proximity is not a win once below 낙찰하한가).
+    settlement = _settlement_for(
+        test_db,
+        paper_bid_amount=86_900_000,
+        paper_bid_rate=0.869,
+        winning_amount=87_000_000,  # winning_rate 0.87, ours 0.869 -> 0.1%p apart
+    )
+    assert settlement["price_close"] is True  # within 0.3%p -- price proximity holds
+    assert settlement["would_have_won_final"] == "disqualified"
+    assert settlement["minimum_bid_price"] == 87_000_000
+
+
+def test_settlement_gate_eligible_but_outbid_above_winning(test_db):
+    # 90M >= floor 87M but > winning 88M -> eligible_but_outbid
+    settlement = _settlement_for(
+        test_db,
+        paper_bid_amount=90_000_000,
+        paper_bid_rate=0.90,
+        winning_amount=88_000_000,
+    )
+    assert settlement["would_have_won_final"] == "eligible_but_outbid"
+
+
+def test_settlement_gate_unknown_when_no_estimate_data(test_db):
+    # No HistoricalData for the project -> estimated_price/floor None -> unknown,
+    # and the call must not crash.
+    target = _project(deadline=_dt(2025, 2, 1), created_at=_dt(2025, 1, 20))
+    test_db.add(target)
+    test_db.flush()
+    result = TenderResult(
+        project_id=target.id,
+        winning_company="Winner",
+        winning_amount=88_100_000,
+        winning_rate=0.881,
+        result_status="awarded",
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.add(result)
+    test_db.flush()
+    item = {
+        "project_id": target.id,
+        "category": "construction",
+        "budget_estimate": 100_000_000,
+        "paper_bid_amount": 88_000_000,
+        "paper_bid_rate": 0.88,
+    }
+    settlement = PaperBiddingBacktestService()._build_settlement_item(
+        test_db, item=item, tender_result=result
+    )
+    assert settlement["would_have_won_final"] == "unknown"
+    assert settlement["estimated_price"] is None
+    assert settlement["minimum_bid_price"] is None
+
+
+def test_settlement_gate_persists_estimated_and_floor_columns(test_db):
+    # End-to-end through a historical backtest: the run persists a settlement whose
+    # estimated_price/minimum_bid_price columns are populated and gate is applied.
+    target = _project(deadline=_dt(2025, 3, 10), created_at=_dt(2025, 2, 1))
+    test_db.add(target)
+    test_db.flush()
+    # Unlinked history feeds the predictor; the linked settled row supplies 예가.
+    for index in range(8):
+        test_db.add(
+            _historical_row(
+                None, opened_at=_dt(2025, 1, 1) + timedelta(days=index), bid_rate=0.88
+            )
+        )
+    test_db.add(_settled_historical_for(target))
+    test_db.add(
+        TenderResult(
+            project_id=target.id,
+            winning_company="Winner",
+            winning_amount=88_100_000,
+            winning_rate=0.881,
+            result_status="awarded",
+            announced_at=_dt(2025, 3, 11),
+        )
+    )
+    test_db.commit()
+
+    result = PaperBiddingBacktestService().run_historical_backtest(
+        test_db,
+        category="construction",
+        start_at=_dt(2025, 3, 1),
+        end_at=_dt(2025, 3, 31),
+        limit=5,
+        persist=True,
+        settle_actions=("bid_now", "review"),
+    )
+
+    assert result["summary"]["settled_count"] == 1
+    settlement = test_db.query(PaperBidSettlement).one()
+    assert settlement.estimated_price == 100_000_000
+    assert settlement.minimum_bid_price == 87_000_000
+    assert settlement.would_have_won_final in {
+        "eligible_favorable",
+        "eligible_but_outbid",
+        "disqualified",
+    }
+    # Summary carries the additive gate counts without dropping the legacy proxy.
+    assert "would_have_won_price_only_count" in result["summary"]
+    assert "would_have_won_final_disqualified_count" in result["summary"]

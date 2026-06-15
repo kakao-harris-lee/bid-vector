@@ -71,6 +71,7 @@ MIGRATION_ADDED_COLUMNS = {
         "awarded_contract_limit",
     },
     "crawl_jobs": {"celery_task_id"},
+    "paper_bid_settlements": {"estimated_price", "minimum_bid_price"},
 }
 
 ALEMBIC_INTERNAL_TABLES = {"alembic_version"}

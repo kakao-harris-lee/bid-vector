@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import json
+
 from app.models.models import (
+    HistoricalData,
     PaperBid,
     PaperBidRun,
     PaperBidSettlement,
@@ -140,6 +143,53 @@ def test_forward_settlement_creates_settlement_for_past_deadline_with_result(tes
     # bid_rate_delta = paper_bid_rate - winning_rate (0.88 - 0.881)
     assert round(settlement.bid_rate_delta, 6) == round(0.88 - 0.881, 6)
     assert settlement.would_have_won_final == "unknown"
+
+
+def test_forward_settlement_applies_eligibility_gate_with_estimate(test_db):
+    # A settled HistoricalData row linked to the project supplies 예정가격
+    # (mean of selected reserves == 100M -> 낙찰하한가 87M for construction). The
+    # forward settlement path must apply the gate and persist the floor columns.
+    run = _forward_run(test_db)
+    project = _open_project(test_db, deadline=_dt(2025, 2, 1))
+    test_db.add(
+        HistoricalData(
+            project_id=project.id,
+            notice_number=f"GATE-FWD-{project.id}",
+            agency_name="Seoul",
+            category="construction",
+            base_amount=100_000_000,
+            predicted_price=0.0,
+            bid_rate=0.88,
+            reserve_prices=json.dumps(
+                [100_000_000, 100_000_000, 100_000_000, 100_000_000]
+            ),
+            selected_numbers=json.dumps([1, 2, 3, 4]),
+            opened_at=_dt(2025, 2, 2),
+        )
+    )
+    _forward_paper_bid(
+        test_db,
+        run=run,
+        project=project,
+        paper_bid_amount=88_000_000,  # >= floor 87M and <= winning 88.1M
+        paper_bid_rate=0.88,
+    )
+    _tender_result(
+        test_db,
+        project=project,
+        winning_amount=88_100_000,
+        winning_rate=0.881,
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.commit()
+
+    result = PaperBiddingBacktestService().run_forward_settlement(test_db, persist=True)
+
+    assert result["settled_count"] == 1
+    settlement = test_db.query(PaperBidSettlement).one()
+    assert settlement.estimated_price == 100_000_000
+    assert settlement.minimum_bid_price == 87_000_000
+    assert settlement.would_have_won_final == "eligible_favorable"
 
 
 def test_forward_settlement_skips_project_before_deadline(test_db):
