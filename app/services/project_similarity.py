@@ -178,15 +178,16 @@ class ProjectSimilarityService:
         min_similarity: float = 0.0,
         same_category_only: bool = True,
     ) -> dict[str, Any]:
-        """Find projects closest to the target project's embedding."""
+        """Find projects closest to the target project's embedding.
+
+        The pgvector path searches against *stored* embeddings via the HNSW
+        index, so candidate freshness is the responsibility of the
+        collection/backfill pipeline (deferred-embedding backfill,
+        :meth:`rebuild_project_embeddings`) rather than this read path. Only the
+        Python fallback (tests/in-memory, no pgvector) loads every candidate and
+        refreshes in-memory embeddings, since it has no stored index to query.
+        """
         target_embedding, target_model = self.refresh_project_embedding(db, project)
-
-        candidate_query = db.query(Project).filter(Project.id != project.id)
-        if same_category_only and project.category:
-            candidate_query = candidate_query.filter(Project.category == project.category)
-
-        candidates = candidate_query.all()
-        self.refresh_project_embeddings(db, candidates)
 
         if self._can_query_pgvector(db):
             results = self._search_with_postgres(
@@ -199,6 +200,15 @@ class ProjectSimilarityService:
             )
             search_mode = "postgres_vector"
         else:
+            candidate_query = db.query(Project).filter(Project.id != project.id)
+            if same_category_only and project.category:
+                candidate_query = candidate_query.filter(
+                    Project.category == project.category
+                )
+
+            candidates = candidate_query.all()
+            self.refresh_project_embeddings(db, candidates)
+
             results = self._search_with_python(
                 candidates,
                 query_embedding=target_embedding,
