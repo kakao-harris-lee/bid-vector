@@ -22,7 +22,10 @@ from app.schemas.schemas import (
     PaperBiddingSummaryResponse,
 )
 from app.services.backtest_data_audit import BacktestDataAuditService
-from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+from app.services.paper_bidding_backtest import (
+    OperatorNotFoundError,
+    PaperBiddingBacktestService,
+)
 
 router = APIRouter()
 
@@ -276,21 +279,26 @@ def create_historical_paper_bidding_run(
     operator: User = Depends(get_current_operator_from_bearer),
 ):
     """Run a historical paper-bidding backtest."""
-    return PaperBiddingBacktestService().run_historical_backtest(
-        db,
-        operator_id=operator.id,
-        category=request.category,
-        start_at=request.start_at,
-        end_at=request.end_at,
-        limit=request.limit,
-        scenario=request.scenario,
-        strategy_version=request.strategy_version,
-        model_version=request.model_version,
-        cutoff_hours_before_deadline=request.cutoff_hours_before_deadline,
-        history_limit=request.history_limit,
-        settle_actions=request.settle_actions,
-        persist=request.persist,
-    )
+    try:
+        return PaperBiddingBacktestService().run_historical_backtest(
+            db,
+            operator_id=operator.id,
+            category=request.category,
+            start_at=request.start_at,
+            end_at=request.end_at,
+            limit=request.limit,
+            scenario=request.scenario,
+            strategy_version=request.strategy_version,
+            model_version=request.model_version,
+            cutoff_hours_before_deadline=request.cutoff_hours_before_deadline,
+            history_limit=request.history_limit,
+            settle_actions=request.settle_actions,
+            persist=request.persist,
+        )
+    except OperatorNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
 
 @router.post(
@@ -302,17 +310,22 @@ def create_forward_paper_bidding_run(
     operator: User = Depends(get_current_operator_from_bearer),
 ):
     """Generate paper bids for currently open/re-notice projects."""
-    return PaperBiddingBacktestService().run_forward_paper_bidding(
-        db,
-        operator_id=operator.id,
-        category=request.category,
-        limit=request.limit,
-        scenario=request.scenario,
-        strategy_version=request.strategy_version,
-        model_version=request.model_version,
-        history_limit=request.history_limit,
-        persist=request.persist,
-    )
+    try:
+        return PaperBiddingBacktestService().run_forward_paper_bidding(
+            db,
+            operator_id=operator.id,
+            category=request.category,
+            limit=request.limit,
+            scenario=request.scenario,
+            strategy_version=request.strategy_version,
+            model_version=request.model_version,
+            history_limit=request.history_limit,
+            persist=request.persist,
+        )
+    except OperatorNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
 
 @router.get("/paper-bidding/runs", response_model=PaperBiddingRunListResponse)

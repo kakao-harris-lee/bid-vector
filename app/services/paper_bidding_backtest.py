@@ -18,8 +18,8 @@ from app.ai.business_group import resolve_business_group
 from app.ai.price_prediction import predict_price
 from app.core.single_user import (
     ensure_operator_account,
-    ensure_operator_profile,
-    ensure_operator_strategy,
+    ensure_operator_profile_for,
+    ensure_operator_strategy_for,
     split_multi_value_text,
 )
 from app.core.time import ensure_utc, utc_now
@@ -37,6 +37,16 @@ from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.classifier import NoticeClassifierService
+
+
+class OperatorNotFoundError(ValueError):
+    """Raised when a backtest is requested for an ``operator_id`` that does not exist.
+
+    Per-operator backtests (e.g. synthetic operator comparisons) must never silently
+    fall back to the canonical operator, since that would let a non-existent operator
+    pollute the canonical operator's strategy/profile/paper-bid data. Callers that accept
+    an ``operator_id`` (the API layer) translate this into a ``404``.
+    """
 
 
 class PaperBiddingBacktestService:
@@ -1196,50 +1206,44 @@ class PaperBiddingBacktestService:
         return tuple(normalized or self.DEFAULT_SETTLE_ACTIONS)
 
     def _resolve_operator(self, db: Session, *, operator_id: int | None) -> User:
+        """Resolve the operator that owns a backtest.
+
+        ``operator_id is None`` keeps the single-operator default path and bootstraps
+        the canonical operator. When an explicit ``operator_id`` is supplied it must
+        resolve to a real row: a missing operator raises :class:`OperatorNotFoundError`
+        rather than silently falling back to the canonical operator, which would let a
+        non-existent (e.g. synthetic) operator pollute canonical paper-bid data.
+        """
         if operator_id is None:
             return ensure_operator_account(db)
         operator = db.query(User).filter(User.id == int(operator_id)).first()
         if operator is None:
-            return ensure_operator_account(db)
+            raise OperatorNotFoundError(f"Operator {int(operator_id)} not found")
         return operator
 
     def _resolve_operator_strategy(
         self, db: Session, *, operator: User
     ) -> OperatorStrategy:
-        """Return the strategy belonging to *operator*, falling back to the canonical one.
+        """Return the strategy belonging to *operator*.
 
-        ``ensure_operator_strategy`` always resolves the canonical "operator" account, so
-        per-operator backtests (e.g. synthetic operator comparisons) must look up the
-        strategy by ``operator.id`` directly first.
+        Scoped to ``operator.id`` via :func:`ensure_operator_strategy_for`, which never
+        reassigns the canonical operator's strategy. Synthetic operators already carry a
+        strategy from seeding; if one is somehow missing a row is created for *that*
+        operator (never the canonical one).
         """
-        strategy = (
-            db.query(OperatorStrategy)
-            .filter(OperatorStrategy.user_id == int(operator.id))
-            .first()
-        )
-        if strategy is not None:
-            return strategy
-        return ensure_operator_strategy(db)
+        return ensure_operator_strategy_for(db, operator)
 
     def _resolve_operator_profile(
         self, db: Session, *, operator: User
     ) -> CompanyProfile | None:
-        """Return the company profile belonging to *operator*, falling back to canonical.
+        """Return the company profile belonging to *operator*.
 
-        Mirrors :meth:`_resolve_operator_strategy`. ``ensure_operator_profile`` always
-        resolves the canonical "operator" account, so per-operator backtests (e.g.
-        synthetic operator comparisons) must look up the profile by ``operator.id``
-        directly first so each operator's license/region/budget/capability profile drives
-        its own matched score.
+        Mirrors :meth:`_resolve_operator_strategy` using
+        :func:`ensure_operator_profile_for`, so each operator's
+        license/region/budget/capability profile drives its own matched score and the
+        canonical profile is never returned or mutated as a fallback.
         """
-        profile = (
-            db.query(CompanyProfile)
-            .filter(CompanyProfile.user_id == int(operator.id))
-            .first()
-        )
-        if profile is not None:
-            return profile
-        return ensure_operator_profile(db)
+        return ensure_operator_profile_for(db, operator)
 
     def _normalize_rate(self, value: float) -> float:
         rate = float(value or 0.0)
