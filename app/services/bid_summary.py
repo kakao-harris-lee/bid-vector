@@ -203,10 +203,14 @@ class BidSummaryService:
             floor_bid_rate = _resolve_floor_bid_rate(
                 category, business_group=business_group
             )
-        except Exception:  # pragma: no cover - defensive: never break the summary
+        except Exception as exc:  # pragma: no cover - defensive: keep summary graceful
+            # Log with traceback so an app/ai signature/contract regression is
+            # visible instead of silently degrading to floor_bid_rate=None.
             logger.warning(
-                "Failed to resolve category floor bid rate for project %s",
+                "Category floor resolve 실패 (project %s): %s",
                 getattr(project, "id", None),
+                exc,
+                exc_info=True,
             )
 
         budget = float(project.budget_estimate or 0.0)

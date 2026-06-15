@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+from app.core.security import get_password_hash
 from app.core.single_user import ensure_operator_account
 from app.models.models import (
     BidDecisionRecord,
@@ -19,6 +20,7 @@ from app.models.models import (
     SyntheticExperiment,
     SyntheticExperimentResult,
     SyntheticExperimentRun,
+    User,
 )
 from app.schemas.bid_summary import DIRECT_SUBMISSION_NOTICE
 
@@ -222,6 +224,67 @@ def test_bid_summary_returns_404_for_unknown_record(client, test_db):
     ensure_operator_account(test_db)
 
     response = client.get(SUMMARY_PATH.format(record_id=999_999))
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Bid decision record not found"
+
+
+def test_bid_summary_returns_404_for_cross_operator_record(client, test_db):
+    """A record owned by another (synthetic) operator must 404 on the default path.
+
+    The default read path resolves to the canonical singleton operator, and the
+    service scopes its lookup with ``operator_id == target.id``. This pins that
+    single-operator scope as a regression: if the operator_id filter were ever
+    dropped, the existing unknown-id 404 test would NOT catch it — but this one
+    (where the id exists, just for a different operator) would.
+    """
+    # Default read path resolves to the canonical singleton operator.
+    canonical = ensure_operator_account(test_db)
+
+    synthetic = User(
+        username="synthetic-sw-small-seoul",
+        email="synthetic-sw-small-seoul@example.com",
+        full_name="Synthetic SW Small Seoul",
+        company="Synthetic Co",
+        hashed_password=get_password_hash("password123"),
+        is_active=True,
+    )
+    test_db.add(synthetic)
+    test_db.commit()
+    test_db.refresh(synthetic)
+    assert synthetic.id != canonical.id
+
+    project = Project(
+        title="다른 운영자 소유 공고",
+        description="cross-operator",
+        requirements="",
+        budget_estimate=80_000_000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=8),
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    foreign_record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=synthetic.id,
+        pursue_bid=True,
+        action="bid_now",
+        decision_status="planned",
+        recommended_amount=72_000_000.0,
+        probability_score=0.6,
+        matched_score=0.7,
+        priority_score=0.7,
+        reasoning="synthetic seed",
+    )
+    test_db.add(foreign_record)
+    test_db.commit()
+    test_db.refresh(foreign_record)
+
+    # The record id EXISTS, but belongs to the synthetic operator — the default
+    # (canonical) read path must not be able to read it.
+    response = client.get(SUMMARY_PATH.format(record_id=foreign_record.id))
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Bid decision record not found"
