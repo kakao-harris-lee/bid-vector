@@ -59,6 +59,24 @@ docker exec <container> grep -c "<fix-marker>" /app/<changed-file>  # 새 코드
 
 핵심 도메인 모듈은 `app/services/koneps/`(수집), `app/services/classifier.py`(분류), `app/ai/predictors/`(가격 예측), `app/services/allocation.py`(결정 엔진), `app/services/notifications/`(텔레그램/실시간), `app/services/paper_bidding_backtest.py`(백테스트)입니다.
 
+## 1.5 서비스 핵심 목표 및 현재 구조 (정직 명세)
+
+**핵심 가치 흐름**: 입찰 업체가 **낙찰받을 최적 투찰가**를 산출 → 투찰서 작성·(직접)제출 → 가상 회사(synthetic operators)로 **분야별 백테스트**해 낙찰율 확인 → 시스템 제시가가 **실제 나라장터 낙찰가와 동등/근접**했는지 리포팅.
+
+> 현재 단계 = **서비스 제공 가능성 검증**(운영자 1인이 합성 운영자로 검증 중, 외부 실사용자 없음). 단일 출처 로드맵은 `docs/service-roadmap.md`.
+
+**무엇이 구현됐고 / 무엇이 의도적으로 다른가** — 주장(claim)과 근거가 어긋나지 않게 정직히 명세한다:
+
+| 표면 용어 | 실제 의미 (코드 근거) | 주의 |
+|---|---|---|
+| "낙찰 가능성"/`probability_score` | **가격 적합도(추정)** — 과거 정산 결과로 보정된 P(가격 근접), **P(낙찰) 아님** | 텔레그램·프론트 라벨은 "가격 적합도(추정)"로 표기. 가중 휴리스틱이 아니라 보정 곡선 사용 |
+| "낙찰율"/`would_have_won_price_only` | **가격 기준 추정 낙찰**(투찰률이 실낙찰률에 근접) — 실낙찰 아님 | 리포트/CSV 지표명에 "추정(price-only)" 한정자 유지 |
+| `would_have_won_final` | **룰 기반 적격 게이트 추정**(예정가×카테고리 낙찰하한율 통과 + 최저가 계열) | 예정가 도출 불가 시 `"unknown"`(정직한 부재) |
+| 투찰가 산출물 | **의사결정 요약 / 투찰서 초안 export**(추천가+근거+예가/하한+분야통계) | **나라장터 자동 투찰서 제출은 없음**(공개 제출 API 부재) — 운영자가 직접 제출 |
+| 가격 예측 | 과거 사정률 + **복수예비가격(예정가) 메커니즘**을 base rate에 반영, predictor guardrail로 카테고리 낙찰하한 미만 차단 | guardrail 우회 금지(§9) |
+
+**불변 원칙**: predictor guardrail 우회 금지 · pgvector 384 고정 · 시간 누수(leakage) 차단(백테스트 `data_cutoff_at` 규율) · 단일 운영자 기본 경로(`operator_id=None`→canonical) 유지 · synthetic은 `synthetic-` 접두 한정으로 canonical 미오염(§8 참조).
+
 ## 2. 빠른 명령어
 
 ```bash
@@ -183,6 +201,9 @@ docker compose --profile tasks config --quiet
 - **Celery `CELERY_ALLOW_INLINE_ML_TASKS=true`는 ML 잡을 API 프로세스에서 eager 실행**. 운영에서는 절대 켜지 말 것.
 - **`comparison.csv`/`.json`의 win rate 프록시는 `would_have_won_price_only_count / settled_count`** — "실제 낙찰"이 아니라 "가격 기준 추정 낙찰". 분석 시 항상 caveat 표기.
 - **WebSocket 토큰 만료**는 Phase 7에서 통합 처리 예정. 그 전까지 임시 재로그인 모달로 대응.
+- **per-operator 백테스트는 silent canonical 폴백 금지.** `PaperBiddingBacktestService`에서 `operator_id`로 운영자를 해소할 때, 존재하지 않으면 canonical로 조용히 폴백하지 말 것(synthetic 백테스트가 canonical 데이터를 오염시킴). 올바른 패턴은 `ensure_operator_strategy_for(db, operator)` / `ensure_operator_profile_for(db, operator)`(폴백 없음). 없는 operator_id는 명시적 에러/404. `operator_id=None`(단일 운영자 기본)만 canonical 허용.
+- **나라장터 자동 투찰서 제출은 없다.** 시스템은 투찰가를 **결정·기록**하고 의사결정 요약/투찰서 초안을 export할 뿐, KONEPS에 실제 투찰서를 제출하지 않는다(공개 제출 API 부재). 운영자가 직접 제출한다. "submitted" 상태는 시스템 결정 기록 의미.
+- **probability=추정, win=price-only.** `probability_score`는 P(낙찰)이 아니라 보정된 가격 적합도 추정이고, `would_have_won_price_only`는 가격 근접 기반 추정 낙찰이다(§1.5). 새 지표/노출을 만들 때 이 한정자를 출력단까지 끌고 갈 것.
 
 ## 9. 보안 빨간 줄
 
