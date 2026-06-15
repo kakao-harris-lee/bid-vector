@@ -2,22 +2,52 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, TenderResult, User
 
 
+@dataclass
+class _RecentWindow:
+    """Memoized recent-window snapshot shared by candidates within one run.
+
+    All collections are loaded once for the unfiltered window (operator + days).
+    Category/agency filters are applied in memory on these snapshots so the
+    underlying SQL is issued at most once per ``(operator_id, days)`` per run.
+    """
+
+    tender_results: list[TenderResult]
+    latest_predictions: dict[int, PricePrediction]
+    latest_histories: dict[int, HistoricalData]
+
+
 class PredictionFeedbackService:
-    """Build operator-facing accuracy summaries from linked tender results."""
+    """Build operator-facing accuracy summaries from linked tender results.
+
+    Instance lifetime is assumed to equal a single monitor/analysis run:
+    ``OpportunityAnalysisService`` owns one ``feedback_service`` per run and
+    ``StrategyMonitoringService`` constructs a fresh ``OpportunityAnalysisService``
+    each run. The recent-window memoization below is therefore scoped to that run
+    -- it never spans runs and cannot go stale across runs. API handlers that
+    require fresh reads simply construct a new instance per request.
+    """
 
     MAX_ADJUSTMENT_RATE = 0.08
+
+    def __init__(self) -> None:
+        # Per-run cache of the unfiltered recent window keyed by
+        # ``(resolved_operator_id, days)``. The category/agency filters are
+        # applied in memory on the cached set so repeated candidates in one
+        # monitor run never re-load the full TenderResult window (~26k rows).
+        self._recent_window_cache: dict[tuple[int, int], "_RecentWindow"] = {}
 
     def build_feedback(
         self,
@@ -30,11 +60,11 @@ class PredictionFeedbackService:
         """Compare the latest stored prediction/decision amounts against actual winning amounts."""
         if operator is None:
             operator = ensure_operator_account(db)
-        date_from = utc_now() - timedelta(days=days)
 
-        tender_results = self._load_recent_tender_results(db, date_from=date_from)
+        window = self._get_recent_window(db, operator_id=operator.id, days=days)
+        tender_results = window.tender_results
         project_ids = [int(result.project_id) for result in tender_results if result.project_id is not None]
-        latest_predictions = self._load_latest_predictions(db, operator_id=operator.id, project_ids=project_ids)
+        latest_predictions = window.latest_predictions
         latest_decisions = self._load_latest_decisions(db, operator_id=operator.id, project_ids=project_ids)
 
         items: list[dict[str, Any]] = []
@@ -86,9 +116,9 @@ class PredictionFeedbackService:
     ) -> dict[str, Any] | None:
         """Build a signed error bias that can calibrate future price predictions."""
         resolved_operator_id = operator_id or ensure_operator_account(db).id
-        date_from = utc_now() - timedelta(days=days)
 
-        tender_results = self._load_recent_tender_results(db, date_from=date_from)
+        window = self._get_recent_window(db, operator_id=resolved_operator_id, days=days)
+        tender_results = window.tender_results
         if category:
             normalized_category = (category or "").strip().lower()
             tender_results = [
@@ -97,9 +127,8 @@ class PredictionFeedbackService:
                 if result.project is not None and (result.project.category or "").strip().lower() == normalized_category
             ]
 
-        project_ids = [int(result.project_id) for result in tender_results if result.project_id is not None]
-        latest_predictions = self._load_latest_predictions(db, operator_id=resolved_operator_id, project_ids=project_ids)
-        latest_histories = self._load_latest_histories(db, project_ids=project_ids)
+        latest_predictions = window.latest_predictions
+        latest_histories = window.latest_histories
         normalized_target_agency = self._normalize_text(agency_name)
 
         signed_error_rates: list[float] = []
@@ -150,10 +179,40 @@ class PredictionFeedbackService:
             "applied_adjustment_rate": round(applied_adjustment_rate, 4),
         }
 
-    def _load_recent_tender_results(self, db: Session, *, date_from) -> list[TenderResult]:
-        """Return recent linked tender results ordered newest first."""
+    def _get_recent_window(self, db: Session, *, operator_id: int, days: int) -> _RecentWindow:
+        """Load (or reuse) the unfiltered recent window for ``(operator_id, days)``.
+
+        The first call within a run issues the bounded query set; subsequent
+        candidates in the same run reuse the cached snapshot and only re-apply
+        category/agency filters in memory. Cache scope is the instance (= one
+        run), so it never spans runs and cannot go stale across runs.
+        """
+        cache_key = (int(operator_id), int(days))
+        cached = self._recent_window_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        date_from = utc_now() - timedelta(days=days)
+        tender_results = self._load_recent_tender_results(db, date_from=date_from)
+        project_ids = [int(result.project_id) for result in tender_results if result.project_id is not None]
+        window = _RecentWindow(
+            tender_results=tender_results,
+            latest_predictions=self._load_latest_predictions(db, operator_id=operator_id, project_ids=project_ids),
+            latest_histories=self._load_latest_histories(db, project_ids=project_ids),
+        )
+        self._recent_window_cache[cache_key] = window
+        return window
+
+    def _load_recent_tender_results(self, db: Session, *, date_from: datetime) -> list[TenderResult]:
+        """Return recent linked tender results ordered newest first.
+
+        ``TenderResult.project`` is eager-loaded so downstream category access
+        (``result.project.category``) does not trigger a per-row lazy SELECT
+        (the previous N+1 over the full window).
+        """
         results = (
             db.query(TenderResult)
+            .options(joinedload(TenderResult.project))
             .filter(
                 TenderResult.project_id.isnot(None),
                 or_(
