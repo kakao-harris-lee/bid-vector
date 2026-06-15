@@ -55,14 +55,22 @@ class BusinessTypeEnrichmentService:
         fetcher = self._resolve_fetcher()
         compiled_rules = self._compile_title_rules(settings.BUSINESS_TYPE_TITLE_RULES or [])
 
-        candidates = (
+        query = (
             db.query(Project)
             .filter(Project.business_type_code.is_(None))
             .filter(Project.source_url.isnot(None))
-            .order_by(Project.id.desc())
-            .limit(limit)
-            .all()
         )
+        # Exclude scsbid award-result pages (e.g. .../link/PNPE027_01/single/?bidPbancNo=...).
+        # business_type_code is only populated at *collection* time from the scsbid award
+        # OpenAPI item; the award-result HTML page carries no business_type, so detail
+        # fetching such URLs is pure waste (every run fails). Skipping keeps the candidate
+        # pool to projects that detail enrichment can actually fill (notice-detail URLs, etc.).
+        if settings.BUSINESS_TYPE_ENRICHMENT_SKIP_AWARD_RESULT_URLS:
+            for marker in settings.BUSINESS_TYPE_ENRICHMENT_AWARD_RESULT_URL_MARKERS or []:
+                if marker:
+                    query = query.filter(~Project.source_url.contains(marker))
+
+        candidates = query.order_by(Project.id.desc()).limit(limit).all()
         stats.candidates = len(candidates)
 
         for project in candidates:
