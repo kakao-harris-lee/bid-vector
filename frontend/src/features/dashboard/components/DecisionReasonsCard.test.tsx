@@ -74,7 +74,7 @@ describe("DecisionReasonsCard", () => {
     );
     expect(screen.getByText("우선순위")).toBeInTheDocument();
     expect(screen.getByText("74%")).toBeInTheDocument();
-    expect(screen.getByText("낙찰 확률")).toBeInTheDocument();
+    expect(screen.getByText("가격 적합도(추정)")).toBeInTheDocument();
     expect(screen.getByText("33%")).toBeInTheDocument();
   });
 
@@ -82,7 +82,7 @@ describe("DecisionReasonsCard", () => {
     renderWithProviders(
       <DecisionReasonsCard strengths={[]} riskFlags={[]} action="skip" priorityScore={0.4} />
     );
-    expect(screen.queryByText("낙찰 확률")).not.toBeInTheDocument();
+    expect(screen.queryByText("가격 적합도(추정)")).not.toBeInTheDocument();
   });
 
   describe("recommendation feedback", () => {

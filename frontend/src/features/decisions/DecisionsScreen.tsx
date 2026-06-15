@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -49,6 +50,7 @@ const STATUS_LABEL: Record<DecisionStatus, string> = {
 
 export function DecisionsScreen() {
   const { session, activeOperator } = useShellContext();
+  const navigate = useNavigate();
   const [days, setDays] = useState(30);
   const [breakdownDimension, setBreakdownDimension] = useState<"category" | "workload" | "agency">(
     "category"
@@ -197,12 +199,19 @@ export function DecisionsScreen() {
                 </span>
                 <span className="tabular-nums">{formatCurrencyCompact(item.recommended_amount)}</span>
               </div>
-              <div className="flex flex-wrap gap-1 pt-1">
+              <div className="flex flex-wrap items-center gap-1 pt-1">
                 <InlineActionButtons
                   decisionStatus={item.decision_status}
                   pendingAction={pendingActionByRecord[item.decision_record_id] ?? null}
                   onAction={(action) => handleAction(item.decision_record_id, action)}
                 />
+                <button
+                  type="button"
+                  onClick={() => navigate(`/dashboard/decisions/${item.decision_record_id}/summary`)}
+                  className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-1 text-[var(--color-fg)] hover:bg-[var(--color-secondary)]"
+                >
+                  투찰 요약
+                </button>
               </div>
             </article>
           ))}
