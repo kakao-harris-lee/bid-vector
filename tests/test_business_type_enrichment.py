@@ -249,6 +249,49 @@ def test_enrich_skip_disabled_includes_award_urls(test_db, monkeypatch):
     assert stats["failed"] == 1
 
 
+def test_enrich_empty_marker_does_not_collapse_candidates(test_db, monkeypatch):
+    """빈 마커([""])는 `if marker:` 가드에 걸러져 후보가 0으로 붕괴하지 않는다.
+
+    가드가 없으면 ``~source_url.contains("")``가 모든 행을 제외해 enrichment가
+    조용히 멈추는 footgun이 된다. 이 테스트가 그 가드를 잠근다.
+    """
+    from app.core.config import settings
+    from app.services.business_type_enrichment import BusinessTypeEnrichmentService
+
+    monkeypatch.setattr(settings, "BUSINESS_TYPE_TITLE_RULES", [])
+    monkeypatch.setattr(settings, "BUSINESS_TYPE_ENRICHMENT_SKIP_AWARD_RESULT_URLS", True)
+    monkeypatch.setattr(
+        settings, "BUSINESS_TYPE_ENRICHMENT_AWARD_RESULT_URL_MARKERS", [""]
+    )
+
+    project = Project(
+        title="정상 공고",
+        source_url="https://www.g2b.go.kr/pn/pnp/pnpe/commipbid/PNPE018_01.do?bidNo=1",
+        category="general",
+        status="open",
+        business_type_code=None,
+    )
+    test_db.add(project)
+    test_db.commit()
+
+    fetched: list[str] = []
+
+    def spy_fetcher(url: str):
+        fetched.append(url)
+        return {"business_type_code": "0411", "business_type_label": "일반토목공사"}
+
+    svc = BusinessTypeEnrichmentService(fetcher=spy_fetcher)
+    stats = svc.enrich_pending(test_db, limit=10)
+
+    # Empty marker must NOT exclude every row — candidate survives and is enriched.
+    assert fetched == [project.source_url]
+    assert stats["candidates"] == 1
+    assert stats["updated_from_detail"] == 1
+
+    test_db.refresh(project)
+    assert project.business_type_code == "0411"
+
+
 def test_enrich_detail_preferred_over_title_rule(test_db, monkeypatch):
     """Detail HTML hit takes precedence; title-rule is fallback only."""
     from app.core.config import settings
