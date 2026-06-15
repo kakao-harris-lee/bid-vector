@@ -41,7 +41,9 @@ def _patch_collector_for_backfill(monkeypatch, response):
     """
     captured: dict = {}
     monkeypatch.setattr(
-        KonepsCollectorService, "collect_notices", lambda self, req: response
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, req, db=None: response,
     )
     monkeypatch.setattr(
         KonepsCollectorService,

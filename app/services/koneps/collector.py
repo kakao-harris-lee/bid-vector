@@ -166,8 +166,17 @@ class KonepsCollectorService:
     OPENING_RESULT_DATA_LIST_KEY = "mf_wfm_container_dlOnbsRsltClsfListOutL"
     LIVE_FAILURE_RETRYABLE_CATEGORIES = {"network", "timeout", "unknown"}
 
-    def collect_notices(self, request: CrawlRequest) -> dict[str, Any]:
-        """Collect KONEPS notices with live mode support and safe fallback."""
+    def collect_notices(
+        self, request: CrawlRequest, db: Session | None = None
+    ) -> dict[str, Any]:
+        """Collect KONEPS notices with live mode support and safe fallback.
+
+        ``db`` is optional: when supplied (Celery collection task, sync crawl
+        endpoint, backfill script) the scsbid sweep can pre-load which awards
+        already have a persisted reserve price and skip the per-notice
+        reserve-detail HTTP fetch for them. Callers without a session (smoke
+        test) simply re-fetch as before.
+        """
         normalized_request = self._normalize_request(request)
         job_status = "mock"
         response_metadata = {
@@ -183,7 +192,7 @@ class KonepsCollectorService:
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
         elif self._is_scsbid_openapi_source(normalized_request.source):
-            live_result = self._collect_scsbid_openapi_items(normalized_request)
+            live_result = self._collect_scsbid_openapi_items(normalized_request, db=db)
             items = live_result["items"]
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
@@ -360,14 +369,26 @@ class KonepsCollectorService:
                 )
                 or 0.0
             )
-            historical_record.reserve_prices = json.dumps(
-                item_metadata.get("reserve_prices", []),
-                ensure_ascii=False,
-            )
-            historical_record.selected_numbers = json.dumps(
-                item_metadata.get("selected_numbers", []),
-                ensure_ascii=False,
-            )
+            # Reserve price / selected numbers are settled, immutable values. An
+            # incoming empty list means "not (re)fetched this run" (e.g. the
+            # reserve-detail HTTP was skipped because it was already persisted),
+            # so it must never clobber a previously stored non-empty value.
+            incoming_reserve_prices = item_metadata.get("reserve_prices") or []
+            if incoming_reserve_prices or not self._has_persisted_reserve_prices(
+                historical_record
+            ):
+                historical_record.reserve_prices = json.dumps(
+                    incoming_reserve_prices,
+                    ensure_ascii=False,
+                )
+            incoming_selected_numbers = item_metadata.get("selected_numbers") or []
+            if incoming_selected_numbers or not self._has_persisted_reserve_prices(
+                historical_record
+            ):
+                historical_record.selected_numbers = json.dumps(
+                    incoming_selected_numbers,
+                    ensure_ascii=False,
+                )
             historical_record.opened_at = self._coerce_datetime(
                 item_metadata.get("opening_announced_at")
                 or item_metadata.get("opening_scheduled_at")
@@ -689,13 +710,23 @@ class KonepsCollectorService:
             },
         }
 
-    def _collect_scsbid_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
+    def _collect_scsbid_openapi_items(
+        self, request: CrawlRequest, *, db: Session | None = None
+    ) -> dict[str, Any]:
         """Collect awarded/opening rows from the KONEPS ScsbidInfoService OpenAPI.
 
         Sweeps every requested category over a resolved date window with safe
         pagination, deduping notices across the whole run. The legacy single-day,
         single-category behaviour is preserved when the new optional request
         fields are absent.
+
+        When ``db`` is supplied and reserve-detail collection is on, awards whose
+        reserve price is already persisted (a settled, immutable value) are not
+        re-fetched: a single up-front query loads the set of notice numbers that
+        already carry a non-empty ``reserve_prices`` row, and the per-notice HTTP
+        fetch is skipped for those (their persisted reserve price is preserved by
+        ``persist_crawl_results``). This is what keeps the rolling-window
+        scheduled sweep from re-paying the per-notice HTTP cost every run.
         """
         service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
         if not service_key:
@@ -710,10 +741,24 @@ class KonepsCollectorService:
         collect_reserve_detail = bool(request.collect_reserve_detail)
         delay_seconds = self._scsbid_request_delay_seconds()
 
+        # One query, not N: load the notice numbers that already have a settled
+        # reserve price so we can skip their per-notice reserve-detail HTTP fetch.
+        reuse_persisted_reserve = (
+            collect_reserve_detail
+            and db is not None
+            and bool(settings.KONEPS_SCSBID_REUSE_PERSISTED_RESERVE_DETAIL)
+        )
+        already_have_reserve: set[str] = (
+            self._notice_numbers_with_persisted_reserve(db)
+            if reuse_persisted_reserve
+            else set()
+        )
+
         parsed_items: list[dict[str, Any]] = []
         seen_notice_numbers: set[str] = set()
         reserve_detail_count = 0
         reserve_detail_error_count = 0
+        reserve_detail_reused_count = 0
         api_call_count = 0
         key_variant = ""
         last_result_code = ""
@@ -776,20 +821,26 @@ class KonepsCollectorService:
                     if notice_number in seen_notice_numbers:
                         continue
                     if collect_reserve_detail:
-                        try:
-                            if delay_seconds > 0:
-                                sleep(delay_seconds)
-                            detail = self._fetch_scsbid_reserve_detail(
-                                raw_item,
-                                category=category,
-                                service_key=service_key,
-                            )
-                            api_call_count += 1
-                            if detail.get("reserve_prices"):
-                                reserve_detail_count += 1
-                        except Exception as exc:
-                            reserve_detail_error_count += 1
-                            detail = {"reserve_detail_error": str(exc)}
+                        if notice_number in already_have_reserve:
+                            # Reserve price already settled & persisted; leave
+                            # ``detail`` empty so persist preserves the stored
+                            # value instead of re-fetching it over HTTP.
+                            reserve_detail_reused_count += 1
+                        else:
+                            try:
+                                if delay_seconds > 0:
+                                    sleep(delay_seconds)
+                                detail = self._fetch_scsbid_reserve_detail(
+                                    raw_item,
+                                    category=category,
+                                    service_key=service_key,
+                                )
+                                api_call_count += 1
+                                if detail.get("reserve_prices"):
+                                    reserve_detail_count += 1
+                            except Exception as exc:
+                                reserve_detail_error_count += 1
+                                detail = {"reserve_detail_error": str(exc)}
 
                     parsed_item = self._build_scsbid_award_item(
                         raw_item,
@@ -848,11 +899,43 @@ class KonepsCollectorService:
                 "reserve_detail_enabled": collect_reserve_detail,
                 "reserve_detail_collected_count": reserve_detail_count,
                 "reserve_detail_error_count": reserve_detail_error_count,
+                "reserve_detail_reused_count": reserve_detail_reused_count,
                 "query_date_begin": begin_token,
                 "query_date_end": end_token,
                 "query_type": "award_registration_datetime",
             },
         }
+
+    def _notice_numbers_with_persisted_reserve(self, db: Session) -> set[str]:
+        """Notice numbers that already carry a non-empty persisted reserve price.
+
+        One indexed scan over ``historical_data.notice_number`` (no per-notice
+        round trip): a reserve price is JSON-encoded into ``reserve_prices`` as
+        ``"[]"`` when absent, so we drop NULL/empty/``"[]"`` rows. Used to skip
+        the per-notice reserve-detail HTTP fetch for already-settled awards.
+        """
+        rows = (
+            db.query(HistoricalData.notice_number)
+            .filter(
+                HistoricalData.notice_number.isnot(None),
+                HistoricalData.reserve_prices.isnot(None),
+                HistoricalData.reserve_prices != "",
+                HistoricalData.reserve_prices != "[]",
+            )
+            .all()
+        )
+        return {str(notice_number) for (notice_number,) in rows if notice_number}
+
+    @staticmethod
+    def _has_persisted_reserve_prices(historical_record: HistoricalData) -> bool:
+        """Whether a HistoricalData row already stores a non-empty reserve price."""
+        stored = historical_record.reserve_prices
+        if not stored:
+            return False
+        try:
+            return bool(json.loads(stored))
+        except (TypeError, ValueError):
+            return bool(str(stored).strip() not in {"", "[]"})
 
     def _scsbid_categories_for_request(self, request: CrawlRequest) -> list[str]:
         """Resolve the ordered, de-duplicated category list for a scsbid sweep.
