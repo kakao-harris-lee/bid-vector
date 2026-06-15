@@ -6753,8 +6753,10 @@ export interface components {
          * @description Settlement aggregates grouped by budget band (Phase 2 Lab).
          *
          *     Band keys: ``lt_1eok`` / ``1eok_5eok`` / ``5eok_10eok`` / ``10eok_50eok`` /
-         *     ``gte_50eok`` (KRW). ``win_rate`` is the same price-only estimate as the
-         *     category breakdown.
+         *     ``gte_50eok`` (KRW). Carries the same honest estimates + health fields as the
+         *     category breakdown (``win_rate``/``est_price_close_rate``,
+         *     ``eligible_favorable_rate`` with ``unknown`` excluded, ``settled_count`` +
+         *     ``latest_result_time``).
          */
         SyntheticExperimentBudgetBandBreakdown: {
             /** Budget Band */
@@ -6771,16 +6773,46 @@ export interface components {
             would_have_won_count: number;
             /** Win Rate */
             win_rate?: number | null;
+            /** Est Price Close Rate */
+            est_price_close_rate?: number | null;
+            /**
+             * Eligible Favorable Count
+             * @default 0
+             */
+            eligible_favorable_count: number;
+            /**
+             * Eligibility Unknown Count
+             * @default 0
+             */
+            eligibility_unknown_count: number;
+            /**
+             * Eligibility Judged Count
+             * @default 0
+             */
+            eligibility_judged_count: number;
+            /** Eligible Favorable Rate */
+            eligible_favorable_rate?: number | null;
             /** Avg Abs Bid Rate Error */
             avg_abs_bid_rate_error?: number | null;
+            /** Latest Result Time */
+            latest_result_time?: string | null;
         };
         /**
          * SyntheticExperimentCategoryBreakdown
          * @description Settlement aggregates grouped by project category (Phase 2 Lab).
          *
-         *     ``win_rate`` is the price-only estimate ``would_have_won_count /
-         *     settled_count`` (NOT an actual award) and is ``None`` when ``settled_count``
-         *     is 0.
+         *     Two honest, separately-named estimates (both NOT actual awards):
+         *
+         *     * ``win_rate`` / ``est_price_close_rate`` -- the SAME price-only estimate
+         *       ``would_have_won_count / settled_count`` (``win_rate`` kept for frontend
+         *       lockstep, ``est_price_close_rate`` is its honest alias). ``None`` when
+         *       ``settled_count`` is 0.
+         *     * ``eligible_favorable_rate`` -- PR3 eligibility-gate estimate
+         *       ``eligible_favorable_count / eligibility_judged_count`` where the
+         *       denominator EXCLUDES ``unknown`` (no 예가/낙찰하한 data) settlements.
+         *
+         *     Health fields: ``settled_count`` (sample size) + ``latest_result_time``
+         *     (freshness of the newest award in the group).
          */
         SyntheticExperimentCategoryBreakdown: {
             /** Category */
@@ -6797,8 +6829,29 @@ export interface components {
             would_have_won_count: number;
             /** Win Rate */
             win_rate?: number | null;
+            /** Est Price Close Rate */
+            est_price_close_rate?: number | null;
+            /**
+             * Eligible Favorable Count
+             * @default 0
+             */
+            eligible_favorable_count: number;
+            /**
+             * Eligibility Unknown Count
+             * @default 0
+             */
+            eligibility_unknown_count: number;
+            /**
+             * Eligibility Judged Count
+             * @default 0
+             */
+            eligibility_judged_count: number;
+            /** Eligible Favorable Rate */
+            eligible_favorable_rate?: number | null;
             /** Avg Abs Bid Rate Error */
             avg_abs_bid_rate_error?: number | null;
+            /** Latest Result Time */
+            latest_result_time?: string | null;
         };
         /**
          * SyntheticExperimentCompareDelta
