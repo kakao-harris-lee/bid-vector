@@ -1760,6 +1760,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/bid-form-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bid Form Draft
+         * @description Build a 나라장터 투찰서 초안 mapped onto KONEPS 입력 항목 for one decision.
+         *
+         *     Reuses the PR7 summary aggregation, then maps recommended 투찰금액/투찰률,
+         *     공고 메타, 적격여부(추정), and the 카테고리 낙찰하한율(참고) onto field-label/value
+         *     pairs. 자동 제출은 하지 않습니다 — 운영자가 직접 나라장터에 입력·제출합니다.
+         *
+         *     ``format=csv`` / ``format=text`` return downloadable / printable renders of the
+         *     same data. 404 when the record id is unknown (or belongs to a different
+         *     operator) / the linked project is missing.
+         */
+        get: operations["get_bid_form_draft_api_v1_operations_bid_decisions__decision_record_id__bid_form_draft_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/operators": {
         parameters: {
             query?: never;
@@ -2577,6 +2605,124 @@ export interface components {
             latest_decision_record_id?: number | null;
             /** Timeline */
             timeline?: components["schemas"]["BidDecisionRecordResponse"][];
+        };
+        /**
+         * BidFormDraftField
+         * @description 나라장터 투찰서 입력 항목 1개 — 라벨 + 값 + (선택) 보조 설명.
+         *
+         *     운영자가 ``field_label`` 을 나라장터 화면의 입력 필드와 대조해 ``value`` 를 그대로
+         *     입력할 수 있도록 구성한다. ``value`` 는 표시용 문자열(포맷 적용)이고, ``raw_value``
+         *     는 원시 수치(있으면)로 프론트가 재포맷할 수 있게 보존한다.
+         */
+        BidFormDraftField: {
+            /**
+             * Key
+             * @description 안정적 식별 키(프론트 매핑용, 영문 snake_case).
+             */
+            key: string;
+            /**
+             * Field Label
+             * @description 나라장터 입력 필드 라벨(한국어).
+             */
+            field_label: string;
+            /**
+             * Value
+             * @description 표시용 값(포맷 적용된 문자열). 미정 시 빈 문자열.
+             */
+            value: string;
+            /**
+             * Raw Value
+             * @description 원시 수치(금액/비율). 비수치 항목은 null.
+             */
+            raw_value?: number | null;
+            /**
+             * Note
+             * @description 항목별 정직 caveat(있으면).
+             */
+            note?: string | null;
+        };
+        /**
+         * BidFormDraftResponse
+         * @description 투찰서 초안 — 나라장터 입력 항목에 매핑된 구조화 산출물(자동 제출 아님).
+         */
+        BidFormDraftResponse: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Operator Id */
+            operator_id: number;
+            /**
+             * Generated At
+             * Format: date-time
+             * @description 이 초안을 작성(집계)한 시각(UTC).
+             */
+            generated_at: string;
+            /**
+             * Notice Number
+             * @description 공고번호.
+             */
+            notice_number?: string | null;
+            /**
+             * Title
+             * @description 공고명.
+             */
+            title: string;
+            /**
+             * Demand Agency
+             * @description 수요기관.
+             */
+            demand_agency?: string | null;
+            /**
+             * Budget Estimate
+             * @description 기초금액(추정가격). 예정가/실하한가는 개찰 전 미공개.
+             * @default 0
+             */
+            budget_estimate: number;
+            /**
+             * Recommended Amount
+             * @description 추천 투찰금액(원).
+             */
+            recommended_amount: number;
+            /**
+             * Recommended Bid Rate
+             * @description 추천 투찰률 = 추천 투찰가 / 추정가격. budget>0 일 때만.
+             */
+            recommended_bid_rate?: number | null;
+            /**
+             * Category
+             * @description 카테고리(분류).
+             */
+            category?: string | null;
+            /**
+             * Business Type Label
+             * @description 업종(세부 분류 라벨).
+             */
+            business_type_label?: string | null;
+            /**
+             * Deadline
+             * @description 투찰 마감일시.
+             */
+            deadline?: string | null;
+            /**
+             * Eligibility Estimate
+             * @description 적격여부(추정) 라벨 — '적격 추정' / '하한 근접' / '하한 미만(주의)' / '판단 불가' 중 하나. 실제 적격/낙찰 아님.
+             */
+            eligibility_estimate: string;
+            /**
+             * Eligibility Note
+             * @default 카테고리 낙찰하한율(참고) 대비 추천 투찰가 위치에서 도출한 추정 라벨입니다. 실제 낙찰하한가는 개찰 시 예정가 기준으로 결정되며, 적격/낙찰을 보장하지 않습니다.
+             */
+            eligibility_note: string;
+            /**
+             * Fields
+             * @description 나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력.
+             */
+            fields: components["schemas"]["BidFormDraftField"][];
+            /**
+             * Direct Submission Notice
+             * @description 자동 제출이 아니며 운영자가 직접 제출한다는 정직 안내 문구.
+             * @default 이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다. 이 산출물은 KONEPS 를 호출하거나 자동으로 투찰서를 제출하지 않으며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
+             */
+            direct_submission_notice: string;
         };
         /** BidRecommendationRequest */
         BidRecommendationRequest: {
@@ -10717,6 +10863,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BidSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bid_form_draft_api_v1_operations_bid_decisions__decision_record_id__bid_form_draft_get: {
+        parameters: {
+            query?: {
+                /** @description 응답 포맷. json(기본, 구조화) / csv / text(평문). */
+                format?: "json" | "csv" | "text";
+            };
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidFormDraftResponse"];
+                    "text/csv": unknown;
+                    "text/plain": unknown;
                 };
             };
             /** @description Validation Error */

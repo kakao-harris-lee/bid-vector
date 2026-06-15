@@ -58,7 +58,9 @@ export const queryKeys = {
     recommendations: (query: DecisionFunnelQuery) =>
       ["decisions", "recommendations", normalizeFunnelKey(query)] as const,
     summary: (decisionRecordId: number) =>
-      ["decisions", "summary", decisionRecordId] as const
+      ["decisions", "summary", decisionRecordId] as const,
+    bidFormDraft: (decisionRecordId: number) =>
+      ["decisions", "bid-form-draft", decisionRecordId] as const
   },
   experiments: {
     list: (query: ExperimentListQuery) => ["experiments", "list", normalizeExperimentKey(query)] as const
