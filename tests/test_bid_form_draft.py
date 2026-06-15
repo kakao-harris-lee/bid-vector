@@ -27,10 +27,11 @@ def _seed_project_and_decision(
     budget: float = 100_000_000.0,
     recommended_amount: float = 90_000_000.0,
     probability: float = 0.72,
+    title: str = "초안 테스트 공고",
 ) -> tuple[Project, BidDecisionRecord]:
     operator = ensure_operator_account(test_db)
     project = Project(
-        title="초안 테스트 공고",
+        title=title,
         description="draft test",
         requirements="",
         budget_estimate=budget,
@@ -118,6 +119,33 @@ def test_bid_form_draft_eligibility_below_floor(client, test_db):
     assert response.json()["eligibility_estimate"] == "하한 미만(주의)"
 
 
+def test_bid_form_draft_eligibility_near_floor(client, test_db):
+    # recommended_amount 88.2M / budget 100M = 0.882. construction floor 0.87,
+    # 근접 상한 0.87 * 1.02 = 0.8874 → 0.87 <= 0.882 <= 0.8874 이므로 "하한 근접".
+    _, decision = _seed_project_and_decision(
+        test_db, recommended_amount=88_200_000.0
+    )
+
+    response = client.get(DRAFT_PATH.format(record_id=decision.id))
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["recommended_bid_rate"] == 0.882
+    assert payload["eligibility_estimate"] == "하한 근접"
+
+
+def test_bid_form_draft_eligibility_unknown_when_rate_missing(client, test_db):
+    # budget_estimate 0 → recommended_bid_rate 산출 불가(None) → "판단 불가".
+    _, decision = _seed_project_and_decision(
+        test_db, budget=0.0, recommended_amount=90_000_000.0
+    )
+
+    response = client.get(DRAFT_PATH.format(record_id=decision.id))
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["recommended_bid_rate"] is None
+    assert payload["eligibility_estimate"] == "판단 불가"
+
+
 def test_bid_form_draft_csv_format(client, test_db):
     _, decision = _seed_project_and_decision(test_db)
 
@@ -134,6 +162,38 @@ def test_bid_form_draft_csv_format(client, test_db):
     assert "투찰금액" in body
     assert "90,000,000원" in body
     assert "직접" in body  # 고지 문구가 CSV 에도 포함.
+
+
+def test_bid_form_draft_csv_neutralizes_formula_injection(client, test_db):
+    # 외부 나라장터 공고명이 "="로 시작 → CSV injection 벡터. 셀이 작은따옴표로
+    # 중화되어 수식으로 실행되지 않아야 한다(OWASP). 공고명에 콤마/따옴표가 섞여
+    # 있어도 (CSV quoting을 통과해도) parse된 셀 값이 작은따옴표로 시작해야 한다.
+    import csv as _csv
+    import io as _io
+
+    dangerous_title = '=HYPERLINK("http://evil","공고")'
+    _, decision = _seed_project_and_decision(test_db, title=dangerous_title)
+
+    response = client.get(
+        DRAFT_PATH.format(record_id=decision.id), params={"format": "csv"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.text
+
+    rows = list(_csv.reader(_io.StringIO(body)))
+
+    # 공고명 셀: 원문 보존 + 선행 작은따옴표로 중화(수식 시작 아님).
+    title_cells = [row[1] for row in rows if row and row[0] == "공고명"]
+    assert title_cells, "공고명 행이 CSV 에 존재해야 한다"
+    neutralized = "'" + dangerous_title
+    assert title_cells[0] == neutralized
+    assert title_cells[0][0] not in ("=", "+", "-", "@")
+
+    # 어떤 CSV 셀도 bare 수식 트리거 문자로 시작하지 않아야 한다.
+    for row in rows:
+        for cell in row:
+            if cell:
+                assert cell[0] not in ("=", "+", "@", "\t", "\r"), cell
 
 
 def test_bid_form_draft_text_format(client, test_db):
@@ -214,3 +274,24 @@ def test_bid_form_draft_returns_404_for_cross_operator_record(client, test_db):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Bid decision record not found"
+
+
+def test_bid_form_draft_returns_404_for_missing_project(client, test_db):
+    """A record whose linked project is absent must 404 (honest 부재).
+
+    The decision record exists and is owned by the canonical operator, but its
+    project row is gone (orphan). The summary aggregation raises ``ValueError``
+    so the endpoint maps it to 404 rather than rendering a half-empty draft.
+    SQLite test engine does not enforce FKs, so the orphan is seedable directly.
+    """
+    project, decision = _seed_project_and_decision(test_db)
+
+    # Drop the linked project, leaving the decision record orphaned.
+    test_db.delete(project)
+    test_db.commit()
+    test_db.expire(decision)
+
+    response = client.get(DRAFT_PATH.format(record_id=decision.id))
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found for bid decision record"

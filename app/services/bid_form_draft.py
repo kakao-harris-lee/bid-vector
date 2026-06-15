@@ -232,20 +232,51 @@ class BidFormDraftService:
         Columns: ``field_label,value,note``. The direct-submission notice is
         emitted as a leading comment-style row so a printed/copied CSV still
         carries the honest caveat.
+
+        모든 셀은 ``_csv_safe``로 중화한다 — 외부 나라장터 데이터(공고명/수요기관 등)가
+        ``=``/``+``/``-``/``@``로 시작하면 Excel·Sheets에서 수식으로 실행되는 CSV
+        injection을 막기 위해 선행 작은따옴표를 붙인다(OWASP 권고).
         """
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        writer.writerow(["고지", draft.get("direct_submission_notice", ""), ""])
-        writer.writerow(["field_label", "value", "note"])
+        writer.writerow(
+            [
+                self._csv_safe("고지"),
+                self._csv_safe(draft.get("direct_submission_notice", "")),
+                self._csv_safe(""),
+            ]
+        )
+        writer.writerow(
+            [
+                self._csv_safe("field_label"),
+                self._csv_safe("value"),
+                self._csv_safe("note"),
+            ]
+        )
         for field in draft.get("fields", []):
             writer.writerow(
                 [
-                    field.get("field_label", ""),
-                    field.get("value", ""),
-                    field.get("note", "") or "",
+                    self._csv_safe(field.get("field_label", "")),
+                    self._csv_safe(field.get("value", "")),
+                    self._csv_safe(field.get("note", "") or ""),
                 ]
             )
         return buffer.getvalue()
+
+    @staticmethod
+    def _csv_safe(value) -> str:
+        """Neutralize CSV formula injection on a single cell.
+
+        If the stringified cell is non-empty and begins with a formula-trigger
+        character (``= + - @`` or the control chars ``\\t``/``\\r``), prepend a
+        single quote so spreadsheet apps treat it as text, not a formula
+        (OWASP-recommended neutralization). Numeric strings like ``"88,200,000"``
+        are unaffected.
+        """
+        text = "" if value is None else str(value)
+        if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
+            return "'" + text
+        return text
 
     def render_text(self, draft: dict) -> str:
         """Render the draft as a copy/print-friendly plain-text block."""
