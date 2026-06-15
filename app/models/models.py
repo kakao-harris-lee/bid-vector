@@ -417,6 +417,11 @@ class PaperBidSettlement(Base):
     price_competitive = Column(Boolean, default=False)
     would_have_won_price_only = Column(String(50), default="unknown")
     would_have_won_final = Column(String(50), default="unknown")
+    # 예정가격 / 낙찰하한가 derived at settlement (scoring) time. Nullable: a
+    # missing value is an honest "not enough data" signal (gate => "unknown"),
+    # distinct from 0.
+    estimated_price = Column(Float, nullable=True)
+    minimum_bid_price = Column(Float, nullable=True)
     settlement_reason = Column(Text, default="")
     settled_at = Column(DateTime(timezone=True), default=utc_now)
     created_at = Column(DateTime(timezone=True), default=utc_now)
