@@ -224,6 +224,7 @@ def build_historical_prediction(
         competitive_quantile_rate=competitive_quantile_rate,
         heuristic_rate=heuristic_rate,
         business_group=business_group,
+        reserve_context=reserve_pattern if isinstance(reserve_pattern, dict) else None,
     )
     rate_band = resolve_procurement_rate_band(category=category, description=description)
 
@@ -389,8 +390,19 @@ def select_competitive_base_rate(
     competitive_quantile_rate: float,
     heuristic_rate: float,
     business_group: str | None = None,
+    reserve_context: dict[str, Any] | None = None,
 ) -> float:
-    """Choose the bidding target, avoiding heuristic drag when history is deep."""
+    """Choose the bidding target, avoiding heuristic drag when history is deep.
+
+    When ``reserve_context`` (복수예비가격 mechanism statistics) is supplied and
+    usable, the reserve-implied bid rate is blended into the statistical base
+    rate as a small prior. The blend stays UPSTREAM of
+    ``apply_procurement_rate_band`` and the downstream clamp/guardrail, so it can
+    only nudge the target toward the reserve-implied winning line and can never
+    push the recommendation below the category bidding floor.
+
+    ``reserve_context=None`` reproduces the legacy output byte-for-byte.
+    """
     normalized_category = normalize_category_key(category)
     robust_median = median_rate or mean_rate
     recent_target = recent_median_rate or robust_median
@@ -398,6 +410,7 @@ def select_competitive_base_rate(
 
     if business_group == "construction" and sample_size >= 10:
         base_rate = (recent_target * 0.6) + (robust_median * 0.3) + (heuristic_rate * 0.1)
+        base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
         if rate_band == "service_high_negotiated":
             base_rate = max(base_rate, 1.0)
@@ -406,6 +419,7 @@ def select_competitive_base_rate(
         return base_rate
     if business_group == "service" and sample_size >= 10:
         base_rate = (quantile_target * 0.5) + (robust_median * 0.35) + (heuristic_rate * 0.15)
+        base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
         if rate_band == "service_high_negotiated":
             base_rate = max(base_rate, 1.0)
@@ -416,20 +430,87 @@ def select_competitive_base_rate(
     if sample_size >= 10:
         if normalized_category in {"service", "technical-service", "general-service"}:
             base_rate = recent_target
+            base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
             return apply_procurement_rate_band(base_rate, category=category, description=description)
         if normalized_category == "construction":
             base_rate = quantile_target
+            base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
             return apply_procurement_rate_band(base_rate, category=category, description=description)
         base_rate = (robust_median * 0.7) + (recent_target * 0.2) + (mean_rate * 0.1)
+        base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         return apply_procurement_rate_band(base_rate, category=category, description=description)
     if sample_size >= 5:
         base_rate = (robust_median * 0.55) + (mean_rate * 0.35) + (heuristic_rate * 0.10)
+        base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         return apply_procurement_rate_band(base_rate, category=category, description=description)
     if sample_size >= 2:
         base_rate = (robust_median * 0.45) + (mean_rate * 0.35) + (heuristic_rate * 0.20)
+        base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         return apply_procurement_rate_band(base_rate, category=category, description=description)
     base_rate = (mean_rate * 0.55) + (heuristic_rate * 0.45)
+    base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
     return apply_procurement_rate_band(base_rate, category=category, description=description)
+
+
+def resolve_reserve_prior_rate(reserve_context: dict[str, Any] | None) -> tuple[float, int]:
+    """Extract the reserve-implied bid rate and its sample count, if usable.
+
+    Returns ``(0.0, 0)`` when the reserve context is missing or carries no usable
+    예가-대비 투찰률(median_bid_to_estimated_price_rate) evidence, which signals
+    callers to leave the statistical base rate untouched.
+    """
+    if not isinstance(reserve_context, dict):
+        return 0.0, 0
+
+    sample_count = int(reserve_context.get("sample_count", 0) or 0)
+    estimated_price_sample_count = int(reserve_context.get("estimated_price_sample_count", 0) or 0)
+    implied_rate = float(reserve_context.get("median_bid_to_estimated_price_rate", 0.0) or 0.0)
+
+    # The reserve-implied bid rate is only meaningful when we actually observed
+    # selected reserve numbers (estimated_price_sample_count) AND a non-trivial
+    # 예가-대비 투찰률. Keep it inside the realistic bidding band before use.
+    if estimated_price_sample_count <= 0 or implied_rate <= 0.0:
+        return 0.0, 0
+    if not (0.5 <= implied_rate <= 1.5):
+        return 0.0, 0
+
+    # Confidence is driven by how many openings actually contributed an
+    # estimated-price observation, not just the raw reserve span count.
+    confidence_sample_count = min(sample_count, estimated_price_sample_count)
+    return implied_rate, max(0, confidence_sample_count)
+
+
+def blend_reserve_prior(base_rate: float, *, reserve_context: dict[str, Any] | None) -> float:
+    """Nudge the statistical base rate toward the reserve-implied bid rate.
+
+    The reserve-implied rate is mixed in with a small, sample-scaled weight so
+    that thin reserve evidence barely moves the target while deeper evidence pulls
+    it more firmly toward the 복수예비가격-implied winning line. The blend stays
+    strictly upstream of the procurement band / clamp / final category guardrail,
+    so it can never lower the recommendation below the bidding floor.
+    """
+    from app.core.config import settings
+
+    if reserve_context is None:
+        return base_rate
+
+    implied_rate, confidence_sample_count = resolve_reserve_prior_rate(reserve_context)
+    if confidence_sample_count <= 0 or implied_rate <= 0.0:
+        return base_rate
+
+    configured_weight = max(0.0, float(settings.PREDICTION_RESERVE_PRIOR_WEIGHT or 0.0))
+    if configured_weight <= 0.0:
+        return base_rate
+
+    full_confidence_samples = max(
+        1, int(settings.PREDICTION_RESERVE_PRIOR_FULL_CONFIDENCE_SAMPLES or 1)
+    )
+    confidence_scale = min(1.0, confidence_sample_count / full_confidence_samples)
+    effective_weight = min(0.5, configured_weight * confidence_scale)
+    if effective_weight <= 0.0:
+        return base_rate
+
+    return (base_rate * (1.0 - effective_weight)) + (implied_rate * effective_weight)
 
 
 def apply_procurement_rate_band(base_rate: float, *, category: str, description: str) -> float:

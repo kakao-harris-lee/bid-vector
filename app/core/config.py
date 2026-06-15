@@ -277,6 +277,14 @@ class Settings(BaseSettings):
             "goods": 1.00,
         }
     )
+    # Weight applied to the reserve-price (복수예비가격) implied bid rate when
+    # blending it into the competitive base rate. 0 disables the prior entirely.
+    # The effective weight is further scaled down by reserve sample_count so that
+    # thin reserve evidence nudges the base rate only slightly. The blend always
+    # stays UPSTREAM of apply_procurement_rate_band / clamp / the final
+    # category-floor guardrail, so it can never undercut the bidding floor.
+    PREDICTION_RESERVE_PRIOR_WEIGHT: float = 0.2
+    PREDICTION_RESERVE_PRIOR_FULL_CONFIDENCE_SAMPLES: int = 8
     PRICE_PREDICTION_PREFERRED_PREDICTOR: str = "historical"
     PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
     PRICE_PREDICTION_LSTM_MODEL_PATH: str = ""
