@@ -117,6 +117,7 @@ class TelegramUpdateProcessor:
                 requested_action=requested_action,
                 callback_query_id=callback_query_id,
                 chat_id=chat_id,
+                send_chat_ack=True,
             )
         except ValueError as exc:
             detail = str(exc)
@@ -162,21 +163,34 @@ class TelegramUpdateProcessor:
             "skip": "보류 처리 완료",
         }[record.action]
 
+        # Domain note: bid-vector records the operator's decision but never
+        # submits a bid form to 나라장터(KONEPS). Make the chat confirmation
+        # explicit so "투찰 처리 완료" is not mistaken for "투찰서가 제출됨".
+        decision_guidance = {
+            "bid_now": (
+                "투찰 결정이 기록되었습니다. "
+                "실제 나라장터 투찰서 제출은 직접 진행하세요."
+            ),
+            "review": (
+                "검토 상태로 기록되었습니다. "
+                "투찰 여부를 확정한 뒤 나라장터에서 직접 진행하세요."
+            ),
+            "skip": (
+                "보류(스킵)로 기록되었습니다. "
+                "나라장터에 별도 조치는 필요하지 않습니다."
+            ),
+        }[record.action]
+
         if callback_query_id:
             self._answer_callback_query(callback_query_id, acknowledgement_text)
 
         if send_chat_ack and chat_id:
-            self.telegram.send_message(
-                self.telegram.build_message(
-                    "입찰 판단 처리",
-                    (
-                        f"공고: {project.title}\n"
-                        f"프로젝트 ID: {project.id}\n"
-                        f"상태: {record.decision_status}\n"
-                        f"결과: {acknowledgement_text}"
-                    ),
-                ),
-                chat_id=str(chat_id),
+            self._send_chat_ack_message(
+                chat_id=chat_id,
+                project=project,
+                record=record,
+                acknowledgement_text=acknowledgement_text,
+                decision_guidance=decision_guidance,
             )
 
         return {
@@ -187,6 +201,41 @@ class TelegramUpdateProcessor:
             "action": record.action,
             "decision_status": record.decision_status,
         }
+
+    def _send_chat_ack_message(
+        self,
+        *,
+        chat_id: int,
+        project: Project,
+        record: BidDecisionRecord,
+        acknowledgement_text: str,
+        decision_guidance: str,
+    ) -> None:
+        """Send the persistent chat confirmation for an applied decision.
+
+        Best-effort: a delivery failure must not break callback/text handling,
+        which has already mutated and committed the decision record.
+        """
+        try:
+            self.telegram.send_message(
+                self.telegram.build_message(
+                    "입찰 판단 처리",
+                    (
+                        f"공고: {project.title}\n"
+                        f"프로젝트 ID: {project.id}\n"
+                        f"상태: {record.decision_status}\n"
+                        f"결과: {acknowledgement_text}\n"
+                        f"{decision_guidance}"
+                    ),
+                ),
+                chat_id=str(chat_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort confirmation
+            logger.warning(
+                "Telegram decision confirmation send failed: decision_id=%s error=%s",
+                record.id,
+                exc,
+            )
 
     def _answer_callback_query(self, callback_query_id: str, text: str) -> None:
         try:

@@ -2923,6 +2923,318 @@ def test_telegram_callback_updates_bid_decision_state(client, test_db, monkeypat
     assert "텔레그램에서 검토 버튼" in record.reasoning
 
 
+def _run_telegram_callback_confirmation_case(
+    client,
+    test_db,
+    monkeypatch,
+    *,
+    callback_action: str,
+    expected_status: str,
+    expected_ack: str,
+    expected_guidance_fragment: str,
+):
+    """Drive an inline callback action and capture chat confirmation deliveries."""
+    deliveries: list[dict] = []
+    acknowledgements: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append(
+            {"message": message, "chat_id": chat_id, "reply_markup": reply_markup}
+        )
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram delivery succeeded.",
+        }
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        acknowledgements.append((callback_query_id, text))
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram callback acknowledgement succeeded.",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+    monkeypatch.setattr(
+        TelegramNotificationService, "answer_callback_query", fake_answer
+    )
+
+    project = Project(
+        title="Telegram Callback Confirmation Project",
+        description="Verify inline callback chat confirmation",
+        requirements="React to Telegram actions",
+        budget_estimate=120000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    save_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project.id,
+            "recommended_amount": 115000000.0,
+            "probability_score": 0.91,
+            "matched_score": 0.84,
+            "deadline_hours_remaining": 5,
+            "current_active_bids": 1,
+            "max_active_bids": 4,
+            "current_workload_score": 0.1,
+        },
+    )
+    assert save_response.status_code == 200
+    decision_id = save_response.json()["id"]
+
+    callback_response = client.post(
+        "/api/v1/operations/telegram/callback",
+        json={
+            "update_id": 1,
+            "callback_query": {
+                "id": "callback-confirm",
+                "data": f"bid-decision:{decision_id}:{callback_action}",
+                "message": {
+                    "message_id": 100,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+
+    assert callback_response.status_code == 200
+    payload = callback_response.json()
+    assert payload["status"] == "processed"
+    assert payload["decision_status"] == expected_status
+
+    # Toast acknowledgement still fires for the inline button.
+    assert acknowledgements == [("callback-confirm", expected_ack)]
+
+    # The regression fix: a persistent chat confirmation must be delivered too.
+    assert deliveries, "expected a chat confirmation message to be sent"
+    confirmation = deliveries[-1]
+    assert confirmation["chat_id"] == "1594710346"
+    assert "입찰 판단 처리" in confirmation["message"]
+    assert expected_ack in confirmation["message"]
+    assert expected_guidance_fragment in confirmation["message"]
+
+    return decision_id, deliveries
+
+
+def test_telegram_callback_submit_sends_chat_confirmation(client, test_db, monkeypatch):
+    """Tapping the inline 투찰 button should send a persistent chat confirmation."""
+    _run_telegram_callback_confirmation_case(
+        client,
+        test_db,
+        monkeypatch,
+        callback_action="submit",
+        expected_status="submitted",
+        expected_ack="투찰 처리 완료",
+        expected_guidance_fragment="실제 나라장터 투찰서 제출은 직접 진행하세요",
+    )
+
+
+def test_telegram_callback_review_sends_chat_confirmation(client, test_db, monkeypatch):
+    """Tapping the inline 검토 button should send a persistent chat confirmation."""
+    _run_telegram_callback_confirmation_case(
+        client,
+        test_db,
+        monkeypatch,
+        callback_action="review",
+        expected_status="reviewing",
+        expected_ack="검토 처리 완료",
+        expected_guidance_fragment="검토 상태로 기록되었습니다",
+    )
+
+
+def test_telegram_callback_skip_sends_chat_confirmation(client, test_db, monkeypatch):
+    """Tapping the inline 보류 button should send a persistent chat confirmation."""
+    _run_telegram_callback_confirmation_case(
+        client,
+        test_db,
+        monkeypatch,
+        callback_action="skip",
+        expected_status="skipped",
+        expected_ack="보류 처리 완료",
+        expected_guidance_fragment="보류(스킵)로 기록되었습니다",
+    )
+
+
+def test_telegram_callback_chat_confirmation_failure_does_not_break_processing(
+    client,
+    test_db,
+    monkeypatch,
+):
+    """A failed chat confirmation send must not break the applied decision response."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def boom_send(self, message: str, reply_markup=None, chat_id=None):
+        raise RuntimeError("Telegram delivery exploded")
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "Telegram callback acknowledgement succeeded.",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", boom_send)
+    monkeypatch.setattr(
+        TelegramNotificationService, "answer_callback_query", fake_answer
+    )
+
+    project = Project(
+        title="Telegram Callback Confirmation Failure Project",
+        description="Verify resilience when chat confirmation send fails",
+        requirements="React to Telegram actions",
+        budget_estimate=120000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    save_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project.id,
+            "recommended_amount": 115000000.0,
+            "probability_score": 0.91,
+            "matched_score": 0.84,
+            "deadline_hours_remaining": 5,
+            "current_active_bids": 1,
+            "max_active_bids": 4,
+            "current_workload_score": 0.1,
+        },
+    )
+    assert save_response.status_code == 200
+    decision_id = save_response.json()["id"]
+
+    callback_response = client.post(
+        "/api/v1/operations/telegram/callback",
+        json={
+            "update_id": 1,
+            "callback_query": {
+                "id": "callback-fail",
+                "data": f"bid-decision:{decision_id}:submit",
+                "message": {
+                    "message_id": 100,
+                    "chat": {"id": 1594710346},
+                },
+            },
+        },
+    )
+
+    assert callback_response.status_code == 200
+    payload = callback_response.json()
+    assert payload["status"] == "processed"
+    assert payload["decision_status"] == "submitted"
+
+    record = (
+        test_db.query(BidDecisionRecord)
+        .filter(BidDecisionRecord.id == decision_id)
+        .one()
+    )
+    assert record.action == "bid_now"
+    assert record.decision_status == "submitted"
+
+
+def test_telegram_callback_unauthorized_chat_is_ignored(client, test_db, monkeypatch):
+    """Inline callbacks from an unauthorized chat must not apply or confirm anything."""
+    deliveries: list[dict] = []
+    acknowledgements: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append({"message": message, "chat_id": chat_id})
+        return {"sent": True, "status": "sent", "detail": "ok"}
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        acknowledgements.append((callback_query_id, text))
+        return {"sent": True, "status": "sent", "detail": "ok"}
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+    monkeypatch.setattr(
+        TelegramNotificationService, "answer_callback_query", fake_answer
+    )
+
+    project = Project(
+        title="Telegram Unauthorized Callback Project",
+        description="Verify unauthorized chat gating",
+        requirements="React to Telegram actions",
+        budget_estimate=120000000.0,
+        category="software",
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    save_response = client.post(
+        "/api/v1/operations/bid-decisions",
+        json={
+            "project_id": project.id,
+            "recommended_amount": 115000000.0,
+            "probability_score": 0.91,
+            "matched_score": 0.84,
+            "deadline_hours_remaining": 5,
+            "current_active_bids": 1,
+            "max_active_bids": 4,
+            "current_workload_score": 0.1,
+        },
+    )
+    assert save_response.status_code == 200
+    saved = save_response.json()
+    decision_id = saved["id"]
+    saved_status = saved["decision_status"]
+
+    # Saving a high-priority decision may itself emit the original Telegram
+    # alert. Ignore anything sent before the callback; we only assert that the
+    # unauthorized callback produces no *additional* delivery.
+    deliveries.clear()
+
+    callback_response = client.post(
+        "/api/v1/operations/telegram/callback",
+        json={
+            "update_id": 1,
+            "callback_query": {
+                "id": "callback-unauth",
+                "data": f"bid-decision:{decision_id}:submit",
+                "message": {
+                    "message_id": 100,
+                    "chat": {"id": 9999999},
+                },
+            },
+        },
+    )
+
+    assert callback_response.status_code == 200
+    payload = callback_response.json()
+    assert payload["status"] == "ignored"
+    assert payload["detail"] == "unauthorized chat"
+    # No confirmation, no toast, no state mutation for unauthorized chats.
+    assert deliveries == []
+    assert acknowledgements == []
+
+    record = (
+        test_db.query(BidDecisionRecord)
+        .filter(BidDecisionRecord.id == decision_id)
+        .one()
+    )
+    assert record.decision_status == saved_status
+
+
 def test_telegram_text_action_updates_latest_active_bid_decision(
     client,
     test_db,
