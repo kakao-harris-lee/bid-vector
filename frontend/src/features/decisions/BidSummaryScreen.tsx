@@ -120,23 +120,15 @@ export function BidSummaryScreen() {
       {summary.data ? <SummaryBody data={summary.data} /> : null}
 
       {summary.data ? (
-        <BidFormDraftCard
-          decisionRecordId={decisionRecordId}
-          token={session?.token ?? null}
-        />
+        <BidFormDraftCard decisionRecordId={decisionRecordId} />
       ) : null}
     </section>
   );
 }
 
-function BidFormDraftCard({
-  decisionRecordId,
-  token
-}: {
-  decisionRecordId: number;
-  token: string | null;
-}) {
+function BidFormDraftCard({ decisionRecordId }: { decisionRecordId: number }) {
   const { session } = useShellContext();
+  const token = session?.token ?? null;
   const draft = useBidFormDraftQuery(session, decisionRecordId);
   const [busy, setBusy] = useState(false);
 
