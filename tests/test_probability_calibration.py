@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from app.ai.predictors.historical import (
     apply_probability_calibration,
+    calibration_raw_signal,
     load_probability_calibration,
 )
 from app.models.models import (
@@ -330,14 +331,15 @@ def test_calibration_dataset_does_not_leak_settled_labels_into_features(test_db)
         "price_close_label",
     }
     assert not (set(features.keys()) & leaky_keys)
-    # features는 추론 시점 신호만
+    # features는 추론 시점 신호만 — historical_sample_size는 train/serve 스큐를
+    # 막기 위해 의도적으로 제외(PaperBid에 미저장 → 항상 0).
     assert set(features.keys()) == {
         "confidence_score",
         "matched_score",
-        "historical_sample_size",
         "business_group",
         "category",
     }
+    assert "historical_sample_size" not in features
     assert features["confidence_score"] == 0.77
     assert features["matched_score"] == 0.66
     # 라벨은 별도 키로만 존재
@@ -442,3 +444,176 @@ def test_schema_probability_score_has_honest_description():
         field = model.model_fields["probability_score"]
         assert field.description is not None
         assert "P(낙찰) 아님" in field.description
+
+
+# --------------------------------------------------------------------------- #
+# F. train/serve raw 정합 — 학습·추론·백테스트가 바이트 동일 raw를 쓴다
+# --------------------------------------------------------------------------- #
+def test_calibration_raw_signal_identical_across_train_serve_backtest():
+    """동일 (confidence, matched)에서 학습 raw == 추론 raw == 백테스트 raw.
+
+    이 단언은 PR #92 리뷰가 지적한 train/serve 스큐(history 항이 학습엔 0,
+    추론엔 >0)를 회귀로 잡는다. history는 raw에 더 이상 기여하지 않아야 한다.
+    """
+    confidence, matched = 0.73, 0.61
+    canonical = calibration_raw_signal(confidence, matched)
+
+    # 학습 경로 (ml_training._raw_probability_signal)
+    train_raw = PricePredictionTrainingService._raw_probability_signal(
+        {"confidence_score": confidence, "matched_score": matched}
+    )
+    assert train_raw == canonical
+
+    # history를 넣어도(학습은 미저장으로 0, 추론은 >0) raw가 변하지 않아야 함
+    train_raw_with_history = PricePredictionTrainingService._raw_probability_signal(
+        {
+            "confidence_score": confidence,
+            "matched_score": matched,
+            "historical_sample_size": 30,
+        }
+    )
+    assert train_raw_with_history == canonical
+
+    # 추론·백테스트 경로는 동일 curve(scale=1,bias=0)에서 raw에만 의존하므로,
+    # 동일 raw면 보정 결과도 동일해야 한다. history 유무로 결과가 갈리면 스큐.
+    identity_curve = {"__global__": {"method": "platt", "scale": 1.0, "bias": 0.0}}
+    serve_no_history = apply_probability_calibration(
+        {
+            "confidence_score": confidence,
+            "matched_score": matched,
+            "business_group": "construction",
+        },
+        calibration=identity_curve,
+    )
+    serve_with_history = apply_probability_calibration(
+        {
+            "confidence_score": confidence,
+            "matched_score": matched,
+            "historical_sample_size": 30,
+            "business_group": "construction",
+        },
+        calibration=identity_curve,
+    )
+    assert serve_no_history == serve_with_history
+    # 그리고 그 raw가 canonical raw와 일치(sigmoid(raw)로 환산해 확인)
+    import math
+
+    expected = round(1.0 / (1.0 + math.exp(-canonical)), 2)
+    assert serve_no_history == expected
+
+
+def test_calibration_raw_signal_renormalized_weights_sum_to_one():
+    """confidence/matched만으로 재정규화된 가중치 합이 1(둘 다 1이면 raw≈1)."""
+    assert abs(calibration_raw_signal(1.0, 1.0) - 1.0) < 1e-9
+    assert calibration_raw_signal(0.0, 0.0) == 0.0
+    # confidence 가중치(0.525) > matched 가중치(0.475)
+    only_confidence = calibration_raw_signal(1.0, 0.0)
+    only_matched = calibration_raw_signal(0.0, 1.0)
+    assert only_confidence > only_matched
+    assert abs((only_confidence + only_matched) - 1.0) < 1e-9
+
+
+# --------------------------------------------------------------------------- #
+# G. Platt 단조성 + base_rate 단일클래스 곡선
+# --------------------------------------------------------------------------- #
+def test_platt_curve_is_monotonic_for_separable_two_class():
+    """분리 가능 2-class 입력에서 high-raw의 p > low-raw의 p (scale>0)."""
+    svc = PricePredictionTrainingService()
+    items = []
+    # 강한 신호 -> 승(1), 약한 신호 -> 패(0)
+    for _ in range(12):
+        items.append(
+            _calibration_item(
+                confidence=0.95,
+                matched=0.95,
+                history=0,
+                business_group="construction",
+                label=1,
+                final="eligible_favorable",
+            )
+        )
+    for _ in range(12):
+        items.append(
+            _calibration_item(
+                confidence=0.1,
+                matched=0.1,
+                history=0,
+                business_group="construction",
+                label=0,
+                final="eligible_but_outbid",
+                price_only="unlikely",
+            )
+        )
+    calibration = svc._build_probability_calibration({"items": items})
+    curve = calibration["construction"]
+    assert curve["method"] == "platt"
+    assert curve["scale"] > 0  # 단조 증가
+
+    table = {"construction": curve}
+    high = apply_probability_calibration(
+        {"confidence_score": 0.95, "matched_score": 0.95, "business_group": "construction"},
+        calibration=table,
+    )
+    low = apply_probability_calibration(
+        {"confidence_score": 0.1, "matched_score": 0.1, "business_group": "construction"},
+        calibration=table,
+    )
+    assert high > low
+
+
+def test_base_rate_curve_for_single_class_group():
+    """단일 클래스(폴백도 단일) 그룹은 flat base_rate 곡선(scale=0, bias=logit(base))."""
+    import math
+
+    svc = PricePredictionTrainingService()
+    # 모두 양성(1) + price_close도 모두 1 -> 어떤 라벨로도 2-class 불가 -> base_rate
+    rows = [(0.9, 1, 1), (0.4, 1, 1), (0.6, 1, 1)]
+    curve = svc._fit_group_probability_curve(rows)
+    assert curve["method"] == "base_rate"
+    assert curve["scale"] == 0.0
+    assert curve["base_rate"] == 1.0
+    # logit(base_rate) with clamp -> bias가 logit(1-1e-6)에 근접(매우 큰 양수)
+    assert curve["bias"] == round(math.log((1 - 1e-6) / 1e-6), 6)
+    # 적용 시 raw와 무관하게 base_rate(≈1.0)을 반환
+    applied = apply_probability_calibration(
+        {"confidence_score": 0.1, "matched_score": 0.1, "business_group": "g"},
+        calibration={"g": curve},
+    )
+    assert applied >= 0.99
+
+
+# --------------------------------------------------------------------------- #
+# H. 실시간 경로(opportunity_analysis) 보정 적용 + non-matched 0.49 클램프 유지
+# --------------------------------------------------------------------------- #
+def test_opportunity_analysis_applies_calibration_and_keeps_non_matched_clamp(
+    monkeypatch,
+):
+    """opportunity_analysis: 보정값 적용하되 non-matched 시 0.49 클램프 유지."""
+    import app.services.opportunity_analysis as oa_mod
+
+    # 보정 곡선이 0.92를 반환하도록 monkeypatch
+    monkeypatch.setattr(
+        oa_mod, "apply_probability_calibration", lambda features, **kw: 0.92
+    )
+
+    service = oa_mod.OpportunityAnalysisService()
+
+    # (a) matched=True -> 보정값 0.92가 그대로 살아남는다(override=0 가정)
+    matched_classification = {"score": 0.8, "matched": True}
+    prob_matched = service._apply_calibrated_or_heuristic_probability(
+        heuristic_probability=0.6,
+        classification=matched_classification,
+        price_prediction={"confidence_score": 0.7},
+        business_group="construction",
+    )
+    assert prob_matched == 0.92
+
+    # (b) matched=False -> 보정값이라도 0.49로 클램프되어야 한다
+    non_matched_classification = {"score": 0.8, "matched": False}
+    prob_non_matched = service._apply_calibrated_or_heuristic_probability(
+        heuristic_probability=0.6,
+        classification=non_matched_classification,
+        price_prediction={"confidence_score": 0.7},
+        business_group="construction",
+    )
+    assert prob_non_matched <= 0.49

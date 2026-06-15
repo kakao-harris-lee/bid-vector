@@ -1352,7 +1352,6 @@ class PaperBiddingBacktestService:
             {
                 "confidence_score": confidence,
                 "matched_score": matched_score,
-                "historical_sample_size": history_count,
                 "business_group": business_group,
             }
         )

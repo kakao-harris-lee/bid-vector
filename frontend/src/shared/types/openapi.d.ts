@@ -2250,7 +2250,10 @@ export interface components {
             execution_complexity_score: number;
             /** Recommended Amount */
             recommended_amount: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /** Matched Score */
             matched_score: number;
@@ -2292,7 +2295,10 @@ export interface components {
             project_id: number;
             /** Recommended Amount */
             recommended_amount: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /**
              * Matched Score
@@ -2349,7 +2355,10 @@ export interface components {
             priority_score: number;
             /** Recommended Amount */
             recommended_amount: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /**
              * Urgency Score
@@ -2392,7 +2401,10 @@ export interface components {
             project_id: number;
             /** Recommended Amount */
             recommended_amount: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /**
              * Matched Score
@@ -3156,7 +3168,10 @@ export interface components {
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
             /** Recommended Amount */
             recommended_amount: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /** Matched Score */
             matched_score: number;
@@ -4960,7 +4975,10 @@ export interface components {
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
             /** Priority Score */
             priority_score: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /** Recommended Amount */
             recommended_amount: number;
@@ -5193,7 +5211,10 @@ export interface components {
             deadline?: string | null;
             /** Matched Score */
             matched_score: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /** Priority Score */
             priority_score: number;
@@ -5316,7 +5337,10 @@ export interface components {
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
             /** Priority Score */
             priority_score: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /** Matched Score */
             matched_score: number;
@@ -5610,7 +5634,10 @@ export interface components {
             matched: boolean;
             /** Matched Score */
             matched_score: number;
-            /** Probability Score */
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
             probability_score: number;
             /** Recommended Amount */
             recommended_amount: number;

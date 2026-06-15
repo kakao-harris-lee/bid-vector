@@ -292,19 +292,20 @@ class PricePredictionTrainingService:
 
     @staticmethod
     def _raw_probability_signal(features: dict[str, Any]) -> float:
-        """Reproduce the legacy heuristic probability from inference-time features.
+        """Build the Platt-curve input from inference-time features.
 
-        This is the SAME blend used by ``_estimate_probability_score`` so the fitted
-        Platt curve maps the heuristic onto observed win frequencies. Keeping it here
-        (not importing the backtest service) avoids a circular import and keeps the
-        calibration self-contained.
+        Delegates to the single source of truth
+        (:func:`app.ai.predictors.historical.calibration_raw_signal`) so training and
+        serving feed the fitted curve a byte-identical raw value. Uses ONLY
+        confidence/matched — ``historical_sample_size`` is excluded to avoid the
+        train/serve skew (history is always 0 in the training dataset).
         """
-        confidence = max(0.0, min(1.0, float(features.get("confidence_score", 0.0) or 0.0)))
-        matched = max(0.0, min(1.0, float(features.get("matched_score", 0.0) or 0.0)))
-        history = int(features.get("historical_sample_size", 0) or 0)
-        history_signal = min(1.0, max(0.0, history / 30))
-        raw = matched * 0.38 + confidence * 0.42 + history_signal * 0.20
-        return max(0.0, min(1.0, raw))
+        from app.ai.predictors.historical import calibration_raw_signal
+
+        return calibration_raw_signal(
+            features.get("confidence_score", 0.0),
+            features.get("matched_score", 0.0),
+        )
 
     def _fit_group_probability_curve(
         self, rows: list[tuple[float, int, int]]

@@ -243,10 +243,14 @@ class PredictionDatasetService:
     ) -> dict[str, Any]:
         """Build a labeled dataset for calibrating the낙찰-가능성 (probability) score.
 
-        Each row pairs the cheap, *inference-time* signals that
-        ``_estimate_probability_score`` consumes (``confidence_score``,
-        ``matched_score``, ``historical_sample_size``, ``business_group``,
+        Each row pairs the cheap, *inference-time* signals the Platt calibration
+        consumes (``confidence_score``, ``matched_score``, ``business_group``,
         ``category``) with a settlement-derived binary label.
+
+        ``historical_sample_size`` is deliberately NOT a feature: it is not persisted
+        on ``PaperBid``, so it would always be 0 here while inference sees a real
+        count — a train/serve skew. The calibration raw therefore uses only
+        confidence/matched (see ``historical.calibration_raw_signal``).
 
         **Leakage guard.** The settlement fields (``would_have_won_final``,
         ``would_have_won_price_only``) are LABELS only. They are never copied into
@@ -315,9 +319,6 @@ class PredictionDatasetService:
                     "features": {
                         "confidence_score": float(paper_bid.confidence_score or 0.0),
                         "matched_score": float(paper_bid.matched_score or 0.0),
-                        "historical_sample_size": int(
-                            self._resolve_paper_bid_history_count(paper_bid)
-                        ),
                         "business_group": business_group,
                         "category": business_group,
                     },
@@ -346,15 +347,6 @@ class PredictionDatasetService:
         if project is not None:
             return getattr(project, "category", None)
         return None
-
-    def _resolve_paper_bid_history_count(self, paper_bid: PaperBid) -> int:
-        """Approximate the history sample size seen at decision time.
-
-        ``historical_sample_size`` is not persisted on ``PaperBid``; the predictor's
-        confidence already encodes sample depth. We fall back to 0 so the feature is
-        always present and never leaks a settled value.
-        """
-        return 0
 
     def _serialize_series_point(
         self,

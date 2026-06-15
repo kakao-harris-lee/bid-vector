@@ -11,6 +11,35 @@ import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
 
+# Renormalized confidence/matched weights for the *calibration* raw signal.
+# The legacy heuristic mixes three signals (matched 0.38 + confidence 0.42 +
+# history 0.20). ``historical_sample_size`` is NOT persisted on ``PaperBid``, so
+# the training dataset would always see history=0 while inference sees history>0
+# — a train/serve skew that systematically miscalibrates the Platt curve. We drop
+# the history term entirely for calibration and renormalize the surviving two
+# weights to sum to 1 (0.38/0.80, 0.42/0.80), so training and serving feed the
+# Platt curve a byte-identical raw built from the SAME two signals.
+_CALIBRATION_MATCHED_WEIGHT = 0.38 / 0.80  # 0.475
+_CALIBRATION_CONFIDENCE_WEIGHT = 0.42 / 0.80  # 0.525
+
+
+def calibration_raw_signal(confidence_score: float, matched_score: float) -> float:
+    """Single source of truth for the calibration Platt-curve input.
+
+    Imported by training (``ml_training._raw_probability_signal``), inference
+    (``apply_probability_calibration``) and the backtest path so all three feed the
+    fitted curve an identical raw value. Uses ONLY ``confidence_score`` and
+    ``matched_score`` — the two signals that are reliably available at both train
+    and serve time — and is independent of the legacy 3-signal heuristic fallback.
+    """
+    confidence = max(0.0, min(1.0, float(confidence_score or 0.0)))
+    matched = max(0.0, min(1.0, float(matched_score or 0.0)))
+    raw = (
+        matched * _CALIBRATION_MATCHED_WEIGHT
+        + confidence * _CALIBRATION_CONFIDENCE_WEIGHT
+    )
+    return max(0.0, min(1.0, raw))
+
 
 def load_group_calibration() -> dict[str, dict[str, float | int]]:
     """Read summary.group_calibration from the active manifest, if present.
@@ -70,10 +99,11 @@ def apply_probability_calibration(
 ) -> float | None:
     """Map inference-time signals onto a calibrated P(낙찰) via the active curve.
 
-    ``features`` carries only inference-time signals: ``confidence_score``,
-    ``matched_score``, ``historical_sample_size`` and ``business_group``. The same
-    raw heuristic the legacy path used is reconstructed here and then passed through
-    the per-group Platt (or base-rate) curve fitted on settled outcomes.
+    ``features`` carries inference-time signals; only ``confidence_score`` and
+    ``matched_score`` feed the calibration raw (see :func:`calibration_raw_signal`
+    — ``historical_sample_size`` is intentionally excluded to keep train and serve
+    raw values identical). The raw is then passed through the per-group Platt (or
+    base-rate) curve fitted on settled outcomes.
 
     Returns ``None`` when no usable calibration artifact exists so callers fall back
     to the legacy heuristic. Never raises on malformed artifacts.
@@ -89,12 +119,10 @@ def apply_probability_calibration(
     if not isinstance(curve, dict):
         return None
 
-    confidence = max(0.0, min(1.0, float(features.get("confidence_score", 0.0) or 0.0)))
-    matched = max(0.0, min(1.0, float(features.get("matched_score", 0.0) or 0.0)))
-    history = int(features.get("historical_sample_size", 0) or 0)
-    history_signal = min(1.0, max(0.0, history / 30))
-    raw = matched * 0.38 + confidence * 0.42 + history_signal * 0.20
-    raw = max(0.0, min(1.0, raw))
+    raw = calibration_raw_signal(
+        features.get("confidence_score", 0.0),
+        features.get("matched_score", 0.0),
+    )
 
     try:
         scale = float(curve.get("scale", 0.0) or 0.0)
