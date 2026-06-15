@@ -1735,6 +1735,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bid Decision Summary
+         * @description Aggregate one persisted bid decision into a decision-support summary.
+         *
+         *     Returns recommended bid amount/rate, price range, 가격 적합도(추정), reasoning,
+         *     the reference 카테고리 낙찰하한율, optional 분야 통계, notice metadata, and the
+         *     direct-submission notice. 404 when the record id is unknown (or belongs to a
+         *     different operator) / the linked project is missing.
+         */
+        get: operations["get_bid_decision_summary_api_v1_operations_bid_decisions__decision_record_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/operators": {
         parameters: {
             query?: never;
@@ -2598,6 +2623,217 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * BidSummaryCategoryFloor
+         * @description 카테고리 낙찰하한율(참고) — 가드레일 floor 와 동일 출처.
+         *
+         *     라이브 공고는 예정가/실하한가를 개찰 전에 모른다. 따라서 이 값은 절대 하한가가
+         *     아니라 **설정된 카테고리 최소 투찰률(참고)**이다.
+         */
+        BidSummaryCategoryFloor: {
+            /** Category */
+            category?: string | null;
+            /** Business Group */
+            business_group?: string | null;
+            /**
+             * Floor Bid Rate
+             * @description 카테고리/그룹 최소 투찰률(참고). 미설정 시 null.
+             */
+            floor_bid_rate?: number | null;
+            /**
+             * Floor Price
+             * @description budget_estimate * floor_bid_rate 참고 하한가. 예정가 기준 아님.
+             */
+            floor_price?: number | null;
+            /**
+             * Note
+             * @default 카테고리 낙찰하한율(참고)입니다. 실제 낙찰하한가는 개찰 시 예정가 기준으로 결정되며, 이 값은 가드레일이 사용하는 설정값일 뿐입니다.
+             */
+            note: string;
+        };
+        /**
+         * BidSummaryFieldStat
+         * @description 분야 통계(체크리스트) — 최신 백테스트 분야 지표(있으면).
+         */
+        BidSummaryFieldStat: {
+            /** Category */
+            category?: string | null;
+            /**
+             * Settled Count
+             * @description 해당 분야 백테스트 표본 수.
+             * @default 0
+             */
+            settled_count: number;
+            /**
+             * Est Price Close Rate
+             * @description 가격 근접 추정율(would_have_won_price_only / settled). 실제 낙찰 아님.
+             */
+            est_price_close_rate?: number | null;
+            /**
+             * Eligible Favorable Rate
+             * @description 적격성 게이트 추정 적격율(unknown 제외 분모).
+             */
+            eligible_favorable_rate?: number | null;
+            /** Source Run Id */
+            source_run_id?: number | null;
+            /** Source Operator Slug */
+            source_operator_slug?: string | null;
+            /**
+             * Note
+             * @default 최신 백테스트 분야 추정 지표입니다(표본 수 동반). 실제 낙찰률이 아닌 가격/적격성 기반 추정이며, 표본이 적으면 신뢰도가 낮습니다.
+             */
+            note: string;
+        };
+        /**
+         * BidSummaryNoticeMeta
+         * @description 공고 메타 — 투찰서 헤더 작성에 필요한 식별 정보.
+         */
+        BidSummaryNoticeMeta: {
+            /** Project Id */
+            project_id: number;
+            /** Title */
+            title: string;
+            /** Notice Number */
+            notice_number?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Business Type Label */
+            business_type_label?: string | null;
+            /**
+             * Budget Estimate
+             * @description 공고 추정가격(예산). 예정가/실하한가는 개찰 전 미공개.
+             * @default 0
+             */
+            budget_estimate: number;
+            /** Demand Agency */
+            demand_agency?: string | null;
+            /** Issuing Agency */
+            issuing_agency?: string | null;
+            /** Deadline */
+            deadline?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Status */
+            status?: string | null;
+        };
+        /**
+         * BidSummaryPrediction
+         * @description 결정에 연결된 가격 예측 메타(없으면 null).
+         */
+        BidSummaryPrediction: {
+            /** Predicted Price */
+            predicted_price?: number | null;
+            /** Predicted Bid Rate */
+            predicted_bid_rate?: number | null;
+            /** Price Range Min */
+            price_range_min?: number | null;
+            /** Price Range Max */
+            price_range_max?: number | null;
+            /** Confidence Score */
+            confidence_score?: number | null;
+            /** Pricing Mode */
+            pricing_mode?: string | null;
+            /** Predictor Name */
+            predictor_name?: string | null;
+            /**
+             * Guardrail Applied
+             * @default false
+             */
+            guardrail_applied: boolean;
+            /**
+             * Floor Bid Rate
+             * @description 예측이 적용한 낙찰하한 가드레일 투찰률(있으면).
+             */
+            floor_bid_rate?: number | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /**
+         * BidSummaryRecommendation
+         * @description 추천 투찰가/투찰률/가격대 + 가격 적합도(추정) + 결정 상태.
+         */
+        BidSummaryRecommendation: {
+            /**
+             * Recommended Amount
+             * @description 추천 투찰가(원).
+             */
+            recommended_amount: number;
+            /**
+             * Recommended Bid Rate
+             * @description 추천 투찰가 / 추정가격. budget_estimate>0 일 때만 산출.
+             */
+            recommended_bid_rate?: number | null;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
+            probability_score: number;
+            /**
+             * Action
+             * @description bid_now / review / skip 중 현재 판단.
+             */
+            action: string;
+            /**
+             * Decision Status
+             * @description planned / reviewing / submitted / skipped 워크플로 상태.
+             */
+            decision_status: string;
+            /**
+             * Priority Score
+             * @description 종합 우선순위 점수(0-1).
+             * @default 0
+             */
+            priority_score: number;
+            /**
+             * Matched Score
+             * @description 공고 적합도 점수(0-1).
+             * @default 0
+             */
+            matched_score: number;
+            /**
+             * Competitiveness Score
+             * @description 시장 경쟁력 점수(0-1).
+             * @default 0
+             */
+            competitiveness_score: number;
+            /**
+             * Reasoning
+             * @description 결정 근거 서술(감사 가능).
+             * @default
+             */
+            reasoning: string;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
+        };
+        /**
+         * BidSummaryResponse
+         * @description 투찰 의사결정 요약 — 운영자가 직접 투찰서를 작성할 때 참고하는 집계 산출물.
+         */
+        BidSummaryResponse: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Operator Id */
+            operator_id: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            notice: components["schemas"]["BidSummaryNoticeMeta"];
+            recommendation: components["schemas"]["BidSummaryRecommendation"];
+            prediction?: components["schemas"]["BidSummaryPrediction"] | null;
+            category_floor: components["schemas"]["BidSummaryCategoryFloor"];
+            /** @description 분야 통계(없거나 미산출 시 null — graceful). */
+            field_stat?: components["schemas"]["BidSummaryFieldStat"] | null;
+            /**
+             * Direct Submission Notice
+             * @description 실제 나라장터 투찰서 제출은 운영자가 직접 진행한다는 안내 문구.
+             * @default 이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 하며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
+             */
+            direct_submission_notice: string;
         };
         /** BidUpdate */
         BidUpdate: {
@@ -10459,6 +10695,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelegramStatusResponse"];
+                };
+            };
+        };
+    };
+    get_bid_decision_summary_api_v1_operations_bid_decisions__decision_record_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

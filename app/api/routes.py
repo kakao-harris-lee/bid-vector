@@ -6,6 +6,7 @@ from app.api import (
     analytics,
     auth,
     backtests,
+    bid_summary,
     bids,
     dashboard,
     ml,
@@ -31,5 +32,6 @@ router.include_router(ml.router, prefix="/ml", tags=["ML Jobs"])
 router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 router.include_router(admin.router, prefix="/admin", tags=["Legacy Admin"])
 router.include_router(operations.router, prefix="/operations", tags=["Operations"])
+router.include_router(bid_summary.router, prefix="/operations", tags=["Bid Summary"])
 router.include_router(realtime.router, prefix="/realtime", tags=["Realtime"])
 router.include_router(synthetic.router, tags=["Synthetic"])
