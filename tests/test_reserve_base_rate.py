@@ -48,16 +48,28 @@ def _base_rate_kwargs(**overrides):
 
 
 def _reserve_context(
-    *, implied_rate: float, sample_count: int, estimated_count: int | None = None
+    *,
+    implied_rate: float,
+    sample_count: int,
+    estimated_count: int | None = None,
+    estimated_price_rate: float = 1.0,
 ):
+    """Build a reserve context.
+
+    ``implied_rate`` is ``median_bid_to_estimated_price_rate`` (bid/예가);
+    ``estimated_price_rate`` is ``median_estimated_price_rate`` (예가율 = 예가/budget).
+    With the default ``estimated_price_rate=1.0`` the bid/예가 → bid/budget
+    conversion is the identity, so ``implied_rate`` doubles as the bid/budget
+    value for tests that do not exercise the unit conversion.
+    """
     return {
         "sample_count": sample_count,
         "estimated_price_sample_count": estimated_count
         if estimated_count is not None
         else sample_count,
         "average_reserve_span_rate": 0.03,
-        "average_estimated_price_rate": 1.0,
-        "median_estimated_price_rate": 1.0,
+        "average_estimated_price_rate": estimated_price_rate,
+        "median_estimated_price_rate": estimated_price_rate,
         "median_bid_to_estimated_price_rate": implied_rate,
         "average_selected_number": 7.5,
         "frequent_selected_numbers": [1, 4, 7, 12],
@@ -237,19 +249,145 @@ def test_reserve_prior_ignored_without_estimated_price_evidence():
 
 
 def test_resolve_reserve_prior_rate_rejects_out_of_band_rates():
-    """Implausible 예가-대비 투찰률 values are discarded so they never skew the base."""
+    """Implausible converted bid/budget rates are discarded so they never skew base."""
     assert resolve_reserve_prior_rate(None) == (0.0, 0)
     assert resolve_reserve_prior_rate({}) == (0.0, 0)
-    # out-of-band implied rate
+    # out-of-band bid/예가 rate (converts to 2.0 at 예가율=1.0)
     assert resolve_reserve_prior_rate(
         _reserve_context(implied_rate=2.0, sample_count=10)
     ) == (0.0, 0)
-    # usable
+    # usable — at 예가율=1.0 the conversion is the identity.
     implied, count = resolve_reserve_prior_rate(
         _reserve_context(implied_rate=0.9, sample_count=6)
     )
     assert implied == pytest.approx(0.9)
     assert count == 6
+
+
+# ---------------------------------------------------------------------------
+# unit-mismatch fix: bid/예가 must be converted to bid/budget before blending,
+# otherwise the prior over-bids systematically because 예가율 < 1 on KONEPS.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_reserve_prior_rate_converts_to_bid_over_budget_units():
+    """resolve_reserve_prior_rate returns bid/budget, i.e. bid/예가 × 예가율."""
+    # operator bid/예가 = 0.946, 예가율 = 0.93 → bid/budget ≈ 0.880
+    implied, count = resolve_reserve_prior_rate(
+        _reserve_context(
+            implied_rate=0.946, sample_count=10, estimated_price_rate=0.93
+        )
+    )
+    assert implied == pytest.approx(0.946 * 0.93, abs=1e-6)  # ≈ 0.8798
+    assert count == 10
+
+
+def test_reserve_prior_does_not_overbid_when_yega_rate_below_one():
+    """The real bug: at 예가율 0.93 a 0.88 (bid/budget) operator must not be pulled up.
+
+    Before the fix, blending the raw bid/예가 ratio (0.946) against a base of
+    0.88 dragged the recommendation UP toward 0.946 — a systematic over-bid.
+    After converting to bid/budget (0.946 × 0.93 ≈ 0.880), the prior agrees with
+    the operator's true bid/budget and does not push the base above 0.88.
+    """
+    kwargs = _base_rate_kwargs(
+        mean_rate=0.88,
+        median_rate=0.88,
+        recent_median_rate=0.88,
+        competitive_quantile_rate=0.88,
+        heuristic_rate=0.88,
+    )
+    pure = select_competitive_base_rate(**kwargs)
+    assert pure == pytest.approx(0.88, abs=1e-4)
+
+    # bid/예가 = 0.946 looks like an over-bid in raw units, but 예가율 0.93 maps it
+    # back to ≈ 0.880 in bid/budget.
+    with_reserve = select_competitive_base_rate(
+        **kwargs,
+        reserve_context=_reserve_context(
+            implied_rate=0.946, sample_count=16, estimated_price_rate=0.93
+        ),
+    )
+    # The recommendation must NOT be pulled above the operator's 0.88 base.
+    assert with_reserve <= 0.88 + 1e-4
+    # And it should stay essentially at the operator's true bid/budget level.
+    assert with_reserve == pytest.approx(0.88, abs=2e-3)
+
+
+def test_reserve_prior_unconverted_would_have_overbid_regression_guard():
+    """Direct contrast: the converted prior is far below the raw bid/예가 ratio.
+
+    Documents the magnitude of the corrected bias — the raw ratio (0.946) sits
+    well above the operator base (0.88), while the converted prior (≈0.880) does
+    not, so the blend can no longer drag the base upward.
+    """
+    raw_ratio = 0.946
+    yega_rate = 0.93
+    converted, _ = resolve_reserve_prior_rate(
+        _reserve_context(
+            implied_rate=raw_ratio, sample_count=10, estimated_price_rate=yega_rate
+        )
+    )
+    assert raw_ratio > 0.88  # raw ratio would have over-bid
+    assert converted < raw_ratio  # conversion strictly lowers it
+    assert converted == pytest.approx(0.8798, abs=1e-3)
+
+
+def test_reserve_prior_falls_back_without_valid_yega_rate():
+    """Missing / zero / out-of-band 예가율 disables the prior (base unchanged)."""
+    kwargs = _base_rate_kwargs()
+    pure = select_competitive_base_rate(**kwargs)
+
+    # 예가율 = 0 → cannot convert → no prior.
+    zero_yega = select_competitive_base_rate(
+        **kwargs,
+        reserve_context=_reserve_context(
+            implied_rate=0.946, sample_count=16, estimated_price_rate=0.0
+        ),
+    )
+    assert zero_yega == pure
+
+    # 예가율 out of band (>1.5) → no prior.
+    high_yega = select_competitive_base_rate(
+        **kwargs,
+        reserve_context=_reserve_context(
+            implied_rate=0.946, sample_count=16, estimated_price_rate=1.6
+        ),
+    )
+    assert high_yega == pure
+
+    # 예가율 key entirely absent → no prior.
+    context = _reserve_context(implied_rate=0.946, sample_count=16)
+    context.pop("median_estimated_price_rate")
+    assert resolve_reserve_prior_rate(context) == (0.0, 0)
+
+
+def test_resolve_reserve_prior_rate_handles_non_numeric_payload():
+    """Non-numeric reserve fields return (0.0, 0) — base-rate-unchanged contract."""
+    assert resolve_reserve_prior_rate(
+        {
+            "sample_count": "many",
+            "estimated_price_sample_count": 10,
+            "median_bid_to_estimated_price_rate": 0.9,
+            "median_estimated_price_rate": 0.93,
+        }
+    ) == (0.0, 0)
+    assert resolve_reserve_prior_rate(
+        {
+            "sample_count": 10,
+            "estimated_price_sample_count": 10,
+            "median_bid_to_estimated_price_rate": "n/a",
+            "median_estimated_price_rate": 0.93,
+        }
+    ) == (0.0, 0)
+    assert resolve_reserve_prior_rate(
+        {
+            "sample_count": 10,
+            "estimated_price_sample_count": 10,
+            "median_bid_to_estimated_price_rate": 0.9,
+            "median_estimated_price_rate": None,
+        }
+    ) == (0.0, 0)
 
 
 # ---------------------------------------------------------------------------

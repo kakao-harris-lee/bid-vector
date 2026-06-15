@@ -453,31 +453,68 @@ def select_competitive_base_rate(
 
 
 def resolve_reserve_prior_rate(reserve_context: dict[str, Any] | None) -> tuple[float, int]:
-    """Extract the reserve-implied bid rate and its sample count, if usable.
+    """Extract the reserve-implied bid rate (in bid/budget units) and its count.
 
-    Returns ``(0.0, 0)`` when the reserve context is missing or carries no usable
-    예가-대비 투찰률(median_bid_to_estimated_price_rate) evidence, which signals
-    callers to leave the statistical base rate untouched.
+    The reserve statistics expose two ratios in DIFFERENT denominators:
+
+    * ``median_bid_to_estimated_price_rate`` — bid / 예가(예정가격), i.e. bid over
+      the selected reserve-price mean.
+    * ``median_estimated_price_rate`` — 예가 / budget(기초금액), i.e. the 예가율.
+
+    ``base_rate``, the category floor, and ``budget × base_rate`` are all bid /
+    budget. Blending the bid/예가 ratio directly would over-bid systematically
+    because 예가 < budget (예가율 < 1) on KONEPS. We therefore convert back to
+    bid/budget units before use::
+
+        implied_bid_to_budget = (bid / 예가) × (예가 / budget) = bid / budget
+                              = median_bid_to_estimated_price_rate
+                                × median_estimated_price_rate
+
+    Returns ``(0.0, 0)`` — which signals callers to leave the statistical base
+    rate untouched — when the context is missing, non-numeric, lacks usable
+    evidence, or the converted rate falls outside a realistic bidding band.
     """
     if not isinstance(reserve_context, dict):
         return 0.0, 0
 
-    sample_count = int(reserve_context.get("sample_count", 0) or 0)
-    estimated_price_sample_count = int(reserve_context.get("estimated_price_sample_count", 0) or 0)
-    implied_rate = float(reserve_context.get("median_bid_to_estimated_price_rate", 0.0) or 0.0)
+    # Harden against non-numeric payloads: any coercion failure means "no usable
+    # prior", preserving the base-rate-unchanged contract.
+    try:
+        sample_count = int(reserve_context.get("sample_count", 0) or 0)
+        estimated_price_sample_count = int(
+            reserve_context.get("estimated_price_sample_count", 0) or 0
+        )
+        bid_to_estimated_price_rate = float(
+            reserve_context.get("median_bid_to_estimated_price_rate", 0.0) or 0.0
+        )
+        estimated_price_rate = float(
+            reserve_context.get("median_estimated_price_rate", 0.0) or 0.0
+        )
+    except (TypeError, ValueError):
+        return 0.0, 0
 
     # The reserve-implied bid rate is only meaningful when we actually observed
     # selected reserve numbers (estimated_price_sample_count) AND a non-trivial
-    # 예가-대비 투찰률. Keep it inside the realistic bidding band before use.
-    if estimated_price_sample_count <= 0 or implied_rate <= 0.0:
+    # bid/예가 ratio.
+    if estimated_price_sample_count <= 0 or bid_to_estimated_price_rate <= 0.0:
         return 0.0, 0
-    if not (0.5 <= implied_rate <= 1.5):
+
+    # 예가율 must be present and inside the realistic 예가/budget band; without a
+    # valid 예가율 we cannot convert to bid/budget, so fall back to no prior.
+    if not (0.5 <= estimated_price_rate <= 1.5):
+        return 0.0, 0
+
+    # Convert bid/예가 → bid/budget so the prior shares units with base_rate.
+    implied_bid_to_budget = bid_to_estimated_price_rate * estimated_price_rate
+
+    # Validate the converted (bid/budget) rate against the realistic bidding band.
+    if not (0.5 <= implied_bid_to_budget <= 1.5):
         return 0.0, 0
 
     # Confidence is driven by how many openings actually contributed an
     # estimated-price observation, not just the raw reserve span count.
     confidence_sample_count = min(sample_count, estimated_price_sample_count)
-    return implied_rate, max(0, confidence_sample_count)
+    return implied_bid_to_budget, max(0, confidence_sample_count)
 
 
 def blend_reserve_prior(base_rate: float, *, reserve_context: dict[str, Any] | None) -> float:
