@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_recommendation
 from app.ai.business_group import resolve_business_group
+from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import get_price_insights, predict_price
 from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy
 from app.core.time import ensure_utc, utc_now
@@ -259,6 +260,16 @@ class OpportunityAnalysisService:
             capacity_score=float(profile.capacity_score or 0.0),
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
+        )
+        # When a settlement-calibrated curve is published, replace the heuristic
+        # P(낙찰) with the calibrated value; otherwise keep the heuristic. The
+        # non-matched 0.49 gate is preserved either way. (Offline / fresh
+        # environments fall back to the heuristic unchanged.)
+        probability_score = self._apply_calibrated_or_heuristic_probability(
+            heuristic_probability=probability_score,
+            classification=classification,
+            price_prediction=price_prediction,
+            business_group=business_group,
         )
         category_priority_override = resolve_category_priority_override(strategy, project.category)
         matched_score = self._apply_category_priority_override(
@@ -559,6 +570,37 @@ class OpportunityAnalysisService:
             probability_score -= 0.05
 
         return round(max(0.0, min(1.0, probability_score)), 2)
+
+    def _apply_calibrated_or_heuristic_probability(
+        self,
+        *,
+        heuristic_probability: float,
+        classification: dict,
+        price_prediction: dict,
+        business_group: str | None,
+    ) -> float:
+        """Override the heuristic P(낙찰) with the calibrated curve when published.
+
+        Uses the SAME inference-time signals (confidence/matched) the backtest path
+        feeds the curve. When no calibration artifact exists, the heuristic is kept
+        unchanged. The non-matched 0.49 gate is enforced here so calibration can
+        never let an unmatched notice present as a high-pursuit opportunity.
+        """
+        probability = float(heuristic_probability)
+        calibrated = apply_probability_calibration(
+            {
+                "confidence_score": float(
+                    price_prediction.get("confidence_score", 0.0) or 0.0
+                ),
+                "matched_score": float(classification.get("score", 0.0) or 0.0),
+                "business_group": business_group,
+            }
+        )
+        if calibrated is not None:
+            probability = calibrated
+        if not classification.get("matched", False):
+            probability = min(probability, 0.49)
+        return round(max(0.0, min(1.0, probability)), 2)
 
     def _apply_category_priority_override(self, score: float, override: float) -> float:
         """Apply a bounded category priority offset to an analysis score."""

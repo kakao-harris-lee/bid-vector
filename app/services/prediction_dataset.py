@@ -7,7 +7,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.models import HistoricalData, TenderResult
+from app.models.models import (
+    HistoricalData,
+    PaperBid,
+    PaperBidSettlement,
+    TenderResult,
+)
 
 _CATEGORY_ALIASES = {
     "general-service": "service",
@@ -228,6 +233,120 @@ class PredictionDatasetService:
             },
             "series": series,
         }
+
+    def build_probability_calibration_dataset(
+        self,
+        db: Session,
+        *,
+        category: str | None = None,
+        limit: int = 2000,
+    ) -> dict[str, Any]:
+        """Build a labeled dataset for calibrating the낙찰-가능성 (probability) score.
+
+        Each row pairs the cheap, *inference-time* signals the Platt calibration
+        consumes (``confidence_score``, ``matched_score``, ``business_group``,
+        ``category``) with a settlement-derived binary label.
+
+        ``historical_sample_size`` is deliberately NOT a feature: it is not persisted
+        on ``PaperBid``, so it would always be 0 here while inference sees a real
+        count — a train/serve skew. The calibration raw therefore uses only
+        confidence/matched (see ``historical.calibration_raw_signal``).
+
+        **Leakage guard.** The settlement fields (``would_have_won_final``,
+        ``would_have_won_price_only``) are LABELS only. They are never copied into
+        the ``features`` block, so a model trained on this dataset can never see a
+        settled outcome as an input. Only columns persisted on ``PaperBid`` at
+        decision time (before settlement) populate ``features``.
+
+        Rows whose ``would_have_won_final`` is ``"unknown"`` (no eligibility verdict
+        yet — typically pre-backfill or missing 예정가격) are excluded from the
+        primary label set to avoid class pollution. A ``price_close`` fallback label
+        is exposed alongside so the trainer can fall back when the eligibility-gated
+        positives are too few.
+        """
+        safe_limit = max(1, min(int(limit or 2000), 20000))
+        query = db.query(PaperBid, PaperBidSettlement).join(
+            PaperBidSettlement, PaperBidSettlement.paper_bid_id == PaperBid.id
+        )
+        if category:
+            normalized = self._normalize_category(category)
+            scope = self._category_scope(category) or [normalized]
+            query = query.filter(PaperBid.project_id.isnot(None))
+            # Filter on the stored paper_bid category proxy via the linked project
+            # category is not persisted on PaperBid; we filter post-hoc below.
+            scope_set = {value for value in scope if value}
+        else:
+            scope_set = None
+        rows = query.order_by(PaperBid.id.desc()).limit(safe_limit).all()
+
+        items: list[dict[str, Any]] = []
+        eligibility_labeled = 0
+        positive_count = 0
+        unknown_count = 0
+        for paper_bid, settlement in rows:
+            business_group = (
+                self._normalize_category(self._resolve_paper_bid_category(paper_bid))
+                or None
+            )
+            if scope_set is not None and business_group not in scope_set:
+                continue
+
+            would_have_won_final = str(settlement.would_have_won_final or "unknown")
+            would_have_won_price_only = str(
+                settlement.would_have_won_price_only or "unknown"
+            )
+            # Primary label: eligibility-gated favorable outcome. "unknown" rows are
+            # dropped from the primary label (None), keeping them out of training.
+            if would_have_won_final == "unknown":
+                primary_label: int | None = None
+                unknown_count += 1
+            elif would_have_won_final == "eligible_favorable":
+                primary_label = 1
+                eligibility_labeled += 1
+                positive_count += 1
+            else:
+                primary_label = 0
+                eligibility_labeled += 1
+            # Fallback label (price-only): used only if the trainer lacks enough
+            # eligibility-gated positives. Never mixed silently with the primary.
+            price_only_label = 1 if would_have_won_price_only == "plausible" else 0
+
+            items.append(
+                {
+                    "paper_bid_id": int(paper_bid.id),
+                    "project_id": paper_bid.project_id,
+                    # --- features (inference-time signals ONLY) ---
+                    "features": {
+                        "confidence_score": float(paper_bid.confidence_score or 0.0),
+                        "matched_score": float(paper_bid.matched_score or 0.0),
+                        "business_group": business_group,
+                        "category": business_group,
+                    },
+                    # --- labels (settled outcomes — never features) ---
+                    "label": primary_label,
+                    "would_have_won_final": would_have_won_final,
+                    "price_close_label": price_only_label,
+                    "would_have_won_price_only": would_have_won_price_only,
+                }
+            )
+
+        return {
+            "category": category,
+            "summary": {
+                "sample_count": len(items),
+                "eligibility_labeled_count": eligibility_labeled,
+                "positive_count": positive_count,
+                "unknown_excluded_count": unknown_count,
+            },
+            "items": items,
+        }
+
+    def _resolve_paper_bid_category(self, paper_bid: PaperBid) -> str | None:
+        """Best-effort category for a paper bid via its linked project."""
+        project = getattr(paper_bid, "project", None)
+        if project is not None:
+            return getattr(project, "category", None)
+        return None
 
     def _serialize_series_point(
         self,
