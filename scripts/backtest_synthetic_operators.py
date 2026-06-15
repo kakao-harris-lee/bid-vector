@@ -5,9 +5,18 @@ Loads the synthetic operators seeded by ``scripts/seed_synthetic_operators.py``,
 runs :func:`PaperBiddingBacktestService.run_historical_backtest` for each one,
 and writes both a per-operator JSON breakdown and a compact CSV-style summary.
 
-The win-rate proxy here is ``would_have_won_price_only_count / settled_count``,
-which mirrors what the paper-bidding service already records in
-``PaperBidSettlement``.
+Two honest rate estimates are emitted (NEITHER is an actual award):
+
+* ``est_price_close_rate_on_settled`` = ``would_have_won_price_only_count /
+  settled_count`` -- a PRICE-ONLY "close" estimate mirroring what the
+  paper-bidding service records in ``PaperBidSettlement``.
+* ``eligible_favorable_rate`` = ``eligible_favorable_count /
+  eligibility_judged_count`` -- the PR3 낙찰하한/적격 gate estimate, with
+  ``unknown`` (no 예가/하한 data) settlements EXCLUDED from the denominator.
+
+Field-level breakdowns (by category / budget band) are written to sibling CSVs
+(``comparison_by_category.csv`` / ``comparison_by_budget_band.csv``) with
+per-group sample size + freshness so thin/stale fields are visible.
 
 Usage::
 
@@ -38,6 +47,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.core.database import Base, SessionLocal, engine
 from app.models.models import CompanyProfile, OperatorStrategy, User
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+from app.services.synthetic_experiment import compute_breakdown
 from scripts.seed_synthetic_operators import (  # noqa: E402  (import after sys.path tweak)
     SYNTHETIC_USERNAME_PREFIX,
 )
@@ -161,14 +171,32 @@ def _condense_summary(summary: dict[str, Any]) -> dict[str, Any]:
     candidate = int(summary.get("candidate_count") or 0)
     paper_bids = int(summary.get("paper_bid_count") or 0)
     win_plausible = int(summary.get("would_have_won_price_only_count") or 0)
+    # Eligibility-gate (PR3) tallies. ``unknown`` (no 예가/낙찰하한 data) is excluded
+    # from the eligibility-rate denominator so the rate is computed only over
+    # judgeable settlements -- the honest counterpart to the price-only estimate.
+    eligible_favorable = int(
+        summary.get("would_have_won_final_eligible_favorable_count") or 0
+    )
+    eligibility_unknown = int(
+        summary.get("would_have_won_final_unknown_count") or 0
+    )
+    eligibility_judged = settled - eligibility_unknown
     return {
         "candidate_count": candidate,
         "paper_bid_count": paper_bids,
         "settled_count": settled,
         "skipped_by_strategy_count": int(summary.get("skipped_by_strategy_count") or 0),
         "would_have_won_price_only_count": win_plausible,
-        "win_rate_on_settled": _safe_ratio(win_plausible, settled),
-        "win_rate_on_candidates": _safe_ratio(win_plausible, candidate),
+        # Honest naming: these are PRICE-ONLY "close" estimates, NOT actual awards.
+        # The legacy ``win_rate_*`` names are dropped here (CLI artifacts have no
+        # frontend consumer) in favour of explicit ``est_price_close_*`` names.
+        "est_price_close_rate_on_settled": _safe_ratio(win_plausible, settled),
+        "est_price_close_rate_on_candidates": _safe_ratio(win_plausible, candidate),
+        # Eligibility-gate estimate: favorable over judgeable (unknown excluded).
+        "would_have_won_final_eligible_favorable_count": eligible_favorable,
+        "would_have_won_final_unknown_count": eligibility_unknown,
+        "eligibility_judged_count": eligibility_judged,
+        "eligible_favorable_rate": _safe_ratio(eligible_favorable, eligibility_judged),
         "bid_submission_rate": _safe_ratio(paper_bids, candidate),
         "average_absolute_bid_rate_error": summary.get("average_absolute_bid_rate_error"),
         "average_absolute_amount_error_rate": summary.get("average_absolute_amount_error_rate"),
@@ -182,6 +210,9 @@ def _condense_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _write_comparison_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    # Column names keep the price-only/estimate qualifier explicit
+    # (``est_price_close_rate_*``) and surface the eligibility-gate estimate
+    # (``eligible_favorable_rate``, unknown excluded from its denominator).
     headers = [
         "slug",
         "business_type",
@@ -190,8 +221,11 @@ def _write_comparison_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "settled_count",
         "skipped_by_strategy_count",
         "would_have_won_price_only_count",
-        "win_rate_on_settled",
-        "win_rate_on_candidates",
+        "est_price_close_rate_on_settled",
+        "est_price_close_rate_on_candidates",
+        "eligible_favorable_count",
+        "eligibility_judged_count",
+        "eligible_favorable_rate",
         "bid_submission_rate",
         "average_absolute_bid_rate_error",
         "average_absolute_amount_error_rate",
@@ -207,13 +241,78 @@ def _write_comparison_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             condensed.get("settled_count", 0),
             condensed.get("skipped_by_strategy_count", 0),
             condensed.get("would_have_won_price_only_count", 0),
-            condensed.get("win_rate_on_settled", ""),
-            condensed.get("win_rate_on_candidates", ""),
+            condensed.get("est_price_close_rate_on_settled", ""),
+            condensed.get("est_price_close_rate_on_candidates", ""),
+            condensed.get("would_have_won_final_eligible_favorable_count", 0),
+            condensed.get("eligibility_judged_count", 0),
+            condensed.get("eligible_favorable_rate", ""),
             condensed.get("bid_submission_rate", ""),
             condensed.get("average_absolute_bid_rate_error", ""),
             condensed.get("average_absolute_amount_error_rate", ""),
         ]
         lines.append(",".join("" if value is None else str(value) for value in values))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# Long-format breakdown CSV headers. ``est_price_close_rate`` is the price-only
+# estimate; ``eligible_favorable_rate`` is the eligibility-gate estimate (unknown
+# excluded). ``latest_result_time`` is the per-group freshness signal.
+_BREAKDOWN_CSV_COMMON_TAIL = [
+    "settled_count",
+    "would_have_won_count",
+    "est_price_close_rate",
+    "eligible_favorable_count",
+    "eligibility_judged_count",
+    "eligible_favorable_rate",
+    "avg_abs_bid_rate_error",
+    "latest_result_time",
+]
+
+
+def _breakdown_group_values(group: dict[str, Any]) -> list[Any]:
+    return [
+        group.get("settled_count", 0),
+        group.get("would_have_won_count", 0),
+        # Prefer the honest alias; fall back to legacy ``win_rate`` for safety.
+        group.get("est_price_close_rate", group.get("win_rate", "")),
+        group.get("eligible_favorable_count", 0),
+        group.get("eligibility_judged_count", 0),
+        group.get("eligible_favorable_rate", ""),
+        group.get("avg_abs_bid_rate_error", ""),
+        group.get("latest_result_time", ""),
+    ]
+
+
+def _write_breakdown_csv(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    breakdown_key: str,
+    group_label: str,
+) -> None:
+    """Write a long-format per-operator breakdown CSV (one row per group).
+
+    ``breakdown_key`` is ``"by_category"`` or ``"by_budget_band"``;
+    ``group_label`` is the leading column name (``category`` / ``budget_band``).
+    Each operator contributes one row per populated group, carrying sample size
+    (``settled_count``) and freshness (``latest_result_time``).
+    """
+    headers = ["slug", "business_type", group_label, *_BREAKDOWN_CSV_COMMON_TAIL]
+    lines = [",".join(headers)]
+    for row in rows:
+        breakdown = row.get("breakdown") or {}
+        groups = breakdown.get(breakdown_key) or []
+        business_type = row["operator"].get("business_type", "")
+        for group in groups:
+            values = [
+                row["slug"],
+                business_type,
+                group.get(group_label, ""),
+                *_breakdown_group_values(group),
+            ]
+            lines.append(
+                ",".join("" if value is None else str(value) for value in values)
+            )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -280,8 +379,12 @@ def main() -> int:
                             "settled_count": 0,
                             "skipped_by_strategy_count": 0,
                             "would_have_won_price_only_count": 0,
-                            "win_rate_on_settled": None,
-                            "win_rate_on_candidates": None,
+                            "est_price_close_rate_on_settled": None,
+                            "est_price_close_rate_on_candidates": None,
+                            "would_have_won_final_eligible_favorable_count": 0,
+                            "would_have_won_final_unknown_count": 0,
+                            "eligibility_judged_count": 0,
+                            "eligible_favorable_rate": None,
                             "bid_submission_rate": None,
                             "average_absolute_bid_rate_error": None,
                             "average_absolute_amount_error_rate": None,
@@ -292,18 +395,24 @@ def main() -> int:
                             "price_competitive_count": 0,
                             "action_counts": {},
                         },
+                        "breakdown": {"by_category": [], "by_budget_band": []},
                         "error": str(exc),
                     }
                 )
                 continue
 
             summary = _condense_summary(result.get("summary", {}))
+            # Field-level breakdown (category / budget band) reusing the same
+            # honest aggregation the web Lab uses -- propagates the per-field view
+            # all the way to the CLI artifacts (sibling CSVs below).
+            breakdown = compute_breakdown(result.get("settlements") or [])
             comparison_rows.append(
                 {
                     "slug": slug,
                     "operator": operator,
                     "run_id": result.get("run_id"),
                     "summary": summary,
+                    "breakdown": breakdown,
                 }
             )
 
@@ -314,6 +423,7 @@ def main() -> int:
                         "request": result.get("request"),
                         "run_id": result.get("run_id"),
                         "summary": result.get("summary"),
+                        "breakdown": breakdown,
                         "settlement_count": len(result.get("settlements") or []),
                     },
                     ensure_ascii=False,
@@ -326,12 +436,13 @@ def main() -> int:
     finally:
         db.close()
 
-    # Sort by win_rate_on_settled descending (None last) for quick visual scan.
+    # Sort by est_price_close_rate_on_settled descending (None last) for a quick
+    # visual scan. This is a PRICE-ONLY estimate, NOT an actual award.
     def _sort_key(row: dict[str, Any]) -> tuple[int, float]:
-        win_rate = row["summary"].get("win_rate_on_settled")
-        if win_rate is None:
+        rate = row["summary"].get("est_price_close_rate_on_settled")
+        if rate is None:
             return (1, 0.0)
-        return (0, -float(win_rate))
+        return (0, -float(rate))
 
     comparison_rows.sort(key=_sort_key)
 
@@ -363,6 +474,24 @@ def main() -> int:
     csv_path = out_dir / "comparison.csv"
     _write_comparison_csv(csv_path, comparison_rows)
 
+    # Sibling long-format CSVs carry the field-level breakdown (one row per
+    # operator x group) with sample size + freshness, so thin/stale fields are
+    # visible without opening the JSON.
+    category_csv_path = out_dir / "comparison_by_category.csv"
+    _write_breakdown_csv(
+        category_csv_path,
+        comparison_rows,
+        breakdown_key="by_category",
+        group_label="category",
+    )
+    budget_band_csv_path = out_dir / "comparison_by_budget_band.csv"
+    _write_breakdown_csv(
+        budget_band_csv_path,
+        comparison_rows,
+        breakdown_key="by_budget_band",
+        group_label="budget_band",
+    )
+
     print(
         json.dumps(
             {
@@ -371,10 +500,19 @@ def main() -> int:
                 "out_dir": str(out_dir),
                 "comparison_json": str(comparison_path),
                 "comparison_csv": str(csv_path),
+                "comparison_by_category_csv": str(category_csv_path),
+                "comparison_by_budget_band_csv": str(budget_band_csv_path),
                 "top": [
                     {
                         "slug": row["slug"],
-                        "win_rate_on_settled": row["summary"].get("win_rate_on_settled"),
+                        # PRICE-ONLY estimate (NOT an actual award).
+                        "est_price_close_rate_on_settled": row["summary"].get(
+                            "est_price_close_rate_on_settled"
+                        ),
+                        # Eligibility-gate estimate (unknown excluded).
+                        "eligible_favorable_rate": row["summary"].get(
+                            "eligible_favorable_rate"
+                        ),
                         "settled_count": row["summary"].get("settled_count"),
                         "candidate_count": row["summary"].get("candidate_count"),
                     }
