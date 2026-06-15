@@ -284,6 +284,73 @@ def test_focus_category_operator_not_starved_by_newer_other_category(test_db):
     assert result["summary"]["skipped_by_strategy_count"] == 0
 
 
+def test_empty_focus_operator_keeps_global_award_pool(test_db):
+    """Regression for the ``elif not category`` global-pool fallback branch.
+
+    A canonical/single operator with EMPTY ``focus_categories`` running with
+    ``category=None`` must keep the GLOBAL award pool (every category in range),
+    and ``request.award_categories`` must be empty -- i.e. the focus-category
+    scoping NEVER narrows an operator that declared no focus. The other
+    starvation tests pass an explicit ``category=`` and so skip this branch; this
+    one covers it directly so a future change to the fallback condition is
+    caught.
+    """
+    _awarded_project(test_db, category="construction", announced_at=_dt(2026, 2, 10))
+    _awarded_project(test_db, category="goods", announced_at=_dt(2026, 2, 12))
+    _awarded_project(test_db, category="service", announced_at=_dt(2026, 2, 14))
+
+    canonical = ensure_operator_account(test_db)
+    canonical_strategy = ensure_operator_strategy(test_db)
+    canonical_strategy.focus_categories = ""  # no focus -> global pool
+    test_db.commit()
+
+    service = PaperBiddingBacktestService()
+    result = service.run_historical_backtest(
+        test_db,
+        operator_id=int(canonical.id),
+        category=None,
+        start_at=_dt(2026, 1, 1),
+        end_at=_dt(2026, 3, 31),
+        limit=10,
+        persist=False,
+    )
+
+    # Empty focus -> no award-category scoping recorded on the request.
+    assert result["request"]["award_categories"] == []
+    # The global pool is preserved: all three categories are present as
+    # candidates (none filtered out by an unintended focus scope).
+    assert result["summary"]["candidate_count"] == 3
+    assert {item["category"] for item in result["items"]} == {
+        "construction",
+        "goods",
+        "service",
+    }
+
+
+def test_load_eligible_awards_category_and_categories_union(test_db):
+    """Passing both ``category`` and ``categories`` yields their UNION (deduped,
+    case-insensitive) -- a thin guard on the filter-set construction."""
+    _awarded_project(test_db, category="construction", announced_at=_dt(2026, 2, 10))
+    _awarded_project(test_db, category="goods", announced_at=_dt(2026, 2, 12))
+    _awarded_project(test_db, category="service", announced_at=_dt(2026, 2, 14))
+
+    service = PaperBiddingBacktestService()
+    awards = service._load_eligible_awards(
+        test_db,
+        category="Construction",  # mixed case -> normalized to construction
+        categories=["goods", "construction"],  # construction duplicated
+        start_at=_dt(2026, 1, 1),
+        end_at=_dt(2026, 3, 31),
+        limit=10,
+    )
+
+    categories = {award.project.category for award in awards}
+    # Union of {construction} and {goods, construction} == {construction, goods};
+    # service is excluded, construction not double-counted.
+    assert categories == {"construction", "goods"}
+    assert len(awards) == 2
+
+
 # --- (b) missing operator_id raises / 404 ------------------------------------
 
 

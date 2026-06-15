@@ -574,6 +574,16 @@ class PaperBiddingBacktestService:
         ``limit`` window dominated by service/construction awards. ``category``
         (singular) stays for the explicit single-category path; when both are
         passed the singular value is appended to the set.
+
+        The category filter is case-insensitive (``func.lower(Project.category)``)
+        so the explicit ``category=`` path matches the same way the downstream
+        ``_passes_strategy`` lower-cased comparison does — no silent miss on a
+        mixed-case stored category.
+
+        Caveat: the window is cut MOST-RECENT-FIRST (this changed from the prior
+        oldest-first ordering). A ``limit``-bounded run therefore keeps the
+        freshest awards, so absolute counts from a bounded run are NOT directly
+        comparable to a pre-change run over the same ``limit``.
         """
         category_filter: set[str] = set()
         if category:
