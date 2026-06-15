@@ -443,6 +443,308 @@ def test_operator_strategy_monitor_persists_decisions_and_notifications(client, 
     assert run.persisted_candidate_count == 2
 
 
+def _seed_many_open_software_projects(test_db, *, count):
+    """Seed ``count`` filter-passing open software notices with staggered deadlines."""
+    projects = []
+    for index in range(count):
+        projects.append(
+            Project(
+                title=f"서울 AI 데이터 통합 플랫폼 구축 {index}",
+                description="서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축",
+                requirements="SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함",
+                budget_estimate=130000000.0,
+                category="software",
+                status="open",
+                # Staggered ascending deadlines so the bounded (deadline asc) scan
+                # deterministically takes the earliest-deadline notices.
+                deadline=datetime.now(UTC) + timedelta(hours=1, minutes=index),
+            )
+        )
+    test_db.add_all(projects)
+    test_db.commit()
+    return projects
+
+
+def _below_threshold_analysis(self, db, project, **kwargs):
+    """Fake analysis returning below-threshold scores (no decisions persist)."""
+    del db, project, kwargs
+    return {
+        "matched_score": 0.1,
+        "probability_score": 0.1,
+        "recommended_amount": 0.0,
+        "deadline_hours_remaining": None,
+        "current_active_bids": 0,
+        "max_active_bids": 3,
+        "current_workload_score": 0.0,
+        "analysis_summary": "스캔 바운드 검증",
+        "decision": {
+            "pursue_bid": False,
+            "action": "skip",
+            "priority_score": 0.1,
+            "recommended_amount": 0.0,
+            "probability_score": 0.1,
+            "reasoning": "below threshold",
+        },
+    }
+
+
+def test_operator_strategy_monitor_scheduled_path_bounds_analysis_scan(client, test_db, monkeypatch):
+    """The scheduled monitor must analyze only the bounded most-imminent slice, not every open notice."""
+    from app.schemas.schemas import OperatorStrategyMonitorRequest
+
+    client.put(
+        "/api/v1/operator/profile",
+        json={
+            "business_type": "software",
+            "license_codes": ["SW001"],
+            "region_codes": ["서울특별시", "전국"],
+            "annual_revenue": 1500000000.0,
+            "capacity_score": 0.95,
+            "total_awards": 9,
+        },
+    )
+    client.put(
+        "/api/v1/operator/strategy",
+        json={
+            "focus_categories": ["software"],
+            "focus_regions": ["서울특별시"],
+            "required_keywords": ["AI", "데이터"],
+            "minimum_match_score": 0.6,
+            "minimum_probability_score": 0.55,
+            "notify_only_high_priority": False,
+            "max_recommended_candidates": 10,
+        },
+    )
+
+    # Pin the scan bound deterministically below the seeded project count.
+    monkeypatch.setattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", 40)
+    monkeypatch.setattr(StrategyMonitoringService, "SCHEDULE_SCAN_MULTIPLIER", 1)
+    monkeypatch.setattr(StrategyMonitoringService, "SCHEDULE_SCAN_FLOOR", 1)
+    expected_scan_limit = 40
+
+    project_count = 120
+    _seed_many_open_software_projects(test_db, count=project_count)
+
+    analyze_calls = {"count": 0}
+
+    def counting_analyze(self, db, project, **kwargs):
+        analyze_calls["count"] += 1
+        return _below_threshold_analysis(self, db, project, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", counting_analyze)
+
+    service = StrategyMonitoringService()
+    response = service.execute_monitoring(
+        test_db,
+        request=OperatorStrategyMonitorRequest(limit=10, high_priority_only=False),
+        trigger_source=StrategyMonitoringService.SCHEDULED_TRIGGER_SOURCE,
+    )
+
+    # The scheduled path loads only the bounded deadline-imminent slice, so the
+    # expensive per-candidate analysis runs at most ``scan_limit`` times — never
+    # once per open notice.
+    assert analyze_calls["count"] == expected_scan_limit
+    assert analyze_calls["count"] < project_count
+    assert response["evaluated_project_count"] == expected_scan_limit
+    assert response["trigger_source"] == StrategyMonitoringService.SCHEDULED_TRIGGER_SOURCE
+
+
+def test_operator_strategy_monitor_manual_path_keeps_full_scan(client, test_db, monkeypatch):
+    """Manual (operator-initiated) runs keep full-scan behavior — the bound is schedule-only."""
+    from app.schemas.schemas import OperatorStrategyMonitorRequest
+
+    client.put(
+        "/api/v1/operator/profile",
+        json={
+            "business_type": "software",
+            "license_codes": ["SW001"],
+            "region_codes": ["서울특별시", "전국"],
+            "annual_revenue": 1500000000.0,
+            "capacity_score": 0.95,
+            "total_awards": 9,
+        },
+    )
+    client.put(
+        "/api/v1/operator/strategy",
+        json={
+            "focus_categories": ["software"],
+            "focus_regions": ["서울특별시"],
+            "required_keywords": ["AI", "데이터"],
+            "minimum_match_score": 0.6,
+            "minimum_probability_score": 0.55,
+            "notify_only_high_priority": False,
+            "max_recommended_candidates": 10,
+        },
+    )
+
+    # Even with a tiny configured scan bound, the manual path must ignore it.
+    monkeypatch.setattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", 5)
+
+    project_count = 25
+    _seed_many_open_software_projects(test_db, count=project_count)
+
+    analyze_calls = {"count": 0}
+
+    def counting_analyze(self, db, project, **kwargs):
+        analyze_calls["count"] += 1
+        return _below_threshold_analysis(self, db, project, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", counting_analyze)
+
+    service = StrategyMonitoringService()
+    response = service.execute_monitoring(
+        test_db,
+        request=OperatorStrategyMonitorRequest(limit=10, high_priority_only=False),
+        trigger_source=StrategyMonitoringService.SYNC_TRIGGER_SOURCE,
+    )
+
+    assert analyze_calls["count"] == project_count
+    assert response["evaluated_project_count"] == project_count
+    assert response["trigger_source"] == StrategyMonitoringService.SYNC_TRIGGER_SOURCE
+
+
+def _seed_imminent_nonmatching_then_late_matching(test_db, *, imminent_count, late_count):
+    """Seed non-matching notices in the imminent slice and matching ones later.
+
+    The imminent slice uses a category outside the operator's watch focus so it
+    fails the cheap watch filter, while the later-deadline slice matches the
+    operator's focus_categories/regions/keywords. This isolates the documented
+    ``scan_limit``-before-filter trade-off: a deadline-asc bounded scan that
+    stops before the matching slice starves the scheduled run, whereas the
+    full (manual) scan still reaches the matches.
+    """
+    nonmatching = []
+    for index in range(imminent_count):
+        nonmatching.append(
+            Project(
+                # category "goods" is outside focus_categories=["software"], so
+                # _apply_strategy_filters rejects these before any analysis.
+                title=f"부산 사무용품 일괄 구매 {index}",
+                description="부산광역시 사무용품 구매",
+                requirements="물품 납품",
+                budget_estimate=130000000.0,
+                category="goods",
+                status="open",
+                deadline=datetime.now(UTC) + timedelta(hours=1, minutes=index),
+            )
+        )
+    matching = []
+    for index in range(late_count):
+        matching.append(
+            Project(
+                title=f"서울 AI 데이터 통합 플랫폼 구축 (지연마감) {index}",
+                description="서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축",
+                requirements="SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함",
+                budget_estimate=130000000.0,
+                category="software",
+                status="open",
+                # Later deadlines than the entire non-matching imminent slice.
+                deadline=datetime.now(UTC) + timedelta(hours=48, minutes=index),
+            )
+        )
+    test_db.add_all(nonmatching + matching)
+    test_db.commit()
+    return nonmatching, matching
+
+
+def test_operator_strategy_monitor_scheduled_scan_can_starve_late_matches(client, test_db, monkeypatch):
+    """Documented trade-off: scan_limit applied before watch filters can starve later matches.
+
+    When the deadline-imminent slice is entirely non-matching and the matches
+    sit on later deadlines beyond ``scan_limit``, the scheduled (bounded) run
+    yields no candidates, while the manual full-scan run still finds them. This
+    pins the intentional behavior so a future change cannot silently turn the
+    bounded scan into a full scan (or vice versa) without updating this test.
+    """
+    from app.schemas.schemas import OperatorStrategyMonitorRequest
+
+    client.put(
+        "/api/v1/operator/profile",
+        json={
+            "business_type": "software",
+            "license_codes": ["SW001"],
+            "region_codes": ["서울특별시", "전국"],
+            "annual_revenue": 1500000000.0,
+            "capacity_score": 0.95,
+            "total_awards": 9,
+        },
+    )
+    client.put(
+        "/api/v1/operator/strategy",
+        json={
+            "focus_categories": ["software"],
+            "focus_regions": ["서울특별시"],
+            "required_keywords": ["AI", "데이터"],
+            "minimum_match_score": 0.6,
+            "minimum_probability_score": 0.55,
+            "notify_only_high_priority": False,
+            "max_recommended_candidates": 10,
+        },
+    )
+
+    imminent_count = 30
+    late_count = 5
+    _seed_imminent_nonmatching_then_late_matching(
+        test_db, imminent_count=imminent_count, late_count=late_count
+    )
+
+    # Bound the scheduled scan to exactly the non-matching imminent slice, so the
+    # deadline-asc scan never reaches the later matching notices.
+    monkeypatch.setattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", imminent_count)
+    monkeypatch.setattr(StrategyMonitoringService, "SCHEDULE_SCAN_MULTIPLIER", 1)
+    monkeypatch.setattr(StrategyMonitoringService, "SCHEDULE_SCAN_FLOOR", 1)
+
+    def matching_analyze(self, db, project, **kwargs):
+        # Only the matching late slice ever reaches analysis (non-matching rows
+        # are dropped by the cheap watch filter first). Return a passing score so
+        # any analyzed candidate would surface as a result.
+        del db, kwargs
+        return {
+            "matched_score": 0.84,
+            "probability_score": 0.89,
+            "recommended_amount": 126000000.0,
+            "deadline_hours_remaining": 48,
+            "current_active_bids": 0,
+            "max_active_bids": 3,
+            "current_workload_score": 0.0,
+            "analysis_summary": "지연 마감 매칭 후보",
+            "decision": {
+                "pursue_bid": True,
+                "action": "bid_now",
+                "priority_score": 0.91,
+                "recommended_amount": 126000000.0,
+                "probability_score": 0.89,
+                "reasoning": "매칭 후보",
+            },
+        }
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", matching_analyze)
+
+    service = StrategyMonitoringService()
+
+    scheduled_response = service.execute_monitoring(
+        test_db,
+        request=OperatorStrategyMonitorRequest(limit=10, high_priority_only=False),
+        trigger_source=StrategyMonitoringService.SCHEDULED_TRIGGER_SOURCE,
+    )
+
+    # Bounded scan only saw the non-matching imminent slice → starved.
+    assert scheduled_response["evaluated_project_count"] == 0
+    assert scheduled_response["persisted_candidate_count"] == 0
+    assert scheduled_response["results"] == []
+
+    # Contrast: the manual full scan (scan_limit=None) reaches the late matches.
+    manual_response = service.execute_monitoring(
+        test_db,
+        request=OperatorStrategyMonitorRequest(limit=10, high_priority_only=False),
+        trigger_source=StrategyMonitoringService.SYNC_TRIGGER_SOURCE,
+    )
+
+    assert manual_response["evaluated_project_count"] == late_count
+    assert manual_response["persisted_candidate_count"] == late_count
+    assert len(manual_response["results"]) == late_count
+
+
 def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(client, test_db, monkeypatch):
     """High-priority monitoring runs should avoid review-only candidates and reuse active records on repeat runs."""
     client.put(
