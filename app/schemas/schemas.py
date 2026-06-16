@@ -1806,10 +1806,12 @@ class MLReleaseOperationsSummary(BaseModel):
 class SmokeTestPhaseRate(BaseModel):
     name: str
     pass_rate: float = Field(
-        ge=0.0, le=1.0, description="해당 단계가 기록된 사이클 중 통과한 비율"
+        ge=0.0,
+        le=1.0,
+        description="시도분 대비 통과율 (스킵 제외, 시도 0이면 0.0)",
     )
     evaluated_count: int = Field(
-        ge=0, description="해당 단계가 기록된(존재한) 사이클 수"
+        ge=0, description="해당 단계가 실제 시도된(스킵 제외) 사이클 수"
     )
 
 

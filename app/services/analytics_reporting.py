@@ -429,22 +429,28 @@ class AnalyticsReportingService:
             else:
                 break
 
-        # Explode per-run trimmed phases for per-phase pass rates.
+        # Explode per-run trimmed phases for per-phase pass rates. A phase that a
+        # cycle *skipped* (recorded with passed=False and a "skipped …" detail
+        # because upstream failed / no eligible project) never actually ran, so it
+        # is excluded from BOTH the numerator and denominator — counting it would
+        # dishonestly drag the phase's pass_rate down for a phase that did not run.
         phase_passed: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
-        phase_total: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
+        phase_attempted: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
         for run in runs:
             for phase in self._load_smoke_phases(run.phases):
                 name = str(phase.get("name") or "")
-                if name not in phase_total:
+                if name not in phase_attempted:
                     continue
-                phase_total[name] += 1
+                if self._is_skipped_phase(phase):
+                    continue
+                phase_attempted[name] += 1
                 if bool(phase.get("passed")):
                     phase_passed[name] += 1
         per_phase = [
             {
                 "name": name,
-                "pass_rate": self._rate(phase_passed[name], phase_total[name]),
-                "evaluated_count": phase_total[name],
+                "pass_rate": self._rate(phase_passed[name], phase_attempted[name]),
+                "evaluated_count": phase_attempted[name],
             }
             for name in self.SMOKE_PHASE_NAMES
         ]
@@ -501,6 +507,19 @@ class AnalyticsReportingService:
         if not isinstance(parsed, list):
             return []
         return [phase for phase in parsed if isinstance(phase, dict)]
+
+    def _is_skipped_phase(self, phase: dict[str, Any]) -> bool:
+        """Return whether a phase record marks a *skipped* (never-run) occurrence.
+
+        A skipped phase is persisted with ``passed=False`` and a ``detail`` that
+        starts with ``"skipped"`` (e.g. ``"skipped — no eligible project"``). A
+        genuinely-attempted-but-failed phase has a non-skipped detail and still
+        counts as attempted+fail.
+        """
+        if bool(phase.get("passed")):
+            return False
+        detail = str(phase.get("detail") or "").strip().lower()
+        return detail.startswith("skipped")
 
     def _smoke_test_status(self, summary: dict[str, Any]) -> tuple[str, str]:
         """Convert smoke cycle telemetry into a dashboard status + detail."""
