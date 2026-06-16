@@ -25,6 +25,9 @@ import pytest
 from app.models.models import CompanyProfile, Project, User
 from app.schemas.schemas import OperatorProfileUpdate
 from app.services.classifier import NoticeClassifierService
+from app.services.opportunity_analysis import (
+    _detect_awarded_contract_limit_risks,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +295,66 @@ def test_assess_budget_passes_when_budget_within_awarded_contract_limit():
     assert result.score == NoticeClassifierService.BUDGET_STRONG_SCORE
     assert any("시공능력평가액" in reason for reason in result.reasons)
     assert not any("도급한도" in reason for reason in result.reasons)
+
+
+def test_assess_budget_passes_when_budget_exactly_at_awarded_contract_limit():
+    """예산 == 도급한도 → 축 통과 + 도급한도 reason 없음 (``>`` 경계, 한도까지는 허용).
+
+    Locks the strict ``>`` semantics: an award *up to and including* the 도급한도
+    is allowed; only exceeding it fails the axis. Guards against a future
+    ``>=`` refactor that would wrongly reject award-at-the-limit notices.
+    """
+    service = NoticeClassifierService()
+    project = _construction_project(budget=1_000_000_000.0)
+    profile = _construction_profile(construction_capacity_amount=3_500_000_000.0)
+    profile.awarded_contract_limit = 1_000_000_000.0  # exactly at the budget
+
+    result = service._assess_budget(project, profile)
+
+    assert result.passed is True
+    assert result.penalty == 0.0
+    # 도급한도 gate must NOT fire when budget equals (does not exceed) the limit;
+    # the existing 시공능력 STRONG path runs unchanged.
+    assert result.score == NoticeClassifierService.BUDGET_STRONG_SCORE
+    assert not any("도급한도" in reason for reason in result.reasons)
+    assert any("시공능력평가액" in reason for reason in result.reasons)
+
+
+def test_awarded_contract_limit_gate_agrees_across_surfaces_on_ambiguous_category():
+    """Budget gate and 도급한도 risk-flag agree on a divergence category.
+
+    "건설공사 설계 감리" normalizes to ``technical-service`` (the 설계/감리 aliases
+    match before construction in ``_normalize_business_type``) yet is a genuine
+    건설/공사 notice. The old gate keyed on ``project_type == "construction"``
+    skipped the budget ceiling here while the risk-flag (broad 건설/공사 predicate)
+    still fired — inconsistent messaging. Both surfaces now share ONE definition
+    (``is_construction_project``), so for budget > 도급한도 they must BOTH react.
+    """
+    service = NoticeClassifierService()
+    project = Project(
+        title="건설공사 설계 감리 용역",
+        description="건설공사 설계 감리 용역",
+        requirements="",
+        budget_estimate=1_000_000_000.0,
+        category="건설공사 설계 감리",  # normalizes to technical-service
+    )
+    profile = _construction_profile(construction_capacity_amount=0.0)
+    profile.awarded_contract_limit = 800_000_000.0  # budget (1e9) exceeds limit
+
+    # (a) classifier budget axis now FAILS with a 도급한도 reason.
+    budget_result = service._assess_budget(project, profile)
+    assert budget_result.passed is False
+    assert budget_result.score == 0.0
+    assert budget_result.penalty == NoticeClassifierService.BUDGET_MISMATCH_PENALTY
+    assert any("도급한도" in reason for reason in budget_result.reasons)
+
+    # Sanity: this is the divergence case — it does NOT normalize to construction.
+    assert service._normalize_business_type(project.category) != "construction"
+
+    # (b) opportunity_analysis risk-flag also surfaces a non-empty 도급한도 risk.
+    risks = _detect_awarded_contract_limit_risks(project, profile)
+    assert risks
+    assert any("도급한도" in risk for risk in risks)
 
 
 def test_assess_budget_ignores_awarded_contract_limit_when_zero():

@@ -7,6 +7,29 @@ from app.core.config import settings
 from app.models.models import CompanyProfile, Project
 
 
+def is_construction_project(project: Project) -> bool:
+    """Shared 건설/공사 detector used by both the 도급한도 budget gate and the
+    construction risk heuristics (``opportunity_analysis``).
+
+    Single source of truth so the budget axis and the risk-flag never disagree
+    on ambiguous categories (e.g. "건설사업관리", "설계·감리"): the raw category is
+    lowercased/stripped and treated as construction when it equals or contains
+    one of ``construction``/``공사``/``건설``. An empty category returns False.
+    """
+    raw_category = (getattr(project, "category", None) or "").strip().lower()
+    if not raw_category:
+        return False
+    # Direct hits + common Korean aliases used across the codebase.
+    if raw_category in {"construction", "공사", "건설"}:
+        return True
+    # Tolerant prefix/suffix forms (e.g. "construction-civil", "건축공사", "토목공사업").
+    if "construction" in raw_category:
+        return True
+    if "공사" in raw_category or "건설" in raw_category:
+        return True
+    return False
+
+
 @dataclass
 class RuleAssessment:
     """Result of a single rule-based classification check."""
@@ -351,13 +374,17 @@ class NoticeClassifierService:
                 reasons=["공고 예산 정보가 없어 예산 적합도는 참고 점수에서 제외했습니다."],
             )
 
-        # Construction-only HARD CEILING: 도급한도(awarded_contract_limit) is a
-        # legal cap on a single award — exceeding it means 신규 수주 불가 regardless
-        # of how strong 시공능력평가액 is. This must fail the budget axis BEFORE the
-        # 시공능력 ratio branch can pass it. When 도급한도 is not provided (<= 0) the
-        # check is skipped entirely so all existing behaviour is preserved.
+        # Construction HARD CEILING: 도급한도(awarded_contract_limit) is a legal cap
+        # on a single award — exceeding it means 신규 도급 불가 regardless of how
+        # strong 시공능력평가액 is. This must fail the budget axis BEFORE the 시공능력
+        # ratio branch can pass it. Uses the broad 건설/공사 predicate
+        # (``is_construction_project``) — the SAME definition as the
+        # opportunity_analysis 도급한도 risk-flag — so the budget gate and the risk
+        # reason never disagree on ambiguous categories (e.g. "건설사업관리",
+        # "설계·감리"). When 도급한도 is not provided (<= 0) the check is skipped
+        # entirely so all existing behaviour is preserved.
         if (
-            project_type == "construction"
+            is_construction_project(project)
             and awarded_contract_limit > 0
             and budget_estimate > awarded_contract_limit
         ):
@@ -367,7 +394,7 @@ class NoticeClassifierService:
                 penalty=self.BUDGET_MISMATCH_PENALTY,
                 reasons=[
                     f"공고 예산({budget_estimate:,.0f}원)이 업체 도급한도({awarded_contract_limit:,.0f}원)를 "
-                    f"초과해 신규 수주가 불가합니다."
+                    f"초과해 신규 도급이 어렵습니다."
                 ],
             )
 
