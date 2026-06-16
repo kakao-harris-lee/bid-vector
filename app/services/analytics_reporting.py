@@ -13,7 +13,14 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun, User
+from app.models.models import (
+    Analytics,
+    CrawlJob,
+    Notification,
+    OperatorStrategyRun,
+    SmokeTestRun,
+    User,
+)
 from app.services.ml_release import MLReleasePromotionService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.tasks.celery_app import (
@@ -32,6 +39,10 @@ class AnalyticsReportingService:
     QUEUED_TASK_STATUSES = {"queued", "pending"}
     RUNNING_TASK_STATUSES = {"running", "started"}
     STALE_TASK_SECONDS = 15 * 60
+    # Canonical 4-phase smoke order (KonepsTelegramSmokeTestService).
+    SMOKE_PHASE_NAMES = ("koneps_collect", "sbert_embedding", "predict_price", "telegram_ping")
+    # "N일 연속 green" healthy threshold for the smoke streak signal.
+    SMOKE_HEALTHY_STREAK = 3
 
     def build_operations_dashboard(
         self,
@@ -70,6 +81,11 @@ class AnalyticsReportingService:
             recent_limit=recent_limit,
         )
         ml_release_summary = self._build_ml_release_summary(recent_limit=recent_limit)
+        smoke_test_summary = self._build_smoke_test_summary(
+            db,
+            days=days,
+            recent_limit=recent_limit,
+        )
         return {
             "operator_id": operator.id,
             "period_days": days,
@@ -78,12 +94,14 @@ class AnalyticsReportingService:
             "tasks": task_summary,
             "notifications": notification_summary,
             "ml_release": ml_release_summary,
+            "smoke_test": smoke_test_summary,
             "cards": self._build_cards(
                 crawl_summary,
                 strategy_summary,
                 task_summary,
                 notification_summary,
                 ml_release_summary,
+                smoke_test_summary,
             ),
         }
 
@@ -376,6 +394,130 @@ class AnalyticsReportingService:
             ],
         }
 
+    def _build_smoke_test_summary(
+        self,
+        db: Session,
+        *,
+        days: int,
+        recent_limit: int,
+    ) -> dict[str, Any]:
+        """Aggregate persisted daily smoke cycles into PASS/FAIL + green-streak signals.
+
+        ``pass_rate`` = passed cycles / total cycles in the window.
+        ``current_streak`` = number of consecutive most-recent cycles that passed
+        overall (the roadmap "N일 연속 green" signal). Honest empty-window output:
+        zero counts, ``latest=None``, no crash. ``schedule_enabled`` surfaces
+        ``SMOKE_TEST_SCHEDULE_ENABLED`` so the UI can say "스케줄 비활성 / 데이터
+        없음" instead of implying failure when there are simply no runs.
+        """
+        date_from = utc_now() - timedelta(days=days)
+        runs = (
+            db.query(SmokeTestRun)
+            .filter(SmokeTestRun.created_at >= date_from)
+            .order_by(SmokeTestRun.created_at.desc(), SmokeTestRun.id.desc())
+            .all()
+        )
+        cycle_count = len(runs)
+        passed_count = sum(1 for run in runs if bool(run.overall_passed))
+        failed_count = cycle_count - passed_count
+
+        # Consecutive most-recent passing cycles (runs are newest-first).
+        current_streak = 0
+        for run in runs:
+            if bool(run.overall_passed):
+                current_streak += 1
+            else:
+                break
+
+        # Explode per-run trimmed phases for per-phase pass rates.
+        phase_passed: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
+        phase_total: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
+        for run in runs:
+            for phase in self._load_smoke_phases(run.phases):
+                name = str(phase.get("name") or "")
+                if name not in phase_total:
+                    continue
+                phase_total[name] += 1
+                if bool(phase.get("passed")):
+                    phase_passed[name] += 1
+        per_phase = [
+            {
+                "name": name,
+                "pass_rate": self._rate(phase_passed[name], phase_total[name]),
+                "evaluated_count": phase_total[name],
+            }
+            for name in self.SMOKE_PHASE_NAMES
+        ]
+
+        latest = None
+        if runs:
+            latest_run = runs[0]
+            latest = {
+                "started_at": latest_run.started_at,
+                "overall_passed": bool(latest_run.overall_passed),
+                "phases": [
+                    {
+                        "name": str(phase.get("name") or ""),
+                        "passed": bool(phase.get("passed")),
+                        "detail": str(phase.get("detail") or ""),
+                    }
+                    for phase in self._load_smoke_phases(latest_run.phases)
+                ],
+            }
+
+        recent_failures = [
+            {
+                "started_at": run.started_at,
+                "failed_phases": [
+                    str(phase.get("name") or "")
+                    for phase in self._load_smoke_phases(run.phases)
+                    if not bool(phase.get("passed"))
+                ],
+            }
+            for run in runs
+            if not bool(run.overall_passed)
+        ][:recent_limit]
+
+        return {
+            "cycle_count": cycle_count,
+            "passed_count": passed_count,
+            "failed_count": failed_count,
+            "pass_rate": self._rate(passed_count, cycle_count),
+            "current_streak": current_streak,
+            "schedule_enabled": bool(settings.SMOKE_TEST_SCHEDULE_ENABLED),
+            "per_phase": per_phase,
+            "latest": latest,
+            "recent_failures": recent_failures,
+        }
+
+    def _load_smoke_phases(self, raw_phases: Any) -> list[dict[str, Any]]:
+        """Parse a SmokeTestRun.phases JSON string into a list of phase dicts."""
+        if isinstance(raw_phases, list):
+            return [phase for phase in raw_phases if isinstance(phase, dict)]
+        try:
+            parsed = json.loads(str(raw_phases or "[]"))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [phase for phase in parsed if isinstance(phase, dict)]
+
+    def _smoke_test_status(self, summary: dict[str, Any]) -> tuple[str, str]:
+        """Convert smoke cycle telemetry into a dashboard status + detail."""
+        cycle_count = int(summary.get("cycle_count") or 0)
+        schedule_enabled = bool(summary.get("schedule_enabled"))
+        if cycle_count == 0:
+            if not schedule_enabled:
+                return "info", "스모크 스케줄 비활성 / 데이터 없음."
+            return "watch", "스모크 스케줄은 켜져 있으나 기록된 사이클이 없습니다."
+        streak = int(summary.get("current_streak") or 0)
+        pass_rate = float(summary.get("pass_rate") or 0.0)
+        if streak >= self.SMOKE_HEALTHY_STREAK or pass_rate >= 0.9:
+            return "healthy", f"최근 {streak}회 연속 통과, 통과율 {pass_rate:.0%} ({cycle_count}회)."
+        if pass_rate >= 0.65:
+            return "watch", f"최근 연속 통과 {streak}회, 통과율 {pass_rate:.0%} ({cycle_count}회)."
+        return "critical", f"최근 연속 통과 {streak}회, 통과율 {pass_rate:.0%} ({cycle_count}회)."
+
     def _build_ml_release_summary(self, *, recent_limit: int) -> dict[str, Any]:
         """Summarize local ML release manifests and predictor promotion gates."""
         manifest_dir = self._ml_manifest_dir()
@@ -419,8 +561,10 @@ class AnalyticsReportingService:
         task_summary: dict[str, Any],
         notification_summary: dict[str, Any],
         ml_release_summary: dict[str, Any],
+        smoke_test_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Build dashboard card payloads from detailed summaries."""
+        smoke_status, smoke_detail = self._smoke_test_status(smoke_test_summary)
         return [
             {
                 "key": "crawl_success_rate",
@@ -524,6 +668,25 @@ class AnalyticsReportingService:
                 "unit": "count",
                 "status": ml_release_summary["backtest_status"],
                 "detail": ml_release_summary["backtest_detail"],
+            },
+            {
+                "key": "smoke_test_streak",
+                "label": "스모크 연속 통과",
+                "value": smoke_test_summary["current_streak"],
+                "unit": "count",
+                "status": smoke_status,
+                "detail": smoke_detail,
+            },
+            {
+                "key": "smoke_test_pass_rate",
+                "label": "스모크 사이클 통과율",
+                "value": smoke_test_summary["pass_rate"],
+                "unit": "ratio",
+                "status": smoke_status,
+                "detail": (
+                    f"{smoke_test_summary['passed_count']}/{smoke_test_summary['cycle_count']} "
+                    "사이클 통과 (추정 운영 검증)."
+                ),
             },
         ]
 

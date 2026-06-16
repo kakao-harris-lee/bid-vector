@@ -459,7 +459,12 @@ def run_koneps_telegram_smoke_test() -> dict:
 
     db = SessionLocal()
     try:
-        report = KonepsTelegramSmokeTestService().run(db)
+        service = KonepsTelegramSmokeTestService()
+        report = service.run(db)
+        try:
+            service.persist_report(db, report)
+        except Exception:  # noqa: BLE001 — persistence must not mask the smoke result
+            logger.exception("failed to persist smoke test run")
         return asdict(report)
     finally:
         db.close()

@@ -451,6 +451,27 @@ class CrawlJob(Base):
     project = relationship("Project", back_populates="crawl_jobs")
 
 
+class SmokeTestRun(Base):
+    """Persisted KONEPS + Telegram end-to-end smoke test cycle.
+
+    One row per daily smoke cycle so the operations dashboard can surface a
+    consolidated PASS/FAIL history + consecutive green streak alongside crawl
+    and notification health. Per-phase ``data`` payloads are intentionally
+    dropped before persistence to keep rows small — only ``{name, passed,
+    detail}`` is retained.
+    """
+    __tablename__ = "smoke_test_runs"
+
+    id = Column(Integer, primary_key=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    overall_passed = Column(Boolean, default=False, index=True)
+    phases = Column(Text, default="[]")  # JSON: [{name, passed, detail}, ...]
+    telegram_message_id = Column(Integer, nullable=True)
+    telegram_status = Column(String(50), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, index=True)
+
+
 class DocumentAnalysis(Base):
     """Document analysis results"""
     __tablename__ = "document_analyses"

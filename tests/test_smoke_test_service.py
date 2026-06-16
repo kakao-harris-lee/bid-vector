@@ -126,6 +126,71 @@ def test_predict_price_phase_band_rejects_above_ceiling(monkeypatch, rate, expec
     assert res.passed is expected
 
 
+def test_persist_report_inserts_trimmed_row(test_db):
+    """persist_report inserts a SmokeTestRun, trims per-phase data, parses timestamps."""
+    import json
+
+    from app.models.models import SmokeTestRun
+    from app.services.smoke_test import KonepsTelegramSmokeTestService, SmokeTestReport
+
+    report = SmokeTestReport(
+        started_at="2026-06-16T07:00:00+00:00",
+        completed_at="2026-06-16T07:01:30+00:00",
+        overall_passed=True,
+        phases=[
+            {"name": "koneps_collect", "passed": True, "detail": "collected 5", "data": {"collected_count": 5}},
+            {"name": "telegram_ping", "passed": True, "detail": "sent", "data": {"delivery": {"big": "payload"}}},
+        ],
+        telegram_message_id=4242,
+        telegram_status="sent",
+    )
+
+    run = KonepsTelegramSmokeTestService().persist_report(test_db, report)
+
+    assert run.id is not None
+    assert run.overall_passed is True
+    assert run.telegram_message_id == 4242
+    assert run.telegram_status == "sent"
+    assert run.started_at is not None and run.completed_at is not None
+
+    stored = json.loads(run.phases)
+    assert stored == [
+        {"name": "koneps_collect", "passed": True, "detail": "collected 5"},
+        {"name": "telegram_ping", "passed": True, "detail": "sent"},
+    ]
+    # bulky per-phase data dict must be dropped
+    assert all("data" not in phase for phase in stored)
+
+    rows = test_db.query(SmokeTestRun).all()
+    assert len(rows) == 1
+
+
+def test_persist_report_tolerates_empty_timestamps_and_null_telegram(test_db):
+    """persist_report must not raise when timestamps are empty and Telegram is null.
+
+    ENVIRONMENT=test skips Telegram, so telegram_message_id is None.
+    """
+    from app.services.smoke_test import KonepsTelegramSmokeTestService, SmokeTestReport
+
+    report = SmokeTestReport(
+        started_at="",
+        completed_at="",
+        overall_passed=False,
+        phases=[{"name": "koneps_collect", "passed": False, "detail": "exception"}],
+        telegram_message_id=None,
+        telegram_status="",
+    )
+
+    run = KonepsTelegramSmokeTestService().persist_report(test_db, report)
+
+    assert run.id is not None
+    assert run.started_at is None
+    assert run.completed_at is None
+    assert run.overall_passed is False
+    assert run.telegram_message_id is None
+    assert run.telegram_status is None
+
+
 def _mk_phase(name, passed, detail, **data):
     from app.services.smoke_test import PhaseResult
     return PhaseResult(name=name, passed=passed, detail=detail, data=data)
