@@ -252,6 +252,96 @@ def test_assess_budget_capacity_outranks_annual_revenue_for_construction():
 
 
 # ---------------------------------------------------------------------------
+# Classifier — 도급한도 (awarded_contract_limit) hard ceiling gate
+# ---------------------------------------------------------------------------
+
+
+def test_assess_budget_fails_when_budget_exceeds_awarded_contract_limit():
+    """도급한도 초과 → budget 축 FAIL even when 시공능력평가액 is overwhelmingly strong.
+
+    도급한도 is a legal cap on a single award: exceeding it = 신규 수주 불가. The
+    ceiling must override an otherwise STRONG 시공능력 ratio (here ratio = 3).
+    """
+    service = NoticeClassifierService()
+    project = _construction_project(budget=1_000_000_000.0)
+    profile = _construction_profile(construction_capacity_amount=3_000_000_000.0)
+    # 시공능력 ratio = 3.0 (would be STRONG) but budget exceeds 도급한도.
+    profile.awarded_contract_limit = 800_000_000.0
+
+    result = service._assess_budget(project, profile)
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert result.penalty == NoticeClassifierService.BUDGET_MISMATCH_PENALTY
+    assert any("도급한도" in reason for reason in result.reasons)
+    # The 시공능력 ratio branch must NOT have run.
+    assert not any("시공능력평가액" in reason for reason in result.reasons)
+
+
+def test_assess_budget_passes_when_budget_within_awarded_contract_limit():
+    """도급한도 이내 → existing 시공능력 path runs unchanged (STRONG)."""
+    service = NoticeClassifierService()
+    project = _construction_project(budget=1_000_000_000.0)
+    profile = _construction_profile(construction_capacity_amount=3_500_000_000.0)
+    profile.awarded_contract_limit = 5_000_000_000.0  # budget well within limit
+
+    result = service._assess_budget(project, profile)
+
+    assert result.passed is True
+    assert result.penalty == 0.0
+    assert result.score == NoticeClassifierService.BUDGET_STRONG_SCORE
+    assert any("시공능력평가액" in reason for reason in result.reasons)
+    assert not any("도급한도" in reason for reason in result.reasons)
+
+
+def test_assess_budget_ignores_awarded_contract_limit_when_zero():
+    """도급한도 미제공(0) → no regression; behaves exactly like before the gate."""
+    service = NoticeClassifierService()
+    project = _construction_project(budget=1_000_000_000.0)
+    profile = _construction_profile(construction_capacity_amount=3_500_000_000.0)
+    # _construction_profile already sets awarded_contract_limit=0.0, assert it.
+    assert profile.awarded_contract_limit == 0.0
+
+    result = service._assess_budget(project, profile)
+
+    assert result.passed is True
+    assert result.penalty == 0.0
+    assert result.score == NoticeClassifierService.BUDGET_STRONG_SCORE
+    assert not any("도급한도" in reason for reason in result.reasons)
+
+
+def test_assess_budget_non_construction_ignores_awarded_contract_limit():
+    """비건설 공고는 도급한도 ceiling을 적용하지 않고 legacy 연매출 path를 탄다."""
+    service = NoticeClassifierService()
+    project = Project(
+        title="AI SW 통합 개발",
+        description="AI SW 통합 개발",
+        requirements="",
+        budget_estimate=1_000_000_000.0,
+        category="software",
+    )
+    profile = CompanyProfile(
+        business_type="software",
+        license_codes="SW001",
+        region_codes="전국",
+        annual_revenue=4_000_000_000.0,
+        capacity_score=0.85,
+        construction_capacity_amount=0.0,
+        # budget (1e9) exceeds 도급한도 (8e8) but project is non-construction.
+        awarded_contract_limit=800_000_000.0,
+        total_awards=3,
+    )
+
+    result = service._assess_budget(project, profile)
+
+    assert result.passed is True
+    assert result.penalty == 0.0
+    # 도급한도 must NOT be applied to a non-construction notice.
+    assert not any("도급한도" in reason for reason in result.reasons)
+    assert any("연매출" in reason for reason in result.reasons)
+
+
+# ---------------------------------------------------------------------------
 # Classifier — fallback paths remain untouched
 # ---------------------------------------------------------------------------
 

@@ -339,6 +339,9 @@ class NoticeClassifierService:
         construction_capacity_amount = float(
             getattr(profile, "construction_capacity_amount", 0.0) or 0.0
         )
+        awarded_contract_limit = float(
+            getattr(profile, "awarded_contract_limit", 0.0) or 0.0
+        )
         project_type = self._normalize_business_type(project.category)
 
         if budget_estimate <= 0:
@@ -346,6 +349,26 @@ class NoticeClassifierService:
                 score=0.0,
                 passed=True,
                 reasons=["공고 예산 정보가 없어 예산 적합도는 참고 점수에서 제외했습니다."],
+            )
+
+        # Construction-only HARD CEILING: 도급한도(awarded_contract_limit) is a
+        # legal cap on a single award — exceeding it means 신규 수주 불가 regardless
+        # of how strong 시공능력평가액 is. This must fail the budget axis BEFORE the
+        # 시공능력 ratio branch can pass it. When 도급한도 is not provided (<= 0) the
+        # check is skipped entirely so all existing behaviour is preserved.
+        if (
+            project_type == "construction"
+            and awarded_contract_limit > 0
+            and budget_estimate > awarded_contract_limit
+        ):
+            return RuleAssessment(
+                score=0.0,
+                passed=False,
+                penalty=self.BUDGET_MISMATCH_PENALTY,
+                reasons=[
+                    f"공고 예산({budget_estimate:,.0f}원)이 업체 도급한도({awarded_contract_limit:,.0f}원)를 "
+                    f"초과해 신규 수주가 불가합니다."
+                ],
             )
 
         # Construction-only: when the operator has filled in 시공능력평가액 it
