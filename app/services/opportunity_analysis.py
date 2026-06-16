@@ -15,7 +15,7 @@ from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, CompanyProfile, Project
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
-from app.services.classifier import NoticeClassifierService
+from app.services.classifier import NoticeClassifierService, is_construction_project
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 from app.services.project_similarity import ProjectSimilarityService
@@ -59,23 +59,15 @@ _CONSTRUCTION_RISK_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
 def _is_construction_project(project: Project) -> bool:
     """Decide whether to run construction-specific risk heuristics on this notice.
 
-    Construction guard: signals only fire when the project category normalizes
-    to a construction tag. This keeps unrelated software/goods notices that
-    happen to mention 공동도급/유사실적 in different domain contexts from
-    raising construction-flavored risk reasons.
+    Delegates to the shared ``classifier.is_construction_project`` so the
+    construction risk heuristics here and the 도급한도 budget gate in
+    ``_assess_budget`` always use ONE definition (no divergence on ambiguous
+    categories such as "건설사업관리" / "설계·감리"). Signals only fire when the
+    project category normalizes to a construction tag, which keeps unrelated
+    software/goods notices that happen to mention 공동도급/유사실적 in different
+    domain contexts from raising construction-flavored risk reasons.
     """
-    raw_category = (getattr(project, "category", None) or "").strip().lower()
-    if not raw_category:
-        return False
-    # Direct hits + common Korean aliases used across the codebase.
-    if raw_category in {"construction", "공사", "건설"}:
-        return True
-    # Tolerant prefix/suffix forms (e.g. "construction-civil", "건축공사", "토목공사업").
-    if "construction" in raw_category:
-        return True
-    if "공사" in raw_category or "건설" in raw_category:
-        return True
-    return False
+    return is_construction_project(project)
 
 
 # 매치 직후 짧은 윈도우 내 부정어가 있으면 신호로 잡지 않음
