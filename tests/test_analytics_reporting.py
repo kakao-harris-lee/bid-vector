@@ -6,7 +6,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.config import settings
-from app.models.models import Analytics, CrawlJob, Notification, OperatorStrategyRun
+from app.models.models import (
+    Analytics,
+    CrawlJob,
+    Notification,
+    OperatorStrategyRun,
+    SmokeTestRun,
+)
 
 
 def _bootstrap_operator(client):
@@ -391,3 +397,279 @@ def test_operations_dashboard_uses_manifest_validation_time_for_latest_release(
     assert cards["ml_release_gate"]["detail"] == (
         "Latest manifest 2026-05-16-price-v1 has an invalid optional signature."
     )
+
+
+def _phases_json(*passes):
+    """Serialize trimmed smoke phases for a run, one (name, passed) per phase."""
+    names = ["koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"]
+    return json.dumps(
+        [
+            {"name": name, "passed": bool(passed), "detail": "ok" if passed else "fail"}
+            for name, passed in zip(names, passes)
+        ],
+        ensure_ascii=False,
+    )
+
+
+def test_operations_dashboard_summarizes_smoke_cycles(client, test_db, monkeypatch):
+    """Smoke summary should report pass rate, streak, per-phase rates, and failures."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    # Newest-first the runs will be: pass (now), pass (-1d), fail (-2d).
+    # current_streak = 2 (two most-recent passing cycles before the failure).
+    test_db.add_all([
+        SmokeTestRun(
+            started_at=now - timedelta(days=2, minutes=1),
+            completed_at=now - timedelta(days=2),
+            overall_passed=False,
+            phases=_phases_json(True, True, False, True),
+            telegram_message_id=None,
+            telegram_status="sent",
+            created_at=now - timedelta(days=2),
+        ),
+        SmokeTestRun(
+            started_at=now - timedelta(days=1, minutes=1),
+            completed_at=now - timedelta(days=1),
+            overall_passed=True,
+            phases=_phases_json(True, True, True, True),
+            telegram_message_id=11,
+            telegram_status="sent",
+            created_at=now - timedelta(days=1),
+        ),
+        SmokeTestRun(
+            started_at=now - timedelta(minutes=1),
+            completed_at=now,
+            overall_passed=True,
+            phases=_phases_json(True, True, True, True),
+            telegram_message_id=12,
+            telegram_status="sent",
+            created_at=now,
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    assert smoke["cycle_count"] == 3
+    assert smoke["passed_count"] == 2
+    assert smoke["failed_count"] == 1
+    assert smoke["pass_rate"] == pytest.approx(0.6667, abs=0.0001)
+    assert smoke["current_streak"] == 2
+    assert smoke["schedule_enabled"] is True
+
+    per_phase = {item["name"]: item for item in smoke["per_phase"]}
+    assert set(per_phase) == {"koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"}
+    assert per_phase["predict_price"]["pass_rate"] == pytest.approx(0.6667, abs=0.0001)
+    assert per_phase["predict_price"]["evaluated_count"] == 3
+    assert per_phase["koneps_collect"]["pass_rate"] == pytest.approx(1.0, abs=0.0001)
+
+    assert smoke["latest"] is not None
+    assert smoke["latest"]["overall_passed"] is True
+    assert [p["name"] for p in smoke["latest"]["phases"]] == [
+        "koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"
+    ]
+
+    assert len(smoke["recent_failures"]) == 1
+    assert smoke["recent_failures"][0]["failed_phases"] == ["predict_price"]
+
+    cards = {card["key"]: card for card in response.json()["cards"]}
+    assert "smoke_test_streak" in cards
+    assert "smoke_test_pass_rate" in cards
+    assert cards["smoke_test_pass_rate"]["value"] == pytest.approx(0.6667, abs=0.0001)
+
+
+def test_operations_dashboard_smoke_empty_window_is_honest(client, test_db, monkeypatch):
+    """Empty window → honest zeros, latest=None, no crash; schedule flag reflected."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", False)
+    _bootstrap_operator(client)
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    assert smoke["cycle_count"] == 0
+    assert smoke["passed_count"] == 0
+    assert smoke["failed_count"] == 0
+    assert smoke["pass_rate"] == 0.0
+    assert smoke["current_streak"] == 0
+    assert smoke["schedule_enabled"] is False
+    assert smoke["latest"] is None
+    assert smoke["recent_failures"] == []
+    # all 4 phases present with zero evaluated_count
+    per_phase = {item["name"]: item for item in smoke["per_phase"]}
+    assert len(per_phase) == 4
+    assert all(item["evaluated_count"] == 0 for item in smoke["per_phase"])
+
+    cards = {card["key"]: card for card in response.json()["cards"]}
+    # schedule disabled + no data → honest info tone
+    assert cards["smoke_test_streak"]["status"] == "info"
+
+
+def test_operations_dashboard_smoke_streak_breaks_on_middle_failure(client, test_db, monkeypatch):
+    """A failure between passing cycles must break the streak (newest-first P, F, P → 1)."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    # Persist oldest-first so the rows materialize as newest-first P, F, P.
+    test_db.add_all([
+        SmokeTestRun(
+            started_at=now - timedelta(days=2, minutes=1),
+            completed_at=now - timedelta(days=2),
+            overall_passed=True,
+            phases=_phases_json(True, True, True, True),
+            telegram_status="sent",
+            created_at=now - timedelta(days=2),
+        ),
+        SmokeTestRun(
+            started_at=now - timedelta(days=1, minutes=1),
+            completed_at=now - timedelta(days=1),
+            overall_passed=False,
+            phases=_phases_json(True, True, False, True),
+            telegram_status="sent",
+            created_at=now - timedelta(days=1),
+        ),
+        SmokeTestRun(
+            started_at=now - timedelta(minutes=1),
+            completed_at=now,
+            overall_passed=True,
+            phases=_phases_json(True, True, True, True),
+            telegram_status="sent",
+            created_at=now,
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    assert smoke["cycle_count"] == 3
+    assert smoke["passed_count"] == 2
+    # Only the most-recent pass counts; the middle failure breaks the streak.
+    assert smoke["current_streak"] == 1
+
+
+def test_operations_dashboard_smoke_tolerates_malformed_phases_json(client, test_db, monkeypatch):
+    """A run with non-JSON phases must not crash; latest.phases degrades to []."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    test_db.add_all([
+        SmokeTestRun(
+            started_at=now - timedelta(days=1, minutes=1),
+            completed_at=now - timedelta(days=1),
+            overall_passed=True,
+            phases=_phases_json(True, True, True, True),
+            telegram_status="sent",
+            created_at=now - timedelta(days=1),
+        ),
+        # Most-recent run has malformed phases JSON.
+        SmokeTestRun(
+            started_at=now - timedelta(minutes=1),
+            completed_at=now,
+            overall_passed=True,
+            phases="not json {[",
+            telegram_status="sent",
+            created_at=now,
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    assert smoke["cycle_count"] == 2
+    # Latest is the malformed run; phases parse to an empty list (no crash).
+    assert smoke["latest"] is not None
+    assert smoke["latest"]["phases"] == []
+    # The malformed cycle contributes nothing; rates come only from the valid run.
+    per_phase = {item["name"]: item for item in smoke["per_phase"]}
+    assert per_phase["koneps_collect"]["evaluated_count"] == 1
+    assert per_phase["koneps_collect"]["pass_rate"] == pytest.approx(1.0, abs=0.0001)
+    assert per_phase["predict_price"]["evaluated_count"] == 1
+
+
+def _phases_json_with_skips(*records):
+    """Serialize smoke phases from explicit (name, passed, detail) records."""
+    return json.dumps(
+        [
+            {"name": name, "passed": bool(passed), "detail": detail}
+            for name, passed, detail in records
+        ],
+        ensure_ascii=False,
+    )
+
+
+def test_operations_dashboard_smoke_per_phase_excludes_skipped(client, test_db, monkeypatch):
+    """Skipped phase occurrences are excluded from per-phase attempted count and pass rate."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    # predict_price: skipped in two cycles, attempted+passed in one → 1/1.
+    # sbert_embedding: skipped in ALL cycles → evaluated_count == 0, pass_rate 0.0.
+    skipped_phases = _phases_json_with_skips(
+        ("koneps_collect", True, "ok"),
+        ("sbert_embedding", False, "skipped — Phase 1 failed"),
+        ("predict_price", False, "skipped — no eligible project"),
+        ("telegram_ping", True, "ok"),
+    )
+    attempted_phases = _phases_json_with_skips(
+        ("koneps_collect", True, "ok"),
+        ("sbert_embedding", False, "skipped — Phase 1 failed"),
+        ("predict_price", True, "predicted 1,234,000"),
+        ("telegram_ping", True, "ok"),
+    )
+
+    test_db.add_all([
+        SmokeTestRun(
+            started_at=now - timedelta(days=2, minutes=1),
+            completed_at=now - timedelta(days=2),
+            overall_passed=False,
+            phases=skipped_phases,
+            telegram_status="sent",
+            created_at=now - timedelta(days=2),
+        ),
+        SmokeTestRun(
+            started_at=now - timedelta(days=1, minutes=1),
+            completed_at=now - timedelta(days=1),
+            overall_passed=False,
+            phases=skipped_phases,
+            telegram_status="sent",
+            created_at=now - timedelta(days=1),
+        ),
+        SmokeTestRun(
+            started_at=now - timedelta(minutes=1),
+            completed_at=now,
+            overall_passed=True,
+            phases=attempted_phases,
+            telegram_status="sent",
+            created_at=now,
+        ),
+    ])
+    test_db.commit()
+
+    response = client.get("/api/v1/analytics/operations-dashboard", params={"days": 30, "recent_limit": 5})
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    per_phase = {item["name"]: item for item in smoke["per_phase"]}
+
+    # predict_price was attempted in exactly one cycle (and passed); skips excluded.
+    assert per_phase["predict_price"]["evaluated_count"] == 1
+    assert per_phase["predict_price"]["pass_rate"] == pytest.approx(1.0, abs=0.0001)
+
+    # koneps_collect / telegram_ping ran every cycle.
+    assert per_phase["koneps_collect"]["evaluated_count"] == 3
+    assert per_phase["telegram_ping"]["evaluated_count"] == 3
+
+    # sbert_embedding was skipped in ALL cycles → honest empty (0 / 0.0).
+    assert per_phase["sbert_embedding"]["evaluated_count"] == 0
+    assert per_phase["sbert_embedding"]["pass_rate"] == 0.0

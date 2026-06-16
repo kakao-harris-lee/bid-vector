@@ -94,6 +94,31 @@ const baseOperations: OperationsDashboardResponse = {
     backtest_status: "healthy",
     backtest_detail: "샘플 100건",
     recent_manifests: []
+  },
+  smoke_test: {
+    cycle_count: 20,
+    passed_count: 18,
+    failed_count: 2,
+    pass_rate: 0.9,
+    current_streak: 5,
+    schedule_enabled: true,
+    per_phase: [
+      { name: "koneps_collect", pass_rate: 1.0, evaluated_count: 20 },
+      { name: "sbert_embedding", pass_rate: 0.95, evaluated_count: 20 },
+      { name: "predict_price", pass_rate: 0.7, evaluated_count: 20 },
+      { name: "telegram_ping", pass_rate: 0.0, evaluated_count: 0 }
+    ],
+    latest: {
+      started_at: "2026-05-19T07:00:00Z",
+      overall_passed: false,
+      phases: [
+        { name: "koneps_collect", passed: true, detail: "" },
+        { name: "predict_price", passed: false, detail: "guardrail 미달" }
+      ]
+    },
+    recent_failures: [
+      { started_at: "2026-05-18T07:00:00Z", failed_phases: ["predict_price"] }
+    ]
   }
 };
 
@@ -207,10 +232,12 @@ interface FetchSpy {
 
 function installFetchMock({
   kpi = buildKpi(),
-  accounts = privilegedAccounts
+  accounts = privilegedAccounts,
+  operations = baseOperations
 }: {
   kpi?: OperationsKpiResponse | ((url: string) => OperationsKpiResponse);
   accounts?: OperatorAccountListResponse;
+  operations?: OperationsDashboardResponse;
 } = {}): FetchSpy {
   const spy: FetchSpy = { dashboardCount: 0, kpiCalls: [] };
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -219,7 +246,7 @@ function installFetchMock({
     if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
     if (url.startsWith("/api/v1/analytics/operations-dashboard")) {
       spy.dashboardCount += 1;
-      return jsonResponse(baseOperations);
+      return jsonResponse(operations);
     }
     if (url.startsWith("/api/v1/analytics/operations-kpi")) {
       spy.kpiCalls.push(url);
@@ -349,6 +376,60 @@ describe("OperationsScreen", () => {
 
     // localStorage에도 영속됨
     expect(window.localStorage.getItem(ACTIVE_OPERATOR_STORAGE_KEY)).toBe("11");
+  });
+
+  it("운영 검증(스모크) 섹션을 통과율·연속 통과·단계 라벨과 함께 렌더한다", async () => {
+    installFetchMock();
+
+    renderApp();
+
+    // 섹션 제목(h3) — Card 루트는 div라 region role이 없으므로 heading 으로 식별
+    const smokeCard = (
+      await screen.findByRole("heading", { name: "운영 검증 (스모크 사이클)" })
+    ).closest("[aria-label='운영 검증 (스모크 사이클)']") as HTMLElement;
+    expect(smokeCard).not.toBeNull();
+    // 통과율 90.0% + 연속 통과 5회
+    expect(within(smokeCard).getAllByText("90.0%").length).toBeGreaterThanOrEqual(1);
+    expect(within(smokeCard).getByText("5회")).toBeInTheDocument();
+    // 단계 라벨 (한국어 매핑) — per-phase + latest-run 양쪽에 등장
+    expect(within(smokeCard).getAllByText("공고 수집").length).toBeGreaterThanOrEqual(1);
+    expect(within(smokeCard).getAllByText("가격 예측").length).toBeGreaterThanOrEqual(1);
+    // evaluated_count=0 단계는 "데이터 없음"으로 정직하게 표기
+    expect(within(smokeCard).getByText("데이터 없음")).toBeInTheDocument();
+    // 최근 실행 FAIL + 실패 단계 detail
+    expect(within(smokeCard).getByText("guardrail 미달")).toBeInTheDocument();
+  });
+
+  it("smoke 스케줄이 비활성이고 사이클이 없으면 정직한 비활성 안내를 노출한다", async () => {
+    installFetchMock({
+      operations: {
+        ...baseOperations,
+        smoke_test: {
+          cycle_count: 0,
+          passed_count: 0,
+          failed_count: 0,
+          pass_rate: 0,
+          current_streak: 0,
+          schedule_enabled: false,
+          per_phase: [],
+          latest: null,
+          recent_failures: []
+        }
+      }
+    });
+
+    renderApp();
+
+    const smokeCard = (
+      await screen.findByRole("heading", { name: "운영 검증 (스모크 사이클)" })
+    ).closest("[aria-label='운영 검증 (스모크 사이클)']") as HTMLElement;
+    expect(smokeCard).not.toBeNull();
+    expect(
+      within(smokeCard).getByText(/smoke 스케줄이 비활성 상태입니다/)
+    ).toBeInTheDocument();
+    expect(
+      within(smokeCard).getByText(/자동 검증 데이터가 아직 없습니다/)
+    ).toBeInTheDocument();
   });
 
   it("KPI fetch가 빈 응답이어도 안전하게 7 그룹을 렌더한다", async () => {

@@ -1803,6 +1803,53 @@ class MLReleaseOperationsSummary(BaseModel):
     recent_manifests: List[MLReleaseManifestSummaryItem] = Field(default_factory=list)
 
 
+class SmokeTestPhaseRate(BaseModel):
+    name: str
+    pass_rate: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="시도분 대비 통과율 (스킵 제외, 시도 0이면 0.0)",
+    )
+    evaluated_count: int = Field(
+        ge=0, description="해당 단계가 실제 시도된(스킵 제외) 사이클 수"
+    )
+
+
+class SmokeTestLatestPhase(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class SmokeTestLatestRun(BaseModel):
+    started_at: Optional[datetime] = None
+    overall_passed: bool
+    phases: List[SmokeTestLatestPhase] = Field(default_factory=list)
+
+
+class SmokeTestRecentFailure(BaseModel):
+    started_at: Optional[datetime] = None
+    failed_phases: List[str] = Field(default_factory=list)
+
+
+class SmokeTestOperationsSummary(BaseModel):
+    cycle_count: int = Field(ge=0, description="기간 내 스모크 사이클 수")
+    passed_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    pass_rate: float = Field(
+        ge=0.0, le=1.0, description="스모크 사이클 통과율 (통과/전체, 데이터 없으면 0.0)"
+    )
+    current_streak: int = Field(
+        ge=0, description="최근 연속 통과 사이클 수 (N일 연속 green 신호)"
+    )
+    schedule_enabled: bool = Field(
+        description="스모크 스케줄(SMOKE_TEST_SCHEDULE_ENABLED) 활성 여부"
+    )
+    per_phase: List[SmokeTestPhaseRate] = Field(default_factory=list)
+    latest: Optional[SmokeTestLatestRun] = None
+    recent_failures: List[SmokeTestRecentFailure] = Field(default_factory=list)
+
+
 class OperationsDashboardResponse(BaseModel):
     operator_id: int
     current_operator_id: int
@@ -1813,6 +1860,7 @@ class OperationsDashboardResponse(BaseModel):
     tasks: TaskOperationsSummary
     notifications: NotificationOperationsSummary
     ml_release: MLReleaseOperationsSummary
+    smoke_test: SmokeTestOperationsSummary
     cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 

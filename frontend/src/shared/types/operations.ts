@@ -22,6 +22,13 @@ export type OperationsKpiRecommendationFeedback =
 export type OperationsKpiSettlementCoverage =
   components["schemas"]["OperationsKpiSettlementCoverage"];
 
+// Smoke-test 운영 검증 summary (backend smoke cycle health). Aliased from the
+// generated OpenAPI schema so labels/structure stay in sync with the backend.
+export type SmokeTestOperationsSummary = components["schemas"]["SmokeTestOperationsSummary"];
+export type SmokeTestPhaseRate = components["schemas"]["SmokeTestPhaseRate"];
+export type SmokeTestLatestRun = components["schemas"]["SmokeTestLatestRun"];
+export type SmokeTestRecentFailure = components["schemas"]["SmokeTestRecentFailure"];
+
 export interface OperationsDashboardCard {
   key: string;
   label: string;
@@ -103,5 +110,6 @@ export interface OperationsDashboardResponse {
   tasks: TaskOperationsSummary;
   notifications: NotificationOperationsSummary;
   ml_release: MLReleaseOperationsSummary;
+  smoke_test: SmokeTestOperationsSummary;
   cards: OperationsDashboardCard[];
 }

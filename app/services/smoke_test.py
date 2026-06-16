@@ -7,12 +7,16 @@ Designed to fire from Celery beat once a day.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.models.models import SmokeTestRun
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,48 @@ class KonepsTelegramSmokeTestService:
         report.completed_at = datetime.now(timezone.utc).isoformat()
         report.phases = [asdict(p) for p in phases]
         return report
+
+    def persist_report(self, db: Session, report: SmokeTestReport) -> "SmokeTestRun":
+        """Persist one smoke cycle as a ``SmokeTestRun`` row and return it.
+
+        Stores only the trimmed ``{name, passed, detail}`` slice of each phase
+        (the bulky per-phase ``data`` dict is dropped to keep rows small). Empty
+        timestamp strings tolerate to ``None`` and null Telegram fields (e.g.
+        ENVIRONMENT=test skips Telegram) must not raise. Plain DB session, no
+        subtask — safe under the ``memory://`` eager broker.
+        """
+        from app.models.models import SmokeTestRun
+
+        trimmed_phases = [
+            {
+                "name": str(phase.get("name") or ""),
+                "passed": bool(phase.get("passed")),
+                "detail": str(phase.get("detail") or ""),
+            }
+            for phase in (report.phases or [])
+        ]
+        run = SmokeTestRun(
+            started_at=self._parse_iso(report.started_at),
+            completed_at=self._parse_iso(report.completed_at),
+            overall_passed=bool(report.overall_passed),
+            phases=json.dumps(trimmed_phases, ensure_ascii=False),
+            telegram_message_id=report.telegram_message_id,
+            telegram_status=report.telegram_status or None,
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return run
+
+    @staticmethod
+    def _parse_iso(value: str | None) -> datetime | None:
+        """Parse an ISO timestamp, tolerating empty/None into ``None``."""
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     def _phase_koneps_collect(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="koneps_collect")
