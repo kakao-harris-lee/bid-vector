@@ -282,6 +282,57 @@ def test_accuracy_report_empty_window_is_honest_zeros(test_db):
     assert report["notes"]
 
 
+def _seed_n_settled(test_db, operator_id, *, count, category="software"):
+    """Seed ``count`` settled cases on distinct days (all within the window)."""
+    for index in range(count):
+        _seed_case(
+            test_db,
+            operator_id,
+            title=f"Trunc {index}",
+            category=category,
+            winning_amount=1_000_000.0,
+            recommended_amount=1_020_000.0,  # 0.02 error
+            predicted_price=1_050_000.0,
+            announced_offset_days=index + 1,
+        )
+
+
+def test_accuracy_report_truncation_flagged_when_limit_hit(test_db):
+    """More matched+settled items than ``limit`` -> honest truncation signal."""
+    operator = ensure_operator_account(test_db)
+    _seed_n_settled(test_db, operator.id, count=4)  # 4 matched, cap at 2
+    test_db.commit()
+
+    report = _build_report(test_db, days=90, limit=2)
+
+    summary = report["summary"]
+    assert summary["truncated"] is True
+    assert summary["matched_sample_count"] == 2
+    assert summary["limit"] == 2
+    # only the capped subset is aggregated/returned.
+    assert summary["recommendation_sample_count"] == 2
+    assert len(report["items"]) == 2
+    # truncation note appended only when truncated.
+    assert any("상한(2건)에 도달" in note for note in report["notes"])
+
+
+def test_accuracy_report_no_truncation_under_limit(test_db):
+    """Matched count below ``limit`` -> truncated False, no truncation note."""
+    operator = ensure_operator_account(test_db)
+    _seed_n_settled(test_db, operator.id, count=3)
+    test_db.commit()
+
+    report = _build_report(test_db, days=90, limit=500)
+
+    summary = report["summary"]
+    assert summary["truncated"] is False
+    assert summary["matched_sample_count"] == 3
+    assert summary["limit"] == 500
+    assert summary["recommendation_sample_count"] == 3
+    # no truncation note when under the cap.
+    assert not any("상한" in note and "도달" in note for note in report["notes"])
+
+
 def test_accuracy_report_endpoint(client, test_db):
     """The /accuracy-report endpoint returns the report shape."""
     operator = ensure_operator_account(test_db)

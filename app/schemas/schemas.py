@@ -1378,6 +1378,15 @@ class AccuracyReportSummary(BaseModel):
     """
 
     period_days: int = Field(ge=0)
+    matched_sample_count: int = Field(
+        ge=0,
+        description="정산 완료·매칭된 비교 표본 수(집계 대상 건수). 상한(limit)에 막히면 truncated=True.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="상한(limit) 도달로 가장 최근 건만 집계돼 일부 과거 비교 건이 누락됐을 수 있음.",
+    )
+    limit: int = Field(ge=0, description="집계에 적용된 유효 상한(limit) 건수.")
     recommendation_sample_count: int = Field(ge=0)
     prediction_sample_count: int = Field(ge=0)
     average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)

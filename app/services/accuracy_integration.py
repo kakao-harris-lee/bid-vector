@@ -68,6 +68,11 @@ class AccuracyIntegrationService:
             db, days=days, limit=limit, operator=operator
         )
         items = feedback["items"]
+        # ``items`` is already pre-capped at ``limit`` by build_feedback (which
+        # stops appending at the limit, newest-first). Track that cap so the
+        # summary can honestly flag truncation of older comparisons.
+        matched_sample_count = int(feedback["result_count"])
+        truncated = matched_sample_count >= limit
 
         recommendation_error_rates = [
             float(item["recommendation_error_rate"])
@@ -76,12 +81,26 @@ class AccuracyIntegrationService:
         ]
         sample_count = len(recommendation_error_rates)
 
-        summary = self._build_summary(feedback, recommendation_error_rates)
+        summary = self._build_summary(
+            feedback,
+            recommendation_error_rates,
+            matched_sample_count=matched_sample_count,
+            truncated=truncated,
+            limit=limit,
+        )
         error_distribution = self._build_error_distribution(
             recommendation_error_rates, sample_count
         )
         per_category = self._build_per_category(items, category_limit=category_limit)
         time_trend = self._build_time_trend(items, trend_bucket_days=trend_bucket_days)
+
+        # items are already <= limit (pre-capped by build_feedback), so no slice.
+        notes = list(_NOTES)
+        if truncated:
+            notes.append(
+                f"표본이 상한({limit}건)에 도달해 가장 최근 건만 집계됐습니다 "
+                "— 더 긴 기간/상한이 필요할 수 있습니다."
+            )
 
         return {
             "operator_id": int(feedback["operator_id"]),
@@ -89,8 +108,8 @@ class AccuracyIntegrationService:
             "error_distribution": error_distribution,
             "per_category": per_category,
             "time_trend": time_trend,
-            "items": items[:limit],
-            "notes": list(_NOTES),
+            "items": items,
+            "notes": notes,
         }
 
     # -- summary ---------------------------------------------------------------
@@ -99,18 +118,23 @@ class AccuracyIntegrationService:
         self,
         feedback: dict[str, Any],
         recommendation_error_rates: list[float],
+        *,
+        matched_sample_count: int,
+        truncated: bool,
+        limit: int,
     ) -> dict[str, Any]:
         sample_count = len(recommendation_error_rates)
-        within_1 = feedback.get("recommendation_within_1_percent_count")
-        within_3 = feedback.get("recommendation_within_3_percent_count")
-        if within_1 is None:
-            within_1 = sum(1 for value in recommendation_error_rates if value <= 0.01)
-        if within_3 is None:
-            within_3 = sum(1 for value in recommendation_error_rates if value <= 0.03)
+        # Compute all within_* thresholds uniformly from the local rates so the
+        # three are symmetric (build_feedback only exposes 1%/3%, not 5%).
+        within_1 = sum(1 for value in recommendation_error_rates if value <= 0.01)
+        within_3 = sum(1 for value in recommendation_error_rates if value <= 0.03)
         within_5 = sum(1 for value in recommendation_error_rates if value <= 0.05)
 
         return {
             "period_days": int(feedback["period_days"]),
+            "matched_sample_count": matched_sample_count,
+            "truncated": truncated,
+            "limit": int(limit),
             "recommendation_sample_count": sample_count,
             "prediction_sample_count": int(feedback.get("prediction_sample_count", 0)),
             "average_recommendation_error_rate": feedback.get(
