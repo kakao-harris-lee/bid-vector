@@ -6941,12 +6941,12 @@ export interface components {
             name: string;
             /**
              * Pass Rate
-             * @description 해당 단계가 기록된 사이클 중 통과한 비율
+             * @description 시도분 대비 통과율 (스킵 제외, 시도 0이면 0.0)
              */
             pass_rate: number;
             /**
              * Evaluated Count
-             * @description 해당 단계가 기록된(존재한) 사이클 수
+             * @description 해당 단계가 실제 시도된(스킵 제외) 사이클 수
              */
             evaluated_count: number;
         };
