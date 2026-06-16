@@ -5104,6 +5104,7 @@ export interface components {
             tasks: components["schemas"]["TaskOperationsSummary"];
             notifications: components["schemas"]["NotificationOperationsSummary"];
             ml_release: components["schemas"]["MLReleaseOperationsSummary"];
+            smoke_test: components["schemas"]["SmokeTestOperationsSummary"];
             /** Cards */
             cards?: components["schemas"]["OperationsDashboardCard"][];
         };
@@ -6883,6 +6884,78 @@ export interface components {
             similarity_score: number;
             /** Embedding Model */
             embedding_model?: string | null;
+        };
+        /** SmokeTestLatestPhase */
+        SmokeTestLatestPhase: {
+            /** Name */
+            name: string;
+            /** Passed */
+            passed: boolean;
+            /** Detail */
+            detail: string;
+        };
+        /** SmokeTestLatestRun */
+        SmokeTestLatestRun: {
+            /** Started At */
+            started_at?: string | null;
+            /** Overall Passed */
+            overall_passed: boolean;
+            /** Phases */
+            phases?: components["schemas"]["SmokeTestLatestPhase"][];
+        };
+        /** SmokeTestOperationsSummary */
+        SmokeTestOperationsSummary: {
+            /**
+             * Cycle Count
+             * @description 기간 내 스모크 사이클 수
+             */
+            cycle_count: number;
+            /** Passed Count */
+            passed_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /**
+             * Pass Rate
+             * @description 스모크 사이클 통과율 (통과/전체, 데이터 없으면 0.0)
+             */
+            pass_rate: number;
+            /**
+             * Current Streak
+             * @description 최근 연속 통과 사이클 수 (N일 연속 green 신호)
+             */
+            current_streak: number;
+            /**
+             * Schedule Enabled
+             * @description 스모크 스케줄(SMOKE_TEST_SCHEDULE_ENABLED) 활성 여부
+             */
+            schedule_enabled: boolean;
+            /** Per Phase */
+            per_phase?: components["schemas"]["SmokeTestPhaseRate"][];
+            latest?: components["schemas"]["SmokeTestLatestRun"] | null;
+            /** Recent Failures */
+            recent_failures?: components["schemas"]["SmokeTestRecentFailure"][];
+        };
+        /** SmokeTestPhaseRate */
+        SmokeTestPhaseRate: {
+            /** Name */
+            name: string;
+            /**
+             * Pass Rate
+             * @description 해당 단계가 기록된 사이클 중 통과한 비율
+             */
+            pass_rate: number;
+            /**
+             * Evaluated Count
+             * @description 해당 단계가 기록된(존재한) 사이클 수
+             */
+            evaluated_count: number;
+        };
+        /** SmokeTestRecentFailure */
+        SmokeTestRecentFailure: {
+            /** Started At */
+            started_at?: string | null;
+            /** Failed Phases */
+            failed_phases?: string[];
         };
         /** StrategyFailureItem */
         StrategyFailureItem: {
