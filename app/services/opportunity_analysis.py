@@ -18,7 +18,6 @@ from app.services.allocation import BidDecisionService
 from app.services.classifier import (
     NoticeClassifierService,
     REGION_PREFERENCE_PATTERN,
-    detect_regional_preference,
     is_construction_project,
 )
 from app.services.prediction_dataset import PredictionDatasetService
@@ -796,20 +795,16 @@ class OpportunityAnalysisService:
         project: Project,
         profile: CompanyProfile | None,
     ) -> bool:
-        """True when the notice advertises 지역가산점 AND the operator's region overlaps
-        the notice region — the in-region case where 지역가산점 is a strength, not a risk.
+        """True when the 지역가산점/지역우대 boost applies to this (project, profile) —
+        the in-region case where 지역가산점 is a strength (classifier score boost),
+        not a risk, so the region_bonus risk is suppressed.
 
-        Uses the classifier's region helpers + the shared ``detect_regional_preference``
-        so the suppression decision and the classifier's region-score boost agree on
-        both the 지역가산 signal and the region-overlap test.
+        Delegates to the classifier's SINGLE source of truth
+        (``region_preference_boost_applies``) so the risk-suppression and the
+        region-score boost can never disagree (e.g. they now agree symmetrically
+        on 전국-notice and 전국-profile cases). No-profile → False → risk shown.
         """
-        if profile is None:
-            return False
-        if not detect_regional_preference(self.classifier._collect_project_text(project)):
-            return False
-        project_regions, _ = self.classifier._extract_project_regions(project)
-        profile_regions = self.classifier._extract_regions(profile.region_codes)
-        return bool(project_regions & profile_regions)
+        return self.classifier.region_preference_boost_applies(project, profile)
 
     def _build_summary(
         self,

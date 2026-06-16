@@ -21,7 +21,10 @@ from app.services.classifier import (
     REGION_PREFERENCE_PATTERN,
     detect_regional_preference,
 )
-from app.services.opportunity_analysis import _detect_construction_risk_reasons
+from app.services.opportunity_analysis import (
+    _REGION_BONUS_RISK_MESSAGE,
+    _detect_construction_risk_reasons,
+)
 
 
 def _project(
@@ -218,8 +221,50 @@ def test_shared_pattern_consistency_between_modules():
     # opportunity_analysis risk uses the SAME REGION_PREFERENCE_PATTERN
     assert REGION_PREFERENCE_PATTERN.search(example.lower()) is not None
     project = _project(description=example)
-    region_bonus_reason = (
-        "지역 가산점/소재지 가산 조건이 있어 비지역 업체는 점수 불리할 수 있습니다."
-    )
+    # Bind to the production constant so a message change can't leave this green
+    # against stale literal text.
+    region_bonus_reason = _REGION_BONUS_RISK_MESSAGE
     # Without in-region suppression the region_bonus risk fires for the same text.
     assert region_bonus_reason in _detect_construction_risk_reasons(project)
+
+
+# ---- 7. boost ⇔ risk-suppression symmetry for 전국 edge cases (asymmetries #1/#2) -------------
+
+
+def _boost_applies(project: Project, profile: CompanyProfile) -> bool:
+    return NoticeClassifierService().region_preference_boost_applies(project, profile)
+
+
+def test_nationwide_notice_with_local_bonus_no_boost():
+    """#1: '전국 어디서나 가능하나 충북 지역 가산점 적용', profile=충북 →
+    the 전국 neutral short-circuit means NO positive region match, so NO boost
+    despite literal 충북 overlap. boost-applies is False and the region score is
+    the neutral 0.05 with no 지역우대 reason."""
+    project = _project(
+        description="전국 어디서나 참여 가능하나 충북 지역 가산점 적용",
+        requirements="전국 업체 참여 가능",
+    )
+    profile = _profile("충북")
+    assert _boost_applies(project, profile) is False
+    assessment = _assess(project, profile)
+    assert assessment.score == NoticeClassifierService.REGION_NEUTRAL_SCORE  # 0.05
+    assert not any("지역우대 가점" in r for r in assessment.reasons)
+
+
+def test_strict_local_notice_nationwide_profile_boost_applied():
+    """#2: strict 충북 지역가산점 notice, profile=전국 → boost applies (전국 profile
+    is region-eligible under the strict-match branch) and the region score is the
+    capped 0.28 with a 지역우대 reason."""
+    project = _project(
+        description="해당 지역 소재 업체만 참여 가능한 충북 지역 도로 공사",
+        requirements="충북 업체 대상, 지역 가산점 부여",
+    )
+    profile = _profile("전국")
+    assert _boost_applies(project, profile) is True
+    assessment = _assess(project, profile)
+    cap = (
+        NoticeClassifierService.REGION_MATCH_SCORE
+        + NoticeClassifierService.REGION_PREFERENCE_BONUS
+    )  # 0.28
+    assert assessment.score == cap
+    assert any("지역우대 가점" in r for r in assessment.reasons)
