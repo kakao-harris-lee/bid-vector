@@ -10,6 +10,7 @@ from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import Analytics, Bid, BidDecisionRecord, Project, User
 from app.schemas.schemas import (
+    AccuracyReportResponse,
     AnalyticsEventRequest,
     DecisionRecommendationResponse,
     DecisionExperimentRunCreateRequest,
@@ -31,6 +32,7 @@ from app.schemas.schemas import (
     PredictionObservabilityResponse,
     RecommendationFeedbackLabelsResponse,
 )
+from app.services.accuracy_integration import AccuracyIntegrationService
 from app.services.analytics_reporting import AnalyticsReportingService
 from app.services.decision_analytics import DecisionAnalyticsService
 from app.services.decision_experiments import DecisionExperimentService
@@ -181,6 +183,22 @@ def get_prediction_observability(
     return PredictionReportingService().build_observability(
         db,
         days=days,
+        trend_bucket_days=trend_bucket_days,
+    )
+
+
+@router.get("/accuracy-report", response_model=AccuracyReportResponse)
+def get_accuracy_report(
+    days: int = Query(90, ge=1, le=365),
+    limit: int = Query(500, ge=1, le=2000),
+    trend_bucket_days: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    """Consolidate 추천가 vs 실제 낙찰가 정확도 (정산 완료 건만, 단일 운영자 기준)."""
+    return AccuracyIntegrationService().build_accuracy_report(
+        db,
+        days=days,
+        limit=limit,
         trend_bucket_days=trend_bucket_days,
     )
 
