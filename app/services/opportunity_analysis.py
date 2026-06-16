@@ -15,12 +15,20 @@ from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, CompanyProfile, Project
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
-from app.services.classifier import NoticeClassifierService, is_construction_project
+from app.services.classifier import (
+    NoticeClassifierService,
+    REGION_PREFERENCE_PATTERN,
+    is_construction_project,
+)
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.operator_strategy_tuning import resolve_category_priority_override
 
+
+# Named constant for the region_bonus risk message so the in-region suppression
+# filter (see _build_risk_flags) matches by identity, not a fragile substring.
+_REGION_BONUS_RISK_MESSAGE = "지역 가산점/소재지 가산 조건이 있어 비지역 업체는 점수 불리할 수 있습니다."
 
 # Construction-specific risk signals (v1) — keyword/regex heuristics applied only
 # when the notice is classified as construction. Each tuple is
@@ -49,9 +57,12 @@ _CONSTRUCTION_RISK_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
         "유사 실적/시공실적 요건이 명시돼 있어 운영자 실적 증빙이 필요합니다.",
     ),
     (
+        # Reuse the SHARED compiled pattern from classifier so the region_bonus
+        # risk-flag and the classifier's region-score boost can never disagree on
+        # what "지역가산점" means (single source of truth).
         "region_bonus",
-        re.compile(r"지역\s*가산(?:점)?|소재지\s*가산|본사\s*가산"),
-        "지역 가산점/소재지 가산 조건이 있어 비지역 업체는 점수 불리할 수 있습니다.",
+        REGION_PREFERENCE_PATTERN,
+        _REGION_BONUS_RISK_MESSAGE,
     ),
 )
 
@@ -75,8 +86,18 @@ def _is_construction_project(project: Project) -> bool:
 _NEGATION_NEAR_MATCH = re.compile(r"\s*(?:없|미적용|불요|무관|면제|미요구|미해당)")
 
 
-def _detect_construction_risk_reasons(project: Project) -> list[str]:
-    """Return ordered, deduplicated construction risk reasons matched on the notice text."""
+def _detect_construction_risk_reasons(
+    project: Project,
+    *,
+    exclude_region_bonus: bool = False,
+) -> list[str]:
+    """Return ordered, deduplicated construction risk reasons matched on the notice text.
+
+    When ``exclude_region_bonus`` is True the ``region_bonus`` reason is dropped —
+    used for an in-region operator, for whom 지역가산점 is a competitive advantage
+    (reflected as a classifier score boost) rather than a risk. Out-of-region
+    operators keep the reason because for them it is a genuine disadvantage.
+    """
     if not _is_construction_project(project):
         return []
 
@@ -91,6 +112,8 @@ def _detect_construction_risk_reasons(project: Project) -> list[str]:
     seen_categories: set[str] = set()
     for category_id, pattern, reason in _CONSTRUCTION_RISK_PATTERNS:
         if category_id in seen_categories:
+            continue
+        if exclude_region_bonus and category_id == "region_bonus":
             continue
         hit = pattern.search(notice_text)
         if hit is None:
@@ -754,10 +777,34 @@ class OpportunityAnalysisService:
             risks.append("마감 시간이 매우 촉박해 즉시 대응 체계가 필요합니다.")
 
         if project is not None:
-            risks.extend(_detect_construction_risk_reasons(project))
+            # 지역가산점 + 업체 수행지역 일치 = 우대(가점)이지 리스크가 아니므로,
+            # in-region 운영자에게는 region_bonus 리스크를 숨긴다. 비지역 운영자는
+            # 여전히 불리하므로 리스크를 유지한다.
+            exclude_region_bonus = self._operator_is_in_region_with_preference(project, profile)
+            risks.extend(
+                _detect_construction_risk_reasons(
+                    project, exclude_region_bonus=exclude_region_bonus
+                )
+            )
             risks.extend(_detect_awarded_contract_limit_risks(project, profile))
 
         return risks
+
+    def _operator_is_in_region_with_preference(
+        self,
+        project: Project,
+        profile: CompanyProfile | None,
+    ) -> bool:
+        """True when the 지역가산점/지역우대 boost applies to this (project, profile) —
+        the in-region case where 지역가산점 is a strength (classifier score boost),
+        not a risk, so the region_bonus risk is suppressed.
+
+        Delegates to the classifier's SINGLE source of truth
+        (``region_preference_boost_applies``) so the risk-suppression and the
+        region-score boost can never disagree (e.g. they now agree symmetrically
+        on 전국-notice and 전국-profile cases). No-profile → False → risk shown.
+        """
+        return self.classifier.region_preference_boost_applies(project, profile)
 
     def _build_summary(
         self,

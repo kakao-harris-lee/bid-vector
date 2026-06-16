@@ -30,6 +30,41 @@ def is_construction_project(project: Project) -> bool:
     return False
 
 
+# Single source of truth for the 지역가산점/소재지 가산/본사 가산 signal. Both the
+# classifier region-score boost (``_assess_region``) and the opportunity_analysis
+# region_bonus risk flag reuse THIS compiled pattern so the score-boost and the
+# risk-flag can never disagree on what "지역가산점" means (PR #98 lesson — one
+# definition). Detection is a regex heuristic over notice text and is
+# construction-gated by callers; it is a matching signal, NOT a substitute for an
+# actual 적격심사 가산점 계산.
+REGION_PREFERENCE_PATTERN = re.compile(r"지역\s*가산(?:점)?|소재지\s*가산|본사\s*가산")
+
+# 매치 직후 짧은 윈도우 내 부정어가 있으면 신호로 잡지 않음
+# (예: "지역 가산점 없음", "소재지 가산 미적용" → 우대 아님). Mirrors
+# opportunity_analysis._NEGATION_NEAR_MATCH so both modules negate identically.
+_REGION_PREFERENCE_NEGATION = re.compile(r"\s*(?:없|미적용|불요|무관|면제|미요구|미해당)")
+
+
+def detect_regional_preference(text: str) -> bool:
+    """Return True if ``text`` advertises a 지역가산점/지역우대 condition.
+
+    Hits ``REGION_PREFERENCE_PATTERN`` AND is not immediately negated — the ~12
+    characters following the match are checked for a negation word (없/미적용/불요/
+    무관/면제/미요구/미해당), matching opportunity_analysis's near-match negation
+    guard so the shared signal cannot drift between the two modules.
+    """
+    if not text:
+        return False
+    normalized = str(text).lower()
+    hit = REGION_PREFERENCE_PATTERN.search(normalized)
+    if hit is None:
+        return False
+    tail = normalized[hit.end():hit.end() + 12]
+    if _REGION_PREFERENCE_NEGATION.match(tail):
+        return False
+    return True
+
+
 @dataclass
 class RuleAssessment:
     """Result of a single rule-based classification check."""
@@ -51,6 +86,12 @@ class NoticeClassifierService:
     REGION_MATCH_SCORE = 0.2
     REGION_ADVISORY_SCORE = 0.12
     REGION_NEUTRAL_SCORE = 0.05
+    # Additive bonus stacked on the region-match score when the construction
+    # notice advertises a 지역가산점/지역우대 condition AND the operator's region
+    # overlaps the notice region — an in-region competitive advantage. Capped so
+    # the region axis stays bounded at REGION_MATCH_SCORE + REGION_PREFERENCE_BONUS
+    # (= 0.28). Heuristic matching signal, not an 적격심사 가산점 calculation.
+    REGION_PREFERENCE_BONUS = 0.08
     BUDGET_STRONG_SCORE = 0.2
     BUDGET_GOOD_SCORE = 0.15
     BUDGET_BORDERLINE_SCORE = 0.1
@@ -293,22 +334,123 @@ class NoticeClassifierService:
             ],
         )
 
-    def _assess_region(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Evaluate whether the company can serve the project's regions."""
+    def _region_match_context(
+        self, project: Project, profile: CompanyProfile
+    ) -> tuple[set[str], bool, set[str], set[str], bool]:
+        """Derive the region-scoring context ONCE so the boost decision
+        (``region_preference_boost_applies``) and the base scoring
+        (``_assess_region``) never re-derive regions independently.
+
+        Returns ``(project_regions, has_strict_region_limit, profile_regions,
+        overlap, is_neutral_notice)`` where ``is_neutral_notice`` mirrors the
+        ``not project_regions or "전국" in project_regions`` short-circuit that
+        grants NO positive region-match (and therefore NO boost).
+        """
         project_regions, has_strict_region_limit = self._extract_project_regions(project)
         profile_regions = self._extract_regions(profile.region_codes)
+        overlap = project_regions & profile_regions
+        is_neutral_notice = not project_regions or "전국" in project_regions
+        return (
+            project_regions,
+            has_strict_region_limit,
+            profile_regions,
+            overlap,
+            is_neutral_notice,
+        )
 
-        if not project_regions or "전국" in project_regions:
+    def region_preference_boost_applies(
+        self, project: Project, profile: CompanyProfile | None
+    ) -> bool:
+        """Single source of truth for "does the 지역가산점/지역우대 boost apply to
+        this (project, profile)?"
+
+        BOTH the classifier region-score boost (``_assess_region``) and the
+        opportunity_analysis region_bonus risk-suppression call THIS method, so
+        the boost and the risk-suppression can never disagree (PR #98/#101
+        pattern-consolidation lesson — one definition).
+
+        Returns True iff ALL of:
+          1. the notice is a construction project (``is_construction_project``);
+          2. the notice text advertises 지역가산점/지역우대 (negation-guarded
+             ``detect_regional_preference``);
+          3. the operator earns a positive region MATCH under the SAME rules
+             ``_assess_region`` uses — i.e. the notice has a specific region
+             restriction (NOT the 전국/neutral short-circuit) AND the operator is
+             region-eligible (``project_regions & profile_regions`` non-empty OR
+             ``"전국" in profile_regions``, matching the strict-match branch that
+             already treats a 전국 profile as eligible).
+
+        This is a regex-heuristic matching signal over notice text, NOT a
+        substitute for an actual 적격심사 가산점 계산.
+        """
+        if profile is None:
+            return False
+        if not is_construction_project(project):
+            return False
+        if not detect_regional_preference(self._collect_project_text(project)):
+            return False
+
+        (
+            _project_regions,
+            _has_strict_region_limit,
+            profile_regions,
+            overlap,
+            is_neutral_notice,
+        ) = self._region_match_context(project, profile)
+
+        if is_neutral_notice:
+            return False
+        return bool(overlap) or "전국" in profile_regions
+
+    def _boosted_region_assessment(
+        self, base_score: float, matched_regions: set[str]
+    ) -> RuleAssessment:
+        """Build the boosted region assessment (advisory 0.12→0.20,
+        strict/전국-match 0.2→0.28), capped at
+        ``REGION_MATCH_SCORE + REGION_PREFERENCE_BONUS`` (= 0.28).
+
+        Only called when ``region_preference_boost_applies`` returned True, so
+        the boost and the risk-suppression stay byte-for-byte symmetric.
+        """
+        cap = self.REGION_MATCH_SCORE + self.REGION_PREFERENCE_BONUS
+        boosted_score = min(cap, base_score + self.REGION_PREFERENCE_BONUS)
+        if matched_regions:
+            reason = (
+                "공고에 지역가산점/지역우대 조건이 있고 업체 수행지역"
+                f"({', '.join(sorted(matched_regions))})이 일치해 지역우대 가점을 반영했습니다."
+            )
+        else:
+            reason = (
+                "공고에 지역가산점/지역우대 조건이 있고 업체가 전국 대응 가능으로 "
+                "등록되어 있어 지역우대 가점을 반영했습니다."
+            )
+        return RuleAssessment(score=boosted_score, passed=True, reasons=[reason])
+
+    def _assess_region(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
+        """Evaluate whether the company can serve the project's regions."""
+        (
+            project_regions,
+            has_strict_region_limit,
+            profile_regions,
+            overlap,
+            is_neutral_notice,
+        ) = self._region_match_context(project, profile)
+
+        if is_neutral_notice:
             return RuleAssessment(
                 score=self.REGION_NEUTRAL_SCORE,
                 passed=True,
                 reasons=["공고에 지역 제한이 명확하지 않거나 전국 대상으로 보여 지역 조건은 중립 처리했습니다."],
             )
 
-        overlap = project_regions & profile_regions
+        boost_applies = self.region_preference_boost_applies(project, profile)
 
         if not has_strict_region_limit:
             if "전국" in profile_regions or overlap:
+                if boost_applies:
+                    return self._boosted_region_assessment(
+                        self.REGION_ADVISORY_SCORE, overlap
+                    )
                 return RuleAssessment(
                     score=self.REGION_ADVISORY_SCORE,
                     passed=True,
@@ -324,6 +466,8 @@ class NoticeClassifierService:
             )
 
         if "전국" in profile_regions:
+            if boost_applies:
+                return self._boosted_region_assessment(self.REGION_MATCH_SCORE, overlap)
             return RuleAssessment(
                 score=self.REGION_MATCH_SCORE,
                 passed=True,
@@ -339,6 +483,8 @@ class NoticeClassifierService:
             )
 
         if overlap:
+            if boost_applies:
+                return self._boosted_region_assessment(self.REGION_MATCH_SCORE, overlap)
             return RuleAssessment(
                 score=self.REGION_MATCH_SCORE,
                 passed=True,

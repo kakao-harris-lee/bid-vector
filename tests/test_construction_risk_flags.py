@@ -9,9 +9,10 @@ gated by the project's category.
 
 from __future__ import annotations
 
-from app.models.models import Project
+from app.models.models import CompanyProfile, Project
 from app.services.opportunity_analysis import (
     OpportunityAnalysisService,
+    _REGION_BONUS_RISK_MESSAGE,
     _detect_construction_risk_reasons,
     _is_construction_project,
 )
@@ -21,7 +22,9 @@ from app.services.opportunity_analysis import (
 JV_REASON = "공동도급/공동수급체 구성이 요구됩니다. 파트너 확보·지분 협상이 필요합니다."
 REGION_JV_REASON = "지역의무공동도급 또는 지역 제한 요건이 명시돼 있어 해당 지역 파트너/소재가 필요합니다."
 SIMILAR_REASON = "유사 실적/시공실적 요건이 명시돼 있어 운영자 실적 증빙이 필요합니다."
-REGION_BONUS_REASON = "지역 가산점/소재지 가산 조건이 있어 비지역 업체는 점수 불리할 수 있습니다."
+# Bind to the production constant so a future message change cannot leave these
+# tests green against stale literal text.
+REGION_BONUS_REASON = _REGION_BONUS_RISK_MESSAGE
 
 
 def _make_project(
@@ -299,3 +302,266 @@ def test_joint_venture_with_negation_does_not_fire():
 def test_region_bonus_with_negation_does_not_fire():
     project = _make_project(description="지역 가산점 없음, 전국 동일 기준.")
     assert REGION_BONUS_REASON not in _detect_construction_risk_reasons(project)
+
+
+# ---- region_bonus suppression for in-region operators ----------------------------------------
+#
+# 지역가산점 + 업체 수행지역 일치 = 우대(가점)이지 리스크가 아니므로, in-region
+# 운영자에게는 region_bonus 리스크를 숨기고, out-of-region 운영자에게는 유지한다.
+
+
+def _construction_profile(region_codes: str) -> CompanyProfile:
+    return CompanyProfile(
+        business_type="construction",
+        license_codes="건축공사업",
+        region_codes=region_codes,
+        annual_revenue=500_000_000.0,
+        capacity_score=0.8,
+        total_awards=4,
+    )
+
+
+def _region_bonus_project() -> Project:
+    """Construction notice in 경기 that advertises 지역 가산점 (strict region limit)."""
+    return _make_project(
+        title="경기 도로 정비 공사",
+        description="해당 지역 소재 업체만 참여 가능한 경기 지역 도로 공사",
+        requirements="경기도 업체 대상, 지역 가산점 부여",
+    )
+
+
+def test_detect_construction_risk_reasons_excludes_region_bonus_when_flagged():
+    """The exclude_region_bonus flag drops ONLY the region_bonus reason."""
+    project = _region_bonus_project()
+    # Default: region_bonus present.
+    assert REGION_BONUS_REASON in _detect_construction_risk_reasons(project)
+    # Excluded: region_bonus gone, other reasons (region_jv from 지역 제한) remain.
+    excluded = _detect_construction_risk_reasons(project, exclude_region_bonus=True)
+    assert REGION_BONUS_REASON not in excluded
+    assert REGION_JV_REASON in excluded
+
+
+def test_build_risk_flags_suppresses_region_bonus_for_in_region_operator():
+    """In-region operator (경기 ↔ 경기 notice with 지역 가산점) → region_bonus risk suppressed."""
+    service = OpportunityAnalysisService()
+    project = _region_bonus_project()
+    profile = _construction_profile("경기")  # matches the notice region
+    risks = service._build_risk_flags(
+        classification={"matched": True, "score": 0.8},
+        price_prediction={"confidence_score": 0.9},
+        similar_projects={"results": [{"similarity_score": 0.7}]},
+        current_active_bids=0,
+        max_active_bids=5,
+        deadline_hours_remaining=72,
+        expected_margin_score=0.6,
+        execution_complexity_score=0.4,
+        project=project,
+        profile=profile,
+    )
+    assert REGION_BONUS_REASON not in risks
+    # The genuine region-restriction risk still surfaces.
+    assert REGION_JV_REASON in risks
+
+
+def test_build_risk_flags_keeps_region_bonus_for_out_of_region_operator():
+    """Out-of-region operator (부산 vs 경기 notice) → region_bonus risk STILL shown."""
+    service = OpportunityAnalysisService()
+    project = _region_bonus_project()
+    profile = _construction_profile("부산")  # does NOT match the notice region
+    risks = service._build_risk_flags(
+        classification={"matched": True, "score": 0.8},
+        price_prediction={"confidence_score": 0.9},
+        similar_projects={"results": [{"similarity_score": 0.7}]},
+        current_active_bids=0,
+        max_active_bids=5,
+        deadline_hours_remaining=72,
+        expected_margin_score=0.6,
+        execution_complexity_score=0.4,
+        project=project,
+        profile=profile,
+    )
+    assert REGION_BONUS_REASON in risks
+
+
+def test_build_risk_flags_keeps_region_bonus_when_no_profile():
+    """No profile → cannot establish in-region → region_bonus risk preserved (default path)."""
+    service = OpportunityAnalysisService()
+    project = _region_bonus_project()
+    risks = service._build_risk_flags(
+        classification={"matched": True, "score": 0.8},
+        price_prediction={"confidence_score": 0.9},
+        similar_projects={"results": [{"similarity_score": 0.7}]},
+        current_active_bids=0,
+        max_active_bids=5,
+        deadline_hours_remaining=72,
+        expected_margin_score=0.6,
+        execution_complexity_score=0.4,
+        project=project,
+        profile=None,
+    )
+    assert REGION_BONUS_REASON in risks
+
+
+# ---- boost ⇔ risk-suppression symmetry (regression for the two asymmetries) -------------------
+#
+# The region-preference boost (classifier._assess_region) and the region_bonus
+# risk-suppression (here) MUST agree: an operator either benefits (boost applied
+# AND risk suppressed) or does not (no boost AND risk shown). Both surfaces now
+# call the SAME classifier.region_preference_boost_applies, so they cannot drift.
+
+
+def _nationwide_notice_with_local_bonus() -> Project:
+    """전국 notice ('전국 어디서나 가능하나 충북 지역 가산점 적용') — neutral region
+    short-circuit, so NO positive region match and NO boost despite literal 충북
+    overlap. Asymmetry #1."""
+    return _make_project(
+        title="전국 대상 도로 정비 공사",
+        description="전국 어디서나 참여 가능하나 충북 지역 가산점 적용",
+        requirements="전국 업체 참여 가능",
+    )
+
+
+def _strict_local_bonus_notice() -> Project:
+    """Strict 충북 지역가산점 notice (specific region restriction)."""
+    return _make_project(
+        title="충북 도로 정비 공사",
+        description="해당 지역 소재 업체만 참여 가능한 충북 지역 도로 공사",
+        requirements="충북 업체 대상, 지역 가산점 부여",
+    )
+
+
+def _region_bonus_risk_shown(project: Project, profile: CompanyProfile | None) -> bool:
+    """Whether the region_bonus risk reason actually surfaces in _build_risk_flags."""
+    service = OpportunityAnalysisService()
+    risks = service._build_risk_flags(
+        classification={"matched": True, "score": 0.8},
+        price_prediction={"confidence_score": 0.9},
+        similar_projects={"results": [{"similarity_score": 0.7}]},
+        current_active_bids=0,
+        max_active_bids=5,
+        deadline_hours_remaining=72,
+        expected_margin_score=0.6,
+        execution_complexity_score=0.4,
+        project=project,
+        profile=profile,
+    )
+    return REGION_BONUS_REASON in risks
+
+
+def _suppression_decision(project: Project, profile: CompanyProfile | None) -> bool:
+    """The region_bonus risk-suppression DECISION fed into _build_risk_flags —
+    i.e. the boolean the in-region check passes as exclude_region_bonus. This is
+    the shared classifier method, so it always equals the classifier boost
+    decision. (Distinct from whether the risk text actually fires, which also
+    depends on the notice text matching/negation.)"""
+    return OpportunityAnalysisService()._operator_is_in_region_with_preference(
+        project, profile
+    )
+
+
+def test_asymmetry_1_nationwide_notice_local_profile_no_boost_risk_shown():
+    """#1: 전국 notice + 충북 가산점, profile=충북 → boost does NOT apply (neutral
+    short-circuit) AND the region_bonus risk is STILL shown (not suppressed)."""
+    from app.services.classifier import NoticeClassifierService
+
+    project = _nationwide_notice_with_local_bonus()
+    profile = _construction_profile("충북")
+    classifier = NoticeClassifierService()
+
+    assert classifier.region_preference_boost_applies(project, profile) is False
+    # No boost: neutral region (전국) keeps the neutral score, no 지역우대 reason.
+    assessment = classifier._assess_region(project, profile)
+    assert assessment.score == NoticeClassifierService.REGION_NEUTRAL_SCORE  # 0.05
+    assert not any("지역우대 가점" in r for r in assessment.reasons)
+    # Suppression decision False (not in-region for boost purposes) AND the
+    # region_bonus risk is STILL shown — symmetric with no boost.
+    assert _suppression_decision(project, profile) is False
+    assert _region_bonus_risk_shown(project, profile) is True
+
+
+def test_asymmetry_2_strict_local_notice_nationwide_profile_boost_and_suppressed():
+    """#2: strict 충북 지역가산점 notice, profile=전국 → boost applies (0.28) AND the
+    region_bonus risk is suppressed (전국 profile is region-eligible)."""
+    from app.services.classifier import NoticeClassifierService
+
+    project = _strict_local_bonus_notice()
+    profile = _construction_profile("전국")
+    classifier = NoticeClassifierService()
+
+    assert classifier.region_preference_boost_applies(project, profile) is True
+    assessment = classifier._assess_region(project, profile)
+    cap = (
+        NoticeClassifierService.REGION_MATCH_SCORE
+        + NoticeClassifierService.REGION_PREFERENCE_BONUS
+    )  # 0.28
+    assert assessment.score == cap
+    assert any("지역우대 가점" in r for r in assessment.reasons)
+    # Suppression decision True AND the region_bonus risk is hidden — symmetric
+    # with boost applied.
+    assert _suppression_decision(project, profile) is True
+    assert _region_bonus_risk_shown(project, profile) is False
+
+
+def test_boost_and_suppression_are_always_symmetric():
+    """Parametrized invariant covering literal-overlap, out-of-region,
+    전국-notice, 전국-profile, negated, and non-construction inputs.
+
+    (a) The classifier boost decision and the opportunity_analysis suppression
+        decision are ALWAYS the same boolean — they call the SAME method, so they
+        cannot drift.
+    (b) boost-applied ⟺ region_bonus risk hidden: the risk surfaces iff it would
+        fire on the notice text (``_detect_construction_risk_reasons`` with no
+        suppression) AND the boost does NOT apply. This pins "an operator that
+        benefits never sees the risk, and an operator that does not benefit always
+        sees it (when present)" across both surfaces."""
+    from app.services.classifier import NoticeClassifierService
+
+    classifier = NoticeClassifierService()
+
+    strict = _strict_local_bonus_notice()
+    advisory = _make_project(
+        title="충북 도로 정비 공사",
+        description="충북 지역 도로 정비 공사 — 지역 가산점 부여",
+        requirements="충북 지역 우대",
+    )
+    nationwide_notice = _nationwide_notice_with_local_bonus()
+    non_construction = _make_project(
+        category="software",
+        title="공공기관 데이터 플랫폼 구축",
+        description="해당 지역 소재 업체만 참여 가능한 충북 지역 사업, 지역 가산점 부여",
+        requirements="충북 업체 대상",
+    )
+    negated = _make_project(
+        title="충북 도로 정비 공사",
+        description="해당 지역 소재 업체만 참여 가능한 충북 지역 도로 공사",
+        requirements="충북 업체 대상, 지역 가산점 없음",
+    )
+
+    local = _construction_profile("충북")
+    nationwide_profile = _construction_profile("전국")
+    out_of_region = _construction_profile("부산")
+
+    cases: list[tuple[str, Project, CompanyProfile | None]] = [
+        ("strict-literal-overlap", strict, local),
+        ("strict-out-of-region", strict, out_of_region),
+        ("strict-nationwide-profile", strict, nationwide_profile),
+        ("advisory-literal-overlap", advisory, local),
+        ("nationwide-notice-local", nationwide_notice, local),
+        ("nationwide-notice-nationwide-profile", nationwide_notice, nationwide_profile),
+        ("negated-overlap", negated, local),
+        ("non-construction-overlap", non_construction, local),
+        ("no-profile", strict, None),
+    ]
+
+    for label, project, profile in cases:
+        boost = classifier.region_preference_boost_applies(project, profile)
+        suppressed = _suppression_decision(project, profile)
+        # (a) both surfaces share the SAME decision.
+        assert boost == suppressed, f"{label}: boost={boost} suppressed={suppressed}"
+
+        # (b) boost-applied ⟺ region_bonus risk hidden (given it would fire).
+        would_fire = REGION_BONUS_REASON in _detect_construction_risk_reasons(project)
+        risk_shown = _region_bonus_risk_shown(project, profile)
+        assert risk_shown == (would_fire and not boost), (
+            f"{label}: risk_shown={risk_shown} would_fire={would_fire} boost={boost}"
+        )
