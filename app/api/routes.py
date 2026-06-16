@@ -10,6 +10,7 @@ from app.api import (
     bid_summary,
     bids,
     dashboard,
+    decision_samples,
     ml,
     operations,
     operator,
@@ -36,6 +37,9 @@ router.include_router(operations.router, prefix="/operations", tags=["Operations
 router.include_router(bid_summary.router, prefix="/operations", tags=["Bid Summary"])
 router.include_router(
     bid_form_draft.router, prefix="/operations", tags=["Bid Form Draft"]
+)
+router.include_router(
+    decision_samples.router, prefix="/operations", tags=["Decision Samples"]
 )
 router.include_router(realtime.router, prefix="/realtime", tags=["Realtime"])
 router.include_router(synthetic.router, tags=["Synthetic"])
