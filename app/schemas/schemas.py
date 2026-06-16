@@ -1337,6 +1337,7 @@ class DecisionFunnelResponse(BaseModel):
 class PredictionFeedbackItem(BaseModel):
     project_id: int
     project_title: str
+    category: Optional[str] = None
     tender_result_id: int
     result_status: str
     announced_at: Optional[datetime] = None
@@ -1367,6 +1368,84 @@ class PredictionFeedbackResponse(BaseModel):
     recommendation_within_3_percent_count: int = Field(ge=0)
     recommendation_better_than_prediction_count: int = Field(ge=0)
     items: List[PredictionFeedbackItem] = Field(default_factory=list)
+
+
+class AccuracyReportSummary(BaseModel):
+    """Top-line accuracy of recommended price vs. actual winning price.
+
+    error = |추천가 - 실제낙찰가| / 실제낙찰가. 정산 완료(실제 낙찰가 보유) 건만 집계하며,
+    단일 운영자(canonical) 기준이다. ``within_*`` 는 추천가 오차가 해당 임계 이하인 표본 수/비율.
+    """
+
+    period_days: int = Field(ge=0)
+    matched_sample_count: int = Field(
+        ge=0,
+        description="정산 완료·매칭된 비교 표본 수(집계 대상 건수). 상한(limit)에 막히면 truncated=True.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="상한(limit) 도달로 가장 최근 건만 집계돼 일부 과거 비교 건이 누락됐을 수 있음.",
+    )
+    limit: int = Field(ge=0, description="집계에 적용된 유효 상한(limit) 건수.")
+    recommendation_sample_count: int = Field(ge=0)
+    prediction_sample_count: int = Field(ge=0)
+    average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    average_prediction_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    recommendation_better_than_prediction_count: int = Field(ge=0)
+    within_1pct_count: int = Field(ge=0)
+    within_3pct_count: int = Field(ge=0)
+    within_5pct_count: int = Field(ge=0)
+    within_1pct_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    within_3pct_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    within_5pct_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class AccuracyReportErrorBin(BaseModel):
+    """One bucket of the recommendation error-rate distribution.
+
+    ``lower``/``upper`` 는 오차율 경계(upper=None 이면 상한 없음). 표본은 ``lower < rate <= upper``
+    규칙으로 배정한다(맨 아래 구간만 ``rate <= upper``).
+    """
+
+    bin_label: str
+    lower: float = Field(ge=0.0)
+    upper: Optional[float] = Field(default=None, ge=0.0)
+    count: int = Field(ge=0)
+    rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class AccuracyReportCategory(BaseModel):
+    """Per-category accuracy. ``category`` None 은 ``(미분류)`` 로 노출한다."""
+
+    category: str
+    sample_count: int = Field(ge=0)
+    average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+    within_3pct_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class AccuracyReportTrendBucket(BaseModel):
+    """Weekly accuracy trend bucketed by ``announced_at`` (chronological)."""
+
+    period_start: datetime
+    period_end: datetime
+    sample_count: int = Field(ge=0)
+    average_recommendation_error_rate: Optional[float] = Field(default=None, ge=0.0)
+
+
+class AccuracyReportResponse(BaseModel):
+    """Consolidated 추천 vs 실제 낙찰가 정확도 리포트.
+
+    추천가(``recommended_amount``)와 실제 낙찰가(``winning_amount``)의 실측 비교다.
+    정산 완료 건만 포함(미정산 제외) — would_have_won/price-only 추정 지표와 달리 실측이다.
+    """
+
+    operator_id: int
+    summary: AccuracyReportSummary
+    error_distribution: List[AccuracyReportErrorBin] = Field(default_factory=list)
+    per_category: List[AccuracyReportCategory] = Field(default_factory=list)
+    time_trend: List[AccuracyReportTrendBucket] = Field(default_factory=list)
+    items: List[PredictionFeedbackItem] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
 
 
 class OperationsKpiManualOverride(BaseModel):

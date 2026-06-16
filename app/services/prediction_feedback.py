@@ -322,6 +322,7 @@ class PredictionFeedbackService:
         return {
             "project_id": int(tender_result.project_id),
             "project_title": tender_result.project.title,
+            "category": (tender_result.project.category or None),
             "tender_result_id": int(tender_result.id),
             "result_status": str(tender_result.result_status or "pending"),
             "announced_at": tender_result.announced_at,

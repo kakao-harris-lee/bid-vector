@@ -1071,6 +1071,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/accuracy-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Accuracy Report
+         * @description Consolidate 추천가 vs 실제 낙찰가 정확도 (정산 완료 건만, 단일 운영자 기준).
+         */
+        get: operations["get_accuracy_report_api_v1_analytics_accuracy_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/operations-dashboard": {
         parameters: {
             query?: never;
@@ -2129,6 +2149,130 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccuracyReportCategory
+         * @description Per-category accuracy. ``category`` None 은 ``(미분류)`` 로 노출한다.
+         */
+        AccuracyReportCategory: {
+            /** Category */
+            category: string;
+            /** Sample Count */
+            sample_count: number;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
+            /** Within 3Pct Rate */
+            within_3pct_rate?: number | null;
+        };
+        /**
+         * AccuracyReportErrorBin
+         * @description One bucket of the recommendation error-rate distribution.
+         *
+         *     ``lower``/``upper`` 는 오차율 경계(upper=None 이면 상한 없음). 표본은 ``lower < rate <= upper``
+         *     규칙으로 배정한다(맨 아래 구간만 ``rate <= upper``).
+         */
+        AccuracyReportErrorBin: {
+            /** Bin Label */
+            bin_label: string;
+            /** Lower */
+            lower: number;
+            /** Upper */
+            upper?: number | null;
+            /** Count */
+            count: number;
+            /** Rate */
+            rate?: number | null;
+        };
+        /**
+         * AccuracyReportResponse
+         * @description Consolidated 추천 vs 실제 낙찰가 정확도 리포트.
+         *
+         *     추천가(``recommended_amount``)와 실제 낙찰가(``winning_amount``)의 실측 비교다.
+         *     정산 완료 건만 포함(미정산 제외) — would_have_won/price-only 추정 지표와 달리 실측이다.
+         */
+        AccuracyReportResponse: {
+            /** Operator Id */
+            operator_id: number;
+            summary: components["schemas"]["AccuracyReportSummary"];
+            /** Error Distribution */
+            error_distribution?: components["schemas"]["AccuracyReportErrorBin"][];
+            /** Per Category */
+            per_category?: components["schemas"]["AccuracyReportCategory"][];
+            /** Time Trend */
+            time_trend?: components["schemas"]["AccuracyReportTrendBucket"][];
+            /** Items */
+            items?: components["schemas"]["PredictionFeedbackItem"][];
+            /** Notes */
+            notes?: string[];
+        };
+        /**
+         * AccuracyReportSummary
+         * @description Top-line accuracy of recommended price vs. actual winning price.
+         *
+         *     error = |추천가 - 실제낙찰가| / 실제낙찰가. 정산 완료(실제 낙찰가 보유) 건만 집계하며,
+         *     단일 운영자(canonical) 기준이다. ``within_*`` 는 추천가 오차가 해당 임계 이하인 표본 수/비율.
+         */
+        AccuracyReportSummary: {
+            /** Period Days */
+            period_days: number;
+            /**
+             * Matched Sample Count
+             * @description 정산 완료·매칭된 비교 표본 수(집계 대상 건수). 상한(limit)에 막히면 truncated=True.
+             */
+            matched_sample_count: number;
+            /**
+             * Truncated
+             * @description 상한(limit) 도달로 가장 최근 건만 집계돼 일부 과거 비교 건이 누락됐을 수 있음.
+             * @default false
+             */
+            truncated: boolean;
+            /**
+             * Limit
+             * @description 집계에 적용된 유효 상한(limit) 건수.
+             */
+            limit: number;
+            /** Recommendation Sample Count */
+            recommendation_sample_count: number;
+            /** Prediction Sample Count */
+            prediction_sample_count: number;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
+            /** Average Prediction Error Rate */
+            average_prediction_error_rate?: number | null;
+            /** Recommendation Better Than Prediction Count */
+            recommendation_better_than_prediction_count: number;
+            /** Within 1Pct Count */
+            within_1pct_count: number;
+            /** Within 3Pct Count */
+            within_3pct_count: number;
+            /** Within 5Pct Count */
+            within_5pct_count: number;
+            /** Within 1Pct Rate */
+            within_1pct_rate?: number | null;
+            /** Within 3Pct Rate */
+            within_3pct_rate?: number | null;
+            /** Within 5Pct Rate */
+            within_5pct_rate?: number | null;
+        };
+        /**
+         * AccuracyReportTrendBucket
+         * @description Weekly accuracy trend bucketed by ``announced_at`` (chronological).
+         */
+        AccuracyReportTrendBucket: {
+            /**
+             * Period Start
+             * Format: date-time
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date-time
+             */
+            period_end: string;
+            /** Sample Count */
+            sample_count: number;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
+        };
         /** AnalyticsEventRequest */
         AnalyticsEventRequest: {
             /** Event Type */
@@ -6243,6 +6387,8 @@ export interface components {
             project_id: number;
             /** Project Title */
             project_title: string;
+            /** Category */
+            category?: string | null;
             /** Tender Result Id */
             tender_result_id: number;
             /** Result Status */
@@ -9770,6 +9916,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PredictionObservabilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_accuracy_report_api_v1_analytics_accuracy_report_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+                trend_bucket_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccuracyReportResponse"];
                 };
             };
             /** @description Validation Error */

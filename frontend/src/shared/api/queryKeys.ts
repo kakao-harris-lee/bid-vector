@@ -1,5 +1,6 @@
 import type { ProjectListQuery, SimilarProjectsQuery } from "./projects";
 import type { DecisionFunnelQuery } from "./decisions";
+import type { AccuracyReportQuery } from "./accuracyReport";
 import type { ExperimentListQuery } from "./experiments";
 import type { OperationsKpiQuery } from "./operations";
 
@@ -62,6 +63,10 @@ export const queryKeys = {
     bidFormDraft: (decisionRecordId: number) =>
       ["decisions", "bid-form-draft", decisionRecordId] as const
   },
+  analytics: {
+    accuracyReport: (query: AccuracyReportQuery) =>
+      ["analytics", "accuracy-report", normalizeAccuracyReportKey(query)] as const
+  },
   experiments: {
     list: (query: ExperimentListQuery) => ["experiments", "list", normalizeExperimentKey(query)] as const
   },
@@ -91,6 +96,14 @@ function normalizeSimilarKey(params: SimilarProjectsQuery): Record<string, unkno
     limit: params.limit ?? null,
     minSimilarity: params.minSimilarity ?? null,
     sameCategoryOnly: params.sameCategoryOnly ?? null
+  };
+}
+
+function normalizeAccuracyReportKey(query: AccuracyReportQuery): Record<string, unknown> {
+  return {
+    days: query.days ?? null,
+    limit: query.limit ?? null,
+    trendBucketDays: query.trendBucketDays ?? null
   };
 }
 
