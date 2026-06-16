@@ -36,6 +36,9 @@ function buildReport(overrides: Partial<AccuracyReportResponse> = {}): AccuracyR
     operator_id: 1,
     summary: {
       period_days: 90,
+      matched_sample_count: 24,
+      truncated: false,
+      limit: 500,
       recommendation_sample_count: 24,
       prediction_sample_count: 22,
       average_recommendation_error_rate: 0.034,
@@ -210,6 +213,9 @@ describe("AccuracyReportScreen", () => {
       buildReport({
         summary: {
           period_days: 90,
+          matched_sample_count: 0,
+          truncated: false,
+          limit: 500,
           recommendation_sample_count: 0,
           prediction_sample_count: 0,
           average_recommendation_error_rate: null,
