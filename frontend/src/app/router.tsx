@@ -29,6 +29,9 @@ const DecisionsScreen = lazy(() =>
 const BidSummaryScreen = lazy(() =>
   import("@/features/decisions").then((mod) => ({ default: mod.BidSummaryScreen }))
 );
+const AccuracyReportScreen = lazy(() =>
+  import("@/features/decisions").then((mod) => ({ default: mod.AccuracyReportScreen }))
+);
 const ExperimentsScreen = lazy(() =>
   import("@/features/experiments").then((mod) => ({ default: mod.ExperimentsScreen }))
 );
@@ -73,6 +76,7 @@ export function AppRoutes() {
           path="decisions/:id/summary"
           element={<Lazy><BidSummaryScreen /></Lazy>}
         />
+        <Route path="accuracy-report" element={<Lazy><AccuracyReportScreen /></Lazy>} />
         <Route path="experiments" element={<Lazy><ExperimentsScreen /></Lazy>} />
         <Route path="synthetic-backtest" element={<Lazy><ExperimentLabScreen /></Lazy>} />
         <Route path="operations" element={<Lazy><OperationsScreen /></Lazy>} />

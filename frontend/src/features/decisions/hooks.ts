@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  fetchAccuracyReport,
   fetchDecisionFunnel,
   fetchDecisionRecommendations,
   fetchOperationsKpi,
   queryKeys,
+  type AccuracyReportQuery,
   type DecisionFunnelQuery,
   type OperationsKpiQuery
 } from "@/shared/api";
@@ -11,6 +13,7 @@ import type {
   DecisionFunnelResponse,
   DecisionRecommendationResponse
 } from "@/shared/types/decisions";
+import type { AccuracyReportResponse } from "@/shared/types/accuracyReport";
 import type { OperationsKpiResponse } from "@/shared/types/operations";
 import type { AuthSession } from "@/app/layout/AuthGate";
 
@@ -29,6 +32,17 @@ export function useDecisionRecommendationsQuery(
   return useQuery<DecisionRecommendationResponse, Error>({
     queryKey: queryKeys.decisions.recommendations(query),
     queryFn: () => fetchDecisionRecommendations(query, session?.token),
+    enabled: Boolean(session?.token)
+  });
+}
+
+export function useAccuracyReportQuery(
+  session: AuthSession | null,
+  params: AccuracyReportQuery = {}
+) {
+  return useQuery<AccuracyReportResponse, Error>({
+    queryKey: queryKeys.analytics.accuracyReport(params),
+    queryFn: () => fetchAccuracyReport(params, session?.token),
     enabled: Boolean(session?.token)
   });
 }
