@@ -158,6 +158,13 @@ def test_poll_run_ok(client, patched_engine):
         assert item["metrics"]["sample_status"] == "insufficient_sample"
     assert body["summary"]["sample_status"] == "insufficient_sample"
     assert body["summary"]["run_total_sample_target"] == 100
+    report = body["summary"]["sample_report"]
+    assert report["preset_name"] == "Q1 balanced sweep"
+    assert report["report_status"] == "insufficient_sample"
+    assert report["ready_for_repeatable_reporting"] is False
+    assert report["synthetic_only"] is True
+    lacking_dimensions = {item["dimension"] for item in report["lacking_groups"]}
+    assert {"preset", "business_type"} <= lacking_dimensions
 
 
 def test_poll_run_not_found(client, patched_engine):
@@ -195,6 +202,7 @@ def test_poll_run_marks_sufficient_sample(client, monkeypatch):
     assert body["summary"]["sample_status"] == "sufficient"
     assert body["summary"]["total_settled_count"] == 105
     assert {item["sample_status"] for item in body["results"]} == {"sufficient"}
+    assert body["summary"]["sample_report"]["by_preset"][0]["sample_status"] == "sufficient"
 
 
 def test_experiment_presets_are_listed_and_saved_idempotently(client):

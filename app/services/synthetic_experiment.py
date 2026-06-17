@@ -33,8 +33,11 @@ RUN_STATUS_COMPLETED = "completed"
 RUN_STATUS_FAILED = "failed"
 SYNTHETIC_OPERATOR_SAMPLE_TARGET = 30
 SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET = 100
+SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET = 30
 SAMPLE_STATUS_SUFFICIENT = "sufficient"
 SAMPLE_STATUS_INSUFFICIENT = "insufficient_sample"
+REPORT_STATUS_READY = "ready_for_reporting"
+REPORT_STATUS_DATA_MIXED = "canonical_synthetic_mixed"
 
 _G1_PRESET_WINDOW = {
     "start_at": "2025-01-01T00:00:00+00:00",
@@ -144,6 +147,55 @@ _COMPARE_DELTA_KEYS: tuple[str, ...] = (
     "bid_submission_rate",
     "average_absolute_bid_rate_error",
 )
+
+
+class _ReportAccumulator:
+    def __init__(self) -> None:
+        self.settled_count = 0
+        self.would_have_won_count = 0
+        self.error_weighted_sum = 0.0
+        self.error_weight = 0
+
+    def add(
+        self,
+        *,
+        settled_count: int,
+        would_have_won_count: int,
+        avg_abs_bid_rate_error: Any,
+    ) -> None:
+        settled = max(0, int(settled_count or 0))
+        self.settled_count += settled
+        self.would_have_won_count += max(0, int(would_have_won_count or 0))
+        if avg_abs_bid_rate_error is not None and settled > 0:
+            self.error_weighted_sum += float(avg_abs_bid_rate_error) * settled
+            self.error_weight += settled
+
+    def row(self, *, dimension: str, key: str, label: str | None = None) -> dict[str, Any]:
+        missing = max(0, SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET - self.settled_count)
+        return {
+            "dimension": dimension,
+            "key": key,
+            "label": label or key,
+            "settled_count": self.settled_count,
+            "sample_target": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
+            "missing_settled_count": missing,
+            "sample_status": (
+                SAMPLE_STATUS_SUFFICIENT
+                if missing == 0
+                else SAMPLE_STATUS_INSUFFICIENT
+            ),
+            "would_have_won_count": self.would_have_won_count,
+            "est_price_close_rate": (
+                round(self.would_have_won_count / self.settled_count, 6)
+                if self.settled_count > 0
+                else None
+            ),
+            "avg_abs_bid_rate_error": (
+                round(self.error_weighted_sum / self.error_weight, 6)
+                if self.error_weight > 0
+                else None
+            ),
+        }
 
 
 def _budget_band_key(budget: float) -> str:
@@ -353,6 +405,203 @@ def aggregate_sample_status(operator_results: list[dict[str, Any]]) -> dict[str,
     }
 
 
+def _is_non_synthetic_result(item: dict[str, Any]) -> bool:
+    """Detect explicit canonical/operator leakage in a synthetic run result.
+
+    Engine-backed synthetic rows carry ``username=synthetic-*``. Stubbed tests and
+    legacy rows often have only a slug, so absence of a username is treated as
+    unknown rather than as leakage. Explicit canonical flags or non-synthetic
+    usernames fail the report readiness gate.
+    """
+    if item.get("is_canonical") is True:
+        return True
+    username = str(item.get("username") or "")
+    return bool(username) and not username.startswith("synthetic-")
+
+
+def _metric_win_count(item: dict[str, Any]) -> int:
+    value = item.get("would_have_won_count")
+    if value is None:
+        value = item.get("would_have_won_price_only_count")
+    return int(value or 0)
+
+
+def _add_group_row(
+    groups: dict[str, _ReportAccumulator],
+    *,
+    key: str,
+    settled_count: int,
+    would_have_won_count: int,
+    avg_abs_bid_rate_error: Any,
+) -> None:
+    acc = groups.get(key)
+    if acc is None:
+        acc = _ReportAccumulator()
+        groups[key] = acc
+    acc.add(
+        settled_count=settled_count,
+        would_have_won_count=would_have_won_count,
+        avg_abs_bid_rate_error=avg_abs_bid_rate_error,
+    )
+
+
+def _report_rows(
+    groups: dict[str, _ReportAccumulator],
+    *,
+    dimension: str,
+    order: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if order is None:
+        ordered_keys = sorted(groups)
+    else:
+        ordered_keys = [key for key in order if key in groups]
+        ordered_keys.extend(sorted(key for key in groups if key not in set(order)))
+    return [
+        groups[key].row(dimension=dimension, key=key)
+        for key in ordered_keys
+    ]
+
+
+def build_sample_report(
+    *,
+    preset_name: str | None,
+    operator_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the G-1 repeatable-reporting readiness stream for a completed run.
+
+    The report is intentionally derived from run payloads already persisted in
+    ``SyntheticExperimentResult``. It flags sample gaps by preset, category,
+    operator business group, and budget band while keeping price-close estimates
+    separate from actual awards. It also exposes an explicit synthetic-only gate
+    so canonical operator leakage blocks repeatable-reporting readiness.
+    """
+    category_groups: dict[str, _ReportAccumulator] = {}
+    business_groups: dict[str, _ReportAccumulator] = {}
+    budget_groups: dict[str, _ReportAccumulator] = {}
+    preset_acc = _ReportAccumulator()
+
+    non_synthetic_slugs: list[str] = []
+    for item in operator_results:
+        slug = str(item.get("slug") or item.get("operator_slug") or "unknown")
+        settled_count = int(item.get("settled_count") or 0)
+        win_count = _metric_win_count(item)
+        avg_error = item.get("average_absolute_bid_rate_error")
+
+        preset_acc.add(
+            settled_count=settled_count,
+            would_have_won_count=win_count,
+            avg_abs_bid_rate_error=avg_error,
+        )
+        if _is_non_synthetic_result(item):
+            non_synthetic_slugs.append(slug)
+
+        business_type = str(item.get("business_type") or "unknown")
+        _add_group_row(
+            business_groups,
+            key=business_type,
+            settled_count=settled_count,
+            would_have_won_count=win_count,
+            avg_abs_bid_rate_error=avg_error,
+        )
+
+        breakdown = item.get("breakdown") or _empty_breakdown()
+        for row in breakdown.get("by_category", []) or []:
+            key = str(row.get("category") or "unknown")
+            _add_group_row(
+                category_groups,
+                key=key,
+                settled_count=int(row.get("settled_count") or 0),
+                would_have_won_count=int(row.get("would_have_won_count") or 0),
+                avg_abs_bid_rate_error=row.get("avg_abs_bid_rate_error"),
+            )
+        for row in breakdown.get("by_budget_band", []) or []:
+            key = str(row.get("budget_band") or "unknown")
+            _add_group_row(
+                budget_groups,
+                key=key,
+                settled_count=int(row.get("settled_count") or 0),
+                would_have_won_count=int(row.get("would_have_won_count") or 0),
+                avg_abs_bid_rate_error=row.get("avg_abs_bid_rate_error"),
+            )
+
+    budget_order = [key for key, _ in BUDGET_BAND_BOUNDARIES] + [BUDGET_BAND_TOP_KEY]
+    by_preset = [
+        {
+            **preset_acc.row(
+                dimension="preset",
+                key=preset_name or "custom",
+                label=preset_name or "custom",
+            ),
+            "sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+            "missing_settled_count": max(
+                0, SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET - preset_acc.settled_count
+            ),
+        }
+    ]
+    by_preset[0]["sample_status"] = (
+        SAMPLE_STATUS_SUFFICIENT
+        if by_preset[0]["missing_settled_count"] == 0
+        else SAMPLE_STATUS_INSUFFICIENT
+    )
+    category_rows = _report_rows(category_groups, dimension="category")
+    business_rows = _report_rows(business_groups, dimension="business_type")
+    budget_rows = _report_rows(
+        budget_groups, dimension="budget_band", order=budget_order
+    )
+    all_rows = by_preset + category_rows + business_rows + budget_rows
+    lacking = [
+        {
+            "dimension": row["dimension"],
+            "key": row["key"],
+            "settled_count": row["settled_count"],
+            "sample_target": row["sample_target"],
+            "missing_settled_count": row["missing_settled_count"],
+        }
+        for row in all_rows
+        if row["sample_status"] != SAMPLE_STATUS_SUFFICIENT
+    ]
+    for dimension, rows in (
+        ("category", category_rows),
+        ("business_type", business_rows),
+        ("budget_band", budget_rows),
+    ):
+        if not rows:
+            lacking.append(
+                {
+                    "dimension": dimension,
+                    "key": "missing",
+                    "settled_count": 0,
+                    "sample_target": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
+                    "missing_settled_count": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
+                }
+            )
+    synthetic_only = len(non_synthetic_slugs) == 0
+    ready = synthetic_only and not lacking and bool(operator_results)
+    return {
+        "preset_name": preset_name,
+        "group_sample_target": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
+        "operator_sample_target": SYNTHETIC_OPERATOR_SAMPLE_TARGET,
+        "run_total_sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+        "synthetic_only": synthetic_only,
+        "non_synthetic_operator_slugs": sorted(set(non_synthetic_slugs)),
+        "ready_for_repeatable_reporting": ready,
+        "report_status": (
+            REPORT_STATUS_READY
+            if ready
+            else (
+                REPORT_STATUS_DATA_MIXED
+                if not synthetic_only
+                else SAMPLE_STATUS_INSUFFICIENT
+            )
+        ),
+        "by_preset": by_preset,
+        "by_category": category_rows,
+        "by_business_type": business_rows,
+        "by_budget_band": budget_rows,
+        "lacking_groups": lacking,
+    }
+
+
 class SyntheticExperimentService:
     """CRUD + run lifecycle for synthetic experiments."""
 
@@ -525,14 +774,30 @@ class SyntheticExperimentService:
         if run is None:
             return
         operator_results = result.get("results", []) or []
+        normalized_results: list[dict[str, Any]] = []
+        for item in operator_results:
+            settlement_sample = item.get("settlement_items")
+            # Prefer the engine-supplied breakdown (computed over the full,
+            # non-truncated settlement set). Fall back to computing from the
+            # sampled ``settlement_items`` for stubbed/legacy payloads.
+            breakdown = item.get("breakdown")
+            if breakdown is None:
+                breakdown = compute_breakdown(settlement_sample)
+            normalized_results.append({**item, "breakdown": breakdown})
+
+        preset_name = run.experiment.name if run.experiment else None
         summary = {
-            "operator_count": result.get("operator_count", len(operator_results)),
+            "operator_count": result.get("operator_count", len(normalized_results)),
             "scenario": result.get("scenario"),
             "category": result.get("category"),
             "start_at": result.get("start_at"),
             "end_at": result.get("end_at"),
             "limit": result.get("limit"),
-            **aggregate_sample_status(operator_results),
+            **aggregate_sample_status(normalized_results),
+            "sample_report": build_sample_report(
+                preset_name=preset_name,
+                operator_results=normalized_results,
+            ),
         }
         run.status = RUN_STATUS_COMPLETED
         run.finished_at = datetime.utcnow()
@@ -540,7 +805,7 @@ class SyntheticExperimentService:
         run.summary_json = _json_dumps(summary)
 
         excluded_metric_keys = {"settlement_items", "breakdown"}
-        for item in operator_results:
+        for item in normalized_results:
             metrics = {
                 key: value
                 for key, value in item.items()
@@ -550,12 +815,7 @@ class SyntheticExperimentService:
                 sample_status_for_settled_count(int(item.get("settled_count") or 0))
             )
             settlement_sample = item.get("settlement_items")
-            # Prefer the engine-supplied breakdown (computed over the full,
-            # non-truncated settlement set). Fall back to computing from the
-            # sampled ``settlement_items`` for stubbed/legacy payloads.
             breakdown = item.get("breakdown")
-            if breakdown is None:
-                breakdown = compute_breakdown(settlement_sample)
             self.db.add(
                 SyntheticExperimentResult(
                     run_id=run.id,

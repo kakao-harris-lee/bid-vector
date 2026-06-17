@@ -128,7 +128,7 @@ export interface SyntheticExperimentRunSummary {
   started_at?: string | null;
   finished_at?: string | null;
   error?: string | null;
-  summary?: Record<string, unknown> | null;
+  summary?: SyntheticExperimentSummary | null;
   created_at?: string | null;
 }
 
@@ -157,6 +157,57 @@ export interface SyntheticExperimentPreset {
 
 export interface SyntheticExperimentPresetListResponse {
   presets: SyntheticExperimentPreset[];
+}
+
+// --- G-1 sample/report readiness ---------------------------------------------
+
+export type SyntheticSampleStatus = "sufficient" | "insufficient_sample" | string;
+
+export type SyntheticSampleReportStatus =
+  | "ready_for_reporting"
+  | "insufficient_sample"
+  | "canonical_synthetic_mixed"
+  | string;
+
+export interface SyntheticSampleReportRow {
+  dimension: "preset" | "category" | "business_type" | "budget_band" | string;
+  key: string;
+  label?: string | null;
+  settled_count: number;
+  sample_target: number;
+  missing_settled_count: number;
+  sample_status: SyntheticSampleStatus;
+  would_have_won_count: number;
+  est_price_close_rate?: number | null;
+  avg_abs_bid_rate_error?: number | null;
+}
+
+export interface SyntheticSampleReportGap {
+  dimension: string;
+  key: string;
+  settled_count: number;
+  sample_target: number;
+  missing_settled_count: number;
+}
+
+export interface SyntheticSampleReport {
+  preset_name?: string | null;
+  group_sample_target: number;
+  operator_sample_target: number;
+  run_total_sample_target: number;
+  synthetic_only: boolean;
+  non_synthetic_operator_slugs?: string[];
+  ready_for_repeatable_reporting: boolean;
+  report_status: SyntheticSampleReportStatus;
+  by_preset?: SyntheticSampleReportRow[];
+  by_category?: SyntheticSampleReportRow[];
+  by_business_type?: SyntheticSampleReportRow[];
+  by_budget_band?: SyntheticSampleReportRow[];
+  lacking_groups?: SyntheticSampleReportGap[];
+}
+
+export interface SyntheticExperimentSummary extends Record<string, unknown> {
+  sample_report?: SyntheticSampleReport | null;
 }
 
 // --- Experiment Lab breakdown (Phase 2) --------------------------------------
@@ -234,7 +285,7 @@ export interface SyntheticExperimentRunResponse {
   started_at?: string | null;
   finished_at?: string | null;
   error?: string | null;
-  summary?: Record<string, unknown> | null;
+  summary?: SyntheticExperimentSummary | null;
   created_at?: string | null;
   results?: SyntheticExperimentResultItem[];
 }
