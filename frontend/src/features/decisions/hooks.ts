@@ -3,10 +3,12 @@ import {
   fetchAccuracyReport,
   fetchDecisionFunnel,
   fetchDecisionRecommendations,
+  fetchDecisionSamples,
   fetchOperationsKpi,
   queryKeys,
   type AccuracyReportQuery,
   type DecisionFunnelQuery,
+  type DecisionSamplesQuery,
   type OperationsKpiQuery
 } from "@/shared/api";
 import type {
@@ -14,6 +16,7 @@ import type {
   DecisionRecommendationResponse
 } from "@/shared/types/decisions";
 import type { AccuracyReportResponse } from "@/shared/types/accuracyReport";
+import type { DecisionSamplesResponse } from "@/shared/types/decisionSamples";
 import type { OperationsKpiResponse } from "@/shared/types/operations";
 import type { AuthSession } from "@/app/layout/AuthGate";
 
@@ -43,6 +46,17 @@ export function useAccuracyReportQuery(
   return useQuery<AccuracyReportResponse, Error>({
     queryKey: queryKeys.analytics.accuracyReport(params),
     queryFn: () => fetchAccuracyReport(params, session?.token),
+    enabled: Boolean(session?.token)
+  });
+}
+
+export function useDecisionSamplesQuery(
+  session: AuthSession | null,
+  params: DecisionSamplesQuery = {}
+) {
+  return useQuery<DecisionSamplesResponse, Error>({
+    queryKey: queryKeys.operations.decisionSamples(params),
+    queryFn: () => fetchDecisionSamples(params, session?.token),
     enabled: Boolean(session?.token)
   });
 }

@@ -10,6 +10,7 @@ import {
   BookOpen,
   Building2,
   CheckCircle2,
+  ClipboardList,
   FlaskConical,
   Clock3,
   FileSearch,
@@ -50,6 +51,7 @@ export const EXPERIMENTS_ROUTE_PATH = "/dashboard/experiments";
 export const SYNTHETIC_ROUTE_PATH = "/dashboard/synthetic-backtest";
 export const OPERATIONS_ROUTE_PATH = "/dashboard/operations";
 export const ACCURACY_REPORT_ROUTE_PATH = "/dashboard/accuracy-report";
+export const DECISION_SAMPLES_ROUTE_PATH = "/dashboard/decision-samples";
 export const GUIDE_ROUTE_PATH = "/dashboard/guide";
 
 export function routeKeyFromPath(pathname: string): RouteKey {
@@ -75,6 +77,7 @@ export function bottomNavKeyForPath(pathname: string): RouteKey | null {
   if (pathname.startsWith(SYNTHETIC_ROUTE_PATH)) return null;
   if (pathname.startsWith(OPERATIONS_ROUTE_PATH)) return null;
   if (pathname.startsWith(ACCURACY_REPORT_ROUTE_PATH)) return null;
+  if (pathname.startsWith(DECISION_SAMPLES_ROUTE_PATH)) return null;
   return routeKeyFromPath(pathname);
 }
 
@@ -88,6 +91,7 @@ function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(SYNTHETIC_ROUTE_PATH)) return "가상 운영자 백테스트";
   if (pathname.startsWith(OPERATIONS_ROUTE_PATH)) return "운영 대시보드";
   if (pathname.startsWith(ACCURACY_REPORT_ROUTE_PATH)) return "정확도 리포트";
+  if (pathname.startsWith(DECISION_SAMPLES_ROUTE_PATH)) return "의사결정 증적";
   const route = routeKeyFromPath(pathname);
   if (route === "home") return "오늘 할 일";
   return ROUTE_LABELS[route].label;
@@ -123,6 +127,7 @@ export function Shell() {
   const onSynthetic = location.pathname.startsWith(SYNTHETIC_ROUTE_PATH);
   const onOperations = location.pathname.startsWith(OPERATIONS_ROUTE_PATH);
   const onAccuracyReport = location.pathname.startsWith(ACCURACY_REPORT_ROUTE_PATH);
+  const onDecisionSamples = location.pathname.startsWith(DECISION_SAMPLES_ROUTE_PATH);
   const onGuide = location.pathname.startsWith(GUIDE_ROUTE_PATH);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
@@ -188,6 +193,14 @@ export function Shell() {
             }
           >
             <Target size={18} />
+          </IconButton>
+          <IconButton
+            label="의사결정 증적"
+            onClick={() =>
+              navigate(onDecisionSamples ? ROUTE_LABELS.home.path : DECISION_SAMPLES_ROUTE_PATH)
+            }
+          >
+            <ClipboardList size={18} />
           </IconButton>
           <IconButton
             label="업체 정보"

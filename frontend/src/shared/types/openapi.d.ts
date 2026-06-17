@@ -1808,6 +1808,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/decision-samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Samples
+         * @description List recent served recommendations + their latest predictions (audit evidence).
+         *
+         *     Single-operator(canonical) 기준. 정산 결과가 아니라 시스템이 산출·기록한 추천/
+         *     예측 증적을 최근 순으로 반환한다. ``probability_score`` 는 가격 적합도(추정)이지
+         *     P(낙찰)이 아니다(§1.5). ``format=csv`` 는 평탄화된 다운로드용 CSV 를 반환한다.
+         */
+        get: operations["get_decision_samples_api_v1_operations_decision_samples_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/operators": {
         parameters: {
             query?: never;
@@ -4848,6 +4872,210 @@ export interface components {
             experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
             /** Recommendations */
             recommendations?: components["schemas"]["DecisionRecommendationItem"][];
+        };
+        /**
+         * DecisionSampleItem
+         * @description 추천 1건의 증적 — ``BidDecisionRecord`` + 공고 메타 + 최신 예측(있으면).
+         */
+        DecisionSampleItem: {
+            /**
+             * Decision Record Id
+             * @description BidDecisionRecord id.
+             */
+            decision_record_id: number;
+            /**
+             * Project Id
+             * @description 연결된 공고 id.
+             */
+            project_id: number;
+            /**
+             * Notice Number
+             * @description 공고번호.
+             */
+            notice_number?: string | null;
+            /**
+             * Title
+             * @description 공고명.
+             * @default
+             */
+            title: string;
+            /**
+             * Demand Agency
+             * @description 수요기관.
+             */
+            demand_agency?: string | null;
+            /**
+             * Category
+             * @description 카테고리(분류).
+             */
+            category?: string | null;
+            /**
+             * Budget Estimate
+             * @description 기초금액(추정가격, 원).
+             */
+            budget_estimate?: number | null;
+            /**
+             * Deadline
+             * @description 투찰 마감일시.
+             */
+            deadline?: string | null;
+            /**
+             * Recommended Amount
+             * @description 추천 투찰금액(원).
+             * @default 0
+             */
+            recommended_amount: number;
+            /**
+             * Recommended Bid Rate
+             * @description 추천 투찰률 = 추천 투찰가 / 추정가격. budget>0 일 때만, 아니면 null.
+             */
+            recommended_bid_rate?: number | null;
+            /**
+             * Action
+             * @description 추천 액션(bid_now/skip 등).
+             */
+            action?: string | null;
+            /**
+             * Decision Status
+             * @description 결정 상태(planned/reviewing/submitted/skipped).
+             */
+            decision_status?: string | null;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) 점수. P(낙찰) 아님(§1.5).
+             */
+            probability_score?: number | null;
+            /**
+             * Priority Score
+             * @description 우선순위 점수.
+             */
+            priority_score?: number | null;
+            /**
+             * Matched Score
+             * @description 프로필 적합도(매칭) 점수.
+             */
+            matched_score?: number | null;
+            /**
+             * Competitiveness Score
+             * @description 경쟁력 점수.
+             */
+            competitiveness_score?: number | null;
+            /**
+             * Reasoning
+             * @description 추천 근거(감사용 기록).
+             */
+            reasoning?: string | null;
+            /**
+             * Decided At
+             * @description 최초 결정 시각(first_decided_at).
+             */
+            decided_at?: string | null;
+            /**
+             * Created At
+             * @description 이 추천 기록이 생성된 시각(UTC).
+             */
+            created_at?: string | null;
+            /**
+             * Updated At
+             * @description 이 추천 기록이 마지막으로 갱신된 시각(UTC).
+             */
+            updated_at?: string | null;
+            /** @description 이 공고에 대한 최신 서빙 예측 증적. 저장된 예측이 없으면 null. */
+            prediction?: components["schemas"]["DecisionSamplePrediction"] | null;
+        };
+        /**
+         * DecisionSamplePrediction
+         * @description 샘플에 연결된 최신 ``PricePrediction`` 증적(서빙된 예측).
+         */
+        DecisionSamplePrediction: {
+            /**
+             * Predicted Price
+             * @description 서빙된 예측 투찰가(원).
+             */
+            predicted_price?: number | null;
+            /**
+             * Price Range Min
+             * @description 예측 가격 범위 하한(원).
+             */
+            price_range_min?: number | null;
+            /**
+             * Price Range Max
+             * @description 예측 가격 범위 상한(원).
+             */
+            price_range_max?: number | null;
+            /**
+             * Confidence Score
+             * @description 예측 신뢰도(0-1).
+             */
+            confidence_score?: number | null;
+            /**
+             * Predictor Name
+             * @description 예측을 산출한 predictor 이름.
+             */
+            predictor_name?: string | null;
+            /**
+             * Predictor Family
+             * @description predictor 계열(statistical/ml 등).
+             */
+            predictor_family?: string | null;
+            /**
+             * Pricing Mode
+             * @description 가격 산출 모드(heuristic/model 등).
+             */
+            pricing_mode?: string | null;
+            /**
+             * Created At
+             * @description 이 예측이 기록된 시각(UTC).
+             */
+            created_at?: string | null;
+        };
+        /**
+         * DecisionSamplesResponse
+         * @description 최근 추천/예측 증적 샘플 목록(감사 목적, 정산 결과 아님).
+         */
+        DecisionSamplesResponse: {
+            /**
+             * Operator Id
+             * @description canonical 운영자 id(정보용).
+             */
+            operator_id: number;
+            /**
+             * Period Days
+             * @description 조회 기간(일). created_at >= now-days.
+             */
+            period_days: number;
+            /**
+             * Limit
+             * @description 요청한 최대 샘플 수.
+             */
+            limit: number;
+            /**
+             * Sample Count
+             * @description 반환된 샘플 수.
+             */
+            sample_count: number;
+            /**
+             * Generated At
+             * Format: date-time
+             * @description 이 목록을 생성한 시각(UTC).
+             */
+            generated_at: string;
+            /**
+             * Truncated
+             * @description sample_count 가 limit 에 도달했는지. true 면 더 오래된 기록이 잘림.
+             */
+            truncated: boolean;
+            /**
+             * Notes
+             * @description 감사 증적/추정 라벨/단일 운영자 기준에 대한 정직 안내 문구.
+             * @default 이 목록은 시스템이 산출·기록한 추천/예측의 감사 증적이며, 정산·실낙찰 결과가 아닙니다. probability_score 는 가격 적합도(추정)이지 P(낙찰)이 아닙니다. 단일 운영자(canonical) 기준이며, truncated 가 true 이면 limit 상한에 도달해 더 오래된 기록이 잘렸음을 의미합니다.
+             */
+            notes: string;
+            /**
+             * Samples
+             * @description 최근 순(created_at desc) 추천 증적 샘플 리스트.
+             */
+            samples?: components["schemas"]["DecisionSampleItem"][];
         };
         /** DecisionStrategyAdjustmentItem */
         DecisionStrategyAdjustmentItem: {
@@ -11151,6 +11379,43 @@ export interface operations {
                     "application/json": components["schemas"]["BidFormDraftResponse"];
                     "text/csv": unknown;
                     "text/plain": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_samples_api_v1_operations_decision_samples_get: {
+        parameters: {
+            query?: {
+                /** @description 조회 기간(일). created_at >= now-days 범위의 추천 기록만 포함. */
+                days?: number;
+                /** @description 최대 샘플 수(최근 순). 상한 도달 시 truncated=true. */
+                limit?: number;
+                /** @description 응답 포맷. json(기본, 구조화) / csv(다운로드). */
+                format?: "json" | "csv";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionSamplesResponse"];
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
