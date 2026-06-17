@@ -9,15 +9,23 @@ from sqlalchemy.orm import Session
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
-from app.models.models import PricePrediction, TenderResult
+from app.models.models import PricePrediction, TenderResult, User
 
 
 class PredictionReportingService:
     """Aggregate persisted prediction metadata for operator reporting."""
 
-    def build_observability(self, db: Session, *, days: int = 90, trend_bucket_days: int = 14) -> dict[str, Any]:
+    def build_observability(
+        self,
+        db: Session,
+        *,
+        days: int = 90,
+        trend_bucket_days: int = 14,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Summarize predictor selection, guardrails, fallback, and result accuracy."""
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         now = utc_now()
         date_from = now - timedelta(days=days)
         resolved_trend_bucket_days = max(1, int(trend_bucket_days or 14))

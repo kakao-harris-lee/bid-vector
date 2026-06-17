@@ -7,22 +7,43 @@ read-only endpoint that lists recent served recommendations(``BidDecisionRecord`
 joined with the latest served prediction(``PricePrediction``) per project, for
 audit-evidence purposes. 정산(settled) 항목만 보여주는 정확도 리포트와 달리, 정산
 여부와 무관하게 시스템이 산출·기록한 추천/예측 자체를 노출한다.
-
-단일 운영자(canonical) 기준 — ``ensure_operator_account`` 로 해소하며 별도
-``operator_id`` 파라미터를 받지 않는다. 시간 누수 우려 없음(과거 서빙 기록 read-only).
 """
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.security import get_current_operator_optional, resolve_target_operator
 from app.core.single_user import ensure_operator_account
+from app.models.models import User
 from app.schemas.decision_samples import DecisionSamplesResponse
 from app.services.decision_samples import DecisionSampleService
 
 router = APIRouter()
+
+
+def _resolve_samples_operator(
+    db: Session,
+    current_operator: User | None,
+    operator_id: int | None,
+) -> User:
+    if current_operator is None:
+        fallback = ensure_operator_account(db)
+        if operator_id is None or int(operator_id) == int(fallback.id):
+            return fallback
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view another operator's data",
+        )
+    return resolve_target_operator(db, current_operator, operator_id)
+
+
+def _with_current_operator(payload: dict, operator: User) -> dict:
+    payload["current_operator_id"] = int(operator.id)
+    payload["current_operator_username"] = str(operator.username or "")
+    return payload
 
 
 @router.get(
@@ -54,17 +75,20 @@ def get_decision_samples(
         default="json",
         description="응답 포맷. json(기본, 구조화) / csv(다운로드).",
     ),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """List recent served recommendations + their latest predictions (audit evidence).
 
-    Single-operator(canonical) 기준. 정산 결과가 아니라 시스템이 산출·기록한 추천/
-    예측 증적을 최근 순으로 반환한다. ``probability_score`` 는 가격 적합도(추정)이지
+    Resolved operator 기준. 정산 결과가 아니라 시스템이 산출·기록한 추천/예측
+    증적을 최근 순으로 반환한다. ``probability_score`` 는 가격 적합도(추정)이지
     P(낙찰)이 아니다(§1.5). ``format=csv`` 는 평탄화된 다운로드용 CSV 를 반환한다.
     """
-    operator = ensure_operator_account(db)
+    operator = _resolve_samples_operator(db, current_operator, operator_id)
     service = DecisionSampleService()
     payload = service.build_samples(db, days=days, limit=limit, operator=operator)
+    payload = _with_current_operator(payload, operator)
 
     if format == "csv":
         return Response(

@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 DECISION_SAMPLES_NOTES = (
     "이 목록은 시스템이 산출·기록한 추천/예측의 감사 증적이며, 정산·실낙찰 결과가 "
     "아닙니다. probability_score 는 가격 적합도(추정)이지 P(낙찰)이 아닙니다. "
-    "단일 운영자(canonical) 기준이며, truncated 가 true 이면 limit 상한에 도달해 "
+    "현재 선택된 운영자 기준이며, truncated 가 true 이면 limit 상한에 도달해 "
     "더 오래된 기록이 잘렸음을 의미합니다."
 )
 
@@ -124,7 +124,9 @@ class DecisionSamplesResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=False)
 
-    operator_id: int = Field(description="canonical 운영자 id(정보용).")
+    operator_id: int = Field(description="현재 응답 범위로 해소된 운영자 id.")
+    current_operator_id: int = Field(description="현재 응답 범위로 해소된 운영자 id.")
+    current_operator_username: str = Field(description="현재 응답 범위로 해소된 운영자 username.")
     period_days: int = Field(description="조회 기간(일). created_at >= now-days.")
     limit: int = Field(description="요청한 최대 샘플 수.")
     sample_count: int = Field(description="반환된 샘플 수.")
