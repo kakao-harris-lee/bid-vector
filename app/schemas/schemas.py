@@ -1148,6 +1148,8 @@ class DecisionExperimentThresholdApplyRequest(BaseModel):
 
 class DecisionExperimentThresholdApplyResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     run_id: int
     experiment_key: str
     recommendation_key: str
@@ -1188,6 +1190,8 @@ class DecisionExperimentStrategyApplyRequest(BaseModel):
 
 class DecisionExperimentStrategyApplyResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     run_id: int
     experiment_key: str
     recommendation_key: str
@@ -1279,6 +1283,8 @@ class DecisionExperimentRunResponse(BaseModel):
 
 class DecisionExperimentRunListResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     result_count: int = Field(ge=0)
     total_match_count: int = Field(default=0, ge=0)
     sort: Literal[
@@ -1311,6 +1317,9 @@ class DecisionExperimentRunListResponse(BaseModel):
 
 
 class DecisionExperimentRunDetailResponse(BaseModel):
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     run: DecisionExperimentRunResponse
     baseline_summary: DecisionExperimentMetricSnapshot
 
