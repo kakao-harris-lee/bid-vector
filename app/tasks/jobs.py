@@ -8,7 +8,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.models import CrawlJob
+from app.models.models import CrawlJob, User
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.ml_training import PricePredictionTrainingService
@@ -269,11 +269,20 @@ def train_price_predictor(request_payload: dict[str, Any] | None = None) -> dict
 
 
 @celery_app.task(name=DECISION_EXPERIMENT_REEVALUATION_TASK_NAME)
-def reevaluate_decision_experiment(experiment_run_id: int) -> dict:
+def reevaluate_decision_experiment(experiment_run_id: int, operator_id: int | None = None) -> dict:
     """Re-evaluate a decision experiment outside the API request path."""
     db = SessionLocal()
     try:
-        return DecisionExperimentService().evaluate_run(db, run_id=int(experiment_run_id))
+        operator = None
+        if operator_id is not None:
+            operator = db.query(User).filter(User.id == int(operator_id)).first()
+            if operator is None:
+                raise ValueError(f"Operator {int(operator_id)} not found")
+        return DecisionExperimentService().evaluate_run(
+            db,
+            run_id=int(experiment_run_id),
+            operator=operator,
+        )
     finally:
         db.close()
 
@@ -501,11 +510,14 @@ def enqueue_price_predictor_training(*, request_payload: dict[str, Any]):
     )
 
 
-def enqueue_decision_experiment_reevaluation(*, experiment_run_id: int):
+def enqueue_decision_experiment_reevaluation(*, experiment_run_id: int, operator_id: int | None = None):
     """Queue a decision experiment re-evaluation task and return the async task handle."""
+    kwargs = {"experiment_run_id": int(experiment_run_id)}
+    if operator_id is not None:
+        kwargs["operator_id"] = int(operator_id)
     return _enqueue_ml_task(
         reevaluate_decision_experiment,
-        kwargs={"experiment_run_id": int(experiment_run_id)},
+        kwargs=kwargs,
         queue=settings.CELERY_ML_REEVALUATION_QUEUE,
     )
 
