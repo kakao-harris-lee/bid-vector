@@ -842,3 +842,63 @@ def test_operations_dashboard_summarizes_g1_synthetic_validation(client, test_db
     cards = {card["key"]: card for card in response.json()["cards"]}
     assert cards["synthetic_g1_presets"]["value"] == 1
     assert cards["synthetic_g1_samples"]["value"] == 1
+
+
+def test_operations_dashboard_g1_preset_uses_latest_run_across_duplicate_names(
+    client, test_db
+):
+    """Duplicate preset-name rows must not hide the newest completed preset run."""
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+    completed_experiment = SyntheticExperiment(
+        name="g1-construction-base-12m",
+        description="completed duplicate",
+        params_json=json.dumps({"limit": 200, "scenario": "base"}),
+        operator_slugs_json=json.dumps(["cn-small-gangwon"]),
+        created_at=now - timedelta(days=2),
+        updated_at=now - timedelta(days=2),
+    )
+    empty_duplicate = SyntheticExperiment(
+        name="g1-construction-base-12m",
+        description="empty duplicate",
+        params_json=json.dumps({"limit": 200, "scenario": "base"}),
+        operator_slugs_json=json.dumps(["cn-small-gangwon"]),
+        created_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=1),
+    )
+    test_db.add_all([completed_experiment, empty_duplicate])
+    test_db.flush()
+    test_db.add(
+        SyntheticExperimentRun(
+            experiment_id=completed_experiment.id,
+            status="completed",
+            summary_json=json.dumps(
+                {
+                    "sample_status": "sufficient",
+                    "total_settled_count": 128,
+                    "missing_total_settled_count": 0,
+                    "insufficient_operators": [],
+                }
+            ),
+            started_at=now - timedelta(hours=1),
+            finished_at=now,
+            created_at=now,
+        )
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/operations-dashboard",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200
+    synthetic = response.json()["synthetic_validation"]
+    construction = {
+        item["name"]: item for item in synthetic["presets"]
+    }["g1-construction-base-12m"]
+    assert construction["experiment_id"] == completed_experiment.id
+    assert construction["latest_run_status"] == "completed"
+    assert construction["sample_status"] == "sufficient"
+    assert synthetic["completed_preset_count"] == 1
+    assert synthetic["sufficient_preset_count"] == 1

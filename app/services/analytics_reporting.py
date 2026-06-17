@@ -430,11 +430,17 @@ class AnalyticsReportingService:
         experiments = (
             db.query(SyntheticExperiment)
             .filter(SyntheticExperiment.name.in_(preset_names))
+            .order_by(
+                SyntheticExperiment.created_at.desc(),
+                SyntheticExperiment.id.desc(),
+            )
             .all()
             if preset_names
             else []
         )
-        experiment_by_name = {str(item.name): item for item in experiments}
+        experiment_by_name: dict[str, SyntheticExperiment] = {}
+        for experiment in experiments:
+            experiment_by_name.setdefault(str(experiment.name), experiment)
         recent_runs = (
             db.query(SyntheticExperimentRun)
             .join(SyntheticExperiment)
@@ -448,6 +454,23 @@ class AnalyticsReportingService:
             )
             .all()
         )
+        all_preset_runs = (
+            db.query(SyntheticExperimentRun)
+            .join(SyntheticExperiment)
+            .filter(SyntheticExperiment.name.in_(preset_names))
+            .order_by(
+                SyntheticExperimentRun.created_at.desc(),
+                SyntheticExperimentRun.id.desc(),
+            )
+            .all()
+            if preset_names
+            else []
+        )
+        latest_run_by_name: dict[str, SyntheticExperimentRun] = {}
+        for run in all_preset_runs:
+            if run.experiment is None:
+                continue
+            latest_run_by_name.setdefault(str(run.experiment.name), run)
         latest_run = (
             db.query(SyntheticExperimentRun)
             .join(SyntheticExperiment)
@@ -461,14 +484,21 @@ class AnalyticsReportingService:
         preset_rows = []
         for name in preset_names:
             experiment = experiment_by_name.get(name)
-            latest_preset_run = experiment.runs[0] if experiment and experiment.runs else None
+            latest_preset_run = latest_run_by_name.get(name)
             summary = self._load_json_object(
                 latest_preset_run.summary_json if latest_preset_run else None
+            )
+            row_experiment_id = (
+                int(latest_preset_run.experiment_id)
+                if latest_preset_run
+                else int(experiment.id)
+                if experiment
+                else None
             )
             preset_rows.append(
                 {
                     "name": name,
-                    "experiment_id": int(experiment.id) if experiment else None,
+                    "experiment_id": row_experiment_id,
                     "latest_run_id": int(latest_preset_run.id) if latest_preset_run else None,
                     "latest_run_status": latest_preset_run.status if latest_preset_run else None,
                     "latest_finished_at": latest_preset_run.finished_at if latest_preset_run else None,
