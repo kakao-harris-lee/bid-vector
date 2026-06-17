@@ -12,6 +12,7 @@ import type {
   SyntheticBacktestTaskStatusResponse,
   SyntheticExperimentCompareResponse,
   SyntheticExperimentCreateRequest,
+  SyntheticExperimentPresetListResponse,
   SyntheticExperimentResponse,
   SyntheticExperimentRunResponse,
   SyntheticOperatorListResponse,
@@ -113,6 +114,31 @@ export function fetchExperiments(
       token
     }),
     "실험 목록을 불러오지 못했습니다."
+  );
+}
+
+export function fetchExperimentPresets(
+  token?: string | null
+): Promise<SyntheticExperimentPresetListResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentPresetListResponse>(
+      "/api/v1/synthetic/experiments/presets",
+      { token }
+    ),
+    "G-1 preset 목록을 불러오지 못했습니다."
+  );
+}
+
+export function ensureExperimentPreset(
+  presetName: string,
+  token?: string | null
+): Promise<SyntheticExperimentResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentResponse>(
+      `/api/v1/synthetic/experiments/presets/${encodeURIComponent(presetName)}`,
+      { method: "POST", token }
+    ),
+    "G-1 preset 저장에 실패했습니다."
   );
 }
 

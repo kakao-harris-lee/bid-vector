@@ -144,6 +144,21 @@ export interface SyntheticExperimentResponse {
   runs?: SyntheticExperimentRunSummary[];
 }
 
+/** Fixed G-1 roadmap preset and its saved experiment state. */
+export interface SyntheticExperimentPreset {
+  name: string;
+  description: string;
+  params: SyntheticExperimentParams;
+  operator_slugs?: string[];
+  experiment_id?: number | null;
+  latest_run_id?: number | null;
+  latest_run_status?: string | null;
+}
+
+export interface SyntheticExperimentPresetListResponse {
+  presets: SyntheticExperimentPreset[];
+}
+
 // --- Experiment Lab breakdown (Phase 2) --------------------------------------
 // 생성 파일 `openapi.d.ts`의 SyntheticExperimentBreakdown 스키마와 동형.
 // 화면(리더보드/분해 시각화)에서 다루기 쉽게 보조 타입으로 재선언한다.
@@ -192,6 +207,9 @@ export interface SyntheticExperimentMetrics {
   win_rate_on_settled?: number | null;
   bid_submission_rate?: number | null;
   average_absolute_bid_rate_error?: number | null;
+  sample_status?: string | null;
+  sample_target?: number | null;
+  missing_settled_count?: number | null;
   [key: string]: unknown;
 }
 
@@ -201,6 +219,10 @@ export interface SyntheticExperimentResultItem {
   metrics?: SyntheticExperimentMetrics;
   settlement_sample?: unknown | null;
   breakdown?: SyntheticExperimentBreakdown;
+  sample_status?: string;
+  sample_target?: number;
+  settled_count?: number;
+  missing_settled_count?: number;
 }
 
 /** 폴링 응답: 런 상태 + 완료 시 회사별 결과. */

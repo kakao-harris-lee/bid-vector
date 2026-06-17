@@ -177,10 +177,25 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 비-trivial 작업은 다음 순서로 진행합니다.
 
 ```text
-main 확인 -> feature branch 생성 -> 작업/커밋 -> push -> PR 생성 -> code review -> 리뷰 대응 -> 사용자 승인 후 머지
+main 최신화 -> 별도 worktree + feature branch 생성 -> 그 worktree에서 작업/커밋 -> push -> PR 생성 -> code review -> 리뷰 대응 -> 사용자 승인 후 머지
 ```
 
-예외는 문서 오타 1줄, 자명한 lint/format fix, 사용자의 명시적 직접 푸시 지시뿐입니다.
+원칙:
+
+- `main`/`master` worktree에서 비-trivial 파일 수정 금지.
+- 작업 시작 전에 `git branch --show-current`와 `git status --short`로 현재 브랜치와 dirty 상태를 확인한다.
+- 현재 브랜치가 `main`/`master`이고 작업이 비-trivial이면 먼저 별도 worktree를 만든다.
+- 새 worktree는 최신 `origin/main` 기준으로 만들고, 작업 브랜치는 목적이 드러나는 이름을 쓴다.
+- 기존 worktree가 dirty이면 임의로 reset/restore하지 말고, 사용자에게 현재 변경을 새 worktree로 옮길지 확인한다.
+- 예외는 문서 오타 1줄, 자명한 lint/format fix, 사용자의 명시적 직접 작업/직접 푸시 지시뿐입니다.
+
+권장 명령:
+
+```bash
+git fetch origin
+git worktree add ../bid-vector-<slug> -b <type>/<slug> origin/main
+cd ../bid-vector-<slug>
+```
 
 브랜치 예:
 

@@ -32,8 +32,23 @@ const SMOKE_PHASE_LABELS: Record<string, string> = {
   telegram_ping: "텔레그램 발신"
 };
 
+const SMOKE_FAILURE_CATEGORY_LABELS: Record<string, string> = {
+  credential: "인증/키",
+  koneps_response: "나라장터 응답",
+  no_candidate: "후보 없음",
+  telegram: "텔레그램",
+  task_broker: "태스크/브로커",
+  db_schema: "DB/schema",
+  prediction: "예측",
+  unknown: "미분류"
+};
+
 function smokePhaseLabel(name: string): string {
   return SMOKE_PHASE_LABELS[name] ?? name;
+}
+
+function smokeFailureCategoryLabel(name: string): string {
+  return SMOKE_FAILURE_CATEGORY_LABELS[name] ?? name;
 }
 
 // phase 통과율 → 톤. 데이터가 없으면(평가 0건) muted로 정직하게 표기.
@@ -261,12 +276,14 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
   const perPhase = summary.per_phase ?? [];
   const latest = summary.latest ?? null;
   const recentFailures = summary.recent_failures ?? [];
+  const target = summary.healthy_streak_target ?? 7;
+  const categoryBreakdown = summary.failure_category_breakdown ?? {};
   const disabledEmpty = !summary.schedule_enabled && summary.cycle_count === 0;
   const disabledManual = !summary.schedule_enabled && summary.cycle_count > 0;
   const overallTone: "healthy" | "watch" | "critical" | "muted" =
     summary.cycle_count === 0
       ? "muted"
-      : summary.pass_rate >= 0.9
+      : summary.current_streak_meets_target
         ? "healthy"
         : summary.pass_rate >= 0.6
           ? "watch"
@@ -281,7 +298,7 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
       <CardContent className="flex flex-col gap-3 text-xs">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <Stat label="통과율" value={formatPercent(summary.pass_rate)} />
-          <Stat label="연속 통과" value={`${summary.current_streak}회`} />
+          <Stat label="G-0 연속 통과" value={`${summary.current_streak}/${target}회`} />
           <Stat
             label="총 사이클"
             value={`${summary.cycle_count}건 (통과 ${summary.passed_count}/실패 ${summary.failed_count})`}
@@ -337,6 +354,11 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
                       {phase.passed ? "PASS" : "FAIL"}
                     </Badge>
                     <span className="text-[var(--color-fg)]">{smokePhaseLabel(phase.name)}</span>
+                    {!phase.passed && phase.failure_category ? (
+                      <Badge tone="watch">
+                        {smokeFailureCategoryLabel(phase.failure_category)}
+                      </Badge>
+                    ) : null}
                     {!phase.passed && phase.detail ? (
                       <span className="text-[var(--color-muted)]">{phase.detail}</span>
                     ) : null}
@@ -344,6 +366,19 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
                 ))}
               </ul>
             ) : null}
+          </div>
+        ) : null}
+
+        {Object.keys(categoryBreakdown).length > 0 ? (
+          <div className="flex flex-col gap-1">
+            <span className="text-[var(--color-muted)]">실패 원인 분류</span>
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(categoryBreakdown).map(([category, count]) => (
+                <Badge key={category} tone="watch">
+                  {smokeFailureCategoryLabel(category)} {count}
+                </Badge>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -358,6 +393,14 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
                 >
                   {failure.started_at ? formatDateTime(failure.started_at) : "시각 미상"} · 실패 단계{" "}
                   {(failure.failed_phases ?? []).map(smokePhaseLabel).join(", ") || "-"}
+                  {(failure.failure_categories ?? []).length > 0 ? (
+                    <span>
+                      {" "}· 원인{" "}
+                      {(failure.failure_categories ?? [])
+                        .map(smokeFailureCategoryLabel)
+                        .join(", ")}
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>

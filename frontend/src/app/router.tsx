@@ -74,16 +74,32 @@ export function AppRoutes() {
         <Route path="profile" element={<Lazy><CompanyInfoEditor /></Lazy>} />
         <Route path="projects" element={<Lazy><ProjectsScreen /></Lazy>} />
         <Route path="projects/:id" element={<Lazy><ProjectDetailScreen /></Lazy>} />
-        <Route path="decisions" element={<Lazy><DecisionsScreen /></Lazy>} />
+        <Route path="decisions" element={<Navigate to="/admin/decisions" replace />} />
         <Route
           path="decisions/:id/summary"
           element={<Lazy><BidSummaryScreen /></Lazy>}
         />
+        <Route path="accuracy-report" element={<Navigate to="/admin/accuracy-report" replace />} />
+        <Route path="decision-samples" element={<Navigate to="/admin/decision-samples" replace />} />
+        <Route path="experiments" element={<Navigate to="/admin/experiments" replace />} />
+        <Route path="synthetic-backtest" element={<Navigate to="/admin/synthetic-backtest" replace />} />
+        <Route path="operations" element={<Navigate to="/admin/operations" replace />} />
+      </Route>
+      <Route
+        path="/admin"
+        element={
+          <AuthGate>
+            <Shell surface="admin" />
+          </AuthGate>
+        }
+      >
+        <Route index element={<Navigate to="/admin/operations" replace />} />
+        <Route path="operations" element={<Lazy><OperationsScreen /></Lazy>} />
+        <Route path="synthetic-backtest" element={<Lazy><ExperimentLabScreen /></Lazy>} />
+        <Route path="experiments" element={<Lazy><ExperimentsScreen /></Lazy>} />
         <Route path="accuracy-report" element={<Lazy><AccuracyReportScreen /></Lazy>} />
         <Route path="decision-samples" element={<Lazy><DecisionSamplesScreen /></Lazy>} />
-        <Route path="experiments" element={<Lazy><ExperimentsScreen /></Lazy>} />
-        <Route path="synthetic-backtest" element={<Lazy><ExperimentLabScreen /></Lazy>} />
-        <Route path="operations" element={<Lazy><OperationsScreen /></Lazy>} />
+        <Route path="decisions" element={<Lazy><DecisionsScreen /></Lazy>} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

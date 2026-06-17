@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { Badge } from "@/shared/components/ui/badge";
-import { cn } from "@/shared/lib/cn";
+import { cn } from "@/shared/lib";
 
 import { AppWorkflowGuide, KonepsProcessGuide } from "./components";
 

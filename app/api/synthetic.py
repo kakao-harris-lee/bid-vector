@@ -18,6 +18,7 @@ from app.schemas.schemas import (
     CustomOperatorUpdate,
     SyntheticExperimentCompareResponse,
     SyntheticExperimentCreate,
+    SyntheticExperimentPresetListResponse,
     SyntheticExperimentResponse,
     SyntheticExperimentRunResponse,
 )
@@ -401,6 +402,35 @@ def list_experiments_endpoint(db: Session = Depends(get_db)):
         service.serialize_experiment(experiment)
         for experiment in service.list_experiments()
     ]
+
+
+@router.get(
+    "/experiments/presets",
+    response_model=SyntheticExperimentPresetListResponse,
+)
+def list_experiment_presets_endpoint(db: Session = Depends(get_db)):
+    """Return fixed G-1 experiment presets and their saved experiment state."""
+    service = SyntheticExperimentService(db)
+    return {"presets": service.list_presets()}
+
+
+@router.post(
+    "/experiments/presets/{preset_name}",
+    response_model=SyntheticExperimentResponse,
+)
+def ensure_experiment_preset_endpoint(
+    preset_name: str,
+    db: Session = Depends(get_db),
+):
+    """Create/update the saved experiment backing a fixed G-1 preset."""
+    service = SyntheticExperimentService(db)
+    experiment = service.ensure_preset(preset_name)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experiment preset not found.",
+        )
+    return service.serialize_experiment(experiment)
 
 
 @router.get(

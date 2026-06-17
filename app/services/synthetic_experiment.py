@@ -31,6 +31,59 @@ RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_COMPLETED = "completed"
 RUN_STATUS_FAILED = "failed"
+SYNTHETIC_OPERATOR_SAMPLE_TARGET = 30
+SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET = 100
+SAMPLE_STATUS_SUFFICIENT = "sufficient"
+SAMPLE_STATUS_INSUFFICIENT = "insufficient_sample"
+
+_G1_PRESET_WINDOW = {
+    "start_at": "2025-01-01T00:00:00+00:00",
+    "end_at": "2025-12-31T23:59:59+00:00",
+    "limit": 200,
+    "scenario": "base",
+    "settle_actions": False,
+}
+
+SYNTHETIC_EXPERIMENT_PRESETS: dict[str, dict[str, Any]] = {
+    "g1-construction-base-12m": {
+        "description": "G-1 공사 입찰 2025년 12개월 base preset",
+        "params": {**_G1_PRESET_WINDOW, "category": "construction"},
+        "operator_slugs": [
+            "cn-small-gangwon",
+            "cn-mid-gyeonggi",
+            "cn-electric-telecom-national",
+        ],
+    },
+    "g1-service-base-12m": {
+        "description": "G-1 일반/기술 용역 2025년 12개월 base preset",
+        # Mixes general-service and technical-service operators. Leave category
+        # unset so each operator's focus categories scope its award pool.
+        "params": {**_G1_PRESET_WINDOW, "category": None},
+        "operator_slugs": [
+            "eng-supervision-busan",
+            "eng-design-daejeon",
+            "gs-cleaning-metro",
+            "gs-security-national",
+        ],
+    },
+    "g1-goods-base-12m": {
+        "description": "G-1 물품 입찰 2025년 12개월 base preset",
+        "params": {**_G1_PRESET_WINDOW, "category": "goods"},
+        "operator_slugs": [
+            "gd-office-sme",
+            "gd-it-equipment-midcap",
+        ],
+    },
+    "g1-software-base-12m": {
+        "description": "G-1 소프트웨어 입찰 2025년 12개월 base preset",
+        "params": {**_G1_PRESET_WINDOW, "category": "software"},
+        "operator_slugs": [
+            "sw-small-seoul",
+            "sw-mid-metro",
+            "sw-large-national",
+        ],
+    },
+}
 
 # Budget-band boundaries (KRW). A settlement is placed into the first band whose
 # upper bound it is *strictly* below; the final band catches everything at or
@@ -258,6 +311,48 @@ def _parse_dt(value: Any) -> Optional[datetime]:
     return None
 
 
+def sample_status_for_settled_count(settled_count: int) -> dict[str, Any]:
+    """Return the fixed G-1 per-operator sample health payload."""
+    count = max(0, int(settled_count or 0))
+    missing = max(0, SYNTHETIC_OPERATOR_SAMPLE_TARGET - count)
+    return {
+        "sample_status": (
+            SAMPLE_STATUS_SUFFICIENT
+            if missing == 0
+            else SAMPLE_STATUS_INSUFFICIENT
+        ),
+        "sample_target": SYNTHETIC_OPERATOR_SAMPLE_TARGET,
+        "settled_count": count,
+        "missing_settled_count": missing,
+    }
+
+
+def aggregate_sample_status(operator_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize G-1 run-level sample health across operator result rows."""
+    total_settled = sum(int(item.get("settled_count") or 0) for item in operator_results)
+    insufficient = [
+        {
+            "operator_slug": str(item.get("slug") or item.get("operator_slug") or "unknown"),
+            **sample_status_for_settled_count(int(item.get("settled_count") or 0)),
+        }
+        for item in operator_results
+        if int(item.get("settled_count") or 0) < SYNTHETIC_OPERATOR_SAMPLE_TARGET
+    ]
+    missing_total = max(0, SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET - total_settled)
+    return {
+        "sample_status": (
+            SAMPLE_STATUS_SUFFICIENT
+            if missing_total == 0 and not insufficient
+            else SAMPLE_STATUS_INSUFFICIENT
+        ),
+        "operator_sample_target": SYNTHETIC_OPERATOR_SAMPLE_TARGET,
+        "run_total_sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+        "total_settled_count": total_settled,
+        "missing_total_settled_count": missing_total,
+        "insufficient_operators": insufficient,
+    }
+
+
 class SyntheticExperimentService:
     """CRUD + run lifecycle for synthetic experiments."""
 
@@ -293,6 +388,52 @@ class SyntheticExperimentService:
             )
             .all()
         )
+
+    def list_presets(self) -> list[dict[str, Any]]:
+        """Return fixed G-1 presets with their saved experiment/run state."""
+        return [
+            self._serialize_preset(name, definition)
+            for name, definition in SYNTHETIC_EXPERIMENT_PRESETS.items()
+        ]
+
+    def ensure_preset(self, name: str) -> Optional[SyntheticExperiment]:
+        """Create or update the saved experiment for a fixed G-1 preset."""
+        definition = SYNTHETIC_EXPERIMENT_PRESETS.get(name)
+        if definition is None:
+            return None
+        experiment = (
+            self.db.query(SyntheticExperiment)
+            .filter(SyntheticExperiment.name == name)
+            .first()
+        )
+        if experiment is None:
+            experiment = SyntheticExperiment(name=name)
+            self.db.add(experiment)
+        experiment.description = str(definition["description"])
+        experiment.params_json = _json_dumps(definition["params"])
+        experiment.operator_slugs_json = _json_dumps(definition["operator_slugs"])
+        self.db.commit()
+        self.db.refresh(experiment)
+        return experiment
+
+    def _serialize_preset(
+        self, name: str, definition: dict[str, Any]
+    ) -> dict[str, Any]:
+        experiment = (
+            self.db.query(SyntheticExperiment)
+            .filter(SyntheticExperiment.name == name)
+            .first()
+        )
+        latest_run = experiment.runs[0] if experiment and experiment.runs else None
+        return {
+            "name": name,
+            "description": str(definition["description"]),
+            "params": definition["params"],
+            "operator_slugs": list(definition["operator_slugs"]),
+            "experiment_id": experiment.id if experiment else None,
+            "latest_run_id": latest_run.id if latest_run else None,
+            "latest_run_status": latest_run.status if latest_run else None,
+        }
 
     def get_experiment(self, experiment_id: int) -> Optional[SyntheticExperiment]:
         return (
@@ -391,6 +532,7 @@ class SyntheticExperimentService:
             "start_at": result.get("start_at"),
             "end_at": result.get("end_at"),
             "limit": result.get("limit"),
+            **aggregate_sample_status(operator_results),
         }
         run.status = RUN_STATUS_COMPLETED
         run.finished_at = datetime.utcnow()
@@ -404,6 +546,9 @@ class SyntheticExperimentService:
                 for key, value in item.items()
                 if key not in excluded_metric_keys
             }
+            metrics.update(
+                sample_status_for_settled_count(int(item.get("settled_count") or 0))
+            )
             settlement_sample = item.get("settlement_items")
             # Prefer the engine-supplied breakdown (computed over the full,
             # non-truncated settlement set). Fall back to computing from the
@@ -473,6 +618,9 @@ class SyntheticExperimentService:
         payload = self.serialize_run_summary(run)
         payload["results"] = [
             {
+                **sample_status_for_settled_count(
+                    int((_json_loads(item.metrics_json) or {}).get("settled_count") or 0)
+                ),
                 "operator_slug": item.operator_slug,
                 "metrics": _json_loads(item.metrics_json) or {},
                 "settlement_sample": _json_loads(item.settlement_sample_json),

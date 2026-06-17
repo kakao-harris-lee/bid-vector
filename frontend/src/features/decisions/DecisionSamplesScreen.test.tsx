@@ -106,7 +106,7 @@ function installFetchMock(response: DecisionSamplesResponse = buildResponse()): 
 beforeEach(() => {
   window.localStorage.clear();
   window.localStorage.setItem("bid-vector-dashboard-token", "token-samples");
-  window.history.pushState({}, "", "/dashboard/decision-samples");
+  window.history.pushState({}, "", "/admin/decision-samples");
   vi.restoreAllMocks();
   // jsdom 의 URL 에는 createObjectURL/revokeObjectURL 이 없으므로 메서드만
   // 주입한다 — 전체 global 을 교체하면 react-router 의 `new URL(...)` 이 깨진다.

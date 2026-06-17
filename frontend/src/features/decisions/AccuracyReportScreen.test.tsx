@@ -150,7 +150,7 @@ function installFetchMock(
 beforeEach(() => {
   window.localStorage.clear();
   window.localStorage.setItem("bid-vector-dashboard-token", "token-accuracy");
-  window.history.pushState({}, "", "/dashboard/accuracy-report");
+  window.history.pushState({}, "", "/admin/accuracy-report");
   vi.restoreAllMocks();
   act(() => {
     toastApi.clearAll();

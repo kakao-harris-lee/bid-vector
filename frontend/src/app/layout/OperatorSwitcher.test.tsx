@@ -135,6 +135,7 @@ beforeEach(() => {
 
 describe("OperatorSwitcher", () => {
   it("권한이 있는 사용자에게 회사 목록 드롭다운을 노출하고 그룹으로 정렬한다", async () => {
+    window.history.pushState({}, "", "/admin/operations");
     vi.stubGlobal("fetch", buildFetchMock(privilegedAccounts));
     renderApp();
 
@@ -158,6 +159,7 @@ describe("OperatorSwitcher", () => {
   });
 
   it("회사 선택 시 activeOperatorId가 localStorage에 영속되고 dashboard 호출에 operator_id가 전달된다", async () => {
+    window.history.pushState({}, "", "/admin/operations");
     const fetchMock = buildFetchMock(privilegedAccounts);
     vi.stubGlobal("fetch", fetchMock);
     renderApp();
@@ -178,6 +180,7 @@ describe("OperatorSwitcher", () => {
   });
 
   it("페이지 새로고침 후에도 activeOperatorId가 유지된다 (localStorage rehydration)", async () => {
+    window.history.pushState({}, "", "/admin/operations");
     window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "12");
     const fetchMock = buildFetchMock(privilegedAccounts);
     vi.stubGlobal("fetch", fetchMock);
@@ -209,6 +212,7 @@ describe("OperatorSwitcher", () => {
   });
 
   it("기본(본인)을 다시 선택하면 operator_id 쿼리 파라미터가 제거된다", async () => {
+    window.history.pushState({}, "", "/admin/operations");
     window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
     const fetchMock = buildFetchMock(privilegedAccounts);
     vi.stubGlobal("fetch", fetchMock);
@@ -236,5 +240,13 @@ describe("OperatorSwitcher", () => {
       );
       expect(matched).toBeDefined();
     });
+  });
+
+  it("권한이 있어도 사용자 dashboard surface에서는 회사 전환을 숨긴다", async () => {
+    vi.stubGlobal("fetch", buildFetchMock(privilegedAccounts));
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "회사 전환" })).not.toBeInTheDocument();
   });
 });

@@ -1898,6 +1898,7 @@ class SmokeTestLatestPhase(BaseModel):
     name: str
     passed: bool
     detail: str
+    failure_category: Optional[str] = None
 
 
 class SmokeTestLatestRun(BaseModel):
@@ -1909,6 +1910,8 @@ class SmokeTestLatestRun(BaseModel):
 class SmokeTestRecentFailure(BaseModel):
     started_at: Optional[datetime] = None
     failed_phases: List[str] = Field(default_factory=list)
+    failure_categories: List[str] = Field(default_factory=list)
+    failure_category_breakdown: dict[str, int] = Field(default_factory=dict)
 
 
 class SmokeTestOperationsSummary(BaseModel):
@@ -1921,9 +1924,14 @@ class SmokeTestOperationsSummary(BaseModel):
     current_streak: int = Field(
         ge=0, description="최근 연속 통과 사이클 수 (N일 연속 green 신호)"
     )
+    healthy_streak_target: int = Field(
+        default=7, ge=1, description="G-0에서 요구하는 연속 green 사이클 수"
+    )
+    current_streak_meets_target: bool = False
     schedule_enabled: bool = Field(
         description="스모크 스케줄(SMOKE_TEST_SCHEDULE_ENABLED) 활성 여부"
     )
+    failure_category_breakdown: dict[str, int] = Field(default_factory=dict)
     per_phase: List[SmokeTestPhaseRate] = Field(default_factory=list)
     latest: Optional[SmokeTestLatestRun] = None
     recent_failures: List[SmokeTestRecentFailure] = Field(default_factory=list)
@@ -2510,6 +2518,24 @@ class SyntheticExperimentCreate(BaseModel):
     operator_slugs: Optional[List[str]] = None
 
 
+class SyntheticExperimentPreset(BaseModel):
+    """Fixed G-1 experiment preset definition and persistence state."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    description: str
+    params: SyntheticExperimentParams
+    operator_slugs: List[str] = Field(default_factory=list)
+    experiment_id: Optional[int] = None
+    latest_run_id: Optional[int] = None
+    latest_run_status: Optional[str] = None
+
+
+class SyntheticExperimentPresetListResponse(BaseModel):
+    presets: List[SyntheticExperimentPreset] = Field(default_factory=list)
+
+
 class SyntheticExperimentRunSummary(BaseModel):
     """Lightweight run summary embedded in an experiment detail response."""
 
@@ -2622,6 +2648,10 @@ class SyntheticExperimentResultItem(BaseModel):
     breakdown: SyntheticExperimentBreakdown = Field(
         default_factory=SyntheticExperimentBreakdown
     )
+    sample_status: str = "insufficient_sample"
+    sample_target: int = Field(default=30, ge=1)
+    settled_count: int = Field(default=0, ge=0)
+    missing_settled_count: int = Field(default=0, ge=0)
 
 
 class SyntheticExperimentRunResponse(BaseModel):

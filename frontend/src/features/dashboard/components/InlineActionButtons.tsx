@@ -1,6 +1,6 @@
 import { Check, Clock, Loader2, Slash } from "lucide-react";
 import { t } from "@/shared/i18n";
-import { cn } from "@/shared/lib/cn";
+import { cn } from "@/shared/lib";
 import type { BidDecisionActionType } from "@/shared/api";
 import type { DashboardOpportunityItem } from "@/shared/types";
 

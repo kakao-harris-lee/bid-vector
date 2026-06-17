@@ -118,7 +118,7 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 
 beforeEach(() => {
   window.localStorage.setItem("bid-vector-dashboard-token", "token-synthetic");
-  window.history.pushState({}, "", "/dashboard/synthetic-backtest");
+  window.history.pushState({}, "", "/admin/synthetic-backtest");
   vi.restoreAllMocks();
   act(() => {
     toastApi.clearAll();

@@ -46,13 +46,14 @@ export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon:
 export const PROFILE_ROUTE_PATH = "/dashboard/profile";
 export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
 export const PROJECTS_ROUTE_PATH = "/dashboard/projects";
-export const DECISIONS_ROUTE_PATH = "/dashboard/decisions";
-export const EXPERIMENTS_ROUTE_PATH = "/dashboard/experiments";
-export const SYNTHETIC_ROUTE_PATH = "/dashboard/synthetic-backtest";
-export const OPERATIONS_ROUTE_PATH = "/dashboard/operations";
-export const ACCURACY_REPORT_ROUTE_PATH = "/dashboard/accuracy-report";
-export const DECISION_SAMPLES_ROUTE_PATH = "/dashboard/decision-samples";
 export const GUIDE_ROUTE_PATH = "/dashboard/guide";
+export const ADMIN_HOME_ROUTE_PATH = "/admin/operations";
+export const DECISIONS_ROUTE_PATH = "/admin/decisions";
+export const EXPERIMENTS_ROUTE_PATH = "/admin/experiments";
+export const SYNTHETIC_ROUTE_PATH = "/admin/synthetic-backtest";
+export const OPERATIONS_ROUTE_PATH = "/admin/operations";
+export const ACCURACY_REPORT_ROUTE_PATH = "/admin/accuracy-report";
+export const DECISION_SAMPLES_ROUTE_PATH = "/admin/decision-samples";
 
 export function routeKeyFromPath(pathname: string): RouteKey {
   if (pathname.startsWith("/dashboard/bids")) return "bids";
@@ -68,6 +69,7 @@ export function routeKeyFromPath(pathname: string): RouteKey {
  * consumers.
  */
 export function bottomNavKeyForPath(pathname: string): RouteKey | null {
+  if (pathname.startsWith("/admin")) return null;
   if (pathname.startsWith(GUIDE_ROUTE_PATH)) return null;
   if (pathname.startsWith(PROFILE_ROUTE_PATH)) return null;
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
@@ -97,7 +99,7 @@ function pageTitleForPath(pathname: string): string {
   return ROUTE_LABELS[route].label;
 }
 
-export function Shell() {
+export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
   const session = useAuthSession();
   const location = useLocation();
   const navigate = useNavigate();
@@ -106,6 +108,8 @@ export function Shell() {
   const [reloadKey, setReloadKey] = useState(0);
   const activeOperator = useActiveOperator(session);
   const activeOperatorId = activeOperator.activeOperatorId;
+  const isAdminSurface = surface === "admin";
+  const homePath = isAdminSurface ? ADMIN_HOME_ROUTE_PATH : ROUTE_LABELS.home.path;
 
   const summary = useQuery({
     queryKey: [...queryKeys.dashboard.summary(activeOperatorId), reloadKey],
@@ -139,7 +143,7 @@ export function Shell() {
         <button
           className="flex items-center gap-3 text-left text-sm focus-visible:outline-none"
           type="button"
-          onClick={() => navigate(ROUTE_LABELS.home.path)}
+          onClick={() => navigate(homePath)}
         >
           <span className="grid h-9 w-9 place-items-center rounded-md bg-[var(--color-primary)] text-xs font-bold text-[var(--color-primary-foreground)]">
             BV
@@ -150,76 +154,83 @@ export function Shell() {
           </span>
         </button>
         <div className="flex items-center gap-2">
-          <OperatorSwitcher activeOperator={activeOperator} />
+          {isAdminSurface ? <OperatorSwitcher activeOperator={activeOperator} /> : null}
           {summary.data ? (
             <Badge tone={toneFromStatus(summary.data.operational_status.status)}>
               {summary.data.operational_status.label}
             </Badge>
           ) : null}
-          <IconButton
-            label="공고 탐색"
-            onClick={() => navigate(onProjects ? ROUTE_LABELS.home.path : PROJECTS_ROUTE_PATH)}
-          >
-            <FileSearch size={18} />
-          </IconButton>
-          <IconButton
-            label="결정 게이트웨이"
-            onClick={() => navigate(onDecisions ? ROUTE_LABELS.home.path : DECISIONS_ROUTE_PATH)}
-          >
-            <BarChart3 size={18} />
-          </IconButton>
-          <IconButton
-            label="실험 lifecycle"
-            onClick={() => navigate(onExperiments ? ROUTE_LABELS.home.path : EXPERIMENTS_ROUTE_PATH)}
-          >
-            <Beaker size={18} />
-          </IconButton>
-          <IconButton
-            label="가상 운영자 백테스트"
-            onClick={() => navigate(onSynthetic ? ROUTE_LABELS.home.path : SYNTHETIC_ROUTE_PATH)}
-          >
-            <FlaskConical size={18} />
-          </IconButton>
-          <IconButton
-            label="운영 대시보드"
-            onClick={() => navigate(onOperations ? ROUTE_LABELS.home.path : OPERATIONS_ROUTE_PATH)}
-          >
-            <HeartPulse size={18} />
-          </IconButton>
-          <IconButton
-            label="정확도 리포트"
-            onClick={() =>
-              navigate(onAccuracyReport ? ROUTE_LABELS.home.path : ACCURACY_REPORT_ROUTE_PATH)
-            }
-          >
-            <Target size={18} />
-          </IconButton>
-          <IconButton
-            label="의사결정 증적"
-            onClick={() =>
-              navigate(onDecisionSamples ? ROUTE_LABELS.home.path : DECISION_SAMPLES_ROUTE_PATH)
-            }
-          >
-            <ClipboardList size={18} />
-          </IconButton>
-          <IconButton
-            label="업체 정보"
-            onClick={() => navigate(onProfile ? ROUTE_LABELS.home.path : PROFILE_ROUTE_PATH)}
-          >
-            <Building2 size={18} />
-          </IconButton>
-          <IconButton
-            label="전략 편집"
-            onClick={() => navigate(onStrategy ? ROUTE_LABELS.home.path : STRATEGY_ROUTE_PATH)}
-          >
-            <Sliders size={18} />
-          </IconButton>
-          <IconButton
-            label="이용 가이드"
-            onClick={() => navigate(onGuide ? ROUTE_LABELS.home.path : GUIDE_ROUTE_PATH)}
-          >
-            <BookOpen size={18} />
-          </IconButton>
+          {isAdminSurface ? (
+            <>
+              <IconButton
+                label="운영 대시보드"
+                onClick={() => navigate(onOperations ? homePath : OPERATIONS_ROUTE_PATH)}
+              >
+                <HeartPulse size={18} />
+              </IconButton>
+              <IconButton
+                label="가상 운영자 백테스트"
+                onClick={() => navigate(onSynthetic ? homePath : SYNTHETIC_ROUTE_PATH)}
+              >
+                <FlaskConical size={18} />
+              </IconButton>
+              <IconButton
+                label="실험 lifecycle"
+                onClick={() => navigate(onExperiments ? homePath : EXPERIMENTS_ROUTE_PATH)}
+              >
+                <Beaker size={18} />
+              </IconButton>
+              <IconButton
+                label="결정 게이트웨이"
+                onClick={() => navigate(onDecisions ? homePath : DECISIONS_ROUTE_PATH)}
+              >
+                <BarChart3 size={18} />
+              </IconButton>
+              <IconButton
+                label="정확도 리포트"
+                onClick={() =>
+                  navigate(onAccuracyReport ? homePath : ACCURACY_REPORT_ROUTE_PATH)
+                }
+              >
+                <Target size={18} />
+              </IconButton>
+              <IconButton
+                label="의사결정 증적"
+                onClick={() =>
+                  navigate(onDecisionSamples ? homePath : DECISION_SAMPLES_ROUTE_PATH)
+                }
+              >
+                <ClipboardList size={18} />
+              </IconButton>
+            </>
+          ) : (
+            <>
+              <IconButton
+                label="공고 탐색"
+                onClick={() => navigate(onProjects ? homePath : PROJECTS_ROUTE_PATH)}
+              >
+                <FileSearch size={18} />
+              </IconButton>
+              <IconButton
+                label="업체 정보"
+                onClick={() => navigate(onProfile ? homePath : PROFILE_ROUTE_PATH)}
+              >
+                <Building2 size={18} />
+              </IconButton>
+              <IconButton
+                label="전략 편집"
+                onClick={() => navigate(onStrategy ? homePath : STRATEGY_ROUTE_PATH)}
+              >
+                <Sliders size={18} />
+              </IconButton>
+              <IconButton
+                label="이용 가이드"
+                onClick={() => navigate(onGuide ? homePath : GUIDE_ROUTE_PATH)}
+              >
+                <BookOpen size={18} />
+              </IconButton>
+            </>
+          )}
           <IconButton
             label="알림"
             onClick={() => setNotificationsOpen(true)}
@@ -255,7 +266,7 @@ export function Shell() {
         </div>
       </main>
 
-      <BottomNav route={bottomNavRoute} />
+      {isAdminSurface ? null : <BottomNav route={bottomNavRoute} />}
       <NotificationDrawer
         open={notificationsOpen}
         onClose={() => setNotificationsOpen(false)}

@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useId, useState } from "react";
 import { X } from "lucide-react";
-import { cn } from "@/shared/lib/cn";
+import { cn } from "@/shared/lib";
 
 export interface ChipInputProps {
   value: string[];

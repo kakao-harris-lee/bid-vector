@@ -152,11 +152,99 @@ def test_poll_run_ok(client, patched_engine):
     # win_rate is a price-only estimate, passed through unchanged.
     for item in body["results"]:
         assert "win_rate_on_settled" in item["metrics"]
+        assert item["sample_status"] == "insufficient_sample"
+        assert item["sample_target"] == 30
+        assert item["missing_settled_count"] > 0
+        assert item["metrics"]["sample_status"] == "insufficient_sample"
+    assert body["summary"]["sample_status"] == "insufficient_sample"
+    assert body["summary"]["run_total_sample_target"] == 100
 
 
 def test_poll_run_not_found(client, patched_engine):
     created = _create_experiment(client).json()
     response = client.get(f"/api/v1/synthetic/experiments/{created['id']}/runs/999999")
+    assert response.status_code == 404
+
+
+def test_poll_run_marks_sufficient_sample(client, monkeypatch):
+    def fake_run_for_all(self, db, **kwargs):
+        return {
+            "operator_count": 3,
+            "category": kwargs.get("category"),
+            "start_at": None,
+            "end_at": None,
+            "limit": kwargs.get("limit", 100),
+            "scenario": kwargs.get("scenario", "base"),
+            "results": [
+                {"slug": "a", "settled_count": 35, "settlement_items": []},
+                {"slug": "b", "settled_count": 35, "settlement_items": []},
+                {"slug": "c", "settled_count": 35, "settlement_items": []},
+            ],
+        }
+
+    monkeypatch.setattr(SyntheticBacktestService, "run_for_all", fake_run_for_all)
+    created = _create_experiment(client).json()
+    run = client.post(f"/api/v1/synthetic/experiments/{created['id']}/runs").json()
+
+    response = client.get(
+        f"/api/v1/synthetic/experiments/{created['id']}/runs/{run['id']}"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["sample_status"] == "sufficient"
+    assert body["summary"]["total_settled_count"] == 105
+    assert {item["sample_status"] for item in body["results"]} == {"sufficient"}
+
+
+def test_experiment_presets_are_listed_and_saved_idempotently(client):
+    response = client.get("/api/v1/synthetic/experiments/presets")
+    assert response.status_code == 200
+    presets = {item["name"]: item for item in response.json()["presets"]}
+    assert {
+        "g1-construction-base-12m",
+        "g1-service-base-12m",
+        "g1-goods-base-12m",
+        "g1-software-base-12m",
+    } <= set(presets)
+    assert presets["g1-construction-base-12m"]["experiment_id"] is None
+    assert presets["g1-construction-base-12m"]["params"]["limit"] == 200
+
+    first = client.post(
+        "/api/v1/synthetic/experiments/presets/g1-construction-base-12m"
+    )
+    second = client.post(
+        "/api/v1/synthetic/experiments/presets/g1-construction-base-12m"
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["id"] == second.json()["id"]
+    assert first.json()["name"] == "g1-construction-base-12m"
+    assert first.json()["params"]["category"] == "construction"
+    assert first.json()["operator_slugs"] == [
+        "cn-small-gangwon",
+        "cn-mid-gyeonggi",
+        "cn-electric-telecom-national",
+    ]
+    service_preset = presets["g1-service-base-12m"]
+    assert service_preset["params"]["category"] is None
+    assert service_preset["operator_slugs"] == [
+        "eng-supervision-busan",
+        "eng-design-daejeon",
+        "gs-cleaning-metro",
+        "gs-security-national",
+    ]
+
+    listed_again = client.get("/api/v1/synthetic/experiments/presets").json()
+    saved = {
+        item["name"]: item for item in listed_again["presets"]
+    }["g1-construction-base-12m"]
+    assert saved["experiment_id"] == first.json()["id"]
+
+
+def test_experiment_preset_unknown_returns_404(client):
+    response = client.post("/api/v1/synthetic/experiments/presets/no-such-preset")
     assert response.status_code == 404
 
 

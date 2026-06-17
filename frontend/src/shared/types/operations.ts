@@ -22,12 +22,48 @@ export type OperationsKpiRecommendationFeedback =
 export type OperationsKpiSettlementCoverage =
   components["schemas"]["OperationsKpiSettlementCoverage"];
 
-// Smoke-test 운영 검증 summary (backend smoke cycle health). Aliased from the
-// generated OpenAPI schema so labels/structure stay in sync with the backend.
-export type SmokeTestOperationsSummary = components["schemas"]["SmokeTestOperationsSummary"];
-export type SmokeTestPhaseRate = components["schemas"]["SmokeTestPhaseRate"];
-export type SmokeTestLatestRun = components["schemas"]["SmokeTestLatestRun"];
-export type SmokeTestRecentFailure = components["schemas"]["SmokeTestRecentFailure"];
+// Smoke-test 운영 검증 summary (backend smoke cycle health). Kept as a local
+// helper type because roadmap G-0 fields may move faster than openapi.d.ts.
+export interface SmokeTestPhaseRate {
+  name: string;
+  pass_rate: number;
+  evaluated_count: number;
+}
+
+export interface SmokeTestLatestPhase {
+  name: string;
+  passed: boolean;
+  detail: string;
+  failure_category?: string | null;
+}
+
+export interface SmokeTestLatestRun {
+  started_at?: string | null;
+  overall_passed: boolean;
+  phases?: SmokeTestLatestPhase[];
+}
+
+export interface SmokeTestRecentFailure {
+  started_at?: string | null;
+  failed_phases?: string[];
+  failure_categories?: string[];
+  failure_category_breakdown?: Record<string, number>;
+}
+
+export interface SmokeTestOperationsSummary {
+  cycle_count: number;
+  passed_count: number;
+  failed_count: number;
+  pass_rate: number;
+  current_streak: number;
+  healthy_streak_target: number;
+  current_streak_meets_target: boolean;
+  schedule_enabled: boolean;
+  failure_category_breakdown: Record<string, number>;
+  per_phase?: SmokeTestPhaseRate[];
+  latest?: SmokeTestLatestRun | null;
+  recent_failures?: SmokeTestRecentFailure[];
+}
 
 export interface OperationsDashboardCard {
   key: string;
@@ -105,6 +141,8 @@ export interface TaskOperationsSummary {
 
 export interface OperationsDashboardResponse {
   operator_id: number;
+  current_operator_id?: number;
+  current_operator_username?: string;
   period_days: number;
   crawl: CrawlOperationsSummary;
   tasks: TaskOperationsSummary;

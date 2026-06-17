@@ -41,8 +41,18 @@ class AnalyticsReportingService:
     STALE_TASK_SECONDS = 15 * 60
     # Canonical 4-phase smoke order (KonepsTelegramSmokeTestService).
     SMOKE_PHASE_NAMES = ("koneps_collect", "sbert_embedding", "predict_price", "telegram_ping")
-    # "N일 연속 green" healthy threshold for the smoke streak signal.
-    SMOKE_HEALTHY_STREAK = 3
+    # G-0 exit gate: seven consecutive scheduled smoke cycles should be green.
+    SMOKE_HEALTHY_STREAK = 7
+    SMOKE_FAILURE_CATEGORIES = (
+        "credential",
+        "koneps_response",
+        "no_candidate",
+        "telegram",
+        "task_broker",
+        "db_schema",
+        "prediction",
+        "unknown",
+    )
 
     def build_operations_dashboard(
         self,
@@ -436,16 +446,25 @@ class AnalyticsReportingService:
         # dishonestly drag the phase's pass_rate down for a phase that did not run.
         phase_passed: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
         phase_attempted: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
+        failure_categories: dict[str, int] = {
+            name: 0 for name in self.SMOKE_FAILURE_CATEGORIES
+        }
         for run in runs:
             for phase in self._load_smoke_phases(run.phases):
                 name = str(phase.get("name") or "")
                 if name not in phase_attempted:
                     continue
                 if self._is_skipped_phase(phase):
+                    category = self._smoke_failure_category(phase)
+                    if category == "no_candidate":
+                        failure_categories[category] = failure_categories.get(category, 0) + 1
                     continue
                 phase_attempted[name] += 1
                 if bool(phase.get("passed")):
                     phase_passed[name] += 1
+                else:
+                    category = self._smoke_failure_category(phase)
+                    failure_categories[category] = failure_categories.get(category, 0) + 1
         per_phase = [
             {
                 "name": name,
@@ -466,23 +485,43 @@ class AnalyticsReportingService:
                         "name": str(phase.get("name") or ""),
                         "passed": bool(phase.get("passed")),
                         "detail": str(phase.get("detail") or ""),
+                        "failure_category": (
+                            None
+                            if bool(phase.get("passed"))
+                            else self._smoke_failure_category(phase)
+                        ),
                     }
                     for phase in self._load_smoke_phases(latest_run.phases)
                 ],
             }
 
-        recent_failures = [
-            {
-                "started_at": run.started_at,
-                "failed_phases": [
-                    str(phase.get("name") or "")
-                    for phase in self._load_smoke_phases(run.phases)
-                    if not bool(phase.get("passed"))
-                ],
-            }
-            for run in runs
-            if not bool(run.overall_passed)
-        ][:recent_limit]
+        recent_failures = []
+        for run in runs:
+            if bool(run.overall_passed):
+                continue
+            failed_phases = [
+                phase
+                for phase in self._load_smoke_phases(run.phases)
+                if not bool(phase.get("passed"))
+            ]
+            run_categories: dict[str, int] = {}
+            for phase in failed_phases:
+                category = self._smoke_failure_category(phase)
+                run_categories[category] = run_categories.get(category, 0) + 1
+            recent_failures.append(
+                {
+                    "started_at": run.started_at,
+                    "failed_phases": [
+                        str(phase.get("name") or "") for phase in failed_phases
+                    ],
+                    "failure_categories": sorted(run_categories),
+                    "failure_category_breakdown": dict(
+                        sorted(run_categories.items(), key=lambda item: (-item[1], item[0]))
+                    ),
+                }
+            )
+            if len(recent_failures) >= recent_limit:
+                break
 
         return {
             "cycle_count": cycle_count,
@@ -490,7 +529,12 @@ class AnalyticsReportingService:
             "failed_count": failed_count,
             "pass_rate": self._rate(passed_count, cycle_count),
             "current_streak": current_streak,
+            "healthy_streak_target": self.SMOKE_HEALTHY_STREAK,
+            "current_streak_meets_target": current_streak >= self.SMOKE_HEALTHY_STREAK,
             "schedule_enabled": bool(settings.SMOKE_TEST_SCHEDULE_ENABLED),
+            "failure_category_breakdown": {
+                key: value for key, value in failure_categories.items() if value > 0
+            },
             "per_phase": per_phase,
             "latest": latest,
             "recent_failures": recent_failures,
@@ -521,6 +565,72 @@ class AnalyticsReportingService:
         detail = str(phase.get("detail") or "").strip().lower()
         return detail.startswith("skipped")
 
+    def _smoke_failure_category(self, phase: dict[str, Any]) -> str:
+        """Classify a failed smoke phase into the roadmap's fixed buckets."""
+        name = str(phase.get("name") or "").strip().lower()
+        detail = str(phase.get("detail") or "").strip().lower()
+        text = f"{name} {detail}"
+        if any(
+            token in text
+            for token in (
+                "credential",
+                "unauthorized",
+                "forbidden",
+                "401",
+                "403",
+                "api key",
+                "apikey",
+                "service key",
+                "token",
+                "secret",
+            )
+        ):
+            return "credential"
+        if any(
+            token in text
+            for token in (
+                "celery",
+                "broker",
+                "rabbit",
+                "redis",
+                "queue",
+                "worker",
+                "task",
+            )
+        ):
+            return "task_broker"
+        if any(
+            token in text
+            for token in (
+                "no eligible",
+                "no candidate",
+                "no recent project",
+                "no project",
+                "collected 0",
+                "0 item",
+            )
+        ):
+            return "no_candidate"
+        if "telegram" in text:
+            return "telegram"
+        if any(
+            token in text
+            for token in (
+                "no such table",
+                "no such column",
+                "schema",
+                "sqlalchemy",
+                "operationalerror",
+                "database",
+            )
+        ):
+            return "db_schema"
+        if name == "koneps_collect" or "koneps" in text or "openapi" in text:
+            return "koneps_response"
+        if name in {"predict_price", "sbert_embedding"}:
+            return "prediction"
+        return "unknown"
+
     def _smoke_test_status(self, summary: dict[str, Any]) -> tuple[str, str]:
         """Convert smoke cycle telemetry into a dashboard status + detail."""
         cycle_count = int(summary.get("cycle_count") or 0)
@@ -531,11 +641,13 @@ class AnalyticsReportingService:
             return "watch", "스모크 스케줄은 켜져 있으나 기록된 사이클이 없습니다."
         streak = int(summary.get("current_streak") or 0)
         pass_rate = float(summary.get("pass_rate") or 0.0)
-        if streak >= self.SMOKE_HEALTHY_STREAK or pass_rate >= 0.9:
-            return "healthy", f"최근 {streak}회 연속 통과, 통과율 {pass_rate:.0%} ({cycle_count}회)."
+        if streak >= self.SMOKE_HEALTHY_STREAK:
+            return "healthy", f"G-0 기준 충족: 최근 {streak}회 연속 통과 ({cycle_count}회)."
+        if pass_rate >= 0.9:
+            return "watch", f"G-0 연속 통과 {streak}/{self.SMOKE_HEALTHY_STREAK}회, 통과율 {pass_rate:.0%}."
         if pass_rate >= 0.65:
-            return "watch", f"최근 연속 통과 {streak}회, 통과율 {pass_rate:.0%} ({cycle_count}회)."
-        return "critical", f"최근 연속 통과 {streak}회, 통과율 {pass_rate:.0%} ({cycle_count}회)."
+            return "watch", f"G-0 연속 통과 {streak}/{self.SMOKE_HEALTHY_STREAK}회, 통과율 {pass_rate:.0%}."
+        return "critical", f"G-0 연속 통과 {streak}/{self.SMOKE_HEALTHY_STREAK}회, 통과율 {pass_rate:.0%}."
 
     def _build_ml_release_summary(self, *, recent_limit: int) -> dict[str, Any]:
         """Summarize local ML release manifests and predictor promotion gates."""

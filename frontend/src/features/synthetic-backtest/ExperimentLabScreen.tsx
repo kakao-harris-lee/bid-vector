@@ -1,10 +1,15 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useShellContext } from "@/app/dashboardContext";
-import { triggerExperimentRun } from "@/shared/api";
-import { Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
+import {
+  ensureExperimentPreset,
+  fetchExperimentPresets,
+  triggerExperimentRun
+} from "@/shared/api";
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { formatDateTime } from "@/shared/lib";
 import type {
+  SyntheticExperimentPreset,
   SyntheticExperimentResponse,
   SyntheticExperimentRunResponse
 } from "@/shared/types/synthetic";
@@ -25,6 +30,30 @@ export function ExperimentLabScreen() {
   const [tab, setTab] = useState<LabTab>("experiments");
   const [selected, setSelected] = useState<SyntheticExperimentResponse | null>(null);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
+
+  const presets = useQuery({
+    queryKey: ["synthetic", "experiments", "presets"],
+    queryFn: () => fetchExperimentPresets(token),
+    enabled: Boolean(token)
+  });
+
+  const presetMutation = useMutation<SyntheticExperimentResponse, Error, string>({
+    mutationFn: (presetName) => ensureExperimentPreset(presetName, token),
+    onSuccess: (experiment) => {
+      setSelected(experiment);
+      setActiveRunId(null);
+      void queryClient.invalidateQueries({ queryKey: ["synthetic", "experiments"] });
+      toastApi.success({
+        title: "Preset 저장",
+        description: experiment.name
+      });
+    },
+    onError: (err) =>
+      toastApi.danger({
+        title: "Preset 저장 실패",
+        description: err instanceof Error ? err.message : "알 수 없는 오류"
+      })
+  });
 
   const runMutation = useMutation<SyntheticExperimentRunResponse, Error, number>({
     mutationFn: (experimentId) => triggerExperimentRun(experimentId, token),
@@ -100,6 +129,13 @@ export function ExperimentLabScreen() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="flex flex-col gap-4">
             <ExperimentForm token={token} onCreated={handleSelect} />
+            <PresetPanel
+              presets={presets.data?.presets ?? []}
+              loading={presets.isPending}
+              savingName={presetMutation.variables ?? null}
+              saving={presetMutation.isPending}
+              onSave={(name) => presetMutation.mutate(name)}
+            />
             <ExperimentList
               token={token}
               selectedId={selected?.id ?? null}
@@ -173,5 +209,61 @@ export function ExperimentLabScreen() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function PresetPanel({
+  presets,
+  loading,
+  saving,
+  savingName,
+  onSave
+}: {
+  presets: SyntheticExperimentPreset[];
+  loading: boolean;
+  saving: boolean;
+  savingName: string | null;
+  onSave: (name: string) => void;
+}) {
+  return (
+    <Card aria-label="G-1 preset">
+      <CardHeader>
+        <CardTitle>G-1 preset</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-xs">
+        {loading ? <p className="text-[var(--color-muted)]">불러오는 중…</p> : null}
+        {presets.map((preset) => (
+          <div
+            key={preset.name}
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] px-2 py-1.5"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate font-medium text-[var(--color-fg)]">{preset.name}</span>
+              <span className="truncate text-[var(--color-muted)]">
+                {preset.params.category ?? "전체"} · limit {preset.params.limit}
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
+              {preset.latest_run_status ? (
+                <Badge tone={preset.latest_run_status === "completed" ? "healthy" : "info"}>
+                  {preset.latest_run_status}
+                </Badge>
+              ) : preset.experiment_id ? (
+                <Badge tone="muted">saved</Badge>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => onSave(preset.name)}
+                disabled={saving}
+              >
+                {saving && savingName === preset.name ? "저장 중…" : "저장"}
+              </Button>
+            </span>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }

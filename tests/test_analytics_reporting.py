@@ -459,7 +459,10 @@ def test_operations_dashboard_summarizes_smoke_cycles(client, test_db, monkeypat
     assert smoke["failed_count"] == 1
     assert smoke["pass_rate"] == pytest.approx(0.6667, abs=0.0001)
     assert smoke["current_streak"] == 2
+    assert smoke["healthy_streak_target"] == 7
+    assert smoke["current_streak_meets_target"] is False
     assert smoke["schedule_enabled"] is True
+    assert smoke["failure_category_breakdown"] == {"prediction": 1}
 
     per_phase = {item["name"]: item for item in smoke["per_phase"]}
     assert set(per_phase) == {"koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"}
@@ -475,6 +478,8 @@ def test_operations_dashboard_summarizes_smoke_cycles(client, test_db, monkeypat
 
     assert len(smoke["recent_failures"]) == 1
     assert smoke["recent_failures"][0]["failed_phases"] == ["predict_price"]
+    assert smoke["recent_failures"][0]["failure_categories"] == ["prediction"]
+    assert smoke["recent_failures"][0]["failure_category_breakdown"] == {"prediction": 1}
 
     cards = {card["key"]: card for card in response.json()["cards"]}
     assert "smoke_test_streak" in cards
@@ -496,7 +501,10 @@ def test_operations_dashboard_smoke_empty_window_is_honest(client, test_db, monk
     assert smoke["failed_count"] == 0
     assert smoke["pass_rate"] == 0.0
     assert smoke["current_streak"] == 0
+    assert smoke["healthy_streak_target"] == 7
+    assert smoke["current_streak_meets_target"] is False
     assert smoke["schedule_enabled"] is False
+    assert smoke["failure_category_breakdown"] == {}
     assert smoke["latest"] is None
     assert smoke["recent_failures"] == []
     # all 4 phases present with zero evaluated_count
@@ -552,6 +560,108 @@ def test_operations_dashboard_smoke_streak_breaks_on_middle_failure(client, test
     assert smoke["passed_count"] == 2
     # Only the most-recent pass counts; the middle failure breaks the streak.
     assert smoke["current_streak"] == 1
+    assert smoke["current_streak_meets_target"] is False
+
+
+def test_operations_dashboard_smoke_g0_healthy_requires_seven_green_cycles(
+    client, test_db, monkeypatch
+):
+    """G-0 healthy status is tied to the roadmap's 7 consecutive green cycles."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    test_db.add_all(
+        [
+            SmokeTestRun(
+                started_at=now - timedelta(days=offset, minutes=1),
+                completed_at=now - timedelta(days=offset),
+                overall_passed=True,
+                phases=_phases_json(True, True, True, True),
+                telegram_status="sent",
+                created_at=now - timedelta(days=offset),
+            )
+            for offset in range(7)
+        ]
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/operations-dashboard",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    smoke = payload["smoke_test"]
+    assert smoke["current_streak"] == 7
+    assert smoke["healthy_streak_target"] == 7
+    assert smoke["current_streak_meets_target"] is True
+    cards = {card["key"]: card for card in payload["cards"]}
+    assert cards["smoke_test_streak"]["status"] == "healthy"
+
+
+def test_operations_dashboard_smoke_failure_category_breakdown(
+    client, test_db, monkeypatch
+):
+    """Smoke failures should be grouped into fixed roadmap buckets."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    test_db.add_all(
+        [
+            SmokeTestRun(
+                started_at=now - timedelta(days=1, minutes=1),
+                completed_at=now - timedelta(days=1),
+                overall_passed=False,
+                phases=_phases_json_with_skips(
+                    ("koneps_collect", False, "service key unauthorized 401"),
+                    ("sbert_embedding", False, "skipped — Phase 1 failed"),
+                    ("predict_price", False, "skipped — no eligible project"),
+                    ("telegram_ping", False, "Telegram API rejected"),
+                ),
+                telegram_status="failed",
+                created_at=now - timedelta(days=1),
+            ),
+            SmokeTestRun(
+                started_at=now - timedelta(minutes=1),
+                completed_at=now,
+                overall_passed=False,
+                phases=_phases_json_with_skips(
+                    ("koneps_collect", False, "KONEPS OpenAPI timeout"),
+                    ("sbert_embedding", False, "OperationalError no such table"),
+                    ("predict_price", False, "guardrail exception"),
+                    ("telegram_ping", True, "ok"),
+                ),
+                telegram_status="sent",
+                created_at=now,
+            ),
+        ]
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/operations-dashboard",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    assert smoke["failure_category_breakdown"] == {
+        "credential": 1,
+        "db_schema": 1,
+        "koneps_response": 1,
+        "no_candidate": 1,
+        "prediction": 1,
+        "telegram": 1,
+    }
+    assert smoke["latest"]["phases"][0]["failure_category"] == "koneps_response"
+    assert smoke["recent_failures"][0]["failure_category_breakdown"] == {
+        "db_schema": 1,
+        "koneps_response": 1,
+        "prediction": 1,
+    }
 
 
 def test_operations_dashboard_smoke_tolerates_malformed_phases_json(client, test_db, monkeypatch):

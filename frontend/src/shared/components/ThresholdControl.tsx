@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { cn } from "@/shared/lib/cn";
+import { cn } from "@/shared/lib";
 
 export interface ThresholdControlProps {
   label: string;

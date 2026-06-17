@@ -111,6 +111,7 @@ export function Leaderboard({ results, initialSortKey = "win_rate_on_settled" }:
                   <th className="py-1 text-right">투찰률</th>
                   <th className="py-1 text-right">평균 |오차|</th>
                   <th className="py-1 text-right">정산 건수</th>
+                  <th className="py-1 text-right">표본</th>
                 </tr>
               </thead>
               <tbody>
@@ -118,6 +119,10 @@ export function Leaderboard({ results, initialSortKey = "win_rate_on_settled" }:
                   const slug = result.operator_slug ?? result.metrics?.operator_slug ?? "—";
                   const medalLabel = MEDAL_LABEL[index];
                   const isTopThree = index < 3;
+                  const sampleStatus =
+                    result.sample_status ?? result.metrics?.sample_status ?? "insufficient_sample";
+                  const missing =
+                    result.missing_settled_count ?? result.metrics?.missing_settled_count ?? null;
                   return (
                     <tr
                       key={result.operator_slug ?? index}
@@ -147,6 +152,11 @@ export function Leaderboard({ results, initialSortKey = "win_rate_on_settled" }:
                       </td>
                       <td className="py-1 text-right tabular-nums">
                         {metricNumber(result.metrics, "settled_count") ?? "—"}
+                      </td>
+                      <td className="py-1 text-right">
+                        <Badge tone={sampleStatus === "sufficient" ? "healthy" : "watch"}>
+                          {sampleStatus === "sufficient" ? "충분" : `부족 ${missing ?? ""}`}
+                        </Badge>
                       </td>
                     </tr>
                   );

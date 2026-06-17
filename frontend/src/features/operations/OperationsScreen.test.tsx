@@ -101,7 +101,10 @@ const baseOperations: OperationsDashboardResponse = {
     failed_count: 2,
     pass_rate: 0.9,
     current_streak: 5,
+    healthy_streak_target: 7,
+    current_streak_meets_target: false,
     schedule_enabled: true,
+    failure_category_breakdown: { prediction: 2 },
     per_phase: [
       { name: "koneps_collect", pass_rate: 1.0, evaluated_count: 20 },
       { name: "sbert_embedding", pass_rate: 0.95, evaluated_count: 20 },
@@ -113,11 +116,21 @@ const baseOperations: OperationsDashboardResponse = {
       overall_passed: false,
       phases: [
         { name: "koneps_collect", passed: true, detail: "" },
-        { name: "predict_price", passed: false, detail: "guardrail 미달" }
+        {
+          name: "predict_price",
+          passed: false,
+          detail: "guardrail 미달",
+          failure_category: "prediction"
+        }
       ]
     },
     recent_failures: [
-      { started_at: "2026-05-18T07:00:00Z", failed_phases: ["predict_price"] }
+      {
+        started_at: "2026-05-18T07:00:00Z",
+        failed_phases: ["predict_price"],
+        failure_categories: ["prediction"],
+        failure_category_breakdown: { prediction: 1 }
+      }
     ]
   }
 };
@@ -262,7 +275,7 @@ function installFetchMock({
 beforeEach(() => {
   window.localStorage.clear();
   window.localStorage.setItem("bid-vector-dashboard-token", "token-operations");
-  window.history.pushState({}, "", "/dashboard/operations");
+  window.history.pushState({}, "", "/admin/operations");
   vi.restoreAllMocks();
   act(() => {
     toastApi.clearAll();
@@ -388,9 +401,9 @@ describe("OperationsScreen", () => {
       await screen.findByRole("heading", { name: "운영 검증 (스모크 사이클)" })
     ).closest("[aria-label='운영 검증 (스모크 사이클)']") as HTMLElement;
     expect(smokeCard).not.toBeNull();
-    // 통과율 90.0% + 연속 통과 5회
+    // 통과율 90.0% + G-0 연속 통과 5/7회
     expect(within(smokeCard).getAllByText("90.0%").length).toBeGreaterThanOrEqual(1);
-    expect(within(smokeCard).getByText("5회")).toBeInTheDocument();
+    expect(within(smokeCard).getByText("5/7회")).toBeInTheDocument();
     // 단계 라벨 (한국어 매핑) — per-phase + latest-run 양쪽에 등장
     expect(within(smokeCard).getAllByText("공고 수집").length).toBeGreaterThanOrEqual(1);
     expect(within(smokeCard).getAllByText("가격 예측").length).toBeGreaterThanOrEqual(1);
@@ -398,6 +411,7 @@ describe("OperationsScreen", () => {
     expect(within(smokeCard).getByText("데이터 없음")).toBeInTheDocument();
     // 최근 실행 FAIL + 실패 단계 detail
     expect(within(smokeCard).getByText("guardrail 미달")).toBeInTheDocument();
+    expect(within(smokeCard).getAllByText("예측").length).toBeGreaterThanOrEqual(1);
   });
 
   it("smoke 스케줄이 비활성이고 사이클이 없으면 정직한 비활성 안내를 노출한다", async () => {
@@ -410,7 +424,10 @@ describe("OperationsScreen", () => {
           failed_count: 0,
           pass_rate: 0,
           current_streak: 0,
+          healthy_streak_target: 7,
+          current_streak_meets_target: false,
           schedule_enabled: false,
+          failure_category_breakdown: {},
           per_phase: [],
           latest: null,
           recent_failures: []
