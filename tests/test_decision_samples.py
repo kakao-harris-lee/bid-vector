@@ -200,8 +200,8 @@ def test_decision_samples_prediction_is_operator_scoped_same_project(client, tes
     Both the canonical operator and a synthetic operator have a stored
     ``PricePrediction`` for the same project. The synthetic row is NEWER. The
     returned sample (for the canonical operator's decision) must reflect the
-    CANONICAL prediction, not the foreign newer one (CLAUDE.md §8 — synthetic
-    must not pollute canonical).
+    CANONICAL prediction, not the foreign newer one. Synthetic data must not
+    pollute canonical operator data.
     """
     canonical = ensure_operator_account(test_db)
 

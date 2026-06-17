@@ -154,7 +154,8 @@ class DecisionSampleService:
 
         Scoped to ``operator_id`` (``PricePrediction.user_id``) so a foreign
         operator's prediction for the same project never surfaces in another
-        operator's audit sample (single-operator invariant — CLAUDE.md §8).
+        operator's audit sample (single-operator invariant documented in
+        CLAUDE.md).
 
         Orders by ``created_at`` (then id) ascending and lets later rows
         overwrite earlier ones in the dict, so each project id maps to its most

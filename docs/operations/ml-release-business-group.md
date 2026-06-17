@@ -1,9 +1,7 @@
 # Phase B 업종 그룹 인식 ML 릴리스 운영 절차
 
-> **관련 문서**
-> - 설계 명세: `docs/superpowers/specs/2026-05-25-business-type-aware-prediction-design.md`
-> - 구현 계획: `docs/superpowers/plans/2026-05-25-business-type-aware-prediction.md`
-> - 기존 ML 릴리스 절차: `docs/ml-image-separation.md`
+> 관련 문서: 상위 제품 단계는 `docs/roadmap.md`, 기존 ML 릴리스 절차는
+> `docs/ml-image-separation.md`를 기준으로 봅니다.
 
 ---
 

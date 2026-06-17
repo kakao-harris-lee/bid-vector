@@ -1,9 +1,8 @@
 """Forward-coverage tests for the scsbid award collector sweep.
 
-Covers the multi-category, paginated, date-window collection added for
-``docs/scsbid-forward-coverage-plan.md`` §3-§4. All external HTTP is mocked via
-``app.services.koneps.collector.requests.get`` (the existing scsbid test
-pattern); no real KONEPS calls are made under ``ENVIRONMENT=test``.
+Covers multi-category, paginated, date-window collection. All external HTTP is
+mocked via ``app.services.koneps.collector.requests.get`` (the existing scsbid
+test pattern); no real KONEPS calls are made under ``ENVIRONMENT=test``.
 """
 
 from __future__ import annotations

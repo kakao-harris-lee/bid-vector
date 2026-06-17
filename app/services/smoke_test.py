@@ -1,8 +1,8 @@
 """KONEPS + Telegram end-to-end smoke test service.
 
-Runs the first four phases of docs/operations/koneps-telegram-smoke-test-plan.md
-in sequence and reports a one-line outcome to the operator's Telegram chat.
-Designed to fire from Celery beat once a day.
+Runs the core smoke phases described in docs/production-smoke-test.md and
+reports a one-line outcome to the operator's Telegram chat. Designed to fire
+from Celery beat once a day.
 """
 
 from __future__ import annotations

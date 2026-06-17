@@ -1,272 +1,191 @@
 # CLAUDE.md
 
-이 문서는 **Claude Code**가 이 저장소에서 작업할 때 자동으로 읽는 진입 컨텍스트입니다.
-일반 사용자 시스템 가이드(`AGENT.md`)는 별도로 유지되며, 본 파일은 Claude Code 전용 규칙·도구·서브에이전트·스킬·MCP 매핑에 집중합니다.
+이 파일은 이 저장소의 단일 에이전트 작업 지침입니다. 현재 제품/실행 개요는 `README.md`, 단계별 목표는 `docs/roadmap.md`를 기준으로 합니다.
 
-> 단일 출처: 기획·구현 매핑은 `docs/first_plan_implementation_review.md`,
-> 운영·작업 원칙은 `AGENT.md`,
-> 웹 프론트엔드 확장 계획은 `docs/web-development-plan.md`를 참고하세요.
+## 0. 환경 상태
 
-## 0. 환경 상태 — production이지만 실사용자 없음 (검증 중)
+이 호스트는 `ENVIRONMENT=production`일 수 있지만 외부 실사용자 트래픽이 없는 단일 검증 환경입니다. 운영자 1인이 실제 키와 운영 데이터를 사용해 서비스 가능성을 검증합니다.
 
-이 호스트는 `ENVIRONMENT=production`으로 설정되어 있지만 **외부 실사용자 트래픽이 없는 단일 검증 환경**이다. 운영자 1인이 직접 검증하면서 운영 데이터로 개발 중이다.
+- 다운타임이 필요한 compose 재시작은 가능하지만, 의도를 명확히 남깁니다.
+- DB write, 백필, 데이터 정리는 사용자 승인 후 진행합니다.
+- 시크릿 조회, 외부 호출, Telegram 송신, 원격 push/merge는 사용자 승인 없이 진행하지 않습니다.
+- `ENVIRONMENT=production` 자체는 임의로 바꾸지 않습니다.
 
-**Claude Code가 작업할 때 의미하는 바:**
+### Volume Mount 함정
 
-- **다운타임은 즉시 가능하다.** `docker compose down && up -d --build` 같이 컨테이너를 통째로 재시작하는 작업도 별도 다운타임 윈도우 협상 없이 진행해도 된다.
-- **DB write 행위(마이그레이션, 백필, 정리 쿼리)는 사용자 명시 승인 후 즉시 실행**한다. staging 우선 같은 단계는 생략한다.
-- **샘플 데이터/시드 정리도 자유롭게 진행**한다 (settled되지 않은 paper_bids 등). 실 입찰 기록(`BidDecisionRecord`, `allocations`)은 그래도 보존한다.
-- 그래도 **시크릿/외부 호출/머지 자체는 사용자 승인 필수**다 (push to remote, gh pr merge, telegram 송신 등).
-- `ENVIRONMENT=production` 자체는 바꾸지 않는다 — 코드의 production-gate(테스트 환경 자동 분기 등)가 실제 운영 path를 타도록 유지해야 검증이 의미 있음.
+`docker-compose.yml` 서비스는 `./:/app` 바인드 마운트를 사용합니다. 컨테이너가 실행하는 코드는 호스트 working tree의 현재 브랜치입니다. PR이 main에 머지되어도 호스트가 feature 브랜치에 있으면 컨테이너는 feature 브랜치 코드를 계속 실행합니다.
 
-### ⚠ Volume-mount 함정 — PR 머지 후 반드시 main으로 체크아웃
-
-`docker-compose.yml`의 모든 서비스가 `./:/app` 으로 호스트 working dir를 바인드 마운트한다. 즉 **컨테이너가 실행하는 코드 = 호스트의 현재 브랜치 파일**이다. 호스트가 feature 브랜치에 머물러 있으면 PR을 main에 머지해도 컨테이너는 여전히 feature 브랜치 코드를 실행한다.
-
-**2026-05-31 incident**: PR #34 (paper_bid fix)를 main에 머지했는데 호스트가 `feature/synthetic-experiment-phase1`에 있어서 fix가 컨테이너에 자동 반영 안 됨. paper_bid_run #14가 또 같은 ValueError로 실패. `git checkout main && git pull` + 워커 재시작 후 정상화.
-
-**PR 머지 후 항상 다음 순서**:
+머지 후 운영 반영 순서:
 
 ```bash
-# 1. 현재 호스트 브랜치 확인
-git branch --show-current     # main이 아니면 다음 단계 필수
-
-# 2. main으로 체크아웃 + pull
+git branch --show-current
 git checkout main
 git pull --rebase origin main
-
-# 3. 관련 컨테이너 재시작 (volume mount는 자동, 그러나 이미 import된 모듈은 reload 필요)
-docker compose --profile tasks restart worker beat  # 코드만 바뀐 경우
-# 또는
-docker compose --profile tasks restart            # 모든 서비스
-# 또는 이미지 자체가 바뀐 경우 (requirements 변경, Dockerfile 변경)
-docker compose --profile tasks up -d --build
-
-# 3-1. 프론트엔드(frontend/)가 바뀐 경우: 수동 npm build 금지.
-#      compose의 frontend-build 서비스가 호스트 소스를 frontend/dist로 빌드하고
-#      api가 그 dist를 StaticFiles로 서빙한다(StaticFiles는 동적이라 api 재시작 불필요).
-docker compose run --rm frontend-build   # 또는: docker compose up -d frontend-build
-
-# 4. 검증
-docker exec <container> grep -c "<fix-marker>" /app/<changed-file>  # 새 코드가 들어왔는지
+docker compose --profile tasks restart worker beat
+docker compose run --rm frontend-build
 ```
 
-다른 feature 브랜치 작업 중에 main에 핫픽스를 머지해야 한다면 `git stash` 또는 별도 worktree(`git worktree add ../bid-vector-main main`)로 main 체크아웃을 격리하는 게 안전하다.
+requirements, Dockerfile, 이미지 타깃 변경이 있으면 `docker compose --profile tasks up -d --build`를 사용합니다.
 
-## 1. 프로젝트 한 줄 요약
+## 1. 프로젝트 요약
 
-한 업체(단일 운영자)가 나라장터(KONEPS) 공고에서 낙찰 가능성이 가장 높은 입찰 후보를 자동으로 찾고, 적정 투찰가를 결정해 추진하도록 돕는 FastAPI 백엔드 + Vite/React/TS 프론트엔드.
+한 운영자가 여러 가상 회사와 실제/가상 회사 프로필을 사용해 KONEPS 공고 추천, 투찰가 산정, 가상 투찰, 정산, 정확도 검증을 반복하는 입찰 의사결정 지원 서비스입니다.
 
-핵심 도메인 모듈은 `app/services/koneps/`(수집), `app/services/classifier.py`(분류), `app/ai/predictors/`(가격 예측), `app/services/allocation.py`(결정 엔진), `app/services/notifications/`(텔레그램/실시간), `app/services/paper_bidding_backtest.py`(백테스트)입니다.
+핵심 모듈:
 
-## 1.5 서비스 핵심 목표 및 현재 구조 (정직 명세)
+- `app/services/koneps/`: KONEPS 수집
+- `app/services/classifier.py`: 공고 적합도/유사도 분류
+- `app/ai/price_prediction.py`, `app/ai/predictors/`: 가격 예측
+- `app/services/allocation.py`: 입찰 추진 결정
+- `app/services/paper_bidding_backtest.py`: paper bidding 백테스트
+- `app/services/synthetic_experiment.py`: synthetic experiment
+- `app/services/notifications/`: Telegram, 웹 알림, callback
+- `frontend/src/features/`: 사용자/운영 화면
 
-**핵심 가치 흐름**: 입찰 업체가 **낙찰받을 최적 투찰가**를 산출 → 투찰서 작성·(직접)제출 → 가상 회사(synthetic operators)로 **분야별 백테스트**해 낙찰율 확인 → 시스템 제시가가 **실제 나라장터 낙찰가와 동등/근접**했는지 리포팅.
+단기 목표는 기능 추가가 아니라 검증입니다.
 
-> 현재 단계 = **서비스 제공 가능성 검증**(운영자 1인이 합성 운영자로 검증 중, 외부 실사용자 없음). 단일 출처 로드맵은 `docs/service-roadmap.md`.
+1. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천/가상 투찰/정산을 반복한다.
+2. 과거 데이터 학습, synthetic backtest, forward paper bidding, smoke test가 자동으로 증적을 남긴다.
+3. 실증 후 가상 회사마다 독립 ID와 사업자 정보를 부여해 운영 단계 검증을 진행한다.
+4. 이후 사용자 웹과 관리자 웹을 분리한다. 사용자 웹은 공고 알림/투찰 선택, 관리자 웹은 백테스트/스모크/통계/데이터 상태를 담당한다.
+5. 최종 사업 모델은 조건에 맞는 입찰 공고 알림, 추천 투찰가, 최종 낙찰 지원, 수수료/구독 수익화다.
 
-**무엇이 구현됐고 / 무엇이 의도적으로 다른가** — 주장(claim)과 근거가 어긋나지 않게 정직히 명세한다:
+## 2. 정직 명세
 
-| 표면 용어 | 실제 의미 (코드 근거) | 주의 |
+| 표현 | 실제 의미 | 규칙 |
 |---|---|---|
-| "낙찰 가능성"/`probability_score` | **가격 적합도(추정)** — 과거 정산 결과로 보정된 P(가격 근접), **P(낙찰) 아님** | 텔레그램·프론트 라벨은 "가격 적합도(추정)"로 표기. 가중 휴리스틱이 아니라 보정 곡선 사용 |
-| "낙찰율"/`would_have_won_price_only` | **가격 기준 추정 낙찰**(투찰률이 실낙찰률에 근접) — 실낙찰 아님 | 리포트/CSV 지표명에 "추정(price-only)" 한정자 유지 |
-| `would_have_won_final` | **룰 기반 적격 게이트 추정**(예정가×카테고리 낙찰하한율 통과 + 최저가 계열) | 예정가 도출 불가 시 `"unknown"`(정직한 부재) |
-| 투찰가 산출물 | **의사결정 요약 / 투찰서 초안 export**(추천가+근거+예가/하한+분야통계) | **나라장터 자동 투찰서 제출은 없음**(공개 제출 API 부재) — 운영자가 직접 제출 |
-| 가격 예측 | 과거 사정률 + **복수예비가격(예정가) 메커니즘**을 base rate에 반영, predictor guardrail로 카테고리 낙찰하한 미만 차단 | guardrail 우회 금지(§9) |
+| `probability_score` | 가격 적합도 추정 | 실제 낙찰 확률로 표시하지 않음 |
+| `would_have_won_price_only` | 가격 근접 기반 추정 낙찰 | 실제 낙찰로 표시하지 않음 |
+| `would_have_won_final` | 낙찰하한/적격 게이트까지 적용한 추정 | 예정가 부재 시 `unknown` 유지 |
+| 투찰서 | 운영자 직접 제출을 돕는 초안 | KONEPS 자동 제출 없음 |
+| synthetic operator | `synthetic-` 접두 검증 계정 | canonical operator 오염 금지 |
 
-**불변 원칙**: predictor guardrail 우회 금지 · pgvector 384 고정 · 시간 누수(leakage) 차단(백테스트 `data_cutoff_at` 규율) · 단일 운영자 기본 경로(`operator_id=None`→canonical) 유지 · synthetic은 `synthetic-` 접두 한정으로 canonical 미오염(§8 참조).
+불변 원칙: predictor guardrail 우회 금지, pgvector 384 유지, 시간 누수 차단, per-operator silent canonical fallback 금지.
 
-## 2. 빠른 명령어
+## 3. 빠른 명령어
 
 ```bash
-# Python 가상환경 (Mac 개발 기준)
 source .venv/bin/activate
+python -m pip install -r requirements/runtime.txt -r requirements/ml-training.txt -r requirements/dev.txt
 
-# 백엔드 테스트
-pytest -q                                      # 전체
-pytest -q tests/test_paper_bidding_backtest.py # 특정 파일
-pytest -q -k synthetic                         # 키워드 매칭
-
-# 백엔드 정적 검증
-python -m py_compile app/services/*.py
-black app/
-flake8 app/
-
-# 프론트엔드
-npm --prefix frontend install
+pytest -q
+pytest -q -k synthetic
 npm --prefix frontend run test
 npm --prefix frontend run build
-npm --prefix frontend run dev   # http://localhost:5173
 
-# 가상 운영자 시드 + 백테스트 (Phase 5 검증용)
+python scripts/seed_synthetic_operators.py --dry-run
 python scripts/seed_synthetic_operators.py
 python scripts/backtest_synthetic_operators.py \
-    --start-date 2025-01-01 --end-date 2025-12-31 --limit 200
+  --start-date 2025-01-01 --end-date 2025-12-31 --limit 200
 
-# Docker 로컬 통합 검증
+python scripts/production_smoke_test.py \
+  --base-url http://localhost:3000 \
+  --evidence-out smoke-read.json
+
 docker compose config --quiet
 docker compose --profile tasks config --quiet
 ```
 
-`check` 스킬은 위 명령들을 한 번에 실행합니다.
+## 4. 코드 경계
 
-## 3. 디렉토리 규칙 (어디에 무엇이 들어가나)
+- 라우터는 `app/api/`에 두고 얇게 유지합니다.
+- 외부 입출력은 `app/schemas/`에 둡니다.
+- 도메인 로직은 `app/services/` 또는 `app/ai/`에 둡니다.
+- 모델 변경은 `app/models/models.py` + Alembic migration + 테스트를 함께 다룹니다.
+- 프론트 신규 화면은 `frontend/src/features/<area>/`에 둡니다.
+- UI 문구는 한국어로 작성하고 ko 단일 번들을 유지합니다.
+- 새 API는 OpenAPI/type drift를 확인합니다.
 
-- `app/api/` — FastAPI 라우터. 얇게 유지, 로직은 services/ai로 위임
-- `app/schemas/` — Pydantic 입출력 스키마. 외부 입력은 반드시 여기를 거침
-- `app/services/` — 도메인 로직. 한 파일 한 책임. 25개 모듈 존재
-- `app/ai/` — predictor / backtest / 추천 / 문서 분석
-- `app/core/` — config / database / security / time / vector / single_user
-- `app/models/models.py` — SQLAlchemy 모델 (19개). 변경 시 마이그레이션·테스트 동반
-- `app/tasks/` — Celery app/jobs. broker `memory://`도 동작해야 함
-- `frontend/src/` — Vite + React + TS. 신규 화면은 `features/<area>/` 하위
-- `scripts/` — 실행형 스크립트 (백테스트/시드/ML release)
-- `docs/` — 운영·계획 문서. 새 계획은 `docs/<topic>-plan.md`
-- `tests/` — pytest. 신규 API/서비스는 정상 + 실패 케이스 최소 1쌍
+작업 원칙:
 
-**금지**: 새 기능을 `app/main.py`나 `frontend/src/App.tsx`에 직접 부풀리지 말 것. App.tsx는 Phase 0에서 `features/`로 분할 진행 중입니다.
+1. 현재 실행 가능한 코드가 오래된 기획 문서보다 우선입니다.
+2. 새 기능은 가능한 한 기존 패턴과 경계 안에서 작게 추가합니다.
+3. 신규 API는 route/schema/service/test를 함께 다룹니다.
+4. 백엔드 API 변경 시 프론트 타입과 호출부를 함께 확인합니다.
+5. 비즈니스 로직을 라우터에 직접 키우지 않습니다.
+6. 무거운 작업은 요청-응답 경로에서 직접 실행하지 않고 task 경로를 사용합니다.
+7. 시크릿, 토큰, 사업자 개인정보는 코드/문서/로그에 남기지 않습니다.
+8. 문서 변경 시 완료된 plan 문서를 계속 늘리지 않습니다. 현재 상태는 `README.md`, 단계 계획은 `docs/roadmap.md`, 운영 절차는 `docs/production-smoke-test.md` 또는 `docs/operations/`에 둡니다.
 
-**한국형 서비스 — 다중 로케일 미지원**: 이 프로젝트는 나라장터(KONEPS) 한정 서비스라 i18n 다중 로케일을 지원하지 않습니다. `frontend/src/shared/i18n/`는 ko 단일 번들만 유지하고 영어/기타 로케일 번들을 추가하지 마세요. UI 문구는 한국어로 작성하고 `ko.json`에 모아 일관성만 관리합니다.
+## 5. 서브에이전트
 
-## 4. 작업 원칙 (Claude Code가 반드시 지킬 것)
+`.claude/agents/` 기준으로 역할을 나눕니다.
 
-1. **테스트 깨면 진행하지 않는다.** 변경 후 관련 pytest/vitest 실행이 그린이어야 함. 실패 시 우선 진단 — 강제로 통과시키지 말 것.
-2. **현재 구현을 존중한다.** `first_plan.md`보다 코드가 우선. 충돌이 있으면 호환 가능한 중간 단계를 먼저 설계.
-3. **단일 운영자 모델을 깨지 말 것.** legacy `allocations` 테이블은 유지하되 새 로직은 `BidDecisionRecord` 기준으로 작성.
-4. **synthetic 운영자는 username 접두 `synthetic-`로 한정.** canonical `operator` 계정과 절대 충돌시키지 말 것.
-5. **타입/스키마를 동기화한다.** 백엔드 API 변경 시 `sync-types` 스킬 또는 직접 `frontend/src/shared/types/openapi.d.ts` 갱신.
-6. **시크릿은 코드에 절대 쓰지 않는다.** `.env`/`.env.example`만 사용.
-7. **predictor guardrail은 우회하지 않는다.** 카테고리 낙찰하한 미만 추천은 항상 차단.
-8. **메모리 broker에서도 동작해야 한다.** 새 Celery 태스크는 `memory://`에서 eager 실행이 가능해야 함.
-9. **요약 강박을 피한다.** 사용자는 코드 diff를 직접 본다. 작업 후 짧게 핵심만 보고.
-10. **불확실하면 묻는다.** `AskUserQuestion`을 사용해 결정을 먼저 받음.
+| 에이전트 | 책임 |
+|---|---|
+| `frontend-builder` | React 화면, 훅, UI 테스트 |
+| `backend-builder` | FastAPI route/schema/service/test |
+| `ml-builder` | predictor, ML training/release, 데이터셋 |
+| `api-reviewer` | API 일관성, OpenAPI drift, 테스트 누락 |
+| `ml-reviewer` | guardrail, pgvector, manifest, leakage |
+| `test-runner` | pytest/vitest/playwright 실행과 실패 triage |
+| `data-seed-runner` | synthetic seed/backtest 스크립트 실행 |
 
-## 5. 서브에이전트 매핑
+ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend-builder는 ML을 노출하는 얇은 API 경계까지만 담당합니다.
 
-`.claude/agents/`에 정의되거나 (없으면) `Agent` 호출 시 다음 의도로 사용:
+## 6. 스킬
 
-| 에이전트 | 책임 | 권한 | 호출 예 |
-|---|---|---|---|
-| `frontend-builder` | `frontend/src/features/`/`shared/` 하위 화면·훅 구현 | Read/Write/Edit + npm/vitest 실행 | "Phase 1 StrategyEditor 구현해줘" |
-| `backend-builder` | `app/api/`, `app/services/`(ML 제외), `app/schemas/`, `tests/` 구현 | Read/Write/Edit + pytest/py_compile | "Phase 5 synthetic backtest 라우터 + 서비스 만들어줘" |
-| `ml-builder` | `app/ai/`, ML 서비스(`ml_training`/`ml_release`/`prediction_*`), ML 스크립트·테스트 | Read/Write/Edit + pytest/py_compile | "price predictor에 새 feature 추가하고 guardrail 회귀 테스트 붙여줘" |
-| `api-reviewer` | 변경된 라우터·스키마·서비스의 일관성·OpenAPI drift·테스트 누락 점검 | Read 전용 | "이번 PR의 API 변경 리뷰해줘" |
-| `ml-reviewer` | predictor guardrail·pgvector 차원·manifest 서명·데이터 누수·drift 점검 | Read 전용 | "이 predictor 변경 ML 관점에서 리뷰해줘" |
-| `test-runner` | pytest/vitest/playwright 실행, 실패 triage | Read + 명령 실행 (수정 금지) | "전체 테스트 돌리고 실패한 것만 표 만들어줘" |
-| `data-seed-runner` | 시드/리셋 스크립트만 실행 (`seed_synthetic_operators.py` 등) | 명령 실행 | "synthetic 운영자 리시드" |
+`.claude/skills/`의 로컬 스킬을 사용합니다.
 
-원칙: 한 에이전트가 다른 에이전트의 책임 영역을 건드리지 않게 프롬프트에 영역을 명시합니다.
-**ML/예측 파이프라인(`app/ai/`, ML 서비스/스크립트)은 `ml-builder`·`ml-reviewer` 소유**이며, backend-builder는 ML을 노출하는 얇은 라우터만 담당합니다.
+- `screen`: 프론트 화면 스캐폴드
+- `api-route`: route/schema/service/test 스캐폴드
+- `sync-types`: OpenAPI 기반 프론트 타입 갱신
+- `run-backtest`: synthetic operator backtest 실행
+- `seed-synthetic`: synthetic operator 시드
+- `check`: pytest + vitest + build
+- `release-preflight`: ML release preflight
+- `api-doc-pipeline`: API 문서 생성
 
-## 6. 스킬 (Skills)
+## 7. 자주 부딪히는 함정
 
-작업 절차는 `.claude/skills/<name>/SKILL.md`에 스킬로 정의됩니다. 슬래시 커맨드가
-아니라 **스킬**이므로, 요청 키워드가 매칭되면 (또는 `Skill` 도구로) 자동 트리거됩니다.
+- `CompanyProfile.user_id`와 `OperatorStrategy.user_id`는 현재 unique입니다. SaaS 멀티테넌트 전환은 별도 로드맵 단계입니다.
+- `ensure_operator_strategy(db)`는 canonical operator 전략을 가져옵니다. per-operator 작업에서는 operator 객체 기반 helper를 사용합니다.
+- `CELERY_ALLOW_INLINE_ML_TASKS=true`는 API 프로세스에서 ML 잡을 실행합니다. 운영에서는 켜지 않습니다.
+- Telegram 송신은 `ENVIRONMENT=test`에서 스킵되어야 합니다.
+- Frontend 빌드는 compose의 `frontend-build` 서비스가 담당합니다. 운영 반영 시 수동 산출물 편집을 피합니다.
+- Web/API 문서의 phase plan이 코드보다 오래되면 코드와 `docs/roadmap.md`를 우선합니다.
 
-**작업 스킬:**
+## 8. 보안
 
-- `screen <feature> <ScreenName>` — `features/<feature>/<ScreenName>.tsx`, `<ScreenName>.test.tsx`, `index.ts` + 라우트 등록 + react-query 훅 placeholder
-- `api-route <name>` — `app/api/<name>.py`, `app/schemas/<name>.py`, `app/services/<name>.py`, `tests/test_<name>.py` 스캐폴드 + `routes.py` 등록
-- `sync-types` — 백엔드 OpenAPI(`/openapi.json`) → `frontend/src/shared/types/openapi.d.ts` 재생성
-- `run-backtest [slugs]` — 활성 venv로 `scripts/backtest_synthetic_operators.py` 실행
-- `seed-synthetic [--purge]` — `scripts/seed_synthetic_operators.py` 실행
-- `check` — `pytest -q && npm --prefix frontend run test && npm --prefix frontend run build`
-- `release-preflight <manifest-ref>` — `python scripts/promote_ml_release.py preflight-rollout --manifest <manifest-ref> --require-signature`
+- `.env`, `.env.example`, `JWT_SECRET_KEY`, `KONEPS_OPENAPI_SERVICE_KEY`, `TELEGRAM_BOT_TOKEN`, `ML_RELEASE_MANIFEST_SIGNING_KEY` 값을 문서/로그/코드에 쓰지 않습니다.
+- 운영자 입찰 판단은 `BidDecisionRecord.reasoning` 등으로 감사 가능하게 남깁니다.
+- KONEPS 외부 호출은 OpenAPI 우선, 저빈도, 적절한 제한을 유지합니다.
 
-**오케스트레이터 스킬:**
+피해야 할 것:
 
-- `bid-vector-orchestrator` — 위 작업 스킬과 §5의 전문 에이전트를 시나리오별로 조율하는 상위 하네스. 비-trivial 개발 작업(풀스택 기능, 리뷰, 검증 루프)을 시작할 때 트리거.
+- 기존 FastAPI/React 구조를 무시하고 새 프레임워크를 도입
+- `app/main.py`나 대형 화면 파일에 새 도메인 로직을 누적
+- 테스트 없이 predictor, guardrail, score 계산 로직 변경
+- synthetic 데이터를 canonical operator에 섞기
+- KONEPS/Telegram 실제 호출을 테스트 환경에서 발생시키기
+- `.env` 없이 시크릿을 코드에 직접 넣기
+- 완료된 계획 문서를 새 계획처럼 남겨두기
 
-새 스킬을 만들 땐 `.claude/skills/<name>/SKILL.md`에 `name`·`description`(트리거 키워드 포함) frontmatter와 워크플로우를 작성합니다. **슬래시 커맨드(`.claude/commands/`)는 더 이상 사용하지 않습니다.**
+## 9. PR 체크리스트
 
-## 7. MCP 서버 (개발 환경 한정)
+- [ ] 관련 pytest/vitest 통과
+- [ ] 새 의존성은 적절한 requirements 또는 `frontend/package.json`에 반영
+- [ ] 새 API는 schema/route/service/test 포함
+- [ ] 새 화면은 `features/<area>/`에 배치
+- [ ] OpenAPI 변경 시 타입 갱신
+- [ ] README 또는 `docs/roadmap.md`/운영 문서 갱신
+- [ ] 시크릿/개인정보 로깅 없음
+- [ ] PR 본문에 어느 로드맵 단계/게이트와 연결되는지 명시
 
-`.claude/mcp.json` 또는 사용자 설정에 등록:
+## 10. 워크플로
 
-- **PostgreSQL (dev, read-only)** — 로컬 dev DB. 마이그레이션/시드는 MCP가 아닌 스크립트로만.
-- **Filesystem** — repo 루트 한정 (기본 동작).
-- **(옵션) KONEPS mock** — 로컬 mock 응답 디렉토리. 사양 점검 시에만 활성화.
-- **(옵션) Telegram Bot API** — **dev 토큰**일 때만. 운영 토큰은 절대 노출 금지.
+비-trivial 작업은 다음 순서로 진행합니다.
 
-운영 자격증명은 어떤 경우에도 MCP에 직접 노출하지 않습니다. 운영 작업이 필요하면 명령형 스크립트(`scripts/production_smoke_test.py` 등)로 분리.
-
-## 8. 자주 부딪히는 함정
-
-- **`ensure_operator_strategy(db)`는 항상 canonical operator의 전략을 가져옵니다.** 운영자 ID로 작업할 땐 `PaperBiddingBacktestService._resolve_operator_strategy(operator)`처럼 operator 객체로 직접 조회해야 함.
-- **`CompanyProfile.user_id`/`OperatorStrategy.user_id`는 `unique=True`** — 한 운영자에 하나만. 다중 운영자(synthetic 백테스트 포함)에서는 사용자별로 따로 upsert.
-- **pgvector 차원은 384 고정** (`Project.embedding`). 모델을 바꿀 땐 manifest promotion gate를 거쳐 차원 호환성을 먼저 검증.
-- **임베딩 모델은 `paraphrase-multilingual-MiniLM-L12-v2`** (`models/` 하위에 캐시됨). 오프라인이면 `CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY=true`로 다운로드 회피.
-- **Telegram 송신은 `ENVIRONMENT=test`에서 자동 스킵**. 테스트가 실제 메시지를 보내면 안 됨.
-- **Celery `CELERY_ALLOW_INLINE_ML_TASKS=true`는 ML 잡을 API 프로세스에서 eager 실행**. 운영에서는 절대 켜지 말 것.
-- **`comparison.csv`/`.json`의 win rate 프록시는 `would_have_won_price_only_count / settled_count`** — "실제 낙찰"이 아니라 "가격 기준 추정 낙찰". 분석 시 항상 caveat 표기.
-- **WebSocket 토큰 만료**는 Phase 7에서 통합 처리 예정. 그 전까지 임시 재로그인 모달로 대응.
-- **per-operator 백테스트는 silent canonical 폴백 금지.** `PaperBiddingBacktestService`에서 `operator_id`로 운영자를 해소할 때, 존재하지 않으면 canonical로 조용히 폴백하지 말 것(synthetic 백테스트가 canonical 데이터를 오염시킴). 올바른 패턴은 `ensure_operator_strategy_for(db, operator)` / `ensure_operator_profile_for(db, operator)`(폴백 없음). 없는 operator_id는 명시적 에러/404. `operator_id=None`(단일 운영자 기본)만 canonical 허용.
-- **나라장터 자동 투찰서 제출은 없다.** 시스템은 투찰가를 **결정·기록**하고 의사결정 요약/투찰서 초안을 export할 뿐, KONEPS에 실제 투찰서를 제출하지 않는다(공개 제출 API 부재). 운영자가 직접 제출한다. "submitted" 상태는 시스템 결정 기록 의미.
-- **probability=추정, win=price-only.** `probability_score`는 P(낙찰)이 아니라 보정된 가격 적합도 추정이고, `would_have_won_price_only`는 가격 근접 기반 추정 낙찰이다(§1.5). 새 지표/노출을 만들 때 이 한정자를 출력단까지 끌고 갈 것.
-
-## 9. 보안 빨간 줄
-
-- `.env`, `.env.example`, `JWT_SECRET_KEY`, `KONEPS_OPENAPI_SERVICE_KEY`, `TELEGRAM_BOT_TOKEN`, `ML_RELEASE_MANIFEST_SIGNING_KEY`는 절대 git에 커밋 금지.
-- 운영자 입찰 기록은 항상 감사 가능하게 영속화(`BidDecisionRecord.reasoning`에 변경 사유 포함).
-- predictor가 카테고리 낙찰하한 미만 값을 반환하지 못하도록 `app/ai/price_prediction.py::_apply_prediction_guardrails`를 우회하지 말 것.
-- 외부 사이트(나라장터) 크롤 시 과도한 요청 금지. `fake-useragent` + 적절한 sleep, OpenAPI 우선 경로 유지.
-
-## 10. PR/커밋 체크리스트
-
-- [ ] 관련 pytest/vitest 그린
-- [ ] 새 의존성은 `requirements/<group>.txt` 또는 `frontend/package.json`에 명시
-- [ ] 새 API는 schema/route/service/test 4종 세트
-- [ ] 새 화면은 `features/<area>/`에 두고 라우트 등록
-- [ ] `frontend/src/styles.css`에 새 규칙 추가하지 않음 (Tailwind/shadcn로 작성)
-- [ ] README 또는 `docs/<topic>.md` 갱신 (사용자가 인지해야 할 변화)
-- [ ] OpenAPI 변경 시 `sync-types` 스킬 실행 → `openapi.d.ts` 커밋
-- [ ] 시크릿/개인정보 로깅하지 않음
-- [ ] 본 PR이 어느 Phase의 어느 수용 기준을 충족하는지 설명 본문에 명시
-
-## 11. 작업 시작 시 권장 워크플로
-
-> **모든 비-trivial 작업은 반드시 다음 순서를 지킵니다 (글로벌 `~/.claude/CLAUDE.md`의 MANDATORY WORKFLOW와 일치):**
->
-> `main 확인 → feature branch 생성 → 작업/커밋 → push → PR 생성 → /code-review → 리뷰 대응 → 머지`
-
-1. **상태 파악**: `git status` / `git log -n 10`로 현재 상태 확인. `main`은 `origin/main`과 동기여야 함.
-2. **컨텍스트 정독**: 관련 docs 1~2개 빠르게 정독 (`docs/web-development-plan.md` 또는 도메인 문서).
-3. **브랜치 생성**: `git switch -c feature/<slug>` (또는 `fix/<slug>`, `chore/<slug>`). 절대 `main`에 직접 커밋 금지.
-4. **계획**: 변경 범위가 큰 작업은 `Plan` 서브에이전트로 단계 분해 → 사용자 확인.
-5. **구현**: 적합한 서브에이전트(`frontend-builder` / `backend-builder`)에 위임. 의미 있는 단위로 atomic commit.
-6. **회귀 검증**: 변경 후 `check` 스킬로 pytest + vitest + build 확인.
-7. **PR 생성**: `git push -u origin <branch>` → `gh pr create`. PR 본문에 무엇/왜/테스트/수용 기준 체크리스트 포함.
-8. **코드 리뷰**: PR을 연 직후 `/code-review`(또는 `/code-review:code-review`) 실행. 자동 리뷰 결과를 PR에 코멘트로 게시.
-9. **리뷰 대응**: 받은 코멘트는 같은 브랜치에 추가 커밋 + push로 처리. 회귀 방지 테스트도 함께.
-10. **머지**: 사용자가 명시적으로 "merge"/"land"라고 지시할 때만 진행.
-11. **보고**: 사용자에게는 핵심 변경 요약 + PR 링크 + 다음 액션만 짧게 보고.
-
-### 브랜치 네이밍
-
-- `feature/<slug>` — 신규 기능, 화면, 라우트
-- `fix/<slug>` — 버그 수정
-- `chore/<slug>` — 의존성 업그레이드, 빌드/CI 변경
-- `docs/<slug>` — 문서만 변경
-- `refactor/<slug>` — 동작 변경 없는 리팩토링
-
-### 예외 (브랜치/PR 없이 main에 직접 푸시 가능)
-
-다음만 예외다. 의심되면 항상 PR 경로로:
-
-- 문서 오타 1줄 수정
-- 명백히 자명한 lint/format fix
-- 사용자가 명시적으로 "PR 없이 직접 푸시"를 지시했을 때
-
-### 이미 main에 커밋된 경우
-
-작업을 시작했는데 main에 커밋해 버렸다면:
-
-```bash
-git switch -c feature/<slug>          # 현재 HEAD에서 새 브랜치 생성
-git switch main
-git reset --keep origin/main          # main을 origin과 동기화
-git switch feature/<slug>             # 작업 계속
-git push -u origin feature/<slug>     # PR 경로로 진입
-gh pr create ...
+```text
+main 확인 -> feature branch 생성 -> 작업/커밋 -> push -> PR 생성 -> code review -> 리뷰 대응 -> 사용자 승인 후 머지
 ```
+
+예외는 문서 오타 1줄, 자명한 lint/format fix, 사용자의 명시적 직접 푸시 지시뿐입니다.
+
+브랜치 예:
+
+- `feature/<slug>`
+- `fix/<slug>`
+- `chore/<slug>`
+- `docs/<slug>`
+- `refactor/<slug>`
