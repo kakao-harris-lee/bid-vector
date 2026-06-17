@@ -21,6 +21,7 @@ from app.schemas.schemas import (
     SyntheticExperimentPresetListResponse,
     SyntheticExperimentResponse,
     SyntheticExperimentRunResponse,
+    SyntheticExperimentSampleGapPlanResponse,
 )
 from app.services.synthetic_backtest import SyntheticBacktestService
 from app.services.synthetic_custom_operator import (
@@ -457,6 +458,24 @@ def compare_experiment_runs_endpoint(
             detail="One or both runs not found.",
         )
     return comparison
+
+
+@router.get(
+    "/experiments/sample-gaps",
+    response_model=SyntheticExperimentSampleGapPlanResponse,
+)
+def get_experiment_sample_gaps_endpoint(
+    max_runs: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Number of recent completed experiment runs to scan.",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Read-only G-1 sample gap/backfill plan from recent completed runs."""
+    service = SyntheticExperimentService(db)
+    return service.build_sample_gap_plan(max_runs=max_runs)
 
 
 @router.get(

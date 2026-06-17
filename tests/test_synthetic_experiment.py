@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
+
 import pytest
 
 from app.models.models import (
+    SyntheticExperiment,
     SyntheticExperimentResult,
     SyntheticExperimentRun,
 )
@@ -58,6 +62,71 @@ def _create_experiment(client, name="Q1 balanced sweep"):
             "operator_slugs": ["aggressive"],
         },
     )
+
+
+def _sample_gap_summary(
+    *,
+    preset_name: str,
+    lacking_groups: list[dict],
+    category: str | None = None,
+    limit: int = 200,
+    synthetic_only: bool = True,
+    non_synthetic_operator_slugs: list[str] | None = None,
+):
+    report_status = (
+        "insufficient_sample" if synthetic_only else "canonical_synthetic_mixed"
+    )
+    return {
+        "scenario": "base",
+        "category": category,
+        "start_at": "2025-01-01T00:00:00+00:00",
+        "end_at": "2025-12-31T23:59:59+00:00",
+        "limit": limit,
+        "sample_report": {
+            "preset_name": preset_name,
+            "synthetic_only": synthetic_only,
+            "non_synthetic_operator_slugs": non_synthetic_operator_slugs or [],
+            "report_status": report_status,
+            "ready_for_repeatable_reporting": False,
+            "lacking_groups": lacking_groups,
+        },
+    }
+
+
+def _persist_experiment_run(
+    test_db,
+    *,
+    name: str,
+    status: str = "completed",
+    summary: dict | None = None,
+    params: dict | None = None,
+):
+    experiment = SyntheticExperiment(
+        name=name,
+        params_json=json.dumps(
+            params
+            or {
+                "start_at": "2025-01-01T00:00:00+00:00",
+                "end_at": "2025-12-31T23:59:59+00:00",
+                "limit": 200,
+                "scenario": "base",
+                "settle_actions": False,
+            }
+        ),
+        operator_slugs_json="[]",
+    )
+    test_db.add(experiment)
+    test_db.flush()
+    run = SyntheticExperimentRun(
+        experiment_id=experiment.id,
+        status=status,
+        finished_at=datetime(2026, 1, 1, 12, 0, 0),
+        summary_json=json.dumps(summary) if summary is not None else None,
+    )
+    test_db.add(run)
+    test_db.commit()
+    test_db.refresh(run)
+    return run
 
 
 # --- create -------------------------------------------------------------------
@@ -254,6 +323,168 @@ def test_experiment_presets_are_listed_and_saved_idempotently(client):
 def test_experiment_preset_unknown_returns_404(client):
     response = client.post("/api/v1/synthetic/experiments/presets/no-such-preset")
     assert response.status_code == 404
+
+
+def test_sample_gap_plan_aggregates_recent_completed_lacking_groups(client, test_db):
+    first = _persist_experiment_run(
+        test_db,
+        name="g1-software-base-12m",
+        summary=_sample_gap_summary(
+            preset_name="g1-software-base-12m",
+            category="software",
+            lacking_groups=[
+                {
+                    "dimension": "preset",
+                    "key": "g1-software-base-12m",
+                    "settled_count": 82,
+                    "sample_target": 100,
+                    "missing_settled_count": 18,
+                },
+                {
+                    "dimension": "category",
+                    "key": "software",
+                    "settled_count": 10,
+                    "sample_target": 30,
+                    "missing_settled_count": 20,
+                },
+                {
+                    "dimension": "business_type",
+                    "key": "software",
+                    "settled_count": 9,
+                    "sample_target": 30,
+                    "missing_settled_count": 21,
+                },
+                {
+                    "dimension": "budget_band",
+                    "key": "lt_1eok",
+                    "settled_count": 4,
+                    "sample_target": 30,
+                    "missing_settled_count": 26,
+                },
+            ],
+        ),
+    )
+    second = _persist_experiment_run(
+        test_db,
+        name="g1-software-base-12m",
+        summary=_sample_gap_summary(
+            preset_name="g1-software-base-12m",
+            category="software",
+            lacking_groups=[
+                {
+                    "dimension": "category",
+                    "key": "software",
+                    "settled_count": 18,
+                    "sample_target": 30,
+                    "missing_settled_count": 12,
+                },
+            ],
+        ),
+    )
+
+    response = client.get("/api/v1/synthetic/experiments/sample-gaps?max_runs=10")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["scanned_completed_run_count"] == 2
+    assert body["source_run_count"] == 2
+    assert body["legacy_summary_run_count"] == 0
+    assert body["warnings"] == []
+
+    category_gap = next(
+        item
+        for item in body["gaps"]
+        if item["dimension"] == "category" and item["key"] == "software"
+    )
+    assert category_gap["missing_settled_count"] == 20
+    assert category_gap["total_missing_settled_count"] == 32
+    assert category_gap["source_run_count"] == 2
+    assert set(category_gap["related_run_ids"]) == {first.id, second.id}
+    assert category_gap["recommendation"]["preset_name"] == "g1-software-base-12m"
+    assert category_gap["recommendation"]["params"]["category"] == "software"
+    assert {
+        action["code"] for action in category_gap["recommendation"]["actions"]
+    } >= {"rerun_related_preset", "expand_category_window"}
+
+
+def test_sample_gap_plan_ignores_failed_and_flags_legacy_and_mixed_data(
+    client, test_db
+):
+    _persist_experiment_run(
+        test_db,
+        name="failed-gap",
+        status="failed",
+        summary=_sample_gap_summary(
+            preset_name="failed-gap",
+            category="construction",
+            lacking_groups=[
+                {
+                    "dimension": "category",
+                    "key": "construction",
+                    "settled_count": 0,
+                    "sample_target": 30,
+                    "missing_settled_count": 30,
+                }
+            ],
+        ),
+    )
+    legacy = _persist_experiment_run(
+        test_db,
+        name="legacy-summary",
+        summary={"sample_status": "insufficient_sample"},
+    )
+    mixed = _persist_experiment_run(
+        test_db,
+        name="g1-service-base-12m",
+        summary=_sample_gap_summary(
+            preset_name="g1-service-base-12m",
+            category=None,
+            synthetic_only=False,
+            non_synthetic_operator_slugs=["operator"],
+            lacking_groups=[
+                {
+                    "dimension": "business_type",
+                    "key": "service",
+                    "settled_count": 3,
+                    "sample_target": 30,
+                    "missing_settled_count": 27,
+                }
+            ],
+        ),
+    )
+
+    response = client.get("/api/v1/synthetic/experiments/sample-gaps?max_runs=10")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["scanned_completed_run_count"] == 2
+    assert body["source_run_count"] == 1
+    assert body["legacy_summary_run_count"] == 1
+    assert all(item["key"] != "construction" for item in body["gaps"])
+
+    warning_codes = {warning["code"] for warning in body["warnings"]}
+    assert warning_codes == {
+        "canonical_synthetic_mixed",
+        "legacy_summary_without_sample_report",
+    }
+    legacy_warning = next(
+        warning
+        for warning in body["warnings"]
+        if warning["code"] == "legacy_summary_without_sample_report"
+    )
+    assert legacy_warning["run_ids"] == [legacy.id]
+
+    mixed_gap = next(
+        item
+        for item in body["gaps"]
+        if item["dimension"] == "business_type" and item["key"] == "service"
+    )
+    assert mixed_gap["warnings"] == ["canonical_synthetic_mixed"]
+    assert mixed_gap["related_run_ids"] == [mixed.id]
+    assert mixed_gap["related_runs"][0]["synthetic_only"] is False
+    assert {
+        action["code"] for action in mixed_gap["recommendation"]["actions"]
+    } >= {"review_operator_mix", "rerun_synthetic_only"}
 
 
 # --- eager persistence (run -> results land in the DB) ------------------------
