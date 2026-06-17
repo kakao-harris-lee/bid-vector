@@ -92,9 +92,17 @@ class DecisionAnalyticsService:
     CATEGORY_PARAMETER_MIN_DELTA = 0.015
     CATEGORY_PARAMETER_MAX_DELTA = 0.05
 
-    def build_insights(self, db: Session, *, days: int = 30, limit: int = 10) -> dict[str, Any]:
+    def build_insights(
+        self,
+        db: Session,
+        *,
+        days: int = 30,
+        limit: int = 10,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Summarize persisted bid-decision signals for tuning and operator review."""
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         decisions = self._load_recent_decisions(db, operator_id=operator.id, days=days)
 
         status_breakdown: dict[str, int] = {}
@@ -218,14 +226,18 @@ class DecisionAnalyticsService:
         breakdown_limit: int = 5,
         trend_bucket_days: int = 7,
         recommendation_limit: int = 5,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Convert funnel analytics into actionable tuning recommendations."""
+        if operator is None:
+            operator = ensure_operator_account(db)
         funnel = self.build_funnel(
             db,
             days=days,
             limit=max(3, recommendation_limit),
             breakdown_limit=breakdown_limit,
             trend_bucket_days=trend_bucket_days,
+            operator=operator,
         )
 
         recommendations = [
@@ -593,6 +605,7 @@ class DecisionAnalyticsService:
         *,
         days: int = 90,
         limit: int = 100,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Return false-positive/negative labels collected via recommendation feedback.
 
@@ -602,7 +615,8 @@ class DecisionAnalyticsService:
         via the shared :meth:`_dedupe_latest_feedback_verdicts` helper. Orphan
         verdicts whose decision record is missing are skipped.
         """
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         start_at = utc_now() - timedelta(days=days)
         feedback_events = self._load_events_in_range(
             db,

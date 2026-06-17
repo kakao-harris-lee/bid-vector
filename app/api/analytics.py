@@ -61,11 +61,13 @@ def _resolve_analytics_operator(
     permission policy (403/404 are raised inside the helper).
     """
     if current_operator is None:
-        if operator_id is None:
-            return ensure_operator_account(db)
-        # Unauthenticated callers may not request another operator's data.
         fallback = ensure_operator_account(db)
-        return resolve_target_operator(db, fallback, operator_id)
+        if operator_id is None or int(operator_id) == int(fallback.id):
+            return fallback
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view another operator's data",
+        )
     return resolve_target_operator(db, current_operator, operator_id)
 
 
@@ -167,24 +169,38 @@ def get_operator_stats(days: int = Query(30, ge=1, le=365), db: Session = Depend
 def get_prediction_feedback(
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(20, ge=1, le=100),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Compare stored prediction and recommendation amounts against actual tender results."""
-    return PredictionFeedbackService().build_feedback(db, days=days, limit=limit)
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = PredictionFeedbackService().build_feedback(
+        db,
+        days=days,
+        limit=limit,
+        operator=target_operator,
+    )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/prediction-observability", response_model=PredictionObservabilityResponse)
 def get_prediction_observability(
     days: int = Query(90, ge=1, le=365),
     trend_bucket_days: int = Query(14, ge=1, le=90),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Summarize predictor selection, fallback, guardrails, and result accuracy."""
-    return PredictionReportingService().build_observability(
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = PredictionReportingService().build_observability(
         db,
         days=days,
         trend_bucket_days=trend_bucket_days,
+        operator=target_operator,
     )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/accuracy-report", response_model=AccuracyReportResponse)
@@ -192,15 +208,20 @@ def get_accuracy_report(
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(500, ge=1, le=2000),
     trend_bucket_days: int = Query(7, ge=1, le=30),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Consolidate 추천가 vs 실제 낙찰가 정확도 (정산 완료 건만, 단일 운영자 기준)."""
-    return AccuracyIntegrationService().build_accuracy_report(
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = AccuracyIntegrationService().build_accuracy_report(
         db,
         days=days,
         limit=limit,
         trend_bucket_days=trend_bucket_days,
+        operator=target_operator,
     )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/operations-dashboard", response_model=OperationsDashboardResponse)
@@ -226,10 +247,19 @@ def get_operations_dashboard(
 def get_decision_insights(
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(10, ge=1, le=50),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Summarize persisted bid-decision signals for tuning and operator review."""
-    return DecisionAnalyticsService().build_insights(db, days=days, limit=limit)
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = DecisionAnalyticsService().build_insights(
+        db,
+        days=days,
+        limit=limit,
+        operator=target_operator,
+    )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/decision-funnel", response_model=DecisionFunnelResponse)
@@ -238,16 +268,21 @@ def get_decision_funnel(
     limit: int = Query(10, ge=1, le=50),
     breakdown_limit: int = Query(5, ge=1, le=20),
     trend_bucket_days: int = Query(7, ge=1, le=30),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Summarize how persisted decision records progress through the operator workflow."""
-    return DecisionAnalyticsService().build_funnel(
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = DecisionAnalyticsService().build_funnel(
         db,
         days=days,
         limit=limit,
         breakdown_limit=breakdown_limit,
         trend_bucket_days=trend_bucket_days,
+        operator=target_operator,
     )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/operations-kpi", response_model=OperationsKpiResponse)
@@ -276,12 +311,19 @@ def get_operations_kpi(
 def get_recommendation_feedback_labels(
     days: int = Query(90, ge=1, le=365),
     limit: int = Query(100, ge=1, le=500),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Export deduped recommendation-feedback labels joined with decision/project context."""
-    return DecisionAnalyticsService().build_recommendation_feedback_labels(
-        db, days=days, limit=limit
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = DecisionAnalyticsService().build_recommendation_feedback_labels(
+        db,
+        days=days,
+        limit=limit,
+        operator=target_operator,
     )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.get("/decision-recommendations", response_model=DecisionRecommendationResponse)
@@ -290,16 +332,21 @@ def get_decision_recommendations(
     breakdown_limit: int = Query(5, ge=1, le=20),
     trend_bucket_days: int = Query(7, ge=1, le=30),
     recommendation_limit: int = Query(5, ge=1, le=20),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Return actionable tuning recommendations derived from the decision funnel analytics."""
-    return DecisionAnalyticsService().build_recommendations(
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = DecisionAnalyticsService().build_recommendations(
         db,
         days=days,
         breakdown_limit=breakdown_limit,
         trend_bucket_days=trend_bucket_days,
         recommendation_limit=recommendation_limit,
+        operator=target_operator,
     )
+    return _with_current_operator(payload, target_operator)
 
 
 @router.post("/decision-experiments", response_model=DecisionExperimentRunDetailResponse)

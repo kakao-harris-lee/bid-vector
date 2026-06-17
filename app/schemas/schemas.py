@@ -869,6 +869,8 @@ class DecisionInsightsRecentItem(BaseModel):
 
 class DecisionInsightsResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     result_count: int = Field(ge=0)
     high_priority_count: int = Field(ge=0)
@@ -1032,6 +1034,8 @@ class DecisionRecommendationItem(BaseModel):
 
 class DecisionRecommendationResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     decision_count: int = Field(ge=0)
     submitted_count: int = Field(ge=0)
@@ -1299,6 +1303,8 @@ class DecisionExperimentRunDetailResponse(BaseModel):
 
 class DecisionFunnelResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     decision_count: int = Field(ge=0)
     project_count: int = Field(ge=0)
@@ -1356,6 +1362,8 @@ class PredictionFeedbackItem(BaseModel):
 
 class PredictionFeedbackResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     result_count: int = Field(ge=0)
     prediction_sample_count: int = Field(ge=0)
@@ -1440,6 +1448,8 @@ class AccuracyReportResponse(BaseModel):
     """
 
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     summary: AccuracyReportSummary
     error_distribution: List[AccuracyReportErrorBin] = Field(default_factory=list)
     per_category: List[AccuracyReportCategory] = Field(default_factory=list)
@@ -1586,6 +1596,8 @@ class RecommendationFeedbackLabelsResponse(BaseModel):
     """
 
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     label_count: int = Field(ge=0)
     useful_count: int = Field(ge=0)
@@ -1642,6 +1654,8 @@ class PredictionPerformanceTrendItem(BaseModel):
 
 class PredictionObservabilityResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     period_days: int
     prediction_count: int = Field(ge=0)
     fallback_count: int = Field(ge=0)
