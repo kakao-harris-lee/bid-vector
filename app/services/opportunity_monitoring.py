@@ -106,6 +106,7 @@ class StrategyMonitoringService:
         evaluations, evaluated_project_count = self._collect_candidate_evaluations(
             db,
             strategy=strategy,
+            operator=operator,
             high_priority_only=resolved_high_priority_only,
             max_active_bids=self.DEFAULT_MAX_ACTIVE_BIDS,
             current_workload_score=None,
@@ -132,11 +133,16 @@ class StrategyMonitoringService:
         trigger_source: str = SYNC_TRIGGER_SOURCE,
         existing_run_id: int | None = None,
         task_id: str | None = None,
+        operator: User | None = None,
     ) -> dict:
         """Run the stored strategy, persist bid decisions, and create notifications."""
-        operator = ensure_operator_account(db)
-        ensure_operator_profile(db)
-        strategy = ensure_operator_strategy(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
+            ensure_operator_profile(db)
+            strategy = ensure_operator_strategy(db)
+        else:
+            ensure_operator_profile_for(db, operator)
+            strategy = ensure_operator_strategy_for(db, operator)
 
         resolved_limit, resolved_high_priority_only = self._resolve_runtime_options(
             strategy,
@@ -152,6 +158,7 @@ class StrategyMonitoringService:
             resolved_limit=resolved_limit,
             existing_run_id=existing_run_id,
             task_id=task_id,
+            operator=operator,
         )
         previous_run = self._get_previous_completed_run(
             db,
@@ -184,6 +191,7 @@ class StrategyMonitoringService:
             evaluations, evaluated_project_count = self._collect_candidate_evaluations(
                 db,
                 strategy=strategy,
+                operator=operator,
                 high_priority_only=resolved_high_priority_only,
                 max_active_bids=request.max_active_bids,
                 current_workload_score=request.current_workload_score,
@@ -201,6 +209,7 @@ class StrategyMonitoringService:
                 refreshed_analysis = self._analyze_project(
                     db,
                     project,
+                    operator=operator,
                     max_active_bids=request.max_active_bids,
                     current_workload_score=request.current_workload_score,
                     same_category_only=request.same_category_only,
@@ -240,6 +249,7 @@ class StrategyMonitoringService:
                         strengths=list(refreshed_analysis.get("strengths") or []),
                         risk_flags=list(refreshed_analysis.get("risk_flags") or []),
                     ),
+                    operator=operator,
                 )
                 is_new_candidate = project.id not in previous_candidate_project_ids
                 notification = None
@@ -276,6 +286,8 @@ class StrategyMonitoringService:
                 "trigger_source": trigger_source,
                 "previous_run_id": previous_run.id if previous_run else None,
                 "operator_id": operator.id,
+                "current_operator_id": int(operator.id),
+                "current_operator_username": str(operator.username or ""),
                 "evaluated_project_count": evaluated_project_count,
                 "selected_candidate_count": len(selected_evaluations),
                 "persisted_candidate_count": len(results),
@@ -304,10 +316,14 @@ class StrategyMonitoringService:
         trigger_source: str,
         task_id: str | None = None,
         status: str = "queued",
+        operator: User | None = None,
     ) -> OperatorStrategyRun:
         """Create a persisted monitoring run record before execution starts."""
-        operator = ensure_operator_account(db)
-        strategy = ensure_operator_strategy(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
+            strategy = ensure_operator_strategy(db)
+        else:
+            strategy = ensure_operator_strategy_for(db, operator)
         resolved_limit, resolved_high_priority_only = self._resolve_runtime_options(
             strategy,
             limit=request.limit,
@@ -364,9 +380,16 @@ class StrategyMonitoringService:
             .all()
         )
 
-    def get_run_detail(self, db: Session, *, run_id: int) -> dict:
+    def get_run_detail(
+        self,
+        db: Session,
+        *,
+        run_id: int,
+        operator: User | None = None,
+    ) -> dict:
         """Return one monitoring run with stored payloads and previous-run diff details."""
-        operator = ensure_operator_account(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
         monitor_run = (
             db.query(OperatorStrategyRun)
             .filter(
@@ -411,9 +434,14 @@ class StrategyMonitoringService:
 
     def serialize_run(self, monitor_run: OperatorStrategyRun) -> dict:
         """Convert a stored monitoring run into the public API response shape."""
+        current_operator_username = ""
+        if monitor_run.operator is not None:
+            current_operator_username = str(monitor_run.operator.username or "")
         return {
             "id": int(monitor_run.id),
             "operator_id": int(monitor_run.operator_id),
+            "current_operator_id": int(monitor_run.operator_id),
+            "current_operator_username": current_operator_username,
             "task_id": monitor_run.task_id,
             "trigger_source": str(monitor_run.trigger_source),
             "status": str(monitor_run.status),
@@ -452,6 +480,7 @@ class StrategyMonitoringService:
         resolved_limit: int,
         existing_run_id: int | None,
         task_id: str | None,
+        operator: User,
     ) -> OperatorStrategyRun:
         """Create or transition a monitoring run record into the running state."""
         if existing_run_id is None:
@@ -461,6 +490,7 @@ class StrategyMonitoringService:
                 trigger_source=trigger_source,
                 task_id=task_id,
                 status="running",
+                operator=operator,
             )
 
         monitor_run = db.query(OperatorStrategyRun).filter(
@@ -554,6 +584,7 @@ class StrategyMonitoringService:
         db: Session,
         *,
         strategy: OperatorStrategy,
+        operator: User,
         high_priority_only: bool,
         max_active_bids: int,
         current_workload_score: float | None,
@@ -595,6 +626,7 @@ class StrategyMonitoringService:
             analysis = self._analyze_project(
                 db,
                 project,
+                operator=operator,
                 max_active_bids=max_active_bids,
                 current_workload_score=current_workload_score,
                 same_category_only=same_category_only,
@@ -677,6 +709,7 @@ class StrategyMonitoringService:
         db: Session,
         project: Project,
         *,
+        operator: User,
         max_active_bids: int,
         current_workload_score: float | None,
         same_category_only: bool,
@@ -695,6 +728,7 @@ class StrategyMonitoringService:
                 similar_limit=similar_limit,
                 min_similarity=min_similarity,
             ),
+            operator=operator,
         )
 
     def _serialize_candidate(self, evaluation: StrategyCandidateEvaluation) -> dict:

@@ -8,7 +8,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.models import CrawlJob
+from app.models.models import CrawlJob, User
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.ml_training import PricePredictionTrainingService
@@ -283,16 +283,23 @@ def monitor_operator_strategy(
     request_payload: dict[str, Any] | None = None,
     monitor_run_id: int | None = None,
     trigger_source: str = StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
+    operator_id: int | None = None,
 ) -> dict:
     """Execute the stored operator strategy and persist bid decisions in a background task."""
     request = OperatorStrategyMonitorRequest(**(request_payload or {}))
     db = SessionLocal()
     try:
+        operator = None
+        if operator_id is not None:
+            operator = db.query(User).filter(User.id == int(operator_id)).first()
+            if operator is None:
+                raise ValueError(f"Operator {int(operator_id)} not found")
         return StrategyMonitoringService().execute_monitoring(
             db,
             request=request,
             trigger_source=trigger_source,
             existing_run_id=monitor_run_id,
+            operator=operator,
         )
     except Exception:
         db.rollback()
@@ -536,6 +543,7 @@ def enqueue_operator_strategy_monitor(
     request: OperatorStrategyMonitorRequest,
     monitor_run_id: int | None = None,
     trigger_source: str = StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
+    operator_id: int | None = None,
 ):
     """Queue an operator strategy monitoring task and return the async task handle."""
     return monitor_operator_strategy.apply_async(
@@ -543,6 +551,7 @@ def enqueue_operator_strategy_monitor(
             "request_payload": request.model_dump(mode="json"),
             "monitor_run_id": monitor_run_id,
             "trigger_source": trigger_source,
+            "operator_id": operator_id,
         },
         queue=settings.CELERY_OPS_QUEUE,
     )
@@ -625,13 +634,17 @@ def get_operator_strategy_monitor_task_status(task_id: str) -> dict[str, Any]:
     }.get(raw_status, "Task status is available.")
 
     monitor_run_id: int | None = None
+    operator_id: int | None = None
     if isinstance(result, dict) and isinstance(result.get("monitor_run_id"), int):
         monitor_run_id = int(result["monitor_run_id"])
         result.setdefault("task_id", task_id)
+    if isinstance(result, dict) and isinstance(result.get("operator_id"), int):
+        operator_id = int(result["operator_id"])
 
     payload: dict[str, Any] = {
         "task_id": task_id,
         "monitor_run_id": monitor_run_id,
+        "operator_id": operator_id,
         "task_name": OPERATOR_STRATEGY_MONITOR_TASK_NAME,
         "status": normalized_status,
         "raw_status": raw_status,

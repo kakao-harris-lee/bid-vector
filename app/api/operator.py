@@ -28,6 +28,7 @@ from app.models.models import (
     BidDecisionRecord,
     CompanyProfile,
     Notification,
+    OperatorStrategyRun,
     PricePrediction,
     Project,
     User,
@@ -85,7 +86,12 @@ def _resolve_operator_for_read(
     """
     if current_operator is None:
         fallback = ensure_operator_account(db)
-        return resolve_target_operator(db, fallback, operator_id)
+        if operator_id is None or int(operator_id) == int(fallback.id):
+            return fallback
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view another operator's data",
+        )
     return resolve_target_operator(db, current_operator, operator_id)
 
 
@@ -587,12 +593,19 @@ def list_operator_strategy_candidates(
 
 
 @router.post("/strategy/monitor", response_model=OperatorStrategyMonitorResponse)
-def run_operator_strategy_monitor(request: OperatorStrategyMonitorRequest, db: Session = Depends(get_db)):
+def run_operator_strategy_monitor(
+    request: OperatorStrategyMonitorRequest,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
     """Execute the stored strategy, persist bid decisions, and create operator notifications."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
     return StrategyMonitoringService().execute_monitoring(
         db,
         request=request,
         trigger_source=StrategyMonitoringService.SYNC_TRIGGER_SOURCE,
+        operator=target,
     )
 
 
@@ -600,49 +613,68 @@ def run_operator_strategy_monitor(request: OperatorStrategyMonitorRequest, db: S
 def list_operator_strategy_monitor_runs(
     limit: int = Query(default=20, ge=1, le=100),
     run_status: str | None = Query(default=None, alias="status"),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
-    """Return recent strategy monitoring execution history for the singleton operator."""
+    """Return recent strategy monitoring execution history for the resolved operator."""
     service = StrategyMonitoringService()
-    operator = ensure_operator_account(db)
-    runs = service.list_recent_runs(db, limit=limit, run_status=run_status)
+    operator = _resolve_operator_for_read(db, current_operator, operator_id)
+    runs = service.list_recent_runs(db, limit=limit, run_status=run_status, operator=operator)
     return {
         "operator_id": operator.id,
+        **_operator_context_fields(operator),
         "result_count": len(runs),
         "runs": [service.serialize_run(run) for run in runs],
     }
 
 
 @router.get("/strategy/monitor/runs/{run_id}", response_model=OperatorStrategyRunDetailResponse)
-def get_operator_strategy_monitor_run_detail(run_id: int, db: Session = Depends(get_db)):
+def get_operator_strategy_monitor_run_detail(
+    run_id: int,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
     """Return one strategy monitor run with full payloads and candidate diff details."""
     service = StrategyMonitoringService()
+    operator = _resolve_operator_for_read(db, current_operator, operator_id)
     try:
-        return service.get_run_detail(db, run_id=run_id)
+        return service.get_run_detail(db, run_id=run_id, operator=operator)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/strategy/monitor/async", response_model=OperatorStrategyMonitorTaskResponse)
-def run_operator_strategy_monitor_async(request: OperatorStrategyMonitorRequest, db: Session = Depends(get_db)):
+def run_operator_strategy_monitor_async(
+    request: OperatorStrategyMonitorRequest,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
     """Queue operator strategy monitoring work and return a pollable task id."""
     service = StrategyMonitoringService()
+    operator = _resolve_operator_for_read(db, current_operator, operator_id)
     monitor_run = service.create_monitor_run(
         db,
         request=request,
         trigger_source=StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
         status="queued",
+        operator=operator,
     )
     async_result = enqueue_operator_strategy_monitor(
         request=request,
         monitor_run_id=monitor_run.id,
         trigger_source=StrategyMonitoringService.ASYNC_TRIGGER_SOURCE,
+        operator_id=operator.id,
     )
     monitor_run = service.update_monitor_run_task_id(db, run_id=monitor_run.id, task_id=async_result.id) or monitor_run
     status_payload = get_operator_strategy_monitor_task_status(async_result.id)
     return {
         "task_id": async_result.id,
         "monitor_run_id": monitor_run.id,
+        "operator_id": operator.id,
+        **_operator_context_fields(operator),
         "task_name": status_payload["task_name"],
         "status": status_payload["status"],
         "detail": status_payload["detail"],
@@ -651,9 +683,41 @@ def run_operator_strategy_monitor_async(request: OperatorStrategyMonitorRequest,
 
 
 @router.get("/strategy/monitor/tasks/{task_id}", response_model=OperatorStrategyMonitorTaskStatusResponse)
-def get_operator_strategy_monitor_status(task_id: str):
+def get_operator_strategy_monitor_status(
+    task_id: str,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
     """Inspect the current status and final result of a queued strategy monitoring task."""
-    return get_operator_strategy_monitor_task_status(task_id)
+    operator = _resolve_operator_for_read(db, current_operator, operator_id)
+    payload = get_operator_strategy_monitor_task_status(task_id)
+
+    monitor_run = (
+        db.query(OperatorStrategyRun)
+        .filter(OperatorStrategyRun.task_id == task_id)
+        .order_by(OperatorStrategyRun.id.desc())
+        .first()
+    )
+    if monitor_run is None and payload.get("monitor_run_id") is not None:
+        monitor_run = (
+            db.query(OperatorStrategyRun)
+            .filter(OperatorStrategyRun.id == int(payload["monitor_run_id"]))
+            .first()
+        )
+
+    result = payload.get("result")
+    result_operator_id = None
+    if isinstance(result, dict) and result.get("operator_id") is not None:
+        result_operator_id = int(result["operator_id"])
+
+    resolved_owner_id = int(monitor_run.operator_id) if monitor_run is not None else result_operator_id
+    if resolved_owner_id is not None and int(resolved_owner_id) != int(operator.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitoring task not found")
+
+    payload["operator_id"] = int(operator.id)
+    payload.update(_operator_context_fields(operator))
+    return payload
 
 
 @router.get("/dashboard", response_model=OperatorDashboardResponse)

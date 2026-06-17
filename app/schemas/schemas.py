@@ -465,6 +465,8 @@ class OperatorStrategyMonitorResponse(BaseModel):
     trigger_source: Optional[str] = None
     previous_run_id: Optional[int] = None
     operator_id: int
+    current_operator_id: Optional[int] = None
+    current_operator_username: Optional[str] = None
     evaluated_project_count: int = Field(ge=0)
     selected_candidate_count: int = Field(ge=0)
     persisted_candidate_count: int = Field(ge=0)
@@ -483,6 +485,9 @@ class OperatorStrategyMonitorResponse(BaseModel):
 class OperatorStrategyMonitorTaskResponse(BaseModel):
     task_id: str
     monitor_run_id: int
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     task_name: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     detail: str
@@ -492,6 +497,9 @@ class OperatorStrategyMonitorTaskResponse(BaseModel):
 class OperatorStrategyMonitorTaskStatusResponse(BaseModel):
     task_id: str
     monitor_run_id: Optional[int] = None
+    operator_id: Optional[int] = None
+    current_operator_id: Optional[int] = None
+    current_operator_username: Optional[str] = None
     task_name: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     raw_status: str
@@ -505,6 +513,8 @@ class OperatorStrategyMonitorTaskStatusResponse(BaseModel):
 class OperatorStrategyRunResponse(BaseModel):
     id: int
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     task_id: Optional[str] = None
     trigger_source: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
@@ -522,6 +532,8 @@ class OperatorStrategyRunResponse(BaseModel):
 
 class OperatorStrategyRunListResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     result_count: int = Field(ge=0)
     runs: List[OperatorStrategyRunResponse] = Field(default_factory=list)
 
@@ -529,6 +541,8 @@ class OperatorStrategyRunListResponse(BaseModel):
 class OperatorStrategyRunDetailResponse(BaseModel):
     id: int
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     task_id: Optional[str] = None
     trigger_source: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]

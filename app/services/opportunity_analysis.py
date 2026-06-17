@@ -10,9 +10,15 @@ from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_r
 from app.ai.business_group import resolve_business_group
 from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import get_price_insights, predict_price
-from app.core.single_user import ensure_operator_account, ensure_operator_profile, ensure_operator_strategy
+from app.core.single_user import (
+    ensure_operator_account,
+    ensure_operator_profile,
+    ensure_operator_profile_for,
+    ensure_operator_strategy,
+    ensure_operator_strategy_for,
+)
 from app.core.time import ensure_utc, utc_now
-from app.models.models import Bid, BidDecisionRecord, CompanyProfile, Project
+from app.models.models import Bid, BidDecisionRecord, CompanyProfile, Project, User
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.classifier import (
@@ -191,11 +197,22 @@ class OpportunityAnalysisService:
         self.feedback_service = PredictionFeedbackService()
         self.similarity_service = ProjectSimilarityService()
 
-    def analyze_project(self, db: Session, project: Project, request: OpportunityAnalysisRequest) -> dict:
+    def analyze_project(
+        self,
+        db: Session,
+        project: Project,
+        request: OpportunityAnalysisRequest,
+        *,
+        operator: User | None = None,
+    ) -> dict:
         """Build a multi-angle bid opportunity analysis for one project."""
-        operator = ensure_operator_account(db)
-        profile = ensure_operator_profile(db)
-        strategy = ensure_operator_strategy(db)
+        if operator is None:
+            operator = ensure_operator_account(db)
+            profile = ensure_operator_profile(db)
+            strategy = ensure_operator_strategy(db)
+        else:
+            profile = ensure_operator_profile_for(db, operator)
+            strategy = ensure_operator_strategy_for(db, operator)
 
         classification = self.classifier.classify(project=project, profile=profile)
         similar_projects = self.similarity_service.find_similar_projects(
@@ -330,6 +347,7 @@ class OpportunityAnalysisService:
                 workload_source=workload_source,
             ),
             db=db,
+            operator=operator,
         )
 
         strengths = self._build_strengths(
