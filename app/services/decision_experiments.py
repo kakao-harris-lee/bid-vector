@@ -8,9 +8,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.single_user import ensure_operator_account, ensure_operator_strategy
+from app.core.single_user import ensure_operator_account, ensure_operator_strategy, ensure_operator_strategy_for
 from app.core.time import ensure_utc, utc_now
-from app.models.models import DecisionExperimentRun
+from app.models.models import DecisionExperimentRun, User
 from app.schemas.schemas import (
     DecisionExperimentRunCreateRequest,
     DecisionExperimentRunUpdateRequest,
@@ -58,21 +58,27 @@ class DecisionExperimentService:
     def __init__(self) -> None:
         self.analytics = DecisionAnalyticsService()
 
-    def create_run(self, db: Session, *, request: DecisionExperimentRunCreateRequest) -> dict[str, Any]:
+    def create_run(
+        self,
+        db: Session,
+        *,
+        request: DecisionExperimentRunCreateRequest,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Persist one experiment definition with a baseline snapshot collected at creation time."""
-        operator = ensure_operator_account(db)
+        target_operator = self._resolve_operator(db, operator=operator)
         now = utc_now()
         started_at = ensure_utc(request.started_at or now)
         baseline_start = started_at - timedelta(days=int(request.baseline_days))
         baseline_summary = self._build_snapshot(
             db,
-            operator_id=operator.id,
+            operator_id=target_operator.id,
             start_at=baseline_start,
             end_at=started_at,
         )
 
         run = DecisionExperimentRun(
-            operator_id=operator.id,
+            operator_id=target_operator.id,
             experiment_key=request.experiment_key,
             recommendation_key=request.recommendation_key,
             status="planned" if started_at > now else "running",
@@ -96,7 +102,7 @@ class DecisionExperimentService:
         db.add(run)
         db.commit()
         db.refresh(run)
-        return self.get_run_detail(db, run_id=int(run.id))
+        return self.get_run_detail(db, run_id=int(run.id), operator=target_operator)
 
     def list_runs(
         self,
@@ -107,10 +113,11 @@ class DecisionExperimentService:
         outcome: str | None = None,
         application_status: str | None = None,
         sort: str = "needs_attention",
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Return recent experiment runs for dashboard and operator review."""
-        operator = ensure_operator_account(db)
-        query = db.query(DecisionExperimentRun).filter(DecisionExperimentRun.operator_id == operator.id)
+        target_operator = self._resolve_operator(db, operator=operator)
+        query = db.query(DecisionExperimentRun).filter(DecisionExperimentRun.operator_id == target_operator.id)
         if run_status:
             query = query.filter(DecisionExperimentRun.status == run_status)
         if outcome:
@@ -126,7 +133,7 @@ class DecisionExperimentService:
         serialized_runs = self._sort_serialized_runs(serialized_runs, sort=sort)
         limited_runs = serialized_runs[:limit]
         return {
-            "operator_id": operator.id,
+            **self._operator_context_fields(target_operator),
             "result_count": len(limited_runs),
             "total_match_count": len(serialized_runs),
             "sort": self._normalize_run_sort(sort),
@@ -151,19 +158,34 @@ class DecisionExperimentService:
             "runs": limited_runs,
         }
 
-    def get_run_detail(self, db: Session, *, run_id: int) -> dict[str, Any]:
+    def get_run_detail(
+        self,
+        db: Session,
+        *,
+        run_id: int,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Return one run including its baseline metrics and latest evaluation, if available."""
-        run = self._get_run_or_raise(db, run_id=run_id)
+        target_operator = self._resolve_operator(db, operator=operator)
+        run = self._get_run_or_raise(db, run_id=run_id, operator=target_operator)
         run_started_at = ensure_utc(run.started_at)
         baseline_summary = self._load_json(run.baseline_summary, fallback=self._empty_snapshot(run_started_at, run_started_at))
         return {
+            **self._operator_context_fields(target_operator),
             "run": self._serialize_run(run),
             "baseline_summary": baseline_summary,
         }
 
-    def evaluate_run(self, db: Session, *, run_id: int) -> dict[str, Any]:
+    def evaluate_run(
+        self,
+        db: Session,
+        *,
+        run_id: int,
+        operator: User | None = None,
+    ) -> dict[str, Any]:
         """Compare the experiment window against the saved baseline and persist the latest evaluation."""
-        run = self._get_run_or_raise(db, run_id=run_id)
+        target_operator = self._resolve_operator(db, operator=operator)
+        run = self._get_run_or_raise(db, run_id=run_id, operator=target_operator)
         now = utc_now()
         run_started_at = ensure_utc(run.started_at)
         scheduled_end = run_started_at + timedelta(days=int(run.duration_days or 0))
@@ -200,7 +222,7 @@ class DecisionExperimentService:
 
         db.commit()
         db.refresh(run)
-        return self.get_run_detail(db, run_id=int(run.id))
+        return self.get_run_detail(db, run_id=int(run.id), operator=target_operator)
 
     def update_run(
         self,
@@ -208,9 +230,11 @@ class DecisionExperimentService:
         *,
         run_id: int,
         request: DecisionExperimentRunUpdateRequest,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Manually update run notes or lifecycle state for operator workflow control."""
-        run = self._get_run_or_raise(db, run_id=run_id)
+        target_operator = self._resolve_operator(db, operator=operator)
+        run = self._get_run_or_raise(db, run_id=run_id, operator=target_operator)
 
         if request.replace_notes is not None:
             run.notes = str(request.replace_notes).strip()
@@ -236,7 +260,7 @@ class DecisionExperimentService:
 
         db.commit()
         db.refresh(run)
-        return self.get_run_detail(db, run_id=int(run.id))
+        return self.get_run_detail(db, run_id=int(run.id), operator=target_operator)
 
     def apply_threshold_adjustments(
         self,
@@ -244,10 +268,12 @@ class DecisionExperimentService:
         *,
         run_id: int,
         request: DecisionExperimentThresholdApplyRequest,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Convert one successful experiment into persisted operator decision-threshold updates."""
-        run = self._get_run_or_raise(db, run_id=run_id)
-        strategy = ensure_operator_strategy(db)
+        target_operator = self._resolve_operator(db, operator=operator)
+        run = self._get_run_or_raise(db, run_id=run_id, operator=target_operator)
+        strategy = self._resolve_strategy(db, operator=target_operator)
         current_thresholds = self._current_strategy_thresholds(strategy)
         parameter_policy = self._build_run_parameter_policy(db, run)
         threshold_updates = self._build_threshold_adjustments(
@@ -278,6 +304,7 @@ class DecisionExperimentService:
 
         strategy_thresholds = self._current_strategy_thresholds(strategy)
         return {
+            **self._operator_context_fields(target_operator),
             "operator_id": int(run.operator_id),
             "run_id": int(run.id),
             "experiment_key": str(run.experiment_key),
@@ -300,10 +327,12 @@ class DecisionExperimentService:
         *,
         run_id: int,
         request: DecisionExperimentStrategyApplyRequest,
+        operator: User | None = None,
     ) -> dict[str, Any]:
         """Convert workload/category experiments into persisted operator strategy tuning."""
-        run = self._get_run_or_raise(db, run_id=run_id)
-        strategy = ensure_operator_strategy(db)
+        target_operator = self._resolve_operator(db, operator=operator)
+        run = self._get_run_or_raise(db, run_id=run_id, operator=target_operator)
+        strategy = self._resolve_strategy(db, operator=target_operator)
         current_tuning = self._current_strategy_tuning(strategy)
         parameter_policy = self._build_run_parameter_policy(db, run)
         strategy_updates = self._build_strategy_adjustments(
@@ -334,6 +363,7 @@ class DecisionExperimentService:
 
         strategy_tuning = self._current_strategy_tuning(strategy)
         return {
+            **self._operator_context_fields(target_operator),
             "operator_id": int(run.operator_id),
             "run_id": int(run.id),
             "experiment_key": str(run.experiment_key),
@@ -919,14 +949,38 @@ class DecisionExperimentService:
             return "성공 outcome이 확정되기 전까지 적용할 수 없습니다."
         return "현재 상태에서는 적용할 수 없습니다."
 
-    def _get_run_or_raise(self, db: Session, *, run_id: int) -> DecisionExperimentRun:
-        """Load one run that belongs to the singleton operator or raise a clear error."""
-        operator = ensure_operator_account(db)
+    def _resolve_operator(self, db: Session, *, operator: User | None) -> User:
+        """Resolve the target operator while preserving canonical behavior by default."""
+        return operator if operator is not None else ensure_operator_account(db)
+
+    def _resolve_strategy(self, db: Session, *, operator: User | None) -> Any:
+        """Resolve the strategy row for the target operator without cross-operator fallback."""
+        if operator is None:
+            return ensure_operator_strategy(db)
+        return ensure_operator_strategy_for(db, operator)
+
+    def _operator_context_fields(self, operator: User) -> dict[str, Any]:
+        """Return standard response fields for the resolved operator context."""
+        return {
+            "operator_id": int(operator.id),
+            "current_operator_id": int(operator.id),
+            "current_operator_username": str(operator.username or ""),
+        }
+
+    def _get_run_or_raise(
+        self,
+        db: Session,
+        *,
+        run_id: int,
+        operator: User | None = None,
+    ) -> DecisionExperimentRun:
+        """Load one run in the target operator scope or raise a clear error."""
+        target_operator = self._resolve_operator(db, operator=operator)
         run = (
             db.query(DecisionExperimentRun)
             .filter(
                 DecisionExperimentRun.id == run_id,
-                DecisionExperimentRun.operator_id == operator.id,
+                DecisionExperimentRun.operator_id == target_operator.id,
             )
             .first()
         )

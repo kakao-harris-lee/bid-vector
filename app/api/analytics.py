@@ -352,10 +352,13 @@ def get_decision_recommendations(
 @router.post("/decision-experiments", response_model=DecisionExperimentRunDetailResponse)
 def create_decision_experiment_run(
     request: DecisionExperimentRunCreateRequest,
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Persist one experiment plan so the operator can track execution and later evaluate outcomes."""
-    return DecisionExperimentService().create_run(db, request=request)
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    return DecisionExperimentService().create_run(db, request=request, operator=target_operator)
 
 
 @router.get("/decision-experiments", response_model=DecisionExperimentRunListResponse)
@@ -365,9 +368,12 @@ def list_decision_experiment_runs(
     outcome: str | None = Query(default=None),
     application_status: str | None = Query(default=None),
     sort: str = Query(default="needs_attention"),
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Return recent decision experiment runs for dashboard status tracking."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
     return DecisionExperimentService().list_runs(
         db,
         limit=limit,
@@ -375,14 +381,21 @@ def list_decision_experiment_runs(
         outcome=outcome,
         application_status=application_status,
         sort=sort,
+        operator=target_operator,
     )
 
 
 @router.get("/decision-experiments/{experiment_run_id}", response_model=DecisionExperimentRunDetailResponse)
-def get_decision_experiment_run_detail(experiment_run_id: int, db: Session = Depends(get_db)):
+def get_decision_experiment_run_detail(
+    experiment_run_id: int,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
     """Return one persisted experiment run with its baseline snapshot and latest evaluation."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
     try:
-        return DecisionExperimentService().get_run_detail(db, run_id=experiment_run_id)
+        return DecisionExperimentService().get_run_detail(db, run_id=experiment_run_id, operator=target_operator)
     except ValueError as exc:
         _raise_decision_experiment_http_error(exc)
 
@@ -392,13 +405,22 @@ def get_decision_experiment_run_detail(experiment_run_id: int, db: Session = Dep
     response_model=MLTaskResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def evaluate_decision_experiment_run(experiment_run_id: int, db: Session = Depends(get_db)):
+def evaluate_decision_experiment_run(
+    experiment_run_id: int,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
     """Queue experiment re-evaluation instead of running it inside the API request."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
     try:
-        DecisionExperimentService().get_run_detail(db, run_id=experiment_run_id)
+        DecisionExperimentService().get_run_detail(db, run_id=experiment_run_id, operator=target_operator)
     except ValueError as exc:
         _raise_decision_experiment_http_error(exc)
-    async_result = enqueue_decision_experiment_reevaluation(experiment_run_id=experiment_run_id)
+    async_result = enqueue_decision_experiment_reevaluation(
+        experiment_run_id=experiment_run_id,
+        operator_id=int(target_operator.id),
+    )
     status_payload = get_decision_experiment_reevaluation_task_status(async_result.id)
     return {
         "task_id": async_result.id,
@@ -414,11 +436,19 @@ def evaluate_decision_experiment_run(experiment_run_id: int, db: Session = Depen
 def update_decision_experiment_run(
     experiment_run_id: int,
     request: DecisionExperimentRunUpdateRequest,
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Manually update a persisted experiment run's notes or lifecycle state."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
     try:
-        return DecisionExperimentService().update_run(db, run_id=experiment_run_id, request=request)
+        return DecisionExperimentService().update_run(
+            db,
+            run_id=experiment_run_id,
+            request=request,
+            operator=target_operator,
+        )
     except ValueError as exc:
         _raise_decision_experiment_http_error(exc)
 
@@ -430,14 +460,18 @@ def update_decision_experiment_run(
 def apply_decision_experiment_thresholds(
     experiment_run_id: int,
     request: DecisionExperimentThresholdApplyRequest,
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Apply one successful experiment's threshold recommendation to the operator strategy."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
     try:
         return DecisionExperimentService().apply_threshold_adjustments(
             db,
             run_id=experiment_run_id,
             request=request,
+            operator=target_operator,
         )
     except ValueError as exc:
         _raise_decision_experiment_http_error(exc)
@@ -450,14 +484,18 @@ def apply_decision_experiment_thresholds(
 def apply_decision_experiment_strategy(
     experiment_run_id: int,
     request: DecisionExperimentStrategyApplyRequest,
+    operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
 ):
     """Apply one successful experiment's workload/category tuning to the operator strategy."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
     try:
         return DecisionExperimentService().apply_strategy_adjustments(
             db,
             run_id=experiment_run_id,
             request=request,
+            operator=target_operator,
         )
     except ValueError as exc:
         _raise_decision_experiment_http_error(exc)

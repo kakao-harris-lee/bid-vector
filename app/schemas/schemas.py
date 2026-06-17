@@ -465,6 +465,8 @@ class OperatorStrategyMonitorResponse(BaseModel):
     trigger_source: Optional[str] = None
     previous_run_id: Optional[int] = None
     operator_id: int
+    current_operator_id: Optional[int] = None
+    current_operator_username: Optional[str] = None
     evaluated_project_count: int = Field(ge=0)
     selected_candidate_count: int = Field(ge=0)
     persisted_candidate_count: int = Field(ge=0)
@@ -483,6 +485,9 @@ class OperatorStrategyMonitorResponse(BaseModel):
 class OperatorStrategyMonitorTaskResponse(BaseModel):
     task_id: str
     monitor_run_id: int
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     task_name: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     detail: str
@@ -492,6 +497,9 @@ class OperatorStrategyMonitorTaskResponse(BaseModel):
 class OperatorStrategyMonitorTaskStatusResponse(BaseModel):
     task_id: str
     monitor_run_id: Optional[int] = None
+    operator_id: Optional[int] = None
+    current_operator_id: Optional[int] = None
+    current_operator_username: Optional[str] = None
     task_name: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     raw_status: str
@@ -505,6 +513,8 @@ class OperatorStrategyMonitorTaskStatusResponse(BaseModel):
 class OperatorStrategyRunResponse(BaseModel):
     id: int
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     task_id: Optional[str] = None
     trigger_source: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
@@ -522,6 +532,8 @@ class OperatorStrategyRunResponse(BaseModel):
 
 class OperatorStrategyRunListResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     result_count: int = Field(ge=0)
     runs: List[OperatorStrategyRunResponse] = Field(default_factory=list)
 
@@ -529,6 +541,8 @@ class OperatorStrategyRunListResponse(BaseModel):
 class OperatorStrategyRunDetailResponse(BaseModel):
     id: int
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     task_id: Optional[str] = None
     trigger_source: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
@@ -1134,6 +1148,8 @@ class DecisionExperimentThresholdApplyRequest(BaseModel):
 
 class DecisionExperimentThresholdApplyResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     run_id: int
     experiment_key: str
     recommendation_key: str
@@ -1174,6 +1190,8 @@ class DecisionExperimentStrategyApplyRequest(BaseModel):
 
 class DecisionExperimentStrategyApplyResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     run_id: int
     experiment_key: str
     recommendation_key: str
@@ -1265,6 +1283,8 @@ class DecisionExperimentRunResponse(BaseModel):
 
 class DecisionExperimentRunListResponse(BaseModel):
     operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     result_count: int = Field(ge=0)
     total_match_count: int = Field(default=0, ge=0)
     sort: Literal[
@@ -1297,6 +1317,9 @@ class DecisionExperimentRunListResponse(BaseModel):
 
 
 class DecisionExperimentRunDetailResponse(BaseModel):
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
     run: DecisionExperimentRunResponse
     baseline_summary: DecisionExperimentMetricSnapshot
 
@@ -2733,6 +2756,99 @@ class SyntheticExperimentRunResponse(BaseModel):
     summary: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
     results: List[SyntheticExperimentResultItem] = Field(default_factory=list)
+
+
+# --- Experiment Lab (G-1): sample gap/backfill planning -----------------------
+
+
+class SyntheticExperimentSampleGapWarning(BaseModel):
+    """Warning emitted while building the read-only sample gap plan."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    message: str
+    run_ids: List[int] = Field(default_factory=list)
+    operator_slugs: List[str] = Field(default_factory=list)
+
+
+class SyntheticExperimentSampleGapRunReference(BaseModel):
+    """Run context attached to one sample gap."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: int
+    experiment_id: int
+    preset_name: Optional[str] = None
+    status: str
+    finished_at: Optional[datetime] = None
+    start_at: Optional[Any] = None
+    end_at: Optional[Any] = None
+    category: Optional[str] = None
+    limit: Optional[int] = None
+    scenario: str = "base"
+    settle_actions: bool = False
+    params: Dict[str, Any] = Field(default_factory=dict)
+    synthetic_only: bool = True
+    report_status: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+
+
+class SyntheticExperimentSampleGapAction(BaseModel):
+    """Operator-facing action hint for closing a sample gap."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    label: str
+    detail: str
+
+
+class SyntheticExperimentSampleGapRecommendation(BaseModel):
+    """Recommended backtest preset/params/actions for one gap."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    preset_name: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    actions: List[SyntheticExperimentSampleGapAction] = Field(default_factory=list)
+
+
+class SyntheticExperimentSampleGapItem(BaseModel):
+    """Aggregated lacking group from recent completed synthetic experiment runs."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    priority: int = Field(ge=1)
+    dimension: Literal["preset", "category", "business_type", "budget_band"]
+    key: str
+    settled_count: int = Field(ge=0)
+    sample_target: int = Field(ge=0)
+    missing_settled_count: int = Field(ge=0)
+    total_missing_settled_count: int = Field(ge=0)
+    source_run_count: int = Field(ge=0)
+    related_preset_names: List[str] = Field(default_factory=list)
+    related_run_ids: List[int] = Field(default_factory=list)
+    related_runs: List[SyntheticExperimentSampleGapRunReference] = Field(
+        default_factory=list
+    )
+    recommendation: SyntheticExperimentSampleGapRecommendation
+    warnings: List[str] = Field(default_factory=list)
+
+
+class SyntheticExperimentSampleGapPlanResponse(BaseModel):
+    """Read-only plan connecting sample_report gaps to operator follow-up work."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    generated_at: datetime
+    max_runs: int = Field(ge=1)
+    scanned_completed_run_count: int = Field(ge=0)
+    source_run_count: int = Field(ge=0)
+    legacy_summary_run_count: int = Field(ge=0)
+    gap_count: int = Field(ge=0)
+    warnings: List[SyntheticExperimentSampleGapWarning] = Field(default_factory=list)
+    gaps: List[SyntheticExperimentSampleGapItem] = Field(default_factory=list)
 
 
 # --- Experiment Lab (Phase 4): A/B run comparison -----------------------------

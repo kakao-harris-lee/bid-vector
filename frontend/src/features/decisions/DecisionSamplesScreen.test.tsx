@@ -32,6 +32,26 @@ const emptySummary: DashboardSummaryResponse = {
   realtime_href: "/api/v1/realtime/events"
 };
 
+const privilegedAccounts = {
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  is_privileged: true,
+  operator_count: 1,
+  operators: [
+    {
+      operator_id: 1,
+      username: "operator",
+      full_name: "본사 운영자",
+      company: "본사",
+      business_type: null,
+      is_canonical: true,
+      is_synthetic: false,
+      is_active: true,
+      profile_configured: true
+    }
+  ]
+};
+
 function buildResponse(
   overrides: Partial<DecisionSamplesResponse> = {}
 ): DecisionSamplesResponse {
@@ -95,6 +115,7 @@ function installFetchMock(response: DecisionSamplesResponse = buildResponse()): 
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+    if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
     if (url.startsWith("/api/v1/operations/decision-samples")) {
       return jsonResponse(response);
     }
