@@ -20,6 +20,7 @@ CSV formula injection 을 중화한다(``_csv_safe``).
 import csv
 import io
 import logging
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -109,7 +110,9 @@ class DecisionSampleService:
 
         project_ids = [r.project_id for r in records if r.project_id is not None]
         projects = self._load_projects(db, project_ids)
-        latest_predictions = self._load_latest_predictions(db, project_ids)
+        latest_predictions = self._load_latest_predictions(
+            db, project_ids, operator_id=operator.id
+        )
 
         samples = [
             self._build_sample(
@@ -145,9 +148,13 @@ class DecisionSampleService:
         return {project.id: project for project in rows}
 
     def _load_latest_predictions(
-        self, db: Session, project_ids: list[int]
+        self, db: Session, project_ids: list[int], *, operator_id: int
     ) -> dict[int, PricePrediction]:
         """Load the latest ``PricePrediction`` per project id in one query.
+
+        Scoped to ``operator_id`` (``PricePrediction.user_id``) so a foreign
+        operator's prediction for the same project never surfaces in another
+        operator's audit sample (single-operator invariant — CLAUDE.md §8).
 
         Orders by ``created_at`` (then id) ascending and lets later rows
         overwrite earlier ones in the dict, so each project id maps to its most
@@ -157,7 +164,10 @@ class DecisionSampleService:
             return {}
         rows = (
             db.query(PricePrediction)
-            .filter(PricePrediction.project_id.in_(set(project_ids)))
+            .filter(
+                PricePrediction.user_id == operator_id,
+                PricePrediction.project_id.in_(set(project_ids)),
+            )
             .order_by(
                 PricePrediction.created_at.asc(),
                 PricePrediction.id.asc(),
@@ -308,6 +318,4 @@ def _as_float(value) -> Optional[float]:
 
 
 def _timedelta_days(days: int):
-    from datetime import timedelta
-
     return timedelta(days=days)

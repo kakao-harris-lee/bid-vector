@@ -194,6 +194,61 @@ def test_decision_samples_picks_latest_prediction_per_project(client, test_db):
     assert sample["prediction"]["predictor_name"] == "fresh_predictor"
 
 
+def test_decision_samples_prediction_is_operator_scoped_same_project(client, test_db):
+    """A foreign operator's prediction for the SAME project must not leak.
+
+    Both the canonical operator and a synthetic operator have a stored
+    ``PricePrediction`` for the same project. The synthetic row is NEWER. The
+    returned sample (for the canonical operator's decision) must reflect the
+    CANONICAL prediction, not the foreign newer one (CLAUDE.md §8 — synthetic
+    must not pollute canonical).
+    """
+    canonical = ensure_operator_account(test_db)
+
+    synthetic = User(
+        username="synthetic-sw-small-busan",
+        email="synthetic-sw-small-busan@example.com",
+        full_name="Synthetic SW Small Busan",
+        company="Synthetic Co",
+        hashed_password=get_password_hash("password123"),
+        is_active=True,
+    )
+    test_db.add(synthetic)
+    test_db.commit()
+    test_db.refresh(synthetic)
+    assert synthetic.id != canonical.id
+
+    project = _seed_project(test_db, notice_number="20260101-SHARED")
+    _seed_decision(test_db, operator=canonical, project=project)
+
+    # Canonical prediction (older).
+    _seed_prediction(
+        test_db,
+        operator=canonical,
+        project=project,
+        predicted_price=80_000_000.0,
+        created_at=utc_now() - timedelta(hours=6),
+        predictor_name="canonical_predictor",
+    )
+    # Synthetic operator's prediction for the SAME project — NEWER + distinct.
+    _seed_prediction(
+        test_db,
+        operator=synthetic,
+        project=project,
+        predicted_price=99_000_000.0,
+        created_at=utc_now() - timedelta(minutes=5),
+        predictor_name="synthetic_predictor",
+    )
+
+    response = client.get(SAMPLES_PATH)
+    assert response.status_code == 200, response.text
+    sample = response.json()["samples"][0]
+
+    assert sample["prediction"] is not None
+    assert sample["prediction"]["predictor_name"] == "canonical_predictor"
+    assert sample["prediction"]["predicted_price"] == 80_000_000.0
+
+
 def test_decision_samples_bid_rate_null_when_budget_zero(client, test_db):
     operator = ensure_operator_account(test_db)
     project = _seed_project(test_db, budget=0.0)
