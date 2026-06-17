@@ -23,6 +23,71 @@ class SmokeFailure(Exception):
     """Raised when a required smoke-test step fails."""
 
 
+FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
+    "credential": {
+        "action_required": "Rotate or restore the missing API/Telegram credential.",
+        "retry_method": "Fix the credential, then rerun this smoke command.",
+    },
+    "koneps_response": {
+        "action_required": "Check KONEPS OpenAPI availability and request parameters.",
+        "retry_method": "Retry with `--write --max-items 3` after KONEPS responds normally.",
+    },
+    "candidate_generation": {
+        "action_required": "Inspect the strategy monitor run and candidate filters.",
+        "retry_method": "Rerun with `--write --monitor-all-candidates` to widen the monitor check.",
+    },
+    "no_candidate": {
+        "action_required": "Confirm whether no active notices match the current strategy.",
+        "retry_method": "Widen filters with `--monitor-all-candidates`; no retry is required if the skip reason is expected.",
+    },
+    "telegram": {
+        "action_required": "Check bot token, chat id, and whether the operator started the bot conversation.",
+        "retry_method": "Fix Telegram configuration, then rerun with `--write --telegram-sync`.",
+    },
+    "task_broker": {
+        "action_required": "Check Celery broker/backend and worker health.",
+        "retry_method": "Repair broker/workers, then rerun this smoke command.",
+    },
+    "db_schema": {
+        "action_required": "Apply pending migrations and verify production schema.",
+        "retry_method": "Run migrations, restart services, then rerun this smoke command.",
+    },
+    "prediction": {
+        "action_required": "Check embedding and price prediction dependencies plus recent project data.",
+        "retry_method": "Repair model/data issues, then rerun this smoke command.",
+    },
+    "unknown": {
+        "action_required": "Inspect the step error and application logs.",
+        "retry_method": "Rerun the same command after the logged root cause is corrected.",
+    },
+}
+
+
+def classify_failure(name: str, detail: str) -> str:
+    text = f"{name} {detail}".strip().lower()
+    if any(token in text for token in ("credential", "unauthorized", "forbidden", "401", "403", "api key", "apikey", "service key", "token", "secret")):
+        return "credential"
+    if any(token in text for token in ("celery", "broker", "rabbit", "redis", "queue", "worker", "task")):
+        return "task_broker"
+    if any(token in text for token in ("no eligible", "no candidate", "no recent project", "no project", "returned=0", "persisted=0", "collected=0", "collected 0")):
+        return "no_candidate"
+    if "telegram" in text:
+        return "telegram"
+    if any(token in text for token in ("no such table", "no such column", "schema", "sqlalchemy", "operationalerror", "database")):
+        return "db_schema"
+    if "candidate" in text or "strategy monitor" in text:
+        return "candidate_generation"
+    if "koneps" in text or "openapi" in text or "crawl" in text:
+        return "koneps_response"
+    if "predict" in text or "embedding" in text:
+        return "prediction"
+    return "unknown"
+
+
+def failure_guidance(category: str) -> dict[str, str]:
+    return FAILURE_GUIDANCE.get(category) or FAILURE_GUIDANCE["unknown"]
+
+
 def parse_bool_env(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -140,7 +205,15 @@ def run_step(
     try:
         result = func()
     except Exception as exc:
-        record.update({"status": "failed", "error": str(exc)})
+        category = classify_failure(name, str(exc))
+        guidance = failure_guidance(category)
+        record.update({
+            "status": "failed",
+            "error": str(exc),
+            "failure_category": category,
+            "action_required": guidance["action_required"],
+            "retry_method": guidance["retry_method"],
+        })
         evidence["steps"].append(record)
         prefix = "[fail]" if required else "[warn]"
         print(f"{prefix} {name}: {exc}")
@@ -237,7 +310,7 @@ def smoke_read_checks(args: argparse.Namespace, evidence: dict[str, Any]) -> Non
         )
         require_keys(
             payload,
-            {"crawl", "strategy", "tasks", "notifications", "ml_release", "cards"},
+            {"crawl", "strategy", "tasks", "notifications", "ml_release", "smoke_test", "cards"},
             name="operations dashboard",
         )
         notifications = payload.get("notifications") or {}
@@ -333,11 +406,20 @@ def smoke_write_checks(args: argparse.Namespace, evidence: dict[str, Any]) -> No
         detail = None
         if monitor_run_id:
             detail = call(f"/api/v1/operator/strategy/monitor/runs/{monitor_run_id}")
+        skip_reason = None
+        if int(payload.get("notification_count") or 0) == 0:
+            if int(payload.get("selected_candidate_count") or 0) == 0:
+                skip_reason = "no strategy candidates selected"
+            elif int(payload.get("persisted_candidate_count") or 0) == 0:
+                skip_reason = "selected candidates already persisted or skipped"
+            else:
+                skip_reason = "no new notification created"
         return {
             "summary": (
                 f"run_id={monitor_run_id} persisted={payload.get('persisted_candidate_count')} "
                 f"notifications={payload.get('notification_count')} new={payload.get('new_candidate_count')}"
             ),
+            "skip_reason": skip_reason,
             "payload": {"result": payload, "detail": detail},
         }
 

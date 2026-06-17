@@ -1899,6 +1899,10 @@ class SmokeTestLatestPhase(BaseModel):
     passed: bool
     detail: str
     failure_category: Optional[str] = None
+    action_required: Optional[str] = None
+    retry_method: Optional[str] = None
+    skip_reason: Optional[str] = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class SmokeTestLatestRun(BaseModel):
@@ -1912,6 +1916,9 @@ class SmokeTestRecentFailure(BaseModel):
     failed_phases: List[str] = Field(default_factory=list)
     failure_categories: List[str] = Field(default_factory=list)
     failure_category_breakdown: dict[str, int] = Field(default_factory=dict)
+    failure_actions: List[str] = Field(default_factory=list)
+    retry_methods: List[str] = Field(default_factory=list)
+    phase_details: List[SmokeTestLatestPhase] = Field(default_factory=list)
 
 
 class SmokeTestOperationsSummary(BaseModel):

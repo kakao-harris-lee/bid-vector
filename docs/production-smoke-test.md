@@ -2,6 +2,8 @@
 
 운영 배포 후 README 전체를 훑지 않고 아래 순서만 실행한다. 기본 smoke는 crawl/monitor 쓰기 작업을 실행하지 않는다. `--write`를 붙인 경우에만 KONEPS crawl과 strategy monitor가 운영 DB에 기록을 남기며 Telegram 알림이 나갈 수 있다.
 
+G-0 운영 검증의 완료 기준은 scheduled smoke 7회 연속 green이다. 운영 대시보드의 `smoke_test.current_streak`가 `7` 이상이고, 최신 scheduled run의 phase evidence에서 KONEPS 수집, 후보 생성, Telegram 알림 또는 명시적 skip reason을 확인할 수 있어야 한다.
+
 ## 1. 사전 확인
 
 운영 `.env`에 최소한 아래 값이 있어야 한다.
@@ -86,6 +88,8 @@ python scripts/production_smoke_test.py \
   --evidence-out smoke-write-wide.json
 ```
 
+수동 smoke의 `--evidence-out` JSON은 실패한 step마다 `failure_category`, `action_required`, `retry_method`를 남긴다. strategy monitor가 성공했지만 알림이 0건이면 `skip_reason`에 `no strategy candidates selected`, `selected candidates already persisted or skipped`, `no new notification created` 중 하나가 기록된다.
+
 ## 5. Telegram 수동 확인
 
 실제 봇 대화에서 아래를 확인한다.
@@ -108,7 +112,48 @@ python scripts/production_smoke_test.py \
 
 버튼 플로우는 `필드 선택 → 새 값 입력 → 적용/취소` 순서다. 잘못된 입력은 기존 전략을 변경하지 않아야 한다.
 
-## 6. 실패 위치 구분
+## 6. Scheduled smoke evidence
+
+Celery beat의 `smoke_test_daily`는 `SmokeTestRun.phases`에 다음 phase를 저장한다.
+
+| Phase | Green 조건 | Dashboard evidence |
+|---|---|---|
+| `koneps_collect` | KONEPS OpenAPI live 수집이 1건 이상 | `collected_count` |
+| `sbert_embedding` | 최근 수집 project가 fallback embedding이 아님 | `project_id`, `project_title` |
+| `predict_price` | 예측 입찰률이 guardrail 범위 `0.7 <= rate <= 1.0` | `project_id`, `predicted_bid_rate`, `predictor_name` |
+| `candidate_generation` | strategy monitor가 완료됨 | `monitor_run_id`, `evaluated_project_count`, `selected_candidate_count`, `persisted_candidate_count`, `notification_count`, `skip_reason` |
+| `telegram_ping` | Telegram smoke 메시지 전송 성공 | `telegram_status`, `telegram_message_id` |
+
+`candidate_generation`은 후보나 알림이 0건이어도 phase 자체는 green일 수 있다. 이 경우 최신 phase의 `skip_reason`이 운영 판단 근거다. skip reason이 없거나 monitor가 exception을 내면 `failure_category=candidate_generation`으로 본다.
+
+Operations dashboard 확인 경로:
+
+```bash
+curl https://<your-api-host>/api/v1/analytics/operations-dashboard
+```
+
+확인할 필드:
+
+- `smoke_test.current_streak`: G-0 7회 연속 green 진행도
+- `smoke_test.latest.phases[].evidence`: 최신 scheduled run의 compact evidence
+- `smoke_test.latest.phases[].failure_category`: 실패 phase의 원인 분류
+- `smoke_test.latest.phases[].action_required`: 사람이 할 조치
+- `smoke_test.latest.phases[].retry_method`: 재실행 방법
+- `smoke_test.recent_failures[].phase_details`: 최근 실패 run별 phase detail
+
+## 7. 실패 위치 구분과 retry
+
+| `failure_category` | 의미 | 먼저 볼 곳 | Retry method |
+|---|---|---|---|
+| `credential` | KONEPS/Telegram/API 인증값 누락 또는 거부 | 운영 `.env`, secret store, HTTP 401/403 | credential 수정 후 scheduled smoke task 또는 `python scripts/production_smoke_test.py --write` 재실행 |
+| `koneps_response` | KONEPS OpenAPI 장애, timeout, 응답 형식 문제 | crawl log, KONEPS status, `KONEPS_OPENAPI_SERVICE_KEY` | KONEPS 정상화 후 `python scripts/production_smoke_test.py --write --max-items 3` |
+| `candidate_generation` | strategy monitor 실행 실패 | `monitor_run_id`, `/api/v1/operator/strategy/monitor/runs/{id}`, app log | `python scripts/production_smoke_test.py --write --monitor-all-candidates` 또는 monitor endpoint 재실행 |
+| `no_candidate` | 실행은 됐지만 후보/최근 project가 없음 | latest phase `skip_reason`, strategy filters, active project count | 필터를 넓힌 뒤 재실행. 의도된 skip이면 코드 retry 불필요 |
+| `telegram` | Telegram 설정 또는 전송 실패 | Telegram status endpoint, bot chat, notification log | 설정 수정 후 `python scripts/production_smoke_test.py --write --telegram-sync` |
+| `task_broker` | Celery broker/backend/worker 문제 | operations dashboard task 카드, worker log | broker/worker 복구 후 scheduled smoke task 재실행 |
+| `db_schema` | migration/schema 불일치 | API/worker log, Alembic revision | migration 적용 및 재시작 후 scheduled smoke task 재실행 |
+| `prediction` | embedding 또는 price prediction 문제 | `project_id`, model/runtime log | model/data 복구 후 같은 smoke 재실행 |
+| `unknown` | 위 분류에 걸리지 않는 예외 | phase detail, app log | root cause 수정 후 같은 command 재실행 |
 
 - API 기동 문제: `/health` 실패
 - DB/schema 문제: profile, strategy, dashboard 실패
@@ -117,7 +162,7 @@ python scripts/production_smoke_test.py \
 - Telegram 문제: `telegram status` 또는 operations dashboard의 Telegram 카드가 `watch`/`critical`
 - task/broker 문제: operations dashboard의 task 카드가 `watch`/`critical`
 
-## 7. 자주 쓰는 옵션
+## 8. 자주 쓰는 옵션
 
 ```bash
 # 로컬 서버

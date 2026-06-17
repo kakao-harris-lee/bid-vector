@@ -27,6 +27,10 @@ class PhaseResult:
     passed: bool = False
     detail: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+    failure_category: str = ""
+    action_required: str = ""
+    retry_method: str = ""
+    skip_reason: str = ""
 
 
 @dataclass
@@ -40,7 +44,46 @@ class SmokeTestReport:
 
 
 class KonepsTelegramSmokeTestService:
-    """Run the 4-phase smoke test and notify the operator via Telegram."""
+    """Run the smoke test phases and notify the operator via Telegram."""
+
+    FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
+        "credential": {
+            "action_required": "Rotate or restore the missing API/Telegram credential.",
+            "retry_method": "Fix the credential, then rerun the scheduled smoke task or `python scripts/production_smoke_test.py --write`.",
+        },
+        "koneps_response": {
+            "action_required": "Check KONEPS OpenAPI availability and request parameters.",
+            "retry_method": "Retry the smoke after KONEPS responds normally; use `--max-items 3 --write` for a bounded manual check.",
+        },
+        "candidate_generation": {
+            "action_required": "Inspect the strategy monitor run and candidate filters.",
+            "retry_method": "Rerun `/api/v1/operator/strategy/monitor` or `python scripts/production_smoke_test.py --write --monitor-all-candidates`.",
+        },
+        "no_candidate": {
+            "action_required": "Confirm whether no active notices match the current operator strategy.",
+            "retry_method": "Rerun with wider strategy filters or `--monitor-all-candidates`; no code retry is required if the skip reason is expected.",
+        },
+        "telegram": {
+            "action_required": "Check bot token, chat id, and whether the operator started the Telegram bot conversation.",
+            "retry_method": "Fix Telegram configuration, then rerun the smoke or `python scripts/production_smoke_test.py --write --telegram-sync`.",
+        },
+        "task_broker": {
+            "action_required": "Check Celery broker/backend and worker health.",
+            "retry_method": "Restart or repair broker/workers, then rerun the scheduled smoke task.",
+        },
+        "db_schema": {
+            "action_required": "Apply pending migrations and verify the production schema.",
+            "retry_method": "Run migrations, restart the API/worker, then rerun the scheduled smoke task.",
+        },
+        "prediction": {
+            "action_required": "Check embedding and price prediction dependencies plus recent project data.",
+            "retry_method": "Rerun after model/data repair; use the smoke evidence project id to reproduce prediction locally.",
+        },
+        "unknown": {
+            "action_required": "Inspect the phase detail and application logs.",
+            "retry_method": "Rerun the same smoke command after the logged root cause is corrected.",
+        },
+    }
 
     def run(self, db: Session) -> SmokeTestReport:
         report = SmokeTestReport(started_at=datetime.now(timezone.utc).isoformat())
@@ -57,18 +100,45 @@ class KonepsTelegramSmokeTestService:
             phases.append(p2)
             latest_project = p2.data.get("project")
         else:
-            phases.append(PhaseResult(name="sbert_embedding", detail="skipped — Phase 1 failed"))
+            phases.append(
+                self._skipped_phase(
+                    "sbert_embedding",
+                    reason="Phase 1 failed",
+                    upstream="koneps_collect",
+                )
+            )
 
         # Phase 3: predict_price (only if we have a project)
         if latest_project is not None:
             p3 = self._phase_predict_price(db, latest_project)
             phases.append(p3)
         else:
-            phases.append(PhaseResult(name="predict_price", detail="skipped — no eligible project"))
+            phases.append(
+                self._skipped_phase(
+                    "predict_price",
+                    reason="no eligible project",
+                    upstream="sbert_embedding",
+                )
+            )
 
-        # Phase 4: Telegram ping (always attempted — that's the point)
-        p4 = self._phase_telegram_ping(report=report, prior_phases=phases)
-        phases.append(p4)
+        # Phase 4: candidate generation / notification evidence. A zero-candidate
+        # monitor run can still be an operationally useful green phase when it
+        # records a clear skip reason.
+        if p1.passed:
+            p4 = self._phase_candidate_generation(db)
+            phases.append(p4)
+        else:
+            phases.append(
+                self._skipped_phase(
+                    "candidate_generation",
+                    reason="Phase 1 failed",
+                    upstream="koneps_collect",
+                )
+            )
+
+        # Phase 5: Telegram ping (always attempted — that's the point)
+        p5 = self._phase_telegram_ping(report=report, prior_phases=phases)
+        phases.append(p5)
 
         report.overall_passed = all(p.passed for p in phases)
         report.completed_at = datetime.now(timezone.utc).isoformat()
@@ -78,22 +148,37 @@ class KonepsTelegramSmokeTestService:
     def persist_report(self, db: Session, report: SmokeTestReport) -> "SmokeTestRun":
         """Persist one smoke cycle as a ``SmokeTestRun`` row and return it.
 
-        Stores only the trimmed ``{name, passed, detail}`` slice of each phase
-        (the bulky per-phase ``data`` dict is dropped to keep rows small). Empty
-        timestamp strings tolerate to ``None`` and null Telegram fields (e.g.
-        ENVIRONMENT=test skips Telegram) must not raise. Plain DB session, no
-        subtask — safe under the ``memory://`` eager broker.
+        Stores only the trimmed operational evidence for each phase (the bulky
+        per-phase ``data`` dict is dropped). Empty timestamp strings tolerate to
+        ``None`` and null Telegram fields (e.g. ENVIRONMENT=test skips Telegram)
+        must not raise. Plain DB session, no subtask — safe under the
+        ``memory://`` eager broker.
         """
         from app.models.models import SmokeTestRun
 
-        trimmed_phases = [
-            {
+        trimmed_phases = []
+        for phase in report.phases or []:
+            trimmed = {
                 "name": str(phase.get("name") or ""),
                 "passed": bool(phase.get("passed")),
                 "detail": str(phase.get("detail") or ""),
             }
-            for phase in (report.phases or [])
-        ]
+            failure_category = str(phase.get("failure_category") or "")
+            action_required = str(phase.get("action_required") or "")
+            retry_method = str(phase.get("retry_method") or "")
+            skip_reason = str(phase.get("skip_reason") or "")
+            evidence = self._trim_phase_evidence(phase)
+            if failure_category:
+                trimmed["failure_category"] = failure_category
+            if action_required:
+                trimmed["action_required"] = action_required
+            if retry_method:
+                trimmed["retry_method"] = retry_method
+            if skip_reason:
+                trimmed["skip_reason"] = skip_reason
+            if evidence:
+                trimmed["evidence"] = evidence
+            trimmed_phases.append(trimmed)
         run = SmokeTestRun(
             started_at=self._parse_iso(report.started_at),
             completed_at=self._parse_iso(report.completed_at),
@@ -117,6 +202,81 @@ class KonepsTelegramSmokeTestService:
         except ValueError:
             return None
 
+    def _skipped_phase(self, name: str, *, reason: str, upstream: str) -> PhaseResult:
+        failure_category = ""
+        if reason == "Phase 1 failed":
+            failure_category = "koneps_response"
+        elif "no eligible" in reason or "no recent" in reason:
+            failure_category = "no_candidate"
+        result = PhaseResult(
+            name=name,
+            detail=f"skipped — {reason}",
+            failure_category=failure_category,
+            skip_reason=reason,
+            data={"upstream_phase": upstream},
+        )
+        return self._annotate_failure(result)
+
+    def _annotate_failure(self, result: PhaseResult) -> PhaseResult:
+        if result.passed:
+            result.failure_category = ""
+            result.action_required = ""
+            result.retry_method = ""
+            return result
+        category = result.failure_category or self._classify_failure(result.name, result.detail)
+        guidance = self.FAILURE_GUIDANCE.get(category) or self.FAILURE_GUIDANCE["unknown"]
+        result.failure_category = category
+        result.action_required = result.action_required or guidance["action_required"]
+        result.retry_method = result.retry_method or guidance["retry_method"]
+        return result
+
+    @classmethod
+    def _classify_failure(cls, name: str, detail: str) -> str:
+        text = f"{name} {detail}".strip().lower()
+        if any(token in text for token in ("credential", "unauthorized", "forbidden", "401", "403", "api key", "apikey", "service key", "token", "secret")):
+            return "credential"
+        if any(token in text for token in ("celery", "broker", "rabbit", "redis", "queue", "worker", "task")):
+            return "task_broker"
+        if any(token in text for token in ("no eligible", "no candidate", "no recent project", "no project", "collected 0", "0 item")):
+            return "no_candidate"
+        if "telegram" in text:
+            return "telegram"
+        if any(token in text for token in ("no such table", "no such column", "schema", "sqlalchemy", "operationalerror", "database")):
+            return "db_schema"
+        if name == "candidate_generation" or "strategy monitor" in text:
+            return "candidate_generation"
+        if name == "koneps_collect" or "koneps" in text or "openapi" in text:
+            return "koneps_response"
+        if name in {"predict_price", "sbert_embedding"}:
+            return "prediction"
+        return "unknown"
+
+    @staticmethod
+    def _trim_phase_evidence(phase: dict[str, Any]) -> dict[str, Any]:
+        evidence = phase.get("evidence")
+        if isinstance(evidence, dict):
+            return evidence
+        data = phase.get("data")
+        if not isinstance(data, dict):
+            return {}
+        allowed_keys = {
+            "collected_count",
+            "project_id",
+            "project_title",
+            "predicted_bid_rate",
+            "predictor_name",
+            "monitor_run_id",
+            "evaluated_project_count",
+            "selected_candidate_count",
+            "persisted_candidate_count",
+            "notification_count",
+            "new_candidate_count",
+            "skip_reason",
+            "telegram_status",
+            "telegram_message_id",
+        }
+        return {key: value for key, value in data.items() if key in allowed_keys and value is not None}
+
     def _phase_koneps_collect(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="koneps_collect")
         try:
@@ -129,10 +289,12 @@ class KonepsTelegramSmokeTestService:
             result.data["collected_count"] = count
             result.passed = count >= 1
             result.detail = f"collected {count}"
+            if not result.passed:
+                result.skip_reason = "KONEPS returned zero notices"
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase koneps_collect failed")
-        return result
+        return result if result.passed else self._annotate_failure(result)
 
     def _phase_sbert_embedding(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="sbert_embedding")
@@ -145,18 +307,21 @@ class KonepsTelegramSmokeTestService:
             """)).fetchone()
             if row is None:
                 result.detail = "no recent project"
-                return result
+                result.skip_reason = "no recent project"
+                return self._annotate_failure(result)
             model = row[2] or ""
             if "fallback-hash" in model:
                 result.detail = f"fallback embedding: {model}"
-                return result
+                return self._annotate_failure(result)
             result.data["project"] = {"id": int(row[0]), "title": row[1], "budget_estimate": float(row[3] or 0)}
+            result.data["project_id"] = int(row[0])
+            result.data["project_title"] = row[1]
             result.passed = True
             result.detail = f"id={row[0]} model={model[-30:]}"
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase sbert_embedding failed")
-        return result
+        return result if result.passed else self._annotate_failure(result)
 
     def _phase_predict_price(self, db: Session, project_info: dict) -> PhaseResult:
         result = PhaseResult(name="predict_price")
@@ -169,7 +334,9 @@ class KonepsTelegramSmokeTestService:
             project = db.query(Project).filter(Project.id == project_info["id"]).one()
             if not project.budget_estimate or project.budget_estimate <= 0:
                 result.detail = f"id={project.id} no usable budget"
-                return result
+                result.data["project_id"] = int(project.id)
+                result.skip_reason = "no usable budget"
+                return self._annotate_failure(result)
             desc = " ".join(p for p in [project.title, project.description or "", project.requirements or ""] if p)
             bg = resolve_business_group(project.business_type_code)
             cs = BacktestCutoffService()
@@ -193,6 +360,7 @@ class KonepsTelegramSmokeTestService:
             rate = float(pred.get("predicted_bid_rate") or 0)
             result.data["predicted_bid_rate"] = rate
             result.data["predictor_name"] = pred.get("predictor_name")
+            result.data["project_id"] = int(project.id)
             # Upper bound matches the max guardrail ceiling (1.0). A rate above
             # 1.0 means the ceiling clamp did not apply — the smoke should fail,
             # not pass, so it can catch that guardrail regression.
@@ -201,7 +369,52 @@ class KonepsTelegramSmokeTestService:
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase predict_price failed")
-        return result
+        return result if result.passed else self._annotate_failure(result)
+
+    def _phase_candidate_generation(self, db: Session) -> PhaseResult:
+        result = PhaseResult(name="candidate_generation")
+        try:
+            from app.schemas.schemas import OperatorStrategyMonitorRequest
+            from app.services.opportunity_monitoring import StrategyMonitoringService
+
+            request = OperatorStrategyMonitorRequest(limit=3, high_priority_only=True)
+            monitor_result = StrategyMonitoringService().execute_monitoring(
+                db,
+                request=request,
+                trigger_source=StrategyMonitoringService.SCHEDULED_TRIGGER_SOURCE,
+            )
+            evidence = {
+                "monitor_run_id": monitor_result.get("monitor_run_id"),
+                "evaluated_project_count": int(monitor_result.get("evaluated_project_count") or 0),
+                "selected_candidate_count": int(monitor_result.get("selected_candidate_count") or 0),
+                "persisted_candidate_count": int(monitor_result.get("persisted_candidate_count") or 0),
+                "notification_count": int(monitor_result.get("notification_count") or 0),
+                "new_candidate_count": int(monitor_result.get("new_candidate_count") or 0),
+            }
+            result.data.update(evidence)
+            result.passed = True
+            if evidence["notification_count"] > 0:
+                result.detail = (
+                    f"run_id={evidence['monitor_run_id']} selected={evidence['selected_candidate_count']} "
+                    f"persisted={evidence['persisted_candidate_count']} notifications={evidence['notification_count']}"
+                )
+            else:
+                if evidence["selected_candidate_count"] == 0:
+                    result.skip_reason = "no strategy candidates selected"
+                elif evidence["persisted_candidate_count"] == 0:
+                    result.skip_reason = "selected candidates already persisted or skipped"
+                else:
+                    result.skip_reason = "no new notification created"
+                result.data["skip_reason"] = result.skip_reason
+                result.detail = (
+                    f"run_id={evidence['monitor_run_id']} selected={evidence['selected_candidate_count']} "
+                    f"persisted={evidence['persisted_candidate_count']} notifications=0 "
+                    f"skip_reason={result.skip_reason}"
+                )
+        except Exception as exc:
+            result.detail = f"exception: {type(exc).__name__}: {exc}"
+            logger.exception("smoke phase candidate_generation failed")
+        return result if result.passed else self._annotate_failure(result)
 
     def _phase_telegram_ping(self, *, report: SmokeTestReport, prior_phases: list[PhaseResult]) -> PhaseResult:
         result = PhaseResult(name="telegram_ping")
@@ -210,7 +423,7 @@ class KonepsTelegramSmokeTestService:
             svc = TelegramNotificationService()
             if not svc.is_configured():
                 result.detail = "telegram not configured"
-                return result
+                return self._annotate_failure(result)
 
             lines = [
                 f"[smoke] bid-vector e2e {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
@@ -224,7 +437,9 @@ class KonepsTelegramSmokeTestService:
             result.passed = bool(delivery.get("sent"))
             result.detail = f"status={delivery.get('status')} msg_id={delivery.get('telegram_message_id')}"
             result.data["delivery"] = delivery
+            result.data["telegram_status"] = delivery.get("status")
+            result.data["telegram_message_id"] = delivery.get("telegram_message_id")
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase telegram_ping failed")
-        return result
+        return result if result.passed else self._annotate_failure(result)

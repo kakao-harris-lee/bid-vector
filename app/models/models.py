@@ -457,8 +457,9 @@ class SmokeTestRun(Base):
     One row per daily smoke cycle so the operations dashboard can surface a
     consolidated PASS/FAIL history + consecutive green streak alongside crawl
     and notification health. Per-phase ``data`` payloads are intentionally
-    dropped before persistence to keep rows small — only ``{name, passed,
-    detail}`` is retained.
+    dropped before persistence to keep rows small; the JSON retains compact
+    evidence plus actionability fields such as ``failure_category`` and
+    ``retry_method``.
     """
     __tablename__ = "smoke_test_runs"
 
@@ -466,7 +467,7 @@ class SmokeTestRun(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     overall_passed = Column(Boolean, default=False, index=True)
-    phases = Column(Text, default="[]")  # JSON: [{name, passed, detail}, ...]
+    phases = Column(Text, default="[]")  # JSON: compact per-phase evidence
     telegram_message_id = Column(Integer, nullable=True)
     telegram_status = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, index=True)

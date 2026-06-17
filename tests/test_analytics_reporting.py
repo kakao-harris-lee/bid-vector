@@ -467,7 +467,13 @@ def test_operations_dashboard_summarizes_smoke_cycles(client, test_db, monkeypat
     assert smoke["failure_category_breakdown"] == {"prediction": 1}
 
     per_phase = {item["name"]: item for item in smoke["per_phase"]}
-    assert set(per_phase) == {"koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"}
+    assert set(per_phase) == {
+        "koneps_collect",
+        "sbert_embedding",
+        "predict_price",
+        "candidate_generation",
+        "telegram_ping",
+    }
     assert per_phase["predict_price"]["pass_rate"] == pytest.approx(0.6667, abs=0.0001)
     assert per_phase["predict_price"]["evaluated_count"] == 3
     assert per_phase["koneps_collect"]["pass_rate"] == pytest.approx(1.0, abs=0.0001)
@@ -509,9 +515,9 @@ def test_operations_dashboard_smoke_empty_window_is_honest(client, test_db, monk
     assert smoke["failure_category_breakdown"] == {}
     assert smoke["latest"] is None
     assert smoke["recent_failures"] == []
-    # all 4 phases present with zero evaluated_count
+    # all scheduled phases present with zero evaluated_count
     per_phase = {item["name"]: item for item in smoke["per_phase"]}
-    assert len(per_phase) == 4
+    assert len(per_phase) == 5
     assert all(item["evaluated_count"] == 0 for item in smoke["per_phase"])
 
     cards = {card["key"]: card for card in response.json()["cards"]}
@@ -664,6 +670,67 @@ def test_operations_dashboard_smoke_failure_category_breakdown(
         "koneps_response": 1,
         "prediction": 1,
     }
+
+
+def test_operations_dashboard_smoke_exposes_actionable_phase_evidence(
+    client, test_db, monkeypatch
+):
+    """Persisted category/action/retry/evidence fields should survive API serialization."""
+    monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+
+    test_db.add(
+        SmokeTestRun(
+            started_at=now - timedelta(minutes=1),
+            completed_at=now,
+            overall_passed=False,
+            phases=json.dumps(
+                [
+                    {
+                        "name": "candidate_generation",
+                        "passed": False,
+                        "detail": "exception: RuntimeError: strategy monitor failed",
+                        "failure_category": "candidate_generation",
+                        "action_required": "Inspect the strategy monitor run and candidate filters.",
+                        "retry_method": "Rerun /api/v1/operator/strategy/monitor.",
+                        "skip_reason": "no strategy candidates selected",
+                        "evidence": {
+                            "monitor_run_id": 77,
+                            "evaluated_project_count": 5,
+                            "selected_candidate_count": 0,
+                            "notification_count": 0,
+                        },
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            telegram_status="sent",
+            created_at=now,
+        )
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/operations-dashboard",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200
+    smoke = response.json()["smoke_test"]
+    phase = smoke["latest"]["phases"][0]
+    assert phase["failure_category"] == "candidate_generation"
+    assert phase["action_required"] == "Inspect the strategy monitor run and candidate filters."
+    assert phase["retry_method"] == "Rerun /api/v1/operator/strategy/monitor."
+    assert phase["skip_reason"] == "no strategy candidates selected"
+    assert phase["evidence"]["monitor_run_id"] == 77
+    assert smoke["recent_failures"][0]["failure_actions"] == [
+        "Inspect the strategy monitor run and candidate filters."
+    ]
+    assert smoke["recent_failures"][0]["retry_methods"] == [
+        "Rerun /api/v1/operator/strategy/monitor."
+    ]
+    assert smoke["recent_failures"][0]["phase_details"][0]["evidence"]["notification_count"] == 0
 
 
 def test_operations_dashboard_smoke_tolerates_malformed_phases_json(client, test_db, monkeypatch):

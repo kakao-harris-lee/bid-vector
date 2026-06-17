@@ -46,13 +46,20 @@ class AnalyticsReportingService:
     QUEUED_TASK_STATUSES = {"queued", "pending"}
     RUNNING_TASK_STATUSES = {"running", "started"}
     STALE_TASK_SECONDS = 15 * 60
-    # Canonical 4-phase smoke order (KonepsTelegramSmokeTestService).
-    SMOKE_PHASE_NAMES = ("koneps_collect", "sbert_embedding", "predict_price", "telegram_ping")
+    # Canonical scheduled smoke order (KonepsTelegramSmokeTestService).
+    SMOKE_PHASE_NAMES = (
+        "koneps_collect",
+        "sbert_embedding",
+        "predict_price",
+        "candidate_generation",
+        "telegram_ping",
+    )
     # G-0 exit gate: seven consecutive scheduled smoke cycles should be green.
     SMOKE_HEALTHY_STREAK = 7
     SMOKE_FAILURE_CATEGORIES = (
         "credential",
         "koneps_response",
+        "candidate_generation",
         "no_candidate",
         "telegram",
         "task_broker",
@@ -687,6 +694,18 @@ class AnalyticsReportingService:
                             if bool(phase.get("passed"))
                             else self._smoke_failure_category(phase)
                         ),
+                        "action_required": (
+                            None
+                            if bool(phase.get("passed"))
+                            else self._smoke_failure_action(phase)
+                        ),
+                        "retry_method": (
+                            None
+                            if bool(phase.get("passed"))
+                            else self._smoke_retry_method(phase)
+                        ),
+                        "skip_reason": self._smoke_skip_reason(phase),
+                        "evidence": self._smoke_phase_evidence(phase),
                     }
                     for phase in self._load_smoke_phases(latest_run.phases)
                 ],
@@ -705,6 +724,19 @@ class AnalyticsReportingService:
             for phase in failed_phases:
                 category = self._smoke_failure_category(phase)
                 run_categories[category] = run_categories.get(category, 0) + 1
+            phase_details = [
+                {
+                    "name": str(phase.get("name") or ""),
+                    "passed": bool(phase.get("passed")),
+                    "detail": str(phase.get("detail") or ""),
+                    "failure_category": self._smoke_failure_category(phase),
+                    "action_required": self._smoke_failure_action(phase),
+                    "retry_method": self._smoke_retry_method(phase),
+                    "skip_reason": self._smoke_skip_reason(phase),
+                    "evidence": self._smoke_phase_evidence(phase),
+                }
+                for phase in failed_phases
+            ]
             recent_failures.append(
                 {
                     "started_at": run.started_at,
@@ -715,6 +747,21 @@ class AnalyticsReportingService:
                     "failure_category_breakdown": dict(
                         sorted(run_categories.items(), key=lambda item: (-item[1], item[0]))
                     ),
+                    "failure_actions": sorted(
+                        {
+                            str(item["action_required"])
+                            for item in phase_details
+                            if item["action_required"]
+                        }
+                    ),
+                    "retry_methods": sorted(
+                        {
+                            str(item["retry_method"])
+                            for item in phase_details
+                            if item["retry_method"]
+                        }
+                    ),
+                    "phase_details": phase_details,
                 }
             )
             if len(recent_failures) >= recent_limit:
@@ -764,6 +811,9 @@ class AnalyticsReportingService:
 
     def _smoke_failure_category(self, phase: dict[str, Any]) -> str:
         """Classify a failed smoke phase into the roadmap's fixed buckets."""
+        stored = str(phase.get("failure_category") or "").strip().lower()
+        if stored in self.SMOKE_FAILURE_CATEGORIES:
+            return stored
         name = str(phase.get("name") or "").strip().lower()
         detail = str(phase.get("detail") or "").strip().lower()
         text = f"{name} {detail}"
@@ -822,11 +872,83 @@ class AnalyticsReportingService:
             )
         ):
             return "db_schema"
+        if name == "candidate_generation" or "strategy monitor" in text:
+            return "candidate_generation"
         if name == "koneps_collect" or "koneps" in text or "openapi" in text:
             return "koneps_response"
         if name in {"predict_price", "sbert_embedding"}:
             return "prediction"
         return "unknown"
+
+    def _smoke_failure_action(self, phase: dict[str, Any]) -> str:
+        stored = str(phase.get("action_required") or "").strip()
+        if stored:
+            return stored
+        return self._smoke_failure_guidance(self._smoke_failure_category(phase))["action_required"]
+
+    def _smoke_retry_method(self, phase: dict[str, Any]) -> str:
+        stored = str(phase.get("retry_method") or "").strip()
+        if stored:
+            return stored
+        return self._smoke_failure_guidance(self._smoke_failure_category(phase))["retry_method"]
+
+    def _smoke_skip_reason(self, phase: dict[str, Any]) -> str | None:
+        stored = str(phase.get("skip_reason") or "").strip()
+        if stored:
+            return stored
+        if not self._is_skipped_phase(phase):
+            return None
+        detail = str(phase.get("detail") or "").strip()
+        if detail.lower().startswith("skipped"):
+            return detail.replace("skipped", "", 1).strip(" -—")
+        return detail or None
+
+    @staticmethod
+    def _smoke_phase_evidence(phase: dict[str, Any]) -> dict[str, Any]:
+        evidence = phase.get("evidence")
+        return evidence if isinstance(evidence, dict) else {}
+
+    @staticmethod
+    def _smoke_failure_guidance(category: str) -> dict[str, str]:
+        guidance = {
+            "credential": {
+                "action_required": "Rotate or restore the missing API/Telegram credential.",
+                "retry_method": "Fix the credential, then rerun the scheduled smoke task or `python scripts/production_smoke_test.py --write`.",
+            },
+            "koneps_response": {
+                "action_required": "Check KONEPS OpenAPI availability and request parameters.",
+                "retry_method": "Retry after KONEPS responds normally; use `--max-items 3 --write` for a bounded manual check.",
+            },
+            "candidate_generation": {
+                "action_required": "Inspect the strategy monitor run and candidate filters.",
+                "retry_method": "Rerun `/api/v1/operator/strategy/monitor` or `python scripts/production_smoke_test.py --write --monitor-all-candidates`.",
+            },
+            "no_candidate": {
+                "action_required": "Confirm whether no active notices match the current operator strategy.",
+                "retry_method": "Rerun with wider strategy filters or `--monitor-all-candidates`; no code retry is required if the skip reason is expected.",
+            },
+            "telegram": {
+                "action_required": "Check bot token, chat id, and whether the operator started the Telegram bot conversation.",
+                "retry_method": "Fix Telegram configuration, then rerun the smoke or `python scripts/production_smoke_test.py --write --telegram-sync`.",
+            },
+            "task_broker": {
+                "action_required": "Check Celery broker/backend and worker health.",
+                "retry_method": "Restart or repair broker/workers, then rerun the scheduled smoke task.",
+            },
+            "db_schema": {
+                "action_required": "Apply pending migrations and verify the production schema.",
+                "retry_method": "Run migrations, restart the API/worker, then rerun the scheduled smoke task.",
+            },
+            "prediction": {
+                "action_required": "Check embedding and price prediction dependencies plus recent project data.",
+                "retry_method": "Rerun after model/data repair; use the smoke evidence project id to reproduce prediction locally.",
+            },
+            "unknown": {
+                "action_required": "Inspect the phase detail and application logs.",
+                "retry_method": "Rerun the same smoke command after the logged root cause is corrected.",
+            },
+        }
+        return guidance.get(category) or guidance["unknown"]
 
     def _smoke_test_status(self, summary: dict[str, Any]) -> tuple[str, str]:
         """Convert smoke cycle telemetry into a dashboard status + detail."""

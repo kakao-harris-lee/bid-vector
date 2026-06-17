@@ -40,11 +40,18 @@ def test_smoke_service_reports_phases_with_full_chain(monkeypatch):
     monkeypatch.setattr(svc, "_phase_koneps_collect", lambda db: _mk_phase("koneps_collect", True, "collected 5"))
     monkeypatch.setattr(svc, "_phase_sbert_embedding", lambda db: _mk_phase("sbert_embedding", True, "id=99", project={"id": 99, "title": "t", "budget_estimate": 100.0}))
     monkeypatch.setattr(svc, "_phase_predict_price", lambda db, p: _mk_phase("predict_price", True, "rate=0.9"))
+    monkeypatch.setattr(svc, "_phase_candidate_generation", lambda db: _mk_phase("candidate_generation", True, "run_id=10 selected=1"))
     monkeypatch.setattr(svc, "_phase_telegram_ping", lambda **kw: _mk_phase("telegram_ping", True, "sent"))
 
     report = svc.run(db=MagicMock())
     assert report.overall_passed is True
-    assert [p["name"] for p in report.phases] == ["koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"]
+    assert [p["name"] for p in report.phases] == [
+        "koneps_collect",
+        "sbert_embedding",
+        "predict_price",
+        "candidate_generation",
+        "telegram_ping",
+    ]
 
 
 def test_smoke_service_skips_downstream_when_collect_fails(monkeypatch):
@@ -60,7 +67,9 @@ def test_smoke_service_skips_downstream_when_collect_fails(monkeypatch):
     assert by_name["sbert_embedding"]["passed"] is False
     assert "skipped" in by_name["sbert_embedding"]["detail"]
     assert by_name["predict_price"]["passed"] is False
-    # Phase 4 still attempted (the point of the smoke is to verify Telegram even on failure)
+    assert by_name["candidate_generation"]["passed"] is False
+    assert by_name["candidate_generation"]["failure_category"] == "koneps_response"
+    # Telegram still attempted (the point of the smoke is to verify Telegram even on failure)
     assert by_name["telegram_ping"]["passed"] is True
 
 
@@ -126,6 +135,35 @@ def test_predict_price_phase_band_rejects_above_ceiling(monkeypatch, rate, expec
     assert res.passed is expected
 
 
+def test_candidate_generation_phase_records_notification_skip_reason(monkeypatch):
+    """A zero-notification monitor run can pass when the skip reason is explicit."""
+    import app.services.opportunity_monitoring as monitoring_mod
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _StubMonitoringService:
+        SCHEDULED_TRIGGER_SOURCE = "scheduled"
+
+        def execute_monitoring(self, db, *, request, trigger_source):
+            return {
+                "monitor_run_id": 77,
+                "evaluated_project_count": 5,
+                "selected_candidate_count": 0,
+                "persisted_candidate_count": 0,
+                "notification_count": 0,
+                "new_candidate_count": 0,
+            }
+
+    monkeypatch.setattr(monitoring_mod, "StrategyMonitoringService", _StubMonitoringService)
+
+    result = KonepsTelegramSmokeTestService()._phase_candidate_generation(MagicMock())
+
+    assert result.passed is True
+    assert result.failure_category == ""
+    assert result.skip_reason == "no strategy candidates selected"
+    assert result.data["monitor_run_id"] == 77
+    assert "skip_reason=no strategy candidates selected" in result.detail
+
+
 def test_persist_report_inserts_trimmed_row(test_db):
     """persist_report inserts a SmokeTestRun, trims per-phase data, parses timestamps."""
     import json
@@ -155,7 +193,7 @@ def test_persist_report_inserts_trimmed_row(test_db):
 
     stored = json.loads(run.phases)
     assert stored == [
-        {"name": "koneps_collect", "passed": True, "detail": "collected 5"},
+        {"name": "koneps_collect", "passed": True, "detail": "collected 5", "evidence": {"collected_count": 5}},
         {"name": "telegram_ping", "passed": True, "detail": "sent"},
     ]
     # bulky per-phase data dict must be dropped
@@ -189,6 +227,56 @@ def test_persist_report_tolerates_empty_timestamps_and_null_telegram(test_db):
     assert run.overall_passed is False
     assert run.telegram_message_id is None
     assert run.telegram_status is None
+
+
+def test_persist_report_keeps_actionable_failure_evidence(test_db):
+    """Failed phases keep category/action/retry/skip evidence without bulky data."""
+    import json
+
+    from app.services.smoke_test import KonepsTelegramSmokeTestService, SmokeTestReport
+
+    report = SmokeTestReport(
+        started_at="2026-06-16T07:00:00+00:00",
+        completed_at="2026-06-16T07:01:30+00:00",
+        overall_passed=False,
+        phases=[
+            {
+                "name": "candidate_generation",
+                "passed": False,
+                "detail": "exception: RuntimeError: strategy monitor failed",
+                "failure_category": "candidate_generation",
+                "action_required": "Inspect the strategy monitor run and candidate filters.",
+                "retry_method": "Rerun /api/v1/operator/strategy/monitor.",
+                "skip_reason": "no strategy candidates selected",
+                "data": {
+                    "monitor_run_id": 77,
+                    "evaluated_project_count": 4,
+                    "selected_candidate_count": 0,
+                    "large_results": [{"ignore": True}],
+                },
+            }
+        ],
+    )
+
+    run = KonepsTelegramSmokeTestService().persist_report(test_db, report)
+
+    stored = json.loads(run.phases)
+    assert stored == [
+        {
+            "name": "candidate_generation",
+            "passed": False,
+            "detail": "exception: RuntimeError: strategy monitor failed",
+            "failure_category": "candidate_generation",
+            "action_required": "Inspect the strategy monitor run and candidate filters.",
+            "retry_method": "Rerun /api/v1/operator/strategy/monitor.",
+            "skip_reason": "no strategy candidates selected",
+            "evidence": {
+                "monitor_run_id": 77,
+                "evaluated_project_count": 4,
+                "selected_candidate_count": 0,
+            },
+        }
+    ]
 
 
 def _mk_phase(name, passed, detail, **data):
