@@ -177,7 +177,7 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 비-trivial 작업은 다음 순서로 진행합니다.
 
 ```text
-main 최신화 -> 별도 worktree + feature branch 생성 -> 그 worktree에서 작업/커밋 -> push -> PR 생성 -> code review -> 리뷰 대응 -> 사용자 승인 후 머지
+main 최신화 -> 별도 worktree + feature branch 생성 -> 그 worktree에서 작업/커밋 -> push -> PR 생성 -> code review -> 리뷰 결과 보고 -> 리뷰 대응 -> 사용자 머지 승인 -> 머지
 ```
 
 원칙:
@@ -187,6 +187,9 @@ main 최신화 -> 별도 worktree + feature branch 생성 -> 그 worktree에서 
 - 현재 브랜치가 `main`/`master`이고 작업이 비-trivial이면 먼저 별도 worktree를 만든다.
 - 새 worktree는 최신 `origin/main` 기준으로 만들고, 작업 브랜치는 목적이 드러나는 이름을 쓴다.
 - 기존 worktree가 dirty이면 임의로 reset/restore하지 말고, 사용자에게 현재 변경을 새 worktree로 옮길지 확인한다.
+- 테스트 통과는 code review가 아니다. 머지 전에는 diff를 실제로 읽고, 발견 사항/잔여 리스크/검증 결과를 사용자에게 보고한다.
+- 사용자가 "리뷰 후 머지" 또는 "문제 없으면 머지"를 요청한 경우, 리뷰 결과를 먼저 보고하고 사용자가 머지를 승인한 뒤에만 머지한다.
+- 리뷰에서 수정이 발생하면 같은 브랜치에서 수정 커밋과 재검증을 끝낸 뒤, 다시 리뷰 결과를 보고하고 머지 승인을 받는다.
 - 예외는 문서 오타 1줄, 자명한 lint/format fix, 사용자의 명시적 직접 작업/직접 푸시 지시뿐입니다.
 
 권장 명령:
