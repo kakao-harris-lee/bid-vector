@@ -1,7 +1,8 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { AuthGate } from "./layout/AuthGate";
+import { AuthGate, useAuthSession } from "./layout/AuthGate";
 import { Shell } from "./layout/Shell";
+import { useActiveOperator } from "./operatorContext";
 import { HomeScreen } from "@/features/dashboard/HomeScreen";
 import { OpportunitiesScreen } from "@/features/dashboard/OpportunitiesScreen";
 import { BidsScreen } from "@/features/dashboard/BidsScreen";
@@ -53,6 +54,21 @@ function Lazy({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<LazyFallback />}>{children}</Suspense>;
 }
 
+function AdminShellGuard() {
+  const session = useAuthSession();
+  const activeOperator = useActiveOperator(session);
+
+  if (activeOperator.isLoading) {
+    return <LazyFallback />;
+  }
+
+  if (!activeOperator.isPrivileged) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <Shell surface="admin" />;
+}
+
 export function AppRoutes() {
   return (
     <Routes>
@@ -89,7 +105,7 @@ export function AppRoutes() {
         path="/admin"
         element={
           <AuthGate>
-            <Shell surface="admin" />
+            <AdminShellGuard />
           </AuthGate>
         }
       >

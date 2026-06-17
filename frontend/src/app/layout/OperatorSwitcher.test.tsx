@@ -7,6 +7,15 @@ import type { OperatorAccountListResponse } from "@/shared/api";
 import { ACTIVE_OPERATOR_STORAGE_KEY } from "@/app/operatorContext";
 
 const TOKEN_KEY = "bid-vector-dashboard-token";
+const ADMIN_NAV_LABELS = [
+  "운영 대시보드",
+  "가상 운영자 백테스트",
+  "실험 lifecycle",
+  "결정 게이트웨이",
+  "정확도 리포트",
+  "의사결정 증적"
+] as const;
+const USER_NAV_LABELS = ["공고 탐색", "업체 정보", "전략 편집", "이용 가이드"] as const;
 
 const summary: DashboardSummaryResponse = {
   operator_id: 1,
@@ -158,6 +167,29 @@ describe("OperatorSwitcher", () => {
     expect(screen.queryByRole("button", { name: "회사 전환" })).not.toBeInTheDocument();
   });
 
+  it("권한 없는 사용자가 /admin/*에 접근하면 dashboard로 보내고 관리자 내비게이션을 숨긴다", async () => {
+    window.history.pushState({}, "", "/admin/operations");
+    const fetchMock = buildFetchMock(nonPrivilegedAccounts);
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+
+    expect(screen.queryByRole("button", { name: "회사 전환" })).not.toBeInTheDocument();
+    for (const label of ADMIN_NAV_LABELS) {
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    }
+    for (const label of USER_NAV_LABELS) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/v1/analytics/operations-dashboard")
+      )
+    ).toBe(false);
+  });
+
   it("회사 선택 시 activeOperatorId가 localStorage에 영속되고 dashboard 호출에 operator_id가 전달된다", async () => {
     window.history.pushState({}, "", "/admin/operations");
     const fetchMock = buildFetchMock(privilegedAccounts);
@@ -248,5 +280,26 @@ describe("OperatorSwitcher", () => {
 
     expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "회사 전환" })).not.toBeInTheDocument();
+    for (const label of ADMIN_NAV_LABELS) {
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    }
+    for (const label of USER_NAV_LABELS) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it("legacy dashboard admin redirect는 권한 있는 사용자에게 admin surface를 유지한다", async () => {
+    window.history.pushState({}, "", "/dashboard/operations");
+    vi.stubGlobal("fetch", buildFetchMock(privilegedAccounts));
+    renderApp();
+
+    await waitFor(() => expect(window.location.pathname).toBe("/admin/operations"));
+    expect(await screen.findByRole("button", { name: "회사 전환" })).toBeInTheDocument();
+    for (const label of ADMIN_NAV_LABELS) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    for (const label of USER_NAV_LABELS) {
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    }
   });
 });

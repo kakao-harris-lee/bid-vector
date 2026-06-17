@@ -33,6 +33,26 @@ const emptySummary: DashboardSummaryResponse = {
   realtime_href: "/api/v1/realtime/events"
 };
 
+const privilegedAccounts = {
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  is_privileged: true,
+  operator_count: 1,
+  operators: [
+    {
+      operator_id: 1,
+      username: "operator",
+      full_name: "본사 운영자",
+      company: "본사",
+      business_type: null,
+      is_canonical: true,
+      is_synthetic: false,
+      is_active: true,
+      profile_configured: true
+    }
+  ]
+};
+
 const experimentRun = {
   id: 7,
   operator_id: 1,
@@ -123,6 +143,7 @@ describe("ExperimentsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
       if (url.startsWith("/api/v1/analytics/decision-experiments?")) return jsonResponse(listResponse);
       if (url === `/api/v1/analytics/decision-experiments/${experimentRun.id}/apply-thresholds`) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -155,6 +176,7 @@ describe("ExperimentsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
       if (url.startsWith("/api/v1/analytics/decision-experiments?")) return jsonResponse(listResponse);
       if (url === `/api/v1/analytics/decision-experiments/${experimentRun.id}/apply-thresholds`) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
