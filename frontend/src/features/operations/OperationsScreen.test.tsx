@@ -132,6 +132,54 @@ const baseOperations: OperationsDashboardResponse = {
         failure_category_breakdown: { prediction: 1 }
       }
     ]
+  },
+  synthetic_validation: {
+    preset_count: 4,
+    saved_preset_count: 2,
+    completed_preset_count: 1,
+    failed_preset_count: 0,
+    sufficient_preset_count: 1,
+    sample_target: 100,
+    recent_run_count: 2,
+    recent_completed_count: 1,
+    recent_failed_count: 0,
+    status: "watch",
+    detail: "1/4 G-1 preset(s) reached the sample target.",
+    latest: {
+      experiment_id: 10,
+      experiment_name: "g1-construction-base-12m",
+      run_id: 21,
+      status: "completed",
+      created_at: "2026-05-19T06:30:00Z",
+      finished_at: "2026-05-19T07:00:00Z",
+      sample_status: "sufficient",
+      total_settled_count: 128,
+      missing_total_settled_count: 0
+    },
+    presets: [
+      {
+        name: "g1-construction-base-12m",
+        experiment_id: 10,
+        latest_run_id: 21,
+        latest_run_status: "completed",
+        latest_finished_at: "2026-05-19T07:00:00Z",
+        sample_status: "sufficient",
+        total_settled_count: 128,
+        missing_total_settled_count: 0,
+        insufficient_operator_count: 0
+      },
+      {
+        name: "g1-service-base-12m",
+        experiment_id: 11,
+        latest_run_id: null,
+        latest_run_status: null,
+        latest_finished_at: null,
+        sample_status: null,
+        total_settled_count: 0,
+        missing_total_settled_count: 100,
+        insufficient_operator_count: 0
+      }
+    ]
   }
 };
 
@@ -412,6 +460,23 @@ describe("OperationsScreen", () => {
     // 최근 실행 FAIL + 실패 단계 detail
     expect(within(smokeCard).getByText("guardrail 미달")).toBeInTheDocument();
     expect(within(smokeCard).getAllByText("예측").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("G-1 synthetic validation 섹션을 preset/sample 상태와 함께 렌더한다", async () => {
+    installFetchMock();
+
+    renderApp();
+
+    const syntheticCard = (
+      await screen.findByRole("heading", { name: "G-1 가상 회사 검증" })
+    ).closest("[aria-label='G-1 가상 회사 검증']") as HTMLElement;
+    expect(syntheticCard).not.toBeNull();
+    expect(within(syntheticCard).getByText("2/4")).toBeInTheDocument();
+    expect(within(syntheticCard).getByText("1/4 G-1 preset(s) reached the sample target.")).toBeInTheDocument();
+    expect(within(syntheticCard).getAllByText("g1-construction-base-12m").length).toBeGreaterThanOrEqual(1);
+    expect(within(syntheticCard).getByText("g1-service-base-12m")).toBeInTheDocument();
+    expect(within(syntheticCard).getByText("settled 128/100")).toBeInTheDocument();
+    expect(within(syntheticCard).getByText("미실행")).toBeInTheDocument();
   });
 
   it("smoke 스케줄이 비활성이고 사이클이 없으면 정직한 비활성 안내를 노출한다", async () => {

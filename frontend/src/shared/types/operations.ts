@@ -65,6 +65,46 @@ export interface SmokeTestOperationsSummary {
   recent_failures?: SmokeTestRecentFailure[];
 }
 
+export interface SyntheticValidationLatestRun {
+  experiment_id: number;
+  experiment_name?: string | null;
+  run_id: number;
+  status: string;
+  created_at?: string | null;
+  finished_at?: string | null;
+  sample_status?: string | null;
+  total_settled_count: number;
+  missing_total_settled_count: number;
+}
+
+export interface SyntheticValidationPresetStatus {
+  name: string;
+  experiment_id?: number | null;
+  latest_run_id?: number | null;
+  latest_run_status?: string | null;
+  latest_finished_at?: string | null;
+  sample_status?: string | null;
+  total_settled_count: number;
+  missing_total_settled_count: number;
+  insufficient_operator_count: number;
+}
+
+export interface SyntheticValidationOperationsSummary {
+  preset_count: number;
+  saved_preset_count: number;
+  completed_preset_count: number;
+  failed_preset_count: number;
+  sufficient_preset_count: number;
+  sample_target: number;
+  recent_run_count: number;
+  recent_completed_count: number;
+  recent_failed_count: number;
+  status: OperationsCardStatus;
+  detail: string;
+  latest?: SyntheticValidationLatestRun | null;
+  presets?: SyntheticValidationPresetStatus[];
+}
+
 export interface OperationsDashboardCard {
   key: string;
   label: string;
@@ -149,5 +189,6 @@ export interface OperationsDashboardResponse {
   notifications: NotificationOperationsSummary;
   ml_release: MLReleaseOperationsSummary;
   smoke_test: SmokeTestOperationsSummary;
+  synthetic_validation: SyntheticValidationOperationsSummary;
   cards: OperationsDashboardCard[];
 }

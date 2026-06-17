@@ -19,9 +19,16 @@ from app.models.models import (
     Notification,
     OperatorStrategyRun,
     SmokeTestRun,
+    SyntheticExperiment,
+    SyntheticExperimentRun,
     User,
 )
 from app.services.ml_release import MLReleasePromotionService
+from app.services.synthetic_experiment import (
+    SAMPLE_STATUS_SUFFICIENT,
+    SYNTHETIC_EXPERIMENT_PRESETS,
+    SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+)
 from app.services.notifications.telegram import TelegramNotificationService
 from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
@@ -96,6 +103,11 @@ class AnalyticsReportingService:
             days=days,
             recent_limit=recent_limit,
         )
+        synthetic_validation_summary = self._build_synthetic_validation_summary(
+            db,
+            date_from=date_from,
+            recent_limit=recent_limit,
+        )
         return {
             "operator_id": operator.id,
             "period_days": days,
@@ -105,6 +117,7 @@ class AnalyticsReportingService:
             "notifications": notification_summary,
             "ml_release": ml_release_summary,
             "smoke_test": smoke_test_summary,
+            "synthetic_validation": synthetic_validation_summary,
             "cards": self._build_cards(
                 crawl_summary,
                 strategy_summary,
@@ -112,6 +125,7 @@ class AnalyticsReportingService:
                 notification_summary,
                 ml_release_summary,
                 smoke_test_summary,
+                synthetic_validation_summary,
             ),
         }
 
@@ -404,6 +418,159 @@ class AnalyticsReportingService:
             ],
         }
 
+    def _build_synthetic_validation_summary(
+        self,
+        db: Session,
+        *,
+        date_from: datetime,
+        recent_limit: int,
+    ) -> dict[str, Any]:
+        """Summarize G-1 synthetic experiment health for the operations report."""
+        preset_names = tuple(SYNTHETIC_EXPERIMENT_PRESETS)
+        experiments = (
+            db.query(SyntheticExperiment)
+            .filter(SyntheticExperiment.name.in_(preset_names))
+            .all()
+            if preset_names
+            else []
+        )
+        experiment_by_name = {str(item.name): item for item in experiments}
+        recent_runs = (
+            db.query(SyntheticExperimentRun)
+            .join(SyntheticExperiment)
+            .filter(
+                SyntheticExperiment.name.in_(preset_names),
+                SyntheticExperimentRun.created_at >= date_from,
+            )
+            .order_by(
+                SyntheticExperimentRun.created_at.desc(),
+                SyntheticExperimentRun.id.desc(),
+            )
+            .all()
+        )
+        latest_run = (
+            db.query(SyntheticExperimentRun)
+            .join(SyntheticExperiment)
+            .filter(SyntheticExperiment.name.in_(preset_names))
+            .order_by(
+                SyntheticExperimentRun.created_at.desc(),
+                SyntheticExperimentRun.id.desc(),
+            )
+            .first()
+        )
+        preset_rows = []
+        for name in preset_names:
+            experiment = experiment_by_name.get(name)
+            latest_preset_run = experiment.runs[0] if experiment and experiment.runs else None
+            summary = self._load_json_object(
+                latest_preset_run.summary_json if latest_preset_run else None
+            )
+            preset_rows.append(
+                {
+                    "name": name,
+                    "experiment_id": int(experiment.id) if experiment else None,
+                    "latest_run_id": int(latest_preset_run.id) if latest_preset_run else None,
+                    "latest_run_status": latest_preset_run.status if latest_preset_run else None,
+                    "latest_finished_at": latest_preset_run.finished_at if latest_preset_run else None,
+                    "sample_status": summary.get("sample_status"),
+                    "total_settled_count": int(summary.get("total_settled_count") or 0),
+                    "missing_total_settled_count": int(
+                        summary.get("missing_total_settled_count") or 0
+                    ),
+                    "insufficient_operator_count": len(
+                        summary.get("insufficient_operators") or []
+                    ),
+                }
+            )
+
+        saved_preset_count = sum(1 for item in preset_rows if item["experiment_id"] is not None)
+        completed_preset_count = sum(
+            1 for item in preset_rows if item["latest_run_status"] == "completed"
+        )
+        failed_preset_count = sum(
+            1 for item in preset_rows if item["latest_run_status"] == "failed"
+        )
+        sufficient_preset_count = sum(
+            1 for item in preset_rows if item["sample_status"] == SAMPLE_STATUS_SUFFICIENT
+        )
+        recent_completed_count = sum(1 for run in recent_runs if str(run.status) == "completed")
+        recent_failed_count = sum(1 for run in recent_runs if str(run.status) == "failed")
+        latest_summary = self._load_json_object(latest_run.summary_json if latest_run else None)
+        status, detail = self._synthetic_validation_status(
+            preset_count=len(preset_names),
+            saved_preset_count=saved_preset_count,
+            completed_preset_count=completed_preset_count,
+            failed_preset_count=failed_preset_count,
+            sufficient_preset_count=sufficient_preset_count,
+            recent_run_count=len(recent_runs),
+        )
+        return {
+            "preset_count": len(preset_names),
+            "saved_preset_count": saved_preset_count,
+            "completed_preset_count": completed_preset_count,
+            "failed_preset_count": failed_preset_count,
+            "sufficient_preset_count": sufficient_preset_count,
+            "sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+            "recent_run_count": len(recent_runs),
+            "recent_completed_count": recent_completed_count,
+            "recent_failed_count": recent_failed_count,
+            "status": status,
+            "detail": detail,
+            "latest": (
+                {
+                    "experiment_id": int(latest_run.experiment_id),
+                    "experiment_name": latest_run.experiment.name
+                    if latest_run.experiment
+                    else None,
+                    "run_id": int(latest_run.id),
+                    "status": latest_run.status,
+                    "created_at": latest_run.created_at,
+                    "finished_at": latest_run.finished_at,
+                    "sample_status": latest_summary.get("sample_status"),
+                    "total_settled_count": int(
+                        latest_summary.get("total_settled_count") or 0
+                    ),
+                    "missing_total_settled_count": int(
+                        latest_summary.get("missing_total_settled_count") or 0
+                    ),
+                }
+                if latest_run
+                else None
+            ),
+            "presets": preset_rows,
+        }
+
+    def _synthetic_validation_status(
+        self,
+        *,
+        preset_count: int,
+        saved_preset_count: int,
+        completed_preset_count: int,
+        failed_preset_count: int,
+        sufficient_preset_count: int,
+        recent_run_count: int,
+    ) -> tuple[str, str]:
+        """Convert G-1 synthetic run state into dashboard status/detail."""
+        if preset_count == 0:
+            return "info", "G-1 synthetic preset is not configured."
+        if failed_preset_count > 0:
+            return "critical", f"{failed_preset_count} G-1 preset run(s) failed."
+        if saved_preset_count == 0:
+            return "info", "No G-1 synthetic preset has been saved yet."
+        if sufficient_preset_count >= preset_count:
+            return "healthy", "All G-1 presets have sufficient settled samples."
+        if completed_preset_count > 0:
+            return (
+                "watch",
+                f"{sufficient_preset_count}/{preset_count} G-1 preset(s) reached the sample target.",
+            )
+        if recent_run_count > 0:
+            return "watch", "G-1 synthetic runs exist, but no preset has completed yet."
+        return (
+            "watch",
+            f"{saved_preset_count}/{preset_count} G-1 preset(s) saved; run experiments to collect samples.",
+        )
+
     def _build_smoke_test_summary(
         self,
         db: Session,
@@ -693,6 +860,7 @@ class AnalyticsReportingService:
         notification_summary: dict[str, Any],
         ml_release_summary: dict[str, Any],
         smoke_test_summary: dict[str, Any],
+        synthetic_validation_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Build dashboard card payloads from detailed summaries."""
         smoke_status, smoke_detail = self._smoke_test_status(smoke_test_summary)
@@ -819,6 +987,25 @@ class AnalyticsReportingService:
                     "사이클 통과 (추정 운영 검증)."
                 ),
             },
+            {
+                "key": "synthetic_g1_presets",
+                "label": "G-1 preset 준비",
+                "value": synthetic_validation_summary["saved_preset_count"],
+                "unit": "count",
+                "status": synthetic_validation_summary["status"],
+                "detail": (
+                    f"{synthetic_validation_summary['saved_preset_count']}/"
+                    f"{synthetic_validation_summary['preset_count']} preset saved."
+                ),
+            },
+            {
+                "key": "synthetic_g1_samples",
+                "label": "G-1 충분 표본 preset",
+                "value": synthetic_validation_summary["sufficient_preset_count"],
+                "unit": "count",
+                "status": synthetic_validation_summary["status"],
+                "detail": synthetic_validation_summary["detail"],
+            },
         ]
 
     def _latest_completed_at(self, rows: list[Any]):
@@ -897,6 +1084,16 @@ class AnalyticsReportingService:
             payload = json.loads(str(raw_payload or "{}"))
         except json.JSONDecodeError:
             return {"detail": str(raw_payload or "")}
+        return payload if isinstance(payload, dict) else {}
+
+    def _load_json_object(self, raw_payload: Any) -> dict[str, Any]:
+        """Parse a JSON object payload, returning an empty dict for invalid data."""
+        if isinstance(raw_payload, dict):
+            return raw_payload
+        try:
+            payload = json.loads(str(raw_payload or "{}"))
+        except json.JSONDecodeError:
+            return {}
         return payload if isinstance(payload, dict) else {}
 
     def _count_payloads_by_key(self, payloads: list[dict[str, Any]], key: str) -> dict[str, int]:

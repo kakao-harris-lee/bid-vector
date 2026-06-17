@@ -1937,6 +1937,48 @@ class SmokeTestOperationsSummary(BaseModel):
     recent_failures: List[SmokeTestRecentFailure] = Field(default_factory=list)
 
 
+class SyntheticValidationLatestRun(BaseModel):
+    experiment_id: int
+    experiment_name: Optional[str] = None
+    run_id: int
+    status: str
+    created_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    sample_status: Optional[str] = None
+    total_settled_count: int = Field(default=0, ge=0)
+    missing_total_settled_count: int = Field(default=0, ge=0)
+
+
+class SyntheticValidationPresetStatus(BaseModel):
+    name: str
+    experiment_id: Optional[int] = None
+    latest_run_id: Optional[int] = None
+    latest_run_status: Optional[str] = None
+    latest_finished_at: Optional[datetime] = None
+    sample_status: Optional[str] = None
+    total_settled_count: int = Field(default=0, ge=0)
+    missing_total_settled_count: int = Field(default=0, ge=0)
+    insufficient_operator_count: int = Field(default=0, ge=0)
+
+
+class SyntheticValidationOperationsSummary(BaseModel):
+    """G-1 synthetic experiment health shown alongside smoke-test telemetry."""
+
+    preset_count: int = Field(ge=0)
+    saved_preset_count: int = Field(ge=0)
+    completed_preset_count: int = Field(ge=0)
+    failed_preset_count: int = Field(ge=0)
+    sufficient_preset_count: int = Field(ge=0)
+    sample_target: int = Field(default=100, ge=1)
+    recent_run_count: int = Field(ge=0)
+    recent_completed_count: int = Field(ge=0)
+    recent_failed_count: int = Field(ge=0)
+    status: Literal["healthy", "watch", "critical", "info"]
+    detail: str
+    latest: Optional[SyntheticValidationLatestRun] = None
+    presets: List[SyntheticValidationPresetStatus] = Field(default_factory=list)
+
+
 class OperationsDashboardResponse(BaseModel):
     operator_id: int
     current_operator_id: int
@@ -1948,6 +1990,7 @@ class OperationsDashboardResponse(BaseModel):
     notifications: NotificationOperationsSummary
     ml_release: MLReleaseOperationsSummary
     smoke_test: SmokeTestOperationsSummary
+    synthetic_validation: SyntheticValidationOperationsSummary
     cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 

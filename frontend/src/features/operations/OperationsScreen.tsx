@@ -51,6 +51,19 @@ function smokeFailureCategoryLabel(name: string): string {
   return SMOKE_FAILURE_CATEGORY_LABELS[name] ?? name;
 }
 
+function sampleStatusLabel(status?: string | null): string {
+  if (status === "sufficient") return "충분";
+  if (status === "insufficient_sample") return "표본 부족";
+  return "미실행";
+}
+
+function runStatusTone(status?: string | null): "healthy" | "watch" | "critical" | "info" | "muted" {
+  if (status === "completed") return "healthy";
+  if (status === "failed") return "critical";
+  if (status === "running" || status === "queued") return "watch";
+  return "muted";
+}
+
 // phase 통과율 → 톤. 데이터가 없으면(평가 0건) muted로 정직하게 표기.
 function smokePhaseTone(rate: SmokeTestPhaseRate): "healthy" | "watch" | "critical" | "muted" {
   if (rate.evaluated_count === 0) return "muted";
@@ -138,6 +151,7 @@ export function OperationsScreen() {
           </section>
 
           <SmokeTestCard summary={operations.data.smoke_test} />
+          <SyntheticValidationCard summary={operations.data.synthetic_validation} />
 
           <section
             className="flex flex-col gap-2"
@@ -267,6 +281,95 @@ function MlReleaseCard({ summary }: { summary: OperationsDashboardResponse["ml_r
           <Stat label="gate" value={summary.latest_gate_status} />
         </div>
         <p className="text-[var(--color-muted)]">backtest: {summary.backtest_detail}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SyntheticValidationCard({
+  summary
+}: {
+  summary: OperationsDashboardResponse["synthetic_validation"];
+}) {
+  const latest = summary.latest ?? null;
+  const presets = summary.presets ?? [];
+  return (
+    <Card aria-label="G-1 가상 회사 검증">
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>G-1 가상 회사 검증</CardTitle>
+        <Badge tone={TONE[summary.status]}>{summary.status}</Badge>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-xs">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Stat
+            label="preset 저장"
+            value={`${summary.saved_preset_count}/${summary.preset_count}`}
+          />
+          <Stat
+            label="완료 preset"
+            value={`${summary.completed_preset_count}/${summary.preset_count}`}
+          />
+          <Stat
+            label="충분 표본"
+            value={`${summary.sufficient_preset_count}/${summary.preset_count}`}
+          />
+          <Stat
+            label="최근 실행"
+            value={`${summary.recent_completed_count}/${summary.recent_run_count}`}
+          />
+        </div>
+
+        <p className="text-[var(--color-muted)]">{summary.detail}</p>
+
+        {latest ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[var(--color-muted)]">최근 run</span>
+            <span className="text-[var(--color-fg)]">
+              {latest.experiment_name ?? `experiment ${latest.experiment_id}`}
+            </span>
+            <Badge tone={runStatusTone(latest.status)}>{latest.status}</Badge>
+            <span className="text-[var(--color-fg)]">
+              settled {latest.total_settled_count}/{summary.sample_target}
+            </span>
+            <span className="text-[var(--color-muted)]">
+              {latest.finished_at ? formatDateTime(latest.finished_at) : "종료 시각 없음"}
+            </span>
+          </div>
+        ) : (
+          <p className="rounded-md border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-muted)]">
+            아직 G-1 synthetic experiment run이 없습니다.
+          </p>
+        )}
+
+        {presets.length > 0 ? (
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {presets.map((preset) => (
+              <div
+                key={preset.name}
+                className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--color-border)] px-2 py-1.5"
+              >
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate font-medium text-[var(--color-fg)]">
+                    {preset.name}
+                  </span>
+                  <Badge tone={runStatusTone(preset.latest_run_status)}>
+                    {preset.latest_run_status ?? "not saved"}
+                  </Badge>
+                </div>
+                <div className="flex flex-wrap items-center gap-1 text-[var(--color-muted)]">
+                  <span>{sampleStatusLabel(preset.sample_status)}</span>
+                  <span>· settled {preset.total_settled_count}</span>
+                  {preset.missing_total_settled_count > 0 ? (
+                    <span>· 부족 {preset.missing_total_settled_count}</span>
+                  ) : null}
+                  {preset.insufficient_operator_count > 0 ? (
+                    <span>· 표본 부족 회사 {preset.insufficient_operator_count}</span>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

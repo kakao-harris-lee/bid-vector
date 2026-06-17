@@ -12,6 +12,8 @@ from app.models.models import (
     Notification,
     OperatorStrategyRun,
     SmokeTestRun,
+    SyntheticExperiment,
+    SyntheticExperimentRun,
 )
 
 
@@ -783,3 +785,60 @@ def test_operations_dashboard_smoke_per_phase_excludes_skipped(client, test_db, 
     # sbert_embedding was skipped in ALL cycles → honest empty (0 / 0.0).
     assert per_phase["sbert_embedding"]["evaluated_count"] == 0
     assert per_phase["sbert_embedding"]["pass_rate"] == 0.0
+
+
+def test_operations_dashboard_summarizes_g1_synthetic_validation(client, test_db):
+    """Operations report should show G-1 preset/sample state beside smoke telemetry."""
+    _bootstrap_operator(client)
+    now = datetime.now(UTC)
+    experiment = SyntheticExperiment(
+        name="g1-construction-base-12m",
+        description="G-1 construction preset",
+        params_json=json.dumps({"limit": 200, "scenario": "base"}),
+        operator_slugs_json=json.dumps(["cn-small-gangwon"]),
+        created_at=now - timedelta(days=2),
+        updated_at=now - timedelta(days=2),
+    )
+    test_db.add(experiment)
+    test_db.flush()
+    run = SyntheticExperimentRun(
+        experiment_id=experiment.id,
+        status="completed",
+        summary_json=json.dumps(
+            {
+                "sample_status": "sufficient",
+                "total_settled_count": 128,
+                "missing_total_settled_count": 0,
+                "insufficient_operators": [],
+            }
+        ),
+        started_at=now - timedelta(hours=1),
+        finished_at=now,
+        created_at=now,
+    )
+    test_db.add(run)
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/operations-dashboard",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200
+    synthetic = response.json()["synthetic_validation"]
+    assert synthetic["preset_count"] == 4
+    assert synthetic["saved_preset_count"] == 1
+    assert synthetic["completed_preset_count"] == 1
+    assert synthetic["sufficient_preset_count"] == 1
+    assert synthetic["recent_run_count"] == 1
+    assert synthetic["recent_completed_count"] == 1
+    assert synthetic["latest"]["experiment_name"] == "g1-construction-base-12m"
+    assert synthetic["latest"]["total_settled_count"] == 128
+    construction = {
+        item["name"]: item for item in synthetic["presets"]
+    }["g1-construction-base-12m"]
+    assert construction["latest_run_status"] == "completed"
+    assert construction["sample_status"] == "sufficient"
+    cards = {card["key"]: card for card in response.json()["cards"]}
+    assert cards["synthetic_g1_presets"]["value"] == 1
+    assert cards["synthetic_g1_samples"]["value"] == 1
