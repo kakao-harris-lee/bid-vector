@@ -13,7 +13,8 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -38,6 +39,14 @@ SAMPLE_STATUS_SUFFICIENT = "sufficient"
 SAMPLE_STATUS_INSUFFICIENT = "insufficient_sample"
 REPORT_STATUS_READY = "ready_for_reporting"
 REPORT_STATUS_DATA_MIXED = "canonical_synthetic_mixed"
+SAMPLE_GAP_WARNING_MIXED_DATA = "canonical_synthetic_mixed"
+SAMPLE_GAP_WARNING_LEGACY_SUMMARY = "legacy_summary_without_sample_report"
+SAMPLE_GAP_DIMENSION_ORDER = {
+    "preset": 0,
+    "category": 1,
+    "business_type": 2,
+    "budget_band": 3,
+}
 
 _G1_PRESET_WINDOW = {
     "start_at": "2025-01-01T00:00:00+00:00",
@@ -602,6 +611,278 @@ def build_sample_report(
     }
 
 
+def _safe_positive_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value if value is not None else default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _sample_gap_run_context(
+    run: SyntheticExperimentRun,
+    *,
+    summary: dict[str, Any],
+    sample_report: dict[str, Any],
+) -> dict[str, Any]:
+    params = _json_loads(run.experiment.params_json) if run.experiment else {}
+    params = params if isinstance(params, dict) else {}
+    preset_name = _first_present(
+        sample_report.get("preset_name"),
+        run.experiment.name if run.experiment else None,
+    )
+    context_params = {
+        "start_at": _first_present(summary.get("start_at"), params.get("start_at")),
+        "end_at": _first_present(summary.get("end_at"), params.get("end_at")),
+        "category": _first_present(summary.get("category"), params.get("category")),
+        "limit": _safe_positive_int(
+            _first_present(summary.get("limit"), params.get("limit")),
+            default=100,
+        ),
+        "scenario": _first_present(summary.get("scenario"), params.get("scenario"))
+        or "base",
+        "settle_actions": bool(params.get("settle_actions", False)),
+    }
+    return {
+        "run_id": run.id,
+        "experiment_id": run.experiment_id,
+        "preset_name": preset_name,
+        "status": run.status,
+        "finished_at": run.finished_at,
+        **context_params,
+        "params": context_params,
+        "synthetic_only": sample_report.get("synthetic_only") is not False,
+        "report_status": sample_report.get("report_status"),
+        "warnings": [],
+    }
+
+
+def _sample_gap_run_warnings(
+    run: SyntheticExperimentRun,
+    sample_report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    mixed_data = (
+        sample_report.get("synthetic_only") is False
+        or sample_report.get("report_status") == REPORT_STATUS_DATA_MIXED
+    )
+    if not mixed_data:
+        return []
+    operator_slugs = sample_report.get("non_synthetic_operator_slugs") or []
+    if not isinstance(operator_slugs, list):
+        operator_slugs = []
+    return [
+        {
+            "code": SAMPLE_GAP_WARNING_MIXED_DATA,
+            "message": (
+                "Run includes canonical/operator data mixed into a synthetic report; "
+                "rerun with synthetic-only operators before using it for reporting."
+            ),
+            "run_ids": [run.id],
+            "operator_slugs": sorted(str(slug) for slug in operator_slugs),
+        }
+    ]
+
+
+def _dedupe_sample_gap_warnings(
+    warnings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for warning in warnings:
+        key = (str(warning.get("code") or "unknown"), str(warning.get("message") or ""))
+        current = merged.setdefault(
+            key,
+            {
+                "code": key[0],
+                "message": key[1],
+                "run_ids": [],
+                "operator_slugs": [],
+            },
+        )
+        current["run_ids"].extend(
+            _safe_positive_int(run_id)
+            for run_id in warning.get("run_ids", []) or []
+            if _safe_positive_int(run_id) > 0
+        )
+        current["operator_slugs"].extend(
+            str(slug)
+            for slug in warning.get("operator_slugs", []) or []
+            if str(slug)
+        )
+    return [
+        {
+            **warning,
+            "run_ids": sorted(set(warning["run_ids"])),
+            "operator_slugs": sorted(set(warning["operator_slugs"])),
+        }
+        for warning in merged.values()
+    ]
+
+
+def _sample_gap_action(
+    code: str,
+    label: str,
+    detail: str,
+) -> dict[str, str]:
+    return {"code": code, "label": label, "detail": detail}
+
+
+class _SampleGapAccumulator:
+    def __init__(self, *, dimension: str, key: str) -> None:
+        self.dimension = dimension
+        self.key = key
+        self.settled_count = 0
+        self.sample_target = 0
+        self.missing_settled_count = 0
+        self.total_missing_settled_count = 0
+        self.related_runs: dict[int, dict[str, Any]] = {}
+        self.preset_counts: Counter[str] = Counter()
+        self.warning_codes: set[str] = set()
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        run_context: dict[str, Any],
+        warning_codes: list[str],
+    ) -> None:
+        missing = _safe_positive_int(row.get("missing_settled_count"))
+        settled = _safe_positive_int(row.get("settled_count"))
+        target = _safe_positive_int(
+            row.get("sample_target"), default=SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET
+        )
+        if missing <= 0:
+            return
+        self.total_missing_settled_count += missing
+        if (
+            missing > self.missing_settled_count
+            or (
+                missing == self.missing_settled_count
+                and (self.settled_count == 0 or settled < self.settled_count)
+            )
+        ):
+            self.missing_settled_count = missing
+            self.settled_count = settled
+            self.sample_target = target
+
+        run_id = _safe_positive_int(run_context.get("run_id"))
+        if run_id > 0:
+            self.related_runs[run_id] = {
+                **run_context,
+                "warnings": sorted(set(warning_codes)),
+            }
+        preset_name = run_context.get("preset_name")
+        if preset_name:
+            self.preset_counts[str(preset_name)] += 1
+        self.warning_codes.update(warning_codes)
+
+    @property
+    def source_run_count(self) -> int:
+        return len(self.related_runs)
+
+    @property
+    def related_preset_names(self) -> list[str]:
+        return sorted(self.preset_counts)
+
+    def primary_run_context(self) -> dict[str, Any]:
+        if not self.related_runs:
+            return {}
+        if self.preset_counts:
+            preset_name = self.preset_counts.most_common(1)[0][0]
+            for run in self.related_runs.values():
+                if run.get("preset_name") == preset_name:
+                    return run
+        return next(iter(self.related_runs.values()))
+
+    def recommendation(self) -> dict[str, Any]:
+        run_context = self.primary_run_context()
+        params = dict(run_context.get("params") or {})
+        if self.dimension == "category" and self.key != "missing":
+            params["category"] = self.key
+        elif "category" not in params and run_context.get("category") is not None:
+            params["category"] = run_context.get("category")
+
+        current_limit = _safe_positive_int(params.get("limit"), default=100)
+        if current_limit:
+            params["limit"] = current_limit
+        actions = [
+            _sample_gap_action(
+                "rerun_related_preset",
+                "Rerun related preset",
+                "Repeat the related synthetic experiment preset and keep the same result window first.",
+            )
+        ]
+        if self.dimension == "category":
+            actions.append(
+                _sample_gap_action(
+                    "expand_category_window",
+                    "Expand category window",
+                    "If the rerun is still thin, widen the date window for this category before changing operators.",
+                )
+            )
+        if self.dimension in {"preset", "budget_band"}:
+            actions.append(
+                _sample_gap_action(
+                    "increase_limit",
+                    "Increase limit",
+                    "Raise the backtest limit when the current preset cannot collect enough settled samples.",
+                )
+            )
+        if self.dimension == "business_type":
+            actions.append(
+                _sample_gap_action(
+                    "review_operator_mix",
+                    "Review operator mix",
+                    "Rerun the preset with operators that cover this business type before widening all categories.",
+                )
+            )
+        if SAMPLE_GAP_WARNING_MIXED_DATA in self.warning_codes:
+            actions.append(
+                _sample_gap_action(
+                    "rerun_synthetic_only",
+                    "Rerun synthetic-only",
+                    "Exclude canonical operators before using this sample set for repeatable reporting.",
+                )
+            )
+
+        deduped_actions: dict[str, dict[str, str]] = {}
+        for action in actions:
+            deduped_actions.setdefault(action["code"], action)
+
+        return {
+            "preset_name": run_context.get("preset_name"),
+            "params": params,
+            "actions": list(deduped_actions.values()),
+        }
+
+    def to_item(self, *, priority: int) -> dict[str, Any]:
+        related_runs = sorted(
+            self.related_runs.values(),
+            key=lambda item: int(item.get("run_id") or 0),
+            reverse=True,
+        )
+        return {
+            "priority": priority,
+            "dimension": self.dimension,
+            "key": self.key,
+            "settled_count": self.settled_count,
+            "sample_target": self.sample_target,
+            "missing_settled_count": self.missing_settled_count,
+            "total_missing_settled_count": self.total_missing_settled_count,
+            "source_run_count": self.source_run_count,
+            "related_preset_names": self.related_preset_names,
+            "related_run_ids": [run["run_id"] for run in related_runs],
+            "related_runs": related_runs,
+            "recommendation": self.recommendation(),
+            "warnings": sorted(self.warning_codes),
+        }
+
+
 class SyntheticExperimentService:
     """CRUD + run lifecycle for synthetic experiments."""
 
@@ -738,6 +1019,116 @@ class SyntheticExperimentService:
         if run.status in (RUN_STATUS_QUEUED, RUN_STATUS_RUNNING) and run.task_id:
             self._sync_run_with_task(run)
         return run
+
+    def build_sample_gap_plan(self, *, max_runs: int = 20) -> dict[str, Any]:
+        """Aggregate recent completed sample-report gaps into a backfill plan.
+
+        This is read-only planning over persisted run summaries. It deliberately
+        does not trigger DB backfills or new experiment runs; the response gives
+        operators the preset/category/window/limit hints needed to decide the
+        next synthetic backtest.
+        """
+        bounded_max_runs = min(100, max(1, int(max_runs or 20)))
+        runs = (
+            self.db.query(SyntheticExperimentRun)
+            .filter(SyntheticExperimentRun.status == RUN_STATUS_COMPLETED)
+            .order_by(
+                SyntheticExperimentRun.finished_at.is_(None).asc(),
+                SyntheticExperimentRun.finished_at.desc(),
+                SyntheticExperimentRun.created_at.desc(),
+                SyntheticExperimentRun.id.desc(),
+            )
+            .limit(bounded_max_runs)
+            .all()
+        )
+
+        gap_groups: dict[tuple[str, str], _SampleGapAccumulator] = {}
+        warnings: list[dict[str, Any]] = []
+        legacy_run_ids: list[int] = []
+        source_run_count = 0
+
+        for run in runs:
+            summary = _json_loads(run.summary_json)
+            if not isinstance(summary, dict):
+                legacy_run_ids.append(run.id)
+                continue
+            sample_report = summary.get("sample_report")
+            if not isinstance(sample_report, dict):
+                legacy_run_ids.append(run.id)
+                continue
+
+            source_run_count += 1
+            run_context = _sample_gap_run_context(
+                run, summary=summary, sample_report=sample_report
+            )
+            run_warnings = _sample_gap_run_warnings(run, sample_report)
+            warning_codes = [str(warning["code"]) for warning in run_warnings]
+            warnings.extend(run_warnings)
+
+            lacking_groups = sample_report.get("lacking_groups") or []
+            if not isinstance(lacking_groups, list):
+                continue
+            for row in lacking_groups:
+                if not isinstance(row, dict):
+                    continue
+                dimension = str(row.get("dimension") or "")
+                if dimension not in SAMPLE_GAP_DIMENSION_ORDER:
+                    continue
+                key = str(row.get("key") or "unknown")
+                missing = _safe_positive_int(row.get("missing_settled_count"))
+                if missing <= 0:
+                    continue
+                group_key = (dimension, key)
+                accumulator = gap_groups.get(group_key)
+                if accumulator is None:
+                    accumulator = _SampleGapAccumulator(
+                        dimension=dimension,
+                        key=key,
+                    )
+                    gap_groups[group_key] = accumulator
+                accumulator.add(
+                    row=row,
+                    run_context=run_context,
+                    warning_codes=warning_codes,
+                )
+
+        if legacy_run_ids:
+            warnings.append(
+                {
+                    "code": SAMPLE_GAP_WARNING_LEGACY_SUMMARY,
+                    "message": (
+                        "Completed runs without summary.sample_report were skipped; "
+                        "rerun them to include G-1 sample-gap metadata."
+                    ),
+                    "run_ids": sorted(legacy_run_ids),
+                    "operator_slugs": [],
+                }
+            )
+
+        ordered_gaps = sorted(
+            gap_groups.values(),
+            key=lambda item: (
+                -item.total_missing_settled_count,
+                -item.missing_settled_count,
+                -item.source_run_count,
+                SAMPLE_GAP_DIMENSION_ORDER[item.dimension],
+                item.key,
+            ),
+        )
+        gaps = [
+            accumulator.to_item(priority=index + 1)
+            for index, accumulator in enumerate(ordered_gaps)
+        ]
+        return {
+            "generated_at": datetime.now(timezone.utc),
+            "max_runs": bounded_max_runs,
+            "scanned_completed_run_count": len(runs),
+            "source_run_count": source_run_count,
+            "legacy_summary_run_count": len(legacy_run_ids),
+            "gap_count": len(gaps),
+            "warnings": _dedupe_sample_gap_warnings(warnings),
+            "gaps": gaps,
+        }
 
     def _sync_run_with_task(self, run: SyntheticExperimentRun) -> None:
         """Reconcile a still-pending run with the Celery task state.
