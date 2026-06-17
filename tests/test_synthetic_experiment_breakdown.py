@@ -13,6 +13,7 @@ from app.services.synthetic_backtest import SyntheticBacktestService
 from app.services.synthetic_experiment import (
     BUDGET_BAND_TOP_KEY,
     _budget_band_key,
+    build_sample_report,
     compute_breakdown,
 )
 
@@ -224,6 +225,156 @@ def test_compute_breakdown_accepts_sliced_item_shape():
     assert gongsa["category"] == "공사"
     assert gongsa["would_have_won_count"] == 1
     assert gongsa["win_rate"] == 0.5
+
+
+# --- G-1 sample/report stream -------------------------------------------------
+
+
+def test_build_sample_report_flags_lacking_category_business_and_budget_groups():
+    report = build_sample_report(
+        preset_name="g1-software-base-12m",
+        operator_results=[
+            {
+                "slug": "sw-small-seoul",
+                "username": "synthetic-sw-small-seoul",
+                "business_type": "software",
+                "settled_count": 12,
+                "would_have_won_count": 3,
+                "average_absolute_bid_rate_error": 0.02,
+                "breakdown": {
+                    "by_category": [
+                        {
+                            "category": "software",
+                            "settled_count": 12,
+                            "would_have_won_count": 3,
+                            "avg_abs_bid_rate_error": 0.02,
+                        }
+                    ],
+                    "by_budget_band": [
+                        {
+                            "budget_band": "1eok_5eok",
+                            "settled_count": 12,
+                            "would_have_won_count": 3,
+                            "avg_abs_bid_rate_error": 0.02,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert report["report_status"] == "insufficient_sample"
+    assert report["ready_for_repeatable_reporting"] is False
+    assert report["synthetic_only"] is True
+    assert report["by_preset"][0]["missing_settled_count"] == 88
+    assert report["by_category"][0]["key"] == "software"
+    assert report["by_category"][0]["sample_status"] == "insufficient_sample"
+    assert report["by_category"][0]["est_price_close_rate"] == 0.25
+    assert report["by_business_type"][0]["key"] == "software"
+    assert report["by_budget_band"][0]["key"] == "1eok_5eok"
+    lacking = {(item["dimension"], item["key"]) for item in report["lacking_groups"]}
+    assert ("preset", "g1-software-base-12m") in lacking
+    assert ("category", "software") in lacking
+    assert ("business_type", "software") in lacking
+    assert ("budget_band", "1eok_5eok") in lacking
+
+
+def test_build_sample_report_marks_ready_when_groups_clear_targets():
+    report = build_sample_report(
+        preset_name="g1-goods-base-12m",
+        operator_results=[
+            {
+                "slug": "gd-office-sme",
+                "username": "synthetic-gd-office-sme",
+                "business_type": "goods",
+                "settled_count": 120,
+                "would_have_won_count": 30,
+                "average_absolute_bid_rate_error": 0.01,
+                "breakdown": {
+                    "by_category": [
+                        {
+                            "category": "goods",
+                            "settled_count": 120,
+                            "would_have_won_count": 30,
+                            "avg_abs_bid_rate_error": 0.01,
+                        }
+                    ],
+                    "by_budget_band": [
+                        {
+                            "budget_band": "5eok_10eok",
+                            "settled_count": 120,
+                            "would_have_won_count": 30,
+                            "avg_abs_bid_rate_error": 0.01,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert report["report_status"] == "ready_for_reporting"
+    assert report["ready_for_repeatable_reporting"] is True
+    assert report["lacking_groups"] == []
+    assert report["by_business_type"][0]["sample_status"] == "sufficient"
+    assert report["by_budget_band"][0]["est_price_close_rate"] == 0.25
+
+
+def test_build_sample_report_requires_category_and_budget_explainability():
+    report = build_sample_report(
+        preset_name="g1-construction-base-12m",
+        operator_results=[
+            {
+                "slug": "cn-small-gangwon",
+                "username": "synthetic-cn-small-gangwon",
+                "business_type": "construction",
+                "settled_count": 120,
+                "would_have_won_count": 30,
+                "breakdown": {"by_category": [], "by_budget_band": []},
+            }
+        ],
+    )
+
+    assert report["report_status"] == "insufficient_sample"
+    assert report["ready_for_repeatable_reporting"] is False
+    lacking = {(item["dimension"], item["key"]) for item in report["lacking_groups"]}
+    assert ("category", "missing") in lacking
+    assert ("budget_band", "missing") in lacking
+
+
+def test_build_sample_report_blocks_readiness_on_explicit_canonical_mix():
+    report = build_sample_report(
+        preset_name="manual-mixed",
+        operator_results=[
+            {
+                "slug": "operator",
+                "username": "operator",
+                "business_type": "construction",
+                "settled_count": 120,
+                "would_have_won_count": 60,
+                "breakdown": {
+                    "by_category": [
+                        {
+                            "category": "construction",
+                            "settled_count": 120,
+                            "would_have_won_count": 60,
+                        }
+                    ],
+                    "by_budget_band": [
+                        {
+                            "budget_band": "gte_50eok",
+                            "settled_count": 120,
+                            "would_have_won_count": 60,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    assert report["synthetic_only"] is False
+    assert report["non_synthetic_operator_slugs"] == ["operator"]
+    assert report["report_status"] == "canonical_synthetic_mixed"
+    assert report["ready_for_repeatable_reporting"] is False
 
 
 # --- polling exposure (eager run -> breakdown in response) --------------------

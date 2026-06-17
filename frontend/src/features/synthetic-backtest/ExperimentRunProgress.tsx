@@ -4,6 +4,7 @@ import { Badge, type BadgeTone, Card, CardContent, CardHeader, CardTitle } from 
 import type { SyntheticExperimentRunResponse } from "@/shared/types/synthetic";
 import { Leaderboard } from "./Leaderboard";
 import { BreakdownView } from "./BreakdownView";
+import { SampleReportView } from "./SampleReportView";
 
 export interface ExperimentRunProgressProps {
   experimentId: number;
@@ -106,6 +107,7 @@ export function ExperimentRunProgress({
             <p className="py-2 text-center text-[var(--color-muted)]">결과 데이터가 없습니다.</p>
           ) : (
             <div className="flex flex-col gap-4">
+              <SampleReportView report={data.summary?.sample_report ?? null} />
               <Leaderboard results={results} />
               <BreakdownView results={results} />
             </div>

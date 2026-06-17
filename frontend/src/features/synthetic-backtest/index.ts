@@ -6,5 +6,6 @@ export { ExperimentRunProgress } from "./ExperimentRunProgress";
 export { RunComparePanel } from "./RunComparePanel";
 export { Leaderboard, type LeaderboardSortKey } from "./Leaderboard";
 export { BreakdownView } from "./BreakdownView";
+export { SampleReportView } from "./SampleReportView";
 export { CustomOperatorForm, textToList, listToText } from "./CustomOperatorForm";
 export { CustomOperatorManager } from "./CustomOperatorManager";
