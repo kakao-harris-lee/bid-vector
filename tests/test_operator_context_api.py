@@ -17,11 +17,14 @@ from app.models.models import (
     Bid,
     BidDecisionRecord,
     CompanyProfile,
+    Notification,
     OperatorStrategy,
+    OperatorStrategyRun,
     Project,
     TenderResult,
     User,
 )
+from app.services.opportunity_monitoring import StrategyMonitoringService
 
 
 def _create_user(
@@ -132,6 +135,75 @@ def _seed_decision_for(
     test_db.add(decision)
     test_db.commit()
     return project, decision
+
+
+def _configure_monitor_context(
+    test_db,
+    *,
+    operator_id: int,
+    required_keyword: str = "AI",
+) -> None:
+    profile = (
+        test_db.query(CompanyProfile)
+        .filter(CompanyProfile.user_id == operator_id)
+        .one()
+    )
+    profile.business_type = "software"
+    profile.license_codes = "SW001"
+    profile.region_codes = "서울특별시, 전국"
+    profile.annual_revenue = 1_500_000_000.0
+    profile.capacity_score = 0.95
+    profile.total_awards = 9
+
+    strategy = (
+        test_db.query(OperatorStrategy)
+        .filter(OperatorStrategy.user_id == operator_id)
+        .one()
+    )
+    strategy.focus_categories = "software"
+    strategy.focus_regions = "서울특별시"
+    strategy.required_keywords = required_keyword
+    strategy.minimum_match_score = 0.6
+    strategy.minimum_probability_score = 0.55
+    strategy.notify_only_high_priority = False
+    strategy.max_recommended_candidates = 10
+    test_db.commit()
+
+
+def _seed_monitor_project(test_db, *, keyword: str = "AI") -> Project:
+    project = Project(
+        title=f"서울 {keyword} 데이터 통합 플랫폼 구축",
+        description=f"서울특별시 대상 {keyword} 데이터 분석과 대시보드 자동화 구축",
+        requirements="SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함",
+        budget_estimate=130_000_000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=8),
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+    return project
+
+
+def _high_priority_analysis(project: Project) -> dict:
+    return {
+        "matched_score": 0.84,
+        "probability_score": 0.89,
+        "recommended_amount": 126_000_000.0,
+        "deadline_hours_remaining": 8,
+        "current_active_bids": 0,
+        "max_active_bids": 3,
+        "current_workload_score": 0.0,
+        "analysis_summary": "target operator candidate",
+        "decision": {
+            "pursue_bid": True,
+            "action": "bid_now",
+            "priority_score": 0.91,
+            "recommended_amount": 126_000_000.0,
+            "probability_score": 0.89,
+            "reasoning": f"{project.id} target candidate",
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -769,3 +841,296 @@ def test_dashboard_results_full_payload_preserves_existing_fields(client, test_d
     item = payload["items"][0]
     assert item["winning_amount"] == 98_000_000.0
     assert item["recommended_amount"] == 95_000_000.0
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/operator/strategy/monitor context isolation
+# ---------------------------------------------------------------------------
+
+
+def test_strategy_monitor_sync_uses_target_operator_context(client, test_db, monkeypatch):
+    """Canonical callers can run monitoring for synthetic operators without falling back to canonical decisions."""
+    canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    _configure_monitor_context(test_db, operator_id=canonical.id, required_keyword="canonical-only")
+    _configure_monitor_context(test_db, operator_id=synthetic.id, required_keyword="synthetic-only")
+    project = _seed_monitor_project(test_db, keyword="synthetic-only")
+
+    def fake_analyze(self, db, project, **kwargs):
+        del self, db
+        assert kwargs["operator"].id == synthetic.id
+        return _high_priority_analysis(project)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fake_analyze)
+
+    headers = _login(client, "operator")
+    response = client.post(
+        "/api/v1/operator/strategy/monitor",
+        params={"operator_id": synthetic.id},
+        json={"high_priority_only": False, "limit": 5},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["operator_id"] == synthetic.id
+    assert payload["current_operator_id"] == synthetic.id
+    assert payload["current_operator_username"] == synthetic.username
+    assert payload["persisted_candidate_count"] == 1
+    assert payload["results"][0]["project_id"] == project.id
+
+    run = test_db.query(OperatorStrategyRun).one()
+    assert run.operator_id == synthetic.id
+    decision = test_db.query(BidDecisionRecord).one()
+    assert decision.operator_id == synthetic.id
+    notification = test_db.query(Notification).one()
+    assert notification.user_id == synthetic.id
+
+
+def test_strategy_monitor_async_and_status_preserve_target_operator(client, test_db, monkeypatch):
+    """Async monitor enqueue passes operator_id through to the eager job and task status response."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    _configure_monitor_context(test_db, operator_id=synthetic.id, required_keyword="async-target")
+    project = _seed_monitor_project(test_db, keyword="async-target")
+
+    def fake_analyze(self, db, project, **kwargs):
+        del self, db
+        assert kwargs["operator"].id == synthetic.id
+        return _high_priority_analysis(project)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fake_analyze)
+
+    headers = _login(client, "operator")
+    kickoff = client.post(
+        "/api/v1/operator/strategy/monitor/async",
+        params={"operator_id": synthetic.id},
+        json={"high_priority_only": False, "limit": 5},
+        headers=headers,
+    )
+
+    assert kickoff.status_code == 200, kickoff.text
+    kickoff_payload = kickoff.json()
+    assert kickoff_payload["operator_id"] == synthetic.id
+    assert kickoff_payload["current_operator_id"] == synthetic.id
+    assert kickoff_payload["status"] == "completed"
+
+    run = test_db.query(OperatorStrategyRun).one()
+    assert run.operator_id == synthetic.id
+    assert run.task_id == kickoff_payload["task_id"]
+
+    status_response = client.get(
+        f"/api/v1/operator/strategy/monitor/tasks/{kickoff_payload['task_id']}",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+    assert status_response.status_code == 200, status_response.text
+    status_payload = status_response.json()
+    assert status_payload["operator_id"] == synthetic.id
+    assert status_payload["current_operator_id"] == synthetic.id
+    assert status_payload["monitor_run_id"] == kickoff_payload["monitor_run_id"]
+    assert status_payload["result"]["operator_id"] == synthetic.id
+    assert status_payload["result"]["results"][0]["project_id"] == project.id
+    assert test_db.query(BidDecisionRecord).one().operator_id == synthetic.id
+    assert test_db.query(Notification).one().user_id == synthetic.id
+
+
+def test_strategy_monitor_run_list_and_detail_are_target_scoped(client, test_db):
+    """Run list/detail return only the resolved target operator's run history."""
+    canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    canonical_run = OperatorStrategyRun(
+        operator_id=canonical.id,
+        trigger_source="manual_sync",
+        status="completed",
+        high_priority_only=False,
+        limit_applied=5,
+    )
+    synthetic_run = OperatorStrategyRun(
+        operator_id=synthetic.id,
+        task_id="synthetic-task",
+        trigger_source="manual_async",
+        status="queued",
+        high_priority_only=False,
+        limit_applied=7,
+    )
+    test_db.add_all([canonical_run, synthetic_run])
+    test_db.commit()
+    test_db.refresh(synthetic_run)
+
+    headers = _login(client, "operator")
+    list_response = client.get(
+        "/api/v1/operator/strategy/monitor/runs",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+    assert list_response.status_code == 200, list_response.text
+    list_payload = list_response.json()
+    assert list_payload["operator_id"] == synthetic.id
+    assert list_payload["current_operator_id"] == synthetic.id
+    assert list_payload["result_count"] == 1
+    assert list_payload["runs"][0]["id"] == synthetic_run.id
+    assert list_payload["runs"][0]["current_operator_id"] == synthetic.id
+
+    detail_response = client.get(
+        f"/api/v1/operator/strategy/monitor/runs/{synthetic_run.id}",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+    assert detail_response.status_code == 200, detail_response.text
+    detail = detail_response.json()
+    assert detail["id"] == synthetic_run.id
+    assert detail["operator_id"] == synthetic.id
+    assert detail["current_operator_id"] == synthetic.id
+
+    wrong_scope = client.get(
+        f"/api/v1/operator/strategy/monitor/runs/{synthetic_run.id}",
+        headers=headers,
+    )
+    assert wrong_scope.status_code == 404
+
+
+def test_strategy_monitor_routes_reject_non_privileged_cross_operator(client, test_db):
+    """Non-privileged callers cannot inspect or run another operator's monitor context."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    run = OperatorStrategyRun(
+        operator_id=synthetic.id,
+        task_id="synthetic-task",
+        trigger_source="manual_async",
+        status="queued",
+        high_priority_only=False,
+        limit_applied=5,
+    )
+    test_db.add(run)
+    test_db.commit()
+    test_db.refresh(run)
+
+    headers = _login(client, "other-operator")
+    assert client.post(
+        "/api/v1/operator/strategy/monitor",
+        params={"operator_id": synthetic.id},
+        json={"limit": 1},
+        headers=headers,
+    ).status_code == 403
+    assert client.post(
+        "/api/v1/operator/strategy/monitor/async",
+        params={"operator_id": synthetic.id},
+        json={"limit": 1},
+        headers=headers,
+    ).status_code == 403
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/runs",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    ).status_code == 403
+    assert client.get(
+        f"/api/v1/operator/strategy/monitor/runs/{run.id}",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    ).status_code == 403
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/tasks/synthetic-task",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    ).status_code == 403
+
+
+def test_strategy_monitor_routes_reject_unauthenticated_cross_operator(client, test_db):
+    """Legacy unauthenticated monitor access cannot target another operator id."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    run = OperatorStrategyRun(
+        operator_id=synthetic.id,
+        task_id="synthetic-task",
+        trigger_source="manual_async",
+        status="queued",
+        high_priority_only=False,
+        limit_applied=5,
+    )
+    test_db.add(run)
+    test_db.commit()
+    test_db.refresh(run)
+    params = {"operator_id": synthetic.id}
+
+    assert client.post(
+        "/api/v1/operator/strategy/monitor",
+        params=params,
+        json={"limit": 1},
+    ).status_code == 403
+    assert client.post(
+        "/api/v1/operator/strategy/monitor/async",
+        params=params,
+        json={"limit": 1},
+    ).status_code == 403
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/runs",
+        params=params,
+    ).status_code == 403
+    assert client.get(
+        f"/api/v1/operator/strategy/monitor/runs/{run.id}",
+        params=params,
+    ).status_code == 403
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/tasks/synthetic-task",
+        params=params,
+    ).status_code == 403
+
+
+def test_strategy_monitor_routes_404_for_unknown_operator_id(client, test_db):
+    """Unknown target operator ids return 404 before monitor work is run or exposed."""
+    _seed_canonical_and_synthetic(test_db)
+    headers = _login(client, "operator")
+    params = {"operator_id": 999_999}
+
+    assert client.post(
+        "/api/v1/operator/strategy/monitor",
+        params=params,
+        json={"limit": 1},
+        headers=headers,
+    ).status_code == 404
+    assert client.post(
+        "/api/v1/operator/strategy/monitor/async",
+        params=params,
+        json={"limit": 1},
+        headers=headers,
+    ).status_code == 404
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/runs",
+        params=params,
+        headers=headers,
+    ).status_code == 404
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/runs/1",
+        params=params,
+        headers=headers,
+    ).status_code == 404
+    assert client.get(
+        "/api/v1/operator/strategy/monitor/tasks/missing-task",
+        params=params,
+        headers=headers,
+    ).status_code == 404
+
+
+def test_admin_can_read_synthetic_strategy_monitor_runs(client, test_db):
+    """Admin callers use the same privileged target-operator policy as canonical."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    admin = _create_user(test_db, username="monitor-admin", is_admin=True)
+    run = OperatorStrategyRun(
+        operator_id=synthetic.id,
+        trigger_source="manual_sync",
+        status="completed",
+        high_priority_only=False,
+        limit_applied=5,
+    )
+    test_db.add(run)
+    test_db.commit()
+    test_db.refresh(run)
+
+    headers = _login(client, admin.username)
+    response = client.get(
+        "/api/v1/operator/strategy/monitor/runs",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["operator_id"] == synthetic.id
+    assert payload["current_operator_id"] == synthetic.id
+    assert payload["runs"][0]["id"] == run.id

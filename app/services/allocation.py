@@ -10,8 +10,9 @@ from app.core.single_user import (
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
     ensure_operator_account,
     ensure_operator_strategy,
+    ensure_operator_strategy_for,
 )
-from app.models.models import BidDecisionRecord, Project
+from app.models.models import BidDecisionRecord, Project, User
 from app.schemas.schemas import BidDecisionRequest
 from app.services.operator_strategy_tuning import (
     DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
@@ -37,9 +38,18 @@ class BidDecisionService:
     TELEGRAM_REVIEW_NOTE = "텔레그램에서 검토 버튼을 눌러 검토 대기 상태로 유지했습니다."
     TELEGRAM_SKIP_NOTE = "텔레그램에서 보류 버튼을 눌러 이번 공고를 보류 처리했습니다."
 
-    def evaluate_opportunity(self, request: BidDecisionRequest, db: Session | None = None) -> dict:
+    def evaluate_opportunity(
+        self,
+        request: BidDecisionRequest,
+        db: Session | None = None,
+        *,
+        operator: User | None = None,
+    ) -> dict:
         """Score a notice for a single user and decide whether to pursue it."""
-        bid_now_threshold, review_threshold, auto_workload_penalty_multiplier = self._resolve_strategy_settings(db)
+        bid_now_threshold, review_threshold, auto_workload_penalty_multiplier = self._resolve_strategy_settings(
+            db,
+            operator=operator,
+        )
         urgency_score = self._compute_urgency_score(request.deadline_hours_remaining)
         active_load_ratio = self._compute_active_load_ratio(
             current_active_bids=request.current_active_bids,
@@ -151,7 +161,13 @@ class BidDecisionService:
             "reasoning": " ".join(reasons),
         }
 
-    def save_decision(self, db: Session, request: "BidDecisionSaveRequest") -> BidDecisionRecord:
+    def save_decision(
+        self,
+        db: Session,
+        request: "BidDecisionSaveRequest",
+        *,
+        operator: User | None = None,
+    ) -> BidDecisionRecord:
         """Persist or update a single operator bid-decision record."""
         from app.schemas.schemas import BidDecisionSaveRequest
 
@@ -163,8 +179,8 @@ class BidDecisionService:
             if project is not None:
                 request = request.model_copy(update={"budget_estimate": float(project.budget_estimate or 0.0)})
 
-        operator = ensure_operator_account(db)
-        decision = self.evaluate_opportunity(request, db=db)
+        operator = operator or ensure_operator_account(db)
+        decision = self.evaluate_opportunity(request, db=db, operator=operator)
         decision_status = self._resolve_decision_status(decision["action"], request.decision_status)
         record = self._get_existing_active_record(db, request.project_id, operator.id)
 
@@ -520,7 +536,12 @@ class BidDecisionService:
         bid_now_threshold, review_threshold, _ = self._resolve_strategy_settings(db)
         return bid_now_threshold, review_threshold
 
-    def _resolve_strategy_settings(self, db: Session | None) -> tuple[float, float, float]:
+    def _resolve_strategy_settings(
+        self,
+        db: Session | None,
+        *,
+        operator: User | None = None,
+    ) -> tuple[float, float, float]:
         """Resolve persisted operator decision settings used by scoring."""
         if db is None:
             return (
@@ -529,7 +550,7 @@ class BidDecisionService:
                 DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
             )
 
-        strategy = ensure_operator_strategy(db)
+        strategy = ensure_operator_strategy_for(db, operator) if operator is not None else ensure_operator_strategy(db)
         bid_now_threshold = self._normalize_unit_score(
             getattr(strategy, "bid_now_threshold", None),
             default=self.BID_NOW_THRESHOLD,
