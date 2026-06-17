@@ -8,6 +8,7 @@ export * from "./backtest";
 export * from "./projects";
 export * from "./decisions";
 export * from "./accuracyReport";
+export * from "./decisionSamples";
 export * from "./bidSummary";
 export * from "./bidFormDraft";
 export * from "./experiments";

@@ -3,6 +3,7 @@ import type { DecisionFunnelQuery } from "./decisions";
 import type { AccuracyReportQuery } from "./accuracyReport";
 import type { ExperimentListQuery } from "./experiments";
 import type { OperationsKpiQuery } from "./operations";
+import type { DecisionSamplesQuery } from "./decisionSamples";
 
 /**
  * Active operator-id is appended as a separate key segment so React Query's
@@ -74,7 +75,9 @@ export const queryKeys = {
     dashboard: (operatorId: OperatorScope = null) =>
       ["operations", "dashboard", { operatorId }] as const,
     kpi: (query: OperationsKpiQuery, operatorId: OperatorScope = null) =>
-      ["operations", "kpi", normalizeOperationsKpiKey(query), { operatorId }] as const
+      ["operations", "kpi", normalizeOperationsKpiKey(query), { operatorId }] as const,
+    decisionSamples: (query: DecisionSamplesQuery) =>
+      ["operations", "decision-samples", normalizeDecisionSamplesKey(query)] as const
   }
 } as const;
 
@@ -120,6 +123,13 @@ function normalizeOperationsKpiKey(query: OperationsKpiQuery): Record<string, un
   return {
     days: query.days ?? null,
     missedLimit: query.missedLimit ?? null
+  };
+}
+
+function normalizeDecisionSamplesKey(query: DecisionSamplesQuery): Record<string, unknown> {
+  return {
+    days: query.days ?? null,
+    limit: query.limit ?? null
   };
 }
 
