@@ -19,6 +19,7 @@ from app.models.models import (
 
 REPORTING_PATHS = (
     "/api/v1/analytics/prediction-feedback",
+    "/api/v1/analytics/prediction-observability",
     "/api/v1/analytics/accuracy-report",
     "/api/v1/analytics/decision-funnel",
     "/api/v1/analytics/decision-insights",
@@ -281,6 +282,17 @@ def test_synthetic_reporting_responses_do_not_include_canonical_rows(
     feedback_items = feedback.json()["items"]
     assert [item["project_id"] for item in feedback_items] == [synthetic_project.id]
     assert all("canonical" not in item["project_title"] for item in feedback_items)
+
+    observability = client.get(
+        "/api/v1/analytics/prediction-observability",
+        params=params,
+        headers=headers,
+    )
+    assert observability.status_code == 200, observability.text
+    observability_payload = observability.json()
+    assert observability_payload["prediction_count"] == 1
+    assert observability_payload["operator_id"] == synthetic.id
+    assert observability_payload["current_operator_id"] == synthetic.id
 
     accuracy = client.get(
         "/api/v1/analytics/accuracy-report",
