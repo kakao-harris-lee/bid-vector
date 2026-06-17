@@ -34,6 +34,26 @@ const emptySummary: DashboardSummaryResponse = {
   realtime_href: "/api/v1/realtime/events"
 };
 
+const privilegedAccounts = {
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  is_privileged: true,
+  operator_count: 1,
+  operators: [
+    {
+      operator_id: 1,
+      username: "operator",
+      full_name: "본사 운영자",
+      company: "본사",
+      business_type: null,
+      is_canonical: true,
+      is_synthetic: false,
+      is_active: true,
+      profile_configured: true
+    }
+  ]
+};
+
 const funnel: DecisionFunnelResponse = {
   operator_id: 1,
   period_days: 30,
@@ -185,6 +205,7 @@ describe("DecisionsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
       if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
       if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
       if (url.startsWith("/api/v1/analytics/decision-recommendations"))
@@ -223,6 +244,7 @@ describe("DecisionsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
       if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
       if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
       if (url.startsWith("/api/v1/analytics/decision-recommendations"))
@@ -293,6 +315,7 @@ describe("DecisionsScreen", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
       if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
       if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
       if (url.startsWith("/api/v1/analytics/decision-recommendations"))
