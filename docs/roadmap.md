@@ -1,12 +1,12 @@
 # bid-vector 로드맵
 
-기준일: 2026-06-17
+기준일: 2026-06-18
 
 이 문서는 `bid-vector`의 단계별 목표와 exit gate를 정리하는 단일 로드맵입니다. 오래된 계획 문서보다 현재 코드와 이 문서를 우선합니다.
 
 ## 현재 결론
 
-0~2단계의 핵심 빌드는 대부분 완료되어 있습니다. 현재 병목은 기능 추가가 아니라 **운영 검증과 증적 축적**입니다.
+0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, 주요 reporting/monitoring/experiment 경로의 per-operator 격리는 구현되었습니다. 현재 병목은 대형 기능 추가가 아니라 **운영 검증, 문서/API 계약 정리, 알림 라우팅 격리, 증적 축적**입니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
@@ -23,10 +23,20 @@
 | 단계 | 이름 | 상태 | 핵심 질문 |
 |---|---|---|---|
 | 0 | 단일 운영자 검증 기반 | 빌드 완료, 관찰 중 | 실제 키와 스케줄로 매일 깨지지 않는가 |
-| 1 | 가상 회사 실험실 | 구현됨, 데이터 축적 필요 | 업종/규모별 가상 회사에서 추천 품질이 검증되는가 |
-| 2 | 독립 가상 사업자 운영 검증 | 다음 목표 | 각 회사가 독립 ID/사업자 정보로 서비스처럼 운영되는가 |
+| 1 | 가상 회사 실험실 | 구현됨, 표본 실행 필요 | 업종/규모별 가상 회사에서 추천 품질이 검증되는가 |
+| 2 | 독립 가상 사업자 운영 검증 | 진행 중 | 각 회사가 독립 ID/사업자 정보로 서비스처럼 운영되는가 |
 | 3 | 제한 실증 서비스 | G-2 후 착수 | 실제 사업자가 매일 써도 업무 시간이 줄고 추천이 유효한가 |
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
+
+## 최근 반영된 작업
+
+2026-06-18 `ab5a6f5` 기준으로 다음 작업이 `main`에 반영되었습니다.
+
+- G-2 monitor context: `/api/v1/operator/strategy/monitor*` 동기/비동기 실행, run list/detail, task status가 `operator_id` 기준 target operator를 유지합니다. 무인증 cross-operator target은 `403`으로 차단됩니다.
+- G-2 decision experiment context: `/api/v1/analytics/decision-experiments*` 생성/목록/상세/평가/전략 적용이 target operator 전략과 실험 run에만 적용됩니다.
+- G-2 admin/user boundary: 프론트 `/admin/*` 라우트는 privileged operator만 접근하고, 일반 사용자는 `/dashboard`로 이동합니다.
+- G-1 sample gap planning: `/api/v1/synthetic/experiments/sample-gaps`가 최근 completed experiment의 `sample_report.lacking_groups`를 모아 read-only backfill 계획을 반환합니다.
+- 통합 검증: backend 115개 테스트, frontend 38개 테스트, frontend production build가 통과된 상태로 병합되었습니다.
 
 ## Phase 0. 단일 운영자 검증 기반
 
@@ -63,6 +73,7 @@ Exit gate G-0:
 - `app/api/synthetic.py`
 - `app/services/synthetic_backtest.py`
 - `app/services/synthetic_experiment.py`
+- `/api/v1/synthetic/experiments/sample-gaps` read-only 표본 부족/backfill 계획
 - `frontend/src/features/synthetic-backtest/`
 
 검증 축:
@@ -76,7 +87,7 @@ Exit gate G-0:
 해야 할 일:
 
 - synthetic company catalog를 실제 서비스 검증 목적에 맞게 정리
-- 업종별 최소 정산 표본 수를 정하고 부족한 영역을 백필
+- sample-gap 계획을 기준으로 업종별 부족 표본을 실제 preset 실행/백필 작업으로 전환
 - 동일 기간/동일 전략으로 반복 가능한 experiment preset을 고정
 - smoke test 자동화와 synthetic backtest 결과를 같은 운영 리포트에서 비교
 
@@ -93,14 +104,16 @@ Exit gate G-1:
 
 현재 상태:
 
-- 백엔드는 여전히 단일 운영자 모델이 기본입니다.
+- 주요 dashboard/reporting, strategy monitor, decision experiment 경로는 `operator_id` target context와 `current_operator_*` 응답 필드를 지원합니다.
 - synthetic operator infrastructure는 있지만 SaaS 멀티테넌트는 아닙니다.
-- 현재 프론트는 단일 SPA이며 사용자 웹/관리자 웹이 명확히 분리되어 있지 않습니다.
+- 현재 프론트는 단일 SPA입니다. `/admin/*` 접근 guard는 구현되었지만 사용자 웹/관리자 웹의 정보 구조와 API 문서는 더 분리되어야 합니다.
+- 알림 채널은 아직 가상 사업자별 routing key/대상 식별자 격리 검증이 부족합니다.
 
 해야 할 일:
 
 - 가상 회사별 로그인/프로필/전략/알림/결정 이력을 독립적으로 검증
-- canonical operator fallback 제거 범위를 넓히고 데이터 격리 테스트 추가
+- 남아 있는 canonical operator fallback 범위를 점검하고 데이터 격리 테스트 추가
+- API 문서와 OpenAPI/front 타입에 `operator_id`, `current_operator_*`, sample-gap endpoint를 반영
 - 사용자 웹과 관리자 웹의 정보 구조 분리
   - 사용자 웹: 회사 정보, 조건 설정, 추천 공고, 알림, 투찰 선택, 결과 확인
   - 관리자 웹: 백테스트, synthetic experiment, smoke test, 데이터 수집 상태, 정확도/통계, ML release 상태
@@ -193,15 +206,17 @@ Exit gate G-3:
 
 ## 다음 우선순위
 
-1. G-0 관찰: scheduled smoke와 operations dashboard를 N일 모니터링한다.
-2. G-1 표본 확보: synthetic operator별 settled sample과 category breakdown을 채운다.
-3. G-1 리포트 고정: synthetic experiment preset과 정확도 리포트 형식을 고정한다.
-4. G-2 설계 착수: 사용자 웹/관리자 웹 분리와 가상 사업자 독립 운영 범위를 작게 설계한다.
-5. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
+1. G-2 API 계약 정리: monitor/decision experiment/sample-gap 변경을 API 문서, OpenAPI 타입, 프론트 호출 규칙에 반영한다.
+2. G-2 알림 라우팅 격리: 가상 사업자별 Telegram/app notification 대상과 callback owner 검증을 분리한다.
+3. G-1 표본 실행: sample-gap 계획을 실제 synthetic preset 실행 후보와 운영 증적으로 연결한다.
+4. G-2 정보 구조 분리: 사용자 웹은 투찰 판단, 관리자 웹은 백테스트/smoke/통계/데이터 상태에 집중하도록 화면 경계를 강화한다.
+5. G-0/G-1 관찰: scheduled smoke, synthetic experiment, operations dashboard를 N일 단위로 리포팅한다.
+6. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
 
 ## 관련 문서
 
 - `README.md`: 현재 시스템 개요와 실행 방법
 - `CLAUDE.md`: 에이전트 작업 지침
+- `docs/operations/roadmap-next-agent-plan.md`: 다음 병렬 작업 계획과 에이전트 지시서
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
 - `docs/api/index.md`: HTTP API 레퍼런스
