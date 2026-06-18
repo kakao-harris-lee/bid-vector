@@ -56,6 +56,12 @@ class AnalyticsReportingService:
     )
     # G-0 exit gate: seven consecutive scheduled smoke cycles should be green.
     SMOKE_HEALTHY_STREAK = 7
+    SMOKE_EVIDENCE_SCOPE = "g0_scheduled_smoke"
+    SMOKE_SOURCE_RUN_TYPE = "smoke_test_run"
+    SMOKE_CANONICAL_ONLY_REASON = (
+        "G-0 scheduled smoke validates the canonical shared pipeline; "
+        "G-2 per-operator evidence is recorded on operator-scoped monitor and experiment runs."
+    )
     SMOKE_FAILURE_CATEGORIES = (
         "credential",
         "koneps_response",
@@ -66,6 +72,11 @@ class AnalyticsReportingService:
         "db_schema",
         "prediction",
         "unknown",
+    )
+    SYNTHETIC_EVIDENCE_SCOPE = "g1_canonical_synthetic_validation"
+    SYNTHETIC_CANONICAL_ONLY_REASON = (
+        "Canonical G-1 synthetic validation aggregates preset operator slugs; "
+        "it is not a target user/operator_id run."
     )
 
     def build_operations_dashboard(
@@ -210,6 +221,9 @@ class AnalyticsReportingService:
             "recent_failures": [
                 {
                     "run_id": int(run.id),
+                    "operator_id": int(run.operator_id),
+                    "source_run_type": "operator_strategy_monitor",
+                    "source_run_id": int(run.id),
                     "trigger_source": run.trigger_source,
                     "status": run.status,
                     "error_message": run.error_message,
@@ -517,6 +531,8 @@ class AnalyticsReportingService:
                     "insufficient_operator_count": len(
                         summary.get("insufficient_operators") or []
                     ),
+                    "evidence_scope": self.SYNTHETIC_EVIDENCE_SCOPE,
+                    "canonical_only_reason": self.SYNTHETIC_CANONICAL_ONLY_REASON,
                 }
             )
 
@@ -541,6 +557,7 @@ class AnalyticsReportingService:
             sufficient_preset_count=sufficient_preset_count,
             recent_run_count=len(recent_runs),
         )
+        detail = self._with_synthetic_scope_detail(detail)
         return {
             "preset_count": len(preset_names),
             "saved_preset_count": saved_preset_count,
@@ -570,6 +587,8 @@ class AnalyticsReportingService:
                     "missing_total_settled_count": int(
                         latest_summary.get("missing_total_settled_count") or 0
                     ),
+                    "evidence_scope": self.SYNTHETIC_EVIDENCE_SCOPE,
+                    "canonical_only_reason": self.SYNTHETIC_CANONICAL_ONLY_REASON,
                 }
                 if latest_run
                 else None
@@ -705,7 +724,10 @@ class AnalyticsReportingService:
                             else self._smoke_retry_method(phase)
                         ),
                         "skip_reason": self._smoke_skip_reason(phase),
-                        "evidence": self._smoke_phase_evidence(phase),
+                        "evidence": self._smoke_phase_evidence(
+                            phase,
+                            smoke_run_id=int(latest_run.id),
+                        ),
                     }
                     for phase in self._load_smoke_phases(latest_run.phases)
                 ],
@@ -733,7 +755,10 @@ class AnalyticsReportingService:
                     "action_required": self._smoke_failure_action(phase),
                     "retry_method": self._smoke_retry_method(phase),
                     "skip_reason": self._smoke_skip_reason(phase),
-                    "evidence": self._smoke_phase_evidence(phase),
+                    "evidence": self._smoke_phase_evidence(
+                        phase,
+                        smoke_run_id=int(run.id),
+                    ),
                 }
                 for phase in failed_phases
             ]
@@ -783,6 +808,9 @@ class AnalyticsReportingService:
             "latest": latest,
             "recent_failures": recent_failures,
         }
+
+    def _with_synthetic_scope_detail(self, detail: str) -> str:
+        return f"{detail} {self.SYNTHETIC_CANONICAL_ONLY_REASON}"
 
     def _load_smoke_phases(self, raw_phases: Any) -> list[dict[str, Any]]:
         """Parse a SmokeTestRun.phases JSON string into a list of phase dicts."""
@@ -903,10 +931,34 @@ class AnalyticsReportingService:
             return detail.replace("skipped", "", 1).strip(" -—")
         return detail or None
 
-    @staticmethod
-    def _smoke_phase_evidence(phase: dict[str, Any]) -> dict[str, Any]:
+    def _smoke_phase_evidence(
+        self,
+        phase: dict[str, Any],
+        *,
+        smoke_run_id: int | None = None,
+    ) -> dict[str, Any]:
         evidence = phase.get("evidence")
-        return evidence if isinstance(evidence, dict) else {}
+        scoped = dict(evidence) if isinstance(evidence, dict) else {}
+        scoped.setdefault("evidence_scope", self.SMOKE_EVIDENCE_SCOPE)
+        phase_name = str(phase.get("name") or "")
+        monitor_run_id = self._optional_int(scoped.get("monitor_run_id"))
+        if phase_name == "candidate_generation" and monitor_run_id is not None:
+            scoped.setdefault("source_run_type", "operator_strategy_monitor")
+            scoped.setdefault("source_run_id", monitor_run_id)
+        else:
+            scoped.setdefault("source_run_type", self.SMOKE_SOURCE_RUN_TYPE)
+            if smoke_run_id is not None:
+                scoped.setdefault("source_run_id", int(smoke_run_id))
+        if smoke_run_id is not None:
+            scoped.setdefault("source_smoke_run_id", int(smoke_run_id))
+        operator_id = self._optional_int(scoped.get("operator_id") or scoped.get("current_operator_id"))
+        if operator_id is not None:
+            scoped["operator_id"] = operator_id
+            scoped.setdefault("operator_scope", "operator")
+            return scoped
+        scoped.setdefault("operator_scope", "canonical_only")
+        scoped.setdefault("canonical_only_reason", self.SMOKE_CANONICAL_ONLY_REASON)
+        return scoped
 
     @staticmethod
     def _smoke_failure_guidance(category: str) -> dict[str, str]:
@@ -1122,7 +1174,7 @@ class AnalyticsReportingService:
             },
             {
                 "key": "smoke_test_streak",
-                "label": "스모크 연속 통과",
+                "label": "G-0 scheduled smoke streak",
                 "value": smoke_test_summary["current_streak"],
                 "unit": "count",
                 "status": smoke_status,
@@ -1130,13 +1182,13 @@ class AnalyticsReportingService:
             },
             {
                 "key": "smoke_test_pass_rate",
-                "label": "스모크 사이클 통과율",
+                "label": "G-0 scheduled smoke pass rate",
                 "value": smoke_test_summary["pass_rate"],
                 "unit": "ratio",
                 "status": smoke_status,
                 "detail": (
                     f"{smoke_test_summary['passed_count']}/{smoke_test_summary['cycle_count']} "
-                    "사이클 통과 (추정 운영 검증)."
+                    "G-0 scheduled smoke cycle(s) passed; per-operator G-2 evidence lives on monitor/experiment runs."
                 ),
             },
             {
@@ -1411,12 +1463,15 @@ class AnalyticsReportingService:
             records.append({
                 "source": "strategy_monitor",
                 "record_id": int(run.id),
+                "operator_id": int(run.operator_id),
+                "source_run_type": "operator_strategy_monitor",
+                "source_run_id": int(run.id),
                 "task_id": run.task_id,
                 "task_name": OPERATOR_STRATEGY_MONITOR_TASK_NAME,
                 "queue": settings.CELERY_OPS_QUEUE,
                 "status": str(run.status or "queued"),
                 "normalized_status": self._normalize_task_status(str(run.status or "queued")),
-                "detail": str(run.trigger_source or "strategy_monitor"),
+                "detail": f"operator_id={int(run.operator_id)} trigger={run.trigger_source or 'strategy_monitor'}",
                 "error_message": run.error_message,
                 "created_at": run.created_at,
                 "started_at": run.started_at,

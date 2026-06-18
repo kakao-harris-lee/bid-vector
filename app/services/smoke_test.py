@@ -46,6 +46,12 @@ class SmokeTestReport:
 class KonepsTelegramSmokeTestService:
     """Run the smoke test phases and notify the operator via Telegram."""
 
+    SCHEDULED_SMOKE_EVIDENCE_SCOPE = "g0_scheduled_smoke"
+    SCHEDULED_SMOKE_CANONICAL_ONLY_REASON = (
+        "G-0 scheduled smoke validates the canonical shared pipeline; "
+        "G-2 per-operator evidence is recorded on operator-scoped monitor and experiment runs."
+    )
+
     FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
         "credential": {
             "action_required": "Rotate or restore the missing API/Telegram credential.",
@@ -215,7 +221,11 @@ class KonepsTelegramSmokeTestService:
             skip_reason=reason,
             data={"upstream_phase": upstream},
         )
-        return self._annotate_failure(result)
+        return self._finalize_phase(result)
+
+    def _finalize_phase(self, result: PhaseResult) -> PhaseResult:
+        result.data = self._with_phase_scope_evidence(result.name, result.data)
+        return result if result.passed else self._annotate_failure(result)
 
     def _annotate_failure(self, result: PhaseResult) -> PhaseResult:
         if result.passed:
@@ -251,15 +261,24 @@ class KonepsTelegramSmokeTestService:
             return "prediction"
         return "unknown"
 
-    @staticmethod
-    def _trim_phase_evidence(phase: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _trim_phase_evidence(cls, phase: dict[str, Any]) -> dict[str, Any]:
+        phase_name = str(phase.get("name") or "")
         evidence = phase.get("evidence")
         if isinstance(evidence, dict):
-            return evidence
+            return cls._with_phase_scope_evidence(phase_name, evidence)
         data = phase.get("data")
         if not isinstance(data, dict):
-            return {}
+            return cls._with_phase_scope_evidence(phase_name, {})
         allowed_keys = {
+            "evidence_scope",
+            "operator_scope",
+            "operator_id",
+            "current_operator_id",
+            "current_operator_username",
+            "canonical_only_reason",
+            "source_run_type",
+            "source_run_id",
             "collected_count",
             "project_id",
             "project_title",
@@ -275,7 +294,37 @@ class KonepsTelegramSmokeTestService:
             "telegram_status",
             "telegram_message_id",
         }
-        return {key: value for key, value in data.items() if key in allowed_keys and value is not None}
+        compact = {key: value for key, value in data.items() if key in allowed_keys and value is not None}
+        return cls._with_phase_scope_evidence(phase_name, compact)
+
+    @classmethod
+    def _with_phase_scope_evidence(cls, phase_name: str, evidence: dict[str, Any]) -> dict[str, Any]:
+        scoped = dict(evidence or {})
+        scoped.setdefault("evidence_scope", cls.SCHEDULED_SMOKE_EVIDENCE_SCOPE)
+
+        source_run_id = cls._optional_int(scoped.get("source_run_id") or scoped.get("monitor_run_id"))
+        if phase_name == "candidate_generation" and source_run_id is not None:
+            scoped.setdefault("source_run_type", "operator_strategy_monitor")
+            scoped.setdefault("source_run_id", source_run_id)
+
+        operator_id = cls._optional_int(scoped.get("operator_id") or scoped.get("current_operator_id"))
+        if operator_id is not None:
+            scoped["operator_id"] = operator_id
+            scoped.setdefault("operator_scope", "operator")
+            return scoped
+
+        scoped.setdefault("operator_scope", "canonical_only")
+        scoped.setdefault("canonical_only_reason", cls.SCHEDULED_SMOKE_CANONICAL_ONLY_REASON)
+        return scoped
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _phase_koneps_collect(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="koneps_collect")
@@ -294,7 +343,7 @@ class KonepsTelegramSmokeTestService:
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase koneps_collect failed")
-        return result if result.passed else self._annotate_failure(result)
+        return self._finalize_phase(result)
 
     def _phase_sbert_embedding(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="sbert_embedding")
@@ -308,11 +357,11 @@ class KonepsTelegramSmokeTestService:
             if row is None:
                 result.detail = "no recent project"
                 result.skip_reason = "no recent project"
-                return self._annotate_failure(result)
+                return self._finalize_phase(result)
             model = row[2] or ""
             if "fallback-hash" in model:
                 result.detail = f"fallback embedding: {model}"
-                return self._annotate_failure(result)
+                return self._finalize_phase(result)
             result.data["project"] = {"id": int(row[0]), "title": row[1], "budget_estimate": float(row[3] or 0)}
             result.data["project_id"] = int(row[0])
             result.data["project_title"] = row[1]
@@ -321,7 +370,7 @@ class KonepsTelegramSmokeTestService:
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase sbert_embedding failed")
-        return result if result.passed else self._annotate_failure(result)
+        return self._finalize_phase(result)
 
     def _phase_predict_price(self, db: Session, project_info: dict) -> PhaseResult:
         result = PhaseResult(name="predict_price")
@@ -336,7 +385,7 @@ class KonepsTelegramSmokeTestService:
                 result.detail = f"id={project.id} no usable budget"
                 result.data["project_id"] = int(project.id)
                 result.skip_reason = "no usable budget"
-                return self._annotate_failure(result)
+                return self._finalize_phase(result)
             desc = " ".join(p for p in [project.title, project.description or "", project.requirements or ""] if p)
             bg = resolve_business_group(project.business_type_code)
             cs = BacktestCutoffService()
@@ -369,7 +418,7 @@ class KonepsTelegramSmokeTestService:
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase predict_price failed")
-        return result if result.passed else self._annotate_failure(result)
+        return self._finalize_phase(result)
 
     def _phase_candidate_generation(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="candidate_generation")
@@ -385,6 +434,11 @@ class KonepsTelegramSmokeTestService:
             )
             evidence = {
                 "monitor_run_id": monitor_result.get("monitor_run_id"),
+                "source_run_type": "operator_strategy_monitor",
+                "source_run_id": monitor_result.get("monitor_run_id"),
+                "operator_id": monitor_result.get("operator_id"),
+                "current_operator_id": monitor_result.get("current_operator_id"),
+                "current_operator_username": monitor_result.get("current_operator_username"),
                 "evaluated_project_count": int(monitor_result.get("evaluated_project_count") or 0),
                 "selected_candidate_count": int(monitor_result.get("selected_candidate_count") or 0),
                 "persisted_candidate_count": int(monitor_result.get("persisted_candidate_count") or 0),
@@ -414,7 +468,7 @@ class KonepsTelegramSmokeTestService:
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase candidate_generation failed")
-        return result if result.passed else self._annotate_failure(result)
+        return self._finalize_phase(result)
 
     def _phase_telegram_ping(self, *, report: SmokeTestReport, prior_phases: list[PhaseResult]) -> PhaseResult:
         result = PhaseResult(name="telegram_ping")
@@ -423,7 +477,7 @@ class KonepsTelegramSmokeTestService:
             svc = TelegramNotificationService()
             if not svc.is_configured():
                 result.detail = "telegram not configured"
-                return self._annotate_failure(result)
+                return self._finalize_phase(result)
 
             lines = [
                 f"[smoke] bid-vector e2e {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
@@ -442,4 +496,4 @@ class KonepsTelegramSmokeTestService:
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase telegram_ping failed")
-        return result if result.passed else self._annotate_failure(result)
+        return self._finalize_phase(result)
