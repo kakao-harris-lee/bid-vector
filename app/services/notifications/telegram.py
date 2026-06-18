@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from app.core.config import settings
+
+
+@dataclass(frozen=True)
+class BidDecisionCallbackRoute:
+    """Parsed bid-decision callback routing key."""
+
+    decision_record_id: int
+    action: str
+    operator_id: int | None
+    is_legacy: bool = False
 
 
 class TelegramNotificationService:
@@ -258,34 +269,78 @@ class TelegramNotificationService:
         )
         return self.build_message("투찰 완료 알림", message, url)
 
-    def build_bid_decision_reply_markup(self, decision_record_id: int) -> dict[str, object]:
+    def build_bid_decision_reply_markup(
+        self,
+        decision_record_id: int,
+        operator_id: int | None = None,
+    ) -> dict[str, object]:
         """Build inline action buttons for a Telegram bid-decision alert."""
         return {
             "inline_keyboard": [[
                 {
                     "text": "✅ 투찰",
-                    "callback_data": self.build_bid_decision_callback_data(decision_record_id, "submit"),
+                    "callback_data": self.build_bid_decision_callback_data(
+                        decision_record_id,
+                        "submit",
+                        operator_id=operator_id,
+                    ),
                 },
                 {
                     "text": "🕒 검토",
-                    "callback_data": self.build_bid_decision_callback_data(decision_record_id, "review"),
+                    "callback_data": self.build_bid_decision_callback_data(
+                        decision_record_id,
+                        "review",
+                        operator_id=operator_id,
+                    ),
                 },
                 {
                     "text": "⛔ 보류",
-                    "callback_data": self.build_bid_decision_callback_data(decision_record_id, "skip"),
+                    "callback_data": self.build_bid_decision_callback_data(
+                        decision_record_id,
+                        "skip",
+                        operator_id=operator_id,
+                    ),
                 },
             ]],
         }
 
-    def build_bid_decision_callback_data(self, decision_record_id: int, action: str) -> str:
+    def build_bid_decision_callback_data(
+        self,
+        decision_record_id: int,
+        action: str,
+        operator_id: int | None = None,
+    ) -> str:
         """Build compact callback data for Telegram decision buttons."""
+        if operator_id is not None:
+            return f"{self.CALLBACK_PREFIX}:{int(operator_id)}:{int(decision_record_id)}:{action}"
         return f"{self.CALLBACK_PREFIX}:{decision_record_id}:{action}"
 
     def parse_bid_decision_callback_data(self, callback_data: str) -> tuple[int, str] | None:
-        """Parse callback data from Telegram inline decision buttons."""
-        try:
-            prefix, record_id, action = callback_data.split(":", maxsplit=2)
-        except ValueError:
+        """Parse callback data from Telegram inline decision buttons.
+
+        This legacy helper returns only the decision id and action. Use
+        :meth:`parse_bid_decision_callback_route` when owner validation matters.
+        """
+        route = self.parse_bid_decision_callback_route(callback_data)
+        if route is None:
+            return None
+        return route.decision_record_id, route.action
+
+    def parse_bid_decision_callback_route(self, callback_data: str) -> BidDecisionCallbackRoute | None:
+        """Parse owner-aware and canonical legacy bid-decision callbacks."""
+        parts = str(callback_data or "").split(":")
+        if len(parts) == 3:
+            prefix, record_id, action = parts
+            operator_id = None
+            is_legacy = True
+        elif len(parts) == 4:
+            prefix, raw_operator_id, record_id, action = parts
+            try:
+                operator_id = int(raw_operator_id)
+            except ValueError:
+                return None
+            is_legacy = False
+        else:
             return None
 
         if prefix != self.CALLBACK_PREFIX:
@@ -294,6 +349,12 @@ class TelegramNotificationService:
             return None
 
         try:
-            return int(record_id), action
+            decision_record_id = int(record_id)
         except ValueError:
             return None
+        return BidDecisionCallbackRoute(
+            decision_record_id=decision_record_id,
+            action=action,
+            operator_id=operator_id,
+            is_legacy=is_legacy,
+        )
