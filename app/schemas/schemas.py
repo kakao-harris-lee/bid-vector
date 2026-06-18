@@ -2789,6 +2789,7 @@ class SyntheticExperimentSampleGapRunReference(BaseModel):
     scenario: str = "base"
     settle_actions: bool = False
     params: Dict[str, Any] = Field(default_factory=dict)
+    operator_slugs: List[str] = Field(default_factory=list)
     synthetic_only: bool = True
     report_status: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
@@ -2849,6 +2850,45 @@ class SyntheticExperimentSampleGapPlanResponse(BaseModel):
     gap_count: int = Field(ge=0)
     warnings: List[SyntheticExperimentSampleGapWarning] = Field(default_factory=list)
     gaps: List[SyntheticExperimentSampleGapItem] = Field(default_factory=list)
+
+
+class SyntheticExperimentSampleGapCandidateRequest(BaseModel):
+    """Select one sample gap and ask for a read-only experiment/run candidate."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    dimension: Literal["preset", "category", "business_type", "budget_band"]
+    key: str = Field(min_length=1, max_length=200)
+    max_runs: int = Field(default=20, ge=1, le=100)
+    action_code: Optional[str] = Field(default=None, max_length=100)
+
+
+class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
+    """Runnable follow-up candidate derived from one sample-gap recommendation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    generated_at: datetime
+    gap: SyntheticExperimentSampleGapItem
+    action_code: str
+    action_label: str
+    preset_name: Optional[str] = None
+    params: SyntheticExperimentParams
+    operator_slugs: List[str] = Field(default_factory=list)
+    experiment_payload: SyntheticExperimentCreate
+    experiment_id: Optional[int] = None
+    latest_run_id: Optional[int] = None
+    latest_run_status: Optional[str] = None
+    next_step: Literal[
+        "resolve_mixed_data",
+        "run_existing_experiment",
+        "save_preset",
+        "create_experiment",
+    ]
+    run_allowed: bool
+    blocked_by_warnings: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    message: str
 
 
 # --- Experiment Lab (Phase 4): A/B run comparison -----------------------------

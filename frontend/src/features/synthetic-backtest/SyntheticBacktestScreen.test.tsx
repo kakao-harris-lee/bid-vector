@@ -5,6 +5,9 @@ import { toastApi } from "@/shared/components/ui";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type {
   SyntheticBacktestRunResponse,
+  SyntheticExperimentResponse,
+  SyntheticExperimentSampleGapPlanResponse,
+  SyntheticExperimentSampleGapRunCandidateResponse,
   SyntheticOperatorListResponse,
   SyntheticSeedResponse
 } from "@/shared/types/synthetic";
@@ -127,6 +130,85 @@ const runResponse: SyntheticBacktestRunResponse = {
   ]
 };
 
+const sampleGapPlan: SyntheticExperimentSampleGapPlanResponse = {
+  generated_at: "2026-06-18T00:00:00Z",
+  max_runs: 20,
+  scanned_completed_run_count: 1,
+  source_run_count: 1,
+  legacy_summary_run_count: 0,
+  gap_count: 1,
+  warnings: [],
+  gaps: [
+    {
+      priority: 1,
+      dimension: "category",
+      key: "software",
+      settled_count: 18,
+      sample_target: 30,
+      missing_settled_count: 12,
+      total_missing_settled_count: 12,
+      source_run_count: 1,
+      related_preset_names: ["g1-software-base-12m"],
+      related_run_ids: [9],
+      related_runs: [],
+      warnings: [],
+      recommendation: {
+        preset_name: "g1-software-base-12m",
+        params: { category: "software", limit: 200 },
+        actions: [
+          {
+            code: "rerun_related_preset",
+            label: "Rerun related preset",
+            detail: "Repeat the related synthetic experiment preset."
+          }
+        ]
+      }
+    }
+  ]
+};
+
+const experimentResponse: SyntheticExperimentResponse = {
+  id: 7,
+  name: "g1-software-base-12m",
+  description: "G-1 소프트웨어 입찰 2025년 12개월 base preset",
+  params: {
+    start_at: "2025-01-01T00:00:00+00:00",
+    end_at: "2025-12-31T23:59:59+00:00",
+    category: "software",
+    limit: 200,
+    scenario: "base",
+    settle_actions: false
+  },
+  operator_slugs: ["sw-small-seoul", "sw-mid-metro", "sw-large-national"],
+  created_at: "2026-06-18T00:00:00Z",
+  updated_at: "2026-06-18T00:00:00Z",
+  runs: []
+};
+
+const sampleGapCandidate: SyntheticExperimentSampleGapRunCandidateResponse = {
+  generated_at: "2026-06-18T00:00:00Z",
+  gap: sampleGapPlan.gaps![0],
+  action_code: "rerun_related_preset",
+  action_label: "Rerun related preset",
+  preset_name: "g1-software-base-12m",
+  params: experimentResponse.params,
+  operator_slugs: experimentResponse.operator_slugs,
+  experiment_payload: {
+    name: "g1-software-base-12m",
+    description: "Sample-gap follow-up candidate for category:software.",
+    params: experimentResponse.params,
+    operator_slugs: experimentResponse.operator_slugs
+  },
+  experiment_id: experimentResponse.id,
+  latest_run_id: 9,
+  latest_run_status: "completed",
+  next_step: "run_existing_experiment",
+  run_allowed: true,
+  blocked_by_warnings: [],
+  warnings: [],
+  message: "Existing experiment is ready to select and run asynchronously."
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -218,6 +300,55 @@ describe("SyntheticBacktestScreen", () => {
     await waitFor(() => {
       const rowsResorted = screen.getAllByRole("row");
       expect(rowsResorted[1]).toHaveTextContent("공격적 운영자");
+    });
+  });
+
+  it("sample-gap 후보를 기존 실험 선택으로 연결한다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
+      if (url === "/api/v1/synthetic/experiments/presets") {
+        return jsonResponse({ presets: [] });
+      }
+      if (url === "/api/v1/synthetic/experiments") return jsonResponse([]);
+      if (url === "/api/v1/synthetic/experiments/sample-gaps?max_runs=20") {
+        return jsonResponse(sampleGapPlan);
+      }
+      if (
+        url === "/api/v1/synthetic/experiments/sample-gaps/candidates" &&
+        init?.method === "POST"
+      ) {
+        return jsonResponse(sampleGapCandidate);
+      }
+      if (url === "/api/v1/synthetic/experiments/7") {
+        return jsonResponse(experimentResponse);
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByLabelText("sample-gap 실행 후보")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Rerun related preset" }));
+
+    expect(await screen.findByLabelText("선택된 sample-gap 후보")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "기존 실험 선택" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "g1-software-base-12m", level: 3 })
+    ).toBeInTheDocument();
+
+    const candidateCall = fetchMock.mock.calls.find(
+      ([input]) => String(input) === "/api/v1/synthetic/experiments/sample-gaps/candidates"
+    );
+    expect(candidateCall).toBeTruthy();
+    const body = JSON.parse(String((candidateCall?.[1] as RequestInit).body));
+    expect(body).toMatchObject({
+      dimension: "category",
+      key: "software",
+      action_code: "rerun_related_preset"
     });
   });
 });
