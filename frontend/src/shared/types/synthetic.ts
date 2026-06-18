@@ -210,6 +210,105 @@ export interface SyntheticExperimentSummary extends Record<string, unknown> {
   sample_report?: SyntheticSampleReport | null;
 }
 
+// --- Experiment Lab sample-gap execution candidates --------------------------
+
+export interface SyntheticExperimentSampleGapWarning {
+  code: string;
+  message: string;
+  run_ids?: number[];
+  operator_slugs?: string[];
+}
+
+export interface SyntheticExperimentSampleGapRunReference {
+  run_id: number;
+  experiment_id: number;
+  preset_name?: string | null;
+  status: string;
+  finished_at?: string | null;
+  start_at?: string | null;
+  end_at?: string | null;
+  category?: string | null;
+  limit?: number | null;
+  scenario: string;
+  settle_actions: boolean;
+  params?: Record<string, unknown>;
+  operator_slugs?: string[];
+  synthetic_only: boolean;
+  report_status?: string | null;
+  warnings?: string[];
+}
+
+export interface SyntheticExperimentSampleGapAction {
+  code: string;
+  label: string;
+  detail: string;
+}
+
+export interface SyntheticExperimentSampleGapRecommendation {
+  preset_name?: string | null;
+  params?: Record<string, unknown>;
+  actions?: SyntheticExperimentSampleGapAction[];
+}
+
+export interface SyntheticExperimentSampleGapItem {
+  priority: number;
+  dimension: "preset" | "category" | "business_type" | "budget_band" | string;
+  key: string;
+  settled_count: number;
+  sample_target: number;
+  missing_settled_count: number;
+  total_missing_settled_count: number;
+  source_run_count: number;
+  related_preset_names?: string[];
+  related_run_ids?: number[];
+  related_runs?: SyntheticExperimentSampleGapRunReference[];
+  recommendation: SyntheticExperimentSampleGapRecommendation;
+  warnings?: string[];
+}
+
+export interface SyntheticExperimentSampleGapPlanResponse {
+  generated_at: string;
+  max_runs: number;
+  scanned_completed_run_count: number;
+  source_run_count: number;
+  legacy_summary_run_count: number;
+  gap_count: number;
+  warnings?: SyntheticExperimentSampleGapWarning[];
+  gaps?: SyntheticExperimentSampleGapItem[];
+}
+
+export interface SyntheticExperimentSampleGapCandidateRequest {
+  dimension: "preset" | "category" | "business_type" | "budget_band" | string;
+  key: string;
+  max_runs?: number;
+  action_code?: string | null;
+}
+
+export type SyntheticExperimentSampleGapCandidateNextStep =
+  | "resolve_mixed_data"
+  | "run_existing_experiment"
+  | "save_preset"
+  | "create_experiment";
+
+export interface SyntheticExperimentSampleGapRunCandidateResponse {
+  generated_at: string;
+  gap: SyntheticExperimentSampleGapItem;
+  action_code: string;
+  action_label: string;
+  preset_name?: string | null;
+  params: SyntheticExperimentParams;
+  operator_slugs?: string[];
+  experiment_payload: SyntheticExperimentCreateRequest;
+  experiment_id?: number | null;
+  latest_run_id?: number | null;
+  latest_run_status?: string | null;
+  next_step: SyntheticExperimentSampleGapCandidateNextStep;
+  run_allowed: boolean;
+  blocked_by_warnings?: string[];
+  warnings?: string[];
+  message: string;
+}
+
 // --- Experiment Lab breakdown (Phase 2) --------------------------------------
 // 생성 파일 `openapi.d.ts`의 SyntheticExperimentBreakdown 스키마와 동형.
 // 화면(리더보드/분해 시각화)에서 다루기 쉽게 보조 타입으로 재선언한다.

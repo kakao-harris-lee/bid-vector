@@ -487,6 +487,95 @@ def test_sample_gap_plan_ignores_failed_and_flags_legacy_and_mixed_data(
     } >= {"review_operator_mix", "rerun_synthetic_only"}
 
 
+def test_sample_gap_run_candidate_builds_existing_preset_payload(client, test_db):
+    run = _persist_experiment_run(
+        test_db,
+        name="g1-software-base-12m",
+        summary=_sample_gap_summary(
+            preset_name="g1-software-base-12m",
+            category="software",
+            lacking_groups=[
+                {
+                    "dimension": "category",
+                    "key": "software",
+                    "settled_count": 18,
+                    "sample_target": 30,
+                    "missing_settled_count": 12,
+                },
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/synthetic/experiments/sample-gaps/candidates",
+        json={"dimension": "category", "key": "software", "max_runs": 10},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["gap"]["dimension"] == "category"
+    assert body["gap"]["key"] == "software"
+    assert body["action_code"] == "rerun_related_preset"
+    assert body["preset_name"] == "g1-software-base-12m"
+    assert body["experiment_id"] == run.experiment_id
+    assert body["latest_run_id"] == run.id
+    assert body["next_step"] == "run_existing_experiment"
+    assert body["run_allowed"] is True
+    assert body["params"]["category"] == "software"
+    assert body["experiment_payload"]["params"]["category"] == "software"
+    assert body["operator_slugs"] == [
+        "sw-small-seoul",
+        "sw-mid-metro",
+        "sw-large-national",
+    ]
+    assert body["experiment_payload"]["operator_slugs"] == body["operator_slugs"]
+
+
+def test_sample_gap_run_candidate_blocks_mixed_data_before_run(client, test_db):
+    _persist_experiment_run(
+        test_db,
+        name="g1-service-base-12m",
+        summary=_sample_gap_summary(
+            preset_name="g1-service-base-12m",
+            category=None,
+            synthetic_only=False,
+            non_synthetic_operator_slugs=["operator"],
+            lacking_groups=[
+                {
+                    "dimension": "business_type",
+                    "key": "service",
+                    "settled_count": 3,
+                    "sample_target": 30,
+                    "missing_settled_count": 27,
+                }
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/synthetic/experiments/sample-gaps/candidates",
+        json={"dimension": "business_type", "key": "service", "max_runs": 10},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["action_code"] == "rerun_synthetic_only"
+    assert body["next_step"] == "resolve_mixed_data"
+    assert body["run_allowed"] is False
+    assert body["blocked_by_warnings"] == ["canonical_synthetic_mixed"]
+    assert body["warnings"] == ["canonical_synthetic_mixed"]
+    assert "canonical/operator data mixed" in body["message"]
+
+
+def test_sample_gap_run_candidate_returns_404_for_unknown_gap(client):
+    response = client.post(
+        "/api/v1/synthetic/experiments/sample-gaps/candidates",
+        json={"dimension": "category", "key": "missing", "max_runs": 10},
+    )
+
+    assert response.status_code == 404
+
+
 # --- eager persistence (run -> results land in the DB) ------------------------
 
 

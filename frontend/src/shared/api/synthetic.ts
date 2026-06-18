@@ -15,6 +15,9 @@ import type {
   SyntheticExperimentPresetListResponse,
   SyntheticExperimentResponse,
   SyntheticExperimentRunResponse,
+  SyntheticExperimentSampleGapCandidateRequest,
+  SyntheticExperimentSampleGapPlanResponse,
+  SyntheticExperimentSampleGapRunCandidateResponse,
   SyntheticOperatorListResponse,
   SyntheticSeedResponse
 } from "@/shared/types/synthetic";
@@ -179,6 +182,37 @@ export function fetchExperimentRun(
       { token }
     ),
     "실험 런 상태를 불러오지 못했습니다."
+  );
+}
+
+export function fetchExperimentSampleGaps(
+  maxRuns = 20,
+  token?: string | null
+): Promise<SyntheticExperimentSampleGapPlanResponse> {
+  const query = new URLSearchParams({ max_runs: String(maxRuns) });
+  return wrap(
+    apiRequest<SyntheticExperimentSampleGapPlanResponse>(
+      `/api/v1/synthetic/experiments/sample-gaps?${query.toString()}`,
+      { token }
+    ),
+    "sample-gap 계획을 불러오지 못했습니다."
+  );
+}
+
+export function buildExperimentSampleGapCandidate(
+  payload: SyntheticExperimentSampleGapCandidateRequest,
+  token?: string | null
+): Promise<SyntheticExperimentSampleGapRunCandidateResponse> {
+  return wrap(
+    apiRequest<SyntheticExperimentSampleGapRunCandidateResponse>(
+      "/api/v1/synthetic/experiments/sample-gaps/candidates",
+      {
+        method: "POST",
+        body: payload,
+        token
+      }
+    ),
+    "sample-gap 실행 후보를 만들지 못했습니다."
   );
 }
 
