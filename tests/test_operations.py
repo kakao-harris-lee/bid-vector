@@ -6,6 +6,7 @@ import json
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.models.models import (
+    Analytics,
     BidDecisionRecord,
     CompanyProfile,
     CrawlJob,
@@ -24,6 +25,7 @@ from app.schemas.schemas import (
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
 from app.services.koneps.collector import KonepsCollectorService
+from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
 from app.services.opportunity_analysis import OpportunityAnalysisService
@@ -2836,6 +2838,23 @@ def test_notify_telegram_endpoint_attempts_delivery_when_configured(
     assert "Telegram delivery succeeded." in data["detail"]
 
 
+def test_telegram_send_message_skips_api_in_test_environment(monkeypatch):
+    """Configured Telegram delivery must still avoid external API calls in test."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "test")
+
+    def fail_post(self, method_name: str, payload: dict[str, object]):
+        raise AssertionError("ENVIRONMENT=test must not call Telegram Bot API")
+
+    monkeypatch.setattr(TelegramNotificationService, "_post_json", fail_post)
+
+    delivery = TelegramNotificationService().send_message("dry-run only")
+
+    assert delivery["sent"] is False
+    assert delivery["status"] == "skipped_test_environment"
+
+
 def test_telegram_callback_updates_bid_decision_state(client, test_db, monkeypatch):
     """Telegram callback endpoint should update the persisted bid decision and acknowledge the action."""
     acknowledgements: list[tuple[str, str]] = []
@@ -3233,6 +3252,78 @@ def test_telegram_callback_unauthorized_chat_is_ignored(client, test_db, monkeyp
         .one()
     )
     assert record.decision_status == saved_status
+
+
+def test_telegram_callback_owner_route_cannot_cross_operator(
+    client,
+    test_db,
+    monkeypatch,
+):
+    """Decision callback payloads cannot use one operator route to mutate another operator's record."""
+    deliveries: list[dict] = []
+    acknowledgements: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append({"message": message, "chat_id": chat_id})
+        return {"sent": True, "status": "sent", "detail": "ok"}
+
+    def fake_answer(self, callback_query_id: str, text: str):
+        acknowledgements.append((callback_query_id, text))
+        return {"sent": True, "status": "sent", "detail": "ok"}
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+    monkeypatch.setattr(
+        TelegramNotificationService,
+        "answer_callback_query",
+        fake_answer,
+    )
+
+    canonical = _create_operator_user(test_db, username="operator")
+    synthetic = _create_operator_user(test_db, username="synthetic-sw-small-seoul")
+    _canonical_record = _seed_action_decision(test_db, operator_id=canonical.id)
+    synthetic_record = _seed_action_decision(test_db, operator_id=synthetic.id)
+
+    callback_payloads = [
+        f"bid-decision:{canonical.id}:{synthetic_record.id}:submit",
+        f"bid-decision:{synthetic.id}:{synthetic_record.id}:submit",
+        f"bid-decision:{synthetic_record.id}:submit",
+    ]
+    for index, callback_data in enumerate(callback_payloads, start=1):
+        response = client.post(
+            "/api/v1/operations/telegram/callback",
+            json={
+                "update_id": index,
+                "callback_query": {
+                    "id": f"callback-cross-{index}",
+                    "data": callback_data,
+                    "message": {
+                        "message_id": 100 + index,
+                        "chat": {"id": 1594710346},
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["status"] == "ignored"
+        assert "Bid decision record not found" in payload["detail"]
+
+    assert deliveries == []
+    assert acknowledgements == [
+        ("callback-cross-1", "처리할 입찰 판단을 찾지 못했습니다"),
+        ("callback-cross-2", "처리할 입찰 판단을 찾지 못했습니다"),
+        ("callback-cross-3", "처리할 입찰 판단을 찾지 못했습니다"),
+    ]
+
+    test_db.refresh(synthetic_record)
+    assert synthetic_record.decision_status == "reviewing"
+    assert synthetic_record.action == "review"
 
 
 def test_telegram_text_action_updates_latest_active_bid_decision(
@@ -4315,6 +4406,119 @@ def _seed_action_decision(
     test_db.commit()
     test_db.refresh(record)
     return record
+
+
+def test_canonical_operator_notification_uses_owner_routed_callback_payload(
+    test_db,
+    monkeypatch,
+):
+    """Canonical Telegram notifications include the operator owner in callback routing keys."""
+    deliveries: list[dict] = []
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+    def fake_send(self, message: str, reply_markup=None, chat_id=None):
+        deliveries.append(
+            {"message": message, "reply_markup": reply_markup, "chat_id": chat_id}
+        )
+        return {"sent": True, "status": "sent", "detail": "ok"}
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fake_send)
+
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(
+        test_db,
+        operator_id=canonical.id,
+        action="bid_now",
+        decision_status="planned",
+    )
+    record.priority_score = 0.99
+    record.probability_score = 0.99
+    test_db.commit()
+    test_db.refresh(record)
+
+    notification = OperatorNotificationService().create_bid_decision_notification(
+        test_db,
+        operator_id=canonical.id,
+        project=record.project,
+        decision_record=record,
+    )
+
+    assert notification.user_id == canonical.id
+    assert deliveries, "canonical operator notification should still deliver to Telegram"
+    reply_markup = deliveries[-1]["reply_markup"]
+    submit_callback = reply_markup["inline_keyboard"][0][0]["callback_data"]
+    assert submit_callback == f"bid-decision:{canonical.id}:{record.id}:submit"
+
+
+def test_synthetic_operator_notification_records_dry_run_without_telegram_send(
+    test_db,
+    monkeypatch,
+):
+    """Synthetic operator notifications stay in-app and record Telegram dry-run evidence."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+    def fail_send(self, message: str, reply_markup=None, chat_id=None):
+        raise AssertionError("synthetic operator notifications must not call Telegram")
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fail_send)
+
+    synthetic = _create_operator_user(test_db, username="synthetic-sw-small-seoul")
+    record = _seed_action_decision(
+        test_db,
+        operator_id=synthetic.id,
+        action="bid_now",
+        decision_status="planned",
+    )
+    record.priority_score = 0.99
+    record.probability_score = 0.99
+    test_db.commit()
+    test_db.refresh(record)
+
+    notification = OperatorNotificationService().create_bid_decision_notification(
+        test_db,
+        operator_id=synthetic.id,
+        project=record.project,
+        decision_record=record,
+    )
+
+    assert notification.user_id == synthetic.id
+    event = (
+        test_db.query(Analytics)
+        .filter(
+            Analytics.user_id == synthetic.id,
+            Analytics.event_type == "telegram.delivery",
+        )
+        .one()
+    )
+    event_data = json.loads(event.event_data)
+    assert event_data["operator_id"] == synthetic.id
+    assert event_data["notification_id"] == notification.id
+    assert event_data["sent"] is False
+    assert event_data["status"] == "skipped_synthetic_operator"
+
+
+def test_bid_decision_notification_rejects_mismatched_owner(test_db):
+    """Notification creation must not bind one operator to another operator's decision."""
+    import pytest
+
+    canonical = _create_operator_user(test_db, username="operator")
+    synthetic = _create_operator_user(test_db, username="synthetic-sw-small-seoul")
+    synthetic_record = _seed_action_decision(test_db, operator_id=synthetic.id)
+
+    with pytest.raises(ValueError, match="Notification owner"):
+        OperatorNotificationService().create_bid_decision_notification(
+            test_db,
+            operator_id=canonical.id,
+            project=synthetic_record.project,
+            decision_record=synthetic_record,
+        )
+
+    assert test_db.query(Notification).count() == 0
 
 
 def test_apply_bid_decision_action_submit_transitions_to_submitted(client, test_db):

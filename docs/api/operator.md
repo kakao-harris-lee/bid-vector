@@ -1,7 +1,8 @@
 # Operator API
 
 > 베이스 경로: `/api/v1/operator` · 베이스 URL 예시: `http://localhost:3000`
-> 인증: 이 라우터에는 인증 의존성이 없다. bid-vector는 **단일 운영자(single-operator) 모델**이라 모든 핸들러가 서버 측에서 canonical 운영자(`CompanyProfile.user_id`·`OperatorStrategy.user_id` 각각 unique)를 자동 확보한다. 토큰 없이 호출하며 운영자/프로필/전략은 항상 1개다.
+> 인증: Bearer 토큰은 선택이다. 토큰이 없으면 legacy 단일 운영자 경로로 canonical `operator`를 사용한다. 토큰이 있으면 토큰 소유자가 기본 target이고, canonical `operator` 또는 admin만 `?operator_id=`로 다른 운영자(`synthetic-*` 포함)를 조회/실행할 수 있다.
+> operator context: `operator_id`는 응답 데이터가 귀속된 target 운영자다. `current_operator_id`/`current_operator_username`도 프론트가 현재 선택한 회사로 표시해야 하는 target 운영자를 뜻한다. 프론트는 선택값이 `null`이면 `operator_id` query를 생략하고, privileged 사용자가 다른 회사를 선택했을 때만 숫자 `operator_id`를 전달한다.
 > 도메인 요약: **프로필**(`CompanyProfile`)은 면허·지역·매출 등 적합도 정보를, **전략**(`OperatorStrategy`)은 어떤 공고를 감시·우선순위화할지 규칙을 담는다. **전략 모니터링**은 매칭 후보를 평가해 입찰 판단(`BidDecisionRecord`)을 영속화하고 알림을 만든다.
 
 ## 목차
@@ -312,15 +313,16 @@ curl "http://localhost:3000/api/v1/operator/strategy/candidates?limit=20&high_pr
 
 ## POST /api/v1/operator/strategy/monitor
 
-저장된 전략을 즉시(동기) 실행해 매칭 후보를 평가하고, 각 후보의 입찰 판단(`BidDecisionRecord`)을 영속화하며 운영자 알림을 생성한다. "지금 한 번 돌려" 동작에 사용. **부수효과가 있으므로** 미리보기(`/strategy/candidates`)와 구분된다.
+저장된 target 운영자 전략을 즉시(동기) 실행해 매칭 후보를 평가하고, 각 후보의 입찰 판단(`BidDecisionRecord`)을 target 운영자에 영속화하며 운영자 알림을 생성한다. "지금 한 번 돌려" 동작에 사용. **부수효과가 있으므로** 미리보기(`/strategy/candidates`)와 구분된다.
 
-- 인증: 불필요(단일 운영자).
+- 인증: 선택. 토큰 없음 + `operator_id` 생략은 canonical 운영자로 실행한다. 토큰 없음 + canonical이 아닌 `operator_id`는 `403`; 토큰이 있어도 non-privileged 사용자의 cross-operator target은 `403`.
 - 도메인: 응답은 이전 실행 대비 신규/연속/탈락 후보를 diff로 집계. `same_category_only`/`similar_limit`/`min_similarity`는 pgvector 유사 사례 검색 파라미터. 각 결과는 영속화된 `decision_record_id`와 (생성됐다면) `notification_id`를 포함.
 
 **파라미터**
 
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
+| query | operator_id | integer\|null | 아니오 | target 운영자 id. 생략 시 토큰 소유자, 토큰이 없으면 canonical `operator` |
 | body | limit | integer\|null | 아니오 | 후보 상한, 1~100 |
 | body | high_priority_only | boolean\|null | 아니오 | 고우선순위만 |
 | body | max_active_bids | integer | 아니오 | 동시 진행 입찰 상한, >=1 (기본 3) |
@@ -331,7 +333,8 @@ curl "http://localhost:3000/api/v1/operator/strategy/candidates?limit=20&high_pr
 
 **요청 예시**
 ```bash
-curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor \
+curl -X POST "http://localhost:3000/api/v1/operator/strategy/monitor?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "limit": 20,
@@ -350,7 +353,9 @@ curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor \
   "task_id": null,
   "trigger_source": "operator.sync",
   "previous_run_id": 56,
-  "operator_id": 1,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "evaluated_project_count": 134,
   "selected_candidate_count": 5,
   "persisted_candidate_count": 5,
@@ -388,15 +393,18 @@ curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor \
 
 | 코드 | 의미 |
 |---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | privileged 호출자가 지정한 `operator_id`가 존재하지 않음 |
 | 422 | 요청 필드 범위 위반 |
 
 ---
 
 ## GET /api/v1/operator/strategy/monitor/runs
 
-싱글톤 운영자의 최근 전략 모니터링 실행 이력을 최신순으로 반환한다. 모니터링 결과 추적 또는 실패 실행 조회에 사용한다(대시보드의 "모니터링 실패" 카드가 `?status=failed`로 링크).
+target 운영자의 최근 전략 모니터링 실행 이력을 최신순으로 반환한다. 모니터링 결과 추적 또는 실패 실행 조회에 사용한다(대시보드의 "모니터링 실패" 카드가 `?status=failed`로 링크).
 
-- 인증: 불필요(단일 운영자).
+- 인증: 선택. 토큰 없음 + `operator_id` 생략은 canonical 운영자 이력을 반환한다. 토큰 없음 + canonical이 아닌 `operator_id`는 `403`; non-privileged 사용자의 cross-operator 조회도 `403`.
 - 도메인: `trigger_source`는 실행 출처(동기/비동기 등). `status` 쿼리로 상태별 필터.
 
 **파라미터**
@@ -405,21 +413,27 @@ curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor \
 |---|---|---|---|---|
 | query | limit | integer | 아니오 | 반환 수, 1~100 (기본 20) |
 | query | status | string\|null | 아니오 | 상태 필터(queued/running/completed/failed/cancelled) |
+| query | operator_id | integer\|null | 아니오 | target 운영자 id. 생략 시 토큰 소유자, 토큰이 없으면 canonical `operator` |
 
 **요청 예시**
 ```bash
-curl "http://localhost:3000/api/v1/operator/strategy/monitor/runs?limit=20&status=failed"
+curl "http://localhost:3000/api/v1/operator/strategy/monitor/runs?limit=20&status=failed&operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
 **응답 200**
 ```json
 {
-  "operator_id": 1,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "result_count": 1,
   "runs": [
     {
       "id": 57,
-      "operator_id": 1,
+      "operator_id": 11,
+      "current_operator_id": 11,
+      "current_operator_username": "synthetic-aggressive",
       "task_id": null,
       "trigger_source": "operator.sync",
       "status": "failed",
@@ -442,15 +456,18 @@ curl "http://localhost:3000/api/v1/operator/strategy/monitor/runs?limit=20&statu
 
 | 코드 | 의미 |
 |---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | privileged 호출자가 지정한 `operator_id`가 존재하지 않음 |
 | 422 | limit 범위(1~100) 위반 |
 
 ---
 
 ## GET /api/v1/operator/strategy/monitor/runs/{run_id}
 
-단일 모니터링 실행의 전체 상세를 반환한다. 실행 요약뿐 아니라 요청 페이로드, 전체 결과 객체, 이전 실행 대비 신규/연속/탈락 후보 목록까지 펼쳐 보여준다. 이력에서 한 건을 클릭해 상세를 볼 때 사용.
+target 운영자에 속한 단일 모니터링 실행의 전체 상세를 반환한다. 실행 요약뿐 아니라 요청 페이로드, 전체 결과 객체, 이전 실행 대비 신규/연속/탈락 후보 목록까지 펼쳐 보여준다. 이력에서 한 건을 클릭해 상세를 볼 때 사용.
 
-- 인증: 불필요(단일 운영자).
+- 인증: 선택. `run_id`가 존재해도 resolved target 운영자 소유가 아니면 상세를 반환하지 않는다.
 - 도메인: `result`는 해당 실행의 `OperatorStrategyMonitorResponse` 전체, `new_/continuing_/dropped_candidates`는 후보 diff 목록.
 
 **파라미터**
@@ -458,17 +475,21 @@ curl "http://localhost:3000/api/v1/operator/strategy/monitor/runs?limit=20&statu
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | run_id | integer | 예 | 모니터 실행 id |
+| query | operator_id | integer\|null | 아니오 | target 운영자 id. 생략 시 토큰 소유자, 토큰이 없으면 canonical `operator` |
 
 **요청 예시**
 ```bash
-curl http://localhost:3000/api/v1/operator/strategy/monitor/runs/57
+curl "http://localhost:3000/api/v1/operator/strategy/monitor/runs/57?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
 **응답 200**
 ```json
 {
   "id": 57,
-  "operator_id": 1,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "task_id": null,
   "trigger_source": "operator.sync",
   "status": "completed",
@@ -495,7 +516,9 @@ curl http://localhost:3000/api/v1/operator/strategy/monitor/runs/57
     "min_similarity": 0.15
   },
   "result": {
-    "operator_id": 1,
+    "operator_id": 11,
+    "current_operator_id": 11,
+    "current_operator_username": "synthetic-aggressive",
     "evaluated_project_count": 134,
     "selected_candidate_count": 5,
     "persisted_candidate_count": 5,
@@ -533,7 +556,9 @@ curl http://localhost:3000/api/v1/operator/strategy/monitor/runs/57
 
 | 코드 | 의미 |
 |---|---|
-| 404 | 해당 run_id 실행 없음 |
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | 해당 target의 run_id 실행 없음 또는 privileged 호출자가 지정한 `operator_id` 없음 |
 | 422 | run_id가 정수가 아님 |
 
 ---
@@ -542,16 +567,17 @@ curl http://localhost:3000/api/v1/operator/strategy/monitor/runs/57
 
 전략 모니터링을 비동기로 큐에 넣고, 진행 상황을 폴링할 수 있는 task id와 poll URL을 즉시 반환한다. 후보가 많아 동기 실행이 오래 걸릴 때 또는 UI 블로킹을 피할 때 사용한다.
 
-- 인증: 불필요(단일 운영자).
+- 인증: 선택. target operator 규칙은 동기 `POST /strategy/monitor`와 동일하다.
 - 도메인: 먼저 `queued` 상태의 monitor_run을 만들고 Celery 작업을 enqueue한다. memory broker 환경에서는 eager 실행되어 즉시 완료될 수 있다. 요청 본문은 `POST /strategy/monitor`와 동일.
 
 **파라미터**
 
-`OperatorStrategyMonitorRequest` (위 `POST /strategy/monitor`의 파라미터 표와 동일)
+`OperatorStrategyMonitorRequest` (위 `POST /strategy/monitor`의 body 파라미터와 동일) + query `operator_id`.
 
 **요청 예시**
 ```bash
-curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor/async \
+curl -X POST "http://localhost:3000/api/v1/operator/strategy/monitor/async?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"limit": 20, "same_category_only": true}'
 ```
@@ -561,6 +587,9 @@ curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor/async \
 {
   "task_id": "b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b",
   "monitor_run_id": 58,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "task_name": "operator.strategy.monitor",
   "status": "queued",
   "detail": "작업이 큐에 등록되었습니다.",
@@ -572,6 +601,9 @@ curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor/async \
 
 | 코드 | 의미 |
 |---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | privileged 호출자가 지정한 `operator_id`가 존재하지 않음 |
 | 422 | 요청 필드 범위 위반 |
 
 ---
@@ -580,18 +612,20 @@ curl -X POST http://localhost:3000/api/v1/operator/strategy/monitor/async \
 
 비동기 모니터링 작업의 현재 상태와 (완료 시) 최종 결과를 조회한다. `async` 호출로 받은 `poll_url`을 주기적으로 폴링해 완료를 확인할 때 사용한다.
 
-- 인증: 불필요. 이 핸들러만 DB 의존성 없이 task id로 작업 상태를 조회한다.
-- 도메인: `ready`/`successful`로 완료·성공 여부를 판별하고, 성공 시 `result`에 `OperatorStrategyMonitorResponse`가 채워진다. 실패 시 `error`에 사유.
+- 인증: 선택. target operator 규칙은 동기 `POST /strategy/monitor`와 동일하다.
+- 도메인: `ready`/`successful`로 완료·성공 여부를 판별하고, 성공 시 `result`에 `OperatorStrategyMonitorResponse`가 채워진다. `task_id`가 다른 operator 소유이면 `404`로 숨긴다. 실패 시 `error`에 사유.
 
 **파라미터**
 
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | task_id | string | 예 | async 호출이 반환한 task id |
+| query | operator_id | integer\|null | 아니오 | target 운영자 id. 생략 시 토큰 소유자, 토큰이 없으면 canonical `operator` |
 
 **요청 예시**
 ```bash
-curl http://localhost:3000/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b
+curl "http://localhost:3000/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
 **응답 200**
@@ -599,6 +633,9 @@ curl http://localhost:3000/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-
 {
   "task_id": "b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b",
   "monitor_run_id": 58,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "task_name": "operator.strategy.monitor",
   "status": "completed",
   "raw_status": "SUCCESS",
@@ -607,7 +644,9 @@ curl http://localhost:3000/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-
   "detail": "작업이 완료되었습니다.",
   "error": null,
   "result": {
-    "operator_id": 1,
+    "operator_id": 11,
+    "current_operator_id": 11,
+    "current_operator_username": "synthetic-aggressive",
     "evaluated_project_count": 134,
     "selected_candidate_count": 5,
     "persisted_candidate_count": 5,
@@ -620,6 +659,15 @@ curl http://localhost:3000/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-
   }
 }
 ```
+
+**에러**
+
+| 코드 | 의미 |
+|---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | `task_id`가 해당 target 운영자 소유가 아니거나 privileged 호출자가 지정한 `operator_id` 없음 |
+| 422 | 경로/쿼리 파라미터 검증 실패 |
 
 ---
 

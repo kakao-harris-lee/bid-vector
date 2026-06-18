@@ -12,9 +12,15 @@
 - **베이스 경로**: 모든 엔드포인트는 `/api/v1` 하위입니다 (예: `/api/v1/projects`).
 - **인증**: 대부분의 보호 엔드포인트는 `Authorization: Bearer <ACCESS_TOKEN>` 헤더를 요구합니다.
   단, 일부 라우터(`projects`, `bids`, `predictions`, `ml`, `analytics`, `operations`,
-  `operator`, `synthetic`, `admin`)는 **단일 운영자 모델** 특성상 토큰 의존성이 없고
-  서버가 canonical operator를 자동으로 사용합니다. 각 태그 문서 상단의 인증 안내를 확인하세요.
+  `operator`, `synthetic`, `admin`)는 legacy 단일 운영자 호출을 유지하기 위해 토큰 없이도
+  canonical `operator`를 자동으로 사용할 수 있습니다. 각 태그 문서 상단의 인증 안내를 확인하세요.
   토큰은 `POST /api/v1/auth/session`으로 발급합니다.
+- **operator target context**: dashboard/operator/analytics/operations 계열의 operator-scoped
+  엔드포인트는 `?operator_id=`를 target 운영자 id로 해석합니다. 프론트는 active operator가
+  토큰 소유자이면 `operator_id`를 생략하고, privileged 사용자(canonical `operator` 또는 admin)가
+  다른 회사를 선택했을 때만 숫자 id를 붙입니다. 토큰 없는 cross-operator 호출과
+  non-privileged 사용자의 cross-operator 호출은 `403`입니다. `current_operator_id`와
+  `current_operator_username`은 프론트가 현재 표시해야 하는 target 운영자를 나타냅니다.
 - **요청/응답 형식**: JSON (`Content-Type: application/json`).
 - **에러 형식**: FastAPI 표준 `{"detail": "..."}`. 검증 실패는 `422`,
   미인증 `401`, 미존재 `404`, 충돌 `409`.
@@ -32,13 +38,13 @@
 | AI Predictions | [ai-predictions.md](./ai-predictions.md) | 3 | 가격 예측·투찰 추천·문서 분석 |
 | ML Jobs | [ml-jobs.md](./ml-jobs.md) | 6 | 임베딩 백필·가격 predictor 학습·실험 재평가 (비동기) |
 | Backtests | [backtests.md](./backtests.md) | 6 | paper bidding 백테스트 실행·요약·데이터 감사 |
-| Synthetic | [synthetic.md](./synthetic.md) | 5 | synthetic 운영자(`synthetic-*`) 시드·백테스트 비교 |
+| Synthetic | [synthetic.md](./synthetic.md) | 7 | synthetic 운영자(`synthetic-*`) 시드·백테스트 비교·sample gap 계획·실행 후보 |
 | Dashboard | [dashboard.md](./dashboard.md) | 4 | 운영자 대시보드 후보·투찰·결과·요약 |
 | Analytics | [analytics.md](./analytics.md) | 17 | 결정 분석·예측 리포팅·실험(decision experiments)·이벤트 |
 | Operations | [operations.md](./operations.md) | 17 | 수집(크롤)·분류·기회 분석·입찰 결정·Telegram 알림 |
 | Legacy Admin | [legacy-admin.md](./legacy-admin.md) | 3 | legacy 호환 관리 엔드포인트 (deprecated 성격) |
 
-> **합계 94개 HTTP 엔드포인트** (+ `GET /health` 등 untagged 1개).
+> **합계 96개 HTTP 엔드포인트** (+ `GET /health` 등 untagged 1개).
 > WebSocket(`Realtime`) 채널은 OpenAPI 스펙에 포함되지 않아 본 레퍼런스에서 제외됩니다.
 
 ## 주의

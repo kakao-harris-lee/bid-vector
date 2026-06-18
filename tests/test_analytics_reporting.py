@@ -144,6 +144,10 @@ def test_operations_dashboard_summarizes_crawl_and_strategy_health(client, test_
     assert "broker_not_production_ready" in tasks["risk_flags"]
     assert "task_failures_detected" in tasks["risk_flags"]
     assert {failure["source"] for failure in tasks["recent_failures"]} == {"crawl", "strategy_monitor"}
+    strategy_task_failure = next(
+        failure for failure in tasks["recent_failures"] if failure["source"] == "strategy_monitor"
+    )
+    assert strategy_task_failure["detail"] == f"operator_id={operator_id} trigger=scheduled"
     queue_map = {item["queue"]: item for item in tasks["queues"]}
     assert settings.CELERY_OPS_QUEUE in queue_map
     assert "jobs.collect_koneps_notices" in queue_map[settings.CELERY_OPS_QUEUE]["task_names"]
@@ -483,6 +487,11 @@ def test_operations_dashboard_summarizes_smoke_cycles(client, test_db, monkeypat
     assert [p["name"] for p in smoke["latest"]["phases"]] == [
         "koneps_collect", "sbert_embedding", "predict_price", "telegram_ping"
     ]
+    latest_phase_evidence = smoke["latest"]["phases"][0]["evidence"]
+    assert latest_phase_evidence["evidence_scope"] == "g0_scheduled_smoke"
+    assert latest_phase_evidence["operator_scope"] == "canonical_only"
+    assert latest_phase_evidence["source_run_type"] == "smoke_test_run"
+    assert "G-2 per-operator evidence" in latest_phase_evidence["canonical_only_reason"]
 
     assert len(smoke["recent_failures"]) == 1
     assert smoke["recent_failures"][0]["failed_phases"] == ["predict_price"]
@@ -697,6 +706,7 @@ def test_operations_dashboard_smoke_exposes_actionable_phase_evidence(
                         "skip_reason": "no strategy candidates selected",
                         "evidence": {
                             "monitor_run_id": 77,
+                            "operator_id": 42,
                             "evaluated_project_count": 5,
                             "selected_candidate_count": 0,
                             "notification_count": 0,
@@ -724,6 +734,11 @@ def test_operations_dashboard_smoke_exposes_actionable_phase_evidence(
     assert phase["retry_method"] == "Rerun /api/v1/operator/strategy/monitor."
     assert phase["skip_reason"] == "no strategy candidates selected"
     assert phase["evidence"]["monitor_run_id"] == 77
+    assert phase["evidence"]["source_run_type"] == "operator_strategy_monitor"
+    assert phase["evidence"]["source_run_id"] == 77
+    assert phase["evidence"]["operator_id"] == 42
+    assert phase["evidence"]["operator_scope"] == "operator"
+    assert phase["evidence"]["source_smoke_run_id"] is not None
     assert smoke["recent_failures"][0]["failure_actions"] == [
         "Inspect the strategy monitor run and candidate filters."
     ]
@@ -899,6 +914,7 @@ def test_operations_dashboard_summarizes_g1_synthetic_validation(client, test_db
     assert synthetic["sufficient_preset_count"] == 1
     assert synthetic["recent_run_count"] == 1
     assert synthetic["recent_completed_count"] == 1
+    assert "Canonical G-1 synthetic validation" in synthetic["detail"]
     assert synthetic["latest"]["experiment_name"] == "g1-construction-base-12m"
     assert synthetic["latest"]["total_settled_count"] == 128
     construction = {
@@ -967,5 +983,6 @@ def test_operations_dashboard_g1_preset_uses_latest_run_across_duplicate_names(
     assert construction["experiment_id"] == completed_experiment.id
     assert construction["latest_run_status"] == "completed"
     assert construction["sample_status"] == "sufficient"
+    assert "Canonical G-1 synthetic validation" in synthetic["detail"]
     assert synthetic["completed_preset_count"] == 1
     assert synthetic["sufficient_preset_count"] == 1

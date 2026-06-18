@@ -21,7 +21,9 @@ from app.schemas.schemas import (
     SyntheticExperimentPresetListResponse,
     SyntheticExperimentResponse,
     SyntheticExperimentRunResponse,
+    SyntheticExperimentSampleGapCandidateRequest,
     SyntheticExperimentSampleGapPlanResponse,
+    SyntheticExperimentSampleGapRunCandidateResponse,
 )
 from app.services.synthetic_backtest import SyntheticBacktestService
 from app.services.synthetic_custom_operator import (
@@ -476,6 +478,36 @@ def get_experiment_sample_gaps_endpoint(
     """Read-only G-1 sample gap/backfill plan from recent completed runs."""
     service = SyntheticExperimentService(db)
     return service.build_sample_gap_plan(max_runs=max_runs)
+
+
+@router.post(
+    "/experiments/sample-gaps/candidates",
+    response_model=SyntheticExperimentSampleGapRunCandidateResponse,
+)
+def build_experiment_sample_gap_candidate_endpoint(
+    request: SyntheticExperimentSampleGapCandidateRequest,
+    db: Session = Depends(get_db),
+):
+    """Convert one sample-gap recommendation into a read-only run candidate."""
+    service = SyntheticExperimentService(db)
+    try:
+        candidate = service.build_sample_gap_run_candidate(
+            dimension=request.dimension,
+            key=request.key,
+            max_runs=request.max_runs,
+            action_code=request.action_code,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sample gap not found.",
+        )
+    return candidate
 
 
 @router.get(

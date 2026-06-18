@@ -633,6 +633,10 @@ def _sample_gap_run_context(
 ) -> dict[str, Any]:
     params = _json_loads(run.experiment.params_json) if run.experiment else {}
     params = params if isinstance(params, dict) else {}
+    operator_slugs = (
+        _json_loads(run.experiment.operator_slugs_json) if run.experiment else []
+    )
+    operator_slugs = operator_slugs if isinstance(operator_slugs, list) else []
     preset_name = _first_present(
         sample_report.get("preset_name"),
         run.experiment.name if run.experiment else None,
@@ -657,6 +661,7 @@ def _sample_gap_run_context(
         "finished_at": run.finished_at,
         **context_params,
         "params": context_params,
+        "operator_slugs": [str(slug) for slug in operator_slugs],
         "synthetic_only": sample_report.get("synthetic_only") is not False,
         "report_status": sample_report.get("report_status"),
         "warnings": [],
@@ -730,6 +735,49 @@ def _sample_gap_action(
     detail: str,
 ) -> dict[str, str]:
     return {"code": code, "label": label, "detail": detail}
+
+
+def _sample_gap_candidate_name(
+    *, preset_name: Optional[str], dimension: str, key: str
+) -> str:
+    if preset_name:
+        return str(preset_name)[:200]
+    clean_key = key.replace("/", "-").strip() or "unknown"
+    return f"sample-gap-{dimension}-{clean_key}"[:200]
+
+
+def _sample_gap_candidate_description(
+    *, dimension: str, key: str, action_label: str
+) -> str:
+    return (
+        f"Sample-gap follow-up candidate for {dimension}:{key}. "
+        f"Recommended action: {action_label}."
+    )
+
+
+def _normalized_experiment_params(params: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(params)
+    normalized["limit"] = _safe_positive_int(normalized.get("limit"), default=100)
+    normalized["scenario"] = str(normalized.get("scenario") or "base")
+    normalized["settle_actions"] = bool(normalized.get("settle_actions", False))
+    return normalized
+
+
+def _candidate_params_for_action(
+    params: dict[str, Any],
+    *,
+    action_code: str,
+    missing_settled_count: int,
+) -> dict[str, Any]:
+    candidate = _normalized_experiment_params(params)
+    if action_code == "increase_limit":
+        current_limit = _safe_positive_int(candidate.get("limit"), default=100)
+        suggested_limit = max(
+            current_limit + max(1, missing_settled_count),
+            int(current_limit * 1.5),
+        )
+        candidate["limit"] = min(1000, suggested_limit)
+    return candidate
 
 
 class _SampleGapAccumulator:
@@ -1129,6 +1177,226 @@ class SyntheticExperimentService:
             "warnings": _dedupe_sample_gap_warnings(warnings),
             "gaps": gaps,
         }
+
+    def build_sample_gap_run_candidate(
+        self,
+        *,
+        dimension: str,
+        key: str,
+        max_runs: int = 20,
+        action_code: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Build a read-only runnable candidate from one sample-gap item.
+
+        This intentionally does not save an experiment or enqueue a run. It turns
+        the recommendation already exposed in ``sample-gaps`` into an explicit
+        experiment payload plus the next UI step.
+        """
+        plan = self.build_sample_gap_plan(max_runs=max_runs)
+        gap = next(
+            (
+                item
+                for item in plan["gaps"]
+                if item["dimension"] == dimension and item["key"] == key
+            ),
+            None,
+        )
+        if gap is None:
+            return None
+
+        recommendation = gap.get("recommendation") or {}
+        actions = recommendation.get("actions") or []
+        action_lookup = {
+            str(action.get("code")): action
+            for action in actions
+            if isinstance(action, dict) and action.get("code")
+        }
+        selected_action_code = action_code or self._default_sample_gap_action_code(
+            gap, action_lookup
+        )
+        action = action_lookup.get(str(selected_action_code))
+        if action is None:
+            available = ", ".join(sorted(action_lookup)) or "none"
+            raise ValueError(
+                f"Unsupported sample-gap action '{selected_action_code}'. "
+                f"Available actions: {available}."
+            )
+
+        preset_name = recommendation.get("preset_name")
+        preset_name = str(preset_name) if preset_name else None
+        definition = (
+            SYNTHETIC_EXPERIMENT_PRESETS.get(preset_name) if preset_name else None
+        )
+        experiment = self._sample_gap_candidate_experiment(
+            preset_name=preset_name,
+            gap=gap,
+        )
+        base_params = dict(definition.get("params") or {}) if definition else {}
+        base_params.update(recommendation.get("params") or {})
+        params = _candidate_params_for_action(
+            base_params,
+            action_code=str(action["code"]),
+            missing_settled_count=_safe_positive_int(
+                gap.get("missing_settled_count")
+            ),
+        )
+        operator_slugs = self._sample_gap_candidate_operator_slugs(
+            definition=definition,
+            experiment=experiment,
+            gap=gap,
+        )
+        warnings = [str(code) for code in gap.get("warnings", []) or [] if str(code)]
+        blocked_by_warnings = [
+            SAMPLE_GAP_WARNING_MIXED_DATA
+            for code in warnings
+            if code == SAMPLE_GAP_WARNING_MIXED_DATA
+        ]
+        blocked_by_warnings = sorted(set(blocked_by_warnings))
+        run_allowed = not blocked_by_warnings
+        latest_run = self._latest_experiment_run(experiment)
+        next_step = self._sample_gap_candidate_next_step(
+            run_allowed=run_allowed,
+            experiment=experiment,
+            preset_name=preset_name,
+        )
+        action_label = str(action.get("label") or action["code"])
+        experiment_payload = {
+            "name": _sample_gap_candidate_name(
+                preset_name=preset_name,
+                dimension=str(gap["dimension"]),
+                key=str(gap["key"]),
+            ),
+            "description": _sample_gap_candidate_description(
+                dimension=str(gap["dimension"]),
+                key=str(gap["key"]),
+                action_label=action_label,
+            ),
+            "params": params,
+            "operator_slugs": operator_slugs,
+        }
+        return {
+            "generated_at": datetime.now(timezone.utc),
+            "gap": gap,
+            "action_code": str(action["code"]),
+            "action_label": action_label,
+            "preset_name": preset_name,
+            "params": params,
+            "operator_slugs": operator_slugs,
+            "experiment_payload": experiment_payload,
+            "experiment_id": experiment.id if experiment else None,
+            "latest_run_id": latest_run.id if latest_run else None,
+            "latest_run_status": latest_run.status if latest_run else None,
+            "next_step": next_step,
+            "run_allowed": run_allowed,
+            "blocked_by_warnings": blocked_by_warnings,
+            "warnings": warnings,
+            "message": self._sample_gap_candidate_message(
+                next_step=next_step,
+                preset_name=preset_name,
+                blocked_by_warnings=blocked_by_warnings,
+            ),
+        }
+
+    def _default_sample_gap_action_code(
+        self,
+        gap: dict[str, Any],
+        action_lookup: dict[str, dict[str, Any]],
+    ) -> str:
+        warnings = set(gap.get("warnings", []) or [])
+        if (
+            SAMPLE_GAP_WARNING_MIXED_DATA in warnings
+            and "rerun_synthetic_only" in action_lookup
+        ):
+            return "rerun_synthetic_only"
+        if action_lookup:
+            return next(iter(action_lookup))
+        raise ValueError("Sample gap has no recommended actions.")
+
+    def _sample_gap_candidate_experiment(
+        self,
+        *,
+        preset_name: Optional[str],
+        gap: dict[str, Any],
+    ) -> Optional[SyntheticExperiment]:
+        if preset_name:
+            experiment = (
+                self.db.query(SyntheticExperiment)
+                .filter(SyntheticExperiment.name == preset_name)
+                .first()
+            )
+            if experiment is not None:
+                return experiment
+
+        related_runs = gap.get("related_runs") or []
+        source_experiment_id = 0
+        if related_runs and isinstance(related_runs[0], dict):
+            source_experiment_id = _safe_positive_int(
+                related_runs[0].get("experiment_id")
+            )
+        if source_experiment_id <= 0:
+            return None
+        return self.get_experiment(source_experiment_id)
+
+    def _sample_gap_candidate_operator_slugs(
+        self,
+        *,
+        definition: Optional[dict[str, Any]],
+        experiment: Optional[SyntheticExperiment],
+        gap: dict[str, Any],
+    ) -> list[str]:
+        if definition is not None:
+            return [str(slug) for slug in definition.get("operator_slugs") or []]
+        if experiment is not None:
+            operator_slugs = _json_loads(experiment.operator_slugs_json) or []
+            if isinstance(operator_slugs, list):
+                return [str(slug) for slug in operator_slugs]
+        related_runs = gap.get("related_runs") or []
+        if related_runs and isinstance(related_runs[0], dict):
+            operator_slugs = related_runs[0].get("operator_slugs") or []
+            if isinstance(operator_slugs, list):
+                return [str(slug) for slug in operator_slugs]
+        return []
+
+    def _latest_experiment_run(
+        self, experiment: Optional[SyntheticExperiment]
+    ) -> Optional[SyntheticExperimentRun]:
+        if experiment is None or not experiment.runs:
+            return None
+        return max(experiment.runs, key=lambda run: run.id)
+
+    def _sample_gap_candidate_next_step(
+        self,
+        *,
+        run_allowed: bool,
+        experiment: Optional[SyntheticExperiment],
+        preset_name: Optional[str],
+    ) -> str:
+        if not run_allowed:
+            return "resolve_mixed_data"
+        if experiment is not None:
+            return "run_existing_experiment"
+        if preset_name:
+            return "save_preset"
+        return "create_experiment"
+
+    def _sample_gap_candidate_message(
+        self,
+        *,
+        next_step: str,
+        preset_name: Optional[str],
+        blocked_by_warnings: list[str],
+    ) -> str:
+        if SAMPLE_GAP_WARNING_MIXED_DATA in blocked_by_warnings:
+            return (
+                "Related runs include canonical/operator data mixed with synthetic "
+                "results. Review the source run and create a synthetic-only rerun "
+                "candidate before treating it as reporting-ready."
+            )
+        if next_step == "run_existing_experiment":
+            return "Existing experiment is ready to select and run asynchronously."
+        if next_step == "save_preset":
+            return f"Save preset {preset_name} before starting a run."
+        return "Create this experiment candidate before starting a run."
 
     def _sync_run_with_task(self, run: SyntheticExperimentRun) -> None:
         """Reconcile a still-pending run with the Celery task state.
