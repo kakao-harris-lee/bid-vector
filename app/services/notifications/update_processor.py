@@ -6,11 +6,11 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.core.single_user import ensure_operator_account
-from app.models.models import BidDecisionRecord, Project
+from app.core.single_user import DEFAULT_OPERATOR_USERNAME, ensure_operator_account
+from app.models.models import BidDecisionRecord, Project, User
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
-from app.services.notifications.telegram import TelegramNotificationService
+from app.services.notifications.telegram import BidDecisionCallbackRoute, TelegramNotificationService
 from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
 
 logger = logging.getLogger(__name__)
@@ -101,20 +101,21 @@ class TelegramUpdateProcessor:
                 "chat_id": chat_id,
             }
 
-        parsed_callback = self.telegram.parse_bid_decision_callback_data(callback_data)
-        if parsed_callback is None:
+        decision_route = self.telegram.parse_bid_decision_callback_route(callback_data)
+        if decision_route is None:
             return {
                 "status": "ignored",
                 "detail": "Unsupported Telegram callback payload.",
                 "chat_id": chat_id,
             }
 
-        decision_record_id, requested_action = parsed_callback
         try:
+            expected_operator_id = self._validate_bid_decision_callback_route(db, decision_route)
             return self._apply_bid_decision_action(
                 db,
-                decision_record_id=decision_record_id,
-                requested_action=requested_action,
+                decision_record_id=decision_route.decision_record_id,
+                requested_action=decision_route.action,
+                expected_operator_id=expected_operator_id,
                 callback_query_id=callback_query_id,
                 chat_id=chat_id,
                 send_chat_ack=True,
@@ -133,18 +134,56 @@ class TelegramUpdateProcessor:
                 "chat_id": chat_id,
             }
 
+    def _validate_bid_decision_callback_route(
+        self,
+        db: Session,
+        route: BidDecisionCallbackRoute,
+    ) -> int:
+        """Return the verified decision owner for a Telegram callback route."""
+        record = (
+            db.query(BidDecisionRecord)
+            .filter(BidDecisionRecord.id == route.decision_record_id)
+            .first()
+        )
+        if record is None:
+            raise ValueError("Bid decision record not found")
+
+        record_operator_id = int(record.operator_id)
+        if route.operator_id is not None:
+            if int(route.operator_id) != record_operator_id:
+                raise ValueError("Bid decision record not found")
+            if not self._is_canonical_operator(db, operator_id=record_operator_id):
+                raise ValueError("Bid decision record not found")
+            return record_operator_id
+
+        if not self._is_canonical_operator(db, operator_id=record_operator_id):
+            raise ValueError("Bid decision record not found")
+        return record_operator_id
+
+    def _is_canonical_operator(self, db: Session, *, operator_id: int) -> bool:
+        """Return whether the operator owns the single configured Telegram route."""
+        operator = (
+            db.query(User)
+            .filter(User.id == operator_id, User.username == DEFAULT_OPERATOR_USERNAME)
+            .first()
+        )
+        return operator is not None
+
     def _apply_bid_decision_action(
         self,
         db: Session,
         *,
         decision_record_id: int,
         requested_action: str,
+        expected_operator_id: int | None = None,
         callback_query_id: str | None = None,
         chat_id: int | None = None,
         send_chat_ack: bool = False,
     ) -> dict[str, object]:
         decision_service = BidDecisionService()
         record = decision_service.apply_telegram_action(db, decision_record_id, requested_action)
+        if expected_operator_id is not None and int(record.operator_id) != int(expected_operator_id):
+            raise ValueError("Bid decision record not found")
 
         project = db.query(Project).filter(Project.id == record.project_id).first()
         if project is None:
@@ -198,6 +237,7 @@ class TelegramUpdateProcessor:
             "detail": acknowledgement_text,
             "chat_id": chat_id,
             "decision_record_id": record.id,
+            "operator_id": int(record.operator_id),
             "action": record.action,
             "decision_status": record.decision_status,
         }

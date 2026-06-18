@@ -10,7 +10,7 @@ from app.core.security import (
     get_current_operator_from_bearer,
     resolve_target_operator,
 )
-from app.core.single_user import ensure_operator_account, get_operator_profile
+from app.core.single_user import DEFAULT_OPERATOR_USERNAME, ensure_operator_account, get_operator_profile
 from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, Project, User
 from pydantic import BaseModel
 from typing import Literal
@@ -55,6 +55,23 @@ def _get_project_or_404(db: Session, project_id: int) -> Project:
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     return project
+
+
+def _get_canonical_telegram_operator_or_403(db: Session) -> User:
+    """Resolve the canonical legacy owner for operator-context-free Telegram sends."""
+    operator = db.query(User).filter(User.username == DEFAULT_OPERATOR_USERNAME).first()
+    if operator is not None:
+        return operator
+
+    if db.query(User).count() == 0:
+        operator = ensure_operator_account(db)
+        if operator.username == DEFAULT_OPERATOR_USERNAME:
+            return operator
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Telegram notification route is limited to the canonical operator context",
+    )
 
 
 def _create_queued_crawl_job(db: Session, request: CrawlRequest) -> CrawlJob:
@@ -341,8 +358,9 @@ def get_bid_decision_detail(
 
 
 @router.post("/notify/telegram", response_model=BackgroundJobResponse)
-def notify_telegram(request: TelegramNotificationRequest):
-    """Build and best-effort send a Telegram notification payload."""
+def notify_telegram(request: TelegramNotificationRequest, db: Session = Depends(get_db)):
+    """Build and best-effort send a canonical legacy Telegram notification payload."""
+    _get_canonical_telegram_operator_or_403(db)
     service = TelegramNotificationService()
     message = service.build_message(request.title, request.message, request.url)
 
