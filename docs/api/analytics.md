@@ -1,7 +1,8 @@
 # Analytics API
 
 > 베이스 경로: `/api/v1/analytics` · 베이스 URL 예시: `http://localhost:3000`
-> 인증: **불필요**. 단일 운영자 모델이라 서버가 canonical 운영자를 암묵 해석한다(응답의 `operator_id`). Analytics 라우터의 어떤 엔드포인트도 Bearer 토큰을 요구하지 않는다.
+> 인증: Bearer 토큰은 선택이다. 토큰이 없으면 legacy 단일 운영자 경로로 canonical `operator`를 사용한다. 토큰이 있으면 토큰 소유자가 기본 target이고, canonical `operator` 또는 admin만 `?operator_id=`로 다른 운영자(`synthetic-*` 포함)를 조회/실행할 수 있다.
+> operator context: `operator_id`는 응답 데이터가 귀속된 target 운영자다. `current_operator_id`/`current_operator_username`도 프론트가 현재 선택한 회사로 표시해야 하는 target 운영자를 뜻한다. 프론트는 선택값이 `null`이면 `operator_id` query를 생략하고, privileged 사용자가 다른 회사를 선택했을 때만 숫자 `operator_id`를 전달한다.
 > 공통 에러: 모든 엔드포인트는 쿼리/경로/바디 검증 실패 시 `422`(`{"detail": [...]}`)를 반환한다.
 > 도메인: 결정 분석(decision analytics) · 예측 리포팅(prediction reporting) · 실험(decision experiments).
 
@@ -775,11 +776,14 @@ curl "http://localhost:3000/api/v1/analytics/decision-recommendations?days=30&re
 ---
 
 ## POST /api/v1/analytics/decision-experiments
-실험 계획 한 건을 영속화한다. 보통 `decision-recommendations`가 제안한 실험 계획을 그대로 등록해 실행 추적과 사후 평가의 기준선을 확보한다. 등록 시 현재 윈도우의 기준선 지표가 `baseline_summary`로 함께 스냅샷된다.
+target 운영자에 실험 계획 한 건을 영속화한다. 보통 `decision-recommendations`가 제안한 실험 계획을 그대로 등록해 실행 추적과 사후 평가의 기준선을 확보한다. 등록 시 target 운영자의 현재 윈도우 기준선 지표가 `baseline_summary`로 함께 스냅샷된다.
+
+- target operator scope: `operator_id` query를 생략하면 토큰 소유자(토큰 없음이면 canonical `operator`)가 target이다. privileged 호출자만 다른 운영자 id를 지정할 수 있고, 무인증 또는 non-privileged cross-operator 호출은 `403`이다.
 
 **파라미터** (request body `DecisionExperimentRunCreateRequest`)
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
+| query | operator_id | integer\|null | 아니오 | 실험을 등록할 target 운영자 id |
 | body | experiment_key | string | 예 | 실험 식별 키 |
 | body | recommendation_key | string | 예 | 출처 권고 키 |
 | body | priority_rank | integer (1~20) | 예 | 우선순위 |
@@ -800,7 +804,8 @@ curl "http://localhost:3000/api/v1/analytics/decision-recommendations?days=30&re
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments" \
+curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "experiment_key": "review_threshold_tuning",
@@ -824,9 +829,12 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments" \
 **응답 200**
 ```json
 {
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "run": {
     "id": 12,
-    "operator_id": 1,
+    "operator_id": 11,
     "experiment_key": "review_threshold_tuning",
     "recommendation_key": "low_review_submission_rate",
     "status": "planned",
@@ -895,12 +903,15 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments" \
 **에러**
 | 코드 | 의미 |
 |---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | privileged 호출자가 지정한 `operator_id`가 존재하지 않음 |
 | 422 | 필수 필드 누락, 범위(priority_rank 1~20, duration_days 1~30 등) 위반 |
 
 ---
 
 ## GET /api/v1/analytics/decision-experiments
-최근 실험 런 목록을 상태별 집계 카운트와 함께 반환한다. 실험 현황 대시보드(주의 필요 항목 우선 정렬)에서 쓴다.
+target 운영자의 최근 실험 런 목록을 상태별 집계 카운트와 함께 반환한다. 실험 현황 대시보드(주의 필요 항목 우선 정렬)에서 쓴다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
@@ -910,16 +921,20 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments" \
 | query | outcome | string\|null | 아니오 | 평가 결과 필터 |
 | query | application_status | string\|null | 아니오 | 적용 상태 필터 |
 | query | sort | string | 아니오 | 정렬: needs_attention(기본)\|created_desc\|created_asc\|priority\|last_evaluated_desc\|application |
+| query | operator_id | integer\|null | 아니오 | 목록을 조회할 target 운영자 id |
 
 **요청 예시**
 ```bash
-curl "http://localhost:3000/api/v1/analytics/decision-experiments?limit=20&status=running&sort=needs_attention"
+curl "http://localhost:3000/api/v1/analytics/decision-experiments?limit=20&status=running&sort=needs_attention&operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
 **응답 200** (runs는 위 상세의 run 구조와 동일, 축약)
 ```json
 {
-  "operator_id": 1,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "result_count": 1,
   "total_match_count": 1,
   "sort": "needs_attention",
@@ -944,7 +959,7 @@ curl "http://localhost:3000/api/v1/analytics/decision-experiments?limit=20&statu
   "runs": [
     {
       "id": 12,
-      "operator_id": 1,
+      "operator_id": 11,
       "experiment_key": "review_threshold_tuning",
       "recommendation_key": "low_review_submission_rate",
       "status": "running",
@@ -985,28 +1000,37 @@ curl "http://localhost:3000/api/v1/analytics/decision-experiments?limit=20&statu
 **에러**
 | 코드 | 의미 |
 |---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | privileged 호출자가 지정한 `operator_id`가 존재하지 않음 |
 | 422 | limit 범위(1~100) 위반 |
 
 ---
 
 ## GET /api/v1/analytics/decision-experiments/{experiment_run_id}
-실험 런 한 건의 상세를 기준선 스냅샷·최신 평가와 함께 반환한다. 실험 상세 화면에서 쓴다.
+target 운영자의 실험 런 한 건의 상세를 기준선 스냅샷·최신 평가와 함께 반환한다. 실험 상세 화면에서 쓴다. `experiment_run_id`가 존재해도 target 운영자 소유가 아니면 상세를 반환하지 않는다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | experiment_run_id | integer | 예 | 실험 런 ID |
+| query | operator_id | integer\|null | 아니오 | 상세를 조회할 target 운영자 id |
 
 **요청 예시**
 ```bash
-curl "http://localhost:3000/api/v1/analytics/decision-experiments/12"
+curl "http://localhost:3000/api/v1/analytics/decision-experiments/12?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
 **응답 200**: `POST /decision-experiments`의 200 응답과 동일한 `DecisionExperimentRunDetailResponse` 구조(`run` + `baseline_summary`). 평가가 한 번이라도 실행됐다면 `run.latest_evaluation`이 채워진다.
 ```json
 {
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "run": {
     "id": 12,
+    "operator_id": 11,
     "status": "running",
     "outcome": "watch",
     "last_evaluated_at": "2026-05-29T01:00:00Z",
@@ -1067,7 +1091,9 @@ curl "http://localhost:3000/api/v1/analytics/decision-experiments/12"
 **에러**
 | 코드 | 의미 |
 |---|---|
-| 404 | 해당 ID의 실험 런 없음 |
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | 해당 target의 실험 런 없음 또는 privileged 호출자가 지정한 `operator_id` 없음 |
 | 400 | 기타 도메인 검증 오류 |
 | 422 | experiment_run_id 타입 오류 |
 
@@ -1076,12 +1102,13 @@ curl "http://localhost:3000/api/v1/analytics/decision-experiments/12"
 ---
 
 ## PATCH /api/v1/analytics/decision-experiments/{experiment_run_id}
-실험 런의 메모나 라이프사이클 상태를 수동으로 갱신한다. 운영자가 실험을 수동으로 완료/롤백 처리하거나 노트를 남길 때 쓴다.
+target 운영자의 실험 런 메모나 라이프사이클 상태를 수동으로 갱신한다. 운영자가 실험을 수동으로 완료/롤백 처리하거나 노트를 남길 때 쓴다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | experiment_run_id | integer | 예 | 실험 런 ID |
+| query | operator_id | integer\|null | 아니오 | 갱신할 target 운영자 id |
 | body | status | enum(planned\|running\|completed\|rolled_back)\|null | 아니오 | 라이프사이클 상태(수동 전환은 failed 제외) |
 | body | outcome | enum(insufficient_data\|watch\|success\|rollback\|inconclusive)\|null | 아니오 | 평가 결과 |
 | body | replace_notes | string\|null | 아니오 | 노트 교체 |
@@ -1090,7 +1117,8 @@ curl "http://localhost:3000/api/v1/analytics/decision-experiments/12"
 
 **요청 예시**
 ```bash
-curl -X PATCH "http://localhost:3000/api/v1/analytics/decision-experiments/12" \
+curl -X PATCH "http://localhost:3000/api/v1/analytics/decision-experiments/12?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"status": "completed", "outcome": "success", "append_note": "표본 충분, 목표 달성", "ended_at": "2026-06-12T00:00:00Z"}'
 ```
@@ -1100,23 +1128,27 @@ curl -X PATCH "http://localhost:3000/api/v1/analytics/decision-experiments/12" \
 **에러**
 | 코드 | 의미 |
 |---|---|
-| 404 | 해당 ID의 실험 런 없음 |
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | 해당 target의 실험 런 없음 또는 privileged 호출자가 지정한 `operator_id` 없음 |
 | 400 | 무효한 상태 전환 등 도메인 오류 |
 | 422 | 바디 검증 오류 |
 
 ---
 
 ## POST /api/v1/analytics/decision-experiments/{experiment_run_id}/evaluate
-실험 재평가를 API 요청 안에서 동기 실행하지 않고 비동기 작업(Celery)으로 큐에 넣는다. 먼저 런 존재를 확인한 뒤 큐잉하고 태스크 상태를 반환한다. `poll_url`로 진행 상태를 폴링한다.
+target 운영자의 실험 재평가를 API 요청 안에서 동기 실행하지 않고 비동기 작업(Celery)으로 큐에 넣는다. 먼저 target 운영자 소유 런 존재를 확인한 뒤 큐잉하고 태스크 상태를 반환한다. `poll_url`로 진행 상태를 폴링한다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | experiment_run_id | integer | 예 | 실험 런 ID |
+| query | operator_id | integer\|null | 아니오 | 재평가할 target 운영자 id |
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/evaluate"
+curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/evaluate?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
 **응답 202**
@@ -1134,26 +1166,30 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/eva
 **에러**
 | 코드 | 의미 |
 |---|---|
-| 404 | 해당 ID의 실험 런 없음 |
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | 해당 target의 실험 런 없음 또는 privileged 호출자가 지정한 `operator_id` 없음 |
 | 400 | 기타 도메인 오류 |
 | 422 | experiment_run_id 타입 오류 |
 
 ---
 
 ## POST /api/v1/analytics/decision-experiments/{experiment_run_id}/apply-thresholds
-성공한 실험이 제안한 임계값(bid_now/review threshold) 조정을 운영자 전략에 실제로 반영한다. 기본은 `outcome=success` 실험에만 적용 가능하다. `dry_run=true`면 변경 없이 시뮬레이션, `force=true`면 성공 미달이어도 강제 적용한다.
+성공한 target 운영자 실험이 제안한 임계값(bid_now/review threshold) 조정을 같은 target 운영자의 `OperatorStrategy`에 실제로 반영한다. 기본은 `outcome=success` 실험에만 적용 가능하다. `dry_run=true`면 변경 없이 시뮬레이션, `force=true`면 성공 미달이어도 강제 적용한다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | experiment_run_id | integer | 예 | 실험 런 ID |
+| query | operator_id | integer\|null | 아니오 | 적용할 target 운영자 id |
 | body | dry_run | boolean | 아니오 | true면 시뮬레이션만, 기본 false |
 | body | force | boolean | 아니오 | true면 성공 미달이어도 강제 적용, 기본 false |
 | body | append_note | string\|null | 아니오 | 적용 메모 추가 |
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/apply-thresholds" \
+curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/apply-thresholds?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"dry_run": false, "force": false, "append_note": "성공 실험 임계값 반영"}'
 ```
@@ -1161,7 +1197,9 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/app
 **응답 200**
 ```json
 {
-  "operator_id": 1,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "run_id": 12,
   "experiment_key": "review_threshold_tuning",
   "recommendation_key": "low_review_submission_rate",
@@ -1190,26 +1228,30 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/12/app
 **에러**
 | 코드 | 의미 |
 |---|---|
-| 404 | 해당 ID의 실험 런 없음 |
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | 해당 target의 실험 런 없음 또는 privileged 호출자가 지정한 `operator_id` 없음 |
 | 400 | 임계값 매핑 미지원 / 이미 적용됨 / 성공 결과 아님(force=false) |
 | 422 | 바디 검증 오류 |
 
 ---
 
 ## POST /api/v1/analytics/decision-experiments/{experiment_run_id}/apply-strategy
-성공한 실험이 제안한 워크로드/카테고리 튜닝(auto_workload_penalty_multiplier, category_priority_overrides)을 운영자 전략에 반영한다. apply-thresholds와 동일한 게이트(성공 실험 한정, `dry_run`/`force` 동작 동일)를 따른다.
+성공한 target 운영자 실험이 제안한 워크로드/카테고리 튜닝(auto_workload_penalty_multiplier, category_priority_overrides)을 같은 target 운영자의 `OperatorStrategy`에 반영한다. apply-thresholds와 동일한 게이트(성공 실험 한정, `dry_run`/`force` 동작 동일)를 따른다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | path | experiment_run_id | integer | 예 | 실험 런 ID |
+| query | operator_id | integer\|null | 아니오 | 적용할 target 운영자 id |
 | body | dry_run | boolean | 아니오 | true면 시뮬레이션만, 기본 false |
 | body | force | boolean | 아니오 | true면 성공 미달이어도 강제 적용, 기본 false |
 | body | append_note | string\|null | 아니오 | 적용 메모 추가 |
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/13/apply-strategy" \
+curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/13/apply-strategy?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"dry_run": true}'
 ```
@@ -1217,7 +1259,9 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/13/app
 **응답 200** (dry_run 예시 — applied=false)
 ```json
 {
-  "operator_id": 1,
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
   "run_id": 13,
   "experiment_key": "workload_penalty_tuning",
   "recommendation_key": "high_auto_workload_skip_rate",
@@ -1255,7 +1299,9 @@ curl -X POST "http://localhost:3000/api/v1/analytics/decision-experiments/13/app
 **에러**
 | 코드 | 의미 |
 |---|---|
-| 404 | 해당 ID의 실험 런 없음 |
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | 해당 target의 실험 런 없음 또는 privileged 호출자가 지정한 `operator_id` 없음 |
 | 400 | 전략 매핑 미지원 / 이미 적용됨 / 성공 결과 아님(force=false) |
 | 422 | 바디 검증 오류 |
 
