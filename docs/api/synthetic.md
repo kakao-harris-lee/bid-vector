@@ -10,6 +10,8 @@
 - [POST /backtests/run-async](#post-apiv1syntheticbacktestsrun-async) — 백테스트 비동기 큐잉(Celery)
 - [GET /backtests/tasks/{task_id}](#get-apiv1syntheticbackteststaskstask_id) — 비동기 백테스트 상태/결과 조회
 - [POST /backtests/run](#post-apiv1syntheticbacktestsrun) — 전체 운영자 백테스트 동기 실행
+- [GET /experiments/sample-gaps](#get-apiv1syntheticexperimentssample-gaps) — G-1 sample gap/backfill 계획 조회
+- [POST /experiments/sample-gaps/candidates](#post-apiv1syntheticexperimentssample-gapscandidates) — sample gap 실행 후보 생성
 
 ---
 
@@ -183,6 +185,255 @@ curl -X POST http://localhost:3000/api/v1/synthetic/backtests/run-async \
   "detail": "No synthetic operators seeded. Seed via POST /operators/seed first."
 }
 ```
+
+---
+
+## GET /api/v1/synthetic/experiments/sample-gaps
+
+최근 완료된 synthetic experiment run의 `summary.sample_report.lacking_groups`를 집계해 표본 부족 영역과 read-only 후속 실행 힌트를 반환한다. 이 API는 **계획 조회 전용**이며 DB backfill, 새 experiment 생성, 외부 호출을 수행하지 않는다. 운영자는 응답의 `recommendation`을 보고 preset 재실행/윈도우 확장/limit 증대 여부를 판단하거나, 아래 `POST /experiments/sample-gaps/candidates`로 실행 후보 payload를 만들 수 있다.
+
+- 스캔 범위: `status=completed`인 최근 run만 `max_runs`개까지 조회한다.
+- 제외/경고: `summary.sample_report`가 없는 legacy run은 gap 계산에서 제외하고 top-level `warnings`에 `legacy_summary_without_sample_report`를 남긴다. canonical operator 데이터가 섞인 report는 gap에는 포함하지만 `canonical_synthetic_mixed` warning과 `rerun_synthetic_only` action을 남긴다.
+- 정렬: `total_missing_settled_count`, `missing_settled_count`, `source_run_count`, dimension 우선순위(`preset`, `category`, `business_type`, `budget_band`), key 순으로 우선순위를 매긴다.
+
+**파라미터**
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| query | max_runs | integer | 아니오 | 스캔할 최근 완료 run 수, 1~100 (기본 20) |
+
+**요청 예시**
+```bash
+curl "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps?max_runs=10"
+```
+
+**응답 200**
+```json
+{
+  "generated_at": "2026-06-18T02:15:00Z",
+  "max_runs": 10,
+  "scanned_completed_run_count": 2,
+  "source_run_count": 2,
+  "legacy_summary_run_count": 0,
+  "gap_count": 1,
+  "warnings": [],
+  "gaps": [
+    {
+      "priority": 1,
+      "dimension": "category",
+      "key": "software",
+      "settled_count": 10,
+      "sample_target": 30,
+      "missing_settled_count": 20,
+      "total_missing_settled_count": 32,
+      "source_run_count": 2,
+      "related_preset_names": ["g1-software-base-12m"],
+      "related_run_ids": [102, 101],
+      "related_runs": [
+        {
+          "run_id": 102,
+          "experiment_id": 12,
+          "preset_name": "g1-software-base-12m",
+          "status": "completed",
+          "finished_at": "2026-06-18T01:30:00Z",
+          "start_at": "2025-01-01T00:00:00",
+          "end_at": "2025-12-31T23:59:59",
+          "category": "software",
+          "limit": 100,
+          "scenario": "base",
+          "settle_actions": false,
+          "operator_slugs": ["sw-small-seoul", "sw-mid-metro", "sw-large-national"],
+          "params": {
+            "start_at": "2025-01-01T00:00:00",
+            "end_at": "2025-12-31T23:59:59",
+            "category": "software",
+            "limit": 100,
+            "scenario": "base",
+            "settle_actions": false
+          },
+          "synthetic_only": true,
+          "report_status": "insufficient_sample",
+          "warnings": []
+        }
+      ],
+      "recommendation": {
+        "preset_name": "g1-software-base-12m",
+        "params": {
+          "start_at": "2025-01-01T00:00:00",
+          "end_at": "2025-12-31T23:59:59",
+          "category": "software",
+          "limit": 100,
+          "scenario": "base",
+          "settle_actions": false
+        },
+        "actions": [
+          {
+            "code": "rerun_related_preset",
+            "label": "Rerun related preset",
+            "detail": "Repeat the related synthetic experiment preset and keep the same result window first."
+          },
+          {
+            "code": "expand_category_window",
+            "label": "Expand category window",
+            "detail": "If the rerun is still thin, widen the date window for this category before changing operators."
+          }
+        ]
+      },
+      "warnings": []
+    }
+  ]
+}
+```
+
+**응답 필드**
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| generated_at | datetime | 계획 생성 시각 |
+| max_runs | integer | 실제 적용된 스캔 상한(1~100으로 보정) |
+| scanned_completed_run_count | integer | 조회한 완료 run 수 |
+| source_run_count | integer | `summary.sample_report`가 있어 gap 계산에 사용된 run 수 |
+| legacy_summary_run_count | integer | sample_report가 없어 제외된 완료 run 수 |
+| gap_count | integer | 집계된 부족 그룹 수 |
+| warnings[] | object[] | top-level 경고(`code`, `message`, `run_ids`, `operator_slugs`) |
+| gaps[].dimension | enum | `preset`, `category`, `business_type`, `budget_band` |
+| gaps[].missing_settled_count | integer | 단일 source run에서 가장 큰 부족 표본 수 |
+| gaps[].total_missing_settled_count | integer | 관련 run들의 부족 표본 합계 |
+| gaps[].related_runs[] | object[] | source run context, `operator_slugs`, `synthetic_only`/`report_status`/warning 정보 |
+| gaps[].recommendation.params | object | 관련 preset 재실행에 사용할 start/end/category/limit/scenario/settle_actions 힌트 |
+| gaps[].recommendation.actions[] | object[] | `rerun_related_preset`, `expand_category_window`, `increase_limit`, `review_operator_mix`, `rerun_synthetic_only` 중 해당 action |
+
+warning code:
+
+| code | 의미 |
+|---|---|
+| canonical_synthetic_mixed | synthetic report에 canonical/operator 데이터가 섞임. 반복 보고용으로 사용하기 전 synthetic-only로 재실행 필요 |
+| legacy_summary_without_sample_report | 완료 run에 `summary.sample_report`가 없어 gap 계산에서 제외됨 |
+
+**에러**
+
+| 코드 | 의미 |
+|---|---|
+| 422 | `max_runs` 범위(1~100) 위반 |
+
+---
+
+## POST /api/v1/synthetic/experiments/sample-gaps/candidates
+
+`GET /experiments/sample-gaps`의 특정 gap과 action을 선택해 read-only 실행 후보를 만든다. 이 API는 새 experiment를 저장하거나 run을 enqueue하지 않는다. UI는 응답의 `next_step`, `run_allowed`, `experiment_payload`를 보고 기존 experiment 선택, preset 저장, 신규 experiment 생성, mixed data 정리 중 다음 동작을 결정한다.
+
+- `dimension`/`key`는 sample-gap item을 식별한다.
+- `action_code`를 생략하면 서비스가 기본 action을 고른다. mixed data warning이 있으면 `rerun_synthetic_only`를 우선한다.
+- `canonical_synthetic_mixed` warning이 있으면 `run_allowed=false`, `next_step=resolve_mixed_data`로 반환한다.
+- 실제 backfill DB write, experiment 저장, run 실행은 하지 않는다.
+
+**파라미터**
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| body | dimension | enum | 예 | `preset`, `category`, `business_type`, `budget_band` |
+| body | key | string | 예 | sample gap key |
+| body | max_runs | integer | 아니오 | gap 계획 스캔 상한, 1~100 (기본 20) |
+| body | action_code | string\|null | 아니오 | recommendation action code. 생략 시 기본 action |
+
+**요청 예시**
+```bash
+curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/candidates" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dimension": "category",
+    "key": "software",
+    "max_runs": 20,
+    "action_code": "rerun_related_preset"
+  }'
+```
+
+**응답 200**
+```json
+{
+  "generated_at": "2026-06-18T02:20:00Z",
+  "gap": {
+    "priority": 1,
+    "dimension": "category",
+    "key": "software",
+    "settled_count": 18,
+    "sample_target": 30,
+    "missing_settled_count": 12,
+    "total_missing_settled_count": 12,
+    "source_run_count": 1,
+    "related_preset_names": ["g1-software-base-12m"],
+    "related_run_ids": [102],
+    "related_runs": [],
+    "recommendation": {
+      "preset_name": "g1-software-base-12m",
+      "params": { "category": "software", "limit": 200, "scenario": "base", "settle_actions": false },
+      "actions": [
+        {
+          "code": "rerun_related_preset",
+          "label": "Rerun related preset",
+          "detail": "Repeat the related synthetic experiment preset and keep the same result window first."
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "action_code": "rerun_related_preset",
+  "action_label": "Rerun related preset",
+  "preset_name": "g1-software-base-12m",
+  "params": {
+    "start_at": "2025-01-01T00:00:00Z",
+    "end_at": "2025-12-31T23:59:59Z",
+    "category": "software",
+    "limit": 200,
+    "scenario": "base",
+    "settle_actions": false
+  },
+  "operator_slugs": ["sw-small-seoul", "sw-mid-metro", "sw-large-national"],
+  "experiment_payload": {
+    "name": "g1-software-base-12m",
+    "description": "Sample-gap follow-up candidate for category:software. Recommended action: Rerun related preset.",
+    "params": {
+      "start_at": "2025-01-01T00:00:00Z",
+      "end_at": "2025-12-31T23:59:59Z",
+      "category": "software",
+      "limit": 200,
+      "scenario": "base",
+      "settle_actions": false
+    },
+    "operator_slugs": ["sw-small-seoul", "sw-mid-metro", "sw-large-national"]
+  },
+  "experiment_id": 12,
+  "latest_run_id": 102,
+  "latest_run_status": "completed",
+  "next_step": "run_existing_experiment",
+  "run_allowed": true,
+  "blocked_by_warnings": [],
+  "warnings": [],
+  "message": "Existing experiment is ready to select and run asynchronously."
+}
+```
+
+**응답 필드**
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| gap | object | 선택된 `SyntheticExperimentSampleGapItem` |
+| action_code/action_label | string | 적용한 recommendation action |
+| params | object | 후보 실행에 사용할 `SyntheticExperimentParams` |
+| operator_slugs | string[] | 후보 실행 대상 synthetic operator slug |
+| experiment_payload | object | 저장 가능한 `SyntheticExperimentCreate` payload |
+| experiment_id/latest_run_id | integer\|null | 기존 experiment/run이 있으면 해당 id |
+| next_step | enum | `resolve_mixed_data`, `run_existing_experiment`, `save_preset`, `create_experiment` |
+| run_allowed | boolean | mixed data 등 blocking warning 없이 실행 후보로 사용할 수 있는지 |
+| blocked_by_warnings | string[] | 실행을 막는 warning code |
+| message | string | 운영자가 다음에 해야 할 일 |
+
+**에러**
+
+| 코드 | 의미 |
+|---|---|
+| 404 | 요청한 `dimension`/`key` gap이 최근 sample-gap 계획에 없음 |
+| 422 | body 검증 실패 또는 지원하지 않는 `action_code` |
 
 ---
 
