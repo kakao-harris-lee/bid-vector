@@ -146,6 +146,9 @@ def test_candidate_generation_phase_records_notification_skip_reason(monkeypatch
         def execute_monitoring(self, db, *, request, trigger_source):
             return {
                 "monitor_run_id": 77,
+                "operator_id": 42,
+                "current_operator_id": 42,
+                "current_operator_username": "operator",
                 "evaluated_project_count": 5,
                 "selected_candidate_count": 0,
                 "persisted_candidate_count": 0,
@@ -161,6 +164,10 @@ def test_candidate_generation_phase_records_notification_skip_reason(monkeypatch
     assert result.failure_category == ""
     assert result.skip_reason == "no strategy candidates selected"
     assert result.data["monitor_run_id"] == 77
+    assert result.data["source_run_type"] == "operator_strategy_monitor"
+    assert result.data["source_run_id"] == 77
+    assert result.data["operator_id"] == 42
+    assert result.data["operator_scope"] == "operator"
     assert "skip_reason=no strategy candidates selected" in result.detail
 
 
@@ -193,8 +200,33 @@ def test_persist_report_inserts_trimmed_row(test_db):
 
     stored = json.loads(run.phases)
     assert stored == [
-        {"name": "koneps_collect", "passed": True, "detail": "collected 5", "evidence": {"collected_count": 5}},
-        {"name": "telegram_ping", "passed": True, "detail": "sent"},
+        {
+            "name": "koneps_collect",
+            "passed": True,
+            "detail": "collected 5",
+            "evidence": {
+                "collected_count": 5,
+                "evidence_scope": "g0_scheduled_smoke",
+                "operator_scope": "canonical_only",
+                "canonical_only_reason": (
+                    "G-0 scheduled smoke validates the canonical shared pipeline; "
+                    "G-2 per-operator evidence is recorded on operator-scoped monitor and experiment runs."
+                ),
+            },
+        },
+        {
+            "name": "telegram_ping",
+            "passed": True,
+            "detail": "sent",
+            "evidence": {
+                "evidence_scope": "g0_scheduled_smoke",
+                "operator_scope": "canonical_only",
+                "canonical_only_reason": (
+                    "G-0 scheduled smoke validates the canonical shared pipeline; "
+                    "G-2 per-operator evidence is recorded on operator-scoped monitor and experiment runs."
+                ),
+            },
+        },
     ]
     # bulky per-phase data dict must be dropped
     assert all("data" not in phase for phase in stored)
@@ -250,6 +282,7 @@ def test_persist_report_keeps_actionable_failure_evidence(test_db):
                 "skip_reason": "no strategy candidates selected",
                 "data": {
                     "monitor_run_id": 77,
+                    "operator_id": 42,
                     "evaluated_project_count": 4,
                     "selected_candidate_count": 0,
                     "large_results": [{"ignore": True}],
@@ -272,6 +305,11 @@ def test_persist_report_keeps_actionable_failure_evidence(test_db):
             "skip_reason": "no strategy candidates selected",
             "evidence": {
                 "monitor_run_id": 77,
+                "operator_id": 42,
+                "source_run_type": "operator_strategy_monitor",
+                "source_run_id": 77,
+                "operator_scope": "operator",
+                "evidence_scope": "g0_scheduled_smoke",
                 "evaluated_project_count": 4,
                 "selected_candidate_count": 0,
             },

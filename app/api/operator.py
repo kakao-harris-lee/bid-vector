@@ -116,6 +116,11 @@ def _resolve_operator_for_write(
     return actor
 
 
+def _append_operator_query(path: str, operator_id: int) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}operator_id={int(operator_id)}"
+
+
 def _operator_context_fields(target: User) -> dict:
     """Return the standard ``current_operator_*`` envelope fields.
 
@@ -730,6 +735,11 @@ def get_operator_dashboard(
 ):
     """Return a card-ready web dashboard payload for analysis, decisions, monitoring, and feedback."""
     operator = _resolve_operator_for_read(db, current_operator, operator_id)
+    def operator_scoped_href(path: str) -> str:
+        if operator_id is None:
+            return path
+        return _append_operator_query(path, int(operator.id))
+
     overview = _build_operator_overview_payload(operator, days=days, db=db)
     date_from = utc_now() - timedelta(days=days)
 
@@ -803,7 +813,7 @@ def get_operator_dashboard(
                 "unit": "count",
                 "status": "critical" if failed_monitor_run_count else "healthy",
                 "detail": f"최근 {days}일 내 실패한 전략 모니터링 실행 수입니다.",
-                "href": "/api/v1/operator/strategy/monitor/runs?status=failed",
+                "href": operator_scoped_href("/api/v1/operator/strategy/monitor/runs?status=failed"),
             },
             {
                 "key": "recommendation_error_rate",
@@ -840,7 +850,7 @@ def get_operator_dashboard(
                 "notification_count": int(run.notification_count or 0),
                 "created_at": run.created_at,
                 "completed_at": run.completed_at,
-                "detail_href": f"/api/v1/operator/strategy/monitor/runs/{run.id}",
+                "detail_href": operator_scoped_href(f"/api/v1/operator/strategy/monitor/runs/{run.id}"),
             }
             for run in recent_monitor_runs
         ],
@@ -858,11 +868,11 @@ def get_operator_dashboard(
         "action_hrefs": {
             "opportunity_analysis": "/api/v1/operations/opportunity-analysis",
             "decision_list": "/api/v1/operations/bid-decisions",
-            "strategy_candidates": "/api/v1/operator/strategy/candidates",
-            "strategy_monitor": "/api/v1/operator/strategy/monitor",
-            "strategy_monitor_runs": "/api/v1/operator/strategy/monitor/runs",
+            "strategy_candidates": operator_scoped_href("/api/v1/operator/strategy/candidates"),
+            "strategy_monitor": operator_scoped_href("/api/v1/operator/strategy/monitor"),
+            "strategy_monitor_runs": operator_scoped_href("/api/v1/operator/strategy/monitor/runs"),
             "prediction_feedback": "/api/v1/analytics/prediction-feedback",
-            "operations_dashboard": "/api/v1/analytics/operations-dashboard",
+            "operations_dashboard": operator_scoped_href("/api/v1/analytics/operations-dashboard"),
         },
         **_operator_context_fields(operator),
     }
