@@ -179,6 +179,26 @@ beforeEach(() => {
 });
 
 describe("StrategyEditor", () => {
+  it("추천 판단 기준과 가격 적합도 caveat를 현재 전략값으로 보여준다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(
+      await screen.findByRole("heading", { name: "추천 판단 기준" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("대상 조건")).toBeInTheDocument();
+    expect(screen.getByText("1개")).toBeInTheDocument();
+    expect(screen.getByText("공고 적합도 60.0% 이상")).toBeInTheDocument();
+    expect(screen.getByText("가격 적합도(추정) 55.0% 이상")).toBeInTheDocument();
+    expect(screen.getByText("투찰 70.0% / 검토 50.0%")).toBeInTheDocument();
+    expect(
+      screen.getByText(/가격 적합도\(추정\)는 P\(낙찰\)이 아니라/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/추천가, 예측 가격대, 하한율 참고값/)).toBeInTheDocument();
+  });
+
   it("저장 시 review_threshold > bid_now_threshold이면 클라이언트 검증으로 차단", async () => {
     const fetchMock = buildFetchMock();
     vi.stubGlobal("fetch", fetchMock);
@@ -321,13 +341,13 @@ describe("StrategyEditor", () => {
     expect(findNumberByLabel("즉시 투찰 임계값").value).toBe("0.7");
   });
 
-  describe("비-본인 컨텍스트 (impersonation, PR #74)", () => {
+  describe("사용자 surface active operator boundary", () => {
     const syntheticStrategy: OperatorStrategyResponse = {
       ...baseStrategy,
       operator_id: 11
     };
 
-    it("/operator/strategy?operator_id=N 으로 fetch 하고 read-only 안내 + 저장 버튼 미노출", async () => {
+    it("저장된 active operator id가 있어도 사용자 strategy 편집은 본인 URL만 호출한다", async () => {
       window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
       const fetchMock = buildFetchMock({ impersonatedStrategy: syntheticStrategy });
       vi.stubGlobal("fetch", fetchMock);
@@ -336,28 +356,23 @@ describe("StrategyEditor", () => {
 
       await screen.findByRole("heading", { name: "전략 편집", level: 2 });
 
-      // 본인 owner URL (no query) 은 호출하지 않는다.
+      // User surface는 Shell에서 activeOperatorId를 null로 마스킹한다.
       await waitFor(() => {
-        expect(
-          fetchMock.mock.calls.some(
-            ([url]) => String(url) === "/api/v1/operator/strategy?operator_id=11"
-          )
-        ).toBe(true);
+        expect(fetchMock).toHaveBeenCalledWith("/api/v1/operator/strategy", expect.anything());
       });
       expect(
-        fetchMock.mock.calls.some(([url]) => String(url) === "/api/v1/operator/strategy")
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === "/api/v1/operator/strategy?operator_id=11"
+        )
       ).toBe(false);
 
-      // read-only 안내 + 저장 버튼 미노출.
-      expect(screen.getByTestId("strategy-readonly-notice")).toHaveTextContent(
-        "현재 회사: Synthetic A"
-      );
-      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "되돌리기" })).not.toBeInTheDocument();
+      // 사용자 surface에서는 본인 회사 편집 흐름으로 유지된다.
+      expect(screen.queryByTestId("strategy-readonly-notice")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "저장" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "되돌리기" })).toBeInTheDocument();
 
-      // number input 비활성.
       await waitFor(() => {
-        expect(findNumberByLabel("최소 매칭 점수")).toBeDisabled();
+        expect(findNumberByLabel("최소 매칭 점수")).toBeEnabled();
       });
     });
   });
