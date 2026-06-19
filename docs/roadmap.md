@@ -230,6 +230,7 @@ Exit gate G-3:
 - `README.md`: 현재 시스템 개요와 실행 방법
 - `CLAUDE.md`: 에이전트 작업 지침
 - `docs/operations/g2-exit-agent-plan.md`: G-2 exit gate 충족을 위한 다음 병렬 작업 계획
+- `docs/operations/g2-evidence-runbook.md`: 3개 이상 가상 사업자의 G-2 evidence를 N일 단위로 반복 실행하고 exit review를 남기는 운영 절차
 - `docs/operations/roadmap-next-agent-plan.md`: 최근 완료된 병렬 작업 기록과 후속 gap
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
 - `docs/api/index.md`: HTTP API 레퍼런스

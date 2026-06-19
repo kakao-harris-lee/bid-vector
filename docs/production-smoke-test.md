@@ -4,6 +4,8 @@
 
 G-0 운영 검증의 완료 기준은 scheduled smoke 7회 연속 green이다. 운영 대시보드의 `smoke_test.current_streak`가 `7` 이상이고, 최신 scheduled run의 phase evidence에서 KONEPS 수집, 후보 생성, Telegram 알림 또는 명시적 skip reason을 확인할 수 있어야 한다.
 
+G-2의 operator별 증적 축적은 이 문서의 G-0 smoke 절차를 선행 신호로만 사용하고, 실제 반복 실행 순서는 [G-2 Evidence Runbook](operations/g2-evidence-runbook.md)을 따른다. G-2 판정에서는 `operator_id`, `current_operator_id`, `operator_scope`, `source_run_type`이 섞이지 않았는지 별도로 확인한다.
+
 ## 1. 사전 확인
 
 운영 `.env`에 최소한 아래 값이 있어야 한다.
