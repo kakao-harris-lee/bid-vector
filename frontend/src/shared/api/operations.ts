@@ -1,6 +1,7 @@
 import { apiRequest } from "./client";
 import { ApiError } from "./session";
 import type {
+  G2EvidenceSummaryResponse,
   OperationsDashboardResponse,
   OperationsKpiResponse
 } from "@/shared/types/operations";
@@ -34,6 +35,29 @@ export function fetchOperationsDashboard(
     apiRequest<OperationsDashboardResponse>(path, { token }),
     "운영 대시보드를 불러오지 못했습니다."
   );
+}
+
+export function fetchG2EvidenceSummary(
+  options: { days?: number } = {},
+  token?: string | null,
+  operatorId?: number | null
+): Promise<G2EvidenceSummaryResponse | null> {
+  const search = new URLSearchParams();
+  if (typeof options.days === "number") search.set("days", String(options.days));
+  if (typeof operatorId === "number") search.set("operator_id", String(operatorId));
+  const qs = search.toString();
+  const path = qs
+    ? `/api/v1/analytics/g2-evidence?${qs}`
+    : "/api/v1/analytics/g2-evidence";
+  return apiRequest<G2EvidenceSummaryResponse>(path, { token }).catch((err) => {
+    if (err instanceof ApiError && [404, 405, 501].includes(err.status)) {
+      return null;
+    }
+    if (err instanceof ApiError && err.status !== 401) {
+      throw new ApiError(err.status, "G-2 증적 요약을 불러오지 못했습니다.");
+    }
+    throw err;
+  });
 }
 
 export interface OperationsKpiQuery {

@@ -2,11 +2,14 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
-import { fetchOperationsDashboard, queryKeys } from "@/shared/api";
+import { fetchG2EvidenceSummary, fetchOperationsDashboard, queryKeys } from "@/shared/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { formatDateTime, formatPercent } from "@/shared/lib";
 import { OperationsKpiPanel, useOperationsKpiQuery } from "@/features/decisions";
 import type {
+  G2EvidenceSectionSummary,
+  G2EvidenceStatus,
+  G2EvidenceSummaryResponse,
   OperationsCardStatus,
   OperationsDashboardCard,
   OperationsDashboardResponse,
@@ -14,6 +17,7 @@ import type {
 } from "@/shared/types/operations";
 
 const REFRESH_INTERVAL_MS = 30_000;
+const G2_EVIDENCE_WINDOW_DAYS = 7;
 const KPI_DAYS_OPTIONS = [7, 30, 90] as const;
 type KpiDays = (typeof KPI_DAYS_OPTIONS)[number];
 
@@ -76,6 +80,17 @@ export function OperationsScreen() {
   const { session, activeOperator } = useShellContext();
   const activeOperatorId = activeOperator.activeOperatorId;
   const [kpiDays, setKpiDays] = useState<KpiDays>(30);
+  const g2Evidence = useQuery<G2EvidenceSummaryResponse | null, Error>({
+    queryKey: queryKeys.operations.g2Evidence(activeOperatorId, G2_EVIDENCE_WINDOW_DAYS),
+    queryFn: () =>
+      fetchG2EvidenceSummary(
+        { days: G2_EVIDENCE_WINDOW_DAYS },
+        session?.token,
+        activeOperatorId
+      ),
+    enabled: Boolean(session?.token),
+    staleTime: 30_000
+  });
   const operations = useQuery<OperationsDashboardResponse, Error>({
     queryKey: queryKeys.operations.dashboard(activeOperatorId),
     queryFn: () => fetchOperationsDashboard({ days: 7 }, session?.token, activeOperatorId),
@@ -141,13 +156,24 @@ export function OperationsScreen() {
 
       {operations.data ? (
         <>
+          <G2EvidenceCard
+            data={g2Evidence.data ?? null}
+            loading={g2Evidence.isPending}
+            error={g2Evidence.error}
+          />
+
           <section
-            className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
-            aria-label="요약 카드"
+            className="flex flex-col gap-2"
+            aria-label="시스템 운영 상태"
           >
-            {operations.data.cards.map((card) => (
-              <SummaryCard key={card.key} card={card} />
-            ))}
+            <h3 className="text-sm font-semibold text-[var(--color-fg)]">
+              시스템 운영 상태
+            </h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {operations.data.cards.map((card) => (
+                <SummaryCard key={card.key} card={card} />
+              ))}
+            </div>
           </section>
 
           <SmokeTestCard summary={operations.data.smoke_test} />
@@ -186,9 +212,12 @@ export function OperationsScreen() {
             />
           </section>
 
-          <CrawlHealth summary={operations.data.crawl} />
-          <TelegramHealth summary={operations.data.notifications} />
-          <MlReleaseCard summary={operations.data.ml_release} />
+          <section className="flex flex-col gap-2" aria-label="데이터 상태">
+            <h3 className="text-sm font-semibold text-[var(--color-fg)]">데이터 상태</h3>
+            <CrawlHealth summary={operations.data.crawl} />
+            <TelegramHealth summary={operations.data.notifications} />
+            <MlReleaseCard summary={operations.data.ml_release} />
+          </section>
         </>
       ) : null}
     </section>
@@ -210,6 +239,164 @@ function SummaryCard({ card }: { card: OperationsDashboardCard }) {
       </CardContent>
     </Card>
   );
+}
+
+function G2EvidenceCard({
+  data,
+  loading,
+  error
+}: {
+  data: G2EvidenceSummaryResponse | null;
+  loading: boolean;
+  error: Error | null;
+}) {
+  const sections = [
+    { key: "smoke", label: "Smoke", summary: data?.smoke ?? null },
+    { key: "strategy_monitor", label: "Strategy monitor", summary: data?.strategy_monitor ?? null },
+    { key: "decision_experiments", label: "Decision experiment", summary: data?.decision_experiments ?? null },
+    { key: "synthetic_experiments", label: "Synthetic experiment", summary: data?.synthetic_experiments ?? null },
+    { key: "notifications", label: "알림 증적", summary: data?.notifications ?? null }
+  ];
+  return (
+    <Card aria-label="G-2 증적 요약">
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>G-2 증적 요약</CardTitle>
+        {data ? (
+          <Badge tone={g2StatusTone(data.evidence_status)}>
+            {g2StatusLabel(data.evidence_status)}
+          </Badge>
+        ) : (
+          <Badge tone="muted">미연결</Badge>
+        )}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-xs">
+        {loading ? (
+          <p className="text-[var(--color-muted)]">G-2 증적을 불러오는 중…</p>
+        ) : null}
+
+        {error ? (
+          <p
+            role="alert"
+            className="rounded-md border border-[var(--color-danger)] bg-[color-mix(in_oklch,var(--color-danger),white_85%)] px-2 py-1.5 text-[var(--color-danger)]"
+          >
+            {error.message}
+          </p>
+        ) : null}
+
+        {!loading && !error && !data ? (
+          <p className="rounded-md border border-[var(--color-border)] px-2 py-1.5 text-[var(--color-muted)]">
+            G-2 evidence API가 아직 연결되지 않았습니다. Agent A 응답이 들어오면 이 영역에 operator별 증적 상태가 표시됩니다.
+          </p>
+        ) : null}
+
+        {data ? (
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Stat
+                label="operator"
+                value={
+                  data.current_operator_username ??
+                  (data.current_operator_id ? `#${data.current_operator_id}` : "-")
+                }
+              />
+              <Stat label="window" value={`${data.window_days}일`} />
+              <Stat label="blocking gaps" value={data.blocking_gaps.length.toString()} />
+              <Stat
+                label="generated"
+                value={data.generated_at ? formatDateTime(data.generated_at) : "-"}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+              {sections.map((section) => (
+                <EvidenceDomainRow
+                  key={section.key}
+                  label={section.label}
+                  summary={section.summary}
+                />
+              ))}
+            </div>
+
+            {data.blocking_gaps.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-[var(--color-muted)]">차단 gap</span>
+                <ul className="flex flex-col gap-1">
+                  {data.blocking_gaps.map((gap, index) => (
+                    <li
+                      key={`${gap}-${index}`}
+                      className="rounded-md bg-[color-mix(in_oklch,var(--color-warn),white_84%)] px-2 py-1 text-[color-mix(in_oklch,var(--color-warn),black_45%)]"
+                    >
+                      {gap}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-[var(--color-muted)]">차단 gap 없음</p>
+            )}
+
+            {(data.warnings ?? []).length > 0 ? (
+              <div className="flex flex-wrap gap-1" aria-label="G-2 증적 경고">
+                {(data.warnings ?? []).map((warning, index) => (
+                  <Badge key={`${warning}-${index}`} tone="watch">
+                    {warning}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EvidenceDomainRow({
+  label,
+  summary
+}: {
+  label: string;
+  summary: G2EvidenceSectionSummary | null;
+}) {
+  const status = summary?.evidence_status ?? summary?.status ?? "missing";
+  const count = summary?.evidence_count ?? summary?.run_count ?? null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--color-border)] px-2 py-1.5">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate font-medium text-[var(--color-fg)]">{label}</span>
+        <Badge tone={g2StatusTone(status)}>{g2StatusLabel(status)}</Badge>
+      </div>
+      <p className="text-[var(--color-muted)]">
+        {summary?.detail ?? summary?.summary ?? "증적 없음"}
+      </p>
+      <div className="flex flex-wrap gap-1 text-[var(--color-muted)]">
+        {typeof count === "number" ? <span>evidence {count}</span> : null}
+        {summary?.latest_at ? <span>latest {formatDateTime(summary.latest_at)}</span> : null}
+        {(summary?.blocking_gaps ?? []).length > 0 ? (
+          <span>gap {(summary?.blocking_gaps ?? []).length}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function g2StatusTone(status?: string | null): "healthy" | "watch" | "critical" | "info" | "muted" {
+  if (status === "ready") return "healthy";
+  if (status === "insufficient") return "watch";
+  if (status === "mixed_scope") return "critical";
+  if (status === "missing") return "muted";
+  return "info";
+}
+
+function g2StatusLabel(status?: string | null): string {
+  const labels: Record<G2EvidenceStatus, string> = {
+    ready: "ready",
+    insufficient: "insufficient",
+    mixed_scope: "mixed scope",
+    missing: "missing"
+  };
+  if (status && status in labels) return labels[status as G2EvidenceStatus];
+  return status ?? "missing";
 }
 
 function CrawlHealth({ summary }: { summary: OperationsDashboardResponse["crawl"] }) {

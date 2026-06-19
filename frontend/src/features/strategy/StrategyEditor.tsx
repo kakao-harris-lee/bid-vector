@@ -235,7 +235,7 @@ export function StrategyEditor() {
               name="minimum_probability_score"
               render={({ field }) => (
                 <ThresholdControl
-                  label="최소 낙찰 확률"
+                  label="최소 가격 적합도"
                   value={field.value}
                   onChange={field.onChange}
                   min={0}

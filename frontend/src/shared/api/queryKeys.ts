@@ -74,6 +74,8 @@ export const queryKeys = {
   operations: {
     dashboard: (operatorId: OperatorScope = null) =>
       ["operations", "dashboard", { operatorId }] as const,
+    g2Evidence: (operatorId: OperatorScope = null, days?: number) =>
+      ["operations", "g2-evidence", { operatorId, days: days ?? null }] as const,
     kpi: (query: OperationsKpiQuery, operatorId: OperatorScope = null) =>
       ["operations", "kpi", normalizeOperationsKpiKey(query), { operatorId }] as const,
     decisionSamples: (query: DecisionSamplesQuery) =>
