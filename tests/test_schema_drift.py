@@ -61,6 +61,7 @@ MIGRATION_OWNED_TABLES = {
     "synthetic_experiment_runs",
     "synthetic_experiment_results",
     "smoke_test_runs",
+    "operator_notification_channels",
 }
 
 # Columns added to a pre-existing table by an alembic migration.

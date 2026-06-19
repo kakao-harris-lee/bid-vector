@@ -12,6 +12,7 @@ from app.models.models import (
     CrawlJob,
     HistoricalData,
     Notification,
+    OperatorNotificationChannel,
     PricePrediction,
     Project,
     TenderResult,
@@ -4500,6 +4501,76 @@ def test_synthetic_operator_notification_records_dry_run_without_telegram_send(
     assert event_data["notification_id"] == notification.id
     assert event_data["sent"] is False
     assert event_data["status"] == "skipped_synthetic_operator"
+    assert event_data["channel_type"] == "telegram"
+    assert event_data["channel_id"] is None
+    assert event_data["route_key"] == f"operator:{synthetic.id}:telegram:unconfigured"
+    assert event_data["channel_source"] == "missing_channel"
+    assert event_data["channel_active"] is False
+    assert event_data["dry_run_only"] is True
+
+
+def test_inactive_operator_telegram_channel_records_dry_run_evidence(
+    test_db,
+    monkeypatch,
+):
+    """Inactive per-operator channels should never send but should leave route evidence."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+    def fail_send(self, message: str, reply_markup=None, chat_id=None):
+        raise AssertionError("inactive operator channels must not call Telegram")
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fail_send)
+
+    synthetic = _create_operator_user(test_db, username="synthetic-sw-small-seoul")
+    channel = OperatorNotificationChannel(
+        operator_id=synthetic.id,
+        channel_type="telegram",
+        route_key="telegram:synthetic-sw-small-seoul",
+        target_label="chat ********0346",
+        is_active=False,
+        dry_run_only=False,
+    )
+    test_db.add(channel)
+    test_db.commit()
+    test_db.refresh(channel)
+
+    record = _seed_action_decision(
+        test_db,
+        operator_id=synthetic.id,
+        action="bid_now",
+        decision_status="planned",
+    )
+    record.priority_score = 0.99
+    record.probability_score = 0.99
+    test_db.commit()
+    test_db.refresh(record)
+
+    notification = OperatorNotificationService().create_bid_decision_notification(
+        test_db,
+        operator_id=synthetic.id,
+        project=record.project,
+        decision_record=record,
+    )
+
+    assert notification.user_id == synthetic.id
+    event = (
+        test_db.query(Analytics)
+        .filter(
+            Analytics.user_id == synthetic.id,
+            Analytics.event_type == "telegram.delivery",
+        )
+        .one()
+    )
+    event_data = json.loads(event.event_data)
+    assert event_data["sent"] is False
+    assert event_data["status"] == "telegram_channel_inactive"
+    assert event_data["channel_id"] == channel.id
+    assert event_data["route_key"] == "telegram:synthetic-sw-small-seoul"
+    assert event_data["target_label"] == "chat ********0346"
+    assert event_data["channel_active"] is False
+    assert event_data["dry_run_only"] is False
 
 
 def test_bid_decision_notification_rejects_mismatched_owner(test_db):
