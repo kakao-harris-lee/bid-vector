@@ -158,6 +158,7 @@ python scripts/production_smoke_test.py \
 
 - [CLAUDE.md](CLAUDE.md): 에이전트 작업 규칙과 함정
 - [docs/roadmap.md](docs/roadmap.md): 현재 단계, 목표, exit gate
+- [docs/operations/g2-exit-agent-plan.md](docs/operations/g2-exit-agent-plan.md): G-2 exit gate 충족을 위한 다음 병렬 작업 계획
 - [docs/operations/roadmap-next-agent-plan.md](docs/operations/roadmap-next-agent-plan.md): 최근 완료된 병렬 작업 기록과 후속 gap
 - [docs/production-smoke-test.md](docs/production-smoke-test.md): 운영 smoke test 절차
 - [docs/ml-image-separation.md](docs/ml-image-separation.md): ML 이미지/의존성 분리

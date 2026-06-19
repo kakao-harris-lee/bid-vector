@@ -43,6 +43,8 @@
 4. G-2 사용자/관리자 정보 구조 분리: 사용자 화면은 공고 추천/투찰 선택/결과 확인, 관리자 화면은 backtest/smoke/statistics/data 상태로 역할을 분리한다.
 5. G-0 관찰: canonical scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 credential, KONEPS 응답, 후보 없음, Telegram, task/broker로 분류한다.
 
+다음 병렬 작업 지시서는 `docs/operations/g2-exit-agent-plan.md`를 기준으로 합니다.
+
 ## 다음 병렬 작업 작성 규칙
 
 새 병렬 작업을 시작할 때는 이 파일을 그대로 재사용하지 말고 `docs/roadmap.md`의 최신 "다음 우선순위"에서 새 작업 지시서를 작성합니다.
