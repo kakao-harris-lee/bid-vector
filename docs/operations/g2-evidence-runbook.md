@@ -97,6 +97,14 @@ curl "$BASE_URL/api/v1/operator/dashboard?days=30&limit=5&operator_id=$OP_ID" \
 curl "$BASE_URL/api/v1/analytics/operations-dashboard?days=30&recent_limit=5&operator_id=$OP_ID" \
   -H "Authorization: Bearer $TOKEN" \
   > "$EVIDENCE_DIR/$OP_ID/operations-dashboard.json"
+
+curl "$BASE_URL/api/v1/operator/notification-channels?operator_id=$OP_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  > "$EVIDENCE_DIR/$OP_ID/notification-channels.json"
+
+curl "$BASE_URL/api/v1/analytics/g2-evidence?days=30&recent_limit=5&operator_id=$OP_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  > "$EVIDENCE_DIR/$OP_ID/g2-evidence.json"
 ```
 
 확인 포인트:
@@ -105,6 +113,8 @@ curl "$BASE_URL/api/v1/analytics/operations-dashboard?days=30&recent_limit=5&ope
 - `strategy.json`: `operator_id == OP_ID`, `strategy_configured=true`, `review_threshold <= bid_now_threshold`.
 - `operator-dashboard.json`: `current_operator_id == OP_ID`, 최근 `recent_monitor_runs[]`가 해당 사업자 실행만 포함.
 - `operations-dashboard.json`: `operator_id/current_operator_id == OP_ID`, `strategy`, `notifications`, `smoke_test` evidence가 canonical-only인지 operator-scoped인지 구분 가능.
+- `notification-channels.json`: `current_operator_id == OP_ID`, target은 masked label만 저장, `is_active`/`dry_run_only`/skip 정책이 operator별로 명확.
+- `g2-evidence.json`: `operator_id/current_operator_id == OP_ID`, `evidence_status`와 `blocking_gaps[]`를 그대로 manifest에 반영.
 - 알림 대상: Telegram chat id, app device token, channel id 같은 민감값은 원문 저장하지 않는다. 증적에는 masked id, channel status, `dry_run_only` 또는 `active` 여부만 남긴다.
 
 ## 4. 1일 실행 순서
@@ -316,7 +326,8 @@ python scripts/backtest_synthetic_operators.py \
 | Operator roster | `operator-accounts.json` | G-2 대상 3개 이상, `is_synthetic=true`, `is_active=true` | mixed data |
 | Profile | `<OP_ID>/profile.json` | `operator_id == OP_ID`, `profile_configured=true` | mixed data |
 | Strategy | `<OP_ID>/strategy.json` | `strategy_configured=true`, 임계값 유효 | 후보 없음 |
-| Notification target | notification mapping evidence | active 또는 dry-run/skip 정책이 operator별로 명확 | Telegram/app notification |
+| Notification target | `<OP_ID>/notification-channels.json` | `is_active` 또는 dry-run/skip 정책이 operator별로 명확 | Telegram/app notification |
+| G-2 evidence ledger | `<OP_ID>/g2-evidence.json` | `evidence_status`, 영역별 status, `blocking_gaps[]` 저장 | mixed data, missing evidence |
 | Scheduled smoke | `smoke-read.json`, dashboard `smoke_test` | read-only smoke pass, scheduled failure 없음 또는 원인 분류됨 | credential, KONEPS 응답, task/broker |
 | Candidate preview | `<OP_ID>/strategy-candidates.json` | API 성공, `current_operator_id == OP_ID` | 후보 없음 |
 | Strategy monitor | `<OP_ID>/strategy-monitor*.json` | 승인 실행 시 completed, run id 저장 | 후보 없음, Telegram/app notification, task/broker |
@@ -337,6 +348,7 @@ python scripts/backtest_synthetic_operators.py \
 - decision experiment: planned/running/completed, sample 부족 여부
 - synthetic experiment: run_id, synthetic_only=true/false, sample-gap status
 - notification: app count, Telegram sent/skipped/dry-run, mixed routing 여부
+- G-2 evidence ledger: ready/insufficient/missing/mixed_scope, blocking_gaps=<count>
 - 실패 분류: credential / KONEPS 응답 / 후보 없음 / Telegram/app notification / task/broker / mixed data / none
 - 재실행 계획: <command or dashboard action>
 ```
@@ -354,57 +366,24 @@ python scripts/backtest_synthetic_operators.py \
 
 분류가 애매하면 `mixed data`로 올려서 exit review에서 제외한다. G-2 ready는 모호한 성공보다 재현 가능한 실패 분류를 우선한다.
 
-## 8. G-2 exit review 양식
+## 8. G-2 exit review template
 
-```markdown
-# G-2 Exit Review
+상세 review 양식과 evidence manifest contract는 `docs/operations/g2-exit-review-template.md`를 사용한다. 이 runbook의 일일 산출물은 해당 template의 `manifest.json` 입력이다.
 
-검토일:
-검토 기간: YYYY-MM-DD ~ YYYY-MM-DD (N일)
-검토자:
+권장 review 산출물:
 
-## 1. 대상 사업자
+- `models/reports/g2-evidence/<review_id>/manifest.json`: operator별 profile/strategy/channel/evidence path, 날짜별 status, `blocking_gaps` 처리 상태, dry-run/승인 후 실행 항목을 구조화한다.
+- `models/reports/g2-evidence/<review_id>/exit-review.md`: manifest를 근거로 G-2 exit gate별 pass/fail과 최종 `approve`/`hold`를 적는다.
 
-| operator_id | username | company | profile ready | strategy ready | notification target | evidence days |
-|---|---|---|---|---|---|---|
-| | | | yes/no | yes/no | active/dry-run/skipped | |
-
-## 2. Exit gate 판정
-
-| Gate | 판정 | 근거 |
-|---|---|---|
-| 3개 이상 가상 사업자가 독립 ID/사업자 정보/전략으로 운영됨 | pass/fail | |
-| 각 사업자의 공고 추천과 알림이 서로 섞이지 않음 | pass/fail | |
-| 관리자 화면에서 사업자별 백테스트, smoke, 통계, 수집 상태를 구분해 볼 수 있음 | pass/fail | |
-| 사용자 화면은 관리 기능 없이 투찰 판단에 집중함 | pass/fail | |
-
-## 3. Evidence 요약
-
-- scheduled smoke: current_streak=<n>, G-2 scope 인정 여부=<yes/no>
-- strategy monitor: operator별 run_id와 completed/failure count
-- decision experiment: operator별 active/completed/evaluated count
-- synthetic experiment: run_id, sample-gap 후속 실행, synthetic_only 여부
-- Telegram/app notification: sent/skipped/dry-run, mixed routing 없음 여부
-
-## 4. 실패/제외 증적
-
-| 날짜 | operator_id | run/source | 실패 분류 | 조치 | 재실행 결과 |
-|---|---|---|---|---|---|
-| | | | credential/KONEPS 응답/후보 없음/Telegram/app notification/task/broker/mixed data | | |
-
-## 5. 결론
-
-- G-2 exit: approve / hold
-- hold 사유:
-- 다음 조치:
-```
+현재 실제 N일 증적이 없으면 `approve` 또는 `hold`를 미리 선언하지 않는다. Review 준비 문서의 기본 상태는 `pending` 또는 `draft`다.
 
 ## 9. 완료 판정 기준
 
-G-2 exit를 선언하려면 최소 N일 동안 아래를 모두 만족해야 한다.
+G-2 exit를 선언하려면 최소 N일 동안 아래를 모두 만족해야 하며, 세부 `approve`/`hold` 기준은 `docs/operations/g2-exit-review-template.md`를 따른다.
 
 - 3개 이상 synthetic operator의 `operator_id`, profile, strategy, notification policy가 독립적으로 확인됨.
 - operator별 strategy candidate/monitor/decision experiment evidence가 `current_operator_id` 기준으로 분리됨.
 - synthetic experiment 또는 backtest evidence가 3개 이상 operator slug를 포함하고 `synthetic_only=true` 또는 canonical mixed warning 없음.
 - Telegram/app notification evidence가 실제 송신과 dry-run/skip을 구분하며, canonical chat으로 synthetic 알림이 섞이지 않음.
 - 실패가 있더라도 위 6개 분류 중 하나로 분류되고, retry command 또는 보류 사유가 남음.
+- `/api/v1/analytics/g2-evidence`의 `blocking_gaps`가 operator별로 resolved 또는 excluded 처리되어 있고, unresolved gap을 성공 근거로 사용하지 않음.
