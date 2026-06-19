@@ -22,6 +22,7 @@ from app.schemas.schemas import (
     DecisionExperimentThresholdApplyRequest,
     DecisionExperimentThresholdApplyResponse,
     DecisionFunnelResponse,
+    G2EvidenceSummaryResponse,
     AnalyticsSummaryResponse,
     DecisionInsightsResponse,
     MLTaskResponse,
@@ -237,6 +238,25 @@ def get_operations_dashboard(
     payload = AnalyticsReportingService().build_operations_dashboard(
         db,
         days=days,
+        recent_limit=recent_limit,
+        operator=target_operator,
+    )
+    return _with_current_operator(payload, target_operator)
+
+
+@router.get("/g2-evidence", response_model=G2EvidenceSummaryResponse)
+def get_g2_evidence_summary(
+    days: int = Query(30, ge=1, le=365),
+    recent_limit: int = Query(5, ge=1, le=20),
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Return one operator-scoped evidence ledger for G-2 exit review."""
+    target_operator = _resolve_analytics_operator(db, current_operator, operator_id)
+    payload = AnalyticsReportingService().build_g2_evidence_summary(
+        db,
+        window_days=days,
         recent_limit=recent_limit,
         operator=target_operator,
     )

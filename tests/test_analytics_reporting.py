@@ -9,10 +9,12 @@ from app.core.config import settings
 from app.models.models import (
     Analytics,
     CrawlJob,
+    DecisionExperimentRun,
     Notification,
     OperatorStrategyRun,
     SmokeTestRun,
     SyntheticExperiment,
+    SyntheticExperimentResult,
     SyntheticExperimentRun,
 )
 
@@ -152,6 +154,254 @@ def test_operations_dashboard_summarizes_crawl_and_strategy_health(client, test_
     assert settings.CELERY_OPS_QUEUE in queue_map
     assert "jobs.collect_koneps_notices" in queue_map[settings.CELERY_OPS_QUEUE]["task_names"]
     assert "jobs.monitor_operator_strategy" in queue_map[settings.CELERY_OPS_QUEUE]["task_names"]
+
+
+def test_g2_evidence_summary_reports_ready_operator_scoped_evidence(client, test_db):
+    """G-2 ledger should be ready only when every evidence family is operator-scoped."""
+    operator = _bootstrap_operator(client)
+    operator_id = operator["id"]
+    username = operator["username"]
+    now = datetime.now(UTC)
+
+    experiment = SyntheticExperiment(
+        name="g2-operator-evidence",
+        description="operator-scoped synthetic evidence",
+        params_json=json.dumps({"limit": 100}),
+        operator_slugs_json=json.dumps([username]),
+        created_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=1),
+    )
+    test_db.add(experiment)
+    test_db.flush()
+    synthetic_run = SyntheticExperimentRun(
+        experiment_id=experiment.id,
+        status="completed",
+        summary_json=json.dumps({"sample_status": "sufficient"}),
+        started_at=now - timedelta(hours=2),
+        finished_at=now - timedelta(hours=1),
+        created_at=now - timedelta(hours=2),
+    )
+    test_db.add(synthetic_run)
+    test_db.flush()
+    test_db.add_all(
+        [
+            SmokeTestRun(
+                started_at=now - timedelta(hours=5),
+                completed_at=now - timedelta(hours=4),
+                overall_passed=True,
+                phases=json.dumps(
+                    [
+                        {
+                            "name": "candidate_generation",
+                            "passed": True,
+                            "detail": "ok",
+                            "evidence": {
+                                "operator_id": operator_id,
+                                "monitor_run_id": 101,
+                            },
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                telegram_status="sent",
+                created_at=now - timedelta(hours=5),
+            ),
+            OperatorStrategyRun(
+                operator_id=operator_id,
+                trigger_source="scheduled",
+                status="completed",
+                evaluated_project_count=12,
+                selected_candidate_count=3,
+                persisted_candidate_count=2,
+                notification_count=1,
+                created_at=now - timedelta(hours=4),
+                completed_at=now - timedelta(hours=3),
+            ),
+            DecisionExperimentRun(
+                operator_id=operator_id,
+                experiment_key="exp-review-threshold-tighten",
+                recommendation_key="review-threshold-tighten",
+                status="completed",
+                outcome="success",
+                priority_rank=1,
+                title="G-2 evidence experiment",
+                hypothesis="operator scoped",
+                suggested_change="raise threshold",
+                target_metric="review_submission_rate",
+                expected_direction="increase",
+                success_criteria="improve",
+                guardrail_metric="overall_submission_rate",
+                minimum_decision_sample=1,
+                duration_days=7,
+                baseline_days=7,
+                rollback_trigger="guardrail drops",
+                baseline_summary=json.dumps({}),
+                latest_evaluation=json.dumps({"sample_size": 3}),
+                started_at=now - timedelta(days=2),
+                ended_at=now - timedelta(days=1),
+                created_at=now - timedelta(days=2),
+                updated_at=now - timedelta(days=1),
+            ),
+            Notification(
+                user_id=operator_id,
+                title="입찰 판단",
+                message="operator notification",
+                type="recommendation",
+                is_read=False,
+                created_at=now - timedelta(hours=2),
+            ),
+            Analytics(
+                user_id=operator_id,
+                event_type="telegram.delivery",
+                event_data=json.dumps({"sent": True, "status": "sent"}),
+                timestamp=now - timedelta(hours=2),
+            ),
+            SyntheticExperimentResult(
+                run_id=synthetic_run.id,
+                operator_slug=username,
+                metrics_json=json.dumps(
+                    {
+                        "operator_id": operator_id,
+                        "settled_count": 35,
+                        "missing_settled_count": 0,
+                        "sample_status": "sufficient",
+                    }
+                ),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/g2-evidence",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["operator_id"] == operator_id
+    assert payload["window_days"] == 30
+    assert payload["evidence_status"] == "ready"
+    assert payload["blocking_gaps"] == []
+    assert payload["smoke"]["counts_toward_g2_ready"] is True
+    assert payload["strategy_monitor"]["completed_count"] == 1
+    assert payload["decision_experiments"]["completed_count"] == 1
+    assert payload["synthetic_experiments"]["operator_id_scoped_result_count"] == 1
+    assert payload["notifications"]["notification_count"] == 1
+
+
+def test_g2_evidence_summary_flags_canonical_and_slug_only_scope(client, test_db):
+    """Canonical smoke and slug-only synthetic evidence must not be reported as G-2 ready."""
+    operator = _bootstrap_operator(client)
+    operator_id = operator["id"]
+    username = operator["username"]
+    now = datetime.now(UTC)
+
+    experiment = SyntheticExperiment(
+        name="g2-slug-only",
+        description="slug-only synthetic evidence",
+        params_json=json.dumps({"limit": 100}),
+        operator_slugs_json=json.dumps([username]),
+        created_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=1),
+    )
+    test_db.add(experiment)
+    test_db.flush()
+    synthetic_run = SyntheticExperimentRun(
+        experiment_id=experiment.id,
+        status="completed",
+        summary_json=json.dumps({"sample_status": "sufficient"}),
+        started_at=now - timedelta(hours=2),
+        finished_at=now - timedelta(hours=1),
+        created_at=now - timedelta(hours=2),
+    )
+    test_db.add(synthetic_run)
+    test_db.flush()
+    test_db.add_all(
+        [
+            SmokeTestRun(
+                started_at=now - timedelta(hours=5),
+                completed_at=now - timedelta(hours=4),
+                overall_passed=True,
+                phases=json.dumps(
+                    [{"name": "koneps_collect", "passed": True, "detail": "ok"}],
+                    ensure_ascii=False,
+                ),
+                telegram_status="sent",
+                created_at=now - timedelta(hours=5),
+            ),
+            OperatorStrategyRun(
+                operator_id=operator_id,
+                trigger_source="scheduled",
+                status="completed",
+                evaluated_project_count=10,
+                selected_candidate_count=2,
+                persisted_candidate_count=1,
+                notification_count=1,
+                created_at=now - timedelta(hours=4),
+                completed_at=now - timedelta(hours=3),
+            ),
+            DecisionExperimentRun(
+                operator_id=operator_id,
+                experiment_key="exp-review-threshold-tighten",
+                recommendation_key="review-threshold-tighten",
+                status="completed",
+                outcome="success",
+                priority_rank=1,
+                title="G-2 mixed-scope experiment",
+                hypothesis="operator scoped",
+                suggested_change="raise threshold",
+                target_metric="review_submission_rate",
+                expected_direction="increase",
+                success_criteria="improve",
+                guardrail_metric="overall_submission_rate",
+                minimum_decision_sample=1,
+                duration_days=7,
+                baseline_days=7,
+                rollback_trigger="guardrail drops",
+                baseline_summary=json.dumps({}),
+                latest_evaluation=json.dumps({}),
+                started_at=now - timedelta(days=2),
+                ended_at=now - timedelta(days=1),
+                created_at=now - timedelta(days=2),
+                updated_at=now - timedelta(days=1),
+            ),
+            Notification(
+                user_id=operator_id,
+                title="입찰 판단",
+                message="operator notification",
+                type="recommendation",
+                is_read=False,
+                created_at=now - timedelta(hours=2),
+            ),
+            SyntheticExperimentResult(
+                run_id=synthetic_run.id,
+                operator_slug=username,
+                metrics_json=json.dumps(
+                    {
+                        "settled_count": 35,
+                        "missing_settled_count": 0,
+                        "sample_status": "sufficient",
+                    }
+                ),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/g2-evidence",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["evidence_status"] == "mixed_scope"
+    assert payload["smoke"]["status"] == "mixed_scope"
+    assert payload["smoke"]["counts_toward_g2_ready"] is False
+    assert payload["synthetic_experiments"]["status"] == "mixed_scope"
+    assert payload["synthetic_experiments"]["slug_only_result_count"] == 1
+    assert any("operator_id" in gap for gap in payload["blocking_gaps"])
 
 
 def test_operations_dashboard_reports_external_broker_and_stale_tasks(client, test_db, monkeypatch):

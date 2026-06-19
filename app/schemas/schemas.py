@@ -2038,6 +2038,20 @@ class OperationsDashboardResponse(BaseModel):
     cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 
+class G2EvidenceSummaryResponse(BaseModel):
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
+    window_days: int
+    evidence_status: Literal["ready", "insufficient", "mixed_scope", "missing"]
+    smoke: Dict[str, Any] = Field(default_factory=dict)
+    strategy_monitor: Dict[str, Any] = Field(default_factory=dict)
+    decision_experiments: Dict[str, Any] = Field(default_factory=dict)
+    synthetic_experiments: Dict[str, Any] = Field(default_factory=dict)
+    notifications: Dict[str, Any] = Field(default_factory=dict)
+    blocking_gaps: List[str] = Field(default_factory=list)
+
+
 class LegacyAdminStatsResponse(BaseModel):
     operator_id: int
     total_users: int

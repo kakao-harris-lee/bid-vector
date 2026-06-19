@@ -27,6 +27,7 @@ REPORTING_PATHS = (
     "/api/v1/analytics/decision-insights",
     "/api/v1/analytics/recommendation-feedback-labels",
     "/api/v1/analytics/decision-recommendations",
+    "/api/v1/analytics/g2-evidence",
     "/api/v1/operations/decision-samples",
 )
 
