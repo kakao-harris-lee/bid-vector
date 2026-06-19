@@ -6,8 +6,8 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.core.single_user import DEFAULT_OPERATOR_USERNAME, ensure_operator_account
-from app.models.models import BidDecisionRecord, Project, User
+from app.core.single_user import ensure_operator_account
+from app.models.models import BidDecisionRecord, Project
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import BidDecisionCallbackRoute, TelegramNotificationService
@@ -77,7 +77,7 @@ class TelegramUpdateProcessor:
         if not self._is_authorized_chat(chat_id):
             logger.info(
                 "Ignoring Telegram callback from unauthorized chat: chat_id=%s",
-                chat_id,
+                self.telegram.mask_chat_id(chat_id),
             )
             return {
                 "status": "ignored",
@@ -149,25 +149,21 @@ class TelegramUpdateProcessor:
             raise ValueError("Bid decision record not found")
 
         record_operator_id = int(record.operator_id)
+        notification_service = OperatorNotificationService()
         if route.operator_id is not None:
             if int(route.operator_id) != record_operator_id:
                 raise ValueError("Bid decision record not found")
-            if not self._is_canonical_operator(db, operator_id=record_operator_id):
+            if not notification_service.has_active_telegram_callback_route(
+                db, operator_id=record_operator_id
+            ):
                 raise ValueError("Bid decision record not found")
             return record_operator_id
 
-        if not self._is_canonical_operator(db, operator_id=record_operator_id):
+        if not notification_service.has_active_telegram_callback_route(
+            db, operator_id=record_operator_id
+        ):
             raise ValueError("Bid decision record not found")
         return record_operator_id
-
-    def _is_canonical_operator(self, db: Session, *, operator_id: int) -> bool:
-        """Return whether the operator owns the single configured Telegram route."""
-        operator = (
-            db.query(User)
-            .filter(User.id == operator_id, User.username == DEFAULT_OPERATOR_USERNAME)
-            .first()
-        )
-        return operator is not None
 
     def _apply_bid_decision_action(
         self,
@@ -317,7 +313,7 @@ class TelegramUpdateProcessor:
         if not self._is_authorized_chat(chat_id):
             logger.info(
                 "Ignoring Telegram message from unauthorized chat: chat_id=%s",
-                chat_id,
+                self.telegram.mask_chat_id(chat_id),
             )
             return {
                 "status": "ignored",

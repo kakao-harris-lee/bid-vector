@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { DashboardWorkItem, RouteKey } from "@/shared/types";
+import type { DashboardMetric, DashboardWorkItem, RouteKey } from "@/shared/types";
 import { useShellContext } from "@/app/dashboardContext";
 import { PROFILE_ROUTE_PATH, ROUTE_LABELS } from "@/app/layout/Shell";
 import { useProfileQuery } from "@/features/profile/hooks";
@@ -84,12 +84,10 @@ function HomeContent({
 
   const visibleWorkItems = summary.work_items.slice(0, 3);
   const hasMoreWorkItems = summary.work_items.length > visibleWorkItems.length;
+  const userMetrics = summary.metrics.filter(isUserDashboardMetric);
 
-  // PR #74 makes `/operator/profile?operator_id=` a cross-operator GET for
-  // privileged callers. The 5-axis detail is now fetched regardless of which
-  // company the user is viewing — only the *edit* CTA stays gated to the
-  // token owner. `null` means "fall back to the token owner" so the URL omits
-  // `?operator_id=` entirely.
+  // User surface is always token-owner scoped. Admin cross-operator context is
+  // stripped in Shell before this screen receives `activeOperatorId`.
   const isOwnContext = activeOperatorId === null;
   const profileQuery = useProfileQuery(session, activeOperatorId);
 
@@ -106,11 +104,13 @@ function HomeContent({
         />
       </section>
 
-      <section className="metric-strip" aria-label="핵심 지표">
-        {summary.metrics.map((metric) => (
-          <MetricTile key={metric.key} metric={metric} />
-        ))}
-      </section>
+      {userMetrics.length > 0 ? (
+        <section className="metric-strip" aria-label="핵심 지표">
+          {userMetrics.map((metric) => (
+            <MetricTile key={metric.key} metric={metric} />
+          ))}
+        </section>
+      ) : null}
 
       <section>
         <SegmentedTabs active={activePreview} onChange={onPreviewChange} sections={summary.sections} />
@@ -159,4 +159,30 @@ function routeFromWorkItem(item: DashboardWorkItem): RouteKey {
   if (item.item_type === "bid_pending_result") return "bids";
   if (item.item_type === "result_review") return "results";
   return "opportunities";
+}
+
+const USER_DASHBOARD_METRIC_KEYS = new Set([
+  "due_opportunities",
+  "active_opportunities",
+  "active_bids",
+  "recent_results"
+]);
+
+const ADMIN_METRIC_KEYWORDS = [
+  "backtest",
+  "smoke",
+  "synthetic",
+  "experiment",
+  "crawl",
+  "telegram",
+  "notification",
+  "ml_release",
+  "kpi",
+  "evidence"
+];
+
+function isUserDashboardMetric(metric: DashboardMetric): boolean {
+  if (USER_DASHBOARD_METRIC_KEYS.has(metric.key)) return true;
+  const key = metric.key.toLowerCase();
+  return !ADMIN_METRIC_KEYWORDS.some((keyword) => key.includes(keyword));
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -107,8 +107,18 @@ export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
   const bottomNavRoute = bottomNavKeyForPath(location.pathname);
   const [reloadKey, setReloadKey] = useState(0);
   const activeOperator = useActiveOperator(session);
-  const activeOperatorId = activeOperator.activeOperatorId;
   const isAdminSurface = surface === "admin";
+  const activeOperatorId = isAdminSurface ? activeOperator.activeOperatorId : null;
+  const surfaceActiveOperator = useMemo(() => {
+    if (isAdminSurface) return activeOperator;
+    const currentOperator =
+      activeOperator.currentOperatorId === null
+        ? null
+        : activeOperator.operators.find(
+            (row) => row.operator_id === activeOperator.currentOperatorId
+          ) ?? null;
+    return { ...activeOperator, activeOperatorId: null, currentOperator };
+  }, [activeOperator, isAdminSurface]);
   const homePath = isAdminSurface ? ADMIN_HOME_ROUTE_PATH : ROUTE_LABELS.home.path;
 
   const summary = useQuery({
@@ -155,7 +165,7 @@ export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
         </button>
         <div className="flex items-center gap-2">
           {isAdminSurface ? <OperatorSwitcher activeOperator={activeOperator} /> : null}
-          {summary.data ? (
+          {isAdminSurface && summary.data ? (
             <Badge tone={toneFromStatus(summary.data.operational_status.status)}>
               {summary.data.operational_status.label}
             </Badge>
@@ -253,16 +263,17 @@ export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
       <main className="flex-1">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6">
           <ActiveOperatorContextBar
-            activeOperator={activeOperator}
+            activeOperator={surfaceActiveOperator}
             summaryOperatorUsername={summary.data?.current_operator_username ?? null}
             pathname={location.pathname}
+            enabled={isAdminSurface}
           />
           {summary.error && (summary.error as { status?: number }).status !== 401 ? (
             <InlineNotice tone="critical">
               {(summary.error as Error).message ?? "대시보드를 불러오지 못했습니다."}
             </InlineNotice>
           ) : null}
-          <Outlet context={{ summary, session, route, reloadKey, activeOperator }} />
+          <Outlet context={{ summary, session, route, reloadKey, activeOperator: surfaceActiveOperator }} />
         </div>
       </main>
 
@@ -287,12 +298,15 @@ export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
 function ActiveOperatorContextBar({
   activeOperator,
   summaryOperatorUsername,
-  pathname
+  pathname,
+  enabled
 }: {
   activeOperator: ReturnType<typeof useActiveOperator>;
   summaryOperatorUsername: string | null;
   pathname: string;
+  enabled: boolean;
 }) {
+  if (!enabled) return null;
   if (!activeOperator.isPrivileged) return null;
   const { activeOperatorId, currentOperator } = activeOperator;
   const isImpersonating = activeOperatorId !== null && currentOperator !== null;

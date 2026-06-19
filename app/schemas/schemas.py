@@ -162,6 +162,32 @@ class OperatorAccountListResponse(BaseModel):
     operators: List[OperatorAccountItem] = Field(default_factory=list)
 
 
+class OperatorNotificationChannelItem(BaseModel):
+    """Masked notification route metadata for one operator channel."""
+
+    channel_id: Optional[int] = None
+    operator_id: int
+    channel_type: str
+    route_key: str
+    target_label: Optional[str] = None
+    is_active: bool = False
+    dry_run_only: bool = True
+    source: str = "operator_notification_channels"
+    verified_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class OperatorNotificationChannelListResponse(BaseModel):
+    """Notification channels visible for the resolved operator context."""
+
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
+    channel_count: int = Field(ge=0)
+    channels: List[OperatorNotificationChannelItem] = Field(default_factory=list)
+
+
 class OperatorDashboardCard(BaseModel):
     key: str
     label: str
@@ -2038,6 +2064,20 @@ class OperationsDashboardResponse(BaseModel):
     cards: List[OperationsDashboardCard] = Field(default_factory=list)
 
 
+class G2EvidenceSummaryResponse(BaseModel):
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
+    window_days: int
+    evidence_status: Literal["ready", "insufficient", "mixed_scope", "missing"]
+    smoke: Dict[str, Any] = Field(default_factory=dict)
+    strategy_monitor: Dict[str, Any] = Field(default_factory=dict)
+    decision_experiments: Dict[str, Any] = Field(default_factory=dict)
+    synthetic_experiments: Dict[str, Any] = Field(default_factory=dict)
+    notifications: Dict[str, Any] = Field(default_factory=dict)
+    blocking_gaps: List[str] = Field(default_factory=list)
+
+
 class LegacyAdminStatsResponse(BaseModel):
     operator_id: int
     total_users: int
@@ -2758,6 +2798,14 @@ class SyntheticExperimentRunResponse(BaseModel):
     results: List[SyntheticExperimentResultItem] = Field(default_factory=list)
 
 
+class SyntheticExperimentRunCreateRequest(BaseModel):
+    """Optional metadata for a queued synthetic experiment run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    source_sample_gap_candidate: Optional[Dict[str, Any]] = None
+
+
 # --- Experiment Lab (G-1): sample gap/backfill planning -----------------------
 
 
@@ -2863,6 +2911,38 @@ class SyntheticExperimentSampleGapCandidateRequest(BaseModel):
     action_code: Optional[str] = Field(default=None, max_length=100)
 
 
+class SyntheticExperimentSampleGapHttpRequest(BaseModel):
+    """Concrete follow-up API request for materializing a sample-gap candidate."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    method: Literal["POST"]
+    path: str
+    body: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SyntheticExperimentSampleGapExecutionPlan(BaseModel):
+    """Repeatable, non-executing plan that bridges a gap candidate to a run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    mode: Literal[
+        "blocked",
+        "run_existing_experiment",
+        "save_preset_then_run",
+        "create_experiment_then_run",
+    ]
+    approval_required: bool = True
+    dry_run_default: bool = True
+    source_context: Dict[str, Any] = Field(default_factory=dict)
+    preset_request: Optional[SyntheticExperimentSampleGapHttpRequest] = None
+    experiment_request: Optional[SyntheticExperimentSampleGapHttpRequest] = None
+    run_request: Optional[SyntheticExperimentSampleGapHttpRequest] = None
+    cli_command: str
+    write_cli_command: Optional[str] = None
+    instructions: List[str] = Field(default_factory=list)
+
+
 class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
     """Runnable follow-up candidate derived from one sample-gap recommendation."""
 
@@ -2885,6 +2965,7 @@ class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
         "save_preset",
         "create_experiment",
     ]
+    execution_plan: SyntheticExperimentSampleGapExecutionPlan
     run_allowed: bool
     blocked_by_warnings: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)

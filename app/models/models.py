@@ -1,5 +1,5 @@
 """Database models"""
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -33,6 +33,7 @@ class User(Base):
     decision_experiment_runs = relationship("DecisionExperimentRun", back_populates="operator")
     allocations = relationship("Allocation", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    notification_channels = relationship("OperatorNotificationChannel", back_populates="operator")
 
 
 class Project(Base):
@@ -180,6 +181,32 @@ class OperatorStrategy(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     user = relationship("User", back_populates="strategy_profile")
+
+
+class OperatorNotificationChannel(Base):
+    """Per-operator notification route metadata without raw secret targets."""
+    __tablename__ = "operator_notification_channels"
+    __table_args__ = (
+        UniqueConstraint(
+            "operator_id",
+            "channel_type",
+            "route_key",
+            name="uq_operator_notification_channels_operator_channel_route",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    operator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    channel_type = Column(String(50), nullable=False, index=True)
+    route_key = Column(String(120), nullable=False, index=True)
+    target_label = Column(String(120), nullable=True)
+    is_active = Column(Boolean, default=False, nullable=False, server_default="0")
+    dry_run_only = Column(Boolean, default=True, nullable=False, server_default="1")
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    operator = relationship("User", back_populates="notification_channels")
 
 
 class OperatorStrategyRun(Base):

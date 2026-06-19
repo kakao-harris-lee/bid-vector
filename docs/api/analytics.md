@@ -13,6 +13,7 @@
 - [GET /api/v1/analytics/prediction-feedback](#get-apiv1analyticsprediction-feedback) — 예측·추천 vs 실 낙찰 정확도
 - [GET /api/v1/analytics/prediction-observability](#get-apiv1analyticsprediction-observability) — predictor 선택/fallback/guardrail/정확도 관측
 - [GET /api/v1/analytics/operations-dashboard](#get-apiv1analyticsoperations-dashboard) — 운영 건강 대시보드(수집/전략/태스크/알림/ML릴리스)
+- [GET /api/v1/analytics/g2-evidence](#get-apiv1analyticsg2-evidence) — 사업자별 G-2 exit 증적 ledger
 - [GET /api/v1/analytics/decision-insights](#get-apiv1analyticsdecision-insights) — 결정 신호 요약
 - [GET /api/v1/analytics/decision-funnel](#get-apiv1analyticsdecision-funnel) — 결정 퍼널 + 비교/추세/세그먼트
 - [GET /api/v1/analytics/decision-recommendations](#get-apiv1analyticsdecision-recommendations) — 튜닝 권고 + 실험 계획
@@ -448,6 +449,84 @@ curl "http://localhost:3000/api/v1/analytics/operations-dashboard?days=30&recent
 | 코드 | 의미 |
 |---|---|
 | 422 | days/recent_limit 범위 위반 |
+
+---
+
+## GET /api/v1/analytics/g2-evidence
+사업자별 G-2 exit 판단에 필요한 smoke, strategy monitor, decision experiment, synthetic experiment, notification 증적을 한 응답으로 반환한다. `operator_id` 쿼리는 canonical `operator` 또는 admin만 다른 사업자 대상으로 사용할 수 있고, 일반 사업자는 자기 증적만 조회한다.
+
+G-0 scheduled smoke는 canonical shared pipeline 증적으로 표시되며, operator_id가 없는 smoke/synthetic 증적은 G-2 ready 계산에 포함되지 않는다. slug-only synthetic 결과처럼 사업자처럼 보이지만 `operator_id`가 없는 데이터는 `mixed_scope`와 `blocking_gaps`로 드러난다.
+
+**파라미터**
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| query | days | integer (1~365) | 아니오 | 증적 집계 기간(일), 기본 30 |
+| query | recent_limit | integer (1~20) | 아니오 | 각 영역 최근 증적 목록 길이, 기본 5 |
+| query | operator_id | integer | 아니오 | privileged caller 전용 target operator id |
+
+**요청 예시**
+```bash
+curl "http://localhost:3000/api/v1/analytics/g2-evidence?days=30&operator_id=11" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**응답 200** (일부 중첩 필드 축약)
+```json
+{
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-sw-small-seoul",
+  "window_days": 30,
+  "evidence_status": "mixed_scope",
+  "smoke": {
+    "status": "mixed_scope",
+    "evidence_scope": "g0_scheduled_smoke",
+    "operator_scope": "mixed_scope",
+    "counts_toward_g2_ready": false,
+    "canonical_only_phase_count": 5,
+    "operator_evidence_count": 0
+  },
+  "strategy_monitor": {
+    "status": "ready",
+    "operator_scope": "operator",
+    "operator_id": 11,
+    "completed_count": 2,
+    "selected_candidate_count": 8
+  },
+  "decision_experiments": {
+    "status": "ready",
+    "operator_scope": "operator",
+    "operator_id": 11,
+    "completed_count": 1,
+    "success_count": 1
+  },
+  "synthetic_experiments": {
+    "status": "mixed_scope",
+    "operator_scope": "mixed_scope",
+    "operator_id_scoped_result_count": 0,
+    "slug_only_result_count": 1,
+    "counts_toward_g2_ready": false
+  },
+  "notifications": {
+    "status": "ready",
+    "operator_scope": "operator",
+    "operator_id": 11,
+    "notification_count": 3,
+    "telegram_delivery_attempt_count": 3
+  },
+  "blocking_gaps": [
+    "Smoke evidence includes G-0 canonical-only or another operator's scope; rerun smoke evidence fully scoped to operator_id=11.",
+    "Synthetic experiment evidence for this operator is slug-scoped without operator_id; rerun or backfill operator_id-scoped metrics."
+  ]
+}
+```
+
+**에러**
+| 코드 | 의미 |
+|---|---|
+| 403 | 일반 operator가 다른 사업자 `operator_id`를 조회 |
+| 404 | target operator 없음 |
+| 422 | days/recent_limit/operator_id 범위 위반 |
 
 ---
 

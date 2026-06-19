@@ -6,6 +6,7 @@ import { toastApi } from "@/shared/components/ui";
 import { ACTIVE_OPERATOR_STORAGE_KEY } from "@/app/operatorContext";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type {
+  G2EvidenceSummaryResponse,
   OperationsDashboardResponse,
   OperationsKpiResponse
 } from "@/shared/types/operations";
@@ -183,6 +184,43 @@ const baseOperations: OperationsDashboardResponse = {
   }
 };
 
+const baseG2Evidence: G2EvidenceSummaryResponse = {
+  current_operator_id: 11,
+  current_operator_username: "synthetic-aggressive",
+  window_days: 7,
+  evidence_status: "insufficient",
+  smoke: {
+    evidence_status: "ready",
+    detail: "operator-scoped smoke evidence present",
+    evidence_count: 7,
+    latest_at: "2026-05-19T07:00:00Z"
+  },
+  strategy_monitor: {
+    evidence_status: "ready",
+    detail: "monitor run captured candidates and notifications",
+    run_count: 3,
+    latest_at: "2026-05-19T06:00:00Z"
+  },
+  decision_experiments: {
+    evidence_status: "missing",
+    detail: "decision experiment run 없음",
+    blocking_gaps: ["decision experiment 필요"]
+  },
+  synthetic_experiments: {
+    evidence_status: "insufficient",
+    detail: "settled sample 부족",
+    evidence_count: 1
+  },
+  notifications: {
+    evidence_status: "ready",
+    detail: "dry-run notification evidence recorded",
+    evidence_count: 4
+  },
+  blocking_gaps: ["decision experiment 필요", "synthetic settled sample 부족"],
+  warnings: ["canonical smoke와 G-2 증적은 분리 표시"],
+  generated_at: "2026-05-19T08:00:00Z"
+};
+
 function buildKpi(overrides: Partial<OperationsKpiResponse> = {}): OperationsKpiResponse {
   return {
     operator_id: 1,
@@ -289,22 +327,30 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 interface FetchSpy {
   dashboardCount: number;
   kpiCalls: string[];
+  g2EvidenceCalls: string[];
 }
 
 function installFetchMock({
   kpi = buildKpi(),
   accounts = privilegedAccounts,
-  operations = baseOperations
+  operations = baseOperations,
+  g2Evidence = null
 }: {
   kpi?: OperationsKpiResponse | ((url: string) => OperationsKpiResponse);
   accounts?: OperatorAccountListResponse;
   operations?: OperationsDashboardResponse;
+  g2Evidence?: G2EvidenceSummaryResponse | null;
 } = {}): FetchSpy {
-  const spy: FetchSpy = { dashboardCount: 0, kpiCalls: [] };
+  const spy: FetchSpy = { dashboardCount: 0, kpiCalls: [], g2EvidenceCalls: [] };
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
     if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
+    if (url.startsWith("/api/v1/analytics/g2-evidence")) {
+      spy.g2EvidenceCalls.push(url);
+      if (g2Evidence) return jsonResponse(g2Evidence);
+      return jsonResponse({ detail: "not implemented" }, 404);
+    }
     if (url.startsWith("/api/v1/analytics/operations-dashboard")) {
       spy.dashboardCount += 1;
       return jsonResponse(operations);
@@ -345,6 +391,38 @@ describe("OperationsScreen", () => {
     const incidentBanner = screen.getByRole("alert", { name: "인시던트 알림" });
     expect(incidentBanner).toHaveTextContent("인시던트 1건");
     expect(incidentBanner).toHaveTextContent("텔레그램 실패");
+  });
+
+  it("G-2 evidence endpoint가 아직 없으면 admin 화면에서 미연결 empty state를 표시한다", async () => {
+    const spy = installFetchMock();
+
+    renderApp();
+
+    const evidenceCard = (
+      await screen.findByRole("heading", { name: "G-2 증적 요약" })
+    ).closest("[aria-label='G-2 증적 요약']") as HTMLElement;
+    expect(evidenceCard).not.toBeNull();
+    expect(
+      within(evidenceCard).getByText(/G-2 evidence API가 아직 연결되지 않았습니다/)
+    ).toBeInTheDocument();
+    expect(spy.g2EvidenceCalls.some((url) => url.includes("days=7"))).toBe(true);
+  });
+
+  it("G-2 evidence summary를 operator별 상태와 gap으로 렌더한다", async () => {
+    installFetchMock({ g2Evidence: baseG2Evidence });
+
+    renderApp();
+
+    const evidenceCard = (
+      await screen.findByRole("heading", { name: "G-2 증적 요약" })
+    ).closest("[aria-label='G-2 증적 요약']") as HTMLElement;
+    expect(evidenceCard).not.toBeNull();
+    expect(within(evidenceCard).getByText("synthetic-aggressive")).toBeInTheDocument();
+    expect(within(evidenceCard).getAllByText("insufficient").length).toBeGreaterThanOrEqual(1);
+    expect(within(evidenceCard).getByText("Strategy monitor")).toBeInTheDocument();
+    expect(within(evidenceCard).getByText("Decision experiment")).toBeInTheDocument();
+    expect(within(evidenceCard).getAllByText("decision experiment 필요").length).toBeGreaterThanOrEqual(1);
+    expect(within(evidenceCard).getByText("canonical smoke와 G-2 증적은 분리 표시")).toBeInTheDocument();
   });
 
   it("탭이 비활성화되어 있어도 자동 갱신은 멈춰 있고 새로고침 버튼은 동작한다", async () => {

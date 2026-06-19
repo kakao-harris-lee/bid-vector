@@ -17,7 +17,7 @@
 - 리포트: 추천 vs 실제 정확도, 의사결정 증적 export, 운영 KPI, operations dashboard
 - 웹: `frontend/` Vite + React + TypeScript SPA를 `/dashboard`에서 서빙
 
-0~2단계의 핵심 빌드는 대부분 완료되어 있고, 현재 병목은 더 많은 기능 구현이 아니라 **실사용/가상운영 증적을 쌓아 가치와 정확도를 검증하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
+현재 로드맵 위치는 **Phase 2 / G-2 독립 가상 사업자 운영 검증 진행 중**입니다. 0~1단계의 핵심 빌드는 대부분 완료되어 있고, `06eeee5` 기준으로 API 계약 정리, synthetic sample-gap 실행 후보 생성, synthetic/non-canonical Telegram dry-run routing, operator-scoped operations evidence가 반영되었습니다. 현재 병목은 더 많은 기능 구현이 아니라 **사업자별 운영 증적을 쌓아 가치와 정확도를 검증하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
 
 ## 서비스 목표
 
@@ -158,7 +158,9 @@ python scripts/production_smoke_test.py \
 
 - [CLAUDE.md](CLAUDE.md): 에이전트 작업 규칙과 함정
 - [docs/roadmap.md](docs/roadmap.md): 현재 단계, 목표, exit gate
-- [docs/operations/roadmap-next-agent-plan.md](docs/operations/roadmap-next-agent-plan.md): 다음 병렬 작업 계획과 에이전트 지시서
+- [docs/operations/g2-exit-agent-plan.md](docs/operations/g2-exit-agent-plan.md): G-2 exit gate 충족을 위한 다음 병렬 작업 계획
+- [docs/operations/g2-evidence-runbook.md](docs/operations/g2-evidence-runbook.md): G-2 operator별 운영 증적 반복 실행 절차와 exit review 양식
+- [docs/operations/roadmap-next-agent-plan.md](docs/operations/roadmap-next-agent-plan.md): 최근 완료된 병렬 작업 기록과 후속 gap
 - [docs/production-smoke-test.md](docs/production-smoke-test.md): 운영 smoke test 절차
 - [docs/ml-image-separation.md](docs/ml-image-separation.md): ML 이미지/의존성 분리
 - [docs/ml-task-separation.md](docs/ml-task-separation.md): ML 작업 큐 분리

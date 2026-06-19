@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from app.core.config import settings
 from app.core.security import get_password_hash
 from app.models.models import (
     Bid,
     BidDecisionRecord,
     CompanyProfile,
     Notification,
+    OperatorNotificationChannel,
     OperatorStrategy,
     OperatorStrategyRun,
     Project,
@@ -267,6 +269,89 @@ def test_operator_accounts_works_without_bearer_token(client, test_db):
     payload = response.json()
     assert payload["current_operator_username"] == "operator"
     assert payload["is_privileged"] is True
+
+
+def test_notification_channels_returns_masked_canonical_legacy_route(
+    client,
+    test_db,
+    monkeypatch,
+):
+    """Canonical legacy Telegram settings are exposed as masked route metadata."""
+    canonical, _synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+
+    headers = _login(client, "operator")
+    response = client.get("/api/v1/operator/notification-channels", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == canonical.id
+    assert payload["current_operator_id"] == canonical.id
+    assert payload["channel_count"] == 1
+    channel = payload["channels"][0]
+    assert channel["channel_id"] is None
+    assert channel["channel_type"] == "telegram"
+    assert channel["route_key"] == "telegram:legacy-configured-chat"
+    assert channel["target_label"] == "******0346"
+    assert "1594710346" not in channel["target_label"]
+    assert channel["is_active"] is True
+    assert channel["dry_run_only"] is False
+    assert channel["source"] == "legacy_settings"
+
+
+def test_notification_channels_canonical_can_view_synthetic_dry_run_channel(
+    client,
+    test_db,
+):
+    """Synthetic channel metadata remains scoped to the selected operator."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    test_db.add(
+        OperatorNotificationChannel(
+            operator_id=synthetic.id,
+            channel_type="telegram",
+            route_key="telegram:synthetic-sw-small-seoul",
+            target_label="chat ********0346",
+            is_active=True,
+            dry_run_only=True,
+        )
+    )
+    test_db.commit()
+
+    headers = _login(client, "operator")
+    response = client.get(
+        "/api/v1/operator/notification-channels",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operator_id"] == synthetic.id
+    assert payload["current_operator_id"] == synthetic.id
+    assert payload["channel_count"] == 1
+    channel = payload["channels"][0]
+    assert channel["operator_id"] == synthetic.id
+    assert channel["route_key"] == "telegram:synthetic-sw-small-seoul"
+    assert channel["target_label"] == "chat ********0346"
+    assert channel["is_active"] is True
+    assert channel["dry_run_only"] is True
+
+
+def test_notification_channels_forbids_non_privileged_cross_operator(
+    client,
+    test_db,
+):
+    """Non-privileged callers cannot inspect another operator's channel routing."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+
+    headers = _login(client, "other-operator")
+    response = client.get(
+        "/api/v1/operator/notification-channels",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------

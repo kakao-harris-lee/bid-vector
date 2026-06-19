@@ -1,6 +1,7 @@
 import type { components } from "./openapi.d";
 
 export type OperationsCardStatus = "healthy" | "watch" | "critical" | "info";
+export type G2EvidenceStatus = "ready" | "insufficient" | "mixed_scope" | "missing";
 
 // Roadmap C-1 instrumentation KPI bundle (GET /api/v1/analytics/operations-kpi).
 // Aliased from the generated OpenAPI schema (PR #58) so this stays in sync with
@@ -191,4 +192,31 @@ export interface OperationsDashboardResponse {
   smoke_test: SmokeTestOperationsSummary;
   synthetic_validation: SyntheticValidationOperationsSummary;
   cards: OperationsDashboardCard[];
+}
+
+export interface G2EvidenceSectionSummary {
+  evidence_status?: G2EvidenceStatus | string | null;
+  status?: G2EvidenceStatus | string | null;
+  summary?: string | null;
+  detail?: string | null;
+  latest_at?: string | null;
+  evidence_count?: number | null;
+  run_count?: number | null;
+  blocking_gaps?: string[];
+  [key: string]: unknown;
+}
+
+export interface G2EvidenceSummaryResponse {
+  current_operator_id: number | null;
+  current_operator_username?: string | null;
+  window_days: number;
+  evidence_status: G2EvidenceStatus | string;
+  smoke?: G2EvidenceSectionSummary | null;
+  strategy_monitor?: G2EvidenceSectionSummary | null;
+  decision_experiments?: G2EvidenceSectionSummary | null;
+  synthetic_experiments?: G2EvidenceSectionSummary | null;
+  notifications?: G2EvidenceSectionSummary | null;
+  blocking_gaps: string[];
+  warnings?: string[];
+  generated_at?: string | null;
 }
