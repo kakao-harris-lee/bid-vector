@@ -108,12 +108,25 @@ export function OperationsScreen() {
 
   const criticalCards =
     operations.data?.cards.filter((card) => card.status === "critical") ?? [];
+  const selectedOperatorLabel =
+    activeOperator.currentOperator?.company ||
+    activeOperator.currentOperator?.full_name ||
+    activeOperator.currentOperator?.username ||
+    operations.data?.current_operator_username ||
+    "토큰 소유자";
 
   return (
     <section className="flex flex-col gap-4" aria-label="운영 대시보드">
-      <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-lg font-semibold text-[var(--color-fg)]">운영 대시보드</h2>
-        <div className="flex items-center gap-2 text-xs">
+      <header className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="break-words text-lg font-semibold text-[var(--color-fg)]">
+            G-2 운영 증적 대시보드
+          </h2>
+          <p className="mt-1 max-w-2xl break-words text-xs text-[var(--color-muted)]">
+            관리자 전용 화면입니다. G-2 evidence, blocking gaps, operator별 상태 확인에 집중합니다.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs sm:justify-end">
           <span className="text-[var(--color-muted)]">
             30초마다 자동 갱신 (탭 비활성 시 정지)
           </span>
@@ -156,6 +169,12 @@ export function OperationsScreen() {
 
       {operations.data ? (
         <>
+          <AdminFocusStrip
+            operatorLabel={selectedOperatorLabel}
+            operations={operations.data}
+            g2Evidence={g2Evidence.data ?? null}
+          />
+
           <G2EvidenceCard
             data={g2Evidence.data ?? null}
             loading={g2Evidence.isPending}
@@ -164,10 +183,21 @@ export function OperationsScreen() {
 
           <section
             className="flex flex-col gap-2"
-            aria-label="시스템 운영 상태"
+            aria-label="G-2 운영 검증 증거"
           >
             <h3 className="text-sm font-semibold text-[var(--color-fg)]">
-              시스템 운영 상태
+              G-2 운영 검증 증거
+            </h3>
+            <SmokeTestCard summary={operations.data.smoke_test} />
+            <SyntheticValidationCard summary={operations.data.synthetic_validation} />
+          </section>
+
+          <section
+            className="flex flex-col gap-2"
+            aria-label="보조 운영 상태"
+          >
+            <h3 className="text-sm font-semibold text-[var(--color-fg)]">
+              보조 운영 상태
             </h3>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {operations.data.cards.map((card) => (
@@ -175,9 +205,6 @@ export function OperationsScreen() {
               ))}
             </div>
           </section>
-
-          <SmokeTestCard summary={operations.data.smoke_test} />
-          <SyntheticValidationCard summary={operations.data.synthetic_validation} />
 
           <section
             className="flex flex-col gap-2"
@@ -212,8 +239,10 @@ export function OperationsScreen() {
             />
           </section>
 
-          <section className="flex flex-col gap-2" aria-label="데이터 상태">
-            <h3 className="text-sm font-semibold text-[var(--color-fg)]">데이터 상태</h3>
+          <section className="flex flex-col gap-2" aria-label="데이터 수집/알림 상태">
+            <h3 className="text-sm font-semibold text-[var(--color-fg)]">
+              데이터 수집/알림 상태
+            </h3>
             <CrawlHealth summary={operations.data.crawl} />
             <TelegramHealth summary={operations.data.notifications} />
             <MlReleaseCard summary={operations.data.ml_release} />
@@ -224,18 +253,52 @@ export function OperationsScreen() {
   );
 }
 
+function AdminFocusStrip({
+  operatorLabel,
+  operations,
+  g2Evidence
+}: {
+  operatorLabel: string;
+  operations: OperationsDashboardResponse;
+  g2Evidence: G2EvidenceSummaryResponse | null;
+}) {
+  const scopedOperator =
+    g2Evidence?.current_operator_username ??
+    operations.current_operator_username ??
+    operatorLabel;
+  const gapCount = g2Evidence?.blocking_gaps.length ?? null;
+  return (
+    <section
+      aria-label="G-2 admin 점검 범위"
+      className="grid grid-cols-1 gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3 text-xs sm:grid-cols-3"
+    >
+      <Stat label="점검 operator" value={scopedOperator || "토큰 소유자"} />
+      <Stat
+        label="G-2 evidence"
+        value={g2Evidence ? g2StatusLabel(g2Evidence.evidence_status) : "미연결"}
+      />
+      <Stat
+        label="blocking gaps"
+        value={gapCount === null ? "확인 대기" : `${gapCount}건`}
+      />
+    </section>
+  );
+}
+
 function SummaryCard({ card }: { card: OperationsDashboardCard }) {
   const valueLabel =
     card.unit === "ratio" ? formatPercent(card.value) : card.value.toLocaleString("ko-KR");
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="text-sm">{card.label}</CardTitle>
-        <Badge tone={TONE[card.status]}>{card.status}</Badge>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+        <CardTitle className="min-w-0 break-words text-sm leading-snug">{card.label}</CardTitle>
+        <Badge className="shrink-0 whitespace-nowrap" tone={TONE[card.status]}>
+          {card.status}
+        </Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-1">
         <strong className="text-2xl tabular-nums text-[var(--color-fg)]">{valueLabel}</strong>
-        <span className="text-xs text-[var(--color-muted)]">{card.detail}</span>
+        <span className="break-words text-xs text-[var(--color-muted)]">{card.detail}</span>
       </CardContent>
     </Card>
   );
@@ -251,7 +314,7 @@ function G2EvidenceCard({
   error: Error | null;
 }) {
   const sections = [
-    { key: "smoke", label: "Smoke", summary: data?.smoke ?? null },
+    { key: "smoke", label: "Smoke 증적", summary: data?.smoke ?? null },
     { key: "strategy_monitor", label: "Strategy monitor", summary: data?.strategy_monitor ?? null },
     { key: "decision_experiments", label: "Decision experiment", summary: data?.decision_experiments ?? null },
     { key: "synthetic_experiments", label: "Synthetic experiment", summary: data?.synthetic_experiments ?? null },
@@ -259,14 +322,21 @@ function G2EvidenceCard({
   ];
   return (
     <Card aria-label="G-2 증적 요약">
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>G-2 증적 요약</CardTitle>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <CardTitle className="break-words leading-snug">
+            G-2 evidence / blocking gaps
+          </CardTitle>
+          <p className="mt-1 break-words text-xs text-[var(--color-muted)]">
+            선택한 operator 기준으로 증적 범위와 남은 차단 gap을 분리 확인합니다.
+          </p>
+        </div>
         {data ? (
-          <Badge tone={g2StatusTone(data.evidence_status)}>
+          <Badge className="shrink-0 whitespace-nowrap" tone={g2StatusTone(data.evidence_status)}>
             {g2StatusLabel(data.evidence_status)}
           </Badge>
         ) : (
-          <Badge tone="muted">미연결</Badge>
+          <Badge className="shrink-0 whitespace-nowrap" tone="muted">미연결</Badge>
         )}
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
@@ -291,21 +361,39 @@ function G2EvidenceCard({
 
         {data ? (
           <>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
-                label="operator"
+                label="점검 operator"
                 value={
                   data.current_operator_username ??
                   (data.current_operator_id ? `#${data.current_operator_id}` : "-")
                 }
               />
-              <Stat label="window" value={`${data.window_days}일`} />
+              <Stat label="증적 window" value={`${data.window_days}일`} />
               <Stat label="blocking gaps" value={data.blocking_gaps.length.toString()} />
               <Stat
-                label="generated"
+                label="생성 시각"
                 value={data.generated_at ? formatDateTime(data.generated_at) : "-"}
               />
             </div>
+
+            {data.blocking_gaps.length > 0 ? (
+              <div className="flex flex-col gap-1" aria-label="G-2 차단 gap">
+                <span className="font-medium text-[var(--color-fg)]">차단 gap</span>
+                <ul className="flex flex-col gap-1">
+                  {data.blocking_gaps.map((gap, index) => (
+                    <li
+                      key={`${gap}-${index}`}
+                      className="break-words rounded-md bg-[color-mix(in_oklch,var(--color-warn),white_84%)] px-2 py-1 text-[color-mix(in_oklch,var(--color-warn),black_45%)]"
+                    >
+                      {gap}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-[var(--color-muted)]">차단 gap 없음</p>
+            )}
 
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
               {sections.map((section) => (
@@ -317,28 +405,10 @@ function G2EvidenceCard({
               ))}
             </div>
 
-            {data.blocking_gaps.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                <span className="text-[var(--color-muted)]">차단 gap</span>
-                <ul className="flex flex-col gap-1">
-                  {data.blocking_gaps.map((gap, index) => (
-                    <li
-                      key={`${gap}-${index}`}
-                      className="rounded-md bg-[color-mix(in_oklch,var(--color-warn),white_84%)] px-2 py-1 text-[color-mix(in_oklch,var(--color-warn),black_45%)]"
-                    >
-                      {gap}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <p className="text-[var(--color-muted)]">차단 gap 없음</p>
-            )}
-
             {(data.warnings ?? []).length > 0 ? (
               <div className="flex flex-wrap gap-1" aria-label="G-2 증적 경고">
                 {(data.warnings ?? []).map((warning, index) => (
-                  <Badge key={`${warning}-${index}`} tone="watch">
+                  <Badge key={`${warning}-${index}`} className="max-w-full whitespace-normal break-words" tone="watch">
                     {warning}
                   </Badge>
                 ))}
@@ -362,11 +432,13 @@ function EvidenceDomainRow({
   const count = summary?.evidence_count ?? summary?.run_count ?? null;
   return (
     <div className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--color-border)] px-2 py-1.5">
-      <div className="flex min-w-0 items-center justify-between gap-2">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <span className="truncate font-medium text-[var(--color-fg)]">{label}</span>
-        <Badge tone={g2StatusTone(status)}>{g2StatusLabel(status)}</Badge>
+        <Badge className="shrink-0 whitespace-nowrap" tone={g2StatusTone(status)}>
+          {g2StatusLabel(status)}
+        </Badge>
       </div>
-      <p className="text-[var(--color-muted)]">
+      <p className="break-words text-[var(--color-muted)]">
         {summary?.detail ?? summary?.summary ?? "증적 없음"}
       </p>
       <div className="flex flex-wrap gap-1 text-[var(--color-muted)]">
@@ -390,10 +462,10 @@ function g2StatusTone(status?: string | null): "healthy" | "watch" | "critical" 
 
 function g2StatusLabel(status?: string | null): string {
   const labels: Record<G2EvidenceStatus, string> = {
-    ready: "ready",
-    insufficient: "insufficient",
-    mixed_scope: "mixed scope",
-    missing: "missing"
+    ready: "증적 충분",
+    insufficient: "증적 부족",
+    mixed_scope: "범위 혼합",
+    missing: "증적 없음"
   };
   if (status && status in labels) return labels[status as G2EvidenceStatus];
   return status ?? "missing";
@@ -436,9 +508,11 @@ function CrawlHealth({ summary }: { summary: OperationsDashboardResponse["crawl"
 function TelegramHealth({ summary }: { summary: OperationsDashboardResponse["notifications"] }) {
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>텔레그램 / 알림</CardTitle>
-        <Badge tone={TONE[summary.telegram_status]}>{summary.telegram_status}</Badge>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+        <CardTitle className="break-words leading-snug">텔레그램 / 알림</CardTitle>
+        <Badge className="shrink-0 whitespace-nowrap" tone={TONE[summary.telegram_status]}>
+          {summary.telegram_status}
+        </Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-xs">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -447,7 +521,7 @@ function TelegramHealth({ summary }: { summary: OperationsDashboardResponse["not
           <Stat label="실패" value={summary.telegram_failed_count.toString()} />
           <Stat label="성공률" value={formatPercent(summary.telegram_success_rate)} />
         </div>
-        <p className="text-[var(--color-muted)]">{summary.telegram_detail}</p>
+        <p className="break-words text-[var(--color-muted)]">{summary.telegram_detail}</p>
       </CardContent>
     </Card>
   );
@@ -456,18 +530,20 @@ function TelegramHealth({ summary }: { summary: OperationsDashboardResponse["not
 function MlReleaseCard({ summary }: { summary: OperationsDashboardResponse["ml_release"] }) {
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>ML release</CardTitle>
-        <Badge tone={TONE[summary.status]}>{summary.status}</Badge>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+        <CardTitle className="break-words leading-snug">ML release</CardTitle>
+        <Badge className="shrink-0 whitespace-nowrap" tone={TONE[summary.status]}>
+          {summary.status}
+        </Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-xs">
-        <p className="text-[var(--color-fg)]">{summary.detail}</p>
+        <p className="break-words text-[var(--color-fg)]">{summary.detail}</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <Stat label="latest_tag" value={summary.latest_release_tag ?? "-"} />
           <Stat label="signature" value={summary.latest_signature_status} />
           <Stat label="gate" value={summary.latest_gate_status} />
         </div>
-        <p className="text-[var(--color-muted)]">backtest: {summary.backtest_detail}</p>
+        <p className="break-words text-[var(--color-muted)]">backtest: {summary.backtest_detail}</p>
       </CardContent>
     </Card>
   );
@@ -482,12 +558,14 @@ function SyntheticValidationCard({
   const presets = summary.presets ?? [];
   return (
     <Card aria-label="G-1 가상 회사 검증">
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>G-1 가상 회사 검증</CardTitle>
-        <Badge tone={TONE[summary.status]}>{summary.status}</Badge>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+        <CardTitle className="break-words leading-snug">G-1 가상 회사 검증</CardTitle>
+        <Badge className="shrink-0 whitespace-nowrap" tone={TONE[summary.status]}>
+          {summary.status}
+        </Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
             label="preset 저장"
             value={`${summary.saved_preset_count}/${summary.preset_count}`}
@@ -506,19 +584,21 @@ function SyntheticValidationCard({
           />
         </div>
 
-        <p className="text-[var(--color-muted)]">{summary.detail}</p>
+        <p className="break-words text-[var(--color-muted)]">{summary.detail}</p>
 
         {latest ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="text-[var(--color-muted)]">최근 run</span>
-            <span className="text-[var(--color-fg)]">
+            <span className="break-words text-[var(--color-fg)]">
               {latest.experiment_name ?? `experiment ${latest.experiment_id}`}
             </span>
-            <Badge tone={runStatusTone(latest.status)}>{latest.status}</Badge>
-            <span className="text-[var(--color-fg)]">
+            <Badge className="shrink-0 whitespace-nowrap" tone={runStatusTone(latest.status)}>
+              {latest.status}
+            </Badge>
+            <span className="break-words text-[var(--color-fg)]">
               settled {latest.total_settled_count}/{summary.sample_target}
             </span>
-            <span className="text-[var(--color-muted)]">
+            <span className="break-words text-[var(--color-muted)]">
               {latest.finished_at ? formatDateTime(latest.finished_at) : "종료 시각 없음"}
             </span>
           </div>
@@ -535,11 +615,11 @@ function SyntheticValidationCard({
                 key={preset.name}
                 className="flex min-w-0 flex-col gap-1 rounded-md border border-[var(--color-border)] px-2 py-1.5"
               >
-                <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                   <span className="truncate font-medium text-[var(--color-fg)]">
                     {preset.name}
                   </span>
-                  <Badge tone={runStatusTone(preset.latest_run_status)}>
+                  <Badge className="shrink-0 whitespace-nowrap" tone={runStatusTone(preset.latest_run_status)}>
                     {preset.latest_run_status ?? "not saved"}
                   </Badge>
                 </div>
@@ -581,12 +661,14 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
 
   return (
     <Card aria-label="운영 검증 (스모크 사이클)">
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>운영 검증 (스모크 사이클)</CardTitle>
-        <Badge tone={overallTone}>{formatPercent(summary.pass_rate)}</Badge>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+        <CardTitle className="break-words leading-snug">운영 검증 (스모크 사이클)</CardTitle>
+        <Badge className="shrink-0 whitespace-nowrap" tone={overallTone}>
+          {formatPercent(summary.pass_rate)}
+        </Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <Stat label="통과율" value={formatPercent(summary.pass_rate)} />
           <Stat label="G-0 연속 통과" value={`${summary.current_streak}/${target}회`} />
           <Stat
@@ -607,17 +689,19 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
         {perPhase.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             <span className="text-[var(--color-muted)]">단계별 통과율</span>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {perPhase.map((phase) => (
                 <div
                   key={phase.name}
-                  className="flex items-center justify-between gap-1 rounded-md border border-[var(--color-border)] px-2 py-1"
+                  className="flex min-w-0 flex-wrap items-center justify-between gap-1 rounded-md border border-[var(--color-border)] px-2 py-1"
                 >
-                  <span className="text-[var(--color-fg)]">{smokePhaseLabel(phase.name)}</span>
+                  <span className="break-words text-[var(--color-fg)]">{smokePhaseLabel(phase.name)}</span>
                   {phase.evaluated_count === 0 ? (
-                    <Badge tone="muted">데이터 없음</Badge>
+                    <Badge className="shrink-0 whitespace-nowrap" tone="muted">데이터 없음</Badge>
                   ) : (
-                    <Badge tone={smokePhaseTone(phase)}>{formatPercent(phase.pass_rate)}</Badge>
+                    <Badge className="shrink-0 whitespace-nowrap" tone={smokePhaseTone(phase)}>
+                      {formatPercent(phase.pass_rate)}
+                    </Badge>
                   )}
                 </div>
               ))}
@@ -627,30 +711,30 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
 
         {latest ? (
           <div className="flex flex-col gap-1.5">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="text-[var(--color-muted)]">최근 실행</span>
-              <span className="text-[var(--color-fg)]">
+              <span className="break-words text-[var(--color-fg)]">
                 {latest.started_at ? formatDateTime(latest.started_at) : "시각 미상"}
               </span>
-              <Badge tone={latest.overall_passed ? "healthy" : "critical"}>
+              <Badge className="shrink-0 whitespace-nowrap" tone={latest.overall_passed ? "healthy" : "critical"}>
                 {latest.overall_passed ? "PASS" : "FAIL"}
               </Badge>
             </div>
             {latest.phases && latest.phases.length > 0 ? (
               <ul className="flex flex-col gap-1">
                 {latest.phases.map((phase) => (
-                  <li key={phase.name} className="flex flex-wrap items-center gap-1.5">
-                    <Badge tone={phase.passed ? "healthy" : "critical"}>
+                  <li key={phase.name} className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <Badge className="shrink-0 whitespace-nowrap" tone={phase.passed ? "healthy" : "critical"}>
                       {phase.passed ? "PASS" : "FAIL"}
                     </Badge>
-                    <span className="text-[var(--color-fg)]">{smokePhaseLabel(phase.name)}</span>
+                    <span className="break-words text-[var(--color-fg)]">{smokePhaseLabel(phase.name)}</span>
                     {!phase.passed && phase.failure_category ? (
-                      <Badge tone="watch">
+                      <Badge className="shrink-0 whitespace-nowrap" tone="watch">
                         {smokeFailureCategoryLabel(phase.failure_category)}
                       </Badge>
                     ) : null}
                     {!phase.passed && phase.detail ? (
-                      <span className="text-[var(--color-muted)]">{phase.detail}</span>
+                      <span className="break-words text-[var(--color-muted)]">{phase.detail}</span>
                     ) : null}
                   </li>
                 ))}
@@ -679,7 +763,7 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
               {recentFailures.map((failure, index) => (
                 <li
                   key={`${failure.started_at ?? "unknown"}-${index}`}
-                  className="text-[var(--color-danger)]"
+                  className="break-words text-[var(--color-danger)]"
                 >
                   {failure.started_at ? formatDateTime(failure.started_at) : "시각 미상"} · 실패 단계{" "}
                   {(failure.failed_phases ?? []).map(smokePhaseLabel).join(", ") || "-"}
@@ -703,9 +787,9 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[var(--color-muted)]">{label}</span>
-      <strong className="tabular-nums text-[var(--color-fg)]">{value}</strong>
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="break-words text-[var(--color-muted)]">{label}</span>
+      <strong className="break-words tabular-nums text-[var(--color-fg)]">{value}</strong>
     </div>
   );
 }
