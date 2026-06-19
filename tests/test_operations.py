@@ -3533,7 +3533,7 @@ def test_telegram_webhook_processes_start_message(client, monkeypatch):
     assert payload["status"] == "processed"
     assert payload["processed_count"] == 1
     assert payload["processed_update_ids"] == [501]
-    assert payload["known_chat_ids"] == [1594710346]
+    assert payload["known_chat_ids"] == ["******0346"]
     assert len(deliveries) == 1
     assert deliveries[0]["chat_id"] == "1594710346"
     assert "감지된 chat id: 1594710346" in deliveries[0]["message"]
@@ -3946,7 +3946,7 @@ def test_telegram_sync_processes_pending_updates_and_acknowledges_offset(
     assert payload["status"] == "processed"
     assert payload["processed_count"] == 1
     assert payload["processed_update_ids"] == [42]
-    assert payload["known_chat_ids"] == [1594710346]
+    assert payload["known_chat_ids"] == ["******0346"]
     assert get_updates_calls[0] == {"offset": None, "limit": 10, "timeout_seconds": 0}
     assert get_updates_calls[1] == {"offset": 43, "limit": 1, "timeout_seconds": 0}
     assert acknowledgements == [("sync-callback-1", "검토 처리 완료")]
@@ -3994,11 +3994,11 @@ def test_telegram_status_reports_webhook_and_chat_diagnostics(client, monkeypatc
     assert payload["configured"] is True
     assert payload["status"] == "healthy"
     assert payload["detail"] == "Telegram is configured."
-    assert payload["delivery_chat_id"] == "1594710346"
+    assert payload["delivery_chat_id"] == "******0346"
     assert payload["pending_update_count"] == 2
     assert payload["webhook_url"].endswith("/telegram/webhook")
     assert payload["has_custom_certificate"] is False
-    assert payload["known_chat_ids"] == [987654321, 1594710346]
+    assert payload["known_chat_ids"] == ["*****4321", "******0346"]
 
 
 def test_telegram_status_treats_placeholder_settings_as_unconfigured(client, monkeypatch):
@@ -4018,6 +4018,7 @@ def test_telegram_status_treats_placeholder_settings_as_unconfigured(client, mon
     assert payload["configured"] is False
     assert payload["status"] == "watch"
     assert payload["detail"] == "Telegram is not configured."
+    assert payload["delivery_chat_id"] is None
     assert payload["pending_update_count"] == 0
     assert payload["webhook_url"] == ""
     assert payload["known_chat_ids"] == []
@@ -4571,6 +4572,148 @@ def test_inactive_operator_telegram_channel_records_dry_run_evidence(
     assert event_data["target_label"] == "chat ********0346"
     assert event_data["channel_active"] is False
     assert event_data["dry_run_only"] is False
+
+
+def test_non_canonical_telegram_delivery_plan_distinguishes_channel_states(
+    test_db,
+    monkeypatch,
+):
+    """Synthetic Telegram plans clearly separate missing, inactive, dry-run, and active-risk states."""
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+    missing = _create_operator_user(test_db, username="synthetic-plan-missing")
+    inactive = _create_operator_user(test_db, username="synthetic-plan-inactive")
+    dry_run = _create_operator_user(test_db, username="synthetic-plan-dry-run")
+    active = _create_operator_user(test_db, username="synthetic-plan-active")
+
+    test_db.add_all(
+        [
+            OperatorNotificationChannel(
+                operator_id=inactive.id,
+                channel_type="telegram",
+                route_key="telegram:inactive-synthetic",
+                target_label="chat 1594710346",
+                is_active=False,
+                dry_run_only=False,
+            ),
+            OperatorNotificationChannel(
+                operator_id=dry_run.id,
+                channel_type="telegram",
+                route_key="telegram:dry-run-synthetic",
+                target_label="chat 1594710346",
+                is_active=True,
+                dry_run_only=True,
+            ),
+            OperatorNotificationChannel(
+                operator_id=active.id,
+                channel_type="telegram",
+                route_key=TelegramNotificationService.LEGACY_CONFIGURED_CHAT_ROUTE_KEY,
+                target_label="chat 1594710346",
+                is_active=True,
+                dry_run_only=False,
+            ),
+        ]
+    )
+    test_db.commit()
+
+    service = OperatorNotificationService()
+    plans = {
+        "missing": service.build_telegram_delivery_plan(test_db, operator_id=missing.id),
+        "inactive": service.build_telegram_delivery_plan(test_db, operator_id=inactive.id),
+        "dry_run": service.build_telegram_delivery_plan(test_db, operator_id=dry_run.id),
+        "active": service.build_telegram_delivery_plan(test_db, operator_id=active.id),
+    }
+
+    assert plans["missing"]["status"] == "skipped_synthetic_operator"
+    assert plans["missing"]["channel_source"] == "missing_channel"
+    assert plans["missing"]["channel_active"] is False
+    assert plans["missing"]["dry_run_only"] is True
+
+    assert plans["inactive"]["status"] == "telegram_channel_inactive"
+    assert plans["inactive"]["channel_source"] == "operator_notification_channels"
+    assert plans["inactive"]["channel_active"] is False
+    assert plans["inactive"]["dry_run_only"] is False
+
+    assert plans["dry_run"]["status"] == "telegram_channel_dry_run"
+    assert plans["dry_run"]["channel_active"] is True
+    assert plans["dry_run"]["dry_run_only"] is True
+
+    assert plans["active"]["status"] == "telegram_route_non_canonical"
+    assert plans["active"]["route_key"] == "telegram:legacy-configured-chat"
+    assert plans["active"]["channel_active"] is True
+    assert plans["active"]["dry_run_only"] is False
+
+    for plan in plans.values():
+        assert plan["target_label"] is None or "1594710346" not in plan["target_label"]
+        assert plan["route_send_allowed"] is False
+        assert plan["can_send"] is False
+        assert plan["telegram_configured"] is True
+
+
+def test_non_canonical_delivery_telemetry_masks_raw_route_targets(
+    test_db,
+    monkeypatch,
+):
+    """Delivery telemetry must not persist raw chat ids from route_key or target_label."""
+    raw_chat_id = "1594710346"
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", raw_chat_id)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+    def fail_send(self, message: str, reply_markup=None, chat_id=None):
+        raise AssertionError("non-canonical active channels must not call Telegram")
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", fail_send)
+
+    synthetic = _create_operator_user(test_db, username="synthetic-raw-route")
+    test_db.add(
+        OperatorNotificationChannel(
+            operator_id=synthetic.id,
+            channel_type="telegram",
+            route_key=f"telegram:{raw_chat_id}",
+            target_label=f"chat_id={raw_chat_id}",
+            is_active=True,
+            dry_run_only=False,
+        )
+    )
+    test_db.commit()
+
+    record = _seed_action_decision(
+        test_db,
+        operator_id=synthetic.id,
+        action="bid_now",
+        decision_status="planned",
+    )
+    record.priority_score = 0.99
+    record.probability_score = 0.99
+    test_db.commit()
+    test_db.refresh(record)
+
+    OperatorNotificationService().create_bid_decision_notification(
+        test_db,
+        operator_id=synthetic.id,
+        project=record.project,
+        decision_record=record,
+    )
+
+    event = (
+        test_db.query(Analytics)
+        .filter(
+            Analytics.user_id == synthetic.id,
+            Analytics.event_type == "telegram.delivery",
+        )
+        .one()
+    )
+    event_data = json.loads(event.event_data)
+    assert raw_chat_id not in json.dumps(event_data, ensure_ascii=False)
+    assert event_data["status"] == "telegram_route_non_canonical"
+    assert event_data["route_key"] == "telegram:******0346"
+    assert event_data["target_label"] == "chat_id=******0346"
+    assert event_data["route_send_allowed"] is False
+    assert event_data["can_send"] is False
+    assert event_data["telegram_configured"] is True
 
 
 def test_bid_decision_notification_rejects_mismatched_owner(test_db):
