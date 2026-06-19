@@ -7,6 +7,8 @@ description: ML release manifest preflight (서명/promotion gate/백테스트 �
 
 ML release manifest의 promotion gate를 사전 점검한다.
 
+> 스크립트 실행 전담이므로 `data-seed-runner` 에이전트가 이 스킬을 따라 실행할 수 있다.
+
 ## 입력
 
 - `<manifest-ref>` — manifest 식별자(파일 경로 또는 release id)

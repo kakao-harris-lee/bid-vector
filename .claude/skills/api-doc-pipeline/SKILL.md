@@ -8,7 +8,7 @@ description: API 문서 자동 생성 하네스 오케스트레이터 — FastAP
 bid-vector의 FastAPI 엔드포인트로부터 사람이 읽는 한국어 API 레퍼런스
 (`docs/api/<tag>.md`)를 자동 생성하는 4단계 파이프라인 하네스.
 
-**아키텍처**: 태그 간 **팬아웃**(13개 라우터 독립) × 태그 내 **파이프라인**
+**아키텍처**: 태그 간 **팬아웃**(태그별 독립, 현재 16개) × 태그 내 **파이프라인**
 (분석→설명→예제) + 마지막 **생성-검증**(리뷰 → 재위임).
 
 ## 팀 구성
@@ -29,9 +29,16 @@ bid-vector의 FastAPI 엔드포인트로부터 사람이 읽는 한국어 API �
    source .venv/bin/activate
    python -c "import json; from app.main import app; print(json.dumps(app.openapi(), ensure_ascii=False))" > docs/api/.work/openapi.json
    ```
-3. `app/api/routes.py`에서 태그 ↔ 라우터 ↔ prefix 매핑을 읽어 작업 목록을 만든다.
-   현재 태그: Authentication, Backtests, Dashboard, Operator, Projects, Bids,
-   AI Predictions, ML Jobs, Analytics, Legacy Admin, Operations, Realtime, Synthetic.
+3. `app/api/routes.py`(및 `app/api/*.py`의 `tags=[...]`)에서 태그 ↔ 라우터 ↔ prefix
+   매핑을 읽어 작업 목록을 만든다. **이 목록은 코드가 진실의 원천이므로 매 실행 시
+   `grep -rhoE 'tags=\[[^]]*\]' app/api/*.py | sort -u`로 재확인한다.**
+   2026-06 기준 태그(16): Authentication, Operator, Projects, Bids, Dashboard,
+   Analytics, Backtests, AI Predictions, ML Jobs, Operations, Realtime, Synthetic,
+   Legacy Admin, Bid Form Draft, Bid Summary, Decision Samples.
+   - **주의(태그 케이스 분리):** 코드에 `tags=["Synthetic"]`와 `tags=["synthetic"]`이
+     공존한다. slug 규칙상 둘 다 `synthetic`으로 떨어져 산출물이 충돌하므로, 한
+     문서로 합치거나(권장) 라우터 태그 케이스를 통일하도록 보고한다(코드 수정은
+     `bid-vector-orchestrator` 쪽 backend-builder 영역).
 
 ### Phase 1~3 — 태그별 파이프라인 (팬아웃)
 각 태그를 **독립적으로** 파이프라인 처리. 태그끼리 병렬 가능, 한 태그 안은 순차:

@@ -1,6 +1,6 @@
 ---
 name: bid-vector-orchestrator
-description: bid-vector 개발 하네스 오케스트레이터 — 백엔드/프론트엔드 기능 구현, 리뷰, 검증, 백테스트 작업을 전문 에이전트(backend-builder, frontend-builder, api-reviewer, test-runner, data-seed-runner)와 스킬로 조율한다. "기능 구현해줘", "이 작업 어떻게 진행", "PR까지 진행", "하네스로 처리" 등 비-trivial 개발 작업 시작 시 사용.
+description: bid-vector 개발 하네스 오케스트레이터 — 백엔드/프론트엔드/ML 기능 구현, 리뷰, 검증, 백테스트, 관찰·증적 작업을 전문 에이전트(backend-builder, frontend-builder, ml-builder, api-reviewer, frontend-reviewer, ml-reviewer, test-runner, data-seed-runner, evidence-runner)와 스킬로 조율한다. "기능 구현해줘", "이 작업 어떻게 진행", "PR까지 진행", "하네스로 처리" 등 비-trivial 개발 작업 시작 시 사용.
 ---
 
 # bid-vector Harness Orchestrator
@@ -16,9 +16,11 @@ bid-vector 프로젝트의 개발 작업을 **전문 에이전트 팀 + 작업 �
 | `frontend-builder` | `frontend/src/features/`, `shared/`, `app/` | Read/Write/Edit + npm/vitest | 백엔드 금지 |
 | `ml-builder` | `app/ai/`, ML 서비스(`ml_training`/`ml_release`/`prediction_*`), ML 스크립트, ML 테스트 | Read/Write/Edit + pytest/py_compile | guardrail·차원·서명 안전 |
 | `api-reviewer` | 변경 라우터·스키마·서비스 일관성, OpenAPI drift, 테스트 누락 | **Read 전용** | 수정 금지 |
+| `frontend-reviewer` | 프론트 화면/훅/타입 일관성, react-query·zod·shadcn 경계, vitest 커버리지, a11y | **Read 전용** | 수정 금지 |
 | `ml-reviewer` | predictor guardrail·pgvector 차원·manifest 서명·leakage·drift 점검 | **Read 전용** | 수정 금지 |
 | `test-runner` | pytest/vitest/playwright 실행·triage | 명령 실행 | **코드 수정 금지** |
 | `data-seed-runner` | 시드/백테스트/preflight 스크립트 실행 | 명령 실행 | **코드 수정 금지** |
+| `evidence-runner` | smoke test·G-2/G-3 증적 수집(읽기 전용 기본) | 명령 실행 | **코드 수정 금지**, write/telegram/live는 승인 후 |
 
 ## 작업 스킬 (어떻게 하는가)
 
@@ -31,10 +33,11 @@ bid-vector 프로젝트의 개발 작업을 **전문 에이전트 팀 + 작업 �
 | `seed-synthetic` | synthetic 운영자 시드 | data-seed-runner |
 | `run-backtest` | synthetic 백테스트 실행 | data-seed-runner |
 | `release-preflight` | ML release manifest promotion gate 점검 | data-seed-runner |
+| `smoke-evidence` | production smoke test + 증적 수집(읽기 전용 기본) | evidence-runner |
 
 ## 의무 워크플로우 (모든 비-trivial 작업)
 
-> 글로벌 `~/.claude/CLAUDE.md` 및 프로젝트 `CLAUDE.md §11`과 일치.
+> 글로벌 `~/.claude/CLAUDE.md` 및 프로젝트 `CLAUDE.md §10. 워크플로`와 일치.
 
 ```
 main 확인 → feature branch 생성 → 작업/커밋 → push → PR 생성 → 코드 리뷰 → 리뷰 대응 → 머지
@@ -63,13 +66,14 @@ backend-builder (api-route 스킬) → 구현
 ```
 frontend-builder (screen 스킬) → 구현 + vitest smoke
   → test-runner (check 스킬)
+  → frontend-reviewer (리뷰)
 ```
 
 ### C. 풀스택 기능 (생성-검증 패턴)
 ```
 Phase 1 (순차): backend-builder (api-route + 로직)
 Phase 2 (순차): frontend-builder (sync-types → screen → API 연결)
-Phase 3 (병렬): test-runner (check) + api-reviewer (리뷰)
+Phase 3 (병렬): test-runner (check) + api-reviewer (백엔드 리뷰) + frontend-reviewer (프론트 리뷰)
 Phase 4: 리뷰 지적 사항을 해당 builder에게 재위임
 ```
 
@@ -93,13 +97,23 @@ ml-builder (manifest 작성/모델 학습) → ml-reviewer (서명·promotion ga
   → 사용자 promote 결정 (승인 필수)
 ```
 
+### G. 관찰·검증 (G-3 실사용 검증 — 현 단계 기본)
+```
+evidence-runner (smoke-evidence 스킬, 읽기 전용) → 증적 reports/ 수집 → PASS/WARN/FAIL 보고
+  → WARN/FAIL이면 oracle(원인 분석) 또는 해당 reviewer/builder에 위임
+  → (write/telegram/live 증적이 필요하면 사용자 승인 후에만)
+```
+> 현 단계는 기능 빌드가 아니라 관찰·측정이다. 새 빌드 시나리오(A~F)는 명확한
+> 필요가 있을 때만 들어가고, 기본은 이 관찰 루프로 증적을 누적한다.
+
 ## 데이터 흐름 원칙
 
 - **OpenAPI drift**: backend-builder가 스키마를 바꾸면 → frontend-builder가 `sync-types`로 `openapi.d.ts` 갱신 → api-reviewer가 누락 점검.
 - **ML ↔ API 경계**: ML을 노출하는 엔드포인트는 backend-builder가 얇은 라우터를, ml-builder가 predictor 호출 로직을 담당. 라우터/스키마는 backend, predictor 내부는 ML.
 - **pgvector 차원 변경**: ml-builder가 설계 → ml-reviewer가 차원 호환성 승인 → backend-builder가 alembic 마이그레이션 실행.
 - **영역 격리**: builder 3종(backend/frontend/ml)은 서로의 디렉토리를 수정하지 않는다. 필요하면 보고 후 상대 builder에 재위임.
-- **검증 게이트**: test-runner/api-reviewer/ml-reviewer는 절대 코드를 수정하지 않는다. 문제 발견 시 해당 builder에게 돌려보낸다.
+- **검증 게이트**: test-runner/api-reviewer/frontend-reviewer/ml-reviewer/evidence-runner는 절대 코드를 수정하지 않는다. 문제 발견 시 해당 builder에게 돌려보낸다. 프론트 변경은 frontend-reviewer, 백엔드는 api-reviewer, ML은 ml-reviewer가 각자 영역을 본다.
+- **관찰 우선 (현 단계)**: 프로젝트는 G-3 실사용 검증(관찰·측정) 단계다. 빌드보다 evidence-runner(`smoke-evidence`)로 증적을 누적하는 것이 기본이고, 증적의 write/telegram/live 동작은 CLAUDE.md §0에 따라 사용자 승인 후에만 켠다.
 - **ML 안전 게이트**: predictor 변경은 ml-reviewer 통과 전 머지 금지. guardrail 우회·차원 무단 변경·서명 누락은 blocking.
 - **시드/스크립트**: data-seed-runner는 스크립트만 실행하고, 스크립트 수정이 필요하면 backend-builder(일반) 또는 ml-builder(ML)에 위임 보고.
 
