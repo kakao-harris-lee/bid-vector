@@ -232,7 +232,7 @@ Exit gate G-3:
 3. G-1 표본 실행: sample-gap candidates를 dry-run으로 검토하고 승인 후 synthetic evidence run을 enqueue하여 settled sample 증적을 쌓는다.
 4. G-2 알림 대상 검증: 사업자별 Telegram/app notification 대상 식별자, `dry_run_only`, masking, 실제 송신 가능 범위를 운영표로 관리한다.
 5. G-0 관찰: scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 dashboard와 문서만으로 구분한다.
-6. G-2 exit review: `docs/operations/g2-evidence-runbook.md`의 양식으로 3개 이상 operator가 exit gate를 만족하는지 판정한다.
+6. G-2 exit review: `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 3개 이상 operator가 exit gate를 만족하는지 판정한다.
 7. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
 
 ## 관련 문서
@@ -241,6 +241,7 @@ Exit gate G-3:
 - `CLAUDE.md`: 에이전트 작업 지침
 - `docs/operations/g2-exit-agent-plan.md`: G-2 exit 기반 병렬 작업 완료 기록과 잔여 TODO
 - `docs/operations/g2-evidence-runbook.md`: 3개 이상 가상 사업자의 G-2 evidence를 N일 단위로 반복 실행하고 exit review를 남기는 운영 절차
+- `docs/operations/g2-exit-review-template.md`: G-2 exit review 문서 양식, evidence manifest 구조, approve/hold 판정 기준
 - `docs/operations/roadmap-next-agent-plan.md`: 최근 완료된 병렬 작업 기록과 후속 gap
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
 - `docs/api/index.md`: HTTP API 레퍼런스
