@@ -337,6 +337,52 @@ def test_notification_channels_canonical_can_view_synthetic_dry_run_channel(
     assert channel["dry_run_only"] is True
 
 
+def test_notification_channels_mask_raw_chat_and_device_targets(client, test_db):
+    """Channel API must not expose raw chat ids or device tokens if labels are misconfigured."""
+    _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
+    raw_chat_id = "1594710346"
+    raw_device_token = "ExponentPushToken[abcdef1234567890secret]"
+    test_db.add_all(
+        [
+            OperatorNotificationChannel(
+                operator_id=synthetic.id,
+                channel_type="telegram",
+                route_key=f"telegram:{raw_chat_id}",
+                target_label=f"chat_id={raw_chat_id}",
+                is_active=True,
+                dry_run_only=True,
+            ),
+            OperatorNotificationChannel(
+                operator_id=synthetic.id,
+                channel_type="app",
+                route_key=f"app:{raw_device_token}",
+                target_label=f"device_token={raw_device_token}",
+                is_active=True,
+                dry_run_only=False,
+            ),
+        ]
+    )
+    test_db.commit()
+
+    headers = _login(client, "operator")
+    response = client.get(
+        "/api/v1/operator/notification-channels",
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    response_text = response.text
+    assert raw_chat_id not in response_text
+    assert raw_device_token not in response_text
+    payload = response.json()
+    by_type = {channel["channel_type"]: channel for channel in payload["channels"]}
+    assert by_type["telegram"]["route_key"] == "telegram:******0346"
+    assert by_type["telegram"]["target_label"] == "chat_id=******0346"
+    assert "ExponentPushToken[" in by_type["app"]["target_label"]
+    assert by_type["app"]["target_label"].endswith("cret]")
+
+
 def test_notification_channels_forbids_non_privileged_cross_operator(
     client,
     test_db,

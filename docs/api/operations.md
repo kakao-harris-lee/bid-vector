@@ -883,7 +883,7 @@ curl -X POST http://localhost:3000/api/v1/operations/telegram/webhook \
   "detail": "Telegram webhook update handled.",
   "processed_count": 1,
   "processed_update_ids": [900002],
-  "known_chat_ids": [123456789]
+  "known_chat_ids": ["*****6789"]
 }
 ```
 
@@ -917,7 +917,7 @@ curl -X POST "http://localhost:3000/api/v1/operations/telegram/sync?limit=20&tim
   "detail": "2건의 업데이트를 처리했습니다.",
   "processed_count": 2,
   "processed_update_ids": [900003, 900004],
-  "known_chat_ids": [123456789]
+  "known_chat_ids": ["*****6789"]
 }
 ```
 
@@ -948,11 +948,11 @@ curl http://localhost:3000/api/v1/operations/telegram/status
   "configured": true,
   "status": "healthy",
   "detail": "Telegram is configured.",
-  "delivery_chat_id": "123456789",
+  "delivery_chat_id": "*****6789",
   "pending_update_count": 0,
   "webhook_url": "https://example.com/api/v1/operations/telegram/webhook",
   "has_custom_certificate": false,
-  "known_chat_ids": [123456789]
+  "known_chat_ids": ["*****6789"]
 }
 ```
 

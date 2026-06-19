@@ -424,7 +424,7 @@ def handle_telegram_webhook(
     update_id = update.get("update_id")
     processed_update_ids = [int(update_id)] if isinstance(update_id, int) else []
     chat_id = result.get("chat_id")
-    known_chat_ids = [int(chat_id)] if isinstance(chat_id, int) else []
+    known_chat_ids = [service.mask_chat_id(chat_id)] if isinstance(chat_id, int) else []
     processed = 1 if result.get("status") == "processed" else 0
     return {
         "status": str(result.get("status", "ignored")),
@@ -442,7 +442,18 @@ def sync_telegram_updates(
     db: Session = Depends(get_db),
 ):
     """Fetch pending Telegram updates manually and process them immediately."""
-    return TelegramSyncService().sync_updates(db, limit=limit, timeout_seconds=timeout_seconds)
+    service = TelegramNotificationService()
+    result = dict(
+        TelegramSyncService(service).sync_updates(
+            db,
+            limit=limit,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+    result["known_chat_ids"] = [
+        service.mask_chat_id(chat_id) for chat_id in result.get("known_chat_ids", [])
+    ]
+    return result
 
 
 @router.get("/telegram/status", response_model=TelegramStatusResponse)
@@ -464,9 +475,13 @@ def get_telegram_status():
         "configured": service.is_configured(),
         "status": status_value,
         "detail": detail,
-        "delivery_chat_id": service.get_configured_chat_id() or None,
+        "delivery_chat_id": (
+            service.get_configured_target_label() if service.is_configured() else None
+        ),
         "pending_update_count": int(webhook_info.get("pending_update_count", 0) or 0),
         "webhook_url": str(webhook_info.get("url", "") or ""),
         "has_custom_certificate": bool(webhook_info.get("has_custom_certificate", False)),
-        "known_chat_ids": service.extract_chat_ids(updates),
+        "known_chat_ids": [
+            service.mask_chat_id(chat_id) for chat_id in service.extract_chat_ids(updates)
+        ],
     }
