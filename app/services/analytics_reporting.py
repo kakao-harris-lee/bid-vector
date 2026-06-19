@@ -280,15 +280,15 @@ class AnalyticsReportingService:
         if not runs:
             status = "missing"
             blocking_gap = "No smoke evidence exists in the G-2 review window."
-        elif canonical_only_count > 0 or other_operator_count > 0:
-            status = "mixed_scope"
-            blocking_gap = (
-                "Smoke evidence includes G-0 canonical-only or another operator's "
-                f"scope; rerun smoke evidence fully scoped to operator_id={operator_id}."
-            )
         elif operator_evidence:
             status = "ready"
             blocking_gap = None
+        elif canonical_only_count > 0 or other_operator_count > 0:
+            status = "mixed_scope"
+            blocking_gap = (
+                "Smoke evidence includes only G-0 canonical-only or another operator's "
+                f"scope; rerun smoke evidence fully scoped to operator_id={operator_id}."
+            )
         else:
             status = "insufficient"
             blocking_gap = f"No operator-scoped smoke phase evidence for operator_id={operator_id}."

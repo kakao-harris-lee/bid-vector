@@ -206,6 +206,25 @@ def test_g2_evidence_summary_reports_ready_operator_scoped_evidence(client, test
                 telegram_status="sent",
                 created_at=now - timedelta(hours=5),
             ),
+            SmokeTestRun(
+                started_at=now - timedelta(hours=6),
+                completed_at=now - timedelta(hours=5),
+                overall_passed=True,
+                phases=json.dumps(
+                    [
+                        {"name": "koneps_collect", "passed": True, "detail": "canonical"},
+                        {
+                            "name": "candidate_generation",
+                            "passed": True,
+                            "detail": "other operator",
+                            "evidence": {"operator_id": operator_id + 999},
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                telegram_status="sent",
+                created_at=now - timedelta(hours=6),
+            ),
             OperatorStrategyRun(
                 operator_id=operator_id,
                 trigger_source="scheduled",
@@ -283,7 +302,10 @@ def test_g2_evidence_summary_reports_ready_operator_scoped_evidence(client, test
     assert payload["window_days"] == 30
     assert payload["evidence_status"] == "ready"
     assert payload["blocking_gaps"] == []
+    assert payload["smoke"]["status"] == "ready"
     assert payload["smoke"]["counts_toward_g2_ready"] is True
+    assert payload["smoke"]["canonical_only_phase_count"] == 1
+    assert payload["smoke"]["other_operator_phase_count"] == 1
     assert payload["strategy_monitor"]["completed_count"] == 1
     assert payload["decision_experiments"]["completed_count"] == 1
     assert payload["synthetic_experiments"]["operator_id_scoped_result_count"] == 1
