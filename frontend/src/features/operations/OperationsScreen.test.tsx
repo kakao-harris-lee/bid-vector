@@ -10,6 +10,7 @@ import type {
   OperationsDashboardResponse,
   OperationsKpiResponse
 } from "@/shared/types/operations";
+import type { OperatorProfileResponse } from "@/shared/types/profile";
 import type { OperatorAccountListResponse } from "@/shared/api";
 
 const emptySummary: DashboardSummaryResponse = {
@@ -315,6 +316,25 @@ const privilegedAccounts: OperatorAccountListResponse = {
   ]
 };
 
+const baseProfile: OperatorProfileResponse = {
+  operator_id: 1,
+  username: "operator",
+  email: "operator@example.com",
+  full_name: "본사 운영자",
+  company: "본사",
+  is_active: true,
+  created_at: "2026-05-01T00:00:00Z",
+  business_type: "정보통신",
+  license_codes: ["SW"],
+  region_codes: ["SEOUL"],
+  annual_revenue: 1_000_000_000,
+  capacity_score: 0.8,
+  construction_capacity_amount: 500_000_000,
+  awarded_contract_limit: 300_000_000,
+  total_awards: 12,
+  profile_configured: true
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -346,6 +366,7 @@ function installFetchMock({
     const url = String(input);
     if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
     if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
+    if (url.startsWith("/api/v1/operator/profile")) return jsonResponse(baseProfile);
     if (url.startsWith("/api/v1/analytics/g2-evidence")) {
       spy.g2EvidenceCalls.push(url);
       if (g2Evidence) return jsonResponse(g2Evidence);
@@ -383,7 +404,7 @@ describe("OperationsScreen", () => {
     renderApp();
 
     expect(
-      await screen.findByRole("heading", { name: "운영 대시보드", level: 2 })
+      await screen.findByRole("heading", { name: "G-2 운영 증적 대시보드", level: 2 })
     ).toBeInTheDocument();
     expect(await screen.findByText("크롤 성공률")).toBeInTheDocument();
     expect(screen.getAllByText("텔레그램 실패").length).toBeGreaterThanOrEqual(1);
@@ -399,7 +420,7 @@ describe("OperationsScreen", () => {
     renderApp();
 
     const evidenceCard = (
-      await screen.findByRole("heading", { name: "G-2 증적 요약" })
+      await screen.findByRole("heading", { name: "G-2 evidence / blocking gaps" })
     ).closest("[aria-label='G-2 증적 요약']") as HTMLElement;
     expect(evidenceCard).not.toBeNull();
     expect(
@@ -413,12 +434,16 @@ describe("OperationsScreen", () => {
 
     renderApp();
 
+    const focusStrip = await screen.findByRole("region", { name: "G-2 admin 점검 범위" });
+    expect(within(focusStrip).getByText("synthetic-aggressive")).toBeInTheDocument();
+    expect(within(focusStrip).getByText("2건")).toBeInTheDocument();
+
     const evidenceCard = (
-      await screen.findByRole("heading", { name: "G-2 증적 요약" })
+      await screen.findByRole("heading", { name: "G-2 evidence / blocking gaps" })
     ).closest("[aria-label='G-2 증적 요약']") as HTMLElement;
     expect(evidenceCard).not.toBeNull();
     expect(within(evidenceCard).getByText("synthetic-aggressive")).toBeInTheDocument();
-    expect(within(evidenceCard).getAllByText("insufficient").length).toBeGreaterThanOrEqual(1);
+    expect(within(evidenceCard).getAllByText("증적 부족").length).toBeGreaterThanOrEqual(1);
     expect(within(evidenceCard).getByText("Strategy monitor")).toBeInTheDocument();
     expect(within(evidenceCard).getByText("Decision experiment")).toBeInTheDocument();
     expect(within(evidenceCard).getAllByText("decision experiment 필요").length).toBeGreaterThanOrEqual(1);
@@ -433,7 +458,7 @@ describe("OperationsScreen", () => {
     renderApp();
 
     expect(
-      await screen.findByRole("heading", { name: "운영 대시보드", level: 2 })
+      await screen.findByRole("heading", { name: "G-2 운영 증적 대시보드", level: 2 })
     ).toBeInTheDocument();
     await waitFor(() => expect(spy.dashboardCount).toBe(1));
 
@@ -444,15 +469,20 @@ describe("OperationsScreen", () => {
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
   });
 
-  it("시스템 헬스 카드와 함께 회사별 KPI 7 그룹을 동시에 노출한다", async () => {
+  it("G-2 운영 증거와 함께 회사별 KPI 7 그룹을 동시에 노출한다", async () => {
     installFetchMock();
 
     renderApp();
 
-    // 시스템 헬스 영역 — 크롤/텔레그램/ML release 카드
+    // G-2 운영 증거 영역 — smoke/synthetic 카드
     expect(
-      await screen.findByRole("heading", { name: "운영 대시보드", level: 2 })
+      await screen.findByRole("heading", { name: "G-2 운영 증적 대시보드", level: 2 })
     ).toBeInTheDocument();
+    expect(await screen.findByText("G-2 운영 검증 증거")).toBeInTheDocument();
+    expect(screen.getByText("운영 검증 (스모크 사이클)")).toBeInTheDocument();
+    expect(screen.getByText("G-1 가상 회사 검증")).toBeInTheDocument();
+
+    // 보조 운영 상태 — 크롤/텔레그램/ML release 카드
     expect(await screen.findByText("크롤 상태")).toBeInTheDocument();
     expect(screen.getByText("텔레그램 / 알림")).toBeInTheDocument();
     expect(screen.getByText("ML release")).toBeInTheDocument();
@@ -488,6 +518,27 @@ describe("OperationsScreen", () => {
       expect(spy.kpiCalls.length).toBeGreaterThan(before);
       expect(spy.kpiCalls.some((url) => url.includes("days=90"))).toBe(true);
     });
+  });
+
+  it("/dashboard user surface에는 admin-only 운영 링크와 cross-operator switcher를 노출하지 않는다", async () => {
+    window.history.pushState({}, "", "/dashboard");
+    const spy = installFetchMock({ accounts: privilegedAccounts });
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
+
+    expect(screen.queryByRole("button", { name: "회사 전환" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "운영 대시보드" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "가상 운영자 백테스트" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "실험 lifecycle" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "결정 게이트웨이" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "의사결정 증적" })).not.toBeInTheDocument();
+    expect(screen.queryByText("운영 검증 (스모크 사이클)")).not.toBeInTheDocument();
+    expect(screen.queryByText("G-2 evidence / blocking gaps")).not.toBeInTheDocument();
+    expect(screen.queryByText("크롤 상태")).not.toBeInTheDocument();
+    expect(spy.dashboardCount).toBe(0);
+    expect(spy.g2EvidenceCalls).toHaveLength(0);
   });
 
   it("회사를 전환하면 KPI도 새 operator_id로 재조회된다", async () => {

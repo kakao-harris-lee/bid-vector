@@ -55,7 +55,11 @@ from app.schemas.schemas import (
     OperatorStrategyUpdate,
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
-from app.services.notifications.manager import OperatorNotificationService
+from app.services.notifications.manager import (
+    OperatorNotificationService,
+    mask_notification_route_key,
+    mask_notification_target,
+)
 from app.services.operator_strategy_tuning import (
     clamp_auto_workload_penalty_multiplier,
     dump_category_priority_overrides,
@@ -936,8 +940,8 @@ def _serialize_notification_channel(
         channel_id=int(channel.id),
         operator_id=int(channel.operator_id),
         channel_type=str(channel.channel_type),
-        route_key=str(channel.route_key),
-        target_label=channel.target_label,
+        route_key=mask_notification_route_key(channel.route_key),
+        target_label=mask_notification_target(channel.target_label),
         is_active=bool(channel.is_active),
         dry_run_only=bool(channel.dry_run_only),
         source="operator_notification_channels",

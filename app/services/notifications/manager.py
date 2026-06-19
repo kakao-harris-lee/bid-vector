@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,73 @@ from app.services.notifications.telegram import TelegramNotificationService
 from app.services.realtime import realtime_event_manager
 
 logger = logging.getLogger(__name__)
+
+_SAFE_OPERATOR_TELEGRAM_ROUTE_RE = re.compile(r"^operator:\d+:telegram:unconfigured$")
+_SAFE_NAMED_ROUTE_RE = re.compile(r"^(?:telegram|app):[a-z][a-z0-9_-]{0,80}$")
+_NUMERIC_TARGET_RE = re.compile(r"(?<!\d)-?\d{5,}(?!\d)")
+_BRACKETED_TOKEN_RE = re.compile(r"(?i)(ExponentPushToken)\[([^\]]{8,})\]")
+_KEYED_SECRET_RE = re.compile(
+    r"(?i)\b(chat_id|device|device_token|target|token|secret)([=:]\s*)([^\s,;]{5,})"
+)
+_TOKENISH_TARGET_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z0-9][A-Za-z0-9_.:-]{19,}[A-Za-z0-9])(?![A-Za-z0-9])"
+)
+
+
+def _mask_secret_fragment(value: str) -> str:
+    """Mask one target-like fragment while keeping the last four chars for evidence."""
+    if len(value) <= 4:
+        return "*" * len(value)
+    return f"{'*' * (len(value) - 4)}{value[-4:]}"
+
+
+def mask_notification_target(value: object | None) -> str | None:
+    """Return API/telemetry-safe notification target text.
+
+    Operators may accidentally save a raw Telegram chat id, device token, or
+    secret target in ``target_label``. Treat labels as untrusted and mask
+    target-shaped fragments before they leave the service boundary.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    masked = _NUMERIC_TARGET_RE.sub(
+        lambda match: _mask_secret_fragment(match.group(0)),
+        text,
+    )
+    masked = _BRACKETED_TOKEN_RE.sub(
+        lambda match: f"{match.group(1)}[{_mask_secret_fragment(match.group(2))}]",
+        masked,
+    )
+    masked = _KEYED_SECRET_RE.sub(
+        lambda match: (
+            match.group(0)
+            if "*" in match.group(3)
+            else f"{match.group(1)}{match.group(2)}{_mask_secret_fragment(match.group(3))}"
+        ),
+        masked,
+    )
+    return _TOKENISH_TARGET_RE.sub(
+        lambda match: _mask_secret_fragment(match.group(1)),
+        masked,
+    )
+
+
+def mask_notification_route_key(value: object | None) -> str:
+    """Return a route key suitable for evidence without leaking secret targets."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if (
+        text == TelegramNotificationService.LEGACY_CONFIGURED_CHAT_ROUTE_KEY
+        or _SAFE_OPERATOR_TELEGRAM_ROUTE_RE.match(text)
+        or _SAFE_NAMED_ROUTE_RE.match(text)
+    ):
+        return text
+    return mask_notification_target(text) or ""
 
 
 class OperatorNotificationService:
@@ -196,7 +264,7 @@ class OperatorNotificationService:
     ) -> dict[str, object] | None:
         """Best-effort Telegram delivery so the web flow still succeeds on failures."""
         delivery_plan = self.build_telegram_delivery_plan(db, operator_id=operator_id)
-        if not bool(delivery_plan.get("can_send")):
+        if not bool(delivery_plan.get("route_send_allowed")):
             blocked_delivery = self._build_blocked_telegram_delivery(delivery_plan)
             self._record_telegram_delivery(
                 db,
@@ -261,6 +329,8 @@ class OperatorNotificationService:
             "channel_source": "missing_channel",
             "channel_active": False,
             "dry_run_only": True,
+            "route_send_allowed": False,
+            "telegram_configured": self.telegram.is_configured(),
             "can_send": False,
         }
         if operator is None:
@@ -273,11 +343,12 @@ class OperatorNotificationService:
         username = str(operator.username or "")
         channel = self._select_telegram_channel(db, operator_id=int(operator_id))
         if channel is not None:
+            raw_route_key = str(channel.route_key)
             plan = {
                 **base,
                 "channel_id": int(channel.id),
-                "route_key": str(channel.route_key),
-                "target_label": channel.target_label,
+                "route_key": mask_notification_route_key(raw_route_key),
+                "target_label": mask_notification_target(channel.target_label),
                 "channel_source": "operator_notification_channels",
                 "channel_active": bool(channel.is_active),
                 "dry_run_only": bool(channel.dry_run_only),
@@ -300,7 +371,7 @@ class OperatorNotificationService:
                     "status": "telegram_route_non_canonical",
                     "detail": "Telegram delivery skipped because non-canonical operator routes require an explicit secret resolver.",
                 }
-            if channel.route_key != self.telegram.LEGACY_CONFIGURED_CHAT_ROUTE_KEY:
+            if raw_route_key != self.telegram.LEGACY_CONFIGURED_CHAT_ROUTE_KEY:
                 return {
                     **plan,
                     "status": "telegram_route_unresolved",
@@ -308,8 +379,10 @@ class OperatorNotificationService:
                 }
             return {
                 **plan,
-                "target_label": channel.target_label or self.telegram.get_configured_target_label(),
-                "can_send": True,
+                "target_label": mask_notification_target(channel.target_label)
+                or self.telegram.get_configured_target_label(),
+                "route_send_allowed": True,
+                "can_send": self._can_actually_send_telegram(route_send_allowed=True),
                 "status": "ready",
                 "detail": "Telegram delivery route is active.",
             }
@@ -322,7 +395,8 @@ class OperatorNotificationService:
                 "channel_source": "legacy_settings",
                 "channel_active": True,
                 "dry_run_only": False,
-                "can_send": True,
+                "route_send_allowed": True,
+                "can_send": self._can_actually_send_telegram(route_send_allowed=True),
                 "status": "ready",
                 "detail": "Telegram delivery route uses the legacy configured chat.",
             }
@@ -341,7 +415,15 @@ class OperatorNotificationService:
     def has_active_telegram_callback_route(self, db: Session, *, operator_id: int) -> bool:
         """Return whether bid-decision callbacks may mutate this operator's records."""
         plan = self.build_telegram_delivery_plan(db, operator_id=operator_id)
-        return bool(plan.get("can_send"))
+        return bool(plan.get("route_send_allowed"))
+
+    def _can_actually_send_telegram(self, *, route_send_allowed: bool) -> bool:
+        """Return whether this process may perform a real Telegram send now."""
+        return bool(
+            route_send_allowed
+            and self.telegram.is_configured()
+            and settings.ENVIRONMENT != "test"
+        )
 
     def _select_telegram_channel(
         self,
@@ -391,6 +473,9 @@ class OperatorNotificationService:
                 "channel_source": delivery_plan.get("channel_source"),
                 "channel_active": bool(delivery_plan.get("channel_active")),
                 "dry_run_only": bool(delivery_plan.get("dry_run_only")),
+                "route_send_allowed": bool(delivery_plan.get("route_send_allowed")),
+                "telegram_configured": bool(delivery_plan.get("telegram_configured")),
+                "can_send": bool(delivery_plan.get("can_send")),
             }
         )
         return enriched
@@ -424,6 +509,9 @@ class OperatorNotificationService:
                     "channel_source": delivery.get("channel_source"),
                     "channel_active": bool(delivery.get("channel_active")),
                     "dry_run_only": bool(delivery.get("dry_run_only")),
+                    "route_send_allowed": bool(delivery.get("route_send_allowed")),
+                    "telegram_configured": bool(delivery.get("telegram_configured")),
+                    "can_send": bool(delivery.get("can_send")),
                 },
                 ensure_ascii=False,
             ),

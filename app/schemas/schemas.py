@@ -2504,7 +2504,7 @@ class TelegramSyncResponse(BaseModel):
     detail: str
     processed_count: int
     processed_update_ids: List[int] = Field(default_factory=list)
-    known_chat_ids: List[int] = Field(default_factory=list)
+    known_chat_ids: List[str] = Field(default_factory=list)
 
 
 class TelegramStatusResponse(BaseModel):
@@ -2515,7 +2515,7 @@ class TelegramStatusResponse(BaseModel):
     pending_update_count: int = 0
     webhook_url: str = ""
     has_custom_certificate: bool = False
-    known_chat_ids: List[int] = Field(default_factory=list)
+    known_chat_ids: List[str] = Field(default_factory=list)
 
 
 class BacktestDataAuditResponse(BaseModel):

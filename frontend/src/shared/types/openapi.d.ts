@@ -8205,7 +8205,7 @@ export interface components {
              */
             has_custom_certificate: boolean;
             /** Known Chat Ids */
-            known_chat_ids?: number[];
+            known_chat_ids?: string[];
         };
         /** TelegramSyncResponse */
         TelegramSyncResponse: {
@@ -8218,7 +8218,7 @@ export interface components {
             /** Processed Update Ids */
             processed_update_ids?: number[];
             /** Known Chat Ids */
-            known_chat_ids?: number[];
+            known_chat_ids?: string[];
         };
         /** TokenResponse */
         TokenResponse: {

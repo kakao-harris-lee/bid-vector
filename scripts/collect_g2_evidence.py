@@ -1,0 +1,624 @@
+#!/usr/bin/env python3
+"""Collect read-only G-2 evidence snapshots for multiple operators.
+
+The runner only performs GET requests and writes local JSON evidence files. It
+does not call KONEPS directly, update the database, or send Telegram messages.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Callable, TextIO
+from urllib import error as urlerror
+from urllib import parse, request
+
+
+class EvidenceCollectionError(Exception):
+    """Raised when a collection step fails outside an operator endpoint call."""
+
+
+class UsageError(Exception):
+    """Raised for CLI arguments that need validation beyond argparse."""
+
+
+@dataclass(frozen=True)
+class EndpointSpec:
+    key: str
+    file_name: str
+    path: str
+    include_days: bool = False
+
+    def params(self, *, operator_id: int, days: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {"operator_id": operator_id}
+        if self.include_days:
+            payload["days"] = days
+        return payload
+
+
+@dataclass(frozen=True)
+class CollectionConfig:
+    base_url: str
+    token: str | None
+    operator_ids: list[int]
+    evidence_dir: Path
+    days: int = 30
+    fail_on_blocking_gaps: bool = False
+    timeout_seconds: float = 20.0
+    run_id: str | None = None
+
+
+HttpGetJson = Callable[..., dict[str, Any]]
+
+
+ENDPOINTS: tuple[EndpointSpec, ...] = (
+    EndpointSpec(
+        key="profile",
+        file_name="profile.json",
+        path="/api/v1/operator/profile",
+    ),
+    EndpointSpec(
+        key="strategy",
+        file_name="strategy.json",
+        path="/api/v1/operator/strategy",
+    ),
+    EndpointSpec(
+        key="notification_channels",
+        file_name="notification-channels.json",
+        path="/api/v1/operator/notification-channels",
+    ),
+    EndpointSpec(
+        key="g2_evidence",
+        file_name="g2-evidence.json",
+        path="/api/v1/analytics/g2-evidence",
+        include_days=True,
+    ),
+)
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
+
+
+def positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Collect read-only G-2 evidence JSON snapshots for at least three "
+            "operators."
+        )
+    )
+    parser.add_argument("--base-url", required=True, help="API base URL.")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("TOKEN"),
+        help="Bearer token. Defaults to the TOKEN environment variable.",
+    )
+    operator_source = parser.add_mutually_exclusive_group(required=True)
+    operator_source.add_argument(
+        "--operator-id",
+        action="append",
+        type=positive_int,
+        help="Operator id to collect. Repeat for at least three operators.",
+    )
+    operator_source.add_argument(
+        "--operators-file",
+        type=Path,
+        help=(
+            "JSON file containing operator ids. Accepts a list, "
+            '{"operator_ids": [...]}, or {"operators": [{"operator_id": ...}]}.'
+        ),
+    )
+    parser.add_argument(
+        "--evidence-dir",
+        required=True,
+        type=Path,
+        help="Directory where the timestamped evidence run will be written.",
+    )
+    parser.add_argument(
+        "--days",
+        type=positive_int,
+        default=30,
+        help="G-2 evidence window in days. Default: 30.",
+    )
+    parser.add_argument(
+        "--fail-on-blocking-gaps",
+        action="store_true",
+        help="Exit non-zero when any operator has blocking_gaps.",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=positive_float,
+        default=20.0,
+        help="HTTP request timeout in seconds. Default: 20.",
+    )
+    parser.add_argument(
+        "--run-id",
+        help="Optional run directory name. Defaults to a UTC timestamp.",
+    )
+    return parser
+
+
+def parse_json_or_text(raw_body: str) -> Any:
+    if not raw_body:
+        return {}
+    try:
+        return json.loads(raw_body)
+    except json.JSONDecodeError:
+        return raw_body
+
+
+def build_url(base_url: str, path: str, params: dict[str, Any] | None = None) -> str:
+    normalized_base = base_url.rstrip("/")
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    url = f"{normalized_base}{normalized_path}"
+    clean_params = {
+        key: value for key, value in (params or {}).items() if value is not None
+    }
+    if clean_params:
+        url = f"{url}?{parse.urlencode(clean_params)}"
+    return url
+
+
+def http_get_json(
+    *,
+    base_url: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+    token: str | None = None,
+    timeout_seconds: float = 20.0,
+) -> dict[str, Any]:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = build_url(base_url, path, params)
+    req = request.Request(url, headers=headers, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as response:
+            raw_body = response.read().decode("utf-8")
+    except urlerror.HTTPError as exc:
+        raw_body = exc.read().decode("utf-8", errors="replace")
+        detail = parse_json_or_text(raw_body)
+        raise EvidenceCollectionError(
+            f"GET {path} returned HTTP {exc.code}: {detail}"
+        ) from exc
+    except urlerror.URLError as exc:
+        raise EvidenceCollectionError(f"GET {path} failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise EvidenceCollectionError(
+            f"GET {path} timed out after {timeout_seconds:g}s"
+        ) from exc
+
+    payload = parse_json_or_text(raw_body)
+    if not isinstance(payload, dict):
+        raise EvidenceCollectionError(
+            f"GET {path} returned non-object JSON: {payload!r}"
+        )
+    return payload
+
+
+def _coerce_operator_id(value: Any) -> int:
+    if isinstance(value, dict):
+        if "operator_id" in value:
+            value = value["operator_id"]
+        elif "id" in value:
+            value = value["id"]
+        else:
+            raise UsageError(f"operator object missing operator_id/id: {value!r}")
+    if isinstance(value, bool):
+        raise UsageError(f"invalid operator id: {value!r}")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise UsageError(f"invalid operator id: {value!r}")
+    if parsed < 1:
+        raise UsageError(f"operator id must be positive: {parsed!r}")
+    return parsed
+
+
+def load_operator_ids_from_file(path: Path) -> list[int]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise UsageError(f"failed to read operators file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise UsageError(f"operators file is not valid JSON: {exc}") from exc
+
+    if isinstance(payload, dict):
+        if "operator_ids" in payload:
+            payload = payload["operator_ids"]
+        elif "operators" in payload:
+            payload = payload["operators"]
+        else:
+            raise UsageError(
+                "operators file object must contain operator_ids or operators"
+            )
+    if not isinstance(payload, list):
+        raise UsageError("operators file must contain a JSON list")
+    return [_coerce_operator_id(item) for item in payload]
+
+
+def normalize_operator_ids(operator_ids: list[int], *, min_count: int = 3) -> list[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for item in operator_ids:
+        operator_id = _coerce_operator_id(item)
+        if operator_id not in seen:
+            normalized.append(operator_id)
+            seen.add(operator_id)
+    if len(normalized) < min_count:
+        raise UsageError(
+            f"at least {min_count} unique operator ids are required; got {len(normalized)}"
+        )
+    return normalized
+
+
+def _default_run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _validate_run_id(run_id: str) -> str:
+    clean = run_id.strip()
+    if not clean or clean in {".", ".."} or "/" in clean or "\\" in clean:
+        raise UsageError(f"invalid run id: {run_id!r}")
+    return clean
+
+
+def config_from_args(args: argparse.Namespace) -> CollectionConfig:
+    operator_ids = (
+        list(args.operator_id or [])
+        if args.operator_id is not None
+        else load_operator_ids_from_file(args.operators_file)
+    )
+    return CollectionConfig(
+        base_url=args.base_url,
+        token=args.token,
+        operator_ids=normalize_operator_ids(operator_ids),
+        evidence_dir=args.evidence_dir,
+        days=args.days,
+        fail_on_blocking_gaps=args.fail_on_blocking_gaps,
+        timeout_seconds=args.timeout_seconds,
+        run_id=_validate_run_id(args.run_id) if args.run_id else _default_run_id(),
+    )
+
+
+def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _list_of_strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _channel_status(channels_payload: dict[str, Any]) -> dict[str, Any]:
+    channels = channels_payload.get("channels")
+    if not isinstance(channels, list):
+        channels = []
+    channel_count = _optional_int(channels_payload.get("channel_count"))
+    if channel_count is None:
+        channel_count = len(channels)
+    active_count = sum(
+        1
+        for item in channels
+        if isinstance(item, dict) and item.get("is_active") is True
+    )
+    dry_run_only_count = sum(
+        1
+        for item in channels
+        if isinstance(item, dict) and item.get("dry_run_only") is True
+    )
+    verified_count = sum(
+        1 for item in channels if isinstance(item, dict) and item.get("verified_at")
+    )
+    if channel_count == 0:
+        status = "missing"
+    elif active_count == 0:
+        status = "inactive"
+    elif dry_run_only_count >= active_count:
+        status = "dry_run_only"
+    else:
+        status = "active"
+    return {
+        "notification_channel_count": channel_count,
+        "notification_channel_status": status,
+        "notification_active_channel_count": active_count,
+        "notification_dry_run_only_channel_count": dry_run_only_count,
+        "notification_verified_channel_count": verified_count,
+    }
+
+
+def build_operator_summary(
+    *,
+    operator_id: int,
+    payloads: dict[str, dict[str, Any]],
+    raw_files: dict[str, str],
+    errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    profile = payloads.get("profile") or {}
+    strategy = payloads.get("strategy") or {}
+    channels = payloads.get("notification_channels") or {}
+    g2 = payloads.get("g2_evidence") or {}
+
+    current_operator_ids = {
+        key: payload.get("current_operator_id")
+        for key, payload in payloads.items()
+        if "current_operator_id" in payload
+    }
+    current_operator_id_matches = bool(current_operator_ids) and all(
+        _optional_int(value) == operator_id for value in current_operator_ids.values()
+    )
+    mismatched_current_operator_ids = {
+        key: value
+        for key, value in current_operator_ids.items()
+        if _optional_int(value) != operator_id
+    }
+
+    notifications = (
+        g2.get("notifications") if isinstance(g2.get("notifications"), dict) else {}
+    )
+    summary: dict[str, Any] = {
+        "operator_id": operator_id,
+        "current_operator_id": g2.get("current_operator_id"),
+        "current_operator_username": g2.get("current_operator_username"),
+        "current_operator_ids_by_endpoint": current_operator_ids,
+        "current_operator_id_matches": current_operator_id_matches,
+        "mismatched_current_operator_ids": mismatched_current_operator_ids,
+        "evidence_status": g2.get(
+            "evidence_status",
+            "collection_failed" if errors else "unknown",
+        ),
+        "blocking_gaps": _list_of_strings(g2.get("blocking_gaps")),
+        "profile_configured": profile.get("profile_configured"),
+        "strategy_configured": strategy.get("strategy_configured"),
+        "g2_notification_status": notifications.get("status"),
+        "raw_files": raw_files,
+        "collection_errors": errors,
+    }
+    summary.update(_channel_status(channels))
+    return summary
+
+
+def collect_operator_evidence(
+    *,
+    config: CollectionConfig,
+    run_dir: Path,
+    operator_id: int,
+    http_get_json_func: HttpGetJson = http_get_json,
+) -> dict[str, Any]:
+    operator_dir = run_dir / f"operator-{operator_id}"
+    payloads: dict[str, dict[str, Any]] = {}
+    raw_files: dict[str, str] = {}
+    errors: list[dict[str, Any]] = []
+    for endpoint in ENDPOINTS:
+        endpoint_path = operator_dir / endpoint.file_name
+        try:
+            payload = http_get_json_func(
+                base_url=config.base_url,
+                path=endpoint.path,
+                params=endpoint.params(operator_id=operator_id, days=config.days),
+                token=config.token,
+                timeout_seconds=config.timeout_seconds,
+            )
+            payloads[endpoint.key] = payload
+            write_json(endpoint_path, payload)
+            raw_files[endpoint.key] = str(endpoint_path.relative_to(run_dir))
+        except Exception as exc:  # noqa: BLE001 - keep collecting other evidence.
+            error_payload = {
+                "endpoint": endpoint.path,
+                "operator_id": operator_id,
+                "error": str(exc),
+            }
+            errors.append(error_payload)
+            error_path = endpoint_path.with_suffix(".error.json")
+            write_json(error_path, error_payload)
+            raw_files[endpoint.key] = str(error_path.relative_to(run_dir))
+
+    return build_operator_summary(
+        operator_id=operator_id,
+        payloads=payloads,
+        raw_files=raw_files,
+        errors=errors,
+    )
+
+
+def build_collection_summary(
+    *,
+    config: CollectionConfig,
+    run_dir: Path,
+    operator_summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    blocking_gap_todos = [
+        {"operator_id": item["operator_id"], "gap_index": index + 1, "todo": gap}
+        for item in operator_summaries
+        for index, gap in enumerate(item.get("blocking_gaps") or [])
+    ]
+    collection_error_count = sum(
+        len(item.get("collection_errors") or []) for item in operator_summaries
+    )
+    if collection_error_count:
+        status = "collection_failed"
+    elif blocking_gap_todos:
+        status = "blocking_gaps"
+    else:
+        status = "ready"
+    return {
+        "status": status,
+        "mode": "dry_run_read_only",
+        "write_performed": False,
+        "run_id": config.run_id,
+        "run_dir": str(run_dir),
+        "base_url": config.base_url,
+        "days": config.days,
+        "operator_count": len(config.operator_ids),
+        "operators": operator_summaries,
+        "blocking_gap_count": len(blocking_gap_todos),
+        "blocking_gap_todos": blocking_gap_todos,
+        "collection_error_count": collection_error_count,
+    }
+
+
+def run_collection(
+    config: CollectionConfig,
+    *,
+    http_get_json_func: HttpGetJson = http_get_json,
+) -> dict[str, Any]:
+    run_id = config.run_id or _default_run_id()
+    effective_config = CollectionConfig(
+        base_url=config.base_url,
+        token=config.token,
+        operator_ids=config.operator_ids,
+        evidence_dir=config.evidence_dir,
+        days=config.days,
+        fail_on_blocking_gaps=config.fail_on_blocking_gaps,
+        timeout_seconds=config.timeout_seconds,
+        run_id=run_id,
+    )
+    run_dir = config.evidence_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    operator_summaries = [
+        collect_operator_evidence(
+            config=effective_config,
+            run_dir=run_dir,
+            operator_id=operator_id,
+            http_get_json_func=http_get_json_func,
+        )
+        for operator_id in effective_config.operator_ids
+    ]
+    summary = build_collection_summary(
+        config=effective_config,
+        run_dir=run_dir,
+        operator_summaries=operator_summaries,
+    )
+    write_json(run_dir / "g2-evidence-summary.json", summary)
+    write_json(
+        run_dir / "run-metadata.json",
+        {
+            "run_id": effective_config.run_id,
+            "base_url": effective_config.base_url,
+            "days": effective_config.days,
+            "operator_ids": effective_config.operator_ids,
+            "mode": "dry_run_read_only",
+            "write_performed": False,
+            "endpoints": [
+                {"key": endpoint.key, "path": endpoint.path, "method": "GET"}
+                for endpoint in ENDPOINTS
+            ],
+        },
+    )
+    return summary
+
+
+def print_summary(summary: dict[str, Any], *, stdout: TextIO) -> None:
+    stdout.write("G-2 evidence collection dry-run complete\n")
+    stdout.write(f"run_dir: {summary['run_dir']}\n")
+    stdout.write(
+        f"operators: {summary['operator_count']} days={summary['days']} "
+        f"status={summary['status']}\n"
+    )
+    for item in summary.get("operators", []):
+        match_label = "match" if item.get("current_operator_id_matches") else "mismatch"
+        gaps = item.get("blocking_gaps") or []
+        errors = item.get("collection_errors") or []
+        stdout.write(
+            "operator "
+            f"{item.get('operator_id')}: evidence={item.get('evidence_status')} "
+            f"gaps={len(gaps)} current_operator_id={match_label} "
+            f"profile_configured={item.get('profile_configured')} "
+            f"strategy_configured={item.get('strategy_configured')} "
+            f"channels={item.get('notification_channel_count')} "
+            f"channel_status={item.get('notification_channel_status')}"
+        )
+        if errors:
+            stdout.write(f" errors={len(errors)}")
+        stdout.write("\n")
+        for index, gap in enumerate(gaps, start=1):
+            stdout.write(f"  TODO {index}: {gap}\n")
+        for error_item in errors:
+            stdout.write(
+                f"  ERROR {error_item.get('endpoint')}: {error_item.get('error')}\n"
+            )
+    stdout.write(f"summary_file: {summary['run_dir']}/g2-evidence-summary.json\n")
+
+
+def exit_code_for_summary(
+    summary: dict[str, Any], *, fail_on_blocking_gaps: bool
+) -> int:
+    if summary.get("collection_error_count", 0) > 0:
+        return 1
+    if fail_on_blocking_gaps and summary.get("blocking_gap_count", 0) > 0:
+        return 3
+    return 0
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    http_get_json_func: HttpGetJson = http_get_json,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+) -> int:
+    stdout = stdout or sys.stdout
+    stderr = stderr or sys.stderr
+    parser = build_parser()
+    try:
+        config = config_from_args(parser.parse_args(argv))
+        summary = run_collection(config, http_get_json_func=http_get_json_func)
+        print_summary(summary, stdout=stdout)
+        code = exit_code_for_summary(
+            summary,
+            fail_on_blocking_gaps=config.fail_on_blocking_gaps,
+        )
+        if code == 3:
+            stderr.write(
+                "blocking_gaps found; failing because "
+                "--fail-on-blocking-gaps was set\n"
+            )
+        return code
+    except UsageError as exc:
+        stderr.write(f"{exc}\n")
+        return 2
+    except EvidenceCollectionError as exc:
+        stderr.write(f"{exc}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

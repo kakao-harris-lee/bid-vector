@@ -36,7 +36,7 @@
 3. `/api/v1/analytics/g2-evidence?operator_id=<OP_ID>`를 매일 저장하고 `blocking_gaps`를 operator별 TODO로 관리한다.
 4. `scripts/run_g2_synthetic_evidence.py --dry-run` 결과를 검토한 뒤, 승인된 경우에만 `--write`로 synthetic evidence run을 enqueue한다.
 5. non-canonical 실제 Telegram/app 송신 전까지는 `dry_run_only` 또는 skip evidence를 유지한다.
-6. `docs/operations/g2-evidence-runbook.md`의 exit review 양식으로 G-2 완료 여부를 판정한다.
+6. `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 G-2 완료 여부를 판정한다.
 
 ## G-2 완료 조건
 
