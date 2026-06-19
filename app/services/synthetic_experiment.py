@@ -13,6 +13,7 @@ import csv
 import io
 import json
 import logging
+import shlex
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -738,10 +739,12 @@ def _sample_gap_action(
 
 
 def _sample_gap_candidate_name(
-    *, preset_name: Optional[str], dimension: str, key: str
+    *, preset_name: Optional[str], dimension: str, key: str, action_code: str
 ) -> str:
-    if preset_name:
+    if preset_name and action_code == "rerun_related_preset":
         return str(preset_name)[:200]
+    if preset_name:
+        return f"{preset_name}-{action_code}"[:200]
     clean_key = key.replace("/", "-").strip() or "unknown"
     return f"sample-gap-{dimension}-{clean_key}"[:200]
 
@@ -778,6 +781,108 @@ def _candidate_params_for_action(
         )
         candidate["limit"] = min(1000, suggested_limit)
     return candidate
+
+
+def _sample_gap_params_match(
+    experiment: SyntheticExperiment,
+    params: dict[str, Any],
+) -> bool:
+    saved = _json_loads(experiment.params_json) or {}
+    if not isinstance(saved, dict):
+        return False
+    return _sample_gap_core_params(saved) == _sample_gap_core_params(params)
+
+
+def _sample_gap_core_params(params: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalized_experiment_params(params)
+    return {
+        "start_at": normalized.get("start_at"),
+        "end_at": normalized.get("end_at"),
+        "category": normalized.get("category"),
+        "limit": normalized.get("limit"),
+        "scenario": normalized.get("scenario"),
+        "settle_actions": normalized.get("settle_actions"),
+    }
+
+
+def _sample_gap_operator_slugs_match(
+    experiment: SyntheticExperiment,
+    operator_slugs: list[str],
+) -> bool:
+    saved = _json_loads(experiment.operator_slugs_json) or []
+    if not isinstance(saved, list):
+        return False
+    return [str(slug) for slug in saved] == [str(slug) for slug in operator_slugs]
+
+
+def _sample_gap_matches_fixed_preset(
+    *,
+    definition: dict[str, Any],
+    params: dict[str, Any],
+    operator_slugs: list[str],
+) -> bool:
+    return (
+        _sample_gap_core_params(definition.get("params") or {})
+        == _sample_gap_core_params(params)
+        and [str(slug) for slug in definition.get("operator_slugs") or []]
+        == [str(slug) for slug in operator_slugs]
+    )
+
+
+def _sample_gap_source_context(
+    *,
+    gap: dict[str, Any],
+    action_code: str,
+    action_label: str,
+    preset_name: Optional[str],
+    params: dict[str, Any],
+    operator_slugs: list[str],
+    run_allowed: bool,
+    blocked_by_warnings: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    return {
+        "source": "sample_gap_candidate",
+        "dimension": str(gap["dimension"]),
+        "key": str(gap["key"]),
+        "action_code": action_code,
+        "action_label": action_label,
+        "preset_name": preset_name,
+        "related_run_ids": [
+            _safe_positive_int(run_id)
+            for run_id in gap.get("related_run_ids", []) or []
+            if _safe_positive_int(run_id) > 0
+        ],
+        "missing_settled_count": _safe_positive_int(
+            gap.get("missing_settled_count")
+        ),
+        "sample_target": _safe_positive_int(gap.get("sample_target")),
+        "source_run_count": _safe_positive_int(gap.get("source_run_count")),
+        "params": params,
+        "operator_slugs": operator_slugs,
+        "run_allowed": run_allowed,
+        "blocked_by_warnings": blocked_by_warnings,
+        "warnings": warnings,
+    }
+
+
+def _sample_gap_cli_command(
+    *,
+    preset_name: Optional[str],
+    dimension: str,
+    key: str,
+    action_code: str,
+    write: bool,
+) -> str:
+    parts = ["python", "scripts/run_g2_synthetic_evidence.py"]
+    parts.append("--write" if write else "--dry-run")
+    if preset_name:
+        parts.extend(["--preset", preset_name])
+    else:
+        parts.extend(["--dimension", dimension, "--key", key])
+    if action_code:
+        parts.extend(["--action-code", action_code])
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 class _SampleGapAccumulator:
@@ -1022,7 +1127,12 @@ class SyntheticExperimentService:
 
     # --- run lifecycle ---------------------------------------------------------
 
-    def create_run(self, experiment: SyntheticExperiment) -> SyntheticExperimentRun:
+    def create_run(
+        self,
+        experiment: SyntheticExperiment,
+        *,
+        source_sample_gap_candidate: Optional[dict[str, Any]] = None,
+    ) -> SyntheticExperimentRun:
         """Create a queued run and enqueue the Celery backtest task.
 
         The Celery payload carries ``experiment_id`` + ``run_id`` so the task can
@@ -1044,6 +1154,8 @@ class SyntheticExperimentService:
         payload["experiment_id"] = experiment.id
         payload["run_id"] = run.id
         payload["slugs"] = operator_slugs or None
+        if isinstance(source_sample_gap_candidate, dict):
+            payload["source_sample_gap_candidate"] = source_sample_gap_candidate
 
         async_result = enqueue_synthetic_operator_backtest(payload=payload)
         run.task_id = getattr(async_result, "id", None)
@@ -1254,17 +1366,13 @@ class SyntheticExperimentService:
         blocked_by_warnings = sorted(set(blocked_by_warnings))
         run_allowed = not blocked_by_warnings
         latest_run = self._latest_experiment_run(experiment)
-        next_step = self._sample_gap_candidate_next_step(
-            run_allowed=run_allowed,
-            experiment=experiment,
-            preset_name=preset_name,
-        )
         action_label = str(action.get("label") or action["code"])
         experiment_payload = {
             "name": _sample_gap_candidate_name(
                 preset_name=preset_name,
                 dimension=str(gap["dimension"]),
                 key=str(gap["key"]),
+                action_code=str(action["code"]),
             ),
             "description": _sample_gap_candidate_description(
                 dimension=str(gap["dimension"]),
@@ -1274,6 +1382,32 @@ class SyntheticExperimentService:
             "params": params,
             "operator_slugs": operator_slugs,
         }
+        next_step = self._sample_gap_candidate_next_step(
+            run_allowed=run_allowed,
+            experiment=experiment,
+            preset_name=preset_name,
+            definition=definition,
+            params=params,
+            operator_slugs=operator_slugs,
+        )
+        source_context = _sample_gap_source_context(
+            gap=gap,
+            action_code=str(action["code"]),
+            action_label=action_label,
+            preset_name=preset_name,
+            params=params,
+            operator_slugs=operator_slugs,
+            run_allowed=run_allowed,
+            blocked_by_warnings=blocked_by_warnings,
+            warnings=warnings,
+        )
+        execution_plan = self._sample_gap_candidate_execution_plan(
+            next_step=next_step,
+            preset_name=preset_name,
+            experiment_id=experiment.id if experiment else None,
+            experiment_payload=experiment_payload,
+            source_context=source_context,
+        )
         return {
             "generated_at": datetime.now(timezone.utc),
             "gap": gap,
@@ -1287,6 +1421,7 @@ class SyntheticExperimentService:
             "latest_run_id": latest_run.id if latest_run else None,
             "latest_run_status": latest_run.status if latest_run else None,
             "next_step": next_step,
+            "execution_plan": execution_plan,
             "run_allowed": run_allowed,
             "blocked_by_warnings": blocked_by_warnings,
             "warnings": warnings,
@@ -1295,6 +1430,74 @@ class SyntheticExperimentService:
                 preset_name=preset_name,
                 blocked_by_warnings=blocked_by_warnings,
             ),
+        }
+
+    def materialize_sample_gap_candidate_run(
+        self,
+        *,
+        dimension: str,
+        key: str,
+        max_runs: int = 20,
+        action_code: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Persist the selected candidate and enqueue its async evidence run.
+
+        This is intentionally not called by the candidate API endpoint. It is
+        used by explicit operator write paths (CLI or a separate approval flow)
+        after the read-only candidate has been inspected.
+        """
+        candidate = self.build_sample_gap_run_candidate(
+            dimension=dimension,
+            key=key,
+            max_runs=max_runs,
+            action_code=action_code,
+        )
+        if candidate is None:
+            return None
+        if not candidate.get("run_allowed"):
+            return {
+                "status": "blocked",
+                "candidate": candidate,
+                "experiment": None,
+                "run": None,
+            }
+
+        next_step = str(candidate.get("next_step") or "")
+        experiment: Optional[SyntheticExperiment] = None
+        if next_step == "run_existing_experiment":
+            experiment_id = _safe_positive_int(candidate.get("experiment_id"))
+            if experiment_id > 0:
+                experiment = self.get_experiment(experiment_id)
+        elif next_step == "save_preset":
+            preset_name = candidate.get("preset_name")
+            if preset_name:
+                experiment = self.ensure_preset(str(preset_name))
+        else:
+            payload = candidate.get("experiment_payload") or {}
+            experiment = self.create_experiment(
+                name=str(payload.get("name") or "sample-gap-candidate"),
+                description=payload.get("description"),
+                params=dict(payload.get("params") or {}),
+                operator_slugs=list(payload.get("operator_slugs") or []),
+            )
+
+        if experiment is None:
+            raise ValueError("Could not materialize sample-gap candidate experiment.")
+
+        source_context = (
+            (candidate.get("execution_plan") or {}).get("source_context") or {}
+        )
+        run = self.create_run(
+            experiment,
+            source_sample_gap_candidate=(
+                source_context if isinstance(source_context, dict) else None
+            ),
+        )
+        return {
+            "status": "queued",
+            "candidate": candidate,
+            "experiment": self.serialize_experiment(experiment),
+            "run": self.serialize_run_detail(run),
         }
 
     def _default_sample_gap_action_code(
@@ -1370,14 +1573,134 @@ class SyntheticExperimentService:
         run_allowed: bool,
         experiment: Optional[SyntheticExperiment],
         preset_name: Optional[str],
+        definition: Optional[dict[str, Any]],
+        params: dict[str, Any],
+        operator_slugs: list[str],
     ) -> str:
         if not run_allowed:
             return "resolve_mixed_data"
-        if experiment is not None:
+        if (
+            experiment is not None
+            and _sample_gap_params_match(experiment, params)
+            and _sample_gap_operator_slugs_match(experiment, operator_slugs)
+        ):
             return "run_existing_experiment"
-        if preset_name:
+        if (
+            preset_name
+            and definition is not None
+            and _sample_gap_matches_fixed_preset(
+                definition=definition,
+                params=params,
+                operator_slugs=operator_slugs,
+            )
+        ):
             return "save_preset"
         return "create_experiment"
+
+    def _sample_gap_candidate_execution_plan(
+        self,
+        *,
+        next_step: str,
+        preset_name: Optional[str],
+        experiment_id: Optional[int],
+        experiment_payload: dict[str, Any],
+        source_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        dimension = str(source_context.get("dimension") or "")
+        key = str(source_context.get("key") or "")
+        action_code = str(source_context.get("action_code") or "")
+        dry_run_command = _sample_gap_cli_command(
+            preset_name=preset_name,
+            dimension=dimension,
+            key=key,
+            action_code=action_code,
+            write=False,
+        )
+        write_command = _sample_gap_cli_command(
+            preset_name=preset_name,
+            dimension=dimension,
+            key=key,
+            action_code=action_code,
+            write=True,
+        )
+        base = {
+            "approval_required": True,
+            "dry_run_default": True,
+            "source_context": source_context,
+            "cli_command": dry_run_command,
+            "write_cli_command": None,
+        }
+        run_body = {"source_sample_gap_candidate": source_context}
+        if next_step == "resolve_mixed_data":
+            return {
+                **base,
+                "mode": "blocked",
+                "preset_request": None,
+                "experiment_request": None,
+                "run_request": None,
+                "instructions": [
+                    "Do not enqueue a run from this candidate.",
+                    "Resolve mixed canonical/synthetic data and rerun synthetic-only first.",
+                ],
+            }
+        if next_step == "run_existing_experiment" and experiment_id is not None:
+            return {
+                **base,
+                "mode": "run_existing_experiment",
+                "preset_request": None,
+                "experiment_request": None,
+                "run_request": {
+                    "method": "POST",
+                    "path": f"/api/v1/synthetic/experiments/{experiment_id}/runs",
+                    "body": run_body,
+                },
+                "write_cli_command": write_command,
+                "instructions": [
+                    "Dry-run this plan first; --write enqueues the asynchronous evidence run.",
+                    "The API request only queues the run and does not run the backtest inline.",
+                ],
+            }
+        if next_step == "save_preset" and preset_name:
+            return {
+                **base,
+                "mode": "save_preset_then_run",
+                "preset_request": {
+                    "method": "POST",
+                    "path": f"/api/v1/synthetic/experiments/presets/{preset_name}",
+                    "body": {},
+                },
+                "experiment_request": None,
+                "run_request": {
+                    "method": "POST",
+                    "path": "/api/v1/synthetic/experiments/{experiment_id}/runs",
+                    "body": run_body,
+                },
+                "write_cli_command": write_command,
+                "instructions": [
+                    "Save the preset, then enqueue a run using the returned experiment id.",
+                    "--write performs both DB write steps and requires operator approval.",
+                ],
+            }
+        return {
+            **base,
+            "mode": "create_experiment_then_run",
+            "preset_request": None,
+            "experiment_request": {
+                "method": "POST",
+                "path": "/api/v1/synthetic/experiments",
+                "body": experiment_payload,
+            },
+            "run_request": {
+                "method": "POST",
+                "path": "/api/v1/synthetic/experiments/{experiment_id}/runs",
+                "body": run_body,
+            },
+            "write_cli_command": write_command,
+            "instructions": [
+                "Create the candidate experiment, then enqueue a run using the returned experiment id.",
+                "--write performs both DB write steps and requires operator approval.",
+            ],
+        }
 
     def _sample_gap_candidate_message(
         self,
@@ -1428,7 +1751,13 @@ class SyntheticExperimentService:
         run.started_at = datetime.utcnow()
         self.db.commit()
 
-    def mark_completed(self, run_id: int, result: dict[str, Any]) -> None:
+    def mark_completed(
+        self,
+        run_id: int,
+        result: dict[str, Any],
+        *,
+        source_sample_gap_candidate: Optional[dict[str, Any]] = None,
+    ) -> None:
         run = self._fetch_run(run_id)
         if run is None:
             return
@@ -1458,6 +1787,8 @@ class SyntheticExperimentService:
                 operator_results=normalized_results,
             ),
         }
+        if isinstance(source_sample_gap_candidate, dict):
+            summary["source_sample_gap_candidate"] = source_sample_gap_candidate
         run.status = RUN_STATUS_COMPLETED
         run.finished_at = datetime.utcnow()
         run.error = None
@@ -1688,7 +2019,14 @@ def run_experiment_backtest(payload: dict[str, Any]) -> dict[str, Any]:
             slugs=payload.get("slugs"),
         )
         if run_id is not None:
-            service.mark_completed(run_id, result)
+            source_context = payload.get("source_sample_gap_candidate")
+            service.mark_completed(
+                run_id,
+                result,
+                source_sample_gap_candidate=(
+                    source_context if isinstance(source_context, dict) else None
+                ),
+            )
         return result
     except Exception as exc:
         if run_id is not None:

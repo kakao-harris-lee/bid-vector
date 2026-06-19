@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from app.schemas.schemas import (
     SyntheticExperimentCreate,
     SyntheticExperimentPresetListResponse,
     SyntheticExperimentResponse,
+    SyntheticExperimentRunCreateRequest,
     SyntheticExperimentRunResponse,
     SyntheticExperimentSampleGapCandidateRequest,
     SyntheticExperimentSampleGapPlanResponse,
@@ -533,6 +534,7 @@ def get_experiment_endpoint(experiment_id: int, db: Session = Depends(get_db)):
 )
 def create_experiment_run_endpoint(
     experiment_id: int,
+    request: Optional[SyntheticExperimentRunCreateRequest] = Body(default=None),
     db: Session = Depends(get_db),
 ):
     """Trigger an asynchronous run of a saved experiment."""
@@ -543,7 +545,12 @@ def create_experiment_run_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Experiment not found.",
         )
-    run = service.create_run(experiment)
+    run = service.create_run(
+        experiment,
+        source_sample_gap_candidate=(
+            request.source_sample_gap_candidate if request is not None else None
+        ),
+    )
     return service.serialize_run_detail(run)
 
 

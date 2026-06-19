@@ -320,12 +320,13 @@ warning code:
 
 ## POST /api/v1/synthetic/experiments/sample-gaps/candidates
 
-`GET /experiments/sample-gaps`의 특정 gap과 action을 선택해 read-only 실행 후보를 만든다. 이 API는 새 experiment를 저장하거나 run을 enqueue하지 않는다. UI는 응답의 `next_step`, `run_allowed`, `experiment_payload`를 보고 기존 experiment 선택, preset 저장, 신규 experiment 생성, mixed data 정리 중 다음 동작을 결정한다.
+`GET /experiments/sample-gaps`의 특정 gap과 action을 선택해 read-only 실행 후보를 만든다. 이 API는 새 experiment를 저장하거나 run을 enqueue하지 않는다. UI/운영 CLI는 응답의 `next_step`, `run_allowed`, `experiment_payload`, `execution_plan`을 보고 기존 experiment 선택, preset 저장, 신규 experiment 생성, mixed data 정리 중 다음 동작을 결정한다.
 
 - `dimension`/`key`는 sample-gap item을 식별한다.
 - `action_code`를 생략하면 서비스가 기본 action을 고른다. mixed data warning이 있으면 `rerun_synthetic_only`를 우선한다.
 - `canonical_synthetic_mixed` warning이 있으면 `run_allowed=false`, `next_step=resolve_mixed_data`로 반환한다.
-- 실제 backfill DB write, experiment 저장, run 실행은 하지 않는다.
+- 실제 backfill DB write, experiment 저장, run enqueue는 하지 않는다. `execution_plan.run_request`는 기존 `/experiments/{id}/runs` 비동기 큐잉 API의 요청 payload만 제공한다.
+- `execution_plan.source_context`는 run 요청 body의 `source_sample_gap_candidate`로 전달할 수 있으며, 완료된 run summary의 `summary.source_sample_gap_candidate`에 남는다.
 
 **파라미터**
 
@@ -406,6 +407,57 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
   "latest_run_id": 102,
   "latest_run_status": "completed",
   "next_step": "run_existing_experiment",
+  "execution_plan": {
+    "mode": "run_existing_experiment",
+    "approval_required": true,
+    "dry_run_default": true,
+    "source_context": {
+      "source": "sample_gap_candidate",
+      "dimension": "category",
+      "key": "software",
+      "action_code": "rerun_related_preset",
+      "action_label": "Rerun related preset",
+      "preset_name": "g1-software-base-12m",
+      "related_run_ids": [102],
+      "missing_settled_count": 12,
+      "sample_target": 30,
+      "source_run_count": 1,
+      "params": {
+        "start_at": "2025-01-01T00:00:00Z",
+        "end_at": "2025-12-31T23:59:59Z",
+        "category": "software",
+        "limit": 200,
+        "scenario": "base",
+        "settle_actions": false
+      },
+      "operator_slugs": ["sw-small-seoul", "sw-mid-metro", "sw-large-national"],
+      "run_allowed": true,
+      "blocked_by_warnings": [],
+      "warnings": []
+    },
+    "preset_request": null,
+    "experiment_request": null,
+    "run_request": {
+      "method": "POST",
+      "path": "/api/v1/synthetic/experiments/12/runs",
+      "body": {
+        "source_sample_gap_candidate": {
+          "source": "sample_gap_candidate",
+          "dimension": "category",
+          "key": "software",
+          "action_code": "rerun_related_preset",
+          "preset_name": "g1-software-base-12m",
+          "related_run_ids": [102]
+        }
+      }
+    },
+    "cli_command": "python scripts/run_g2_synthetic_evidence.py --dry-run --preset g1-software-base-12m --action-code rerun_related_preset",
+    "write_cli_command": "python scripts/run_g2_synthetic_evidence.py --write --preset g1-software-base-12m --action-code rerun_related_preset",
+    "instructions": [
+      "Dry-run this plan first; --write enqueues the asynchronous evidence run.",
+      "The API request only queues the run and does not run the backtest inline."
+    ]
+  },
   "run_allowed": true,
   "blocked_by_warnings": [],
   "warnings": [],
@@ -424,6 +476,10 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
 | experiment_payload | object | 저장 가능한 `SyntheticExperimentCreate` payload |
 | experiment_id/latest_run_id | integer\|null | 기존 experiment/run이 있으면 해당 id |
 | next_step | enum | `resolve_mixed_data`, `run_existing_experiment`, `save_preset`, `create_experiment` |
+| execution_plan | object | 저장/큐잉을 위한 후속 API 요청 payload. 후보 API 자체는 실행하지 않음 |
+| execution_plan.source_context | object | run summary에 남길 sample-gap provenance (`source_sample_gap_candidate`) |
+| execution_plan.run_request | object\|null | `POST /experiments/{experiment_id}/runs` 요청 payload. blocked 후보는 null |
+| execution_plan.cli_command/write_cli_command | string\|null | dry-run 기본 명령과 승인 후 write 명령 |
 | run_allowed | boolean | mixed data 등 blocking warning 없이 실행 후보로 사용할 수 있는지 |
 | blocked_by_warnings | string[] | 실행을 막는 warning code |
 | message | string | 운영자가 다음에 해야 할 일 |
@@ -434,6 +490,35 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
 |---|---|
 | 404 | 요청한 `dimension`/`key` gap이 최근 sample-gap 계획에 없음 |
 | 422 | body 검증 실패 또는 지원하지 않는 `action_code` |
+
+---
+
+## CLI: scripts/run_g2_synthetic_evidence.py
+
+sample-gap 후보를 반복 가능한 G-1/G-2 synthetic evidence run으로 연결하는 운영 CLI다. 기본은 dry-run이며 DB 저장, run enqueue, 외부 호출을 하지 않는다.
+
+```bash
+python scripts/run_g2_synthetic_evidence.py --dry-run --preset g1-software-base-12m
+```
+
+승인된 운영 실행에서만 `--write`를 사용한다. `--write`는 필요하면 experiment/preset을 저장하고 기존 Celery synthetic experiment run을 enqueue한다. 요청-응답 경로에서 heavy backtest를 직접 실행하지 않고, 큐잉된 run은 기존 `/experiments/{experiment_id}/runs/{run_id}`로 폴링한다.
+
+```bash
+python scripts/run_g2_synthetic_evidence.py --write --preset g1-software-base-12m
+```
+
+옵션:
+
+| 옵션 | 설명 |
+|---|---|
+| `--dry-run` | 기본값. 최근 completed run summary를 읽어 candidate와 execution plan만 출력 |
+| `--write` | 승인 필요. DB write 후 비동기 run enqueue |
+| `--preset <name\|id>` | 관련 preset 이름 또는 저장된 experiment id로 gap 선택 (`g1-software-base-12m`, `12` 등) |
+| `--dimension <dimension> --key <key>` | preset 대신 특정 sample-gap을 직접 선택 |
+| `--action-code <code>` | recommendation action 명시 (`rerun_related_preset`, `increase_limit` 등) |
+| `--max-runs <n>` | 최근 completed run scan 상한 |
+
+`run_allowed=false` 또는 `canonical_synthetic_mixed` warning이 있으면 `--write`도 run을 enqueue하지 않고 blocked 결과를 출력한다.
 
 ---
 
