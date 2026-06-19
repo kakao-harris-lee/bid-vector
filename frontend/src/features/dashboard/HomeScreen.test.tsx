@@ -108,11 +108,12 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 
 function buildFetchMock(
   profile: OperatorProfileResponse | null,
-  impersonatedProfile?: OperatorProfileResponse
+  impersonatedProfile?: OperatorProfileResponse,
+  dashboardSummary: DashboardSummaryResponse = summary
 ) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.startsWith("/api/v1/dashboard/summary")) return jsonResponse(summary);
+    if (url.startsWith("/api/v1/dashboard/summary")) return jsonResponse(dashboardSummary);
     if (url === "/api/v1/operator/accounts") return jsonResponse(accounts);
     // `?operator_id=<n>` → impersonated GET (cross-operator). PR #74.
     if (url.startsWith("/api/v1/operator/profile?operator_id=")) {
@@ -172,7 +173,7 @@ describe("HomeScreen + ProfileStatusWidget integration", () => {
     expect(window.location.pathname).toBe("/dashboard/profile");
   });
 
-  it("synthetic 운영자 컨텍스트는 /operator/profile?operator_id=N 으로 5축을 fetch 하지만 편집 CTA는 비노출한다", async () => {
+  it("사용자 dashboard surface는 저장된 synthetic 운영자 컨텍스트를 조회에 사용하지 않는다", async () => {
     window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
     const impersonated: OperatorProfileResponse = {
       ...configuredProfile,
@@ -186,30 +187,69 @@ describe("HomeScreen + ProfileStatusWidget integration", () => {
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
-    // PR #74 한계 해소: 다른 회사 컨텍스트에서도 5축 grid 가 노출된다.
     expect(await screen.findByLabelText("내 자격 상태")).toBeInTheDocument();
     expect(await screen.findByLabelText("5축 자격 요약")).toBeInTheDocument();
-    // 편집 CTA 대신 본인 회사 안내 hint 가 보인다 (PUT 은 self-only).
-    expect(await screen.findByText(/편집은 본인 회사로 돌아가야/)).toBeInTheDocument();
-    // 위젯 안에 "편집"/"단계별 입력 시작" 액션 버튼이 없음을 검증한다. 헤더의 "전략
-    // 편집" 아이콘 버튼이 매칭되지 않도록 위젯 컨테이너로 범위를 좁혀 query 한다.
     const widget = screen.getByLabelText("내 자격 상태");
-    expect(within(widget).queryByRole("button", { name: /편집/ })).not.toBeInTheDocument();
+    expect(within(widget).getByRole("button", { name: /편집/ })).toBeInTheDocument();
     expect(
       within(widget).queryByRole("button", { name: /단계별 입력 시작/ })
     ).not.toBeInTheDocument();
 
-    // 다른 회사 컨텍스트는 `?operator_id=` 가 붙은 URL 로만 호출한다.
+    // 사용자 surface에서는 cross-operator 조회가 admin 화면으로만 제한된다.
     await waitFor(() => {
       const calls = fetchMock.mock.calls.filter(
-        ([url]) => String(url) === "/api/v1/operator/profile?operator_id=11"
+        ([url]) => String(url) === "/api/v1/operator/profile"
       );
       expect(calls.length).toBe(1);
     });
-    // 토큰 owner 경로(/operator/profile, no query) 는 호출하지 않는다.
-    const bareCalls = fetchMock.mock.calls.filter(
-      ([url]) => String(url) === "/api/v1/operator/profile"
+    const impersonatedCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "/api/v1/operator/profile?operator_id=11"
     );
-    expect(bareCalls.length).toBe(0);
+    expect(impersonatedCalls.length).toBe(0);
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => String(url) === "/api/v1/dashboard/summary?operator_id=11"
+      )
+    ).toBe(false);
+  });
+
+  it("사용자 dashboard에서 관리자/백테스트성 지표를 숨긴다", async () => {
+    const fetchMock = buildFetchMock(configuredProfile, undefined, {
+      ...summary,
+      metrics: [
+        {
+          key: "due_opportunities",
+          label: "오늘 마감",
+          value: 2,
+          unit: "count",
+          status: "watch",
+          detail: "사용자 투찰 판단 지표"
+        },
+        {
+          key: "paper_backtest",
+          label: "페이퍼 검증",
+          value: 12,
+          unit: "count",
+          status: "info",
+          detail: "관리자용 백테스트 지표"
+        },
+        {
+          key: "smoke_success_rate",
+          label: "스모크 통과율",
+          value: 0.9,
+          unit: "ratio",
+          status: "healthy",
+          detail: "관리자용 smoke 지표"
+        }
+      ]
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
+    expect(screen.getByText("오늘 마감")).toBeInTheDocument();
+    expect(screen.queryByText("페이퍼 검증")).not.toBeInTheDocument();
+    expect(screen.queryByText("스모크 통과율")).not.toBeInTheDocument();
   });
 });

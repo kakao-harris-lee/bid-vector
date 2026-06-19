@@ -275,17 +275,28 @@ describe("OperatorSwitcher", () => {
   });
 
   it("권한이 있어도 사용자 dashboard surface에서는 회사 전환을 숨긴다", async () => {
-    vi.stubGlobal("fetch", buildFetchMock(privilegedAccounts));
+    window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
+    const fetchMock = buildFetchMock(privilegedAccounts);
+    vi.stubGlobal("fetch", fetchMock);
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "오늘 할 일" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "회사 전환" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("활성 운영자 컨텍스트")).not.toBeInTheDocument();
     for (const label of ADMIN_NAV_LABELS) {
       expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
     }
     for (const label of USER_NAV_LABELS) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => String(url) === "/api/v1/dashboard/summary?operator_id=11"
+      )
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url) === "/api/v1/dashboard/summary")
+    ).toBe(true);
   });
 
   it("legacy dashboard admin redirect는 권한 있는 사용자에게 admin surface를 유지한다", async () => {
