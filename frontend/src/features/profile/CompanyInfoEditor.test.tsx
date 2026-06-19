@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test-utils";
@@ -295,6 +295,32 @@ describe("CompanyInfoEditor", () => {
     expect(
       screen.queryByText(/표시 없는 면허만 공고 요구 면허와 자동 매칭/)
     ).not.toBeInTheDocument();
+  });
+
+  it("파일럿 준비도에서 면허·지역·금액·관심/제외 조건 보강 상태를 보여준다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+
+    const checklist = await screen.findByLabelText("파일럿 준비도 체크리스트");
+    expect(within(checklist).getByText("보유 면허")).toBeInTheDocument();
+    expect(within(checklist).getByText("1개 면허가 후보 필터에 반영됩니다.")).toBeInTheDocument();
+    expect(within(checklist).getByText("수행 지역")).toBeInTheDocument();
+    expect(within(checklist).getByText("1개 지역이 매칭 범위로 쓰입니다.")).toBeInTheDocument();
+    expect(within(checklist).getByText("시공능력평가액")).toBeInTheDocument();
+    expect(
+      within(checklist).getByText("0이면 미입력으로 처리되어 금액 검토 근거가 약해집니다.")
+    ).toBeInTheDocument();
+    expect(within(checklist).getByText("도급한도")).toBeInTheDocument();
+    expect(
+      within(checklist).getByText("도급한도 확인 전에는 상한 초과 후보를 별도 검토해야 합니다.")
+    ).toBeInTheDocument();
+    expect(within(checklist).getByText("관심 조건")).toBeInTheDocument();
+    expect(within(checklist).getByText("2개 조건으로 후보를 좁힙니다.")).toBeInTheDocument();
+    expect(within(checklist).getByText("제외 조건")).toBeInTheDocument();
   });
 
   it("저장 시 profile과 strategy를 각자 소유 필드로 호출하고 임계값은 보내지 않는다", async () => {
@@ -668,7 +694,7 @@ describe("CompanyInfoEditor", () => {
     });
   });
 
-  describe("비-본인 컨텍스트 (impersonation, PR #74)", () => {
+  describe("사용자 surface active operator boundary", () => {
     const syntheticProfile: OperatorProfileResponse = {
       ...baseProfile,
       operator_id: 11,
@@ -680,7 +706,7 @@ describe("CompanyInfoEditor", () => {
       operator_id: 11
     };
 
-    it("/operator/profile?operator_id=N + /strategy?operator_id=N 으로 fetch 하고 read-only 안내를 노출한다", async () => {
+    it("저장된 active operator id가 있어도 사용자 profile 편집은 본인 URL만 호출한다", async () => {
       window.localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, "11");
       const fetchMock = buildFetchMock({
         impersonatedProfile: syntheticProfile,
@@ -692,31 +718,32 @@ describe("CompanyInfoEditor", () => {
 
       await screen.findByRole("heading", { name: "업체 정보", level: 2 });
 
-      // 본인 owner URL (no query) 은 호출하지 않는다.
+      // User surface는 Shell에서 activeOperatorId를 null로 마스킹한다.
       await waitFor(() => {
-        expect(
-          fetchMock.mock.calls.some(
-            ([url]) => String(url) === "/api/v1/operator/profile?operator_id=11"
-          )
-        ).toBe(true);
+        expect(fetchMock).toHaveBeenCalledWith("/api/v1/operator/profile", expect.anything());
+      });
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith("/api/v1/operator/strategy", expect.anything());
       });
       expect(
-        fetchMock.mock.calls.some(([url]) => String(url) === "/api/v1/operator/profile")
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === "/api/v1/operator/profile?operator_id=11"
+        )
+      ).toBe(false);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === "/api/v1/operator/strategy?operator_id=11"
+        )
       ).toBe(false);
 
-      // 안내 박스 + 저장/단계별 버튼 미노출.
-      expect(screen.getByTestId("profile-readonly-notice")).toHaveTextContent(
-        "현재 회사: Synthetic A"
-      );
-      expect(screen.queryByRole("button", { name: "저장" })).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: "단계별 가이드" })
-      ).not.toBeInTheDocument();
+      // 사용자 surface에서는 본인 회사 편집 흐름으로 유지된다.
+      expect(screen.queryByTestId("profile-readonly-notice")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "저장" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "단계별 가이드" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "저장하고 마치기" })).not.toBeInTheDocument();
 
-      // 폼 입력은 disabled — 업무 구분 select 도 비활성.
       const select = screen.getByLabelText("업무 구분") as HTMLSelectElement;
-      expect(select).toBeDisabled();
+      expect(select).toBeEnabled();
     });
 
     it("본인 컨텍스트로 돌아가면 저장 버튼이 다시 노출된다", async () => {

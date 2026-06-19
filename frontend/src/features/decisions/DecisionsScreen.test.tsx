@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test-utils";
 import { toastApi } from "@/shared/components/ui";
@@ -100,7 +100,9 @@ const funnel: DecisionFunnelResponse = {
       decision_status: "reviewing",
       priority_score: 0.7,
       recommended_amount: 50_000_000,
-      updated_at: "2026-05-18T00:00:00Z"
+      updated_at: "2026-05-18T00:00:00Z",
+      strengths: ["면허 일치", "지역 적합"],
+      risk_flags: ["가격 변동성"]
     }
   ]
 };
@@ -238,6 +240,44 @@ describe("DecisionsScreen", () => {
     expect(reviewButton).toHaveAttribute("aria-pressed", "true");
     expect(submitButton).toHaveAttribute("aria-pressed", "false");
     expect(skipButton).toHaveAttribute("aria-pressed", "false");
+
+    // 사유 초안 작성 전에는 전환을 막아 UX에서 기록 필요성을 드러낸다.
+    expect(submitButton).toBeDisabled();
+    expect(reviewButton).toBeDisabled();
+    expect(skipButton).toBeDisabled();
+    expect(screen.getByText("선택 사유 작성 후 전환 가능")).toBeInTheDocument();
+  });
+
+  it("추천가 근거 확인 흐름과 현재 가능한 강점/리스크 신호를 보여준다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
+      if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
+      if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
+      if (url.startsWith("/api/v1/analytics/decision-recommendations"))
+        return jsonResponse(recommendations);
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(
+      await screen.findByRole("heading", { name: "투찰 전 확인 흐름" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/예측 가격대, 하한율 참고값, 분야 통계/)).toBeInTheDocument();
+
+    const evidence = await screen.findByLabelText("전이 대상 공고 추천 근거 확인");
+    expect(within(evidence).getByText("추천가 근거 확인")).toBeInTheDocument();
+    expect(within(evidence).getByText("우선순위")).toBeInTheDocument();
+    expect(within(evidence).getByText("70.0%")).toBeInTheDocument();
+    expect(within(evidence).getByText("강점 2개 / 리스크 1개")).toBeInTheDocument();
+    expect(within(evidence).getByText("면허 일치")).toBeInTheDocument();
+    expect(within(evidence).getByText("가격 변동성")).toBeInTheDocument();
+    expect(
+      within(evidence).getByText(/운영 KPI의 과거 추천 오차/)
+    ).toBeInTheDocument();
   });
 
   it("투찰 버튼을 누르면 POST /actions(body action=submit) 요청을 보낸다", async () => {
@@ -279,7 +319,14 @@ describe("DecisionsScreen", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("전이 대상 공고")).toBeInTheDocument();
 
+    const reasonDraft = await screen.findByRole("textbox", {
+      name: "결정 101 선택 사유 메모"
+    });
+    fireEvent.change(reasonDraft, { target: { value: "추천가와 리스크를 확인해 투찰 전환" } });
+    expect(await screen.findByText("선택 사유 작성됨")).toBeInTheDocument();
+
     const submitButton = await screen.findByRole("button", { name: "투찰로 전환" });
+    expect(submitButton).toBeEnabled();
     fireEvent.click(submitButton);
 
     const actionCall = await waitFor(() => {

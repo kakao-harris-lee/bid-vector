@@ -19,6 +19,7 @@ import type { BidDecisionActionType } from "@/shared/api";
 import type {
   DecisionAction,
   DecisionFunnelBreakdownItem,
+  DecisionFunnelRecentSubmissionItem,
   DecisionFunnelResponse,
   DecisionStatus
 } from "@/shared/types/decisions";
@@ -61,6 +62,7 @@ export function DecisionsScreen() {
   const [pendingActionByRecord, setPendingActionByRecord] = useState<
     Record<number, BidDecisionActionType | null>
   >({});
+  const [reasonDraftByRecord, setReasonDraftByRecord] = useState<Record<number, string>>({});
 
   const funnel = useDecisionFunnelQuery(session, { days });
   const recs = useDecisionRecommendationsQuery(session, { days });
@@ -79,6 +81,7 @@ export function DecisionsScreen() {
   }, [funnel.data, breakdownDimension]);
 
   const handleAction = (decisionRecordId: number, action: BidDecisionActionType) => {
+    if (!reasonDraftByRecord[decisionRecordId]?.trim()) return;
     setPendingActionByRecord((prev) => ({ ...prev, [decisionRecordId]: action }));
     actionMutation.mutate(
       {
@@ -126,6 +129,8 @@ export function DecisionsScreen() {
         loading={operationsKpi.isPending}
         error={operationsKpi.error}
       />
+
+      <DecisionReviewFlowCard />
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
@@ -176,48 +181,204 @@ export function DecisionsScreen() {
           {funnel.data && funnel.data.recent_submissions.length === 0 ? (
             <p className="text-[var(--color-muted)]">최근 제출 결정이 없습니다.</p>
           ) : null}
-          {funnel.data?.recent_submissions.map((item) => (
-            <article
-              key={item.decision_record_id}
-              className="flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-2"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="truncate font-medium text-[var(--color-fg)]" title={item.project_title}>
-                    {item.project_title}
+          {funnel.data?.recent_submissions.map((item) => {
+            const reasonDraft = reasonDraftByRecord[item.decision_record_id] ?? "";
+            const hasReasonDraft = reasonDraft.trim().length > 0;
+            return (
+              <article
+                key={item.decision_record_id}
+                className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium text-[var(--color-fg)]" title={item.project_title}>
+                      {item.project_title}
+                    </span>
+                    <ReasonIndicators strengths={item.strengths} riskFlags={item.risk_flags} />
                   </span>
-                  <ReasonIndicators strengths={item.strengths} riskFlags={item.risk_flags} />
-                </span>
-                <div className="flex items-center gap-1">
-                  <Badge tone={ACTION_TONE[item.action]}>{ACTION_LABEL[item.action]}</Badge>
-                  <Badge tone="info">{STATUS_LABEL[item.decision_status]}</Badge>
+                  <div className="flex items-center gap-1">
+                    <Badge tone={ACTION_TONE[item.action]}>{ACTION_LABEL[item.action]}</Badge>
+                    <Badge tone="info">{STATUS_LABEL[item.decision_status]}</Badge>
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-1 text-[var(--color-muted)]">
-                <span>
-                  {item.category ?? "-"} · 우선순위 {formatPercent(item.priority_score)} · {formatDateTime(item.updated_at)}
-                </span>
-                <span className="tabular-nums">{formatCurrencyCompact(item.recommended_amount)}</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-1 pt-1">
-                <InlineActionButtons
-                  decisionStatus={item.decision_status}
-                  pendingAction={pendingActionByRecord[item.decision_record_id] ?? null}
-                  onAction={(action) => handleAction(item.decision_record_id, action)}
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[var(--color-muted)]">
+                  <span>
+                    {item.category ?? "-"} · 우선순위 {formatPercent(item.priority_score)} · {formatDateTime(item.updated_at)}
+                  </span>
+                  <span className="tabular-nums">{formatCurrencyCompact(item.recommended_amount)}</span>
+                </div>
+                <DecisionEvidenceChecklist item={item} />
+                <DecisionReasonDraft
+                  recordId={item.decision_record_id}
+                  value={reasonDraft}
+                  onChange={(next) =>
+                    setReasonDraftByRecord((prev) => ({
+                      ...prev,
+                      [item.decision_record_id]: next
+                    }))
+                  }
                 />
-                <button
-                  type="button"
-                  onClick={() => navigate(`/dashboard/decisions/${item.decision_record_id}/summary`)}
-                  className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-1 text-[var(--color-fg)] hover:bg-[var(--color-secondary)]"
-                >
-                  투찰 요약
-                </button>
-              </div>
-            </article>
-          ))}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <InlineActionButtons
+                    decisionStatus={item.decision_status}
+                    pendingAction={pendingActionByRecord[item.decision_record_id] ?? null}
+                    disabled={!hasReasonDraft}
+                    onAction={(action) => handleAction(item.decision_record_id, action)}
+                  />
+                  <span className="text-[11px] text-[var(--color-muted)]">
+                    {hasReasonDraft ? "선택 사유 작성됨" : "선택 사유 작성 후 전환 가능"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/dashboard/decisions/${item.decision_record_id}/summary`)}
+                    className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-1 text-[var(--color-fg)] hover:bg-[var(--color-secondary)]"
+                  >
+                    투찰 요약
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+function DecisionReviewFlowCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>투찰 전 확인 흐름</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3 text-xs md:grid-cols-3">
+        <ReviewFlowStep
+          label="1. 목록에서 1차 확인"
+          detail="추천가, 우선순위, 강점과 리스크 신호를 먼저 확인합니다."
+        />
+        <ReviewFlowStep
+          label="2. 요약에서 가격 근거 확인"
+          detail="예측 가격대, 하한율 참고값, 분야 통계를 함께 보고 가격 신호를 검토합니다."
+        />
+        <ReviewFlowStep
+          label="3. 선택 사유 기록"
+          detail="투찰·검토·보류 전환 전 내부 판단 사유를 남겨 나중에 과거 오차와 비교합니다."
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReviewFlowStep({ label, detail }: { label: string; detail: string }) {
+  return (
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+      <p className="font-medium text-[var(--color-fg)]">{label}</p>
+      <p className="mt-1 text-[var(--color-muted)]">{detail}</p>
+    </div>
+  );
+}
+
+function DecisionEvidenceChecklist({ item }: { item: DecisionFunnelRecentSubmissionItem }) {
+  const strengths = item.strengths ?? [];
+  const risks = item.risk_flags ?? [];
+  return (
+    <div
+      className="rounded-md border border-[var(--color-border)] bg-[var(--color-secondary)] p-3"
+      aria-label={`${item.project_title} 추천 근거 확인`}
+    >
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium text-[var(--color-fg)]">추천가 근거 확인</span>
+        <Badge tone={risks.length > 0 ? "watch" : "healthy"}>
+          리스크 {risks.length.toLocaleString("ko-KR")}개
+        </Badge>
+      </div>
+      <dl className="grid gap-2 sm:grid-cols-3">
+        <EvidenceMetric label="추천가" value={formatCurrencyCompact(item.recommended_amount)} />
+        <EvidenceMetric label="우선순위" value={formatPercent(item.priority_score)} />
+        <EvidenceMetric
+          label="근거 신호"
+          value={`강점 ${strengths.length.toLocaleString("ko-KR")}개 / 리스크 ${risks.length.toLocaleString(
+            "ko-KR"
+          )}개`}
+        />
+      </dl>
+      {(strengths.length > 0 || risks.length > 0) ? (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <SignalList title="강점" items={strengths} empty="기록된 강점 신호 없음" />
+          <SignalList title="리스크" items={risks} empty="기록된 리스크 신호 없음" />
+        </div>
+      ) : null}
+      <p className="mt-2 text-[11px] leading-tight text-[var(--color-muted)]">
+        투찰 요약에서 예측 가격대와 하한율 참고값을 확인하고, 운영 KPI의 과거 추천 오차와
+        함께 검토하세요.
+      </p>
+    </div>
+  );
+}
+
+function EvidenceMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[var(--color-muted)]">{label}</dt>
+      <dd className="font-medium tabular-nums text-[var(--color-fg)]">{value}</dd>
+    </div>
+  );
+}
+
+function SignalList({
+  title,
+  items,
+  empty
+}: {
+  title: string;
+  items: string[];
+  empty: string;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-[var(--color-muted)]">{title}</p>
+      {items.length > 0 ? (
+        <ul className="flex flex-wrap gap-1" aria-label={`${title} 신호`}>
+          {items.map((signal) => (
+            <li
+              key={signal}
+              className="rounded-full bg-[var(--color-card)] px-2 py-0.5 text-[11px] text-[var(--color-fg)]"
+            >
+              {signal}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[11px] text-[var(--color-muted)]">{empty}</p>
+      )}
+    </div>
+  );
+}
+
+function DecisionReasonDraft({
+  recordId,
+  value,
+  onChange
+}: {
+  recordId: number;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-[var(--color-muted)]">
+        선택 사유 메모 (임시)
+      </span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={`결정 ${recordId} 선택 사유 메모`}
+        className="min-h-16 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 text-xs text-[var(--color-fg)]"
+      />
+      <span className="text-[11px] text-[var(--color-muted)]">
+        현재는 저장되지 않는 검토 초안이며, 전환 버튼 활성화에만 사용됩니다.
+      </span>
+    </label>
   );
 }
 
