@@ -1,10 +1,42 @@
-# G-2 exit 병렬 작업 계획
+# G-2 exit 병렬 작업 완료 기록
 
 기준 커밋: `06eeee5`
 계획 작성일: 2026-06-19
+완료 커밋: `7fdc04c`
+완료일: 2026-06-19
 기준 로드맵: `docs/roadmap.md` Phase 2 / G-2
 
-이 문서는 G-2 완료 조건을 채우기 위한 다음 병렬 작업 지시서입니다. 목표는 새 SaaS 멀티테넌트 전환이 아니라, 현재 검증 환경에서 3개 이상 가상 사업자가 독립 ID/사업자 정보/전략/알림/증적으로 운영되는지 확인할 수 있게 만드는 것입니다.
+이 문서는 G-2 완료 조건을 채우기 위한 병렬 작업의 완료 기록입니다. 현재 기준의 다음 TODO와 exit 판단은 `docs/roadmap.md`와 `docs/operations/g2-evidence-runbook.md`를 우선합니다.
+
+## 완료 요약
+
+`7fdc04c` 기준으로 다음 작업이 `main`에 병합되었습니다.
+
+| 에이전트 | 커밋 | 완료 결과 | 남은 TODO |
+|---|---|---|---|
+| A. G-2 증적 ledger/API | `b3ee613` + `a55a93c` | `/api/v1/analytics/g2-evidence` 추가, smoke/monitor/decision/synthetic/notification 증적 ledger 제공, smoke scope 리뷰 수정 | N일 operator별 evidence 저장, `blocking_gaps` 운영 관리 |
+| B. 사업자별 알림 대상 매핑 | `219c70e` | `OperatorNotificationChannel` 모델/migration, masked `/operator/notification-channels`, dry-run route evidence | 운영 DB migration 적용, non-canonical 실제 송신 secret resolver/target 정책 확정 |
+| C. sample-gap 기반 synthetic 증적 실행 | `f5f97ea` | sample-gap `execution_plan`, `scripts/run_g2_synthetic_evidence.py`, run summary source context | dry-run 검토 후 승인된 `--write` 실행으로 settled sample 축적 |
+| D. 관리자/사용자 surface 분리 | `b9be656` | `/admin/operations` G-2 evidence summary, `/dashboard` token-owner 사용자 surface 제한 | 실제 운영 화면에서 operator별 evidence UX 확인 |
+| E. G-2 운영 runbook | `c0d32d0` | `docs/operations/g2-evidence-runbook.md` 작성 | runbook대로 N일 evidence 수집 후 exit review 작성 |
+
+통합 검증:
+
+- backend 선택 테스트 201개 통과
+- frontend 테스트 24개 통과
+- frontend production build 통과
+- `python -m py_compile` 통과
+- schema drift/migration test 통과
+- `git diff --check` 통과
+
+## 현재 TODO
+
+1. 운영/검증 DB에 `6f2a8c9d0e12_add_operator_notification_channels.py` migration 적용 절차를 확인한다.
+2. 3개 이상 가상 사업자를 선정하고 profile, strategy, notification channel 상태를 일 단위로 저장한다.
+3. `/api/v1/analytics/g2-evidence?operator_id=<OP_ID>`를 매일 저장하고 `blocking_gaps`를 operator별 TODO로 관리한다.
+4. `scripts/run_g2_synthetic_evidence.py --dry-run` 결과를 검토한 뒤, 승인된 경우에만 `--write`로 synthetic evidence run을 enqueue한다.
+5. non-canonical 실제 Telegram/app 송신 전까지는 `dry_run_only` 또는 skip evidence를 유지한다.
+6. `docs/operations/g2-evidence-runbook.md`의 exit review 양식으로 G-2 완료 여부를 판정한다.
 
 ## G-2 완료 조건
 
@@ -15,7 +47,11 @@ Exit gate G-2:
 3. 관리자 화면에서 사업자별 백테스트, smoke, 통계, 수집 상태를 구분해 볼 수 있음
 4. 사용자 화면은 관리 기능 없이 투찰 판단에 집중함
 
-이번 병렬 작업의 완료 기준은 G-2 exit gate를 바로 선언하는 것이 아니라, 위 조건을 판단할 수 있는 API, 화면, 알림 라우팅, 실행 증적, 운영 절차를 갖추는 것입니다.
+이번 병렬 작업의 완료 기준은 G-2 exit gate를 바로 선언하는 것이 아니라, 위 조건을 판단할 수 있는 API, 화면, 알림 라우팅, 실행 증적, 운영 절차를 갖추는 것이었습니다. 이 기준은 `7fdc04c`에서 충족되었습니다. 실제 G-2 exit는 N일 운영 증적을 수집한 뒤 별도 review로 판정합니다.
+
+## 원본 작업 지시서
+
+아래 내용은 `06eeee5`에서 병렬 작업을 시작할 때 사용한 원본 지시서입니다. 새 작업을 시작할 때는 그대로 재사용하지 말고 `docs/roadmap.md`의 최신 "다음 우선순위"와 `docs/operations/g2-evidence-runbook.md`의 TODO를 기준으로 새 계획을 작성합니다.
 
 ## 공통 진행 규칙
 

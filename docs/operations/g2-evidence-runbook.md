@@ -4,6 +4,25 @@
 
 기본값은 항상 read-only 또는 dry-run이다. DB write, 실제 KONEPS 호출, 실제 Telegram 송신, 전략 적용은 운영 승인과 실행 창이 잡힌 뒤에만 수행한다.
 
+## 현재 구현 상태
+
+`7fdc04c` 기준으로 runbook 실행에 필요한 기반은 `main`에 반영되어 있다.
+
+- `/api/v1/analytics/g2-evidence`: operator별 G-2 증적 ledger와 `blocking_gaps` 확인
+- `/api/v1/operator/notification-channels`: operator별 masked notification route metadata 확인
+- `/api/v1/synthetic/experiments/sample-gaps/candidates`: sample-gap 기반 실행 계획 확인
+- `scripts/run_g2_synthetic_evidence.py`: 기본 dry-run, 승인 후 `--write`로 synthetic evidence run enqueue
+- `/admin/operations`: 관리자 surface에서 G-2 evidence summary 확인
+- `/dashboard`: 사용자 surface에서 token owner 기준 투찰 판단에 집중
+
+운영 전 TODO:
+
+1. 운영 DB에 notification channel migration 적용 여부 확인
+2. 검증 대상 operator 3개 이상 선정
+3. operator별 profile/strategy/channel 상태 저장
+4. 일일 evidence 저장 경로 생성
+5. 실제 Telegram/app 송신 여부는 `dry_run_only` 상태로 먼저 검증
+
 ## 1. 운영 원칙
 
 - `BASE_URL`, `TOKEN`, `EVIDENCE_DIR`, `DAY`를 매일 명시한다. 예: `DAY=2026-06-19`, `EVIDENCE_DIR=models/reports/g2-evidence/$DAY`.

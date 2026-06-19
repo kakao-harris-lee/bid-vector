@@ -32,7 +32,7 @@
 | 태그 | 문서 | 엔드포인트 | 설명 |
 |---|---|---:|---|
 | Authentication | [authentication.md](./authentication.md) | 6 | 운영자 부트스트랩·로그인·토큰·비밀번호 재설정·내 프로필 |
-| Operator | [operator.md](./operator.md) | 14 | 운영자 프로필·전략·전략 후보·모니터링·알림 |
+| Operator | [operator.md](./operator.md) | 16 | 운영자 프로필·전략·전략 후보·모니터링·알림 채널·알림 |
 | Projects | [projects.md](./projects.md) | 9 | KONEPS 공고 CRUD·임베딩 재계산·유사 공고(pgvector) |
 | Bids | [bids.md](./bids.md) | 4 | 입찰(투찰) 제출·조회·수정 |
 | AI Predictions | [ai-predictions.md](./ai-predictions.md) | 3 | 가격 예측·투찰 추천·문서 분석 |
@@ -40,11 +40,11 @@
 | Backtests | [backtests.md](./backtests.md) | 6 | paper bidding 백테스트 실행·요약·데이터 감사 |
 | Synthetic | [synthetic.md](./synthetic.md) | 7 | synthetic 운영자(`synthetic-*`) 시드·백테스트 비교·sample gap 계획·실행 후보 |
 | Dashboard | [dashboard.md](./dashboard.md) | 4 | 운영자 대시보드 후보·투찰·결과·요약 |
-| Analytics | [analytics.md](./analytics.md) | 17 | 결정 분석·예측 리포팅·실험(decision experiments)·이벤트 |
+| Analytics | [analytics.md](./analytics.md) | 18 | 결정 분석·예측 리포팅·실험(decision experiments)·G-2 증적·이벤트 |
 | Operations | [operations.md](./operations.md) | 17 | 수집(크롤)·분류·기회 분석·입찰 결정·Telegram 알림 |
 | Legacy Admin | [legacy-admin.md](./legacy-admin.md) | 3 | legacy 호환 관리 엔드포인트 (deprecated 성격) |
 
-> **합계 96개 HTTP 엔드포인트** (+ `GET /health` 등 untagged 1개).
+> **합계 99개 HTTP 엔드포인트** (+ `GET /health` 등 untagged 1개).
 > WebSocket(`Realtime`) 채널은 OpenAPI 스펙에 포함되지 않아 본 레퍼런스에서 제외됩니다.
 
 ## 주의
