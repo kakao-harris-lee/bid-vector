@@ -28,6 +28,7 @@ from app.models.models import (
     BidDecisionRecord,
     CompanyProfile,
     Notification,
+    OperatorNotificationChannel,
     OperatorStrategyRun,
     PricePrediction,
     Project,
@@ -38,6 +39,8 @@ from app.schemas.schemas import (
     OperatorAccountItem,
     OperatorAccountListResponse,
     OperatorDashboardResponse,
+    OperatorNotificationChannelItem,
+    OperatorNotificationChannelListResponse,
     OperatorOverviewResponse,
     OperatorProfileResponse,
     OperatorProfileUpdate,
@@ -926,6 +929,42 @@ def _serialize_operator_account(
     )
 
 
+def _serialize_notification_channel(
+    channel: OperatorNotificationChannel,
+) -> OperatorNotificationChannelItem:
+    return OperatorNotificationChannelItem(
+        channel_id=int(channel.id),
+        operator_id=int(channel.operator_id),
+        channel_type=str(channel.channel_type),
+        route_key=str(channel.route_key),
+        target_label=channel.target_label,
+        is_active=bool(channel.is_active),
+        dry_run_only=bool(channel.dry_run_only),
+        source="operator_notification_channels",
+        verified_at=channel.verified_at,
+        created_at=channel.created_at,
+        updated_at=channel.updated_at,
+    )
+
+
+def _notification_channel_item_from_plan(
+    plan: dict[str, object],
+) -> OperatorNotificationChannelItem:
+    channel_id = plan.get("channel_id")
+    return OperatorNotificationChannelItem(
+        channel_id=int(channel_id) if channel_id is not None else None,
+        operator_id=int(plan["operator_id"]),
+        channel_type=str(plan.get("channel_type") or ""),
+        route_key=str(plan.get("route_key") or ""),
+        target_label=(
+            str(plan["target_label"]) if plan.get("target_label") is not None else None
+        ),
+        is_active=bool(plan.get("channel_active")),
+        dry_run_only=bool(plan.get("dry_run_only")),
+        source=str(plan.get("channel_source") or ""),
+    )
+
+
 @router.get("/accounts", response_model=OperatorAccountListResponse)
 def list_operator_accounts(
     db: Session = Depends(get_db),
@@ -981,6 +1020,42 @@ def list_operator_accounts(
         is_privileged=privileged,
         operator_count=len(operators),
         operators=operators,
+    )
+
+
+@router.get("/notification-channels", response_model=OperatorNotificationChannelListResponse)
+def list_operator_notification_channels(
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Return masked notification route metadata for the resolved operator."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
+    rows = (
+        db.query(OperatorNotificationChannel)
+        .filter(OperatorNotificationChannel.operator_id == int(target.id))
+        .order_by(
+            OperatorNotificationChannel.channel_type.asc(),
+            OperatorNotificationChannel.is_active.desc(),
+            OperatorNotificationChannel.id.asc(),
+        )
+        .all()
+    )
+    channels = [_serialize_notification_channel(row) for row in rows]
+
+    has_telegram_row = any(row.channel_type == "telegram" for row in rows)
+    if not has_telegram_row:
+        plan = OperatorNotificationService().build_telegram_delivery_plan(
+            db, operator_id=int(target.id)
+        )
+        if plan.get("channel_source") == "legacy_settings":
+            channels.append(_notification_channel_item_from_plan(plan))
+
+    return OperatorNotificationChannelListResponse(
+        operator_id=int(target.id),
+        **_operator_context_fields(target),
+        channel_count=len(channels),
+        channels=channels,
     )
 
 

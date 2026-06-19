@@ -24,6 +24,7 @@ class TelegramNotificationService:
     """Send messages to Telegram when configured."""
 
     CALLBACK_PREFIX = "bid-decision"
+    LEGACY_CONFIGURED_CHAT_ROUTE_KEY = "telegram:legacy-configured-chat"
 
     def is_configured(self) -> bool:
         """Return whether Telegram settings are available."""
@@ -169,6 +170,10 @@ class TelegramNotificationService:
         """Return the currently configured delivery chat id."""
         return settings.TELEGRAM_CHAT_ID
 
+    def get_configured_target_label(self) -> str:
+        """Return a masked label for the configured delivery chat id."""
+        return self.mask_chat_id(settings.TELEGRAM_CHAT_ID)
+
     def get_authorized_chat_id(self) -> str | None:
         """Return the configured delivery chat id only when it is a real value.
 
@@ -180,6 +185,15 @@ class TelegramNotificationService:
         if not self._has_real_setting(value):
             return None
         return str(value).strip()
+
+    def mask_chat_id(self, chat_id: str | int | None) -> str:
+        """Mask a Telegram chat id for logs, API responses, and telemetry."""
+        normalized = str(chat_id or "").strip()
+        if not self._has_real_setting(normalized):
+            return "(not configured)"
+        if len(normalized) <= 4:
+            return "*" * len(normalized)
+        return f"{'*' * max(len(normalized) - 4, 0)}{normalized[-4:]}"
 
     def _has_real_setting(self, value: str | None) -> bool:
         """Treat scaffold placeholder values as missing runtime configuration."""

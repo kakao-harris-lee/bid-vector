@@ -162,6 +162,32 @@ class OperatorAccountListResponse(BaseModel):
     operators: List[OperatorAccountItem] = Field(default_factory=list)
 
 
+class OperatorNotificationChannelItem(BaseModel):
+    """Masked notification route metadata for one operator channel."""
+
+    channel_id: Optional[int] = None
+    operator_id: int
+    channel_type: str
+    route_key: str
+    target_label: Optional[str] = None
+    is_active: bool = False
+    dry_run_only: bool = True
+    source: str = "operator_notification_channels"
+    verified_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class OperatorNotificationChannelListResponse(BaseModel):
+    """Notification channels visible for the resolved operator context."""
+
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
+    channel_count: int = Field(ge=0)
+    channels: List[OperatorNotificationChannelItem] = Field(default_factory=list)
+
+
 class OperatorDashboardCard(BaseModel):
     key: str
     label: str
