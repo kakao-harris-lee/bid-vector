@@ -100,6 +100,7 @@ def _persist_experiment_run(
     status: str = "completed",
     summary: dict | None = None,
     params: dict | None = None,
+    operator_slugs: list[str] | None = None,
 ):
     experiment = SyntheticExperiment(
         name=name,
@@ -113,7 +114,7 @@ def _persist_experiment_run(
                 "settle_actions": False,
             }
         ),
-        operator_slugs_json="[]",
+        operator_slugs_json=json.dumps(operator_slugs or []),
     )
     test_db.add(experiment)
     test_db.flush()
@@ -491,6 +492,19 @@ def test_sample_gap_run_candidate_builds_existing_preset_payload(client, test_db
     run = _persist_experiment_run(
         test_db,
         name="g1-software-base-12m",
+        params={
+            "start_at": "2025-01-01T00:00:00+00:00",
+            "end_at": "2025-12-31T23:59:59+00:00",
+            "category": "software",
+            "limit": 200,
+            "scenario": "base",
+            "settle_actions": False,
+        },
+        operator_slugs=[
+            "sw-small-seoul",
+            "sw-mid-metro",
+            "sw-large-national",
+        ],
         summary=_sample_gap_summary(
             preset_name="g1-software-base-12m",
             category="software",
@@ -529,6 +543,79 @@ def test_sample_gap_run_candidate_builds_existing_preset_payload(client, test_db
         "sw-large-national",
     ]
     assert body["experiment_payload"]["operator_slugs"] == body["operator_slugs"]
+    plan = body["execution_plan"]
+    assert plan["mode"] == "run_existing_experiment"
+    assert plan["dry_run_default"] is True
+    assert plan["approval_required"] is True
+    assert "--dry-run" in plan["cli_command"]
+    assert "--write" in plan["write_cli_command"]
+    assert plan["run_request"]["method"] == "POST"
+    assert (
+        plan["run_request"]["path"]
+        == f"/api/v1/synthetic/experiments/{run.experiment_id}/runs"
+    )
+    source_context = plan["run_request"]["body"]["source_sample_gap_candidate"]
+    assert source_context["source"] == "sample_gap_candidate"
+    assert source_context["dimension"] == "category"
+    assert source_context["key"] == "software"
+    assert source_context["action_code"] == "rerun_related_preset"
+    assert source_context["related_run_ids"] == [run.id]
+
+
+def test_sample_gap_run_candidate_creates_new_plan_for_modified_action(
+    client, test_db
+):
+    _persist_experiment_run(
+        test_db,
+        name="g1-software-base-12m",
+        params={
+            "start_at": "2025-01-01T00:00:00+00:00",
+            "end_at": "2025-12-31T23:59:59+00:00",
+            "category": "software",
+            "limit": 200,
+            "scenario": "base",
+            "settle_actions": False,
+        },
+        operator_slugs=[
+            "sw-small-seoul",
+            "sw-mid-metro",
+            "sw-large-national",
+        ],
+        summary=_sample_gap_summary(
+            preset_name="g1-software-base-12m",
+            category="software",
+            lacking_groups=[
+                {
+                    "dimension": "preset",
+                    "key": "g1-software-base-12m",
+                    "settled_count": 40,
+                    "sample_target": 100,
+                    "missing_settled_count": 60,
+                },
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/synthetic/experiments/sample-gaps/candidates",
+        json={
+            "dimension": "preset",
+            "key": "g1-software-base-12m",
+            "max_runs": 10,
+            "action_code": "increase_limit",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["action_code"] == "increase_limit"
+    assert body["params"]["limit"] == 300
+    assert body["next_step"] == "create_experiment"
+    assert body["execution_plan"]["mode"] == "create_experiment_then_run"
+    assert body["execution_plan"]["experiment_request"]["body"]["params"]["limit"] == 300
+    assert body["execution_plan"]["run_request"]["path"].endswith(
+        "/{experiment_id}/runs"
+    )
 
 
 def test_sample_gap_run_candidate_blocks_mixed_data_before_run(client, test_db):
@@ -565,6 +652,9 @@ def test_sample_gap_run_candidate_blocks_mixed_data_before_run(client, test_db):
     assert body["blocked_by_warnings"] == ["canonical_synthetic_mixed"]
     assert body["warnings"] == ["canonical_synthetic_mixed"]
     assert "canonical/operator data mixed" in body["message"]
+    assert body["execution_plan"]["mode"] == "blocked"
+    assert body["execution_plan"]["run_request"] is None
+    assert body["execution_plan"]["write_cli_command"] is None
 
 
 def test_sample_gap_run_candidate_returns_404_for_unknown_gap(client):
@@ -574,6 +664,31 @@ def test_sample_gap_run_candidate_returns_404_for_unknown_gap(client):
     )
 
     assert response.status_code == 404
+
+
+def test_experiment_run_summary_keeps_sample_gap_source_context(
+    client, patched_engine
+):
+    created = _create_experiment(client).json()
+    source_context = {
+        "source": "sample_gap_candidate",
+        "dimension": "category",
+        "key": "software",
+        "action_code": "rerun_related_preset",
+        "related_run_ids": [101],
+    }
+    run = client.post(
+        f"/api/v1/synthetic/experiments/{created['id']}/runs",
+        json={"source_sample_gap_candidate": source_context},
+    ).json()
+
+    response = client.get(
+        f"/api/v1/synthetic/experiments/{created['id']}/runs/{run['id']}"
+    )
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["source_sample_gap_candidate"] == source_context
 
 
 # --- eager persistence (run -> results land in the DB) ------------------------

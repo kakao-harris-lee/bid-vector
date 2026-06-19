@@ -2758,6 +2758,14 @@ class SyntheticExperimentRunResponse(BaseModel):
     results: List[SyntheticExperimentResultItem] = Field(default_factory=list)
 
 
+class SyntheticExperimentRunCreateRequest(BaseModel):
+    """Optional metadata for a queued synthetic experiment run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    source_sample_gap_candidate: Optional[Dict[str, Any]] = None
+
+
 # --- Experiment Lab (G-1): sample gap/backfill planning -----------------------
 
 
@@ -2863,6 +2871,38 @@ class SyntheticExperimentSampleGapCandidateRequest(BaseModel):
     action_code: Optional[str] = Field(default=None, max_length=100)
 
 
+class SyntheticExperimentSampleGapHttpRequest(BaseModel):
+    """Concrete follow-up API request for materializing a sample-gap candidate."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    method: Literal["POST"]
+    path: str
+    body: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SyntheticExperimentSampleGapExecutionPlan(BaseModel):
+    """Repeatable, non-executing plan that bridges a gap candidate to a run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    mode: Literal[
+        "blocked",
+        "run_existing_experiment",
+        "save_preset_then_run",
+        "create_experiment_then_run",
+    ]
+    approval_required: bool = True
+    dry_run_default: bool = True
+    source_context: Dict[str, Any] = Field(default_factory=dict)
+    preset_request: Optional[SyntheticExperimentSampleGapHttpRequest] = None
+    experiment_request: Optional[SyntheticExperimentSampleGapHttpRequest] = None
+    run_request: Optional[SyntheticExperimentSampleGapHttpRequest] = None
+    cli_command: str
+    write_cli_command: Optional[str] = None
+    instructions: List[str] = Field(default_factory=list)
+
+
 class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
     """Runnable follow-up candidate derived from one sample-gap recommendation."""
 
@@ -2885,6 +2925,7 @@ class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
         "save_preset",
         "create_experiment",
     ]
+    execution_plan: SyntheticExperimentSampleGapExecutionPlan
     run_allowed: bool
     blocked_by_warnings: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
