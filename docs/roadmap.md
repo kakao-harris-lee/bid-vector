@@ -6,7 +6,7 @@
 
 ## 현재 결론
 
-0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, 주요 reporting/monitoring/experiment 경로의 per-operator 격리, API 계약 정리, sample-gap 실행 후보 생성, 운영 증적 scope 보강이 `main`에 반영되었습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행, 사업자별 알림 대상 매핑, 사용자/관리자 정보 구조 분리 검증**입니다.
+0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, 운영 runbook이 `main`에 반영되었습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행, 사업자별 알림 대상 확인, G-2 exit review**입니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
@@ -24,11 +24,21 @@
 |---|---|---|---|
 | 0 | 단일 운영자 검증 기반 | 빌드 완료, 관찰 중 | 실제 키와 스케줄로 매일 깨지지 않는가 |
 | 1 | 가상 회사 실험실 | 구현됨, 실행 후보 연결됨, 표본 실행 필요 | 업종/규모별 가상 회사에서 추천 품질이 검증되는가 |
-| 2 | 독립 가상 사업자 운영 검증 | 진행 중, 증적 필요 | 각 회사가 독립 ID/사업자 정보로 서비스처럼 운영되는가 |
+| 2 | 독립 가상 사업자 운영 검증 | 진행 중, 실행/증적 축적 필요 | 각 회사가 독립 ID/사업자 정보로 서비스처럼 운영되는가 |
 | 3 | 제한 실증 서비스 | G-2 후 착수 | 실제 사업자가 매일 써도 업무 시간이 줄고 추천이 유효한가 |
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
 
 ## 최근 반영된 작업
+
+2026-06-19 `7fdc04c` 기준으로 다음 G-2 exit 기반 작업이 `main`에 반영되었습니다.
+
+- G-2 evidence ledger: `/api/v1/analytics/g2-evidence`가 operator별 smoke, strategy monitor, decision experiment, synthetic experiment, notification 증적을 `ready`/`insufficient`/`mixed_scope`/`missing` 상태와 `blocking_gaps`로 정리합니다.
+- G-2 notification channels: `OperatorNotificationChannel` 모델과 Alembic migration이 추가되었습니다. `/api/v1/operator/notification-channels`는 raw chat id 없이 masked route metadata만 반환합니다. synthetic/non-canonical operator는 채널 없음, inactive, dry-run 상태를 실제 송신 없이 evidence로 남깁니다.
+- G-1/G-2 synthetic evidence runs: sample-gap candidate 응답에 `execution_plan`이 추가되었고, `scripts/run_g2_synthetic_evidence.py`는 기본 dry-run으로 계획을 출력하며 승인 후 `--write`로만 DB write/async run enqueue를 수행합니다.
+- G-2 admin/user surface: `/admin/operations`는 G-2 증적 요약을 표시하고, `/dashboard`는 token owner 기준 투찰 판단 화면으로 제한됩니다. operator switcher/cross-operator 조회는 admin surface에만 남습니다.
+- G-2 runbook: `docs/operations/g2-evidence-runbook.md`가 3개 이상 가상 사업자의 일일 증적 수집, dry-run/승인 후 실행 경계, exit review 양식을 정리합니다.
+- 통합 리뷰 수정: operator-scoped smoke evidence가 존재할 때 같은 기간의 canonical/다른 operator smoke 때문에 `mixed_scope`로 떨어지는 문제를 수정했습니다.
+- 통합 검증: backend 선택 테스트 201개, frontend 테스트 24개, frontend production build, `py_compile`, schema drift/migration test, `git diff --check`가 통과된 상태로 병합되었습니다.
 
 2026-06-19 `06eeee5` 기준으로 다음 작업이 `main`에 반영되었습니다.
 
@@ -115,21 +125,20 @@ Exit gate G-1:
 
 - 주요 dashboard/reporting, strategy monitor, decision experiment 경로는 `operator_id` target context와 `current_operator_*` 응답 필드를 지원합니다.
 - synthetic operator infrastructure는 있지만 SaaS 멀티테넌트는 아닙니다.
-- 현재 프론트는 단일 SPA입니다. `/admin/*` 접근 guard는 구현되었지만 사용자 웹/관리자 웹의 정보 구조는 더 분리되어야 합니다.
+- 현재 프론트는 단일 SPA이지만 `/dashboard` 사용자 surface와 `/admin/*` 관리자 surface의 역할이 분리되었습니다.
 - API 문서는 monitor/decision experiment/sample-gap/candidates와 operator target context를 반영합니다.
-- synthetic/non-canonical operator Telegram 송신은 dry-run evidence로 남기며, callback owner 검증은 강화되었습니다.
-- 알림 채널은 아직 가상 사업자별 실제 chat/channel 매핑이 없습니다.
+- `/api/v1/analytics/g2-evidence`가 operator별 G-2 증적 ledger와 blocking gap을 반환합니다.
+- synthetic/non-canonical operator Telegram 송신은 dry-run evidence로 남기며, callback owner 검증과 route metadata 분리가 강화되었습니다.
+- `OperatorNotificationChannel`은 operator별 masked notification route metadata를 저장하지만, non-canonical 실제 Telegram 송신 secret resolver는 아직 없습니다.
 - smoke/analytics evidence는 `operator_scope`, `current_operator_id`, `source_run_type`, `source_run_id`를 남기지만, N일 운영 증적은 아직 충분하지 않습니다.
 
 해야 할 일:
 
-- 가상 회사별 로그인/프로필/전략/알림/결정 이력을 독립적으로 검증
-- 남아 있는 canonical operator fallback 범위를 점검하고 데이터 격리 테스트 추가
-- 사용자 웹과 관리자 웹의 정보 구조 분리
-  - 사용자 웹: 회사 정보, 조건 설정, 추천 공고, 알림, 투찰 선택, 결과 확인
-  - 관리자 웹: 백테스트, synthetic experiment, smoke test, 데이터 수집 상태, 정확도/통계, ML release 상태
-- 가상 사업자별 실제 알림 대상(chat/channel/app device)을 분리하거나 routing key를 명확히 한다.
-- operator별 smoke/experiment/reporting evidence를 N일 단위로 축적한다.
+- 운영 DB에 `6f2a8c9d0e12_add_operator_notification_channels.py` migration 적용을 배포 절차에 포함한다.
+- 3개 이상 가상 회사별 로그인/프로필/전략/알림/결정 이력을 일일 runbook으로 저장한다.
+- `/api/v1/analytics/g2-evidence` 결과를 operator별로 N일 단위 저장하고 `blocking_gaps`를 해소한다.
+- `scripts/run_g2_synthetic_evidence.py --dry-run`으로 sample-gap 실행 계획을 검토하고, 승인 후 `--write`로만 synthetic evidence run을 enqueue한다.
+- non-canonical 실제 Telegram/app 송신 전에는 operator별 target, masking, secret resolver 정책을 확정한다.
 - 사업자 정보와 알림 대상 식별자를 개인정보/운영정보로 취급한다.
 
 Exit gate G-2:
@@ -218,18 +227,19 @@ Exit gate G-3:
 
 ## 다음 우선순위
 
-1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 smoke, monitor, decision experiment, synthetic experiment 결과를 N일 단위로 남긴다.
-2. G-2 알림 대상 매핑: 가상 사업자별 Telegram/app notification 대상 식별자와 실제 송신 가능 범위를 분리한다.
-3. G-1 표본 실행: sample-gap candidates를 실제 synthetic preset 실행과 settled sample 증적으로 연결한다.
-4. G-2 정보 구조 분리: 사용자 웹은 투찰 판단, 관리자 웹은 백테스트/smoke/통계/데이터 상태에 집중하도록 화면 경계를 강화한다.
+1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 profile, strategy, notification channel, strategy monitor, decision experiment, synthetic experiment, G-2 evidence ledger를 N일 단위로 저장한다.
+2. G-2 blocking gap 해소: `/api/v1/analytics/g2-evidence`의 `blocking_gaps`를 operator별 TODO로 관리하고 `mixed_scope`/`missing` 상태를 제거한다.
+3. G-1 표본 실행: sample-gap candidates를 dry-run으로 검토하고 승인 후 synthetic evidence run을 enqueue하여 settled sample 증적을 쌓는다.
+4. G-2 알림 대상 검증: 사업자별 Telegram/app notification 대상 식별자, `dry_run_only`, masking, 실제 송신 가능 범위를 운영표로 관리한다.
 5. G-0 관찰: scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 dashboard와 문서만으로 구분한다.
-6. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
+6. G-2 exit review: `docs/operations/g2-evidence-runbook.md`의 양식으로 3개 이상 operator가 exit gate를 만족하는지 판정한다.
+7. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
 
 ## 관련 문서
 
 - `README.md`: 현재 시스템 개요와 실행 방법
 - `CLAUDE.md`: 에이전트 작업 지침
-- `docs/operations/g2-exit-agent-plan.md`: G-2 exit gate 충족을 위한 다음 병렬 작업 계획
+- `docs/operations/g2-exit-agent-plan.md`: G-2 exit 기반 병렬 작업 완료 기록과 잔여 TODO
 - `docs/operations/g2-evidence-runbook.md`: 3개 이상 가상 사업자의 G-2 evidence를 N일 단위로 반복 실행하고 exit review를 남기는 운영 절차
 - `docs/operations/roadmap-next-agent-plan.md`: 최근 완료된 병렬 작업 기록과 후속 gap
 - `docs/production-smoke-test.md`: 운영 smoke test 절차

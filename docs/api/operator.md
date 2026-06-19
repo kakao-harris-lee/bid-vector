@@ -18,6 +18,8 @@
 - [GET /strategy/monitor/tasks/{task_id}](#get-apiv1operatorstrategymonitortaskstask_id) — 비동기 작업 상태 조회
 - [GET /dashboard](#get-apiv1operatordashboard) — 웹 대시보드 종합 페이로드
 - [GET /overview](#get-apiv1operatoroverview) — 컴팩트 요약 지표
+- [GET /accounts](#get-apiv1operatoraccounts) — 현재 토큰에서 볼 수 있는 운영자 계정 목록
+- [GET /notification-channels](#get-apiv1operatornotification-channels) — operator별 masked 알림 채널 메타데이터
 - [GET /notifications](#get-apiv1operatornotifications) — 알림 목록
 - [PUT /notifications/{notification_id}/read](#put-apiv1operatornotificationsnotification_idread) — 알림 읽음 처리
 
@@ -806,6 +808,114 @@ curl "http://localhost:3000/api/v1/operator/overview?days=7"
 | 코드 | 의미 |
 |---|---|
 | 422 | days(1~90) 범위 위반 |
+
+---
+
+## GET /api/v1/operator/accounts
+
+현재 bearer-token 소유자가 볼 수 있는 운영자 계정 목록을 반환한다. 관리자 surface의 operator switcher에서 사용한다.
+
+- 인증: Bearer 토큰은 선택이다. 토큰이 없으면 canonical `operator` 기준으로 동작한다.
+- 도메인: canonical `operator` 또는 admin은 canonical, synthetic, 본인 계정을 볼 수 있다. 일반 운영자는 자기 계정만 받는다.
+
+**파라미터**
+
+(없음)
+
+**요청 예시**
+```bash
+curl http://localhost:3000/api/v1/operator/accounts \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+**응답 200**
+```json
+{
+  "current_operator_id": 1,
+  "current_operator_username": "operator",
+  "is_privileged": true,
+  "operator_count": 2,
+  "operators": [
+    {
+      "operator_id": 1,
+      "username": "operator",
+      "company": "가나다건설",
+      "is_synthetic": false,
+      "is_active": true,
+      "profile_configured": true
+    },
+    {
+      "operator_id": 11,
+      "username": "synthetic-sw-small-seoul",
+      "company": "서울 소프트웨어 테스트",
+      "is_synthetic": true,
+      "is_active": true,
+      "profile_configured": true
+    }
+  ]
+}
+```
+
+**에러**
+
+| 코드 | 의미 |
+|---|---|
+| 401 | Bearer 토큰이 잘못됨 |
+
+---
+
+## GET /api/v1/operator/notification-channels
+
+해결된 operator context의 알림 채널 메타데이터를 masked 형태로 반환한다. G-2 운영 검증에서 사업자별 Telegram/app 알림 대상이 분리되어 있는지 확인할 때 사용한다.
+
+- 인증: Bearer 토큰은 선택이다. 토큰이 없으면 canonical `operator` 기준으로 동작한다.
+- 도메인: `target_label`은 raw chat id나 secret target을 노출하지 않는 masked 값이다. canonical legacy Telegram 설정만 있는 경우에는 `source=legacy_settings` 항목으로 노출한다. `operator_notification_channels` row가 있으면 해당 row의 `dry_run_only`, `is_active`, `verified_at` 상태를 반환한다.
+- 권한: canonical `operator` 또는 admin만 `?operator_id=`로 다른 운영자 채널을 조회할 수 있다. 일반 운영자의 cross-operator 조회는 `403`이다.
+
+**파라미터**
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| query | operator_id | integer | 아니오 | 조회할 target operator id. privileged 호출에서만 다른 operator 조회 가능 |
+
+**요청 예시**
+```bash
+curl "http://localhost:3000/api/v1/operator/notification-channels?operator_id=11" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+**응답 200**
+```json
+{
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-sw-small-seoul",
+  "channel_count": 1,
+  "channels": [
+    {
+      "channel_id": 7,
+      "operator_id": 11,
+      "channel_type": "telegram",
+      "route_key": "telegram:synthetic-sw-small-seoul",
+      "target_label": "chat ********0346",
+      "is_active": true,
+      "dry_run_only": true,
+      "source": "operator_notification_channels",
+      "verified_at": null,
+      "created_at": "2026-06-19T02:10:00Z",
+      "updated_at": "2026-06-19T02:10:00Z"
+    }
+  ]
+}
+```
+
+**에러**
+
+| 코드 | 의미 |
+|---|---|
+| 403 | 다른 operator 채널을 조회할 권한이 없음 |
+| 404 | operator_id에 해당하는 운영자가 없음 |
+| 422 | operator_id가 1 이상 정수가 아님 |
 
 ---
 

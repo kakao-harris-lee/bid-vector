@@ -6,6 +6,8 @@
 
 이 문서는 `docs/roadmap.md`의 다음 우선순위를 여러 에이전트가 동시에 처리했던 작업 기록입니다. 현재 기준의 단계 판단과 다음 우선순위는 `docs/roadmap.md`를 우선합니다.
 
+후속 G-2 exit 기반 병렬 작업은 `7fdc04c`로 완료되어 `docs/operations/g2-exit-agent-plan.md`에 완료 기록과 잔여 TODO로 정리되었습니다.
+
 ## 현재 결론
 
 `06eeee5` 병합으로 G-2 진입에 필요한 API 계약 정리, 1차 알림 routing 격리, sample-gap 실행 후보 생성, operations evidence operator scope 보강이 `main`에 반영되었습니다.
@@ -35,7 +37,7 @@
 
 ## 후속 작업 후보
 
-다음 병렬 작업 계획을 새로 작성할 때는 아래 gap을 기준으로 분리합니다.
+아래 목록은 `06eeee5` 직후의 후속 gap입니다. 일부는 `7fdc04c`의 G-2 exit 기반 병렬 작업에서 완료되었으므로, 현재 실행 TODO는 `docs/roadmap.md`와 `docs/operations/g2-exit-agent-plan.md`를 우선합니다.
 
 1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 scheduled smoke, strategy monitor, decision experiment, synthetic experiment 결과를 N일 단위로 저장하고 dashboard에서 구분한다.
 2. G-2 알림 대상 매핑: 사업자별 Telegram chat/channel 또는 app notification 대상 식별자 모델과 마이그레이션, 송신 정책, masking/logging 규칙을 설계한다.
@@ -43,7 +45,7 @@
 4. G-2 사용자/관리자 정보 구조 분리: 사용자 화면은 공고 추천/투찰 선택/결과 확인, 관리자 화면은 backtest/smoke/statistics/data 상태로 역할을 분리한다.
 5. G-0 관찰: canonical scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 credential, KONEPS 응답, 후보 없음, Telegram, task/broker로 분류한다.
 
-다음 병렬 작업 지시서는 `docs/operations/g2-exit-agent-plan.md`를 기준으로 합니다.
+후속 병렬 작업 완료 기록과 현재 잔여 TODO는 `docs/operations/g2-exit-agent-plan.md`를 기준으로 확인합니다.
 
 ## 다음 병렬 작업 작성 규칙
 
