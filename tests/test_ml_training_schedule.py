@@ -40,7 +40,7 @@ def test_ml_training_schedule_builds_when_enabled(monkeypatch):
 
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED", True)
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK", 0)
-    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC", 18)
+    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST", 18)
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE", 0)
 
     schedule = build_price_predictor_training_beat_schedule()
@@ -82,7 +82,7 @@ def test_ml_training_schedule_clamps_out_of_range_values(monkeypatch):
 
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED", True)
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK", 99)
-    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC", 99)
+    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST", 99)
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE", 99)
 
     crontab = build_price_predictor_training_beat_schedule()[
@@ -99,7 +99,7 @@ def test_ml_training_schedule_clamps_negative_values(monkeypatch):
 
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED", True)
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK", -5)
-    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC", -1)
+    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST", -1)
     monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE", -1)
 
     crontab = build_price_predictor_training_beat_schedule()[

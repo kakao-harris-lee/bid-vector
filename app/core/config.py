@@ -130,8 +130,13 @@ class Settings(BaseSettings):
     HISTORICAL_BACKTEST_SCHEDULE_CUTOFF_HOURS: int = 2
     HISTORICAL_BACKTEST_SCHEDULE_SETTLE_ACTIONS: str = "bid_now,review"
     HISTORICAL_BACKTEST_SCHEDULE_PERSIST: bool = True
+    # NOTE: the *_HOUR_KST schedule settings below are interpreted in KST, not
+    # UTC. Celery beat runs with timezone="Asia/Seoul" and enable_utc=False
+    # (see app/tasks/celery_app.py), so crontab(hour=N) fires at N:00 KST.
+    # Internal timestamp storage stays UTC (app/core/time.py utc_now()); only
+    # these operator-facing schedule hours are KST.
     SMOKE_TEST_SCHEDULE_ENABLED: bool = False
-    SMOKE_TEST_HOUR_UTC: int = 7   # 07:00 UTC = 16:00 KST
+    SMOKE_TEST_HOUR_KST: int = 7   # 07:00 KST
     SMOKE_TEST_MINUTE: int = 0
     # G-2 candidate re-check — daily read-only sweep that measures when synthetic
     # operators regain biddable candidates as niche inventory recovers. Calls the
@@ -139,7 +144,7 @@ class Settings(BaseSettings):
     # records a single ``g2_candidate_recheck`` analytics event for evidence.
     # Default OFF; opt-in via .env.
     G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED: bool = False
-    G2_CANDIDATE_RECHECK_HOUR_UTC: int = 21  # 21:00 UTC = 06:00 KST
+    G2_CANDIDATE_RECHECK_HOUR_KST: int = 21  # 21:00 KST
     G2_CANDIDATE_RECHECK_MINUTE: int = 0
     # Price-predictor ML training — weekly Celery-beat schedule (training-worker
     # executes via the ML training queue). Default OFF; opt-in via .env.
@@ -147,7 +152,7 @@ class Settings(BaseSettings):
     # (limit 500, create_manifest=True, publish_remote=True).
     PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED: bool = False
     PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK: int = 0  # 0=Sunday (crontab day_of_week)
-    PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC: int = 18    # 18:00 UTC = 03:00 KST
+    PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST: int = 18    # 18:00 KST
     PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE: int = 0
     KONEPS_COLLECTION_SCHEDULE_ENABLED: bool = False
     KONEPS_COLLECTION_INTERVAL_MINUTES: int = 60

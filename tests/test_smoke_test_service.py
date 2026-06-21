@@ -28,7 +28,7 @@ def test_smoke_test_schedule_builds_when_enabled(monkeypatch):
     from celery.schedules import crontab
     from app.core.config import settings
     monkeypatch.setattr(settings, "SMOKE_TEST_SCHEDULE_ENABLED", True)
-    monkeypatch.setattr(settings, "SMOKE_TEST_HOUR_UTC", 7)
+    monkeypatch.setattr(settings, "SMOKE_TEST_HOUR_KST", 7)
     monkeypatch.setattr(settings, "SMOKE_TEST_MINUTE", 0)
     schedule = build_smoke_test_beat_schedule()
     entry = schedule["smoke_test_daily"]
