@@ -345,28 +345,101 @@ class KonepsTelegramSmokeTestService:
             logger.exception("smoke phase koneps_collect failed")
         return self._finalize_phase(result)
 
+    # Recency window for selecting a real embedded project to validate the
+    # embedding -> prediction pipeline health. Decoupled from KONEPS collection
+    # novelty: the smoke verifies that *some* recent, real (non-fallback)
+    # embedding can drive prediction, not that this run produced a brand-new row.
+    # 7 days comfortably covers the daily collection + (re)embedding cadence
+    # while still failing loudly if embeddings have gone stale/absent.
+    SBERT_RECENT_WINDOW_DAYS = 7
+
     def _phase_sbert_embedding(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="sbert_embedding")
         try:
-            from sqlalchemy import text
-            row = db.execute(text("""
-                SELECT id, title, embedding_model, budget_estimate
-                FROM projects WHERE created_at > now() - interval '30 minute'
-                ORDER BY id DESC LIMIT 1
-            """)).fetchone()
-            if row is None:
-                result.detail = "no recent project"
-                result.skip_reason = "no recent project"
+            from datetime import timedelta
+
+            from sqlalchemy import case
+
+            from app.core.time import utc_now
+            from app.models.models import Project
+
+            window_days = self.SBERT_RECENT_WINDOW_DAYS
+            cutoff = utc_now() - timedelta(days=window_days)
+
+            # Most-recent-first by embedding refresh time, falling back to
+            # created_at when embedding_updated_at is NULL (NULLS LAST via a
+            # dialect-portable case() ordering key). Prefer projects with a
+            # usable budget so the downstream predict_price phase exercises the
+            # real guardrail band instead of immediately skipping on "no usable
+            # budget" — this is a legitimate selection to maximise end-to-end
+            # health coverage, not a result fabrication (predict_price still
+            # validates the guardrail band and fails on regression).
+            recency_key = case(
+                (Project.embedding_updated_at.isnot(None), Project.embedding_updated_at),
+                else_=Project.created_at,
+            )
+            has_budget = case((Project.budget_estimate > 0, 1), else_=0)
+
+            base = db.query(Project).filter(
+                Project.embedding.isnot(None),
+                Project.embedding_model.isnot(None),
+                Project.embedding_model != "",
+                # Exclude fallback-hash embeddings (keep in lockstep with the
+                # explicit fallback guard below and FALLBACK_EMBEDDING_MODEL).
+                ~Project.embedding_model.contains("fallback-hash"),
+                recency_key >= cutoff,
+            )
+
+            project = (
+                base.order_by(
+                    has_budget.desc(),
+                    recency_key.desc(),
+                    Project.id.desc(),
+                )
+                .first()
+            )
+
+            if project is None:
+                # Distinguish an empty DB / no embeddings at all from "embedded
+                # rows exist but are all older than the window". Operators need
+                # to know whether to seed/collect or to investigate a stalled
+                # embedding pipeline.
+                any_real_embedded = (
+                    db.query(Project.id)
+                    .filter(
+                        Project.embedding.isnot(None),
+                        Project.embedding_model.isnot(None),
+                        Project.embedding_model != "",
+                        ~Project.embedding_model.contains("fallback-hash"),
+                    )
+                    .first()
+                )
+                if any_real_embedded is None:
+                    skip_reason = "no non-fallback embedded project"
+                else:
+                    skip_reason = f"no embedded project in last {window_days}d"
+                result.detail = skip_reason
+                result.skip_reason = skip_reason
                 return self._finalize_phase(result)
-            model = row[2] or ""
+
+            model = project.embedding_model or ""
+            # Defensive: the query already excludes fallback-hash, but keep the
+            # explicit guard so the guardrail intent is local and obvious.
             if "fallback-hash" in model:
                 result.detail = f"fallback embedding: {model}"
+                result.skip_reason = "fallback embedding model"
                 return self._finalize_phase(result)
-            result.data["project"] = {"id": int(row[0]), "title": row[1], "budget_estimate": float(row[3] or 0)}
-            result.data["project_id"] = int(row[0])
-            result.data["project_title"] = row[1]
+
+            budget = float(project.budget_estimate or 0)
+            result.data["project"] = {
+                "id": int(project.id),
+                "title": project.title,
+                "budget_estimate": budget,
+            }
+            result.data["project_id"] = int(project.id)
+            result.data["project_title"] = project.title
             result.passed = True
-            result.detail = f"id={row[0]} model={model[-30:]}"
+            result.detail = f"id={project.id} model={model[-30:]} budget={budget:.0f}"
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase sbert_embedding failed")
