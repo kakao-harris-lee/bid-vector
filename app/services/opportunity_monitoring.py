@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -595,20 +596,33 @@ class StrategyMonitoringService:
     ) -> tuple[list[StrategyCandidateEvaluation], int]:
         """Analyze currently actionable projects that pass stored watch rules.
 
+        Only notices that are still biddable are considered: projects whose
+        deadline has already passed are excluded (NULL deadlines are kept).
+
         When ``scan_limit`` is provided the query loads only the ``scan_limit``
-        most deadline-imminent active notices (``deadline asc``) before applying
-        the cheap watch filters and the expensive per-candidate analysis. This
-        bounds the work for the interactive preview (``_preview_scan_limit``) and
-        the periodic schedule (``_schedule_scan_limit``) so neither can scan the
-        full open-notice table. When ``scan_limit`` is ``None`` (manual
-        sync/async runs) every active project is considered.
+        most deadline-imminent *future* notices (``deadline asc``) before
+        applying the cheap watch filters and the expensive per-candidate
+        analysis. This bounds the work for the interactive preview
+        (``_preview_scan_limit``) and the periodic schedule
+        (``_schedule_scan_limit``) so neither can scan the full open-notice
+        table. When ``scan_limit`` is ``None`` (manual sync/async runs) every
+        still-biddable active project is considered.
         """
         if not self._has_configured_watch_rules(strategy):
             return [], 0
 
+        # Live bid-eligibility filter: only evaluate notices that are still
+        # biddable. Projects whose deadline has already passed cannot be bid on,
+        # so evaluating them wastes ML analysis and (combined with the bounded
+        # ``deadline asc`` scan) can crowd out genuinely imminent future notices.
+        # NULL deadlines are intentionally INCLUDED so that missing deadline
+        # metadata never silently hides a candidate from the operator. This is a
+        # real-time eligibility narrowing only -- it is unrelated to predictor
+        # guardrails or the backtest cutoff path and introduces no leakage.
         query = (
             db.query(Project)
             .filter(Project.status.in_(self.ACTIVE_PROJECT_STATUSES))
+            .filter(or_(Project.deadline.is_(None), Project.deadline > utc_now()))
             .order_by(Project.deadline.asc(), Project.id.asc())
         )
         if scan_limit is not None:
