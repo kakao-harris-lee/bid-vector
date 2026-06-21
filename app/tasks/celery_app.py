@@ -101,6 +101,7 @@ SYNTHETIC_BACKTEST_RUN_TASK_NAME = "jobs.run_synthetic_operator_backtest"
 ENRICH_BUSINESS_TYPE_TASK_NAME = "jobs.enrich_pending_business_types"
 RECLASSIFY_CATEGORIES_TASK_NAME = "jobs.reclassify_pending_categories"
 SMOKE_TEST_TASK_NAME = "jobs.run_koneps_telegram_smoke_test"
+G2_CANDIDATE_RECHECK_TASK_NAME = "jobs.run_g2_candidate_recheck"
 TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 
 
@@ -117,6 +118,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         SYNTHETIC_BACKTEST_RUN_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SMOKE_TEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        G2_CANDIDATE_RECHECK_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -376,6 +378,27 @@ def build_smoke_test_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_g2_candidate_recheck_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for the daily G-2 candidate re-check.
+
+    Read-only observation tool: the task re-runs ``preview_candidates`` for every
+    synthetic operator to measure when niche biddable inventory recovers and
+    candidates reappear. It never executes the heavy strategy monitor and writes
+    nothing to operator data (only a single analytics evidence event). Defaults
+    to OFF; opt-in via ``G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED``.
+    """
+    if not settings.G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED:
+        return {}
+    hour = max(0, min(23, int(settings.G2_CANDIDATE_RECHECK_HOUR_UTC)))
+    minute = max(0, min(59, int(settings.G2_CANDIDATE_RECHECK_MINUTE)))
+    return {
+        "g2_candidate_recheck_daily": {
+            "task": G2_CANDIDATE_RECHECK_TASK_NAME,
+            "schedule": crontab(hour=hour, minute=minute),
+        }
+    }
+
+
 def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object]]:
     """Build the weekly schedule entry for price-predictor ML training.
 
@@ -479,6 +502,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_business_type_enrichment_beat_schedule(),
             **build_category_reclassify_beat_schedule(),
             **build_smoke_test_beat_schedule(),
+            **build_g2_candidate_recheck_beat_schedule(),
             **build_price_predictor_training_beat_schedule(),
             **build_telegram_polling_beat_schedule(),
         },

@@ -133,6 +133,14 @@ class Settings(BaseSettings):
     SMOKE_TEST_SCHEDULE_ENABLED: bool = False
     SMOKE_TEST_HOUR_UTC: int = 7   # 07:00 UTC = 16:00 KST
     SMOKE_TEST_MINUTE: int = 0
+    # G-2 candidate re-check — daily read-only sweep that measures when synthetic
+    # operators regain biddable candidates as niche inventory recovers. Calls the
+    # read-only ``preview_candidates`` (never the heavy strategy monitor) and
+    # records a single ``g2_candidate_recheck`` analytics event for evidence.
+    # Default OFF; opt-in via .env.
+    G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED: bool = False
+    G2_CANDIDATE_RECHECK_HOUR_UTC: int = 21  # 21:00 UTC = 06:00 KST
+    G2_CANDIDATE_RECHECK_MINUTE: int = 0
     # Price-predictor ML training — weekly Celery-beat schedule (training-worker
     # executes via the ML training queue). Default OFF; opt-in via .env.
     # request_payload is left at None → trains the full dataset with task defaults
