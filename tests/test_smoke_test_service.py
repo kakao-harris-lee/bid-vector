@@ -5,6 +5,13 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock
 
+# Import the ORM models at module top so SQLAlchemy registers the `projects`
+# table on Base.metadata before the `test_db` fixture runs create_all. A lazy
+# (in-function) import makes whichever DB-touching test runs first in the
+# process fail with "no such table: projects" under isolation (`-k sbert`,
+# single-test runs, pytest-xdist sharding). Matches the codebase convention
+# (tests/test_predictions.py, tests/test_projects.py).
+from app.models.models import Project  # noqa: F401 — registers table metadata
 from app.tasks.celery_app import (
     SMOKE_TEST_TASK_NAME,
     build_smoke_test_beat_schedule,
@@ -320,3 +327,310 @@ def test_persist_report_keeps_actionable_failure_evidence(test_db):
 def _mk_phase(name, passed, detail, **data):
     from app.services.smoke_test import PhaseResult
     return PhaseResult(name=name, passed=passed, detail=detail, data=data)
+
+
+# ---------------------------------------------------------------------------
+# Real _phase_sbert_embedding selection logic (DB-backed, not monkeypatched).
+#
+# These exercise the actual SELECT that the monkeypatched suite above could not
+# catch: the old "new project in last 30 minutes" criterion was structurally
+# always empty because the smoke never persists a fresh project. The B-plan
+# decouples selection from collection novelty and instead picks the most recent
+# real (non-fallback) embedded project within a recency window, preferring a
+# usable budget so predict_price can exercise the guardrail band.
+# ---------------------------------------------------------------------------
+
+_REAL_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+
+def _make_embedded_project(
+    test_db,
+    *,
+    title,
+    budget=100_000_000.0,
+    embedding=None,
+    embedding_model=_REAL_EMBEDDING_MODEL,
+    embedding_updated_at="now",
+    created_at=None,
+):
+    """Insert a Project with a real 384-dim embedding vector for realism.
+
+    pgvector only enforces the dimension when the optional dependency is
+    installed; without it ``app/core/vector.py`` falls back to a dimensionless
+    UserDefinedType, so the SQLite dialect does not validate the vector length.
+    ``embedding_updated_at='now'`` uses a fresh UTC timestamp; pass an explicit
+    datetime to age it out of the window.
+    """
+    from app.core.time import utc_now
+
+    if embedding is None and embedding_model is not None:
+        # 384-dim unit-ish vector so the column is genuinely non-NULL.
+        embedding = [0.1] * 384
+    if embedding_updated_at == "now":
+        embedding_updated_at = utc_now()
+
+    project = Project(
+        title=title,
+        description="설명",
+        requirements="",
+        budget_estimate=budget,
+        category="소프트웨어",
+        status="open",
+        embedding=embedding,
+        embedding_model=embedding_model,
+        embedding_updated_at=embedding_updated_at,
+        semantic_text="ignored",
+    )
+    if created_at is not None:
+        project.created_at = created_at
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+    return project
+
+
+def test_sbert_embedding_selects_recent_nonfallback_with_budget(test_db):
+    """Passes and fills data['project'] for a recent non-fallback embedded row."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    project = _make_embedded_project(test_db, title="최근 임베딩 공고", budget=120_000_000.0)
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is True
+    assert result.failure_category == ""
+    assert result.data["project"]["id"] == project.id
+    assert result.data["project"]["budget_estimate"] == 120_000_000.0
+    assert result.data["project_id"] == project.id
+    assert result.data["project_title"] == "최근 임베딩 공고"
+    assert "fallback" not in result.detail
+
+
+def test_sbert_embedding_prefers_budgeted_over_more_recent_zero_budget(test_db):
+    """A usable-budget project wins even if a zero-budget row is more recent.
+
+    This keeps predict_price from immediately skipping on 'no usable budget',
+    maximising end-to-end health coverage. predict_price still validates the
+    guardrail band, so this preference cannot fabricate a green result.
+    """
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    budgeted = _make_embedded_project(
+        test_db,
+        title="예산 있는 공고",
+        budget=90_000_000.0,
+        embedding_updated_at=utc_now() - timedelta(days=2),
+    )
+    # More recent, but zero budget -> would skip in predict_price.
+    _make_embedded_project(
+        test_db,
+        title="예산 없는 최신 공고",
+        budget=0.0,
+        embedding_updated_at=utc_now() - timedelta(hours=1),
+    )
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is True
+    assert result.data["project"]["id"] == budgeted.id
+
+
+def test_sbert_embedding_skips_when_no_embedded_project(test_db):
+    """Empty DB / no real embeddings -> passed=False with explicit skip reason."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is False
+    assert result.skip_reason == "no non-fallback embedded project"
+    assert "fallback" in result.skip_reason
+    # Must not regurgitate the old, misleading "no recent project" string.
+    assert result.skip_reason != "no recent project"
+
+
+def test_sbert_embedding_skips_fallback_only_embeddings(test_db):
+    """A project whose only embedding is fallback-hash must not be selected."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    _make_embedded_project(
+        test_db,
+        title="폴백 임베딩 공고",
+        embedding_model="fallback-hash-v1",
+    )
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is False
+    assert result.skip_reason == "no non-fallback embedded project"
+
+
+def test_sbert_embedding_skips_when_embeddings_too_old(test_db):
+    """Real embeddings exist but all older than the window -> distinct reason."""
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    window = KonepsTelegramSmokeTestService.SBERT_RECENT_WINDOW_DAYS
+    _make_embedded_project(
+        test_db,
+        title="오래된 임베딩 공고",
+        embedding_updated_at=utc_now() - timedelta(days=window + 3),
+    )
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is False
+    assert result.skip_reason == f"no embedded project in last {window}d"
+    # Distinguishes "exists but stale" from "no embeddings at all".
+    assert result.skip_reason != "no non-fallback embedded project"
+
+
+def test_sbert_embedding_skips_null_embedding_even_with_model(test_db):
+    """embedding_model set but vector NULL must not be treated as embedded."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    # Insert a genuine NULL embedding vector while keeping a non-fallback
+    # embedding_model populated, to prove the selection requires the vector
+    # itself (embedding IS NOT NULL), not merely a model label.
+    project = Project(
+        title="모델만 있고 벡터 없는 공고",
+        description="설명",
+        requirements="",
+        budget_estimate=100_000_000.0,
+        category="소프트웨어",
+        status="open",
+        embedding=None,
+        embedding_model=_REAL_EMBEDDING_MODEL,
+        semantic_text="ignored",
+    )
+    test_db.add(project)
+    test_db.commit()
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is False
+    assert result.skip_reason == "no non-fallback embedded project"
+
+
+def test_sbert_embedding_chains_into_predict_price(test_db, monkeypatch):
+    """Integration: real sbert selection hands a project to predict_price.
+
+    The embedding selection is the real DB query; predict_price itself is
+    stubbed to a deterministic in-band rate so the test asserts the wiring
+    (data['project'] -> _phase_predict_price) rather than predictor internals.
+    The guardrail-band check inside _phase_predict_price is left intact.
+    """
+    import app.ai.business_group as bg_mod
+    import app.ai.price_prediction as pp_mod
+    import app.services.backtest_cutoff as cutoff_mod
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    project = _make_embedded_project(
+        test_db,
+        title="예측까지 이어지는 공고",
+        budget=80_000_000.0,
+    )
+
+    class _StubCutoff:
+        def resolve_data_cutoff_at(self, *a, **k):
+            return None
+
+        def load_price_history_at_cutoff(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
+    monkeypatch.setattr(cutoff_mod, "BacktestCutoffService", _StubCutoff)
+    monkeypatch.setattr(
+        pp_mod,
+        "predict_price",
+        lambda **kw: {"predicted_bid_rate": 0.88, "predictor_name": "stub"},
+    )
+
+    svc = KonepsTelegramSmokeTestService()
+    p2 = svc._phase_sbert_embedding(test_db)
+    assert p2.passed is True
+
+    selected = p2.data.get("project")
+    assert selected is not None and selected["id"] == project.id
+
+    p3 = svc._phase_predict_price(test_db, selected)
+    assert p3.passed is True
+    assert p3.data["project_id"] == project.id
+    assert p3.data["predicted_bid_rate"] == 0.88
+    assert p3.data["predictor_name"] == "stub"
+
+
+def test_sbert_embedding_recency_breaks_tie_within_same_budget_tier(test_db):
+    """Among equally-budgeted rows, the most recently embedded one wins."""
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    # Both have a usable budget (same tier), so has_budget cannot break the tie
+    # — recency_key (embedding_updated_at DESC) must decide.
+    _make_embedded_project(
+        test_db,
+        title="오래된 임베딩 (동일 예산대)",
+        budget=100_000_000.0,
+        embedding_updated_at=utc_now() - timedelta(days=3),
+    )
+    newer = _make_embedded_project(
+        test_db,
+        title="최신 임베딩 (동일 예산대)",
+        budget=100_000_000.0,
+        embedding_updated_at=utc_now() - timedelta(hours=2),
+    )
+
+    result = KonepsTelegramSmokeTestService()._phase_sbert_embedding(test_db)
+
+    assert result.passed is True
+    assert result.data["project"]["id"] == newer.id
+
+
+def test_sbert_embedding_passes_then_predict_price_skips_zero_budget(test_db, monkeypatch):
+    """A window has only a zero-budget embedded project.
+
+    sbert_embedding still passes (the embedding pipeline is healthy), but
+    predict_price then skips with 'no usable budget' rather than fabricating a
+    rate — the guardrail/band path is never reached without a real budget.
+    """
+    import app.ai.business_group as bg_mod
+    import app.ai.price_prediction as pp_mod
+    import app.services.backtest_cutoff as cutoff_mod
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    project = _make_embedded_project(
+        test_db,
+        title="예산 0 임베딩 공고",
+        budget=0.0,
+    )
+
+    class _StubCutoff:
+        def resolve_data_cutoff_at(self, *a, **k):
+            return None
+
+        def load_price_history_at_cutoff(self, *a, **k):
+            return []
+
+    # predict_price must NOT be invoked when budget is zero; raise if it is.
+    def _must_not_call(**kw):
+        raise AssertionError("predict_price called despite zero budget")
+
+    monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
+    monkeypatch.setattr(cutoff_mod, "BacktestCutoffService", _StubCutoff)
+    monkeypatch.setattr(pp_mod, "predict_price", _must_not_call)
+
+    svc = KonepsTelegramSmokeTestService()
+    p2 = svc._phase_sbert_embedding(test_db)
+    assert p2.passed is True
+    assert p2.data["project"]["id"] == project.id
+
+    p3 = svc._phase_predict_price(test_db, p2.data["project"])
+    assert p3.passed is False
+    assert p3.skip_reason == "no usable budget"
+    assert p3.data["project_id"] == project.id
