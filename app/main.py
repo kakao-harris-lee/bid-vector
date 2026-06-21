@@ -26,6 +26,10 @@ from app.services.strategy_scheduler import strategy_scheduler
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+# The frontend build emits two SPA bundles under frontend/dist: the operator
+# dashboard (base /dashboard/) and the admin console (base /admin/).
+DASHBOARD_DIST_DIR = FRONTEND_DIST_DIR / "dashboard"
+ADMIN_DIST_DIR = FRONTEND_DIST_DIR / "admin"
 
 
 @asynccontextmanager
@@ -88,20 +92,18 @@ async def health_check():
     return {"status": "healthy", "service": "bid-vector-api"}
 
 
-def _dashboard_file_response(full_path: str = ""):
-    """Serve the built dashboard SPA when frontend/dist exists."""
-    index_path = FRONTEND_DIST_DIR / "index.html"
+def _spa_file_response(dist_dir: Path, full_path: str, not_built_detail: str):
+    """Serve a built SPA bundle from ``dist_dir`` with a path-traversal guard."""
+    index_path = dist_dir / "index.html"
     if not index_path.is_file():
         return JSONResponse(
             status_code=404,
-            content={
-                "detail": "Dashboard frontend has not been built. Run `npm --prefix frontend run build`."
-            },
+            content={"detail": not_built_detail},
         )
 
     if full_path:
-        dist_root = FRONTEND_DIST_DIR.resolve()
-        requested_path = (FRONTEND_DIST_DIR / full_path).resolve()
+        dist_root = dist_dir.resolve()
+        requested_path = (dist_dir / full_path).resolve()
         try:
             requested_path.relative_to(dist_root)
         except ValueError:
@@ -112,11 +114,37 @@ def _dashboard_file_response(full_path: str = ""):
     return FileResponse(index_path)
 
 
-if (FRONTEND_DIST_DIR / "assets").is_dir():
+def _dashboard_file_response(full_path: str = ""):
+    """Serve the built operator dashboard SPA when frontend/dist/dashboard exists."""
+    return _spa_file_response(
+        DASHBOARD_DIST_DIR,
+        full_path,
+        "Dashboard frontend has not been built. Run `npm --prefix frontend run build`.",
+    )
+
+
+def _admin_file_response(full_path: str = ""):
+    """Serve the built admin console SPA when frontend/dist/admin exists."""
+    return _spa_file_response(
+        ADMIN_DIST_DIR,
+        full_path,
+        "Admin frontend has not been built. Run `npm --prefix frontend run build`.",
+    )
+
+
+if (DASHBOARD_DIST_DIR / "assets").is_dir():
     app.mount(
         "/dashboard/assets",
-        StaticFiles(directory=FRONTEND_DIST_DIR / "assets"),
+        StaticFiles(directory=DASHBOARD_DIST_DIR / "assets"),
         name="dashboard-assets",
+    )
+
+
+if (ADMIN_DIST_DIR / "assets").is_dir():
+    app.mount(
+        "/admin/assets",
+        StaticFiles(directory=ADMIN_DIST_DIR / "assets"),
+        name="admin-assets",
     )
 
 
@@ -130,6 +158,18 @@ async def dashboard_index():
 async def dashboard_spa_fallback(full_path: str):
     """Serve dashboard static files or fall back to the SPA entrypoint."""
     return _dashboard_file_response(full_path)
+
+
+@app.get("/admin", include_in_schema=False)
+async def admin_index():
+    """Serve the admin console SPA entrypoint."""
+    return _admin_file_response()
+
+
+@app.get("/admin/{full_path:path}", include_in_schema=False)
+async def admin_spa_fallback(full_path: str):
+    """Serve admin static files or fall back to the SPA entrypoint."""
+    return _admin_file_response(full_path)
 
 
 @app.exception_handler(Exception)

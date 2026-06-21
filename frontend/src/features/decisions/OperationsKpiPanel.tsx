@@ -1,7 +1,7 @@
-import { useNavigate } from "react-router-dom";
 import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { MiniBar } from "@/features/dashboard/components";
 import { formatPercent } from "@/shared/lib";
+import { useCrossAppNavigate } from "@/shared/crossAppNav";
 import type { DecisionStatus } from "@/shared/types/decisions";
 import type {
   OperationsKpiConversion,
@@ -209,7 +209,10 @@ function PredictionAccuracyCard({ data }: { data: OperationsKpiPredictionAccurac
 }
 
 function MissedOpportunitiesCard({ data }: { data: OperationsKpiMissedOpportunities }) {
-  const navigate = useNavigate();
+  // OperationsKpiPanel renders inside admin screens (OperationsScreen /
+  // DecisionsScreen); the project-detail link targets the user app
+  // (/dashboard/projects/...), so it crosses the bundle boundary.
+  const navigate = useCrossAppNavigate();
   const items = data.items ?? [];
   return (
     <KpiGroup title="놓친 유효 공고" hint="추천(투찰/검토)했지만 마감까지 미처리된 공고">

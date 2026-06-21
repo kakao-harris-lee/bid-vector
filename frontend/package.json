@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && BUILD_TARGET=user vite build && BUILD_TARGET=admin vite build",
+    "build:user": "BUILD_TARGET=user vite build",
+    "build:admin": "BUILD_TARGET=admin vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "test:watch": "vitest",

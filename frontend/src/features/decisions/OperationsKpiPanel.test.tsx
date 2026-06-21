@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test-utils";
 import { OperationsKpiPanel } from "./OperationsKpiPanel";
 import type { OperationsKpiResponse } from "@/shared/types/operations";
@@ -236,6 +236,35 @@ describe("OperationsKpiPanel", () => {
     // clicking an item navigates to the project detail route
     fireEvent.click(within(missed).getByText("지나친 유효 공고 A"));
     expect(window.location.pathname).toBe("/dashboard/projects/42");
+  });
+
+  // Regression: OperationsKpiPanel renders inside admin screens
+  // (OperationsScreen / DecisionsScreen). Its project-detail link targets the
+  // user app (/dashboard/projects/...), so in the standalone admin bundle the
+  // click must full-page navigate (window.location.assign) across the boundary.
+  it("standalone admin 번들에서는 놓친 공고 클릭이 user 앱으로 full-page 이동한다", () => {
+    vi.stubEnv("BASE_URL", "/admin/");
+    const originalLocation = window.location;
+    const assignMock = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, assign: assignMock }
+    });
+
+    try {
+      renderWithProviders(<OperationsKpiPanel data={fullData} loading={false} error={null} />);
+
+      const missed = screen.getByLabelText("놓친 유효 공고");
+      fireEvent.click(within(missed).getByText("지나친 유효 공고 A"));
+
+      expect(assignMock).toHaveBeenCalledWith("/dashboard/projects/42");
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation
+      });
+      vi.unstubAllEnvs();
+    }
   });
 
   it("놓친 유효 공고가 0건이면 빈 상태 문구를 표시한다", () => {

@@ -190,6 +190,36 @@ describe("OperatorSwitcher", () => {
     ).toBe(false);
   });
 
+  // Regression: in the standalone admin bundle there is no /dashboard route, so
+  // RedirectToUserApp must full-page bounce a non-privileged operator to the
+  // user app (window.location.assign) instead of an in-app <Navigate> (which
+  // would loop through the admin catch-all).
+  it("standalone admin 번들에서 비권한 사용자는 user 앱으로 full-page bounce된다", async () => {
+    vi.stubEnv("BASE_URL", "/admin/");
+    window.history.pushState({}, "", "/admin/operations");
+    const originalLocation = window.location;
+    const assignMock = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, assign: assignMock }
+    });
+
+    try {
+      vi.stubGlobal("fetch", buildFetchMock(nonPrivilegedAccounts));
+      renderApp();
+
+      await waitFor(() =>
+        expect(assignMock).toHaveBeenCalledWith("/dashboard")
+      );
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation
+      });
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("회사 선택 시 activeOperatorId가 localStorage에 영속되고 dashboard 호출에 operator_id가 전달된다", async () => {
     window.history.pushState({}, "", "/admin/operations");
     const fetchMock = buildFetchMock(privilegedAccounts);
@@ -299,8 +329,8 @@ describe("OperatorSwitcher", () => {
     ).toBe(true);
   });
 
-  it("legacy dashboard admin redirect는 권한 있는 사용자에게 admin surface를 유지한다", async () => {
-    window.history.pushState({}, "", "/dashboard/operations");
+  it("admin 라우트는 권한 있는 사용자에게 admin surface를 유지한다", async () => {
+    window.history.pushState({}, "", "/admin/operations");
     vi.stubGlobal("fetch", buildFetchMock(privilegedAccounts));
     renderApp();
 

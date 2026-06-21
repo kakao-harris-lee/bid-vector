@@ -1,8 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { AuthGate, useAuthSession } from "./layout/AuthGate";
+import { AuthGate } from "./layout/AuthGate";
 import { Shell } from "./layout/Shell";
-import { useActiveOperator } from "./operatorContext";
 import { HomeScreen } from "@/features/dashboard/HomeScreen";
 import { OpportunitiesScreen } from "@/features/dashboard/OpportunitiesScreen";
 import { BidsScreen } from "@/features/dashboard/BidsScreen";
@@ -24,26 +23,14 @@ const ProjectsScreen = lazy(() =>
 const ProjectDetailScreen = lazy(() =>
   import("@/features/projects").then((mod) => ({ default: mod.ProjectDetailScreen }))
 );
-const DecisionsScreen = lazy(() =>
-  import("@/features/decisions").then((mod) => ({ default: mod.DecisionsScreen }))
-);
+// BidSummaryScreen is the only user-facing screen under features/decisions/.
+// Import the file directly (NOT the barrel) so the admin-only decision screens
+// (DecisionsScreen/AccuracyReportScreen/DecisionSamplesScreen) never get pulled
+// into the user (/dashboard) bundle.
 const BidSummaryScreen = lazy(() =>
-  import("@/features/decisions").then((mod) => ({ default: mod.BidSummaryScreen }))
-);
-const AccuracyReportScreen = lazy(() =>
-  import("@/features/decisions").then((mod) => ({ default: mod.AccuracyReportScreen }))
-);
-const DecisionSamplesScreen = lazy(() =>
-  import("@/features/decisions").then((mod) => ({ default: mod.DecisionSamplesScreen }))
-);
-const ExperimentsScreen = lazy(() =>
-  import("@/features/experiments").then((mod) => ({ default: mod.ExperimentsScreen }))
-);
-const ExperimentLabScreen = lazy(() =>
-  import("@/features/synthetic-backtest").then((mod) => ({ default: mod.ExperimentLabScreen }))
-);
-const OperationsScreen = lazy(() =>
-  import("@/features/operations").then((mod) => ({ default: mod.OperationsScreen }))
+  import("@/features/decisions/BidSummaryScreen").then((mod) => ({
+    default: mod.BidSummaryScreen
+  }))
 );
 
 function LazyFallback() {
@@ -54,30 +41,22 @@ function Lazy({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<LazyFallback />}>{children}</Suspense>;
 }
 
-function AdminShellGuard() {
-  const session = useAuthSession();
-  const activeOperator = useActiveOperator(session);
-
-  if (activeOperator.isLoading) {
-    return <LazyFallback />;
-  }
-
-  if (!activeOperator.isPrivileged) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
-  return <Shell surface="admin" />;
-}
-
-export function AppRoutes() {
+/**
+ * Bare user route subtree (no `<Routes>` wrapper, no catch-all).
+ *
+ * `AppRoutes` wraps this in `<Routes>` for the production user app. Tests mount
+ * it alongside the admin subtree in a single combined `<Routes>` (see
+ * `test-utils.tsx`) so existing specs that exercise both surfaces keep working.
+ */
+export function UserRouteTree() {
   return (
-    <Routes>
+    <>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route
         path="/dashboard"
         element={
           <AuthGate>
-            <Shell />
+            <Shell surface="user" />
           </AuthGate>
         }
       >
@@ -90,33 +69,24 @@ export function AppRoutes() {
         <Route path="profile" element={<Lazy><CompanyInfoEditor /></Lazy>} />
         <Route path="projects" element={<Lazy><ProjectsScreen /></Lazy>} />
         <Route path="projects/:id" element={<Lazy><ProjectDetailScreen /></Lazy>} />
-        <Route path="decisions" element={<Navigate to="/admin/decisions" replace />} />
         <Route
           path="decisions/:id/summary"
           element={<Lazy><BidSummaryScreen /></Lazy>}
         />
-        <Route path="accuracy-report" element={<Navigate to="/admin/accuracy-report" replace />} />
-        <Route path="decision-samples" element={<Navigate to="/admin/decision-samples" replace />} />
-        <Route path="experiments" element={<Navigate to="/admin/experiments" replace />} />
-        <Route path="synthetic-backtest" element={<Navigate to="/admin/synthetic-backtest" replace />} />
-        <Route path="operations" element={<Navigate to="/admin/operations" replace />} />
       </Route>
-      <Route
-        path="/admin"
-        element={
-          <AuthGate>
-            <AdminShellGuard />
-          </AuthGate>
-        }
-      >
-        <Route index element={<Navigate to="/admin/operations" replace />} />
-        <Route path="operations" element={<Lazy><OperationsScreen /></Lazy>} />
-        <Route path="synthetic-backtest" element={<Lazy><ExperimentLabScreen /></Lazy>} />
-        <Route path="experiments" element={<Lazy><ExperimentsScreen /></Lazy>} />
-        <Route path="accuracy-report" element={<Lazy><AccuracyReportScreen /></Lazy>} />
-        <Route path="decision-samples" element={<Lazy><DecisionSamplesScreen /></Lazy>} />
-        <Route path="decisions" element={<Lazy><DecisionsScreen /></Lazy>} />
-      </Route>
+    </>
+  );
+}
+
+/**
+ * Production user app routes. The admin surface is served as a separate Vite
+ * bundle (see `router-admin.tsx`), so any non-user path falls back to
+ * `/dashboard` rather than redirecting into `/admin`.
+ */
+export function AppRoutes() {
+  return (
+    <Routes>
+      {UserRouteTree()}
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
