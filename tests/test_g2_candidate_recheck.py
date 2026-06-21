@@ -47,7 +47,7 @@ def test_g2_recheck_schedule_builds_when_enabled(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED", True)
-    monkeypatch.setattr(settings, "G2_CANDIDATE_RECHECK_HOUR_UTC", 21)
+    monkeypatch.setattr(settings, "G2_CANDIDATE_RECHECK_HOUR_KST", 21)
     monkeypatch.setattr(settings, "G2_CANDIDATE_RECHECK_MINUTE", 0)
 
     schedule = build_g2_candidate_recheck_beat_schedule()

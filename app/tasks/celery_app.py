@@ -368,7 +368,7 @@ def build_smoke_test_beat_schedule() -> dict[str, dict[str, object]]:
     """Build the periodic schedule entry for the daily KONEPS+Telegram smoke test."""
     if not settings.SMOKE_TEST_SCHEDULE_ENABLED:
         return {}
-    hour = max(0, min(23, int(settings.SMOKE_TEST_HOUR_UTC)))
+    hour = max(0, min(23, int(settings.SMOKE_TEST_HOUR_KST)))
     minute = max(0, min(59, int(settings.SMOKE_TEST_MINUTE)))
     return {
         "smoke_test_daily": {
@@ -389,7 +389,7 @@ def build_g2_candidate_recheck_beat_schedule() -> dict[str, dict[str, object]]:
     """
     if not settings.G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED:
         return {}
-    hour = max(0, min(23, int(settings.G2_CANDIDATE_RECHECK_HOUR_UTC)))
+    hour = max(0, min(23, int(settings.G2_CANDIDATE_RECHECK_HOUR_KST)))
     minute = max(0, min(59, int(settings.G2_CANDIDATE_RECHECK_MINUTE)))
     return {
         "g2_candidate_recheck_daily": {
@@ -420,7 +420,7 @@ def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object
         return {}
 
     day_of_week = max(0, min(6, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK)))
-    hour = max(0, min(23, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_UTC)))
+    hour = max(0, min(23, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST)))
     minute = max(0, min(59, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE)))
 
     return {
