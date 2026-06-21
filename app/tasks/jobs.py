@@ -23,6 +23,7 @@ from app.tasks.celery_app import (
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
     ENRICH_BUSINESS_TYPE_TASK_NAME,
     FORWARD_SETTLEMENT_TASK_NAME,
+    G2_CANDIDATE_RECHECK_TASK_NAME,
     HISTORICAL_BACKTEST_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
@@ -482,6 +483,110 @@ def run_koneps_telegram_smoke_test() -> dict:
         except Exception:  # noqa: BLE001 — persistence must not mask the smoke result
             logger.exception("failed to persist smoke test run")
         return asdict(report)
+    finally:
+        db.close()
+
+
+@celery_app.task(name=G2_CANDIDATE_RECHECK_TASK_NAME)
+def run_g2_candidate_recheck() -> dict:
+    """Daily read-only G-2 candidate re-check across synthetic operators.
+
+    Re-runs the read-only ``preview_candidates`` for every active synthetic
+    operator (``username LIKE 'synthetic-%'``) to measure when niche biddable
+    inventory recovers and candidates reappear. This is an *observation* tool for
+    G-2 live evidence — it deliberately calls ``preview_candidates`` (read-only),
+    never ``execute_monitoring``, and writes nothing to operator data
+    (``operator_strategy_runs`` / ``bid_decision_records`` / notifications). The
+    only permitted write is a single ``g2_candidate_recheck`` analytics evidence
+    event carrying the per-operator + aggregate summary.
+
+    Each operator is swept inside its own ``try/except`` so one failure cannot
+    abort the whole sweep; failures are recorded per operator and the task
+    continues.
+    """
+    import json
+
+    from app.core.single_user import ensure_operator_account
+    from app.models.models import Analytics
+
+    db = SessionLocal()
+    try:
+        operator = ensure_operator_account(db)
+        operators = (
+            db.query(User)
+            .filter(User.username.like("synthetic-%"), User.is_active.is_(True))
+            .order_by(User.id.asc())
+            .all()
+        )
+
+        service = StrategyMonitoringService()
+        per_operator: list[dict[str, Any]] = []
+        total_candidates = 0
+        operators_with_candidates = 0
+        error_count = 0
+
+        for op in operators:
+            try:
+                preview = service.preview_candidates(
+                    db,
+                    limit=10,
+                    high_priority_only=False,
+                    operator=op,
+                )
+                evaluated = int(preview.get("evaluated_project_count", 0) or 0)
+                returned = int(preview.get("returned_candidate_count", 0) or 0)
+                total_candidates += returned
+                if returned > 0:
+                    operators_with_candidates += 1
+                per_operator.append(
+                    {
+                        "operator_id": int(op.id),
+                        "username": str(op.username or ""),
+                        "evaluated_project_count": evaluated,
+                        "returned_candidate_count": returned,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
+                error_count += 1
+                logger.exception(
+                    "g2_candidate_recheck failed for operator_id=%s username=%s",
+                    getattr(op, "id", None),
+                    getattr(op, "username", None),
+                )
+                per_operator.append(
+                    {
+                        "operator_id": int(op.id),
+                        "username": str(op.username or ""),
+                        "error": type(exc).__name__,
+                    }
+                )
+
+        summary = {
+            "operator_count": len(operators),
+            "total_candidates": total_candidates,
+            "operators_with_candidates": operators_with_candidates,
+            "error_count": error_count,
+            "per_operator": per_operator,
+        }
+
+        # The only permitted write: one analytics evidence event for the sweep.
+        analytics = Analytics(
+            user_id=operator.id,
+            event_type="g2_candidate_recheck",
+            event_data=json.dumps(summary, ensure_ascii=False),
+        )
+        db.add(analytics)
+        db.commit()
+
+        logger.info(
+            "g2_candidate_recheck completed operators=%s total_candidates=%s "
+            "operators_with_candidates=%s errors=%s",
+            summary["operator_count"],
+            total_candidates,
+            operators_with_candidates,
+            error_count,
+        )
+        return summary
     finally:
         db.close()
 
