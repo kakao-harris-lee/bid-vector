@@ -603,6 +603,179 @@ def test_operator_strategy_monitor_manual_path_keeps_full_scan(client, test_db, 
     assert response["trigger_source"] == StrategyMonitoringService.SYNC_TRIGGER_SOURCE
 
 
+def _configure_software_operator(client):
+    """Configure the singleton operator + a software watch strategy for monitor tests."""
+    client.put(
+        "/api/v1/operator/profile",
+        json={
+            "business_type": "software",
+            "license_codes": ["SW001"],
+            "region_codes": ["서울특별시", "전국"],
+            "annual_revenue": 1500000000.0,
+            "capacity_score": 0.95,
+            "total_awards": 9,
+        },
+    )
+    client.put(
+        "/api/v1/operator/strategy",
+        json={
+            "focus_categories": ["software"],
+            "focus_regions": ["서울특별시"],
+            "required_keywords": ["AI", "데이터"],
+            "minimum_match_score": 0.6,
+            "minimum_probability_score": 0.55,
+            "notify_only_high_priority": False,
+            "max_recommended_candidates": 10,
+        },
+    )
+
+
+def _passing_software_project(*, title, deadline):
+    """Build a watch-filter-passing software notice with an explicit deadline."""
+    return Project(
+        title=title,
+        description="서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축",
+        requirements="SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함",
+        budget_estimate=130000000.0,
+        category="software",
+        status="open",
+        deadline=deadline,
+    )
+
+
+def _passing_analysis(self, db, project, **kwargs):
+    """Fake analysis that passes thresholds so eligible projects always surface."""
+    del db, project, kwargs
+    return {
+        "matched_score": 0.84,
+        "probability_score": 0.89,
+        "recommended_amount": 126000000.0,
+        "deadline_hours_remaining": 8,
+        "current_active_bids": 0,
+        "max_active_bids": 3,
+        "current_workload_score": 0.0,
+        "analysis_summary": "마감 적격 후보",
+        "decision": {
+            "pursue_bid": True,
+            "action": "bid_now",
+            "priority_score": 0.91,
+            "recommended_amount": 126000000.0,
+            "probability_score": 0.89,
+            "reasoning": "적격 마감 후보",
+        },
+    }
+
+
+def _collect_evaluations_for_operator(test_db, *, scan_limit=None):
+    """Run ``_collect_candidate_evaluations`` against the configured singleton operator."""
+    from app.core.single_user import ensure_operator_account, ensure_operator_strategy
+
+    operator = ensure_operator_account(test_db)
+    strategy = ensure_operator_strategy(test_db)
+    service = StrategyMonitoringService()
+    evaluations, evaluated_count = service._collect_candidate_evaluations(
+        test_db,
+        strategy=strategy,
+        operator=operator,
+        high_priority_only=False,
+        max_active_bids=service.DEFAULT_MAX_ACTIVE_BIDS,
+        current_workload_score=None,
+        same_category_only=service.DEFAULT_SAME_CATEGORY_ONLY,
+        similar_limit=service.DEFAULT_SIMILAR_LIMIT,
+        min_similarity=service.DEFAULT_MIN_SIMILARITY,
+        scan_limit=scan_limit,
+    )
+    return evaluations, evaluated_count
+
+
+def test_collect_candidate_evaluations_excludes_expired_deadlines(client, test_db, monkeypatch):
+    """Notices whose deadline already passed are not biddable and must be skipped."""
+    _configure_software_operator(client)
+
+    expired = _passing_software_project(
+        title="서울 AI 데이터 통합 (마감지남)",
+        deadline=datetime.now(UTC) - timedelta(hours=2),
+    )
+    future = _passing_software_project(
+        title="서울 AI 데이터 통합 (미래마감)",
+        deadline=datetime.now(UTC) + timedelta(hours=12),
+    )
+    test_db.add_all([expired, future])
+    test_db.commit()
+    test_db.refresh(expired)
+    test_db.refresh(future)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _passing_analysis)
+
+    evaluations, evaluated_count = _collect_evaluations_for_operator(test_db)
+
+    surfaced_ids = {evaluation.project.id for evaluation in evaluations}
+    assert future.id in surfaced_ids
+    assert expired.id not in surfaced_ids
+    # evaluated_project_count now counts only biddable matches.
+    assert evaluated_count == 1
+
+
+def test_collect_candidate_evaluations_includes_null_deadline(client, test_db, monkeypatch):
+    """A missing deadline must NOT silently hide a candidate (conservative inclusion)."""
+    _configure_software_operator(client)
+
+    null_deadline = _passing_software_project(
+        title="서울 AI 데이터 통합 (마감미정)",
+        deadline=None,
+    )
+    test_db.add(null_deadline)
+    test_db.commit()
+    test_db.refresh(null_deadline)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _passing_analysis)
+
+    evaluations, evaluated_count = _collect_evaluations_for_operator(test_db)
+
+    surfaced_ids = {evaluation.project.id for evaluation in evaluations}
+    assert null_deadline.id in surfaced_ids
+    assert evaluated_count == 1
+
+
+def test_collect_candidate_evaluations_orders_most_imminent_future_first(client, test_db, monkeypatch):
+    """Among biddable notices the soonest future deadline is scanned first (deadline asc)."""
+    _configure_software_operator(client)
+
+    expired = _passing_software_project(
+        title="서울 AI 데이터 통합 (마감지남)",
+        deadline=datetime.now(UTC) - timedelta(hours=5),
+    )
+    soonest = _passing_software_project(
+        title="서울 AI 데이터 통합 (임박)",
+        deadline=datetime.now(UTC) + timedelta(hours=3),
+    )
+    later = _passing_software_project(
+        title="서울 AI 데이터 통합 (지연)",
+        deadline=datetime.now(UTC) + timedelta(hours=48),
+    )
+    test_db.add_all([expired, soonest, later])
+    test_db.commit()
+    for project in (expired, soonest, later):
+        test_db.refresh(project)
+
+    scanned_order = []
+
+    def recording_analyze(self, db, project, **kwargs):
+        scanned_order.append(project.id)
+        return _passing_analysis(self, db, project, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", recording_analyze)
+
+    # Bound the scan to 1 so only the most-imminent FUTURE notice is reached;
+    # without the future filter the expired notice would be scanned first.
+    evaluations, evaluated_count = _collect_evaluations_for_operator(test_db, scan_limit=1)
+
+    assert scanned_order == [soonest.id]
+    assert evaluated_count == 1
+    assert [evaluation.project.id for evaluation in evaluations] == [soonest.id]
+    assert expired.id not in scanned_order
+
+
 def _seed_imminent_nonmatching_then_late_matching(test_db, *, imminent_count, late_count):
     """Seed non-matching notices in the imminent slice and matching ones later.
 
