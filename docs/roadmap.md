@@ -1,12 +1,12 @@
 # bid-vector 로드맵
 
-기준일: 2026-06-19
+기준일: 2026-06-22
 
 이 문서는 `bid-vector`의 단계별 목표와 exit gate를 정리하는 단일 로드맵입니다. 오래된 계획 문서보다 현재 코드와 이 문서를 우선합니다.
 
 ## 현재 결론
 
-0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, 운영 runbook이 `main`에 반영되었습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행, 사업자별 알림 대상 확인, G-2 exit review**입니다.
+0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, **관리자/사용자 웹 물리 분리(별도 Vite 번들)**, 운영 runbook이 `main`에 반영되었습니다. 2026-06-22 기준으로 **G-0 smoke가 실제 스케줄에서 5 phase 전부 green으로 실증**됐고(smoke ML phase fix #106), **G-2 라이브 증적 축적이 시작**됐으며(사업자별 strategy monitor 실행 + dry-run 알림채널 + 일일 후보 재확인 자동화), 운영 안정화(celerybeat 복구, KST 스케줄 정합, monitor run 고아 정리/reconciler)도 반영됐습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
@@ -29,6 +29,17 @@
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
 
 ## 최근 반영된 작업
+
+2026-06-22 (`88d9f53` 포함, PR #106~#111)로 다음이 `main`에 반영·배포되었습니다.
+
+- G-0 smoke 실증(#106): smoke ML phase가 "최근 30분 내 신규 공고"(smoke가 공고를 persist하지 않아 구조적으로 항상 비어 FAIL)가 아니라 "최근 7일 내 비-fallback 임베딩 + budget 우선 실제 공고"를 평가하도록 수정. **06-22 07:00 KST 스케줄 smoke가 5 phase 전부 green**으로 실증(이전 06-16 2회 FAIL).
+- monitor 스캔 정확성/성능(#108): strategy monitor 후보 스캔이 만료(과거 마감) 공고를 제외하고 **입찰가능 공고만** 평가(`deadline IS NULL OR deadline > now()`). 만료 공고에 ML 평가 낭비 + 미래 후보 누락을 차단.
+- 스케줄 시각 KST 정합(#109): celery가 이미 `timezone=Asia/Seoul`인데 설정명/주석이 UTC였던 misnomer를 `*_HOUR_KST`로 정정. **smoke 07:00 KST, G-2 일일 재확인 21:00 KST**.
+- G-2 일일 후보 재확인 자동화(#107): read-only `preview_candidates` 스윕으로 사업자별 입찰가능 후보 수를 매일 측정해 analytics 증적(`g2_candidate_recheck`)으로 기록(operator 데이터 무변경). niche 재고 회복 추적용, `.env`로 ON.
+- 사용자/관리자 웹 물리 분리(#110): 단일 SPA를 `/dashboard`(사용자)·`/admin`(관리자) **두 독립 Vite 번들**로 분리(BUILD_TARGET 이중 빌드). 사용자 앱에 admin 화면/fetch 코드 미포함, FastAPI가 각 번들을 별도 서빙. 앱 경계 이동은 full-page.
+- monitor run 수명주기/고아 정리(#111): 고아 `running` strategy_run/crawl_job이 누적돼 operations `task_stale_queue`를 critical로 만들던 문제를, finalize-on-failure(예외 mask 없음, 새 세션 폴백) + 주기 stale-task reconciler(하드리밋+grace 초과 비종료 row를 failed로 마감)로 차단. reconciler ON. **monitor 스케줄 자체는 perf 재검토 전까지 OFF**.
+- 운영 안정화: celerybeat 스케줄 corruption(`_dbm.error`) 크래시 루프 복구(주기 작업 재가동). 고아 monitor run 10건 수동 failed 마감.
+- G-2 라이브 증적 kickoff: synthetic 사업자별 strategy monitor 실행(op14 sw-small 1후보→결정→in-app 알림 / op19 gs-cleaning 12후보) + op14/19/21/24 dry-run 알림채널 생성. **대부분 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보 0** — 재고 누적 대기(데이터 부재이지 설정/버그 아님). canonical operator만 Telegram 실송신, synthetic은 구조적 skip/dry-run.
 
 2026-06-19 `7fdc04c` 기준으로 다음 G-2 exit 기반 작업이 `main`에 반영되었습니다.
 
@@ -125,7 +136,7 @@ Exit gate G-1:
 
 - 주요 dashboard/reporting, strategy monitor, decision experiment 경로는 `operator_id` target context와 `current_operator_*` 응답 필드를 지원합니다.
 - synthetic operator infrastructure는 있지만 SaaS 멀티테넌트는 아닙니다.
-- 현재 프론트는 단일 SPA이지만 `/dashboard` 사용자 surface와 `/admin/*` 관리자 surface의 역할이 분리되었습니다.
+- 프론트는 `/dashboard`(사용자)와 `/admin`(관리자)이 **두 독립 Vite 번들로 물리 분리**되었습니다(#110). 사용자 앱에 admin 코드 미포함, 관리자 번들은 privileged operator 가드. 완전한 모노레포 분리·RBAC는 후속(Phase 3/4).
 - API 문서는 monitor/decision experiment/sample-gap/candidates와 operator target context를 반영합니다.
 - `/api/v1/analytics/g2-evidence`가 operator별 G-2 증적 ledger와 blocking gap을 반환합니다.
 - synthetic/non-canonical operator Telegram 송신은 dry-run evidence로 남기며, callback owner 검증과 route metadata 분리가 강화되었습니다.
