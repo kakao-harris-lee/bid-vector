@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -13,6 +12,7 @@ import {
 import { useShellContext } from "@/app/dashboardContext";
 import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { formatCurrencyCompact, formatDateTime, formatPercent } from "@/shared/lib";
+import { useCrossAppNavigate } from "@/shared/crossAppNav";
 import { InlineActionButtons, ReasonIndicators } from "@/features/dashboard/components";
 import { useApplyBidDecisionActionMutation } from "@/features/dashboard/hooks";
 import type { BidDecisionActionType } from "@/shared/api";
@@ -51,7 +51,9 @@ const STATUS_LABEL: Record<DecisionStatus, string> = {
 
 export function DecisionsScreen() {
   const { session, activeOperator } = useShellContext();
-  const navigate = useNavigate();
+  // Admin screen linking into the user app (/dashboard/...) crosses the bundle
+  // boundary, so use the cross-app helper (full-page nav in standalone admin).
+  const navigate = useCrossAppNavigate();
   const [days, setDays] = useState(30);
   const [breakdownDimension, setBreakdownDimension] = useState<"category" | "workload" | "agency">(
     "category"

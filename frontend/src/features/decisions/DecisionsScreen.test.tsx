@@ -195,7 +195,7 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 
 beforeEach(() => {
   window.localStorage.setItem("bid-vector-dashboard-token", "token-decisions");
-  window.history.pushState({}, "", "/dashboard/decisions");
+  window.history.pushState({}, "", "/admin/decisions");
   vi.restoreAllMocks();
   act(() => {
     toastApi.clearAll();
@@ -392,5 +392,72 @@ describe("DecisionsScreen", () => {
       expect(agencyTab).toHaveAttribute("aria-selected", "true")
     );
     expect(categoryTab).toHaveAttribute("aria-selected", "false");
+  });
+
+  // Regression: DecisionsScreen is admin-only; the "투찰 요약" link targets the
+  // user app (/dashboard/decisions/:id/summary). In the standalone admin bundle
+  // that crosses the app boundary, so it must be a full-page navigation
+  // (window.location.assign) — an in-app navigate would hit the admin catch-all.
+  it("standalone admin 번들에서 '투찰 요약' 클릭은 user 앱으로 full-page 이동한다", async () => {
+    vi.stubEnv("BASE_URL", "/admin/");
+    const originalLocation = window.location;
+    const assignMock = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, assign: assignMock }
+    });
+
+    try {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+        if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
+        if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
+        if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
+        if (url.startsWith("/api/v1/analytics/decision-recommendations"))
+          return jsonResponse(recommendations);
+        return jsonResponse({}, 404);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderApp();
+
+      const summaryButton = await screen.findByRole("button", { name: "투찰 요약" });
+      fireEvent.click(summaryButton);
+
+      expect(assignMock).toHaveBeenCalledWith("/dashboard/decisions/101/summary");
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation
+      });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // Combined-test branch (base "/"): both surfaces share one router, so the
+  // same link stays in-app — exercised by `renderApp`'s combined route tree.
+  it("combined-test 분기에서 '투찰 요약' 클릭은 in-app으로 summary 경로를 연다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === "/api/v1/operator/accounts") return jsonResponse(privilegedAccounts);
+      if (url.startsWith("/api/v1/analytics/operations-kpi")) return jsonResponse(operationsKpi);
+      if (url.startsWith("/api/v1/analytics/decision-funnel")) return jsonResponse(funnel);
+      if (url.startsWith("/api/v1/analytics/decision-recommendations"))
+        return jsonResponse(recommendations);
+      if (url.startsWith("/api/v1/decisions/101/summary")) return jsonResponse({}, 404);
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const summaryButton = await screen.findByRole("button", { name: "투찰 요약" });
+    fireEvent.click(summaryButton);
+
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/dashboard/decisions/101/summary")
+    );
   });
 });
