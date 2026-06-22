@@ -103,6 +103,7 @@ RECLASSIFY_CATEGORIES_TASK_NAME = "jobs.reclassify_pending_categories"
 SMOKE_TEST_TASK_NAME = "jobs.run_koneps_telegram_smoke_test"
 G2_CANDIDATE_RECHECK_TASK_NAME = "jobs.run_g2_candidate_recheck"
 TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
+RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -119,6 +120,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SMOKE_TEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         G2_CANDIDATE_RECHECK_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -460,6 +462,32 @@ def build_telegram_polling_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_stale_task_reconciler_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for the stale task-run reconciler.
+
+    Durable backstop for orphaned non-terminal ``operator_strategy_runs`` /
+    ``crawl_jobs`` rows left behind by a hard-kill / worker-restart / DB-down
+    event (the cases the in-task finalize-on-failure path cannot cover because no
+    Python ``finally`` runs on SIGKILL). Without this, one orphaned ``running``
+    row trips the operations dashboard ``task_stale_queue: critical`` KPI forever.
+
+    Safe idempotent janitor: only flips already-stale non-terminal rows to
+    ``failed`` (never deletes rows or partial results), so it is recommended ON.
+    Defaults to OFF to honor the codebase opt-in-via-.env schedule convention.
+    """
+    if not settings.STALE_TASK_RECONCILER_SCHEDULE_ENABLED:
+        return {}
+
+    return {
+        "stale_task_reconciler_periodic": {
+            "task": RECONCILE_STALE_TASK_RUNS_TASK_NAME,
+            "schedule": float(
+                max(1, settings.STALE_TASK_RECONCILER_INTERVAL_MINUTES) * 60
+            ),
+        }
+    }
+
+
 def build_celery_runtime_config() -> dict[str, object]:
     """Build the shared Celery runtime configuration for eager and worker-backed modes."""
     soft_time_limit, hard_time_limit = _normalize_task_time_limits(
@@ -505,6 +533,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_g2_candidate_recheck_beat_schedule(),
             **build_price_predictor_training_beat_schedule(),
             **build_telegram_polling_beat_schedule(),
+            **build_stale_task_reconciler_beat_schedule(),
         },
     }
 

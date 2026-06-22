@@ -560,25 +560,89 @@ class StrategyMonitoringService:
             },
         )
 
-    def _mark_run_failed(self, db: Session, *, run_id: int, error_message: str) -> None:
-        """Persist failure metadata for a monitoring run after rollback-safe recovery."""
-        db.rollback()
-        monitor_run = db.query(OperatorStrategyRun).filter(OperatorStrategyRun.id == run_id).first()
-        if monitor_run is None:
-            return
-        monitor_run.status = "failed"
-        monitor_run.error_message = error_message
-        monitor_run.completed_at = utc_now()
-        db.commit()
-        realtime_event_manager.publish_event(
-            "strategy_monitor.failed",
-            {
-                "monitor_run_id": int(monitor_run.id),
-                "operator_id": int(monitor_run.operator_id),
-                "trigger_source": monitor_run.trigger_source,
-                "error_message": monitor_run.error_message,
-            },
-        )
+    def _mark_run_failed(self, db: Session, *, run_id: int, error_message: str) -> bool:
+        """Persist failure metadata for a monitoring run after rollback-safe recovery.
+
+        Best-effort and exception-safe: this runs inside the ``except`` arm of
+        ``execute_monitoring`` (and the ``monitor_operator_strategy`` task), so it
+        must never raise. If the original failure was a DB error, the passed-in
+        session is already poisoned -- the ``db.rollback()`` / query / commit on
+        it can themselves raise. We first try the live session, then fall back to
+        a brand-new session, and finally swallow any secondary error so the
+        original exception is always re-raised by the caller (never masked).
+
+        Returns ``True`` when the row was transitioned to ``failed`` (so the
+        reconciler does not have to mop it up later), ``False`` otherwise.
+        """
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 — poisoned session must not mask original error
+            pass
+
+        try:
+            if self._write_run_failure(db, run_id=run_id, error_message=error_message):
+                return True
+            # Live session could not persist the failure (e.g. connection
+            # refused). Try once more on a fresh, independent session so the
+            # orphan ``running`` row is still closed out without waiting for the
+            # periodic reconciler.
+            return self._write_run_failure_on_new_session(
+                run_id=run_id, error_message=error_message
+            )
+        except Exception:  # noqa: BLE001 — finalize is best-effort; never mask original
+            return False
+
+    def _write_run_failure(self, db: Session, *, run_id: int, error_message: str) -> bool:
+        """Attempt to finalize a run as failed on the given session. Never raises."""
+        try:
+            monitor_run = db.query(OperatorStrategyRun).filter(OperatorStrategyRun.id == run_id).first()
+            if monitor_run is None:
+                return False
+            monitor_run.status = "failed"
+            monitor_run.error_message = error_message
+            monitor_run.completed_at = utc_now()
+            db.commit()
+        except Exception:  # noqa: BLE001 — best-effort finalize must not mask original error
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
+        self._publish_run_failed_event(monitor_run)
+        return True
+
+    def _write_run_failure_on_new_session(self, *, run_id: int, error_message: str) -> bool:
+        """Finalize a run as failed on a fresh session when the live one is poisoned."""
+        from app.core.database import SessionLocal
+
+        recovery_db: Session | None = None
+        try:
+            recovery_db = SessionLocal()
+            return self._write_run_failure(recovery_db, run_id=run_id, error_message=error_message)
+        except Exception:  # noqa: BLE001 — recovery is strictly best-effort
+            return False
+        finally:
+            if recovery_db is not None:
+                try:
+                    recovery_db.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _publish_run_failed_event(self, monitor_run: OperatorStrategyRun) -> None:
+        """Emit the realtime failure event without ever masking the original error."""
+        try:
+            realtime_event_manager.publish_event(
+                "strategy_monitor.failed",
+                {
+                    "monitor_run_id": int(monitor_run.id),
+                    "operator_id": int(monitor_run.operator_id),
+                    "trigger_source": monitor_run.trigger_source,
+                    "error_message": monitor_run.error_message,
+                },
+            )
+        except Exception:  # noqa: BLE001 — event publish must not break failure finalize
+            pass
 
     def _collect_candidate_evaluations(
         self,

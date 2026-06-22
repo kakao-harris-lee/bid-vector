@@ -201,6 +201,25 @@ class Settings(BaseSettings):
     CATEGORY_RECLASSIFY_INTERVAL_MINUTES: int = 30
     CATEGORY_RECLASSIFY_BATCH_LIMIT: int = 100
 
+    # Stale task-run reconciler — periodic janitor that closes out non-terminal
+    # (running/queued) operator_strategy_runs and crawl_jobs whose age exceeds the
+    # task hard time limit plus a safety margin. This is the durable backstop for
+    # the hard-kill / worker-restart / DB-down cases that the in-task
+    # finalize-on-failure path cannot cover (no ``finally`` runs on SIGKILL), so a
+    # crashed run can never strand a ``running`` row that trips the operations
+    # dashboard ``task_stale_queue: critical`` KPI forever. Safe idempotent
+    # janitor (only flips already-stale non-terminal rows to ``failed`` with a
+    # ``[reconciled]`` marker); recommended ON. Default OFF to honor the
+    # codebase's opt-in-via-.env schedule convention.
+    STALE_TASK_RECONCILER_SCHEDULE_ENABLED: bool = False
+    STALE_TASK_RECONCILER_INTERVAL_MINUTES: int = 10
+    # Extra slack added on top of CELERY_TASK_TIME_LIMIT_SECONDS before a
+    # non-terminal row is considered orphaned. Keeps a task that is legitimately
+    # running right up to its hard limit (then redelivered/finalized) from being
+    # reconciled out from under itself.
+    STALE_TASK_RECONCILER_GRACE_SECONDS: int = 300
+    STALE_TASK_RECONCILER_BATCH_LIMIT: int = 500
+
     # ML release governance
     ML_RELEASE_MANIFEST_DIR: str = "models/manifests"
     ML_RELEASE_MANIFEST_ARCHIVE_DIR: str = "models/manifests/archive"
