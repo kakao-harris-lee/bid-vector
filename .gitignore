@@ -115,3 +115,9 @@ frontend/playwright/.cache/
 
 # API doc pipeline intermediates
 docs/api/.work/
+
+# Operational evidence snapshots (smoke / g2-evidence) — kept local, not committed
+reports/
+
+# Playwright MCP scratch output (screenshots / snapshots / console logs)
+.playwright-mcp/
