@@ -30,6 +30,7 @@ from app.tasks.celery_app import (
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
     PROJECT_EMBEDDING_REBUILD_TASK_NAME,
     RECLASSIFY_CATEGORIES_TASK_NAME,
+    RECONCILE_STALE_TASK_RUNS_TASK_NAME,
     SMOKE_TEST_TASK_NAME,
     SYNTHETIC_BACKTEST_RUN_TASK_NAME,
     celery_app,
@@ -587,6 +588,39 @@ def run_g2_candidate_recheck() -> dict:
             error_count,
         )
         return summary
+    finally:
+        db.close()
+
+
+@celery_app.task(name=RECONCILE_STALE_TASK_RUNS_TASK_NAME)
+def reconcile_stale_task_runs() -> dict:
+    """Finalize orphaned non-terminal task-run rows left by hard-kill/restart/DB-down.
+
+    Periodic janitor backstop for the in-task finalize-on-failure path: when a
+    worker is SIGKILLed by the hard time limit, restarted, or loses the database
+    at the moment it tries to mark a run failed, the ``operator_strategy_runs`` /
+    ``crawl_jobs`` row is stranded in a non-terminal (``running`` / ``queued``)
+    state forever and trips the operations dashboard ``task_stale_queue:
+    critical`` KPI. This sweep flips any such row older than the Celery hard time
+    limit (plus a grace margin) to ``failed`` with a ``[reconciled]`` marker.
+    Status-only transition: it never deletes the row or its partial results.
+    """
+    from app.services.stale_task_reconciler import StaleTaskReconcilerService
+
+    db = SessionLocal()
+    try:
+        result = StaleTaskReconcilerService().reconcile(db)
+        if result.get("total_finalized"):
+            logger.info(
+                "reconcile_stale_task_runs finalized strategy_runs=%s crawl_jobs=%s (threshold=%ss)",
+                result.get("strategy_runs_finalized"),
+                result.get("crawl_jobs_finalized"),
+                result.get("threshold_seconds"),
+            )
+        return result
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
