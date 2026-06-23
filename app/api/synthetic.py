@@ -37,7 +37,10 @@ from app.tasks.jobs import (
     get_synthetic_backtest_task_status,
 )
 
-router = APIRouter(prefix="/synthetic", tags=["synthetic"])
+# Tag is assigned at include time in routes.py (tags=["Synthetic"]). Declaring a
+# lowercase tag here too produced a "Synthetic"/"synthetic" case-split in the
+# OpenAPI spec, so the tag is intentionally omitted from the router.
+router = APIRouter(prefix="/synthetic")
 
 
 # --- schemas -------------------------------------------------------------------
