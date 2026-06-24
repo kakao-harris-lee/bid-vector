@@ -422,6 +422,8 @@ def test_recommendation_feedback_labels_empty_payload_is_safe(client):
     payload = response.json()
     assert payload == {
         "operator_id": operator_id,
+        "current_operator_id": operator_id,
+        "current_operator_username": "labels-empty-operator",
         "period_days": 30,
         "label_count": 0,
         "useful_count": 0,
