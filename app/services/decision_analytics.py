@@ -1772,8 +1772,19 @@ class DecisionAnalyticsService:
         return str(decision.project.demand_agency or decision.project.issuing_agency or self.UNKNOWN_AGENCY)
 
     def _entry_datetime(self, decision: BidDecisionRecord):
-        """Resolve the timestamp that represents entry into the decision workflow."""
-        return decision.first_decided_at or decision.created_at or decision.updated_at or utc_now()
+        """Resolve the timestamp that represents entry into the decision workflow.
+
+        ``first_decided_at`` is persisted as a naive timestamp while
+        ``created_at`` / ``updated_at`` are timezone-aware; normalize to a
+        UTC-aware value so downstream arithmetic (e.g. ``_compute_hours_to_submit``)
+        never mixes naive and aware datetimes.
+        """
+        return ensure_utc(
+            decision.first_decided_at
+            or decision.created_at
+            or decision.updated_at
+            or utc_now()
+        )
 
     def _is_submitted(self, decision: BidDecisionRecord) -> bool:
         """Return whether the current decision has reached submitted state."""
