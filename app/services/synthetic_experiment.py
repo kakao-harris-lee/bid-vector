@@ -1801,6 +1801,17 @@ class SyntheticExperimentService:
                 for key, value in item.items()
                 if key not in excluded_metric_keys
             }
+            # Bind the per-operator result to ``operator_id`` so the G-2 evidence
+            # ledger (analytics_reporting._build_g2_synthetic_experiment_summary)
+            # can attribute it to a specific operator. The upstream backtest item
+            # carries ``user_id`` (synthetic_backtest.list_operators) but not
+            # ``operator_id``; mirror it here. ``user_id`` is preserved alongside
+            # so existing consumers are unaffected.
+            operator_id_value = item.get("operator_id")
+            if operator_id_value is None:
+                operator_id_value = item.get("user_id")
+            if operator_id_value is not None:
+                metrics["operator_id"] = operator_id_value
             metrics.update(
                 sample_status_for_settled_count(int(item.get("settled_count") or 0))
             )
