@@ -19,6 +19,7 @@ from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.decision_experiments import DecisionExperimentService
 from app.tasks.celery_app import (
+    COLLECT_G2_EVIDENCE_TASK_NAME,
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
     ENRICH_BUSINESS_TYPE_TASK_NAME,
@@ -588,6 +589,125 @@ def run_g2_candidate_recheck() -> dict:
             error_count,
         )
         return summary
+    finally:
+        db.close()
+
+
+@celery_app.task(name=COLLECT_G2_EVIDENCE_TASK_NAME)
+def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
+    """Daily read-only snapshot of the per-operator G-2 evidence ledger.
+
+    Iterates every active operator — BOTH the canonical operator
+    (``ensure_operator_account``) AND every synthetic operator
+    (``username LIKE 'synthetic-%'``) — and builds the read-only G-2 evidence
+    summary via ``AnalyticsReportingService.build_g2_evidence_summary`` for each.
+    It records a SINGLE ``collect_g2_evidence`` analytics evidence event carrying
+    a compact per-operator + aggregate roll-up so ``counted_days`` can accumulate
+    toward the G-2 exit review.
+
+    This is a pure *observation* tool: it reads existing data only and writes
+    nothing to operator data (``operator_strategy_runs`` / ``bid_decision_records``
+    / notifications), never runs the heavy strategy monitor, and never calls
+    external services or sends Telegram. The only permitted write is the single
+    analytics evidence event.
+
+    Each operator is summarized inside its own ``try/except`` so one failure
+    cannot abort the whole sweep; failures are recorded per operator and the task
+    continues.
+    """
+    import json
+
+    from app.core.single_user import ensure_operator_account
+    from app.models.models import Analytics
+    from app.services.analytics_reporting import AnalyticsReportingService
+
+    db = SessionLocal()
+    try:
+        operator = ensure_operator_account(db)
+        # Canonical operator first, then active synthetic operators (deterministic).
+        synthetic_operators = (
+            db.query(User)
+            .filter(User.username.like("synthetic-%"), User.is_active.is_(True))
+            .order_by(User.id.asc())
+            .all()
+        )
+        operators = [operator, *synthetic_operators]
+
+        service = AnalyticsReportingService()
+        section_keys = (
+            "smoke",
+            "strategy_monitor",
+            "decision_experiments",
+            "synthetic_experiments",
+            "notifications",
+        )
+        per_operator: list[dict[str, Any]] = []
+        ready_count = 0
+        error_count = 0
+
+        for op in operators:
+            try:
+                summary = service.build_g2_evidence_summary(
+                    db,
+                    window_days=window_days,
+                    recent_limit=recent_limit,
+                    operator=op,
+                )
+                evidence_status = str(summary.get("evidence_status") or "")
+                if evidence_status == "ready":
+                    ready_count += 1
+                compact = {
+                    "operator_id": int(op.id),
+                    "username": str(op.username or ""),
+                    "evidence_status": evidence_status,
+                    "blocking_gaps_count": len(summary.get("blocking_gaps") or []),
+                    "sections": {
+                        key: str((summary.get(key) or {}).get("status") or "")
+                        for key in section_keys
+                    },
+                }
+                per_operator.append(compact)
+            except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
+                error_count += 1
+                logger.exception(
+                    "collect_g2_evidence failed for operator_id=%s username=%s",
+                    getattr(op, "id", None),
+                    getattr(op, "username", None),
+                )
+                per_operator.append(
+                    {
+                        "operator_id": int(op.id),
+                        "username": str(op.username or ""),
+                        "error": type(exc).__name__,
+                    }
+                )
+
+        summary_payload = {
+            "generated_window_days": window_days,
+            "recent_limit": recent_limit,
+            "operator_count": len(operators),
+            "ready_count": ready_count,
+            "error_count": error_count,
+            "per_operator": per_operator,
+        }
+
+        # The only permitted write: one analytics evidence event for the snapshot.
+        analytics = Analytics(
+            user_id=operator.id,
+            event_type="collect_g2_evidence",
+            event_data=json.dumps(summary_payload, ensure_ascii=False, default=str),
+        )
+        db.add(analytics)
+        db.commit()
+
+        logger.info(
+            "collect_g2_evidence completed operators=%s ready=%s errors=%s window_days=%s",
+            summary_payload["operator_count"],
+            ready_count,
+            error_count,
+            window_days,
+        )
+        return summary_payload
     finally:
         db.close()
 
