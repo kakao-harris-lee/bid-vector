@@ -421,6 +421,10 @@ def build_collect_g2_evidence_beat_schedule() -> dict[str, dict[str, object]]:
         "collect_g2_evidence_daily": {
             "task": COLLECT_G2_EVIDENCE_TASK_NAME,
             "schedule": crontab(hour=hour, minute=minute),
+            "kwargs": {
+                "window_days": max(1, int(settings.COLLECT_G2_EVIDENCE_WINDOW_DAYS)),
+                "recent_limit": max(1, int(settings.COLLECT_G2_EVIDENCE_RECENT_LIMIT)),
+            },
         }
     }
 

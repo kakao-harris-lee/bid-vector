@@ -50,6 +50,8 @@ def test_collect_g2_evidence_schedule_builds_when_enabled(monkeypatch):
     monkeypatch.setattr(settings, "COLLECT_G2_EVIDENCE_SCHEDULE_ENABLED", True)
     monkeypatch.setattr(settings, "COLLECT_G2_EVIDENCE_HOUR_KST", 22)
     monkeypatch.setattr(settings, "COLLECT_G2_EVIDENCE_MINUTE", 0)
+    monkeypatch.setattr(settings, "COLLECT_G2_EVIDENCE_WINDOW_DAYS", 21)
+    monkeypatch.setattr(settings, "COLLECT_G2_EVIDENCE_RECENT_LIMIT", 7)
 
     schedule = build_collect_g2_evidence_beat_schedule()
     entry = schedule["collect_g2_evidence_daily"]
@@ -59,6 +61,8 @@ def test_collect_g2_evidence_schedule_builds_when_enabled(monkeypatch):
     # Celery beat runs timezone="Asia/Seoul"/enable_utc=False -> hour IS KST.
     assert entry["schedule"].hour == {22}
     assert entry["schedule"].minute == {0}
+    # Config window/recent settings must feed the scheduled run (not dead settings).
+    assert entry["kwargs"] == {"window_days": 21, "recent_limit": 7}
 
 
 def test_collect_g2_evidence_schedule_clamps_out_of_range(monkeypatch):
