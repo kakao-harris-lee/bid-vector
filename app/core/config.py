@@ -146,6 +146,18 @@ class Settings(BaseSettings):
     G2_CANDIDATE_RECHECK_SCHEDULE_ENABLED: bool = False
     G2_CANDIDATE_RECHECK_HOUR_KST: int = 21  # 21:00 KST
     G2_CANDIDATE_RECHECK_MINUTE: int = 0
+    # G-2 evidence collection — daily read-only snapshot that records the
+    # per-operator G-2 evidence ledger (via AnalyticsReportingService) into a
+    # single ``collect_g2_evidence`` analytics event so ``counted_days`` can
+    # accumulate toward the G-2 exit review. Runs at 22:00 KST (after the 21:00
+    # candidate re-check, before the 07:00 smoke test). Reads existing data only
+    # and never runs monitors, writes operator data, or sends Telegram.
+    # Default OFF; opt-in via .env.
+    COLLECT_G2_EVIDENCE_SCHEDULE_ENABLED: bool = False
+    COLLECT_G2_EVIDENCE_HOUR_KST: int = 22  # 22:00 KST
+    COLLECT_G2_EVIDENCE_MINUTE: int = 0
+    COLLECT_G2_EVIDENCE_WINDOW_DAYS: int = 30
+    COLLECT_G2_EVIDENCE_RECENT_LIMIT: int = 5
     # Price-predictor ML training — weekly Celery-beat schedule (training-worker
     # executes via the ML training queue). Default OFF; opt-in via .env.
     # request_payload is left at None → trains the full dataset with task defaults

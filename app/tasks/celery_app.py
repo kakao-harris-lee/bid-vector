@@ -102,6 +102,7 @@ ENRICH_BUSINESS_TYPE_TASK_NAME = "jobs.enrich_pending_business_types"
 RECLASSIFY_CATEGORIES_TASK_NAME = "jobs.reclassify_pending_categories"
 SMOKE_TEST_TASK_NAME = "jobs.run_koneps_telegram_smoke_test"
 G2_CANDIDATE_RECHECK_TASK_NAME = "jobs.run_g2_candidate_recheck"
+COLLECT_G2_EVIDENCE_TASK_NAME = "jobs.collect_g2_evidence"
 TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 
@@ -120,6 +121,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         ENRICH_BUSINESS_TYPE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         SMOKE_TEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         G2_CANDIDATE_RECHECK_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        COLLECT_G2_EVIDENCE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
@@ -401,6 +403,32 @@ def build_g2_candidate_recheck_beat_schedule() -> dict[str, dict[str, object]]:
     }
 
 
+def build_collect_g2_evidence_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for the daily G-2 evidence snapshot.
+
+    Read-only observation tool: the task snapshots the per-operator G-2 evidence
+    ledger (via ``AnalyticsReportingService.build_g2_evidence_summary``) into a
+    single ``collect_g2_evidence`` analytics event so ``counted_days`` can
+    accumulate toward the G-2 exit review. It never runs monitors, writes nothing
+    to operator data, and sends no notifications. Defaults to OFF; opt-in via
+    ``COLLECT_G2_EVIDENCE_SCHEDULE_ENABLED``.
+    """
+    if not settings.COLLECT_G2_EVIDENCE_SCHEDULE_ENABLED:
+        return {}
+    hour = max(0, min(23, int(settings.COLLECT_G2_EVIDENCE_HOUR_KST)))
+    minute = max(0, min(59, int(settings.COLLECT_G2_EVIDENCE_MINUTE)))
+    return {
+        "collect_g2_evidence_daily": {
+            "task": COLLECT_G2_EVIDENCE_TASK_NAME,
+            "schedule": crontab(hour=hour, minute=minute),
+            "kwargs": {
+                "window_days": max(1, int(settings.COLLECT_G2_EVIDENCE_WINDOW_DAYS)),
+                "recent_limit": max(1, int(settings.COLLECT_G2_EVIDENCE_RECENT_LIMIT)),
+            },
+        }
+    }
+
+
 def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object]]:
     """Build the weekly schedule entry for price-predictor ML training.
 
@@ -531,6 +559,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_category_reclassify_beat_schedule(),
             **build_smoke_test_beat_schedule(),
             **build_g2_candidate_recheck_beat_schedule(),
+            **build_collect_g2_evidence_beat_schedule(),
             **build_price_predictor_training_beat_schedule(),
             **build_telegram_polling_beat_schedule(),
             **build_stale_task_reconciler_beat_schedule(),
