@@ -8,9 +8,9 @@
 
 권장 저장 위치:
 
-- Review 문서: `models/reports/g2-evidence/<review_id>/exit-review.md`
-- Evidence manifest: `models/reports/g2-evidence/<review_id>/manifest.json`
-- 일일 원본 증적: `models/reports/g2-evidence/YYYY-MM-DD/...`
+- Review 문서: `reports/g2-evidence/<review_id>/exit-review.md`
+- Evidence manifest: `reports/g2-evidence/<review_id>/manifest.json`
+- 일일 원본 증적: `reports/g2-evidence/YYYY-MM-DD/...`
 
 `review_id`는 `g2-exit-YYYYMMDD`처럼 검토일을 포함한다. 증적 파일은 raw secret, raw Telegram chat id, app device token을 포함하지 않아야 하며, 알림 대상은 masked label 또는 route metadata로만 남긴다.
 
@@ -46,39 +46,39 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
       "operator_scope_status": "pass|fail|missing|mixed_scope",
       "profile": {
         "status": "pass|fail|missing|mixed_scope",
-        "path": "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/profile.json",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<operator_id>/profile.json",
         "required_fields_present": true
       },
       "strategy": {
         "status": "pass|fail|missing|mixed_scope",
-        "path": "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy.json",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy.json",
         "thresholds_valid": true
       },
       "notification_channel": {
         "status": "pass|fail|missing|mixed_scope",
         "mode": "active|dry_run_only|skipped|missing",
-        "path": "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/notification-channels.json",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<operator_id>/notification-channels.json",
         "masked_target_present": true,
         "raw_secret_absent": true
       },
       "evidence_paths": {
         "g2_evidence": [
-          "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/g2-evidence.json"
+          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/g2-evidence.json"
         ],
         "candidate_preview": [
-          "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy-candidates.json"
+          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy-candidates.json"
         ],
         "strategy_monitor": [
-          "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy-monitor.json"
+          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy-monitor.json"
         ],
         "decision_experiments": [
-          "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/decision-experiments.json"
+          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/decision-experiments.json"
         ],
         "decision_apply_dry_run": [
-          "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/decision-experiment-apply-strategy-dry-run.json"
+          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/decision-experiment-apply-strategy-dry-run.json"
         ],
         "operations_dashboard": [
-          "models/reports/g2-evidence/YYYY-MM-DD/<operator_id>/operations-dashboard.json"
+          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/operations-dashboard.json"
         ]
       }
     }
@@ -104,7 +104,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
       "approved_execution_item_ids": [],
       "excluded_evidence": [
         {
-          "path": "models/reports/g2-evidence/YYYY-MM-DD/...",
+          "path": "reports/g2-evidence/YYYY-MM-DD/...",
           "reason": "canonical_only|mixed_scope|operator_mismatch|raw_secret|incomplete"
         }
       ]
@@ -121,7 +121,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
       "status": "open|triaged|resolved|excluded|accepted_hold",
       "treatment": "rerun|documented_not_counted|mapping_fixed|operator_removed|hold",
       "owner": "<person-or-role>",
-      "resolution_path": "models/reports/g2-evidence/YYYY-MM-DD/...",
+      "resolution_path": "reports/g2-evidence/YYYY-MM-DD/...",
       "resolved_date": "YYYY-MM-DD"
     }
   ],
@@ -133,7 +133,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
         "scope": "global|operator",
         "operator_id": "<operator-id-or-null>",
         "source": "read-only API|dry-run script|dashboard inspection",
-        "output_path": "models/reports/g2-evidence/YYYY-MM-DD/...",
+        "output_path": "reports/g2-evidence/YYYY-MM-DD/...",
         "result": "pass|fail|blocked",
         "notes": ""
       }
@@ -149,7 +149,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
         "scope": "global|operator",
         "operator_id": "<operator-id-or-null>",
         "operation": "strategy_monitor|synthetic_experiment_run|smoke_write|decision_apply|other",
-        "output_path": "models/reports/g2-evidence/YYYY-MM-DD/...",
+        "output_path": "reports/g2-evidence/YYYY-MM-DD/...",
         "stop_or_rollback_condition": "condition checked before execution",
         "result": "pass|fail|rolled_back|blocked"
       }
@@ -177,7 +177,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
 - 검토 기간: YYYY-MM-DD ~ YYYY-MM-DD (N일)
 - 기준 commit:
 - 검토자:
-- manifest: models/reports/g2-evidence/<review_id>/manifest.json
+- manifest: reports/g2-evidence/<review_id>/manifest.json
 - 판정: pending
 
 ## 1. 대상 사업자
