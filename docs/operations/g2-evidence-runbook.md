@@ -93,7 +93,9 @@ python scripts/collect_g2_evidence.py \
   --days 30
 ```
 
-스크립트는 operator별 `profile.json`, `strategy.json`, `notification-channels.json`, `g2-evidence.json`뿐 아니라 `operator-dashboard.json`, `operations-dashboard.json`, `strategy-candidates.json`, `decision-experiments.json`, `decision-recommendations.json`도 같은 run 디렉터리에 저장한다. 각 실행 디렉터리에는 `g2-evidence-summary.json`, `run-metadata.json`, `manifest-draft.json`도 함께 생성된다.
+스크립트는 operator별 `profile.json`, `strategy.json`, `notification-channels.json`, `g2-evidence.json`뿐 아니라 `operator-dashboard.json`, `operations-dashboard.json`, `strategy-candidates.json`, `decision-experiments.json`, `decision-recommendations.json`도 같은 run 디렉터리에 저장한다. 각 실행 디렉터리에는 `g2-evidence-summary.json`, `run-metadata.json`, `manifest-draft.json`, `daily-worklog.json`도 함께 생성된다.
+
+`daily-worklog.json`은 해당 run의 read-only 산출물 인덱스다. `write_performed=false`, 수집 endpoint 목록, operator별 파일 경로, collection error/blocking gap/missing evidence에서 파생한 `next_actions[]`를 남기므로 다음날 재실행 또는 gap register 입력으로 사용한다.
 
 대상 목록을 파일로 관리할 때는 JSON 배열, `{"operator_ids": [...]}`, 또는 `{"operators": [{"operator_id": ...}]}` 형태를 사용한다.
 
@@ -309,6 +311,17 @@ curl -X POST "$BASE_URL/api/v1/synthetic/experiments/sample-gaps/candidates" \
   > "$EVIDENCE_DIR/synthetic-sample-gap-candidate.json"
 ```
 
+운영 CLI dry-run도 같은 payload를 파일 증적으로 남길 수 있다.
+
+```bash
+python scripts/run_g2_synthetic_evidence.py \
+  --dry-run \
+  --preset "<preset-or-experiment-id>" \
+  --evidence-out "$EVIDENCE_DIR/synthetic-sample-gap-dry-run.json"
+```
+
+승인 후 `--write`를 사용할 때도 `--evidence-out`을 지정한다. stdout과 파일 내용은 동일하며, `write_performed`, `approval_required`, `operator_scope`, `selected_gap`, `status`가 함께 기록된다. `blocked`는 exit code `3`, operator scope 미해결은 exit code `4`로 DB write 전에 중단된다.
+
 확인:
 
 - `run_allowed=true`여야 실행 가능.
@@ -370,6 +383,17 @@ python scripts/backtest_synthetic_operators.py \
 - 민감값은 masked id만 저장.
 - canonical Telegram chat으로 synthetic/non-canonical operator 알림이 전송되지 않음.
 
+operator별 `notification-channels.json`을 모은 뒤에는 로컬 verifier로 masking과 dry-run 경계를 확인한다. 이 명령은 파일만 읽고 HTTP/DB/Telegram을 호출하지 않는다.
+
+```bash
+python scripts/verify_g2_notification_targets.py \
+  --evidence-root "$EVIDENCE_DIR" \
+  --output "$EVIDENCE_DIR/notification-target-verification.json" \
+  --markdown "$EVIDENCE_DIR/notification-target-verification.md"
+```
+
+실패가 있으면 exit code `1`을 반환한다. raw secret-like target, operator mismatch, non-canonical active Telegram, missing channel, missing dry-run/skip policy는 G-2 gap으로 등록한다. 실제 non-canonical 송신을 별도 승인한 경우에만 `--allow-active-noncanonical`을 사용해 해당 항목을 warning으로 낮춘다.
+
 ## 6. 1일 단위 evidence checklist
 
 하루가 끝날 때 operator별 체크리스트를 채운다.
@@ -421,6 +445,17 @@ python scripts/backtest_synthetic_operators.py \
 
 분류가 애매하면 `mixed data`로 올려서 exit review에서 제외한다. G-2 ready는 모호한 성공보다 재현 가능한 실패 분류를 우선한다.
 
+여러 일자의 `manifest-draft.json`과 review `manifest.json`에서 unresolved gap 목록을 운영표로 만들 때는 gap register를 사용한다.
+
+```bash
+python scripts/g2_blocking_gap_register.py \
+  --evidence-root reports/g2-evidence \
+  --output reports/g2-evidence/g2-blocking-gaps.json \
+  --markdown reports/g2-evidence/g2-blocking-gaps.md
+```
+
+`open`, `triaged`, `accepted_hold` gap이 남아 있으면 exit code `1`이다. `resolved` 또는 `excluded` gap만 남아 있어야 G-2 성공 근거로 다음 단계에 넘길 수 있다.
+
 ## 8. G-2 exit review template
 
 상세 review 양식과 evidence manifest contract는 `docs/operations/g2-exit-review-template.md`를 사용한다. 이 runbook의 일일 산출물은 해당 template의 `manifest.json` 입력이다.
@@ -436,6 +471,18 @@ python scripts/build_g2_exit_review.py \
 ```
 
 builder는 `<evidence-root>/<review-id>/manifest.json`과 `exit-review.md`를 생성한다. `manifest.status=ready_for_review`는 counted pass day 수, 포함 operator 수, open blocking gap 수가 기준을 만족한다는 뜻일 뿐이며, `exit-review.md`의 최종 판정은 계속 `pending`으로 남긴다.
+
+review bundle을 만든 뒤에는 readiness checker로 네 개 G-2 exit gate와 파일 경로를 한 번 더 검증한다.
+
+```bash
+python scripts/check_g2_exit_readiness.py \
+  --manifest reports/g2-evidence/g2-exit-YYYYMMDD/manifest.json \
+  --output reports/g2-evidence/g2-exit-YYYYMMDD/readiness.json \
+  --min-days 7 \
+  --min-operators 3
+```
+
+이 명령은 로컬 `manifest.json`, 참조 파일 존재 여부, pass day의 `collect_g2_evidence_snapshot.status`, 그리고 operator별 `notification-channels.json`의 masking/dry-run 안전성을 확인한다. exit code `0`은 human review에 올릴 준비가 됐다는 뜻이고, G-2 approve 자체는 아니다.
 
 권장 review 산출물:
 

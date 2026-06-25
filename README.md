@@ -159,8 +159,12 @@ G-2 운영 검증에서 자주 쓰는 엔드포인트:
 - `/analytics/g2-evidence`: operator별 smoke/monitor/experiment/notification 증적 ledger
 - `/operator/notification-channels`: operator별 masked notification route metadata
 - `/synthetic/experiments/sample-gaps/candidates`: sample-gap 기반 synthetic evidence 실행 계획
-- `scripts/collect_g2_evidence.py`: operator별 read-only evidence와 `manifest-draft.json` 수집
+- `scripts/collect_g2_evidence.py`: operator별 read-only evidence, `daily-worklog.json`, `manifest-draft.json` 수집
+- `scripts/g2_blocking_gap_register.py`: manifest들의 unresolved G-2 gap을 JSON/Markdown 운영표로 병합
+- `scripts/run_g2_synthetic_evidence.py --evidence-out`: sample-gap dry-run/write 승인 payload를 파일 증적으로 저장
+- `scripts/verify_g2_notification_targets.py`: notification channel masking, dry-run, non-canonical 송신 경계 검증
 - `scripts/build_g2_exit_review.py`: 일일 manifest draft를 `manifest.json`/`exit-review.md` review bundle로 병합
+- `scripts/check_g2_exit_readiness.py`: review manifest가 G-2 human review에 올릴 준비가 됐는지 gate별 점검
 
 ## 문서
 

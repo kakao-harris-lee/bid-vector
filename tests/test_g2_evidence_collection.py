@@ -5,7 +5,12 @@ from __future__ import annotations
 import io
 import json
 
-from scripts.collect_g2_evidence import CollectionConfig, main, run_collection
+from scripts.collect_g2_evidence import (
+    CollectionConfig,
+    ENDPOINTS,
+    main,
+    run_collection,
+)
 
 
 def _fake_http_client(*, blocking_gaps_by_operator: dict[int, list[str]] | None = None):
@@ -297,6 +302,7 @@ def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
     assert first_operator["profile"]["status"] == "pass"
     assert first_operator["strategy"]["status"] == "pass"
     assert first_operator["notification_channel"]["status"] == "pass"
+    assert first_operator["notification_channel"]["raw_secret_absent"] is None
     assert first_operator["evidence_paths"]["g2_evidence"][0].endswith(
         "operator-101/g2-evidence.json"
     )
@@ -327,8 +333,112 @@ def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
     assert daily_status["collect_g2_evidence_snapshot"]["path"].endswith(
         "g2-evidence-summary.json"
     )
+    assert daily_status["operators"]["101"]["candidate_preview"] == "pass"
+    assert daily_status["operators"]["101"]["decision_experiment"] == "pass"
     assert daily_status["operators"]["101"]["g2_evidence_status"] == "ready"
     assert daily_status["operators"]["101"]["blocking_gap_ids"] == []
+
+
+def test_collection_writes_daily_worklog_next_to_manifest(tmp_path):
+    fake_get_json = _fake_http_client()
+    config = CollectionConfig(
+        base_url="http://api.test",
+        token="secret-token",
+        operator_ids=[101, 102, 104],
+        evidence_dir=tmp_path,
+        days=14,
+        run_id="20260625T120000Z",
+    )
+
+    run_collection(config, http_get_json_func=fake_get_json)
+
+    run_dir = tmp_path / "20260625T120000Z"
+    worklog_path = run_dir / "daily-worklog.json"
+    assert worklog_path.exists()
+    assert (run_dir / "manifest-draft.json").exists()
+
+    worklog = json.loads(worklog_path.read_text(encoding="utf-8"))
+    assert worklog["run_id"] == "20260625T120000Z"
+    assert worklog["operator_count"] == 3
+    assert worklog["write_performed"] is False
+    assert worklog["endpoint_keys"] == [endpoint.key for endpoint in ENDPOINTS]
+    assert worklog["next_actions"] == []
+
+    first_operator = worklog["operators"][0]
+    assert first_operator["operator_id"] == 101
+    assert first_operator["file_paths"]["profile"].endswith(
+        "operator-101/profile.json"
+    )
+    assert first_operator["file_paths"]["g2_evidence"].endswith(
+        "operator-101/g2-evidence.json"
+    )
+    assert first_operator["file_paths"]["decision_recommendations"].endswith(
+        "operator-101/decision-recommendations.json"
+    )
+
+
+def test_daily_worklog_next_actions_include_blocking_gaps_and_collection_errors(
+    tmp_path,
+):
+    base_fake_get_json = _fake_http_client(
+        blocking_gaps_by_operator={
+            202: ["Strategy monitor evidence is missing for operator_id=202."]
+        }
+    )
+
+    def fake_get_json(**kwargs):
+        if (
+            kwargs["path"] == "/api/v1/analytics/operations-dashboard"
+            and kwargs["params"]["operator_id"] == 203
+        ):
+            raise RuntimeError("operations dashboard unavailable")
+        return base_fake_get_json(**kwargs)
+
+    config = CollectionConfig(
+        base_url="http://api.test",
+        token="secret-token",
+        operator_ids=[201, 202, 203],
+        evidence_dir=tmp_path,
+        days=30,
+        run_id="worklog-gap-run",
+    )
+
+    run_collection(config, http_get_json_func=fake_get_json)
+
+    worklog = json.loads(
+        (tmp_path / "worklog-gap-run" / "daily-worklog.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    actions = worklog["next_actions"]
+    assert {
+        "kind": "blocking_gap",
+        "operator_id": 202,
+        "endpoint_key": "g2_evidence",
+        "description": "Strategy monitor evidence is missing for operator_id=202.",
+        "action": "Resolve the blocking gap and rerun G-2 evidence collection.",
+    } in actions
+    assert {
+        "kind": "collection_error",
+        "operator_id": 203,
+        "endpoint_key": "operations_dashboard",
+        "endpoint": "/api/v1/analytics/operations-dashboard",
+        "path": "operator-203/operations-dashboard.error.json",
+        "error": "operations dashboard unavailable",
+        "action": (
+            "Fix the endpoint collection error and rerun G-2 evidence collection."
+        ),
+    } in actions
+    assert {
+        "kind": "missing_endpoint",
+        "operator_id": 203,
+        "endpoint_key": "operations_dashboard",
+        "path": "operator-203/operations-dashboard.error.json",
+        "action": (
+            "Collect the missing endpoint evidence and rerun G-2 evidence collection."
+        ),
+    } in actions
 
 
 def test_manifest_links_extended_evidence_paths(tmp_path):

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -69,11 +70,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Number of ranked gaps to include in dry-run context.",
     )
+    parser.add_argument(
+        "--evidence-out",
+        type=Path,
+        help="Optional path to write the same JSON evidence payload printed to stdout.",
+    )
     return parser
 
 
-def _json_dump(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+def _json_dump(
+    payload: dict[str, Any],
+    *,
+    evidence_out: Path | None = None,
+) -> None:
+    output = json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n"
+    sys.stdout.write(output)
+    if evidence_out is not None:
+        temp_path = evidence_out.with_name(f".{evidence_out.name}.tmp")
+        temp_path.write_text(output, encoding="utf-8")
+        os.replace(temp_path, evidence_out)
+
+
+def _preflight_evidence_out(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    if path.exists() and path.is_dir():
+        return f"evidence output path is a directory: {path}"
+    parent = path.parent
+    if not parent.exists():
+        return f"evidence output parent does not exist: {parent}"
+    if not parent.is_dir():
+        return f"evidence output parent is not a directory: {parent}"
+    try:
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text("", encoding="utf-8")
+        temp_path.unlink()
+    except OSError as exc:
+        return f"evidence output is not writable: {exc}"
+    return None
 
 
 def default_session_factory():
@@ -160,6 +194,11 @@ def main(
             "--write requires --preset or an exact --dimension/--key target.\n"
         )
         return 2
+    if args.write:
+        evidence_error = _preflight_evidence_out(args.evidence_out)
+        if evidence_error:
+            sys.stderr.write(f"{evidence_error}\n")
+            return 2
 
     session_factory = session_factory or default_session_factory
     service_factory = service_factory or default_service_factory
@@ -189,7 +228,8 @@ def main(
                         "source_run_count": plan.get("source_run_count", 0),
                         "warnings": plan.get("warnings", []),
                     },
-                }
+                },
+                evidence_out=args.evidence_out,
             )
             return 2
 
@@ -204,20 +244,37 @@ def main(
         operator_scope = operator_scope_summary(candidate)
         if args.write:
             if candidate is None:
-                _json_dump({"status": "not_found", "dimension": dimension, "key": key})
+                _json_dump(
+                    {
+                        "status": "not_found",
+                        "mode": "write",
+                        "approval_required": True,
+                        "write_performed": False,
+                        "selected_gap": {"dimension": dimension, "key": key},
+                        "operator_scope": operator_scope,
+                        "candidate": candidate,
+                        "dimension": dimension,
+                        "key": key,
+                    },
+                    evidence_out=args.evidence_out,
+                )
                 return 2
             if candidate.get("run_allowed") is False:
                 _json_dump(
                     {
                         "status": "blocked",
+                        "mode": "write",
+                        "approval_required": True,
                         "message": (
                             "Run was not enqueued because the candidate is blocked. "
                             "Resolve warnings first."
                         ),
                         "write_performed": False,
+                        "selected_gap": {"dimension": dimension, "key": key},
                         "operator_scope": operator_scope,
                         "candidate": candidate,
-                    }
+                    },
+                    evidence_out=args.evidence_out,
                 )
                 return 3
             if not operator_scope["operator_id_scope_ready"]:
@@ -235,7 +292,8 @@ def main(
                         "selected_gap": {"dimension": dimension, "key": key},
                         "operator_scope": operator_scope,
                         "candidate": candidate,
-                    }
+                    },
+                    evidence_out=args.evidence_out,
                 )
                 return 4
             result = service.materialize_sample_gap_candidate_run(
@@ -245,20 +303,37 @@ def main(
                 action_code=args.action_code,
             )
             if result is None:
-                _json_dump({"status": "not_found", "dimension": dimension, "key": key})
+                _json_dump(
+                    {
+                        "status": "not_found",
+                        "mode": "write",
+                        "approval_required": True,
+                        "write_performed": False,
+                        "selected_gap": {"dimension": dimension, "key": key},
+                        "operator_scope": operator_scope,
+                        "candidate": candidate,
+                        "dimension": dimension,
+                        "key": key,
+                    },
+                    evidence_out=args.evidence_out,
+                )
                 return 2
             if result.get("status") == "blocked":
                 _json_dump(
                     {
                         "status": "blocked",
+                        "mode": "write",
+                        "approval_required": True,
                         "message": (
                             "Run was not enqueued because the candidate is blocked. "
                             "Resolve warnings first."
                         ),
                         "write_performed": False,
+                        "selected_gap": {"dimension": dimension, "key": key},
                         "operator_scope": operator_scope,
                         "candidate": result.get("candidate"),
-                    }
+                    },
+                    evidence_out=args.evidence_out,
                 )
                 return 3
             _json_dump(
@@ -271,9 +346,11 @@ def main(
                         "DB writes were performed and the async synthetic evidence "
                         "run was enqueued."
                     ),
+                    "selected_gap": {"dimension": dimension, "key": key},
                     "operator_scope": operator_scope,
                     **result,
-                }
+                },
+                evidence_out=args.evidence_out,
             )
             return 0
 
@@ -282,6 +359,7 @@ def main(
                 "status": "planned",
                 "mode": "dry_run",
                 "write_performed": False,
+                "approval_required": True,
                 "approval_required_for_write": True,
                 "message": (
                     "Dry run only. Re-run with --write after approval to save the "
@@ -292,7 +370,8 @@ def main(
                 "candidate": candidate,
                 "ranked_gaps": (plan.get("gaps") or [])[: max(0, int(args.top or 0))],
                 "plan_warnings": plan.get("warnings", []),
-            }
+            },
+            evidence_out=args.evidence_out,
         )
         return 0
     finally:

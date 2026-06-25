@@ -131,6 +131,7 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
     ),
 )
 ENDPOINT_PATHS_BY_KEY = {endpoint.key: endpoint.path for endpoint in ENDPOINTS}
+ENDPOINT_KEYS_BY_PATH = {endpoint.path: endpoint.key for endpoint in ENDPOINTS}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATE_PATTERN = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})|(?P<compact>\d{8})")
 
@@ -811,7 +812,7 @@ def _build_manifest_operator(
             "masked_target_present": (
                 operator_summary.get("notification_channel_count", 0) > 0
             ),
-            "raw_secret_absent": True,
+            "raw_secret_absent": None,
         },
         "evidence_paths": {
             "g2_evidence": [
@@ -870,9 +871,15 @@ def _build_manifest_operator(
             "profile": profile_status,
             "strategy": strategy_status,
             "notification_channel": notification_status,
-            "candidate_preview": "missing",
+            "candidate_preview": _endpoint_scope_status(
+                operator_summary,
+                "strategy_candidates",
+            ),
             "strategy_monitor": "missing",
-            "decision_experiment": "missing",
+            "decision_experiment": _endpoint_scope_status(
+                operator_summary,
+                "decision_experiments",
+            ),
             "g2_evidence_status": g2_status,
             "blocking_gap_ids": blocking_gap_ids,
         },
@@ -894,6 +901,8 @@ def _daily_status_value(
             and operator.get("profile", {}).get("status") == "pass"
             and operator.get("strategy", {}).get("status") == "pass"
             and operator.get("notification_channel", {}).get("status") == "pass"
+            and operator.get("_daily_status", {}).get("candidate_preview") == "pass"
+            and operator.get("_daily_status", {}).get("decision_experiment") == "pass"
             and operator.get("_daily_status", {}).get("g2_evidence_status") == "ready"
             for operator in manifest_operators
         )
@@ -974,6 +983,100 @@ def build_manifest_draft(
     return manifest
 
 
+def _daily_worklog_file_paths(operator_summary: dict[str, Any]) -> dict[str, str]:
+    raw_files = operator_summary.get("raw_files") or {}
+    return {
+        endpoint.key: raw_files[endpoint.key]
+        for endpoint in ENDPOINTS
+        if endpoint.key in raw_files
+    }
+
+
+def _daily_worklog_next_actions(
+    *, operator_summaries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for operator_summary in operator_summaries:
+        operator_id = int(operator_summary["operator_id"])
+        file_paths = _daily_worklog_file_paths(operator_summary)
+
+        for gap in operator_summary.get("blocking_gaps") or []:
+            actions.append(
+                {
+                    "kind": "blocking_gap",
+                    "operator_id": operator_id,
+                    "endpoint_key": "g2_evidence",
+                    "description": str(gap),
+                    "action": (
+                        "Resolve the blocking gap and rerun G-2 evidence collection."
+                    ),
+                }
+            )
+
+        for error_item in operator_summary.get("collection_errors") or []:
+            if not isinstance(error_item, dict):
+                continue
+            endpoint = str(error_item.get("endpoint") or "")
+            endpoint_key = ENDPOINT_KEYS_BY_PATH.get(endpoint, endpoint)
+            actions.append(
+                {
+                    "kind": "collection_error",
+                    "operator_id": operator_id,
+                    "endpoint_key": endpoint_key,
+                    "endpoint": endpoint,
+                    "path": file_paths.get(endpoint_key),
+                    "error": str(error_item.get("error") or ""),
+                    "action": (
+                        "Fix the endpoint collection error and rerun "
+                        "G-2 evidence collection."
+                    ),
+                }
+            )
+
+        for endpoint in ENDPOINTS:
+            path = file_paths.get(endpoint.key)
+            if path and not path.endswith(".error.json"):
+                continue
+            actions.append(
+                {
+                    "kind": "missing_endpoint",
+                    "operator_id": operator_id,
+                    "endpoint_key": endpoint.key,
+                    "path": path,
+                    "action": (
+                        "Collect the missing endpoint evidence and rerun "
+                        "G-2 evidence collection."
+                    ),
+                }
+            )
+    return actions
+
+
+def build_daily_worklog(
+    *,
+    config: CollectionConfig,
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    operator_summaries = summary.get("operators") or []
+    return {
+        "worklog_version": 1,
+        "run_id": config.run_id,
+        "operator_count": len(operator_summaries),
+        "write_performed": False,
+        "endpoint_keys": [endpoint.key for endpoint in ENDPOINTS],
+        "operators": [
+            {
+                "operator_id": int(operator_summary["operator_id"]),
+                "file_paths": _daily_worklog_file_paths(operator_summary),
+            }
+            for operator_summary in operator_summaries
+        ],
+        "next_actions": _daily_worklog_next_actions(
+            operator_summaries=operator_summaries
+        ),
+    }
+
+
 def run_collection(
     config: CollectionConfig,
     *,
@@ -1029,6 +1132,10 @@ def run_collection(
             run_dir=run_dir,
             summary=summary,
         ),
+    )
+    write_json(
+        run_dir / "daily-worklog.json",
+        build_daily_worklog(config=effective_config, summary=summary),
     )
     return summary
 

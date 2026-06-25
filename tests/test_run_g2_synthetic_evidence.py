@@ -97,23 +97,27 @@ def _candidate(*, ready: bool) -> dict[str, Any]:
     }
 
 
-def _run_with_fake_service(capsys, fake_service: _FakeSyntheticExperimentService):
+def _run_with_fake_service(
+    capsys,
+    fake_service: _FakeSyntheticExperimentService,
+    argv: list[str] | None = None,
+):
     session = _FakeSession()
 
     code = main(
-        ["--preset", "sample-preset"],
+        argv or ["--preset", "sample-preset"],
         session_factory=lambda: session,
         service_factory=lambda db: fake_service,
     )
 
     captured = capsys.readouterr()
-    return code, json.loads(captured.out), session
+    return code, captured.out, json.loads(captured.out), session
 
 
 def test_dry_run_outputs_operator_scope_summary(capsys):
     fake_service = _FakeSyntheticExperimentService(_candidate(ready=False))
 
-    code, payload, session = _run_with_fake_service(capsys, fake_service)
+    code, _stdout, payload, session = _run_with_fake_service(capsys, fake_service)
 
     assert code == 0
     assert session.closed is True
@@ -125,6 +129,32 @@ def test_dry_run_outputs_operator_scope_summary(capsys):
             "unresolved_operator_targets"
         ],
     }
+
+
+def test_dry_run_writes_same_evidence_payload_as_stdout(capsys, tmp_path):
+    fake_service = _FakeSyntheticExperimentService(_candidate(ready=False))
+    evidence_path = tmp_path / "sample-gap-evidence.json"
+
+    code, stdout, payload, session = _run_with_fake_service(
+        capsys,
+        fake_service,
+        [
+            "--preset",
+            "sample-preset",
+            "--evidence-out",
+            str(evidence_path),
+        ],
+    )
+
+    assert code == 0
+    assert session.closed is True
+    assert evidence_path.read_text(encoding="utf-8") == stdout
+    assert payload["status"] == "planned"
+    assert payload["write_performed"] is False
+    assert payload["approval_required"] is True
+    assert payload["selected_gap"] == {"dimension": "preset", "key": "sample-preset"}
+    assert payload["operator_scope"]["operator_id_scope_ready"] is False
+    assert payload["candidate"] == fake_service.candidate
 
 
 def test_operator_scope_summary_derives_unresolved_targets_when_missing() -> None:
@@ -204,6 +234,139 @@ def test_write_materializes_when_operator_scope_ready(capsys):
     assert fake_service.materialize_count == 1
     assert payload["status"] == "queued"
     assert payload["write_performed"] is True
+
+
+def test_write_writes_same_evidence_payload_as_stdout(capsys, tmp_path):
+    candidate = _candidate(ready=True)
+    candidate["operator_targets"][1]["operator_id"] = 202
+    candidate["operator_targets"][1]["operator_id_scope_ready"] = True
+    candidate["unresolved_operator_targets"] = []
+    fake_service = _FakeSyntheticExperimentService(candidate)
+    evidence_path = tmp_path / "queued-evidence.json"
+
+    session = _FakeSession()
+    code = main(
+        [
+            "--write",
+            "--preset",
+            "sample-preset",
+            "--evidence-out",
+            str(evidence_path),
+        ],
+        session_factory=lambda: session,
+        service_factory=lambda db: fake_service,
+    )
+
+    stdout = capsys.readouterr().out
+    payload = json.loads(stdout)
+    assert code == 0
+    assert session.closed is True
+    assert evidence_path.read_text(encoding="utf-8") == stdout
+    assert payload["status"] == "queued"
+    assert payload["write_performed"] is True
+    assert payload["approval_required"] is True
+    assert payload["selected_gap"] == {"dimension": "preset", "key": "sample-preset"}
+    assert payload["operator_scope"]["operator_id_scope_ready"] is True
+    assert payload["candidate"] == candidate
+    assert payload["run"] == {"id": 34, "status": "queued"}
+
+
+def test_write_preflights_evidence_output_before_materializing(capsys, tmp_path):
+    candidate = _candidate(ready=True)
+    candidate["operator_targets"][1]["operator_id"] = 202
+    candidate["operator_targets"][1]["operator_id_scope_ready"] = True
+    candidate["unresolved_operator_targets"] = []
+    fake_service = _FakeSyntheticExperimentService(candidate)
+    invalid_evidence_path = tmp_path / "missing-parent" / "queued-evidence.json"
+
+    session = _FakeSession()
+    code = main(
+        [
+            "--write",
+            "--preset",
+            "sample-preset",
+            "--evidence-out",
+            str(invalid_evidence_path),
+        ],
+        session_factory=lambda: session,
+        service_factory=lambda db: fake_service,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert session.closed is False
+    assert fake_service.materialize_count == 0
+    assert captured.out == ""
+    assert "evidence output parent does not exist" in captured.err
+    assert not invalid_evidence_path.exists()
+
+
+def test_write_rejects_directory_evidence_output_before_materializing(
+    capsys,
+    tmp_path,
+):
+    candidate = _candidate(ready=True)
+    candidate["operator_targets"][1]["operator_id"] = 202
+    candidate["operator_targets"][1]["operator_id_scope_ready"] = True
+    candidate["unresolved_operator_targets"] = []
+    fake_service = _FakeSyntheticExperimentService(candidate)
+    directory_output = tmp_path / "evidence-dir"
+    directory_output.mkdir()
+
+    session = _FakeSession()
+    code = main(
+        [
+            "--write",
+            "--preset",
+            "sample-preset",
+            "--evidence-out",
+            str(directory_output),
+        ],
+        session_factory=lambda: session,
+        service_factory=lambda db: fake_service,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert session.closed is False
+    assert fake_service.materialize_count == 0
+    assert captured.out == ""
+    assert "evidence output path is a directory" in captured.err
+
+
+def test_write_not_found_evidence_payload_includes_common_fields(capsys, tmp_path):
+    candidate = _candidate(ready=True)
+    candidate["operator_targets"][1]["operator_id"] = 202
+    candidate["operator_targets"][1]["operator_id_scope_ready"] = True
+    candidate["unresolved_operator_targets"] = []
+    fake_service = _FakeSyntheticExperimentService(candidate)
+    fake_service.materialize_result = None
+    evidence_path = tmp_path / "not-found-evidence.json"
+
+    session = _FakeSession()
+    code = main(
+        [
+            "--write",
+            "--preset",
+            "sample-preset",
+            "--evidence-out",
+            str(evidence_path),
+        ],
+        session_factory=lambda: session,
+        service_factory=lambda db: fake_service,
+    )
+
+    stdout = capsys.readouterr().out
+    payload = json.loads(stdout)
+    assert code == 2
+    assert session.closed is True
+    assert evidence_path.read_text(encoding="utf-8") == stdout
+    assert payload["status"] == "not_found"
+    assert payload["write_performed"] is False
+    assert payload["approval_required"] is True
+    assert payload["selected_gap"] == {"dimension": "preset", "key": "sample-preset"}
+    assert payload["operator_scope"]["operator_id_scope_ready"] is True
+    assert payload["candidate"] == candidate
 
 
 def test_help_does_not_import_database_dependencies() -> None:
