@@ -33,8 +33,8 @@
 
 1. 운영/검증 DB에 `6f2a8c9d0e12_add_operator_notification_channels.py` migration 적용 절차를 확인한다.
 2. 3개 이상 가상 사업자를 선정하고 profile, strategy, notification channel 상태를 일 단위로 저장한다.
-3. `/api/v1/analytics/g2-evidence?operator_id=<OP_ID>`를 매일 저장하고 `blocking_gaps`를 operator별 TODO로 관리한다.
-4. `scripts/run_g2_synthetic_evidence.py --dry-run` 결과를 검토한 뒤, 승인된 경우에만 `--write`로 synthetic evidence run을 enqueue한다.
+3. `scripts/collect_g2_evidence.py` 또는 `/api/v1/analytics/g2-evidence?operator_id=<OP_ID>`로 `reports/g2-evidence/`에 일일 증적을 저장하고, 필요한 경우 `COLLECT_G2_EVIDENCE_*` snapshot으로 counted day를 축적한다. `blocking_gaps`는 operator별 TODO로 관리한다.
+4. `scripts/run_g2_synthetic_evidence.py --dry-run` 결과를 검토한 뒤, 승인된 경우에만 `--write`로 operator_id-scoped synthetic evidence run을 enqueue한다.
 5. non-canonical 실제 Telegram/app 송신 전까지는 `dry_run_only` 또는 skip evidence를 유지한다.
 6. `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 G-2 완료 여부를 판정한다.
 

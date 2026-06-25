@@ -6,7 +6,7 @@
 
 ## 현재 결론
 
-0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, **관리자/사용자 웹 물리 분리(별도 Vite 번들)**, 운영 runbook이 `main`에 반영되었습니다. 2026-06-22 기준으로 **G-0 smoke가 실제 스케줄에서 5 phase 전부 green으로 실증**됐고(smoke ML phase fix #106), **G-2 라이브 증적 축적이 시작**됐으며(사업자별 strategy monitor 실행 + dry-run 알림채널 + 일일 후보 재확인 자동화), 운영 안정화(celerybeat 복구, KST 스케줄 정합, monitor run 고아 정리/reconciler)도 반영됐습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다.
+0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, **관리자/사용자 웹 물리 분리(별도 Vite 번들)**, 운영 runbook, operator-scoped synthetic evidence, read-only evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 2026-06-22 기준으로 **G-0 smoke가 실제 스케줄에서 5 phase 전부 green으로 실증**됐고(smoke ML phase fix #106), **G-2 라이브 증적 축적이 시작**됐으며(사업자별 strategy monitor 실행 + dry-run 알림채널 + 일일 후보 재확인 자동화), 운영 안정화(celerybeat 복구, KST 스케줄 정합, monitor run 고아 정리/reconciler)도 반영됐습니다. 2026-06-24 기준으로 synthetic experiment 결과는 `operator_id`가 붙어야 G-2 ledger에 집계되고, 일일 evidence snapshot은 `reports/g2-evidence/` 파일 수집과 `collect_g2_evidence` analytics event로 축적할 수 있습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
@@ -29,6 +29,13 @@
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
 
 ## 최근 반영된 작업
+
+2026-06-24 (`50c9336` 포함, PR #113~#116)로 다음이 `main`에 반영되었습니다.
+
+- decision analytics 시간 정합(#113): `entry_timestamp` 생성에서 naive/aware datetime 혼합을 제거해 decision analytics 응답/테스트가 시간대 처리에 흔들리지 않도록 수정.
+- synthetic experiment operator scope(#114): synthetic experiment 결과 저장 시 upstream `user_id`를 `operator_id`로 mirror해 G-2 ledger가 operator별 synthetic evidence를 집계할 수 있게 수정. 기존 slug-only 결과는 `mixed_scope`로 남기며, G-2 성공 근거로 쓰려면 operator_id-scoped로 재실행 또는 보정해야 함.
+- 일일 G-2 evidence snapshot 자동화(#115): `COLLECT_G2_EVIDENCE_*` 설정과 `jobs.collect_g2_evidence` beat task가 추가됨. 기본 OFF이며, 활성화 시 22:00 KST에 canonical + active synthetic operator의 `/analytics/g2-evidence` 요약을 한 개의 `collect_g2_evidence` analytics event로 저장한다. strategy monitor 실행, operator 데이터 write, 외부 호출, Telegram 송신은 하지 않는다.
+- evidence 경로 정합(#116): G-2 exit review 증적 위치는 `.gitignore`와 smoke-evidence convention에 맞춰 `reports/g2-evidence/...`를 사용한다. `models/reports/...`는 더 이상 새 문서/manifest의 기준 경로가 아니다.
 
 2026-06-22 (`88d9f53` 포함, PR #106~#111)로 다음이 `main`에 반영·배포되었습니다.
 
@@ -139,15 +146,18 @@ Exit gate G-1:
 - 프론트는 `/dashboard`(사용자)와 `/admin`(관리자)이 **두 독립 Vite 번들로 물리 분리**되었습니다(#110). 사용자 앱에 admin 코드 미포함, 관리자 번들은 privileged operator 가드. 완전한 모노레포 분리·RBAC는 후속(Phase 3/4).
 - API 문서는 monitor/decision experiment/sample-gap/candidates와 operator target context를 반영합니다.
 - `/api/v1/analytics/g2-evidence`가 operator별 G-2 증적 ledger와 blocking gap을 반환합니다.
+- `scripts/collect_g2_evidence.py`가 operator 3개 이상에 대한 read-only HTTP evidence 파일을 `reports/g2-evidence/` 아래에 저장합니다.
+- `COLLECT_G2_EVIDENCE_*` beat task가 매일 22:00 KST에 operator별 G-2 evidence 요약을 하나의 analytics event로 snapshot할 수 있습니다. 기본값은 OFF입니다.
 - synthetic/non-canonical operator Telegram 송신은 dry-run evidence로 남기며, callback owner 검증과 route metadata 분리가 강화되었습니다.
 - `OperatorNotificationChannel`은 operator별 masked notification route metadata를 저장하지만, non-canonical 실제 Telegram 송신 secret resolver는 아직 없습니다.
+- synthetic experiment 결과는 `operator_id`가 있어야 G-2 operator evidence로 집계됩니다. slug-only 결과는 `mixed_scope`로 분류됩니다.
 - smoke/analytics evidence는 `operator_scope`, `current_operator_id`, `source_run_type`, `source_run_id`를 남기지만, N일 운영 증적은 아직 충분하지 않습니다.
 
 해야 할 일:
 
 - 운영 DB에 `6f2a8c9d0e12_add_operator_notification_channels.py` migration 적용을 배포 절차에 포함한다.
-- 3개 이상 가상 회사별 로그인/프로필/전략/알림/결정 이력을 일일 runbook으로 저장한다.
-- `/api/v1/analytics/g2-evidence` 결과를 operator별로 N일 단위 저장하고 `blocking_gaps`를 해소한다.
+- 3개 이상 가상 회사별 로그인/프로필/전략/알림/결정 이력을 `reports/g2-evidence/` 아래에 일일 runbook으로 저장한다.
+- `/api/v1/analytics/g2-evidence` 결과를 operator별로 N일 단위 저장하거나 `COLLECT_G2_EVIDENCE_*` snapshot으로 축적하고 `blocking_gaps`를 해소한다.
 - `scripts/run_g2_synthetic_evidence.py --dry-run`으로 sample-gap 실행 계획을 검토하고, 승인 후 `--write`로만 synthetic evidence run을 enqueue한다.
 - non-canonical 실제 Telegram/app 송신 전에는 operator별 target, masking, secret resolver 정책을 확정한다.
 - 사업자 정보와 알림 대상 식별자를 개인정보/운영정보로 취급한다.
@@ -238,9 +248,9 @@ Exit gate G-3:
 
 ## 다음 우선순위
 
-1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 profile, strategy, notification channel, strategy monitor, decision experiment, synthetic experiment, G-2 evidence ledger를 N일 단위로 저장한다.
-2. G-2 blocking gap 해소: `/api/v1/analytics/g2-evidence`의 `blocking_gaps`를 operator별 TODO로 관리하고 `mixed_scope`/`missing` 상태를 제거한다.
-3. G-1 표본 실행: sample-gap candidates를 dry-run으로 검토하고 승인 후 synthetic evidence run을 enqueue하여 settled sample 증적을 쌓는다.
+1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 profile, strategy, notification channel, strategy monitor, decision experiment, synthetic experiment, G-2 evidence ledger를 `reports/g2-evidence/`와 `collect_g2_evidence` snapshot으로 N일 단위 저장한다.
+2. G-2 blocking gap 해소: `/api/v1/analytics/g2-evidence`의 `blocking_gaps`를 operator별 TODO로 관리하고 `mixed_scope`/`missing` 상태를 제거한다. slug-only synthetic result는 operator_id-scoped evidence로 재실행 또는 보정한다.
+3. G-1 표본 실행: sample-gap candidates를 dry-run으로 검토하고 승인 후 synthetic evidence run을 enqueue하여 operator_id-scoped settled sample 증적을 쌓는다.
 4. G-2 알림 대상 검증: 사업자별 Telegram/app notification 대상 식별자, `dry_run_only`, masking, 실제 송신 가능 범위를 운영표로 관리한다.
 5. G-0 관찰: scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 dashboard와 문서만으로 구분한다.
 6. G-2 exit review: `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 3개 이상 operator가 exit gate를 만족하는지 판정한다.

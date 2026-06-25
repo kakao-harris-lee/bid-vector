@@ -10,7 +10,7 @@
 
 - Review 문서: `reports/g2-evidence/<review_id>/exit-review.md`
 - Evidence manifest: `reports/g2-evidence/<review_id>/manifest.json`
-- 일일 원본 증적: `reports/g2-evidence/YYYY-MM-DD/...`
+- 일일 원본 증적: `reports/g2-evidence/YYYY-MM-DD/<run_id>/...`
 
 `review_id`는 `g2-exit-YYYYMMDD`처럼 검토일을 포함한다. 증적 파일은 raw secret, raw Telegram chat id, app device token을 포함하지 않아야 하며, 알림 대상은 masked label 또는 route metadata로만 남긴다.
 
@@ -46,39 +46,39 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
       "operator_scope_status": "pass|fail|missing|mixed_scope",
       "profile": {
         "status": "pass|fail|missing|mixed_scope",
-        "path": "reports/g2-evidence/YYYY-MM-DD/<operator_id>/profile.json",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/profile.json",
         "required_fields_present": true
       },
       "strategy": {
         "status": "pass|fail|missing|mixed_scope",
-        "path": "reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy.json",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/strategy.json",
         "thresholds_valid": true
       },
       "notification_channel": {
         "status": "pass|fail|missing|mixed_scope",
         "mode": "active|dry_run_only|skipped|missing",
-        "path": "reports/g2-evidence/YYYY-MM-DD/<operator_id>/notification-channels.json",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/notification-channels.json",
         "masked_target_present": true,
         "raw_secret_absent": true
       },
       "evidence_paths": {
         "g2_evidence": [
-          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/g2-evidence.json"
+          "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/g2-evidence.json"
         ],
         "candidate_preview": [
-          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy-candidates.json"
+          "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/strategy-candidates.json"
         ],
         "strategy_monitor": [
-          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/strategy-monitor.json"
+          "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/strategy-monitor.json"
         ],
         "decision_experiments": [
-          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/decision-experiments.json"
+          "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/decision-experiments.json"
         ],
         "decision_apply_dry_run": [
-          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/decision-experiment-apply-strategy-dry-run.json"
+          "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/decision-experiment-apply-strategy-dry-run.json"
         ],
         "operations_dashboard": [
-          "reports/g2-evidence/YYYY-MM-DD/<operator_id>/operations-dashboard.json"
+          "reports/g2-evidence/YYYY-MM-DD/<run_id>/operator-<operator_id>/operations-dashboard.json"
         ]
       }
     }
@@ -88,6 +88,11 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
       "date": "YYYY-MM-DD",
       "status": "pass|partial|fail|excluded",
       "summary": "short human-readable status",
+      "collect_g2_evidence_snapshot": {
+        "status": "pass|fail|missing",
+        "path": "reports/g2-evidence/YYYY-MM-DD/<run_id>/g2-evidence-summary.json",
+        "source": "scripts/collect_g2_evidence.py|exported collect_g2_evidence analytics event"
+      },
       "operators": {
         "<operator-id>": {
           "profile": "pass|fail|missing|mixed_scope",
@@ -132,7 +137,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
         "date": "YYYY-MM-DD",
         "scope": "global|operator",
         "operator_id": "<operator-id-or-null>",
-        "source": "read-only API|dry-run script|dashboard inspection",
+        "source": "read-only API|dry-run script|scheduled read-only task|dashboard inspection",
         "output_path": "reports/g2-evidence/YYYY-MM-DD/...",
         "result": "pass|fail|blocked",
         "notes": ""
@@ -162,6 +167,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
 
 - `operators[]`에는 G-2 판정에 포함할 operator만 넣는다. 제외한 operator는 `excluded_evidence` 또는 review note에 사유를 남긴다.
 - `profile.path`, `strategy.path`, `notification_channel.path`는 operator별 최신 상태 파일을 가리킨다. 날짜별로 값이 바뀌면 `daily_status`와 `evidence_paths`에 해당 날짜 파일을 모두 남긴다.
+- `collect_g2_evidence_snapshot.path`는 `scripts/collect_g2_evidence.py`의 `g2-evidence-summary.json` 또는 `collect_g2_evidence` analytics event payload를 export한 파일을 가리킨다. DB event만 있고 파일이 없으면 manifest에는 `missing`으로 표시하고 review 전에 export한다.
 - `daily_status[].status=pass`는 해당 날짜가 G-2 판단에 계산 가능하다는 뜻이다. `partial`은 재실행 또는 gap 처리가 필요하고, `excluded`는 `approve`의 N일 카운트에 넣지 않는다.
 - `blocking_gaps[].status=resolved`는 resolution path가 실제로 존재하고 reviewer가 원 gap 해소를 확인했을 때만 사용한다.
 - `excluded` gap은 G-2 성공 증거로 쓰지 않는다는 뜻이지 성공 처리가 아니다. `accepted_hold`가 하나라도 남아 있으면 최종 판정은 `hold`다.
@@ -252,14 +258,15 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
 
 1. Manifest가 `ready_for_review` 또는 `reviewed` 상태이며, review 문서와 manifest가 같은 `review_id`를 참조한다.
 2. `evidence_window.counted_days >= required_days`이고, counted day가 모두 `daily_status.status=pass`다.
-3. `operators[]`에 synthetic 또는 G-2 검증 대상으로 지정된 operator가 3개 이상 있으며, 각 operator의 `operator_id`, `username`, `profile`, `strategy`, `notification_channel`이 실제 파일 path와 함께 확인된다.
-4. 각 counted day에서 모든 included operator의 `g2_evidence_status`가 `ready`이거나, `insufficient` 항목이 G-2 gate 밖의 canonical smoke처럼 명확히 제외되어 `blocking_gaps`에 `excluded`로 남아 있다.
-5. `blocking_gaps`에 `open`, `triaged`, `accepted_hold` 상태가 없다. `excluded` gap은 성공 근거로 쓰지 않았다는 note가 있어야 한다.
-6. `mixed_scope`, `operator_mismatch`, canonical-only 증적을 G-2 ready 근거로 사용하지 않았다.
-7. 알림 증적은 operator별 route가 분리되었거나, synthetic/non-canonical operator에 대해 `dry_run_only` 또는 `skipped` 정책이 명확하다. canonical Telegram/app target으로 synthetic/non-canonical 알림이 섞인 흔적이 없어야 한다.
-8. 승인 후 실행 항목은 모두 `approved_execution_items`에 approval reference, 실행 창, output path, result가 남아 있다.
-9. dry-run 또는 read-only 항목은 `dry_run_items`에만 기록되어 있고, DB write 또는 실제 외부 송신 성공처럼 해석하지 않았다.
-10. 관리자 surface와 사용자 surface의 역할 분리 증적이 있고, 사용자 화면에 cross-operator 관리 기능이 노출되지 않았다는 확인이 남아 있다.
+3. counted day마다 `collect_g2_evidence_snapshot.status=pass`이거나, 같은 날짜의 operator별 `g2_evidence` 파일들이 모두 존재해 equivalent evidence로 설명된다.
+4. `operators[]`에 synthetic 또는 G-2 검증 대상으로 지정된 operator가 3개 이상 있으며, 각 operator의 `operator_id`, `username`, `profile`, `strategy`, `notification_channel`이 실제 파일 path와 함께 확인된다.
+5. 각 counted day에서 모든 included operator의 `g2_evidence_status`가 `ready`이거나, `insufficient` 항목이 G-2 gate 밖의 canonical smoke처럼 명확히 제외되어 `blocking_gaps`에 `excluded`로 남아 있다.
+6. `blocking_gaps`에 `open`, `triaged`, `accepted_hold` 상태가 없다. `excluded` gap은 성공 근거로 쓰지 않았다는 note가 있어야 한다.
+7. `mixed_scope`, `operator_mismatch`, canonical-only 증적, `operator_id` 없는 slug-only synthetic result를 G-2 ready 근거로 사용하지 않았다.
+8. 알림 증적은 operator별 route가 분리되었거나, synthetic/non-canonical operator에 대해 `dry_run_only` 또는 `skipped` 정책이 명확하다. canonical Telegram/app target으로 synthetic/non-canonical 알림이 섞인 흔적이 없어야 한다.
+9. 승인 후 실행 항목은 모두 `approved_execution_items`에 approval reference, 실행 창, output path, result가 남아 있다.
+10. dry-run 또는 read-only 항목은 `dry_run_items`에만 기록되어 있고, DB write 또는 실제 외부 송신 성공처럼 해석하지 않았다.
+11. 관리자 surface와 사용자 surface의 역할 분리 증적이 있고, 사용자 화면에 cross-operator 관리 기능이 노출되지 않았다는 확인이 남아 있다.
 
 G-0 scheduled smoke는 운영 안정성의 선행 신호다. canonical-only smoke를 G-2 per-operator 성공 증거로 계산하면 안 된다. 다만 canonical scheduled smoke가 별도 운영 안정성 전제로 green이고, G-2 operator별 증적이 독립적으로 충분하면 canonical-only smoke 자체만으로 `hold`를 선언할 필요는 없다.
 
@@ -270,7 +277,7 @@ G-0 scheduled smoke는 운영 안정성의 선행 신호다. canonical-only smok
 - counted operator가 3개 미만이다.
 - operator의 profile, strategy, notification channel 또는 G-2 ledger path가 없거나 target operator와 맞지 않는다.
 - `blocking_gaps`에 `open`, `triaged`, `accepted_hold`가 남아 있다.
-- `mixed_scope`, `operator_mismatch`, canonical-only evidence를 pass 근거로 사용했다.
+- `mixed_scope`, `operator_mismatch`, canonical-only evidence, `operator_id` 없는 slug-only synthetic result를 pass 근거로 사용했다.
 - synthetic/non-canonical 알림이 canonical Telegram/app target으로 송신되었거나, 송신 여부를 구분할 수 없다.
 - 승인 없이 DB write, 실제 KONEPS 호출, 실제 Telegram/app 송신, `dry_run=false` 전략 적용이 수행되었다.
 - raw Telegram chat id, app device token, secret target이 review artifact에 노출되었다.

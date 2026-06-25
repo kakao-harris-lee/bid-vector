@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 from typing import Any, Callable, TextIO
 from urllib import error as urlerror
@@ -33,11 +35,25 @@ class EndpointSpec:
     file_name: str
     path: str
     include_days: bool = False
+    limit: int | None = None
+    recent_limit: int | None = None
+    recommendation_limit: int | None = None
+    sort: str | None = None
+    static_params: tuple[tuple[str, Any], ...] = ()
 
     def params(self, *, operator_id: int, days: int) -> dict[str, Any]:
         payload: dict[str, Any] = {"operator_id": operator_id}
         if self.include_days:
             payload["days"] = days
+        if self.limit is not None:
+            payload["limit"] = self.limit
+        if self.recent_limit is not None:
+            payload["recent_limit"] = self.recent_limit
+        if self.recommendation_limit is not None:
+            payload["recommendation_limit"] = self.recommendation_limit
+        if self.sort is not None:
+            payload["sort"] = self.sort
+        payload.update(self.static_params)
         return payload
 
 
@@ -78,7 +94,46 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
         path="/api/v1/analytics/g2-evidence",
         include_days=True,
     ),
+    EndpointSpec(
+        key="operator_dashboard",
+        file_name="operator-dashboard.json",
+        path="/api/v1/operator/dashboard",
+        include_days=True,
+        limit=5,
+    ),
+    EndpointSpec(
+        key="operations_dashboard",
+        file_name="operations-dashboard.json",
+        path="/api/v1/analytics/operations-dashboard",
+        include_days=True,
+        recent_limit=5,
+    ),
+    EndpointSpec(
+        key="strategy_candidates",
+        file_name="strategy-candidates.json",
+        path="/api/v1/operator/strategy/candidates",
+        limit=20,
+        static_params=(("high_priority_only", "true"),),
+    ),
+    EndpointSpec(
+        key="decision_experiments",
+        file_name="decision-experiments.json",
+        path="/api/v1/analytics/decision-experiments",
+        limit=20,
+        sort="needs_attention",
+    ),
+    EndpointSpec(
+        key="decision_recommendations",
+        file_name="decision-recommendations.json",
+        path="/api/v1/analytics/decision-recommendations",
+        include_days=True,
+        recommendation_limit=5,
+    ),
 )
+ENDPOINT_PATHS_BY_KEY = {endpoint.key: endpoint.path for endpoint in ENDPOINTS}
+ENDPOINT_KEYS_BY_PATH = {endpoint.path: endpoint.key for endpoint in ENDPOINTS}
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATE_PATTERN = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})|(?P<compact>\d{8})")
 
 
 def positive_int(value: str) -> int:
@@ -495,6 +550,533 @@ def build_collection_summary(
     }
 
 
+def _repo_relative_path(path: Path, *, repo_root: Path = REPO_ROOT) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(repo_root.resolve()))
+    except ValueError:
+        return str(resolved)
+
+
+def _basis_commit(*, repo_root: Path = REPO_ROOT) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:  # noqa: BLE001 - manifest is still useful without git.
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def _date_from_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = DATE_PATTERN.search(value)
+    if not match:
+        return None
+    if match.group("date"):
+        return match.group("date")
+    compact = match.group("compact")
+    try:
+        return datetime.strptime(compact, "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def _run_date(run_dir: Path, run_id: str | None) -> str | None:
+    return (
+        _date_from_text(run_dir.parent.name)
+        or _date_from_text(run_id)
+        or _date_from_text(run_dir.name)
+    )
+
+
+def _evidence_window(
+    *, required_days: int, run_date: str | None, counted: bool
+) -> dict[str, Any]:
+    start_date = None
+    if run_date:
+        end_date = datetime.strptime(run_date, "%Y-%m-%d").date()
+        start_date = (end_date - timedelta(days=required_days - 1)).isoformat()
+    return {
+        "start_date": start_date,
+        "end_date": run_date,
+        "required_days": required_days,
+        "observed_days": 1,
+        "counted_days": 1 if counted else 0,
+        "timezone": "Asia/Seoul",
+    }
+
+
+def _operator_raw_path(
+    *,
+    run_dir: Path,
+    operator_summary: dict[str, Any],
+    key: str,
+    repo_root: Path = REPO_ROOT,
+) -> str | None:
+    raw_file = (operator_summary.get("raw_files") or {}).get(key)
+    if not raw_file:
+        return None
+    return _repo_relative_path(run_dir / raw_file, repo_root=repo_root)
+
+
+def _read_operator_payload(
+    *, run_dir: Path, operator_summary: dict[str, Any], key: str
+) -> dict[str, Any]:
+    raw_file = (operator_summary.get("raw_files") or {}).get(key)
+    if not raw_file or raw_file.endswith(".error.json"):
+        return {}
+    try:
+        payload = json.loads((run_dir / raw_file).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _endpoint_has_error(operator_summary: dict[str, Any], key: str) -> bool:
+    endpoint_path = ENDPOINT_PATHS_BY_KEY[key]
+    return any(
+        item.get("endpoint") == endpoint_path
+        for item in operator_summary.get("collection_errors") or []
+        if isinstance(item, dict)
+    )
+
+
+def _endpoint_scope_status(operator_summary: dict[str, Any], key: str) -> str:
+    if _endpoint_has_error(operator_summary, key):
+        return "missing"
+    raw_file = (operator_summary.get("raw_files") or {}).get(key)
+    if not raw_file or raw_file.endswith(".error.json"):
+        return "missing"
+    current_ids = operator_summary.get("current_operator_ids_by_endpoint") or {}
+    if key not in current_ids:
+        return "missing"
+    if _optional_int(current_ids.get(key)) != operator_summary.get("operator_id"):
+        return "mixed_scope"
+    return "pass"
+
+
+def _profile_status(operator_summary: dict[str, Any]) -> str:
+    endpoint_status = _endpoint_scope_status(operator_summary, "profile")
+    if endpoint_status != "pass":
+        return endpoint_status
+    if operator_summary.get("profile_configured") is True:
+        return "pass"
+    if operator_summary.get("profile_configured") is False:
+        return "fail"
+    return "missing"
+
+
+def _strategy_status(operator_summary: dict[str, Any]) -> str:
+    endpoint_status = _endpoint_scope_status(operator_summary, "strategy")
+    if endpoint_status != "pass":
+        return endpoint_status
+    if operator_summary.get("strategy_configured") is True:
+        return "pass"
+    if operator_summary.get("strategy_configured") is False:
+        return "fail"
+    return "missing"
+
+
+def _notification_status(operator_summary: dict[str, Any]) -> str:
+    endpoint_status = _endpoint_scope_status(operator_summary, "notification_channels")
+    if endpoint_status != "pass":
+        return endpoint_status
+    mode = operator_summary.get("notification_channel_status")
+    if mode in {"active", "dry_run_only", "skipped"}:
+        return "pass"
+    if mode == "missing":
+        return "missing"
+    return "fail"
+
+
+def _operator_scope_status(operator_summary: dict[str, Any]) -> str:
+    if operator_summary.get("mismatched_current_operator_ids"):
+        return "mixed_scope"
+    if operator_summary.get("current_operator_id_matches") is True:
+        return "pass"
+    if operator_summary.get("collection_errors"):
+        return "missing"
+    return "missing"
+
+
+def _gap_category(description: str) -> str:
+    lowered = description.lower()
+    if any(term in lowered for term in ("mixed", "canonical", "scope", "mismatch")):
+        return "mixed data"
+    if any(term in lowered for term in ("telegram", "notification", "app")):
+        return "Telegram/app notification"
+    if any(
+        term in lowered for term in ("credential", "token", "secret", "401", "403")
+    ):
+        return "credential"
+    if any(term in lowered for term in ("koneps", "crawl", "schema", "response")):
+        return "KONEPS response"
+    if any(
+        term in lowered for term in ("celery", "task", "broker", "worker", "queue")
+    ):
+        return "task/broker"
+    if any(term in lowered for term in ("no candidate", "candidate", "공고", "후보")):
+        return "no candidates"
+    return "missing evidence"
+
+
+def _gap_treatment(category: str) -> str:
+    if category == "mixed data":
+        return "documented_not_counted"
+    return "rerun"
+
+
+def _blocking_gap_entries(
+    *, operator_summaries: list[dict[str, Any]], run_date: str | None
+) -> tuple[list[dict[str, Any]], dict[int, list[str]]]:
+    entries: list[dict[str, Any]] = []
+    ids_by_operator: dict[int, list[str]] = {}
+    for operator_summary in operator_summaries:
+        operator_id = int(operator_summary["operator_id"])
+        for gap in operator_summary.get("blocking_gaps") or []:
+            description = str(gap)
+            gap_id = f"GAP-{len(entries) + 1:03d}"
+            category = _gap_category(description)
+            entry = {
+                "gap_id": gap_id,
+                "date": _date_from_text(description) or run_date,
+                "operator_id": operator_id,
+                "source": "g2-evidence.blocking_gaps",
+                "category": category,
+                "description": description,
+                "status": "open",
+                "treatment": _gap_treatment(category),
+            }
+            entries.append(entry)
+            ids_by_operator.setdefault(operator_id, []).append(gap_id)
+    return entries, ids_by_operator
+
+
+def _build_manifest_operator(
+    *,
+    run_dir: Path,
+    operator_summary: dict[str, Any],
+    blocking_gap_ids: list[str],
+) -> dict[str, Any]:
+    operator_id = int(operator_summary["operator_id"])
+    profile_payload = _read_operator_payload(
+        run_dir=run_dir, operator_summary=operator_summary, key="profile"
+    )
+    username = (
+        operator_summary.get("current_operator_username")
+        or profile_payload.get("current_operator_username")
+        or profile_payload.get("username")
+    )
+    company = profile_payload.get("company") or profile_payload.get("company_name")
+    profile_status = _profile_status(operator_summary)
+    strategy_status = _strategy_status(operator_summary)
+    notification_status = _notification_status(operator_summary)
+    g2_status = operator_summary.get("evidence_status") or "missing"
+    return {
+        "operator_id": operator_id,
+        "username": username,
+        "company": company,
+        "is_synthetic": bool(
+            isinstance(username, str) and username.startswith("synthetic-")
+        ),
+        "operator_scope_status": _operator_scope_status(operator_summary),
+        "profile": {
+            "status": profile_status,
+            "path": _operator_raw_path(
+                run_dir=run_dir, operator_summary=operator_summary, key="profile"
+            ),
+            "required_fields_present": profile_status == "pass",
+        },
+        "strategy": {
+            "status": strategy_status,
+            "path": _operator_raw_path(
+                run_dir=run_dir, operator_summary=operator_summary, key="strategy"
+            ),
+            "thresholds_valid": strategy_status == "pass",
+        },
+        "notification_channel": {
+            "status": notification_status,
+            "mode": operator_summary.get("notification_channel_status") or "missing",
+            "path": _operator_raw_path(
+                run_dir=run_dir,
+                operator_summary=operator_summary,
+                key="notification_channels",
+            ),
+            "masked_target_present": (
+                operator_summary.get("notification_channel_count", 0) > 0
+            ),
+            "raw_secret_absent": None,
+        },
+        "evidence_paths": {
+            "g2_evidence": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="g2_evidence",
+                    )
+                ]
+                if path
+            ],
+            "candidate_preview": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="strategy_candidates",
+                    )
+                ]
+                if path
+            ],
+            "strategy_monitor": [],
+            "decision_experiments": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="decision_experiments",
+                    )
+                ]
+                if path
+            ],
+            "decision_apply_dry_run": [],
+            "operations_dashboard": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="operator_dashboard",
+                    ),
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="operations_dashboard",
+                    ),
+                ]
+                if path
+            ],
+        },
+        "_daily_status": {
+            "profile": profile_status,
+            "strategy": strategy_status,
+            "notification_channel": notification_status,
+            "candidate_preview": _endpoint_scope_status(
+                operator_summary,
+                "strategy_candidates",
+            ),
+            "strategy_monitor": "missing",
+            "decision_experiment": _endpoint_scope_status(
+                operator_summary,
+                "decision_experiments",
+            ),
+            "g2_evidence_status": g2_status,
+            "blocking_gap_ids": blocking_gap_ids,
+        },
+    }
+
+
+def _daily_status_value(
+    *,
+    summary: dict[str, Any],
+    manifest_operators: list[dict[str, Any]],
+) -> str:
+    if summary.get("collection_error_count", 0) > 0:
+        return "fail"
+    all_collected_evidence_passed = (
+        summary.get("operator_count", 0) >= 3
+        and summary.get("blocking_gap_count", 0) == 0
+        and all(
+            operator.get("operator_scope_status") == "pass"
+            and operator.get("profile", {}).get("status") == "pass"
+            and operator.get("strategy", {}).get("status") == "pass"
+            and operator.get("notification_channel", {}).get("status") == "pass"
+            and operator.get("_daily_status", {}).get("candidate_preview") == "pass"
+            and operator.get("_daily_status", {}).get("decision_experiment") == "pass"
+            and operator.get("_daily_status", {}).get("g2_evidence_status") == "ready"
+            for operator in manifest_operators
+        )
+    )
+    return "pass" if all_collected_evidence_passed else "partial"
+
+
+def build_manifest_draft(
+    *,
+    config: CollectionConfig,
+    run_dir: Path,
+    summary: dict[str, Any],
+    repo_root: Path = REPO_ROOT,
+) -> dict[str, Any]:
+    run_date = _run_date(run_dir, config.run_id)
+    blocking_gaps, gap_ids_by_operator = _blocking_gap_entries(
+        operator_summaries=summary.get("operators") or [],
+        run_date=run_date,
+    )
+    manifest_operators = [
+        _build_manifest_operator(
+            run_dir=run_dir,
+            operator_summary=operator_summary,
+            blocking_gap_ids=gap_ids_by_operator.get(
+                int(operator_summary["operator_id"]), []
+            ),
+        )
+        for operator_summary in summary.get("operators") or []
+    ]
+    daily_status = _daily_status_value(
+        summary=summary, manifest_operators=manifest_operators
+    )
+    summary_path = run_dir / "g2-evidence-summary.json"
+    manifest = {
+        "review_id": f"g2-exit-draft-{config.run_id}",
+        "manifest_version": 1,
+        "status": "draft",
+        "basis": {
+            "roadmap": "docs/roadmap.md",
+            "runbook": "docs/operations/g2-evidence-runbook.md",
+            "review_template": "docs/operations/g2-exit-review-template.md",
+            "basis_commit": _basis_commit(repo_root=repo_root),
+        },
+        "evidence_window": _evidence_window(
+            required_days=config.days,
+            run_date=run_date,
+            counted=daily_status == "pass",
+        ),
+        "operators": [
+            {key: value for key, value in operator.items() if key != "_daily_status"}
+            for operator in manifest_operators
+        ],
+        "daily_status": [
+            {
+                "date": run_date,
+                "status": daily_status,
+                "summary": f"collect_g2_evidence snapshot status={summary.get('status')}",
+                "collect_g2_evidence_snapshot": {
+                    "status": "pass" if summary.get("status") == "ready" else "fail",
+                    "path": _repo_relative_path(summary_path, repo_root=repo_root),
+                    "source": "scripts/collect_g2_evidence.py",
+                },
+                "operators": {
+                    str(operator["operator_id"]): operator["_daily_status"]
+                    for operator in manifest_operators
+                },
+                "dry_run_item_ids": [],
+                "approved_execution_item_ids": [],
+                "excluded_evidence": [],
+            }
+        ],
+        "blocking_gaps": blocking_gaps,
+        "action_register": {
+            "dry_run_items": [],
+            "approved_execution_items": [],
+        },
+    }
+    return manifest
+
+
+def _daily_worklog_file_paths(operator_summary: dict[str, Any]) -> dict[str, str]:
+    raw_files = operator_summary.get("raw_files") or {}
+    return {
+        endpoint.key: raw_files[endpoint.key]
+        for endpoint in ENDPOINTS
+        if endpoint.key in raw_files
+    }
+
+
+def _daily_worklog_next_actions(
+    *, operator_summaries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for operator_summary in operator_summaries:
+        operator_id = int(operator_summary["operator_id"])
+        file_paths = _daily_worklog_file_paths(operator_summary)
+
+        for gap in operator_summary.get("blocking_gaps") or []:
+            actions.append(
+                {
+                    "kind": "blocking_gap",
+                    "operator_id": operator_id,
+                    "endpoint_key": "g2_evidence",
+                    "description": str(gap),
+                    "action": (
+                        "Resolve the blocking gap and rerun G-2 evidence collection."
+                    ),
+                }
+            )
+
+        for error_item in operator_summary.get("collection_errors") or []:
+            if not isinstance(error_item, dict):
+                continue
+            endpoint = str(error_item.get("endpoint") or "")
+            endpoint_key = ENDPOINT_KEYS_BY_PATH.get(endpoint, endpoint)
+            actions.append(
+                {
+                    "kind": "collection_error",
+                    "operator_id": operator_id,
+                    "endpoint_key": endpoint_key,
+                    "endpoint": endpoint,
+                    "path": file_paths.get(endpoint_key),
+                    "error": str(error_item.get("error") or ""),
+                    "action": (
+                        "Fix the endpoint collection error and rerun "
+                        "G-2 evidence collection."
+                    ),
+                }
+            )
+
+        for endpoint in ENDPOINTS:
+            path = file_paths.get(endpoint.key)
+            if path and not path.endswith(".error.json"):
+                continue
+            actions.append(
+                {
+                    "kind": "missing_endpoint",
+                    "operator_id": operator_id,
+                    "endpoint_key": endpoint.key,
+                    "path": path,
+                    "action": (
+                        "Collect the missing endpoint evidence and rerun "
+                        "G-2 evidence collection."
+                    ),
+                }
+            )
+    return actions
+
+
+def build_daily_worklog(
+    *,
+    config: CollectionConfig,
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    operator_summaries = summary.get("operators") or []
+    return {
+        "worklog_version": 1,
+        "run_id": config.run_id,
+        "operator_count": len(operator_summaries),
+        "write_performed": False,
+        "endpoint_keys": [endpoint.key for endpoint in ENDPOINTS],
+        "operators": [
+            {
+                "operator_id": int(operator_summary["operator_id"]),
+                "file_paths": _daily_worklog_file_paths(operator_summary),
+            }
+            for operator_summary in operator_summaries
+        ],
+        "next_actions": _daily_worklog_next_actions(
+            operator_summaries=operator_summaries
+        ),
+    }
+
+
 def run_collection(
     config: CollectionConfig,
     *,
@@ -542,6 +1124,18 @@ def run_collection(
                 for endpoint in ENDPOINTS
             ],
         },
+    )
+    write_json(
+        run_dir / "manifest-draft.json",
+        build_manifest_draft(
+            config=effective_config,
+            run_dir=run_dir,
+            summary=summary,
+        ),
+    )
+    write_json(
+        run_dir / "daily-worklog.json",
+        build_daily_worklog(config=effective_config, summary=summary),
     )
     return summary
 

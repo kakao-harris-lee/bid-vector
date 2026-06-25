@@ -11,6 +11,7 @@ from app.models.models import (
     SyntheticExperiment,
     SyntheticExperimentResult,
     SyntheticExperimentRun,
+    User,
 )
 from app.services.synthetic_backtest import SyntheticBacktestService
 
@@ -128,6 +129,21 @@ def _persist_experiment_run(
     test_db.commit()
     test_db.refresh(run)
     return run
+
+
+def _seed_synthetic_user(test_db, *, slug: str, is_active: bool = True) -> User:
+    user = User(
+        username=f"synthetic-{slug}",
+        email=f"{slug}@synthetic.test.local",
+        full_name=f"Synthetic {slug}",
+        company=f"Synthetic {slug} Co",
+        hashed_password="x",
+        is_active=is_active,
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+    return user
 
 
 # --- create -------------------------------------------------------------------
@@ -560,6 +576,169 @@ def test_sample_gap_run_candidate_builds_existing_preset_payload(client, test_db
     assert source_context["key"] == "software"
     assert source_context["action_code"] == "rerun_related_preset"
     assert source_context["related_run_ids"] == [run.id]
+
+
+def test_sample_gap_run_candidate_resolves_operator_ids_for_seeded_slugs(
+    client, test_db
+):
+    seeded = [
+        _seed_synthetic_user(test_db, slug="sw-small-seoul"),
+        _seed_synthetic_user(test_db, slug="sw-mid-metro"),
+        _seed_synthetic_user(test_db, slug="sw-large-national"),
+    ]
+    run = _persist_experiment_run(
+        test_db,
+        name="g1-software-base-12m",
+        params={
+            "start_at": "2025-01-01T00:00:00+00:00",
+            "end_at": "2025-12-31T23:59:59+00:00",
+            "category": "software",
+            "limit": 200,
+            "scenario": "base",
+            "settle_actions": False,
+        },
+        operator_slugs=[
+            "sw-small-seoul",
+            "sw-mid-metro",
+            "sw-large-national",
+        ],
+        summary=_sample_gap_summary(
+            preset_name="g1-software-base-12m",
+            category="software",
+            lacking_groups=[
+                {
+                    "dimension": "category",
+                    "key": "software",
+                    "settled_count": 18,
+                    "sample_target": 30,
+                    "missing_settled_count": 12,
+                },
+            ],
+        ),
+    )
+    experiment_count = test_db.query(SyntheticExperiment).count()
+    run_count = test_db.query(SyntheticExperimentRun).count()
+
+    response = client.post(
+        "/api/v1/synthetic/experiments/sample-gaps/candidates",
+        json={"dimension": "category", "key": "software", "max_runs": 10},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    expected_targets = [
+        {
+            "slug": "sw-small-seoul",
+            "username": "synthetic-sw-small-seoul",
+            "operator_id": seeded[0].id,
+            "user_id": seeded[0].id,
+            "resolved": True,
+            "operator_id_scope_ready": True,
+        },
+        {
+            "slug": "sw-mid-metro",
+            "username": "synthetic-sw-mid-metro",
+            "operator_id": seeded[1].id,
+            "user_id": seeded[1].id,
+            "resolved": True,
+            "operator_id_scope_ready": True,
+        },
+        {
+            "slug": "sw-large-national",
+            "username": "synthetic-sw-large-national",
+            "operator_id": seeded[2].id,
+            "user_id": seeded[2].id,
+            "resolved": True,
+            "operator_id_scope_ready": True,
+        },
+    ]
+    assert body["operator_targets"] == expected_targets
+    assert body["operator_id_scope_ready"] is True
+    source_context = body["execution_plan"]["source_context"]
+    assert source_context["operator_targets"] == expected_targets
+    assert source_context["operator_id_scope_ready"] is True
+    assert source_context["related_run_ids"] == [run.id]
+    assert (
+        body["execution_plan"]["run_request"]["body"]["source_sample_gap_candidate"]
+        == source_context
+    )
+    assert test_db.query(SyntheticExperiment).count() == experiment_count
+    assert test_db.query(SyntheticExperimentRun).count() == run_count
+
+
+def test_sample_gap_run_candidate_marks_unresolved_slug_not_operator_scope_ready(
+    client, test_db
+):
+    active = _seed_synthetic_user(test_db, slug="resolved-custom")
+    _seed_synthetic_user(test_db, slug="inactive-custom", is_active=False)
+    _persist_experiment_run(
+        test_db,
+        name="custom-gap",
+        params={
+            "start_at": "2025-01-01T00:00:00+00:00",
+            "end_at": "2025-12-31T23:59:59+00:00",
+            "category": "software",
+            "limit": 200,
+            "scenario": "base",
+            "settle_actions": False,
+        },
+        operator_slugs=[
+            "resolved-custom",
+            "inactive-custom",
+            "missing-custom",
+        ],
+        summary=_sample_gap_summary(
+            preset_name="custom-gap",
+            category="software",
+            lacking_groups=[
+                {
+                    "dimension": "category",
+                    "key": "software",
+                    "settled_count": 18,
+                    "sample_target": 30,
+                    "missing_settled_count": 12,
+                },
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/synthetic/experiments/sample-gaps/candidates",
+        json={"dimension": "category", "key": "software", "max_runs": 10},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["operator_id_scope_ready"] is False
+    assert body["operator_targets"] == [
+        {
+            "slug": "resolved-custom",
+            "username": "synthetic-resolved-custom",
+            "operator_id": active.id,
+            "user_id": active.id,
+            "resolved": True,
+            "operator_id_scope_ready": True,
+        },
+        {
+            "slug": "inactive-custom",
+            "username": "synthetic-inactive-custom",
+            "operator_id": None,
+            "user_id": None,
+            "resolved": False,
+            "operator_id_scope_ready": False,
+        },
+        {
+            "slug": "missing-custom",
+            "username": "synthetic-missing-custom",
+            "operator_id": None,
+            "user_id": None,
+            "resolved": False,
+            "operator_id_scope_ready": False,
+        },
+    ]
+    source_context = body["execution_plan"]["source_context"]
+    assert source_context["operator_id_scope_ready"] is False
+    assert source_context["operator_targets"] == body["operator_targets"]
 
 
 def test_sample_gap_run_candidate_creates_new_plan_for_modified_action(

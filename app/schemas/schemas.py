@@ -2943,6 +2943,19 @@ class SyntheticExperimentSampleGapExecutionPlan(BaseModel):
     instructions: List[str] = Field(default_factory=list)
 
 
+class SyntheticExperimentSampleGapOperatorTarget(BaseModel):
+    """Operator-id preflight resolution for a selected synthetic slug."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    slug: str
+    username: str
+    operator_id: Optional[int] = None
+    user_id: Optional[int] = None
+    resolved: bool = False
+    operator_id_scope_ready: bool = False
+
+
 class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
     """Runnable follow-up candidate derived from one sample-gap recommendation."""
 
@@ -2955,6 +2968,10 @@ class SyntheticExperimentSampleGapRunCandidateResponse(BaseModel):
     preset_name: Optional[str] = None
     params: SyntheticExperimentParams
     operator_slugs: List[str] = Field(default_factory=list)
+    operator_targets: List[SyntheticExperimentSampleGapOperatorTarget] = Field(
+        default_factory=list
+    )
+    operator_id_scope_ready: bool = False
     experiment_payload: SyntheticExperimentCreate
     experiment_id: Optional[int] = None
     latest_run_id: Optional[int] = None

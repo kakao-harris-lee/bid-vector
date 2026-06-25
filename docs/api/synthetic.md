@@ -325,6 +325,7 @@ warning code:
 - `dimension`/`key`는 sample-gap item을 식별한다.
 - `action_code`를 생략하면 서비스가 기본 action을 고른다. mixed data warning이 있으면 `rerun_synthetic_only`를 우선한다.
 - `canonical_synthetic_mixed` warning이 있으면 `run_allowed=false`, `next_step=resolve_mixed_data`로 반환한다.
+- `operator_targets`는 각 synthetic slug가 실제 active `synthetic-*` 사용자 id로 해석되는지 보여준다. `operator_id_scope_ready=false`면 승인 전 시드/비활성 operator를 먼저 정리해야 한다.
 - 실제 backfill DB write, experiment 저장, run enqueue는 하지 않는다. `execution_plan.run_request`는 기존 `/experiments/{id}/runs` 비동기 큐잉 API의 요청 payload만 제공한다.
 - `execution_plan.source_context`는 run 요청 body의 `source_sample_gap_candidate`로 전달할 수 있으며, 완료된 run summary의 `summary.source_sample_gap_candidate`에 남는다.
 
@@ -390,6 +391,33 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
     "settle_actions": false
   },
   "operator_slugs": ["sw-small-seoul", "sw-mid-metro", "sw-large-national"],
+  "operator_targets": [
+    {
+      "slug": "sw-small-seoul",
+      "username": "synthetic-sw-small-seoul",
+      "operator_id": 101,
+      "user_id": 101,
+      "resolved": true,
+      "operator_id_scope_ready": true
+    },
+    {
+      "slug": "sw-mid-metro",
+      "username": "synthetic-sw-mid-metro",
+      "operator_id": 102,
+      "user_id": 102,
+      "resolved": true,
+      "operator_id_scope_ready": true
+    },
+    {
+      "slug": "sw-large-national",
+      "username": "synthetic-sw-large-national",
+      "operator_id": 103,
+      "user_id": 103,
+      "resolved": true,
+      "operator_id_scope_ready": true
+    }
+  ],
+  "operator_id_scope_ready": true,
   "experiment_payload": {
     "name": "g1-software-base-12m",
     "description": "Sample-gap follow-up candidate for category:software. Recommended action: Rerun related preset.",
@@ -431,6 +459,33 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
         "settle_actions": false
       },
       "operator_slugs": ["sw-small-seoul", "sw-mid-metro", "sw-large-national"],
+      "operator_targets": [
+        {
+          "slug": "sw-small-seoul",
+          "username": "synthetic-sw-small-seoul",
+          "operator_id": 101,
+          "user_id": 101,
+          "resolved": true,
+          "operator_id_scope_ready": true
+        },
+        {
+          "slug": "sw-mid-metro",
+          "username": "synthetic-sw-mid-metro",
+          "operator_id": 102,
+          "user_id": 102,
+          "resolved": true,
+          "operator_id_scope_ready": true
+        },
+        {
+          "slug": "sw-large-national",
+          "username": "synthetic-sw-large-national",
+          "operator_id": 103,
+          "user_id": 103,
+          "resolved": true,
+          "operator_id_scope_ready": true
+        }
+      ],
+      "operator_id_scope_ready": true,
       "run_allowed": true,
       "blocked_by_warnings": [],
       "warnings": []
@@ -447,7 +502,8 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
           "key": "software",
           "action_code": "rerun_related_preset",
           "preset_name": "g1-software-base-12m",
-          "related_run_ids": [102]
+          "related_run_ids": [102],
+          "operator_id_scope_ready": true
         }
       }
     },
@@ -473,11 +529,13 @@ curl -X POST "http://localhost:3000/api/v1/synthetic/experiments/sample-gaps/can
 | action_code/action_label | string | 적용한 recommendation action |
 | params | object | 후보 실행에 사용할 `SyntheticExperimentParams` |
 | operator_slugs | string[] | 후보 실행 대상 synthetic operator slug |
+| operator_targets | object[] | slug별 active `synthetic-*` 사용자 해석 결과(`operator_id`, `user_id`, `resolved`) |
+| operator_id_scope_ready | boolean | 모든 후보 slug가 active operator id로 해석되어 G-2 operator-scoped run을 만들 준비가 되었는지 |
 | experiment_payload | object | 저장 가능한 `SyntheticExperimentCreate` payload |
 | experiment_id/latest_run_id | integer\|null | 기존 experiment/run이 있으면 해당 id |
 | next_step | enum | `resolve_mixed_data`, `run_existing_experiment`, `save_preset`, `create_experiment` |
 | execution_plan | object | 저장/큐잉을 위한 후속 API 요청 payload. 후보 API 자체는 실행하지 않음 |
-| execution_plan.source_context | object | run summary에 남길 sample-gap provenance (`source_sample_gap_candidate`) |
+| execution_plan.source_context | object | run summary에 남길 sample-gap provenance (`source_sample_gap_candidate`). `operator_targets`와 `operator_id_scope_ready`를 포함한다. |
 | execution_plan.run_request | object\|null | `POST /experiments/{experiment_id}/runs` 요청 payload. blocked 후보는 null |
 | execution_plan.cli_command/write_cli_command | string\|null | dry-run 기본 명령과 승인 후 write 명령 |
 | run_allowed | boolean | mixed data 등 blocking warning 없이 실행 후보로 사용할 수 있는지 |
@@ -503,6 +561,8 @@ python scripts/run_g2_synthetic_evidence.py --dry-run --preset g1-software-base-
 
 승인된 운영 실행에서만 `--write`를 사용한다. `--write`는 필요하면 experiment/preset을 저장하고 기존 Celery synthetic experiment run을 enqueue한다. 요청-응답 경로에서 heavy backtest를 직접 실행하지 않고, 큐잉된 run은 기존 `/experiments/{experiment_id}/runs/{run_id}`로 폴링한다.
 
+dry-run 출력은 top-level `operator_scope`를 포함한다. `operator_scope.operator_id_scope_ready=false`면 `--write`도 materialize/enqueue 전에 `blocked_operator_scope`로 중단하고 exit code `4`를 반환한다.
+
 ```bash
 python scripts/run_g2_synthetic_evidence.py --write --preset g1-software-base-12m
 ```
@@ -518,7 +578,7 @@ python scripts/run_g2_synthetic_evidence.py --write --preset g1-software-base-12
 | `--action-code <code>` | recommendation action 명시 (`rerun_related_preset`, `increase_limit` 등) |
 | `--max-runs <n>` | 최근 completed run scan 상한 |
 
-`run_allowed=false` 또는 `canonical_synthetic_mixed` warning이 있으면 `--write`도 run을 enqueue하지 않고 blocked 결과를 출력한다.
+`operator_id_scope_ready=false`면 exit code `4`, `run_allowed=false` 또는 `canonical_synthetic_mixed` warning이면 exit code `3`으로 run을 enqueue하지 않고 blocked 결과를 출력한다.
 
 ---
 

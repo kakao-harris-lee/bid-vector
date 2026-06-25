@@ -17,7 +17,7 @@
 - 리포트: 추천 vs 실제 정확도, 의사결정 증적 export, 운영 KPI, operations dashboard
 - 웹: `frontend/` Vite + React + TypeScript SPA를 `/dashboard`에서 서빙
 
-현재 로드맵 위치는 **Phase 2 / G-2 독립 가상 사업자 운영 검증 진행 중**입니다. `7fdc04c` 기준으로 G-2 evidence API, 사업자별 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, G-2 runbook이 `main`에 반영되었습니다. 현재 병목은 더 많은 기능 구현이 아니라 **3개 이상 가상 사업자에 대해 N일 운영 증적을 쌓고 exit review를 수행하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
+현재 로드맵 위치는 **Phase 2 / G-2 독립 가상 사업자 운영 검증 진행 중**입니다. `50c9336` 기준으로 G-2 evidence API, 사업자별 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, G-2 runbook, operator-scoped synthetic evidence, read-only G-2 evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 현재 병목은 더 많은 기능 구현이 아니라 **3개 이상 가상 사업자에 대해 `reports/g2-evidence/` 기준 N일 운영 증적을 쌓고 exit review를 수행하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
 
 ## 서비스 목표
 
@@ -159,6 +159,12 @@ G-2 운영 검증에서 자주 쓰는 엔드포인트:
 - `/analytics/g2-evidence`: operator별 smoke/monitor/experiment/notification 증적 ledger
 - `/operator/notification-channels`: operator별 masked notification route metadata
 - `/synthetic/experiments/sample-gaps/candidates`: sample-gap 기반 synthetic evidence 실행 계획
+- `scripts/collect_g2_evidence.py`: operator별 read-only evidence, `daily-worklog.json`, `manifest-draft.json` 수집
+- `scripts/g2_blocking_gap_register.py`: manifest들의 unresolved G-2 gap을 JSON/Markdown 운영표로 병합
+- `scripts/run_g2_synthetic_evidence.py --evidence-out`: sample-gap dry-run/write 승인 payload를 파일 증적으로 저장
+- `scripts/verify_g2_notification_targets.py`: notification channel masking, dry-run, non-canonical 송신 경계 검증
+- `scripts/build_g2_exit_review.py`: 일일 manifest draft를 `manifest.json`/`exit-review.md` review bundle로 병합
+- `scripts/check_g2_exit_readiness.py`: review manifest가 G-2 human review에 올릴 준비가 됐는지 gate별 점검
 
 ## 문서
 
