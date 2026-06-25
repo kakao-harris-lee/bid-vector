@@ -17,7 +17,7 @@
 - 리포트: 추천 vs 실제 정확도, 의사결정 증적 export, 운영 KPI, operations dashboard
 - 웹: `frontend/` Vite + React + TypeScript SPA를 `/dashboard`에서 서빙
 
-현재 로드맵 위치는 **Phase 2 / G-2 독립 가상 사업자 운영 검증 진행 중**입니다. `7fdc04c` 기준으로 G-2 evidence API, 사업자별 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, G-2 runbook이 `main`에 반영되었습니다. 현재 병목은 더 많은 기능 구현이 아니라 **3개 이상 가상 사업자에 대해 N일 운영 증적을 쌓고 exit review를 수행하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
+현재 로드맵 위치는 **Phase 2 / G-2 독립 가상 사업자 운영 검증 진행 중**입니다. `50c9336` 기준으로 G-2 evidence API, 사업자별 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, G-2 runbook, operator-scoped synthetic evidence, read-only G-2 evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 현재 병목은 더 많은 기능 구현이 아니라 **3개 이상 가상 사업자에 대해 `reports/g2-evidence/` 기준 N일 운영 증적을 쌓고 exit review를 수행하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
 
 ## 서비스 목표
 
