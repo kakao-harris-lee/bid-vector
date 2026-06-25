@@ -17,18 +17,15 @@ export const GUIDE_STEPS: GuideStep[] = [
     no: 1,
     title: "전략 설정",
     description:
-      "운영자 전략과 임계값을 먼저 설정합니다. 검토(review) 기준과 즉시투찰(bid_now) 기준을 정해 두면 이후 단계의 추천·결정이 이 기준을 따릅니다.",
+      "우리 회사의 선호 업종, 지역, 금액 기준을 먼저 설정합니다. 검토(review) 기준과 즉시투찰(bid_now) 기준을 정해 두면 이후 단계의 후보 추천이 이 기준을 따릅니다.",
     links: [{ label: "전략 편집 열기", path: "/dashboard/strategy" }],
   },
   {
     no: 2,
-    title: "공고 수집 · 발굴",
+    title: "공고 확인 · 발굴",
     description:
-      "나라장터(KONEPS) 공고를 수집한 뒤 입찰(=입찰 후보 발굴) 화면에서 추진할 만한 후보를 확인합니다. 수집 상태와 주기는 운영 · 수집 화면에서 점검합니다.",
-    links: [
-      { label: "운영 · 수집 열기", path: "/dashboard/operations" },
-      { label: "입찰 후보 열기", path: "/dashboard/opportunities" },
-    ],
+      "입찰 후보 화면에서 자격과 전략 기준에 맞는 공고를 확인합니다. 우선순위, 제외 사유, 관심 후보를 함께 보며 추진할 만한 건을 고릅니다.",
+    links: [{ label: "입찰 후보 열기", path: "/dashboard/opportunities" }],
   },
   {
     no: 3,
@@ -41,18 +38,18 @@ export const GUIDE_STEPS: GuideStep[] = [
     no: 4,
     title: "가격 예측 & guardrail",
     description:
-      "공고 상세에서 적정 투찰가 예측을 확인합니다. 카테고리 낙찰하한 미만의 추천은 guardrail이 자동으로 차단하므로, 하한 미만 가격은 추천·결정에 노출되지 않습니다.",
-    links: [
-      { label: "공고 상세 열기", path: "/dashboard/projects" },
-      { label: "결정 게이트웨이 열기", path: "/dashboard/decisions" },
-    ],
+      "공고 상세에서 적정 투찰가 예측을 확인합니다. 카테고리 낙찰하한 미만의 추천은 guardrail이 자동으로 차단하므로, 하한 미만 가격은 후보 검토에 쓰지 않습니다.",
+    links: [{ label: "공고 상세 열기", path: "/dashboard/projects" }],
   },
   {
     no: 5,
-    title: "투찰 결정",
+    title: "투찰 준비",
     description:
-      "결정 게이트웨이에서 review / bid_now 게이트로 각 건의 추진 여부를 판단합니다. 전략 임계값을 넘은 건만 즉시투찰 후보로 분류됩니다.",
-    links: [{ label: "결정 게이트웨이 열기", path: "/dashboard/decisions" }],
+      "후보와 공고 상세를 함께 검토해 실제로 추진할 건을 정합니다. 전략 기준을 넘고 리스크가 낮은 건만 투찰 화면에서 제출 준비를 이어갑니다.",
+    links: [
+      { label: "입찰 후보 열기", path: "/dashboard/opportunities" },
+      { label: "투찰 열기", path: "/dashboard/bids" },
+    ],
   },
   {
     no: 6,
@@ -74,12 +71,12 @@ export const GUIDE_STEPS: GuideStep[] = [
     no: 8,
     title: "피드백 · 전략 튜닝",
     description:
-      "결과를 바탕으로 전략 임계값을 보정하고, 합성 백테스트로 변경 효과를 검증한 뒤 다음 사이클에 반영합니다.",
+      "결과를 바탕으로 전략 임계값을 보정하고 다음 공고 검토 기준에 반영합니다.",
     caveat:
-      "백테스트의 낙찰률 또한 가격 기준 추정 프록시이므로, 절대치보다 전후 비교 추세로 보는 것이 안전합니다.",
+      "결과 화면의 낙찰률은 가격 기준 추정 프록시일 수 있으므로, 절대치보다 반복적인 결과 흐름을 함께 보세요.",
     links: [
       { label: "전략 편집 열기", path: "/dashboard/strategy" },
-      { label: "합성 백테스트 열기", path: "/dashboard/synthetic-backtest" },
+      { label: "결과 열기", path: "/dashboard/results" },
     ],
   },
 ];
@@ -121,12 +118,9 @@ export const KONEPS_PROCESS_STEPS: KonepsProcessStep[] = [
     title: "공고 발굴",
     summary: "나라장터에 입찰공고가 게시됩니다.",
     ourHelp:
-      "공고를 자동 수집·분류하고, 자격 충족 + 선호/제외 필터로 추진할 만한 후보를 발굴합니다.",
+      "새 공고를 자격 충족 + 선호/제외 필터로 정리해 추진할 만한 후보를 발굴합니다.",
     external: false,
-    links: [
-      { label: "입찰 후보", path: "/dashboard/opportunities" },
-      { label: "운영·수집", path: "/dashboard/operations" },
-    ],
+    links: [{ label: "입찰 후보", path: "/dashboard/opportunities" }],
   },
   {
     no: 4,
@@ -142,12 +136,9 @@ export const KONEPS_PROCESS_STEPS: KonepsProcessStep[] = [
     title: "투찰가 결정·제출",
     summary: "나라장터 전자입찰에서 투찰가를 제출합니다.",
     ourHelp:
-      "적정 투찰가를 예측하고 카테고리 낙찰하한 미만 추천은 guardrail이 자동 차단합니다. 결정 게이트(review/bid_now)로 추진 여부를 판단합니다. 실제 투찰 제출은 나라장터에서 운영자가 직접 합니다.",
+      "적정 투찰가를 예측하고 카테고리 낙찰하한 미만 추천은 guardrail이 자동 차단합니다. 후보 검토 후 실제 투찰 제출은 나라장터에서 직접 진행합니다.",
     external: false,
-    links: [
-      { label: "결정 게이트웨이", path: "/dashboard/decisions" },
-      { label: "투찰", path: "/dashboard/bids" },
-    ],
+    links: [{ label: "투찰", path: "/dashboard/bids" }],
   },
   {
     no: 6,
@@ -155,11 +146,11 @@ export const KONEPS_PROCESS_STEPS: KonepsProcessStep[] = [
     summary:
       "예정가격(복수예비가격 추첨 기반) 산정 후 적격심사/최저가/종합심사로 낙찰자를 결정합니다.",
     ourHelp:
-      "개찰 결과를 수집·정산하여 예측가 대비 실제 오차와 낙찰 여부를 추적하고, 합성 백테스트로 전략을 보정합니다.",
+      "개찰 결과를 확인해 예측가 대비 실제 오차와 낙찰 여부를 추적하고, 다음 전략 보정에 반영합니다.",
     external: false,
     links: [
       { label: "결과", path: "/dashboard/results" },
-      { label: "합성 백테스트", path: "/dashboard/synthetic-backtest" },
+      { label: "전략", path: "/dashboard/strategy" },
     ],
   },
 ];

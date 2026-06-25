@@ -24,8 +24,12 @@ from app.models.models import (
     SyntheticExperiment,
     SyntheticExperimentResult,
     SyntheticExperimentRun,
+    User,
 )
-from app.services.synthetic_backtest import SyntheticBacktestService
+from app.services.synthetic_backtest import (
+    SYNTHETIC_USERNAME_PREFIX,
+    SyntheticBacktestService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -837,6 +841,8 @@ def _sample_gap_source_context(
     preset_name: Optional[str],
     params: dict[str, Any],
     operator_slugs: list[str],
+    operator_targets: list[dict[str, Any]],
+    operator_id_scope_ready: bool,
     run_allowed: bool,
     blocked_by_warnings: list[str],
     warnings: list[str],
@@ -860,6 +866,8 @@ def _sample_gap_source_context(
         "source_run_count": _safe_positive_int(gap.get("source_run_count")),
         "params": params,
         "operator_slugs": operator_slugs,
+        "operator_targets": operator_targets,
+        "operator_id_scope_ready": operator_id_scope_ready,
         "run_allowed": run_allowed,
         "blocked_by_warnings": blocked_by_warnings,
         "warnings": warnings,
@@ -1357,6 +1365,11 @@ class SyntheticExperimentService:
             experiment=experiment,
             gap=gap,
         )
+        operator_targets = self._sample_gap_candidate_operator_targets(operator_slugs)
+        operator_id_scope_ready = bool(operator_targets) and all(
+            bool(target.get("operator_id_scope_ready"))
+            for target in operator_targets
+        )
         warnings = [str(code) for code in gap.get("warnings", []) or [] if str(code)]
         blocked_by_warnings = [
             SAMPLE_GAP_WARNING_MIXED_DATA
@@ -1397,6 +1410,8 @@ class SyntheticExperimentService:
             preset_name=preset_name,
             params=params,
             operator_slugs=operator_slugs,
+            operator_targets=operator_targets,
+            operator_id_scope_ready=operator_id_scope_ready,
             run_allowed=run_allowed,
             blocked_by_warnings=blocked_by_warnings,
             warnings=warnings,
@@ -1416,6 +1431,8 @@ class SyntheticExperimentService:
             "preset_name": preset_name,
             "params": params,
             "operator_slugs": operator_slugs,
+            "operator_targets": operator_targets,
+            "operator_id_scope_ready": operator_id_scope_ready,
             "experiment_payload": experiment_payload,
             "experiment_id": experiment.id if experiment else None,
             "latest_run_id": latest_run.id if latest_run else None,
@@ -1559,6 +1576,49 @@ class SyntheticExperimentService:
             if isinstance(operator_slugs, list):
                 return [str(slug) for slug in operator_slugs]
         return []
+
+    def _sample_gap_candidate_operator_targets(
+        self,
+        operator_slugs: list[str],
+    ) -> list[dict[str, Any]]:
+        pairs = [
+            (
+                str(slug),
+                (
+                    str(slug)
+                    if str(slug).startswith(SYNTHETIC_USERNAME_PREFIX)
+                    else f"{SYNTHETIC_USERNAME_PREFIX}{slug}"
+                ),
+            )
+            for slug in operator_slugs
+        ]
+        usernames = [username for _, username in pairs]
+        users_by_username: dict[str, User] = {}
+        if usernames:
+            users = (
+                self.db.query(User)
+                .filter(User.username.in_(usernames))
+                .filter(User.is_active.is_(True))
+                .all()
+            )
+            users_by_username = {str(user.username): user for user in users}
+
+        targets: list[dict[str, Any]] = []
+        for slug, username in pairs:
+            user = users_by_username.get(username)
+            user_id = int(user.id) if user is not None else None
+            resolved = user_id is not None
+            targets.append(
+                {
+                    "slug": slug,
+                    "username": username,
+                    "operator_id": user_id,
+                    "user_id": user_id,
+                    "resolved": resolved,
+                    "operator_id_scope_ready": resolved,
+                }
+            )
+        return targets
 
     def _latest_experiment_run(
         self, experiment: Optional[SyntheticExperiment]

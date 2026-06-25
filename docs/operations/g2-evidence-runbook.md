@@ -312,6 +312,7 @@ curl -X POST "$BASE_URL/api/v1/synthetic/experiments/sample-gaps/candidates" \
 - `run_allowed=true`여야 실행 가능.
 - `blocked_by_warnings`에 `canonical_synthetic_mixed`가 있으면 중단하고 mixed data로 분류한다.
 - `operator_slugs`가 3개 이상이고 canonical operator가 포함되지 않아야 한다.
+- `operator_targets[]`가 각 slug를 active `synthetic-*` 사용자 `operator_id`로 해석하고, `operator_id_scope_ready=true`여야 승인 후 실행 후보로 본다. false면 시드/비활성 synthetic operator를 먼저 정리한다.
 - synthetic experiment 결과가 G-2 ledger에 operator별로 집계되려면 결과 metrics에 `operator_id`가 있어야 한다. 새 실행 결과는 upstream `user_id`를 `operator_id`로 mirror하지만, 과거 slug-only 결과는 `mixed_scope`로 분류한다.
 
 `next_step`별 write 작업은 모두 승인 후 실행한다.

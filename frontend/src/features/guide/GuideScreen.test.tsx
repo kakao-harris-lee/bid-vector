@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -25,6 +25,10 @@ function renderWithProviders(ui: React.ReactElement) {
 }
 
 describe("GuideScreen", () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+  });
+
   it("renders the guide heading", () => {
     renderWithProviders(<GuideScreen />);
     expect(screen.getByRole("heading", { name: "입찰 워크플로우 안내" })).toBeInTheDocument();
@@ -86,5 +90,47 @@ describe("GuideScreen", () => {
     await user.click(screen.getByRole("tab", { name: "이 앱 사용 흐름" }));
     await user.click(screen.getAllByRole("button", { name: /전략 편집 열기/ })[0]);
     expect(mockNavigate).toHaveBeenCalledWith("/dashboard/strategy");
+  });
+
+  it("renders guide links only to user routes and hides admin guide labels", async () => {
+    const user = userEvent.setup();
+    const allowedRoutes = new Set([
+      "/dashboard/profile",
+      "/dashboard/opportunities",
+      "/dashboard/projects",
+      "/dashboard/bids",
+      "/dashboard/results",
+      "/dashboard/strategy",
+    ]);
+    const forbiddenLabels = [/운영\s*·?\s*수집/, /결정 게이트웨이/, /합성 백테스트/];
+
+    renderWithProviders(<GuideScreen />);
+
+    for (const label of forbiddenLabels) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+
+    let panel = screen.getByRole("tabpanel");
+    const konepsButtons = within(panel).getAllByRole("button");
+    for (const button of konepsButtons) {
+      await user.click(button);
+    }
+
+    await user.click(screen.getByRole("tab", { name: "이 앱 사용 흐름" }));
+
+    for (const label of forbiddenLabels) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+
+    panel = screen.getByRole("tabpanel");
+    const appButtons = within(panel).getAllByRole("button");
+    for (const button of appButtons) {
+      await user.click(button);
+    }
+
+    expect(mockNavigate.mock.calls.length).toBeGreaterThan(0);
+    for (const [path] of mockNavigate.mock.calls) {
+      expect(allowedRoutes.has(path)).toBe(true);
+    }
   });
 });
