@@ -159,6 +159,8 @@ G-2 운영 검증에서 자주 쓰는 엔드포인트:
 - `/analytics/g2-evidence`: operator별 smoke/monitor/experiment/notification 증적 ledger
 - `/operator/notification-channels`: operator별 masked notification route metadata
 - `/synthetic/experiments/sample-gaps/candidates`: sample-gap 기반 synthetic evidence 실행 계획
+- `scripts/collect_g2_evidence.py`: operator별 read-only evidence와 `manifest-draft.json` 수집
+- `scripts/build_g2_exit_review.py`: 일일 manifest draft를 `manifest.json`/`exit-review.md` review bundle로 병합
 
 ## 문서
 

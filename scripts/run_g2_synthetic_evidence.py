@@ -22,9 +22,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.core.database import SessionLocal  # noqa: E402
-from app.services.synthetic_experiment import SyntheticExperimentService  # noqa: E402
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -79,6 +76,38 @@ def _json_dump(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
+def default_session_factory():
+    from app.core.database import SessionLocal
+
+    return SessionLocal()
+
+
+def default_service_factory(db):
+    from app.services.synthetic_experiment import SyntheticExperimentService
+
+    return SyntheticExperimentService(db)
+
+
+def operator_scope_summary(candidate: dict[str, Any] | None) -> dict[str, Any]:
+    candidate = candidate or {}
+    operator_targets = candidate.get("operator_targets") or []
+    unresolved_targets = candidate.get("unresolved_operator_targets")
+    if unresolved_targets is None:
+        unresolved_targets = [
+            target
+            for target in operator_targets
+            if isinstance(target, dict)
+            and not bool(target.get("operator_id_scope_ready"))
+        ]
+    return {
+        "operator_id_scope_ready": bool(
+            candidate.get("operator_id_scope_ready", False)
+        ),
+        "operator_targets": operator_targets,
+        "unresolved_operator_targets": unresolved_targets,
+    }
+
+
 def _select_gap(
     plan: dict[str, Any],
     *,
@@ -120,17 +149,24 @@ def _select_gap(
     return gaps[0] if gaps else None
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(
+    argv: list[str] | None = None,
+    session_factory=None,
+    service_factory=None,
+) -> int:
+    args = build_parser().parse_args(argv)
     if args.write and not (args.preset or (args.dimension and args.key)):
         sys.stderr.write(
             "--write requires --preset or an exact --dimension/--key target.\n"
         )
         return 2
 
-    db = SessionLocal()
+    session_factory = session_factory or default_session_factory
+    service_factory = service_factory or default_service_factory
+
+    db = session_factory()
     try:
-        service = SyntheticExperimentService(db)
+        service = service_factory(db)
         plan = service.build_sample_gap_plan(max_runs=args.max_runs)
         try:
             gap = _select_gap(
@@ -159,7 +195,49 @@ def main() -> int:
 
         dimension = str(gap["dimension"])
         key = str(gap["key"])
+        candidate = service.build_sample_gap_run_candidate(
+            dimension=dimension,
+            key=key,
+            max_runs=args.max_runs,
+            action_code=args.action_code,
+        )
+        operator_scope = operator_scope_summary(candidate)
         if args.write:
+            if candidate is None:
+                _json_dump({"status": "not_found", "dimension": dimension, "key": key})
+                return 2
+            if candidate.get("run_allowed") is False:
+                _json_dump(
+                    {
+                        "status": "blocked",
+                        "message": (
+                            "Run was not enqueued because the candidate is blocked. "
+                            "Resolve warnings first."
+                        ),
+                        "write_performed": False,
+                        "operator_scope": operator_scope,
+                        "candidate": candidate,
+                    }
+                )
+                return 3
+            if not operator_scope["operator_id_scope_ready"]:
+                _json_dump(
+                    {
+                        "status": "blocked_operator_scope",
+                        "mode": "write",
+                        "write_performed": False,
+                        "approval_required": True,
+                        "message": (
+                            "Run was not enqueued because one or more synthetic "
+                            "operator targets could not be resolved to active "
+                            "operator IDs."
+                        ),
+                        "selected_gap": {"dimension": dimension, "key": key},
+                        "operator_scope": operator_scope,
+                        "candidate": candidate,
+                    }
+                )
+                return 4
             result = service.materialize_sample_gap_candidate_run(
                 dimension=dimension,
                 key=key,
@@ -177,6 +255,8 @@ def main() -> int:
                             "Run was not enqueued because the candidate is blocked. "
                             "Resolve warnings first."
                         ),
+                        "write_performed": False,
+                        "operator_scope": operator_scope,
                         "candidate": result.get("candidate"),
                     }
                 )
@@ -191,17 +271,12 @@ def main() -> int:
                         "DB writes were performed and the async synthetic evidence "
                         "run was enqueued."
                     ),
+                    "operator_scope": operator_scope,
                     **result,
                 }
             )
             return 0
 
-        candidate = service.build_sample_gap_run_candidate(
-            dimension=dimension,
-            key=key,
-            max_runs=args.max_runs,
-            action_code=args.action_code,
-        )
         _json_dump(
             {
                 "status": "planned",
@@ -213,6 +288,7 @@ def main() -> int:
                     "plan and enqueue the asynchronous evidence run."
                 ),
                 "selected_gap": {"dimension": dimension, "key": key},
+                "operator_scope": operator_scope,
                 "candidate": candidate,
                 "ranked_gaps": (plan.get("gaps") or [])[: max(0, int(args.top or 0))],
                 "plan_warnings": plan.get("warnings", []),

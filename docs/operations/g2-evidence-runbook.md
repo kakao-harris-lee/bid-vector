@@ -93,6 +93,8 @@ python scripts/collect_g2_evidence.py \
   --days 30
 ```
 
+스크립트는 operator별 `profile.json`, `strategy.json`, `notification-channels.json`, `g2-evidence.json`뿐 아니라 `operator-dashboard.json`, `operations-dashboard.json`, `strategy-candidates.json`, `decision-experiments.json`, `decision-recommendations.json`도 같은 run 디렉터리에 저장한다. 각 실행 디렉터리에는 `g2-evidence-summary.json`, `run-metadata.json`, `manifest-draft.json`도 함께 생성된다.
+
 대상 목록을 파일로 관리할 때는 JSON 배열, `{"operator_ids": [...]}`, 또는 `{"operators": [{"operator_id": ...}]}` 형태를 사용한다.
 
 ```bash
@@ -151,7 +153,7 @@ curl "$BASE_URL/api/v1/analytics/g2-evidence?days=30&recent_limit=5&operator_id=
 
 ### 4.0 Read-only G-2 evidence 수집과 daily snapshot
 
-매일 먼저 `scripts/collect_g2_evidence.py`로 operator별 profile/strategy/notification channel/G-2 ledger 응답을 `reports/g2-evidence/$DAY/<run_id>/`에 저장한다. 이 파일 수집기는 exit review manifest의 기본 입력이다.
+매일 먼저 `scripts/collect_g2_evidence.py`로 operator별 profile/strategy/notification channel/dashboard/candidate/decision/G-2 ledger 응답을 `reports/g2-evidence/$DAY/<run_id>/`에 저장한다. 이 파일 수집기는 exit review manifest draft의 기본 입력이다.
 
 운영에서 `counted_days`를 자동으로 누적하려면 Celery beat에 아래 설정을 opt-in한다.
 
@@ -313,6 +315,7 @@ curl -X POST "$BASE_URL/api/v1/synthetic/experiments/sample-gaps/candidates" \
 - `blocked_by_warnings`에 `canonical_synthetic_mixed`가 있으면 중단하고 mixed data로 분류한다.
 - `operator_slugs`가 3개 이상이고 canonical operator가 포함되지 않아야 한다.
 - `operator_targets[]`가 각 slug를 active `synthetic-*` 사용자 `operator_id`로 해석하고, `operator_id_scope_ready=true`여야 승인 후 실행 후보로 본다. false면 시드/비활성 synthetic operator를 먼저 정리한다.
+- 운영 CLI의 dry-run 출력에는 같은 값이 top-level `operator_scope`에도 복사된다. `--write` 실행 시 `operator_scope.operator_id_scope_ready=false`면 DB write 전에 `blocked_operator_scope`를 출력하고 exit code `4`로 중단한다.
 - synthetic experiment 결과가 G-2 ledger에 operator별로 집계되려면 결과 metrics에 `operator_id`가 있어야 한다. 새 실행 결과는 upstream `user_id`를 `operator_id`로 mirror하지만, 과거 slug-only 결과는 `mixed_scope`로 분류한다.
 
 `next_step`별 write 작업은 모두 승인 후 실행한다.
@@ -421,6 +424,18 @@ python scripts/backtest_synthetic_operators.py \
 ## 8. G-2 exit review template
 
 상세 review 양식과 evidence manifest contract는 `docs/operations/g2-exit-review-template.md`를 사용한다. 이 runbook의 일일 산출물은 해당 template의 `manifest.json` 입력이다.
+
+일일 `manifest-draft.json`들을 모아 review bundle을 만들 때는 로컬 파일 전용 builder를 사용한다. 이 명령은 DB, HTTP, monitor, Telegram을 호출하지 않는다.
+
+```bash
+python scripts/build_g2_exit_review.py \
+  --evidence-root reports/g2-evidence \
+  --review-id g2-exit-YYYYMMDD \
+  --min-days 7 \
+  --min-operators 3
+```
+
+builder는 `<evidence-root>/<review-id>/manifest.json`과 `exit-review.md`를 생성한다. `manifest.status=ready_for_review`는 counted pass day 수, 포함 operator 수, open blocking gap 수가 기준을 만족한다는 뜻일 뿐이며, `exit-review.md`의 최종 판정은 계속 `pending`으로 남긴다.
 
 권장 review 산출물:
 

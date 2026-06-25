@@ -74,6 +74,59 @@ def _fake_http_client(*, blocking_gaps_by_operator: dict[int, list[str]] | None 
                 "notifications": {"status": "ready"},
                 "blocking_gaps": gaps,
             }
+        if path == "/api/v1/operator/dashboard":
+            return {
+                "operator_id": operator_id,
+                "current_operator_id": operator_id,
+                "window_days": params["days"],
+                "items": [{"kind": "operator-dashboard", "limit": params["limit"]}],
+            }
+        if path == "/api/v1/analytics/operations-dashboard":
+            return {
+                "operator_id": operator_id,
+                "current_operator_id": operator_id,
+                "window_days": params["days"],
+                "recent_items": [
+                    {
+                        "kind": "operations-dashboard",
+                        "recent_limit": params["recent_limit"],
+                    }
+                ],
+            }
+        if path == "/api/v1/operator/strategy/candidates":
+            return {
+                "operator_id": operator_id,
+                "current_operator_id": operator_id,
+                "candidates": [
+                    {
+                        "candidate_id": f"candidate-{operator_id}",
+                        "high_priority_only": params["high_priority_only"],
+                    }
+                ],
+            }
+        if path == "/api/v1/analytics/decision-experiments":
+            return {
+                "operator_id": operator_id,
+                "current_operator_id": operator_id,
+                "experiments": [
+                    {
+                        "experiment_id": f"experiment-{operator_id}",
+                        "sort": params["sort"],
+                    }
+                ],
+            }
+        if path == "/api/v1/analytics/decision-recommendations":
+            return {
+                "operator_id": operator_id,
+                "current_operator_id": operator_id,
+                "window_days": params["days"],
+                "recommendations": [
+                    {
+                        "recommendation_id": f"recommendation-{operator_id}",
+                        "limit": params["recommendation_limit"],
+                    }
+                ],
+            }
         raise AssertionError(f"unexpected path: {path}")
 
     fake_get_json.calls = calls
@@ -98,12 +151,17 @@ def test_collection_writes_raw_endpoint_files_and_summary(tmp_path):
     assert summary["operator_count"] == 3
     assert summary["blocking_gap_count"] == 0
     assert summary["collection_error_count"] == 0
-    assert len(fake_get_json.calls) == 12
+    assert len(fake_get_json.calls) == 27
     assert {call["path"] for call in fake_get_json.calls} == {
         "/api/v1/operator/profile",
         "/api/v1/operator/strategy",
         "/api/v1/operator/notification-channels",
         "/api/v1/analytics/g2-evidence",
+        "/api/v1/operator/dashboard",
+        "/api/v1/analytics/operations-dashboard",
+        "/api/v1/operator/strategy/candidates",
+        "/api/v1/analytics/decision-experiments",
+        "/api/v1/analytics/decision-recommendations",
     }
     assert all(call["token"] == "secret-token" for call in fake_get_json.calls)
 
@@ -113,6 +171,11 @@ def test_collection_writes_raw_endpoint_files_and_summary(tmp_path):
         assert (operator_dir / "strategy.json").exists()
         assert (operator_dir / "notification-channels.json").exists()
         assert (operator_dir / "g2-evidence.json").exists()
+        assert (operator_dir / "operator-dashboard.json").exists()
+        assert (operator_dir / "operations-dashboard.json").exists()
+        assert (operator_dir / "strategy-candidates.json").exists()
+        assert (operator_dir / "decision-experiments.json").exists()
+        assert (operator_dir / "decision-recommendations.json").exists()
         persisted_g2 = json.loads(
             (operator_dir / "g2-evidence.json").read_text(encoding="utf-8")
         )
@@ -127,6 +190,69 @@ def test_collection_writes_raw_endpoint_files_and_summary(tmp_path):
     assert persisted_summary["operators"][0]["notification_channel_count"] == 1
     assert persisted_summary["operators"][0]["notification_channel_status"] == "active"
     assert persisted_summary["operators"][2]["profile_configured"] is False
+
+
+def test_collection_writes_extended_read_only_evidence_files(tmp_path):
+    fake_get_json = _fake_http_client()
+    config = CollectionConfig(
+        base_url="http://api.test",
+        token="secret-token",
+        operator_ids=[101, 102, 103],
+        evidence_dir=tmp_path,
+        days=14,
+        run_id="extended-run",
+    )
+
+    run_collection(config, http_get_json_func=fake_get_json)
+
+    run_dir = tmp_path / "extended-run"
+    expected_paths = {
+        "/api/v1/operator/dashboard",
+        "/api/v1/analytics/operations-dashboard",
+        "/api/v1/operator/strategy/candidates",
+        "/api/v1/analytics/decision-experiments",
+        "/api/v1/analytics/decision-recommendations",
+    }
+    assert expected_paths.issubset({call["path"] for call in fake_get_json.calls})
+
+    calls_by_path = {
+        call["path"]: call
+        for call in fake_get_json.calls
+        if call["params"]["operator_id"] == 101
+    }
+    assert calls_by_path["/api/v1/operator/dashboard"]["params"] == {
+        "operator_id": 101,
+        "days": 14,
+        "limit": 5,
+    }
+    assert calls_by_path["/api/v1/analytics/operations-dashboard"]["params"] == {
+        "operator_id": 101,
+        "days": 14,
+        "recent_limit": 5,
+    }
+    assert calls_by_path["/api/v1/operator/strategy/candidates"]["params"] == {
+        "operator_id": 101,
+        "limit": 20,
+        "high_priority_only": "true",
+    }
+    assert calls_by_path["/api/v1/analytics/decision-experiments"]["params"] == {
+        "operator_id": 101,
+        "limit": 20,
+        "sort": "needs_attention",
+    }
+    assert calls_by_path["/api/v1/analytics/decision-recommendations"]["params"] == {
+        "operator_id": 101,
+        "days": 14,
+        "recommendation_limit": 5,
+    }
+
+    for operator_id in (101, 102, 103):
+        operator_dir = run_dir / f"operator-{operator_id}"
+        assert (operator_dir / "operator-dashboard.json").exists()
+        assert (operator_dir / "operations-dashboard.json").exists()
+        assert (operator_dir / "strategy-candidates.json").exists()
+        assert (operator_dir / "decision-experiments.json").exists()
+        assert (operator_dir / "decision-recommendations.json").exists()
 
 
 def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
@@ -174,9 +300,26 @@ def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
     assert first_operator["evidence_paths"]["g2_evidence"][0].endswith(
         "operator-101/g2-evidence.json"
     )
-    assert first_operator["evidence_paths"]["candidate_preview"] == []
+    assert first_operator["evidence_paths"]["candidate_preview"][0].endswith(
+        "operator-101/strategy-candidates.json"
+    )
     assert first_operator["evidence_paths"]["strategy_monitor"] == []
-    assert first_operator["evidence_paths"]["decision_experiments"] == []
+    assert first_operator["evidence_paths"]["decision_experiments"][0].endswith(
+        "operator-101/decision-experiments.json"
+    )
+    operations_dashboard_paths = first_operator["evidence_paths"][
+        "operations_dashboard"
+    ]
+    assert len(operations_dashboard_paths) == 2
+    assert any(
+        path.endswith("operator-101/operator-dashboard.json")
+        for path in operations_dashboard_paths
+    )
+    assert any(
+        path.endswith("operator-101/operations-dashboard.json")
+        for path in operations_dashboard_paths
+    )
+    assert first_operator["evidence_paths"]["decision_apply_dry_run"] == []
 
     daily_status = manifest["daily_status"][0]
     assert daily_status["status"] == "pass"
@@ -186,6 +329,44 @@ def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
     )
     assert daily_status["operators"]["101"]["g2_evidence_status"] == "ready"
     assert daily_status["operators"]["101"]["blocking_gap_ids"] == []
+
+
+def test_manifest_links_extended_evidence_paths(tmp_path):
+    fake_get_json = _fake_http_client()
+    config = CollectionConfig(
+        base_url="http://api.test",
+        token="secret-token",
+        operator_ids=[101, 102, 104],
+        evidence_dir=tmp_path,
+        days=14,
+        run_id="20260625T120000Z",
+    )
+
+    run_collection(config, http_get_json_func=fake_get_json)
+
+    manifest = json.loads(
+        (tmp_path / "20260625T120000Z" / "manifest-draft.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    evidence_paths = manifest["operators"][0]["evidence_paths"]
+    assert evidence_paths["candidate_preview"][0].endswith(
+        "operator-101/strategy-candidates.json"
+    )
+    assert len(evidence_paths["operations_dashboard"]) == 2
+    assert any(
+        path.endswith("operator-101/operator-dashboard.json")
+        for path in evidence_paths["operations_dashboard"]
+    )
+    assert any(
+        path.endswith("operator-101/operations-dashboard.json")
+        for path in evidence_paths["operations_dashboard"]
+    )
+    assert evidence_paths["decision_experiments"][0].endswith(
+        "operator-101/decision-experiments.json"
+    )
+    assert evidence_paths["decision_apply_dry_run"] == []
 
 
 def test_collection_converts_blocking_gaps_to_open_manifest_entries(tmp_path):

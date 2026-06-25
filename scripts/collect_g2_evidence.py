@@ -35,11 +35,25 @@ class EndpointSpec:
     file_name: str
     path: str
     include_days: bool = False
+    limit: int | None = None
+    recent_limit: int | None = None
+    recommendation_limit: int | None = None
+    sort: str | None = None
+    static_params: tuple[tuple[str, Any], ...] = ()
 
     def params(self, *, operator_id: int, days: int) -> dict[str, Any]:
         payload: dict[str, Any] = {"operator_id": operator_id}
         if self.include_days:
             payload["days"] = days
+        if self.limit is not None:
+            payload["limit"] = self.limit
+        if self.recent_limit is not None:
+            payload["recent_limit"] = self.recent_limit
+        if self.recommendation_limit is not None:
+            payload["recommendation_limit"] = self.recommendation_limit
+        if self.sort is not None:
+            payload["sort"] = self.sort
+        payload.update(self.static_params)
         return payload
 
 
@@ -79,6 +93,41 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
         file_name="g2-evidence.json",
         path="/api/v1/analytics/g2-evidence",
         include_days=True,
+    ),
+    EndpointSpec(
+        key="operator_dashboard",
+        file_name="operator-dashboard.json",
+        path="/api/v1/operator/dashboard",
+        include_days=True,
+        limit=5,
+    ),
+    EndpointSpec(
+        key="operations_dashboard",
+        file_name="operations-dashboard.json",
+        path="/api/v1/analytics/operations-dashboard",
+        include_days=True,
+        recent_limit=5,
+    ),
+    EndpointSpec(
+        key="strategy_candidates",
+        file_name="strategy-candidates.json",
+        path="/api/v1/operator/strategy/candidates",
+        limit=20,
+        static_params=(("high_priority_only", "true"),),
+    ),
+    EndpointSpec(
+        key="decision_experiments",
+        file_name="decision-experiments.json",
+        path="/api/v1/analytics/decision-experiments",
+        limit=20,
+        sort="needs_attention",
+    ),
+    EndpointSpec(
+        key="decision_recommendations",
+        file_name="decision-recommendations.json",
+        path="/api/v1/analytics/decision-recommendations",
+        include_days=True,
+        recommendation_limit=5,
     ),
 )
 ENDPOINT_PATHS_BY_KEY = {endpoint.key: endpoint.path for endpoint in ENDPOINTS}
@@ -776,11 +825,46 @@ def _build_manifest_operator(
                 ]
                 if path
             ],
-            "candidate_preview": [],
+            "candidate_preview": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="strategy_candidates",
+                    )
+                ]
+                if path
+            ],
             "strategy_monitor": [],
-            "decision_experiments": [],
+            "decision_experiments": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="decision_experiments",
+                    )
+                ]
+                if path
+            ],
             "decision_apply_dry_run": [],
-            "operations_dashboard": [],
+            "operations_dashboard": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="operator_dashboard",
+                    ),
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="operations_dashboard",
+                    ),
+                ]
+                if path
+            ],
         },
         "_daily_status": {
             "profile": profile_status,

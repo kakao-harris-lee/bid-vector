@@ -561,6 +561,8 @@ python scripts/run_g2_synthetic_evidence.py --dry-run --preset g1-software-base-
 
 승인된 운영 실행에서만 `--write`를 사용한다. `--write`는 필요하면 experiment/preset을 저장하고 기존 Celery synthetic experiment run을 enqueue한다. 요청-응답 경로에서 heavy backtest를 직접 실행하지 않고, 큐잉된 run은 기존 `/experiments/{experiment_id}/runs/{run_id}`로 폴링한다.
 
+dry-run 출력은 top-level `operator_scope`를 포함한다. `operator_scope.operator_id_scope_ready=false`면 `--write`도 materialize/enqueue 전에 `blocked_operator_scope`로 중단하고 exit code `4`를 반환한다.
+
 ```bash
 python scripts/run_g2_synthetic_evidence.py --write --preset g1-software-base-12m
 ```
@@ -576,7 +578,7 @@ python scripts/run_g2_synthetic_evidence.py --write --preset g1-software-base-12
 | `--action-code <code>` | recommendation action 명시 (`rerun_related_preset`, `increase_limit` 등) |
 | `--max-runs <n>` | 최근 completed run scan 상한 |
 
-`run_allowed=false` 또는 `canonical_synthetic_mixed` warning이 있으면 `--write`도 run을 enqueue하지 않고 blocked 결과를 출력한다.
+`operator_id_scope_ready=false`면 exit code `4`, `run_allowed=false` 또는 `canonical_synthetic_mixed` warning이면 exit code `3`으로 run을 enqueue하지 않고 blocked 결과를 출력한다.
 
 ---
 
