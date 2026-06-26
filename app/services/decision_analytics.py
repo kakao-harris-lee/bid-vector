@@ -1813,7 +1813,13 @@ class DecisionAnalyticsService:
         submitted_at = decision.updated_at
         if first_decided_at is None or submitted_at is None:
             return None
-        delta_seconds = max((submitted_at - first_decided_at).total_seconds(), 0.0)
+        # ``first_decided_at`` is already UTC-aware (normalized by
+        # ``_entry_datetime``), but ``updated_at`` is read back naive on some
+        # backends (e.g. SQLite), so normalize it too before subtracting to
+        # avoid mixing naive and aware datetimes.
+        delta_seconds = max(
+            (ensure_utc(submitted_at) - first_decided_at).total_seconds(), 0.0
+        )
         return round(delta_seconds / 3600, 4)
 
     def _average(self, values: list[float]) -> float | None:
