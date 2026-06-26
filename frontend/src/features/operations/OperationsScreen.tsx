@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
 import { fetchG2EvidenceSummary, fetchOperationsDashboard, queryKeys } from "@/shared/api";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
+import { LabeledStat } from "@/shared/components";
 import { formatDateTime, formatPercent } from "@/shared/lib";
 import { OperationsKpiPanel, useOperationsKpiQuery } from "@/features/decisions";
 import type {
@@ -272,12 +273,12 @@ function AdminFocusStrip({
       aria-label="G-2 admin 점검 범위"
       className="grid grid-cols-1 gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3 text-xs sm:grid-cols-3"
     >
-      <Stat label="점검 operator" value={scopedOperator || "토큰 소유자"} />
-      <Stat
+      <LabeledStat label="점검 operator" value={scopedOperator || "토큰 소유자"} />
+      <LabeledStat
         label="G-2 evidence"
         value={g2Evidence ? g2StatusLabel(g2Evidence.evidence_status) : "미연결"}
       />
-      <Stat
+      <LabeledStat
         label="blocking gaps"
         value={gapCount === null ? "확인 대기" : `${gapCount}건`}
       />
@@ -362,16 +363,16 @@ function G2EvidenceCard({
         {data ? (
           <>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat
+              <LabeledStat
                 label="점검 operator"
                 value={
                   data.current_operator_username ??
                   (data.current_operator_id ? `#${data.current_operator_id}` : "-")
                 }
               />
-              <Stat label="증적 window" value={`${data.window_days}일`} />
-              <Stat label="blocking gaps" value={data.blocking_gaps.length.toString()} />
-              <Stat
+              <LabeledStat label="증적 window" value={`${data.window_days}일`} />
+              <LabeledStat label="blocking gaps" value={data.blocking_gaps.length.toString()} />
+              <LabeledStat
                 label="생성 시각"
                 value={data.generated_at ? formatDateTime(data.generated_at) : "-"}
               />
@@ -479,10 +480,10 @@ function CrawlHealth({ summary }: { summary: OperationsDashboardResponse["crawl"
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-xs">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="job_count" value={summary.job_count.toString()} />
-          <Stat label="completed" value={summary.completed_count.toString()} />
-          <Stat label="failed" value={summary.failed_count.toString()} />
-          <Stat label="success_rate" value={formatPercent(summary.success_rate)} />
+          <LabeledStat label="job_count" value={summary.job_count.toString()} />
+          <LabeledStat label="completed" value={summary.completed_count.toString()} />
+          <LabeledStat label="failed" value={summary.failed_count.toString()} />
+          <LabeledStat label="success_rate" value={formatPercent(summary.success_rate)} />
         </div>
         <p className="text-[var(--color-muted)]">
           last_success {summary.last_success_at ? formatDateTime(summary.last_success_at) : "-"} ·
@@ -516,10 +517,10 @@ function TelegramHealth({ summary }: { summary: OperationsDashboardResponse["not
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-xs">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="전송 시도" value={summary.telegram_delivery_attempt_count.toString()} />
-          <Stat label="성공" value={summary.telegram_sent_count.toString()} />
-          <Stat label="실패" value={summary.telegram_failed_count.toString()} />
-          <Stat label="성공률" value={formatPercent(summary.telegram_success_rate)} />
+          <LabeledStat label="전송 시도" value={summary.telegram_delivery_attempt_count.toString()} />
+          <LabeledStat label="성공" value={summary.telegram_sent_count.toString()} />
+          <LabeledStat label="실패" value={summary.telegram_failed_count.toString()} />
+          <LabeledStat label="성공률" value={formatPercent(summary.telegram_success_rate)} />
         </div>
         <p className="break-words text-[var(--color-muted)]">{summary.telegram_detail}</p>
       </CardContent>
@@ -539,9 +540,9 @@ function MlReleaseCard({ summary }: { summary: OperationsDashboardResponse["ml_r
       <CardContent className="flex flex-col gap-2 text-xs">
         <p className="break-words text-[var(--color-fg)]">{summary.detail}</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <Stat label="latest_tag" value={summary.latest_release_tag ?? "-"} />
-          <Stat label="signature" value={summary.latest_signature_status} />
-          <Stat label="gate" value={summary.latest_gate_status} />
+          <LabeledStat label="latest_tag" value={summary.latest_release_tag ?? "-"} />
+          <LabeledStat label="signature" value={summary.latest_signature_status} />
+          <LabeledStat label="gate" value={summary.latest_gate_status} />
         </div>
         <p className="break-words text-[var(--color-muted)]">backtest: {summary.backtest_detail}</p>
       </CardContent>
@@ -566,19 +567,19 @@ function SyntheticValidationCard({
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat
+          <LabeledStat
             label="preset 저장"
             value={`${summary.saved_preset_count}/${summary.preset_count}`}
           />
-          <Stat
+          <LabeledStat
             label="완료 preset"
             value={`${summary.completed_preset_count}/${summary.preset_count}`}
           />
-          <Stat
+          <LabeledStat
             label="충분 표본"
             value={`${summary.sufficient_preset_count}/${summary.preset_count}`}
           />
-          <Stat
+          <LabeledStat
             label="최근 실행"
             value={`${summary.recent_completed_count}/${summary.recent_run_count}`}
           />
@@ -669,9 +670,9 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <Stat label="통과율" value={formatPercent(summary.pass_rate)} />
-          <Stat label="G-0 연속 통과" value={`${summary.current_streak}/${target}회`} />
-          <Stat
+          <LabeledStat label="통과율" value={formatPercent(summary.pass_rate)} />
+          <LabeledStat label="G-0 연속 통과" value={`${summary.current_streak}/${target}회`} />
+          <LabeledStat
             label="총 사이클"
             value={`${summary.cycle_count}건 (통과 ${summary.passed_count}/실패 ${summary.failed_count})`}
           />
@@ -782,14 +783,5 @@ function SmokeTestCard({ summary }: { summary: OperationsDashboardResponse["smok
         ) : null}
       </CardContent>
     </Card>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      <span className="break-words text-[var(--color-muted)]">{label}</span>
-      <strong className="break-words tabular-nums text-[var(--color-fg)]">{value}</strong>
-    </div>
   );
 }

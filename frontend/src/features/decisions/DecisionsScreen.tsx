@@ -21,6 +21,7 @@ import type {
   DecisionFunnelRecentSubmissionItem,
   DecisionFunnelResponse
 } from "@/shared/types/decisions";
+import { LabeledStat } from "@/shared/components";
 import {
   ACTION_LABEL,
   ACTION_TONE,
@@ -279,9 +280,10 @@ function DecisionEvidenceChecklist({ item }: { item: DecisionFunnelRecentSubmiss
         </Badge>
       </div>
       <dl className="grid gap-2 sm:grid-cols-3">
-        <EvidenceMetric label="추천가" value={formatCurrencyCompact(item.recommended_amount)} />
-        <EvidenceMetric label="우선순위" value={formatPercent(item.priority_score)} />
-        <EvidenceMetric
+        <LabeledStat variant="evidence" label="추천가" value={formatCurrencyCompact(item.recommended_amount)} />
+        <LabeledStat variant="evidence" label="우선순위" value={formatPercent(item.priority_score)} />
+        <LabeledStat
+          variant="evidence"
           label="근거 신호"
           value={`강점 ${strengths.length.toLocaleString("ko-KR")}개 / 리스크 ${risks.length.toLocaleString(
             "ko-KR"
@@ -298,15 +300,6 @@ function DecisionEvidenceChecklist({ item }: { item: DecisionFunnelRecentSubmiss
         투찰 요약에서 예측 가격대와 하한율 참고값을 확인하고, 운영 KPI의 과거 추천 오차와
         함께 검토하세요.
       </p>
-    </div>
-  );
-}
-
-function EvidenceMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-[var(--color-muted)]">{label}</dt>
-      <dd className="font-medium tabular-nums text-[var(--color-fg)]">{value}</dd>
     </div>
   );
 }
@@ -437,10 +430,10 @@ function FunnelOverview({
           </ResponsiveContainer>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-          <Metric label="제출률" value={formatPercent(funnel.overall_submission_rate)} />
-          <Metric label="투찰 → 제출" value={formatPercent(funnel.bid_now_submission_rate)} />
-          <Metric label="검토 → 제출" value={formatPercent(funnel.review_submission_rate)} />
-          <Metric
+          <LabeledStat variant="metric" label="제출률" value={formatPercent(funnel.overall_submission_rate)} />
+          <LabeledStat variant="metric" label="투찰 → 제출" value={formatPercent(funnel.bid_now_submission_rate)} />
+          <LabeledStat variant="metric" label="검토 → 제출" value={formatPercent(funnel.review_submission_rate)} />
+          <LabeledStat variant="metric"
             label="평균 처리시간"
             value={funnel.average_hours_to_submit ? `${funnel.average_hours_to_submit.toFixed(1)}h` : "-"}
           />
@@ -530,11 +523,3 @@ function RecommendationsList({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[var(--color-muted)]">{label}</span>
-      <strong className="text-sm text-[var(--color-fg)] tabular-nums">{value}</strong>
-    </div>
-  );
-}
