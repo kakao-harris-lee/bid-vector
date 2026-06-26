@@ -1,12 +1,10 @@
 """KONEPS collector service skeleton."""
 
 import json
-import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from math import ceil
 from time import sleep
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse
 
 import requests
 from sqlalchemy.orm import Session
@@ -15,7 +13,7 @@ from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.core.time import utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
-from app.services.koneps import html_parsing, openapi, parsing
+from app.services.koneps import html_parsing, matching, openapi, parsing
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.realtime import realtime_event_manager
 
@@ -321,7 +319,9 @@ class KonepsCollectorService:
                 or item_metadata.get("issuing_agency")
                 or ""
             )
-            historical_record.category = self._resolve_project_category(item, request)
+            historical_record.category = matching.resolve_project_category(
+                item, request
+            )
             historical_record.base_amount = item.get("base_amount") or 0.0
             historical_record.predicted_price = (
                 item.get("estimated_amount") or item.get("base_amount") or 0.0
@@ -1659,7 +1659,7 @@ class KonepsCollectorService:
                 description="",
                 requirements="",
                 budget_estimate=0.0,
-                category=self._resolve_project_category(item, request),
+                category=matching.resolve_project_category(item, request),
             )
             db.add(project)
             db.flush()
@@ -1731,10 +1731,10 @@ class KonepsCollectorService:
         target_notice_number = parsing.normalize_notice_number(
             item.get("notice_number")
         )
-        target_source_url = self._normalize_source_url(item.get("source_url"))
-        target_agencies = self._extract_item_agency_keys(item)
-        target_category = self._resolve_project_category(item, request)
-        target_budget = self._resolve_budget_estimate(item)
+        target_source_url = matching.normalize_source_url(item.get("source_url"))
+        target_agencies = matching.extract_item_agency_keys(item)
+        target_category = matching.resolve_project_category(item, request)
+        target_budget = matching.resolve_budget_estimate(item)
         target_deadline = parsing.coerce_datetime(item.get("closing_at"))
 
         if target_notice_number:
@@ -1766,7 +1766,7 @@ class KonepsCollectorService:
             null_notice_candidates = null_notice_query.all()
             for candidate in null_notice_candidates:
                 candidate_notice_number = parsing.normalize_notice_number(
-                    self._extract_project_notice_number(candidate)
+                    matching.extract_project_notice_number(candidate)
                 )
                 if (
                     candidate_notice_number
@@ -1777,7 +1777,7 @@ class KonepsCollectorService:
             # 3. source_url / title fuzzy, restricted to notice-less candidates.
             #    Projects carrying a (different) notice number are authoritatively
             #    distinct tenders and must not be fuzzy-merged here.
-            return self._match_by_url_or_title(
+            return matching.match_by_url_or_title(
                 null_notice_candidates,
                 target_source_url=target_source_url,
                 target_title=target_title,
@@ -1792,7 +1792,7 @@ class KonepsCollectorService:
         if target_category:
             query = query.filter(Project.category == target_category)
         candidates = query.all()
-        return self._match_by_url_or_title(
+        return matching.match_by_url_or_title(
             candidates,
             target_source_url=target_source_url,
             target_title=target_title,
@@ -1801,86 +1801,13 @@ class KonepsCollectorService:
             target_deadline=target_deadline,
         )
 
-    def _match_by_url_or_title(
-        self,
-        candidates: list[Project],
-        *,
-        target_source_url: str,
-        target_title: str,
-        target_agencies: set[str],
-        target_budget: float,
-        target_deadline: datetime | None,
-    ) -> Project | None:
-        """Resolve a project from a candidate set via source_url then scored title heuristics.
-
-        Preserves the original matching priority (source_url > title) and the
-        score-based best-match selection, but operates on a caller-supplied
-        candidate list so the fast path can scope it to notice-less rows.
-        """
-        if target_source_url:
-            for candidate in candidates:
-                candidate_source_url = self._normalize_source_url(
-                    candidate.source_url or self._extract_project_source_url(candidate)
-                )
-                if candidate_source_url and candidate_source_url == target_source_url:
-                    return candidate
-
-        if not target_title:
-            return None
-
-        best_candidate: Project | None = None
-        best_score = -1
-        for candidate in candidates:
-            candidate_title = parsing.normalize_title(candidate.title)
-            title_exact = candidate_title == target_title
-            title_overlap = (
-                not title_exact
-                and bool(candidate_title)
-                and (target_title in candidate_title or candidate_title in target_title)
-            )
-            if not title_exact and not title_overlap:
-                continue
-
-            budget_match = parsing.is_budget_compatible(candidate, target_budget)
-            deadline_match = parsing.is_deadline_compatible(
-                candidate.deadline, target_deadline
-            )
-            agency_overlap = len(
-                self._extract_project_agency_keys(candidate) & target_agencies
-            )
-
-            matches = (
-                (title_exact and agency_overlap > 0)
-                or (title_exact and budget_match and deadline_match)
-                or (
-                    title_overlap
-                    and agency_overlap > 0
-                    and budget_match
-                    and deadline_match
-                )
-            )
-            if not matches:
-                continue
-
-            score = (
-                (6 if title_exact else 3)
-                + (3 if agency_overlap > 0 else 0)
-                + (2 if budget_match else 0)
-                + (1 if deadline_match else 0)
-            )
-            if score > best_score:
-                best_candidate = candidate
-                best_score = score
-
-        return best_candidate
-
     def _update_project_from_item(
         self, project: Project, *, item: dict[str, Any], request: CrawlRequest
     ) -> None:
         """Apply crawled notice details onto a project without discarding user-entered context."""
         item_metadata = item.get("metadata", {})
-        resolved_category = self._resolve_project_category(item, request)
-        budget_estimate = self._resolve_budget_estimate(item)
+        resolved_category = matching.resolve_project_category(item, request)
+        budget_estimate = matching.resolve_budget_estimate(item)
         budget_values = [
             float(amount)
             for amount in (
@@ -1962,8 +1889,8 @@ class KonepsCollectorService:
         source_url = item.get("source_url")
         if source_url and (
             not project.source_url
-            or self._normalize_source_url(project.source_url)
-            == self._normalize_source_url(source_url)
+            or matching.normalize_source_url(project.source_url)
+            == matching.normalize_source_url(source_url)
         ):
             project.source_url = str(source_url).strip()
         issuing_agency = item_metadata.get("issuing_agency")
@@ -1999,7 +1926,7 @@ class KonepsCollectorService:
         if closing_at is not None:
             project.deadline = closing_at
 
-        resolved_status = self._resolve_project_status(item)
+        resolved_status = matching.resolve_project_status(item)
         if resolved_status:
             project.status = resolved_status
 
@@ -2062,92 +1989,6 @@ class KonepsCollectorService:
         tender_result.announced_at = announced_at
         return tender_result
 
-    def _resolve_project_category(
-        self, item: dict[str, Any], request: CrawlRequest
-    ) -> str:
-        """Resolve the internal project category for a crawled notice."""
-        request_category = str(request.category or "").strip().lower()
-        if request_category and request_category not in {"general", "기타", "other"}:
-            return request_category
-
-        business_type = str(item.get("business_type") or "").strip().lower()
-        category_map = {
-            "소프트웨어": "software",
-            "software": "software",
-            "기술용역": "technical-service",
-            "technical-service": "technical-service",
-            "일반용역": "service",
-            "service": "service",
-            "general-service": "service",
-            "물품": "goods",
-            "goods": "goods",
-            "공사": "construction",
-            "construction": "construction",
-        }
-        return category_map.get(
-            business_type, request_category or business_type or "other"
-        )
-
-    def _resolve_budget_estimate(self, item: dict[str, Any]) -> float:
-        """Prefer the most actionable estimate while falling back to the available base amount."""
-        for value in (item.get("estimated_amount"), item.get("base_amount")):
-            if value not in (None, "", 0, 0.0):
-                return float(value)
-        return 0.0
-
-    def _resolve_project_status(self, item: dict[str, Any]) -> str:
-        """Map crawl timing and opening metadata to an internal project lifecycle state."""
-        item_metadata = item.get("metadata", {})
-        status_text = " ".join(
-            str(value or "")
-            for value in (
-                item_metadata.get("opening_status"),
-                item_metadata.get("status"),
-                item_metadata.get("opening_bid_classification"),
-                item_metadata.get("opening_bid_progress_order"),
-                item.get("title"),
-            )
-        )
-        normalized_status_text = parsing.normalize_status_text(status_text)
-
-        if any(
-            keyword in normalized_status_text
-            for keyword in ("취소", "공고취소", "입찰취소", "개찰취소", "정정취소")
-        ):
-            return "cancelled"
-        if any(
-            keyword in normalized_status_text
-            for keyword in ("재공고", "재입찰", "재안내", "2차공고", "3차공고")
-        ):
-            return "re_notice"
-        if any(
-            keyword in normalized_status_text
-            for keyword in ("유찰", "무응찰", "무투찰", "개찰불성립", "낙찰자없음")
-        ):
-            return "failed"
-        if any(
-            item_metadata.get(key)
-            for key in (
-                "winning_company",
-                "winning_amount",
-                "winning_rate",
-                "opening_announced_at",
-            )
-        ):
-            return "awarded"
-        if any(keyword in normalized_status_text for keyword in ("낙찰", "계약완료")):
-            return "awarded"
-        if any(
-            keyword in normalized_status_text
-            for keyword in ("마감", "종료", "개찰완료", "개찰진행", "개찰대기")
-        ):
-            return "closed"
-
-        closing_at = parsing.coerce_datetime(item.get("closing_at"))
-        if closing_at is not None and closing_at <= utc_now():
-            return "closed"
-        return "open"
-
     def _normalize_notice_number(self, value: Any) -> str:
         """Delegate notice-number normalization to the pure parsing module.
 
@@ -2155,92 +1996,6 @@ class KonepsCollectorService:
         through the service surface (``service._normalize_notice_number``).
         """
         return parsing.normalize_notice_number(value)
-
-    def _normalize_source_url(self, value: Any) -> str:
-        """Normalize a URL so detail links can be compared across formatting differences."""
-        if not value:
-            return ""
-        parsed = urlparse(str(value).strip())
-        if not parsed.scheme and not parsed.netloc:
-            return str(value).strip().rstrip("/").lower()
-        netloc = parsed.netloc.lower()
-        path = parsed.path.rstrip("/")
-        normalized_url = f"{netloc}{path}".strip().lower()
-        significant_query_pairs = [
-            (key.strip().lower(), val.strip().lower())
-            for key, val in parse_qsl(parsed.query, keep_blank_values=True)
-            if key.strip().lower()
-            in {
-                "bidntceno",
-                "bidntceord",
-                "bidpbancno",
-                "bidpbancord",
-            }
-        ]
-        if significant_query_pairs:
-            normalized_query = urlencode(sorted(significant_query_pairs))
-            return f"{normalized_url}?{normalized_query}"
-        return normalized_url
-
-    def _extract_item_agency_keys(self, item: dict[str, Any]) -> set[str]:
-        """Extract normalized agency names from a crawled notice payload."""
-        item_metadata = item.get("metadata", {})
-        return {
-            normalized
-            for normalized in (
-                parsing.normalize_agency_name(item_metadata.get("issuing_agency")),
-                parsing.normalize_agency_name(
-                    item_metadata.get("opening_demand_agency")
-                ),
-                parsing.normalize_agency_name(item_metadata.get("demand_agency")),
-            )
-            if normalized
-        }
-
-    def _extract_project_agency_keys(self, project: Project) -> set[str]:
-        """Extract normalized agency names from a stored project, including labeled notes."""
-        agency_values = [project.issuing_agency, project.demand_agency]
-        project_text = "\n".join(
-            filter(None, [project.description, project.requirements])
-        )
-        for label in ("공고기관", "수요기관"):
-            label_match = re.search(rf"{label}\s*[:：]\s*([^\n]+)", project_text)
-            if label_match:
-                agency_values.append(label_match.group(1).strip())
-
-        return {
-            normalized
-            for normalized in (
-                parsing.normalize_agency_name(value) for value in agency_values
-            )
-            if normalized
-        }
-
-    def _extract_project_notice_number(self, project: Project) -> str | None:
-        """Read a notice number from explicit project metadata or free-form notes."""
-        if project.notice_number:
-            return project.notice_number
-
-        project_text = "\n".join(
-            filter(None, [project.description, project.requirements])
-        )
-        label_match = re.search(r"공고번호\s*[:：]\s*([A-Za-z0-9\-]+)", project_text)
-        if label_match:
-            return label_match.group(1).strip()
-        return parsing.extract_notice_number(project_text)
-
-    def _extract_project_source_url(self, project: Project) -> str | None:
-        """Read a source URL from explicit project metadata or free-form notes."""
-        if project.source_url:
-            return project.source_url
-
-        project_text = "\n".join(
-            filter(None, [project.description, project.requirements])
-        )
-        url_match = re.search(r"https?://[^\s]+", project_text)
-        if url_match:
-            return url_match.group(0).strip()
-        return None
 
     def _build_mock_items(
         self,
