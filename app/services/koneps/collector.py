@@ -7,7 +7,7 @@ from html import unescape
 from math import ceil
 from time import sleep
 from typing import Any
-from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.core.time import utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
-from app.services.koneps import parsing
+from app.services.koneps import openapi, parsing
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.realtime import realtime_event_manager
 
@@ -65,62 +65,12 @@ def format_crawl_error_message(metadata: dict[str, Any]) -> str | None:
 class KonepsCollectorService:
     """Collect KONEPS notices/opening data."""
 
-    OPENAPI_SOURCE_ALIASES = {
-        "koneps-openapi",
-        "koneps_api",
-        "koneps-api",
-        "koneps-public-api",
-        "bid-public-info",
-    }
-    SCSBID_OPENAPI_SOURCE_ALIASES = {
-        "koneps-scsbid",
-        "koneps-award-openapi",
-        "koneps-awards",
-        "scsbid",
-        "scsbid-openapi",
-    }
-    OPENAPI_CATEGORY_OPERATIONS = {
-        "construction": "getBidPblancListInfoCnstwk",
-        "공사": "getBidPblancListInfoCnstwk",
-        "service": "getBidPblancListInfoServc",
-        "general-service": "getBidPblancListInfoServc",
-        "technical-service": "getBidPblancListInfoServc",
-        "software": "getBidPblancListInfoServc",
-        "용역": "getBidPblancListInfoServc",
-        "goods": "getBidPblancListInfoThng",
-        "물품": "getBidPblancListInfoThng",
-        "foreign": "getBidPblancListInfoFrgcpt",
-        "frgcpt": "getBidPblancListInfoFrgcpt",
-        "외자": "getBidPblancListInfoFrgcpt",
-    }
-    SCSBID_CATEGORY_OPERATIONS = {
-        "construction": "getScsbidListSttusCnstwk",
-        "공사": "getScsbidListSttusCnstwk",
-        "service": "getScsbidListSttusServc",
-        "general-service": "getScsbidListSttusServc",
-        "technical-service": "getScsbidListSttusServc",
-        "software": "getScsbidListSttusServc",
-        "용역": "getScsbidListSttusServc",
-        "goods": "getScsbidListSttusThng",
-        "물품": "getScsbidListSttusThng",
-        "foreign": "getScsbidListSttusFrgcpt",
-        "frgcpt": "getScsbidListSttusFrgcpt",
-        "외자": "getScsbidListSttusFrgcpt",
-    }
-    SCSBID_RESERVE_DETAIL_OPERATIONS = {
-        "construction": "getOpengResultListInfoCnstwkPreparPcDetail",
-        "공사": "getOpengResultListInfoCnstwkPreparPcDetail",
-        "service": "getOpengResultListInfoServcPreparPcDetail",
-        "general-service": "getOpengResultListInfoServcPreparPcDetail",
-        "technical-service": "getOpengResultListInfoServcPreparPcDetail",
-        "software": "getOpengResultListInfoServcPreparPcDetail",
-        "용역": "getOpengResultListInfoServcPreparPcDetail",
-        "goods": "getOpengResultListInfoThngPreparPcDetail",
-        "물품": "getOpengResultListInfoThngPreparPcDetail",
-        "foreign": "getOpengResultListInfoFrgcptPreparPcDetail",
-        "frgcpt": "getOpengResultListInfoFrgcptPreparPcDetail",
-        "외자": "getOpengResultListInfoFrgcptPreparPcDetail",
-    }
+    # OpenAPI/category mapping constants now live in ``openapi`` (single
+    # source). This class-level alias is kept only for backward compatibility
+    # with external callers that read ``KonepsCollectorService
+    # .SCSBID_OPENAPI_SOURCE_ALIASES``; it references the module constant
+    # rather than duplicating its value.
+    SCSBID_OPENAPI_SOURCE_ALIASES = openapi.SCSBID_OPENAPI_SOURCE_ALIASES
 
     HOME_SEARCH_KEYWORD_ID = "mf_wfm_container_wq_uuid_925_wq_uuid_934_searchKeyword"
     HOME_SEARCH_BUTTON_ID = (
@@ -199,12 +149,12 @@ class KonepsCollectorService:
             "max_items": normalized_request.max_items,
         }
 
-        if self._is_openapi_source(normalized_request.source):
+        if openapi.is_openapi_source(normalized_request.source):
             live_result = self._collect_openapi_items(normalized_request)
             items = live_result["items"]
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
-        elif self._is_scsbid_openapi_source(normalized_request.source):
+        elif openapi.is_scsbid_openapi_source(normalized_request.source):
             live_result = self._collect_scsbid_openapi_items(
                 normalized_request, db=db, defer_reserve_detail=defer_reserve_detail
             )
@@ -621,8 +571,8 @@ class KonepsCollectorService:
         normalized_mode = request.execution_mode.strip().lower()
         configured_max_items = (
             settings.KONEPS_OPENAPI_MAX_ITEMS
-            if self._is_openapi_source(normalized_source)
-            or self._is_scsbid_openapi_source(normalized_source)
+            if openapi.is_openapi_source(normalized_source)
+            or openapi.is_scsbid_openapi_source(normalized_source)
             else settings.KONEPS_MAX_ITEMS
         )
         normalized_max_items = min(request.max_items, configured_max_items)
@@ -638,13 +588,13 @@ class KonepsCollectorService:
             }
         )
 
-    def _is_openapi_source(self, source: str | None) -> bool:
-        """Return whether the crawl request should use the KONEPS OpenAPI path."""
-        return str(source or "").strip().lower() in self.OPENAPI_SOURCE_ALIASES
-
     def _is_scsbid_openapi_source(self, source: str | None) -> bool:
-        """Return whether the crawl request should use the KONEPS award OpenAPI path."""
-        return str(source or "").strip().lower() in self.SCSBID_OPENAPI_SOURCE_ALIASES
+        """Thin delegator kept for external callers (``app/tasks/jobs.py``).
+
+        The implementation now lives in
+        :func:`app.services.koneps.openapi.is_scsbid_openapi_source`.
+        """
+        return openapi.is_scsbid_openapi_source(source)
 
     def _collect_openapi_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI."""
@@ -654,8 +604,8 @@ class KonepsCollectorService:
                 "KONEPS_OPENAPI_SERVICE_KEY is required for source=koneps-openapi"
             )
 
-        operation = self._openapi_operation_for_category(request.category)
-        date_token = self._openapi_date_token(request.target_date)
+        operation = openapi.openapi_operation_for_category(request.category)
+        date_token = openapi.openapi_date_token(request.target_date)
         page_size = max(1, min(int(request.max_items or 1), 999))
         url = f"{settings.KONEPS_OPENAPI_BID_PUBLIC_INFO_URL.rstrip('/')}/{operation}"
         params = {
@@ -679,7 +629,7 @@ class KonepsCollectorService:
                 f"{response.text[:300]} Tried service key variants: {key_variant}."
             )
         payload = self._load_openapi_json(response)
-        header = self._openapi_header(payload)
+        header = openapi.openapi_header(payload)
         result_code = str(header.get("resultCode") or "").strip()
         result_message = str(header.get("resultMsg") or "").strip()
         if result_code and result_code not in {"00", "03"}:
@@ -687,12 +637,12 @@ class KonepsCollectorService:
                 f"KONEPS OpenAPI returned resultCode={result_code}: {result_message or 'unknown error'}"
             )
 
-        body = self._openapi_body(payload)
-        raw_items = self._openapi_item_list(body)
+        body = openapi.openapi_body(payload)
+        raw_items = openapi.openapi_item_list(body)
         parsed_items: list[dict[str, Any]] = []
         seen_notice_numbers: set[str] = set()
         for raw_item in raw_items:
-            parsed_item = self._build_openapi_notice_item(
+            parsed_item = openapi.build_openapi_notice_item(
                 raw_item,
                 request=request,
                 operation=operation,
@@ -801,7 +751,7 @@ class KonepsCollectorService:
         category_metadata: list[dict[str, Any]] = []
 
         for category in categories:
-            operation = self._scsbid_operation_for_category(category)
+            operation = openapi.scsbid_operation_for_category(category)
             url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
             category_total_count: int | None = None
             category_pages = 0
@@ -831,7 +781,7 @@ class KonepsCollectorService:
                         f"Tried service key variants: {key_variant}."
                     )
                 payload = self._load_openapi_json(response)
-                header = self._openapi_header(payload)
+                header = openapi.openapi_header(payload)
                 result_code = str(header.get("resultCode") or "").strip()
                 result_message = str(header.get("resultMsg") or "").strip()
                 if result_code and result_code not in {"00", "03"}:
@@ -842,10 +792,10 @@ class KonepsCollectorService:
                 last_result_code = result_code or last_result_code
                 last_result_message = result_message or last_result_message
 
-                body = self._openapi_body(payload)
+                body = openapi.openapi_body(payload)
                 if category_total_count is None:
                     category_total_count = parsing.safe_int(body.get("totalCount"))
-                raw_items = self._openapi_item_list(body)
+                raw_items = openapi.openapi_item_list(body)
                 category_pages += 1
 
                 for raw_item in raw_items:
@@ -1022,15 +972,15 @@ class KonepsCollectorService:
         ``YYYYMMDDHHMM`` tokens.
         """
         if request.start_date and request.end_date:
-            begin = self._openapi_date_token(request.start_date)
-            end = self._openapi_date_token(request.end_date)
+            begin = openapi.openapi_date_token(request.start_date)
+            end = openapi.openapi_date_token(request.end_date)
         elif request.lookback_days is not None:
             today = utc_now().date()
             start_day = today - timedelta(days=max(0, int(request.lookback_days)))
             begin = start_day.strftime("%Y%m%d")
             end = today.strftime("%Y%m%d")
         else:
-            token = self._openapi_date_token(request.target_date)
+            token = openapi.openapi_date_token(request.target_date)
             begin = token
             end = token
         return f"{begin}0000", f"{end}2359"
@@ -1060,7 +1010,7 @@ class KonepsCollectorService:
         service_key: str,
     ) -> dict[str, Any]:
         """Fetch and summarize reserve-price detail rows for one awarded notice."""
-        operation = self._scsbid_reserve_detail_operation_for_category(category)
+        operation = openapi.scsbid_reserve_detail_operation_for_category(category)
         notice_number = str(raw_item.get("bidNtceNo") or "").strip()
         if not notice_number:
             return {}
@@ -1086,7 +1036,7 @@ class KonepsCollectorService:
             )
 
         payload = self._load_openapi_json(response)
-        header = self._openapi_header(payload)
+        header = openapi.openapi_header(payload)
         result_code = str(header.get("resultCode") or "").strip()
         result_message = str(header.get("resultMsg") or "").strip()
         if result_code and result_code not in {"00", "03"}:
@@ -1095,9 +1045,9 @@ class KonepsCollectorService:
                 f"{result_message or 'unknown error'}"
             )
 
-        body = self._openapi_body(payload)
-        rows = self._openapi_item_list(body)
-        detail = self._summarize_scsbid_reserve_detail(rows)
+        body = openapi.openapi_body(payload)
+        rows = openapi.openapi_item_list(body)
+        detail = openapi.summarize_scsbid_reserve_detail(rows)
         detail.update(
             {
                 "reserve_detail_operation": operation,
@@ -1199,57 +1149,6 @@ class KonepsCollectorService:
             },
         }
 
-    def _scsbid_operation_for_category(self, category: str | None) -> str:
-        """Choose the ScsbidInfoService award operation for an internal category."""
-        normalized_category = str(category or "").strip().lower()
-        return self.SCSBID_CATEGORY_OPERATIONS.get(
-            normalized_category,
-            "getScsbidListSttusServc",
-        )
-
-    def _scsbid_reserve_detail_operation_for_category(
-        self, category: str | None
-    ) -> str:
-        """Choose the ScsbidInfoService reserve-detail operation for a category."""
-        normalized_category = str(category or "").strip().lower()
-        return self.SCSBID_RESERVE_DETAIL_OPERATIONS.get(
-            normalized_category,
-            "getOpengResultListInfoServcPreparPcDetail",
-        )
-
-    def _summarize_scsbid_reserve_detail(
-        self, rows: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """Summarize reserve-detail rows into prices, selected numbers, and prices."""
-        reserve_rows: list[tuple[int, float]] = []
-        selected_numbers: list[int] = []
-        planned_price: float | None = None
-        base_amount: float | None = None
-
-        for row in rows:
-            if planned_price is None:
-                planned_price = parsing.coerce_amount(row.get("plnprc"))
-            if base_amount is None:
-                base_amount = parsing.coerce_amount(row.get("bssamt"))
-
-            sequence = parsing.coerce_int_value(row.get("compnoRsrvtnPrceSno"))
-            reserve_price = parsing.coerce_amount(row.get("bsisPlnprc"))
-            if sequence is not None and reserve_price is not None:
-                reserve_rows.append((sequence, reserve_price))
-
-            drawn = str(row.get("drwtYn") or "").strip().upper()
-            if sequence is not None and drawn in {"Y", "1", "TRUE", "예", "추첨"}:
-                selected_numbers.append(sequence)
-
-        reserve_rows.sort(key=lambda item: item[0])
-        return {
-            "reserve_prices": [price for _, price in reserve_rows],
-            "selected_numbers": sorted(set(selected_numbers)),
-            "planned_price": planned_price,
-            "base_amount": base_amount,
-            "raw_reserve_detail_items": rows,
-        }
-
     def _request_openapi_with_key_variants(
         self,
         url: str,
@@ -1260,12 +1159,12 @@ class KonepsCollectorService:
     ) -> tuple[requests.Response, str]:
         """Call OpenAPI with raw and URL-encoded key forms used by data.go.kr."""
         timeout = max(1, int(settings.KONEPS_OPENAPI_TIMEOUT_SECONDS))
-        variants = self._openapi_service_key_variants(service_key)
+        variants = openapi.openapi_service_key_variants(service_key)
         last_response: requests.Response | None = None
 
         for variant_name, variant_value, value_is_preencoded in variants:
             if value_is_preencoded:
-                query_string = self._openapi_query_string(
+                query_string = openapi.openapi_query_string(
                     params={**params, "ServiceKey": variant_value},
                     preencoded_keys={"ServiceKey"},
                 )
@@ -1286,62 +1185,6 @@ class KonepsCollectorService:
             )
         return last_response, ",".join(name for name, _, _ in variants)
 
-    def _openapi_service_key_variants(
-        self, service_key: str
-    ) -> list[tuple[str, str, bool]]:
-        """Return distinct service key variants without logging the key value."""
-        raw_key = str(service_key or "").strip()
-        encoded_key = quote_plus(raw_key, safe="")
-        configured_encoded_key = str(
-            settings.KONEPS_OPENAPI_ENCODED_SERVICE_KEY or ""
-        ).strip()
-        variants: list[tuple[str, str, bool]] = [("configured", raw_key, False)]
-        if encoded_key != raw_key:
-            variants.append(("url_encoded", encoded_key, True))
-        if configured_encoded_key and configured_encoded_key not in {
-            raw_key,
-            encoded_key,
-        }:
-            variants.append(("configured_encoded", configured_encoded_key, True))
-        return variants
-
-    def _openapi_query_string(
-        self,
-        *,
-        params: dict[str, Any],
-        preencoded_keys: set[str],
-    ) -> str:
-        """Build a query string while preserving already-encoded key values."""
-        query_parts: list[str] = []
-        for key, value in params.items():
-            encoded_key = quote_plus(str(key), safe="")
-            encoded_value = (
-                str(value)
-                if key in preencoded_keys
-                else quote_plus(str(value), safe="")
-            )
-            query_parts.append(f"{encoded_key}={encoded_value}")
-        return "&".join(query_parts)
-
-    def _openapi_operation_for_category(self, category: str | None) -> str:
-        """Choose the BidPublicInfoService operation matching the internal category."""
-        normalized_category = str(category or "").strip().lower()
-        return self.OPENAPI_CATEGORY_OPERATIONS.get(
-            normalized_category,
-            "getBidPblancListInfoServc",
-        )
-
-    def _openapi_date_token(self, target_date: str | None) -> str:
-        """Return YYYYMMDD for OpenAPI date-time query parameters."""
-        raw_value = str(target_date or utc_now().date().isoformat()).strip()
-        compact = re.sub(r"\D", "", raw_value)
-        if len(compact) >= 8:
-            return compact[:8]
-        parsed = parsing.coerce_datetime(raw_value)
-        if parsed is None:
-            raise ValueError(f"target_date must be parseable as a date: {raw_value}")
-        return parsed.strftime("%Y%m%d")
-
     def _load_openapi_json(self, response: requests.Response) -> dict[str, Any]:
         """Decode one OpenAPI response, surfacing non-JSON error bodies clearly."""
         try:
@@ -1353,147 +1196,6 @@ class KonepsCollectorService:
         if not isinstance(payload, dict):
             raise ValueError("KONEPS OpenAPI response did not contain a JSON object.")
         return payload
-
-    def _openapi_header(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Extract the normalized OpenAPI response header."""
-        response = (
-            payload.get("response") if isinstance(payload.get("response"), dict) else {}
-        )
-        header = (
-            response.get("header") if isinstance(response.get("header"), dict) else {}
-        )
-        return dict(header)
-
-    def _openapi_body(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Extract the normalized OpenAPI response body."""
-        response = (
-            payload.get("response") if isinstance(payload.get("response"), dict) else {}
-        )
-        body = response.get("body") if isinstance(response.get("body"), dict) else {}
-        return dict(body)
-
-    def _openapi_item_list(self, body: dict[str, Any]) -> list[dict[str, Any]]:
-        """Return a list of item dictionaries across supported JSON response shapes."""
-        items_container = body.get("items")
-        if isinstance(items_container, dict):
-            raw_items = items_container.get("item", [])
-        else:
-            raw_items = items_container or []
-        if isinstance(raw_items, dict):
-            raw_items = [raw_items]
-        if not isinstance(raw_items, list):
-            return []
-        return [dict(item) for item in raw_items if isinstance(item, dict)]
-
-    def _build_openapi_notice_item(
-        self,
-        raw_item: dict[str, Any],
-        *,
-        request: CrawlRequest,
-        operation: str,
-    ) -> dict[str, Any] | None:
-        """Convert one OpenAPI row into the existing crawl notice payload."""
-        notice_number = str(
-            raw_item.get("bidNtceNo")
-            or raw_item.get("bidPbancNo")
-            or raw_item.get("bfSpecRgstNo")
-            or ""
-        ).strip()
-        if not notice_number:
-            return None
-
-        title = str(
-            raw_item.get("bidNtceNm") or raw_item.get("ntceNm") or notice_number
-        ).strip()
-        base_amount = self._first_openapi_amount(
-            raw_item,
-            [
-                "asignBdgtAmt",
-                "bdgtAmt",
-                "presmptPrce",
-                "presmptAmt",
-                "bssAmt",
-                "bssamt",
-                "bssAmtPurcnstcst",
-            ],
-        )
-        estimated_amount = self._first_openapi_amount(
-            raw_item,
-            ["presmptPrce", "presmptAmt", "asignBdgtAmt", "bdgtAmt"],
-        )
-        business_type = str(
-            raw_item.get("bsnsDivNm")
-            or raw_item.get("prcmBsneSeCd")
-            or request.category
-            or ""
-        ).strip()
-        demand_agency = str(raw_item.get("dminsttNm") or "").strip()
-        issuing_agency = str(raw_item.get("ntceInsttNm") or "").strip()
-        opening_at = (
-            raw_item.get("opengDt")
-            or raw_item.get("opengDate")
-            or raw_item.get("bidOpenDt")
-        )
-        closing_at = (
-            parsing.coerce_datetime(raw_item.get("bidClseDt"))
-            or parsing.coerce_datetime(opening_at)
-            or parsing.coerce_datetime(raw_item.get("bidNtceDt"))
-        )
-        source_url = (
-            str(
-                raw_item.get("bidNtceDtlUrl") or raw_item.get("ntceSpecDocUrl1") or ""
-            ).strip()
-            or None
-        )
-        license_text = " ".join(
-            str(raw_item.get(key) or "")
-            for key in ("indstrytyCd", "indstrytyNm", "lcnsLmtNm", "prtcptLmtRgnNm")
-        )
-
-        return {
-            "notice_number": notice_number,
-            "title": title,
-            "base_amount": float(base_amount or 0.0),
-            "estimated_amount": float(estimated_amount or base_amount or 0.0),
-            "closing_at": closing_at,
-            "business_type": business_type or request.category,
-            "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,
-            "license_codes": parsing.extract_license_codes(license_text),
-            "source_url": source_url,
-            "metadata": {
-                "mode": "openapi",
-                "openapi_service": "BidPublicInfoService",
-                "openapi_operation": operation,
-                "bid_notice_order": raw_item.get("bidNtceOrd"),
-                "notice_kind": raw_item.get("ntceKindNm"),
-                "registration_type": raw_item.get("rgstTyNm"),
-                "bid_method": raw_item.get("bidMethdNm"),
-                "contract_method": raw_item.get("cntrctCnclsMthdNm"),
-                "business_type": business_type,
-                "demand_agency": demand_agency,
-                "opening_demand_agency": demand_agency,
-                "issuing_agency": issuing_agency,
-                "opening_status": raw_item.get("ntceKindNm"),
-                "opening_scheduled_at": opening_at,
-                "bid_notice_datetime": raw_item.get("bidNtceDt"),
-                "bid_begin_at": raw_item.get("bidBeginDt"),
-                "bid_close_at": raw_item.get("bidClseDt"),
-                "reference_number": raw_item.get("refNo"),
-                "raw_openapi_item": raw_item,
-            },
-        }
-
-    def _first_openapi_amount(
-        self,
-        raw_item: dict[str, Any],
-        candidate_keys: list[str],
-    ) -> float | None:
-        """Return the first parseable amount from one OpenAPI row."""
-        for key in candidate_keys:
-            value = parsing.coerce_amount(raw_item.get(key))
-            if value is not None:
-                return value
-        return None
 
     def _collect_live_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect live KONEPS items via the public homepage search flow."""
