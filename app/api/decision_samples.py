@@ -11,12 +11,12 @@ audit-evidence purposes. 정산(settled) 항목만 보여주는 정확도 리포
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_operator_optional, resolve_target_operator
-from app.core.single_user import ensure_operator_account
+from app.core.security import get_current_operator_optional
+from app.core.single_user import resolve_read_operator
 from app.models.models import User
 from app.schemas.decision_samples import DecisionSamplesResponse
 from app.services.decision_samples import DecisionSampleService
@@ -24,20 +24,11 @@ from app.services.decision_samples import DecisionSampleService
 router = APIRouter()
 
 
-def _resolve_samples_operator(
-    db: Session,
-    current_operator: User | None,
-    operator_id: int | None,
-) -> User:
-    if current_operator is None:
-        fallback = ensure_operator_account(db)
-        if operator_id is None or int(operator_id) == int(fallback.id):
-            return fallback
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view another operator's data",
-        )
-    return resolve_target_operator(db, current_operator, operator_id)
+# Read-scoped operator resolution is shared across analytics/operator/decision
+# endpoints; see app.core.single_user.resolve_read_operator for the security
+# policy (canonical fallback / 403 / 404). Kept as a thin alias so the existing
+# call site and its name remain stable.
+_resolve_samples_operator = resolve_read_operator
 
 
 def _with_current_operator(payload: dict, operator: User) -> dict:
