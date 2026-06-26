@@ -9,6 +9,7 @@ from app.api import dashboard
 from app.core.constants import ACTIVE_DECISION_STATUSES
 from app.services.allocation import BidDecisionService
 from app.services.decision_analytics import DecisionAnalyticsService
+from app.services.opportunity_analysis import OpportunityAnalysisService
 
 
 def test_canonical_value_is_planned_and_reviewing():
@@ -20,6 +21,7 @@ def test_all_consumers_reference_the_single_source():
     # Same identity, not just equal value, proves there is one source of truth.
     assert BidDecisionService.ACTIVE_DECISION_STATUSES is ACTIVE_DECISION_STATUSES
     assert DecisionAnalyticsService.ACTIVE_DECISION_STATUSES is ACTIVE_DECISION_STATUSES
+    assert OpportunityAnalysisService.ACTIVE_DECISION_STATUSES is ACTIVE_DECISION_STATUSES
     assert dashboard._ACTIVE_OPPORTUNITY_STATUSES is ACTIVE_DECISION_STATUSES
 
 

@@ -13,9 +13,11 @@ from __future__ import annotations
 # under review but has not yet been submitted or skipped.
 #
 # This set is shared by:
-#   - app/services/allocation.py        (BidDecisionService.ACTIVE_DECISION_STATUSES)
-#   - app/services/decision_analytics.py (DecisionAnalyticsService.ACTIVE_DECISION_STATUSES)
-#   - app/api/dashboard.py               (_ACTIVE_OPPORTUNITY_STATUSES)
+#   - app/services/allocation.py           (BidDecisionService.ACTIVE_DECISION_STATUSES)
+#   - app/services/decision_analytics.py   (DecisionAnalyticsService.ACTIVE_DECISION_STATUSES)
+#   - app/services/opportunity_analysis.py (OpportunityAnalysisService.ACTIVE_DECISION_STATUSES)
+#   - app/api/dashboard.py                 (_ACTIVE_OPPORTUNITY_STATUSES)
+#   - app/api/operator.py                  (active_decision_count .in_() filter)
 #
 # NOTE: This is intentionally distinct from experiment lifecycle statuses such
 # as {"planned", "running"} used in app/services/decision_experiments.py — do

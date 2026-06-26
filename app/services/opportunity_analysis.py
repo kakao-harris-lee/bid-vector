@@ -10,6 +10,7 @@ from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_r
 from app.ai.business_group import resolve_business_group
 from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import get_price_insights, predict_price
+from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import (
     ensure_operator_account,
     ensure_operator_profile,
@@ -171,7 +172,7 @@ def _detect_awarded_contract_limit_risks(
 class OpportunityAnalysisService:
     """Combine fit, price, market, similarity, and action guidance into one analysis."""
 
-    ACTIVE_DECISION_STATUSES = ("planned", "reviewing")
+    ACTIVE_DECISION_STATUSES = _ACTIVE_DECISION_STATUSES
     DEFAULT_SIMILARITY_SCORE = 0.35
     # Upper bound on probability_score for notices that did NOT match the
     # operator profile. This is the honesty-spec non-matched gate / invariant:
