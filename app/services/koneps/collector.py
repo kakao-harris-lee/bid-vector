@@ -167,7 +167,11 @@ class KonepsCollectorService:
     LIVE_FAILURE_RETRYABLE_CATEGORIES = {"network", "timeout", "unknown"}
 
     def collect_notices(
-        self, request: CrawlRequest, db: Session | None = None
+        self,
+        request: CrawlRequest,
+        db: Session | None = None,
+        *,
+        defer_reserve_detail: bool = False,
     ) -> dict[str, Any]:
         """Collect KONEPS notices with live mode support and safe fallback.
 
@@ -176,6 +180,14 @@ class KonepsCollectorService:
         already have a persisted reserve price and skip the per-notice
         reserve-detail HTTP fetch for them. Callers without a session (smoke
         test) simply re-fetch as before.
+
+        ``defer_reserve_detail`` is decided by the *caller* (only the
+        time-limited Celery collection task sets it True): when True the scsbid
+        sweep skips the inline per-notice reserve-detail HTTP fetch and surfaces
+        the not-yet-settled notices in
+        ``metadata['deferred_reserve_detail_notices']`` so the task layer can
+        enqueue a bounded ``backfill_scsbid_reserve_detail`` sweep. Synchronous
+        callers leave the default False and fetch inline as before.
         """
         normalized_request = self._normalize_request(request)
         job_status = "mock"
@@ -192,7 +204,9 @@ class KonepsCollectorService:
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
         elif self._is_scsbid_openapi_source(normalized_request.source):
-            live_result = self._collect_scsbid_openapi_items(normalized_request, db=db)
+            live_result = self._collect_scsbid_openapi_items(
+                normalized_request, db=db, defer_reserve_detail=defer_reserve_detail
+            )
             items = live_result["items"]
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
@@ -711,7 +725,11 @@ class KonepsCollectorService:
         }
 
     def _collect_scsbid_openapi_items(
-        self, request: CrawlRequest, *, db: Session | None = None
+        self,
+        request: CrawlRequest,
+        *,
+        db: Session | None = None,
+        defer_reserve_detail: bool = False,
     ) -> dict[str, Any]:
         """Collect awarded/opening rows from the KONEPS ScsbidInfoService OpenAPI.
 
@@ -727,6 +745,17 @@ class KonepsCollectorService:
         fetch is skipped for those (their persisted reserve price is preserved by
         ``persist_crawl_results``). This is what keeps the rolling-window
         scheduled sweep from re-paying the per-notice HTTP cost every run.
+
+        ``defer_reserve_detail`` (set only by the time-limited Celery collection
+        task) makes the sweep skip the inline per-notice reserve-detail HTTP
+        fetch (and its throttle sleep) entirely: the award list pagination still
+        runs inline (cheap, <=90 calls) but each non-settled notice is recorded
+        as ``{"notice_number": ..., "category": ...}`` in
+        ``metadata['deferred_reserve_detail_notices']`` so the task layer can
+        enqueue a bounded ``backfill_scsbid_reserve_detail`` sweep instead. The
+        award item is built with an empty ``detail`` so ``persist_crawl_results``
+        preserves any already-stored reserve price. When False the inline fetch
+        runs exactly as before.
         """
         service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
         if not service_key:
@@ -756,9 +785,14 @@ class KonepsCollectorService:
 
         parsed_items: list[dict[str, Any]] = []
         seen_notice_numbers: set[str] = set()
+        # Deferred reserve-detail notices: {(notice_number, category)} to dedupe,
+        # surfaced as a list of dicts in metadata for the async backfill enqueue.
+        deferred_reserve_detail: list[dict[str, str]] = []
+        deferred_reserve_seen: set[tuple[str, str]] = set()
         reserve_detail_count = 0
         reserve_detail_error_count = 0
         reserve_detail_reused_count = 0
+        reserve_detail_deferred_count = 0
         api_call_count = 0
         key_variant = ""
         last_result_code = ""
@@ -826,6 +860,22 @@ class KonepsCollectorService:
                             # ``detail`` empty so persist preserves the stored
                             # value instead of re-fetching it over HTTP.
                             reserve_detail_reused_count += 1
+                        elif defer_reserve_detail:
+                            # Time-limited Celery collection path: skip the inline
+                            # per-notice fetch (and its throttle sleep) and queue
+                            # the notice for a bounded async backfill instead.
+                            # ``detail`` stays empty so persist preserves any
+                            # already-stored reserve price.
+                            dedupe_key = (notice_number, str(category or ""))
+                            if dedupe_key not in deferred_reserve_seen:
+                                deferred_reserve_seen.add(dedupe_key)
+                                deferred_reserve_detail.append(
+                                    {
+                                        "notice_number": notice_number,
+                                        "category": str(category or ""),
+                                    }
+                                )
+                                reserve_detail_deferred_count += 1
                         else:
                             try:
                                 if delay_seconds > 0:
@@ -900,6 +950,8 @@ class KonepsCollectorService:
                 "reserve_detail_collected_count": reserve_detail_count,
                 "reserve_detail_error_count": reserve_detail_error_count,
                 "reserve_detail_reused_count": reserve_detail_reused_count,
+                "reserve_detail_deferred_count": reserve_detail_deferred_count,
+                "deferred_reserve_detail_notices": deferred_reserve_detail,
                 "query_date_begin": begin_token,
                 "query_date_end": end_token,
                 "query_type": "award_registration_datetime",

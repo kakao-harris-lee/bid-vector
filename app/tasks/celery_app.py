@@ -94,6 +94,7 @@ PAPER_BIDDING_FORWARD_TASK_NAME = "jobs.run_forward_paper_bidding"
 FORWARD_SETTLEMENT_TASK_NAME = "jobs.settle_forward_paper_bids"
 HISTORICAL_BACKTEST_TASK_NAME = "jobs.run_historical_backtest"
 COLLECT_KONEPS_NOTICES_TASK_NAME = "jobs.collect_koneps_notices"
+BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME = "jobs.backfill_scsbid_reserve_detail"
 PROJECT_EMBEDDING_REBUILD_TASK_NAME = "jobs.rebuild_project_embeddings"
 PRICE_PREDICTOR_TRAINING_TASK_NAME = "ml.train_price_predictor"
 DECISION_EXPERIMENT_REEVALUATION_TASK_NAME = "ml.reevaluate_decision_experiment"
@@ -111,6 +112,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
     """Route long-running domains onto dedicated queues."""
     return {
         COLLECT_KONEPS_NOTICES_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         "jobs.send_telegram_notification": {"queue": settings.CELERY_OPS_QUEUE},
         TELEGRAM_POLLING_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},

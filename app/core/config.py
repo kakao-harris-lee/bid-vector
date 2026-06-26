@@ -195,6 +195,21 @@ class Settings(BaseSettings):
     KONEPS_SCSBID_REUSE_PERSISTED_RESERVE_DETAIL: bool = True
     # Throttle between scsbid OpenAPI page/category calls (seconds). 0 allowed in tests.
     KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS: float = 0.2
+    # Defer the per-notice reserve-detail HTTP fetch out of the time-limited Celery
+    # collection task into a bounded async backfill. The inline path issues one
+    # reserve-detail call (each preceded by a throttle sleep) per non-settled award
+    # — up to thousands per scheduled sweep — which blew past the Celery hard time
+    # limit, SIGKILLed the task, and (with task_acks_late) spun a redelivery loop
+    # that persisted 0 rows. With this on, the collection task only paginates the
+    # award lists inline (cheap) and enqueues the reserve-detail fetches as
+    # ``backfill_scsbid_reserve_detail`` tasks. Synchronous callers are unaffected.
+    # Set false to restore the fully-inline behaviour.
+    KONEPS_SCSBID_RESERVE_DETAIL_DEFER: bool = True
+    # Max notices per deferred reserve-detail backfill task. Bounds each
+    # backfill_scsbid_reserve_detail run so a large catch-up sweep is split across
+    # several short tasks instead of one unbounded task that re-creates the
+    # time-limit redelivery loop on the ops queue.
+    KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE: int = 200
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50
