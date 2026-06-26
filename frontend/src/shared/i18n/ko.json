@@ -159,6 +159,12 @@
     "feedback_useful": "도움됨",
     "feedback_not_useful": "도움 안 됨"
   },
+  "decision_status": {
+    "planned": "예정",
+    "reviewing": "검토 중",
+    "submitted": "제출",
+    "skipped": "보류"
+  },
   "experiments": {
     "title": "실험 lifecycle",
     "apply_success_title": "임계값 적용 완료",

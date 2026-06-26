@@ -2,7 +2,12 @@ import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/shared/compon
 import { MiniBar } from "@/features/dashboard/components";
 import { formatPercent } from "@/shared/lib";
 import { useCrossAppNavigate } from "@/shared/crossAppNav";
-import type { DecisionStatus } from "@/shared/types/decisions";
+import {
+  ACTION_LABEL,
+  ACTION_TONE,
+  labelDecisionStatus
+} from "@/shared/constants/decisionLabels";
+import type { DecisionAction } from "@/shared/types/decisions";
 import type {
   OperationsKpiConversion,
   OperationsKpiManualOverride,
@@ -16,18 +21,6 @@ import type {
 } from "@/shared/types/operations";
 
 const DASH = "—";
-
-const ACTION_LABEL: Record<string, string> = {
-  bid_now: "투찰",
-  review: "검토",
-  skip: "보류"
-};
-
-const ACTION_TONE: Record<string, "healthy" | "watch" | "muted"> = {
-  bid_now: "healthy",
-  review: "watch",
-  skip: "muted"
-};
 
 /** 0~1 비율을 % 문자열로. null/undefined면 "데이터 없음" 대시. */
 function rateOrDash(value?: number | null): string {
@@ -264,15 +257,15 @@ function MissedItem({
           >
             {item.project_title}
           </span>
-          <Badge tone={ACTION_TONE[item.initial_action] ?? "muted"}>
-            {ACTION_LABEL[item.initial_action] ?? item.initial_action}
+          <Badge tone={ACTION_TONE[item.initial_action as DecisionAction] ?? "muted"}>
+            {ACTION_LABEL[item.initial_action as DecisionAction] ?? item.initial_action}
           </Badge>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-1 text-[var(--color-muted)]">
           <span>
             {deadlineLabel(item.deadline)} · 우선순위 {formatPercent(item.priority_score)}
           </span>
-          <span className="tabular-nums">{statusLabel(item.decision_status)}</span>
+          <span className="tabular-nums">{labelDecisionStatus(item.decision_status)}</span>
         </div>
       </button>
     </li>
@@ -353,15 +346,4 @@ function SettlementCoverageCard({ data }: { data: OperationsKpiSettlementCoverag
       ) : null}
     </KpiGroup>
   );
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  planned: "예정",
-  reviewing: "검토 중",
-  submitted: "제출",
-  skipped: "보류"
-};
-
-function statusLabel(status: string): string {
-  return STATUS_LABEL[status as DecisionStatus] ?? status;
 }

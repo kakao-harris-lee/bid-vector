@@ -9,30 +9,15 @@ import {
   formatDateTime,
   formatPercent
 } from "@/shared/lib";
-import type { BidDecisionRecordResponse } from "@/shared/types/project";
+import {
+  ACTION_LABEL,
+  ACTION_TONE,
+  DECISION_STATUS_LABEL
+} from "@/shared/constants/decisionLabels";
 import { DecisionReasonsCard } from "@/features/dashboard/components";
 import { trackProjectView } from "@/shared/api";
 import { SimilarPanel } from "./SimilarPanel";
 import { useProjectQuery, useTimelineQuery } from "./hooks";
-
-const ACTION_LABEL: Record<BidDecisionRecordResponse["action"], string> = {
-  bid_now: "투찰",
-  review: "검토",
-  skip: "보류"
-};
-
-const ACTION_TONE: Record<BidDecisionRecordResponse["action"], "healthy" | "watch" | "muted"> = {
-  bid_now: "healthy",
-  review: "watch",
-  skip: "muted"
-};
-
-const DECISION_LABEL: Record<BidDecisionRecordResponse["decision_status"], string> = {
-  planned: "예정",
-  reviewing: "검토 중",
-  submitted: "제출",
-  skipped: "보류"
-};
 
 export function ProjectDetailScreen() {
   const { id } = useParams();
@@ -155,7 +140,7 @@ export function ProjectDetailScreen() {
                   <span className="text-[var(--color-muted)]">{formatDateTime(record.updated_at)}</span>
                   <div className="flex items-center gap-1">
                     <Badge tone={ACTION_TONE[record.action]}>{ACTION_LABEL[record.action]}</Badge>
-                    <Badge tone="info">{DECISION_LABEL[record.decision_status]}</Badge>
+                    <Badge tone="info">{DECISION_STATUS_LABEL[record.decision_status]}</Badge>
                   </div>
                 </div>
                 <div className="flex items-center justify-between tabular-nums text-[var(--color-muted)]">

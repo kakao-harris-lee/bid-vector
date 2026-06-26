@@ -124,15 +124,7 @@ export function statusFromBid(status: DashboardBidItem["status"]): DashboardStat
   return "info";
 }
 
-export function labelDecisionStatus(status: string): string {
-  const labels: Record<string, string> = {
-    planned: "계획",
-    reviewing: "검토",
-    submitted: "제출",
-    skipped: "보류"
-  };
-  return labels[status] ?? status;
-}
+export { labelDecisionStatus } from "@/shared/constants/decisionLabels";
 
 export function labelOutcome(status: string): string {
   const labels: Record<string, string> = {

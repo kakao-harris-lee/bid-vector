@@ -17,37 +17,21 @@ import { InlineActionButtons, ReasonIndicators } from "@/features/dashboard/comp
 import { useApplyBidDecisionActionMutation } from "@/features/dashboard/hooks";
 import type { BidDecisionActionType } from "@/shared/api";
 import type {
-  DecisionAction,
   DecisionFunnelBreakdownItem,
   DecisionFunnelRecentSubmissionItem,
-  DecisionFunnelResponse,
-  DecisionStatus
+  DecisionFunnelResponse
 } from "@/shared/types/decisions";
+import {
+  ACTION_LABEL,
+  ACTION_TONE,
+  DECISION_STATUS_LABEL
+} from "@/shared/constants/decisionLabels";
 import {
   useDecisionFunnelQuery,
   useDecisionRecommendationsQuery,
   useOperationsKpiQuery
 } from "./hooks";
 import { OperationsKpiPanel } from "./OperationsKpiPanel";
-
-const ACTION_LABEL: Record<DecisionAction, string> = {
-  bid_now: "투찰",
-  review: "검토",
-  skip: "보류"
-};
-
-const ACTION_TONE: Record<DecisionAction, "healthy" | "watch" | "muted"> = {
-  bid_now: "healthy",
-  review: "watch",
-  skip: "muted"
-};
-
-const STATUS_LABEL: Record<DecisionStatus, string> = {
-  planned: "예정",
-  reviewing: "검토 중",
-  submitted: "제출",
-  skipped: "보류"
-};
 
 export function DecisionsScreen() {
   const { session, activeOperator } = useShellContext();
@@ -200,7 +184,7 @@ export function DecisionsScreen() {
                   </span>
                   <div className="flex items-center gap-1">
                     <Badge tone={ACTION_TONE[item.action]}>{ACTION_LABEL[item.action]}</Badge>
-                    <Badge tone="info">{STATUS_LABEL[item.decision_status]}</Badge>
+                    <Badge tone="info">{DECISION_STATUS_LABEL[item.decision_status]}</Badge>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-1 text-[var(--color-muted)]">
