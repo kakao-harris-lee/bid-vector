@@ -3,6 +3,7 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { ChipInput, ThresholdControl } from "@/shared/components";
+import { formatPercent } from "@/shared/lib";
 import { useShellContext } from "@/app/dashboardContext";
 import { ApiError } from "@/shared/api";
 import { logoutSession } from "@/app/layout/AuthGate";
@@ -227,7 +228,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   error={errors.minimum_match_score?.message}
                 />
               )}
@@ -243,7 +244,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   error={errors.minimum_probability_score?.message}
                 />
               )}
@@ -259,7 +260,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   description="이 값 이상이면 'bid_now'로 분류"
                   error={errors.bid_now_threshold?.message}
                 />
@@ -276,7 +277,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   description="즉시 투찰 임계값보다 크면 안 됩니다."
                   error={errors.review_threshold?.message}
                 />
@@ -392,14 +393,14 @@ function StrategyDecisionGuide({ values }: { values: StrategyFormValues }) {
           />
           <GuideMetric
             label="점수 문턱"
-            value={`공고 적합도 ${formatRatio(values.minimum_match_score)} 이상`}
-            detail={`가격 적합도(추정) ${formatRatio(
+            value={`공고 적합도 ${formatPercent(values.minimum_match_score)} 이상`}
+            detail={`가격 적합도(추정) ${formatPercent(
               values.minimum_probability_score
             )} 이상`}
           />
           <GuideMetric
             label="액션 분기"
-            value={`투찰 ${formatRatio(values.bid_now_threshold)} / 검토 ${formatRatio(
+            value={`투찰 ${formatPercent(values.bid_now_threshold)} / 검토 ${formatPercent(
               values.review_threshold
             )}`}
             detail="검토 임계값 미만은 보류 후보로 분류됩니다."
@@ -461,10 +462,6 @@ function toFormValues(strategy: NonNullable<ReturnType<typeof useStrategyQuery>[
     max_recommended_candidates: strategy.max_recommended_candidates,
     notify_only_high_priority: strategy.notify_only_high_priority
   };
-}
-
-function formatRatio(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
 }
 
 function NumberField({
