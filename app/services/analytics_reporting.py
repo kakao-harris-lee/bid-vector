@@ -33,6 +33,11 @@ from app.services.synthetic_experiment import (
     sample_status_for_settled_count,
 )
 from app.services.notifications.telegram import TelegramNotificationService
+from app.services.smoke_failure_taxonomy import (
+    SMOKE_FAILURE_CATEGORIES,
+    classify_failure,
+    guidance_for,
+)
 from app.tasks.celery_app import (
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
@@ -65,17 +70,9 @@ class AnalyticsReportingService:
         "G-0 scheduled smoke validates the canonical shared pipeline; "
         "G-2 per-operator evidence is recorded on operator-scoped monitor and experiment runs."
     )
-    SMOKE_FAILURE_CATEGORIES = (
-        "credential",
-        "koneps_response",
-        "candidate_generation",
-        "no_candidate",
-        "telegram",
-        "task_broker",
-        "db_schema",
-        "prediction",
-        "unknown",
-    )
+    # Shared with the smoke producer (KonepsTelegramSmokeTestService) via
+    # app.services.smoke_failure_taxonomy.
+    SMOKE_FAILURE_CATEGORIES = SMOKE_FAILURE_CATEGORIES
     SYNTHETIC_EVIDENCE_SCOPE = "g1_canonical_synthetic_validation"
     SYNTHETIC_CANONICAL_ONLY_REASON = (
         "Canonical G-1 synthetic validation aggregates preset operator slugs; "
@@ -1287,75 +1284,19 @@ class AnalyticsReportingService:
         return detail.startswith("skipped")
 
     def _smoke_failure_category(self, phase: dict[str, Any]) -> str:
-        """Classify a failed smoke phase into the roadmap's fixed buckets."""
+        """Classify a failed smoke phase into the roadmap's fixed buckets.
+
+        Trusts the producer-stored ``failure_category`` when it is one of the
+        canonical buckets, otherwise re-derives it via the shared classifier
+        (guidance-less / legacy rows).
+        """
         stored = str(phase.get("failure_category") or "").strip().lower()
         if stored in self.SMOKE_FAILURE_CATEGORIES:
             return stored
-        name = str(phase.get("name") or "").strip().lower()
-        detail = str(phase.get("detail") or "").strip().lower()
-        text = f"{name} {detail}"
-        if any(
-            token in text
-            for token in (
-                "credential",
-                "unauthorized",
-                "forbidden",
-                "401",
-                "403",
-                "api key",
-                "apikey",
-                "service key",
-                "token",
-                "secret",
-            )
-        ):
-            return "credential"
-        if any(
-            token in text
-            for token in (
-                "celery",
-                "broker",
-                "rabbit",
-                "redis",
-                "queue",
-                "worker",
-                "task",
-            )
-        ):
-            return "task_broker"
-        if any(
-            token in text
-            for token in (
-                "no eligible",
-                "no candidate",
-                "no recent project",
-                "no project",
-                "collected 0",
-                "0 item",
-            )
-        ):
-            return "no_candidate"
-        if "telegram" in text:
-            return "telegram"
-        if any(
-            token in text
-            for token in (
-                "no such table",
-                "no such column",
-                "schema",
-                "sqlalchemy",
-                "operationalerror",
-                "database",
-            )
-        ):
-            return "db_schema"
-        if name == "candidate_generation" or "strategy monitor" in text:
-            return "candidate_generation"
-        if name == "koneps_collect" or "koneps" in text or "openapi" in text:
-            return "koneps_response"
-        if name in {"predict_price", "sbert_embedding"}:
-            return "prediction"
-        return "unknown"
+        return classify_failure(
+            str(phase.get("name") or ""),
+            str(phase.get("detail") or ""),
+        )
 
     def _smoke_failure_action(self, phase: dict[str, Any]) -> str:
         stored = str(phase.get("action_required") or "").strip()
@@ -1411,45 +1352,8 @@ class AnalyticsReportingService:
 
     @staticmethod
     def _smoke_failure_guidance(category: str) -> dict[str, str]:
-        guidance = {
-            "credential": {
-                "action_required": "Rotate or restore the missing API/Telegram credential.",
-                "retry_method": "Fix the credential, then rerun the scheduled smoke task or `python scripts/production_smoke_test.py --write`.",
-            },
-            "koneps_response": {
-                "action_required": "Check KONEPS OpenAPI availability and request parameters.",
-                "retry_method": "Retry after KONEPS responds normally; use `--max-items 3 --write` for a bounded manual check.",
-            },
-            "candidate_generation": {
-                "action_required": "Inspect the strategy monitor run and candidate filters.",
-                "retry_method": "Rerun `/api/v1/operator/strategy/monitor` or `python scripts/production_smoke_test.py --write --monitor-all-candidates`.",
-            },
-            "no_candidate": {
-                "action_required": "Confirm whether no active notices match the current operator strategy.",
-                "retry_method": "Rerun with wider strategy filters or `--monitor-all-candidates`; no code retry is required if the skip reason is expected.",
-            },
-            "telegram": {
-                "action_required": "Check bot token, chat id, and whether the operator started the Telegram bot conversation.",
-                "retry_method": "Fix Telegram configuration, then rerun the smoke or `python scripts/production_smoke_test.py --write --telegram-sync`.",
-            },
-            "task_broker": {
-                "action_required": "Check Celery broker/backend and worker health.",
-                "retry_method": "Restart or repair broker/workers, then rerun the scheduled smoke task.",
-            },
-            "db_schema": {
-                "action_required": "Apply pending migrations and verify the production schema.",
-                "retry_method": "Run migrations, restart the API/worker, then rerun the scheduled smoke task.",
-            },
-            "prediction": {
-                "action_required": "Check embedding and price prediction dependencies plus recent project data.",
-                "retry_method": "Rerun after model/data repair; use the smoke evidence project id to reproduce prediction locally.",
-            },
-            "unknown": {
-                "action_required": "Inspect the phase detail and application logs.",
-                "retry_method": "Rerun the same smoke command after the logged root cause is corrected.",
-            },
-        }
-        return guidance.get(category) or guidance["unknown"]
+        """Return shared remediation guidance for a smoke failure category."""
+        return guidance_for(category)
 
     def _smoke_test_status(self, summary: dict[str, Any]) -> tuple[str, str]:
         """Convert smoke cycle telemetry into a dashboard status + detail."""
