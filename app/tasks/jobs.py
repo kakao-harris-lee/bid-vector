@@ -404,8 +404,15 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     requested = len(cleaned)
     fetched = 0
     skipped_existing = 0
+    not_settled = 0
     errors = 0
     processed_since_commit = 0
+    # Diagnostics: surface WHY fetches fail (the per-notice except previously
+    # swallowed the exception, logging only notice_number). Aggregate by
+    # exception type + keep a few sample messages so one summary line / the
+    # returned dict reveals the cause instead of N silent warnings.
+    error_type_counts: dict[str, int] = {}
+    error_samples: list[str] = []
 
     db = SessionLocal()
     try:
@@ -447,8 +454,11 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
                 reserve_prices = detail.get("reserve_prices") or []
                 selected_numbers = detail.get("selected_numbers") or []
                 if not reserve_prices:
-                    # Nothing settled yet for this notice; leave the row untouched
-                    # so a later run can re-fetch when it settles.
+                    # Fetched OK but no settled reserve yet (e.g. notice closed
+                    # but not opened). Leave the row untouched so a later run
+                    # re-fetches once it settles. Tracked separately from errors
+                    # — this is the benign "not yet settled" path, not a failure.
+                    not_settled += 1
                     continue
 
                 if record is None:
@@ -479,22 +489,42 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
                     "requested": requested,
                     "fetched": fetched,
                     "skipped_existing": skipped_existing,
+                    "not_settled": not_settled,
                     "errors": errors,
+                    "error_types": error_type_counts,
+                    "error_samples": error_samples,
                     "soft_time_limit_exceeded": True,
                 }
-            except Exception:  # noqa: BLE001 — one notice must not abort the chunk
+            except Exception as exc:  # noqa: BLE001 — one notice must not abort the chunk
                 errors += 1
-                logger.warning(
-                    "backfill_scsbid_reserve_detail failed for notice_number=%s",
-                    notice_number,
-                )
+                exc_type = type(exc).__name__
+                error_type_counts[exc_type] = error_type_counts.get(exc_type, 0) + 1
+                label = f"{exc_type}: {exc}"[:200]
+                if label not in error_samples and len(error_samples) < 5:
+                    error_samples.append(label)
 
         db.commit()
+        if errors:
+            # One summary line (not N) so the failure cause is visible in logs.
+            logger.warning(
+                "backfill_scsbid_reserve_detail chunk done requested=%s fetched=%s "
+                "skipped=%s not_settled=%s errors=%s error_types=%s samples=%s",
+                requested,
+                fetched,
+                skipped_existing,
+                not_settled,
+                errors,
+                error_type_counts,
+                error_samples,
+            )
         return {
             "requested": requested,
             "fetched": fetched,
             "skipped_existing": skipped_existing,
+            "not_settled": not_settled,
             "errors": errors,
+            "error_types": error_type_counts,
+            "error_samples": error_samples,
         }
     except Exception:
         db.rollback()
