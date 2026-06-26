@@ -173,6 +173,12 @@ class OpportunityAnalysisService:
 
     ACTIVE_DECISION_STATUSES = ("planned", "reviewing")
     DEFAULT_SIMILARITY_SCORE = 0.35
+    # Upper bound on probability_score for notices that did NOT match the
+    # operator profile. This is the honesty-spec non-matched gate / invariant:
+    # an unmatched notice can never present as a high-pursuit opportunity,
+    # regardless of heuristic or calibrated inputs. Value is load-bearing — do
+    # not change it; this only names the existing 0.49 literal.
+    NON_MATCHED_PROBABILITY_CAP = 0.49
     EXECUTION_COMPLEXITY_KEYWORDS = (
         "통합",
         "고도화",
@@ -313,7 +319,7 @@ class OpportunityAnalysisService:
             category_priority_override,
         )
         if not classification.get("matched", False):
-            probability_score = min(probability_score, 0.49)
+            probability_score = min(probability_score, self.NON_MATCHED_PROBABILITY_CAP)
         expected_margin_score = self._estimate_expected_margin_score(
             project=project,
             recommended_amount=recommended_amount,
@@ -597,7 +603,7 @@ class OpportunityAnalysisService:
         )
 
         if not classification.get("matched", False):
-            probability_score = min(probability_score, 0.49)
+            probability_score = min(probability_score, self.NON_MATCHED_PROBABILITY_CAP)
 
         if current_active_bids >= max_active_bids:
             probability_score -= 0.05
@@ -632,7 +638,7 @@ class OpportunityAnalysisService:
         if calibrated is not None:
             probability = calibrated
         if not classification.get("matched", False):
-            probability = min(probability, 0.49)
+            probability = min(probability, self.NON_MATCHED_PROBABILITY_CAP)
         return round(max(0.0, min(1.0, probability)), 2)
 
     def _apply_category_priority_override(self, score: float, override: float) -> float:
