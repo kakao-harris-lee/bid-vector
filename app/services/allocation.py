@@ -4,6 +4,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.time import utc_now
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
@@ -31,7 +32,7 @@ class BidDecisionService:
     COMPETITIVENESS_WEIGHT = 0.08
     BUDGET_CAPTURE_WEIGHT = 0.06
     EXPECTED_MARGIN_WEIGHT = 0.09
-    ACTIVE_DECISION_STATUSES = {"planned", "reviewing"}
+    ACTIVE_DECISION_STATUSES = _ACTIVE_DECISION_STATUSES
     SUBMITTED_SYNC_NOTE = "실제 투찰이 등록되어 제출 상태로 동기화했습니다."
     FALLBACK_SUBMITTED_REASONING = "사전 결정 기록 없이 직접 투찰이 등록되어 제출 이력을 생성했습니다."
     TELEGRAM_SUBMITTED_NOTE = "텔레그램에서 투찰 버튼을 눌러 제출 상태로 전환했습니다."

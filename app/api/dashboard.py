@@ -8,6 +8,7 @@ from typing import Iterable
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.constants import ACTIVE_DECISION_STATUSES
 from app.core.database import get_db
 from app.core.security import get_current_operator_from_bearer, resolve_target_operator
 from app.core.time import ensure_utc, utc_now
@@ -34,7 +35,7 @@ from app.schemas.schemas import (
 router = APIRouter()
 
 _OPPORTUNITY_STATUSES = {"planned", "reviewing", "submitted", "skipped"}
-_ACTIVE_OPPORTUNITY_STATUSES = {"planned", "reviewing"}
+_ACTIVE_OPPORTUNITY_STATUSES = ACTIVE_DECISION_STATUSES
 _BID_STATUSES = {"submitted", "reviewed", "accepted", "rejected"}
 _PAPER_ACTION_STATUS = {"bid_now": "planned", "review": "reviewing", "skip": "skipped"}
 _DEFAULT_PAPER_OPPORTUNITY_ACTIONS = {"bid_now", "review"}
