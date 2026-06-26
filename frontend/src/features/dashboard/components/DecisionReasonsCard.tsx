@@ -2,30 +2,20 @@ import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Target, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Badge } from "@/shared/components/ui";
 import { t } from "@/shared/i18n";
+import { ACTION_LABEL, ACTION_TONE } from "@/shared/constants/decisionLabels";
+import type { DecisionAction } from "@/shared/types/decisions";
 import {
   submitRecommendationFeedback,
   type RecommendationFeedbackVerdict
 } from "@/shared/api/operations";
 import { MiniBar } from "./Helpers";
 
-export type DecisionAction = "bid_now" | "review" | "skip";
-
-const ACTION_LABEL: Record<DecisionAction, string> = {
-  bid_now: t("decision_reasons.action_bid_now"),
-  review: t("decision_reasons.action_review"),
-  skip: t("decision_reasons.action_skip")
-};
+export type { DecisionAction };
 
 const ACTION_VERDICT: Record<DecisionAction, string> = {
   bid_now: t("decision_reasons.verdict_bid_now"),
   review: t("decision_reasons.verdict_review"),
   skip: t("decision_reasons.verdict_skip")
-};
-
-const ACTION_TONE: Record<DecisionAction, "healthy" | "watch" | "muted"> = {
-  bid_now: "healthy",
-  review: "watch",
-  skip: "muted"
 };
 
 export interface DecisionReasonsCardProps {

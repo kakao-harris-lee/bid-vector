@@ -1,4 +1,5 @@
 import { Badge, Card, CardContent, CardHeader, CardTitle, type BadgeTone } from "@/shared/components/ui";
+import { LabeledStat } from "@/shared/components";
 import { formatPercent } from "@/shared/lib";
 import type { SyntheticSampleReport, SyntheticSampleReportGap, SyntheticSampleReportRow } from "@/shared/types/synthetic";
 
@@ -60,13 +61,13 @@ export function SampleReportView({ report }: SampleReportViewProps) {
       </CardHeader>
       <CardContent className="flex flex-col gap-4 text-xs">
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <Metric label="preset" value={report.preset_name ?? "custom"} />
-          <Metric
+          <LabeledStat variant="card" label="preset" value={report.preset_name ?? "custom"} />
+          <LabeledStat variant="card"
             label="repeatable"
             value={report.ready_for_repeatable_reporting ? "ready" : "blocked"}
           />
-          <Metric label="group target" value={String(report.group_sample_target)} />
-          <Metric label="synthetic only" value={report.synthetic_only ? "yes" : "no"} />
+          <LabeledStat variant="card" label="group target" value={String(report.group_sample_target)} />
+          <LabeledStat variant="card" label="synthetic only" value={report.synthetic_only ? "yes" : "no"} />
         </div>
 
         {syntheticLeaks.length > 0 ? (
@@ -86,15 +87,6 @@ export function SampleReportView({ report }: SampleReportViewProps) {
         <ReportRows title="예산구간" rows={report.by_budget_band ?? []} />
       </CardContent>
     </Card>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-[var(--color-border)] px-2 py-1.5">
-      <div className="text-[var(--color-muted)]">{label}</div>
-      <div className="truncate font-medium text-[var(--color-fg)]">{value}</div>
-    </div>
   );
 }
 

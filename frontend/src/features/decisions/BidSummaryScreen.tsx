@@ -11,6 +11,7 @@ import {
   CardTitle,
   toastApi
 } from "@/shared/components/ui";
+import { LabeledStat } from "@/shared/components";
 import { fetchBidFormDraftRaw } from "@/shared/api";
 import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
 import { t } from "@/shared/i18n";
@@ -328,11 +329,11 @@ function SummaryBody({ data }: { data: BidSummaryResponse }) {
         <CardContent className="flex flex-col gap-3 text-sm">
           {prediction ? (
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field
+              <LabeledStat variant="field"
                 label={t("bid_summary.predicted_price_label")}
                 value={formatCurrency(prediction.predicted_price)}
               />
-              <Field
+              <LabeledStat variant="field"
                 label={t("bid_summary.price_range_label")}
                 value={
                   prediction.price_range_min != null || prediction.price_range_max != null
@@ -342,7 +343,7 @@ function SummaryBody({ data }: { data: BidSummaryResponse }) {
                     : "-"
                 }
               />
-              <Field
+              <LabeledStat variant="field"
                 label={t("bid_summary.confidence_label")}
                 value={formatPercent(prediction.confidence_score)}
               />
@@ -359,15 +360,15 @@ function SummaryBody({ data }: { data: BidSummaryResponse }) {
           <CardTitle>{t("bid_summary.scores_title")}</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-3 gap-3 text-sm">
-          <Field
+          <LabeledStat variant="field"
             label={t("bid_summary.priority_label")}
             value={formatPercent(recommendation.priority_score)}
           />
-          <Field
+          <LabeledStat variant="field"
             label={t("bid_summary.matched_label")}
             value={formatPercent(recommendation.matched_score)}
           />
-          <Field
+          <LabeledStat variant="field"
             label={t("bid_summary.competitiveness_label")}
             value={formatPercent(recommendation.competitiveness_score)}
           />
@@ -438,11 +439,11 @@ function SummaryBody({ data }: { data: BidSummaryResponse }) {
           {category_floor.floor_bid_rate !== null &&
           category_floor.floor_bid_rate !== undefined ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field
+              <LabeledStat variant="field"
                 label={t("bid_summary.category_floor_rate_label")}
                 value={formatPercent(category_floor.floor_bid_rate)}
               />
-              <Field
+              <LabeledStat variant="field"
                 label={t("bid_summary.category_floor_price_label")}
                 value={formatCurrency(category_floor.floor_price)}
               />
@@ -478,19 +479,19 @@ function SummaryBody({ data }: { data: BidSummaryResponse }) {
           <CardTitle>{t("bid_summary.notice_title")}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
-          <Field label={t("bid_summary.notice_number_label")} value={notice.notice_number ?? "-"} full>
+          <LabeledStat variant="field" label={t("bid_summary.notice_number_label")} value={notice.notice_number ?? "-"} full>
             <strong className="text-[var(--color-fg)]">{notice.title}</strong>
-          </Field>
-          <Field
+          </LabeledStat>
+          <LabeledStat variant="field"
             label={t("bid_summary.category_label")}
             value={notice.business_type_label ?? notice.category ?? "-"}
           />
-          <Field
+          <LabeledStat variant="field"
             label={t("bid_summary.budget_label")}
             value={formatCurrency(notice.budget_estimate)}
           />
-          <Field label={t("bid_summary.agency_label")} value={notice.demand_agency ?? "-"} />
-          <Field
+          <LabeledStat variant="field" label={t("bid_summary.agency_label")} value={notice.demand_agency ?? "-"} />
+          <LabeledStat variant="field"
             label={t("bid_summary.deadline_label")}
             value={notice.deadline ? formatDateTime(notice.deadline) : "-"}
           />
@@ -504,43 +505,21 @@ function FieldStatBody({ stat }: { stat: BidSummaryFieldStat }) {
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field
+        <LabeledStat variant="field"
           label={t("bid_summary.field_stat_close_rate_label")}
           value={formatPercent(stat.est_price_close_rate)}
         />
-        <Field
+        <LabeledStat variant="field"
           label={t("bid_summary.field_stat_favorable_rate_label")}
           value={formatPercent(stat.eligible_favorable_rate)}
         />
-        <Field
+        <LabeledStat variant="field"
           label={t("bid_summary.field_stat_sample_label")}
           value={`${stat.settled_count.toLocaleString("ko-KR")}건`}
         />
       </div>
       <p className="text-[11px] leading-tight text-[var(--color-muted)]">{stat.note}</p>
     </>
-  );
-}
-
-function Field({
-  label,
-  value,
-  full = false,
-  children
-}: {
-  label: string;
-  value: string;
-  full?: boolean;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className={`flex flex-col gap-0.5 ${full ? "sm:col-span-2" : ""}`}>
-      <span className="text-xs text-[var(--color-muted)]">{label}</span>
-      {children ?? (
-        <span className="text-sm tabular-nums text-[var(--color-fg)]">{value}</span>
-      )}
-      {children ? <span className="text-xs text-[var(--color-muted)]">{value}</span> : null}
-    </div>
   );
 }
 

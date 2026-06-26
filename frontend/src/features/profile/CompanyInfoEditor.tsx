@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Controller, useForm, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
-import { ChipInput, ThresholdControl } from "@/shared/components";
+import {
+  ChipInput,
+  NumberField,
+  ReadOnlyContextNotice,
+  ThresholdControl
+} from "@/shared/components";
 import { useShellContext } from "@/app/dashboardContext";
 import { ApiError } from "@/shared/api";
 import { logoutSession } from "@/app/layout/AuthGate";
@@ -267,14 +272,10 @@ export function CompanyInfoEditor() {
         </header>
 
         {readOnly ? (
-          <div
-            role="note"
-            data-testid="profile-readonly-notice"
-            className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_88%)] px-3 py-2 text-xs"
-          >
-            현재 회사: {currentOperatorLabel ?? "다른 회사"} · 편집은 본인 회사로 돌아가야
-            가능합니다.
-          </div>
+          <ReadOnlyContextNotice
+            operatorLabel={currentOperatorLabel}
+            testId="profile-readonly-notice"
+          />
         ) : null}
 
         {isWizard ? (
@@ -848,38 +849,5 @@ function RegionSuggestions({
         })}
       </div>
     </div>
-  );
-}
-
-function NumberField({
-  label,
-  register,
-  error,
-  min,
-  max,
-  step
-}: {
-  label: string;
-  register: ReturnType<ReturnType<typeof useForm<CompanyInfoFormValues>>["register"]>;
-  error?: string;
-  min?: number;
-  max?: number;
-  step?: number;
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-[var(--color-muted)]">{label}</span>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        step={step}
-        className={`h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 text-sm tabular-nums ${
-          error ? "border-[var(--color-danger)]" : ""
-        }`}
-        {...register}
-      />
-      {error ? <span className="text-[11px] text-[var(--color-danger)]">{error}</span> : null}
-    </label>
   );
 }

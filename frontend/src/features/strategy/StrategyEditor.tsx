@@ -2,7 +2,14 @@ import { useEffect, useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
-import { ChipInput, ThresholdControl } from "@/shared/components";
+import {
+  ChipInput,
+  LabeledStat,
+  NumberField,
+  ReadOnlyContextNotice,
+  ThresholdControl
+} from "@/shared/components";
+import { formatPercent } from "@/shared/lib";
 import { useShellContext } from "@/app/dashboardContext";
 import { ApiError } from "@/shared/api";
 import { logoutSession } from "@/app/layout/AuthGate";
@@ -112,14 +119,10 @@ export function StrategyEditor() {
           </span>
         </header>
         {readOnly ? (
-          <div
-            role="note"
-            data-testid="strategy-readonly-notice"
-            className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_88%)] px-3 py-2 text-xs"
-          >
-            현재 회사: {currentOperatorLabel ?? "다른 회사"} · 편집은 본인 회사로 돌아가야
-            가능합니다.
-          </div>
+          <ReadOnlyContextNotice
+            operatorLabel={currentOperatorLabel}
+            testId="strategy-readonly-notice"
+          />
         ) : null}
         <StrategyDecisionGuide values={strategyValues} />
         <fieldset disabled={readOnly} className="contents">
@@ -227,7 +230,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   error={errors.minimum_match_score?.message}
                 />
               )}
@@ -243,7 +246,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   error={errors.minimum_probability_score?.message}
                 />
               )}
@@ -259,7 +262,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   description="이 값 이상이면 'bid_now'로 분류"
                   error={errors.bid_now_threshold?.message}
                 />
@@ -276,7 +279,7 @@ export function StrategyEditor() {
                   min={0}
                   max={1}
                   step={0.01}
-                  format={formatRatio}
+                  format={formatPercent}
                   description="즉시 투찰 임계값보다 크면 안 됩니다."
                   error={errors.review_threshold?.message}
                 />
@@ -377,12 +380,14 @@ function StrategyDecisionGuide({ values }: { values: StrategyFormValues }) {
           패널티를 통과한 공고만 남기는 방식으로 좁힙니다.
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
-          <GuideMetric
+          <LabeledStat
+            variant="guide"
             label="대상 조건"
             value={`${targetingCount.toLocaleString("ko-KR")}개`}
             detail="중점·제외 지역과 키워드가 후보 폭을 조절합니다."
           />
-          <GuideMetric
+          <LabeledStat
+            variant="guide"
             label="예산 범위"
             value={`${formatBudget(values.min_budget_estimate)} ~ ${formatBudget(
               values.max_budget_estimate,
@@ -390,16 +395,18 @@ function StrategyDecisionGuide({ values }: { values: StrategyFormValues }) {
             )}`}
             detail="공고 추정가격이 이 범위를 벗어나면 우선순위가 낮아집니다."
           />
-          <GuideMetric
+          <LabeledStat
+            variant="guide"
             label="점수 문턱"
-            value={`공고 적합도 ${formatRatio(values.minimum_match_score)} 이상`}
-            detail={`가격 적합도(추정) ${formatRatio(
+            value={`공고 적합도 ${formatPercent(values.minimum_match_score)} 이상`}
+            detail={`가격 적합도(추정) ${formatPercent(
               values.minimum_probability_score
             )} 이상`}
           />
-          <GuideMetric
+          <LabeledStat
+            variant="guide"
             label="액션 분기"
-            value={`투찰 ${formatRatio(values.bid_now_threshold)} / 검토 ${formatRatio(
+            value={`투찰 ${formatPercent(values.bid_now_threshold)} / 검토 ${formatPercent(
               values.review_threshold
             )}`}
             detail="검토 임계값 미만은 보류 후보로 분류됩니다."
@@ -418,24 +425,6 @@ function StrategyDecisionGuide({ values }: { values: StrategyFormValues }) {
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function GuideMetric({
-  label,
-  value,
-  detail
-}: {
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-      <span className="text-[var(--color-muted)]">{label}</span>
-      <strong className="mt-0.5 block text-sm text-[var(--color-fg)]">{value}</strong>
-      <p className="mt-1 text-[var(--color-muted)]">{detail}</p>
-    </div>
   );
 }
 
@@ -461,41 +450,4 @@ function toFormValues(strategy: NonNullable<ReturnType<typeof useStrategyQuery>[
     max_recommended_candidates: strategy.max_recommended_candidates,
     notify_only_high_priority: strategy.notify_only_high_priority
   };
-}
-
-function formatRatio(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function NumberField({
-  label,
-  register,
-  error,
-  min,
-  max,
-  step
-}: {
-  label: string;
-  register: ReturnType<ReturnType<typeof useForm<StrategyFormValues>>["register"]>;
-  error?: string;
-  min?: number;
-  max?: number;
-  step?: number;
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium text-[var(--color-muted)]">{label}</span>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        step={step}
-        className={`h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 text-sm tabular-nums ${
-          error ? "border-[var(--color-danger)]" : ""
-        }`}
-        {...register}
-      />
-      {error ? <span className="text-[11px] text-[var(--color-danger)]">{error}</span> : null}
-    </label>
-  );
 }
