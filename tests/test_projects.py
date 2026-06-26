@@ -111,8 +111,15 @@ def test_get_nonexistent_project(client):
     assert "not found" in response.json()["detail"].lower()
 
 
-def test_create_project_persists_embedding_metadata(client, test_db):
-    """Creating a project should also persist semantic embedding metadata."""
+def test_create_project_defers_embedding_to_backfill_task(client, test_db):
+    """Creating a project should NOT compute the embedding inline.
+
+    The heavy SBERT ``model.encode`` is moved off the synchronous request path:
+    ``POST /projects`` returns immediately and enqueues a
+    ``rebuild_project_embeddings`` worker task. On the in-memory eager broker
+    (tests) with ``CELERY_ALLOW_INLINE_ML_TASKS=false`` the task is only queued,
+    so the row has no embedding metadata until a worker runs the backfill.
+    """
     response = client.post(
         "/api/v1/projects/",
         json={
@@ -125,7 +132,41 @@ def test_create_project_persists_embedding_metadata(client, test_db):
     )
 
     assert response.status_code == 200
-    project = test_db.query(Project).filter(Project.id == response.json()["id"]).first()
+    project_id = response.json()["id"]
+    project = test_db.query(Project).filter(Project.id == project_id).first()
+    assert project is not None
+    # Embedding is deferred to the async backfill task; nothing computed inline.
+    # Columns keep their schema defaults ("" / "[]") rather than a real vector.
+    assert project.semantic_text == ""
+    assert project.embedding_payload == "[]"
+    assert project.embedding_model is None
+    assert project.embedding_updated_at is None
+
+
+def test_create_project_embedding_backfill_task_populates_metadata(client, test_db):
+    """Running the enqueued backfill task fills in the deferred embedding metadata."""
+    from app.tasks.jobs import rebuild_project_embeddings as rebuild_project_embeddings_task
+
+    response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "AI 데이터 분석 플랫폼 구축",
+            "description": "AI 분석과 데이터 시각화 기능을 포함한 플랫폼을 구축합니다.",
+            "requirements": "데이터 파이프라인, 대시보드, 운영 지원이 필요합니다.",
+            "budget_estimate": 120000000.0,
+            "category": "software",
+        },
+    )
+    assert response.status_code == 200
+    project_id = response.json()["id"]
+
+    # Simulate the worker draining the enqueued single-project backfill.
+    result = rebuild_project_embeddings_task.run(project_ids=[project_id])
+    assert result["processed_count"] == 1
+    assert result["requested_project_ids"] == [project_id]
+
+    test_db.expire_all()
+    project = test_db.query(Project).filter(Project.id == project_id).first()
     assert project is not None
     assert project.semantic_text
     assert project.embedding_payload.startswith("[")

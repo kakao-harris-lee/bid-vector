@@ -17,6 +17,7 @@ from app.schemas.schemas import (
 )
 from app.services.project_similarity import ProjectSimilarityService
 from app.tasks.jobs import (
+    enqueue_project_embedding_backfill,
     enqueue_project_embedding_rebuild,
     get_project_embedding_rebuild_task_status,
 )
@@ -42,10 +43,16 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         deadline=project.deadline,
     )
     db.add(db_project)
-    db.flush()
-    ProjectSimilarityService().refresh_project_embedding(db, db_project)
     db.commit()
     db.refresh(db_project)
+
+    # Move the heavy SBERT model.encode off the synchronous request path: the
+    # semantic embedding for this new project is computed by the
+    # rebuild_project_embeddings worker task (eventual, seconds in production)
+    # instead of inline. The semantic similarity search (POST /{id}/similar) and
+    # the on-demand refresh endpoint still recompute on demand, so newly created
+    # rows are not invisible to callers that explicitly query for them.
+    enqueue_project_embedding_backfill([db_project.id])
 
     return db_project
 
