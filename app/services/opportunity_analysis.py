@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -169,6 +170,20 @@ def _detect_awarded_contract_limit_risks(
     ]
 
 
+@dataclass(frozen=True)
+class _AnalysisScores:
+    """Bundle of the per-analysis derived scores produced by ``_compute_scores``.
+
+    A plain value carrier so ``analyze_project`` can keep its existing local
+    variable names. Holds the exact float values the inline code produced — no
+    additional rounding or transformation happens in this container.
+    """
+
+    competitiveness_score: float
+    expected_margin_score: float
+    execution_complexity_score: float
+
+
 class OpportunityAnalysisService:
     """Combine fit, price, market, similarity, and action guidance into one analysis."""
 
@@ -284,16 +299,6 @@ class OpportunityAnalysisService:
             bid_recommendation=bid_recommendation,
         )
 
-        competitiveness_score = calculate_competitiveness_score(
-            recommended_amount,
-            project_data={
-                "budget": float(project.budget_estimate or 0.0),
-                "category": project.category or "other",
-            },
-            market_data=market_insights,
-        )
-        market_insights["competitiveness_score"] = round(float(competitiveness_score), 4)
-
         deadline_hours_remaining = self._compute_deadline_hours_remaining(project)
         current_active_bids, current_workload_score, workload_source = self._resolve_workload_context(
             db,
@@ -302,7 +307,27 @@ class OpportunityAnalysisService:
             exclude_project_id=project.id,
         )
 
-        probability_score = self._estimate_probability_score(
+        scores = self._compute_scores(
+            project=project,
+            classification=classification,
+            price_prediction=price_prediction,
+            recommended_amount=recommended_amount,
+            market_insights=market_insights,
+            capacity_score=float(profile.capacity_score or 0.0),
+            deadline_hours_remaining=deadline_hours_remaining,
+            current_active_bids=current_active_bids,
+            max_active_bids=request.max_active_bids,
+        )
+        competitiveness_score = scores.competitiveness_score
+        expected_margin_score = scores.expected_margin_score
+        execution_complexity_score = scores.execution_complexity_score
+
+        category_priority_override = resolve_category_priority_override(strategy, project.category)
+        matched_score = self._apply_category_priority_override(
+            float(classification["score"]),
+            category_priority_override * 0.5,
+        )
+        probability_score = self._resolve_final_probability_score(
             classification=classification,
             price_prediction=price_prediction,
             bid_recommendation=bid_recommendation,
@@ -311,42 +336,8 @@ class OpportunityAnalysisService:
             capacity_score=float(profile.capacity_score or 0.0),
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
-        )
-        # When a settlement-calibrated curve is published, replace the heuristic
-        # P(낙찰) with the calibrated value; otherwise keep the heuristic. The
-        # non-matched 0.49 gate is preserved either way. (Offline / fresh
-        # environments fall back to the heuristic unchanged.)
-        probability_score = self._apply_calibrated_or_heuristic_probability(
-            heuristic_probability=probability_score,
-            classification=classification,
-            price_prediction=price_prediction,
             business_group=business_group,
-        )
-        category_priority_override = resolve_category_priority_override(strategy, project.category)
-        matched_score = self._apply_category_priority_override(
-            float(classification["score"]),
-            category_priority_override * 0.5,
-        )
-        probability_score = self._apply_category_priority_override(
-            probability_score,
-            category_priority_override,
-        )
-        if not classification.get("matched", False):
-            probability_score = min(probability_score, self.NON_MATCHED_PROBABILITY_CAP)
-        expected_margin_score = self._estimate_expected_margin_score(
-            project=project,
-            recommended_amount=recommended_amount,
-            price_prediction=price_prediction,
-            competitiveness_score=float(competitiveness_score),
-            capacity_score=float(profile.capacity_score or 0.0),
-        )
-        execution_complexity_score = self._estimate_execution_complexity_score(
-            project=project,
-            classification=classification,
-            deadline_hours_remaining=deadline_hours_remaining,
-            current_active_bids=current_active_bids,
-            max_active_bids=request.max_active_bids,
-            capacity_score=float(profile.capacity_score or 0.0),
+            category_priority_override=category_priority_override,
         )
 
         decision = self.decision_service.evaluate_opportunity(
@@ -398,6 +389,168 @@ class OpportunityAnalysisService:
                 f"운영 전략에서 {project.category or '미분류'} 카테고리 우선순위를 낮춰 보수적으로 평가했습니다."
             )
 
+        return self._build_analysis_response(
+            project=project,
+            operator=operator,
+            request=request,
+            classification=classification,
+            matched_score=matched_score,
+            probability_score=probability_score,
+            recommended_amount=recommended_amount,
+            deadline_hours_remaining=deadline_hours_remaining,
+            current_active_bids=current_active_bids,
+            current_workload_score=current_workload_score,
+            workload_source=workload_source,
+            category_priority_override=category_priority_override,
+            decision=decision,
+            strengths=strengths,
+            risk_flags=risk_flags,
+            market_insights=market_insights,
+            price_prediction=price_prediction,
+            bid_recommendation=bid_recommendation,
+            similar_projects=similar_projects,
+        )
+
+    def _compute_scores(
+        self,
+        *,
+        project: Project,
+        classification: dict,
+        price_prediction: dict,
+        recommended_amount: float,
+        market_insights: dict,
+        capacity_score: float,
+        deadline_hours_remaining: int | None,
+        current_active_bids: int,
+        max_active_bids: int,
+    ) -> _AnalysisScores:
+        """Compute the competitiveness, expected-margin, and execution-complexity scores.
+
+        Pure extraction of the three derived score computations from
+        ``analyze_project``. Competitiveness is computed first and writes its
+        rounded value back into ``market_insights`` exactly as the inline code
+        did (so the market block in the response is unchanged), then margin and
+        complexity reuse the existing ``_estimate_*`` helpers with identical
+        arguments. No values are altered here.
+        """
+        competitiveness_score = calculate_competitiveness_score(
+            recommended_amount,
+            project_data={
+                "budget": float(project.budget_estimate or 0.0),
+                "category": project.category or "other",
+            },
+            market_data=market_insights,
+        )
+        market_insights["competitiveness_score"] = round(float(competitiveness_score), 4)
+
+        expected_margin_score = self._estimate_expected_margin_score(
+            project=project,
+            recommended_amount=recommended_amount,
+            price_prediction=price_prediction,
+            competitiveness_score=float(competitiveness_score),
+            capacity_score=capacity_score,
+        )
+        execution_complexity_score = self._estimate_execution_complexity_score(
+            project=project,
+            classification=classification,
+            deadline_hours_remaining=deadline_hours_remaining,
+            current_active_bids=current_active_bids,
+            max_active_bids=max_active_bids,
+            capacity_score=capacity_score,
+        )
+        return _AnalysisScores(
+            competitiveness_score=competitiveness_score,
+            expected_margin_score=expected_margin_score,
+            execution_complexity_score=execution_complexity_score,
+        )
+
+    def _resolve_final_probability_score(
+        self,
+        *,
+        classification: dict,
+        price_prediction: dict,
+        bid_recommendation: dict,
+        similar_projects: dict,
+        competitiveness_score: float,
+        capacity_score: float,
+        current_active_bids: int,
+        max_active_bids: int,
+        business_group: str | None,
+        category_priority_override: float,
+    ) -> float:
+        """Resolve the final pursuit ``probability_score`` through its full override chain.
+
+        Pure extraction of the probability_score reassignment chain from
+        ``analyze_project``. The reassignment order, operations, and honesty-spec
+        gates are byte-identical to the inline code:
+
+          1. heuristic blend via ``_estimate_probability_score``
+          2. calibrated-or-heuristic override via
+             ``_apply_calibrated_or_heuristic_probability`` (preserves the 0.49
+             non-matched cap internally)
+          3. category-priority offset via ``_apply_category_priority_override``
+          4. non-matched 0.49 cap re-applied last
+
+        The ``matched_score`` override (which uses ``override * 0.5`` and is
+        independent of this chain) stays in ``analyze_project``.
+        """
+        probability_score = self._estimate_probability_score(
+            classification=classification,
+            price_prediction=price_prediction,
+            bid_recommendation=bid_recommendation,
+            similar_projects=similar_projects,
+            competitiveness_score=competitiveness_score,
+            capacity_score=capacity_score,
+            current_active_bids=current_active_bids,
+            max_active_bids=max_active_bids,
+        )
+        # When a settlement-calibrated curve is published, replace the heuristic
+        # P(낙찰) with the calibrated value; otherwise keep the heuristic. The
+        # non-matched 0.49 gate is preserved either way. (Offline / fresh
+        # environments fall back to the heuristic unchanged.)
+        probability_score = self._apply_calibrated_or_heuristic_probability(
+            heuristic_probability=probability_score,
+            classification=classification,
+            price_prediction=price_prediction,
+            business_group=business_group,
+        )
+        probability_score = self._apply_category_priority_override(
+            probability_score,
+            category_priority_override,
+        )
+        if not classification.get("matched", False):
+            probability_score = min(probability_score, self.NON_MATCHED_PROBABILITY_CAP)
+        return probability_score
+
+    def _build_analysis_response(
+        self,
+        *,
+        project: Project,
+        operator: User,
+        request: OpportunityAnalysisRequest,
+        classification: dict,
+        matched_score: float,
+        probability_score: float,
+        recommended_amount: float,
+        deadline_hours_remaining: int | None,
+        current_active_bids: int,
+        current_workload_score: float,
+        workload_source: str,
+        category_priority_override: float,
+        decision: dict,
+        strengths: list[str],
+        risk_flags: list[str],
+        market_insights: dict,
+        price_prediction: dict,
+        bid_recommendation: dict,
+        similar_projects: dict,
+    ) -> dict:
+        """Assemble the final analysis response dict.
+
+        Pure extraction of the terminal ``return {...}`` in ``analyze_project``.
+        Field names, values, ordering, and the nested ``_build_summary`` call are
+        unchanged.
+        """
         return {
             "project_id": project.id,
             "project_title": project.title,
