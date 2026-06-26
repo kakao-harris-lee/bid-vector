@@ -10,6 +10,7 @@ from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_r
 from app.ai.business_group import resolve_business_group
 from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import get_price_insights, predict_price
+from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import (
     ensure_operator_account,
     ensure_operator_profile,
@@ -171,8 +172,26 @@ def _detect_awarded_contract_limit_risks(
 class OpportunityAnalysisService:
     """Combine fit, price, market, similarity, and action guidance into one analysis."""
 
-    ACTIVE_DECISION_STATUSES = ("planned", "reviewing")
+    ACTIVE_DECISION_STATUSES = _ACTIVE_DECISION_STATUSES
     DEFAULT_SIMILARITY_SCORE = 0.35
+    # Upper bound on probability_score for notices that did NOT match the
+    # operator profile. This is the honesty-spec non-matched gate / invariant:
+    # an unmatched notice can never present as a high-pursuit opportunity,
+    # regardless of heuristic or calibrated inputs. Value is load-bearing — do
+    # not change it; this only names the existing 0.49 literal.
+    NON_MATCHED_PROBABILITY_CAP = 0.49
+    # Weights that blend the main analysis signals into the pursuit
+    # probability_score (see _estimate_probability_score). These weights are
+    # specific to THIS module's probability_score composition and are unrelated
+    # to the BidDecisionService opportunity-score weights in allocation.py or
+    # the paper-bidding P(win) fallback weights — do not merge them. The six
+    # weights sum to 1.0.
+    PROBABILITY_BLEND_CLASSIFICATION_WEIGHT = 0.34
+    PROBABILITY_BLEND_RECOMMENDATION_WEIGHT = 0.22
+    PROBABILITY_BLEND_PRICE_WEIGHT = 0.14
+    PROBABILITY_BLEND_COMPETITIVENESS_WEIGHT = 0.18
+    PROBABILITY_BLEND_SIMILARITY_WEIGHT = 0.07
+    PROBABILITY_BLEND_CAPACITY_WEIGHT = 0.05
     EXECUTION_COMPLEXITY_KEYWORDS = (
         "통합",
         "고도화",
@@ -313,7 +332,7 @@ class OpportunityAnalysisService:
             category_priority_override,
         )
         if not classification.get("matched", False):
-            probability_score = min(probability_score, 0.49)
+            probability_score = min(probability_score, self.NON_MATCHED_PROBABILITY_CAP)
         expected_margin_score = self._estimate_expected_margin_score(
             project=project,
             recommended_amount=recommended_amount,
@@ -588,16 +607,16 @@ class OpportunityAnalysisService:
         normalized_capacity = self._normalize_capacity_score(capacity_score)
 
         probability_score = (
-            float(classification.get("score", 0.0)) * 0.34
-            + float(bid_recommendation.get("confidence_score", 0.0)) * 0.22
-            + float(price_prediction.get("confidence_score", 0.0)) * 0.14
-            + float(competitiveness_score) * 0.18
-            + similarity_signal * 0.07
-            + normalized_capacity * 0.05
+            float(classification.get("score", 0.0)) * self.PROBABILITY_BLEND_CLASSIFICATION_WEIGHT
+            + float(bid_recommendation.get("confidence_score", 0.0)) * self.PROBABILITY_BLEND_RECOMMENDATION_WEIGHT
+            + float(price_prediction.get("confidence_score", 0.0)) * self.PROBABILITY_BLEND_PRICE_WEIGHT
+            + float(competitiveness_score) * self.PROBABILITY_BLEND_COMPETITIVENESS_WEIGHT
+            + similarity_signal * self.PROBABILITY_BLEND_SIMILARITY_WEIGHT
+            + normalized_capacity * self.PROBABILITY_BLEND_CAPACITY_WEIGHT
         )
 
         if not classification.get("matched", False):
-            probability_score = min(probability_score, 0.49)
+            probability_score = min(probability_score, self.NON_MATCHED_PROBABILITY_CAP)
 
         if current_active_bids >= max_active_bids:
             probability_score -= 0.05
@@ -632,7 +651,7 @@ class OpportunityAnalysisService:
         if calibrated is not None:
             probability = calibrated
         if not classification.get("matched", False):
-            probability = min(probability, 0.49)
+            probability = min(probability, self.NON_MATCHED_PROBABILITY_CAP)
         return round(max(0.0, min(1.0, probability)), 2)
 
     def _apply_category_priority_override(self, score: float, override: float) -> float:

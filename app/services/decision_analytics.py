@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
 from app.models.models import (
@@ -50,7 +51,7 @@ def parse_analytics_event_data(raw: str | None) -> dict[str, Any]:
 class DecisionAnalyticsService:
     """Build operator-facing analytics from persisted bid decision records."""
 
-    ACTIVE_DECISION_STATUSES = {"planned", "reviewing"}
+    ACTIVE_DECISION_STATUSES = _ACTIVE_DECISION_STATUSES
     UNKNOWN_CATEGORY = "uncategorized"
     UNKNOWN_AGENCY = "unknown"
     DEFAULT_WORKLOAD_SOURCE = "provided"

@@ -5,6 +5,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.constants import ACTIVE_DECISION_STATUSES
 from app.core.database import get_db
 from app.core.security import (
     CANONICAL_OPERATOR_USERNAME,
@@ -754,7 +755,7 @@ def get_operator_dashboard(
         db.query(BidDecisionRecord)
         .filter(
             BidDecisionRecord.operator_id == operator.id,
-            BidDecisionRecord.decision_status.in_(["planned", "reviewing"]),
+            BidDecisionRecord.decision_status.in_(ACTIVE_DECISION_STATUSES),
         )
         .count()
     )
