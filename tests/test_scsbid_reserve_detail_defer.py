@@ -285,7 +285,10 @@ def test_backfill_fetches_and_persists_reserve_prices(test_db, monkeypatch):
         "requested": 1,
         "fetched": 1,
         "skipped_existing": 0,
+        "not_settled": 0,
         "errors": 0,
+        "error_types": {},
+        "error_samples": [],
     }
     test_db.expire_all()
     stored = (
@@ -370,6 +373,10 @@ def test_backfill_one_failure_does_not_abort_chunk(test_db, monkeypatch):
     assert out["fetched"] == 2
     assert out["errors"] == 1
     assert out["requested"] == 3
+    # Diagnostics: the previously-swallowed exception is now surfaced so the
+    # cause of a failing cycle is visible in the result dict / summary log.
+    assert out["error_types"] == {"ValueError": 1}
+    assert "ValueError: KONEPS HTTP 500" in out["error_samples"]
     test_db.expire_all()
     for nn in ("OK-1", "OK-2"):
         stored = (
@@ -384,6 +391,52 @@ def test_backfill_one_failure_does_not_abort_chunk(test_db, monkeypatch):
         .one()
     )
     assert json.loads(boom.reserve_prices) == []  # failed fetch left it empty
+
+
+def test_backfill_empty_reserve_counts_as_not_settled(test_db, monkeypatch):
+    """A successful fetch with no reserve yet is benign (not_settled), not an error.
+
+    Distinguishes the "notice closed but not opened" case from real fetch
+    failures so a cycle of unsettled notices does not look like errors.
+    """
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    test_db.add(
+        HistoricalData(
+            notice_number="UNSETTLED", reserve_prices="[]", selected_numbers="[]"
+        )
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [],
+            "selected_numbers": [],
+        },
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "UNSETTLED", "category": "service"}]
+    )
+
+    assert out["not_settled"] == 1
+    assert out["fetched"] == 0
+    assert out["errors"] == 0
+    assert out["error_types"] == {}
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "UNSETTLED")
+        .one()
+    )
+    assert json.loads(stored.reserve_prices) == []  # untouched, retried later
 
 
 # ---------------------------------------------------------------------------
