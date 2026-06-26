@@ -19,6 +19,7 @@ from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.decision_experiments import DecisionExperimentService
 from app.tasks.celery_app import (
+    BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME,
     COLLECT_G2_EVIDENCE_TASK_NAME,
     COLLECT_KONEPS_NOTICES_TASK_NAME,
     DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
@@ -113,10 +114,21 @@ def collect_koneps_notices(
             db.commit()
             db.refresh(crawl_job)
 
-        result = service.collect_notices(request, db=db)
-        # Defer embeddings only on this time-limited Celery path; synchronous
-        # callers embed inline (see persist_crawl_results docstring).
-        defer_embeddings = service._is_scsbid_openapi_source(request.source)
+        # Defer embeddings AND the per-notice scsbid reserve-detail HTTP fetch
+        # only on this time-limited Celery path; synchronous callers do both
+        # inline (see persist_crawl_results / collect_notices docstrings). The
+        # inline reserve-detail fetch (one throttled HTTP call per non-settled
+        # award, thousands per sweep) is what blew past the hard time limit and
+        # spun a 0-row redelivery loop; deferring it to a bounded backfill keeps
+        # the collection task short.
+        is_scsbid = service._is_scsbid_openapi_source(request.source)
+        defer_embeddings = is_scsbid
+        defer_reserve_detail = (
+            bool(settings.KONEPS_SCSBID_RESERVE_DETAIL_DEFER) and is_scsbid
+        )
+        result = service.collect_notices(
+            request, db=db, defer_reserve_detail=defer_reserve_detail
+        )
         crawl_job = service.persist_crawl_results(
             db, crawl_job, request, result, defer_embeddings=defer_embeddings
         )
@@ -125,6 +137,12 @@ def collect_koneps_notices(
         deferred_ids = result.get("metadata", {}).get("deferred_embedding_project_ids")
         if deferred_ids:
             _enqueue_deferred_embedding_backfill(list(deferred_ids))
+
+        deferred_reserve = result.get("metadata", {}).get(
+            "deferred_reserve_detail_notices"
+        )
+        if deferred_reserve:
+            _enqueue_deferred_reserve_detail_backfill(list(deferred_reserve))
 
         return result
     except SoftTimeLimitExceeded as exc:
@@ -279,6 +297,210 @@ def enqueue_project_embedding_backfill(project_ids: list[int]) -> int:
     Returns the number of tasks enqueued (0 on empty input or failure).
     """
     return _enqueue_deferred_embedding_backfill(project_ids)
+
+
+def _normalize_deferred_reserve_notices(
+    notices: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """De-duplicate and clean the deferred reserve-detail notice payloads.
+
+    Each entry needs a non-empty ``notice_number``; ``category`` is optional and
+    only selects the reserve-detail operation. Order-preserving dedupe on the
+    (notice_number, category) pair keeps the backfill from re-fetching the same
+    notice twice within one chunk set.
+    """
+    cleaned: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in notices or []:
+        if not isinstance(entry, dict):
+            continue
+        notice_number = str(entry.get("notice_number") or "").strip()
+        if not notice_number:
+            continue
+        category = str(entry.get("category") or "").strip()
+        key = (notice_number, category)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append({"notice_number": notice_number, "category": category})
+    return cleaned
+
+
+def _enqueue_deferred_reserve_detail_backfill(notices: list[dict[str, Any]]) -> int:
+    """Queue async reserve-detail fetch task(s) for notices deferred by the crawl.
+
+    Mirrors :func:`_enqueue_deferred_embedding_backfill`: the deferred notices are
+    split into bounded chunks (``KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE``)
+    and enqueued as separate ``backfill_scsbid_reserve_detail`` tasks so a large
+    catch-up sweep cannot run as one unbounded task that re-creates the time-limit
+    redelivery loop on the ops queue.
+
+    Unlike the embedding backfill this is NOT an ML task, so it bypasses the
+    ``_enqueue_ml_task`` inline-ML guard and enqueues directly onto the ops queue
+    (same pattern as ``collect_koneps_notices.apply_async``).
+
+    Isolated with a try/except so a failed enqueue never breaks a successful
+    crawl. Returns the number of tasks enqueued (0 on empty input or failure).
+    """
+    cleaned = _normalize_deferred_reserve_notices(notices)
+    if not cleaned:
+        return 0
+
+    chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
+    enqueued = 0
+    try:
+        for start in range(0, len(cleaned), chunk_size):
+            chunk = cleaned[start:start + chunk_size]
+            backfill_scsbid_reserve_detail.apply_async(
+                kwargs={"notices": chunk},
+                queue=settings.CELERY_OPS_QUEUE,
+            )
+            enqueued += 1
+    except Exception:  # pragma: no cover - defensive: enqueue must not break crawl
+        logger.exception(
+            "deferred reserve-detail backfill enqueue failed for %d notice(s)",
+            len(cleaned),
+        )
+    return enqueued
+
+
+@celery_app.task(bind=True, name=BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME)
+def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
+    """Fetch deferred scsbid reserve-detail rows and persist them per notice.
+
+    Async companion to the deferral added in ``collect_koneps_notices``: the
+    time-limited collection task no longer issues a per-notice reserve-detail HTTP
+    call inline (which spun a 0-row redelivery loop past the hard time limit); it
+    surfaces the not-yet-settled notices and enqueues bounded chunks here instead.
+
+    For each ``{"notice_number", "category"}``:
+
+    * Idempotency — if the notice's ``HistoricalData.reserve_prices`` is already a
+      non-empty settled value it is skipped (a reserve price is immutable, so a
+      re-run after a partial crash never re-pays the HTTP cost).
+    * Otherwise the reserve detail is fetched (one throttled HTTP call) and the
+      resulting ``reserve_prices`` / ``selected_numbers`` are written onto the
+      matching ``HistoricalData`` row as JSON.
+
+    Partial-progress preservation: progress is committed in small batches so a
+    SIGKILL / soft-time-limit mid-chunk still keeps what was already fetched. On
+    ``SoftTimeLimitExceeded`` the work done so far is committed and a graceful
+    summary is returned (no redelivery loop). A single notice failing (HTTP or
+    parse) is caught per-notice and counted, never aborting the chunk.
+    """
+    import json
+    from time import sleep
+
+    from app.models.models import HistoricalData
+
+    cleaned = _normalize_deferred_reserve_notices(notices)
+    service = KonepsCollectorService()
+    service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
+    delay_seconds = max(
+        0.0, float(settings.KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS or 0.0)
+    )
+    commit_every = 25
+
+    requested = len(cleaned)
+    fetched = 0
+    skipped_existing = 0
+    errors = 0
+    processed_since_commit = 0
+
+    db = SessionLocal()
+    try:
+        if not service_key:
+            # No key -> nothing fetchable; surface as errors without HTTP.
+            return {
+                "requested": requested,
+                "fetched": 0,
+                "skipped_existing": 0,
+                "errors": requested,
+                "error": "missing_service_key",
+            }
+
+        for index, entry in enumerate(cleaned):
+            notice_number = entry["notice_number"]
+            category = entry["category"] or None
+            try:
+                record = (
+                    db.query(HistoricalData)
+                    .filter(HistoricalData.notice_number == notice_number)
+                    .order_by(HistoricalData.id.asc())
+                    .first()
+                )
+                # Idempotency: a settled, non-empty reserve price is immutable.
+                if record is not None and service._has_persisted_reserve_prices(
+                    record
+                ):
+                    skipped_existing += 1
+                    continue
+
+                if index > 0 and delay_seconds > 0:
+                    sleep(delay_seconds)
+
+                detail = service._fetch_scsbid_reserve_detail(
+                    {"bidNtceNo": notice_number},
+                    category=category,
+                    service_key=service_key,
+                )
+                reserve_prices = detail.get("reserve_prices") or []
+                selected_numbers = detail.get("selected_numbers") or []
+                if not reserve_prices:
+                    # Nothing settled yet for this notice; leave the row untouched
+                    # so a later run can re-fetch when it settles.
+                    continue
+
+                if record is None:
+                    record = HistoricalData(notice_number=notice_number)
+                    db.add(record)
+                record.reserve_prices = json.dumps(reserve_prices, ensure_ascii=False)
+                record.selected_numbers = json.dumps(
+                    selected_numbers, ensure_ascii=False
+                )
+                fetched += 1
+                processed_since_commit += 1
+
+                if processed_since_commit >= commit_every:
+                    db.commit()
+                    processed_since_commit = 0
+            except SoftTimeLimitExceeded:
+                # Preserve progress so far and stop gracefully (no redelivery loop).
+                db.commit()
+                logger.warning(
+                    "backfill_scsbid_reserve_detail hit soft time limit "
+                    "(fetched=%s skipped=%s errors=%s of %s)",
+                    fetched,
+                    skipped_existing,
+                    errors,
+                    requested,
+                )
+                return {
+                    "requested": requested,
+                    "fetched": fetched,
+                    "skipped_existing": skipped_existing,
+                    "errors": errors,
+                    "soft_time_limit_exceeded": True,
+                }
+            except Exception:  # noqa: BLE001 — one notice must not abort the chunk
+                errors += 1
+                logger.warning(
+                    "backfill_scsbid_reserve_detail failed for notice_number=%s",
+                    notice_number,
+                )
+
+        db.commit()
+        return {
+            "requested": requested,
+            "fetched": fetched,
+            "skipped_existing": skipped_existing,
+            "errors": errors,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)

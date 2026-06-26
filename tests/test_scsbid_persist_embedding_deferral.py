@@ -165,7 +165,7 @@ def test_collect_task_reuses_crawl_job_on_redelivery(test_db, monkeypatch):
     monkeypatch.setattr(
         KonepsCollectorService,
         "collect_notices",
-        lambda self, request, db=None: dict(response),
+        lambda self, request, db=None, **kwargs: dict(response),
     )
     # Keep the embedding model out of the task path entirely.
     monkeypatch.setattr(
@@ -294,7 +294,7 @@ def test_sync_crawl_route_embeds_scsbid_inline(client, test_db, monkeypatch):
     monkeypatch.setattr(
         KonepsCollectorService,
         "collect_notices",
-        lambda self, request, db=None: _award_response(
+        lambda self, request, db=None, **kwargs: _award_response(
             "R-SCSBID-ROUTE", source="scsbid-openapi"
         ),
     )

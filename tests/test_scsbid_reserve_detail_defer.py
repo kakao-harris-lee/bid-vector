@@ -1,0 +1,440 @@
+"""Tests for deferring the scsbid reserve-detail HTTP fetch out of the crawl task.
+
+Background (fix/scsbid-reserve-detail-defer)
+--------------------------------------------
+The 6-hourly scsbid (open-bid result) sweep ran one reserve-detail HTTP call —
+each preceded by a throttle sleep — *inline* per non-settled award. Across 3
+categories x up to 30 pages x 100 rows that is up to ~9,000 sequential calls
+whose sleeps alone exceeded the Celery hard time limit (1800s). The SIGKILLed
+task was redelivered (task_acks_late) and, because persist only ran after the
+*whole* sweep completed, every run persisted 0 rows — so the same notices were
+re-fetched forever.
+
+This mirrors the embedding defer+chunk pattern (PR#82) onto reserve-detail:
+
+1. ``_collect_scsbid_openapi_items(defer_reserve_detail=True)`` skips the inline
+   ``_fetch_scsbid_reserve_detail`` call (and its sleep) and instead records the
+   not-yet-settled notices as ``(notice_number, category)`` in
+   ``metadata['deferred_reserve_detail_notices']``.
+2. ``defer_reserve_detail=False`` (synchronous callers) keeps the inline fetch.
+3. ``backfill_scsbid_reserve_detail`` fetches those notices async, persisting the
+   reserve price onto ``HistoricalData`` — idempotent (skips already-settled),
+   and one notice failing does not abort the chunk.
+4. ``_enqueue_deferred_reserve_detail_backfill`` splits a large set into bounded
+   chunks (one task per chunk).
+
+All external HTTP is mocked; no real KONEPS calls under ``ENVIRONMENT=test``.
+"""
+
+from __future__ import annotations
+
+import json
+
+from app.core.config import settings
+from app.models.models import HistoricalData
+from app.schemas.schemas import CrawlRequest
+from app.services.koneps.collector import KonepsCollectorService
+
+
+class FakeOpenApiResponse:
+    status_code = 200
+    text = "{}"
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def _award_body(items, *, total_count, num_of_rows, page_no=1):
+    return {
+        "response": {
+            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
+            "body": {
+                "items": {"item": items},
+                "numOfRows": str(num_of_rows),
+                "pageNo": str(page_no),
+                "totalCount": str(total_count),
+            },
+        }
+    }
+
+
+def _award_item(notice_number, *, title="테스트 낙찰", amount="88,000,000"):
+    return {
+        "bidNtceNo": notice_number,
+        "bidNtceOrd": "000",
+        "bidClsfcNo": "0",
+        "rbidNo": "0",
+        "bidNtceNm": title,
+        "prtcptCnum": "10",
+        "bidwinnrNm": "낙찰사",
+        "bidwinnrBizno": "1234567890",
+        "sucsfbidAmt": amount,
+        "sucsfbidRate": "88.0",
+        "rlOpengDt": "2026-05-13 11:00:00",
+        "dminsttNm": "서울특별시",
+        "rgstDt": "2026-05-13 12:00:00",
+        "fnlSucsfDate": "2026-05-13",
+    }
+
+
+def _reserve_detail_body():
+    """A reserve-detail response carrying two reserve-price rows."""
+    return {
+        "response": {
+            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
+            "body": {
+                "items": {
+                    "item": [
+                        {
+                            "compnoRsrvtnPrceSno": "1",
+                            "bsisPlnprc": "101000000",
+                            "plnprc": "100000000",
+                            "bssamt": "100000000",
+                            "drwtYn": "Y",
+                        },
+                        {
+                            "compnoRsrvtnPrceSno": "2",
+                            "bsisPlnprc": "102000000",
+                            "plnprc": "100000000",
+                            "bssamt": "100000000",
+                            "drwtYn": "N",
+                        },
+                    ]
+                },
+                "numOfRows": "100",
+                "pageNo": "1",
+                "totalCount": "2",
+            },
+        }
+    }
+
+
+def _scsbid_request():
+    return CrawlRequest(
+        source="scsbid-openapi",
+        categories=["construction"],
+        start_date="20260501",
+        end_date="20260507",
+        collect_reserve_detail=True,
+        execution_mode="auto",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. defer_reserve_detail=True: no inline fetch, notices surfaced for backfill.
+# ---------------------------------------------------------------------------
+def test_defer_true_skips_inline_fetch_and_surfaces_notices(test_db, monkeypatch):
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+
+    fetch_calls: list[str] = []
+
+    def _spy_fetch(self, raw_item, *, category, service_key):
+        fetch_calls.append(str(raw_item.get("bidNtceNo")))
+        return {"reserve_prices": [1], "selected_numbers": []}
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _spy_fetch
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body(
+                [_award_item("NEW-A"), _award_item("NEW-B")],
+                total_count=2,
+                num_of_rows=100,
+            )
+        )
+
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    # The inline reserve-detail fetch was never called.
+    assert fetch_calls == []
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    assert {(d["notice_number"], d["category"]) for d in deferred} == {
+        ("NEW-A", "construction"),
+        ("NEW-B", "construction"),
+    }
+    assert result["metadata"]["reserve_detail_deferred_count"] == 2
+    assert result["metadata"]["reserve_detail_collected_count"] == 0
+    # Items still build (with empty reserve detail) so the award row persists.
+    assert {item["notice_number"] for item in result["items"]} == {"NEW-A", "NEW-B"}
+    assert result["items"][0]["metadata"]["reserve_prices"] == []
+
+
+def test_defer_true_omits_already_settled_notice(test_db, monkeypatch):
+    """A notice that already has a persisted reserve price is neither fetched nor deferred."""
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    test_db.add(
+        HistoricalData(
+            notice_number="HAS-RESERVE",
+            reserve_prices=json.dumps([101000000]),
+            selected_numbers="[]",
+        )
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: (_ for _ in ()).throw(
+            AssertionError("must not fetch when deferring")
+        ),
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body(
+                [_award_item("HAS-RESERVE"), _award_item("NEW-AWARD")],
+                total_count=2,
+                num_of_rows=100,
+            )
+        )
+
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    assert [d["notice_number"] for d in deferred] == ["NEW-AWARD"]
+    assert result["metadata"]["reserve_detail_reused_count"] == 1
+    assert result["metadata"]["reserve_detail_deferred_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 2. defer_reserve_detail=False: inline fetch still happens (regression guard).
+# ---------------------------------------------------------------------------
+def test_defer_false_still_fetches_inline(test_db, monkeypatch):
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+
+    reserve_calls: list[str] = []
+
+    def fake_get(url, params, timeout):
+        if "PreparPcDetail" in url:
+            reserve_calls.append(str(params.get("bidNtceNo")))
+            return FakeOpenApiResponse(_reserve_detail_body())
+        return FakeOpenApiResponse(
+            _award_body([_award_item("NEW-AWARD")], total_count=1, num_of_rows=100)
+        )
+
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=False,
+    )
+
+    assert reserve_calls == ["NEW-AWARD"]  # inline fetch preserved
+    assert result["metadata"]["reserve_detail_collected_count"] == 1
+    assert result["metadata"]["reserve_detail_deferred_count"] == 0
+    assert result["metadata"]["deferred_reserve_detail_notices"] == []
+
+
+# ---------------------------------------------------------------------------
+# 3. backfill task: fetch+persist, idempotent skip, per-notice error isolation.
+# ---------------------------------------------------------------------------
+def test_backfill_fetches_and_persists_reserve_prices(test_db, monkeypatch):
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    # Keep the test session open across the task body.
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    # A row exists but with no settled reserve yet (the deferral case).
+    test_db.add(
+        HistoricalData(notice_number="N-1", reserve_prices="[]", selected_numbers="[]")
+    )
+    test_db.commit()
+
+    def _fake_fetch(self, raw_item, *, category, service_key):
+        assert raw_item == {"bidNtceNo": "N-1"}
+        assert category == "construction"
+        return {"reserve_prices": [101000000.0, 102000000.0], "selected_numbers": [1]}
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _fake_fetch
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "N-1", "category": "construction"}]
+    )
+
+    assert out == {
+        "requested": 1,
+        "fetched": 1,
+        "skipped_existing": 0,
+        "errors": 0,
+    }
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "N-1")
+        .one()
+    )
+    assert json.loads(stored.reserve_prices) == [101000000.0, 102000000.0]
+    assert json.loads(stored.selected_numbers) == [1]
+
+
+def test_backfill_skips_already_settled_notice(test_db, monkeypatch):
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    test_db.add(
+        HistoricalData(
+            notice_number="DONE-1",
+            reserve_prices=json.dumps([999]),
+            selected_numbers="[]",
+        )
+    )
+    test_db.commit()
+
+    def _must_not_fetch(self, raw_item, *, category, service_key):
+        raise AssertionError("must not fetch an already-settled notice")
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _must_not_fetch
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "DONE-1", "category": "construction"}]
+    )
+
+    assert out["skipped_existing"] == 1
+    assert out["fetched"] == 0
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "DONE-1")
+        .one()
+    )
+    assert json.loads(stored.reserve_prices) == [999]  # untouched
+
+
+def test_backfill_one_failure_does_not_abort_chunk(test_db, monkeypatch):
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    for nn in ("OK-1", "BOOM", "OK-2"):
+        test_db.add(
+            HistoricalData(notice_number=nn, reserve_prices="[]", selected_numbers="[]")
+        )
+    test_db.commit()
+
+    def _fetch(self, raw_item, *, category, service_key):
+        notice_number = raw_item["bidNtceNo"]
+        if notice_number == "BOOM":
+            raise ValueError("KONEPS HTTP 500")
+        return {"reserve_prices": [123], "selected_numbers": []}
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _fetch
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[
+            {"notice_number": "OK-1", "category": "construction"},
+            {"notice_number": "BOOM", "category": "construction"},
+            {"notice_number": "OK-2", "category": "construction"},
+        ]
+    )
+
+    assert out["fetched"] == 2
+    assert out["errors"] == 1
+    assert out["requested"] == 3
+    test_db.expire_all()
+    for nn in ("OK-1", "OK-2"):
+        stored = (
+            test_db.query(HistoricalData)
+            .filter(HistoricalData.notice_number == nn)
+            .one()
+        )
+        assert json.loads(stored.reserve_prices) == [123]
+    boom = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "BOOM")
+        .one()
+    )
+    assert json.loads(boom.reserve_prices) == []  # failed fetch left it empty
+
+
+# ---------------------------------------------------------------------------
+# 4. enqueue helper: bounded chunking.
+# ---------------------------------------------------------------------------
+def test_enqueue_chunks_large_notice_set(monkeypatch):
+    from app.tasks import jobs
+
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 200
+    )
+
+    captured: list[dict] = []
+
+    def _fake_apply_async(*, kwargs, queue):
+        captured.append({"kwargs": kwargs, "queue": queue})
+        return object()
+
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail, "apply_async", _fake_apply_async
+    )
+
+    notices = [
+        {"notice_number": f"N-{i}", "category": "construction"} for i in range(450)
+    ]
+    enqueued = jobs._enqueue_deferred_reserve_detail_backfill(notices)
+
+    assert enqueued == 3
+    chunk_sizes = [len(call["kwargs"]["notices"]) for call in captured]
+    assert chunk_sizes == [200, 200, 50]
+    assert all(call["queue"] == settings.CELERY_OPS_QUEUE for call in captured)
+
+    # Chunks together cover exactly the input notices with no overlap.
+    flattened = [
+        n["notice_number"] for call in captured for n in call["kwargs"]["notices"]
+    ]
+    assert sorted(flattened) == sorted(n["notice_number"] for n in notices)
+
+
+def test_enqueue_empty_is_noop(monkeypatch):
+    from app.tasks import jobs
+
+    called = {"count": 0}
+
+    def _fake_apply_async(*, kwargs, queue):
+        called["count"] += 1
+        return object()
+
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail, "apply_async", _fake_apply_async
+    )
+
+    assert jobs._enqueue_deferred_reserve_detail_backfill([]) == 0
+    assert called["count"] == 0
