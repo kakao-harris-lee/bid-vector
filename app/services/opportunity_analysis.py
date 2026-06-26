@@ -179,6 +179,18 @@ class OpportunityAnalysisService:
     # regardless of heuristic or calibrated inputs. Value is load-bearing — do
     # not change it; this only names the existing 0.49 literal.
     NON_MATCHED_PROBABILITY_CAP = 0.49
+    # Weights that blend the main analysis signals into the pursuit
+    # probability_score (see _estimate_probability_score). These weights are
+    # specific to THIS module's probability_score composition and are unrelated
+    # to the BidDecisionService opportunity-score weights in allocation.py or
+    # the paper-bidding P(win) fallback weights — do not merge them. The six
+    # weights sum to 1.0.
+    PROBABILITY_BLEND_CLASSIFICATION_WEIGHT = 0.34
+    PROBABILITY_BLEND_RECOMMENDATION_WEIGHT = 0.22
+    PROBABILITY_BLEND_PRICE_WEIGHT = 0.14
+    PROBABILITY_BLEND_COMPETITIVENESS_WEIGHT = 0.18
+    PROBABILITY_BLEND_SIMILARITY_WEIGHT = 0.07
+    PROBABILITY_BLEND_CAPACITY_WEIGHT = 0.05
     EXECUTION_COMPLEXITY_KEYWORDS = (
         "통합",
         "고도화",
@@ -594,12 +606,12 @@ class OpportunityAnalysisService:
         normalized_capacity = self._normalize_capacity_score(capacity_score)
 
         probability_score = (
-            float(classification.get("score", 0.0)) * 0.34
-            + float(bid_recommendation.get("confidence_score", 0.0)) * 0.22
-            + float(price_prediction.get("confidence_score", 0.0)) * 0.14
-            + float(competitiveness_score) * 0.18
-            + similarity_signal * 0.07
-            + normalized_capacity * 0.05
+            float(classification.get("score", 0.0)) * self.PROBABILITY_BLEND_CLASSIFICATION_WEIGHT
+            + float(bid_recommendation.get("confidence_score", 0.0)) * self.PROBABILITY_BLEND_RECOMMENDATION_WEIGHT
+            + float(price_prediction.get("confidence_score", 0.0)) * self.PROBABILITY_BLEND_PRICE_WEIGHT
+            + float(competitiveness_score) * self.PROBABILITY_BLEND_COMPETITIVENESS_WEIGHT
+            + similarity_signal * self.PROBABILITY_BLEND_SIMILARITY_WEIGHT
+            + normalized_capacity * self.PROBABILITY_BLEND_CAPACITY_WEIGHT
         )
 
         if not classification.get("matched", False):

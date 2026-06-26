@@ -57,6 +57,33 @@ class PaperBiddingBacktestService:
     DEFAULT_SETTLE_ACTIONS = ("bid_now",)
     DEFAULT_SCENARIO = "base"
 
+    # Fallback heuristic weights for the backtest P(win) signal, used only when
+    # no settlement-calibrated curve is published (see _estimate_win_probability).
+    # These weights are specific to the backtest P(win) fallback and are
+    # unrelated to the opportunity_analysis probability_score blend weights or
+    # the allocation opportunity-score weights — do not merge them. They sum to
+    # 1.0.
+    WIN_PROBABILITY_MATCHED_WEIGHT = 0.38
+    WIN_PROBABILITY_CONFIDENCE_WEIGHT = 0.42
+    WIN_PROBABILITY_HISTORY_WEIGHT = 0.20
+
+    # Competitiveness heuristic: a paper-bid rate closest to the target rate is
+    # most competitive; the tolerance scales how quickly the score decays away
+    # from the target. Specific to _estimate_competitiveness_score.
+    COMPETITIVENESS_TARGET_RATE = 0.88
+    COMPETITIVENESS_RATE_TOLERANCE = 0.15
+
+    # Budget-tier execution-complexity scores: larger budgets map to higher
+    # complexity. Thresholds are in KRW. Specific to
+    # _estimate_execution_complexity_score.
+    EXECUTION_COMPLEXITY_TIER1_BUDGET = 500_000_000
+    EXECUTION_COMPLEXITY_TIER2_BUDGET = 200_000_000
+    EXECUTION_COMPLEXITY_TIER3_BUDGET = 100_000_000
+    EXECUTION_COMPLEXITY_TIER1_SCORE = 0.82
+    EXECUTION_COMPLEXITY_TIER2_SCORE = 0.68
+    EXECUTION_COMPLEXITY_TIER3_SCORE = 0.52
+    EXECUTION_COMPLEXITY_DEFAULT_SCORE = 0.36
+
     def __init__(self) -> None:
         self.cutoff_service = BacktestCutoffService()
         self.decision_service = BidDecisionService()
@@ -1416,13 +1443,28 @@ class PaperBiddingBacktestService:
         if calibrated is not None:
             return calibrated
         history_signal = min(1.0, max(0.0, history_count / 30))
-        probability = matched_score * 0.38 + confidence * 0.42 + history_signal * 0.20
+        probability = (
+            matched_score * self.WIN_PROBABILITY_MATCHED_WEIGHT
+            + confidence * self.WIN_PROBABILITY_CONFIDENCE_WEIGHT
+            + history_signal * self.WIN_PROBABILITY_HISTORY_WEIGHT
+        )
         return round(max(0.0, min(1.0, probability)), 2)
 
     def _estimate_competitiveness_score(self, paper_bid_rate: float) -> float:
-        target_rate = 0.88
+        target_rate = self.COMPETITIVENESS_TARGET_RATE
         return round(
-            max(0.0, min(1.0, 1.0 - (abs(paper_bid_rate - target_rate) / 0.15))), 2
+            max(
+                0.0,
+                min(
+                    1.0,
+                    1.0
+                    - (
+                        abs(paper_bid_rate - target_rate)
+                        / self.COMPETITIVENESS_RATE_TOLERANCE
+                    ),
+                ),
+            ),
+            2,
         )
 
     def _estimate_expected_margin_score(self, paper_bid_rate: float) -> float:
@@ -1430,13 +1472,13 @@ class PaperBiddingBacktestService:
 
     def _estimate_execution_complexity_score(self, project: Project) -> float:
         budget = self._resolve_project_budget(project)
-        if budget >= 500_000_000:
-            return 0.82
-        if budget >= 200_000_000:
-            return 0.68
-        if budget >= 100_000_000:
-            return 0.52
-        return 0.36
+        if budget >= self.EXECUTION_COMPLEXITY_TIER1_BUDGET:
+            return self.EXECUTION_COMPLEXITY_TIER1_SCORE
+        if budget >= self.EXECUTION_COMPLEXITY_TIER2_BUDGET:
+            return self.EXECUTION_COMPLEXITY_TIER2_SCORE
+        if budget >= self.EXECUTION_COMPLEXITY_TIER3_BUDGET:
+            return self.EXECUTION_COMPLEXITY_TIER3_SCORE
+        return self.EXECUTION_COMPLEXITY_DEFAULT_SCORE
 
     def _deadline_hours_remaining(
         self, *, project: Project, data_cutoff_at: datetime
