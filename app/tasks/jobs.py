@@ -261,6 +261,26 @@ def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> int:
     return enqueued
 
 
+def enqueue_project_embedding_backfill(project_ids: list[int]) -> int:
+    """Queue async embedding rebuild(s) for a specific set of project ids.
+
+    Thin public wrapper over :func:`_enqueue_deferred_embedding_backfill` for
+    request-path callers (e.g. ``POST /projects``) that need to move the heavy
+    SBERT ``model.encode`` off the synchronous request: the freshly created row
+    is embedded later by the ``rebuild_project_embeddings`` worker task instead
+    of inline. Shares the same semantics as the deferred-crawl backfill:
+
+    - ``force=False`` so a brand-new project (no cached vector) is embedded while
+      an unchanged existing project is a no-op.
+    - bounded chunking via ``EMBEDDING_BACKFILL_CHUNK_SIZE``.
+    - honours the ``CELERY_ALLOW_INLINE_ML_TASKS`` guard, so on the in-memory
+      eager broker (tests) the ML task is only queued, never run inline.
+
+    Returns the number of tasks enqueued (0 on empty input or failure).
+    """
+    return _enqueue_deferred_embedding_backfill(project_ids)
+
+
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)
 def train_price_predictor(request_payload: dict[str, Any] | None = None) -> dict:
     """Run price-predictor training in the dedicated ML training queue."""
