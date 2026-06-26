@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_operator_optional, resolve_target_operator
-from app.core.single_user import ensure_operator_account
+from app.core.security import get_current_operator_optional
+from app.core.single_user import ensure_operator_account, resolve_read_operator
 from app.core.time import utc_now
 from app.models.models import Analytics, Bid, BidDecisionRecord, Project, User
 from app.schemas.schemas import (
@@ -49,27 +49,11 @@ router = APIRouter()
 INTERNAL_TELEMETRY_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
 
 
-def _resolve_analytics_operator(
-    db: Session,
-    current_operator: User | None,
-    operator_id: int | None,
-) -> User:
-    """Resolve the operator whose data should drive an analytics payload.
-
-    Falls back to the canonical operator when no bearer token is supplied
-    (preserves backward-compatible behavior for unauthenticated callers).
-    With a bearer token, applies the standard ``resolve_target_operator``
-    permission policy (403/404 are raised inside the helper).
-    """
-    if current_operator is None:
-        fallback = ensure_operator_account(db)
-        if operator_id is None or int(operator_id) == int(fallback.id):
-            return fallback
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view another operator's data",
-        )
-    return resolve_target_operator(db, current_operator, operator_id)
+# Read-scoped operator resolution is shared across analytics/operator/decision
+# endpoints; see app.core.single_user.resolve_read_operator for the security
+# policy (canonical fallback / 403 / 404). Kept as a thin alias so existing
+# call sites and their names remain stable.
+_resolve_analytics_operator = resolve_read_operator
 
 
 def _with_current_operator(payload: dict, operator) -> dict:

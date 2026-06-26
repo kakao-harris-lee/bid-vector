@@ -7,10 +7,16 @@ helpers centralize how the canonical operator account/profile are resolved.
 
 from __future__ import annotations
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, resolve_target_operator
 from app.models.models import CompanyProfile, OperatorStrategy, User
+
+# Shared 403 detail for read-scoped operator resolution. Kept identical to the
+# string raised by ``resolve_target_operator`` so the unauthenticated-fallback
+# path and the authenticated cross-account path return the same message.
+READ_OPERATOR_FORBIDDEN_DETAIL = "Not authorized to view another operator's data"
 
 DEFAULT_OPERATOR_USERNAME = "operator"
 DEFAULT_OPERATOR_EMAIL = "operator@local.bid-vector"
@@ -73,6 +79,42 @@ def ensure_operator_account(db: Session) -> User:
     db.commit()
     db.refresh(operator)
     return operator
+
+
+def resolve_read_operator(
+    db: Session,
+    current_operator: User | None,
+    operator_id: int | None,
+) -> User:
+    """Resolve the operator whose data a read-only (GET) endpoint should expose.
+
+    Shared security policy for ``/operator/*``, ``/analytics/*`` and
+    ``/decision-samples`` read endpoints:
+
+    - **No bearer token** (``current_operator is None``): fall back to the
+      canonical singleton operator. This preserves the legacy unauthenticated
+      read path used by existing tooling/tests. If an explicit ``operator_id``
+      is supplied it must match the canonical operator's id; otherwise a
+      ``403`` (:data:`READ_OPERATOR_FORBIDDEN_DETAIL`) is raised — an
+      unauthenticated caller may never read another operator's data.
+    - **Bearer token supplied**: delegate to
+      :func:`app.core.security.resolve_target_operator`, which applies the
+      privileged/non-privileged policy and raises ``403`` (cross-account) or
+      ``404`` (unknown id) as appropriate.
+
+    Behavior-preserving consolidation of the previously duplicated
+    ``_resolve_*_operator`` helpers; the returned operator also drives the
+    ``current_operator_*`` response envelope fields.
+    """
+    if current_operator is None:
+        fallback = ensure_operator_account(db)
+        if operator_id is None or int(operator_id) == int(fallback.id):
+            return fallback
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=READ_OPERATOR_FORBIDDEN_DETAIL,
+        )
+    return resolve_target_operator(db, current_operator, operator_id)
 
 
 def get_operator_profile(db: Session, allow_fallback: bool = True) -> CompanyProfile | None:

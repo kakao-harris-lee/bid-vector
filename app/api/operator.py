@@ -11,7 +11,6 @@ from app.core.security import (
     CANONICAL_OPERATOR_USERNAME,
     get_current_operator_optional,
     is_privileged_operator,
-    resolve_target_operator,
 )
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
@@ -20,6 +19,7 @@ from app.core.single_user import (
     ensure_operator_profile_for,
     ensure_operator_strategy_for,
     join_multi_value_text,
+    resolve_read_operator,
     split_multi_value_text,
 )
 from app.core.time import utc_now
@@ -74,33 +74,12 @@ router = APIRouter()
 INTERNAL_OPERATOR_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
 
 
-def _resolve_operator_for_read(
-    db: Session,
-    current_operator: User | None,
-    operator_id: int | None,
-) -> User:
-    """Return the target operator that a /operator/* GET endpoint should expose.
-
-    - When no bearer token is supplied the canonical singleton operator is
-      used — this preserves the legacy unauthenticated read path used by
-      existing operator tests and tooling.
-    - When a bearer token is supplied :func:`resolve_target_operator` applies
-      the standard privileged/non-privileged policy and raises 403/404.
-
-    The returned operator is also what populates the ``current_operator_*``
-    envelope fields, matching the convention established by the dashboard /
-    analytics endpoints in PR #70 where ``current_operator_*`` reflects which
-    company the response is scoped to (i.e. the one shown in the switcher).
-    """
-    if current_operator is None:
-        fallback = ensure_operator_account(db)
-        if operator_id is None or int(operator_id) == int(fallback.id):
-            return fallback
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view another operator's data",
-        )
-    return resolve_target_operator(db, current_operator, operator_id)
+# Read-scoped operator resolution is shared across analytics/operator/decision
+# endpoints; see app.core.single_user.resolve_read_operator for the security
+# policy (canonical fallback / 403 / 404). The returned operator also populates
+# the ``current_operator_*`` envelope fields (convention from PR #70). Kept as a
+# thin alias so existing call sites and their names remain stable.
+_resolve_operator_for_read = resolve_read_operator
 
 
 def _resolve_operator_for_write(
