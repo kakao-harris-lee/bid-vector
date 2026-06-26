@@ -622,19 +622,6 @@ def _serialize_paper_backtest_metric(latest_run: PaperBidRun | None) -> dict:
     }
 
 
-def _list_meta_payload(
-    *, operator: User, generated_at, limit: int, returned_count: int
-) -> dict:
-    return {
-        "operator_id": int(operator.id),
-        "current_operator_id": int(operator.id),
-        "current_operator_username": str(operator.username or ""),
-        "generated_at": generated_at,
-        "limit": limit,
-        "returned_count": returned_count,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Summary collectors (one section each)
 # ---------------------------------------------------------------------------
