@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
-from app.core.time import ensure_utc, utc_now
+from app.core.time import utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
+from app.services.koneps import parsing
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.realtime import realtime_event_manager
 
@@ -378,7 +379,7 @@ class KonepsCollectorService:
                 item.get("estimated_amount") or item.get("base_amount") or 0.0
             )
             historical_record.bid_rate = (
-                self._normalize_bid_rate_value(
+                parsing.normalize_bid_rate_value(
                     item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
                 )
                 or 0.0
@@ -403,7 +404,7 @@ class KonepsCollectorService:
                     incoming_selected_numbers,
                     ensure_ascii=False,
                 )
-            historical_record.opened_at = self._coerce_datetime(
+            historical_record.opened_at = parsing.coerce_datetime(
                 item_metadata.get("opening_announced_at")
                 or item_metadata.get("opening_scheduled_at")
             )
@@ -716,9 +717,9 @@ class KonepsCollectorService:
                 "openapi_service_key_variant": key_variant,
                 "openapi_result_code": result_code or "00",
                 "openapi_result_message": result_message,
-                "openapi_total_count": self._safe_int(body.get("totalCount")),
-                "openapi_page_no": self._safe_int(body.get("pageNo")),
-                "openapi_num_of_rows": self._safe_int(body.get("numOfRows")),
+                "openapi_total_count": parsing.safe_int(body.get("totalCount")),
+                "openapi_page_no": parsing.safe_int(body.get("pageNo")),
+                "openapi_num_of_rows": parsing.safe_int(body.get("numOfRows")),
                 "query_date": date_token,
                 "query_type": "registration_datetime",
             },
@@ -843,7 +844,7 @@ class KonepsCollectorService:
 
                 body = self._openapi_body(payload)
                 if category_total_count is None:
-                    category_total_count = self._safe_int(body.get("totalCount"))
+                    category_total_count = parsing.safe_int(body.get("totalCount"))
                 raw_items = self._openapi_item_list(body)
                 category_pages += 1
 
@@ -1102,7 +1103,7 @@ class KonepsCollectorService:
                 "reserve_detail_operation": operation,
                 "reserve_detail_result_code": result_code or "00",
                 "reserve_detail_result_message": result_message,
-                "reserve_detail_total_count": self._safe_int(body.get("totalCount")),
+                "reserve_detail_total_count": parsing.safe_int(body.get("totalCount")),
             }
         )
         return detail
@@ -1129,8 +1130,8 @@ class KonepsCollectorService:
         )
 
         title = str(raw_item.get("bidNtceNm") or notice_number).strip()
-        winning_amount = self._coerce_amount(raw_item.get("sucsfbidAmt"))
-        success_rate = self._normalize_bid_rate_value(raw_item.get("sucsfbidRate"))
+        winning_amount = parsing.coerce_amount(raw_item.get("sucsfbidAmt"))
+        success_rate = parsing.normalize_bid_rate_value(raw_item.get("sucsfbidRate"))
         base_amount = (
             detail.get("base_amount")
             or detail.get("planned_price")
@@ -1164,9 +1165,9 @@ class KonepsCollectorService:
             "title": title,
             "base_amount": float(base_amount or 0.0),
             "estimated_amount": float(planned_price or base_amount or 0.0),
-            "closing_at": self._coerce_datetime(opened_at),
+            "closing_at": parsing.coerce_datetime(opened_at),
             "business_type": resolved_category or request.category,
-            "region": self._extract_region([demand_agency, title]),
+            "region": parsing.extract_region([demand_agency, title]),
             "license_codes": [],
             "source_url": None,
             "metadata": {
@@ -1181,12 +1182,12 @@ class KonepsCollectorService:
                 "demand_agency": demand_agency,
                 "opening_scheduled_at": opened_at,
                 "opening_announced_at": opened_at,
-                "participant_count": self._safe_int(raw_item.get("prtcptCnum")),
+                "participant_count": parsing.safe_int(raw_item.get("prtcptCnum")),
                 "winning_company": raw_item.get("bidwinnrNm"),
                 "winning_business_no": raw_item.get("bidwinnrBizno"),
                 "winning_amount": winning_amount,
                 "winning_rate": success_rate,
-                "bid_rate": self._normalize_bid_rate_value(bid_rate),
+                "bid_rate": parsing.normalize_bid_rate_value(bid_rate),
                 "final_success_date": raw_item.get("fnlSucsfDate"),
                 "reserve_prices": detail.get("reserve_prices") or [],
                 "selected_numbers": detail.get("selected_numbers") or [],
@@ -1227,12 +1228,12 @@ class KonepsCollectorService:
 
         for row in rows:
             if planned_price is None:
-                planned_price = self._coerce_amount(row.get("plnprc"))
+                planned_price = parsing.coerce_amount(row.get("plnprc"))
             if base_amount is None:
-                base_amount = self._coerce_amount(row.get("bssamt"))
+                base_amount = parsing.coerce_amount(row.get("bssamt"))
 
-            sequence = self._coerce_int_value(row.get("compnoRsrvtnPrceSno"))
-            reserve_price = self._coerce_amount(row.get("bsisPlnprc"))
+            sequence = parsing.coerce_int_value(row.get("compnoRsrvtnPrceSno"))
+            reserve_price = parsing.coerce_amount(row.get("bsisPlnprc"))
             if sequence is not None and reserve_price is not None:
                 reserve_rows.append((sequence, reserve_price))
 
@@ -1336,7 +1337,7 @@ class KonepsCollectorService:
         compact = re.sub(r"\D", "", raw_value)
         if len(compact) >= 8:
             return compact[:8]
-        parsed = self._coerce_datetime(raw_value)
+        parsed = parsing.coerce_datetime(raw_value)
         if parsed is None:
             raise ValueError(f"target_date must be parseable as a date: {raw_value}")
         return parsed.strftime("%Y%m%d")
@@ -1434,9 +1435,9 @@ class KonepsCollectorService:
             or raw_item.get("bidOpenDt")
         )
         closing_at = (
-            self._coerce_datetime(raw_item.get("bidClseDt"))
-            or self._coerce_datetime(opening_at)
-            or self._coerce_datetime(raw_item.get("bidNtceDt"))
+            parsing.coerce_datetime(raw_item.get("bidClseDt"))
+            or parsing.coerce_datetime(opening_at)
+            or parsing.coerce_datetime(raw_item.get("bidNtceDt"))
         )
         source_url = (
             str(
@@ -1457,7 +1458,7 @@ class KonepsCollectorService:
             "closing_at": closing_at,
             "business_type": business_type or request.category,
             "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,
-            "license_codes": self._extract_license_codes(license_text),
+            "license_codes": parsing.extract_license_codes(license_text),
             "source_url": source_url,
             "metadata": {
                 "mode": "openapi",
@@ -1489,17 +1490,10 @@ class KonepsCollectorService:
     ) -> float | None:
         """Return the first parseable amount from one OpenAPI row."""
         for key in candidate_keys:
-            value = self._coerce_amount(raw_item.get(key))
+            value = parsing.coerce_amount(raw_item.get(key))
             if value is not None:
                 return value
         return None
-
-    def _safe_int(self, value: Any) -> int | None:
-        """Convert optional OpenAPI count fields into integers."""
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
 
     def _collect_live_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect live KONEPS items via the public homepage search flow."""
@@ -1750,7 +1744,7 @@ class KonepsCollectorService:
             if not item.get("business_type") and opening_row.get("business_type"):
                 item["business_type"] = opening_row["business_type"]
             if not item.get("region") and opening_row.get("demand_agency"):
-                item["region"] = self._extract_region([opening_row["demand_agency"]])
+                item["region"] = parsing.extract_region([opening_row["demand_agency"]])
             enriched_count += 1
 
         return items, {
@@ -2061,7 +2055,7 @@ class KonepsCollectorService:
 
         notice_number = cells[2].get_text(" ", strip=True)
         title_cell = cells[3]
-        title = self._extract_koneps_title(title_cell)
+        title = parsing.extract_koneps_title(title_cell)
         business_type = cells[1].get_text(" ", strip=True)
         business_type_code, business_type_label = self._split_business_type_cell(
             business_type
@@ -2085,7 +2079,7 @@ class KonepsCollectorService:
             self._parse_detail_html(detail_snapshot["html"]) if detail_snapshot else {}
         )
         row_text = " ".join(cell.get_text(" ", strip=True) for cell in cells)
-        region = detail_data.get("region") or self._extract_region(
+        region = detail_data.get("region") or parsing.extract_region(
             [title, issuing_agency, demand_agency, row_text]
         )
         source_url = (
@@ -2097,12 +2091,12 @@ class KonepsCollectorService:
         estimated_amount = detail_data.get("estimated_amount")
         closing_at = (
             detail_data.get("closing_at")
-            or self._extract_datetime(closing_at_text)
-            or self._extract_datetime(opening_at_text)
+            or parsing.extract_datetime(closing_at_text)
+            or parsing.extract_datetime(opening_at_text)
         )
-        license_codes = detail_data.get("license_codes") or self._extract_license_codes(
-            row_text
-        )
+        license_codes = detail_data.get(
+            "license_codes"
+        ) or parsing.extract_license_codes(row_text)
 
         return CrawlNoticeItem(
             notice_number=notice_number
@@ -2160,10 +2154,10 @@ class KonepsCollectorService:
                 if key and value and key not in field_map:
                     field_map[key] = value
 
-        base_amounts = self._extract_amounts(field_map.get("기초금액", ""))
-        estimated_amounts = self._extract_amounts(field_map.get("추정가격", ""))
-        license_codes = self._extract_license_codes(field_map.get("면허제한", ""))
-        region = self._extract_region([field_map.get("제한지역", "")])
+        base_amounts = parsing.extract_amounts(field_map.get("기초금액", ""))
+        estimated_amounts = parsing.extract_amounts(field_map.get("추정가격", ""))
+        license_codes = parsing.extract_license_codes(field_map.get("면허제한", ""))
+        region = parsing.extract_region([field_map.get("제한지역", "")])
         business_type_raw = field_map.get("입찰유형") or field_map.get("업무구분")
         business_type_code, business_type_label = self._split_business_type_cell(
             business_type_raw
@@ -2177,7 +2171,7 @@ class KonepsCollectorService:
             "business_type_label": business_type_label,
             "base_amount": base_amounts[0] if base_amounts else None,
             "estimated_amount": estimated_amounts[0] if estimated_amounts else None,
-            "closing_at": self._extract_datetime(field_map.get("입찰마감일시", "")),
+            "closing_at": parsing.extract_datetime(field_map.get("입찰마감일시", "")),
             "opening_at_text": field_map.get("개찰일시"),
             "license_codes": license_codes,
             "region": region,
@@ -2234,7 +2228,7 @@ class KonepsCollectorService:
             or row.get("bidPbancNoPbancOrd")
             or f"{notice_number}-{notice_order}".strip("-")
         ).strip()
-        opening_amount = self._coerce_amount(
+        opening_amount = parsing.coerce_amount(
             row.get("opening_amount") or row.get("bizAmt")
         )
 
@@ -2265,7 +2259,7 @@ class KonepsCollectorService:
                 or detail_data.get("result_status")
                 or ""
             ).strip(),
-            "scheduled_at": self._coerce_datetime(
+            "scheduled_at": parsing.coerce_datetime(
                 row.get("scheduled_at")
                 or row.get("onbsPrnmntDt")
                 or detail_data.get("announced_at")
@@ -2291,7 +2285,7 @@ class KonepsCollectorService:
                 if detail_data.get("winning_rate") is not None
                 else row.get("winning_rate")
             ),
-            "announced_at": self._coerce_datetime(
+            "announced_at": parsing.coerce_datetime(
                 detail_data.get("announced_at") or row.get("announced_at")
             ),
             "raw": row,
@@ -2318,7 +2312,7 @@ class KonepsCollectorService:
                     field_map[key] = value
 
         all_text = soup.get_text(" ", strip=True)
-        reserve_text = self._find_field_value(field_map, ["복수예비가격", "예비가격", "추첨예비가격"])
+        reserve_text = parsing.find_field_value(field_map, ["복수예비가격", "예비가격", "추첨예비가격"])
         if not reserve_text:
             reserve_match = re.search(
                 r"복수예비가격\s*(.*?)(?:선택번호|추첨번호|낙찰자|낙찰업체|낙찰금액|낙찰률|개찰일시|$)",
@@ -2326,7 +2320,7 @@ class KonepsCollectorService:
             )
             reserve_text = reserve_match.group(1) if reserve_match else ""
 
-        selected_text = self._find_field_value(field_map, ["선택번호", "추첨번호", "선정번호"])
+        selected_text = parsing.find_field_value(field_map, ["선택번호", "추첨번호", "선정번호"])
         if not selected_text:
             selected_match = re.search(
                 r"(?:선택번호|추첨번호|선정번호)\s*(.*?)(?:낙찰자|낙찰업체|낙찰금액|낙찰률|개찰일시|$)",
@@ -2334,23 +2328,23 @@ class KonepsCollectorService:
             )
             selected_text = selected_match.group(1) if selected_match else ""
 
-        winning_company = self._find_field_value(
+        winning_company = parsing.find_field_value(
             field_map, ["낙찰업체", "낙찰자", "낙찰자명", "계약상대자"]
         )
-        winning_amount = self._coerce_amount(
-            self._find_field_value(field_map, ["낙찰금액", "낙찰가격", "투찰금액"])
+        winning_amount = parsing.coerce_amount(
+            parsing.find_field_value(field_map, ["낙찰금액", "낙찰가격", "투찰금액"])
         )
-        winning_rate = self._extract_percentage(
-            self._find_field_value(field_map, ["낙찰률", "투찰률", "낙찰하한율"])
+        winning_rate = parsing.extract_percentage(
+            parsing.find_field_value(field_map, ["낙찰률", "투찰률", "낙찰하한율"])
         )
-        announced_at = self._coerce_datetime(
-            self._find_field_value(field_map, ["개찰일시", "개찰완료일시", "낙찰일시"])
+        announced_at = parsing.coerce_datetime(
+            parsing.find_field_value(field_map, ["개찰일시", "개찰완료일시", "낙찰일시"])
         )
-        status = self._find_field_value(field_map, ["진행상태", "개찰상태", "낙찰상태"])
+        status = parsing.find_field_value(field_map, ["진행상태", "개찰상태", "낙찰상태"])
 
         return {
-            "reserve_prices": self._extract_amounts(reserve_text)[:15],
-            "selected_numbers": self._extract_integer_tokens(
+            "reserve_prices": parsing.extract_amounts(reserve_text)[:15],
+            "selected_numbers": parsing.extract_integer_tokens(
                 selected_text, max_items=4
             ),
             "winning_company": winning_company or None,
@@ -2375,20 +2369,20 @@ class KonepsCollectorService:
             return None
 
         combined_text = " ".join(cleaned_cells)
-        amounts = self._extract_amounts(combined_text)
+        amounts = parsing.extract_amounts(combined_text)
         notice_number = (
-            self._extract_notice_number(combined_text)
+            parsing.extract_notice_number(combined_text)
             or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}"
         )
-        title = self._extract_title(
+        title = parsing.extract_title(
             cleaned_cells, notice_number, link.get_text(strip=True) if link else None
         )
 
         if not title:
             return None
 
-        region = self._extract_region(cleaned_cells)
-        closing_at = self._extract_datetime(combined_text)
+        region = parsing.extract_region(cleaned_cells)
+        closing_at = parsing.extract_datetime(combined_text)
         href = link.get("href") if link else None
         source_url = (
             urljoin(page_url or settings.KONEPS_BASE_URL, href)
@@ -2404,7 +2398,7 @@ class KonepsCollectorService:
             closing_at=closing_at,
             business_type=request.category,
             region=region,
-            license_codes=self._extract_license_codes(combined_text),
+            license_codes=parsing.extract_license_codes(combined_text),
             source_url=source_url,
             metadata={
                 "mode": "live",
@@ -2414,175 +2408,6 @@ class KonepsCollectorService:
                 "target_date": request.target_date,
             },
         )
-
-    def _extract_koneps_title(self, title_cell: Any) -> str:
-        """Extract the visible KONEPS title from a result cell with optional state badges."""
-        linked_title = title_cell.select_one(".link_txt")
-        if linked_title:
-            return linked_title.get_text(" ", strip=True)
-
-        title_attr = title_cell.get("title")
-        if title_attr:
-            return title_attr.strip()
-
-        return title_cell.get_text(" ", strip=True)
-
-    def _extract_notice_number(self, text: str) -> str | None:
-        """Extract a plausible notice number from freeform row text."""
-        match = re.search(r"\b(?:\d{4,}-\d{2,}|\d{8,}|[A-Z]{2,}\d{2,})\b", text)
-        return match.group(0) if match else None
-
-    def _extract_amounts(self, text: str) -> list[float]:
-        """Extract monetary values from text."""
-        matches = re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", text)
-        amounts = []
-        for value in matches:
-            try:
-                amounts.append(float(value.replace(",", "")))
-            except ValueError:
-                continue
-        return amounts
-
-    def _extract_datetime(self, text: str) -> datetime | None:
-        """Extract a datetime value from text when possible."""
-        patterns = [
-            "%Y-%m-%dT%H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y.%m.%d %H:%M",
-            "%Y.%m.%d %H:%M:%S",
-            "%Y/%m/%d %H:%M",
-            "%Y/%m/%d %H:%M:%S",
-            "%Y-%m-%d",
-            "%Y.%m.%d",
-            "%Y/%m/%d",
-        ]
-        match = re.search(
-            r"\d{4}[-./]\d{2}[-./]\d{2}(?:[T\s]+\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?",
-            text,
-        )
-        if not match:
-            return None
-
-        raw = match.group(0)
-        for pattern in patterns:
-            try:
-                return ensure_utc(datetime.strptime(raw, pattern))
-            except ValueError:
-                continue
-
-        return None
-
-    def _extract_title(
-        self, cells: list[str], notice_number: str, link_text: str | None
-    ) -> str | None:
-        """Choose the most likely title cell."""
-        generic_link_texts = {"상세", "상세보기", "보기", "조회", "바로가기"}
-        if link_text and link_text.strip() not in generic_link_texts:
-            return link_text.strip()
-
-        for cell in cells:
-            if cell == notice_number:
-                continue
-            if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", cell):
-                continue
-            if re.fullmatch(r"\d{4}[-./]\d{2}[-./]\d{2}(?:\s+\d{2}:\d{2})?", cell):
-                continue
-            return cell.strip()
-
-        return None
-
-    def _extract_region(self, cells: list[str]) -> str | None:
-        """Extract a likely Korean region value."""
-        region_keywords = [
-            "서울",
-            "부산",
-            "대구",
-            "인천",
-            "광주",
-            "대전",
-            "울산",
-            "세종",
-            "경기",
-            "강원",
-            "충북",
-            "충남",
-            "전북",
-            "전남",
-            "경북",
-            "경남",
-            "제주",
-            "전국",
-        ]
-        for cell in cells:
-            for keyword in region_keywords:
-                if keyword in cell:
-                    return keyword
-        return None
-
-    def _extract_license_codes(self, text: str) -> list[str]:
-        """Extract structured license-like codes from row text."""
-        return sorted(set(re.findall(r"\b[A-Z]{2,}\d{2,}\b", text)))
-
-    def _extract_percentage(self, text: str) -> float | None:
-        """Extract a percentage value from text."""
-        if not text:
-            return None
-        match = re.search(r"(-?\d+(?:\.\d+)?)\s*%", text)
-        if match:
-            return float(match.group(1))
-        try:
-            return float(str(text).strip())
-        except ValueError:
-            return None
-
-    def _normalize_bid_rate_value(self, value: Any) -> float | None:
-        """Normalize percentage-like bid rates into predictor-friendly ratios."""
-        if value in (None, ""):
-            return None
-        if isinstance(value, (int, float)):
-            numeric = float(value)
-        else:
-            percentage = self._extract_percentage(str(value))
-            if percentage is not None:
-                numeric = percentage
-            else:
-                try:
-                    numeric = float(str(value).replace(",", "").strip())
-                except ValueError:
-                    return None
-        if numeric <= 0:
-            return None
-        if numeric > 1.5:
-            numeric = numeric / 100.0
-        return round(float(numeric), 6)
-
-    def _coerce_int_value(self, value: Any) -> int | None:
-        """Convert numeric text into an integer when possible."""
-        if value in (None, ""):
-            return None
-        try:
-            return int(float(str(value).replace(",", "").strip()))
-        except ValueError:
-            return None
-
-    def _extract_integer_tokens(
-        self, text: str, max_items: int | None = None
-    ) -> list[int]:
-        """Extract integer tokens from text, optionally limiting the result length."""
-        numbers = [int(token) for token in re.findall(r"\b\d{1,2}\b", text)]
-        if max_items is None:
-            return numbers
-        return numbers[:max_items]
-
-    def _find_field_value(self, field_map: dict[str, str], labels: list[str]) -> str:
-        """Find the first matching field value using partial Korean label matching."""
-        for label in labels:
-            for key, value in field_map.items():
-                if label in key:
-                    return value
-        return ""
 
     def _map_opening_business_type(self, code: str | None) -> str | None:
         """Map observed 개찰결과 업무코드 values to readable business types."""
@@ -2595,33 +2420,6 @@ class KonepsCollectorService:
         if not code:
             return None
         return code_map.get(str(code).strip(), str(code).strip())
-
-    def _coerce_amount(self, value: Any) -> float | None:
-        """Convert arbitrary numeric text into a float amount when possible."""
-        if value in (None, ""):
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        amounts = self._extract_amounts(str(value))
-        if amounts:
-            return amounts[0]
-        try:
-            return float(str(value).replace(",", "").strip())
-        except ValueError:
-            return None
-
-    def _coerce_datetime(self, value: Any) -> datetime | None:
-        """Convert an arbitrary value into a datetime when possible."""
-        if value in (None, ""):
-            return None
-        if isinstance(value, datetime):
-            return ensure_utc(value)
-        if isinstance(value, str):
-            try:
-                return ensure_utc(datetime.fromisoformat(value))
-            except ValueError:
-                return self._extract_datetime(value)
-        return None
 
     def _resolve_project_for_item(
         self,
@@ -2726,13 +2524,15 @@ class KonepsCollectorService:
            full category load + source_url/title fuzzy matching to avoid any
            regression for that path.
         """
-        target_title = self._normalize_title(item.get("title"))
-        target_notice_number = self._normalize_notice_number(item.get("notice_number"))
+        target_title = parsing.normalize_title(item.get("title"))
+        target_notice_number = parsing.normalize_notice_number(
+            item.get("notice_number")
+        )
         target_source_url = self._normalize_source_url(item.get("source_url"))
         target_agencies = self._extract_item_agency_keys(item)
         target_category = self._resolve_project_category(item, request)
         target_budget = self._resolve_budget_estimate(item)
-        target_deadline = self._coerce_datetime(item.get("closing_at"))
+        target_deadline = parsing.coerce_datetime(item.get("closing_at"))
 
         if target_notice_number:
             # 1. Index fast path: match on the indexed notice_number column.
@@ -2746,7 +2546,7 @@ class KonepsCollectorService:
                 .all()
             ):
                 if (
-                    self._normalize_notice_number(candidate.notice_number)
+                    parsing.normalize_notice_number(candidate.notice_number)
                     == target_notice_number
                 ):
                     return candidate
@@ -2762,7 +2562,7 @@ class KonepsCollectorService:
                 )
             null_notice_candidates = null_notice_query.all()
             for candidate in null_notice_candidates:
-                candidate_notice_number = self._normalize_notice_number(
+                candidate_notice_number = parsing.normalize_notice_number(
                     self._extract_project_notice_number(candidate)
                 )
                 if (
@@ -2828,7 +2628,7 @@ class KonepsCollectorService:
         best_candidate: Project | None = None
         best_score = -1
         for candidate in candidates:
-            candidate_title = self._normalize_title(candidate.title)
+            candidate_title = parsing.normalize_title(candidate.title)
             title_exact = candidate_title == target_title
             title_overlap = (
                 not title_exact
@@ -2838,8 +2638,8 @@ class KonepsCollectorService:
             if not title_exact and not title_overlap:
                 continue
 
-            budget_match = self._is_budget_compatible(candidate, target_budget)
-            deadline_match = self._is_deadline_compatible(
+            budget_match = parsing.is_budget_compatible(candidate, target_budget)
+            deadline_match = parsing.is_deadline_compatible(
                 candidate.deadline, target_deadline
             )
             agency_overlap = len(
@@ -2940,7 +2740,7 @@ class KonepsCollectorService:
             ),
         ]
 
-        if item.get("title") and self._should_replace_project_title(
+        if item.get("title") and parsing.should_replace_project_title(
             project.title, item.get("title")
         ):
             project.title = str(item.get("title")).strip()
@@ -2949,10 +2749,10 @@ class KonepsCollectorService:
         # ``notice_number.in_(...)`` fast path in ``_find_matching_project`` can
         # rely on equality. Storing a non-canonical value (lower case / inner
         # whitespace) would make the index probe miss and create duplicates.
-        normalized_notice_number = self._normalize_notice_number(notice_number)
+        normalized_notice_number = parsing.normalize_notice_number(notice_number)
         if normalized_notice_number and (
             not project.notice_number
-            or self._normalize_notice_number(project.notice_number)
+            or parsing.normalize_notice_number(project.notice_number)
             == normalized_notice_number
         ):
             project.notice_number = normalized_notice_number
@@ -2966,8 +2766,8 @@ class KonepsCollectorService:
         issuing_agency = item_metadata.get("issuing_agency")
         if issuing_agency and (
             not project.issuing_agency
-            or self._normalize_agency_name(project.issuing_agency)
-            == self._normalize_agency_name(issuing_agency)
+            or parsing.normalize_agency_name(project.issuing_agency)
+            == parsing.normalize_agency_name(issuing_agency)
         ):
             project.issuing_agency = str(issuing_agency).strip()
         demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
@@ -2975,14 +2775,14 @@ class KonepsCollectorService:
         )
         if demand_agency and (
             not project.demand_agency
-            or self._normalize_agency_name(project.demand_agency)
-            == self._normalize_agency_name(demand_agency)
+            or parsing.normalize_agency_name(project.demand_agency)
+            == parsing.normalize_agency_name(demand_agency)
         ):
             project.demand_agency = str(demand_agency).strip()
-        project.description = self._merge_text_lines(
+        project.description = parsing.merge_text_lines(
             project.description, description_lines
         )
-        project.requirements = self._merge_text_lines(
+        project.requirements = parsing.merge_text_lines(
             project.requirements, requirement_lines
         )
         project.category = resolved_category or project.category
@@ -2992,7 +2792,7 @@ class KonepsCollectorService:
         project.budget_min = min(budget_values) if budget_values else project.budget_min
         project.budget_max = max(budget_values) if budget_values else project.budget_max
 
-        closing_at = self._coerce_datetime(item.get("closing_at"))
+        closing_at = parsing.coerce_datetime(item.get("closing_at"))
         if closing_at is not None:
             project.deadline = closing_at
 
@@ -3017,7 +2817,9 @@ class KonepsCollectorService:
         crawl_job_status: str,
     ) -> TenderResult:
         """Upsert a tender result snapshot so repeated crawls do not duplicate the same award record."""
-        announced_at = self._coerce_datetime(item_metadata.get("opening_announced_at"))
+        announced_at = parsing.coerce_datetime(
+            item_metadata.get("opening_announced_at")
+        )
         winning_company = item_metadata.get("winning_company") or ""
         winning_amount = item_metadata.get("winning_amount") or 0.0
         winning_rate = item_metadata.get("winning_rate") or 0.0
@@ -3103,7 +2905,7 @@ class KonepsCollectorService:
                 item.get("title"),
             )
         )
-        normalized_status_text = self._normalize_status_text(status_text)
+        normalized_status_text = parsing.normalize_status_text(status_text)
 
         if any(
             keyword in normalized_status_text
@@ -3138,48 +2940,18 @@ class KonepsCollectorService:
         ):
             return "closed"
 
-        closing_at = self._coerce_datetime(item.get("closing_at"))
+        closing_at = parsing.coerce_datetime(item.get("closing_at"))
         if closing_at is not None and closing_at <= utc_now():
             return "closed"
         return "open"
 
-    def _normalize_status_text(self, value: Any) -> str:
-        """Normalize crawl status text for keyword-based lifecycle mapping."""
-        return re.sub(r"\s+", "", str(value or "").strip().lower())
-
-    def _merge_text_lines(
-        self, existing: str | None, new_lines: list[str | None]
-    ) -> str:
-        """Append unique crawl-derived text fragments while keeping any manual notes intact."""
-        merged_lines = [
-            line.strip()
-            for line in str(existing or "").splitlines()
-            if line and line.strip()
-        ]
-        merged_text = "\n".join(merged_lines)
-
-        for line in new_lines:
-            if not line:
-                continue
-            normalized_line = str(line).strip()
-            if not normalized_line:
-                continue
-            if normalized_line in merged_lines:
-                continue
-            if normalized_line in merged_text:
-                continue
-            merged_lines.append(normalized_line)
-            merged_text = "\n".join(merged_lines)
-
-        return "\n".join(merged_lines)
-
-    def _normalize_title(self, value: Any) -> str:
-        """Normalize a notice title for strict duplicate detection."""
-        return re.sub(r"[^0-9a-z가-힣]+", "", str(value or "").strip().lower())
-
     def _normalize_notice_number(self, value: Any) -> str:
-        """Normalize notice numbers for direct key matching."""
-        return re.sub(r"\s+", "", str(value or "").strip().upper())
+        """Delegate notice-number normalization to the pure parsing module.
+
+        Retained as a thin instance method because existing tests exercise it
+        through the service surface (``service._normalize_notice_number``).
+        """
+        return parsing.normalize_notice_number(value)
 
     def _normalize_source_url(self, value: Any) -> str:
         """Normalize a URL so detail links can be compared across formatting differences."""
@@ -3207,19 +2979,17 @@ class KonepsCollectorService:
             return f"{normalized_url}?{normalized_query}"
         return normalized_url
 
-    def _normalize_agency_name(self, value: Any) -> str:
-        """Normalize agency names for cross-source matching."""
-        return "".join(str(value or "").strip().lower().split())
-
     def _extract_item_agency_keys(self, item: dict[str, Any]) -> set[str]:
         """Extract normalized agency names from a crawled notice payload."""
         item_metadata = item.get("metadata", {})
         return {
             normalized
             for normalized in (
-                self._normalize_agency_name(item_metadata.get("issuing_agency")),
-                self._normalize_agency_name(item_metadata.get("opening_demand_agency")),
-                self._normalize_agency_name(item_metadata.get("demand_agency")),
+                parsing.normalize_agency_name(item_metadata.get("issuing_agency")),
+                parsing.normalize_agency_name(
+                    item_metadata.get("opening_demand_agency")
+                ),
+                parsing.normalize_agency_name(item_metadata.get("demand_agency")),
             )
             if normalized
         }
@@ -3238,7 +3008,7 @@ class KonepsCollectorService:
         return {
             normalized
             for normalized in (
-                self._normalize_agency_name(value) for value in agency_values
+                parsing.normalize_agency_name(value) for value in agency_values
             )
             if normalized
         }
@@ -3254,7 +3024,7 @@ class KonepsCollectorService:
         label_match = re.search(r"공고번호\s*[:：]\s*([A-Za-z0-9\-]+)", project_text)
         if label_match:
             return label_match.group(1).strip()
-        return self._extract_notice_number(project_text)
+        return parsing.extract_notice_number(project_text)
 
     def _extract_project_source_url(self, project: Project) -> str | None:
         """Read a source URL from explicit project metadata or free-form notes."""
@@ -3268,46 +3038,6 @@ class KonepsCollectorService:
         if url_match:
             return url_match.group(0).strip()
         return None
-
-    def _is_budget_compatible(self, project: Project, target_budget: float) -> bool:
-        """Return whether an existing project's budget is close enough to a crawled notice."""
-        if target_budget <= 0:
-            return True
-
-        candidate_budget = float(
-            project.budget_estimate or project.budget_max or project.budget_min or 0.0
-        )
-        if candidate_budget <= 0:
-            return True
-
-        difference_ratio = abs(candidate_budget - target_budget) / max(
-            candidate_budget, target_budget
-        )
-        return difference_ratio <= 0.15
-
-    def _is_deadline_compatible(
-        self, existing_deadline: datetime | None, target_deadline: datetime | None
-    ) -> bool:
-        """Return whether existing and crawled deadlines are close enough to represent the same notice."""
-        if existing_deadline is None or target_deadline is None:
-            return True
-        return (
-            abs(
-                (
-                    ensure_utc(existing_deadline) - ensure_utc(target_deadline)
-                ).total_seconds()
-            )
-            <= 60 * 60 * 24 * 7
-        )
-
-    def _should_replace_project_title(
-        self, existing_title: str | None, new_title: Any
-    ) -> bool:
-        """Prefer the crawled title only when the current one is missing or obviously synthetic."""
-        existing = str(existing_title or "").strip()
-        if not existing:
-            return True
-        return existing.startswith("KONEPS notice") or existing.startswith("KONEPS-")
 
     def _build_mock_items(
         self,
