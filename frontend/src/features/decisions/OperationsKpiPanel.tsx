@@ -36,6 +36,7 @@ function formatCount(value: number): string {
 function deadlineLabel(deadline?: string | null): string {
   if (!deadline) return "마감 미정";
   const formatted = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
     month: "short",
     day: "numeric"
   }).format(new Date(deadline));

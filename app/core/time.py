@@ -33,3 +33,12 @@ def ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def to_kst(value: datetime) -> datetime:
+    """Convert any datetime to KST-aware (naive is assumed UTC).
+
+    Use ONLY for operator-facing day boundaries (e.g. daily cohorts grouped by
+    the Korean calendar day). Internal storage/arithmetic stays UTC.
+    """
+    return ensure_utc(value).astimezone(KST)

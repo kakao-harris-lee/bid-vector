@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import ensure_operator_account
-from app.core.time import ensure_utc, utc_now
+from app.core.time import ensure_utc, kst_now, to_kst, utc_now
 from app.models.models import (
     Analytics,
     BidDecisionRecord,
@@ -1674,13 +1674,16 @@ class DecisionAnalyticsService:
         if not decisions:
             return []
 
-        now = utc_now()
+        # Cohorts group by the KST calendar day so the operator's daily trend is
+        # not shifted by the 9h UTC offset (a decision at 06:00 KST belongs to
+        # "today", not the previous UTC day).
+        now = kst_now()
         period_start = (now - timedelta(days=days)).date()
         period_end = now.date()
         buckets: dict[date, list[BidDecisionRecord]] = {}
 
         for decision in decisions:
-            entry_date = self._entry_datetime(decision).date()
+            entry_date = to_kst(self._entry_datetime(decision)).date()
             offset_days = max((entry_date - period_start).days, 0)
             bucket_index = offset_days // max(bucket_days, 1)
             bucket_start = period_start + timedelta(days=bucket_index * max(bucket_days, 1))

@@ -9,7 +9,7 @@ offset and the frontend parses them as UTC, not local).
 
 from datetime import UTC, datetime
 
-from app.core.time import KST, kst_now, utc_now
+from app.core.time import KST, kst_now, to_kst, utc_now
 from app.models.models import SyntheticExperiment, SyntheticExperimentRun
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
@@ -22,6 +22,16 @@ def test_utc_now_and_kst_now_are_aware_and_9h_apart():
     assert k.utcoffset().total_seconds() == 9 * 3600
     # Same instant, just different frames.
     assert abs((u - k).total_seconds()) < 5
+
+
+def test_to_kst_converts_to_korean_calendar_day():
+    """to_kst shifts an aware/naive datetime into the KST frame (for day cohorts)."""
+    aware = datetime(2026, 6, 26, 20, 0, tzinfo=UTC)  # == 2026-06-27 05:00 KST
+    k = to_kst(aware)
+    assert k.utcoffset().total_seconds() == 9 * 3600
+    assert (k.year, k.month, k.day, k.hour) == (2026, 6, 27, 5)
+    # naive is assumed UTC, then shifted to KST (next day).
+    assert to_kst(datetime(2026, 6, 26, 20, 0)).day == 27
 
 
 def test_scsbid_date_window_uses_kst_day_not_utc(monkeypatch):

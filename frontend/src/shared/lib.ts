@@ -41,6 +41,7 @@ export function formatDate(value: string | Date | null | undefined): string {
   const date = parseDate(value);
   if (!date) return "-";
   return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
@@ -51,6 +52,7 @@ export function formatDateTime(value: string | Date | null | undefined): string 
   const date = parseDate(value);
   if (!date) return "-";
   return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
