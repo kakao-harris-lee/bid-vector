@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
-from app.core.time import utc_now
+from app.core.time import kst_now, utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
 from app.services.koneps import html_parsing, matching, openapi, parsing
 from app.services.project_similarity import ProjectSimilarityService
@@ -565,7 +565,9 @@ class KonepsCollectorService:
             request.category.strip().lower() if request.category else "general"
         )
         normalized_keyword = request.keyword.strip() if request.keyword else "AI"
-        normalized_target_date = request.target_date or utc_now().date().isoformat()
+        # KONEPS dates are KST: default "today" must be the Korean calendar day,
+        # not the UTC one (which lags KST by 9h — wrong day for KST 00:00-09:00).
+        normalized_target_date = request.target_date or kst_now().date().isoformat()
         normalized_mode = request.execution_mode.strip().lower()
         configured_max_items = (
             settings.KONEPS_OPENAPI_MAX_ITEMS
@@ -973,7 +975,10 @@ class KonepsCollectorService:
             begin = openapi.openapi_date_token(request.start_date)
             end = openapi.openapi_date_token(request.end_date)
         elif request.lookback_days is not None:
-            today = utc_now().date()
+            # KONEPS opening dates are KST — anchor the rolling window on the
+            # Korean calendar day so the latest ~9h of openings are not missed
+            # while UTC is still on the previous date (KST 00:00-09:00).
+            today = kst_now().date()
             start_day = today - timedelta(days=max(0, int(request.lookback_days)))
             begin = start_day.strftime("%Y%m%d")
             end = today.strftime("%Y%m%d")

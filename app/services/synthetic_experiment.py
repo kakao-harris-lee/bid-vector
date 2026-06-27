@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.time import utc_now
 from app.models.models import (
     SyntheticExperiment,
     SyntheticExperimentResult,
@@ -1808,7 +1809,7 @@ class SyntheticExperimentService:
         if run is None:
             return
         run.status = RUN_STATUS_RUNNING
-        run.started_at = datetime.utcnow()
+        run.started_at = utc_now()
         self.db.commit()
 
     def mark_completed(
@@ -1850,7 +1851,7 @@ class SyntheticExperimentService:
         if isinstance(source_sample_gap_candidate, dict):
             summary["source_sample_gap_candidate"] = source_sample_gap_candidate
         run.status = RUN_STATUS_COMPLETED
-        run.finished_at = datetime.utcnow()
+        run.finished_at = utc_now()
         run.error = None
         run.summary_json = _json_dumps(summary)
 
@@ -1897,7 +1898,7 @@ class SyntheticExperimentService:
         if run is None:
             return
         run.status = RUN_STATUS_FAILED
-        run.finished_at = datetime.utcnow()
+        run.finished_at = utc_now()
         run.error = error
         self.db.commit()
 
