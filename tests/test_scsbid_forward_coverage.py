@@ -13,6 +13,7 @@ import sys
 from datetime import UTC, datetime
 
 from app.core.config import settings
+from app.core.time import KST
 from app.models.models import CrawlJob, Project, TenderResult
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
@@ -302,8 +303,9 @@ def test_scsbid_date_window_resolution_three_paths(monkeypatch):
     )
     assert explicit == ("202605010000", "202605072359")
 
-    fixed_now = datetime(2026, 6, 8, tzinfo=UTC)
-    monkeypatch.setattr("app.services.koneps.collector.utc_now", lambda: fixed_now)
+    # lookback anchors on the KST calendar day (KONEPS opening dates are KST).
+    fixed_kst = datetime(2026, 6, 8, 9, 0, tzinfo=KST)
+    monkeypatch.setattr("app.services.koneps.collector.kst_now", lambda: fixed_kst)
     lookback = service._scsbid_date_window(
         CrawlRequest(source="scsbid-openapi", lookback_days=3)
     )
