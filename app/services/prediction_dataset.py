@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -12,6 +11,10 @@ from app.models.models import (
     PaperBid,
     PaperBidSettlement,
     TenderResult,
+)
+from app.utils.sequence_coercion import (
+    coerce_integer_list,
+    coerce_numeric_list,
 )
 
 _CATEGORY_ALIASES = {
@@ -369,8 +372,8 @@ class PredictionDatasetService:
             "base_amount": float(record.base_amount or 0.0),
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": bid_rate,
-            "reserve_prices": self._coerce_numeric_list(record.reserve_prices),
-            "selected_numbers": self._coerce_integer_list(record.selected_numbers),
+            "reserve_prices": coerce_numeric_list(record.reserve_prices),
+            "selected_numbers": coerce_integer_list(record.selected_numbers),
             "opened_at": record.opened_at or record.created_at,
             "tender_result_id": tender_result.id if tender_result is not None else None,
             "winning_amount": float(tender_result.winning_amount or 0.0) if tender_result is not None else None,
@@ -424,38 +427,3 @@ class PredictionDatasetService:
             return candidate_announced_at > current_announced_at
         return int(candidate.id or 0) > int(current.id or 0)
 
-    def _coerce_numeric_list(self, raw_value: Any) -> list[float]:
-        """Coerce a JSON string or list of numbers into floats."""
-        parsed = self._coerce_sequence(raw_value)
-        numbers: list[float] = []
-        for item in parsed:
-            try:
-                numbers.append(float(item))
-            except (TypeError, ValueError):
-                continue
-        return numbers
-
-    def _coerce_integer_list(self, raw_value: Any) -> list[int]:
-        """Coerce a JSON string or list of numbers into integers."""
-        parsed = self._coerce_sequence(raw_value)
-        numbers: list[int] = []
-        for item in parsed:
-            try:
-                numbers.append(int(item))
-            except (TypeError, ValueError):
-                continue
-        return numbers
-
-    def _coerce_sequence(self, raw_value: Any) -> list[Any]:
-        """Parse list-like values coming from ORM rows."""
-        if raw_value is None:
-            return []
-        if isinstance(raw_value, list):
-            return raw_value
-        if isinstance(raw_value, str):
-            try:
-                parsed = json.loads(raw_value)
-            except json.JSONDecodeError:
-                return []
-            return parsed if isinstance(parsed, list) else []
-        return []
