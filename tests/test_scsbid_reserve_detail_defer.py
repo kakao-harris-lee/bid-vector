@@ -158,7 +158,7 @@ def test_defer_true_skips_inline_fetch_and_surfaces_notices(test_db, monkeypatch
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     result = service._collect_scsbid_openapi_items(
@@ -235,7 +235,7 @@ def test_age_gate_excludes_recently_opened_notice(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     result = service._collect_scsbid_openapi_items(
@@ -281,7 +281,7 @@ def test_age_gate_defers_notice_with_unknown_opening(test_db, monkeypatch):
         item["rgstDt"] = ""
         return FakeOpenApiResponse(_award_body([item], total_count=1, num_of_rows=100))
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     result = service._collect_scsbid_openapi_items(
@@ -326,7 +326,7 @@ def test_age_gate_disabled_when_threshold_zero(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     result = service._collect_scsbid_openapi_items(
@@ -370,7 +370,7 @@ def test_defer_true_omits_already_settled_notice(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     result = service._collect_scsbid_openapi_items(
@@ -402,7 +402,7 @@ def test_defer_false_still_fetches_inline(test_db, monkeypatch):
             _award_body([_award_item("NEW-AWARD")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     result = service._collect_scsbid_openapi_items(

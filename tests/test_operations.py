@@ -109,7 +109,7 @@ def test_openapi_crawl_collects_bid_public_info_and_persists_history(
         return FakeOpenApiResponse()
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     response = client.post(
         "/api/v1/operations/crawl",
@@ -253,7 +253,7 @@ def test_scsbid_openapi_crawl_collects_awards_and_reserve_details(
         raise AssertionError(f"unexpected URL: {url}")
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     response = client.post(
         "/api/v1/operations/crawl",
