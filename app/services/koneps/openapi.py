@@ -8,9 +8,9 @@ module-level pure helpers and module-level constants to keep the
 collector class focused on orchestration.
 
 Behavior is intentionally identical to the original methods; this module
-is a pure relocation, not a rewrite. The collector remains the single
-caller of the OpenAPI IO clients (``_request_openapi_with_key_variants``
-/ ``_load_openapi_json``) which stay in ``collector.py``.
+is a pure relocation, not a rewrite. The OpenAPI IO clients
+(``request_openapi_with_key_variants`` / ``load_openapi_json``) live in
+``app.services.koneps.http_client`` and consume these pure helpers.
 """
 
 import re

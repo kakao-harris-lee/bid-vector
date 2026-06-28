@@ -1,7 +1,7 @@
 """Forward-coverage tests for the scsbid award collector sweep.
 
 Covers multi-category, paginated, date-window collection. All external HTTP is
-mocked via ``app.services.koneps.collector.requests.get`` (the existing scsbid
+mocked via ``app.services.koneps.http_client.requests.get`` (the existing scsbid
 test pattern); no real KONEPS calls are made under ``ENVIRONMENT=test``.
 """
 
@@ -231,7 +231,7 @@ def test_scsbid_sweep_visits_each_category_operation(monkeypatch):
             return FakeOpenApiResponse(_empty_reserve_body())
         raise AssertionError(f"unexpected URL: {url}")
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     request = CrawlRequest(
@@ -272,7 +272,7 @@ def test_scsbid_sweep_paginates_until_total_count(monkeypatch):
             _award_body(items, total_count=4, num_of_rows=2, page_no=page_no)
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     request = CrawlRequest(
@@ -333,7 +333,7 @@ def test_scsbid_reserve_detail_skipped_when_disabled(monkeypatch):
             _award_body([_award_item("C-1")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     request = CrawlRequest(
@@ -364,7 +364,7 @@ def test_scsbid_sweep_dedupes_notice_numbers_across_categories(monkeypatch):
             _award_body([_award_item("DUP-1")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     request = CrawlRequest(
@@ -416,7 +416,7 @@ def test_scsbid_award_attaches_to_existing_forward_project(
             )
         raise AssertionError(f"unexpected URL: {url}")
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     response = client.post(
         "/api/v1/operations/crawl",
@@ -455,7 +455,7 @@ def test_scsbid_legacy_single_day_single_category_regression(monkeypatch):
             return FakeOpenApiResponse(_empty_reserve_body())
         raise AssertionError(f"unexpected URL: {url}")
 
-    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
 
     service = KonepsCollectorService()
     request = CrawlRequest(

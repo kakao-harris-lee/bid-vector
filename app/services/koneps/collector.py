@@ -6,7 +6,6 @@ from math import ceil
 from time import sleep
 from typing import Any
 
-import requests
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -15,6 +14,7 @@ from app.core.time import kst_now, utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
 from app.services.koneps import (
     html_parsing,
+    http_client,
     live_failure,
     matching,
     openapi,
@@ -527,7 +527,7 @@ class KonepsCollectorService:
             "inqryEndDt": f"{date_token}2359",
         }
 
-        response, key_variant = self._request_openapi_with_key_variants(
+        response, key_variant = http_client.request_openapi_with_key_variants(
             url,
             params=params,
             service_key=service_key,
@@ -538,7 +538,7 @@ class KonepsCollectorService:
                 f"KONEPS OpenAPI HTTP {response.status_code} for {operation}: "
                 f"{response.text[:300]} Tried service key variants: {key_variant}."
             )
-        payload = self._load_openapi_json(response)
+        payload = http_client.load_openapi_json(response)
         header = openapi.openapi_header(payload)
         result_code = str(header.get("resultCode") or "").strip()
         result_message = str(header.get("resultMsg") or "").strip()
@@ -694,7 +694,7 @@ class KonepsCollectorService:
                 }
                 if api_call_count > 0 and delay_seconds > 0:
                     sleep(delay_seconds)
-                response, key_variant = self._request_openapi_with_key_variants(
+                response, key_variant = http_client.request_openapi_with_key_variants(
                     url,
                     params=params,
                     service_key=service_key,
@@ -707,7 +707,7 @@ class KonepsCollectorService:
                         f"{operation}: {response.text[:300]} "
                         f"Tried service key variants: {key_variant}."
                     )
-                payload = self._load_openapi_json(response)
+                payload = http_client.load_openapi_json(response)
                 header = openapi.openapi_header(payload)
                 result_code = str(header.get("resultCode") or "").strip()
                 result_message = str(header.get("resultMsg") or "").strip()
@@ -944,7 +944,7 @@ class KonepsCollectorService:
             "inqryDiv": "2",
             "bidNtceNo": notice_number,
         }
-        response, key_variant = self._request_openapi_with_key_variants(
+        response, key_variant = http_client.request_openapi_with_key_variants(
             url,
             params=params,
             service_key=service_key,
@@ -956,7 +956,7 @@ class KonepsCollectorService:
                 f"{response.text[:300]} Tried service key variants: {key_variant}."
             )
 
-        payload = self._load_openapi_json(response)
+        payload = http_client.load_openapi_json(response)
         header = openapi.openapi_header(payload)
         result_code = str(header.get("resultCode") or "").strip()
         result_message = str(header.get("resultMsg") or "").strip()
@@ -978,54 +978,6 @@ class KonepsCollectorService:
             }
         )
         return detail
-
-    def _request_openapi_with_key_variants(
-        self,
-        url: str,
-        *,
-        params: dict[str, Any],
-        service_key: str,
-        operation: str,
-    ) -> tuple[requests.Response, str]:
-        """Call OpenAPI with raw and URL-encoded key forms used by data.go.kr."""
-        timeout = max(1, int(settings.KONEPS_OPENAPI_TIMEOUT_SECONDS))
-        variants = openapi.openapi_service_key_variants(service_key)
-        last_response: requests.Response | None = None
-
-        for variant_name, variant_value, value_is_preencoded in variants:
-            if value_is_preencoded:
-                query_string = openapi.openapi_query_string(
-                    params={**params, "ServiceKey": variant_value},
-                    preencoded_keys={"ServiceKey"},
-                )
-                response = requests.get(f"{url}?{query_string}", timeout=timeout)
-            else:
-                response = requests.get(
-                    url,
-                    params={**params, "ServiceKey": variant_value},
-                    timeout=timeout,
-                )
-            if response.status_code != 401:
-                return response, variant_name
-            last_response = response
-
-        if last_response is None:
-            raise ValueError(
-                f"KONEPS OpenAPI request was not attempted for {operation}."
-            )
-        return last_response, ",".join(name for name, _, _ in variants)
-
-    def _load_openapi_json(self, response: requests.Response) -> dict[str, Any]:
-        """Decode one OpenAPI response, surfacing non-JSON error bodies clearly."""
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise ValueError(
-                f"KONEPS OpenAPI response was not JSON: {response.text[:500]}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise ValueError("KONEPS OpenAPI response did not contain a JSON object.")
-        return payload
 
     def _collect_live_items(self, request: CrawlRequest) -> dict[str, Any]:
         """Collect live KONEPS items via the public homepage search flow."""
@@ -1442,21 +1394,12 @@ class KonepsCollectorService:
     def fetch_detail_html_payload(self, source_url: str) -> dict[str, str | None]:
         """Fetch + parse a single KONEPS detail page, returning the business-type fields.
 
-        Performs a simple HTTP GET on ``source_url``, parses the HTML with the
-        same ``html_parsing.parse_detail_html`` helper used during live
-        collection, and returns only the two business-type keys.
-
-        Best-effort: any exception raised by the HTTP call is propagated so
-        callers (e.g. backfill scripts) can record per-row failures.
+        Thin delegator to ``http_client.fetch_detail_html_payload``; kept as an
+        instance method so external callers can use it as a bound callable
+        (``business_type_enrichment``) or invoke it on a service instance
+        (``scripts/backfill_business_type.py``).
         """
-        timeout = max(1, int(getattr(settings, "KONEPS_OPENAPI_TIMEOUT_SECONDS", 30)))
-        response = requests.get(source_url, timeout=timeout)
-        response.raise_for_status()
-        detail = html_parsing.parse_detail_html(response.text)
-        return {
-            "business_type_code": detail.get("business_type_code"),
-            "business_type_label": detail.get("business_type_label"),
-        }
+        return http_client.fetch_detail_html_payload(source_url)
 
     def _resolve_project_for_item(
         self,
