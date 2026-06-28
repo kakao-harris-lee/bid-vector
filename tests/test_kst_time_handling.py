@@ -39,8 +39,10 @@ def test_scsbid_date_window_uses_kst_day_not_utc(monkeypatch):
     are KST, so the rolling window's "today" must be 06-27, not the UTC 06-26."""
     service = KonepsCollectorService()
     instant_utc = datetime(2026, 6, 26, 20, 0, tzinfo=UTC)  # == 06-27 05:00 KST
+    # The KST-anchored window logic lives in ``app.services.koneps.scsbid``
+    # (extracted from the collector); patch its clock, not the collector's.
     monkeypatch.setattr(
-        "app.services.koneps.collector.kst_now",
+        "app.services.koneps.scsbid.kst_now",
         lambda: instant_utc.astimezone(KST),
     )
     begin, end = service._scsbid_date_window(

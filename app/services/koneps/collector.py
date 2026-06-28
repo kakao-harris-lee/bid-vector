@@ -19,6 +19,7 @@ from app.services.koneps import (
     matching,
     openapi,
     parsing,
+    scsbid,
 )
 from app.services.koneps.live_failure import KonepsLiveCollectionError
 from app.services.project_similarity import ProjectSimilarityService
@@ -625,10 +626,10 @@ class KonepsCollectorService:
 
         categories = self._scsbid_categories_for_request(request)
         begin_token, end_token = self._scsbid_date_window(request)
-        page_size = self._scsbid_page_size(request)
-        max_pages = self._scsbid_max_pages(request)
+        page_size = scsbid.page_size(request)
+        max_pages = scsbid.max_pages(request)
         collect_reserve_detail = bool(request.collect_reserve_detail)
-        delay_seconds = self._scsbid_request_delay_seconds()
+        delay_seconds = scsbid.request_delay_seconds()
 
         # One query, not N: load the notice numbers that already have a settled
         # reserve price so we can skip their per-notice reserve-detail HTTP fetch.
@@ -752,7 +753,7 @@ class KonepsCollectorService:
                                 reserve_detail_error_count += 1
                                 detail = {"reserve_detail_error": str(exc)}
 
-                    parsed_item = self._build_scsbid_award_item(
+                    parsed_item = scsbid.build_scsbid_award_item(
                         raw_item,
                         detail=detail,
                         request=request,
@@ -840,14 +841,13 @@ class KonepsCollectorService:
 
     @staticmethod
     def _has_persisted_reserve_prices(historical_record: HistoricalData) -> bool:
-        """Whether a HistoricalData row already stores a non-empty reserve price."""
-        stored = historical_record.reserve_prices
-        if not stored:
-            return False
-        try:
-            return bool(json.loads(stored))
-        except (TypeError, ValueError):
-            return bool(str(stored).strip() not in {"", "[]"})
+        """Thin delegator to ``scsbid.has_persisted_reserve_prices``.
+
+        Kept as an instance method because external callers
+        (``app/tasks/jobs.py``) and internal persist paths invoke it via the
+        service. The implementation now lives in ``scsbid``.
+        """
+        return scsbid.has_persisted_reserve_prices(historical_record)
 
     def _scsbid_categories_for_request(self, request: CrawlRequest) -> list[str]:
         """Resolve the ordered, de-duplicated category list for a scsbid sweep.
@@ -874,45 +874,13 @@ class KonepsCollectorService:
         return resolved or [""]
 
     def _scsbid_date_window(self, request: CrawlRequest) -> tuple[str, str]:
-        """Resolve (inqryBgnDt, inqryEndDt) tokens for the scsbid date window.
+        """Thin delegator to ``scsbid.date_window``.
 
-        Priority: explicit ``start_date``/``end_date`` > ``lookback_days``
-        (end=today) > ``target_date`` single-day (legacy). Returns
-        ``YYYYMMDDHHMM`` tokens.
+        Kept as an instance method because external callers (timezone /
+        forward-coverage tests) invoke it via the service. The KST-anchored
+        implementation now lives in ``scsbid``.
         """
-        if request.start_date and request.end_date:
-            begin = openapi.openapi_date_token(request.start_date)
-            end = openapi.openapi_date_token(request.end_date)
-        elif request.lookback_days is not None:
-            # KONEPS opening dates are KST — anchor the rolling window on the
-            # Korean calendar day so the latest ~9h of openings are not missed
-            # while UTC is still on the previous date (KST 00:00-09:00).
-            today = kst_now().date()
-            start_day = today - timedelta(days=max(0, int(request.lookback_days)))
-            begin = start_day.strftime("%Y%m%d")
-            end = today.strftime("%Y%m%d")
-        else:
-            token = openapi.openapi_date_token(request.target_date)
-            begin = token
-            end = token
-        return f"{begin}0000", f"{end}2359"
-
-    def _scsbid_page_size(self, request: CrawlRequest) -> int:
-        """Resolve numOfRows per page for a scsbid sweep (default 100, <=999)."""
-        configured = request.page_size or settings.KONEPS_SCSBID_COLLECTION_PAGE_SIZE
-        return max(1, min(int(configured or 100), 999))
-
-    def _scsbid_max_pages(self, request: CrawlRequest) -> int:
-        """Resolve the per-category page ceiling for a scsbid sweep (default 30)."""
-        configured = request.max_pages or settings.KONEPS_SCSBID_COLLECTION_MAX_PAGES
-        return max(1, int(configured or 30))
-
-    def _scsbid_request_delay_seconds(self) -> float:
-        """Return the inter-call throttle delay (seconds, never negative)."""
-        return max(
-            0.0,
-            float(settings.KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS or 0.0),
-        )
+        return scsbid.date_window(request)
 
     def _fetch_scsbid_reserve_detail(
         self,
@@ -969,97 +937,6 @@ class KonepsCollectorService:
             }
         )
         return detail
-
-    def _build_scsbid_award_item(
-        self,
-        raw_item: dict[str, Any],
-        *,
-        detail: dict[str, Any],
-        request: CrawlRequest,
-        operation: str,
-        category: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Convert one ScsbidInfoService row into the existing crawl payload."""
-        notice_number = str(raw_item.get("bidNtceNo") or "").strip()
-        if not notice_number:
-            return None
-        # Tag the item with the swept category so persist-time category
-        # resolution honours the per-category operation, not request.category.
-        resolved_category = (
-            str(category).strip().lower()
-            if category is not None
-            else (request.category or None)
-        )
-
-        title = str(raw_item.get("bidNtceNm") or notice_number).strip()
-        winning_amount = parsing.coerce_amount(raw_item.get("sucsfbidAmt"))
-        success_rate = parsing.normalize_bid_rate_value(raw_item.get("sucsfbidRate"))
-        base_amount = (
-            detail.get("base_amount")
-            or detail.get("planned_price")
-            or (
-                winning_amount / success_rate
-                if winning_amount is not None and success_rate
-                else None
-            )
-            or winning_amount
-            or 0.0
-        )
-        planned_price = detail.get("planned_price") or (
-            winning_amount / success_rate
-            if winning_amount is not None and success_rate
-            else None
-        )
-        bid_rate = (
-            winning_amount / base_amount
-            if winning_amount is not None and float(base_amount or 0.0) > 0
-            else success_rate
-        )
-        opened_at = (
-            raw_item.get("rlOpengDt")
-            or raw_item.get("fnlSucsfDate")
-            or raw_item.get("rgstDt")
-        )
-        demand_agency = str(raw_item.get("dminsttNm") or "").strip()
-
-        return {
-            "notice_number": notice_number,
-            "title": title,
-            "base_amount": float(base_amount or 0.0),
-            "estimated_amount": float(planned_price or base_amount or 0.0),
-            "closing_at": parsing.coerce_datetime(opened_at),
-            "business_type": resolved_category or request.category,
-            "region": parsing.extract_region([demand_agency, title]),
-            "license_codes": [],
-            "source_url": None,
-            "metadata": {
-                "mode": "scsbid_openapi",
-                "openapi_service": "ScsbidInfoService",
-                "openapi_operation": operation,
-                "bid_notice_order": raw_item.get("bidNtceOrd"),
-                "bid_classification_no": raw_item.get("bidClsfcNo"),
-                "rebid_no": raw_item.get("rbidNo"),
-                "opening_status": "낙찰",
-                "opening_demand_agency": demand_agency,
-                "demand_agency": demand_agency,
-                "opening_scheduled_at": opened_at,
-                "opening_announced_at": opened_at,
-                "participant_count": parsing.safe_int(raw_item.get("prtcptCnum")),
-                "winning_company": raw_item.get("bidwinnrNm"),
-                "winning_business_no": raw_item.get("bidwinnrBizno"),
-                "winning_amount": winning_amount,
-                "winning_rate": success_rate,
-                "bid_rate": parsing.normalize_bid_rate_value(bid_rate),
-                "final_success_date": raw_item.get("fnlSucsfDate"),
-                "reserve_prices": detail.get("reserve_prices") or [],
-                "selected_numbers": detail.get("selected_numbers") or [],
-                "planned_price": detail.get("planned_price"),
-                "reserve_detail_error": detail.get("reserve_detail_error"),
-                "raw_openapi_item": raw_item,
-                "raw_reserve_detail_items": detail.get("raw_reserve_detail_items")
-                or [],
-            },
-        }
 
     def _request_openapi_with_key_variants(
         self,
