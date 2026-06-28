@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta
 from typing import Any
@@ -12,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import ensure_utc
 from app.models.models import HistoricalData, Project, TenderResult
+from app.utils.sequence_coercion import coerce_sequence
 
 _CATEGORY_ALIASES = {
     "general-service": "service",
@@ -227,20 +227,7 @@ class BacktestCutoffService:
             "base_amount": float(record.base_amount or 0.0),
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": float(record.bid_rate or 0.0),
-            "reserve_prices": self._coerce_sequence(record.reserve_prices),
-            "selected_numbers": self._coerce_sequence(record.selected_numbers),
+            "reserve_prices": coerce_sequence(record.reserve_prices),
+            "selected_numbers": coerce_sequence(record.selected_numbers),
             "opened_at": record.opened_at or record.created_at,
         }
-
-    def _coerce_sequence(self, raw_value: Any) -> list[Any]:
-        if raw_value is None:
-            return []
-        if isinstance(raw_value, list):
-            return raw_value
-        if isinstance(raw_value, str):
-            try:
-                parsed = json.loads(raw_value)
-            except json.JSONDecodeError:
-                return []
-            return parsed if isinstance(parsed, list) else []
-        return []

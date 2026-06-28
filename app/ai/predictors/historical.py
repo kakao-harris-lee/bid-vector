@@ -10,6 +10,10 @@ from typing import Any
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.utils.sequence_coercion import (
+    coerce_integer_list,
+    coerce_numeric_list,
+)
 
 # Renormalized confidence/matched weights for the *calibration* raw signal.
 # The legacy heuristic mixes three signals (matched 0.38 + confidence 0.42 +
@@ -841,45 +845,6 @@ def weighted_std(values: list[float], weights: list[float], mean_value: float) -
         return float(np.std(values))
     variance = np.average((np.array(values) - mean_value) ** 2, weights=np.array(weights))
     return float(sqrt(float(variance)))
-
-
-def coerce_numeric_list(raw_value: Any) -> list[float]:
-    """Coerce a JSON string or list of numbers into floats."""
-    parsed = coerce_sequence(raw_value)
-    numbers: list[float] = []
-    for item in parsed:
-        try:
-            numbers.append(float(item))
-        except (TypeError, ValueError):
-            continue
-    return numbers
-
-
-def coerce_integer_list(raw_value: Any) -> list[int]:
-    """Coerce a JSON string or list of numbers into integers."""
-    parsed = coerce_sequence(raw_value)
-    numbers: list[int] = []
-    for item in parsed:
-        try:
-            numbers.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return numbers
-
-
-def coerce_sequence(raw_value: Any) -> list[Any]:
-    """Parse list-like values coming from ORM rows or dictionaries."""
-    if raw_value is None:
-        return []
-    if isinstance(raw_value, list):
-        return raw_value
-    if isinstance(raw_value, str):
-        try:
-            parsed = json.loads(raw_value)
-        except json.JSONDecodeError:
-            return []
-        return parsed if isinstance(parsed, list) else []
-    return []
 
 
 def build_reserve_pattern_context(
