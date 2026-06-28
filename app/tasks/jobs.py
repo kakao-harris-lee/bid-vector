@@ -327,41 +327,43 @@ def _normalize_deferred_reserve_notices(
 
 
 def _enqueue_deferred_reserve_detail_backfill(notices: list[dict[str, Any]]) -> int:
-    """Queue async reserve-detail fetch task(s) for notices deferred by the crawl.
+    """Queue ONE serial-chain root task for the deferred reserve-detail notices.
 
-    Mirrors :func:`_enqueue_deferred_embedding_backfill`: the deferred notices are
-    split into bounded chunks (``KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE``)
-    and enqueued as separate ``backfill_scsbid_reserve_detail`` tasks so a large
-    catch-up sweep cannot run as one unbounded task that re-creates the time-limit
-    redelivery loop on the ops queue.
+    ScsbidInfoService imposes a *rate* limit (HTTP 429 "API token quota exceeded"),
+    not a daily quota: it recovers within ~2 minutes of a 429. The previous version
+    split the deferred set into N bounded chunks and enqueued them all at once, so
+    several ops workers burst the reserve-detail API *concurrently* and tripped the
+    rate limit (small bursts passed with 0 errors, large bursts saw mass 429s).
+    Concurrency, not total volume, was the cause.
+
+    The fix enqueues a *single* root ``backfill_scsbid_reserve_detail`` task carrying
+    the entire cleaned notice list. That task processes only one
+    ``KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE``-sized chunk and self-chains a
+    continuation for the remainder, so the API is hit strictly serially.
 
     Unlike the embedding backfill this is NOT an ML task, so it bypasses the
     ``_enqueue_ml_task`` inline-ML guard and enqueues directly onto the ops queue
     (same pattern as ``collect_koneps_notices.apply_async``).
 
     Isolated with a try/except so a failed enqueue never breaks a successful
-    crawl. Returns the number of tasks enqueued (0 on empty input or failure).
+    crawl. Returns the number of root tasks enqueued (1, or 0 on empty/failure).
     """
     cleaned = _normalize_deferred_reserve_notices(notices)
     if not cleaned:
         return 0
 
-    chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
-    enqueued = 0
     try:
-        for start in range(0, len(cleaned), chunk_size):
-            chunk = cleaned[start:start + chunk_size]
-            backfill_scsbid_reserve_detail.apply_async(
-                kwargs={"notices": chunk},
-                queue=settings.CELERY_OPS_QUEUE,
-            )
-            enqueued += 1
+        backfill_scsbid_reserve_detail.apply_async(
+            kwargs={"notices": cleaned},
+            queue=settings.CELERY_OPS_QUEUE,
+        )
+        return 1
     except Exception:  # pragma: no cover - defensive: enqueue must not break crawl
         logger.exception(
             "deferred reserve-detail backfill enqueue failed for %d notice(s)",
             len(cleaned),
         )
-    return enqueued
+        return 0
 
 
 @celery_app.task(bind=True, name=BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME)
@@ -382,18 +384,32 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
       resulting ``reserve_prices`` / ``selected_numbers`` are written onto the
       matching ``HistoricalData`` row as JSON.
 
+    Serial self-chaining (rate-limit throttle): ScsbidInfoService rate-limits
+    concurrent reserve-detail calls (HTTP 429), so the enqueue helper hands this
+    task the *entire* deferred notice list and the task processes only the first
+    ``KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE`` notices, then enqueues a
+    *single* continuation task for the remainder. This keeps the API hit strictly
+    one-chunk-at-a-time instead of N chunks bursting in parallel across ops workers.
+    Assumption: a chunk (<=chunk_size notices) finishes well within the 6h sweep
+    interval, so a chain never overlaps the next sweep; if a chain is dropped the
+    next 6h collect recomputes the deferred list, so the work self-heals.
+
     Partial-progress preservation: progress is committed in small batches so a
     SIGKILL / soft-time-limit mid-chunk still keeps what was already fetched. On
     ``SoftTimeLimitExceeded`` the work done so far is committed and a graceful
-    summary is returned (no redelivery loop). A single notice failing (HTTP or
-    parse) is caught per-notice and counted, never aborting the chunk.
+    summary is returned (no continuation enqueue — the remainder is recomputed and
+    re-deferred by the next 6h collect, so it self-heals). A single notice failing
+    (HTTP or parse) is caught per-notice and counted, never aborting the chunk.
     """
     import json
     from time import sleep
 
     from app.models.models import HistoricalData
 
-    cleaned = _normalize_deferred_reserve_notices(notices)
+    all_cleaned = _normalize_deferred_reserve_notices(notices)
+    chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
+    cleaned = all_cleaned[:chunk_size]
+    rest = all_cleaned[chunk_size:]
     service = KonepsCollectorService()
     service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
     delay_seconds = max(
@@ -417,13 +433,18 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     db = SessionLocal()
     try:
         if not service_key:
-            # No key -> nothing fetchable; surface as errors without HTTP.
+            # No key -> nothing fetchable; surface as errors without HTTP. Do NOT
+            # chain a continuation (the remainder would fail the same way); the
+            # next 6h collect re-defers everything once a key is configured.
             return {
                 "requested": requested,
+                "processed": 0,
                 "fetched": 0,
                 "skipped_existing": 0,
                 "errors": requested,
                 "error": "missing_service_key",
+                "remaining": len(rest),
+                "continued": False,
             }
 
         for index, entry in enumerate(cleaned):
@@ -487,6 +508,7 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
                 )
                 return {
                     "requested": requested,
+                    "processed": fetched + skipped_existing + not_settled + errors,
                     "fetched": fetched,
                     "skipped_existing": skipped_existing,
                     "not_settled": not_settled,
@@ -494,6 +516,10 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
                     "error_types": error_type_counts,
                     "error_samples": error_samples,
                     "soft_time_limit_exceeded": True,
+                    # Do not chain on soft-time-limit: the unprocessed remainder is
+                    # recomputed and re-deferred by the next 6h collect (self-heal).
+                    "remaining": len(rest),
+                    "continued": False,
                 }
             except Exception as exc:  # noqa: BLE001 — one notice must not abort the chunk
                 errors += 1
@@ -517,14 +543,37 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
                 error_type_counts,
                 error_samples,
             )
+
+        # Serial self-chaining: this run processed at most one chunk. If notices
+        # remain, enqueue a SINGLE continuation carrying the remainder so the
+        # reserve-detail API stays hit one-chunk-at-a-time (never a parallel
+        # burst). Done after the commit / on the normal path only.
+        continued = False
+        if rest:
+            try:
+                backfill_scsbid_reserve_detail.apply_async(
+                    kwargs={"notices": rest},
+                    queue=settings.CELERY_OPS_QUEUE,
+                )
+                continued = True
+            except Exception:  # pragma: no cover - chain failure must not fail chunk
+                logger.exception(
+                    "backfill_scsbid_reserve_detail continuation enqueue failed "
+                    "for %d remaining notice(s)",
+                    len(rest),
+                )
+
         return {
             "requested": requested,
+            "processed": fetched + skipped_existing + not_settled + errors,
             "fetched": fetched,
             "skipped_existing": skipped_existing,
             "not_settled": not_settled,
             "errors": errors,
             "error_types": error_type_counts,
             "error_samples": error_samples,
+            "remaining": len(rest),
+            "continued": continued,
         }
     except Exception:
         db.rollback()

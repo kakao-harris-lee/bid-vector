@@ -210,6 +210,17 @@ class Settings(BaseSettings):
     # several short tasks instead of one unbounded task that re-creates the
     # time-limit redelivery loop on the ops queue.
     KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE: int = 200
+    # Minimum age (hours) of a notice's opening/closing datetime before its reserve
+    # detail is deferred for backfill. ScsbidInfoService imposes a *rate* limit (HTTP
+    # 429 "API token quota exceeded"), not a daily quota, and a just-opened notice
+    # usually has no settled reserve yet — fetching it returns an empty reserve
+    # ("not_settled") and is re-tried every 6h sweep, wasting calls against the rate
+    # limit. Skipping notices whose opening is more recent than
+    # ``now - MIN_SETTLE_AGE_HOURS`` defers each notice's single fetch until it has
+    # had time to settle; within the 3-day lookback an aging notice is then fetched
+    # exactly once. Notices with an unknown/None opening datetime are still deferred
+    # (the gate cannot apply, so we try). 0 disables the gate.
+    KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS: int = 24
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50

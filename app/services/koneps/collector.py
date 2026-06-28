@@ -744,11 +744,28 @@ class KonepsCollectorService:
         reserve_detail_error_count = 0
         reserve_detail_reused_count = 0
         reserve_detail_deferred_count = 0
+        reserve_detail_backoff_skipped_count = 0
         api_call_count = 0
         key_variant = ""
         last_result_code = ""
         last_result_message = ""
         category_metadata: list[dict[str, Any]] = []
+
+        # Reserve-detail backoff age-gate (only when deferring): a just-opened
+        # notice usually has no settled reserve yet, so deferring it now means every
+        # 6h sweep re-fetches an empty reserve ("not_settled") and burns
+        # ScsbidInfoService rate limit (HTTP 429). Defer a notice only once its
+        # opening datetime is at least MIN_SETTLE_AGE_HOURS old. Comparison is by
+        # instant: ``coerce_datetime`` returns UTC-aware values and ``kst_now`` is
+        # KST-aware (KONEPS frame, per the KST policy), so the cutoff is exact.
+        min_settle_age_hours = max(
+            0, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS)
+        )
+        reserve_detail_age_cutoff = (
+            kst_now() - timedelta(hours=min_settle_age_hours)
+            if defer_reserve_detail and min_settle_age_hours > 0
+            else None
+        )
 
         for category in categories:
             operation = openapi.scsbid_operation_for_category(category)
@@ -817,16 +834,37 @@ class KonepsCollectorService:
                             # the notice for a bounded async backfill instead.
                             # ``detail`` stays empty so persist preserves any
                             # already-stored reserve price.
-                            dedupe_key = (notice_number, str(category or ""))
-                            if dedupe_key not in deferred_reserve_seen:
-                                deferred_reserve_seen.add(dedupe_key)
-                                deferred_reserve_detail.append(
-                                    {
-                                        "notice_number": notice_number,
-                                        "category": str(category or ""),
-                                    }
-                                )
-                                reserve_detail_deferred_count += 1
+                            #
+                            # Age-gate (rate-limit backoff): only defer once the
+                            # notice's opening datetime is old enough to have a
+                            # settled reserve. A just-opened/future notice is skipped
+                            # this sweep (counted separately) and re-checked next
+                            # sweep — within the 3-day lookback it ages in and is
+                            # fetched exactly once. Unknown opening => defer (the gate
+                            # cannot apply, so we try). Uses the SAME opening fields
+                            # as ``_build_scsbid_award_item``'s closing_at.
+                            opened_at = parsing.coerce_datetime(
+                                raw_item.get("rlOpengDt")
+                                or raw_item.get("fnlSucsfDate")
+                                or raw_item.get("rgstDt")
+                            )
+                            if (
+                                reserve_detail_age_cutoff is not None
+                                and opened_at is not None
+                                and opened_at > reserve_detail_age_cutoff
+                            ):
+                                reserve_detail_backoff_skipped_count += 1
+                            else:
+                                dedupe_key = (notice_number, str(category or ""))
+                                if dedupe_key not in deferred_reserve_seen:
+                                    deferred_reserve_seen.add(dedupe_key)
+                                    deferred_reserve_detail.append(
+                                        {
+                                            "notice_number": notice_number,
+                                            "category": str(category or ""),
+                                        }
+                                    )
+                                    reserve_detail_deferred_count += 1
                         else:
                             try:
                                 if delay_seconds > 0:
@@ -902,6 +940,9 @@ class KonepsCollectorService:
                 "reserve_detail_error_count": reserve_detail_error_count,
                 "reserve_detail_reused_count": reserve_detail_reused_count,
                 "reserve_detail_deferred_count": reserve_detail_deferred_count,
+                "reserve_detail_backoff_skipped_count": (
+                    reserve_detail_backoff_skipped_count
+                ),
                 "deferred_reserve_detail_notices": deferred_reserve_detail,
                 "query_date_begin": begin_token,
                 "query_date_end": end_token,

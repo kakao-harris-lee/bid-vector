@@ -20,8 +20,17 @@ This mirrors the embedding defer+chunk pattern (PR#82) onto reserve-detail:
 3. ``backfill_scsbid_reserve_detail`` fetches those notices async, persisting the
    reserve price onto ``HistoricalData`` — idempotent (skips already-settled),
    and one notice failing does not abort the chunk.
-4. ``_enqueue_deferred_reserve_detail_backfill`` splits a large set into bounded
-   chunks (one task per chunk).
+4. ``_enqueue_deferred_reserve_detail_backfill`` enqueues a single serial-chain
+   root task; the task processes one chunk and self-chains the remainder.
+
+Throttle follow-up (fix/scsbid-reserve-detail-throttle)
+------------------------------------------------------
+ScsbidInfoService rate-limits *concurrent* reserve-detail calls (HTTP 429), so the
+backfill is serialized: the enqueue helper hands one root task the full notice list
+and ``backfill_scsbid_reserve_detail`` processes one chunk then enqueues a single
+continuation for the remainder. A closing/opening age-gate
+(``KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS``) keeps just-opened notices
+out of the deferred set so their unsettled reserve is not re-fetched every sweep.
 
 All external HTTP is mocked; no real KONEPS calls under ``ENVIRONMENT=test``.
 """
@@ -173,6 +182,164 @@ def test_defer_true_skips_inline_fetch_and_surfaces_notices(test_db, monkeypatch
     assert result["items"][0]["metadata"]["reserve_prices"] == []
 
 
+# ---------------------------------------------------------------------------
+# 1b. closing_at age-gate: just-opened notices are NOT deferred (rate-limit
+#     backoff), so they are not re-fetched every 6h sweep before they settle.
+# ---------------------------------------------------------------------------
+def _award_item_opened_at(notice_number, opened_at):
+    item = _award_item(notice_number)
+    item["rlOpengDt"] = opened_at
+    item["fnlSucsfDate"] = ""
+    item["rgstDt"] = ""
+    return item
+
+
+def test_age_gate_excludes_recently_opened_notice(test_db, monkeypatch):
+    from datetime import timedelta
+
+    from app.core import time as time_module
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS", 24
+    )
+
+    # coerce_datetime treats a naive ISO string as UTC, so build the opening
+    # timestamps in UTC wall-clock to control their instant deterministically.
+    # The gate compares the UTC-aware opening instant against ``kst_now()`` minus
+    # the threshold; aware-datetime comparison is by instant, so the frame the
+    # cutoff is expressed in does not change the boundary.
+    now_utc = time_module.utc_now()
+    recent = (now_utc - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    future = (now_utc + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    aged = (now_utc - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _spy_fetch(self, raw_item, *, category, service_key):
+        raise AssertionError("must not fetch when deferring")
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _spy_fetch
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body(
+                [
+                    _award_item_opened_at("RECENT", recent),
+                    _award_item_opened_at("FUTURE", future),
+                    _award_item_opened_at("AGED", aged),
+                ],
+                total_count=3,
+                num_of_rows=100,
+            )
+        )
+
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    # Only the aged notice (opened > 24h ago) is deferred; recent/future ones are
+    # backed off so they are not re-fetched before they have a chance to settle.
+    assert [d["notice_number"] for d in deferred] == ["AGED"]
+    assert result["metadata"]["reserve_detail_deferred_count"] == 1
+    assert result["metadata"]["reserve_detail_backoff_skipped_count"] == 2
+    # The award rows still build for all three (the gate only defers the fetch).
+    assert {item["notice_number"] for item in result["items"]} == {
+        "RECENT",
+        "FUTURE",
+        "AGED",
+    }
+
+
+def test_age_gate_defers_notice_with_unknown_opening(test_db, monkeypatch):
+    """A notice with no opening datetime cannot be gated, so it is still deferred."""
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS", 24
+    )
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: (_ for _ in ()).throw(
+            AssertionError("must not fetch when deferring")
+        ),
+    )
+
+    def fake_get(url, params, timeout):
+        item = _award_item("NO-DATE")
+        item["rlOpengDt"] = ""
+        item["fnlSucsfDate"] = ""
+        item["rgstDt"] = ""
+        return FakeOpenApiResponse(_award_body([item], total_count=1, num_of_rows=100))
+
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    assert [d["notice_number"] for d in deferred] == ["NO-DATE"]
+    assert result["metadata"]["reserve_detail_backoff_skipped_count"] == 0
+
+
+def test_age_gate_disabled_when_threshold_zero(test_db, monkeypatch):
+    """MIN_SETTLE_AGE_HOURS=0 disables the gate: even recent notices are deferred."""
+    from datetime import timedelta
+
+    from app.core import time as time_module
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS", 0
+    )
+
+    recent = (time_module.utc_now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: (_ for _ in ()).throw(
+            AssertionError("must not fetch when deferring")
+        ),
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body(
+                [_award_item_opened_at("RECENT", recent)],
+                total_count=1,
+                num_of_rows=100,
+            )
+        )
+
+    monkeypatch.setattr("app.services.koneps.collector.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    assert [d["notice_number"] for d in deferred] == ["RECENT"]
+    assert result["metadata"]["reserve_detail_backoff_skipped_count"] == 0
+
+
 def test_defer_true_omits_already_settled_notice(test_db, monkeypatch):
     """A notice that already has a persisted reserve price is neither fetched nor deferred."""
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
@@ -283,12 +450,15 @@ def test_backfill_fetches_and_persists_reserve_prices(test_db, monkeypatch):
 
     assert out == {
         "requested": 1,
+        "processed": 1,
         "fetched": 1,
         "skipped_existing": 0,
         "not_settled": 0,
         "errors": 0,
         "error_types": {},
         "error_samples": [],
+        "remaining": 0,
+        "continued": False,
     }
     test_db.expire_all()
     stored = (
@@ -440,9 +610,19 @@ def test_backfill_empty_reserve_counts_as_not_settled(test_db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 4. enqueue helper: bounded chunking.
+# 4. enqueue helper: a single serial-chain root task (throttle fix).
+#
+# Background (fix/scsbid-reserve-detail-throttle)
+# -----------------------------------------------
+# ScsbidInfoService imposes a *rate* limit (HTTP 429 "API token quota exceeded"),
+# not a daily quota. The old helper split the deferred notices into N chunks and
+# enqueued them all at once, so several ops workers burst the reserve-detail API
+# concurrently and tripped the rate limit (large bursts saw mass 429s; a small
+# 9-chunk burst passed with 0 errors). The fix enqueues a *single* root task with
+# the full notice list; ``backfill_scsbid_reserve_detail`` processes one chunk and
+# self-chains a continuation for the remainder, so the API is hit strictly serially.
 # ---------------------------------------------------------------------------
-def test_enqueue_chunks_large_notice_set(monkeypatch):
+def test_enqueue_creates_single_root_task(monkeypatch):
     from app.tasks import jobs
 
     monkeypatch.setattr(
@@ -464,16 +644,38 @@ def test_enqueue_chunks_large_notice_set(monkeypatch):
     ]
     enqueued = jobs._enqueue_deferred_reserve_detail_backfill(notices)
 
-    assert enqueued == 3
-    chunk_sizes = [len(call["kwargs"]["notices"]) for call in captured]
-    assert chunk_sizes == [200, 200, 50]
-    assert all(call["queue"] == settings.CELERY_OPS_QUEUE for call in captured)
-
-    # Chunks together cover exactly the input notices with no overlap.
-    flattened = [
-        n["notice_number"] for call in captured for n in call["kwargs"]["notices"]
+    # A single root task carries the *entire* cleaned notice list (no parallel
+    # chunk burst). Chunking now happens serially inside the task via self-chaining.
+    assert enqueued == 1
+    assert len(captured) == 1
+    assert captured[0]["queue"] == settings.CELERY_OPS_QUEUE
+    assert len(captured[0]["kwargs"]["notices"]) == 450
+    assert [n["notice_number"] for n in captured[0]["kwargs"]["notices"]] == [
+        n["notice_number"] for n in notices
     ]
-    assert sorted(flattened) == sorted(n["notice_number"] for n in notices)
+
+
+def test_enqueue_dedupes_into_single_task(monkeypatch):
+    from app.tasks import jobs
+
+    captured: list[dict] = []
+
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail,
+        "apply_async",
+        lambda *, kwargs, queue: captured.append({"kwargs": kwargs, "queue": queue}),
+    )
+
+    notices = [
+        {"notice_number": "DUP", "category": "construction"},
+        {"notice_number": "DUP", "category": "construction"},
+        {"notice_number": "OTHER", "category": "service"},
+    ]
+    assert jobs._enqueue_deferred_reserve_detail_backfill(notices) == 1
+    assert [n["notice_number"] for n in captured[0]["kwargs"]["notices"]] == [
+        "DUP",
+        "OTHER",
+    ]
 
 
 def test_enqueue_empty_is_noop(monkeypatch):
@@ -491,3 +693,112 @@ def test_enqueue_empty_is_noop(monkeypatch):
 
     assert jobs._enqueue_deferred_reserve_detail_backfill([]) == 0
     assert called["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 5. backfill self-chaining: one chunk processed per run, continuation enqueued.
+# ---------------------------------------------------------------------------
+def test_backfill_processes_one_chunk_and_chains_remainder(test_db, monkeypatch):
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 2)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    for i in range(5):
+        test_db.add(
+            HistoricalData(
+                notice_number=f"C-{i}", reserve_prices="[]", selected_numbers="[]"
+            )
+        )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [111],
+            "selected_numbers": [],
+        },
+    )
+
+    continuations: list[dict] = []
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail,
+        "apply_async",
+        lambda *, kwargs, queue: continuations.append(
+            {"kwargs": kwargs, "queue": queue}
+        ),
+    )
+
+    notices = [
+        {"notice_number": f"C-{i}", "category": "construction"} for i in range(5)
+    ]
+    out = jobs.backfill_scsbid_reserve_detail.run(notices=notices)
+
+    # Only the first chunk_size notices were processed this run.
+    assert out["processed"] == 2
+    assert out["fetched"] == 2
+    assert out["requested"] == 2
+    assert out["remaining"] == 3
+    assert out["continued"] is True
+
+    # Exactly one continuation task carrying the remaining notices.
+    assert len(continuations) == 1
+    assert continuations[0]["queue"] == settings.CELERY_OPS_QUEUE
+    assert [n["notice_number"] for n in continuations[0]["kwargs"]["notices"]] == [
+        "C-2",
+        "C-3",
+        "C-4",
+    ]
+
+    # Only the first two rows were settled this run.
+    test_db.expire_all()
+    settled = {
+        row.notice_number
+        for row in test_db.query(HistoricalData).all()
+        if json.loads(row.reserve_prices)
+    }
+    assert settled == {"C-0", "C-1"}
+
+
+def test_backfill_last_chunk_does_not_chain(test_db, monkeypatch):
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 5)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    test_db.add(
+        HistoricalData(notice_number="ONLY", reserve_prices="[]", selected_numbers="[]")
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [222],
+            "selected_numbers": [],
+        },
+    )
+
+    continuations: list[dict] = []
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail,
+        "apply_async",
+        lambda *, kwargs, queue: continuations.append(kwargs),
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "ONLY", "category": "construction"}]
+    )
+
+    assert out["processed"] == 1
+    assert out["remaining"] == 0
+    assert out["continued"] is False
+    assert continuations == []  # nothing left to chain
