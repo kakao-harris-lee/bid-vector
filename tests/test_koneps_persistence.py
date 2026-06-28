@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from app.models.models import HistoricalData, Project, TenderResult
+from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import persistence
 from app.services.koneps.collector import KonepsCollectorService
@@ -206,3 +206,83 @@ def test_collector_delegators_forward_to_persistence(test_db):
 
     assert via_method is not None
     assert via_method.id == via_function.id == existing.id
+
+
+def test_create_crawl_job_commits_running_row(test_db):
+    """``create_crawl_job`` inserts a committed ``running`` row stamped with the task id."""
+    crawl_job = persistence.create_crawl_job(
+        test_db, _request(), celery_task_id="task-123"
+    )
+
+    assert crawl_job.id is not None
+    assert crawl_job.status == "running"
+    assert crawl_job.result_count == 0
+    assert crawl_job.celery_task_id == "task-123"
+    assert crawl_job.source == "scsbid-openapi"
+
+    # The single commit means a fresh session-independent query sees the row.
+    test_db.expire_all()
+    reloaded = test_db.query(CrawlJob).filter(CrawlJob.id == crawl_job.id).one()
+    assert reloaded.status == "running"
+    assert reloaded.celery_task_id == "task-123"
+
+
+def test_mark_crawl_job_failed_commits_failure(test_db):
+    """``mark_crawl_job_failed`` flips an existing row to failed and commits once."""
+    crawl_job = persistence.create_crawl_job(test_db, _request())
+    assert crawl_job.status == "running"
+
+    failed = persistence.mark_crawl_job_failed(
+        test_db, crawl_job, "boom: collection blew up"
+    )
+
+    assert failed.id == crawl_job.id
+    assert failed.status == "failed"
+    assert failed.error_message == "boom: collection blew up"
+    assert failed.completed_at is not None
+
+    test_db.expire_all()
+    reloaded = test_db.query(CrawlJob).filter(CrawlJob.id == crawl_job.id).one()
+    assert reloaded.status == "failed"
+    assert reloaded.error_message == "boom: collection blew up"
+
+
+def test_write_delegators_forward_to_persistence(test_db, monkeypatch):
+    """The retained collector write methods delegate to the persistence module."""
+    calls: dict[str, tuple] = {}
+
+    def _spy_create(db, request, *, celery_task_id=None):
+        calls["create"] = (db, request, celery_task_id)
+        return "created-job"
+
+    def _spy_persist(db, crawl_job, request, response, *, defer_embeddings=False):
+        calls["persist"] = (db, crawl_job, request, response, defer_embeddings)
+        return "persisted-job"
+
+    def _spy_mark(db, crawl_job, error_message):
+        calls["mark"] = (db, crawl_job, error_message)
+        return "failed-job"
+
+    monkeypatch.setattr(persistence, "create_crawl_job", _spy_create)
+    monkeypatch.setattr(persistence, "persist_crawl_results", _spy_persist)
+    monkeypatch.setattr(persistence, "mark_crawl_job_failed", _spy_mark)
+
+    service = KonepsCollectorService()
+    request = _request()
+
+    assert (
+        service.create_crawl_job(test_db, request, celery_task_id="t-9")
+        == "created-job"
+    )
+    assert calls["create"] == (test_db, request, "t-9")
+
+    assert (
+        service.persist_crawl_results(
+            test_db, "job", request, {"items": []}, defer_embeddings=True
+        )
+        == "persisted-job"
+    )
+    assert calls["persist"] == (test_db, "job", request, {"items": []}, True)
+
+    assert service.mark_crawl_job_failed(test_db, "job", "err") == "failed-job"
+    assert calls["mark"] == (test_db, "job", "err")
