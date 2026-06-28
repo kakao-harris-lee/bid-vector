@@ -304,8 +304,10 @@ def test_scsbid_date_window_resolution_three_paths(monkeypatch):
     assert explicit == ("202605010000", "202605072359")
 
     # lookback anchors on the KST calendar day (KONEPS opening dates are KST).
+    # The window logic lives in ``app.services.koneps.scsbid`` (extracted from
+    # the collector); patch its clock, not the collector's.
     fixed_kst = datetime(2026, 6, 8, 9, 0, tzinfo=KST)
-    monkeypatch.setattr("app.services.koneps.collector.kst_now", lambda: fixed_kst)
+    monkeypatch.setattr("app.services.koneps.scsbid.kst_now", lambda: fixed_kst)
     lookback = service._scsbid_date_window(
         CrawlRequest(source="scsbid-openapi", lookback_days=3)
     )
