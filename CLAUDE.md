@@ -107,6 +107,35 @@ docker compose --profile tasks config --quiet
 7. 시크릿, 토큰, 사업자 개인정보는 코드/문서/로그에 남기지 않습니다.
 8. 문서 변경 시 완료된 plan 문서를 계속 늘리지 않습니다. 현재 상태는 `README.md`, 단계 계획은 `docs/roadmap.md`, 운영 절차는 `docs/production-smoke-test.md` 또는 `docs/operations/`에 둡니다.
 
+## 4.5 설계 규칙 (크기 · 위임 · 패턴 · 파이프라인)
+
+코드가 비대해지고 한 곳에 책임이 몰리는 것을 막고, 비동기 스트림 파이프라인을 유지하기 위한 규칙입니다. 한도는 **소프트 가이드**(의미 있는 단일 책임이면 약간 초과 허용)이며, 리뷰어 에이전트가 PR에서 점검합니다.
+
+### 1. 크기 한도 (초과 시 분해 권장)
+
+- Python 파일 **~500줄**, 함수/메서드 **~50줄**, React 컴포넌트 **~250줄**.
+- 초과하면 **책임 단위로 분해**합니다. 예: `collector.py`를 `parsing`/`openapi`/`html_parsing`/`matching`/`http_client` 모듈로 점진 분해(#127~#140). 긴 함수는 헬퍼로, 큰 화면은 하위 컴포넌트로.
+- 한도를 넘겨야 할 합당한 이유가 있으면 PR 본문에 사유를 남깁니다.
+
+### 2. 위임 (얇은 경계, 깊은 도메인)
+
+- 라우터·컴포넌트는 얇게(§4). 도메인 로직은 `app/services/`·`app/ai/`(백엔드), `features/`·`shared/` 훅(프론트)으로 위임합니다.
+- 한 함수가 여러 일을 하면 단일 책임 단위로 분해해 위임합니다.
+- 무겁거나 시간제한이 있는 작업은 요청-응답 경로에서 직접 실행하지 않고 **celery task로 위임**합니다(예: defer→backfill).
+- 멀티파일·복합 작업은 적절한 빌더 서브에이전트(`backend-builder`/`frontend-builder`/`ml-builder`)로 위임합니다.
+
+### 3. 패턴 활용 (재사용 우선, 복붙 금지)
+
+- 새 코드는 **기존 패턴을 먼저 찾아 따릅니다**: db 주입 service 클래스, repository-style 조회, `defer + chunk + idempotency` backfill(#82/#123/#138), self-chain 직렬화, 시간 헬퍼(`utc_now`/`ensure_utc`/`kst_now`/`to_kst`), react-query 훅, `zod` 폼, shadcn 래퍼.
+- 같은 문제를 두 번째로 풀면 **공용 헬퍼/모듈로 추출**합니다. 복붙·중복 로직 금지.
+
+### 4. 이벤트 드리븐 + 스트림 데이터 파이프라인 유지
+
+- 수집·예측·정산·증적은 **celery task + beat 스케줄의 비동기 파이프라인**으로 흐릅니다. 이 흐름을 동기 블로킹으로 되돌리지 않습니다.
+- 대량 작업은 **스트림/청크 단위**로 처리하고 **부분 진행을 영속화**(중간 commit), **멱등성**(`celery_task_id`/persisted-state)으로 재배달·재시작에 안전하게 만듭니다.
+- 외부 호출(KONEPS 등)은 **rate/quota를 존중**해 직렬·throttle·backoff합니다. 동시 burst 금지(reserve-detail 동시 청크가 KONEPS rate limit을 초과한 사례에서 얻은 교훈).
+- 작업은 soft/hard time limit 안에 들도록 분할하고, 못 끝내면 self-chain/재배달로 이어가되 **orphan을 남기지 않습니다**(reconciler·idempotency).
+
 ## 5. 서브에이전트
 
 `.claude/agents/` 기준으로 역할을 나눕니다.
@@ -171,6 +200,7 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 - [ ] README 또는 `docs/roadmap.md`/운영 문서 갱신
 - [ ] 시크릿/개인정보 로깅 없음
 - [ ] PR 본문에 어느 로드맵 단계/게이트와 연결되는지 명시
+- [ ] 설계 규칙(§4.5): 파일/함수 크기 한도 준수(초과 시 분해 또는 사유), 기존 패턴·헬퍼 재사용(복붙 없음), 무거운 작업은 task 경로·외부 호출은 throttle/멱등(파이프라인 유지)
 
 ## 10. 워크플로
 
