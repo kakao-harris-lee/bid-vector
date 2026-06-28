@@ -13,26 +13,16 @@ from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.core.time import kst_now, utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
-from app.services.koneps import html_parsing, matching, openapi, parsing
+from app.services.koneps import (
+    html_parsing,
+    live_failure,
+    matching,
+    openapi,
+    parsing,
+)
+from app.services.koneps.live_failure import KonepsLiveCollectionError
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.realtime import realtime_event_manager
-
-
-class KonepsLiveCollectionError(RuntimeError):
-    """Wrap live crawl failures with retry attempts and crawl-stage metadata."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        stage: str,
-        attempts: list[dict[str, Any]] | None = None,
-        original_error: Exception | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.stage = stage
-        self.attempts = attempts or []
-        self.original_error = original_error
 
 
 def format_crawl_error_message(metadata: dict[str, Any]) -> str | None:
@@ -111,7 +101,10 @@ class KonepsCollectorService:
     # ``OPENING_RESULT_GRID_ID`` / ``OPENING_RESULT_DATA_LIST_KEY`` /
     # ``HOME_SEARCH_RESULT_TABLE_ID`` now live in ``html_parsing`` (single
     # source); collector references them as ``html_parsing.<CONST>``.
-    LIVE_FAILURE_RETRYABLE_CATEGORIES = {"network", "timeout", "unknown"}
+    # ``LIVE_FAILURE_RETRYABLE_CATEGORIES`` and the live-failure classification
+    # helpers now live in ``live_failure`` (single source); collector calls
+    # them as ``live_failure.<name>`` (and keeps thin delegator methods below
+    # for external instance-method callers).
 
     def collect_notices(
         self,
@@ -166,7 +159,7 @@ class KonepsCollectorService:
             except (
                 Exception
             ) as exc:  # pragma: no cover - fallback path is covered via monkeypatch test
-                failure_payload = self._live_failure_payload(
+                failure_payload = live_failure.live_failure_payload(
                     exc, stage="live_collection"
                 )
                 fallback_item_metadata = {
@@ -436,12 +429,12 @@ class KonepsCollectorService:
         attempts: list[dict[str, Any]],
         original_error: Exception,
     ) -> KonepsLiveCollectionError:
-        """Build a live crawl exception with retry context attached."""
-        attempt_count = len(attempts)
-        detail = str(original_error) or type(original_error).__name__
-        message = f"KONEPS {stage} failed after {attempt_count} attempt(s): {detail}"
-        return KonepsLiveCollectionError(
-            message,
+        """Build a live crawl exception with retry context attached.
+
+        Thin delegator kept for external callers that invoke this as an
+        instance method; the implementation now lives in ``live_failure``.
+        """
+        return live_failure.live_collection_error(
             stage=stage,
             attempts=attempts,
             original_error=original_error,
@@ -455,101 +448,17 @@ class KonepsCollectorService:
         exc: Exception,
         final_attempt: bool,
     ) -> dict[str, Any]:
-        """Build one retry-attempt payload for operations diagnostics."""
-        failure_payload = self._live_failure_payload(exc, stage=stage)
-        next_delay_seconds = (
-            None if final_attempt else self._retry_delay_seconds(attempt_index)
+        """Build one retry-attempt payload for operations diagnostics.
+
+        Thin delegator kept for external callers that invoke this as an
+        instance method; the implementation now lives in ``live_failure``.
+        """
+        return live_failure.build_live_retry_attempt(
+            stage=stage,
+            attempt_index=attempt_index,
+            exc=exc,
+            final_attempt=final_attempt,
         )
-        return {
-            "attempt": attempt_index + 1,
-            "stage": stage,
-            "category": failure_payload["category"],
-            "retryable": failure_payload["retryable"],
-            "exception_type": failure_payload["exception_type"],
-            "error_message": failure_payload["error_message"],
-            "next_retry_delay_seconds": next_delay_seconds,
-            "final_attempt": final_attempt,
-        }
-
-    def _live_failure_payload(self, exc: Exception, *, stage: str) -> dict[str, Any]:
-        """Classify a live crawl exception into a stable operations payload."""
-        original_error = getattr(exc, "original_error", None) or exc
-        resolved_stage = str(getattr(exc, "stage", stage) or stage)
-        attempts = getattr(exc, "attempts", None)
-        category = self._classify_live_failure(original_error)
-        retryable = category in self.LIVE_FAILURE_RETRYABLE_CATEGORIES
-        detail = str(exc) or str(original_error) or type(original_error).__name__
-
-        payload: dict[str, Any] = {
-            "stage": resolved_stage,
-            "category": category,
-            "retryable": retryable,
-            "detail": detail,
-            "error_message": str(original_error) or detail,
-            "exception_type": type(original_error).__name__,
-        }
-        if attempts:
-            payload["attempt_count"] = len(attempts)
-            payload["attempts"] = attempts
-        return payload
-
-    def _classify_live_failure(self, exc: Exception) -> str:
-        """Map browser/network/parser errors to operator-actionable categories."""
-        lowered_message = str(exc or "").lower()
-        exception_name = type(exc).__name__.lower()
-
-        if any(
-            marker in lowered_message
-            for marker in ("captcha", "access denied", "forbidden", "403", "blocked")
-        ):
-            return "access_denied"
-        if any(
-            marker in lowered_message
-            for marker in (
-                "browser not available",
-                "executable doesn't exist",
-                "playwright install",
-                "failed to launch",
-                "target page, context or browser has been closed",
-            )
-        ):
-            return "browser_runtime"
-        if any(
-            marker in lowered_message
-            for marker in (
-                "err_name_not_resolved",
-                "err_connection",
-                "econn",
-                "net::",
-                "network",
-                "connection reset",
-                "connection refused",
-            )
-        ):
-            return "network"
-        if any(
-            marker in lowered_message
-            for marker in ("no notice items", "no result", "empty result")
-        ):
-            return "no_data"
-        if any(
-            marker in lowered_message
-            for marker in (
-                "could not be located",
-                "selector",
-                "locator",
-                "strict mode violation",
-                "waiting for",
-            )
-        ):
-            return "selector_drift"
-        if "timeout" in lowered_message or "timeout" in exception_name:
-            return "timeout"
-        return "unknown"
-
-    def _retry_delay_seconds(self, attempt_index: int) -> float:
-        """Return linear backoff delay for the next retry attempt."""
-        return (settings.KONEPS_RETRY_BACKOFF_MS * (attempt_index + 1)) / 1000
 
     def _close_browser_context(self, context: Any) -> None:
         """Best-effort browser context cleanup without masking crawl failures."""
@@ -1241,7 +1150,9 @@ class KonepsCollectorService:
                 opening_result_metadata,
             ) = html_parsing.merge_opening_result_rows(parsed_items, opening_rows)
         except Exception as exc:
-            failure_payload = self._live_failure_payload(exc, stage="opening_result")
+            failure_payload = live_failure.live_failure_payload(
+                exc, stage="opening_result"
+            )
             opening_result_metadata.update(
                 {
                     "opening_result_error": failure_payload["detail"],
@@ -1310,7 +1221,7 @@ class KonepsCollectorService:
                                 attempts=attempts,
                                 original_error=exc,
                             ) from exc
-                        sleep(self._retry_delay_seconds(attempt))
+                        sleep(live_failure.retry_delay_seconds(attempt))
 
                 if last_error:
                     raise self._live_collection_error(
@@ -1425,7 +1336,7 @@ class KonepsCollectorService:
                                 attempts=attempts,
                                 original_error=exc,
                             ) from exc
-                        sleep(self._retry_delay_seconds(attempt))
+                        sleep(live_failure.retry_delay_seconds(attempt))
 
                 if last_error:
                     raise self._live_collection_error(
