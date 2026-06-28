@@ -36,7 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,27 +48,10 @@ from app.core.database import Base, SessionLocal, engine
 from app.models.models import CompanyProfile, OperatorStrategy, User
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from app.services.synthetic_experiment import compute_breakdown
+from scripts._common import parse_datetime
 from scripts.seed_synthetic_operators import (  # noqa: E402  (import after sys.path tweak)
     SYNTHETIC_USERNAME_PREFIX,
 )
-
-
-def parse_datetime(value: str | None, *, end_of_day: bool = False) -> datetime | None:
-    if not value:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    if len(normalized) == 10:
-        parsed_date = datetime.fromisoformat(normalized).date()
-        parsed_time = time.max if end_of_day else time.min
-        return datetime.combine(parsed_date, parsed_time, tzinfo=UTC)
-    if normalized.endswith("Z"):
-        normalized = f"{normalized[:-1]}+00:00"
-    parsed = datetime.fromisoformat(normalized)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def parse_actions(value: str) -> tuple[str, ...]:

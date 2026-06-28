@@ -10,19 +10,15 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, TextIO
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts._common import positive_int  # noqa: E402  (import after sys.path tweak)
+
 
 class ReviewBundleError(Exception):
     """Raised when local review bundle inputs cannot be processed."""
-
-
-def positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("value must be a positive integer")
-    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:

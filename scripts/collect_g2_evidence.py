@@ -133,17 +133,11 @@ ENDPOINTS: tuple[EndpointSpec, ...] = (
 ENDPOINT_PATHS_BY_KEY = {endpoint.key: endpoint.path for endpoint in ENDPOINTS}
 ENDPOINT_KEYS_BY_PATH = {endpoint.path: endpoint.key for endpoint in ENDPOINTS}
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 DATE_PATTERN = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})|(?P<compact>\d{8})")
 
-
-def positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("value must be a positive integer")
-    return parsed
+from scripts._common import positive_int  # noqa: E402  (import after sys.path tweak)
 
 
 def positive_float(value: str) -> float:
