@@ -317,3 +317,26 @@ def should_replace_project_title(existing_title: str | None, new_title: Any) -> 
     if not existing:
         return True
     return existing.startswith("KONEPS notice") or existing.startswith("KONEPS-")
+
+
+def format_crawl_error_message(metadata: dict[str, Any]) -> str | None:
+    """Return a compact crawl-job error message with live failure category context."""
+    if not isinstance(metadata, dict):
+        return None
+
+    reason = metadata.get("fallback_reason")
+    if not reason:
+        return None
+
+    live_failure = (
+        metadata.get("live_failure")
+        if isinstance(metadata.get("live_failure"), dict)
+        else {}
+    )
+    stage = metadata.get("fallback_failure_stage") or live_failure.get("stage")
+    category = metadata.get("fallback_failure_category") or live_failure.get("category")
+
+    if stage or category:
+        failure_label = "/".join(str(value) for value in (stage, category) if value)
+        return f"[{failure_label}] {reason}"
+    return str(reason)

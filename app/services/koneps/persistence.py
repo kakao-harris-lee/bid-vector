@@ -1,28 +1,37 @@
-"""DB read / resolve helpers for the KONEPS collector.
+"""DB read / resolve / write helpers for the KONEPS collector.
 
 These functions were extracted verbatim from ``KonepsCollectorService``
 (``collector.py``) as part of the incremental God-module decomposition
-(Phase C1, DB read/resolve layer). They take an explicit ``db: Session`` and
-carry no instance state, so they live here as module-level functions rather
-than methods. They perform DB reads and in-memory ORM mutations (including the
-pre-existing ``db.add`` / ``db.flush`` staging in the upsert helpers) but never
-``db.commit`` -- the transaction boundary stays with the caller
-(``persist_crawl_results``, extracted in a later step).
+(Phase C1 DB read/resolve layer, Phase C2 DB write/persist layer). They take an
+explicit ``db: Session`` and carry no instance state, so they live here as
+module-level functions rather than methods.
+
+The read/resolve helpers perform DB reads and in-memory ORM mutations
+(including the pre-existing ``db.add`` / ``db.flush`` staging in the upsert
+helpers) but never ``db.commit``. The write functions
+(``persist_crawl_results`` / ``create_crawl_job`` / ``mark_crawl_job_failed``)
+own the transaction boundary: each issues exactly one ``db.commit`` at the same
+point it did in the original method (``persist_crawl_results`` stages every item
+in the loop and commits once at the end).
 
 Behavior is intentionally identical to the original methods; this module is a
 pure relocation, not a rewrite. To avoid an import cycle, this module must
 never import ``collector``: the collector imports ``persistence`` (and the
-sibling ``matching`` / ``parsing`` modules), not the other way around.
+sibling ``matching`` / ``parsing`` / ``scsbid`` modules), not the other way
+around.
 """
 
+import json
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.models import HistoricalData, Project, TenderResult
+from app.core.time import utc_now
+from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.schemas.schemas import CrawlRequest
-from app.services.koneps import matching, parsing
+from app.services.koneps import matching, parsing, scsbid
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.realtime import realtime_event_manager
 
 
 def notice_numbers_with_persisted_reserve(db: Session) -> set[str]:
@@ -389,3 +398,213 @@ def resolve_tender_result(
     tender_result.result_status = result_status
     tender_result.announced_at = announced_at
     return tender_result
+
+
+def create_crawl_job(
+    db: Session,
+    request: CrawlRequest,
+    *,
+    celery_task_id: str | None = None,
+) -> CrawlJob:
+    """Create a crawl job record before execution starts.
+
+    ``celery_task_id`` is stamped at INSERT time so the row is immediately
+    recoverable by a redelivered task (closes the orphan window where a
+    SIGKILL between create and stamp would leave an unrecoverable row).
+    """
+    crawl_job = CrawlJob(
+        source=request.source,
+        target_date=request.target_date,
+        status="running",
+        result_count=0,
+        celery_task_id=str(celery_task_id) if celery_task_id else None,
+    )
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+    realtime_event_manager.publish_event(
+        "crawl.completed" if crawl_job.status == "completed" else "crawl.fallback",
+        {
+            "crawl_job_id": int(crawl_job.id),
+            "project_id": (
+                int(crawl_job.project_id) if crawl_job.project_id is not None else None
+            ),
+            "status": crawl_job.status,
+            "source": crawl_job.source,
+            "target_date": crawl_job.target_date,
+            "result_count": int(crawl_job.result_count or 0),
+            "error_message": crawl_job.error_message,
+        },
+    )
+    return crawl_job
+
+
+def persist_crawl_results(
+    db: Session,
+    crawl_job: CrawlJob,
+    request: CrawlRequest,
+    response: dict[str, Any],
+    *,
+    defer_embeddings: bool = False,
+) -> CrawlJob:
+    """Persist crawl history and any usable opening-result data.
+
+    ``defer_embeddings`` is decided by the *caller*, not this method: only the
+    Celery collection task (the single path with a hard time limit) defers
+    embeddings to an async backfill. Synchronous callers (``POST
+    /operations/crawl``, the scsbid backfill script) leave it at the default
+    ``False`` so projects are embedded inline -- otherwise their newly created
+    projects would never be embedded (no inline, no enqueued backfill) and
+    silently drop out of pgvector search/recommendation.
+    """
+    items = response.get("items", [])
+    metadata = response.get("metadata", {})
+
+    crawl_job.status = response.get("job_status", "completed")
+    crawl_job.result_count = response.get("collected_count", len(items))
+    crawl_job.error_message = parsing.format_crawl_error_message(metadata)
+    crawl_job.completed_at = utc_now()
+
+    project_similarity = ProjectSimilarityService()
+    linked_project_ids: set[int] = set()
+    # When deferred (Celery collection task for high-volume scsbid sweeps),
+    # per-item embedding is skipped and the touched project ids are surfaced
+    # for a single async backfill; CPU model inference per item would
+    # otherwise exceed the Celery hard time limit.
+    deferred_embedding_project_ids: set[int] = set()
+
+    for item in items:
+        item_metadata = item.get("metadata", {})
+        historical_record = (
+            db.query(HistoricalData)
+            .filter(HistoricalData.notice_number == item.get("notice_number"))
+            .first()
+        )
+        if historical_record is None:
+            historical_record = HistoricalData(notice_number=item.get("notice_number"))
+            db.add(historical_record)
+
+        project, embedding_deferred = resolve_project_for_item(
+            db,
+            item=item,
+            request=request,
+            historical_record=historical_record,
+            project_similarity=project_similarity,
+            defer_embeddings=defer_embeddings,
+        )
+        if project is not None:
+            historical_record.project_id = project.id
+            linked_project_ids.add(int(project.id))
+            if embedding_deferred:
+                deferred_embedding_project_ids.add(int(project.id))
+
+        historical_record.agency_name = (
+            item_metadata.get("opening_demand_agency")
+            or item_metadata.get("demand_agency")
+            or item_metadata.get("issuing_agency")
+            or ""
+        )
+        historical_record.category = matching.resolve_project_category(item, request)
+        historical_record.base_amount = item.get("base_amount") or 0.0
+        historical_record.predicted_price = (
+            item.get("estimated_amount") or item.get("base_amount") or 0.0
+        )
+        historical_record.bid_rate = (
+            parsing.normalize_bid_rate_value(
+                item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
+            )
+            or 0.0
+        )
+        # Reserve price / selected numbers are settled, immutable values. An
+        # incoming empty list means "not (re)fetched this run" (e.g. the
+        # reserve-detail HTTP was skipped because it was already persisted),
+        # so it must never clobber a previously stored non-empty value.
+        incoming_reserve_prices = item_metadata.get("reserve_prices") or []
+        if incoming_reserve_prices or not scsbid.has_persisted_reserve_prices(
+            historical_record
+        ):
+            historical_record.reserve_prices = json.dumps(
+                incoming_reserve_prices,
+                ensure_ascii=False,
+            )
+        incoming_selected_numbers = item_metadata.get("selected_numbers") or []
+        if incoming_selected_numbers or not scsbid.has_persisted_reserve_prices(
+            historical_record
+        ):
+            historical_record.selected_numbers = json.dumps(
+                incoming_selected_numbers,
+                ensure_ascii=False,
+            )
+        historical_record.opened_at = parsing.coerce_datetime(
+            item_metadata.get("opening_announced_at")
+            or item_metadata.get("opening_scheduled_at")
+        )
+
+        has_tender_result = any(
+            item_metadata.get(key)
+            for key in (
+                "opening_status",
+                "winning_company",
+                "winning_amount",
+                "winning_rate",
+                "opening_announced_at",
+            )
+        )
+        if has_tender_result:
+            tender_result = resolve_tender_result(
+                db,
+                project_id=(
+                    project.id if project is not None else historical_record.project_id
+                ),
+                item_metadata=item_metadata,
+                crawl_job_status=crawl_job.status,
+            )
+
+            if (
+                tender_result.project_id is None
+                and historical_record.project_id is not None
+            ):
+                tender_result.project_id = historical_record.project_id
+
+    if len(linked_project_ids) == 1:
+        crawl_job.project_id = next(iter(linked_project_ids))
+
+    # Surface deferred-embedding project ids so the task layer can enqueue a
+    # single async backfill. The service layer never imports the task module
+    # (avoids a circular import); the orchestration lives in the task.
+    if deferred_embedding_project_ids:
+        response.setdefault("metadata", {})["deferred_embedding_project_ids"] = sorted(
+            deferred_embedding_project_ids
+        )
+
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+    realtime_event_manager.publish_event(
+        "crawl.failed",
+        {
+            "crawl_job_id": int(crawl_job.id),
+            "project_id": (
+                int(crawl_job.project_id) if crawl_job.project_id is not None else None
+            ),
+            "status": crawl_job.status,
+            "source": crawl_job.source,
+            "target_date": crawl_job.target_date,
+            "result_count": int(crawl_job.result_count or 0),
+            "error_message": crawl_job.error_message,
+        },
+    )
+    return crawl_job
+
+
+def mark_crawl_job_failed(
+    db: Session, crawl_job: CrawlJob, error_message: str
+) -> CrawlJob:
+    """Update an existing crawl job when execution fails unexpectedly."""
+    crawl_job.status = "failed"
+    crawl_job.error_message = error_message
+    crawl_job.completed_at = utc_now()
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+    return crawl_job
