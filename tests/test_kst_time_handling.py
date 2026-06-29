@@ -55,8 +55,12 @@ def test_scsbid_date_window_uses_kst_day_not_utc(monkeypatch):
 def test_normalize_request_target_date_defaults_to_kst_day(monkeypatch):
     service = KonepsCollectorService()
     instant_utc = datetime(2026, 6, 26, 20, 0, tzinfo=UTC)  # == 06-27 KST
+    # ``_normalize_request``'s default-day logic now lives in
+    # ``app.services.koneps.collection`` (extracted from the collector); the
+    # collector keeps only a thin delegator. Patch the clock where the lookup
+    # actually happens, not the collector module.
     monkeypatch.setattr(
-        "app.services.koneps.collector.kst_now",
+        "app.services.koneps.collection.kst_now",
         lambda: instant_utc.astimezone(KST),
     )
     normalized = service._normalize_request(CrawlRequest(source="koneps-openapi"))
