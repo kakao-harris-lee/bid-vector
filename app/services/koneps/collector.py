@@ -1,6 +1,7 @@
 """KONEPS collector service skeleton."""
 
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from math import ceil
 from time import sleep
 from typing import Any
@@ -30,6 +31,53 @@ from app.services.project_similarity import ProjectSimilarityService
 # its original name because external callers still import it from this module
 # (``app/api/operations.py``).
 format_crawl_error_message = parsing.format_crawl_error_message
+
+
+@dataclass(frozen=True)
+class _ScsbidSweepConfig:
+    """Immutable per-run configuration for a ScsbidInfoService award sweep.
+
+    Bundles the values resolved once in ``_collect_scsbid_openapi_items``'s setup
+    so the extracted sweep/page/item helpers receive an explicit, read-only
+    config instead of closing over a dozen locals. Pure data; no behaviour.
+    """
+
+    service_key: str
+    page_size: int
+    max_pages: int
+    delay_seconds: float
+    begin_token: str
+    end_token: str
+    collect_reserve_detail: bool
+    defer_reserve_detail: bool
+    already_have_reserve: frozenset[str]
+    reserve_detail_age_cutoff: datetime | None
+
+
+@dataclass
+class _ScsbidSweepState:
+    """Mutable accumulators shared across the categories of one award sweep.
+
+    Holds exactly the running collections, counters, and last-seen header fields
+    that ``_collect_scsbid_openapi_items`` previously kept as method locals. The
+    extracted helpers mutate this in place so dedup sets, counters, and ordering
+    are preserved bit-for-bit (no copying, no re-ordering).
+    """
+
+    parsed_items: list[dict[str, Any]] = field(default_factory=list)
+    seen_notice_numbers: set[str] = field(default_factory=set)
+    deferred_reserve_detail: list[dict[str, str]] = field(default_factory=list)
+    deferred_reserve_seen: set[tuple[str, str]] = field(default_factory=set)
+    reserve_detail_count: int = 0
+    reserve_detail_error_count: int = 0
+    reserve_detail_reused_count: int = 0
+    reserve_detail_deferred_count: int = 0
+    reserve_detail_backoff_skipped_count: int = 0
+    api_call_count: int = 0
+    key_variant: str = ""
+    last_result_code: str = ""
+    last_result_message: str = ""
+    category_metadata: list[dict[str, Any]] = field(default_factory=list)
 
 
 class KonepsCollectorService:
@@ -446,10 +494,7 @@ class KonepsCollectorService:
 
         categories = self._scsbid_categories_for_request(request)
         begin_token, end_token = self._scsbid_date_window(request)
-        page_size = scsbid.page_size(request)
-        max_pages = scsbid.max_pages(request)
         collect_reserve_detail = bool(request.collect_reserve_detail)
-        delay_seconds = scsbid.request_delay_seconds()
 
         # One query, not N: load the notice numbers that already have a settled
         # reserve price so we can skip their per-notice reserve-detail HTTP fetch.
@@ -463,23 +508,6 @@ class KonepsCollectorService:
             if reuse_persisted_reserve
             else set()
         )
-
-        parsed_items: list[dict[str, Any]] = []
-        seen_notice_numbers: set[str] = set()
-        # Deferred reserve-detail notices: {(notice_number, category)} to dedupe,
-        # surfaced as a list of dicts in metadata for the async backfill enqueue.
-        deferred_reserve_detail: list[dict[str, str]] = []
-        deferred_reserve_seen: set[tuple[str, str]] = set()
-        reserve_detail_count = 0
-        reserve_detail_error_count = 0
-        reserve_detail_reused_count = 0
-        reserve_detail_deferred_count = 0
-        reserve_detail_backoff_skipped_count = 0
-        api_call_count = 0
-        key_variant = ""
-        last_result_code = ""
-        last_result_message = ""
-        category_metadata: list[dict[str, Any]] = []
 
         # Reserve-detail backoff age-gate (only when deferring): a just-opened
         # notice usually has no settled reserve yet, so deferring it now means every
@@ -497,157 +525,39 @@ class KonepsCollectorService:
             else None
         )
 
+        config = _ScsbidSweepConfig(
+            service_key=service_key,
+            page_size=scsbid.page_size(request),
+            max_pages=scsbid.max_pages(request),
+            delay_seconds=scsbid.request_delay_seconds(),
+            begin_token=begin_token,
+            end_token=end_token,
+            collect_reserve_detail=collect_reserve_detail,
+            defer_reserve_detail=defer_reserve_detail,
+            already_have_reserve=frozenset(already_have_reserve),
+            reserve_detail_age_cutoff=reserve_detail_age_cutoff,
+        )
+        state = _ScsbidSweepState()
+
         for category in categories:
-            operation = openapi.scsbid_operation_for_category(category)
-            url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
-            category_total_count: int | None = None
-            category_pages = 0
-
-            for page_no in range(1, max_pages + 1):
-                params = {
-                    "type": "json",
-                    "numOfRows": page_size,
-                    "pageNo": page_no,
-                    "inqryDiv": "1",
-                    "inqryBgnDt": begin_token,
-                    "inqryEndDt": end_token,
-                }
-                if api_call_count > 0 and delay_seconds > 0:
-                    sleep(delay_seconds)
-                response, key_variant = http_client.request_openapi_with_key_variants(
-                    url,
-                    params=params,
-                    service_key=service_key,
-                    operation=operation,
-                )
-                api_call_count += 1
-                if response.status_code >= 400:
-                    raise ValueError(
-                        f"KONEPS ScsbidInfoService HTTP {response.status_code} for "
-                        f"{operation}: {response.text[:300]} "
-                        f"Tried service key variants: {key_variant}."
-                    )
-                payload = http_client.load_openapi_json(response)
-                header = openapi.openapi_header(payload)
-                result_code = str(header.get("resultCode") or "").strip()
-                result_message = str(header.get("resultMsg") or "").strip()
-                if result_code and result_code not in {"00", "03"}:
-                    raise ValueError(
-                        f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
-                        f"{result_message or 'unknown error'}"
-                    )
-                last_result_code = result_code or last_result_code
-                last_result_message = result_message or last_result_message
-
-                body = openapi.openapi_body(payload)
-                if category_total_count is None:
-                    category_total_count = parsing.safe_int(body.get("totalCount"))
-                raw_items = openapi.openapi_item_list(body)
-                category_pages += 1
-
-                for raw_item in raw_items:
-                    detail: dict[str, Any] = {}
-                    notice_number = str(raw_item.get("bidNtceNo") or "").strip()
-                    if not notice_number:
-                        continue
-                    if notice_number in seen_notice_numbers:
-                        continue
-                    if collect_reserve_detail:
-                        if notice_number in already_have_reserve:
-                            # Reserve price already settled & persisted; leave
-                            # ``detail`` empty so persist preserves the stored
-                            # value instead of re-fetching it over HTTP.
-                            reserve_detail_reused_count += 1
-                        elif defer_reserve_detail:
-                            # Time-limited Celery collection path: skip the inline
-                            # per-notice fetch (and its throttle sleep) and queue
-                            # the notice for a bounded async backfill instead.
-                            # ``detail`` stays empty so persist preserves any
-                            # already-stored reserve price.
-                            #
-                            # Age-gate (rate-limit backoff): only defer once the
-                            # notice's opening datetime is old enough to have a
-                            # settled reserve. A just-opened/future notice is skipped
-                            # this sweep (counted separately) and re-checked next
-                            # sweep — within the 3-day lookback it ages in and is
-                            # fetched exactly once. Unknown opening => defer (the gate
-                            # cannot apply, so we try). Uses the SAME opening fields
-                            # as ``_build_scsbid_award_item``'s closing_at.
-                            opened_at = parsing.coerce_datetime(
-                                raw_item.get("rlOpengDt")
-                                or raw_item.get("fnlSucsfDate")
-                                or raw_item.get("rgstDt")
-                            )
-                            if (
-                                reserve_detail_age_cutoff is not None
-                                and opened_at is not None
-                                and opened_at > reserve_detail_age_cutoff
-                            ):
-                                reserve_detail_backoff_skipped_count += 1
-                            else:
-                                dedupe_key = (notice_number, str(category or ""))
-                                if dedupe_key not in deferred_reserve_seen:
-                                    deferred_reserve_seen.add(dedupe_key)
-                                    deferred_reserve_detail.append(
-                                        {
-                                            "notice_number": notice_number,
-                                            "category": str(category or ""),
-                                        }
-                                    )
-                                    reserve_detail_deferred_count += 1
-                        else:
-                            try:
-                                if delay_seconds > 0:
-                                    sleep(delay_seconds)
-                                detail = self._fetch_scsbid_reserve_detail(
-                                    raw_item,
-                                    category=category,
-                                    service_key=service_key,
-                                )
-                                api_call_count += 1
-                                if detail.get("reserve_prices"):
-                                    reserve_detail_count += 1
-                            except Exception as exc:
-                                reserve_detail_error_count += 1
-                                detail = {"reserve_detail_error": str(exc)}
-
-                    parsed_item = scsbid.build_scsbid_award_item(
-                        raw_item,
-                        detail=detail,
-                        request=request,
-                        operation=operation,
-                        category=category,
-                    )
-                    if parsed_item is None:
-                        continue
-                    notice_number = str(parsed_item["notice_number"])
-                    if notice_number in seen_notice_numbers:
-                        continue
-                    seen_notice_numbers.add(notice_number)
-                    parsed_items.append(parsed_item)
-
-                # Stop conditions: empty/short page or totalCount window reached.
-                if not raw_items:
-                    break
-                if len(raw_items) < page_size:
-                    break
-                if (
-                    category_total_count is not None
-                    and page_no * page_size >= category_total_count
-                ):
-                    break
-
-            category_metadata.append(
-                {
-                    "category": category,
-                    "operation": operation,
-                    "total_count": category_total_count,
-                    "pages_fetched": category_pages,
-                }
+            self._sweep_scsbid_category(
+                category, state=state, config=config, request=request
             )
 
+        return self._build_scsbid_result(state, config)
+
+    def _build_scsbid_result(
+        self, state: "_ScsbidSweepState", config: "_ScsbidSweepConfig"
+    ) -> dict[str, Any]:
+        """Assemble the final collect result dict from the accumulated sweep state.
+
+        Pure read-only projection of ``state``/``config`` into the exact ``items``
+        + ``metadata`` shape ``_collect_scsbid_openapi_items`` returned before the
+        decomposition (every counter key/value preserved).
+        """
+        category_metadata = state.category_metadata
         return {
-            "items": parsed_items,
+            "items": state.parsed_items,
             "metadata": {
                 "resolved_mode": "scsbid_openapi",
                 "openapi_service": "ScsbidInfoService",
@@ -655,30 +565,248 @@ class KonepsCollectorService:
                     category_metadata[0]["operation"] if category_metadata else None
                 ),
                 "openapi_endpoint": settings.KONEPS_OPENAPI_SCSBID_INFO_URL,
-                "openapi_service_key_variant": key_variant,
-                "openapi_result_code": last_result_code or "00",
-                "openapi_result_message": last_result_message,
+                "openapi_service_key_variant": state.key_variant,
+                "openapi_result_code": state.last_result_code or "00",
+                "openapi_result_message": state.last_result_message,
                 "openapi_total_count": sum(
                     int(entry["total_count"] or 0) for entry in category_metadata
                 ),
                 "scsbid_categories": [entry["category"] for entry in category_metadata],
                 "scsbid_category_breakdown": category_metadata,
-                "scsbid_api_call_count": api_call_count,
-                "scsbid_collected_count": len(parsed_items),
-                "reserve_detail_enabled": collect_reserve_detail,
-                "reserve_detail_collected_count": reserve_detail_count,
-                "reserve_detail_error_count": reserve_detail_error_count,
-                "reserve_detail_reused_count": reserve_detail_reused_count,
-                "reserve_detail_deferred_count": reserve_detail_deferred_count,
+                "scsbid_api_call_count": state.api_call_count,
+                "scsbid_collected_count": len(state.parsed_items),
+                "reserve_detail_enabled": config.collect_reserve_detail,
+                "reserve_detail_collected_count": state.reserve_detail_count,
+                "reserve_detail_error_count": state.reserve_detail_error_count,
+                "reserve_detail_reused_count": state.reserve_detail_reused_count,
+                "reserve_detail_deferred_count": state.reserve_detail_deferred_count,
                 "reserve_detail_backoff_skipped_count": (
-                    reserve_detail_backoff_skipped_count
+                    state.reserve_detail_backoff_skipped_count
                 ),
-                "deferred_reserve_detail_notices": deferred_reserve_detail,
-                "query_date_begin": begin_token,
-                "query_date_end": end_token,
+                "deferred_reserve_detail_notices": state.deferred_reserve_detail,
+                "query_date_begin": config.begin_token,
+                "query_date_end": config.end_token,
                 "query_type": "award_registration_datetime",
             },
         }
+
+    def _sweep_scsbid_category(
+        self,
+        category: str,
+        *,
+        state: "_ScsbidSweepState",
+        config: "_ScsbidSweepConfig",
+        request: CrawlRequest,
+    ) -> None:
+        """Paginate one ScsbidInfoService category, mutating ``state`` in place.
+
+        Runs the page loop (HTTP fetch via ``_fetch_scsbid_page``, per-item
+        processing via ``_process_scsbid_raw_item``, then the empty/short-page and
+        totalCount stop conditions) and appends this category's breakdown entry to
+        ``state.category_metadata``. The page-fetch throttle, stop-condition order,
+        and counter updates are unchanged from the original inline loop.
+        """
+        operation = openapi.scsbid_operation_for_category(category)
+        url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
+        category_total_count: int | None = None
+        category_pages = 0
+
+        for page_no in range(1, config.max_pages + 1):
+            raw_items, body = self._fetch_scsbid_page(
+                url,
+                page_no=page_no,
+                operation=operation,
+                config=config,
+                state=state,
+            )
+            if category_total_count is None:
+                category_total_count = parsing.safe_int(body.get("totalCount"))
+            category_pages += 1
+
+            for raw_item in raw_items:
+                self._process_scsbid_raw_item(
+                    raw_item,
+                    state=state,
+                    config=config,
+                    category=category,
+                    operation=operation,
+                    request=request,
+                )
+
+            # Stop conditions: empty/short page or totalCount window reached.
+            if not raw_items:
+                break
+            if len(raw_items) < config.page_size:
+                break
+            if (
+                category_total_count is not None
+                and page_no * config.page_size >= category_total_count
+            ):
+                break
+
+        state.category_metadata.append(
+            {
+                "category": category,
+                "operation": operation,
+                "total_count": category_total_count,
+                "pages_fetched": category_pages,
+            }
+        )
+
+    def _fetch_scsbid_page(
+        self,
+        url: str,
+        *,
+        page_no: int,
+        operation: str,
+        config: "_ScsbidSweepConfig",
+        state: "_ScsbidSweepState",
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Fetch and validate one award-list page, returning ``(raw_items, body)``.
+
+        Applies the inter-call throttle (skipped on the very first API call),
+        performs the keyed HTTP GET, validates the HTTP status and OpenAPI
+        ``resultCode``, and updates ``state.api_call_count`` / ``key_variant`` /
+        ``last_result_*``. Error handling (the two ``raise ValueError`` paths) is
+        identical to the original inline page loop.
+        """
+        params = {
+            "type": "json",
+            "numOfRows": config.page_size,
+            "pageNo": page_no,
+            "inqryDiv": "1",
+            "inqryBgnDt": config.begin_token,
+            "inqryEndDt": config.end_token,
+        }
+        if state.api_call_count > 0 and config.delay_seconds > 0:
+            sleep(config.delay_seconds)
+        response, state.key_variant = http_client.request_openapi_with_key_variants(
+            url,
+            params=params,
+            service_key=config.service_key,
+            operation=operation,
+        )
+        state.api_call_count += 1
+        if response.status_code >= 400:
+            raise ValueError(
+                f"KONEPS ScsbidInfoService HTTP {response.status_code} for "
+                f"{operation}: {response.text[:300]} "
+                f"Tried service key variants: {state.key_variant}."
+            )
+        payload = http_client.load_openapi_json(response)
+        header = openapi.openapi_header(payload)
+        result_code = str(header.get("resultCode") or "").strip()
+        result_message = str(header.get("resultMsg") or "").strip()
+        if result_code and result_code not in {"00", "03"}:
+            raise ValueError(
+                f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
+                f"{result_message or 'unknown error'}"
+            )
+        state.last_result_code = result_code or state.last_result_code
+        state.last_result_message = result_message or state.last_result_message
+
+        body = openapi.openapi_body(payload)
+        raw_items = openapi.openapi_item_list(body)
+        return raw_items, body
+
+    def _process_scsbid_raw_item(
+        self,
+        raw_item: dict[str, Any],
+        *,
+        state: "_ScsbidSweepState",
+        config: "_ScsbidSweepConfig",
+        category: str,
+        operation: str,
+        request: CrawlRequest,
+    ) -> None:
+        """Process one raw award row, mutating ``state`` in place.
+
+        Preserves the exact original ordering and conditions: notice presence /
+        pre-build dedup, then the reserve-detail branch (reused -> deferred with
+        age-gate -> inline fetch), then ``build_scsbid_award_item`` plus the
+        post-build dedup and append. Counter increments, set adds, the throttle
+        sleep before the inline fetch, and the ``api_call_count`` bump on a
+        successful inline fetch all happen at the same points as before.
+        """
+        detail: dict[str, Any] = {}
+        notice_number = str(raw_item.get("bidNtceNo") or "").strip()
+        if not notice_number:
+            return
+        if notice_number in state.seen_notice_numbers:
+            return
+        if config.collect_reserve_detail:
+            if notice_number in config.already_have_reserve:
+                # Reserve price already settled & persisted; leave
+                # ``detail`` empty so persist preserves the stored
+                # value instead of re-fetching it over HTTP.
+                state.reserve_detail_reused_count += 1
+            elif config.defer_reserve_detail:
+                # Time-limited Celery collection path: skip the inline
+                # per-notice fetch (and its throttle sleep) and queue
+                # the notice for a bounded async backfill instead.
+                # ``detail`` stays empty so persist preserves any
+                # already-stored reserve price.
+                #
+                # Age-gate (rate-limit backoff): only defer once the
+                # notice's opening datetime is old enough to have a
+                # settled reserve. A just-opened/future notice is skipped
+                # this sweep (counted separately) and re-checked next
+                # sweep — within the 3-day lookback it ages in and is
+                # fetched exactly once. Unknown opening => defer (the gate
+                # cannot apply, so we try). Uses the SAME opening fields
+                # as ``_build_scsbid_award_item``'s closing_at.
+                opened_at = parsing.coerce_datetime(
+                    raw_item.get("rlOpengDt")
+                    or raw_item.get("fnlSucsfDate")
+                    or raw_item.get("rgstDt")
+                )
+                if (
+                    config.reserve_detail_age_cutoff is not None
+                    and opened_at is not None
+                    and opened_at > config.reserve_detail_age_cutoff
+                ):
+                    state.reserve_detail_backoff_skipped_count += 1
+                else:
+                    dedupe_key = (notice_number, str(category or ""))
+                    if dedupe_key not in state.deferred_reserve_seen:
+                        state.deferred_reserve_seen.add(dedupe_key)
+                        state.deferred_reserve_detail.append(
+                            {
+                                "notice_number": notice_number,
+                                "category": str(category or ""),
+                            }
+                        )
+                        state.reserve_detail_deferred_count += 1
+            else:
+                try:
+                    if config.delay_seconds > 0:
+                        sleep(config.delay_seconds)
+                    detail = self._fetch_scsbid_reserve_detail(
+                        raw_item,
+                        category=category,
+                        service_key=config.service_key,
+                    )
+                    state.api_call_count += 1
+                    if detail.get("reserve_prices"):
+                        state.reserve_detail_count += 1
+                except Exception as exc:
+                    state.reserve_detail_error_count += 1
+                    detail = {"reserve_detail_error": str(exc)}
+
+        parsed_item = scsbid.build_scsbid_award_item(
+            raw_item,
+            detail=detail,
+            request=request,
+            operation=operation,
+            category=category,
+        )
+        if parsed_item is None:
+            return
+        notice_number = str(parsed_item["notice_number"])
+        if notice_number in state.seen_notice_numbers:
+            return
+        state.seen_notice_numbers.add(notice_number)
+        state.parsed_items.append(parsed_item)
 
     def _notice_numbers_with_persisted_reserve(self, db: Session) -> set[str]:
         """Thin delegator to ``persistence.notice_numbers_with_persisted_reserve``.
