@@ -250,6 +250,12 @@ class HistoricalData(Base):
     reserve_prices = Column(Text, default="[]")
     selected_numbers = Column(Text, default="[]")
     opened_at = Column(DateTime(timezone=True), nullable=True)
+    # Last time a deferred reserve-detail backfill fetched this notice but found
+    # no settled reserve yet ("not_settled"). Lets the collector back off
+    # permanently-empty notices (open >24h but reserve never published) so they
+    # are re-checked at most once per RECHECK window instead of every 6h sweep,
+    # which otherwise burns the ScsbidInfoService rate limit (HTTP 429).
+    reserve_detail_checked_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     project = relationship("Project", back_populates="historical_records")

@@ -52,6 +52,7 @@ class _ScsbidSweepConfig:
     defer_reserve_detail: bool
     already_have_reserve: frozenset[str]
     reserve_detail_age_cutoff: datetime | None
+    checked_recently: frozenset[str]
 
 
 @dataclass
@@ -73,6 +74,7 @@ class _ScsbidSweepState:
     reserve_detail_reused_count: int = 0
     reserve_detail_deferred_count: int = 0
     reserve_detail_backoff_skipped_count: int = 0
+    reserve_detail_recheck_skipped_count: int = 0
     api_call_count: int = 0
     key_variant: str = ""
     last_result_code: str = ""
@@ -525,6 +527,20 @@ class KonepsCollectorService:
             else None
         )
 
+        # Reserve-detail recheck backoff (only when deferring): a notice the
+        # backfill already fetched and found empty ("not_settled") is stamped with
+        # ``reserve_detail_checked_at``. Skip re-deferring it within the recheck
+        # window so a permanently-empty notice is re-checked at most once per
+        # window instead of every 6h sweep (rate-limit backoff). One query, not N.
+        recheck_hours = max(
+            0, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS)
+        )
+        checked_recently: set[str] = (
+            self._notice_numbers_checked_recently(db, recheck_hours)
+            if defer_reserve_detail and db is not None and recheck_hours > 0
+            else set()
+        )
+
         config = _ScsbidSweepConfig(
             service_key=service_key,
             page_size=scsbid.page_size(request),
@@ -536,6 +552,7 @@ class KonepsCollectorService:
             defer_reserve_detail=defer_reserve_detail,
             already_have_reserve=frozenset(already_have_reserve),
             reserve_detail_age_cutoff=reserve_detail_age_cutoff,
+            checked_recently=frozenset(checked_recently),
         )
         state = _ScsbidSweepState()
 
@@ -582,6 +599,9 @@ class KonepsCollectorService:
                 "reserve_detail_deferred_count": state.reserve_detail_deferred_count,
                 "reserve_detail_backoff_skipped_count": (
                     state.reserve_detail_backoff_skipped_count
+                ),
+                "reserve_detail_recheck_skipped_count": (
+                    state.reserve_detail_recheck_skipped_count
                 ),
                 "deferred_reserve_detail_notices": state.deferred_reserve_detail,
                 "query_date_begin": config.begin_token,
@@ -760,7 +780,15 @@ class KonepsCollectorService:
                     or raw_item.get("fnlSucsfDate")
                     or raw_item.get("rgstDt")
                 )
-                if (
+                if notice_number in config.checked_recently:
+                    # Recheck-gate (rate-limit backoff): the backfill already
+                    # fetched this notice and found no settled reserve within the
+                    # recheck window. Skip it this sweep so a permanently-empty
+                    # notice is re-checked at most once per window, not every 6h.
+                    # Complementary to the age-gate (which defers before settling;
+                    # this backs off after a confirmed-empty fetch).
+                    state.reserve_detail_recheck_skipped_count += 1
+                elif (
                     config.reserve_detail_age_cutoff is not None
                     and opened_at is not None
                     and opened_at > config.reserve_detail_age_cutoff
@@ -817,6 +845,18 @@ class KonepsCollectorService:
         assert the persisted-reserve set is loaded with a single query.
         """
         return persistence.notice_numbers_with_persisted_reserve(db)
+
+    def _notice_numbers_checked_recently(
+        self, db: Session, within_hours: int
+    ) -> set[str]:
+        """Thin delegator to ``persistence.notice_numbers_checked_recently``.
+
+        Notice numbers whose deferred reserve-detail fetch was stamped
+        ``reserve_detail_checked_at`` within ``within_hours``. Used by the defer
+        path to back off permanently-empty notices. Kept as an instance method
+        (called via ``self.``) so tests can monkeypatch it on the class.
+        """
+        return persistence.notice_numbers_checked_recently(db, within_hours)
 
     @staticmethod
     def _has_persisted_reserve_prices(historical_record: HistoricalData) -> bool:
