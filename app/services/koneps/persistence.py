@@ -22,6 +22,7 @@ around.
 """
 
 import json
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -49,6 +50,35 @@ def notice_numbers_with_persisted_reserve(db: Session) -> set[str]:
             HistoricalData.reserve_prices.isnot(None),
             HistoricalData.reserve_prices != "",
             HistoricalData.reserve_prices != "[]",
+        )
+        .all()
+    )
+    return {str(notice_number) for (notice_number,) in rows if notice_number}
+
+
+def notice_numbers_checked_recently(db: Session, within_hours: int) -> set[str]:
+    """Notice numbers whose reserve detail was checked within ``within_hours``.
+
+    The deferred reserve-detail backfill stamps
+    ``HistoricalData.reserve_detail_checked_at`` whenever a fetch succeeded but
+    returned no settled reserve ("not_settled"). The collector uses this set to
+    back off permanently-empty notices: one that was checked recently is skipped
+    from the deferred set so it is re-checked at most once per recheck window
+    instead of every 6h sweep (which would burn the ScsbidInfoService rate
+    limit). ``within_hours <= 0`` disables the gate (returns an empty set).
+
+    One indexed scan; the cutoff is an instant (``utc_now`` minus the window)
+    and the stored timestamps are UTC-aware, so the comparison is frame-exact.
+    """
+    if within_hours <= 0:
+        return set()
+    cutoff = utc_now() - timedelta(hours=within_hours)
+    rows = (
+        db.query(HistoricalData.notice_number)
+        .filter(
+            HistoricalData.notice_number.isnot(None),
+            HistoricalData.reserve_detail_checked_at.isnot(None),
+            HistoricalData.reserve_detail_checked_at >= cutoff,
         )
         .all()
     )

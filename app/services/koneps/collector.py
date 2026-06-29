@@ -464,6 +464,20 @@ class KonepsCollectorService:
             else set()
         )
 
+        # Recheck backoff (only when deferring): a notice that the backfill
+        # already fetched and found empty ("not_settled") is stamped with
+        # ``reserve_detail_checked_at``. Skip deferring any notice checked within
+        # the recheck window so permanently-empty notices are re-checked at most
+        # once per window instead of every 6h sweep (rate-limit backoff). One
+        # query, not N. Disabled (empty set) when not deferring, db is None, or
+        # the window is 0.
+        recheck_hours = max(0, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS))
+        checked_recently: set[str] = (
+            self._notice_numbers_checked_recently(db, recheck_hours)
+            if defer_reserve_detail and db is not None and recheck_hours > 0
+            else set()
+        )
+
         parsed_items: list[dict[str, Any]] = []
         seen_notice_numbers: set[str] = set()
         # Deferred reserve-detail notices: {(notice_number, category)} to dedupe,
@@ -475,6 +489,7 @@ class KonepsCollectorService:
         reserve_detail_reused_count = 0
         reserve_detail_deferred_count = 0
         reserve_detail_backoff_skipped_count = 0
+        reserve_detail_recheck_skipped_count = 0
         api_call_count = 0
         key_variant = ""
         last_result_code = ""
@@ -578,7 +593,17 @@ class KonepsCollectorService:
                                 or raw_item.get("fnlSucsfDate")
                                 or raw_item.get("rgstDt")
                             )
-                            if (
+                            if notice_number in checked_recently:
+                                # Recheck-gate (rate-limit backoff): the backfill
+                                # already fetched this notice and found no settled
+                                # reserve within the recheck window. Skip it this
+                                # sweep so a permanently-empty notice is re-checked
+                                # at most once per window, not every 6h. Counted
+                                # separately from the age-gate (complementary: the
+                                # age-gate defers before settling, this backs off
+                                # after a confirmed-empty fetch).
+                                reserve_detail_recheck_skipped_count += 1
+                            elif (
                                 reserve_detail_age_cutoff is not None
                                 and opened_at is not None
                                 and opened_at > reserve_detail_age_cutoff
@@ -673,6 +698,9 @@ class KonepsCollectorService:
                 "reserve_detail_backoff_skipped_count": (
                     reserve_detail_backoff_skipped_count
                 ),
+                "reserve_detail_recheck_skipped_count": (
+                    reserve_detail_recheck_skipped_count
+                ),
                 "deferred_reserve_detail_notices": deferred_reserve_detail,
                 "query_date_begin": begin_token,
                 "query_date_end": end_token,
@@ -689,6 +717,18 @@ class KonepsCollectorService:
         assert the persisted-reserve set is loaded with a single query.
         """
         return persistence.notice_numbers_with_persisted_reserve(db)
+
+    def _notice_numbers_checked_recently(
+        self, db: Session, within_hours: int
+    ) -> set[str]:
+        """Thin delegator to ``persistence.notice_numbers_checked_recently``.
+
+        Notice numbers whose deferred reserve-detail fetch was stamped
+        ``reserve_detail_checked_at`` within ``within_hours``. Used by the defer
+        path to back off permanently-empty notices. Kept as an instance method
+        (called via ``self.``) so tests can monkeypatch it on the class.
+        """
+        return persistence.notice_numbers_checked_recently(db, within_hours)
 
     @staticmethod
     def _has_persisted_reserve_prices(historical_record: HistoricalData) -> bool:

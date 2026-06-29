@@ -195,6 +195,14 @@ class Settings(BaseSettings):
     KONEPS_SCSBID_REUSE_PERSISTED_RESERVE_DETAIL: bool = True
     # Throttle between scsbid OpenAPI page/category calls (seconds). 0 allowed in tests.
     KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS: float = 0.2
+    # Throttle between deferred reserve-detail backfill HTTP calls (seconds), kept
+    # SEPARATE from the page-pagination delay above so the backfill can run slower
+    # without slowing collection's page sweep. ScsbidInfoService rate-limits the
+    # reserve-detail endpoint harder than the award-list endpoint (HTTP 429 "API
+    # token quota exceeded" persisted even at the ~2/s serial pace the collection
+    # delay implied), so the backfill needs its own, slacker pace. 0 disables the
+    # inter-call sleep (used in tests).
+    KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS: float = 1.0
     # Defer the per-notice reserve-detail HTTP fetch out of the time-limited Celery
     # collection task into a bounded async backfill. The inline path issues one
     # reserve-detail call (each preceded by a throttle sleep) per non-settled award
@@ -221,6 +229,18 @@ class Settings(BaseSettings):
     # exactly once. Notices with an unknown/None opening datetime are still deferred
     # (the gate cannot apply, so we try). 0 disables the gate.
     KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS: int = 24
+    # Re-check backoff for permanently-empty notices. The age-gate above defers a
+    # notice once its opening is old enough to *have* a settled reserve, but some
+    # notices stay empty forever (reserve never published). Those pass the age-gate
+    # and so are re-fetched ("not_settled") every 6h sweep, perpetually burning the
+    # rate limit. The backfill stamps ``HistoricalData.reserve_detail_checked_at``
+    # on a successful-but-empty fetch; the collector then skips deferring any notice
+    # checked within this many hours, so a permanently-empty notice is re-checked at
+    # most once per window (e.g. 48h => 0.5/day vs every 6h => 4/day, ~8x fewer
+    # calls). The age-gate (defer only after the notice could have settled) and this
+    # recheck-gate (back off after it was checked and found empty) are complementary.
+    # 0 disables the recheck-gate.
+    KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS: int = 48
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50

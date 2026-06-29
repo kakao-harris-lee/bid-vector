@@ -404,6 +404,7 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     import json
     from time import sleep
 
+    from app.core.time import utc_now
     from app.models.models import HistoricalData
 
     all_cleaned = _normalize_deferred_reserve_notices(notices)
@@ -412,8 +413,13 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     rest = all_cleaned[chunk_size:]
     service = KonepsCollectorService()
     service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
+    # Backfill-specific inter-call throttle, kept separate from the collection
+    # page-pagination delay: the reserve-detail endpoint is rate-limited harder
+    # (HTTP 429 persisted even at collection's ~serial pace), so the backfill runs
+    # at its own, slacker pace without slowing collection. 0 disables the sleep.
     delay_seconds = max(
-        0.0, float(settings.KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS or 0.0)
+        0.0,
+        float(settings.KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS or 0.0),
     )
     commit_every = 25
 
@@ -476,10 +482,24 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
                 selected_numbers = detail.get("selected_numbers") or []
                 if not reserve_prices:
                     # Fetched OK but no settled reserve yet (e.g. notice closed
-                    # but not opened). Leave the row untouched so a later run
-                    # re-fetches once it settles. Tracked separately from errors
-                    # — this is the benign "not yet settled" path, not a failure.
+                    # but not opened). Leave reserve_prices untouched so a later
+                    # run re-fetches once it settles. Tracked separately from
+                    # errors — this is the benign "not yet settled" path, not a
+                    # failure. Stamp ``reserve_detail_checked_at`` so the collector
+                    # backs this notice off the deferred set for one recheck window
+                    # (permanently-empty notices otherwise re-fetch every 6h sweep,
+                    # burning the rate limit). 429/exceptions are NOT stamped (they
+                    # fall to the except below) so genuinely-retryable notices stay
+                    # retryable. Create the row if missing so the marker persists.
+                    if record is None:
+                        record = HistoricalData(notice_number=notice_number)
+                        db.add(record)
+                    record.reserve_detail_checked_at = utc_now()
                     not_settled += 1
+                    processed_since_commit += 1
+                    if processed_since_commit >= commit_every:
+                        db.commit()
+                        processed_since_commit = 0
                     continue
 
                 if record is None:
