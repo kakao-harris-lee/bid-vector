@@ -425,6 +425,9 @@ def test_backfill_fetches_and_persists_reserve_prices(test_db, monkeypatch):
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
     monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
     # Keep the test session open across the task body.
     monkeypatch.setattr(test_db, "close", lambda: None)
@@ -513,6 +516,9 @@ def test_backfill_one_failure_does_not_abort_chunk(test_db, monkeypatch):
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
     monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
@@ -573,6 +579,9 @@ def test_backfill_empty_reserve_counts_as_not_settled(test_db, monkeypatch):
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
     monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
@@ -703,6 +712,9 @@ def test_backfill_processes_one_chunk_and_chains_remainder(test_db, monkeypatch)
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
     monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 2)
     monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
@@ -802,3 +814,436 @@ def test_backfill_last_chunk_does_not_chain(test_db, monkeypatch):
     assert out["remaining"] == 0
     assert out["continued"] is False
     assert continuations == []  # nothing left to chain
+
+
+# ---------------------------------------------------------------------------
+# 6. backfill stamps reserve_detail_checked_at on a not_settled fetch.
+#
+# Background (fix/scsbid-reserve-detail-quota)
+# --------------------------------------------
+# Some notices stay empty forever (reserve never published): they pass the
+# age-gate (opening > MIN_SETTLE_AGE_HOURS old) yet a fetch returns no reserve,
+# so they were re-fetched every 6h sweep, perpetually burning the rate limit.
+# The backfill now stamps ``HistoricalData.reserve_detail_checked_at`` on a
+# successful-but-empty fetch so the collector can back the notice off the
+# deferred set for one recheck window. A fetched (non-empty) reserve sets
+# reserve_prices instead and needs no marker (the reuse query already skips it).
+# 429/exceptions must NOT stamp (they stay retryable).
+# ---------------------------------------------------------------------------
+def test_backfill_stamps_checked_at_on_not_settled(test_db, monkeypatch):
+    from app.core.time import utc_now
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    test_db.add(
+        HistoricalData(
+            notice_number="EMPTY-1", reserve_prices="[]", selected_numbers="[]"
+        )
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [],
+            "selected_numbers": [],
+        },
+    )
+
+    # Capture the value assigned by the task before it is committed so we can
+    # assert it is a UTC-AWARE instant (SQLite drops tzinfo on round-trip; only
+    # Postgres timestamptz preserves it, so check the in-memory ORM object).
+    stamped: list[object] = []
+    real_utc_now = utc_now
+
+    def _capturing_utc_now():
+        value = real_utc_now()
+        stamped.append(value)
+        return value
+
+    monkeypatch.setattr("app.tasks.jobs.utc_now", _capturing_utc_now, raising=False)
+    # The task imports utc_now locally; patch the source module too.
+    import app.core.time as _time_mod
+
+    monkeypatch.setattr(_time_mod, "utc_now", _capturing_utc_now)
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "EMPTY-1", "category": "service"}]
+    )
+
+    assert out["not_settled"] == 1
+    assert out["fetched"] == 0
+    # The value the task stamped is a timezone-aware UTC instant.
+    assert stamped, "task did not stamp a checked-at value"
+    assert stamped[-1].tzinfo is not None
+
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "EMPTY-1")
+        .one()
+    )
+    # reserve_prices is left empty (retried later once it settles) but the row is
+    # now stamped so the collector backs it off the deferred set.
+    assert json.loads(stored.reserve_prices) == []
+    assert stored.reserve_detail_checked_at is not None
+
+
+def test_backfill_creates_row_to_stamp_missing_notice(test_db, monkeypatch):
+    """A not_settled fetch for a notice with no row creates the marker row."""
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [],
+            "selected_numbers": [],
+        },
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "NO-ROW", "category": "service"}]
+    )
+
+    assert out["not_settled"] == 1
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "NO-ROW")
+        .one()
+    )
+    assert stored.reserve_detail_checked_at is not None
+    assert json.loads(stored.reserve_prices or "[]") == []
+
+
+def test_backfill_does_not_stamp_on_fetched_reserve(test_db, monkeypatch):
+    """A fetched (non-empty) reserve sets reserve_prices; checked_at stays untouched."""
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    test_db.add(
+        HistoricalData(
+            notice_number="WILL-FILL", reserve_prices="[]", selected_numbers="[]"
+        )
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [777],
+            "selected_numbers": [],
+        },
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "WILL-FILL", "category": "service"}]
+    )
+
+    assert out["fetched"] == 1
+    assert out["not_settled"] == 0
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "WILL-FILL")
+        .one()
+    )
+    assert json.loads(stored.reserve_prices) == [777]
+    # The settled (fetched) path does not stamp the not_settled marker.
+    assert stored.reserve_detail_checked_at is None
+
+
+def test_backfill_does_not_stamp_on_fetch_error(test_db, monkeypatch):
+    """A fetch that raises is retryable: no checked_at marker is written."""
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    test_db.add(
+        HistoricalData(
+            notice_number="RATE-LIMITED", reserve_prices="[]", selected_numbers="[]"
+        )
+    )
+    test_db.commit()
+
+    def _boom(self, raw_item, *, category, service_key):
+        raise ValueError("API token quota exceeded")
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _boom
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[{"notice_number": "RATE-LIMITED", "category": "service"}]
+    )
+
+    assert out["errors"] == 1
+    assert out["not_settled"] == 0
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "RATE-LIMITED")
+        .one()
+    )
+    # No marker: a 429/error notice stays retryable on the next sweep.
+    assert stored.reserve_detail_checked_at is None
+
+
+# ---------------------------------------------------------------------------
+# 7. backfill delay uses the dedicated reserve-detail setting (Part 2).
+# ---------------------------------------------------------------------------
+def test_backfill_uses_dedicated_delay_setting(test_db, monkeypatch):
+    """The inter-call sleep reads RESERVE_DETAIL_REQUEST_DELAY_SECONDS, not the
+    collection page delay, and 0 disables the sleep."""
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    # Collection delay is non-zero, but the backfill must ignore it.
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 9.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    # The task does ``from time import sleep`` locally, so patch time.sleep.
+    import time as _time_module
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(_time_module, "sleep", lambda s: sleeps.append(s))
+
+    for nn in ("S-1", "S-2", "S-3"):
+        test_db.add(
+            HistoricalData(notice_number=nn, reserve_prices="[]", selected_numbers="[]")
+        )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [1],
+            "selected_numbers": [],
+        },
+    )
+
+    notices = [
+        {"notice_number": nn, "category": "service"} for nn in ("S-1", "S-2", "S-3")
+    ]
+    out = jobs.backfill_scsbid_reserve_detail.run(notices=notices)
+
+    assert out["fetched"] == 3
+    # Delay setting is 0 => no inter-call sleeps even across 3 notices.
+    assert sleeps == []
+
+
+def test_backfill_sleeps_between_calls_when_delay_set(test_db, monkeypatch):
+    """A non-zero reserve-detail delay sleeps once between each pair of calls."""
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 1.5
+    )
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    import time as _time_module
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(_time_module, "sleep", lambda s: sleeps.append(s))
+
+    for nn in ("D-1", "D-2", "D-3"):
+        test_db.add(
+            HistoricalData(notice_number=nn, reserve_prices="[]", selected_numbers="[]")
+        )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: {
+            "reserve_prices": [1],
+            "selected_numbers": [],
+        },
+    )
+
+    notices = [
+        {"notice_number": nn, "category": "service"} for nn in ("D-1", "D-2", "D-3")
+    ]
+    jobs.backfill_scsbid_reserve_detail.run(notices=notices)
+
+    # index>0 for two of the three notices => two sleeps of the configured value.
+    assert sleeps == [1.5, 1.5]
+
+
+# ---------------------------------------------------------------------------
+# 8. collector defer recheck-gate (Part 3): a recently-checked notice is skipped.
+# ---------------------------------------------------------------------------
+def test_recheck_gate_excludes_recently_checked_notice(test_db, monkeypatch):
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    # Disable the age-gate so only the recheck-gate decides here.
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS", 0
+    )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS", 48)
+
+    # CHECKED was fetched-empty 1h ago (within the 48h window) => skip this sweep.
+    # STALE was checked 72h ago (outside the window) => defer again.
+    test_db.add(
+        HistoricalData(
+            notice_number="CHECKED",
+            reserve_prices="[]",
+            selected_numbers="[]",
+            reserve_detail_checked_at=utc_now() - timedelta(hours=1),
+        )
+    )
+    test_db.add(
+        HistoricalData(
+            notice_number="STALE",
+            reserve_prices="[]",
+            selected_numbers="[]",
+            reserve_detail_checked_at=utc_now() - timedelta(hours=72),
+        )
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: (_ for _ in ()).throw(
+            AssertionError("must not fetch when deferring")
+        ),
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body(
+                [_award_item("CHECKED"), _award_item("STALE"), _award_item("FRESH")],
+                total_count=3,
+                num_of_rows=100,
+            )
+        )
+
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    deferred_numbers = {d["notice_number"] for d in deferred}
+    # CHECKED is backed off; STALE (window expired) and FRESH (never checked) defer.
+    assert deferred_numbers == {"STALE", "FRESH"}
+    assert result["metadata"]["reserve_detail_recheck_skipped_count"] == 1
+
+
+def test_recheck_gate_disabled_when_hours_zero(test_db, monkeypatch):
+    """RECHECK_HOURS=0 disables the recheck-gate: even a just-checked notice defers."""
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_MIN_SETTLE_AGE_HOURS", 0
+    )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS", 0)
+
+    test_db.add(
+        HistoricalData(
+            notice_number="CHECKED",
+            reserve_prices="[]",
+            selected_numbers="[]",
+            reserve_detail_checked_at=utc_now() - timedelta(hours=1),
+        )
+    )
+    test_db.commit()
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "_fetch_scsbid_reserve_detail",
+        lambda self, raw_item, *, category, service_key: (_ for _ in ()).throw(
+            AssertionError("must not fetch when deferring")
+        ),
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body([_award_item("CHECKED")], total_count=1, num_of_rows=100)
+        )
+
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=True,
+    )
+
+    deferred = result["metadata"]["deferred_reserve_detail_notices"]
+    assert [d["notice_number"] for d in deferred] == ["CHECKED"]
+    assert result["metadata"]["reserve_detail_recheck_skipped_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. model regression: the new reserve_detail_checked_at column exists & defaults None.
+# ---------------------------------------------------------------------------
+def test_historical_data_has_reserve_detail_checked_at_column():
+    column = HistoricalData.__table__.columns["reserve_detail_checked_at"]
+    assert column.nullable is True
+    # DateTime(timezone=True) so the marker is a UTC-aware instant.
+    assert getattr(column.type, "timezone", False) is True
+
+
+def test_historical_data_reserve_detail_checked_at_defaults_none(test_db):
+    row = HistoricalData(
+        notice_number="DEFAULT-NONE", reserve_prices="[]", selected_numbers="[]"
+    )
+    test_db.add(row)
+    test_db.commit()
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "DEFAULT-NONE")
+        .one()
+    )
+    assert stored.reserve_detail_checked_at is None
