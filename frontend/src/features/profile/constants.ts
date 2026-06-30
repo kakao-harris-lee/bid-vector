@@ -21,6 +21,9 @@
  *   INT001 ← 실내건축공사업
  *   MEC001 ← 기계설비공사업
  *   GAS001 ← 가스시설공사업
+ *   PORT001 ← 항만및해안 / 항만및해안기술사 / 항만설계 / 해안기술사
+ *   MAR001 ← 해양엔지니어링 / 해양기술사
+ *   HYDRO001 ← 수로조사 / 수로측량 / 해양조사
  *
  * Plus any raw `[A-Z]{2,}\d{2,}` code (e.g. typing a code directly). As of the
  * construction-license-matching work the backend alias table now covers the
@@ -60,7 +63,12 @@ export const MATCHABLE_LICENSE_CHIPS: LicenseChip[] = [
   { label: "산업·환경설비공사업", value: "산업환경설비공사업", matchable: true },
   { label: "실내건축공사업", value: "실내건축공사업", matchable: true },
   { label: "기계설비공사업", value: "기계설비공사업", matchable: true },
-  { label: "가스시설공사업", value: "가스시설공사업", matchable: true }
+  { label: "가스시설공사업", value: "가스시설공사업", matchable: true },
+  // 해양 엔지니어링·기술용역 면허 (해양엔지니어링협회 게이트, Phase 1).
+  // 백엔드 LICENSE_ALIASES → PORT001/MAR001/HYDRO001.
+  { label: "항만·해안 설계·기술", value: "항만및해안", matchable: true },
+  { label: "해양엔지니어링·기술사", value: "해양엔지니어링", matchable: true },
+  { label: "수로·해양조사", value: "수로조사", matchable: true }
 ];
 
 /**
