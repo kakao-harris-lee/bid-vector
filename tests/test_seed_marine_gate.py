@@ -4,7 +4,7 @@ Verifies the canonical-operator marine gate is:
   * dry-run by default — outputs a before→after plan but does NOT commit;
   * applied (--apply) — sets profile.license_codes (4 groups),
     strategy.focus_categories (3: technical-service/service/construction) and
-    required_keywords (32) with unlimited budget, leaving amount fields /
+    required_keywords (31) with unlimited budget, leaving amount fields /
     thresholds untouched;
   * idempotent — re-running --apply yields the same persisted state.
 
@@ -37,20 +37,24 @@ from scripts.seed_marine_gate import (
 
 
 def test_required_keyword_catalogue_is_unique():
-    # 32 unique tokens after dropping 6 over-matching generic terms.
-    assert len(MARINE_REQUIRED_KEYWORDS) == 32
-    assert len(set(MARINE_REQUIRED_KEYWORDS)) == 32
+    # 31 unique tokens after dropping 6 generic terms + "준설" (sewer over-match).
+    assert len(MARINE_REQUIRED_KEYWORDS) == 31
+    assert len(set(MARINE_REQUIRED_KEYWORDS)) == 31
 
 
 def test_removed_generic_keywords_are_absent():
-    """The 6 over-matching generic terms must not be in the catalogue."""
-    removed = {"해양", "수산", "해상", "매립", "등대", "수중"}
+    """The over-matching terms must not be in the catalogue.
+
+    6 generic terms + "준설" (drops 하수관로/저수지/배수로 준설공사; real marine
+    dredging is caught by 항만/항로/방파제/연안).
+    """
+    removed = {"해양", "수산", "해상", "매립", "등대", "수중", "준설"}
     assert removed.isdisjoint(set(MARINE_REQUIRED_KEYWORDS))
 
 
 def test_retained_specific_keywords_present():
     """Specific marine-engineering compounds are retained."""
-    for kept in ("항만", "방파제", "준설", "해양조사", "해양환경", "항만설계", "마리나"):
+    for kept in ("항만", "방파제", "해양조사", "해양환경", "항만설계", "마리나"):
         assert kept in MARINE_REQUIRED_KEYWORDS
 
 
@@ -69,7 +73,7 @@ def test_dry_run_outputs_plan_without_committing(test_db):
     assert result["after"]["business_type"] == MARINE_BUSINESS_TYPE
     assert result["after"]["license_codes"] == MARINE_LICENSE_CODES
     assert result["after"]["focus_categories"] == MARINE_FOCUS_CATEGORIES
-    assert len(result["after"]["required_keywords"]) == 32
+    assert len(result["after"]["required_keywords"]) == 31
     assert result["after"]["min_budget_estimate"] == 0.0
     assert result["after"]["max_budget_estimate"] == 0.0
 
@@ -103,7 +107,7 @@ def test_apply_sets_profile_and_strategy(test_db):
     assert "construction" in focus
 
     keywords = split_multi_value_text(strategy.required_keywords)
-    assert len(keywords) == 32
+    assert len(keywords) == 31
     assert "항만" in keywords
     assert "방파제" in keywords
     # Dropped generic term must not leak back in.
