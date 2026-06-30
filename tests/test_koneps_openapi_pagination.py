@@ -245,6 +245,46 @@ def test_missing_totalcount_continues_on_full_page(monkeypatch):
     assert len(result["items"]) == 110
 
 
+def test_missing_totalcount_runaway_guard(monkeypatch):
+    """totalCount 누락 + API가 pageNo를 무시하고 full 중복 페이지를 무한 반환해도
+    max_pages 백스톱이 무한 루프를 막는다.
+
+    Every page returns the SAME 100 items (full page, all duplicates) and omits
+    totalCount. Without the runaway guard this loops forever; with it the loop
+    stops at ceil(max_items/per_page)+2 fetched pages.
+    """
+    _setup_monkeypatch(monkeypatch)
+
+    dup_items = [_notice_item(i) for i in range(100)]  # identical full page every call
+
+    def _side_effect(url, params, service_key, operation):
+        payload = {
+            "response": {
+                "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},
+                "body": {"items": {"item": dup_items}},  # no totalCount, always full+dup
+            }
+        }
+        return _mock_response(json_data=payload), "raw"
+
+    with (
+        patch(
+            "app.services.koneps.http_client.request_openapi_with_key_variants",
+            side_effect=_side_effect,
+        ),
+        patch(
+            "app.services.koneps.http_client.load_openapi_json",
+            side_effect=lambda resp: resp._json_data,
+        ),
+    ):
+        result = collect_openapi_items(_make_request(max_items=500))
+
+    meta = result["metadata"]
+    # ceil(500/100) + 2 = 7 pages, then the guard breaks the loop.
+    assert meta["openapi_pages_fetched"] == 7
+    # All pages are duplicates → only the first page's 100 unique items survive.
+    assert len(result["items"]) == 100
+
+
 def test_http_error_raises(monkeypatch):
     """HTTP 400 from KONEPS → ValueError is raised."""
     _setup_monkeypatch(monkeypatch)

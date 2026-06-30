@@ -85,6 +85,11 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
     date_token = openapi.openapi_date_token(request.target_date)
     per_page = 100  # KONEPS API 호출당 고정 페이지 크기
     max_total = max(1, int(request.max_items))
+    # Runaway guard: totalCount 누락 + API가 pageNo를 무시하고 full 중복 페이지를
+    # 무한 반환하는 이중 오작동 시 무한 루프(→ Celery time limit SIGKILL → orphan)를
+    # 막는다. 정상 데이터는 max_total/total_pages가 먼저 종료하므로 이 캡은 totalCount
+    # 누락 경로에서만 백스톱으로 작동한다(정상 truncation 위험 없음).
+    max_pages = math.ceil(max_total / per_page) + 2
     url = f"{settings.KONEPS_OPENAPI_BID_PUBLIC_INFO_URL.rstrip('/')}/{operation}"
     base_params = {
         "type": "json",
@@ -159,6 +164,8 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
         if total_pages is not None and page_no >= total_pages:
             break
         if total_pages is None and len(raw_items) < per_page:
+            break
+        if total_pages is None and pages_fetched >= max_pages:
             break
         # 다음 페이지 요청 전 throttle (첫 호출 뒤부터)
         if settings.KONEPS_OPENAPI_REQUEST_DELAY_SECONDS > 0:
