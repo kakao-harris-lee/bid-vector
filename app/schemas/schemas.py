@@ -2100,7 +2100,7 @@ class CrawlRequest(BaseModel):
     target_date: Optional[str] = None
     keyword: Optional[str] = None
     execution_mode: Literal["mock", "live", "auto"] = "mock"
-    max_items: int = Field(default=10, ge=1, le=100)
+    max_items: int = Field(default=10, ge=1, le=500)
     # scsbid award coverage — all optional, fully backward compatible.
     categories: Optional[List[str]] = Field(
         default=None,

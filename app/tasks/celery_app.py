@@ -254,29 +254,47 @@ def build_historical_backtest_beat_schedule() -> dict[str, dict[str, object]]:
 
 
 def build_koneps_collection_beat_schedule() -> dict[str, dict[str, object]]:
-    """Build the periodic schedule entry for KONEPS notice collection."""
+    """Build the periodic schedule entries for KONEPS notice collection.
+
+    If KONEPS_COLLECTION_CATEGORIES is set, creates one entry per category.
+    Falls back to the single KONEPS_COLLECTION_CATEGORY for backward compatibility.
+    """
     if not settings.KONEPS_COLLECTION_SCHEDULE_ENABLED:
         return {}
 
-    category = str(settings.KONEPS_COLLECTION_CATEGORY or "").strip() or None
     execution_mode = str(settings.KONEPS_COLLECTION_EXECUTION_MODE or "auto").strip() or "auto"
     if execution_mode not in {"mock", "live", "auto"}:
         execution_mode = "auto"
 
-    return {
-        "koneps_collection_periodic": {
+    max_items = min(500, max(1, int(settings.KONEPS_COLLECTION_MAX_ITEMS)))
+    interval = float(max(1, settings.KONEPS_COLLECTION_INTERVAL_MINUTES) * 60)
+    source = str(settings.KONEPS_COLLECTION_SOURCE or "koneps-openapi").strip() or "koneps-openapi"
+
+    # multi-category support
+    raw_categories = str(settings.KONEPS_COLLECTION_CATEGORIES or "").strip()
+    if raw_categories:
+        categories = [t.strip().lower() for t in raw_categories.split(",") if t.strip()]
+    else:
+        single = str(settings.KONEPS_COLLECTION_CATEGORY or "").strip() or None
+        categories = [single] if single else [None]
+
+    result: dict[str, dict[str, object]] = {}
+    for cat in categories:
+        slug = cat or "general"
+        key = f"koneps_collection_{slug}_periodic"
+        result[key] = {
             "task": COLLECT_KONEPS_NOTICES_TASK_NAME,
-            "schedule": float(max(1, settings.KONEPS_COLLECTION_INTERVAL_MINUTES) * 60),
+            "schedule": interval,
             "kwargs": {
                 "request_payload": {
-                    "source": str(settings.KONEPS_COLLECTION_SOURCE or "koneps-openapi").strip() or "koneps-openapi",
-                    "category": category,
+                    "source": source,
+                    "category": cat,
                     "execution_mode": execution_mode,
-                    "max_items": min(100, max(1, int(settings.KONEPS_COLLECTION_MAX_ITEMS))),
+                    "max_items": max_items,
                 },
             },
         }
-    }
+    return result
 
 
 def build_scsbid_collection_beat_schedule() -> dict[str, dict[str, object]]:
