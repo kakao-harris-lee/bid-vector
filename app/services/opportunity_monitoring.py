@@ -830,6 +830,12 @@ class StrategyMonitoringService:
     def _apply_strategy_filters(self, project: Project, strategy: OperatorStrategy) -> StrategyFilterResult:
         """Apply cheap watch-rule filters before running heavier analysis."""
         project_text = self._build_project_text(project)
+        # Keyword matching uses a narrower text (title + requirements + category,
+        # NO description): KONEPS stores 공고기관/공고번호/URL metadata in the
+        # description (persistence.py), so 기관명 like "해양수산부" would otherwise
+        # false-trigger required_keywords. Region matching keeps the full text
+        # because 지역 can legitimately live in those metadata fields.
+        keyword_text = self._build_keyword_text(project)
         reasons: list[str] = []
 
         focus_categories = split_multi_value_text(strategy.focus_categories)
@@ -852,14 +858,14 @@ class StrategyMonitoringService:
             return StrategyFilterResult(matched=False, reasons=[])
 
         required_keywords = split_multi_value_text(strategy.required_keywords)
-        matched_keywords = self._matched_terms(project_text, required_keywords)
+        matched_keywords = self._matched_terms(keyword_text, required_keywords)
         if required_keywords:
             if not matched_keywords:
                 return StrategyFilterResult(matched=False, reasons=[])
             reasons.append(f"관심 키워드 일치: {', '.join(matched_keywords[:3])}")
 
         exclude_keywords = split_multi_value_text(strategy.exclude_keywords)
-        if self._matched_terms(project_text, exclude_keywords):
+        if self._matched_terms(keyword_text, exclude_keywords):
             return StrategyFilterResult(matched=False, reasons=[])
 
         project_budget = float(project.budget_estimate or 0.0)
@@ -882,6 +888,21 @@ class StrategyMonitoringService:
         return " ".join(
             part.strip()
             for part in [project.title or "", project.description or "", project.requirements or "", project.category or ""]
+            if part and part.strip()
+        ).lower()
+
+    def _build_keyword_text(self, project: Project) -> str:
+        """Flatten only the work-describing fields for keyword matching.
+
+        Excludes ``description`` on purpose: KONEPS collectors store metadata
+        (공고기관/공고번호/URL) there, so 기관명 like "해양수산부" must NOT satisfy a
+        required keyword. The actual work name lives in ``title`` and the
+        requirements in ``requirements``; ``category`` is the coarse type. No
+        recall loss for keyword intent.
+        """
+        return " ".join(
+            part.strip()
+            for part in [project.title or "", project.requirements or "", project.category or ""]
             if part and part.strip()
         ).lower()
 
