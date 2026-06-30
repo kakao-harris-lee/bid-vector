@@ -28,6 +28,7 @@ are referenced only from ``collect_notices``.
 
 import math
 from datetime import timedelta
+from time import sleep
 from typing import Any
 
 from app.core.config import settings
@@ -83,7 +84,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
     operation = openapi.openapi_operation_for_category(request.category)
     date_token = openapi.openapi_date_token(request.target_date)
     per_page = 100  # KONEPS API 호출당 고정 페이지 크기
-    max_total = max(1, int(request.max_items or per_page))
+    max_total = max(1, int(request.max_items))
     url = f"{settings.KONEPS_OPENAPI_BID_PUBLIC_INFO_URL.rstrip('/')}/{operation}"
     base_params = {
         "type": "json",
@@ -152,10 +153,16 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
         if len(parsed_items) >= max_total:
             break
 
-        # 더 가져올 페이지가 있으면 계속
-        total_pages = math.ceil(total_count / per_page) if total_count > 0 else 1
-        if page_no >= total_pages:
+        # totalCount를 신뢰할 수 없을 때(누락/0) full page면 다음 페이지를 계속 시도한다.
+        # short page(<per_page)면 마지막 페이지로 간주하고 종료.
+        total_pages = math.ceil(total_count / per_page) if total_count > 0 else None
+        if total_pages is not None and page_no >= total_pages:
             break
+        if total_pages is None and len(raw_items) < per_page:
+            break
+        # 다음 페이지 요청 전 throttle (첫 호출 뒤부터)
+        if settings.KONEPS_OPENAPI_REQUEST_DELAY_SECONDS > 0:
+            sleep(settings.KONEPS_OPENAPI_REQUEST_DELAY_SECONDS)
         page_no += 1
 
     return {
@@ -170,7 +177,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             "openapi_result_message": result_message,
             "openapi_total_count": total_count,
             "openapi_pages_fetched": pages_fetched,
-            "openapi_page_no": page_no,
+            "openapi_last_page_no": page_no,
             "openapi_num_of_rows": per_page,
             "query_date": date_token,
             "query_type": "registration_datetime",

@@ -406,6 +406,7 @@ class Settings(BaseSettings):
     KONEPS_OPENAPI_ENCODED_SERVICE_KEY: str = ""
     KONEPS_OPENAPI_MAX_ITEMS: int = 500
     KONEPS_OPENAPI_TIMEOUT_SECONDS: int = 20
+    KONEPS_OPENAPI_REQUEST_DELAY_SECONDS: float = 0.2  # inter-page throttle for BidPublicInfoService pagination
     KONEPS_HEADLESS: bool = True
     KONEPS_TIMEOUT_MS: int = 30000
     KONEPS_USER_AGENT: str = "bid-vector-bot/0.1"

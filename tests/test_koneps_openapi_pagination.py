@@ -79,6 +79,8 @@ def _setup_monkeypatch(monkeypatch) -> None:
         "KONEPS_OPENAPI_BID_PUBLIC_INFO_URL",
         "https://apis.data.go.kr/1230000/ad/BidPublicInfoService",
     )
+    # Disable the inter-page throttle so pagination tests stay fast.
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_REQUEST_DELAY_SECONDS", 0)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +203,48 @@ def test_empty_totalcount_returns_no_items(monkeypatch):
     assert result["metadata"]["openapi_pages_fetched"] == 1
 
 
+def test_missing_totalcount_continues_on_full_page(monkeypatch):
+    """totalCount 누락/0 + full page → keeps paginating until a short page.
+
+    Page 1 omits totalCount but returns a full page (100 items); page 2 omits
+    totalCount and returns a short page (10 items), signalling the last page.
+    All 110 items are collected across 2 fetched pages.
+    """
+    _setup_monkeypatch(monkeypatch)
+
+    page1_items = [_notice_item(i) for i in range(100)]  # full page
+    page2_items = [_notice_item(100 + i) for i in range(10)]  # short page
+
+    def _side_effect(url, params, service_key, operation):
+        page_no = params["pageNo"]
+        items = page1_items if page_no == 1 else page2_items
+        # Build a body WITHOUT a totalCount key (unreliable / missing).
+        payload = {
+            "response": {
+                "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},
+                "body": {"items": {"item": items}},
+            }
+        }
+        return _mock_response(json_data=payload), "raw"
+
+    with (
+        patch(
+            "app.services.koneps.http_client.request_openapi_with_key_variants",
+            side_effect=_side_effect,
+        ),
+        patch(
+            "app.services.koneps.http_client.load_openapi_json",
+            side_effect=lambda resp: resp._json_data,
+        ),
+    ):
+        result = collect_openapi_items(_make_request(max_items=500))
+
+    meta = result["metadata"]
+    assert meta["openapi_pages_fetched"] == 2
+    assert meta["openapi_total_count"] == 0  # missing → defaults to 0
+    assert len(result["items"]) == 110
+
+
 def test_http_error_raises(monkeypatch):
     """HTTP 400 from KONEPS → ValueError is raised."""
     _setup_monkeypatch(monkeypatch)
@@ -256,7 +300,7 @@ def test_metadata_keys_present(monkeypatch):
         "openapi_result_message",
         "openapi_total_count",
         "openapi_pages_fetched",
-        "openapi_page_no",
+        "openapi_last_page_no",
         "openapi_num_of_rows",
         "query_date",
         "query_type",
