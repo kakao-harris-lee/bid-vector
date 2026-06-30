@@ -170,7 +170,8 @@ class Settings(BaseSettings):
     KONEPS_COLLECTION_INTERVAL_MINUTES: int = 60
     KONEPS_COLLECTION_SOURCE: str = "koneps-openapi"
     KONEPS_COLLECTION_CATEGORY: str = ""
-    KONEPS_COLLECTION_MAX_ITEMS: int = 50
+    KONEPS_COLLECTION_CATEGORIES: str = ""  # comma-separated, e.g. "construction,service"
+    KONEPS_COLLECTION_MAX_ITEMS: int = 50  # 기존값 유지, .env에서 500으로 덮어씀
     KONEPS_COLLECTION_EXECUTION_MODE: str = "auto"
     # KONEPS scsbid (개찰 결과) collection — independent beat schedule.
     # Re-uses the same collect_koneps_notices task but routes to the scsbid OpenAPI
@@ -403,8 +404,9 @@ class Settings(BaseSettings):
     )
     KONEPS_OPENAPI_SERVICE_KEY: str = ""
     KONEPS_OPENAPI_ENCODED_SERVICE_KEY: str = ""
-    KONEPS_OPENAPI_MAX_ITEMS: int = 100
+    KONEPS_OPENAPI_MAX_ITEMS: int = 500
     KONEPS_OPENAPI_TIMEOUT_SECONDS: int = 20
+    KONEPS_OPENAPI_REQUEST_DELAY_SECONDS: float = 0.2  # inter-page throttle for BidPublicInfoService pagination
     KONEPS_HEADLESS: bool = True
     KONEPS_TIMEOUT_MS: int = 30000
     KONEPS_USER_AGENT: str = "bid-vector-bot/0.1"

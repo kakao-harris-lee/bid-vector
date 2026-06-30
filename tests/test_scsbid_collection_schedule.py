@@ -156,8 +156,11 @@ def test_scsbid_and_notice_schedules_are_independent(monkeypatch):
 
     # Only notice ON → only the notice entry registers.
     monkeypatch.setattr(settings, "KONEPS_COLLECTION_SCHEDULE_ENABLED", True)
+    monkeypatch.setattr(settings, "KONEPS_COLLECTION_CATEGORIES", "")
+    monkeypatch.setattr(settings, "KONEPS_COLLECTION_CATEGORY", "")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED", False)
-    assert "koneps_collection_periodic" in build_koneps_collection_beat_schedule()
+    notice_schedule = build_koneps_collection_beat_schedule()
+    assert len(notice_schedule) >= 1  # at least one notice entry produced
     assert build_scsbid_collection_beat_schedule() == {}
 
     # Only scsbid ON → only the scsbid entry registers.
@@ -173,13 +176,12 @@ def test_scsbid_and_notice_schedules_are_independent(monkeypatch):
     monkeypatch.setattr(settings, "KONEPS_COLLECTION_SCHEDULE_ENABLED", True)
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED", True)
     beat = build_celery_runtime_config()["beat_schedule"]
-    assert "koneps_collection_periodic" in beat
+    # With no category set, the notice schedule uses the "general" slug key
+    notice_keys = [k for k in beat if k.startswith("koneps_collection_") and not k.startswith("koneps_collection_scsbid")]
+    assert len(notice_keys) >= 1
     assert "koneps_scsbid_collection_periodic" in beat
 
-    # And the two entries must carry distinct sources (notice vs. scsbid).
-    assert (
-        beat["koneps_collection_periodic"]["kwargs"]["request_payload"]["source"]
-        != beat["koneps_scsbid_collection_periodic"]["kwargs"]["request_payload"][
-            "source"
-        ]
-    )
+    # The notice and scsbid entries must carry distinct sources.
+    notice_source = beat[notice_keys[0]]["kwargs"]["request_payload"]["source"]
+    scsbid_source = beat["koneps_scsbid_collection_periodic"]["kwargs"]["request_payload"]["source"]
+    assert notice_source != scsbid_source

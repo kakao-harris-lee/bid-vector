@@ -26,7 +26,9 @@ The collector keeps a thin ``_normalize_request`` delegator for external callers
 are referenced only from ``collect_notices``.
 """
 
+import math
 from datetime import timedelta
+from time import sleep
 from typing import Any
 
 from app.core.config import settings
@@ -67,7 +69,12 @@ def normalize_request(request: CrawlRequest) -> CrawlRequest:
 
 
 def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
-    """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI."""
+    """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI.
+
+    Paginates through all available pages (100 items per page) until either
+    ``max_items`` unique notices are collected or the API returns no more items.
+    ``totalCount`` from page 1 determines how many pages to fetch.
+    """
     service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
     if not service_key:
         raise ValueError(
@@ -76,56 +83,94 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
 
     operation = openapi.openapi_operation_for_category(request.category)
     date_token = openapi.openapi_date_token(request.target_date)
-    page_size = max(1, min(int(request.max_items or 1), 999))
+    per_page = 100  # KONEPS API 호출당 고정 페이지 크기
+    max_total = max(1, int(request.max_items))
+    # Runaway guard: totalCount 누락 + API가 pageNo를 무시하고 full 중복 페이지를
+    # 무한 반환하는 이중 오작동 시 무한 루프(→ Celery time limit SIGKILL → orphan)를
+    # 막는다. 정상 데이터는 max_total/total_pages가 먼저 종료하므로 이 캡은 totalCount
+    # 누락 경로에서만 백스톱으로 작동한다(정상 truncation 위험 없음).
+    max_pages = math.ceil(max_total / per_page) + 2
     url = f"{settings.KONEPS_OPENAPI_BID_PUBLIC_INFO_URL.rstrip('/')}/{operation}"
-    params = {
+    base_params = {
         "type": "json",
-        "numOfRows": page_size,
-        "pageNo": 1,
+        "numOfRows": per_page,
         "inqryDiv": "1",
         "inqryBgnDt": f"{date_token}0000",
         "inqryEndDt": f"{date_token}2359",
     }
 
-    response, key_variant = http_client.request_openapi_with_key_variants(
-        url,
-        params=params,
-        service_key=service_key,
-        operation=operation,
-    )
-    if response.status_code >= 400:
-        raise ValueError(
-            f"KONEPS OpenAPI HTTP {response.status_code} for {operation}: "
-            f"{response.text[:300]} Tried service key variants: {key_variant}."
-        )
-    payload = http_client.load_openapi_json(response)
-    header = openapi.openapi_header(payload)
-    result_code = str(header.get("resultCode") or "").strip()
-    result_message = str(header.get("resultMsg") or "").strip()
-    if result_code and result_code not in {"00", "03"}:
-        raise ValueError(
-            f"KONEPS OpenAPI returned resultCode={result_code}: {result_message or 'unknown error'}"
-        )
-
-    body = openapi.openapi_body(payload)
-    raw_items = openapi.openapi_item_list(body)
     parsed_items: list[dict[str, Any]] = []
     seen_notice_numbers: set[str] = set()
-    for raw_item in raw_items:
-        parsed_item = openapi.build_openapi_notice_item(
-            raw_item,
-            request=request,
+    total_count = 0
+    result_code = ""
+    result_message = ""
+    key_variant = ""
+    pages_fetched = 0
+
+    page_no = 1
+    while True:
+        params = {**base_params, "pageNo": page_no}
+        response, key_variant = http_client.request_openapi_with_key_variants(
+            url,
+            params=params,
+            service_key=service_key,
             operation=operation,
         )
-        if parsed_item is None:
-            continue
-        notice_number = str(parsed_item["notice_number"])
-        if notice_number in seen_notice_numbers:
-            continue
-        seen_notice_numbers.add(notice_number)
-        parsed_items.append(parsed_item)
-        if len(parsed_items) >= request.max_items:
+        if response.status_code >= 400:
+            raise ValueError(
+                f"KONEPS OpenAPI HTTP {response.status_code} for {operation}: "
+                f"{response.text[:300]} Tried service key variants: {key_variant}."
+            )
+        payload = http_client.load_openapi_json(response)
+        header = openapi.openapi_header(payload)
+        result_code = str(header.get("resultCode") or "").strip()
+        result_message = str(header.get("resultMsg") or "").strip()
+        if result_code and result_code not in {"00", "03"}:
+            raise ValueError(
+                f"KONEPS OpenAPI returned resultCode={result_code}: {result_message or 'unknown error'}"
+            )
+
+        body = openapi.openapi_body(payload)
+        if page_no == 1:
+            total_count = parsing.safe_int(body.get("totalCount")) or 0
+
+        pages_fetched += 1
+        raw_items = openapi.openapi_item_list(body)
+        if not raw_items:
             break
+
+        for raw_item in raw_items:
+            parsed_item = openapi.build_openapi_notice_item(
+                raw_item,
+                request=request,
+                operation=operation,
+            )
+            if parsed_item is None:
+                continue
+            notice_number = str(parsed_item["notice_number"])
+            if notice_number in seen_notice_numbers:
+                continue
+            seen_notice_numbers.add(notice_number)
+            parsed_items.append(parsed_item)
+            if len(parsed_items) >= max_total:
+                break
+
+        if len(parsed_items) >= max_total:
+            break
+
+        # totalCount를 신뢰할 수 없을 때(누락/0) full page면 다음 페이지를 계속 시도한다.
+        # short page(<per_page)면 마지막 페이지로 간주하고 종료.
+        total_pages = math.ceil(total_count / per_page) if total_count > 0 else None
+        if total_pages is not None and page_no >= total_pages:
+            break
+        if total_pages is None and len(raw_items) < per_page:
+            break
+        if total_pages is None and pages_fetched >= max_pages:
+            break
+        # 다음 페이지 요청 전 throttle (첫 호출 뒤부터)
+        if settings.KONEPS_OPENAPI_REQUEST_DELAY_SECONDS > 0:
+            sleep(settings.KONEPS_OPENAPI_REQUEST_DELAY_SECONDS)
+        page_no += 1
 
     return {
         "items": parsed_items,
@@ -137,9 +182,10 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             "openapi_service_key_variant": key_variant,
             "openapi_result_code": result_code or "00",
             "openapi_result_message": result_message,
-            "openapi_total_count": parsing.safe_int(body.get("totalCount")),
-            "openapi_page_no": parsing.safe_int(body.get("pageNo")),
-            "openapi_num_of_rows": parsing.safe_int(body.get("numOfRows")),
+            "openapi_total_count": total_count,
+            "openapi_pages_fetched": pages_fetched,
+            "openapi_last_page_no": page_no,
+            "openapi_num_of_rows": per_page,
             "query_date": date_token,
             "query_type": "registration_datetime",
         },
