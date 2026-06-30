@@ -4,13 +4,16 @@ Adds three marine engineering / technical-service license groups to
 ``NoticeClassifierService.LICENSE_ALIASES`` so a 해양 firm whose
 ``license_codes`` hold Korean license names normalize to canonical codes:
 
-    PORT001   ← 항만및해안 / 항만및해안기술사 / 항만설계 / 해안기술사
-    MAR001    ← 해양엔지니어링 / 해양기술사
+    PORT001   ← 항만및해안 / 항만설계
+    MAR001    ← 해양엔지니어링
     HYDRO001  ← 수로조사 / 수로측량 / 해양조사
 
 These are technical-service (설계·감리·조사·측량) licenses, not construction
-(시공) licenses. ``_extract_license_tokens`` needs no DB session, so these are
-plain unit tests built from in-memory text / ``CompanyProfile`` instances.
+(시공) licenses. ``…기술사`` suffix aliases are intentionally NOT listed: the
+legacy ``기술사`` alias (ENG001) already fires for them, and the root alias
+(항만및해안) covers the full name (항만및해안기술사) by substring — listing them
+would be pure duplication. ``_extract_license_tokens`` needs no DB session, so
+these are plain unit tests built from in-memory text / ``CompanyProfile``.
 """
 
 from __future__ import annotations
@@ -43,23 +46,34 @@ def test_extract_marine_license_tokens(text, expected):
     assert service._extract_license_tokens(text, require_context=True) == expected
 
 
-@pytest.mark.parametrize(
-    "text, marine_code",
-    [
-        ("항만및해안기술사 면허 필요", "PORT001"),
-        ("해안기술사 면허 필요", "PORT001"),
-        ("해양기술사 면허 필요", "MAR001"),
-    ],
-)
-def test_marine_engineer_names_cofire_eng001(text, marine_code):
-    """'…기술사' marine names also fire ENG001 via the legacy '기술사' alias.
+def test_full_port_engineer_name_cofires_eng001():
+    """'항만및해안기술사' still fires {PORT001, ENG001} after the alias cleanup.
 
-    Intended: a 기술사 credential IS an engineering credential, mirroring the
-    '해양엔지니어링' → ENG001+MAR001 behaviour. The marine code is still present.
+    The root alias '항만및해안' is a substring of the full 기술사 name (→ PORT001),
+    and the legacy '기술사' alias fires ENG001. So dropping the explicit
+    '항만및해안기술사' alias is purely cosmetic for this real license name.
     """
     service = NoticeClassifierService()
-    tokens = service._extract_license_tokens(text, require_context=True)
-    assert tokens == {marine_code, "ENG001"}
+    assert service._extract_license_tokens("항만및해안기술사 면허 필요", require_context=True) == {
+        "PORT001",
+        "ENG001",
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["해안기술사 면허 필요", "해양기술사 면허 필요"],
+)
+def test_standalone_marine_engineer_names_map_to_eng001_only(text):
+    """Standalone '해안기술사'/'해양기술사' now resolve to ENG001 via '기술사'.
+
+    These partial forms are NOT full license names (the real names are
+    '항만및해안기술사' / '해양기술사' 종목). The marine seed profile stores the root
+    license strings ('항만및해안'/'해양엔지니어링'), so this simplification does not
+    affect gate matching.
+    """
+    service = NoticeClassifierService()
+    assert service._extract_license_tokens(text, require_context=True) == {"ENG001"}
 
 
 def test_marine_engineering_matches_both_eng_and_mar():
@@ -91,9 +105,9 @@ def test_bare_marine_terms_do_not_match_licenses():
     "license_name, expected_code",
     [
         ("해양조사", "HYDRO001"),
-        ("항만및해안기술사", "PORT001"),
+        ("항만및해안", "PORT001"),
         ("수로측량", "HYDRO001"),
-        ("해양기술사", "MAR001"),
+        ("해양엔지니어링", "MAR001"),
     ],
 )
 def test_profile_marine_license_normalizes(license_name, expected_code):

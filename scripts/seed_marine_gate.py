@@ -59,9 +59,16 @@ MARINE_BUSINESS_TYPE = "technical-service"
 MARINE_LICENSE_CODES = ["엔지니어링", "항만및해안", "해양엔지니어링", "수로조사"]
 MARINE_REGION_CODES = ["전국"]
 
-MARINE_FOCUS_CATEGORIES = ["technical-service", "service"]
+# construction 포함: 해양 공사(예: "○○항 방파제 보강공사")는 KONEPS 카테고리가
+# construction 이라 제외되던 문제를 해결한다. required_keywords(OR) 와 AND 로
+# 결합되므로 해양 키워드가 있는 공사만 통과하고, 일반 건물/도로 공사는 키워드
+# 미스로 제외된다.
+MARINE_FOCUS_CATEGORIES = ["technical-service", "service", "construction"]
 
-# Phase 1 OR 매칭 키워드 38개. 항만/해양/연안 토목·기술용역 어휘.
+# Phase 1 OR 매칭 키워드 32개. 항만/해양/연안 토목·기술용역 어휘.
+# 일반 어휘 6개(해양/수산/해상/매립/등대/수중)는 기관명·타도메인 오탐이 커서
+# 제외한다(해양·수산→해양수산부 기관명, 해상→해상보험/운송, 매립→폐기물매립지,
+# 등대→등대운영관리, 수중→수중생태조사). 구체 해양공학 합성어는 유지한다.
 MARINE_REQUIRED_KEYWORDS = [
     "항만",
     "어항",
@@ -77,12 +84,8 @@ MARINE_REQUIRED_KEYWORDS = [
     "계류",
     "케이슨",
     "준설",
-    "매립",
     "사석",
-    "해상",
-    "해양",
     "해저",
-    "수중",
     "연안",
     "해안",
     "갯벌",
@@ -96,11 +99,9 @@ MARINE_REQUIRED_KEYWORDS = [
     "해안침식",
     "항로",
     "항로표지",
-    "등대",
     "어초",
     "인공어초",
     "마리나",
-    "수산",
 ]
 
 # 무제한 예산 게이트(금액 축으로 거르지 않음).

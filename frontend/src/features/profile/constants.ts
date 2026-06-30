@@ -21,8 +21,8 @@
  *   INT001 ← 실내건축공사업
  *   MEC001 ← 기계설비공사업
  *   GAS001 ← 가스시설공사업
- *   PORT001 ← 항만및해안 / 항만및해안기술사 / 항만설계 / 해안기술사
- *   MAR001 ← 해양엔지니어링 / 해양기술사
+ *   PORT001 ← 항만및해안 / 항만설계
+ *   MAR001 ← 해양엔지니어링
  *   HYDRO001 ← 수로조사 / 수로측량 / 해양조사
  *
  * Plus any raw `[A-Z]{2,}\d{2,}` code (e.g. typing a code directly). As of the
