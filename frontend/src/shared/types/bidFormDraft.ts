@@ -50,6 +50,13 @@ export interface BidFormDraftResponse {
   eligibility_estimate: string;
   eligibility_note: string;
 
+  /**
+   * 복수예비가격 추첨번호(2개) 무작위 편의 픽. 공고번호 seed 로 재현 가능.
+   * 분석/유리가 아니며 개별 선택은 낙찰 결과에 영향 없음. 공고번호 부재 시 빈 배열.
+   */
+  lottery_numbers: number[];
+  lottery_numbers_note: string;
+
   /** 나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력. */
   fields: BidFormDraftField[];
 

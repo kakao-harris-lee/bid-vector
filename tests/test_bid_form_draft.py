@@ -110,6 +110,82 @@ def test_bid_form_draft_maps_known_decision(client, test_db):
     assert amount_field["raw_value"] == 90_000_000.0
 
 
+def test_bid_form_draft_lottery_numbers_present_and_valid(client, test_db):
+    """복수예비가격 추첨번호: 1~15 중 서로 다른 2개, 정렬, 정직 note 포함."""
+    _, decision = _seed_project_and_decision(test_db)
+
+    payload = client.get(DRAFT_PATH.format(record_id=decision.id)).json()
+
+    nums = payload["lottery_numbers"]
+    assert isinstance(nums, list) and len(nums) == 2
+    assert len(set(nums)) == 2  # 서로 다른 2개
+    assert all(1 <= n <= 15 for n in nums)
+    assert nums == sorted(nums)
+
+    # 정직 note — 개별 선택이 낙찰에 영향 없음 + 분석 아님을 분명히.
+    note = payload["lottery_numbers_note"]
+    assert "무작위" in note
+    assert "영향" in note  # 개별 번호 선택은 낙찰 결과에 영향 없음
+    assert "분석" in note
+
+    # fields 리스트에도 추첨번호 항목이 라벨+note 와 함께 노출.
+    lottery_field = next(
+        f for f in payload["fields"] if f["key"] == "lottery_numbers"
+    )
+    # 라벨 자체에 "무작위"가 있어야 함(빠른 스캔 시 분석 픽 오해 방지).
+    assert lottery_field["field_label"] == "복수예비가격 추첨번호(무작위 2개)"
+    assert "무작위" in lottery_field["field_label"]
+    assert lottery_field["value"] == ", ".join(str(n) for n in nums)
+    assert "영향" in (lottery_field["note"] or "")
+
+
+def test_lottery_note_matches_pool_and_pick_constants():
+    """정직 note 의 '15개 중 2개' 문구가 실제 상수와 일치(드리프트 가드)."""
+    from app.schemas.bid_form_draft import LOTTERY_NUMBERS_NOTE
+    from app.services.bid_form_draft import (
+        _LOTTERY_PICK_COUNT,
+        _LOTTERY_POOL_SIZE,
+    )
+
+    assert f"{_LOTTERY_POOL_SIZE}개 중 {_LOTTERY_PICK_COUNT}개" in LOTTERY_NUMBERS_NOTE
+    # 절차 미적용 가능성 고지도 유지(공고별 복수예비가격 미적용 대비).
+    assert "적용되지 않을 수 있습니다" in LOTTERY_NUMBERS_NOTE
+
+
+def test_bid_form_draft_lottery_numbers_are_reproducible(client, test_db):
+    """같은 공고번호 → 같은 추첨번호(공고번호 seed, 결정적)."""
+    _, decision = _seed_project_and_decision(test_db)
+    path = DRAFT_PATH.format(record_id=decision.id)
+
+    first = client.get(path).json()["lottery_numbers"]
+    second = client.get(path).json()["lottery_numbers"]
+    assert first == second
+
+
+def test_suggest_lottery_numbers_empty_without_notice_number():
+    """공고번호가 없으면 추천을 생성하지 않는다(빈 리스트)."""
+    from app.services.bid_form_draft import BidFormDraftService
+
+    service = BidFormDraftService()
+    assert service._suggest_lottery_numbers(None) == []
+    assert service._suggest_lottery_numbers("") == []
+    assert service._suggest_lottery_numbers("   ") == []
+
+
+def test_suggest_lottery_numbers_deterministic():
+    """공고번호별 결정적(재현 가능)이며 항상 1~15 중 서로 다른 2개."""
+    from app.services.bid_form_draft import BidFormDraftService
+
+    service = BidFormDraftService()
+    for notice in ("20260101-777", "20260101-888", "R26BK01599047"):
+        first = service._suggest_lottery_numbers(notice)
+        second = service._suggest_lottery_numbers(notice)
+        assert first == second  # 재현성
+        assert len(set(first)) == 2
+        assert all(1 <= n <= 15 for n in first)
+        assert first == sorted(first)
+
+
 def test_bid_form_draft_eligibility_below_floor(client, test_db):
     # recommended_amount 85M / budget 100M = 0.85 < floor 0.87 → 하한 미만(주의).
     _, decision = _seed_project_and_decision(test_db, recommended_amount=85_000_000.0)

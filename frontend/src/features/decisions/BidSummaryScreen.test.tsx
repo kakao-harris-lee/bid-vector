@@ -108,6 +108,9 @@ const bidFormDraft: BidFormDraftResponse = {
   eligibility_estimate: "적격 추정",
   eligibility_note:
     "카테고리 낙찰하한율(참고) 대비 추천 투찰가 위치에서 도출한 추정 라벨입니다.",
+  lottery_numbers: [3, 11],
+  lottery_numbers_note:
+    "무작위 편의 픽입니다. 개별 번호 선택은 낙찰 결과에 영향이 없습니다.",
   fields: [
     {
       key: "recommended_amount",
@@ -122,6 +125,13 @@ const bidFormDraft: BidFormDraftResponse = {
       value: "86.0%",
       raw_value: 0.86,
       note: "추천 투찰가 / 추정가격 기준입니다."
+    },
+    {
+      key: "lottery_numbers",
+      field_label: "복수예비가격 추첨번호(무작위 2개)",
+      value: "3, 11",
+      raw_value: null,
+      note: "무작위 편의 픽입니다. 개별 번호 선택은 낙찰 결과에 영향이 없습니다."
     }
   ],
   direct_submission_notice:
@@ -198,6 +208,13 @@ describe("BidSummaryScreen", () => {
     expect(
       screen.getByText(/개찰 전에는 실제 낙찰하한가가 미공개/)
     ).toBeInTheDocument();
+
+    // 복수예비가격 추첨번호 정직성 — 라벨에 "무작위", note 노출, "추천/최적번호" 금지.
+    expect(
+      await screen.findByText("복수예비가격 추첨번호(무작위 2개)")
+    ).toBeInTheDocument();
+    expect(screen.getByText(/무작위 편의 픽/)).toBeInTheDocument();
+    expect(screen.queryByText(/추천번호|최적번호/)).toBeNull();
 
     // 분야 통계
     expect(screen.getByText("분야 통계 (백테스트 추정)")).toBeInTheDocument();
