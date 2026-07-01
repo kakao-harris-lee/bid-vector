@@ -132,9 +132,24 @@ def test_bid_form_draft_lottery_numbers_present_and_valid(client, test_db):
     lottery_field = next(
         f for f in payload["fields"] if f["key"] == "lottery_numbers"
     )
-    assert lottery_field["field_label"] == "복수예비가격 추첨번호(2개)"
+    # 라벨 자체에 "무작위"가 있어야 함(빠른 스캔 시 분석 픽 오해 방지).
+    assert lottery_field["field_label"] == "복수예비가격 추첨번호(무작위 2개)"
+    assert "무작위" in lottery_field["field_label"]
     assert lottery_field["value"] == ", ".join(str(n) for n in nums)
     assert "영향" in (lottery_field["note"] or "")
+
+
+def test_lottery_note_matches_pool_and_pick_constants():
+    """정직 note 의 '15개 중 2개' 문구가 실제 상수와 일치(드리프트 가드)."""
+    from app.schemas.bid_form_draft import LOTTERY_NUMBERS_NOTE
+    from app.services.bid_form_draft import (
+        _LOTTERY_PICK_COUNT,
+        _LOTTERY_POOL_SIZE,
+    )
+
+    assert f"{_LOTTERY_POOL_SIZE}개 중 {_LOTTERY_PICK_COUNT}개" in LOTTERY_NUMBERS_NOTE
+    # 절차 미적용 가능성 고지도 유지(공고별 복수예비가격 미적용 대비).
+    assert "적용되지 않을 수 있습니다" in LOTTERY_NUMBERS_NOTE
 
 
 def test_bid_form_draft_lottery_numbers_are_reproducible(client, test_db):

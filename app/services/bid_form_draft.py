@@ -217,7 +217,9 @@ class BidFormDraftService:
             },
             {
                 "key": "lottery_numbers",
-                "field_label": "복수예비가격 추첨번호(2개)",
+                # 라벨 자체에 "무작위"를 담아, note 를 못 읽어도 분석 픽으로 오해하지
+                # 않게 한다(정직 명세 — 라이브 폼 작성 중 빠른 스캔 대비).
+                "field_label": "복수예비가격 추첨번호(무작위 2개)",
                 "value": ", ".join(str(n) for n in lottery_numbers),
                 "raw_value": None,
                 "note": LOTTERY_NUMBERS_NOTE,
