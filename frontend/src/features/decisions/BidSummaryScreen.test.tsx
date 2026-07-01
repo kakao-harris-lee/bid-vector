@@ -108,6 +108,9 @@ const bidFormDraft: BidFormDraftResponse = {
   eligibility_estimate: "적격 추정",
   eligibility_note:
     "카테고리 낙찰하한율(참고) 대비 추천 투찰가 위치에서 도출한 추정 라벨입니다.",
+  lottery_numbers: [3, 11],
+  lottery_numbers_note:
+    "무작위 편의 픽입니다. 개별 번호 선택은 낙찰 결과에 영향이 없습니다.",
   fields: [
     {
       key: "recommended_amount",

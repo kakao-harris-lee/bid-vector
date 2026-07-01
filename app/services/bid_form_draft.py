@@ -13,8 +13,10 @@ avoid duplication. This module only adds the KONEPS field mapping + the honest
 """
 
 import csv
+import hashlib
 import io
 import logging
+import random
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -22,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.schemas.bid_form_draft import (
     BID_FORM_DRAFT_NOTICE,
     ELIGIBILITY_NOTE,
+    LOTTERY_NUMBERS_NOTE,
 )
 from app.services.bid_summary import BidSummaryService
 
@@ -35,6 +38,11 @@ _ELIGIBILITY_UNKNOWN = "판단 불가"
 
 # 추천가가 하한가의 이 비율 이내면 "하한 근접"으로 표기 (참고 하한 기준).
 _NEAR_FLOOR_MARGIN = 0.02
+
+# 복수예비가격 추첨: 15개 중 2개 선택(표준 절차). 무작위 편의 픽이며
+# 개별 선택은 낙찰 결과에 영향 없음(예정가격은 전체 투찰자 합산으로 결정).
+_LOTTERY_POOL_SIZE = 15
+_LOTTERY_PICK_COUNT = 2
 
 
 class BidFormDraftService:
@@ -78,6 +86,8 @@ class BidFormDraftService:
             floor_bid_rate=floor_bid_rate,
         )
 
+        lottery_numbers = self._suggest_lottery_numbers(notice.get("notice_number"))
+
         fields = self._build_field_map(
             notice=notice,
             recommended_amount=recommended_amount,
@@ -85,6 +95,7 @@ class BidFormDraftService:
             budget_estimate=budget_estimate,
             eligibility=eligibility,
             category_floor=category_floor,
+            lottery_numbers=lottery_numbers,
         )
 
         return {
@@ -102,6 +113,8 @@ class BidFormDraftService:
             "deadline": notice.get("deadline"),
             "eligibility_estimate": eligibility,
             "eligibility_note": ELIGIBILITY_NOTE,
+            "lottery_numbers": lottery_numbers,
+            "lottery_numbers_note": LOTTERY_NUMBERS_NOTE,
             "fields": fields,
             "direct_submission_notice": BID_FORM_DRAFT_NOTICE,
         }
@@ -139,9 +152,11 @@ class BidFormDraftService:
         budget_estimate: float,
         eligibility: str,
         category_floor: dict,
+        lottery_numbers: Optional[list[int]] = None,
     ) -> list[dict]:
         """Map the aggregation onto 나라장터 투찰서 입력 항목(label + value pairs)."""
         floor_bid_rate = category_floor.get("floor_bid_rate")
+        lottery_numbers = lottery_numbers or []
 
         fields: list[dict] = [
             {
@@ -199,6 +214,13 @@ class BidFormDraftService:
                 "value": self._format_percent(recommended_bid_rate),
                 "raw_value": recommended_bid_rate,
                 "note": "투찰가 / 추정가격 비율(참고).",
+            },
+            {
+                "key": "lottery_numbers",
+                "field_label": "복수예비가격 추첨번호(2개)",
+                "value": ", ".join(str(n) for n in lottery_numbers),
+                "raw_value": None,
+                "note": LOTTERY_NUMBERS_NOTE,
             },
             {
                 "key": "eligibility_estimate",
@@ -293,6 +315,27 @@ class BidFormDraftService:
         lines.append("")
         lines.append(draft.get("direct_submission_notice", ""))
         return "\n".join(lines)
+
+    # --- 복수예비가격 추첨번호 (무작위 편의 픽) --------------------------------
+
+    def _suggest_lottery_numbers(self, notice_number: Optional[str]) -> list[int]:
+        """복수예비가격 15개 중 2개를 뽑는 무작위 편의 픽(정렬).
+
+        공고번호를 seed 로 삼아 **결정적·재현 가능**하게 뽑는다(같은 공고 → 같은
+        추천, 감사 가능). Python 내장 ``hash()`` 는 프로세스마다 salt 가 달라
+        재현되지 않으므로 ``hashlib.sha256`` 다이제스트를 seed 로 쓴다.
+
+        분석/최적화가 아니다. 예정가격은 전체 투찰자의 추첨을 합산해 정해지므로
+        개별 번호 선택은 자기 낙찰 결과에 영향이 없다. 공고번호가 없으면 빈 리스트.
+        """
+        seed_source = str(notice_number or "").strip()
+        if not seed_source:
+            return []
+        digest = hashlib.sha256(seed_source.encode("utf-8")).hexdigest()
+        rng = random.Random(int(digest, 16))
+        return sorted(
+            rng.sample(range(1, _LOTTERY_POOL_SIZE + 1), _LOTTERY_PICK_COUNT)
+        )
 
     # --- formatting helpers ----------------------------------------------------
 
