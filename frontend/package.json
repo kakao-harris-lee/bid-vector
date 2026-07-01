@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "BUILD_TARGET=user vite --host 0.0.0.0",
+    "dev:user": "BUILD_TARGET=user vite --host 0.0.0.0",
+    "dev:admin": "BUILD_TARGET=admin vite --host 0.0.0.0",
     "build": "tsc --noEmit && BUILD_TARGET=user vite build && BUILD_TARGET=admin vite build",
     "build:user": "BUILD_TARGET=user vite build",
     "build:admin": "BUILD_TARGET=admin vite build",

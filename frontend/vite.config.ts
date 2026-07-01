@@ -51,9 +51,49 @@ function renameAdminEntryHtml(outDir: string): Plugin {
   };
 }
 
+function devSpaEntryFallback(entry: string): Plugin {
+  return {
+    name: "dev-spa-entry-fallback",
+    apply: "serve",
+    configureServer(server) {
+      const basePath = active.base.replace(/\/$/, "");
+      server.middlewares.use((req, _res, next) => {
+        if (req.method !== "GET" && req.method !== "HEAD") return next();
+        if (!req.url) return next();
+
+        const [pathname, query] = req.url.split("?");
+        const insideActiveBase =
+          pathname === basePath ||
+          pathname === `${basePath}/` ||
+          pathname.startsWith(`${basePath}/`);
+        if (!insideActiveBase) return next();
+
+        if (
+          pathname.startsWith(`${basePath}/@`) ||
+          pathname.startsWith(`${basePath}/src/`) ||
+          pathname.startsWith(`${basePath}/node_modules/`)
+        ) {
+          return next();
+        }
+
+        const lastSegment = pathname.split("/").pop() ?? "";
+        if (lastSegment.includes(".")) return next();
+
+        req.url = `${active.base}${entry}${query ? `?${query}` : ""}`;
+        return next();
+      });
+    }
+  };
+}
+
 export default defineConfig({
   base: active.base,
-  plugins: [react(), tailwindcss(), renameAdminEntryHtml(active.outDir)],
+  plugins: [
+    devSpaEntryFallback(active.entry),
+    react(),
+    tailwindcss(),
+    renameAdminEntryHtml(active.outDir)
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src")

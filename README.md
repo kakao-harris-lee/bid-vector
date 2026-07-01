@@ -15,7 +15,7 @@
 - 알림: Telegram 버튼, `/strategy` 편집, 웹 알림, WebSocket realtime
 - 검증: paper bidding, synthetic operator backtest, synthetic experiment lab, 운영 smoke run 저장
 - 리포트: 추천 vs 실제 정확도, 의사결정 증적 export, 운영 KPI, operations dashboard
-- 웹: `frontend/` Vite + React + TypeScript SPA를 `/dashboard`에서 서빙
+- 웹: `frontend/` Vite + React + TypeScript를 `/dashboard` 사용자 앱과 `/admin` 관리자 앱의 별도 Vite 번들로 서빙
 
 현재 로드맵 위치는 **Phase 2 / G-2 독립 가상 사업자 운영 검증 진행 중**입니다. `50c9336` 기준으로 G-2 evidence API, 사업자별 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, 관리자/사용자 surface 분리, G-2 runbook, operator-scoped synthetic evidence, read-only G-2 evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 현재 병목은 더 많은 기능 구현이 아니라 **3개 이상 가상 사업자에 대해 `reports/g2-evidence/` 기준 N일 운영 증적을 쌓고 exit review를 수행하는 것**입니다. 단계별 목표와 다음 로드맵은 [docs/roadmap.md](docs/roadmap.md)를 기준으로 봅니다.
 
@@ -24,7 +24,7 @@
 1. 운영자 1명이 여러 가상 회사를 만들어 입찰 종류별 후보 추천, 가상 투찰, 최종 낙찰 정산을 반복 검증합니다.
 2. 과거 데이터 학습, synthetic backtest, forward paper bidding, smoke test가 자동으로 돌며 증적을 남깁니다.
 3. 실증이 충분하면 가상 회사마다 독립 ID와 사업자 정보를 가진 운영 검증 단계로 넘어갑니다.
-4. 이후 사용자 대상 서비스 웹과 관리자 웹을 분리합니다. 사용자 웹은 공고 알림과 투찰 선택에 집중하고, 관리자 웹은 백테스트, 스모크 테스트, 통계, 데이터 상태를 다룹니다.
+4. 사용자 대상 서비스 웹과 관리자 웹은 이미 `/dashboard`와 `/admin`의 별도 번들로 분리되어 있습니다. 사용자 웹은 공고 알림과 투찰 선택에 집중하고, 관리자 웹은 백테스트, 스모크 테스트, 통계, 데이터 상태를 다룹니다.
 5. 실제 사업자는 설정한 조건에 맞는 입찰 가능 공고를 Telegram 또는 앱 알림으로 받고, 추천 투찰가와 근거를 확인한 뒤 투찰 여부를 선택합니다.
 
 ## 아키텍처
@@ -84,6 +84,12 @@ npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
+기본 `dev`는 사용자 앱(`/dashboard`) 타깃입니다. 관리자 앱을 Vite dev server에서 확인할 때는 별도 admin 타깃으로 실행합니다.
+
+```bash
+npm --prefix frontend run dev:admin
+```
+
 Docker 로컬 실행:
 
 ```bash
@@ -103,8 +109,10 @@ make docker-up-server
 |---|---|
 | API / 앱 | http://localhost:3000 |
 | API Docs | http://localhost:3000/docs |
-| 빌드된 대시보드 | http://localhost:3000/dashboard |
-| Vite dev server | http://localhost:3001 |
+| 사용자 화면 | http://localhost:3000/dashboard |
+| 관리자 화면 | http://localhost:3000/admin |
+| Vite dev server (사용자) | http://localhost:3001/dashboard |
+| Vite dev server (관리자) | http://localhost:3001/admin |
 
 ## 자주 쓰는 검증 명령
 
