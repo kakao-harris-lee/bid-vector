@@ -1,7 +1,8 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderApp } from "@/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderApp, renderWithProviders } from "@/test-utils";
+import { AdminRoutes } from "@/app/router-admin";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type { OperatorAccountListResponse } from "@/shared/api";
 import { ACTIVE_OPERATOR_STORAGE_KEY } from "@/app/operatorContext";
@@ -16,6 +17,7 @@ const ADMIN_NAV_LABELS = [
   "의사결정 증적"
 ] as const;
 const USER_NAV_LABELS = ["공고 탐색", "업체 정보", "전략 편집", "이용 가이드"] as const;
+const USER_BOTTOM_NAV_LABELS = ["오늘", "입찰", "투찰", "결과"] as const;
 
 const summary: DashboardSummaryResponse = {
   operator_id: 1,
@@ -140,6 +142,10 @@ beforeEach(() => {
   window.localStorage.setItem(TOKEN_KEY, "token-switcher");
   window.history.pushState({}, "", "/dashboard");
   vi.restoreAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("OperatorSwitcher", () => {
@@ -340,6 +346,27 @@ describe("OperatorSwitcher", () => {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     for (const label of USER_NAV_LABELS) {
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    }
+  });
+
+  it("standalone admin home은 admin 컨트롤만 렌더링하고 user bottom navigation을 숨긴다", async () => {
+    vi.stubEnv("BASE_URL", "/admin/");
+    window.history.pushState({}, "", "/admin/operations");
+    vi.stubGlobal("fetch", buildFetchMock(privilegedAccounts));
+
+    renderWithProviders(<AdminRoutes />);
+
+    expect(await screen.findByRole("button", { name: "회사 전환" })).toBeInTheDocument();
+    for (const label of ADMIN_NAV_LABELS) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+
+    expect(screen.queryByRole("navigation", { name: "대시보드 탭" })).not.toBeInTheDocument();
+    for (const label of USER_NAV_LABELS) {
+      expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    }
+    for (const label of USER_BOTTOM_NAV_LABELS) {
       expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
     }
   });

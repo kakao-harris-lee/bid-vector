@@ -163,10 +163,14 @@ def test_generated_gap_ids_are_stable_across_runs(tmp_path):
 
     assert first_result.returncode == 1, first_result.stderr
     assert second_result.returncode == 1, second_result.stderr
-    first_id = json.loads(first.read_text(encoding="utf-8"))["rows"][0]["gap_id"]
-    second_id = json.loads(second.read_text(encoding="utf-8"))["rows"][0]["gap_id"]
+    first_register = json.loads(first.read_text(encoding="utf-8"))
+    second_register = json.loads(second.read_text(encoding="utf-8"))
+    first_id = first_register["rows"][0]["gap_id"]
+    second_id = second_register["rows"][0]["gap_id"]
     assert first_id == second_id
     assert first_id.startswith("GAP-AUTO-")
+    assert first_register["open_gap_count"] == 1
+    assert first_register["open_statuses"] == ["accepted_hold", "open", "triaged"]
 
 
 def test_register_exits_zero_when_only_closed_gap_statuses_remain(tmp_path):

@@ -470,7 +470,7 @@ python scripts/build_g2_exit_review.py \
   --min-operators 3
 ```
 
-builder는 `<evidence-root>/<review-id>/manifest.json`과 `exit-review.md`를 생성한다. `manifest.status=ready_for_review`는 counted pass day 수, 포함 operator 수, open blocking gap 수가 기준을 만족한다는 뜻일 뿐이며, `exit-review.md`의 최종 판정은 계속 `pending`으로 남긴다.
+builder는 `<evidence-root>/<review-id>/manifest.json`과 `exit-review.md`를 생성한다. `manifest.status=ready_for_review`는 counted pass day 수, 포함 operator 수, 미해결 blocking gap(`open`, `triaged`, `accepted_hold`) 수가 기준을 만족한다는 뜻일 뿐이며, `exit-review.md`의 최종 판정은 계속 `pending`으로 남긴다.
 
 review bundle을 만든 뒤에는 readiness checker로 네 개 G-2 exit gate와 파일 경로를 한 번 더 검증한다.
 

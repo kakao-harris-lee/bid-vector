@@ -6,6 +6,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.verify_g2_notification_targets import main
 
 
@@ -83,6 +85,10 @@ def _run_verifier(root: Path, output: Path, *extra_args: str):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+def _load_summary(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_verifier_accepts_masked_canonical_active_and_synthetic_dry_run(tmp_path):
     evidence_root = tmp_path / "evidence"
     summary_path = tmp_path / "summary.json"
@@ -116,7 +122,7 @@ def test_verifier_accepts_masked_canonical_active_and_synthetic_dry_run(tmp_path
 
     assert code == 0
     assert stderr == ""
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary = _load_summary(summary_path)
     assert summary["status"] == "pass"
     assert summary["file_count"] == 2
     assert summary["failure_count"] == 0
@@ -169,7 +175,7 @@ def test_verifier_reports_unsafe_targets_missing_policy_and_mismatches(tmp_path)
 
     assert code == 1
     assert stderr == ""
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary = _load_summary(summary_path)
     assert summary["status"] == "fail"
     issue_codes = {issue["code"] for issue in summary["issues"]}
     assert {
@@ -184,6 +190,87 @@ def test_verifier_reports_unsafe_targets_missing_policy_and_mismatches(tmp_path)
     by_operator = {row["operator_id"]: row for row in summary["operators"]}
     assert by_operator[202]["mode"] == "missing"
     assert by_operator[204]["status"] == "fail"
+    assert [
+        issue["severity"]
+        for issue in summary["issues"]
+        if issue["code"] == "operator_mismatch"
+    ] == ["failure", "failure"]
+
+
+def test_verifier_reports_raw_secret_like_targets_inside_metadata(tmp_path):
+    evidence_root = tmp_path / "evidence"
+    summary_path = tmp_path / "summary.json"
+    channel = _telegram_channel(401, dry_run_only=True)
+    channel["metadata"] = {
+        "device_token": "ExponentPushToken[abcdef1234567890]",
+        "target_values": [
+            {"value": "device_token=abcdef1234567890"},
+        ],
+    }
+    _write_channels(
+        evidence_root,
+        operator_id=401,
+        username="synthetic-metadata",
+        channels=[channel],
+        extra={
+            "metadata": {
+                "notification_target": "chat_id=1594710346",
+                "notification_targets": ["chat_id=2594710346"],
+                "telegram": {"chat_id": "3594710346"},
+            },
+        },
+    )
+
+    code, _stdout, stderr = _run_verifier(evidence_root, summary_path)
+
+    assert code == 1
+    assert stderr == ""
+    summary = _load_summary(summary_path)
+    raw_target_issues = [
+        issue
+        for issue in summary["issues"]
+        if issue["code"] == "raw_secret_like_target"
+    ]
+    assert {issue["field"] for issue in raw_target_issues} == {
+        "metadata.notification_target",
+        "metadata.notification_targets[0]",
+        "metadata.telegram.chat_id",
+        "metadata.device_token",
+        "metadata.target_values[0].value",
+    }
+    assert {issue["severity"] for issue in raw_target_issues} == {"failure"}
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"status": "skipped_synthetic_operator"},
+        {"delivery_policy": "telegram_channel_dry_run"},
+    ],
+)
+def test_empty_channels_with_explicit_skip_or_dry_run_policy_passes(
+    tmp_path, policy
+):
+    evidence_root = tmp_path / "evidence"
+    summary_path = tmp_path / "summary.json"
+    _write_channels(
+        evidence_root,
+        operator_id=402,
+        username="synthetic-no-channel",
+        channels=[],
+        extra=policy,
+    )
+
+    code, _stdout, stderr = _run_verifier(evidence_root, summary_path)
+
+    assert code == 0
+    assert stderr == ""
+    summary = _load_summary(summary_path)
+    assert summary["status"] == "pass"
+    assert summary["failure_count"] == 0
+    assert summary["warning_count"] == 0
+    assert summary["issues"] == []
+    assert summary["operators"][0]["mode"] == "skipped"
 
 
 def test_allow_active_noncanonical_downgrades_active_telegram_to_warning(tmp_path):
@@ -205,7 +292,7 @@ def test_allow_active_noncanonical_downgrades_active_telegram_to_warning(tmp_pat
     )
 
     assert default_code == 1
-    default_summary = json.loads(default_summary_path.read_text(encoding="utf-8"))
+    default_summary = _load_summary(default_summary_path)
     assert [
         issue["severity"]
         for issue in default_summary["issues"]
@@ -213,9 +300,13 @@ def test_allow_active_noncanonical_downgrades_active_telegram_to_warning(tmp_pat
     ] == ["failure"]
 
     assert allowed_code == 0
-    allowed_summary = json.loads(allowed_summary_path.read_text(encoding="utf-8"))
+    allowed_summary = _load_summary(allowed_summary_path)
     assert allowed_summary["status"] == "pass"
     assert allowed_summary["failure_count"] == 0
+    assert allowed_summary["operators"][0]["status"] == "warning"
+    assert allowed_summary["operators"][0]["issue_codes"] == [
+        "active_noncanonical_telegram"
+    ]
     assert [
         issue["severity"]
         for issue in allowed_summary["issues"]

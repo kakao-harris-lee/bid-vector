@@ -17,6 +17,9 @@ if str(REPO_ROOT) not in sys.path:
 from scripts._common import positive_int  # noqa: E402  (import after sys.path tweak)
 
 
+UNRESOLVED_BLOCKING_GAP_STATUSES = {"open", "triaged", "accepted_hold"}
+
+
 class ReviewBundleError(Exception):
     """Raised when local review bundle inputs cannot be processed."""
 
@@ -196,7 +199,10 @@ def _counted_days(daily_status: list[dict[str, Any]]) -> int:
 
 def _open_blocking_gap_count(blocking_gaps: list[dict[str, Any]]) -> int:
     return sum(
-        1 for gap in blocking_gaps if str(gap.get("status") or "").lower() == "open"
+        1
+        for gap in blocking_gaps
+        if str(gap.get("status") or "").strip().lower()
+        in UNRESOLVED_BLOCKING_GAP_STATUSES
     )
 
 
@@ -288,7 +294,7 @@ def render_exit_review(manifest: dict[str, Any]) -> str:
             "- Operators: "
             f"{gate.get('operator_count')} / {gate.get('required_operator_count')}"
         ),
-        f"- Open blocking gaps: {gate.get('open_blocking_gap_count')}",
+        f"- Unresolved blocking gaps: {gate.get('open_blocking_gap_count')}",
         f"- Ready for review: {gate.get('ready_for_review')}",
         "",
         "## Blocking Gaps",

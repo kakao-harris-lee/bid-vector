@@ -284,6 +284,15 @@ export interface SyntheticExperimentSampleGapCandidateRequest {
   action_code?: string | null;
 }
 
+export interface SyntheticExperimentSampleGapOperatorTarget {
+  slug: string;
+  username?: string | null;
+  operator_id?: number | null;
+  user_id?: number | null;
+  resolved?: boolean;
+  operator_id_scope_ready?: boolean;
+}
+
 export type SyntheticExperimentSampleGapCandidateNextStep =
   | "resolve_mixed_data"
   | "run_existing_experiment"
@@ -298,6 +307,8 @@ export interface SyntheticExperimentSampleGapRunCandidateResponse {
   preset_name?: string | null;
   params: SyntheticExperimentParams;
   operator_slugs?: string[];
+  operator_targets?: SyntheticExperimentSampleGapOperatorTarget[];
+  operator_id_scope_ready?: boolean;
   experiment_payload: SyntheticExperimentCreateRequest;
   experiment_id?: number | null;
   latest_run_id?: number | null;

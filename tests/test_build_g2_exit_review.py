@@ -147,9 +147,9 @@ def test_build_review_bundle_combines_daily_manifest_drafts(tmp_path):
     assert manifest["action_register"]["approved_execution_items"] == [
         {"item_id": "APP-001", "status": "approved"}
     ]
-    assert (output_dir / "exit-review.md").read_text(encoding="utf-8").endswith(
-        "G-2 exit: pending\n"
-    )
+    exit_review = (output_dir / "exit-review.md").read_text(encoding="utf-8")
+    assert "- Unresolved blocking gaps: 0" in exit_review
+    assert exit_review.endswith("G-2 exit: pending\n")
 
 
 def test_review_bundle_stays_draft_with_open_gaps(tmp_path):
@@ -194,6 +194,57 @@ def test_review_bundle_stays_draft_with_open_gaps(tmp_path):
     assert (output_dir / "exit-review.md").read_text(encoding="utf-8").endswith(
         "G-2 exit: pending\n"
     )
+
+
+def test_review_bundle_stays_draft_with_triaged_and_accepted_hold_gaps(tmp_path):
+    evidence_root = tmp_path / "reports" / "g2-evidence"
+    output_dir = evidence_root / "review-with-held-gaps"
+    gap_statuses = {
+        301: "triaged",
+        302: "accepted_hold",
+    }
+    for offset, operator_id in enumerate((301, 302, 303), start=1):
+        gap_status = gap_statuses.get(operator_id)
+        blocking_gaps = []
+        if gap_status:
+            blocking_gaps = [
+                {
+                    "gap_id": f"GAP-{operator_id}",
+                    "date": f"2026-06-2{offset}",
+                    "operator_id": operator_id,
+                    "source": "g2-evidence.blocking_gaps",
+                    "category": "missing evidence",
+                    "description": f"gap for operator {operator_id}",
+                    "status": gap_status,
+                    "treatment": (
+                        "hold" if gap_status == "accepted_hold" else "rerun"
+                    ),
+                }
+            ]
+        _write_manifest_draft(
+            evidence_root / f"2026-06-2{offset}" / "manifest-draft.json",
+            review_id=f"daily-2026062{offset}",
+            date=f"2026-06-2{offset}",
+            operators=[_operator(operator_id, f"synthetic-{operator_id}")],
+            blocking_gaps=blocking_gaps,
+        )
+
+    write_review_bundle(
+        evidence_root=evidence_root,
+        review_id="review-with-held-gaps",
+        output_dir=output_dir,
+        min_days=3,
+        min_operators=3,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "draft"
+    assert manifest["review_gate_summary"]["ready_for_review"] is False
+    assert manifest["review_gate_summary"]["open_blocking_gap_count"] == 2
+    assert [gap["status"] for gap in manifest["blocking_gaps"]] == [
+        "triaged",
+        "accepted_hold",
+    ]
 
 
 def test_cli_rejects_when_no_manifest_drafts(tmp_path):

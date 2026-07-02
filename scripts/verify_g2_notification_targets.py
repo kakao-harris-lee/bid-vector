@@ -201,6 +201,73 @@ def _is_target_field(field: object) -> bool:
     return any(part in name for part in _TARGET_FIELD_PARTS)
 
 
+def _target_field_values(
+    mapping: dict[str, Any],
+    *,
+    prefix: str = "",
+    skip_fields: set[str] | None = None,
+    in_metadata: bool = False,
+    in_target_context: bool = False,
+) -> list[tuple[str, object]]:
+    values: list[tuple[str, object]] = []
+    for field, value in mapping.items():
+        field_name = str(field)
+        if skip_fields and field_name in skip_fields:
+            continue
+        field_path = f"{prefix}.{field_name}" if prefix else field_name
+        target_field = _is_target_field(field_name)
+        metadata_context = in_metadata or field_name == "metadata"
+        target_context = in_target_context or target_field
+        if (target_field or in_target_context) and not isinstance(value, (dict, list)):
+            values.append((field_path, value))
+        if isinstance(value, dict) and (metadata_context or target_context):
+            values.extend(
+                _target_field_values(
+                    value,
+                    prefix=field_path,
+                    in_metadata=metadata_context,
+                    in_target_context=target_context,
+                )
+            )
+        elif isinstance(value, list) and (metadata_context or target_context):
+            values.extend(
+                _target_sequence_values(
+                    value,
+                    prefix=field_path,
+                    in_target_context=target_context,
+                )
+            )
+    return values
+
+
+def _target_sequence_values(
+    values: list[Any], *, prefix: str, in_target_context: bool
+) -> list[tuple[str, object]]:
+    target_values: list[tuple[str, object]] = []
+    for index, value in enumerate(values):
+        item_path = f"{prefix}[{index}]"
+        if isinstance(value, dict):
+            target_values.extend(
+                _target_field_values(
+                    value,
+                    prefix=item_path,
+                    in_metadata=True,
+                    in_target_context=in_target_context,
+                )
+            )
+        elif isinstance(value, list):
+            target_values.extend(
+                _target_sequence_values(
+                    value,
+                    prefix=item_path,
+                    in_target_context=in_target_context,
+                )
+            )
+        elif in_target_context:
+            target_values.append((item_path, value))
+    return target_values
+
+
 def _is_safe_route_key(value: str) -> bool:
     return (
         value == "telegram:legacy-configured-chat"
@@ -216,7 +283,8 @@ def _contains_raw_secret_like_target(value: object, *, field: str) -> bool:
     text = value.strip()
     if not text:
         return False
-    if field == "route_key" and _is_safe_route_key(text):
+    field_name = field.rsplit(".", maxsplit=1)[-1].split("[", maxsplit=1)[0]
+    if field_name == "route_key" and _is_safe_route_key(text):
         return False
     if any("*" not in match.group(0) for match in _NUMERIC_TARGET_RE.finditer(text)):
         return True
@@ -335,9 +403,7 @@ def _verify_file(
             )
         )
 
-    for field, value in payload.items():
-        if field == "channels" or not _is_target_field(field):
-            continue
+    for field, value in _target_field_values(payload, skip_fields={"channels"}):
         if _contains_raw_secret_like_target(value, field=str(field)):
             issues.append(
                 _issue(
@@ -393,9 +459,7 @@ def _verify_file(
                 )
             )
 
-        for field, value in channel.items():
-            if not _is_target_field(field):
-                continue
+        for field, value in _target_field_values(channel):
             if _contains_raw_secret_like_target(value, field=str(field)):
                 issues.append(
                     _issue(

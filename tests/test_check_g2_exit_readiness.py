@@ -244,6 +244,48 @@ def test_cli_writes_ready_report_when_all_exit_gates_pass(tmp_path, monkeypatch)
     assert report["missing_evidence_paths"] == []
 
 
+def test_cli_blocks_ready_manifest_with_accepted_hold_gap(tmp_path, monkeypatch):
+    manifest = _manifest()
+    manifest["blocking_gaps"] = [
+        {
+            "gap_id": "GAP-HOLD-001",
+            "date": "2026-06-24",
+            "operator_id": 103,
+            "source": "reviewer",
+            "category": "no candidates",
+            "description": "operator is on accepted hold pending new candidates",
+            "status": "accepted_hold",
+            "treatment": "hold",
+        }
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "2",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 1
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is False
+    assert report["counts"]["open_blocking_gap_count"] == 1
+    assert report["global_checks"]["no_open_blocking_gaps"] is False
+    assert report["open_blocking_gaps"] == manifest["blocking_gaps"]
+
+
 def test_cli_reports_hold_reasons_when_exit_gates_fail(tmp_path, monkeypatch):
     manifest = _manifest(status="ready_for_review")
     manifest["evidence_window"]["counted_days"] = 1
