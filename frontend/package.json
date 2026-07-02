@@ -11,6 +11,8 @@
     "build:user": "BUILD_TARGET=user vite build",
     "build:admin": "BUILD_TARGET=admin vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "sync-types": "python ../scripts/sync_openapi_types.py",
+    "check:sync-types": "python ../scripts/sync_openapi_types.py --check",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",

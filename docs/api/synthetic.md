@@ -2,7 +2,7 @@
 
 > 베이스 경로: `/api/v1/synthetic` · 인증: 불필요(operator 토큰 없이 호출 가능) · 베이스 URL 예시: `http://localhost:3000`
 >
-> **도메인**: synthetic 운영자는 username이 `synthetic-*`인 가상 운영자 카탈로그(12개 아키타입)로, canonical `operator` 계정과 분리되어 전략 임계값을 달리한 백테스트 비교에 쓰인다. (OpenAPI 태그는 `Synthetic`/`synthetic` 양쪽으로 노출되나 동일 라우터다.)
+> **도메인**: synthetic 운영자는 username이 `synthetic-*`인 가상 운영자 카탈로그(12개 아키타입)로, canonical `operator` 계정과 분리되어 전략 임계값을 달리한 백테스트 비교에 쓰인다. OpenAPI 태그는 `Synthetic`만 사용하며, `tests/test_openapi_tags.py`가 `Synthetic`/`synthetic` case-split 회귀를 막는다.
 
 ## 목차
 - [GET /operators](#get-apiv1syntheticoperators) — 시드된 synthetic 운영자 목록 조회

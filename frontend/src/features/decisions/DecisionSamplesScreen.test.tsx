@@ -57,6 +57,8 @@ function buildResponse(
 ): DecisionSamplesResponse {
   return {
     operator_id: 1,
+    current_operator_id: 1,
+    current_operator_username: "operator",
     period_days: 30,
     limit: 50,
     sample_count: 1,

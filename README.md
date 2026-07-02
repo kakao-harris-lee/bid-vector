@@ -151,6 +151,12 @@ python scripts/production_smoke_test.py \
 ## API
 
 상세 API는 [docs/api/index.md](docs/api/index.md)를 기준으로 봅니다. 주요 라우터는 `/api/v1` 하위에 있습니다.
+프론트엔드 OpenAPI 타입은 `frontend/src/shared/types/openapi.d.ts`에 생성되며, API 스키마 변경 후 아래 명령으로 갱신/검증합니다.
+
+```bash
+npm --prefix frontend run sync-types
+npm --prefix frontend run check:sync-types
+```
 
 - `/auth`: 단일 운영자 부트스트랩, 세션, 비밀번호 재설정
 - `/operator`: 회사 프로필, 전략, 후보, 모니터링, 알림

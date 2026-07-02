@@ -54,6 +54,8 @@ const privilegedAccounts = {
 function buildReport(overrides: Partial<AccuracyReportResponse> = {}): AccuracyReportResponse {
   return {
     operator_id: 1,
+    current_operator_id: 1,
+    current_operator_username: "operator",
     summary: {
       period_days: 90,
       matched_sample_count: 24,
