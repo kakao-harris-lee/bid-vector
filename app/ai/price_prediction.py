@@ -57,6 +57,7 @@ def predict_price(
     feedback_calibration: Dict[str, Any] | None = None,
     business_type_code: str | None = None,
     business_group: str | None = None,
+    legal_floor_bid_rate: float | None = None,
 ) -> Dict[str, Any]:
     """Predict project price using the configured predictor stack with safe fallback."""
     context = PricePredictionContext(
@@ -81,6 +82,7 @@ def predict_price(
         budget=context.budget,
         category=context.category,
         business_group=business_group,
+        legal_floor_bid_rate=legal_floor_bid_rate,
     )
     return _attach_predictor_metadata(
         prediction,
@@ -291,14 +293,31 @@ def _apply_prediction_guardrails(
     budget: float,
     category: str | None,
     business_group: str | None = None,
+    legal_floor_bid_rate: float | None = None,
 ) -> Dict[str, Any]:
     """Apply category bid-rate guardrails after all statistical adjustments."""
     guarded_prediction = dict(prediction)
-    floor_bid_rate = _resolve_floor_bid_rate(category, business_group=business_group)
+    configured_floor_bid_rate = _resolve_floor_bid_rate(category, business_group=business_group)
+    normalized_legal_floor_bid_rate = _normalize_optional_bid_rate(legal_floor_bid_rate)
+    floor_bid_rate = _max_optional_rate(configured_floor_bid_rate, normalized_legal_floor_bid_rate)
+    floor_guardrail_source = _resolve_floor_guardrail_source(
+        configured_floor_bid_rate,
+        normalized_legal_floor_bid_rate,
+        floor_bid_rate,
+    )
     ceiling_bid_rate = _resolve_ceiling_bid_rate(category, business_group=business_group)
     if floor_bid_rate is not None and ceiling_bid_rate is not None and ceiling_bid_rate < floor_bid_rate:
         ceiling_bid_rate = floor_bid_rate
+    safe_floor_bid_rate = _resolve_safe_floor_bid_rate(
+        floor_bid_rate,
+        ceiling_bid_rate=ceiling_bid_rate,
+    )
     floor_price = round(float(budget or 0.0) * floor_bid_rate, 2) if floor_bid_rate is not None and budget > 0 else None
+    safe_floor_price = (
+        round(float(budget or 0.0) * safe_floor_bid_rate, 2)
+        if safe_floor_bid_rate is not None and budget > 0
+        else None
+    )
     ceiling_price = (
         round(float(budget or 0.0) * ceiling_bid_rate, 2)
         if ceiling_bid_rate is not None and budget > 0
@@ -307,9 +326,28 @@ def _apply_prediction_guardrails(
 
     guarded_prediction["guardrail_applied"] = False
     guarded_prediction["guardrail_reason"] = None
-    guarded_prediction["floor_bid_rate"] = round(floor_bid_rate, 4) if floor_bid_rate is not None else None
+    guarded_prediction["legal_floor_bid_rate"] = (
+        round(normalized_legal_floor_bid_rate, 6)
+        if normalized_legal_floor_bid_rate is not None
+        else None
+    )
+    guarded_prediction["floor_guardrail_source"] = floor_guardrail_source
+    guarded_prediction["floor_bid_rate"] = (
+        round(floor_bid_rate, 6) if floor_bid_rate is not None else None
+    )
     guarded_prediction["floor_price"] = floor_price
-    guarded_prediction["ceiling_bid_rate"] = round(ceiling_bid_rate, 4) if ceiling_bid_rate is not None else None
+    guarded_prediction["floor_safety_margin_rate"] = (
+        round(max(0.0, safe_floor_bid_rate - floor_bid_rate), 6)
+        if safe_floor_bid_rate is not None and floor_bid_rate is not None
+        else None
+    )
+    guarded_prediction["safe_floor_bid_rate"] = (
+        round(safe_floor_bid_rate, 6) if safe_floor_bid_rate is not None else None
+    )
+    guarded_prediction["safe_floor_price"] = safe_floor_price
+    guarded_prediction["ceiling_bid_rate"] = (
+        round(ceiling_bid_rate, 6) if ceiling_bid_rate is not None else None
+    )
     guarded_prediction["ceiling_price"] = ceiling_price
 
     if (floor_bid_rate is None and ceiling_bid_rate is None) or budget <= 0:
@@ -323,17 +361,22 @@ def _apply_prediction_guardrails(
         original_bid_rate = float(candidate.get("bid_rate", 0.0) or 0.0)
         guarded_bid_rate = _clamp_rate_to_guardrails(
             original_bid_rate,
-            floor_bid_rate=floor_bid_rate,
+            floor_bid_rate=safe_floor_bid_rate,
             ceiling_bid_rate=ceiling_bid_rate,
         )
-        if floor_bid_rate is not None and guarded_bid_rate > original_bid_rate + 1e-9:
+        if safe_floor_bid_rate is not None and guarded_bid_rate > original_bid_rate + 1e-9:
             floor_applied_labels.append(label)
         if ceiling_bid_rate is not None and guarded_bid_rate < original_bid_rate - 1e-9:
             ceiling_applied_labels.append(label)
+        pre_guardrail_price = float(candidate.get("predicted_price", 0.0) or 0.0)
+        guardrail_changed = abs(guarded_bid_rate - original_bid_rate) > 1e-9
         guarded_candidates.append({
             **candidate,
             "bid_rate": round(guarded_bid_rate, 4),
             "predicted_price": round(float(budget) * guarded_bid_rate, 2),
+            "guardrail_applied": guardrail_changed,
+            "pre_guardrail_bid_rate": round(original_bid_rate, 4) if guardrail_changed else None,
+            "pre_guardrail_price": round(pre_guardrail_price, 2) if guardrail_changed else None,
         })
 
     if guarded_candidates:
@@ -350,10 +393,10 @@ def _apply_prediction_guardrails(
         original_bid_rate = float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
         guarded_bid_rate = _clamp_rate_to_guardrails(
             original_bid_rate,
-            floor_bid_rate=floor_bid_rate,
+            floor_bid_rate=safe_floor_bid_rate,
             ceiling_bid_rate=ceiling_bid_rate,
         )
-        if floor_bid_rate is not None and guarded_bid_rate > original_bid_rate + 1e-9:
+        if safe_floor_bid_rate is not None and guarded_bid_rate > original_bid_rate + 1e-9:
             floor_applied_labels.append("base")
         if ceiling_bid_rate is not None and guarded_bid_rate < original_bid_rate - 1e-9:
             ceiling_applied_labels.append("base")
@@ -372,6 +415,8 @@ def _apply_prediction_guardrails(
 
     guardrail_reason = _build_guardrail_reason(
         floor_bid_rate=floor_bid_rate,
+        safe_floor_bid_rate=safe_floor_bid_rate,
+        floor_guardrail_source=floor_guardrail_source,
         ceiling_bid_rate=ceiling_bid_rate,
         floor_labels=floor_applied_labels,
         ceiling_labels=ceiling_applied_labels,
@@ -415,6 +460,8 @@ def _clamp_price_to_guardrails(price: float, floor_price: float | None, ceiling_
 def _build_guardrail_reason(
     *,
     floor_bid_rate: float | None,
+    safe_floor_bid_rate: float | None,
+    floor_guardrail_source: str | None,
     ceiling_bid_rate: float | None,
     floor_labels: list[str],
     ceiling_labels: list[str],
@@ -422,10 +469,19 @@ def _build_guardrail_reason(
     reasons: list[str] = []
     if floor_bid_rate is not None and floor_labels:
         unique_labels = list(dict.fromkeys(floor_labels))
-        reasons.append(
-            f"업종별 최소 투찰률 {floor_bid_rate:.2%} 가드레일을 적용해 "
-            f"{', '.join(unique_labels)} 시나리오를 상향 보정했습니다."
-        )
+        floor_label = _floor_guardrail_label(floor_guardrail_source)
+        if safe_floor_bid_rate is not None and safe_floor_bid_rate > floor_bid_rate + 1e-9:
+            reasons.append(
+                f"{floor_label} {floor_bid_rate:.3%}에 안전마진 "
+                f"{(safe_floor_bid_rate - floor_bid_rate) * 100:.2f}pp를 더한 "
+                f"{safe_floor_bid_rate:.3%} 가드레일을 적용해 "
+                f"{', '.join(unique_labels)} 시나리오를 상향 보정했습니다."
+            )
+        else:
+            reasons.append(
+                f"{floor_label} {floor_bid_rate:.3%} 가드레일을 적용해 "
+                f"{', '.join(unique_labels)} 시나리오를 상향 보정했습니다."
+            )
     if ceiling_bid_rate is not None and ceiling_labels:
         unique_labels = list(dict.fromkeys(ceiling_labels))
         reasons.append(
@@ -433,6 +489,70 @@ def _build_guardrail_reason(
             f"{', '.join(unique_labels)} 시나리오를 하향 보정했습니다."
         )
     return " ".join(reasons)
+
+
+def _normalize_optional_bid_rate(value: Any) -> float | None:
+    """Normalize ratio or percent-like bid rates into a ratio."""
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    if numeric > 1.5:
+        numeric = numeric / 100.0
+    if numeric <= 0:
+        return None
+    return round(float(numeric), 6)
+
+
+def _max_optional_rate(*rates: float | None) -> float | None:
+    usable_rates = [float(rate) for rate in rates if rate is not None]
+    if not usable_rates:
+        return None
+    return max(usable_rates)
+
+
+def _resolve_floor_guardrail_source(
+    configured_floor_bid_rate: float | None,
+    legal_floor_bid_rate: float | None,
+    effective_floor_bid_rate: float | None,
+) -> str | None:
+    if effective_floor_bid_rate is None:
+        return None
+    if legal_floor_bid_rate is not None and configured_floor_bid_rate is not None:
+        if abs(legal_floor_bid_rate - configured_floor_bid_rate) <= 1e-9:
+            return "category_and_legal"
+        if legal_floor_bid_rate >= effective_floor_bid_rate - 1e-9:
+            return "legal"
+        return "category"
+    if legal_floor_bid_rate is not None:
+        return "legal"
+    return "category"
+
+
+def _resolve_safe_floor_bid_rate(
+    floor_bid_rate: float | None,
+    *,
+    ceiling_bid_rate: float | None,
+) -> float | None:
+    if floor_bid_rate is None:
+        return None
+    safety_margin = max(0.0, float(settings.PREDICTION_FLOOR_SAFETY_MARGIN_RATE or 0.0))
+    safe_floor_bid_rate = float(floor_bid_rate) + safety_margin
+    if ceiling_bid_rate is not None:
+        safe_floor_bid_rate = min(safe_floor_bid_rate, float(ceiling_bid_rate))
+    return max(float(floor_bid_rate), safe_floor_bid_rate)
+
+
+def _floor_guardrail_label(source: str | None) -> str:
+    if source == "legal":
+        return "공고별 법정 최소 투찰률"
+    if source == "category_and_legal":
+        return "공고별 법정/업종별 최소 투찰률"
+    return "업종별 최소 투찰률"
 
 
 def _resolve_floor_bid_rate(category: str | None, business_group: str | None = None) -> float | None:

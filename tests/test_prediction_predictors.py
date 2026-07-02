@@ -234,6 +234,54 @@ def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch,
     assert competitive_prediction["predicted_bid_rate"] == 0.9
 
 
+def test_ensemble_prediction_lifts_goods_recent_high_rate_tail(monkeypatch, tmp_path):
+    """Goods outcomes clustered near 100% should lift the recommended/base scenario."""
+    _write_lstm_artifact(tmp_path)
+    ensemble_artifact_path = _write_ensemble_artifact(tmp_path)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES", 8)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MODEL_PATH", ensemble_artifact_path)
+
+    recent_high_tail = [{"bid_rate": rate, "base_amount": 100000000.0} for rate in [
+        0.982,
+        0.991,
+        0.998,
+        1.0,
+        0.974,
+        0.989,
+        1.0,
+        0.996,
+        0.951,
+        0.986,
+        0.997,
+        1.0,
+    ]]
+    older_low_band = [{"bid_rate": rate, "base_amount": 100000000.0} for rate in [
+        0.862,
+        0.875,
+        0.881,
+        0.889,
+        0.902,
+        0.918,
+        0.927,
+        0.934,
+    ]]
+
+    prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="관급자재 부스터펌프 구입",
+        historical_records=recent_high_tail + older_low_band,
+        business_group="goods",
+    )
+
+    assert prediction["predictor_name"] == "ensemble_blend"
+    assert prediction["predicted_bid_rate"] >= 0.97
+    assert prediction["high_rate_tail_adjustment"]["reason"] == "goods_recent_high_rate_tail"
+    assert "최근 고율 낙찰 분포" in prediction["explanation"]
+
+
 def test_predict_price_auto_selector_uses_backtest_metadata(monkeypatch):
     """Auto predictor selection should run a rolling backtest and expose selector metadata."""
     monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "auto")

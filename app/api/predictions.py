@@ -60,6 +60,7 @@ def predict_project_price(
         historical_records=_load_price_history(db, category=request.category or project.category),
         agency_name=request.agency_name,
         feedback_calibration=feedback_calibration,
+        legal_floor_bid_rate=request.legal_floor_bid_rate,
     )
 
     db_prediction = PricePrediction(

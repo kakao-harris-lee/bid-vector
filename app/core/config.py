@@ -166,6 +166,9 @@ class Settings(BaseSettings):
     PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK: int = 0  # 0=Sunday (crontab day_of_week)
     PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST: int = 18    # 18:00 KST
     PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE: int = 0
+    # Comma-separated category/business-group scoped candidate retrains to run
+    # alongside the global weekly retrain. Empty string disables scoped runs.
+    PRICE_PREDICTOR_TRAINING_SCHEDULE_CATEGORIES: str = "construction,service,goods"
     KONEPS_COLLECTION_SCHEDULE_ENABLED: bool = False
     KONEPS_COLLECTION_INTERVAL_MINUTES: int = 60
     KONEPS_COLLECTION_SOURCE: str = "koneps-openapi"
@@ -323,6 +326,10 @@ class Settings(BaseSettings):
             "construction": 0.93,
         }
     )
+    # Extra buffer added above the effective 낙찰하한율 when clamping scenario
+    # candidates. This keeps the "conservative" scenario near the legal floor
+    # without letting rounding/reserve-price variance land below it.
+    PREDICTION_FLOOR_SAFETY_MARGIN_RATE: float = 0.001
     BUSINESS_GROUP_CODE_PREFIXES: dict[str, list[str]] = Field(
         default_factory=lambda: {
             "construction": ["04"],
@@ -376,6 +383,13 @@ class Settings(BaseSettings):
     # category-floor guardrail, so it can never undercut the bidding floor.
     PREDICTION_RESERVE_PRIOR_WEIGHT: float = 0.2
     PREDICTION_RESERVE_PRIOR_FULL_CONFIDENCE_SAMPLES: int = 8
+    # Distribution-tail adjustment for recent high-award-rate patterns. Keeps
+    # the recommended/base bid from being dragged below the recent settled high
+    # band when goods/service outcomes cluster around 95-100% or small
+    # construction awards are capped by the configured construction ceiling.
+    PREDICTION_HIGH_RATE_TAIL_ADJUSTMENT_ENABLED: bool = True
+    PREDICTION_SMALL_BUDGET_HIGH_RATE_BUDGET_MAX: float = 50_000_000.0
+    PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET: float = 0.93
     PRICE_PREDICTION_PREFERRED_PREDICTOR: str = "historical"
     PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
     PRICE_PREDICTION_LSTM_MODEL_PATH: str = ""

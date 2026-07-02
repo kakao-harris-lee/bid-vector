@@ -228,13 +228,14 @@ curl -X POST http://localhost:3000/api/v1/operations/classify \
 
 ## POST /api/v1/operations/opportunity-analysis
 
-한 공고에 대해 다각도 종합 분석을 수행해 권장 입찰 액션을 반환합니다. 분류·가격 예측·시장 인사이트·유사 공고(pgvector)·최종 결정을 한 응답에 묶어줍니다. `price_prediction`에는 카테고리 낙찰하한 가드레일(`guardrail_applied`/`floor_*`)이 반영됩니다.
+한 공고에 대해 다각도 종합 분석을 수행해 권장 입찰 액션을 반환합니다. 분류·가격 예측·시장 인사이트·유사 공고(pgvector)·최종 결정을 한 응답에 묶어줍니다. `price_prediction`에는 카테고리/공고별 낙찰하한 가드레일(`guardrail_applied`/`floor_*`/`safe_floor_*`)이 반영됩니다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
 | body | project_id | int | 예 | 분석 대상 공고 ID |
 | body | agency_name | string\|null | 아니오 | 발주 기관명 힌트 |
+| body | legal_floor_bid_rate | number\|null | 아니오 | 메일/공고 분석에서 확인한 법정 낙찰하한율. `0.87995` 또는 `87.995` 모두 허용 |
 | body | current_active_bids | int\|null | 아니오 | 현재 진행 중 입찰 수 |
 | body | max_active_bids | int(>=1) | 아니오 | 동시 최대 입찰 수. 기본 3 |
 | body | current_workload_score | number\|null | 아니오 | 현재 작업량 점수 |
@@ -247,7 +248,7 @@ curl -X POST http://localhost:3000/api/v1/operations/classify \
 ```bash
 curl -X POST http://localhost:3000/api/v1/operations/opportunity-analysis \
   -H "Content-Type: application/json" \
-  -d '{"project_id":1024,"max_active_bids":3,"same_category_only":true,"similar_limit":3,"min_similarity":0.2}'
+  -d '{"project_id":1024,"legal_floor_bid_rate":87.995,"max_active_bids":3,"same_category_only":true,"similar_limit":3,"min_similarity":0.2}'
 ```
 
 **응답 200** (주요 필드 발췌)

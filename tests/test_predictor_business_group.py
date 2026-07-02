@@ -62,11 +62,12 @@ def test_opportunity_analysis_passes_business_type(test_db, monkeypatch):
     monkeypatch.setattr(oa_module, "predict_price", fake_predict_price)
     service = oa_module.OpportunityAnalysisService()
     # analyze_project is the entry method; build a minimal request
-    request = OpportunityAnalysisRequest(project_id=project.id)
+    request = OpportunityAnalysisRequest(project_id=project.id, legal_floor_bid_rate=87.995)
     service.analyze_project(test_db, project=project, request=request)
 
     assert captured.get("business_type_code") == "0411"
     assert captured.get("business_group") == "construction"
+    assert captured.get("legal_floor_bid_rate") == 87.995
 
 
 def test_select_base_rate_construction_uses_recent_target_weight():
@@ -209,7 +210,6 @@ def test_service_high_negotiated_floor_preserved_in_group_branch():
     from app.ai.predictors.historical import select_competitive_base_rate
 
     # 협상에 의한 계약 → service_high_negotiated band → max(base_rate, 1.0) 강제
-    history = [{"bid_rate": 0.85} for _ in range(20)]
     rate = select_competitive_base_rate(
         category="service",
         description="OO 협상에 의한 계약",
@@ -222,6 +222,32 @@ def test_service_high_negotiated_floor_preserved_in_group_branch():
         business_group="service",
     )
     assert rate >= 1.0, "service_high_negotiated band는 1.0 floor를 적용해야 함"
+
+
+def test_small_construction_high_rate_tail_targets_group_ceiling():
+    """Small construction bids with high historical anchor should target the safe upper band."""
+    from app.ai.predictors.historical import apply_high_rate_distribution_adjustment
+
+    rate, adjustment = apply_high_rate_distribution_adjustment(
+        0.9272,
+        category="construction",
+        description="원상복구 및 사무실 조성공사",
+        business_group="construction",
+        budget=40_250_000.0,
+        historical_summary={
+            "sample_size": 1000,
+            "recent_sample_size": 20,
+            "recent_median_bid_rate": 0.9028,
+            "recent_upper_quantile_bid_rate": 0.9051,
+            "upper_quantile_bid_rate": 0.9050,
+            "recent_rate_ge_0_93_share": 0.0,
+            "recent_rate_ge_0_95_share": 0.0,
+            "recent_rate_ge_0_98_share": 0.0,
+        },
+    )
+
+    assert rate == 0.93
+    assert adjustment["reason"] == "construction_small_budget_high_rate_target"
 
 
 def test_construction_group_ceiling_never_bypassed_for_high_history():

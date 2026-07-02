@@ -329,6 +329,14 @@ def build_historical_prediction(
         business_group=business_group,
         reserve_context=reserve_pattern if isinstance(reserve_pattern, dict) else None,
     )
+    base_rate, high_rate_adjustment = apply_high_rate_distribution_adjustment(
+        base_rate,
+        category=category,
+        description=description,
+        historical_summary=historical_summary,
+        business_group=business_group,
+        budget=budget,
+    )
     rate_band = resolve_procurement_rate_band(category=category, description=description)
 
     spread = max(std_rate * 0.6, margin * 0.4, 0.01)
@@ -388,12 +396,14 @@ def build_historical_prediction(
         "floor_price": None,
         "competitive_target_bid_rate": round(base_rate, 4),
         "procurement_rate_band": rate_band,
+        "high_rate_tail_adjustment": high_rate_adjustment,
         "explanation": build_historical_explanation(
             sample_size=sample_size,
             base_rate=base_rate,
             agency_match_sample_size=agency_match_sample_size,
             reserve_pattern=reserve_pattern,
             rate_band=rate_band,
+            high_rate_adjustment=high_rate_adjustment,
         ),
     }
 
@@ -463,14 +473,28 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
         bid_rates[:recent_window_size],
         weights[:recent_window_size],
     )
+    recent_tail_window_size = min(20, len(bid_rates))
+    recent_tail_rates = bid_rates[:recent_tail_window_size]
+    recent_tail_weights = weights[:recent_tail_window_size]
     competitive_quantile_value = weighted_quantile(bid_rates, weights, 0.45)
+    upper_quantile_value = weighted_quantile(bid_rates, weights, 0.75)
+    recent_upper_quantile_value = weighted_quantile(recent_tail_rates, recent_tail_weights, 0.75)
 
     return {
         "sample_size": len(bid_rates),
         "mean_bid_rate": weighted_mean_value,
         "median_bid_rate": weighted_median_value,
         "recent_median_bid_rate": recent_median_value,
+        "recent_sample_size": recent_tail_window_size,
         "competitive_quantile_bid_rate": competitive_quantile_value,
+        "upper_quantile_bid_rate": upper_quantile_value,
+        "recent_upper_quantile_bid_rate": recent_upper_quantile_value,
+        "rate_ge_0_93_share": rate_share_at_or_above(bid_rates, 0.93),
+        "rate_ge_0_95_share": rate_share_at_or_above(bid_rates, 0.95),
+        "rate_ge_0_98_share": rate_share_at_or_above(bid_rates, 0.98),
+        "recent_rate_ge_0_93_share": rate_share_at_or_above(recent_tail_rates, 0.93),
+        "recent_rate_ge_0_95_share": rate_share_at_or_above(recent_tail_rates, 0.95),
+        "recent_rate_ge_0_98_share": rate_share_at_or_above(recent_tail_rates, 0.98),
         "std_bid_rate": weighted_std_value,
         "agency_match_sample_size": agency_match_sample_size,
         "reserve_price_context": build_reserve_pattern_context(
@@ -553,6 +577,140 @@ def select_competitive_base_rate(
     base_rate = (mean_rate * 0.55) + (heuristic_rate * 0.45)
     base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
     return apply_procurement_rate_band(base_rate, category=category, description=description)
+
+
+def apply_high_rate_distribution_adjustment(
+    base_rate: float,
+    *,
+    category: str,
+    description: str,
+    historical_summary: dict[str, Any],
+    business_group: str | None = None,
+    budget: float | None = None,
+    historical_rate: float | None = None,
+) -> tuple[float, dict[str, Any] | None]:
+    """Lift base recommendations when recent settled history is high-rate heavy.
+
+    This adjustment is intentionally upstream of final guardrails. Category/group
+    ceilings still cap the result, but the recommended/base scenario no longer
+    stays below the visible high-rate cluster while only the aggressive scenario
+    reaches it.
+    """
+    from app.core.config import settings
+
+    if not settings.PREDICTION_HIGH_RATE_TAIL_ADJUSTMENT_ENABLED:
+        return base_rate, None
+
+    sample_size = int(historical_summary.get("sample_size", 0) or 0)
+    recent_sample_size = int(historical_summary.get("recent_sample_size", 0) or 0)
+    if sample_size < 20 or recent_sample_size < 8:
+        return base_rate, None
+
+    normalized_category = normalize_category_key(category)
+    group = business_group or normalized_category
+    rate_band = resolve_procurement_rate_band(category=category, description=description)
+    if rate_band == "service_price_competitive":
+        return base_rate, None
+    if rate_band == "service_high_negotiated":
+        adjusted_rate = max(base_rate, 1.0)
+        return adjusted_rate, build_high_rate_adjustment_context(
+            group=group,
+            reason="service_high_negotiated",
+            original_rate=base_rate,
+            adjusted_rate=adjusted_rate,
+            historical_summary=historical_summary,
+        )
+
+    recent_median_rate = float(historical_summary.get("recent_median_bid_rate", 0.0) or 0.0)
+    recent_upper_rate = float(historical_summary.get("recent_upper_quantile_bid_rate", 0.0) or 0.0)
+    upper_rate = float(historical_summary.get("upper_quantile_bid_rate", 0.0) or 0.0)
+    recent_ge_93_share = float(historical_summary.get("recent_rate_ge_0_93_share", 0.0) or 0.0)
+    recent_ge_95_share = float(historical_summary.get("recent_rate_ge_0_95_share", 0.0) or 0.0)
+    recent_ge_98_share = float(historical_summary.get("recent_rate_ge_0_98_share", 0.0) or 0.0)
+    high_rate_anchor = max(recent_median_rate, recent_upper_rate, upper_rate)
+    candidate_base_rate = max(float(base_rate or 0.0), float(historical_rate or 0.0))
+
+    reason: str | None = None
+    target_rate: float | None = None
+    if group == "goods" and (
+        recent_ge_95_share >= 0.35
+        or recent_ge_98_share >= 0.20
+        or recent_upper_rate >= 0.97
+    ):
+        target_rate = (
+            (candidate_base_rate * 0.20)
+            + (max(recent_median_rate, upper_rate) * 0.25)
+            + (high_rate_anchor * 0.55)
+        )
+        reason = "goods_recent_high_rate_tail"
+    elif group == "service" and (
+        recent_median_rate >= 0.93
+        and (recent_ge_93_share >= 0.30 or recent_ge_95_share >= 0.20)
+    ):
+        service_tail_anchor = min(high_rate_anchor, recent_median_rate + 0.02)
+        target_rate = (
+            (candidate_base_rate * 0.25)
+            + (recent_median_rate * 0.65)
+            + (service_tail_anchor * 0.10)
+        )
+        reason = "service_recent_high_rate_tail"
+    elif group == "construction":
+        budget_value = float(budget or 0.0)
+        small_budget_limit = float(settings.PREDICTION_SMALL_BUDGET_HIGH_RATE_BUDGET_MAX or 0.0)
+        small_budget_target = float(settings.PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET or 0.0)
+        if (
+            small_budget_limit > 0
+            and budget_value > 0
+            and budget_value <= small_budget_limit
+            and candidate_base_rate >= 0.925
+            and small_budget_target > candidate_base_rate
+        ):
+            target_rate = small_budget_target
+            reason = "construction_small_budget_high_rate_target"
+
+    if target_rate is None or reason is None:
+        return candidate_base_rate, None if candidate_base_rate == base_rate else build_high_rate_adjustment_context(
+            group=group,
+            reason="preserve_historical_component",
+            original_rate=base_rate,
+            adjusted_rate=candidate_base_rate,
+            historical_summary=historical_summary,
+        )
+
+    adjusted_rate = max(candidate_base_rate, target_rate)
+    if adjusted_rate <= float(base_rate or 0.0) + 1e-9:
+        return base_rate, None
+
+    return adjusted_rate, build_high_rate_adjustment_context(
+        group=group,
+        reason=reason,
+        original_rate=base_rate,
+        adjusted_rate=adjusted_rate,
+        historical_summary=historical_summary,
+    )
+
+
+def build_high_rate_adjustment_context(
+    *,
+    group: str | None,
+    reason: str,
+    original_rate: float,
+    adjusted_rate: float,
+    historical_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Build compact metadata for high-rate tail adjustments."""
+    return {
+        "reason": reason,
+        "business_group": group,
+        "original_bid_rate": round(float(original_rate or 0.0), 6),
+        "adjusted_bid_rate": round(float(adjusted_rate or 0.0), 6),
+        "recent_sample_size": int(historical_summary.get("recent_sample_size", 0) or 0),
+        "recent_median_bid_rate": round(float(historical_summary.get("recent_median_bid_rate", 0.0) or 0.0), 6),
+        "recent_upper_quantile_bid_rate": round(float(historical_summary.get("recent_upper_quantile_bid_rate", 0.0) or 0.0), 6),
+        "recent_rate_ge_0_93_share": round(float(historical_summary.get("recent_rate_ge_0_93_share", 0.0) or 0.0), 4),
+        "recent_rate_ge_0_95_share": round(float(historical_summary.get("recent_rate_ge_0_95_share", 0.0) or 0.0), 4),
+        "recent_rate_ge_0_98_share": round(float(historical_summary.get("recent_rate_ge_0_98_share", 0.0) or 0.0), 4),
+    }
 
 
 def resolve_reserve_prior_rate(reserve_context: dict[str, Any] | None) -> tuple[float, int]:
@@ -837,6 +995,13 @@ def weighted_quantile(values: list[float], weights: list[float], quantile: float
     return float(sorted_pairs[-1][0])
 
 
+def rate_share_at_or_above(values: list[float], threshold: float) -> float:
+    """Return the share of values at or above a bid-rate threshold."""
+    if not values:
+        return 0.0
+    return round(sum(1 for value in values if value >= threshold) / len(values), 6)
+
+
 def weighted_std(values: list[float], weights: list[float], mean_value: float) -> float:
     """Compute a weighted standard deviation."""
     if not values:
@@ -893,6 +1058,7 @@ def build_historical_explanation(
     agency_match_sample_size: int,
     reserve_pattern: dict[str, Any] | None,
     rate_band: str | None,
+    high_rate_adjustment: dict[str, Any] | None = None,
 ) -> str:
     """Build a natural-language summary for weighted historical price prediction."""
     details: list[str] = []
@@ -905,6 +1071,8 @@ def build_historical_explanation(
         details.append("협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다")
     elif rate_band == "service_price_competitive":
         details.append("가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다")
+    if high_rate_adjustment:
+        details.append("최근 고율 낙찰 분포를 반영해 기준 사정률을 상향 보정했습니다")
 
     detail_text = f" {' '.join(details)}" if details else ""
     return (

@@ -17,7 +17,7 @@
 대상 공고에 대해 적정 투찰가와 투찰률(bid rate)을 예측합니다. 동일 카테고리의 최근 낙찰 이력 시계열(explicit bid-rate 기반, 최대 80건)을 끌어와 통계/히스토리컬 블렌드 방식으로 가격을 산출하고, 운영자 피드백 보정을 반영합니다. 결과는 보수/기준/공격(`conservative`/`base`/`aggressive`) 시나리오 후보와 함께 반환됩니다.
 
 - 언제 쓰나: 운영자가 특정 공고의 투찰가를 결정하기 직전, 가격 예측 화면에서 호출. 결과는 단일 operator에 귀속되어 `PricePrediction` 레코드로 저장됩니다(이후 추적·피드백 보정에 사용).
-- 도메인: predictor guardrail이 적용됩니다. 카테고리 낙찰하한(`floor_bid_rate`/`floor_price`) 미만 투찰을 차단하도록 예측가를 클램프하며, 적용 여부·사유가 `guardrail_applied`/`guardrail_reason`으로 노출됩니다. `pricing_mode`는 이력이 충분하면 `historical_blend`, 부족하면 `heuristic`입니다.
+- 도메인: predictor guardrail이 적용됩니다. 카테고리/공고별 낙찰하한(`floor_bid_rate`/`floor_price`) 미만 투찰을 차단하도록 예측가를 클램프하며, 공고별 법정 하한은 `legal_floor_bid_rate`로 전달할 수 있습니다. 최종 후보에는 하한 안전마진(`safe_floor_bid_rate`)이 적용되고, 적용 여부·사유가 `guardrail_applied`/`guardrail_reason`으로 노출됩니다. `pricing_mode`는 이력이 충분하면 `historical_blend`, 부족하면 `heuristic`입니다.
 - 부수효과: `PricePrediction` 레코드 1건이 DB에 영속화됩니다.
 
 **파라미터**
@@ -28,6 +28,7 @@
 | body | category | str | 예 | 공고 카테고리 |
 | body | description | str | 예 | 공고 설명 텍스트 |
 | body | agency_name | str\|null | 아니오 | 발주 기관명(기관 매칭 보정용) |
+| body | legal_floor_bid_rate | float\|null | 아니오 | 공고별 법정 낙찰하한율. `0.87995` 또는 `87.995` 모두 허용 |
 
 **요청 예시**
 ```bash
@@ -38,7 +39,8 @@ curl -X POST http://localhost:3000/api/v1/predictions/price \
     "budget_estimate": 480000000,
     "category": "정보통신공사",
     "description": "관내 행정망 네트워크 장비 교체 및 구축",
-    "agency_name": "한국조달연구원"
+    "agency_name": "한국조달연구원",
+    "legal_floor_bid_rate": 87.995
   }'
 ```
 ```json
@@ -47,7 +49,8 @@ curl -X POST http://localhost:3000/api/v1/predictions/price \
   "budget_estimate": 480000000,
   "category": "정보통신공사",
   "description": "관내 행정망 네트워크 장비 교체 및 구축",
-  "agency_name": "한국조달연구원"
+  "agency_name": "한국조달연구원",
+  "legal_floor_bid_rate": 87.995
 }
 ```
 
@@ -98,8 +101,13 @@ curl -X POST http://localhost:3000/api/v1/predictions/price \
   },
   "guardrail_applied": false,
   "guardrail_reason": null,
-  "floor_bid_rate": 0.88,
-  "floor_price": 422400000,
+  "legal_floor_bid_rate": 0.87995,
+  "floor_guardrail_source": "legal",
+  "floor_bid_rate": 0.87995,
+  "floor_price": 422376000,
+  "floor_safety_margin_rate": 0.001,
+  "safe_floor_bid_rate": 0.88095,
+  "safe_floor_price": 422856000,
   "ceiling_bid_rate": 1.0,
   "ceiling_price": 480000000,
   "explanation": "최근 동일 카테고리 낙찰 이력 72건과 기관 매칭 9건을 블렌드해 산출. 낙찰하한 0.88 이상 유지."

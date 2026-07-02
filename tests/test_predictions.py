@@ -501,6 +501,42 @@ def test_predict_price_applies_minimum_bid_rate_guardrail():
     assert "가드레일" in prediction["explanation"]
 
 
+def test_predict_price_applies_notice_legal_floor_to_conservative_scenario():
+    """Notice-specific legal floors should keep conservative bids above the final floor."""
+    budget = 49_461_000.0
+    prediction = predict_price(
+        budget=budget,
+        category="construction",
+        description="2026년 울주군(나사리) 자연석 투석 사업지 및 천연해조장 서식환경개선",
+        legal_floor_bid_rate=88.0,
+        historical_records=[
+            {"bid_rate": 0.8782},
+            {"bid_rate": 0.8790},
+            {"bid_rate": 0.8800},
+            {"bid_rate": 0.8810},
+            {"bid_rate": 0.8820},
+        ],
+    )
+
+    conservative = next(
+        item for item in prediction["bid_rate_candidates"]
+        if item["label"] == "conservative"
+    )
+    assert prediction["legal_floor_bid_rate"] == pytest.approx(0.88, abs=0.0001)
+    assert prediction["floor_bid_rate"] == pytest.approx(0.88, abs=0.0001)
+    assert prediction["floor_guardrail_source"] == "legal"
+    assert prediction["floor_safety_margin_rate"] == pytest.approx(0.001, abs=0.0001)
+    assert prediction["safe_floor_bid_rate"] == pytest.approx(0.881, abs=0.0001)
+    assert conservative["guardrail_applied"] is True
+    assert conservative["pre_guardrail_bid_rate"] < prediction["floor_bid_rate"]
+    assert conservative["bid_rate"] >= prediction["safe_floor_bid_rate"]
+    assert conservative["predicted_price"] == pytest.approx(
+        round(budget * prediction["safe_floor_bid_rate"], 2),
+        abs=0.01,
+    )
+    assert "공고별 법정 최소 투찰률" in prediction["guardrail_reason"]
+
+
 def test_predict_price_applies_maximum_bid_rate_guardrail():
     """Configured bid-rate ceilings should clamp unrealistically high price scenarios."""
     prediction = predict_price(
@@ -668,6 +704,56 @@ def test_price_prediction_endpoint_surfaces_guardrail_metadata(client, test_db):
     assert data["predicted_bid_rate"] >= data["floor_bid_rate"]
     assert data["price_range_min"] >= data["floor_price"]
     assert data["model_version"].endswith("+guardrail")
+
+
+def test_price_prediction_endpoint_accepts_notice_legal_floor_rate(client, test_db):
+    """The price endpoint should accept percent-style notice floor rates."""
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "R26BK01603215-000 하한율 검증",
+            "description": "자연석 투석 사업지 및 천연해조장 서식환경개선",
+            "requirements": "공고별 법정 하한율 반영",
+            "budget_estimate": 49_461_000.0,
+            "category": "construction",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    test_db.add_all([
+        HistoricalData(
+            notice_number=f"LEGAL-FLOOR-{index}",
+            category="construction",
+            base_amount=49_461_000.0,
+            predicted_price=49_461_000.0 * bid_rate,
+            bid_rate=bid_rate,
+        )
+        for index, bid_rate in enumerate([0.8782, 0.879, 0.88, 0.881], start=1)
+    ])
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/predictions/price",
+        json={
+            "project_id": project_id,
+            "budget_estimate": 49_461_000.0,
+            "category": "construction",
+            "description": "R26BK01603215-000 하한율 검증",
+            "legal_floor_bid_rate": 87.995,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["floor_guardrail_source"] == "legal"
+    assert data["legal_floor_bid_rate"] == pytest.approx(0.87995, abs=0.000001)
+    assert data["floor_bid_rate"] == pytest.approx(0.87995, abs=0.000001)
+    assert data["safe_floor_bid_rate"] == pytest.approx(0.88095, abs=0.000001)
+    assert all(
+        item["bid_rate"] >= data["safe_floor_bid_rate"]
+        for item in data["bid_rate_candidates"]
+        if item["guardrail_applied"]
+    )
 
 
 def test_price_prediction_endpoint_uses_related_category_history_for_technical_service(client, test_db):

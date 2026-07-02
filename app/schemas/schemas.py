@@ -770,6 +770,11 @@ class PricePredictionRequest(BaseModel):
     category: str
     description: str
     agency_name: Optional[str] = None
+    legal_floor_bid_rate: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="공고별 법정 낙찰하한율. 0.87995 또는 87.995 모두 허용.",
+    )
 
 
 class PricePredictionScenario(BaseModel):
@@ -777,6 +782,9 @@ class PricePredictionScenario(BaseModel):
     bid_rate: float
     predicted_price: float
     confidence_weight: float = Field(ge=0.0, le=1.0)
+    guardrail_applied: bool = False
+    pre_guardrail_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    pre_guardrail_price: Optional[float] = Field(default=None, ge=0.0)
 
 
 class PricePredictionReservePattern(BaseModel):
@@ -824,8 +832,13 @@ class PricePredictionResponse(BaseModel):
     feedback_calibration: Optional[PricePredictionFeedbackCalibration] = None
     guardrail_applied: bool = False
     guardrail_reason: Optional[str] = None
+    legal_floor_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    floor_guardrail_source: Optional[str] = None
     floor_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     floor_price: Optional[float] = Field(default=None, ge=0.0)
+    floor_safety_margin_rate: Optional[float] = Field(default=None, ge=0.0)
+    safe_floor_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    safe_floor_price: Optional[float] = Field(default=None, ge=0.0)
     ceiling_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     ceiling_price: Optional[float] = Field(default=None, ge=0.0)
     explanation: str = ""
@@ -2200,6 +2213,11 @@ class ClassificationResponse(BaseModel):
 class OpportunityAnalysisRequest(BaseModel):
     project_id: int
     agency_name: Optional[str] = None
+    legal_floor_bid_rate: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="공고별 법정 낙찰하한율. 메일/공고 분석값을 가격 예측 guardrail에 전달합니다.",
+    )
     current_active_bids: Optional[int] = Field(
         default=None,
         ge=0,

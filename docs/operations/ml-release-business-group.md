@@ -86,6 +86,24 @@ python scripts/backtest_synthetic_operators.py \
 
 MAE가 현저히 높아진 그룹이 있으면 해당 그룹의 백필 품질을 재검토한다.
 
+### 4-1. 최신 낙찰결과 홀드아웃 검증
+
+업종 그룹 또는 가격 예측 알고리즘을 바꾼 뒤에는 최신 낙찰결과 1건씩을 숨긴 상태로
+실제 낙찰가와 추천 투찰가를 비교한다. 절차와 2026-07-02 기준선은
+`docs/operations/latest-award-holdout-backtest.md`를 따른다.
+
+```bash
+.venv/bin/python scripts/backtest_latest_award_holdouts.py \
+    --out models/reports/latest-award-holdout-after-<release-tag>.json
+```
+
+비교 기준:
+
+- `summary.recommended.mean_absolute_amount_error_pct`가 기준선보다 낮아질 것
+- `summary.recommended.mean_absolute_bid_rate_error_bp`가 기준선보다 낮아질 것
+- `summary.recommended.within_counts.0.3%` 및 `1.0%` 이내 건수가 늘어날 것
+- `summary.closest`만 좋아지고 `recommended`가 그대로면 시나리오 선택 정책을 재점검할 것
+
 ### 5. 운영 프로모션
 
 ```bash
@@ -194,6 +212,7 @@ GROUP BY predictor_name;
 | `BUSINESS_GROUP_CALIBRATION_ENABLED` | `true` | `false`로 설정하면 그룹 캘리브레이션을 건너뛰고 카테고리 전용 경로로 폴백. 킬 스위치. |
 | `PREDICTION_GROUP_MINIMUM_BID_RATES` | `{"construction":0.87,"service":0.70,"goods":0.84}` | 그룹별 낙찰가율 하한. 카테고리 guardrail보다 우선 적용. |
 | `PREDICTION_GROUP_MAXIMUM_BID_RATES` | `{"construction":0.93,"service":1.00,"goods":1.00}` | 그룹별 낙찰가율 상한. |
+| `PRICE_PREDICTOR_TRAINING_SCHEDULE_CATEGORIES` | `construction,service,goods` | 주간 글로벌 후보 학습과 함께 실행할 카테고리/업무그룹별 후보 학습 목록. 빈 문자열이면 그룹별 예약 학습을 생략. |
 | `GROUP_CALIBRATION_MIN_SAMPLES` | `100` | preflight gate에서 각 그룹의 `sample_count`가 이 값 이상이어야 통과. |
 | `BUSINESS_TYPE_TITLE_RULES` | (5개 기본 패턴) | `backfill_business_type.py`의 title-rule fallback에서 사용하는 regex → code 매핑. |
 

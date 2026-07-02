@@ -457,23 +457,26 @@ def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object
     compose service executes it while the ``beat`` service only schedules it.
     Defaults to OFF; opt-in via ``PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED``.
 
-    The scheduled run is **candidate-only**: it passes ``create_manifest=False``
-    and ``publish_remote=False`` so the weekly job only retrains predictor
+    The scheduled runs are **candidate-only**: they pass ``create_manifest=False``
+    and ``publish_remote=False`` so the weekly jobs only retrain predictor
     artifacts + dataset/quality/comparison reports (most recent 500 settled
-    rows, the task default ``limit``). It never creates a release manifest,
-    uploads to remote storage, or activates a model — release/promotion stays a
-    deliberate, gated, manual action (``scripts/promote_ml_release.py``). This
-    keeps the weekly retrain decoupled from the signing-key / object-storage
-    release machinery.
+    rows, the task default ``limit``). The global run is kept, and
+    ``PRICE_PREDICTOR_TRAINING_SCHEDULE_CATEGORIES`` can add category-scoped
+    runs (default: construction/service/goods) so each business group gets a
+    fresh candidate artifact. Scheduled jobs never create a release manifest,
+    upload to remote storage, or activate a model — release/promotion stays a
+    deliberate, gated, manual action (``scripts/promote_ml_release.py``).
     """
     if not settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED:
         return {}
 
-    day_of_week = max(0, min(6, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK)))
+    day_of_week = max(
+        0, min(6, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_DAY_OF_WEEK))
+    )
     hour = max(0, min(23, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_HOUR_KST)))
     minute = max(0, min(59, int(settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_MINUTE)))
 
-    return {
+    schedule = {
         "price_predictor_training_weekly": {
             "task": PRICE_PREDICTOR_TRAINING_TASK_NAME,
             "schedule": crontab(day_of_week=day_of_week, hour=hour, minute=minute),
@@ -486,6 +489,30 @@ def build_price_predictor_training_beat_schedule() -> dict[str, dict[str, object
             },
         }
     }
+    categories = [
+        token.strip().lower()
+        for token in str(
+            settings.PRICE_PREDICTOR_TRAINING_SCHEDULE_CATEGORIES or ""
+        ).split(",")
+        if token.strip()
+    ]
+    for category in dict.fromkeys(categories):
+        safe_key = "".join(ch if ch.isalnum() else "_" for ch in category).strip("_")
+        if not safe_key:
+            continue
+        schedule[f"price_predictor_training_weekly_{safe_key}"] = {
+            "task": PRICE_PREDICTOR_TRAINING_TASK_NAME,
+            "schedule": crontab(day_of_week=day_of_week, hour=hour, minute=minute),
+            # Candidate-only: never auto-create/publish/activate a release.
+            "kwargs": {
+                "request_payload": {
+                    "category": category,
+                    "create_manifest": False,
+                    "publish_remote": False,
+                }
+            },
+        }
+    return schedule
 
 
 def build_telegram_polling_beat_schedule() -> dict[str, dict[str, object]]:

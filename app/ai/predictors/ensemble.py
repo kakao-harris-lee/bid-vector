@@ -11,6 +11,7 @@ import numpy as np
 from app.ai.predictors.base import BasePricePredictor, PredictorAvailability, PricePredictionContext
 from app.ai.predictors.historical import (
     HistoricalStatisticalPredictor,
+    apply_high_rate_distribution_adjustment,
     apply_procurement_candidate_band,
     apply_procurement_rate_band,
     clamp_bid_rate,
@@ -117,6 +118,15 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
     base_rate = clamp_bid_rate(
         sum(float(components[key]) * float(component_weights[key]) for key in component_weights)
     )
+    base_rate, high_rate_adjustment = apply_high_rate_distribution_adjustment(
+        base_rate,
+        category=context.category,
+        description=context.description,
+        historical_summary=historical_summary,
+        business_group=context.business_group,
+        budget=context.budget,
+        historical_rate=components.get("historical"),
+    )
     base_rate = clamp_bid_rate(
         apply_procurement_rate_band(
             base_rate,
@@ -191,12 +201,14 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
         "floor_price": None,
         "competitive_target_bid_rate": round(base_rate, 4),
         "procurement_rate_band": rate_band,
+        "high_rate_tail_adjustment": high_rate_adjustment,
         "explanation": _build_ensemble_explanation(
             components=components,
             component_weights=component_weights,
             artifact=artifact,
             agency_match_sample_size=agency_match_sample_size,
             rate_band=rate_band,
+            high_rate_adjustment=high_rate_adjustment,
         ),
     }
 
@@ -259,6 +271,7 @@ def _build_ensemble_explanation(
     artifact: dict[str, Any],
     agency_match_sample_size: int,
     rate_band: str | None,
+    high_rate_adjustment: dict[str, Any] | None = None,
 ) -> str:
     """Build a natural-language explanation for the ensemble output."""
     ordered_components = [
@@ -275,6 +288,8 @@ def _build_ensemble_explanation(
         explanation += " 협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다."
     elif rate_band == "service_price_competitive":
         explanation += " 가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다."
+    if high_rate_adjustment:
+        explanation += " 최근 고율 낙찰 분포를 반영해 기준 사정률을 상향 보정했습니다."
     return explanation
 
 

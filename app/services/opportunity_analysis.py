@@ -282,6 +282,7 @@ class OpportunityAnalysisService:
             feedback_calibration=feedback_calibration,
             business_type_code=business_type_code,
             business_group=business_group,
+            legal_floor_bid_rate=request.legal_floor_bid_rate,
         )
 
         bid_recommendation = get_bid_recommendation(

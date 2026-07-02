@@ -57,6 +57,28 @@ def test_ml_training_schedule_builds_when_enabled(monkeypatch):
     assert crontab.minute == {0}
 
 
+def test_ml_training_schedule_adds_category_scoped_candidate_runs(monkeypatch):
+    """Weekly retrain should also build category-scoped candidate artifacts."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTOR_TRAINING_SCHEDULE_ENABLED", True)
+    monkeypatch.setattr(
+        settings,
+        "PRICE_PREDICTOR_TRAINING_SCHEDULE_CATEGORIES",
+        "construction,service,goods",
+    )
+
+    schedule = build_price_predictor_training_beat_schedule()
+
+    for category in ("construction", "service", "goods"):
+        entry = schedule[f"price_predictor_training_weekly_{category}"]
+        assert entry["task"] == PRICE_PREDICTOR_TRAINING_TASK_NAME
+        payload = entry["kwargs"]["request_payload"]
+        assert payload["category"] == category
+        assert payload["create_manifest"] is False
+        assert payload["publish_remote"] is False
+
+
 def test_ml_training_schedule_is_candidate_only(monkeypatch):
     """Safety invariant: the scheduled run never creates/publishes/activates a release.
 
