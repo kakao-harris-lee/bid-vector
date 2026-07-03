@@ -1,12 +1,14 @@
 # bid-vector 로드맵
 
-기준일: 2026-06-22
+기준일: 2026-07-03
 
 이 문서는 `bid-vector`의 단계별 목표와 exit gate를 정리하는 단일 로드맵입니다. 오래된 계획 문서보다 현재 코드와 이 문서를 우선합니다.
 
 ## 현재 결론
 
-0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, **관리자/사용자 웹 물리 분리(별도 Vite 번들)**, 운영 runbook, operator-scoped synthetic evidence, read-only evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 2026-06-22 기준으로 **G-0 smoke가 실제 스케줄에서 5 phase 전부 green으로 실증**됐고(smoke ML phase fix #106), **G-2 라이브 증적 축적이 시작**됐으며(사업자별 strategy monitor 실행 + dry-run 알림채널 + 일일 후보 재확인 자동화), 운영 안정화(celerybeat 복구, KST 스케줄 정합, monitor run 고아 정리/reconciler)도 반영됐습니다. 2026-06-24 기준으로 synthetic experiment 결과는 `operator_id`가 붙어야 G-2 ledger에 집계되고, 일일 evidence snapshot은 `reports/g2-evidence/` 파일 수집과 `collect_g2_evidence` analytics event로 축적할 수 있습니다. 현재 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다.
+0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, **관리자/사용자 웹 물리 분리(별도 Vite 번들)**, 운영 runbook, operator-scoped synthetic evidence, read-only evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 2026-06-22 기준으로 **G-0 smoke가 실제 스케줄에서 5 phase 전부 green으로 실증**됐고(smoke ML phase fix #106), **G-2 라이브 증적 축적이 시작**됐으며(사업자별 strategy monitor 실행 + dry-run 알림채널 + 일일 후보 재확인 자동화), 운영 안정화(celerybeat 복구, KST 스케줄 정합, monitor run 고아 정리/reconciler)도 반영됐습니다. 2026-06-24 기준으로 synthetic experiment 결과는 `operator_id`가 붙어야 G-2 ledger에 집계되고, 일일 evidence snapshot은 `reports/g2-evidence/` 파일 수집과 `collect_g2_evidence` analytics event로 축적할 수 있습니다.
+
+2026-07-03 기준으로 개발 노트북에서 처리 가능한 G-2 검증 하드닝, OpenAPI 타입 동기화 가드, 추천 투찰가 guardrail/holdout 백테스트, 세부 조달 세그먼트 밴드와 10원 단위 보정도 `main`에 반영되었습니다. 현재 운영 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다. 추천 품질 쪽은 최신 낙찰 holdout 개선이 들어왔지만, 다음 개발 항목은 `procurement_rate_band`보다 세밀한 feature extractor, selector 분리, legal floor/분모 품질 강화입니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
@@ -29,6 +31,20 @@
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
 
 ## 최근 반영된 작업
+
+2026-07-03 (`7aa4e6f` 포함)로 다음이 `main`에 반영되었습니다.
+
+- 조달 세그먼트별 투찰가 예측 개선: 서비스/물품을 `service_price_competitive`, `service_direct_negotiated`, `service_high_negotiated`, `goods_price_competitive`, `goods_deep_discount` 등 더 세밀한 `procurement_rate_band`로 나누고, 해양/엔지니어링 가격경쟁형 용역, 수의시담, 물품 견적/2단계 구매 세그먼트의 추천률 왜곡을 줄였습니다.
+- 최종 투찰가 단위 보정: 추천 후보 금액을 기본 10원 단위로 내림 처리하고, 낙찰하한 안전가격을 침범하면 올림 보정합니다. API 응답과 OpenAPI 타입에는 `bid_price_granularity`, `bid_price_rounding_mode`, `price_granularity_applied`, `pre_granularity_price`가 반영되었습니다.
+- 최신 낙찰 holdout 확장 검증: 2026-07-02 3건 기준선은 추천 평균 절대오차율 3.559%였고, 세그먼트/금액단위 개선 후 0.5545%로 낮아졌습니다. 업무구분별 150건 확장 holdout에서는 clean 표본 141건 기준 추천 평균 절대오차율 1.837%, 1.0% 이내 76/141로 기록되었습니다.
+- 추천 품질 후속 문서화: `docs/operations/latest-award-holdout-backtest.md`와 `docs/operations/procurement-segment-improvement-notes.md`에 개선 전후 수치, 데이터 품질 플래그, 다음 세그먼트 개선 축을 고정했습니다.
+
+2026-07-02 (`16f2f58`, `1e111fe`, `81450e5` 포함)로 다음이 `main`에 반영되었습니다.
+
+- 가격 예측 guardrail과 holdout 백테스트: 공고별 법정 하한(`legal_floor_bid_rate`)과 safety margin을 추천 후보에 반영하고, 업무구분별 최신 낙찰결과 holdout을 `scripts/backtest_latest_award_holdouts.py`로 재현할 수 있게 했습니다. ML release business group 문서와 scheduler/test coverage도 갱신되었습니다.
+- OpenAPI 타입 동기화 가드: `scripts/sync_openapi_types.py`, `npm --prefix frontend run sync-types`, `npm --prefix frontend run check:sync-types`가 추가되어 API 스키마 변경 후 `frontend/src/shared/types/openapi.d.ts`를 갱신/검증합니다.
+- 개발 노트북용 G-2 검증 하드닝: 관리자 홈에서 사용자 화면 메뉴가 추가 노출되지 않는지 회귀 테스트를 추가했고, sample-gap dry-run 화면은 write safety/status를 명시합니다. notification target verifier는 nested metadata/target context의 raw secret-like target도 검사합니다.
+- G-2 exit review 기준 강화: `scripts/build_g2_exit_review.py`, `scripts/check_g2_exit_readiness.py`, `scripts/g2_blocking_gap_register.py`는 `open`, `triaged`, `accepted_hold` gap을 모두 unresolved로 취급합니다. `resolved` 또는 `excluded`만 남아야 exit 근거로 넘길 수 있습니다.
 
 2026-06-24 (`50c9336` 포함, PR #113~#116)로 다음이 `main`에 반영되었습니다.
 
@@ -151,6 +167,9 @@ Exit gate G-1:
 - synthetic/non-canonical operator Telegram 송신은 dry-run evidence로 남기며, callback owner 검증과 route metadata 분리가 강화되었습니다.
 - `OperatorNotificationChannel`은 operator별 masked notification route metadata를 저장하지만, non-canonical 실제 Telegram 송신 secret resolver는 아직 없습니다.
 - synthetic experiment 결과는 `operator_id`가 있어야 G-2 operator evidence로 집계됩니다. slug-only 결과는 `mixed_scope`로 분류됩니다.
+- G-2 exit review builder/readiness checker/gap register는 `open`, `triaged`, `accepted_hold` gap을 모두 unresolved로 다룹니다. `resolved` 또는 `excluded`만 남아야 G-2 성공 근거로 넘길 수 있습니다.
+- notification target verifier는 operator별 `notification-channels.json`의 nested metadata/target context까지 raw secret-like target을 검사합니다.
+- sample-gap 기반 실행 화면과 CLI dry-run은 write safety/status를 증적으로 남깁니다.
 - smoke/analytics evidence는 `operator_scope`, `current_operator_id`, `source_run_type`, `source_run_id`를 남기지만, N일 운영 증적은 아직 충분하지 않습니다.
 
 해야 할 일:
@@ -312,12 +331,14 @@ Exit gate G-3:
 ## 다음 우선순위
 
 1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 profile, strategy, notification channel, strategy monitor, decision experiment, synthetic experiment, G-2 evidence ledger를 `reports/g2-evidence/`와 `collect_g2_evidence` snapshot으로 N일 단위 저장한다.
-2. G-2 blocking gap 해소: `/api/v1/analytics/g2-evidence`의 `blocking_gaps`를 operator별 TODO로 관리하고 `mixed_scope`/`missing` 상태를 제거한다. slug-only synthetic result는 operator_id-scoped evidence로 재실행 또는 보정한다.
+2. G-2 blocking gap 해소: `/api/v1/analytics/g2-evidence`의 `blocking_gaps`를 operator별 TODO로 관리하고 `open`/`triaged`/`accepted_hold`를 모두 unresolved로 다룬다. `mixed_scope`/`missing` 상태를 제거하고, slug-only synthetic result는 operator_id-scoped evidence로 재실행 또는 보정한다.
 3. G-1 표본 실행: sample-gap candidates를 dry-run으로 검토하고 승인 후 synthetic evidence run을 enqueue하여 operator_id-scoped settled sample 증적을 쌓는다.
 4. G-2 알림 대상 검증: 사업자별 Telegram/app notification 대상 식별자, `dry_run_only`, masking, 실제 송신 가능 범위를 운영표로 관리한다.
 5. G-0 관찰: scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 dashboard와 문서만으로 구분한다.
 6. G-2 exit review: `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 3개 이상 operator가 exit gate를 만족하는지 판정한다.
-7. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
+7. 추천 품질 세그먼트 후속: `procurement_rate_band`보다 세밀한 feature extractor, 세그먼트별 calibration, recommended selector 분리, legal floor/예정가격 분모 품질 검사를 구현하고 고정 holdout으로 회귀 비교한다.
+8. API/OpenAPI 타입 정합: API schema 변경 시 `npm --prefix frontend run sync-types`와 `check:sync-types`를 실행해 generated frontend type drift를 막는다.
+9. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
 
 ## 관련 문서
 
@@ -329,5 +350,6 @@ Exit gate G-3:
 - `docs/operations/roadmap-next-agent-plan.md`: 최근 완료된 병렬 작업 기록과 후속 gap
 - `docs/operations/latest-award-holdout-backtest.md`: 최신 낙찰결과 holdout 백테스트 절차와 개선 전후 수치
 - `docs/operations/procurement-segment-improvement-notes.md`: 조달 세그먼트별 투찰가 예측 개선 축과 후속 과제
+- `docs/operations/ml-release-business-group.md`: business group별 ML release guardrail과 holdout 검증 절차
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
 - `docs/api/index.md`: HTTP API 레퍼런스

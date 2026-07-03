@@ -6,7 +6,7 @@
 
 ## 현재 구현 상태
 
-`50c9336` 기준으로 runbook 실행에 필요한 기반은 `main`에 반영되어 있다.
+`81450e5` 기준으로 runbook 실행에 필요한 기반은 `main`에 반영되어 있다.
 
 - `/api/v1/analytics/g2-evidence`: operator별 G-2 증적 ledger와 `blocking_gaps` 확인
 - `/api/v1/operator/notification-channels`: operator별 masked notification route metadata 확인
@@ -14,8 +14,11 @@
 - `scripts/collect_g2_evidence.py`: operator 3개 이상에 대한 read-only HTTP evidence 파일을 `reports/g2-evidence/` 아래에 저장
 - `jobs.collect_g2_evidence` / `COLLECT_G2_EVIDENCE_*`: 매일 22:00 KST에 operator별 G-2 ledger 요약을 하나의 `collect_g2_evidence` analytics event로 snapshot. 기본 OFF이며 operator data write, monitor 실행, 외부 호출, Telegram 송신 없음
 - `scripts/run_g2_synthetic_evidence.py`: 기본 dry-run, 승인 후 `--write`로 synthetic evidence run enqueue
+- `scripts/build_g2_exit_review.py` / `scripts/check_g2_exit_readiness.py` / `scripts/g2_blocking_gap_register.py`: `open`, `triaged`, `accepted_hold` gap을 unresolved로 취급하고, `resolved` 또는 `excluded`만 성공 근거로 넘김
+- `scripts/verify_g2_notification_targets.py`: operator별 `notification-channels.json`의 nested metadata/target context까지 raw secret-like target을 검사
 - `/admin/operations`: 관리자 surface에서 G-2 evidence summary 확인
 - `/dashboard`: 사용자 surface에서 token owner 기준 투찰 판단에 집중
+- synthetic experiment lab: sample-gap dry-run의 write safety/status를 UI와 evidence payload에 표시
 - synthetic experiment 결과는 `operator_id`가 붙어야 G-2 ledger에 operator-scoped evidence로 집계됨. slug-only 결과는 `mixed_scope`로 분류
 
 운영 전 TODO:
