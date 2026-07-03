@@ -609,7 +609,11 @@ def apply_high_rate_distribution_adjustment(
     normalized_category = normalize_category_key(category)
     group = business_group or normalized_category
     rate_band = resolve_procurement_rate_band(category=category, description=description)
-    if rate_band == "service_price_competitive":
+    if rate_band in {
+        "service_price_competitive",
+        "goods_deep_discount",
+        "goods_price_competitive",
+    }:
         return base_rate, None
     if rate_band == "service_high_negotiated":
         adjusted_rate = max(base_rate, 1.0)
@@ -812,11 +816,17 @@ def blend_reserve_prior(base_rate: float, *, reserve_context: dict[str, Any] | N
 
 
 def apply_procurement_rate_band(base_rate: float, *, category: str, description: str) -> float:
-    """Apply service subtype bid-rate bands inferred from notice text."""
+    """Apply procurement subtype bid-rate bands inferred from notice text."""
     rate_band = resolve_procurement_rate_band(category=category, description=description)
     if rate_band == "service_high_negotiated":
         return max(base_rate, 1.0)
+    if rate_band == "service_direct_negotiated":
+        return max(base_rate, 0.95)
     if rate_band == "service_price_competitive":
+        return min(base_rate, 0.90)
+    if rate_band == "goods_deep_discount":
+        return min(base_rate, 0.78)
+    if rate_band == "goods_price_competitive":
         return min(base_rate, 0.90)
     return base_rate
 
@@ -831,20 +841,117 @@ def apply_procurement_candidate_band(
     """Keep all scenarios consistent with the inferred procurement band."""
     if rate_band == "service_high_negotiated":
         return max(conservative_rate, 0.98), max(base_rate, 1.0), max(aggressive_rate, 1.0)
+    if rate_band == "service_direct_negotiated":
+        return (
+            max(conservative_rate, 0.93),
+            max(base_rate, 0.95),
+            max(aggressive_rate, 0.97),
+        )
     if rate_band == "service_price_competitive":
         return min(conservative_rate, 0.90), min(base_rate, 0.90), min(aggressive_rate, 0.90)
+    if rate_band == "goods_deep_discount":
+        return min(conservative_rate, 0.76), min(base_rate, 0.78), min(aggressive_rate, 0.84)
+    if rate_band == "goods_price_competitive":
+        return min(conservative_rate, 0.88), min(base_rate, 0.90), min(aggressive_rate, 0.91)
     return conservative_rate, base_rate, aggressive_rate
 
 
 def resolve_procurement_rate_band(*, category: str, description: str) -> str | None:
-    """Infer broad service bidding bands from the notice text."""
+    """Infer broad procurement bidding bands from the notice text."""
     normalized_category = normalize_category_key(category)
-    if normalized_category not in {"service", "technical-service", "general-service", "software"}:
-        return None
-
     normalized_text = str(description or "").strip().lower()
     if not normalized_text:
         return None
+
+    if normalized_category == "goods":
+        if _is_goods_deep_discount_notice(normalized_text):
+            return "goods_deep_discount"
+        if _is_goods_narrow_control_price_competitive(normalized_text):
+            return "goods_price_competitive"
+        goods_price_competitive_keywords = (
+            "소액수의 견적",
+            "견적 제출",
+            "견적제출",
+            "2단계",
+            "규격·가격",
+            "규격 가격",
+            "규격가격",
+            "가격분리",
+            "가격 분리",
+            "동시입찰",
+            "국내도서",
+            "도서 구매",
+            "운영장비 구입",
+            "데이터로거 구매",
+            "모니터 확장",
+            "상토 구입",
+            "원액주입설비",
+            "인명구조함",
+            "주방기구",
+        )
+        if any(keyword in normalized_text for keyword in goods_price_competitive_keywords):
+            return "goods_price_competitive"
+        return None
+
+    if normalized_category not in {"service", "technical-service", "general-service", "software"}:
+        return None
+
+    title_text = normalized_text.splitlines()[0] if normalized_text.splitlines() else normalized_text
+    explicit_direct_negotiated_keywords = (
+        "수의시담",
+        "수의 시담",
+    )
+    title_direct_negotiated_keywords = (
+        "수의계약",
+        "수의 계약",
+        "(수의)",
+        "[수의]",
+    )
+    if any(keyword in normalized_text for keyword in explicit_direct_negotiated_keywords) or any(
+        keyword in title_text for keyword in title_direct_negotiated_keywords
+    ):
+        return "service_direct_negotiated"
+
+    engineering_competitive_keywords = (
+        "해양이용협의",
+        "간이해양이용협의",
+        "해양환경영향",
+        "환경영향",
+        "사전영향조사",
+        "사후영향조사",
+        "사전·사후영향조사",
+        "영향조사",
+        "적지조사",
+        "해저지형조사",
+        "수심측량",
+        "지형 및 수심측량",
+        "실시설계",
+        "기본 및 실시설계",
+        "기본설계",
+        "서식환경",
+        "바다숲",
+        "인공어초",
+        "어초어장",
+        "해상풍력",
+        "pq 후 지명경쟁",
+    )
+    if any(keyword in normalized_text for keyword in engineering_competitive_keywords):
+        return "service_price_competitive"
+
+    service_low_tail_price_competitive_keywords = (
+        "건축기획",
+        "정밀안전진단",
+        "정밀안전점검",
+        "내진성능평가",
+        "석면조사",
+        "성능점검",
+        "시설 및 안전관리",
+        "경비용역",
+        "예초 용역",
+        "비용분석",
+    )
+    if any(keyword in normalized_text for keyword in service_low_tail_price_competitive_keywords):
+        return "service_price_competitive"
 
     price_competitive_keywords = (
         "폐기물",
@@ -862,6 +969,28 @@ def resolve_procurement_rate_band(*, category: str, description: str) -> str | N
     if any(keyword in normalized_text for keyword in price_competitive_keywords):
         return "service_price_competitive"
 
+    service_exception_price_competitive_keywords = (
+        "2단계",
+        "규격·가격",
+        "규격 가격",
+        "규격가격",
+        "가격분리",
+        "가격 분리",
+        "동시입찰",
+        "수학여행",
+        "현장체험학습",
+        "해외문화체험",
+        "버스",
+        "차량임차",
+        "차량 임차",
+        "임차용역",
+        "보험",
+        "자동차보험",
+        "재산종합보험",
+    )
+    if any(keyword in normalized_text for keyword in service_exception_price_competitive_keywords):
+        return "service_price_competitive"
+
     high_negotiated_keywords = (
         "협상에 의한 계약",
         "협상",
@@ -873,7 +1002,6 @@ def resolve_procurement_rate_band(*, category: str, description: str) -> str | N
         "콘텐츠",
         "시스템",
         "개발",
-        "조사",
         "출판",
         "제작",
         "마스터플랜",
@@ -884,6 +1012,25 @@ def resolve_procurement_rate_band(*, category: str, description: str) -> str | N
     if any(keyword in normalized_text for keyword in high_negotiated_keywords):
         return "service_high_negotiated"
     return None
+
+
+def _is_goods_deep_discount_notice(normalized_text: str) -> bool:
+    """Detect narrow goods notices that settle below the usual 84~90% goods band."""
+    has_two_stage = any(keyword in normalized_text for keyword in ("2단계", "규격·가격", "규격 가격", "규격가격"))
+    has_food_purchase = any(keyword in normalized_text for keyword in ("급식", "농산물"))
+    return has_two_stage and has_food_purchase
+
+
+def _is_goods_narrow_control_price_competitive(normalized_text: str) -> bool:
+    """Detect low-rate control-equipment goods without catching high-rate control panels."""
+    if "(계측제어)" not in normalized_text:
+        return False
+    high_rate_control_terms = (
+        "관급자재",
+        "프로세스",
+        "계장",
+    )
+    return not any(keyword in normalized_text for keyword in high_rate_control_terms)
 
 
 def estimate_historical_confidence(*, sample_size: int, std_rate: float, margin: float) -> float:
@@ -1069,8 +1216,14 @@ def build_historical_explanation(
         details.append(f"예비가격 패턴 {reserve_sample_count}건도 함께 참고했습니다")
     if rate_band == "service_high_negotiated":
         details.append("협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다")
+    elif rate_band == "service_direct_negotiated":
+        details.append("수의시담/수의계약형 용역으로 보고 95% 이상 목표율을 적용했습니다")
     elif rate_band == "service_price_competitive":
         details.append("가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다")
+    elif rate_band == "goods_deep_discount":
+        details.append("2단계 급식/농산물형 물품으로 보고 78% 기준 저가 목표율을 적용했습니다")
+    elif rate_band == "goods_price_competitive":
+        details.append("견적/2단계/구매설치형 물품으로 보고 90% 기준, 91% 상한 목표율을 적용했습니다")
     if high_rate_adjustment:
         details.append("최근 고율 낙찰 분포를 반영해 기준 사정률을 상향 보정했습니다")
 

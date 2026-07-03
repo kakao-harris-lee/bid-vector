@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402
-"""Backtest the latest awarded notice per business group as leakage-free holdouts."""
+"""Backtest latest awarded notices per business group as leakage-free holdouts."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.ai.business_group import resolve_business_group
 from app.ai.price_prediction import predict_price
+from app.ai.predictors.historical import resolve_procurement_rate_band
 from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
@@ -68,6 +69,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10000,
         help="Maximum recent TenderResult rows scanned while selecting latest group targets.",
+    )
+    parser.add_argument(
+        "--targets-per-group",
+        type=int,
+        default=1,
+        help="Number of latest awarded targets selected per group when --notice-numbers is omitted.",
+    )
+    parser.add_argument(
+        "--max-targets",
+        type=int,
+        default=0,
+        help="Optional cap on total selected targets after sorting. 0 means no extra cap.",
+    )
+    parser.add_argument(
+        "--worst-limit",
+        type=int,
+        default=10,
+        help="Number of worst recommended-error targets included in the report summary.",
+    )
+    parser.add_argument(
+        "--print-target-limit",
+        type=int,
+        default=20,
+        help="Number of short target rows printed to stdout. Full rows are always written to --out.",
     )
     parser.add_argument(
         "--notice-numbers",
@@ -222,6 +247,23 @@ def latest_history_by_project(db, project_ids: list[int]) -> dict[int, Historica
     return histories
 
 
+def amount_bucket(amount: float | None) -> str:
+    """Bucket base amounts for report breakdowns."""
+    if amount is None or amount <= 0:
+        return "unknown"
+    if amount < 10_000_000:
+        return "<10m"
+    if amount < 30_000_000:
+        return "10m-30m"
+    if amount < 100_000_000:
+        return "30m-100m"
+    if amount < 300_000_000:
+        return "100m-300m"
+    if amount < 1_000_000_000:
+        return "300m-1b"
+    return "1b+"
+
+
 def select_latest_targets(
     db,
     *,
@@ -230,8 +272,11 @@ def select_latest_targets(
     now: datetime,
     timestamp_grace_hours: float,
     candidate_limit: int,
+    targets_per_group: int,
+    max_targets: int,
 ) -> list[HoldoutTarget]:
     group_set = set(groups)
+    group_target_limit = max(1, int(targets_per_group or 1))
     selection_cutoff = now + timedelta(hours=max(0.0, float(timestamp_grace_hours or 0.0)))
     results = (
         db.query(TenderResult)
@@ -251,11 +296,15 @@ def select_latest_targets(
     histories = latest_history_by_project(db, [row.project_id for row in results if row.project_id])
 
     candidates: list[HoldoutTarget] = []
+    seen_project_ids: set[int] = set()
     for result in results:
         project = result.project
         historical = histories.get(result.project_id)
         if project is None or historical is None:
             continue
+        if result.project_id in seen_project_ids:
+            continue
+        seen_project_ids.add(result.project_id)
         budget = base_amount(project, historical)
         actual_amount = amount_float(result.winning_amount)
         if not budget or budget <= 0 or not actual_amount or actual_amount <= 0:
@@ -285,10 +334,20 @@ def select_latest_targets(
         )
 
     candidates.sort(key=lambda item: (item.event_at, item.available_at, item.result.id or 0), reverse=True)
-    selected: dict[str, HoldoutTarget] = {}
+    selected: dict[str, list[HoldoutTarget]] = {group: [] for group in groups}
     for candidate in candidates:
-        selected.setdefault(candidate.group, candidate)
-    return [selected[group] for group in groups if group in selected]
+        group_targets = selected.setdefault(candidate.group, [])
+        if len(group_targets) < group_target_limit:
+            group_targets.append(candidate)
+
+    ordered_targets = [
+        target
+        for group in groups
+        for target in selected.get(group, [])
+    ]
+    if max_targets and max_targets > 0:
+        return ordered_targets[:max_targets]
+    return ordered_targets
 
 
 def select_targets_by_notice(
@@ -434,6 +493,12 @@ def evaluate_target(
         or normalize_rate(historical.bid_rate)
         or (actual_amount / budget)
     )
+    amount_derived_rate = actual_amount / budget
+    data_quality_flags = resolve_data_quality_flags(
+        group=target.group,
+        actual_rate=actual_rate,
+        amount_derived_rate=amount_derived_rate,
+    )
     # The target's award row is unavailable at inference time. Use the stricter of
     # source event and persisted availability to avoid leaking rows with mixed TZs.
     as_of = min(target.event_at, target.available_at) - timedelta(seconds=1)
@@ -454,16 +519,19 @@ def evaluate_target(
     description = "\n".join(
         part
         for part in (
-            project.title or historical.title or "",
-            project.description or historical.description or "",
+            project.title or getattr(historical, "title", "") or "",
+            project.description or getattr(historical, "description", "") or "",
         )
         if part
     )
+    category = (
+        normalize_category(service, project.category)
+        or normalize_category(service, historical.category)
+        or target.group
+    )
     prediction = predict_price(
         budget=budget,
-        category=normalize_category(service, project.category)
-        or normalize_category(service, historical.category)
-        or target.group,
+        category=category,
         description=description,
         historical_records=filtered_history,
         agency_name=project.issuing_agency or project.demand_agency,
@@ -502,8 +570,11 @@ def evaluate_target(
         "group_source": target.group_source,
         "notice_number": historical.notice_number or project.notice_number,
         "project_id": historical.project_id,
-        "title": project.title or historical.title,
-        "category": normalize_category(service, project.category) or normalize_category(service, historical.category),
+        "title": project.title or getattr(historical, "title", None),
+        "category": category,
+        "amount_bucket": amount_bucket(budget),
+        "procurement_rate_band": prediction.get("procurement_rate_band")
+        or resolve_procurement_rate_band(category=category, description=description),
         "business_type_code": project.business_type_code,
         "event_at": display_dt(target.event_at),
         "available_at": display_dt(target.available_at),
@@ -513,7 +584,9 @@ def evaluate_target(
         "actual": {
             "winning_amount": round(actual_amount, 2),
             "winning_rate": round(actual_rate, 6),
+            "amount_derived_rate": round(amount_derived_rate, 6),
         },
+        "data_quality_flags": data_quality_flags,
         "prediction_metadata": {
             "predictor_name": prediction.get("predictor_name"),
             "predictor_family": prediction.get("predictor_family"),
@@ -525,6 +598,9 @@ def evaluate_target(
             "floor_bid_rate": prediction.get("floor_bid_rate"),
             "safe_floor_bid_rate": prediction.get("safe_floor_bid_rate"),
             "ceiling_bid_rate": prediction.get("ceiling_bid_rate"),
+            "bid_price_granularity": prediction.get("bid_price_granularity"),
+            "price_granularity_applied": prediction.get("price_granularity_applied"),
+            "procurement_rate_band": prediction.get("procurement_rate_band"),
             "high_rate_tail_adjustment": prediction.get("high_rate_tail_adjustment"),
         },
         "recommended": recommended,
@@ -557,6 +633,63 @@ def aggregate(rows: list[dict[str, Any]], thresholds: tuple[float, ...]) -> dict
         "recommended": aggregate_scenarios(recommended, thresholds),
         "closest": aggregate_scenarios(closest, thresholds),
     }
+
+
+def aggregate_by_key(
+    rows: list[dict[str, Any]],
+    *,
+    key: str,
+    thresholds: tuple[float, ...],
+) -> dict[str, Any]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        bucket_key = str(row.get(key) or "unknown")
+        buckets.setdefault(bucket_key, []).append(row)
+    return {
+        bucket_key: aggregate(bucket_rows, thresholds)
+        for bucket_key, bucket_rows in sorted(
+            buckets.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
+    }
+
+
+def aggregate_by_flag(rows: list[dict[str, Any]], thresholds: tuple[float, ...]) -> dict[str, Any]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        flags = row.get("data_quality_flags") or ["clean"]
+        for flag in flags:
+            buckets.setdefault(str(flag), []).append(row)
+    return {
+        bucket_key: aggregate(bucket_rows, thresholds)
+        for bucket_key, bucket_rows in sorted(
+            buckets.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
+    }
+
+
+def resolve_data_quality_flags(*, group: str, actual_rate: float, amount_derived_rate: float) -> list[str]:
+    """Flag rows where the stored amount/rate relation looks unsuitable for price backtests."""
+    flags: list[str] = []
+    if actual_rate < 0.75:
+        flags.append("low_actual_rate")
+    if str(group or "").lower() == "construction" and actual_rate < 0.85:
+        flags.append("construction_low_rate_review")
+    if amount_derived_rate <= 0:
+        flags.append("missing_amount_derived_rate")
+    elif abs(actual_rate - amount_derived_rate) > 0.02:
+        flags.append("amount_rate_mismatch")
+    return flags
+
+
+def worst_targets(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    ranked = sorted(
+        (row for row in rows if row.get("recommended")),
+        key=lambda row: row["recommended"]["absolute_amount_error_pct"],
+        reverse=True,
+    )
+    return [report_short_target(row) for row in ranked[: max(0, int(limit or 0))]]
 
 
 def aggregate_scenarios(rows: list[dict[str, Any]], thresholds: tuple[float, ...]) -> dict[str, Any]:
@@ -592,6 +725,9 @@ def report_short_target(row: dict[str, Any]) -> dict[str, Any]:
     actual = row.get("actual") or {}
     return {
         "group": row.get("group"),
+        "amount_bucket": row.get("amount_bucket"),
+        "procurement_rate_band": row.get("procurement_rate_band"),
+        "data_quality_flags": row.get("data_quality_flags") or [],
         "notice_number": row.get("notice_number"),
         "event_at": row.get("event_at"),
         "history_count": row.get("history_count"),
@@ -639,6 +775,8 @@ def main() -> int:
                 now=now,
                 timestamp_grace_hours=args.timestamp_grace_hours,
                 candidate_limit=args.candidate_limit,
+                targets_per_group=args.targets_per_group,
+                max_targets=args.max_targets,
             )
         rows = [
             evaluate_target(
@@ -655,23 +793,32 @@ def main() -> int:
 
     report = {
         "generated_at": generated_at.isoformat(),
-        "method": "latest_awarded_notice_per_business_group_holdout",
+        "method": "latest_awarded_notices_per_business_group_holdout",
         "settings": {
             "groups": list(groups),
             "history_limit": args.history_limit,
             "candidate_limit": args.candidate_limit,
+            "targets_per_group": args.targets_per_group,
+            "max_targets": args.max_targets,
             "notice_numbers": list(notice_numbers),
             "timestamp_grace_hours": args.timestamp_grace_hours,
             "thresholds": list(thresholds),
             "utc_now": display_dt(now),
         },
         "selection_notes": [
-            "Select one latest awarded TenderResult per business group using announced/opened event time.",
+            "Select the latest awarded TenderResult targets per business group using announced/opened event time.",
             "Target project and notice are excluded from prediction history.",
             "Training cutoff is one second before the stricter of source event time and result availability time.",
             "Only explicit settled bid-rate evidence is used for historical records.",
         ],
         "summary": aggregate(rows, thresholds),
+        "breakdowns": {
+            "by_group": aggregate_by_key(rows, key="group", thresholds=thresholds),
+            "by_amount_bucket": aggregate_by_key(rows, key="amount_bucket", thresholds=thresholds),
+            "by_procurement_rate_band": aggregate_by_key(rows, key="procurement_rate_band", thresholds=thresholds),
+            "by_data_quality_flag": aggregate_by_flag(rows, thresholds),
+        },
+        "worst_recommended_targets": worst_targets(rows, limit=args.worst_limit),
         "targets": rows,
     }
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
@@ -682,7 +829,14 @@ def main() -> int:
                 "status": "completed",
                 "out": str(output_path),
                 "summary": report["summary"],
-                "targets": [report_short_target(row) for row in rows],
+                "breakdowns": report["breakdowns"],
+                "worst_recommended_targets": report["worst_recommended_targets"],
+                "printed_target_count": min(len(rows), max(0, int(args.print_target_limit or 0))),
+                "target_count": len(rows),
+                "targets": [
+                    report_short_target(row)
+                    for row in rows[: max(0, int(args.print_target_limit or 0))]
+                ],
             },
             ensure_ascii=False,
         )

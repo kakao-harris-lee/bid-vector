@@ -17,7 +17,7 @@
 대상 공고에 대해 적정 투찰가와 투찰률(bid rate)을 예측합니다. 동일 카테고리의 최근 낙찰 이력 시계열(explicit bid-rate 기반, 최대 80건)을 끌어와 통계/히스토리컬 블렌드 방식으로 가격을 산출하고, 운영자 피드백 보정을 반영합니다. 결과는 보수/기준/공격(`conservative`/`base`/`aggressive`) 시나리오 후보와 함께 반환됩니다.
 
 - 언제 쓰나: 운영자가 특정 공고의 투찰가를 결정하기 직전, 가격 예측 화면에서 호출. 결과는 단일 operator에 귀속되어 `PricePrediction` 레코드로 저장됩니다(이후 추적·피드백 보정에 사용).
-- 도메인: predictor guardrail이 적용됩니다. 카테고리/공고별 낙찰하한(`floor_bid_rate`/`floor_price`) 미만 투찰을 차단하도록 예측가를 클램프하며, 공고별 법정 하한은 `legal_floor_bid_rate`로 전달할 수 있습니다. 최종 후보에는 하한 안전마진(`safe_floor_bid_rate`)이 적용되고, 적용 여부·사유가 `guardrail_applied`/`guardrail_reason`으로 노출됩니다. `pricing_mode`는 이력이 충분하면 `historical_blend`, 부족하면 `heuristic`입니다.
+- 도메인: predictor guardrail이 적용됩니다. 카테고리/공고별 낙찰하한(`floor_bid_rate`/`floor_price`) 미만 투찰을 차단하도록 예측가를 클램프하며, 공고별 법정 하한은 `legal_floor_bid_rate`로 전달할 수 있습니다. 최종 후보에는 하한 안전마진(`safe_floor_bid_rate`)이 적용되고, 적용 여부·사유가 `guardrail_applied`/`guardrail_reason`으로 노출됩니다. 최종 투찰 후보 금액은 기본 10원 단위(`bid_price_granularity`)로 내림 처리하되, 하한 안전가격을 침범하면 해당 단위로 올림 보정합니다. `procurement_rate_band`에는 `service_price_competitive`, `service_direct_negotiated`, `service_high_negotiated`, `goods_price_competitive`, `goods_deep_discount` 같은 세부 조달 밴드가 노출될 수 있습니다. `pricing_mode`는 이력이 충분하면 `historical_blend`, 부족하면 `heuristic`입니다.
 - 부수효과: `PricePrediction` 레코드 1건이 DB에 영속화됩니다.
 
 **파라미터**
@@ -76,11 +76,41 @@ curl -X POST http://localhost:3000/api/v1/predictions/price \
   "agency_match_sample_size": 9,
   "predicted_bid_rate": 0.901,
   "competitive_target_bid_rate": 0.8975,
-  "procurement_rate_band": "0.88-0.92",
+  "procurement_rate_band": "service_price_competitive",
   "bid_rate_candidates": [
-    { "label": "conservative", "bid_rate": 0.908, "predicted_price": 435840000, "confidence_weight": 0.3 },
-    { "label": "base", "bid_rate": 0.901, "predicted_price": 432480000, "confidence_weight": 0.5 },
-    { "label": "aggressive", "bid_rate": 0.894, "predicted_price": 429120000, "confidence_weight": 0.2 }
+    {
+      "label": "conservative",
+      "bid_rate": 0.908,
+      "predicted_price": 435840000,
+      "confidence_weight": 0.3,
+      "guardrail_applied": false,
+      "pre_guardrail_bid_rate": null,
+      "pre_guardrail_price": null,
+      "price_granularity_applied": false,
+      "pre_granularity_price": null
+    },
+    {
+      "label": "base",
+      "bid_rate": 0.901,
+      "predicted_price": 432480000,
+      "confidence_weight": 0.5,
+      "guardrail_applied": false,
+      "pre_guardrail_bid_rate": null,
+      "pre_guardrail_price": null,
+      "price_granularity_applied": false,
+      "pre_granularity_price": null
+    },
+    {
+      "label": "aggressive",
+      "bid_rate": 0.894,
+      "predicted_price": 429120000,
+      "confidence_weight": 0.2,
+      "guardrail_applied": false,
+      "pre_guardrail_bid_rate": null,
+      "pre_guardrail_price": null,
+      "price_granularity_applied": false,
+      "pre_granularity_price": null
+    }
   ],
   "reserve_price_context": {
     "sample_count": 41,
@@ -110,6 +140,9 @@ curl -X POST http://localhost:3000/api/v1/predictions/price \
   "safe_floor_price": 422856000,
   "ceiling_bid_rate": 1.0,
   "ceiling_price": 480000000,
+  "bid_price_granularity": 10,
+  "bid_price_rounding_mode": "floor",
+  "price_granularity_applied": false,
   "explanation": "최근 동일 카테고리 낙찰 이력 72건과 기관 매칭 9건을 블렌드해 산출. 낙찰하한 0.88 이상 유지."
 }
 ```

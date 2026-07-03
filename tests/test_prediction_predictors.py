@@ -225,6 +225,12 @@ def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch,
         description="건설폐기물 처리용역 가격입찰",
         historical_records=history,
     )
+    service_low_tail_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="[당진]지방도615호 덕두교 등 2개교 정밀안전진단용역",
+        historical_records=history,
+    )
 
     assert negotiated_prediction["predictor_name"] == "ensemble_blend"
     assert negotiated_prediction["procurement_rate_band"] == "service_high_negotiated"
@@ -232,6 +238,9 @@ def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch,
     assert competitive_prediction["predictor_name"] == "ensemble_blend"
     assert competitive_prediction["procurement_rate_band"] == "service_price_competitive"
     assert competitive_prediction["predicted_bid_rate"] == 0.9
+    assert service_low_tail_prediction["predictor_name"] == "ensemble_blend"
+    assert service_low_tail_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert service_low_tail_prediction["predicted_bid_rate"] == 0.9
 
 
 def test_ensemble_prediction_lifts_goods_recent_high_rate_tail(monkeypatch, tmp_path):
@@ -271,7 +280,7 @@ def test_ensemble_prediction_lifts_goods_recent_high_rate_tail(monkeypatch, tmp_
     prediction = predict_price(
         budget=100000000.0,
         category="goods",
-        description="관급자재 부스터펌프 구입",
+        description="디지털서비스 클라우드 구독 라이선스 단독공급",
         historical_records=recent_high_tail + older_low_band,
         business_group="goods",
     )
@@ -280,6 +289,42 @@ def test_ensemble_prediction_lifts_goods_recent_high_rate_tail(monkeypatch, tmp_
     assert prediction["predicted_bid_rate"] >= 0.97
     assert prediction["high_rate_tail_adjustment"]["reason"] == "goods_recent_high_rate_tail"
     assert "최근 고율 낙찰 분포" in prediction["explanation"]
+
+    competitive_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="관급자재 부스터펌프 구매 및 설치 소액수의 견적 제출",
+        historical_records=recent_high_tail + older_low_band,
+        business_group="goods",
+    )
+    deep_discount_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="급식용 농산물 구매 2단계 입찰 공고",
+        historical_records=recent_high_tail + older_low_band,
+        business_group="goods",
+    )
+    narrow_control_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="백암면(평창5블록) 인입지점 복선화 사업(계측제어)",
+        historical_records=recent_high_tail + older_low_band,
+        business_group="goods",
+    )
+
+    assert competitive_prediction["predictor_name"] == "ensemble_blend"
+    assert competitive_prediction["procurement_rate_band"] == "goods_price_competitive"
+    assert competitive_prediction["predicted_bid_rate"] == 0.9
+    assert competitive_prediction["high_rate_tail_adjustment"] is None
+    assert all(item["bid_rate"] <= 0.91 for item in competitive_prediction["bid_rate_candidates"])
+    assert deep_discount_prediction["predictor_name"] == "ensemble_blend"
+    assert deep_discount_prediction["procurement_rate_band"] == "goods_deep_discount"
+    assert deep_discount_prediction["predicted_bid_rate"] == 0.841
+    assert deep_discount_prediction["high_rate_tail_adjustment"] is None
+    assert narrow_control_prediction["predictor_name"] == "ensemble_blend"
+    assert narrow_control_prediction["procurement_rate_band"] == "goods_price_competitive"
+    assert narrow_control_prediction["predicted_bid_rate"] == 0.9
+    assert narrow_control_prediction["high_rate_tail_adjustment"] is None
 
 
 def test_predict_price_auto_selector_uses_backtest_metadata(monkeypatch):

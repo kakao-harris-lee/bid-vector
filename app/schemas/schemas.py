@@ -785,6 +785,8 @@ class PricePredictionScenario(BaseModel):
     guardrail_applied: bool = False
     pre_guardrail_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     pre_guardrail_price: Optional[float] = Field(default=None, ge=0.0)
+    price_granularity_applied: bool = False
+    pre_granularity_price: Optional[float] = Field(default=None, ge=0.0)
 
 
 class PricePredictionReservePattern(BaseModel):
@@ -841,6 +843,9 @@ class PricePredictionResponse(BaseModel):
     safe_floor_price: Optional[float] = Field(default=None, ge=0.0)
     ceiling_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     ceiling_price: Optional[float] = Field(default=None, ge=0.0)
+    bid_price_granularity: Optional[int] = Field(default=None, ge=1)
+    bid_price_rounding_mode: Optional[str] = None
+    price_granularity_applied: bool = False
     explanation: str = ""
 
 

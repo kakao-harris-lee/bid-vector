@@ -222,13 +222,76 @@ Exit gate G-3:
 - notice number canonicalization
 - `TenderResult`와 `Project` 정합
 - historical/forward paper settlement coverage
+- Supabase Pro 기반 원격 데이터 접근: 구조화 데이터는 Supabase Postgres, 모델/학습 산출물은 Supabase Storage 또는 S3 호환 object storage로 분리
+- pgvector/vector extension, Alembic migration, 학습/운영 권한 분리, Storage release manifest/checksum 정책
 
 ### 추천 품질
 
 - 가격 예측 오차
 - category/business group별 guardrail
+- 업무구분보다 세밀한 조달 세그먼트 분류: 계약/평가 방식, 제목/본문 표현 위치, 키워드 조합,
+  금액대, 기관 습관, 법정 하한, 데이터 품질 플래그를 함께 사용
 - 지역/면허/시공능력/도급한도 매칭
 - 추천 피드백 label과 threshold tuning
+
+## 추천 품질 후속 로드맵
+
+2026-07-02 백테스트에서 업무구분(`construction`, `service`, `goods`)만으로는 투찰가 예측을
+안정적으로 설명하기 어렵다는 점이 확인됐다. 다음 개선은 `docs/operations/procurement-segment-improvement-notes.md`의
+세그먼트 체크리스트를 기준으로 진행한다.
+
+우선 개선 과제:
+
+1. 조달 세그먼트 feature extractor 고도화: 공고 제목 첫 줄, 본문, 계약방식 문구를 분리해
+   `procurement_rate_band`보다 넓은 구조화 feature를 만든다. 최소 축은 계약/평가 방식, 표현 위치,
+   키워드 조합, 금액대, 기관/수요처, 법정 하한/예정가격 분모, 데이터 품질 플래그다.
+2. 키워드 규칙 관리 체계화: positive keyword만 추가하지 말고 negative keyword, 결합 조건,
+   제목 전용 조건, 본문 안내문 제외 조건을 함께 기록한다. `관급자재`, `구매 및 설치`, `계측제어`처럼
+   고율/저율이 섞이는 표현은 단독 신호로 쓰지 않는다.
+3. 세그먼트별 학습/보정: ML 학습과 통계 보정에서 업무구분뿐 아니라 세그먼트별 calibration,
+   금액대별 bucket, 기관별 최근 분포를 사용할 수 있게 한다. 표본이 부족한 세그먼트는 전역 모델보다
+   낮은 가중치 또는 fallback을 명시한다.
+4. recommended 후보 선택 정책 분리: 후보 생성과 최종 추천 선택을 분리한다. 세그먼트별로
+   `conservative`/`base`/`aggressive` 중 어떤 후보를 추천으로 승격할지 backtest 기준으로 결정한다.
+   `closest`가 `recommended`보다 크게 좋은 구간을 우선 대상으로 삼는다.
+5. 법정 하한과 분모 품질 강화: `legal_floor_bid_rate`, 예정가격/기초금액/추정가격 분모 정합,
+   `winning_rate`와 `winning_amount / base_amount` 불일치를 학습 전처리와 백테스트 리포트에 반영한다.
+6. 세그먼트 회귀 백테스트 확대: 최신 N건 holdout, 해양/엔지니어링 고정 20건, 업무구분별 150건,
+   세그먼트별 worst case를 개선 전후 같은 명령으로 비교한다. 결과는 운영 문서에 고정 JSON 경로와
+   함께 기록한다.
+
+## 원격 데이터/모델 접근 로드맵
+
+2026-07-02 기준 로컬 사용량과 Supabase Pro 기본 제공량을 대조한 결과, 현재 모델 아티팩트와
+학습 데이터 산출물을 Supabase Storage로 옮길 여유는 충분하다.
+
+- 현재 `models/` 사용량: 약 471MB. Supabase Pro Storage 기본 제공량 100GB 대비 0.5% 미만이다.
+- 현재 로컬 Postgres DB 크기: 약 711MB. Supabase Pro DB disk 기본 제공량 8GB 대비 약 9% 수준이다.
+- Storage 여유는 충분하지만, KONEPS 원천/개찰 데이터는 모델 아티팩트보다 빠르게 증가할 수 있으므로
+  DB disk 사용량은 별도 모니터링 대상으로 둔다.
+- Supabase DB backup/PITR은 데이터베이스 대상이며 Storage object를 같은 방식으로 복구해주지 않는다.
+  모델 파일, 학습 snapshot, release manifest는 checksum과 별도 export/mirror 정책이 필요하다.
+
+전환 방향:
+
+1. Supabase 프로젝트 준비: Postgres `vector` extension을 활성화하고 Alembic migration을 staging Supabase에
+   적용한다. 운영 API, 학습 worker, read-only 분석 계정의 권한을 분리한다.
+2. DB migration rehearsal: 로컬 Postgres에서 dump/restore를 수행한 뒤 row count, schema drift,
+   주요 FK 정합, 최신 낙찰 holdout 백테스트 결과가 유지되는지 비교한다.
+3. 모델 아티팩트 Storage 이전: `models/manifests`, `models/predictors`, `models/training-runs`를 private bucket으로
+   옮기고 active release manifest에 checksum, artifact URI, 학습 데이터 snapshot id를 기록한다.
+4. S3 호환 endpoint 지원: 현재 `ML_RELEASE_OBJECT_STORAGE_URL=s3://...` 경로는 boto3 S3 클라이언트를 사용하므로,
+   Supabase Storage S3 endpoint를 명시할 수 있는 `ML_RELEASE_OBJECT_STORAGE_ENDPOINT_URL` 계열 설정과
+   write/read/delete preflight를 추가한다.
+5. 런타임 설정 분리: app/worker/training-worker가 `DATABASE_URL`, pooler mode, active manifest URI,
+   local cache dir를 환경별로 다르게 받을 수 있게 한다. migration, dump/restore, 장기 job은 direct/session
+   연결을 우선하고, 일반 API traffic은 pooler 사용을 검토한다.
+6. 백업/복구 정책: DB 백업과 Storage 백업을 별도 runbook으로 관리한다. Storage는 release manifest,
+   checksum 목록, 주기적 mirror export를 기준으로 복구 가능성을 검증한다.
+7. 보안 경계: 클라이언트가 원천 학습 데이터나 모델 아티팩트에 직접 접근하지 않게 하고, backend/service
+   credential만 private bucket과 학습 테이블에 접근한다. RLS는 client direct access가 필요한 테이블부터 적용한다.
+8. 검증 gate: `alembic upgrade head`, schema drift check, 최신 낙찰 holdout, 업무구분별 wide holdout,
+   해양/엔지니어링 holdout, smoke test를 Supabase staging 연결로 통과해야 운영 전환 후보로 본다.
 
 ### 운영 자동화
 
@@ -264,5 +327,7 @@ Exit gate G-3:
 - `docs/operations/g2-evidence-runbook.md`: 3개 이상 가상 사업자의 G-2 evidence를 N일 단위로 반복 실행하고 exit review를 남기는 운영 절차
 - `docs/operations/g2-exit-review-template.md`: G-2 exit review 문서 양식, evidence manifest 구조, approve/hold 판정 기준
 - `docs/operations/roadmap-next-agent-plan.md`: 최근 완료된 병렬 작업 기록과 후속 gap
+- `docs/operations/latest-award-holdout-backtest.md`: 최신 낙찰결과 holdout 백테스트 절차와 개선 전후 수치
+- `docs/operations/procurement-segment-improvement-notes.md`: 조달 세그먼트별 투찰가 예측 개선 축과 후속 과제
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
 - `docs/api/index.md`: HTTP API 레퍼런스

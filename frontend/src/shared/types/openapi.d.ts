@@ -7166,6 +7166,10 @@ export interface components {
              * @default 0
              */
             backtest_sample_count: number;
+            /** Bid Price Granularity */
+            bid_price_granularity?: number | null;
+            /** Bid Price Rounding Mode */
+            bid_price_rounding_mode?: string | null;
             /** Bid Rate Candidates */
             bid_rate_candidates?: components["schemas"]["PricePredictionScenario"][];
             /** Ceiling Bid Rate */
@@ -7225,6 +7229,11 @@ export interface components {
              * @default historical_statistical
              */
             predictor_name: string;
+            /**
+             * Price Granularity Applied
+             * @default false
+             */
+            price_granularity_applied: boolean;
             /** Price Range Max */
             price_range_max: number;
             /** Price Range Min */
@@ -7271,12 +7280,19 @@ export interface components {
              * @enum {string}
              */
             label: "conservative" | "base" | "aggressive";
+            /** Pre Granularity Price */
+            pre_granularity_price?: number | null;
             /** Pre Guardrail Bid Rate */
             pre_guardrail_bid_rate?: number | null;
             /** Pre Guardrail Price */
             pre_guardrail_price?: number | null;
             /** Predicted Price */
             predicted_price: number;
+            /**
+             * Price Granularity Applied
+             * @default false
+             */
+            price_granularity_applied: boolean;
         };
         /** PricePredictionTrainingRequest */
         PricePredictionTrainingRequest: {

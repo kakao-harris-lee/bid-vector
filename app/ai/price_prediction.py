@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Iterable
 
 import numpy as np
@@ -84,6 +85,7 @@ def predict_price(
         business_group=business_group,
         legal_floor_bid_rate=legal_floor_bid_rate,
     )
+    prediction = _apply_bid_price_granularity(prediction, budget=context.budget)
     return _attach_predictor_metadata(
         prediction,
         predictor=used_predictor,
@@ -432,6 +434,152 @@ def _apply_prediction_guardrails(
         guardrail_reason,
     )
     return guarded_prediction
+
+
+def _apply_bid_price_granularity(prediction: Dict[str, Any], *, budget: float) -> Dict[str, Any]:
+    """Round final bid prices to an operator-facing currency unit."""
+    granularity = int(settings.PREDICTION_BID_PRICE_GRANULARITY or 0)
+    min_budget = float(settings.PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET or 0.0)
+    if granularity <= 1 or budget <= 0 or budget < min_budget:
+        return prediction
+
+    rounded_prediction = dict(prediction)
+    rounding_mode = str(settings.PREDICTION_BID_PRICE_ROUNDING_MODE or "floor").strip().lower()
+    floor_price = _optional_float(prediction.get("safe_floor_price") or prediction.get("floor_price"))
+    ceiling_price = _optional_float(prediction.get("ceiling_price"))
+
+    rounded_candidates: list[dict[str, Any]] = []
+    for candidate in prediction.get("bid_rate_candidates", []):
+        rounded_candidates.append(
+            _round_candidate_price_to_granularity(
+                candidate,
+                budget=budget,
+                granularity=granularity,
+                rounding_mode=rounding_mode,
+                floor_price=floor_price,
+                ceiling_price=ceiling_price,
+            )
+        )
+
+    if rounded_candidates:
+        base_candidate = next(
+            (candidate for candidate in rounded_candidates if candidate.get("label") == "base"),
+            rounded_candidates[0],
+        )
+        rounded_prediction["bid_rate_candidates"] = rounded_candidates
+        rounded_prediction["predicted_price"] = round(float(base_candidate.get("predicted_price", 0.0) or 0.0), 2)
+        rounded_prediction["predicted_bid_rate"] = round(float(base_candidate.get("bid_rate", 0.0) or 0.0), 6)
+        rounded_prediction["price_range_min"] = min(float(candidate["predicted_price"]) for candidate in rounded_candidates)
+        rounded_prediction["price_range_max"] = max(float(candidate["predicted_price"]) for candidate in rounded_candidates)
+        applied = any(candidate.get("price_granularity_applied") for candidate in rounded_candidates)
+    else:
+        original_price = _resolve_prediction_price(prediction, budget=budget)
+        rounded_price = _round_price_to_granularity(
+            original_price,
+            granularity=granularity,
+            rounding_mode=rounding_mode,
+            floor_price=floor_price,
+            ceiling_price=ceiling_price,
+        )
+        rounded_prediction["predicted_price"] = rounded_price
+        rounded_prediction["predicted_bid_rate"] = round(rounded_price / budget, 6)
+        rounded_prediction["price_range_min"] = min(
+            rounded_price,
+            _round_price_to_granularity(
+                _optional_float(prediction.get("price_range_min")) or rounded_price,
+                granularity=granularity,
+                rounding_mode=rounding_mode,
+                floor_price=floor_price,
+                ceiling_price=ceiling_price,
+            ),
+        )
+        rounded_prediction["price_range_max"] = max(
+            rounded_price,
+            _round_price_to_granularity(
+                _optional_float(prediction.get("price_range_max")) or rounded_price,
+                granularity=granularity,
+                rounding_mode=rounding_mode,
+                floor_price=floor_price,
+                ceiling_price=ceiling_price,
+            ),
+        )
+        applied = abs(rounded_price - original_price) > 1e-9
+
+    rounded_prediction["bid_price_granularity"] = granularity
+    rounded_prediction["bid_price_rounding_mode"] = rounding_mode
+    rounded_prediction["price_granularity_applied"] = bool(applied)
+    return rounded_prediction
+
+
+def _round_candidate_price_to_granularity(
+    candidate: dict[str, Any],
+    *,
+    budget: float,
+    granularity: int,
+    rounding_mode: str,
+    floor_price: float | None,
+    ceiling_price: float | None,
+) -> dict[str, Any]:
+    original_price = _resolve_prediction_price(candidate, budget=budget)
+    rounded_price = _round_price_to_granularity(
+        original_price,
+        granularity=granularity,
+        rounding_mode=rounding_mode,
+        floor_price=floor_price,
+        ceiling_price=ceiling_price,
+    )
+    changed = abs(rounded_price - original_price) > 1e-9
+    rounded_candidate = {
+        **candidate,
+        "bid_rate": round(rounded_price / budget, 6),
+        "predicted_price": rounded_price,
+        "price_granularity_applied": changed,
+        "pre_granularity_price": round(original_price, 2) if changed else None,
+    }
+    return rounded_candidate
+
+
+def _round_price_to_granularity(
+    price: float,
+    *,
+    granularity: int,
+    rounding_mode: str,
+    floor_price: float | None,
+    ceiling_price: float | None,
+) -> float:
+    safe_price = max(0.0, float(price or 0.0))
+    unit = max(1, int(granularity))
+    if rounding_mode == "ceil":
+        rounded_price = math.ceil(safe_price / unit) * unit
+    elif rounding_mode == "nearest":
+        rounded_price = round(safe_price / unit) * unit
+    else:
+        rounded_price = math.floor(safe_price / unit) * unit
+
+    if floor_price is not None and rounded_price < floor_price:
+        rounded_price = math.ceil(float(floor_price) / unit) * unit
+    if ceiling_price is not None and rounded_price > ceiling_price:
+        rounded_price = math.floor(float(ceiling_price) / unit) * unit
+    return float(max(0, rounded_price))
+
+
+def _resolve_prediction_price(payload: dict[str, Any], *, budget: float) -> float:
+    price = _optional_float(payload.get("predicted_price") or payload.get("price"))
+    if price is not None and price > 0:
+        return price
+    bid_rate = _optional_float(payload.get("bid_rate") or payload.get("predicted_bid_rate"))
+    if bid_rate is not None and bid_rate > 0:
+        return float(budget) * bid_rate
+    return 0.0
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _clamp_rate_to_guardrails(

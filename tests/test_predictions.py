@@ -189,12 +189,135 @@ def test_predict_price_applies_service_procurement_rate_bands():
         description="건설폐기물 처리용역 가격입찰",
         historical_records=history,
     )
+    marine_engineering_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="동해바다숲 사전영향조사 및 일반해양이용협의 용역",
+        historical_records=history,
+    )
+    direct_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="수산종자 방류효과조사 및 사전·사후영향조사 수의시담",
+        historical_records=history,
+    )
+    body_only_direct_text_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="일반 시설점검 용역\n계약방법 안내: 수의계약 가능 문구 포함",
+        historical_records=history,
+    )
+    two_stage_travel_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="해외문화체험 수학여행 위탁 용역 2단계 입찰 규격 가격 분리",
+        historical_records=history,
+    )
+    bus_operation_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="이동형 근로자 휴게 및 교육 버스 운영 용역",
+        historical_records=history,
+    )
+    service_low_tail_prediction = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="[천안]국지도70호 매주육교 정밀안전진단용역",
+        historical_records=history,
+    )
+    goods_competitive_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="태장초등학교 냉난방기 구매 및 설치 소액수의 견적 제출 안내",
+        historical_records=[
+            {"bid_rate": rate, "base_amount": 100000000.0}
+            for rate in [0.982, 0.991, 0.998, 1.0, 0.974, 0.989, 0.996, 0.951, 0.986, 1.0]
+        ],
+        business_group="goods",
+    )
+    goods_deep_discount_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="전주교도소 급식용 농산물 구매 2단계 입찰 공고",
+        historical_records=[
+            {"bid_rate": rate, "base_amount": 100000000.0}
+            for rate in [0.982, 0.991, 0.998, 1.0, 0.974, 0.989, 0.996, 0.951, 0.986, 1.0]
+        ],
+        business_group="goods",
+    )
+    goods_narrow_control_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="백암면(평창5블록) 인입지점 복선화 사업(계측제어)",
+        historical_records=[
+            {"bid_rate": rate, "base_amount": 100000000.0}
+            for rate in [0.982, 0.991, 0.998, 1.0, 0.974, 0.989, 0.996, 0.951, 0.986, 1.0]
+        ],
+        business_group="goods",
+    )
+    goods_control_panel_prediction = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="관급자재(프로세스제어반) 계측제어 장치 구입",
+        historical_records=[
+            {"bid_rate": rate, "base_amount": 100000000.0}
+            for rate in [0.982, 0.991, 0.998, 1.0, 0.974, 0.989, 0.996, 0.951, 0.986, 1.0]
+        ],
+        business_group="goods",
+    )
 
     assert negotiated_prediction["procurement_rate_band"] == "service_high_negotiated"
     assert negotiated_prediction["predicted_bid_rate"] == 1.0
     assert competitive_prediction["procurement_rate_band"] == "service_price_competitive"
     assert competitive_prediction["predicted_bid_rate"] == 0.9
     assert all(item["bid_rate"] <= 0.9 for item in competitive_prediction["bid_rate_candidates"])
+    assert marine_engineering_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert marine_engineering_prediction["predicted_bid_rate"] == 0.9
+    assert direct_prediction["procurement_rate_band"] == "service_direct_negotiated"
+    assert direct_prediction["predicted_bid_rate"] == 0.95
+    assert body_only_direct_text_prediction["procurement_rate_band"] is None
+    assert two_stage_travel_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert two_stage_travel_prediction["predicted_bid_rate"] == 0.9
+    assert bus_operation_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert bus_operation_prediction["predicted_bid_rate"] == 0.9
+    assert service_low_tail_prediction["procurement_rate_band"] == "service_price_competitive"
+    assert service_low_tail_prediction["predicted_bid_rate"] == 0.9
+    assert goods_competitive_prediction["procurement_rate_band"] == "goods_price_competitive"
+    assert goods_competitive_prediction["predicted_bid_rate"] == 0.9
+    assert goods_competitive_prediction["high_rate_tail_adjustment"] is None
+    assert all(item["bid_rate"] <= 0.91 for item in goods_competitive_prediction["bid_rate_candidates"])
+    assert goods_deep_discount_prediction["procurement_rate_band"] == "goods_deep_discount"
+    assert goods_deep_discount_prediction["guardrail_applied"] is True
+    assert goods_deep_discount_prediction["predicted_bid_rate"] == 0.841
+    assert goods_deep_discount_prediction["high_rate_tail_adjustment"] is None
+    assert goods_narrow_control_prediction["procurement_rate_band"] == "goods_price_competitive"
+    assert goods_narrow_control_prediction["predicted_bid_rate"] == 0.9
+    assert goods_narrow_control_prediction["high_rate_tail_adjustment"] is None
+    assert goods_control_panel_prediction["procurement_rate_band"] is None
+
+
+def test_predict_price_rounds_final_bid_prices_to_ten_won():
+    """Final bid candidates should avoid sub-ten KRW units."""
+    prediction = predict_price(
+        budget=49_461_000.0,
+        category="service",
+        description="일반해양이용협의 용역",
+        historical_records=[
+            {"bid_rate": 0.8782, "base_amount": 49_461_000.0},
+            {"bid_rate": 0.879, "base_amount": 49_461_000.0},
+            {"bid_rate": 0.88035, "base_amount": 49_461_000.0},
+            {"bid_rate": 0.881, "base_amount": 49_461_000.0},
+            {"bid_rate": 0.882, "base_amount": 49_461_000.0},
+        ],
+        legal_floor_bid_rate=87.995,
+    )
+
+    assert prediction["bid_price_granularity"] == 10
+    assert prediction["bid_price_rounding_mode"] == "floor"
+    assert prediction["price_granularity_applied"] is True
+    assert prediction["predicted_price"] % 10 == 0
+    assert all(item["predicted_price"] % 10 == 0 for item in prediction["bid_rate_candidates"])
+    assert all(item["predicted_price"] >= prediction["safe_floor_price"] for item in prediction["bid_rate_candidates"])
 
 
 def test_predict_price_summarizes_selected_reserve_estimated_price_rates():
@@ -530,10 +653,8 @@ def test_predict_price_applies_notice_legal_floor_to_conservative_scenario():
     assert conservative["guardrail_applied"] is True
     assert conservative["pre_guardrail_bid_rate"] < prediction["floor_bid_rate"]
     assert conservative["bid_rate"] >= prediction["safe_floor_bid_rate"]
-    assert conservative["predicted_price"] == pytest.approx(
-        round(budget * prediction["safe_floor_bid_rate"], 2),
-        abs=0.01,
-    )
+    assert conservative["predicted_price"] >= round(budget * prediction["safe_floor_bid_rate"], 2)
+    assert conservative["predicted_price"] % 10 == 0
     assert "공고별 법정 최소 투찰률" in prediction["guardrail_reason"]
 
 
