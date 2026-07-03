@@ -228,7 +228,7 @@ Exit gate G-3:
 
 ## Phase 4. SaaS/수수료 사업화
 
-목표: 검증된 추천/알림/투찰 보조 기능을 유료 서비스로 전환한다.
+목표: 검증된 추천/알림/투찰 보조 기능을 유료 서비스로 전환한다. SaaS 단계의 핵심은 모델 추가보다 **사용자 입찰 업무 UX**, **투찰 진행 상태 추적**, **admin 운영 관측성**, **성과/승률/정산 체계**를 제품화하는 것이다.
 
 필요 작업:
 
@@ -240,11 +240,29 @@ Exit gate G-3:
 - 고객 지원용 운영 대시보드
 - KONEPS 호출량, Telegram/app 알림량, ML 비용 통제
 
+SaaS 세부 설계 축:
+
+- 사용자 입찰 워크스페이스: 사업자 온보딩 이후 "오늘 확인할 공고" → 공고 상세/자격 적합성 → 투찰가 요청 → 투찰 보고서 확인 → 메일 공유 → 사용자 결정 → 나라장터 제출 여부 기록 → 개찰 결과 확인까지 끊기지 않는 흐름을 제공한다.
+- 설명 가능한 인터랙션: 추천 공고마다 추천 사유, 충족/미충족 조건, 추천 투찰가 근거, 낙찰하한/예가/과거 오차/유사 공고, 사용자가 조정할 수 있는 가정을 함께 보여준다. 사용자의 적합/부적합/보류/투찰 사유는 학습/운영 피드백으로 남긴다.
+- Bid lifecycle state machine: `discovered -> matched -> notified -> viewed -> price_requested -> report_generated -> report_sent -> user_decision -> submitted_external -> opened -> awarded/lost -> fee_pending -> invoiced/paid/disputed` 상태를 명시적으로 관리한다. 자동 나라장터 제출은 범위 밖으로 두고, 외부 제출 사실과 증빙을 사용자가 확인/기록하는 방식으로 시작한다.
+- Admin 운영 관측성: `/admin`에서 tenant/operator별 공고 수집, 매칭, 알림, 보고서 생성, 메일 전송, 사용자 클릭/결정, 제출 확인, 개찰 결과, 수수료 상태를 한 타임라인으로 추적한다.
+- Admin 예외 큐: 후보 없음, 자격 조건 불확실, 마감 임박 미확인, 추천 신뢰도 낮음, 메일/알림 실패, 개찰 결과 매칭 실패, 수수료 분쟁을 운영자가 처리할 수 있는 큐로 분리한다.
+- 승률/성과 분석: 전체 낙찰률 하나가 아니라 투찰 대비 낙찰률, 추천 보고서 수락률, 추천가 오차, 세그먼트별 win rate, 모델 버전별 성과, 엔지니어링협회 조건 공고 precision/recall, 사용자 거절 사유를 함께 집계한다.
+- 낙찰/수수료 정산: 낙찰 확정, 계약금액, 취소/무효, 세금계산서, 지급기한, 지급 상태, 이의제기/분쟁 상태를 별도 settlement lifecycle로 관리한다. 성공보수형 모델은 계약/법무/세무 검토 전까지 운영 실험 가설로만 둔다.
+- 고객지원/감사: support view, read-only impersonation, operator/tenant별 audit log, 개인정보/사업자정보 masking, 관리자 조회 기록을 갖춰 사용자가 "왜 이 공고/가격/수수료가 나왔는지" 문의했을 때 재현 가능하게 한다.
+- 비용/품질 통제: tenant별 KONEPS/API 호출량, 알림량, 메일 발송량, ML inference 비용, 보고서 생성 실패율, stale data 비율을 admin에서 추적하고 요금제 한도와 연결한다.
+
+시장 관찰 기준:
+
+- 국내 입찰 정보/분석 서비스는 맞춤 공고 알림, 낙찰/투찰 분석, 전용 투찰함/일정관리, 1:1 분석 컨설팅, 결제/계산서 지원을 핵심 상품으로 묶는다.
+- 일부 서비스는 구독형 정보 제공과 전문가 분석을 분리하고, 1:1 분석에는 낙찰금액 비율 기반 성공보수 모델을 붙인다. `bid-vector`는 먼저 투명한 보고서/상태 추적/성과 지표를 제품 차별점으로 삼고, 성공보수는 정산 증빙과 법무/세무 조건이 정리된 뒤 적용한다.
+- 해외 tender SaaS는 사업자 프로필 기반 opportunity matching, email notification, amendment 알림, market intelligence, partnership discovery를 기본 UX로 둔다. Phase 4 UX는 "공고 검색"이 아니라 "사업자에게 필요한 다음 행동" 중심으로 설계한다.
+
 초기 상품 가설:
 
 - Lite: 조건 기반 공고 추천/알림
-- Pro: 투찰가 추천, 근거, 투찰서 초안, 결과 추적
-- Expert: 백테스트, 전략 튜닝, 월간 성과 리포트, 컨설팅
+- Pro: 투찰가 추천, 근거, 투찰 보고서/메일 전달, 투찰서 초안, 결과 추적, 기본 승률 리포트
+- Expert: 백테스트, 전략 튜닝, 월간 성과 리포트, admin 지원 큐 우선 처리, 컨설팅
 
 ## 교차 워크스트림
 
@@ -264,6 +282,11 @@ Exit gate G-3:
 - Phase 3 최우선 ML 세그먼트: 엔지니어링협회 가입 조건이 명시된 공고와 엔지니어링협회 가입 실제 회사 매칭. 공고 자격 조건, 협회/기술부문/전문분야 표현 위치, 면허제한, 해양·항만·수로조사 키워드, 기관명 오탐 여부를 분리해 feature와 label로 관리
 - 업무구분보다 세밀한 조달 세그먼트 분류: 계약/평가 방식, 제목/본문 표현 위치, 키워드 조합,
   금액대, 기관 습관, 법정 하한, 데이터 품질 플래그를 함께 사용
+- 가격 레짐 feature layer: 관공서/공공기관/민간, 업태/면허, 공사/용역/물품 세부구분, 계약/평가 방식,
+  예정가격 분모, 낙찰하한, 복수예가 맥락을 구조화하고 `floor_bound`, `near_100`, `deep_discount`,
+  `ambiguous` 레짐으로 분리
+- 과적합 방지 검증: random split 평균이 아니라 최신 N건 rolling holdout, 기관/수요처 group holdout,
+  세그먼트별 worst case, 데이터 품질 flag 표본 분리로 평가
 - 지역/면허/시공능력/도급한도 매칭
 - 추천 피드백 label과 threshold tuning
 
@@ -296,6 +319,31 @@ Exit gate G-3:
    Phase 3 첫 실증 세그먼트로 승격한다. ML 작업자는 협회 가입 조건 명시 공고를 positive label로,
    해양/항만 키워드만 있는 공고와 기관명 오탐 공고를 negative/ambiguous label로 분리해 feature extractor,
    candidate selector, 투찰가 calibration을 평가한다.
+8. 가격 레짐 feature layer 신설: 낙찰가를 직접 맞추기 전에 공고가 어떤 가격 결정 메커니즘인지 먼저
+   구조화한다. 최소 필드는 `buyer_sector`, `buyer_type`, `notice_category`, `business_type_code`,
+   `construction_or_service_type`, `contract_method`, `award_method`, `evaluation_method`,
+   `price_submission_mode`, `denominator_type`, `legal_floor_bid_rate`, `reserve_price_context`,
+   `amount_bucket`, `agency_recent_rate_profile`, `data_quality_flags`로 둔다.
+9. 가격 레짐 라벨 정의: feature extractor는 아래 레짐 중 하나와 confidence를 반환한다.
+   - `floor_bound`: 적격심사/가격경쟁형처럼 낙찰하한 바로 위가 경쟁선인 공고
+   - `near_100`: 협상, 수의시담, 위탁/운영, 단독공급, 유지관리처럼 95~100% 근처가 자연스러운 공고
+   - `deep_discount`: 보험, 차량, 2단계, 규격·가격분리, 일부 물품 견적처럼 낮은 낙찰률이 가능한 공고
+   - `ambiguous`: 계약방식, 분모, 본문/제목 신호가 충돌해 단일 추천보다 후보 범위와 검토 사유가 필요한 공고
+10. 레짐별 예측 target 분리: ML은 모든 공고의 낙찰가를 하나의 target으로 직접 예측하지 않는다.
+    `floor_bound`는 `legal_floor_bid_rate + bp_delta`, `near_100`은 `1.0 - discount_rate`,
+    `deep_discount`는 세그먼트 분위수 또는 rate bucket, `ambiguous`는 단일값 대신
+    `conservative/base/aggressive` 후보와 불확실성으로 평가한다.
+11. 고카디널리티 feature 과적합 방지: 발주기관/수요기관/업체명/공고명 n-gram은 raw memorization을
+    금지한다. 기관별 최근 낙찰률은 최소 표본 수, time cutoff, 전역/세그먼트 prior shrinkage를 통과한
+    경우에만 사용하고, target encoding이 필요하면 cross-fitting 또는 holdout encoding으로 누수를 막는다.
+12. 검증 split 정책 고정: 가격 레짐/selector 변경은 random split 평균으로 승인하지 않는다. 필수 검증은
+    최신 N건 rolling holdout, 기관/수요처 group holdout, 해양/엔지니어링 고정 20건, 업무구분별 wide holdout,
+    레짐별 worst-case replay, `data_quality_flags`별 clean/flag 분리 리포트다.
+13. 보고서/UX 노출: 사용자 투찰 보고서와 admin 화면에는 추천가만 노출하지 않고 가격 레짐, 레짐 confidence,
+    적용된 낙찰하한, 예정가격/기초금액/추정가격 분모, 기관 표본 수, 데이터 품질 flag,
+    `recommended_selector_reason`을 함께 보여준다. `ambiguous`는 자동 단일 추천보다 검토 필요 상태를 우선한다.
+14. 릴리스 gate: `price_regime_features` schema, extractor unit test, 레짐별 confusion/worst-case 리포트,
+    추천 후보 selector 회귀 비교, OpenAPI 타입 동기화, 최신 낙찰 holdout이 모두 남아야 운영 후보로 본다.
 
 ## 원격 데이터/모델 접근 로드맵
 
@@ -355,7 +403,9 @@ Exit gate G-3:
 4. G-2 알림 대상 검증: 사업자별 Telegram/app notification 대상 식별자, `dry_run_only`, masking, 실제 송신 가능 범위를 운영표로 관리한다.
 5. G-0 관찰: scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 dashboard와 문서만으로 구분한다.
 6. G-2 exit review: `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 3개 이상 operator가 exit gate를 만족하는지 판정한다.
-7. 추천 품질 세그먼트 후속: `procurement_rate_band`보다 세밀한 feature extractor, 세그먼트별 calibration, recommended selector 분리, legal floor/예정가격 분모 품질 검사를 구현하고 고정 holdout으로 회귀 비교한다.
+7. 추천 품질 세그먼트 후속: `procurement_rate_band`보다 세밀한 `price_regime_features`를 만들고,
+   `floor_bound`/`near_100`/`deep_discount`/`ambiguous` 레짐별 calibration, recommended selector 분리,
+   legal floor/예정가격 분모 품질 검사, 기관 group holdout과 최신 N건 rolling holdout을 구현한다.
 8. API/OpenAPI 타입 정합: API schema 변경 시 `npm --prefix frontend run sync-types`와 `check:sync-types`를 실행해 generated frontend type drift를 막는다.
 9. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
 
@@ -370,6 +420,8 @@ Exit gate G-3:
 - `docs/operations/latest-award-holdout-backtest.md`: 최신 낙찰결과 holdout 백테스트 절차와 개선 전후 수치
 - `docs/operations/procurement-segment-improvement-notes.md`: 조달 세그먼트별 투찰가 예측 개선 축과 후속 과제
 - `docs/operations/ml-release-business-group.md`: business group별 ML release guardrail과 holdout 검증 절차
+- `docs/operations/development-notebook-tasks.md`: 개발 노트북에서 진행 가능한 남은 작업 목록
+- `docs/operations/test-operating-server-tasks.md`: 테스트/운영 서버와 실제 데이터가 필요한 남은 작업 목록
 - `docs/marine-engineering-gate.md`: 엔지니어링협회 가입 회사 대상 해양/항만 기술용역 게이트와 면허/키워드 기준
 - `docs/superpowers/specs/2026-07-03-business-number-guided-onboarding-design.md`: 사업자번호 기반 반자동 온보딩 설계
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
