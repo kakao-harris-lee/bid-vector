@@ -53,6 +53,7 @@ SAMPLE_GAP_DIMENSION_ORDER = {
     "business_type": 2,
     "budget_band": 3,
 }
+SYNTHETIC_SETTLE_ACTIONS = ("bid_now", "review", "skip")
 
 _G1_PRESET_WINDOW = {
     "start_at": "2025-01-01T00:00:00+00:00",
@@ -624,6 +625,38 @@ def _safe_positive_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_settle_actions(value: Any) -> list[str]:
+    if isinstance(value, bool):
+        return ["bid_now", "review"] if value else ["bid_now"]
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return ["bid_now", "review"]
+        if lowered in {"false", "0", "no", "n", ""}:
+            return ["bid_now"]
+        raw_actions = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_actions = value
+    else:
+        return ["bid_now"]
+
+    actions: list[str] = []
+    for item in raw_actions:
+        action = str(item).strip()
+        if action in SYNTHETIC_SETTLE_ACTIONS and action not in actions:
+            actions.append(action)
+    return actions or ["bid_now"]
+
+
 def _first_present(*values: Any) -> Any:
     for value in values:
         if value not in (None, ""):
@@ -657,7 +690,7 @@ def _sample_gap_run_context(
         ),
         "scenario": _first_present(summary.get("scenario"), params.get("scenario"))
         or "base",
-        "settle_actions": bool(params.get("settle_actions", False)),
+        "settle_actions": _normalize_settle_actions(params.get("settle_actions")),
     }
     return {
         "run_id": run.id,
@@ -767,7 +800,9 @@ def _normalized_experiment_params(params: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(params)
     normalized["limit"] = _safe_positive_int(normalized.get("limit"), default=100)
     normalized["scenario"] = str(normalized.get("scenario") or "base")
-    normalized["settle_actions"] = bool(normalized.get("settle_actions", False))
+    normalized["settle_actions"] = _normalize_settle_actions(
+        normalized.get("settle_actions")
+    )
     return normalized
 
 
@@ -2089,6 +2124,14 @@ def run_experiment_backtest(payload: dict[str, Any]) -> dict[str, Any]:
             limit=int(payload.get("limit") or 100),
             scenario=str(payload.get("scenario") or "base"),
             slugs=payload.get("slugs"),
+            cutoff_hours_before_deadline=_safe_optional_int(
+                _first_present(
+                    payload.get("cutoff_hours_before_deadline"),
+                    payload.get("cutoff_hours"),
+                )
+            ),
+            history_limit=_safe_optional_int(payload.get("history_limit")),
+            settle_actions=_normalize_settle_actions(payload.get("settle_actions")),
         )
         if run_id is not None:
             source_context = payload.get("source_sample_gap_candidate")

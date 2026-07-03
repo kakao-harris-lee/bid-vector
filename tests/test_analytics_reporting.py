@@ -11,6 +11,7 @@ from app.models.models import (
     CrawlJob,
     DecisionExperimentRun,
     Notification,
+    OperatorNotificationChannel,
     OperatorStrategyRun,
     SmokeTestRun,
     SyntheticExperiment,
@@ -424,6 +425,128 @@ def test_g2_evidence_summary_flags_canonical_and_slug_only_scope(client, test_db
     assert payload["synthetic_experiments"]["status"] == "mixed_scope"
     assert payload["synthetic_experiments"]["slug_only_result_count"] == 1
     assert any("operator_id" in gap for gap in payload["blocking_gaps"])
+
+
+def test_g2_evidence_summary_treats_smoke_as_supporting_and_dry_run_policy_as_notification(
+    client, test_db
+):
+    operator = _bootstrap_operator(client)
+    operator_id = operator["id"]
+    username = operator["username"]
+    now = datetime.now(UTC)
+
+    experiment = SyntheticExperiment(
+        name="g2-fastlane",
+        description="operator-scoped synthetic evidence",
+        params_json=json.dumps({"limit": 100, "settle_actions": ["bid_now", "review"]}),
+        operator_slugs_json=json.dumps([username]),
+        created_at=now - timedelta(hours=4),
+        updated_at=now - timedelta(hours=4),
+    )
+    test_db.add(experiment)
+    test_db.flush()
+    synthetic_run = SyntheticExperimentRun(
+        experiment_id=experiment.id,
+        status="completed",
+        summary_json=json.dumps({"sample_status": "sufficient"}),
+        started_at=now - timedelta(hours=3),
+        finished_at=now - timedelta(hours=2),
+        created_at=now - timedelta(hours=3),
+    )
+    test_db.add(synthetic_run)
+    test_db.flush()
+    test_db.add_all(
+        [
+            SmokeTestRun(
+                started_at=now - timedelta(hours=6),
+                completed_at=now - timedelta(hours=5),
+                overall_passed=True,
+                phases=json.dumps(
+                    [{"name": "koneps_collect", "passed": True, "detail": "canonical"}],
+                    ensure_ascii=False,
+                ),
+                telegram_status="sent",
+                created_at=now - timedelta(hours=6),
+            ),
+            OperatorStrategyRun(
+                operator_id=operator_id,
+                trigger_source="manual",
+                status="completed",
+                evaluated_project_count=10,
+                selected_candidate_count=2,
+                persisted_candidate_count=2,
+                notification_count=0,
+                created_at=now - timedelta(hours=3),
+                completed_at=now - timedelta(hours=2),
+            ),
+            DecisionExperimentRun(
+                operator_id=operator_id,
+                experiment_key="exp-review-threshold-tighten",
+                recommendation_key="review-threshold-tighten",
+                status="completed",
+                outcome="inconclusive",
+                priority_rank=1,
+                title="G-2 dry-run notification policy",
+                hypothesis="operator scoped",
+                suggested_change="raise threshold",
+                target_metric="review_submission_rate",
+                expected_direction="increase",
+                success_criteria="improve",
+                guardrail_metric="overall_submission_rate",
+                minimum_decision_sample=1,
+                duration_days=7,
+                baseline_days=7,
+                rollback_trigger="guardrail drops",
+                baseline_summary=json.dumps({}),
+                latest_evaluation=json.dumps({"sample_size": 2}),
+                started_at=now - timedelta(days=2),
+                ended_at=now - timedelta(days=1),
+                created_at=now - timedelta(days=2),
+                updated_at=now - timedelta(days=1),
+            ),
+            OperatorNotificationChannel(
+                operator_id=operator_id,
+                channel_type="telegram",
+                route_key="telegram:synthetic-test",
+                target_label="masked",
+                is_active=True,
+                dry_run_only=True,
+                verified_at=now - timedelta(hours=1),
+                created_at=now - timedelta(hours=1),
+                updated_at=now - timedelta(hours=1),
+            ),
+            SyntheticExperimentResult(
+                run_id=synthetic_run.id,
+                operator_slug=username,
+                metrics_json=json.dumps(
+                    {
+                        "operator_id": operator_id,
+                        "settled_count": 40,
+                        "missing_settled_count": 0,
+                        "sample_status": "sufficient",
+                    }
+                ),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/analytics/g2-evidence",
+        params={"days": 30, "recent_limit": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["evidence_status"] == "ready"
+    assert payload["blocking_gaps"] == []
+    assert payload["supporting_gaps"]
+    assert payload["smoke"]["status"] == "mixed_scope"
+    assert payload["smoke"]["counts_toward_g2_ready"] is False
+    assert payload["notifications"]["status"] == "ready"
+    assert payload["notifications"]["source_run_type"] == "operator_notification_policy"
+    assert payload["notifications"]["dry_run_policy_evidence_count"] == 1
+    assert payload["notifications"]["evidence_count"] == 1
 
 
 def test_operations_dashboard_reports_external_broker_and_stale_tasks(client, test_db, monkeypatch):

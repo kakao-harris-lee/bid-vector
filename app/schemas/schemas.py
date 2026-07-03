@@ -2094,6 +2094,7 @@ class G2EvidenceSummaryResponse(BaseModel):
     synthetic_experiments: Dict[str, Any] = Field(default_factory=dict)
     notifications: Dict[str, Any] = Field(default_factory=dict)
     blocking_gaps: List[str] = Field(default_factory=list)
+    supporting_gaps: List[str] = Field(default_factory=list)
 
 
 class LegacyAdminStatsResponse(BaseModel):
@@ -2640,9 +2641,9 @@ class SyntheticExperimentParams(BaseModel):
 
     Field names mirror the existing synthetic backtest request (``start_at`` /
     ``end_at`` datetimes, ``scenario`` default ``base``). ``cutoff_hours`` /
-    ``history_limit`` / ``settle_actions`` are persisted with the definition for
-    forward compatibility even though the current engine consumes only the core
-    fields.
+    ``history_limit`` / ``settle_actions`` are persisted with the definition and
+    consumed by experiment-scoped backtest runs. ``settle_actions`` accepts the
+    legacy boolean form as well as the explicit action list.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -2654,7 +2655,9 @@ class SyntheticExperimentParams(BaseModel):
     scenario: str = "base"
     cutoff_hours: Optional[int] = Field(default=None, ge=0)
     history_limit: Optional[int] = Field(default=None, ge=1)
-    settle_actions: bool = False
+    settle_actions: Union[bool, List[Literal["bid_now", "review", "skip"]]] = Field(
+        default_factory=lambda: ["bid_now"]
+    )
 
 
 class SyntheticExperimentCreate(BaseModel):
@@ -2858,7 +2861,9 @@ class SyntheticExperimentSampleGapRunReference(BaseModel):
     category: Optional[str] = None
     limit: Optional[int] = None
     scenario: str = "base"
-    settle_actions: bool = False
+    settle_actions: Union[bool, List[Literal["bid_now", "review", "skip"]]] = Field(
+        default_factory=lambda: ["bid_now"]
+    )
     params: Dict[str, Any] = Field(default_factory=dict)
     operator_slugs: List[str] = Field(default_factory=list)
     synthetic_only: bool = True

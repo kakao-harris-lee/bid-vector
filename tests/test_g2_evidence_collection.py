@@ -76,6 +76,9 @@ def _fake_http_client(*, blocking_gaps_by_operator: dict[int, list[str]] | None 
                 "current_operator_username": f"operator-{operator_id}",
                 "window_days": params["days"],
                 "evidence_status": "insufficient" if gaps else "ready",
+                "strategy_monitor": {"status": "ready"},
+                "decision_experiments": {"status": "ready"},
+                "synthetic_experiments": {"status": "ready"},
                 "notifications": {"status": "ready"},
                 "blocking_gaps": gaps,
             }
@@ -309,7 +312,9 @@ def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
     assert first_operator["evidence_paths"]["candidate_preview"][0].endswith(
         "operator-101/strategy-candidates.json"
     )
-    assert first_operator["evidence_paths"]["strategy_monitor"] == []
+    assert first_operator["evidence_paths"]["strategy_monitor"][0].endswith(
+        "operator-101/g2-evidence.json"
+    )
     assert first_operator["evidence_paths"]["decision_experiments"][0].endswith(
         "operator-101/decision-experiments.json"
     )
@@ -334,6 +339,7 @@ def test_collection_writes_manifest_draft_from_collected_files(tmp_path):
         "g2-evidence-summary.json"
     )
     assert daily_status["operators"]["101"]["candidate_preview"] == "pass"
+    assert daily_status["operators"]["101"]["strategy_monitor"] == "ready"
     assert daily_status["operators"]["101"]["decision_experiment"] == "pass"
     assert daily_status["operators"]["101"]["g2_evidence_status"] == "ready"
     assert daily_status["operators"]["101"]["blocking_gap_ids"] == []

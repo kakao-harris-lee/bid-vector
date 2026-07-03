@@ -2,6 +2,62 @@
 
 from __future__ import annotations
 
+from app.services.synthetic_backtest import SyntheticBacktestService
+
+
+class _FakePaperBacktestService:
+    def __init__(self):
+        self.calls = []
+
+    def run_historical_backtest(self, db, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "summary": {
+                "candidate_count": 42,
+                "paper_bid_count": 35,
+                "settled_count": 35,
+                "would_have_won_price_only_count": 12,
+            },
+            "settlements": [],
+        }
+
+
+def test_synthetic_backtest_reads_counts_from_backtest_summary():
+    fake_backtest = _FakePaperBacktestService()
+    service = SyntheticBacktestService(backtest_service=fake_backtest)
+    service.list_operators = lambda db: [
+        {
+            "user_id": 101,
+            "username": "synthetic-sample",
+            "slug": "sample",
+            "is_custom": False,
+            "display_name": "Sample",
+            "company": "Sample Co",
+            "business_type": "service",
+            "focus_categories": ["service"],
+            "annual_revenue": 1.0,
+            "capacity_score": 0.5,
+            "bid_now_threshold": 0.75,
+            "review_threshold": 0.55,
+        }
+    ]
+
+    payload = service.run_for_all(
+        object(),
+        limit=1000,
+        settle_actions=["bid_now", "review"],
+        cutoff_hours_before_deadline=4,
+        history_limit=120,
+    )
+
+    result = payload["results"][0]
+    assert result["candidate_count"] == 42
+    assert result["paper_bid_count"] == 35
+    assert result["settled_count"] == 35
+    assert fake_backtest.calls[0]["settle_actions"] == ["bid_now", "review"]
+    assert fake_backtest.calls[0]["cutoff_hours_before_deadline"] == 4
+    assert fake_backtest.calls[0]["history_limit"] == 120
+
 
 def test_seed_synthetic_operators_is_idempotent(client):
     first = client.post("/api/v1/synthetic/operators/seed", json={})

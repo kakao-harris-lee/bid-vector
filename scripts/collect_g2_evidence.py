@@ -443,6 +443,17 @@ def build_operator_summary(
     notifications = (
         g2.get("notifications") if isinstance(g2.get("notifications"), dict) else {}
     )
+    g2_component_statuses = {
+        key: str(section.get("status") or "missing")
+        for key in (
+            "smoke",
+            "strategy_monitor",
+            "decision_experiments",
+            "synthetic_experiments",
+            "notifications",
+        )
+        for section in [g2.get(key) if isinstance(g2.get(key), dict) else {}]
+    }
     summary: dict[str, Any] = {
         "operator_id": operator_id,
         "current_operator_id": g2.get("current_operator_id"),
@@ -458,6 +469,7 @@ def build_operator_summary(
         "profile_configured": profile.get("profile_configured"),
         "strategy_configured": strategy.get("strategy_configured"),
         "g2_notification_status": notifications.get("status"),
+        "g2_component_statuses": g2_component_statuses,
         "raw_files": raw_files,
         "collection_errors": errors,
     }
@@ -700,6 +712,13 @@ def _operator_scope_status(operator_summary: dict[str, Any]) -> str:
     return "missing"
 
 
+def _g2_component_status(operator_summary: dict[str, Any], key: str) -> str:
+    statuses = operator_summary.get("g2_component_statuses")
+    if isinstance(statuses, dict):
+        return str(statuses.get(key) or "missing")
+    return "missing"
+
+
 def _gap_category(description: str) -> str:
     lowered = description.lower()
     if any(term in lowered for term in ("mixed", "canonical", "scope", "mismatch")):
@@ -831,7 +850,17 @@ def _build_manifest_operator(
                 ]
                 if path
             ],
-            "strategy_monitor": [],
+            "strategy_monitor": [
+                path
+                for path in [
+                    _operator_raw_path(
+                        run_dir=run_dir,
+                        operator_summary=operator_summary,
+                        key="g2_evidence",
+                    )
+                ]
+                if path
+            ],
             "decision_experiments": [
                 path
                 for path in [
@@ -869,7 +898,10 @@ def _build_manifest_operator(
                 operator_summary,
                 "strategy_candidates",
             ),
-            "strategy_monitor": "missing",
+            "strategy_monitor": _g2_component_status(
+                operator_summary,
+                "strategy_monitor",
+            ),
             "decision_experiment": _endpoint_scope_status(
                 operator_summary,
                 "decision_experiments",

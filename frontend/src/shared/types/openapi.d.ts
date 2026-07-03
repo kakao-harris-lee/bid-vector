@@ -5398,6 +5398,8 @@ export interface components {
             smoke?: Record<string, never>;
             /** Strategy Monitor */
             strategy_monitor?: Record<string, never>;
+            /** Supporting Gaps */
+            supporting_gaps?: string[];
             /** Synthetic Experiments */
             synthetic_experiments?: Record<string, never>;
             /** Window Days */
@@ -7845,8 +7847,12 @@ export interface components {
         SyntheticBacktestRunRequest: {
             /** Category */
             category?: string | null;
+            /** Cutoff Hours Before Deadline */
+            cutoff_hours_before_deadline?: number | null;
             /** End At */
             end_at?: string | null;
+            /** History Limit */
+            history_limit?: number | null;
             /**
              * Limit
              * @default 100
@@ -7857,6 +7863,8 @@ export interface components {
              * @default base
              */
             scenario: string;
+            /** Settle Actions */
+            settle_actions?: ("bid_now" | "review" | "skip")[];
             /** Slugs */
             slugs?: string[] | null;
             /** Start At */
@@ -8151,9 +8159,9 @@ export interface components {
          *
          *     Field names mirror the existing synthetic backtest request (``start_at`` /
          *     ``end_at`` datetimes, ``scenario`` default ``base``). ``cutoff_hours`` /
-         *     ``history_limit`` / ``settle_actions`` are persisted with the definition for
-         *     forward compatibility even though the current engine consumes only the core
-         *     fields.
+         *     ``history_limit`` / ``settle_actions`` are persisted with the definition and
+         *     consumed by experiment-scoped backtest runs. ``settle_actions`` accepts the
+         *     legacy boolean form as well as the explicit action list.
          */
         SyntheticExperimentParams: {
             /** Category */
@@ -8174,11 +8182,8 @@ export interface components {
              * @default base
              */
             scenario: string;
-            /**
-             * Settle Actions
-             * @default false
-             */
-            settle_actions: boolean;
+            /** Settle Actions */
+            settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
             /** Start At */
             start_at?: string | null;
         };
@@ -8571,11 +8576,8 @@ export interface components {
              * @default base
              */
             scenario: string;
-            /**
-             * Settle Actions
-             * @default false
-             */
-            settle_actions: boolean;
+            /** Settle Actions */
+            settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
             /** Start At */
             start_at?: unknown | null;
             /** Status */

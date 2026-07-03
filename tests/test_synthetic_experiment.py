@@ -215,6 +215,41 @@ def test_trigger_run_ok(client, patched_engine):
     assert body["status"] in ("queued", "running", "completed")
 
 
+def test_trigger_run_passes_explicit_settle_actions_to_backtest(client, monkeypatch):
+    captured_kwargs = {}
+
+    def fake_run_for_all(self, db, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _fake_run_for_all_result(**kwargs)
+
+    monkeypatch.setattr(SyntheticBacktestService, "run_for_all", fake_run_for_all)
+    created = client.post(
+        "/api/v1/synthetic/experiments",
+        json={
+            "name": "G-2 fastlane",
+            "description": "include review decisions as settled samples",
+            "params": {
+                "limit": 1000,
+                "scenario": "base",
+                "cutoff_hours": 4,
+                "history_limit": 120,
+                "settle_actions": ["bid_now", "review"],
+            },
+            "operator_slugs": ["gs-cleaning-metro"],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    response = client.post(
+        f"/api/v1/synthetic/experiments/{created.json()['id']}/runs"
+    )
+
+    assert response.status_code == 202, response.text
+    assert captured_kwargs["settle_actions"] == ["bid_now", "review"]
+    assert captured_kwargs["cutoff_hours_before_deadline"] == 4
+    assert captured_kwargs["history_limit"] == 120
+
+
 def test_trigger_run_experiment_not_found(client, patched_engine):
     response = client.post("/api/v1/synthetic/experiments/999999/runs")
     assert response.status_code == 404

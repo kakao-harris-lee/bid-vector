@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -80,6 +80,11 @@ class SyntheticBacktestRunRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
     scenario: str = "base"
     slugs: Optional[List[str]] = None
+    cutoff_hours_before_deadline: Optional[int] = Field(default=None, ge=0, le=168)
+    history_limit: Optional[int] = Field(default=None, ge=1, le=500)
+    settle_actions: List[Literal["bid_now", "review", "skip"]] = Field(
+        default_factory=lambda: ["bid_now"]
+    )
 
 
 class SyntheticBacktestSettlementItem(BaseModel):
@@ -328,6 +333,9 @@ def run_synthetic_backtest_async_endpoint(
         "limit": request.limit,
         "scenario": request.scenario,
         "slugs": request.slugs,
+        "cutoff_hours_before_deadline": request.cutoff_hours_before_deadline,
+        "history_limit": request.history_limit,
+        "settle_actions": request.settle_actions,
     }
     async_result = enqueue_synthetic_operator_backtest(payload=payload)
     status_payload = get_synthetic_backtest_task_status(async_result.id)
@@ -375,6 +383,9 @@ def run_synthetic_backtest_endpoint(
         limit=request.limit,
         scenario=request.scenario,
         slugs=request.slugs,
+        cutoff_hours_before_deadline=request.cutoff_hours_before_deadline,
+        history_limit=request.history_limit,
+        settle_actions=request.settle_actions,
     )
 
 

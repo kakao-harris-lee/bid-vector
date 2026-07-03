@@ -98,6 +98,9 @@ class SyntheticBacktestService:
         limit: int = 100,
         scenario: str = PaperBiddingBacktestService.DEFAULT_SCENARIO,
         slugs: Sequence[str] | None = None,
+        cutoff_hours_before_deadline: int | None = None,
+        history_limit: int | None = None,
+        settle_actions: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Run the historical backtest for every synthetic operator (or a slug subset).
 
@@ -121,6 +124,9 @@ class SyntheticBacktestService:
                 category=category,
                 limit=limit,
                 scenario=scenario,
+                cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+                history_limit=history_limit,
+                settle_actions=settle_actions,
                 focus_categories=op.get("focus_categories") or None,
             )
             # ``focus_categories`` is an internal plumbing key, not a response
@@ -150,6 +156,9 @@ class SyntheticBacktestService:
         scenario: str,
         settlement_sample: int = 20,
         focus_categories: Sequence[str] | None = None,
+        cutoff_hours_before_deadline: int | None = None,
+        history_limit: int | None = None,
+        settle_actions: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         result = self.backtest_service.run_historical_backtest(
             db,
@@ -161,6 +170,13 @@ class SyntheticBacktestService:
             scenario=scenario,
             strategy_version="synthetic-backtest",
             model_version="current",
+            cutoff_hours_before_deadline=(
+                int(cutoff_hours_before_deadline)
+                if cutoff_hours_before_deadline is not None
+                else 2
+            ),
+            history_limit=int(history_limit) if history_limit is not None else 80,
+            settle_actions=settle_actions,
             persist=False,
             # Scope the award window to the operator's focus categories so a
             # minority-category operator (goods) is not starved by the global
@@ -170,7 +186,15 @@ class SyntheticBacktestService:
             award_categories=list(focus_categories) if focus_categories else None,
         )
         summary = result.get("summary") or {}
-        settled_count = int(result.get("settled_count") or 0)
+        candidate_count = int(
+            result.get("candidate_count") or summary.get("candidate_count") or 0
+        )
+        paper_bid_count = int(
+            result.get("paper_bid_count") or summary.get("paper_bid_count") or 0
+        )
+        settled_count = int(
+            result.get("settled_count") or summary.get("settled_count") or 0
+        )
         win_count = int(summary.get("would_have_won_price_only_count") or 0)
         win_rate_on_settled = (
             float(win_count) / float(settled_count) if settled_count else None
@@ -188,8 +212,8 @@ class SyntheticBacktestService:
 
         breakdown = compute_breakdown(raw_settlements)
         return {
-            "candidate_count": int(result.get("candidate_count") or 0),
-            "paper_bid_count": int(result.get("paper_bid_count") or 0),
+            "candidate_count": candidate_count,
+            "paper_bid_count": paper_bid_count,
             "settled_count": settled_count,
             "would_have_won_count": win_count,
             "win_rate_on_settled": win_rate_on_settled,

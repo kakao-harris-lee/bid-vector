@@ -686,6 +686,15 @@ def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> di
     end_at_raw = data.get("end_at")
     start_at = datetime.fromisoformat(start_at_raw) if isinstance(start_at_raw, str) else None
     end_at = datetime.fromisoformat(end_at_raw) if isinstance(end_at_raw, str) else None
+    settle_actions_raw = data.get("settle_actions")
+    if isinstance(settle_actions_raw, str):
+        settle_actions = tuple(s.strip() for s in settle_actions_raw.split(",") if s.strip())
+    elif isinstance(settle_actions_raw, (list, tuple)):
+        settle_actions = tuple(str(s).strip() for s in settle_actions_raw if str(s).strip())
+    else:
+        settle_actions = None
+    cutoff_hours_before_deadline = data.get("cutoff_hours_before_deadline")
+    history_limit = data.get("history_limit")
 
     db = SessionLocal()
     try:
@@ -697,6 +706,13 @@ def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> di
             limit=int(data.get("limit") or 100),
             scenario=str(data.get("scenario") or "base"),
             slugs=data.get("slugs"),
+            cutoff_hours_before_deadline=(
+                int(cutoff_hours_before_deadline)
+                if cutoff_hours_before_deadline is not None
+                else None
+            ),
+            history_limit=int(history_limit) if history_limit is not None else None,
+            settle_actions=settle_actions,
         )
     finally:
         db.close()

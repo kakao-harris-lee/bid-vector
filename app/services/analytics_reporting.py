@@ -18,6 +18,7 @@ from app.models.models import (
     CrawlJob,
     DecisionExperimentRun,
     Notification,
+    OperatorNotificationChannel,
     OperatorStrategyRun,
     SmokeTestRun,
     SyntheticExperiment,
@@ -31,6 +32,10 @@ from app.services.synthetic_experiment import (
     SYNTHETIC_EXPERIMENT_PRESETS,
     SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
     sample_status_for_settled_count,
+)
+from app.services.notifications.manager import (
+    mask_notification_route_key,
+    mask_notification_target,
 )
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.smoke_failure_taxonomy import (
@@ -193,8 +198,7 @@ class AnalyticsReportingService:
             recent_limit=recent_limit,
         )
 
-        components = [
-            smoke,
+        g2_ready_components = [
             strategy_monitor,
             decision_experiments,
             synthetic_experiments,
@@ -202,13 +206,22 @@ class AnalyticsReportingService:
         ]
         blocking_gaps = [
             str(component["blocking_gap"])
-            for component in components
+            for component in g2_ready_components
             if component.get("blocking_gap")
         ]
-        has_any_evidence = any(int(component.get("evidence_count") or 0) > 0 for component in components)
+        supporting_gaps = [
+            str(smoke["blocking_gap"])
+        ] if smoke.get("blocking_gap") else []
+        has_any_evidence = any(
+            int(component.get("evidence_count") or 0) > 0
+            for component in g2_ready_components
+        )
         if not has_any_evidence:
             evidence_status = "missing"
-        elif any(str(component.get("status")) == "mixed_scope" for component in components):
+        elif any(
+            str(component.get("status")) == "mixed_scope"
+            for component in g2_ready_components
+        ):
             evidence_status = "mixed_scope"
         elif blocking_gaps:
             evidence_status = "insufficient"
@@ -225,6 +238,7 @@ class AnalyticsReportingService:
             "synthetic_experiments": synthetic_experiments,
             "notifications": notifications,
             "blocking_gaps": blocking_gaps,
+            "supporting_gaps": supporting_gaps,
         }
 
     def _build_g2_smoke_summary(
@@ -511,21 +525,59 @@ class AnalyticsReportingService:
             recent_limit=recent_limit,
         )
         evidence_count = int(summary["notification_count"]) + int(summary["telegram_delivery_attempt_count"])
+        dry_run_policy_channels = (
+            db.query(OperatorNotificationChannel)
+            .filter(
+                OperatorNotificationChannel.operator_id == operator_id,
+                OperatorNotificationChannel.is_active.is_(True),
+                OperatorNotificationChannel.dry_run_only.is_(True),
+            )
+            .order_by(OperatorNotificationChannel.verified_at.desc().nullslast(), OperatorNotificationChannel.id.desc())
+            .all()
+        )
         if evidence_count > 0:
             status = "ready"
             blocking_gap = None
+            policy_evidence_count = 0
+            source_run_type = "notification_or_telegram_delivery"
+        elif dry_run_policy_channels:
+            status = "ready"
+            blocking_gap = None
+            policy_evidence_count = len(dry_run_policy_channels)
+            source_run_type = "operator_notification_policy"
+            evidence_count = policy_evidence_count
         else:
             status = "missing"
             blocking_gap = f"No notification evidence for operator_id={operator_id}."
+            policy_evidence_count = 0
+            source_run_type = "notification_or_telegram_delivery"
         return {
             **summary,
             "status": status,
             "evidence_scope": "g2_operator_notification",
-            "source_run_type": "notification_or_telegram_delivery",
+            "source_run_type": source_run_type,
             "operator_scope": "operator",
             "operator_id": operator_id,
             "counts_toward_g2_ready": status == "ready",
             "evidence_count": evidence_count,
+            "dry_run_policy_evidence_count": policy_evidence_count,
+            "latest_dry_run_policy": (
+                {
+                    "channel_id": int(dry_run_policy_channels[0].id),
+                    "channel_type": dry_run_policy_channels[0].channel_type,
+                    "route_key": mask_notification_route_key(
+                        dry_run_policy_channels[0].route_key,
+                    ),
+                    "target_label": mask_notification_target(
+                        dry_run_policy_channels[0].target_label,
+                    ),
+                    "verified_at": dry_run_policy_channels[0].verified_at,
+                    "created_at": dry_run_policy_channels[0].created_at,
+                    "updated_at": dry_run_policy_channels[0].updated_at,
+                }
+                if dry_run_policy_channels
+                else None
+            ),
             "blocking_gap": blocking_gap,
         }
 
