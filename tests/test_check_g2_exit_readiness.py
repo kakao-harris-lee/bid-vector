@@ -242,6 +242,10 @@ def test_cli_writes_ready_report_when_all_exit_gates_pass(tmp_path, monkeypatch)
     assert report["open_blocking_gaps"] == []
     assert report["notification_failures"] == []
     assert report["missing_evidence_paths"] == []
+    assert report["failure_summary"] == {
+        "global_failures": [],
+        "failed_gates": [],
+    }
 
 
 def test_cli_blocks_ready_manifest_with_accepted_hold_gap(tmp_path, monkeypatch):
@@ -369,6 +373,39 @@ def test_cli_reports_hold_reasons_when_exit_gates_fail(tmp_path, monkeypatch):
         "admin_surface_separation": False,
         "user_surface_focus": False,
     }
+    assert report["failure_summary"]["global_failures"] == [
+        {
+            "check": "counted_days_ready",
+            "reason": "counted_days 1 is below required 2",
+        },
+        {
+            "check": "pass_daily_status_count_ready",
+            "reason": "pass_daily_status_count 1 is below required 2",
+        },
+        {
+            "check": "operator_count_ready",
+            "reason": "operator_count 2 is below required 3",
+        },
+        {
+            "check": "no_open_blocking_gaps",
+            "reason": "2 unresolved blocking gap(s)",
+        },
+        {
+            "check": "no_notification_failures",
+            "reason": f"{report['counts']['notification_failure_count']} notification failure(s)",
+        },
+        {
+            "check": "no_missing_evidence_paths",
+            "reason": f"{report['counts']['missing_evidence_path_count']} missing evidence path(s)",
+        },
+    ]
+    assert [item["gate_id"] for item in report["failure_summary"]["failed_gates"]] == [
+        "operator_independence",
+        "routing_isolation",
+        "admin_surface_separation",
+        "user_surface_focus",
+    ]
+    assert all(item["failures"] for item in report["failure_summary"]["failed_gates"])
 
 
 def test_cli_blocks_ready_manifest_when_snapshot_status_fails(tmp_path, monkeypatch):

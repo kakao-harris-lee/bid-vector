@@ -15,7 +15,11 @@ from app.ai.predictors import (
     PricePredictionContext,
 )
 from app.ai.predictor_backtest import build_predictor_backtest_report
-from app.ai.predictors.historical import clamp_bid_rate
+from app.ai.predictors.historical import (
+    clamp_bid_rate,
+    normalize_category_key,
+    resolve_procurement_rate_band,
+)
 from app.core.config import settings
 
 _CATEGORY_FLOOR_RATE_ALIASES = {
@@ -86,6 +90,7 @@ def predict_price(
         legal_floor_bid_rate=legal_floor_bid_rate,
     )
     prediction = _apply_bid_price_granularity(prediction, budget=context.budget)
+    prediction = _attach_price_regime_metadata(prediction, context=context)
     return _attach_predictor_metadata(
         prediction,
         predictor=used_predictor,
@@ -237,6 +242,230 @@ def _attach_predictor_metadata(
         annotated_prediction["backtest_report"] = selection_metadata["backtest_report"]
     annotated_prediction["training_window_size"] = int(annotated_prediction.get("historical_sample_size", 0) or 0)
     return annotated_prediction
+
+
+def _attach_price_regime_metadata(
+    prediction: dict[str, Any],
+    *,
+    context: PricePredictionContext,
+) -> dict[str, Any]:
+    """Attach explainable price-regime and final-candidate selector metadata."""
+    annotated_prediction = dict(prediction)
+    features = _build_price_regime_features(prediction, context=context)
+    selector = _select_recommended_candidate(
+        annotated_prediction.get("bid_rate_candidates", []),
+        price_regime_label=str(features["price_regime_label"]),
+    )
+    annotated_prediction["price_regime_features"] = features
+    annotated_prediction["price_regime_label"] = features["price_regime_label"]
+    annotated_prediction["price_regime_confidence"] = features["price_regime_confidence"]
+    annotated_prediction["review_required"] = bool(features["review_required"])
+    annotated_prediction["recommended_candidate_label"] = selector["recommended_candidate_label"]
+    annotated_prediction["recommended_selector_reason"] = selector["recommended_selector_reason"]
+    return annotated_prediction
+
+
+def _build_price_regime_features(
+    prediction: dict[str, Any],
+    *,
+    context: PricePredictionContext,
+) -> dict[str, Any]:
+    """Classify the procurement price regime before interpreting model output."""
+    category = normalize_category_key(context.category)
+    text = str(context.description or "").strip().lower()
+    rate_band = (
+        prediction.get("procurement_rate_band")
+        or resolve_procurement_rate_band(category=context.category, description=context.description)
+    )
+    signal_flags = _detect_price_regime_signals(category=category, text=text, rate_band=rate_band)
+
+    if signal_flags["conflicting"]:
+        price_regime_label = "ambiguous"
+        confidence = 0.58
+        review_required = True
+    elif signal_flags["deep_discount"]:
+        price_regime_label = "deep_discount"
+        confidence = 0.86
+        review_required = False
+    elif signal_flags["near_100"]:
+        price_regime_label = "near_100"
+        confidence = 0.84
+        review_required = False
+    elif signal_flags["floor_bound"]:
+        price_regime_label = "floor_bound"
+        confidence = 0.82
+        review_required = False
+    else:
+        price_regime_label = "ambiguous"
+        confidence = 0.45
+        review_required = True
+
+    return {
+        "buyer_sector": "unknown",
+        "buyer_type": "unknown",
+        "notice_category": category or "unknown",
+        "business_type_code": context.business_type_code,
+        "business_group": context.business_group,
+        "construction_or_service_type": _infer_service_type(text),
+        "contract_method": _infer_contract_method(signal_flags),
+        "award_method": _infer_award_method(signal_flags),
+        "evaluation_method": _infer_evaluation_method(signal_flags),
+        "price_submission_mode": _infer_price_submission_mode(signal_flags),
+        "denominator_type": "base_amount",
+        "legal_floor_bid_rate": prediction.get("legal_floor_bid_rate"),
+        "reserve_price_context_available": prediction.get("reserve_price_context") is not None,
+        "amount_bucket": _amount_bucket(context.budget),
+        "agency_recent_rate_profile": {
+            "historical_sample_size": int(prediction.get("historical_sample_size", 0) or 0),
+            "agency_match_sample_size": int(prediction.get("agency_match_sample_size", 0) or 0),
+        },
+        "data_quality_flags": [],
+        "procurement_rate_band": rate_band,
+        "price_regime_label": price_regime_label,
+        "price_regime_confidence": confidence,
+        "review_required": review_required,
+        "regime_signals": signal_flags["signals"],
+    }
+
+
+def _detect_price_regime_signals(*, category: str, text: str, rate_band: Any) -> dict[str, Any]:
+    """Return broad mechanism signals used by the price-regime classifier."""
+    signals: set[str] = set()
+    has_two_stage = _contains_any(
+        text,
+        ("2단계", "규격·가격", "규격 가격", "규격가격", "가격분리", "가격 분리", "동시입찰", "동시 평가"),
+    )
+    has_price_competition = _contains_any(
+        text,
+        ("가격입찰", "적격심사", "pq", "소액수의 견적", "견적 제출", "견적제출"),
+    )
+    has_negotiation = _contains_any(text, ("협상에 의한 계약", "협상", "제안서 평가", "제안"))
+    has_direct = _contains_any(text, ("수의시담", "수의 시담", "수의계약", "수의 계약", "(수의)", "[수의]"))
+    has_deep_discount = bool(rate_band == "goods_deep_discount")
+
+    if rate_band in {"service_price_competitive", "goods_price_competitive"} or has_price_competition:
+        signals.add("price_competitive")
+    if has_two_stage:
+        signals.add("two_stage_or_separated")
+    if has_negotiation or rate_band == "service_high_negotiated":
+        signals.add("negotiated")
+    if has_direct or rate_band == "service_direct_negotiated":
+        signals.add("direct_negotiated")
+    if has_deep_discount:
+        signals.add("deep_discount")
+
+    floor_bound = bool(rate_band in {"service_price_competitive", "goods_price_competitive"} or has_price_competition)
+    near_100 = bool(rate_band in {"service_high_negotiated", "service_direct_negotiated"} or has_negotiation or has_direct)
+    deep_discount = bool(has_deep_discount)
+    conflicting = (near_100 and floor_bound) or (deep_discount and near_100)
+    if category == "goods" and has_two_stage and _contains_any(text, ("급식", "농산물")):
+        deep_discount = True
+        floor_bound = False
+        signals.add("deep_discount")
+
+    return {
+        "floor_bound": floor_bound,
+        "near_100": near_100,
+        "deep_discount": deep_discount,
+        "conflicting": conflicting,
+        "signals": sorted(signals),
+    }
+
+
+def _select_recommended_candidate(
+    candidates: Any,
+    *,
+    price_regime_label: str,
+) -> dict[str, str]:
+    """Select the final candidate label separately from candidate generation."""
+    candidate_list = candidates if isinstance(candidates, list) else []
+    labels = {str(candidate.get("label")) for candidate in candidate_list if isinstance(candidate, dict)}
+    selected_label = "base" if "base" in labels else (next(iter(labels), "base"))
+    if price_regime_label == "ambiguous":
+        reason = "ambiguous/conflicting price regime; retaining base candidate and requiring review."
+    else:
+        reason = f"{price_regime_label} regime; retaining {selected_label} candidate after guardrails."
+    return {
+        "recommended_candidate_label": selected_label,
+        "recommended_selector_reason": reason,
+    }
+
+
+def _infer_contract_method(signals: dict[str, Any]) -> str:
+    if signals["conflicting"]:
+        return "conflicting"
+    if signals["deep_discount"]:
+        return "two_stage_or_separated"
+    if "direct_negotiated" in signals["signals"]:
+        return "direct_negotiated"
+    if "negotiated" in signals["signals"]:
+        return "negotiated"
+    if signals["floor_bound"]:
+        return "price_competitive"
+    return "unknown"
+
+
+def _infer_award_method(signals: dict[str, Any]) -> str:
+    if signals["conflicting"]:
+        return "review_required"
+    if signals["near_100"]:
+        return "negotiated_or_direct"
+    if signals["deep_discount"]:
+        return "separated_price_competition"
+    if signals["floor_bound"]:
+        return "price_competition"
+    return "unknown"
+
+
+def _infer_evaluation_method(signals: dict[str, Any]) -> str:
+    if "two_stage_or_separated" in signals["signals"]:
+        return "two_stage_or_spec_price"
+    if signals["near_100"]:
+        return "proposal_or_direct"
+    if signals["floor_bound"]:
+        return "price_or_qualification"
+    return "unknown"
+
+
+def _infer_price_submission_mode(signals: dict[str, Any]) -> str:
+    if "two_stage_or_separated" in signals["signals"]:
+        return "separated"
+    if signals["near_100"]:
+        return "negotiated"
+    if signals["floor_bound"]:
+        return "standard_price"
+    return "unknown"
+
+
+def _infer_service_type(text: str) -> str | None:
+    if _contains_any(text, ("해양", "항만", "수심측량", "해저지형", "바다숲", "인공어초")):
+        return "marine_engineering"
+    if _contains_any(text, ("보험", "차량", "버스", "수학여행")):
+        return "transport_or_insurance"
+    if _contains_any(text, ("시스템", "소프트웨어", "플랫폼", "클라우드", "유지관리")):
+        return "software_or_operations"
+    return None
+
+
+def _amount_bucket(budget: float) -> str:
+    value = float(budget or 0.0)
+    if value <= 0:
+        return "unknown"
+    if value < 10_000_000:
+        return "lt_10m"
+    if value < 30_000_000:
+        return "10m_30m"
+    if value < 100_000_000:
+        return "30m_100m"
+    if value < 300_000_000:
+        return "100m_300m"
+    if value < 1_000_000_000:
+        return "300m_1b"
+    return "gte_1b"
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
 
 
 def _apply_feedback_calibration(prediction: Dict[str, Any], feedback_calibration: Dict[str, Any] | None) -> Dict[str, Any]:

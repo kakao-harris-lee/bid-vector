@@ -13,8 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts._common import positive_int
-from scripts.verify_g2_notification_targets import (
+from scripts._common import positive_int  # noqa: E402
+from scripts.verify_g2_notification_targets import (  # noqa: E402
     VerificationInputError,
     build_summary as build_notification_summary,
 )
@@ -520,6 +520,101 @@ def _gate_result(
     }
 
 
+def _build_failure_summary(
+    *,
+    manifest_status: Any,
+    counted_days: int,
+    pass_daily_status_count: int,
+    min_days: int,
+    operator_count: int,
+    min_operators: int,
+    blocking_gaps: list[dict[str, Any]],
+    notification_failures: list[dict[str, Any]],
+    missing_paths: list[dict[str, Any]],
+    collect_snapshot_failures: list[dict[str, Any]],
+    gates: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Build a compact failure summary for operators reviewing hold reasons."""
+    global_failures: list[dict[str, Any]] = []
+
+    if _status(manifest_status) not in READY_MANIFEST_STATUSES:
+        global_failures.append(
+            {
+                "check": "manifest_status_ready",
+                "reason": (
+                    f"manifest status {manifest_status!r} is not one of "
+                    f"{sorted(READY_MANIFEST_STATUSES)}"
+                ),
+            }
+        )
+    if counted_days < min_days:
+        global_failures.append(
+            {
+                "check": "counted_days_ready",
+                "reason": f"counted_days {counted_days} is below required {min_days}",
+            }
+        )
+    if pass_daily_status_count < min_days:
+        global_failures.append(
+            {
+                "check": "pass_daily_status_count_ready",
+                "reason": (
+                    f"pass_daily_status_count {pass_daily_status_count} "
+                    f"is below required {min_days}"
+                ),
+            }
+        )
+    if operator_count < min_operators:
+        global_failures.append(
+            {
+                "check": "operator_count_ready",
+                "reason": f"operator_count {operator_count} is below required {min_operators}",
+            }
+        )
+    if blocking_gaps:
+        global_failures.append(
+            {
+                "check": "no_open_blocking_gaps",
+                "reason": f"{len(blocking_gaps)} unresolved blocking gap(s)",
+            }
+        )
+    if notification_failures:
+        global_failures.append(
+            {
+                "check": "no_notification_failures",
+                "reason": f"{len(notification_failures)} notification failure(s)",
+            }
+        )
+    if missing_paths:
+        global_failures.append(
+            {
+                "check": "no_missing_evidence_paths",
+                "reason": f"{len(missing_paths)} missing evidence path(s)",
+            }
+        )
+    if collect_snapshot_failures:
+        global_failures.append(
+            {
+                "check": "all_collect_snapshots_passed",
+                "reason": f"{len(collect_snapshot_failures)} collect snapshot failure(s)",
+            }
+        )
+
+    failed_gates = [
+        {
+            "gate_id": gate["gate_id"],
+            "label": gate["label"],
+            "failures": gate["failures"],
+        }
+        for gate in gates
+        if not gate.get("passed")
+    ]
+    return {
+        "global_failures": global_failures,
+        "failed_gates": failed_gates,
+    }
+
+
 def _operator_independence_gate(
     operators: list[dict[str, Any]],
     *,
@@ -735,6 +830,7 @@ def evaluate_readiness(
         in READY_MANIFEST_STATUSES,
         "counted_days_ready": counted_days >= min_days,
         "pass_daily_status_count_ready": pass_daily_status_count >= min_days,
+        "operator_count_ready": operator_count >= min_operators,
         "no_open_blocking_gaps": not blocking_gaps,
         "no_notification_failures": not notification_failures,
         "no_missing_evidence_paths": not missing_paths,
@@ -764,6 +860,19 @@ def evaluate_readiness(
         "notification_failures": notification_failures,
         "collect_snapshot_failures": collect_snapshot_failures,
         "missing_evidence_paths": missing_paths,
+        "failure_summary": _build_failure_summary(
+            manifest_status=manifest.get("status"),
+            counted_days=counted_days,
+            pass_daily_status_count=pass_daily_status_count,
+            min_days=min_days,
+            operator_count=operator_count,
+            min_operators=min_operators,
+            blocking_gaps=blocking_gaps,
+            notification_failures=notification_failures,
+            missing_paths=missing_paths,
+            collect_snapshot_failures=collect_snapshot_failures,
+            gates=gates,
+        ),
     }
 
 

@@ -296,6 +296,61 @@ def test_predict_price_applies_service_procurement_rate_bands():
     assert goods_control_panel_prediction["procurement_rate_band"] is None
 
 
+def test_predict_price_exposes_price_regime_features_and_selector_reason():
+    """Predictions should explain the price regime before model-specific rates."""
+    history = [
+        {"bid_rate": bid_rate, "base_amount": 100000000.0}
+        for bid_rate in [0.91, 0.914, 0.918, 0.922, 0.926, 0.93, 0.934, 0.938, 0.942, 0.946]
+    ]
+
+    floor_bound = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="항만 해양환경영향조사 용역 PQ 후 가격입찰",
+        historical_records=history,
+        legal_floor_bid_rate=87.995,
+    )
+    near_100 = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="콘텐츠 플랫폼 운영 위탁 용역 협상에 의한 계약",
+        historical_records=history,
+    )
+    deep_discount = predict_price(
+        budget=100000000.0,
+        category="goods",
+        description="급식용 농산물 구매 2단계 규격 가격 분리 입찰",
+        historical_records=history,
+        business_group="goods",
+    )
+    ambiguous = predict_price(
+        budget=100000000.0,
+        category="service",
+        description="연구용역 협상에 의한 계약 및 가격입찰 동시 평가",
+        historical_records=history,
+    )
+
+    assert floor_bound["price_regime_label"] == "floor_bound"
+    assert floor_bound["price_regime_confidence"] >= 0.75
+    assert floor_bound["price_regime_features"]["contract_method"] == "price_competitive"
+    assert floor_bound["price_regime_features"]["legal_floor_bid_rate"] == 0.87995
+    assert floor_bound["recommended_candidate_label"] == "base"
+    assert "floor_bound" in floor_bound["recommended_selector_reason"]
+
+    assert near_100["price_regime_label"] == "near_100"
+    assert near_100["price_regime_features"]["contract_method"] == "negotiated"
+    assert near_100["review_required"] is False
+
+    assert deep_discount["price_regime_label"] == "deep_discount"
+    assert deep_discount["price_regime_features"]["price_submission_mode"] == "separated"
+    assert deep_discount["price_regime_features"]["data_quality_flags"] == []
+
+    assert ambiguous["price_regime_label"] == "ambiguous"
+    assert ambiguous["price_regime_confidence"] < 0.7
+    assert ambiguous["review_required"] is True
+    assert "conflicting" in ambiguous["recommended_selector_reason"]
+
+
 def test_predict_price_rounds_final_bid_prices_to_ten_won():
     """Final bid candidates should avoid sub-ten KRW units."""
     prediction = predict_price(

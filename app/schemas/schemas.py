@@ -808,6 +808,30 @@ class PricePredictionFeedbackCalibration(BaseModel):
     applied_adjustment_rate: float
 
 
+class PriceRegimeFeatures(BaseModel):
+    buyer_sector: Optional[str] = None
+    buyer_type: Optional[str] = None
+    notice_category: Optional[str] = None
+    business_type_code: Optional[str] = None
+    business_group: Optional[str] = None
+    construction_or_service_type: Optional[str] = None
+    contract_method: Optional[str] = None
+    award_method: Optional[str] = None
+    evaluation_method: Optional[str] = None
+    price_submission_mode: Optional[str] = None
+    denominator_type: Optional[str] = None
+    legal_floor_bid_rate: Optional[float] = Field(default=None, ge=0.0)
+    reserve_price_context_available: bool = False
+    amount_bucket: Optional[str] = None
+    agency_recent_rate_profile: dict = Field(default_factory=dict)
+    data_quality_flags: List[str] = Field(default_factory=list)
+    procurement_rate_band: Optional[str] = None
+    price_regime_label: Optional[str] = None
+    price_regime_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_required: bool = False
+    regime_signals: List[str] = Field(default_factory=list)
+
+
 class PricePredictionResponse(BaseModel):
     predicted_price: float
     price_range_min: float
@@ -846,6 +870,12 @@ class PricePredictionResponse(BaseModel):
     bid_price_granularity: Optional[int] = Field(default=None, ge=1)
     bid_price_rounding_mode: Optional[str] = None
     price_granularity_applied: bool = False
+    price_regime_features: PriceRegimeFeatures = Field(default_factory=PriceRegimeFeatures)
+    price_regime_label: Optional[str] = None
+    price_regime_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    review_required: bool = False
+    recommended_candidate_label: Optional[str] = None
+    recommended_selector_reason: Optional[str] = None
     explanation: str = ""
 
 

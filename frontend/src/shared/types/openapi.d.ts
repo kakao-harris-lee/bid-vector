@@ -2424,7 +2424,9 @@ export interface components {
         /** AnalyticsEventRequest */
         AnalyticsEventRequest: {
             /** Event Data */
-            event_data: Record<string, never>;
+            event_data: {
+                [key: string]: unknown;
+            };
             /** Event Type */
             event_type: string;
         };
@@ -2459,17 +2461,27 @@ export interface components {
         /** BacktestDataAuditResponse */
         BacktestDataAuditResponse: {
             /** Category Breakdown */
-            category_breakdown?: Record<string, never>[];
+            category_breakdown?: {
+                [key: string]: unknown;
+            }[];
             /** Date Range */
-            date_range?: Record<string, never>;
+            date_range?: {
+                [key: string]: unknown;
+            };
             /** Filters */
-            filters?: Record<string, never>;
+            filters?: {
+                [key: string]: unknown;
+            };
             /** Generated At */
             generated_at: string;
             /** Table Counts */
-            table_counts?: Record<string, never>;
+            table_counts?: {
+                [key: string]: unknown;
+            };
             /** Window Counts */
-            window_counts?: Record<string, never>;
+            window_counts?: {
+                [key: string]: unknown;
+            };
         };
         /** BidCreate */
         BidCreate: {
@@ -3031,14 +3043,18 @@ export interface components {
             /** Project Id */
             project_id: number;
             /** User Historical Data */
-            user_historical_data?: Record<string, never> | null;
+            user_historical_data?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** BidRecommendationResponse */
         BidRecommendationResponse: {
             /** Confidence Score */
             confidence_score: number;
             /** Market Analysis */
-            market_analysis?: Record<string, never> | null;
+            market_analysis?: {
+                [key: string]: unknown;
+            } | null;
             /** Reasoning */
             reasoning: string;
             /** Recommended Bid */
@@ -3303,7 +3319,9 @@ export interface components {
         /** ClassificationResponse */
         ClassificationResponse: {
             /** Criteria */
-            criteria?: Record<string, never>;
+            criteria?: {
+                [key: string]: unknown;
+            };
             /** Matched */
             matched: boolean;
             /** Reasons */
@@ -3311,7 +3329,9 @@ export interface components {
             /** Score */
             score: number;
             /** Score Breakdown */
-            score_breakdown?: Record<string, never>;
+            score_breakdown?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlFailureItem */
         CrawlFailureItem: {
@@ -3350,7 +3370,9 @@ export interface components {
             /** License Codes */
             license_codes?: string[];
             /** Metadata */
-            metadata?: Record<string, never>;
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** Notice Number */
             notice_number: string;
             /** Region */
@@ -3459,7 +3481,9 @@ export interface components {
             /** Job Status */
             job_status: string;
             /** Metadata */
-            metadata?: Record<string, never>;
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** Source */
             source: string;
         };
@@ -4096,7 +4120,9 @@ export interface components {
             /** Path */
             path: string;
             /** Payload */
-            payload?: Record<string, never>;
+            payload?: {
+                [key: string]: unknown;
+            };
             /** Reason */
             reason: string;
         };
@@ -4215,7 +4241,9 @@ export interface components {
             /** Notes */
             notes?: string | null;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             /** Priority Rank */
             priority_rank: number;
             /** Recommendation Key */
@@ -4926,7 +4954,9 @@ export interface components {
             /** Minimum Decision Sample */
             minimum_decision_sample: number;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             /** Priority Rank */
             priority_rank: number;
             /** Recommendation Key */
@@ -4973,7 +5003,9 @@ export interface components {
             /** Key */
             key: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             /**
              * Priority Score
              * @default 0
@@ -4989,7 +5021,9 @@ export interface components {
             /** Summary */
             summary: string;
             /** Supporting Metrics */
-            supporting_metrics?: Record<string, never>;
+            supporting_metrics?: {
+                [key: string]: unknown;
+            };
             /** Title */
             title: string;
         };
@@ -5009,7 +5043,9 @@ export interface components {
             /** Experiment Count */
             experiment_count: number;
             /** Experiment History */
-            experiment_history?: Record<string, never>;
+            experiment_history?: {
+                [key: string]: unknown;
+            };
             /** Experiments */
             experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
             /** Headline */
@@ -5384,24 +5420,34 @@ export interface components {
             /** Current Operator Username */
             current_operator_username: string;
             /** Decision Experiments */
-            decision_experiments?: Record<string, never>;
+            decision_experiments?: {
+                [key: string]: unknown;
+            };
             /**
              * Evidence Status
              * @enum {string}
              */
             evidence_status: "ready" | "insufficient" | "mixed_scope" | "missing";
             /** Notifications */
-            notifications?: Record<string, never>;
+            notifications?: {
+                [key: string]: unknown;
+            };
             /** Operator Id */
             operator_id: number;
             /** Smoke */
-            smoke?: Record<string, never>;
+            smoke?: {
+                [key: string]: unknown;
+            };
             /** Strategy Monitor */
-            strategy_monitor?: Record<string, never>;
+            strategy_monitor?: {
+                [key: string]: unknown;
+            };
             /** Supporting Gaps */
             supporting_gaps?: string[];
             /** Synthetic Experiments */
-            synthetic_experiments?: Record<string, never>;
+            synthetic_experiments?: {
+                [key: string]: unknown;
+            };
             /** Window Days */
             window_days: number;
         };
@@ -5571,7 +5617,9 @@ export interface components {
             /** Ready */
             ready: boolean;
             /** Result */
-            result?: Record<string, never> | null;
+            result?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Status
              * @enum {string}
@@ -6520,7 +6568,9 @@ export interface components {
             /** Previous Run Id */
             previous_run_id?: number | null;
             /** Request Payload */
-            request_payload?: Record<string, never>;
+            request_payload?: {
+                [key: string]: unknown;
+            };
             result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
             /** Selected Candidate Count */
             selected_candidate_count: number;
@@ -6666,7 +6716,9 @@ export interface components {
              */
             similar_limit: number;
             /** User Historical Data */
-            user_historical_data?: Record<string, never> | null;
+            user_historical_data?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** OpportunityAnalysisResponse */
         OpportunityAnalysisResponse: {
@@ -6754,17 +6806,25 @@ export interface components {
             /** Paper Bid Count */
             paper_bid_count: number;
             /** Paper Bids */
-            paper_bids?: Record<string, never>[];
+            paper_bids?: {
+                [key: string]: unknown;
+            }[];
             /** Request */
-            request?: Record<string, never>;
+            request?: {
+                [key: string]: unknown;
+            };
             /** Scenario */
             scenario: string;
             /** Settled Count */
             settled_count: number;
             /** Settlement Overview */
-            settlement_overview?: Record<string, never>;
+            settlement_overview?: {
+                [key: string]: unknown;
+            };
             /** Settlements */
-            settlements?: Record<string, never>[];
+            settlements?: {
+                [key: string]: unknown;
+            }[];
             /** Started At */
             started_at?: string | null;
             /** Status */
@@ -6772,7 +6832,9 @@ export interface components {
             /** Strategy Version */
             strategy_version: string;
             /** Summary */
-            summary?: Record<string, never>;
+            summary?: {
+                [key: string]: unknown;
+            };
             /** Target End At */
             target_end_at?: string | null;
             /** Target Start At */
@@ -6781,15 +6843,23 @@ export interface components {
         /** PaperBiddingRunExecutionResponse */
         PaperBiddingRunExecutionResponse: {
             /** Items */
-            items?: Record<string, never>[];
+            items?: {
+                [key: string]: unknown;
+            }[];
             /** Request */
-            request?: Record<string, never>;
+            request?: {
+                [key: string]: unknown;
+            };
             /** Run Id */
             run_id?: number | null;
             /** Settlements */
-            settlements?: Record<string, never>[];
+            settlements?: {
+                [key: string]: unknown;
+            }[];
             /** Summary */
-            summary?: Record<string, never>;
+            summary?: {
+                [key: string]: unknown;
+            };
         };
         /** PaperBiddingRunListItem */
         PaperBiddingRunListItem: {
@@ -6816,7 +6886,9 @@ export interface components {
             /** Settled Count */
             settled_count: number;
             /** Settlement Overview */
-            settlement_overview?: Record<string, never>;
+            settlement_overview?: {
+                [key: string]: unknown;
+            };
             /** Started At */
             started_at?: string | null;
             /** Status */
@@ -6824,7 +6896,9 @@ export interface components {
             /** Strategy Version */
             strategy_version: string;
             /** Summary */
-            summary?: Record<string, never>;
+            summary?: {
+                [key: string]: unknown;
+            };
             /** Target End At */
             target_end_at?: string | null;
             /** Target Start At */
@@ -6894,7 +6968,9 @@ export interface components {
             completed_count: number;
             latest_run?: components["schemas"]["PaperBiddingRunListItem"] | null;
             /** Latest Summary */
-            latest_summary?: Record<string, never>;
+            latest_summary?: {
+                [key: string]: unknown;
+            };
             /** Operator Id */
             operator_id: number;
             /** Run Count */
@@ -7162,7 +7238,9 @@ export interface components {
             /** Backtest Average Absolute Error Rate */
             backtest_average_absolute_error_rate?: number | null;
             /** Backtest Report */
-            backtest_report?: Record<string, never> | null;
+            backtest_report?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Backtest Sample Count
              * @default 0
@@ -7240,6 +7318,11 @@ export interface components {
             price_range_max: number;
             /** Price Range Min */
             price_range_min: number;
+            /** Price Regime Confidence */
+            price_regime_confidence?: number | null;
+            price_regime_features?: components["schemas"]["PriceRegimeFeatures"];
+            /** Price Regime Label */
+            price_regime_label?: string | null;
             /**
              * Pricing Mode
              * @default heuristic
@@ -7248,7 +7331,16 @@ export interface components {
             pricing_mode: "historical_blend" | "heuristic";
             /** Procurement Rate Band */
             procurement_rate_band?: string | null;
+            /** Recommended Candidate Label */
+            recommended_candidate_label?: string | null;
+            /** Recommended Selector Reason */
+            recommended_selector_reason?: string | null;
             reserve_price_context?: components["schemas"]["PricePredictionReservePattern"] | null;
+            /**
+             * Review Required
+             * @default false
+             */
+            review_required: boolean;
             /** Safe Floor Bid Rate */
             safe_floor_bid_rate?: number | null;
             /** Safe Floor Price */
@@ -7321,6 +7413,59 @@ export interface components {
             publish_remote: boolean;
             /** Release Tag */
             release_tag?: string | null;
+        };
+        /** PriceRegimeFeatures */
+        PriceRegimeFeatures: {
+            /** Agency Recent Rate Profile */
+            agency_recent_rate_profile?: {
+                [key: string]: unknown;
+            };
+            /** Amount Bucket */
+            amount_bucket?: string | null;
+            /** Award Method */
+            award_method?: string | null;
+            /** Business Group */
+            business_group?: string | null;
+            /** Business Type Code */
+            business_type_code?: string | null;
+            /** Buyer Sector */
+            buyer_sector?: string | null;
+            /** Buyer Type */
+            buyer_type?: string | null;
+            /** Construction Or Service Type */
+            construction_or_service_type?: string | null;
+            /** Contract Method */
+            contract_method?: string | null;
+            /** Data Quality Flags */
+            data_quality_flags?: string[];
+            /** Denominator Type */
+            denominator_type?: string | null;
+            /** Evaluation Method */
+            evaluation_method?: string | null;
+            /** Legal Floor Bid Rate */
+            legal_floor_bid_rate?: number | null;
+            /** Notice Category */
+            notice_category?: string | null;
+            /** Price Regime Confidence */
+            price_regime_confidence?: number | null;
+            /** Price Regime Label */
+            price_regime_label?: string | null;
+            /** Price Submission Mode */
+            price_submission_mode?: string | null;
+            /** Procurement Rate Band */
+            procurement_rate_band?: string | null;
+            /** Regime Signals */
+            regime_signals?: string[];
+            /**
+             * Reserve Price Context Available
+             * @default false
+             */
+            reserve_price_context_available: boolean;
+            /**
+             * Review Required
+             * @default false
+             */
+            review_required: boolean;
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -7609,7 +7754,9 @@ export interface components {
             /** Detail */
             detail: string;
             /** Evidence */
-            evidence?: Record<string, never>;
+            evidence?: {
+                [key: string]: unknown;
+            };
             /** Failure Category */
             failure_category?: string | null;
             /** Name */
@@ -8121,7 +8268,9 @@ export interface components {
             /** Id */
             id: number;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SyntheticExperimentCompareSide
@@ -8239,7 +8388,9 @@ export interface components {
         SyntheticExperimentResultItem: {
             breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
             /** Metrics */
-            metrics?: Record<string, never>;
+            metrics?: {
+                [key: string]: unknown;
+            };
             /**
              * Missing Settled Count
              * @default 0
@@ -8271,7 +8422,9 @@ export interface components {
          */
         SyntheticExperimentRunCreateRequest: {
             /** Source Sample Gap Candidate */
-            source_sample_gap_candidate?: Record<string, never> | null;
+            source_sample_gap_candidate?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SyntheticExperimentRunResponse
@@ -8295,7 +8448,9 @@ export interface components {
             /** Status */
             status: string;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
             /** Task Id */
             task_id?: string | null;
         };
@@ -8319,7 +8474,9 @@ export interface components {
             /** Status */
             status: string;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
             /** Task Id */
             task_id?: string | null;
         };
@@ -8383,7 +8540,9 @@ export interface components {
             preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             /** Source Context */
-            source_context?: Record<string, never>;
+            source_context?: {
+                [key: string]: unknown;
+            };
             /** Write Cli Command */
             write_cli_command?: string | null;
         };
@@ -8393,7 +8552,9 @@ export interface components {
          */
         SyntheticExperimentSampleGapHttpRequest: {
             /** Body */
-            body?: Record<string, never>;
+            body?: {
+                [key: string]: unknown;
+            };
             /**
              * Method
              * @constant
@@ -8493,7 +8654,9 @@ export interface components {
             /** Actions */
             actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
             /** Params */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: unknown;
+            };
             /** Preset Name */
             preset_name?: string | null;
         };
@@ -8564,7 +8727,9 @@ export interface components {
             /** Operator Slugs */
             operator_slugs?: string[];
             /** Params */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: unknown;
+            };
             /** Preset Name */
             preset_name?: string | null;
             /** Report Status */
@@ -11386,7 +11551,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
