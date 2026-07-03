@@ -197,10 +197,13 @@ Exit gate G-2:
 - 초기 대상은 공사 입찰 중소업체 중심
 - Telegram 알림을 기본 채널로 유지하고, 앱 알림은 다음 채널로 확장
 - 자동 투찰 제출 없이 추천, 초안, 상태 기록까지만 제공
+- 사업자번호 기반 반자동 온보딩은 상태/진위 확인, 프로필 후보 자동입력, 사용자 확정, 공고 미리보기까지로 제한한다. 사업자번호만으로 면허·지역·시공능력·관심 공고 조건을 확정하지 않는다.
 
 해야 할 일:
 
 - 사업자 온보딩: 면허, 지역, 시공능력, 도급한도, 관심/제외 조건
+- 사업자번호 기반 프로필 보조: 국세청 사업자등록정보 API로 휴폐업/과세유형/진위 확인을 먼저 수행하고, 외부 조회 또는 내부 규칙으로 추론한 면허·지역·업종·금액 범위 후보는 사용자가 확정해야 `CompanyProfile`/`OperatorStrategy`에 반영한다.
+- 온보딩 직후 후보 확인: 확정된 프로필/전략으로 `/api/v1/operator/strategy/candidates`를 실행해 "현재 이 사업자에게 맞는 공고"를 즉시 보여주고, 후보가 없으면 어떤 입력값이 과하게 좁혔는지 설명한다.
 - 알림 품질 조정: 너무 많은 알림을 막고 실제 투찰 가치가 높은 공고만 전달
 - 추천가 근거 제공: 예가, 낙찰하한, 유사 공고, 과거 오차, 리스크
 - 투찰 선택 기록: 투찰/검토/보류와 사유를 감사 가능하게 저장
@@ -209,6 +212,7 @@ Exit gate G-2:
 Exit gate G-3:
 
 - 1~3개 사업자가 2~4주 매일 사용
+- 사업자번호 온보딩에서 자동 확인값, 추론 후보, 사용자가 확정/수정한 값이 구분되어 감사 가능하게 남음
 - 공고 검토 시간 감소, 놓친 유효 공고 감소, 추천 검토 가치, 투찰가 오차가 측정됨
 - 추천을 믿을 수 없는 상황과 추천 가능한 상황이 지표로 구분됨
 - G-3 전에는 SaaS 멀티테넌트 대공사를 시작하지 않음
@@ -351,5 +355,6 @@ Exit gate G-3:
 - `docs/operations/latest-award-holdout-backtest.md`: 최신 낙찰결과 holdout 백테스트 절차와 개선 전후 수치
 - `docs/operations/procurement-segment-improvement-notes.md`: 조달 세그먼트별 투찰가 예측 개선 축과 후속 과제
 - `docs/operations/ml-release-business-group.md`: business group별 ML release guardrail과 holdout 검증 절차
+- `docs/superpowers/specs/2026-07-03-business-number-guided-onboarding-design.md`: 사업자번호 기반 반자동 온보딩 설계
 - `docs/production-smoke-test.md`: 운영 smoke test 절차
 - `docs/api/index.md`: HTTP API 레퍼런스
