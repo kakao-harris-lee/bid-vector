@@ -7,10 +7,12 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.ai.bid_recommendation import calculate_competitiveness_score, get_bid_recommendation
+from app.ai.bid_recommendation import calculate_competitiveness_score
 from app.ai.business_group import resolve_business_group
+from app.ai.factory import build_bid_recommendation_port, build_price_prediction_port
 from app.ai.predictors.historical import apply_probability_calibration
-from app.ai.price_prediction import get_price_insights, predict_price
+from app.ai.price_prediction import get_price_insights
+from app.ai.service_interfaces import BidRecommendationPort, PricePredictionPort
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import (
     ensure_operator_account,
@@ -224,12 +226,19 @@ class OpportunityAnalysisService:
         "플랫폼",
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        price_prediction_port: PricePredictionPort | None = None,
+        bid_recommendation_port: BidRecommendationPort | None = None,
+    ) -> None:
         self.classifier = NoticeClassifierService()
         self.dataset_service = PredictionDatasetService()
         self.decision_service = BidDecisionService()
         self.feedback_service = PredictionFeedbackService()
         self.similarity_service = ProjectSimilarityService()
+        self.price_prediction_port = price_prediction_port or build_price_prediction_port()
+        self.bid_recommendation_port = bid_recommendation_port or build_bid_recommendation_port()
 
     def analyze_project(
         self,
@@ -273,7 +282,7 @@ class OpportunityAnalysisService:
 
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
-        price_prediction = predict_price(
+        price_prediction = self.price_prediction_port.predict_price(
             budget=float(project.budget_estimate or 0.0),
             category=project.category or "other",
             description=f"{project.description or ''} {project.requirements or ''}".strip(),
@@ -285,7 +294,7 @@ class OpportunityAnalysisService:
             legal_floor_bid_rate=request.legal_floor_bid_rate,
         )
 
-        bid_recommendation = get_bid_recommendation(
+        bid_recommendation = self.bid_recommendation_port.recommend(
             project_data={
                 "budget": float(project.budget_estimate or 0.0),
                 "category": project.category or "other",

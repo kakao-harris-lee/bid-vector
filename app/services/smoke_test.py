@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
+from app.ai.factory import build_price_prediction_port
+from app.ai.service_interfaces import PricePredictionPort
 from app.services.smoke_failure_taxonomy import (
     FAILURE_GUIDANCE,
     classify_failure,
@@ -63,6 +65,13 @@ class KonepsTelegramSmokeTestService:
     # dashboard). The class alias preserves the historical
     # ``self.FAILURE_GUIDANCE`` access pattern.
     FAILURE_GUIDANCE: dict[str, dict[str, str]] = FAILURE_GUIDANCE
+
+    def __init__(
+        self,
+        *,
+        price_prediction_port: PricePredictionPort | None = None,
+    ) -> None:
+        self.price_prediction_port = price_prediction_port or build_price_prediction_port()
 
     def run(self, db: Session) -> SmokeTestReport:
         report = SmokeTestReport(started_at=datetime.now(timezone.utc).isoformat())
@@ -406,7 +415,6 @@ class KonepsTelegramSmokeTestService:
         result = PhaseResult(name="predict_price")
         try:
             from app.ai.business_group import resolve_business_group
-            from app.ai.price_prediction import predict_price
             from app.models.models import Project
             from app.services.backtest_cutoff import BacktestCutoffService
 
@@ -426,7 +434,7 @@ class KonepsTelegramSmokeTestService:
                 cutoff_at=cutoff, exclude_project_id=int(project.id),
                 limit=80, explicit_bid_rate_only=True,
             )
-            pred = predict_price(
+            pred = self.price_prediction_port.predict_price(
                 budget=float(project.budget_estimate),
                 category=project.category or "other",
                 description=desc,

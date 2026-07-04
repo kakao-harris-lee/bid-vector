@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -16,6 +19,10 @@ from app.tasks.celery_app import (
     SMOKE_TEST_TASK_NAME,
     build_smoke_test_beat_schedule,
 )
+
+# Test DBs use SQLite even when the model column is VECTOR(384). Keep helper
+# assignments vector-shaped while letting SQLite persist a non-NULL marker.
+sqlite3.register_adapter(list, lambda value: json.dumps(value, ensure_ascii=False))
 
 
 def test_smoke_test_schedule_empty_by_default(monkeypatch):
@@ -80,6 +87,57 @@ def test_smoke_service_skips_downstream_when_collect_fails(monkeypatch):
     assert by_name["telegram_ping"]["passed"] is True
 
 
+class CapturingPredictionPort:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def predict_price(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "predicted_bid_rate": 0.9,
+            "predictor_name": "fake",
+            "predicted_price": 90_000_000.0,
+            "price_range_min": 89_000_000.0,
+            "price_range_max": 91_000_000.0,
+            "confidence_score": 0.7,
+            "model_version": "fake",
+            "predictor_family": "fake",
+            "pricing_mode": "heuristic",
+            "historical_sample_size": 0,
+            "agency_match_sample_size": 0,
+            "bid_rate_candidates": [],
+            "price_regime_features": {},
+            "review_required": False,
+            "explanation": "fake",
+        }
+
+
+def test_smoke_predict_price_phase_uses_injected_prediction_port(test_db):
+    from app.models.models import Project
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    project = Project(
+        title="Smoke port project",
+        description="port description",
+        requirements="port requirements",
+        budget_estimate=100_000_000.0,
+        category="software",
+        business_type_code="0621",
+    )
+    test_db.add(project)
+    test_db.commit()
+
+    port = CapturingPredictionPort()
+    service = KonepsTelegramSmokeTestService(price_prediction_port=port)
+    result = service._phase_predict_price(test_db, {"id": project.id})
+
+    assert result.passed is True
+    assert port.calls
+    assert port.calls[0]["category"] == "software"
+    assert "port description" in port.calls[0]["description"]
+    assert port.calls[0]["business_type_code"] == "0621"
+
+
 @pytest.mark.parametrize(
     "rate, expected",
     [
@@ -93,12 +151,13 @@ def test_smoke_service_skips_downstream_when_collect_fails(monkeypatch):
 )
 def test_predict_price_phase_band_rejects_above_ceiling(monkeypatch, rate, expected):
     """predict_price phase passes iff 0.7 <= rate <= 1.0 (guardrail ceiling)."""
-    # `_phase_predict_price` imports its deps inside the function from their
-    # origin modules, so patch there (not on app.services.smoke_test).
     import app.ai.business_group as bg_mod
-    import app.ai.price_prediction as pp_mod
     import app.services.backtest_cutoff as cutoff_mod
     from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _RatePredictionPort:
+        def predict_price(self, **kwargs):
+            return {"predicted_bid_rate": rate, "predictor_name": "stub"}
 
     class _StubProject:
         id = 1
@@ -131,13 +190,8 @@ def test_predict_price_phase_band_rejects_above_ceiling(monkeypatch, rate, expec
 
     monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
     monkeypatch.setattr(cutoff_mod, "BacktestCutoffService", _StubCutoff)
-    monkeypatch.setattr(
-        pp_mod,
-        "predict_price",
-        lambda **kw: {"predicted_bid_rate": rate, "predictor_name": "stub"},
-    )
 
-    svc = KonepsTelegramSmokeTestService()
+    svc = KonepsTelegramSmokeTestService(price_prediction_port=_RatePredictionPort())
     res = svc._phase_predict_price(_StubDB(), {"id": 1})
     assert res.passed is expected
 
@@ -368,6 +422,7 @@ def _make_embedded_project(
         embedding = [0.1] * 384
     if embedding_updated_at == "now":
         embedding_updated_at = utc_now()
+    embedding_payload = json.dumps(embedding or [], ensure_ascii=False)
 
     project = Project(
         title=title,
@@ -376,7 +431,8 @@ def _make_embedded_project(
         budget_estimate=budget,
         category="소프트웨어",
         status="open",
-        embedding=embedding,
+        embedding=embedding if embedding is not None else None,
+        embedding_payload=embedding_payload,
         embedding_model=embedding_model,
         embedding_updated_at=embedding_updated_at,
         semantic_text="ignored",
@@ -519,15 +575,18 @@ def test_sbert_embedding_skips_null_embedding_even_with_model(test_db):
 def test_sbert_embedding_chains_into_predict_price(test_db, monkeypatch):
     """Integration: real sbert selection hands a project to predict_price.
 
-    The embedding selection is the real DB query; predict_price itself is
-    stubbed to a deterministic in-band rate so the test asserts the wiring
+    The embedding selection is the real DB query; price prediction itself is
+    stubbed through the injected port so the test asserts the wiring
     (data['project'] -> _phase_predict_price) rather than predictor internals.
     The guardrail-band check inside _phase_predict_price is left intact.
     """
     import app.ai.business_group as bg_mod
-    import app.ai.price_prediction as pp_mod
     import app.services.backtest_cutoff as cutoff_mod
     from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _RatePredictionPort:
+        def predict_price(self, **kwargs):
+            return {"predicted_bid_rate": 0.88, "predictor_name": "stub"}
 
     project = _make_embedded_project(
         test_db,
@@ -544,13 +603,8 @@ def test_sbert_embedding_chains_into_predict_price(test_db, monkeypatch):
 
     monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
     monkeypatch.setattr(cutoff_mod, "BacktestCutoffService", _StubCutoff)
-    monkeypatch.setattr(
-        pp_mod,
-        "predict_price",
-        lambda **kw: {"predicted_bid_rate": 0.88, "predictor_name": "stub"},
-    )
 
-    svc = KonepsTelegramSmokeTestService()
+    svc = KonepsTelegramSmokeTestService(price_prediction_port=_RatePredictionPort())
     p2 = svc._phase_sbert_embedding(test_db)
     assert p2.passed is True
 
@@ -600,9 +654,12 @@ def test_sbert_embedding_passes_then_predict_price_skips_zero_budget(test_db, mo
     rate — the guardrail/band path is never reached without a real budget.
     """
     import app.ai.business_group as bg_mod
-    import app.ai.price_prediction as pp_mod
     import app.services.backtest_cutoff as cutoff_mod
     from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _ExplodingPredictionPort:
+        def predict_price(self, **kwargs):
+            raise AssertionError("predict_price called despite zero budget")
 
     project = _make_embedded_project(
         test_db,
@@ -617,15 +674,10 @@ def test_sbert_embedding_passes_then_predict_price_skips_zero_budget(test_db, mo
         def load_price_history_at_cutoff(self, *a, **k):
             return []
 
-    # predict_price must NOT be invoked when budget is zero; raise if it is.
-    def _must_not_call(**kw):
-        raise AssertionError("predict_price called despite zero budget")
-
     monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
     monkeypatch.setattr(cutoff_mod, "BacktestCutoffService", _StubCutoff)
-    monkeypatch.setattr(pp_mod, "predict_price", _must_not_call)
 
-    svc = KonepsTelegramSmokeTestService()
+    svc = KonepsTelegramSmokeTestService(price_prediction_port=_ExplodingPredictionPort())
     p2 = svc._phase_sbert_embedding(test_db)
     assert p2.passed is True
     assert p2.data["project"]["id"] == project.id

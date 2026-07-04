@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from app.ai.price_prediction import predict_price
+from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.registry import normalize_predictor_registry
 from app.core.config import settings
 from app.models.models import HistoricalData
 
@@ -103,6 +105,77 @@ def _write_ensemble_artifact(tmp_path) -> str:
         encoding="utf-8",
     )
     return str(artifact_path)
+
+
+class InjectedRegistryPredictor(BasePricePredictor):
+    name = "injected_registry_predictor"
+    family = "test"
+
+    def __init__(self, *, should_fail: bool = False) -> None:
+        self.should_fail = should_fail
+
+    def predict(self, context: PricePredictionContext) -> dict:
+        if self.should_fail:
+            raise RuntimeError("injected failure")
+        return {
+            "predicted_price": context.budget * 0.91,
+            "price_range_min": context.budget * 0.90,
+            "price_range_max": context.budget * 0.92,
+            "confidence_score": 0.7,
+            "model_version": "injected-v1",
+            "pricing_mode": "historical_blend",
+            "historical_sample_size": context.historical_sample_size,
+            "agency_match_sample_size": 0,
+            "predicted_bid_rate": 0.91,
+            "bid_rate_candidates": [
+                {"label": "base", "bid_rate": 0.91, "predicted_price": context.budget * 0.91},
+            ],
+            "explanation": "injected registry predictor",
+        }
+
+
+def test_predict_price_accepts_injected_predictor_registry(monkeypatch):
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "injected")
+
+    prediction = predict_price(
+        budget=100_000_000.0,
+        category="software",
+        description="injected registry",
+        historical_records=[{"bid_rate": 0.91}],
+        predictor_registry={
+            "historical": InjectedRegistryPredictor(),
+            "injected": InjectedRegistryPredictor(),
+        },
+    )
+
+    assert prediction["predictor_name"] == "injected_registry_predictor"
+    assert prediction["predictor_family"] == "test"
+
+
+def test_predict_price_uses_injected_historical_fallback_when_selected_predictor_fails(monkeypatch):
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "injected")
+
+    prediction = predict_price(
+        budget=100_000_000.0,
+        category="software",
+        description="fallback registry",
+        historical_records=[{"bid_rate": 0.91}],
+        predictor_registry={
+            "historical": InjectedRegistryPredictor(),
+            "injected": InjectedRegistryPredictor(should_fail=True),
+        },
+    )
+
+    assert prediction["predictor_name"] == "injected_registry_predictor"
+    assert "injected failure" in prediction["fallback_reason"]
+
+
+def test_normalize_predictor_registry_keeps_explicit_empty_mapping_sparse():
+    registry = normalize_predictor_registry({})
+
+    assert "historical" in registry
+    assert "lstm" not in registry
+    assert "ensemble" not in registry
 
 
 def test_predict_price_reports_historical_predictor_metadata_by_default():

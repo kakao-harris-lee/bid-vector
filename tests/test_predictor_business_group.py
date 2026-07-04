@@ -6,6 +6,41 @@ from app.models.models import Project  # noqa: F401 — registers models to Base
 from app.schemas.schemas import OpportunityAnalysisRequest  # noqa: F401
 
 
+class CapturingPricePredictionPort:
+    def __init__(self) -> None:
+        self.kwargs = {}
+
+    def predict_price(self, **kwargs):
+        self.kwargs = kwargs
+        return {
+            "predicted_price": 90_000_000.0,
+            "price_range_min": 89_000_000.0,
+            "price_range_max": 91_000_000.0,
+            "confidence_score": 0.7,
+            "model_version": "fake",
+            "predictor_name": "fake",
+            "predictor_family": "fake",
+            "pricing_mode": "heuristic",
+            "historical_sample_size": 0,
+            "agency_match_sample_size": 0,
+            "predicted_bid_rate": 0.9,
+            "bid_rate_candidates": [],
+            "price_regime_features": {},
+            "review_required": False,
+            "explanation": "fake",
+        }
+
+
+class StaticBidRecommendationPort:
+    def recommend(self, *, project_data, user_data):
+        return {
+            "recommended_bid": 90_000_000.0,
+            "confidence_score": 0.8,
+            "reasoning": "fake",
+            "market_analysis": {},
+        }
+
+
 def test_context_accepts_business_type_fields():
     context = PricePredictionContext(
         budget=100_000_000.0,
@@ -36,16 +71,7 @@ def test_opportunity_analysis_passes_business_type(test_db, monkeypatch):
     """OpportunityAnalysisService가 Project.business_type_code를 predict_price로 전달."""
     from app.services import opportunity_analysis as oa_module
 
-    captured = {}
-
-    def fake_predict_price(**kwargs):
-        captured.update(kwargs)
-        return {
-            "predicted_price": 90_000_000.0,
-            "recommended_amount": 90_000_000.0,
-            "probability_score": 0.6,
-            "matched_score": 0.6,
-        }
+    price_port = CapturingPricePredictionPort()
 
     project = Project(
         title="건축공사 시그널 검증",
@@ -59,15 +85,44 @@ def test_opportunity_analysis_passes_business_type(test_db, monkeypatch):
     test_db.add(project)
     test_db.flush()
 
-    monkeypatch.setattr(oa_module, "predict_price", fake_predict_price)
+    monkeypatch.setattr(oa_module, "build_price_prediction_port", lambda: price_port)
+    monkeypatch.setattr(oa_module, "build_bid_recommendation_port", lambda: StaticBidRecommendationPort())
     service = oa_module.OpportunityAnalysisService()
     # analyze_project is the entry method; build a minimal request
     request = OpportunityAnalysisRequest(project_id=project.id, legal_floor_bid_rate=87.995)
     service.analyze_project(test_db, project=project, request=request)
 
-    assert captured.get("business_type_code") == "0411"
-    assert captured.get("business_group") == "construction"
-    assert captured.get("legal_floor_bid_rate") == 87.995
+    assert price_port.kwargs.get("business_type_code") == "0411"
+    assert price_port.kwargs.get("business_group") == "construction"
+    assert price_port.kwargs.get("legal_floor_bid_rate") == 87.995
+
+
+def test_opportunity_analysis_uses_injected_prediction_ports(test_db):
+    from app.services.opportunity_analysis import OpportunityAnalysisService
+
+    price_port = CapturingPricePredictionPort()
+    service = OpportunityAnalysisService(
+        price_prediction_port=price_port,
+        bid_recommendation_port=StaticBidRecommendationPort(),
+    )
+    project = Project(
+        title="건축공사 포트 검증",
+        description="-",
+        requirements="-",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        business_type_code="0411",
+        business_type_label="건축공사",
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    request = OpportunityAnalysisRequest(project_id=project.id, legal_floor_bid_rate=87.995)
+    service.analyze_project(test_db, project=project, request=request)
+
+    assert price_port.kwargs["business_type_code"] == "0411"
+    assert price_port.kwargs["business_group"] == "construction"
+    assert price_port.kwargs["legal_floor_bid_rate"] == 87.995
 
 
 def test_select_base_rate_construction_uses_recent_target_weight():

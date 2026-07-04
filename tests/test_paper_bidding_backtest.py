@@ -929,6 +929,67 @@ def _build_candidate_for_target(test_db, target: Project) -> dict:
     )
 
 
+class CapturingPredictionPort:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def predict_price(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "predicted_bid_rate": 0.88,
+            "predictor_name": "fake",
+            "predicted_price": 88_000_000.0,
+            "price_range_min": 87_000_000.0,
+            "price_range_max": 89_000_000.0,
+            "confidence_score": 0.75,
+            "model_version": "fake",
+            "predictor_family": "fake",
+            "pricing_mode": "heuristic",
+            "historical_sample_size": 0,
+            "agency_match_sample_size": 0,
+            "bid_rate_candidates": [],
+            "price_regime_features": {},
+            "review_required": False,
+            "explanation": "fake",
+        }
+
+
+def test_candidate_item_uses_injected_prediction_port(test_db):
+    target = _project(
+        title="Port injected tender",
+        category="software",
+        budget=100_000_000,
+        deadline=_dt(2025, 3, 10),
+        created_at=_dt(2025, 2, 1),
+    )
+    target.description = "port injected description"
+    target.requirements = "port injected requirements"
+    target.business_type_code = "0621"
+    test_db.add(target)
+    test_db.flush()
+
+    port = CapturingPredictionPort()
+    item = PaperBiddingBacktestService(price_prediction_port=port)._build_candidate_item(
+        test_db,
+        project=target,
+        tender_result=None,
+        data_cutoff_at=_dt(2025, 3, 9),
+        scenario="base",
+        strategy_version="port-test",
+        cutoff_hours_before_deadline=0,
+        history_limit=80,
+        profile=None,
+    )
+
+    assert port.calls
+    assert port.calls[0]["budget"] == 100_000_000
+    assert port.calls[0]["category"] == "software"
+    assert "port injected description" in port.calls[0]["description"]
+    assert port.calls[0]["business_type_code"] == "0621"
+    assert item["predicted_bid_rate"] == 0.88
+    assert item["predictor_name"] == "fake"
+
+
 def test_candidate_prediction_ignores_target_own_reserve_prices(test_db):
     """REGRESSION (leakage): the prediction/candidate path must NOT read the
     target project's own settled reserve_prices / 예정가격.

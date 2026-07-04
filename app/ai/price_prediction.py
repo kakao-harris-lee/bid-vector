@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from typing import Any, Dict, Iterable
 
 import numpy as np
 
 from app.ai.predictors import (
     BasePricePredictor,
-    EnsembleBidRatePredictor,
-    HistoricalStatisticalPredictor,
-    LSTMBidRatePredictor,
     PricePredictionContext,
 )
 from app.ai.predictor_backtest import build_predictor_backtest_report
@@ -19,6 +17,10 @@ from app.ai.predictors.historical import (
     clamp_bid_rate,
     normalize_category_key,
     resolve_procurement_rate_band,
+)
+from app.ai.predictors.registry import (
+    build_default_predictor_registry,
+    normalize_predictor_registry,
 )
 from app.core.config import settings
 
@@ -63,6 +65,8 @@ def predict_price(
     business_type_code: str | None = None,
     business_group: str | None = None,
     legal_floor_bid_rate: float | None = None,
+    *,
+    predictor_registry: Mapping[str, BasePricePredictor] | None = None,
 ) -> Dict[str, Any]:
     """Predict project price using the configured predictor stack with safe fallback."""
     context = PricePredictionContext(
@@ -75,10 +79,12 @@ def predict_price(
         business_group=business_group,
     )
 
-    predictor, fallback_reason, selection_metadata = _select_predictor(context)
+    registry = normalize_predictor_registry(predictor_registry)
+    predictor, fallback_reason, selection_metadata = _select_predictor(context, registry=registry)
     prediction, used_predictor, fallback_reason = _run_predictor(
         context=context,
         predictor=predictor,
+        historical_predictor=registry["historical"],
         fallback_reason=fallback_reason,
     )
     prediction = _apply_feedback_calibration(prediction, feedback_calibration)
@@ -99,9 +105,12 @@ def predict_price(
     )
 
 
-def _select_predictor(context: PricePredictionContext) -> tuple[BasePricePredictor, str | None, dict[str, Any]]:
+def _select_predictor(
+    context: PricePredictionContext,
+    *,
+    registry: dict[str, BasePricePredictor],
+) -> tuple[BasePricePredictor, str | None, dict[str, Any]]:
     """Choose the configured predictor or fall back to the stable baseline."""
-    registry = _build_predictor_registry()
     preferred_key = _normalize_predictor_key(settings.PRICE_PREDICTION_PREFERRED_PREDICTOR)
     historical_predictor = registry["historical"]
     requested_predictor = registry.get(preferred_key)
@@ -145,11 +154,7 @@ def _select_predictor(context: PricePredictionContext) -> tuple[BasePricePredict
 
 def _build_predictor_registry() -> dict[str, BasePricePredictor]:
     """Build the in-process predictor registry."""
-    return {
-        "historical": HistoricalStatisticalPredictor(),
-        "lstm": LSTMBidRatePredictor(),
-        "ensemble": EnsembleBidRatePredictor(),
-    }
+    return build_default_predictor_registry()
 
 
 def _select_predictor_by_backtest(
@@ -195,14 +200,14 @@ def _run_predictor(
     *,
     context: PricePredictionContext,
     predictor: BasePricePredictor,
+    historical_predictor: BasePricePredictor,
     fallback_reason: str | None,
 ) -> tuple[dict[str, Any], BasePricePredictor, str | None]:
     """Run the selected predictor and recover to the historical baseline on failure."""
     try:
         return predictor.predict(context), predictor, fallback_reason
     except Exception as exc:
-        historical_predictor = HistoricalStatisticalPredictor()
-        if predictor.name == historical_predictor.name:
+        if predictor is historical_predictor:
             raise
         merged_reason = _merge_fallback_reason(
             fallback_reason,

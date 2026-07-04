@@ -9,14 +9,14 @@ from collections import Counter
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
-logger = logging.getLogger(__name__)
-
 from sqlalchemy import exists, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
+from app.ai.factory import build_price_prediction_port
 from app.ai.predictors.historical import apply_probability_calibration
-from app.ai.price_prediction import _resolve_floor_bid_rate, predict_price
+from app.ai.price_prediction import _resolve_floor_bid_rate
+from app.ai.service_interfaces import PricePredictionPort
 from app.core.single_user import (
     ensure_operator_account,
     ensure_operator_profile_for,
@@ -39,6 +39,8 @@ from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.classifier import NoticeClassifierService
+
+logger = logging.getLogger(__name__)
 
 
 class OperatorNotFoundError(ValueError):
@@ -84,10 +86,15 @@ class PaperBiddingBacktestService:
     EXECUTION_COMPLEXITY_TIER3_SCORE = 0.52
     EXECUTION_COMPLEXITY_DEFAULT_SCORE = 0.36
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        price_prediction_port: PricePredictionPort | None = None,
+    ) -> None:
         self.cutoff_service = BacktestCutoffService()
         self.decision_service = BidDecisionService()
         self.classifier = NoticeClassifierService()
+        self.price_prediction_port = price_prediction_port or build_price_prediction_port()
 
     def run_historical_backtest(
         self,
@@ -717,7 +724,7 @@ class PaperBiddingBacktestService:
         )
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
-        prediction = predict_price(
+        prediction = self.price_prediction_port.predict_price(
             budget=budget,
             category=project.category or "other",
             description=" ".join(
