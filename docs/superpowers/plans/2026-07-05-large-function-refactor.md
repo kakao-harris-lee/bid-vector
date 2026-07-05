@@ -167,3 +167,41 @@ pytest tests/test_large_function_budgets.py tests/test_paper_bidding_backtest.py
 ```
 
 Observed: PASS.
+
+## Task 6: Split Price Prediction Guardrail Application
+
+**Files:**
+- Modify: `tests/test_large_function_budgets.py`
+- Modify: `app/ai/price_prediction.py`
+
+- [x] **Step 1: Extend line-budget tests**
+
+Added budget check for:
+
+```python
+("app.ai.price_prediction", None, "_apply_prediction_guardrails", 110)
+```
+
+- [x] **Step 2: Run test to verify RED**
+
+Run:
+
+```bash
+pytest tests/test_large_function_budgets.py -q
+```
+
+Observed: FAIL because `_apply_prediction_guardrails` was 145 lines.
+
+- [x] **Step 3: Extract guardrail context and application helpers**
+
+Created `GuardrailContext`, `_resolve_guardrail_context(...)`, metadata helpers, candidate clamp helpers, base prediction clamp helper, and final guardrail marker helper.
+
+- [x] **Step 4: Run guardrail tests**
+
+Run:
+
+```bash
+pytest tests/test_large_function_budgets.py tests/test_predictions.py::test_predict_price_applies_minimum_bid_rate_guardrail tests/test_predictions.py::test_predict_price_applies_notice_legal_floor_to_conservative_scenario tests/test_predictions.py::test_predict_price_applies_maximum_bid_rate_guardrail tests/test_predictions.py::test_price_prediction_endpoint_surfaces_guardrail_metadata tests/test_predictions.py::test_price_prediction_endpoint_accepts_notice_legal_floor_rate tests/test_predictor_business_group.py -q
+```
+
+Observed: PASS.

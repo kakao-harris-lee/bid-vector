@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable
 
 import numpy as np
@@ -23,6 +24,19 @@ from app.ai.predictors.registry import (
     normalize_predictor_registry,
 )
 from app.core.config import settings
+
+
+@dataclass(frozen=True)
+class GuardrailContext:
+    normalized_legal_floor_bid_rate: float | None
+    floor_guardrail_source: str | None
+    floor_bid_rate: float | None
+    safe_floor_bid_rate: float | None
+    ceiling_bid_rate: float | None
+    floor_price: float | None
+    safe_floor_price: float | None
+    ceiling_price: float | None
+
 
 _CATEGORY_FLOOR_RATE_ALIASES = {
     "general-service": "service",
@@ -533,129 +547,276 @@ def _apply_prediction_guardrails(
 ) -> Dict[str, Any]:
     """Apply category bid-rate guardrails after all statistical adjustments."""
     guarded_prediction = dict(prediction)
-    configured_floor_bid_rate = _resolve_floor_bid_rate(category, business_group=business_group)
+    guardrail_context = _resolve_guardrail_context(
+        budget=budget,
+        category=category,
+        business_group=business_group,
+        legal_floor_bid_rate=legal_floor_bid_rate,
+    )
+    _apply_guardrail_metadata(guarded_prediction, guardrail_context)
+
+    if (
+        guardrail_context.floor_bid_rate is None
+        and guardrail_context.ceiling_bid_rate is None
+    ) or budget <= 0:
+        return guarded_prediction
+
+    guarded_candidates, floor_applied_labels, ceiling_applied_labels = (
+        _guard_bid_rate_candidates(prediction, budget=budget, context=guardrail_context)
+    )
+    if guarded_candidates:
+        _apply_guarded_candidate_prediction(
+            guarded_prediction,
+            guarded_candidates,
+        )
+    else:
+        floor_applied_labels, ceiling_applied_labels = (
+            _apply_base_prediction_guardrails(
+                guarded_prediction,
+                prediction,
+                budget=budget,
+                context=guardrail_context,
+            )
+        )
+
+    if not floor_applied_labels and not ceiling_applied_labels:
+        return guarded_prediction
+
+    _mark_guardrail_application(
+        guarded_prediction,
+        context=guardrail_context,
+        floor_labels=floor_applied_labels,
+        ceiling_labels=ceiling_applied_labels,
+    )
+    return guarded_prediction
+
+
+def _resolve_guardrail_context(
+    *,
+    budget: float,
+    category: str | None,
+    business_group: str | None,
+    legal_floor_bid_rate: float | None,
+) -> GuardrailContext:
+    configured_floor_bid_rate = _resolve_floor_bid_rate(
+        category,
+        business_group=business_group,
+    )
     normalized_legal_floor_bid_rate = _normalize_optional_bid_rate(legal_floor_bid_rate)
-    floor_bid_rate = _max_optional_rate(configured_floor_bid_rate, normalized_legal_floor_bid_rate)
+    floor_bid_rate = _max_optional_rate(
+        configured_floor_bid_rate,
+        normalized_legal_floor_bid_rate,
+    )
     floor_guardrail_source = _resolve_floor_guardrail_source(
         configured_floor_bid_rate,
         normalized_legal_floor_bid_rate,
         floor_bid_rate,
     )
-    ceiling_bid_rate = _resolve_ceiling_bid_rate(category, business_group=business_group)
-    if floor_bid_rate is not None and ceiling_bid_rate is not None and ceiling_bid_rate < floor_bid_rate:
+    ceiling_bid_rate = _resolve_ceiling_bid_rate(
+        category,
+        business_group=business_group,
+    )
+    if (
+        floor_bid_rate is not None
+        and ceiling_bid_rate is not None
+        and ceiling_bid_rate < floor_bid_rate
+    ):
         ceiling_bid_rate = floor_bid_rate
     safe_floor_bid_rate = _resolve_safe_floor_bid_rate(
         floor_bid_rate,
         ceiling_bid_rate=ceiling_bid_rate,
     )
-    floor_price = round(float(budget or 0.0) * floor_bid_rate, 2) if floor_bid_rate is not None and budget > 0 else None
-    safe_floor_price = (
-        round(float(budget or 0.0) * safe_floor_bid_rate, 2)
-        if safe_floor_bid_rate is not None and budget > 0
-        else None
-    )
-    ceiling_price = (
-        round(float(budget or 0.0) * ceiling_bid_rate, 2)
-        if ceiling_bid_rate is not None and budget > 0
-        else None
+    return GuardrailContext(
+        normalized_legal_floor_bid_rate=normalized_legal_floor_bid_rate,
+        floor_guardrail_source=floor_guardrail_source,
+        floor_bid_rate=floor_bid_rate,
+        safe_floor_bid_rate=safe_floor_bid_rate,
+        ceiling_bid_rate=ceiling_bid_rate,
+        floor_price=_guardrail_price(budget, floor_bid_rate),
+        safe_floor_price=_guardrail_price(budget, safe_floor_bid_rate),
+        ceiling_price=_guardrail_price(budget, ceiling_bid_rate),
     )
 
+
+def _guardrail_price(budget: float, bid_rate: float | None) -> float | None:
+    if bid_rate is None or budget <= 0:
+        return None
+    return round(float(budget or 0.0) * bid_rate, 2)
+
+
+def _apply_guardrail_metadata(
+    guarded_prediction: Dict[str, Any],
+    context: GuardrailContext,
+) -> None:
     guarded_prediction["guardrail_applied"] = False
     guarded_prediction["guardrail_reason"] = None
     guarded_prediction["legal_floor_bid_rate"] = (
-        round(normalized_legal_floor_bid_rate, 6)
-        if normalized_legal_floor_bid_rate is not None
+        round(context.normalized_legal_floor_bid_rate, 6)
+        if context.normalized_legal_floor_bid_rate is not None
         else None
     )
-    guarded_prediction["floor_guardrail_source"] = floor_guardrail_source
+    guarded_prediction["floor_guardrail_source"] = context.floor_guardrail_source
     guarded_prediction["floor_bid_rate"] = (
-        round(floor_bid_rate, 6) if floor_bid_rate is not None else None
+        round(context.floor_bid_rate, 6) if context.floor_bid_rate is not None else None
     )
-    guarded_prediction["floor_price"] = floor_price
+    guarded_prediction["floor_price"] = context.floor_price
     guarded_prediction["floor_safety_margin_rate"] = (
-        round(max(0.0, safe_floor_bid_rate - floor_bid_rate), 6)
-        if safe_floor_bid_rate is not None and floor_bid_rate is not None
+        round(max(0.0, context.safe_floor_bid_rate - context.floor_bid_rate), 6)
+        if context.safe_floor_bid_rate is not None and context.floor_bid_rate is not None
         else None
     )
     guarded_prediction["safe_floor_bid_rate"] = (
-        round(safe_floor_bid_rate, 6) if safe_floor_bid_rate is not None else None
+        round(context.safe_floor_bid_rate, 6)
+        if context.safe_floor_bid_rate is not None
+        else None
     )
-    guarded_prediction["safe_floor_price"] = safe_floor_price
+    guarded_prediction["safe_floor_price"] = context.safe_floor_price
     guarded_prediction["ceiling_bid_rate"] = (
-        round(ceiling_bid_rate, 6) if ceiling_bid_rate is not None else None
+        round(context.ceiling_bid_rate, 6)
+        if context.ceiling_bid_rate is not None
+        else None
     )
-    guarded_prediction["ceiling_price"] = ceiling_price
+    guarded_prediction["ceiling_price"] = context.ceiling_price
 
-    if (floor_bid_rate is None and ceiling_bid_rate is None) or budget <= 0:
-        return guarded_prediction
 
+def _guard_bid_rate_candidates(
+    prediction: Dict[str, Any],
+    *,
+    budget: float,
+    context: GuardrailContext,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     guarded_candidates: list[dict[str, Any]] = []
     floor_applied_labels: list[str] = []
     ceiling_applied_labels: list[str] = []
     for candidate in prediction.get("bid_rate_candidates", []):
-        label = str(candidate.get("label") or "base")
-        original_bid_rate = float(candidate.get("bid_rate", 0.0) or 0.0)
-        guarded_bid_rate = _clamp_rate_to_guardrails(
-            original_bid_rate,
-            floor_bid_rate=safe_floor_bid_rate,
-            ceiling_bid_rate=ceiling_bid_rate,
+        guarded_candidate, floor_applied, ceiling_applied = _guard_candidate_bid_rate(
+            candidate,
+            budget=budget,
+            context=context,
         )
-        if safe_floor_bid_rate is not None and guarded_bid_rate > original_bid_rate + 1e-9:
-            floor_applied_labels.append(label)
-        if ceiling_bid_rate is not None and guarded_bid_rate < original_bid_rate - 1e-9:
-            ceiling_applied_labels.append(label)
-        pre_guardrail_price = float(candidate.get("predicted_price", 0.0) or 0.0)
-        guardrail_changed = abs(guarded_bid_rate - original_bid_rate) > 1e-9
-        guarded_candidates.append({
+        if floor_applied:
+            floor_applied_labels.append(str(candidate.get("label") or "base"))
+        if ceiling_applied:
+            ceiling_applied_labels.append(str(candidate.get("label") or "base"))
+        guarded_candidates.append(guarded_candidate)
+    return guarded_candidates, floor_applied_labels, ceiling_applied_labels
+
+
+def _guard_candidate_bid_rate(
+    candidate: dict[str, Any],
+    *,
+    budget: float,
+    context: GuardrailContext,
+) -> tuple[dict[str, Any], bool, bool]:
+    original_bid_rate = float(candidate.get("bid_rate", 0.0) or 0.0)
+    guarded_bid_rate = _clamp_rate_to_guardrails(
+        original_bid_rate,
+        floor_bid_rate=context.safe_floor_bid_rate,
+        ceiling_bid_rate=context.ceiling_bid_rate,
+    )
+    guardrail_changed = abs(guarded_bid_rate - original_bid_rate) > 1e-9
+    pre_guardrail_price = float(candidate.get("predicted_price", 0.0) or 0.0)
+    return (
+        {
             **candidate,
             "bid_rate": round(guarded_bid_rate, 4),
             "predicted_price": round(float(budget) * guarded_bid_rate, 2),
             "guardrail_applied": guardrail_changed,
-            "pre_guardrail_bid_rate": round(original_bid_rate, 4) if guardrail_changed else None,
-            "pre_guardrail_price": round(pre_guardrail_price, 2) if guardrail_changed else None,
-        })
+            "pre_guardrail_bid_rate": round(original_bid_rate, 4)
+            if guardrail_changed
+            else None,
+            "pre_guardrail_price": round(pre_guardrail_price, 2)
+            if guardrail_changed
+            else None,
+        },
+        context.safe_floor_bid_rate is not None
+        and guarded_bid_rate > original_bid_rate + 1e-9,
+        context.ceiling_bid_rate is not None
+        and guarded_bid_rate < original_bid_rate - 1e-9,
+    )
 
-    if guarded_candidates:
-        base_candidate = next(
-            (candidate for candidate in guarded_candidates if candidate.get("label") == "base"),
-            guarded_candidates[0],
-        )
-        guarded_prediction["bid_rate_candidates"] = guarded_candidates
-        guarded_prediction["predicted_bid_rate"] = round(float(base_candidate.get("bid_rate", 0.0) or 0.0), 4)
-        guarded_prediction["predicted_price"] = round(float(base_candidate.get("predicted_price", 0.0) or 0.0), 2)
-        guarded_prediction["price_range_min"] = min(candidate["predicted_price"] for candidate in guarded_candidates)
-        guarded_prediction["price_range_max"] = max(candidate["predicted_price"] for candidate in guarded_candidates)
-    else:
-        original_bid_rate = float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
-        guarded_bid_rate = _clamp_rate_to_guardrails(
-            original_bid_rate,
-            floor_bid_rate=safe_floor_bid_rate,
-            ceiling_bid_rate=ceiling_bid_rate,
-        )
-        if safe_floor_bid_rate is not None and guarded_bid_rate > original_bid_rate + 1e-9:
-            floor_applied_labels.append("base")
-        if ceiling_bid_rate is not None and guarded_bid_rate < original_bid_rate - 1e-9:
-            ceiling_applied_labels.append("base")
-        guarded_prediction["predicted_bid_rate"] = round(guarded_bid_rate, 4)
-        guarded_prediction["predicted_price"] = round(float(budget) * guarded_bid_rate, 2)
-        price_candidates = [
-            guarded_prediction["predicted_price"],
-            _clamp_price_to_guardrails(float(prediction.get("price_range_min", 0.0) or 0.0), floor_price, ceiling_price),
-            _clamp_price_to_guardrails(float(prediction.get("price_range_max", 0.0) or 0.0), floor_price, ceiling_price),
-        ]
-        guarded_prediction["price_range_min"] = min(price_candidates)
-        guarded_prediction["price_range_max"] = max(price_candidates)
 
-    if not floor_applied_labels and not ceiling_applied_labels:
-        return guarded_prediction
+def _apply_guarded_candidate_prediction(
+    guarded_prediction: Dict[str, Any],
+    guarded_candidates: list[dict[str, Any]],
+) -> None:
+    base_candidate = next(
+        (candidate for candidate in guarded_candidates if candidate.get("label") == "base"),
+        guarded_candidates[0],
+    )
+    guarded_prediction["bid_rate_candidates"] = guarded_candidates
+    guarded_prediction["predicted_bid_rate"] = round(
+        float(base_candidate.get("bid_rate", 0.0) or 0.0),
+        4,
+    )
+    guarded_prediction["predicted_price"] = round(
+        float(base_candidate.get("predicted_price", 0.0) or 0.0),
+        2,
+    )
+    guarded_prediction["price_range_min"] = min(
+        candidate["predicted_price"] for candidate in guarded_candidates
+    )
+    guarded_prediction["price_range_max"] = max(
+        candidate["predicted_price"] for candidate in guarded_candidates
+    )
 
+
+def _apply_base_prediction_guardrails(
+    guarded_prediction: Dict[str, Any],
+    prediction: Dict[str, Any],
+    *,
+    budget: float,
+    context: GuardrailContext,
+) -> tuple[list[str], list[str]]:
+    original_bid_rate = float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
+    guarded_bid_rate = _clamp_rate_to_guardrails(
+        original_bid_rate,
+        floor_bid_rate=context.safe_floor_bid_rate,
+        ceiling_bid_rate=context.ceiling_bid_rate,
+    )
+    guarded_prediction["predicted_bid_rate"] = round(guarded_bid_rate, 4)
+    guarded_prediction["predicted_price"] = round(float(budget) * guarded_bid_rate, 2)
+    price_candidates = [
+        guarded_prediction["predicted_price"],
+        _clamp_price_to_guardrails(
+            float(prediction.get("price_range_min", 0.0) or 0.0),
+            context.floor_price,
+            context.ceiling_price,
+        ),
+        _clamp_price_to_guardrails(
+            float(prediction.get("price_range_max", 0.0) or 0.0),
+            context.floor_price,
+            context.ceiling_price,
+        ),
+    ]
+    guarded_prediction["price_range_min"] = min(price_candidates)
+    guarded_prediction["price_range_max"] = max(price_candidates)
+    return (
+        ["base"]
+        if context.safe_floor_bid_rate is not None
+        and guarded_bid_rate > original_bid_rate + 1e-9
+        else [],
+        ["base"]
+        if context.ceiling_bid_rate is not None
+        and guarded_bid_rate < original_bid_rate - 1e-9
+        else [],
+    )
+
+
+def _mark_guardrail_application(
+    guarded_prediction: Dict[str, Any],
+    *,
+    context: GuardrailContext,
+    floor_labels: list[str],
+    ceiling_labels: list[str],
+) -> None:
     guardrail_reason = _build_guardrail_reason(
-        floor_bid_rate=floor_bid_rate,
-        safe_floor_bid_rate=safe_floor_bid_rate,
-        floor_guardrail_source=floor_guardrail_source,
-        ceiling_bid_rate=ceiling_bid_rate,
-        floor_labels=floor_applied_labels,
-        ceiling_labels=ceiling_applied_labels,
+        floor_bid_rate=context.floor_bid_rate,
+        safe_floor_bid_rate=context.safe_floor_bid_rate,
+        floor_guardrail_source=context.floor_guardrail_source,
+        ceiling_bid_rate=context.ceiling_bid_rate,
+        floor_labels=floor_labels,
+        ceiling_labels=ceiling_labels,
     )
     guarded_prediction["guardrail_applied"] = True
     guarded_prediction["guardrail_reason"] = guardrail_reason
@@ -667,7 +828,6 @@ def _apply_prediction_guardrails(
         str(guarded_prediction.get("explanation", "") or ""),
         guardrail_reason,
     )
-    return guarded_prediction
 
 
 def _apply_bid_price_granularity(prediction: Dict[str, Any], *, budget: float) -> Dict[str, Any]:
