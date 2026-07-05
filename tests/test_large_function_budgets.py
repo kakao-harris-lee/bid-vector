@@ -24,6 +24,18 @@ import pytest
             "_build_candidate_item",
             105,
         ),
+        (
+            "app.services.paper_bidding_backtest",
+            "PaperBiddingBacktestService",
+            "run_historical_backtest",
+            130,
+        ),
+        (
+            "app.services.paper_bidding_backtest",
+            "PaperBiddingBacktestService",
+            "run_forward_paper_bidding",
+            105,
+        ),
     ],
 )
 def test_high_coupling_service_functions_stay_within_line_budget(

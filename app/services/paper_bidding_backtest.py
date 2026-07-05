@@ -201,7 +201,6 @@ class PaperBiddingBacktestService:
         candidate_items: list[dict[str, Any]] = []
         settlement_items: list[dict[str, Any]] = []
         action_counts: Counter[str] = Counter()
-        skipped_by_strategy = 0
 
         try:
             awards = self._load_eligible_awards(
@@ -212,83 +211,146 @@ class PaperBiddingBacktestService:
                 limit=safe_limit,
                 categories=resolved_award_categories or None,
             )
-            for tender_result in awards:
-                project = tender_result.project
-                if project is None:
-                    continue
-                if not self._passes_strategy(project, strategy):
-                    skipped_by_strategy += 1
-                    continue
-
-                item = self._build_candidate_item(
-                    db,
-                    project=project,
-                    tender_result=tender_result,
-                    data_cutoff_at=None,
-                    scenario=normalized_scenario,
-                    strategy_version=strategy_version,
-                    cutoff_hours_before_deadline=cutoff_hours_before_deadline,
-                    history_limit=history_limit,
-                    profile=profile,
-                )
-                action_counts[item["action"]] += 1
-                candidate_items.append(item)
-
-                paper_bid = self._persist_paper_bid(
-                    db,
-                    run=run,
-                    operator_id=int(operator.id),
-                    item=item,
-                    persist=persist,
-                    model_version=model_version,
-                    strategy_version=strategy_version,
-                )
-                if item["action"] not in normalized_settle_actions:
-                    continue
-
-                settlement = self._build_settlement_item(
-                    db, item=item, tender_result=tender_result
-                )
-                settlement_items.append(settlement)
-                self._persist_settlement(
-                    db,
-                    paper_bid=paper_bid,
-                    tender_result=tender_result,
-                    settlement=settlement,
-                    persist=persist,
-                )
-
-            summary = self._build_summary(
+            skipped_by_strategy = self._process_historical_awards(
+                db,
+                awards=awards,
+                strategy=strategy,
+                profile=profile,
+                run=run,
+                operator_id=int(operator.id),
+                scenario=normalized_scenario,
+                strategy_version=strategy_version,
+                model_version=model_version,
+                cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+                history_limit=history_limit,
+                settle_actions=normalized_settle_actions,
+                persist=persist,
+                candidate_items=candidate_items,
+                settlement_items=settlement_items,
+                action_counts=action_counts,
+            )
+            return self._complete_historical_backtest(
+                db,
+                run=run,
+                persist=persist,
+                request_payload=request_payload,
                 candidate_items=candidate_items,
                 settlement_items=settlement_items,
                 skipped_by_strategy=skipped_by_strategy,
                 action_counts=action_counts,
+                settle_actions=normalized_settle_actions,
             )
-            self._complete_run(
-                db,
-                run=run,
-                persist=persist,
-                summary=summary,
-                candidate_count=len(candidate_items),
-                paper_bid_count=sum(
-                    1
-                    for item in candidate_items
-                    if item["action"] in normalized_settle_actions
-                ),
-                settled_count=len(settlement_items),
-            )
-            return {
-                "run_id": int(run.id)
-                if run is not None and run.id is not None
-                else None,
-                "request": request_payload,
-                "summary": summary,
-                "items": candidate_items,
-                "settlements": settlement_items,
-            }
         except Exception as exc:
             self._fail_run(db, run=run, persist=persist, error_message=str(exc))
             raise
+
+    def _process_historical_awards(
+        self,
+        db: Session,
+        *,
+        awards: Sequence[TenderResult],
+        strategy: OperatorStrategy,
+        profile: CompanyProfile | None,
+        run: PaperBidRun | None,
+        operator_id: int,
+        scenario: str,
+        strategy_version: str,
+        model_version: str,
+        cutoff_hours_before_deadline: int,
+        history_limit: int,
+        settle_actions: Sequence[str],
+        persist: bool,
+        candidate_items: list[dict[str, Any]],
+        settlement_items: list[dict[str, Any]],
+        action_counts: Counter[str],
+    ) -> int:
+        skipped_by_strategy = 0
+        for tender_result in awards:
+            project = tender_result.project
+            if project is None:
+                continue
+            if not self._passes_strategy(project, strategy):
+                skipped_by_strategy += 1
+                continue
+
+            item = self._build_candidate_item(
+                db,
+                project=project,
+                tender_result=tender_result,
+                data_cutoff_at=None,
+                scenario=scenario,
+                strategy_version=strategy_version,
+                cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+                history_limit=history_limit,
+                profile=profile,
+            )
+            action_counts[item["action"]] += 1
+            candidate_items.append(item)
+
+            paper_bid = self._persist_paper_bid(
+                db,
+                run=run,
+                operator_id=operator_id,
+                item=item,
+                persist=persist,
+                model_version=model_version,
+                strategy_version=strategy_version,
+            )
+            if item["action"] not in settle_actions:
+                continue
+
+            settlement = self._build_settlement_item(
+                db,
+                item=item,
+                tender_result=tender_result,
+            )
+            settlement_items.append(settlement)
+            self._persist_settlement(
+                db,
+                paper_bid=paper_bid,
+                tender_result=tender_result,
+                settlement=settlement,
+                persist=persist,
+            )
+        return skipped_by_strategy
+
+    def _complete_historical_backtest(
+        self,
+        db: Session,
+        *,
+        run: PaperBidRun | None,
+        persist: bool,
+        request_payload: dict[str, Any],
+        candidate_items: list[dict[str, Any]],
+        settlement_items: list[dict[str, Any]],
+        skipped_by_strategy: int,
+        action_counts: Counter[str],
+        settle_actions: Sequence[str],
+    ) -> dict[str, Any]:
+        summary = self._build_summary(
+            candidate_items=candidate_items,
+            settlement_items=settlement_items,
+            skipped_by_strategy=skipped_by_strategy,
+            action_counts=action_counts,
+        )
+        self._complete_run(
+            db,
+            run=run,
+            persist=persist,
+            summary=summary,
+            candidate_count=len(candidate_items),
+            paper_bid_count=sum(
+                1 for item in candidate_items if item["action"] in settle_actions
+            ),
+            settled_count=len(settlement_items),
+        )
+        return {
+            "run_id": int(run.id) if run is not None and run.id is not None else None,
+            "request": request_payload,
+            "summary": summary,
+            "items": candidate_items,
+            "settlements": settlement_items,
+        }
 
     def run_forward_paper_bidding(
         self,
@@ -339,83 +401,135 @@ class PaperBiddingBacktestService:
 
         candidate_items: list[dict[str, Any]] = []
         action_counts: Counter[str] = Counter()
-        skipped_by_strategy = 0
-        skipped_invalid = 0
 
         try:
             projects = self._load_forward_projects(
                 db, category=category, limit=safe_limit, data_cutoff_at=data_cutoff_at
             )
-            for project in projects:
-                if not self._passes_strategy(project, strategy):
-                    skipped_by_strategy += 1
-                    continue
-                try:
-                    item = self._build_candidate_item(
-                        db,
-                        project=project,
-                        tender_result=None,
-                        data_cutoff_at=data_cutoff_at,
-                        scenario=normalized_scenario,
-                        strategy_version=strategy_version,
-                        cutoff_hours_before_deadline=0,
-                        history_limit=history_limit,
-                        profile=profile,
-                    )
-                except ValueError as project_exc:
-                    # A single malformed project (e.g. 0 budget for ebiz4u-link
-                    # imports) must not abort the whole run — skip + count it.
-                    logger.warning(
-                        "forward_paper: skipping project %s due to %s",
-                        getattr(project, "id", "?"),
-                        project_exc,
-                    )
-                    skipped_invalid += 1
-                    continue
-                action_counts[item["action"]] += 1
-                candidate_items.append(item)
-                self._persist_paper_bid(
-                    db,
-                    run=run,
-                    operator_id=int(operator.id),
-                    item=item,
-                    persist=persist,
-                    model_version=model_version,
-                    strategy_version=strategy_version,
-                )
-
-            summary = self._build_summary(
+            skipped_by_strategy, skipped_invalid = self._process_forward_projects(
+                db,
+                projects=projects,
+                strategy=strategy,
+                profile=profile,
+                run=run,
+                operator_id=int(operator.id),
+                data_cutoff_at=data_cutoff_at,
+                scenario=normalized_scenario,
+                strategy_version=strategy_version,
+                model_version=model_version,
+                history_limit=history_limit,
+                persist=persist,
                 candidate_items=candidate_items,
-                settlement_items=[],
-                skipped_by_strategy=skipped_by_strategy,
                 action_counts=action_counts,
-                skipped_invalid=skipped_invalid,
             )
-            self._complete_run(
+            return self._complete_forward_paper_run(
                 db,
                 run=run,
                 persist=persist,
-                summary=summary,
-                candidate_count=len(candidate_items),
-                paper_bid_count=sum(
-                    1
-                    for item in candidate_items
-                    if item["action"] in {"bid_now", "review"}
-                ),
-                settled_count=0,
+                request_payload=request_payload,
+                candidate_items=candidate_items,
+                skipped_by_strategy=skipped_by_strategy,
+                skipped_invalid=skipped_invalid,
+                action_counts=action_counts,
             )
-            return {
-                "run_id": int(run.id)
-                if run is not None and run.id is not None
-                else None,
-                "request": request_payload,
-                "summary": summary,
-                "items": candidate_items,
-                "settlements": [],
-            }
         except Exception as exc:
             self._fail_run(db, run=run, persist=persist, error_message=str(exc))
             raise
+
+    def _process_forward_projects(
+        self,
+        db: Session,
+        *,
+        projects: Sequence[Project],
+        strategy: OperatorStrategy,
+        profile: CompanyProfile | None,
+        run: PaperBidRun | None,
+        operator_id: int,
+        data_cutoff_at: datetime,
+        scenario: str,
+        strategy_version: str,
+        model_version: str,
+        history_limit: int,
+        persist: bool,
+        candidate_items: list[dict[str, Any]],
+        action_counts: Counter[str],
+    ) -> tuple[int, int]:
+        skipped_by_strategy = 0
+        skipped_invalid = 0
+        for project in projects:
+            if not self._passes_strategy(project, strategy):
+                skipped_by_strategy += 1
+                continue
+            try:
+                item = self._build_candidate_item(
+                    db,
+                    project=project,
+                    tender_result=None,
+                    data_cutoff_at=data_cutoff_at,
+                    scenario=scenario,
+                    strategy_version=strategy_version,
+                    cutoff_hours_before_deadline=0,
+                    history_limit=history_limit,
+                    profile=profile,
+                )
+            except ValueError as project_exc:
+                logger.warning(
+                    "forward_paper: skipping project %s due to %s",
+                    getattr(project, "id", "?"),
+                    project_exc,
+                )
+                skipped_invalid += 1
+                continue
+            action_counts[item["action"]] += 1
+            candidate_items.append(item)
+            self._persist_paper_bid(
+                db,
+                run=run,
+                operator_id=operator_id,
+                item=item,
+                persist=persist,
+                model_version=model_version,
+                strategy_version=strategy_version,
+            )
+        return skipped_by_strategy, skipped_invalid
+
+    def _complete_forward_paper_run(
+        self,
+        db: Session,
+        *,
+        run: PaperBidRun | None,
+        persist: bool,
+        request_payload: dict[str, Any],
+        candidate_items: list[dict[str, Any]],
+        skipped_by_strategy: int,
+        skipped_invalid: int,
+        action_counts: Counter[str],
+    ) -> dict[str, Any]:
+        summary = self._build_summary(
+            candidate_items=candidate_items,
+            settlement_items=[],
+            skipped_by_strategy=skipped_by_strategy,
+            action_counts=action_counts,
+            skipped_invalid=skipped_invalid,
+        )
+        self._complete_run(
+            db,
+            run=run,
+            persist=persist,
+            summary=summary,
+            candidate_count=len(candidate_items),
+            paper_bid_count=sum(
+                1 for item in candidate_items if item["action"] in {"bid_now", "review"}
+            ),
+            settled_count=0,
+        )
+        return {
+            "run_id": int(run.id) if run is not None and run.id is not None else None,
+            "request": request_payload,
+            "summary": summary,
+            "items": candidate_items,
+            "settlements": [],
+        }
 
     def run_forward_settlement(
         self,

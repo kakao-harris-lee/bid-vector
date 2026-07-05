@@ -124,3 +124,46 @@ git diff --check
 ```
 
 Expected: all commands exit 0.
+
+## Task 5: Split Remaining Paper Bidding Entry Points
+
+**Files:**
+- Modify: `tests/test_large_function_budgets.py`
+- Modify: `app/services/paper_bidding_backtest.py`
+
+- [x] **Step 1: Extend line-budget tests**
+
+Added budget checks for:
+
+```python
+("app.services.paper_bidding_backtest", "PaperBiddingBacktestService", "run_historical_backtest", 130)
+("app.services.paper_bidding_backtest", "PaperBiddingBacktestService", "run_forward_paper_bidding", 105)
+```
+
+- [x] **Step 2: Run test to verify RED**
+
+Run:
+
+```bash
+pytest tests/test_large_function_budgets.py -q
+```
+
+Observed: FAIL because `run_historical_backtest` was 170 lines and `run_forward_paper_bidding` was 126 lines.
+
+- [x] **Step 3: Extract historical award processing**
+
+Created `_process_historical_awards(...)` and `_complete_historical_backtest(...)`.
+
+- [x] **Step 4: Extract forward project processing**
+
+Created `_process_forward_projects(...)` and `_complete_forward_paper_run(...)`.
+
+- [x] **Step 5: Run paper bidding tests**
+
+Run:
+
+```bash
+pytest tests/test_large_function_budgets.py tests/test_paper_bidding_backtest.py -q
+```
+
+Observed: PASS.
