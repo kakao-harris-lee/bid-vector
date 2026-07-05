@@ -401,12 +401,6 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     re-deferred by the next 6h collect, so it self-heals). A single notice failing
     (HTTP or parse) is caught per-notice and counted, never aborting the chunk.
     """
-    import json
-    from time import sleep
-
-    from app.core.time import utc_now
-    from app.models.models import HistoricalData
-
     all_cleaned = _normalize_deferred_reserve_notices(notices)
     chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
     cleaned = all_cleaned[:chunk_size]
@@ -424,17 +418,6 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     commit_every = 25
 
     requested = len(cleaned)
-    fetched = 0
-    skipped_existing = 0
-    not_settled = 0
-    errors = 0
-    processed_since_commit = 0
-    # Diagnostics: surface WHY fetches fail (the per-notice except previously
-    # swallowed the exception, logging only notice_number). Aggregate by
-    # exception type + keep a few sample messages so one summary line / the
-    # returned dict reveals the cause instead of N silent warnings.
-    error_type_counts: dict[str, int] = {}
-    error_samples: list[str] = []
 
     db = SessionLocal()
     try:
@@ -442,164 +425,272 @@ def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
             # No key -> nothing fetchable; surface as errors without HTTP. Do NOT
             # chain a continuation (the remainder would fail the same way); the
             # next 6h collect re-defers everything once a key is configured.
-            return {
-                "requested": requested,
-                "processed": 0,
-                "fetched": 0,
-                "skipped_existing": 0,
-                "errors": requested,
-                "error": "missing_service_key",
-                "remaining": len(rest),
-                "continued": False,
-            }
-
-        for index, entry in enumerate(cleaned):
-            notice_number = entry["notice_number"]
-            category = entry["category"] or None
-            try:
-                record = (
-                    db.query(HistoricalData)
-                    .filter(HistoricalData.notice_number == notice_number)
-                    .order_by(HistoricalData.id.asc())
-                    .first()
-                )
-                # Idempotency: a settled, non-empty reserve price is immutable.
-                if record is not None and service._has_persisted_reserve_prices(
-                    record
-                ):
-                    skipped_existing += 1
-                    continue
-
-                if index > 0 and delay_seconds > 0:
-                    sleep(delay_seconds)
-
-                detail = service._fetch_scsbid_reserve_detail(
-                    {"bidNtceNo": notice_number},
-                    category=category,
-                    service_key=service_key,
-                )
-                reserve_prices = detail.get("reserve_prices") or []
-                selected_numbers = detail.get("selected_numbers") or []
-                if not reserve_prices:
-                    # Fetched OK but no settled reserve yet (e.g. notice closed
-                    # but not opened). Leave reserve_prices untouched so a later
-                    # run re-fetches once it settles. Tracked separately from
-                    # errors — this is the benign "not yet settled" path, not a
-                    # failure. Stamp ``reserve_detail_checked_at`` so the collector
-                    # backs this notice off the deferred set for one recheck window
-                    # (permanently-empty notices otherwise re-fetch every 6h sweep,
-                    # burning the rate limit). 429/exceptions are NOT stamped (they
-                    # fall to the except below) so genuinely-retryable notices stay
-                    # retryable. Create the row if missing so the marker persists.
-                    if record is None:
-                        record = HistoricalData(notice_number=notice_number)
-                        db.add(record)
-                    record.reserve_detail_checked_at = utc_now()
-                    not_settled += 1
-                    processed_since_commit += 1
-                    if processed_since_commit >= commit_every:
-                        db.commit()
-                        processed_since_commit = 0
-                    continue
-
-                if record is None:
-                    record = HistoricalData(notice_number=notice_number)
-                    db.add(record)
-                record.reserve_prices = json.dumps(reserve_prices, ensure_ascii=False)
-                record.selected_numbers = json.dumps(
-                    selected_numbers, ensure_ascii=False
-                )
-                fetched += 1
-                processed_since_commit += 1
-
-                if processed_since_commit >= commit_every:
-                    db.commit()
-                    processed_since_commit = 0
-            except SoftTimeLimitExceeded:
-                # Preserve progress so far and stop gracefully (no redelivery loop).
-                db.commit()
-                logger.warning(
-                    "backfill_scsbid_reserve_detail hit soft time limit "
-                    "(fetched=%s skipped=%s errors=%s of %s)",
-                    fetched,
-                    skipped_existing,
-                    errors,
-                    requested,
-                )
-                return {
-                    "requested": requested,
-                    "processed": fetched + skipped_existing + not_settled + errors,
-                    "fetched": fetched,
-                    "skipped_existing": skipped_existing,
-                    "not_settled": not_settled,
-                    "errors": errors,
-                    "error_types": error_type_counts,
-                    "error_samples": error_samples,
-                    "soft_time_limit_exceeded": True,
-                    # Do not chain on soft-time-limit: the unprocessed remainder is
-                    # recomputed and re-deferred by the next 6h collect (self-heal).
-                    "remaining": len(rest),
-                    "continued": False,
-                }
-            except Exception as exc:  # noqa: BLE001 — one notice must not abort the chunk
-                errors += 1
-                exc_type = type(exc).__name__
-                error_type_counts[exc_type] = error_type_counts.get(exc_type, 0) + 1
-                label = f"{exc_type}: {exc}"[:200]
-                if label not in error_samples and len(error_samples) < 5:
-                    error_samples.append(label)
-
-        db.commit()
-        if errors:
-            # One summary line (not N) so the failure cause is visible in logs.
-            logger.warning(
-                "backfill_scsbid_reserve_detail chunk done requested=%s fetched=%s "
-                "skipped=%s not_settled=%s errors=%s error_types=%s samples=%s",
-                requested,
-                fetched,
-                skipped_existing,
-                not_settled,
-                errors,
-                error_type_counts,
-                error_samples,
+            return _missing_reserve_detail_service_key_result(
+                requested=requested,
+                remaining=len(rest),
             )
 
-        # Serial self-chaining: this run processed at most one chunk. If notices
-        # remain, enqueue a SINGLE continuation carrying the remainder so the
-        # reserve-detail API stays hit one-chunk-at-a-time (never a parallel
-        # burst). Done after the commit / on the normal path only.
-        continued = False
-        if rest:
-            try:
-                backfill_scsbid_reserve_detail.apply_async(
-                    kwargs={"notices": rest},
-                    queue=settings.CELERY_OPS_QUEUE,
-                )
-                continued = True
-            except Exception:  # pragma: no cover - chain failure must not fail chunk
-                logger.exception(
-                    "backfill_scsbid_reserve_detail continuation enqueue failed "
-                    "for %d remaining notice(s)",
-                    len(rest),
-                )
+        stats = _process_scsbid_reserve_detail_chunk(
+            db,
+            service=service,
+            cleaned=cleaned,
+            service_key=service_key,
+            delay_seconds=delay_seconds,
+            commit_every=commit_every,
+            requested=requested,
+            remaining=len(rest),
+        )
+        if stats.get("soft_time_limit_exceeded"):
+            return _reserve_detail_backfill_result(
+                requested=requested,
+                remaining=len(rest),
+                continued=False,
+                stats=stats,
+            )
 
-        return {
-            "requested": requested,
-            "processed": fetched + skipped_existing + not_settled + errors,
-            "fetched": fetched,
-            "skipped_existing": skipped_existing,
-            "not_settled": not_settled,
-            "errors": errors,
-            "error_types": error_type_counts,
-            "error_samples": error_samples,
-            "remaining": len(rest),
-            "continued": continued,
-        }
+        db.commit()
+        _log_reserve_detail_backfill_errors(requested=requested, stats=stats)
+        continued = _enqueue_reserve_detail_continuation(rest)
+        return _reserve_detail_backfill_result(
+            requested=requested,
+            remaining=len(rest),
+            continued=continued,
+            stats=stats,
+        )
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+
+def _missing_reserve_detail_service_key_result(
+    *,
+    requested: int,
+    remaining: int,
+) -> dict[str, Any]:
+    return {
+        "requested": requested,
+        "processed": 0,
+        "fetched": 0,
+        "skipped_existing": 0,
+        "errors": requested,
+        "error": "missing_service_key",
+        "remaining": remaining,
+        "continued": False,
+    }
+
+
+def _process_scsbid_reserve_detail_chunk(
+    db,
+    *,
+    service: KonepsCollectorService,
+    cleaned: list[dict[str, Any]],
+    service_key: str,
+    delay_seconds: float,
+    commit_every: int,
+    requested: int,
+    remaining: int,
+) -> dict[str, Any]:
+    from time import sleep
+
+    from app.core.time import utc_now
+    from app.models.models import HistoricalData
+
+    stats: dict[str, Any] = {
+        "fetched": 0,
+        "skipped_existing": 0,
+        "not_settled": 0,
+        "errors": 0,
+        "error_types": {},
+        "error_samples": [],
+        "processed_since_commit": 0,
+    }
+    for index, entry in enumerate(cleaned):
+        notice_number = entry["notice_number"]
+        category = entry["category"] or None
+        try:
+            record = _load_reserve_detail_record(db, HistoricalData, notice_number)
+            if record is not None and service._has_persisted_reserve_prices(record):
+                stats["skipped_existing"] += 1
+                continue
+            if index > 0 and delay_seconds > 0:
+                sleep(delay_seconds)
+            detail = service._fetch_scsbid_reserve_detail(
+                {"bidNtceNo": notice_number},
+                category=category,
+                service_key=service_key,
+            )
+            _persist_reserve_detail_result(
+                db,
+                HistoricalData,
+                record=record,
+                notice_number=notice_number,
+                detail=detail,
+                stats=stats,
+                utc_now=utc_now,
+            )
+            _commit_reserve_detail_progress(db, stats=stats, commit_every=commit_every)
+        except SoftTimeLimitExceeded:
+            return _reserve_detail_soft_limit_stats(
+                db,
+                stats=stats,
+                requested=requested,
+                remaining=remaining,
+            )
+        except Exception as exc:  # noqa: BLE001 — one notice must not abort the chunk
+            _record_reserve_detail_error(stats, exc)
+    stats.pop("processed_since_commit", None)
+    return stats
+
+
+def _load_reserve_detail_record(db, historical_model, notice_number: str):
+    return (
+        db.query(historical_model)
+        .filter(historical_model.notice_number == notice_number)
+        .order_by(historical_model.id.asc())
+        .first()
+    )
+
+
+def _persist_reserve_detail_result(
+    db,
+    historical_model,
+    *,
+    record,
+    notice_number: str,
+    detail: dict[str, Any],
+    stats: dict[str, Any],
+    utc_now,
+) -> None:
+    import json
+
+    reserve_prices = detail.get("reserve_prices") or []
+    selected_numbers = detail.get("selected_numbers") or []
+    if record is None:
+        record = historical_model(notice_number=notice_number)
+        db.add(record)
+    if not reserve_prices:
+        record.reserve_detail_checked_at = utc_now()
+        stats["not_settled"] += 1
+    else:
+        record.reserve_prices = json.dumps(reserve_prices, ensure_ascii=False)
+        record.selected_numbers = json.dumps(selected_numbers, ensure_ascii=False)
+        stats["fetched"] += 1
+    stats["processed_since_commit"] += 1
+
+
+def _commit_reserve_detail_progress(
+    db,
+    *,
+    stats: dict[str, Any],
+    commit_every: int,
+) -> None:
+    if int(stats["processed_since_commit"]) < commit_every:
+        return
+    db.commit()
+    stats["processed_since_commit"] = 0
+
+
+def _reserve_detail_soft_limit_stats(
+    db,
+    *,
+    stats: dict[str, Any],
+    requested: int,
+    remaining: int,
+) -> dict[str, Any]:
+    db.commit()
+    logger.warning(
+        "backfill_scsbid_reserve_detail hit soft time limit "
+        "(fetched=%s skipped=%s errors=%s of %s)",
+        stats["fetched"],
+        stats["skipped_existing"],
+        stats["errors"],
+        requested,
+    )
+    stats = dict(stats)
+    stats.pop("processed_since_commit", None)
+    stats["soft_time_limit_exceeded"] = True
+    stats["remaining"] = remaining
+    return stats
+
+
+def _record_reserve_detail_error(stats: dict[str, Any], exc: Exception) -> None:
+    stats["errors"] += 1
+    error_type_counts = stats["error_types"]
+    error_samples = stats["error_samples"]
+    exc_type = type(exc).__name__
+    error_type_counts[exc_type] = error_type_counts.get(exc_type, 0) + 1
+    label = f"{exc_type}: {exc}"[:200]
+    if label not in error_samples and len(error_samples) < 5:
+        error_samples.append(label)
+
+
+def _log_reserve_detail_backfill_errors(
+    *,
+    requested: int,
+    stats: dict[str, Any],
+) -> None:
+    if not stats["errors"]:
+        return
+    logger.warning(
+        "backfill_scsbid_reserve_detail chunk done requested=%s fetched=%s "
+        "skipped=%s not_settled=%s errors=%s error_types=%s samples=%s",
+        requested,
+        stats["fetched"],
+        stats["skipped_existing"],
+        stats["not_settled"],
+        stats["errors"],
+        stats["error_types"],
+        stats["error_samples"],
+    )
+
+
+def _enqueue_reserve_detail_continuation(rest: list[dict[str, Any]]) -> bool:
+    if not rest:
+        return False
+    try:
+        backfill_scsbid_reserve_detail.apply_async(
+            kwargs={"notices": rest},
+            queue=settings.CELERY_OPS_QUEUE,
+        )
+        return True
+    except Exception:  # pragma: no cover - chain failure must not fail chunk
+        logger.exception(
+            "backfill_scsbid_reserve_detail continuation enqueue failed "
+            "for %d remaining notice(s)",
+            len(rest),
+        )
+        return False
+
+
+def _reserve_detail_backfill_result(
+    *,
+    requested: int,
+    remaining: int,
+    continued: bool,
+    stats: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "requested": requested,
+        "processed": stats["fetched"]
+        + stats["skipped_existing"]
+        + stats.get("not_settled", 0)
+        + stats["errors"],
+        "fetched": stats["fetched"],
+        "skipped_existing": stats["skipped_existing"],
+        "not_settled": stats.get("not_settled", 0),
+        "errors": stats["errors"],
+        "error_types": stats.get("error_types", {}),
+        "error_samples": stats.get("error_samples", []),
+        "remaining": remaining,
+        "continued": continued,
+        **(
+            {"soft_time_limit_exceeded": True}
+            if stats.get("soft_time_limit_exceeded")
+            else {}
+        ),
+    }
 
 
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)

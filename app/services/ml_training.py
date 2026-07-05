@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any
@@ -20,6 +21,30 @@ from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotio
 from app.services.prediction_dataset import PredictionDatasetService
 
 
+@dataclass(frozen=True)
+class TrainingRunOptions:
+    release_tag: str
+    category: str | None
+    agency_name: str | None
+    limit: int
+    notes: str | None
+    publish_remote: bool
+    create_manifest: bool
+
+
+@dataclass(frozen=True)
+class TrainingRunPaths:
+    training_dir: Path
+    predictor_lstm_dir: Path
+    predictor_ensemble_dir: Path
+    dataset_path: Path
+    summary_path: Path
+    dataset_quality_path: Path
+    comparison_report_path: Path
+    lstm_artifact_path: Path
+    ensemble_artifact_path: Path
+
+
 class PricePredictionTrainingService:
     """Build lightweight predictor artifacts from historical bid-rate data."""
 
@@ -29,158 +54,256 @@ class PricePredictionTrainingService:
 
     def train_price_predictor(self, db: Session, request_payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Build a dataset snapshot, create predictor artifacts, and optionally publish a manifest."""
-        request = dict(request_payload or {})
-        release_tag = self._resolve_release_tag(request.get("release_tag"))
-        category = self._clean_optional(request.get("category"))
-        agency_name = self._clean_optional(request.get("agency_name"))
-        limit = max(1, min(int(request.get("limit") or 500), 5000))
-        notes = self._clean_optional(request.get("notes"))
-        publish_remote = bool(request.get("publish_remote", True))
-        create_manifest = bool(request.get("create_manifest", True))
+        options = self._training_run_options(request_payload)
+        paths = self._training_run_paths(options.release_tag)
+        self._ensure_training_run_dirs(paths)
 
-        dataset_service = PredictionDatasetService()
-        dataset = dataset_service.build_training_dataset(
-            db,
-            category=category,
-            agency_name=agency_name,
-            limit=limit,
-            explicit_bid_rate_only=True,
-        )
-        # Settlement-derived labels for낙찰-가능성 calibration. Built from PaperBid +
-        # PaperBidSettlement (NOT from `dataset`), so settled outcomes can only ever
-        # be labels here — never price-prediction features.
-        probability_calibration_dataset = (
-            dataset_service.build_probability_calibration_dataset(
-                db, category=category, limit=limit * 5
-            )
-        )
-        training_dir = self.repo_root / "models" / "training-runs" / release_tag
-        predictor_lstm_dir = self.repo_root / "models" / "predictors" / "lstm"
-        predictor_ensemble_dir = self.repo_root / "models" / "predictors" / "ensemble"
-        training_dir.mkdir(parents=True, exist_ok=True)
-        predictor_lstm_dir.mkdir(parents=True, exist_ok=True)
-        predictor_ensemble_dir.mkdir(parents=True, exist_ok=True)
-
-        dataset_path = training_dir / "dataset.json"
-        summary_path = training_dir / "training-summary.json"
-        dataset_quality_path = training_dir / "dataset-quality.json"
-        comparison_report_path = training_dir / "artifact-comparison.json"
-        dataset_path.write_text(self._dump_json(dataset), encoding="utf-8")
+        dataset, probability_calibration_dataset = self._build_training_datasets(db, options)
+        paths.dataset_path.write_text(self._dump_json(dataset), encoding="utf-8")
 
         bid_rates = [float(item["bid_rate"]) for item in dataset["series"] if item.get("bid_rate") is not None]
         dataset_quality = self._build_dataset_quality_report(
-            release_tag=release_tag,
-            category=category,
-            agency_name=agency_name,
-            limit=limit,
+            release_tag=options.release_tag,
+            category=options.category,
+            agency_name=options.agency_name,
+            limit=options.limit,
             bid_rates=bid_rates,
             dataset=dataset,
         )
-        dataset_quality_path.write_text(self._dump_json(dataset_quality), encoding="utf-8")
+        paths.dataset_quality_path.write_text(self._dump_json(dataset_quality), encoding="utf-8")
         summary = self._build_training_summary(
-            release_tag=release_tag,
-            category=category,
-            agency_name=agency_name,
-            limit=limit,
+            release_tag=options.release_tag,
+            category=options.category,
+            agency_name=options.agency_name,
+            limit=options.limit,
             bid_rates=bid_rates,
             dataset=dataset,
             dataset_quality=dataset_quality,
             probability_calibration_dataset=probability_calibration_dataset,
         )
-        summary_path.write_text(self._dump_json(summary), encoding="utf-8")
+        paths.summary_path.write_text(self._dump_json(summary), encoding="utf-8")
 
         if not bid_rates:
-            comparison_report = self._build_artifact_comparison_report(
-                release_tag=release_tag,
-                category=category,
-                agency_name=agency_name,
+            comparison_report = self._write_artifact_comparison_report(
+                options=options,
+                paths=paths,
                 dataset=dataset,
                 dataset_quality=dataset_quality,
                 lstm_artifact=None,
                 ensemble_artifact=None,
             )
-            comparison_report_path.write_text(self._dump_json(comparison_report), encoding="utf-8")
-            return {
-                "release_tag": release_tag,
-                "status": "skipped_insufficient_data",
-                "detail": "No usable historical bid-rate samples were available for training.",
-                "dataset_path": self._to_portable_path(dataset_path),
-                "summary_path": self._to_portable_path(summary_path),
-                "dataset_quality_path": self._to_portable_path(dataset_quality_path),
-                "comparison_report_path": self._to_portable_path(comparison_report_path),
-                "summary": summary,
-                "dataset_quality": dataset_quality,
-                "comparison_report": comparison_report,
-                "manifest": None,
-            }
+            return self._skipped_training_result(
+                options=options,
+                paths=paths,
+                summary=summary,
+                dataset_quality=dataset_quality,
+                comparison_report=comparison_report,
+            )
 
-        lstm_artifact_path = predictor_lstm_dir / f"{release_tag}.json"
-        ensemble_artifact_path = predictor_ensemble_dir / f"{release_tag}.json"
-        lstm_artifact = self._build_lstm_artifact(release_tag=release_tag, bid_rates=bid_rates)
-        ensemble_artifact = self._build_ensemble_artifact(
-            release_tag=release_tag,
-            lstm_artifact_path=lstm_artifact_path,
-            lstm_artifact=lstm_artifact,
+        lstm_artifact, ensemble_artifact = self._build_and_write_predictor_artifacts(
+            options=options,
+            paths=paths,
             bid_rates=bid_rates,
+            summary=summary,
         )
-        # Phase B: inject group_calibration into the in-memory dict BEFORE writing to
-        # disk so that (a) no reader can see the artifact without calibration and
-        # (b) downstream code receiving ensemble_artifact in-memory also has it.
-        # summary is built above (lines 71-80) and is available here already.
-        self._inject_group_calibration(
-            artifact=ensemble_artifact,
-            group_calibration=summary.get("group_calibration") or {},
-        )
-        # Same channel/guarantees as group_calibration: injected into the in-memory
-        # ensemble artifact BEFORE it is written to disk, so the on-disk sha256 (and
-        # therefore the signed manifest) covers the probability calibration too.
-        self._inject_summary_block(
-            artifact=ensemble_artifact,
-            key="probability_calibration",
-            block=summary.get("probability_calibration") or {},
-        )
-        lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
-        ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
-        load_lstm_artifact(lstm_artifact_path)
-        load_ensemble_artifact(ensemble_artifact_path)
-        comparison_report = self._build_artifact_comparison_report(
-            release_tag=release_tag,
-            category=category,
-            agency_name=agency_name,
+        comparison_report = self._write_artifact_comparison_report(
+            options=options,
+            paths=paths,
             dataset=dataset,
             dataset_quality=dataset_quality,
             lstm_artifact=lstm_artifact,
             ensemble_artifact=ensemble_artifact,
         )
-        comparison_report_path.write_text(self._dump_json(comparison_report), encoding="utf-8")
+        manifest, remote_storage = self._maybe_create_training_manifest(options=options, paths=paths)
+        return self._completed_training_result(
+            options=options,
+            paths=paths,
+            summary=summary,
+            dataset_quality=dataset_quality,
+            comparison_report=comparison_report,
+            manifest=manifest,
+            remote_storage=remote_storage,
+        )
 
-        manifest = None
-        remote_storage = None
-        if create_manifest:
-            release_service = MLReleasePromotionService(repo_root=self.repo_root)
-            manifest = release_service.create_release_manifest(
-                MLReleasePromotionRequest(
-                    release_tag=release_tag,
-                    lstm_artifact_path=str(lstm_artifact_path),
-                    ensemble_artifact_path=str(ensemble_artifact_path),
-                    predictor_backtest_report_path=str(comparison_report_path),
-                    notes=notes or f"Queued price-predictor training run for {release_tag}",
-                    rebuild_limit=100,
-                    force_rebuild=False,
-                )
+    def _training_run_options(
+        self,
+        request_payload: dict[str, Any] | None,
+    ) -> TrainingRunOptions:
+        request = dict(request_payload or {})
+        return TrainingRunOptions(
+            release_tag=self._resolve_release_tag(request.get("release_tag")),
+            category=self._clean_optional(request.get("category")),
+            agency_name=self._clean_optional(request.get("agency_name")),
+            limit=max(1, min(int(request.get("limit") or 500), 5000)),
+            notes=self._clean_optional(request.get("notes")),
+            publish_remote=bool(request.get("publish_remote", True)),
+            create_manifest=bool(request.get("create_manifest", True)),
+        )
+
+    def _training_run_paths(self, release_tag: str) -> TrainingRunPaths:
+        training_dir = self.repo_root / "models" / "training-runs" / release_tag
+        predictor_lstm_dir = self.repo_root / "models" / "predictors" / "lstm"
+        predictor_ensemble_dir = self.repo_root / "models" / "predictors" / "ensemble"
+        return TrainingRunPaths(
+            training_dir=training_dir,
+            predictor_lstm_dir=predictor_lstm_dir,
+            predictor_ensemble_dir=predictor_ensemble_dir,
+            dataset_path=training_dir / "dataset.json",
+            summary_path=training_dir / "training-summary.json",
+            dataset_quality_path=training_dir / "dataset-quality.json",
+            comparison_report_path=training_dir / "artifact-comparison.json",
+            lstm_artifact_path=predictor_lstm_dir / f"{release_tag}.json",
+            ensemble_artifact_path=predictor_ensemble_dir / f"{release_tag}.json",
+        )
+
+    @staticmethod
+    def _ensure_training_run_dirs(paths: TrainingRunPaths) -> None:
+        paths.training_dir.mkdir(parents=True, exist_ok=True)
+        paths.predictor_lstm_dir.mkdir(parents=True, exist_ok=True)
+        paths.predictor_ensemble_dir.mkdir(parents=True, exist_ok=True)
+
+    def _build_training_datasets(
+        self,
+        db: Session,
+        options: TrainingRunOptions,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        dataset_service = PredictionDatasetService()
+        dataset = dataset_service.build_training_dataset(
+            db,
+            category=options.category,
+            agency_name=options.agency_name,
+            limit=options.limit,
+            explicit_bid_rate_only=True,
+        )
+        probability_calibration_dataset = dataset_service.build_probability_calibration_dataset(
+            db,
+            category=options.category,
+            limit=options.limit * 5,
+        )
+        return dataset, probability_calibration_dataset
+
+    def _build_and_write_predictor_artifacts(
+        self,
+        *,
+        options: TrainingRunOptions,
+        paths: TrainingRunPaths,
+        bid_rates: list[float],
+        summary: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        lstm_artifact = self._build_lstm_artifact(
+            release_tag=options.release_tag,
+            bid_rates=bid_rates,
+        )
+        ensemble_artifact = self._build_ensemble_artifact(
+            release_tag=options.release_tag,
+            lstm_artifact_path=paths.lstm_artifact_path,
+            lstm_artifact=lstm_artifact,
+            bid_rates=bid_rates,
+        )
+        self._inject_group_calibration(
+            artifact=ensemble_artifact,
+            group_calibration=summary.get("group_calibration") or {},
+        )
+        self._inject_summary_block(
+            artifact=ensemble_artifact,
+            key="probability_calibration",
+            block=summary.get("probability_calibration") or {},
+        )
+        paths.lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
+        paths.ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
+        load_lstm_artifact(paths.lstm_artifact_path)
+        load_ensemble_artifact(paths.ensemble_artifact_path)
+        return lstm_artifact, ensemble_artifact
+
+    def _write_artifact_comparison_report(
+        self,
+        *,
+        options: TrainingRunOptions,
+        paths: TrainingRunPaths,
+        dataset: dict[str, Any],
+        dataset_quality: dict[str, Any],
+        lstm_artifact: dict[str, Any] | None,
+        ensemble_artifact: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        comparison_report = self._build_artifact_comparison_report(
+            release_tag=options.release_tag,
+            category=options.category,
+            agency_name=options.agency_name,
+            dataset=dataset,
+            dataset_quality=dataset_quality,
+            lstm_artifact=lstm_artifact,
+            ensemble_artifact=ensemble_artifact,
+        )
+        paths.comparison_report_path.write_text(self._dump_json(comparison_report), encoding="utf-8")
+        return comparison_report
+
+    def _maybe_create_training_manifest(
+        self,
+        *,
+        options: TrainingRunOptions,
+        paths: TrainingRunPaths,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if not options.create_manifest:
+            return None, None
+        release_service = MLReleasePromotionService(repo_root=self.repo_root)
+        manifest = release_service.create_release_manifest(
+            MLReleasePromotionRequest(
+                release_tag=options.release_tag,
+                lstm_artifact_path=str(paths.lstm_artifact_path),
+                ensemble_artifact_path=str(paths.ensemble_artifact_path),
+                predictor_backtest_report_path=str(paths.comparison_report_path),
+                notes=options.notes or f"Queued price-predictor training run for {options.release_tag}",
+                rebuild_limit=100,
+                force_rebuild=False,
             )
-            if publish_remote:
-                remote_storage = release_service.publish_release_manifest(manifest["manifest_path"])
+        )
+        if options.publish_remote:
+            return manifest, release_service.publish_release_manifest(manifest["manifest_path"])
+        return manifest, None
 
+    def _skipped_training_result(
+        self,
+        *,
+        options: TrainingRunOptions,
+        paths: TrainingRunPaths,
+        summary: dict[str, Any],
+        dataset_quality: dict[str, Any],
+        comparison_report: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
-            "release_tag": release_tag,
+            "release_tag": options.release_tag,
+            "status": "skipped_insufficient_data",
+            "detail": "No usable historical bid-rate samples were available for training.",
+            "dataset_path": self._to_portable_path(paths.dataset_path),
+            "summary_path": self._to_portable_path(paths.summary_path),
+            "dataset_quality_path": self._to_portable_path(paths.dataset_quality_path),
+            "comparison_report_path": self._to_portable_path(paths.comparison_report_path),
+            "summary": summary,
+            "dataset_quality": dataset_quality,
+            "comparison_report": comparison_report,
+            "manifest": None,
+        }
+
+    def _completed_training_result(
+        self,
+        *,
+        options: TrainingRunOptions,
+        paths: TrainingRunPaths,
+        summary: dict[str, Any],
+        dataset_quality: dict[str, Any],
+        comparison_report: dict[str, Any],
+        manifest: dict[str, Any] | None,
+        remote_storage: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "release_tag": options.release_tag,
             "status": "completed",
-            "dataset_path": self._to_portable_path(dataset_path),
-            "summary_path": self._to_portable_path(summary_path),
-            "dataset_quality_path": self._to_portable_path(dataset_quality_path),
-            "comparison_report_path": self._to_portable_path(comparison_report_path),
-            "lstm_artifact_path": self._to_portable_path(lstm_artifact_path),
-            "ensemble_artifact_path": self._to_portable_path(ensemble_artifact_path),
+            "dataset_path": self._to_portable_path(paths.dataset_path),
+            "summary_path": self._to_portable_path(paths.summary_path),
+            "dataset_quality_path": self._to_portable_path(paths.dataset_quality_path),
+            "comparison_report_path": self._to_portable_path(paths.comparison_report_path),
+            "lstm_artifact_path": self._to_portable_path(paths.lstm_artifact_path),
+            "ensemble_artifact_path": self._to_portable_path(paths.ensemble_artifact_path),
             "summary": summary,
             "dataset_quality": dataset_quality,
             "comparison_report": comparison_report,

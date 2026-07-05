@@ -652,68 +652,16 @@ class DecisionAnalyticsService:
         )
         decisions_by_id = {int(record.id): record for record in decisions}
 
-        items: list[dict[str, Any]] = []
-        useful_count = 0
-        not_useful_count = 0
-        category_counters: dict[str, dict[str, int]] = {}
-        action_counters: dict[str, dict[str, int]] = {}
-
-        for decision_id, entry in latest_by_decision.items():
-            decision = decisions_by_id.get(decision_id)
-            if decision is None:
-                # Orphan label: feedback pointing to a missing/foreign decision record.
-                continue
-            verdict = entry["verdict"]
-            if verdict == "useful":
-                useful_count += 1
-            else:
-                not_useful_count += 1
-
-            project = decision.project
-            project_category = (
-                str(project.category) if project is not None and project.category else None
-            )
-            project_business_type_code = (
-                str(project.business_type_code)
-                if project is not None and project.business_type_code
-                else None
-            )
-            project_title = (
-                str(project.title)
-                if project is not None and project.title
-                else f"Project {decision.project_id}"
-            )
-
-            self._increment_label_breakdown(
-                category_counters,
-                key=project_category or self.UNKNOWN_CATEGORY,
-                verdict=verdict,
-            )
-            self._increment_label_breakdown(
-                action_counters,
-                key=str(decision.action or "skip"),
-                verdict=verdict,
-            )
-
-            strengths, risk_flags = _extract_decision_reasons(decision.score_breakdown)
-            reasoning_excerpt = self._reasoning_excerpt(decision.reasoning)
-            items.append(
-                {
-                    "decision_record_id": int(decision.id),
-                    "project_id": int(decision.project_id) if decision.project_id is not None else 0,
-                    "project_title": project_title,
-                    "project_category": project_category,
-                    "project_business_type_code": project_business_type_code,
-                    "action": str(decision.action or "skip"),
-                    "decision_status": str(decision.decision_status or "planned"),
-                    "priority_score": float(decision.priority_score or 0.0),
-                    "verdict": verdict,
-                    "feedback_at": entry["feedback_at"],
-                    "reasoning": reasoning_excerpt,
-                    "strengths": strengths,
-                    "risk_flags": risk_flags,
-                }
-            )
+        (
+            items,
+            useful_count,
+            not_useful_count,
+            category_counters,
+            action_counters,
+        ) = self._build_feedback_label_items(
+            latest_by_decision=latest_by_decision,
+            decisions_by_id=decisions_by_id,
+        )
 
         # Newest feedback first; missing timestamps sort last deterministically by id.
         items.sort(
@@ -736,6 +684,85 @@ class DecisionAnalyticsService:
             "by_category": self._finalize_label_breakdown(category_counters),
             "by_action": self._finalize_label_breakdown(action_counters),
             "items": clamped_items,
+        }
+
+    def _build_feedback_label_items(
+        self,
+        *,
+        latest_by_decision: dict[int, dict[str, Any]],
+        decisions_by_id: dict[int, BidDecisionRecord],
+    ) -> tuple[list[dict[str, Any]], int, int, dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+        items: list[dict[str, Any]] = []
+        useful_count = 0
+        not_useful_count = 0
+        category_counters: dict[str, dict[str, int]] = {}
+        action_counters: dict[str, dict[str, int]] = {}
+        for decision_id, entry in latest_by_decision.items():
+            decision = decisions_by_id.get(decision_id)
+            if decision is None:
+                continue
+            verdict = entry["verdict"]
+            useful_count += 1 if verdict == "useful" else 0
+            not_useful_count += 1 if verdict != "useful" else 0
+            items.append(
+                self._build_feedback_label_item(
+                    decision,
+                    verdict=verdict,
+                    feedback_at=entry["feedback_at"],
+                    category_counters=category_counters,
+                    action_counters=action_counters,
+                )
+            )
+        return items, useful_count, not_useful_count, category_counters, action_counters
+
+    def _build_feedback_label_item(
+        self,
+        decision: BidDecisionRecord,
+        *,
+        verdict: str,
+        feedback_at,
+        category_counters: dict[str, dict[str, int]],
+        action_counters: dict[str, dict[str, int]],
+    ) -> dict[str, Any]:
+        project = decision.project
+        project_category = (
+            str(project.category) if project is not None and project.category else None
+        )
+        project_business_type_code = (
+            str(project.business_type_code)
+            if project is not None and project.business_type_code
+            else None
+        )
+        project_title = (
+            str(project.title)
+            if project is not None and project.title
+            else f"Project {decision.project_id}"
+        )
+        self._increment_label_breakdown(
+            category_counters,
+            key=project_category or self.UNKNOWN_CATEGORY,
+            verdict=verdict,
+        )
+        self._increment_label_breakdown(
+            action_counters,
+            key=str(decision.action or "skip"),
+            verdict=verdict,
+        )
+        strengths, risk_flags = _extract_decision_reasons(decision.score_breakdown)
+        return {
+            "decision_record_id": int(decision.id),
+            "project_id": int(decision.project_id) if decision.project_id is not None else 0,
+            "project_title": project_title,
+            "project_category": project_category,
+            "project_business_type_code": project_business_type_code,
+            "action": str(decision.action or "skip"),
+            "decision_status": str(decision.decision_status or "planned"),
+            "priority_score": float(decision.priority_score or 0.0),
+            "verdict": verdict,
+            "feedback_at": feedback_at,
+            "reasoning": self._reasoning_excerpt(decision.reasoning),
+            "strengths": strengths,
+            "risk_flags": risk_flags,
         }
 
     def _increment_label_breakdown(

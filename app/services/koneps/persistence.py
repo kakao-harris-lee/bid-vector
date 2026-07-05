@@ -490,10 +490,12 @@ def persist_crawl_results(
     items = response.get("items", [])
     metadata = response.get("metadata", {})
 
-    crawl_job.status = response.get("job_status", "completed")
-    crawl_job.result_count = response.get("collected_count", len(items))
-    crawl_job.error_message = parsing.format_crawl_error_message(metadata)
-    crawl_job.completed_at = utc_now()
+    _apply_crawl_response_summary(
+        crawl_job,
+        job_status=response.get("job_status", "completed"),
+        collected_count=response.get("collected_count", len(items)),
+        metadata=metadata,
+    )
 
     project_similarity = ProjectSimilarityService()
     linked_project_ids: set[int] = set()
@@ -504,97 +506,18 @@ def persist_crawl_results(
     deferred_embedding_project_ids: set[int] = set()
 
     for item in items:
-        item_metadata = item.get("metadata", {})
-        historical_record = (
-            db.query(HistoricalData)
-            .filter(HistoricalData.notice_number == item.get("notice_number"))
-            .first()
-        )
-        if historical_record is None:
-            historical_record = HistoricalData(notice_number=item.get("notice_number"))
-            db.add(historical_record)
-
-        project, embedding_deferred = resolve_project_for_item(
+        project, embedding_deferred = _persist_crawl_item(
             db,
             item=item,
             request=request,
-            historical_record=historical_record,
             project_similarity=project_similarity,
+            crawl_job_status=crawl_job.status,
             defer_embeddings=defer_embeddings,
         )
         if project is not None:
-            historical_record.project_id = project.id
             linked_project_ids.add(int(project.id))
             if embedding_deferred:
                 deferred_embedding_project_ids.add(int(project.id))
-
-        historical_record.agency_name = (
-            item_metadata.get("opening_demand_agency")
-            or item_metadata.get("demand_agency")
-            or item_metadata.get("issuing_agency")
-            or ""
-        )
-        historical_record.category = matching.resolve_project_category(item, request)
-        historical_record.base_amount = item.get("base_amount") or 0.0
-        historical_record.predicted_price = (
-            item.get("estimated_amount") or item.get("base_amount") or 0.0
-        )
-        historical_record.bid_rate = (
-            parsing.normalize_bid_rate_value(
-                item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
-            )
-            or 0.0
-        )
-        # Reserve price / selected numbers are settled, immutable values. An
-        # incoming empty list means "not (re)fetched this run" (e.g. the
-        # reserve-detail HTTP was skipped because it was already persisted),
-        # so it must never clobber a previously stored non-empty value.
-        incoming_reserve_prices = item_metadata.get("reserve_prices") or []
-        if incoming_reserve_prices or not scsbid.has_persisted_reserve_prices(
-            historical_record
-        ):
-            historical_record.reserve_prices = json.dumps(
-                incoming_reserve_prices,
-                ensure_ascii=False,
-            )
-        incoming_selected_numbers = item_metadata.get("selected_numbers") or []
-        if incoming_selected_numbers or not scsbid.has_persisted_reserve_prices(
-            historical_record
-        ):
-            historical_record.selected_numbers = json.dumps(
-                incoming_selected_numbers,
-                ensure_ascii=False,
-            )
-        historical_record.opened_at = parsing.coerce_datetime(
-            item_metadata.get("opening_announced_at")
-            or item_metadata.get("opening_scheduled_at")
-        )
-
-        has_tender_result = any(
-            item_metadata.get(key)
-            for key in (
-                "opening_status",
-                "winning_company",
-                "winning_amount",
-                "winning_rate",
-                "opening_announced_at",
-            )
-        )
-        if has_tender_result:
-            tender_result = resolve_tender_result(
-                db,
-                project_id=(
-                    project.id if project is not None else historical_record.project_id
-                ),
-                item_metadata=item_metadata,
-                crawl_job_status=crawl_job.status,
-            )
-
-            if (
-                tender_result.project_id is None
-                and historical_record.project_id is not None
-            ):
-                tender_result.project_id = historical_record.project_id
 
     if len(linked_project_ids) == 1:
         crawl_job.project_id = next(iter(linked_project_ids))
@@ -607,11 +530,168 @@ def persist_crawl_results(
             deferred_embedding_project_ids
         )
 
+    return _commit_and_publish_crawl_job(db, crawl_job, event_name="crawl.failed")
+
+
+def _apply_crawl_response_summary(
+    crawl_job: CrawlJob,
+    *,
+    job_status: str,
+    collected_count: int,
+    metadata: dict[str, Any],
+) -> None:
+    crawl_job.status = job_status
+    crawl_job.result_count = collected_count
+    crawl_job.error_message = parsing.format_crawl_error_message(metadata)
+    crawl_job.completed_at = utc_now()
+
+
+def _persist_crawl_item(
+    db: Session,
+    *,
+    item: dict[str, Any],
+    request: CrawlRequest,
+    project_similarity: ProjectSimilarityService,
+    crawl_job_status: str,
+    defer_embeddings: bool,
+) -> tuple[Project | None, bool]:
+    item_metadata = item.get("metadata", {})
+    historical_record = _resolve_historical_record(db, notice_number=item.get("notice_number"))
+    project, embedding_deferred = resolve_project_for_item(
+        db,
+        item=item,
+        request=request,
+        historical_record=historical_record,
+        project_similarity=project_similarity,
+        defer_embeddings=defer_embeddings,
+    )
+    if project is not None:
+        historical_record.project_id = project.id
+    _update_historical_record_from_item(
+        historical_record,
+        item=item,
+        item_metadata=item_metadata,
+        request=request,
+    )
+    _persist_tender_result_for_item(
+        db,
+        project=project,
+        historical_record=historical_record,
+        item_metadata=item_metadata,
+        crawl_job_status=crawl_job_status,
+    )
+    return project, embedding_deferred
+
+
+def _resolve_historical_record(
+    db: Session,
+    *,
+    notice_number: Any,
+) -> HistoricalData:
+    historical_record = (
+        db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == notice_number)
+        .first()
+    )
+    if historical_record is None:
+        historical_record = HistoricalData(notice_number=notice_number)
+        db.add(historical_record)
+    return historical_record
+
+
+def _update_historical_record_from_item(
+    historical_record: HistoricalData,
+    *,
+    item: dict[str, Any],
+    item_metadata: dict[str, Any],
+    request: CrawlRequest,
+) -> None:
+    historical_record.agency_name = (
+        item_metadata.get("opening_demand_agency")
+        or item_metadata.get("demand_agency")
+        or item_metadata.get("issuing_agency")
+        or ""
+    )
+    historical_record.category = matching.resolve_project_category(item, request)
+    historical_record.base_amount = item.get("base_amount") or 0.0
+    historical_record.predicted_price = item.get("estimated_amount") or item.get("base_amount") or 0.0
+    historical_record.bid_rate = (
+        parsing.normalize_bid_rate_value(
+            item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
+        )
+        or 0.0
+    )
+    _update_historical_reserve_fields(historical_record, item_metadata=item_metadata)
+    historical_record.opened_at = parsing.coerce_datetime(
+        item_metadata.get("opening_announced_at")
+        or item_metadata.get("opening_scheduled_at")
+    )
+
+
+def _update_historical_reserve_fields(
+    historical_record: HistoricalData,
+    *,
+    item_metadata: dict[str, Any],
+) -> None:
+    incoming_reserve_prices = item_metadata.get("reserve_prices") or []
+    if incoming_reserve_prices or not scsbid.has_persisted_reserve_prices(
+        historical_record
+    ):
+        historical_record.reserve_prices = json.dumps(
+            incoming_reserve_prices,
+            ensure_ascii=False,
+        )
+    incoming_selected_numbers = item_metadata.get("selected_numbers") or []
+    if incoming_selected_numbers or not scsbid.has_persisted_reserve_prices(
+        historical_record
+    ):
+        historical_record.selected_numbers = json.dumps(
+            incoming_selected_numbers,
+            ensure_ascii=False,
+        )
+
+
+def _persist_tender_result_for_item(
+    db: Session,
+    *,
+    project: Project | None,
+    historical_record: HistoricalData,
+    item_metadata: dict[str, Any],
+    crawl_job_status: str,
+) -> None:
+    has_tender_result = any(
+        item_metadata.get(key)
+        for key in (
+            "opening_status",
+            "winning_company",
+            "winning_amount",
+            "winning_rate",
+            "opening_announced_at",
+        )
+    )
+    if not has_tender_result:
+        return
+    tender_result = resolve_tender_result(
+        db,
+        project_id=project.id if project is not None else historical_record.project_id,
+        item_metadata=item_metadata,
+        crawl_job_status=crawl_job_status,
+    )
+    if tender_result.project_id is None and historical_record.project_id is not None:
+        tender_result.project_id = historical_record.project_id
+
+
+def _commit_and_publish_crawl_job(
+    db: Session,
+    crawl_job: CrawlJob,
+    *,
+    event_name: str,
+) -> CrawlJob:
     db.add(crawl_job)
     db.commit()
     db.refresh(crawl_job)
     realtime_event_manager.publish_event(
-        "crawl.failed",
+        event_name,
         {
             "crawl_job_id": int(crawl_job.id),
             "project_id": (

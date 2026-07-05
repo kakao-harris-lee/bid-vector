@@ -864,38 +864,45 @@ def resolve_procurement_rate_band(*, category: str, description: str) -> str | N
         return None
 
     if normalized_category == "goods":
-        if _is_goods_deep_discount_notice(normalized_text):
-            return "goods_deep_discount"
-        if _is_goods_narrow_control_price_competitive(normalized_text):
-            return "goods_price_competitive"
-        goods_price_competitive_keywords = (
-            "소액수의 견적",
-            "견적 제출",
-            "견적제출",
-            "2단계",
-            "규격·가격",
-            "규격 가격",
-            "규격가격",
-            "가격분리",
-            "가격 분리",
-            "동시입찰",
-            "국내도서",
-            "도서 구매",
-            "운영장비 구입",
-            "데이터로거 구매",
-            "모니터 확장",
-            "상토 구입",
-            "원액주입설비",
-            "인명구조함",
-            "주방기구",
-        )
-        if any(keyword in normalized_text for keyword in goods_price_competitive_keywords):
-            return "goods_price_competitive"
-        return None
+        return _resolve_goods_procurement_rate_band(normalized_text)
 
     if normalized_category not in {"service", "technical-service", "general-service", "software"}:
         return None
+    return _resolve_service_procurement_rate_band(normalized_text)
 
+
+def _resolve_goods_procurement_rate_band(normalized_text: str) -> str | None:
+    if _is_goods_deep_discount_notice(normalized_text):
+        return "goods_deep_discount"
+    if _is_goods_narrow_control_price_competitive(normalized_text):
+        return "goods_price_competitive"
+    goods_price_competitive_keywords = (
+        "소액수의 견적",
+        "견적 제출",
+        "견적제출",
+        "2단계",
+        "규격·가격",
+        "규격 가격",
+        "규격가격",
+        "가격분리",
+        "가격 분리",
+        "동시입찰",
+        "국내도서",
+        "도서 구매",
+        "운영장비 구입",
+        "데이터로거 구매",
+        "모니터 확장",
+        "상토 구입",
+        "원액주입설비",
+        "인명구조함",
+        "주방기구",
+    )
+    if any(keyword in normalized_text for keyword in goods_price_competitive_keywords):
+        return "goods_price_competitive"
+    return None
+
+
+def _resolve_service_procurement_rate_band(normalized_text: str) -> str | None:
     title_text = normalized_text.splitlines()[0] if normalized_text.splitlines() else normalized_text
     explicit_direct_negotiated_keywords = (
         "수의시담",

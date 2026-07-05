@@ -559,70 +559,93 @@ class NoticeClassifierService:
         # /capacity_score. The legacy fallbacks below run unchanged when the
         # field is left at its default (0.0).
         if project_type == "construction" and construction_capacity_amount > 0:
-            capacity_ratio = construction_capacity_amount / budget_estimate
-            capacity_label = f"시공능력평가액 {construction_capacity_amount:,.0f}원"
-            if capacity_ratio >= 3:
-                return RuleAssessment(
-                    score=self.BUDGET_STRONG_SCORE,
-                    passed=True,
-                    reasons=[
-                        f"{capacity_label}이 공고 예산의 {capacity_ratio:.1f}배 수준으로 도급 가능 규모가 충분합니다."
-                    ],
-                )
-            if capacity_ratio >= 1:
-                return RuleAssessment(
-                    score=self.BUDGET_GOOD_SCORE,
-                    passed=True,
-                    reasons=[
-                        f"{capacity_label}이 공고 예산 이상으로 시공능력 기준 필터를 충족합니다. (배수: {capacity_ratio:.1f})"
-                    ],
-                )
-            if capacity_ratio >= 0.6:
-                return RuleAssessment(
-                    score=self.BUDGET_BORDERLINE_SCORE,
-                    passed=True,
-                    reasons=[
-                        f"{capacity_label}이 공고 예산 대비 다소 타이트하지만 시공능력 기준으로 보수적 통과 처리했습니다. (배수: {capacity_ratio:.1f})"
-                    ],
-                )
-
-            return RuleAssessment(
-                score=0.0,
-                passed=False,
-                penalty=self.BUDGET_MISMATCH_PENALTY,
-                reasons=[
-                    f"{capacity_label}이 공고 예산 대비 부족해 시공능력 기준 필터를 통과하지 못했습니다. (배수: {capacity_ratio:.1f})"
-                ],
+            return self._assess_construction_capacity_budget(
+                budget_estimate=budget_estimate,
+                construction_capacity_amount=construction_capacity_amount,
             )
 
         if annual_revenue > 0:
-            revenue_ratio = annual_revenue / budget_estimate
-            if revenue_ratio >= 3:
-                return RuleAssessment(
-                    score=self.BUDGET_STRONG_SCORE,
-                    passed=True,
-                    reasons=[f"연매출이 공고 예산의 {revenue_ratio:.1f}배 수준으로 예산 대응 여력이 충분합니다."],
-                )
-            if revenue_ratio >= 1:
-                return RuleAssessment(
-                    score=self.BUDGET_GOOD_SCORE,
-                    passed=True,
-                    reasons=[f"연매출이 공고 예산 이상으로 기본 예산 필터를 충족합니다. (배수: {revenue_ratio:.1f})"],
-                )
-            if revenue_ratio >= 0.6:
-                return RuleAssessment(
-                    score=self.BUDGET_BORDERLINE_SCORE,
-                    passed=True,
-                    reasons=[f"연매출이 공고 예산 대비 다소 타이트하지만 1차 수행 가능 범위로 판단했습니다. (배수: {revenue_ratio:.1f})"],
-                )
-
-            return RuleAssessment(
-                score=0.0,
-                passed=False,
-                penalty=self.BUDGET_MISMATCH_PENALTY,
-                reasons=[f"연매출이 공고 예산 대비 낮아 예산 적합도 필터를 통과하지 못했습니다. (배수: {revenue_ratio:.1f})"],
+            return self._assess_revenue_budget(
+                budget_estimate=budget_estimate,
+                annual_revenue=annual_revenue,
             )
 
+        return self._assess_capacity_score_budget(capacity_score)
+
+    def _assess_construction_capacity_budget(
+        self,
+        *,
+        budget_estimate: float,
+        construction_capacity_amount: float,
+    ) -> RuleAssessment:
+        capacity_ratio = construction_capacity_amount / budget_estimate
+        capacity_label = f"시공능력평가액 {construction_capacity_amount:,.0f}원"
+        if capacity_ratio >= 3:
+            return RuleAssessment(
+                score=self.BUDGET_STRONG_SCORE,
+                passed=True,
+                reasons=[
+                    f"{capacity_label}이 공고 예산의 {capacity_ratio:.1f}배 수준으로 도급 가능 규모가 충분합니다."
+                ],
+            )
+        if capacity_ratio >= 1:
+            return RuleAssessment(
+                score=self.BUDGET_GOOD_SCORE,
+                passed=True,
+                reasons=[
+                    f"{capacity_label}이 공고 예산 이상으로 시공능력 기준 필터를 충족합니다. (배수: {capacity_ratio:.1f})"
+                ],
+            )
+        if capacity_ratio >= 0.6:
+            return RuleAssessment(
+                score=self.BUDGET_BORDERLINE_SCORE,
+                passed=True,
+                reasons=[
+                    f"{capacity_label}이 공고 예산 대비 다소 타이트하지만 시공능력 기준으로 보수적 통과 처리했습니다. (배수: {capacity_ratio:.1f})"
+                ],
+            )
+        return RuleAssessment(
+            score=0.0,
+            passed=False,
+            penalty=self.BUDGET_MISMATCH_PENALTY,
+            reasons=[
+                f"{capacity_label}이 공고 예산 대비 부족해 시공능력 기준 필터를 통과하지 못했습니다. (배수: {capacity_ratio:.1f})"
+            ],
+        )
+
+    def _assess_revenue_budget(
+        self,
+        *,
+        budget_estimate: float,
+        annual_revenue: float,
+    ) -> RuleAssessment:
+        revenue_ratio = annual_revenue / budget_estimate
+        if revenue_ratio >= 3:
+            return RuleAssessment(
+                score=self.BUDGET_STRONG_SCORE,
+                passed=True,
+                reasons=[f"연매출이 공고 예산의 {revenue_ratio:.1f}배 수준으로 예산 대응 여력이 충분합니다."],
+            )
+        if revenue_ratio >= 1:
+            return RuleAssessment(
+                score=self.BUDGET_GOOD_SCORE,
+                passed=True,
+                reasons=[f"연매출이 공고 예산 이상으로 기본 예산 필터를 충족합니다. (배수: {revenue_ratio:.1f})"],
+            )
+        if revenue_ratio >= 0.6:
+            return RuleAssessment(
+                score=self.BUDGET_BORDERLINE_SCORE,
+                passed=True,
+                reasons=[f"연매출이 공고 예산 대비 다소 타이트하지만 1차 수행 가능 범위로 판단했습니다. (배수: {revenue_ratio:.1f})"],
+            )
+        return RuleAssessment(
+            score=0.0,
+            passed=False,
+            penalty=self.BUDGET_MISMATCH_PENALTY,
+            reasons=[f"연매출이 공고 예산 대비 낮아 예산 적합도 필터를 통과하지 못했습니다. (배수: {revenue_ratio:.1f})"],
+        )
+
+    def _assess_capacity_score_budget(self, capacity_score: float) -> RuleAssessment:
         if capacity_score >= 0.8:
             return RuleAssessment(
                 score=self.CAPACITY_HIGH_SCORE,

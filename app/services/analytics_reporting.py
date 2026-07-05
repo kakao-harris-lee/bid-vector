@@ -946,6 +946,56 @@ class AnalyticsReportingService:
     ) -> dict[str, Any]:
         """Summarize G-1 synthetic experiment health for the operations report."""
         preset_names = tuple(SYNTHETIC_EXPERIMENT_PRESETS)
+        experiment_by_name = self._synthetic_experiments_by_name(db, preset_names)
+        recent_runs = self._synthetic_preset_runs(
+            db,
+            preset_names,
+            date_from=date_from,
+        )
+        all_preset_runs = self._synthetic_preset_runs(db, preset_names)
+        latest_run_by_name = self._latest_synthetic_run_by_name(all_preset_runs)
+        latest_run = all_preset_runs[0] if all_preset_runs else None
+        preset_rows = [
+            self._synthetic_preset_row(
+                name,
+                experiment=experiment_by_name.get(name),
+                latest_preset_run=latest_run_by_name.get(name),
+            )
+            for name in preset_names
+        ]
+        counts = self._synthetic_validation_counts(preset_rows, recent_runs)
+        status, detail = self._synthetic_validation_status(
+            preset_count=len(preset_names),
+            saved_preset_count=counts["saved_preset_count"],
+            completed_preset_count=counts["completed_preset_count"],
+            failed_preset_count=counts["failed_preset_count"],
+            sufficient_preset_count=counts["sufficient_preset_count"],
+            recent_run_count=counts["recent_run_count"],
+        )
+        detail = self._with_synthetic_scope_detail(detail)
+        return {
+            "preset_count": len(preset_names),
+            "saved_preset_count": counts["saved_preset_count"],
+            "completed_preset_count": counts["completed_preset_count"],
+            "failed_preset_count": counts["failed_preset_count"],
+            "sufficient_preset_count": counts["sufficient_preset_count"],
+            "sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+            "recent_run_count": counts["recent_run_count"],
+            "recent_completed_count": counts["recent_completed_count"],
+            "recent_failed_count": counts["recent_failed_count"],
+            "status": status,
+            "detail": detail,
+            "latest": self._synthetic_latest_run_summary(latest_run),
+            "presets": preset_rows,
+        }
+
+    def _synthetic_experiments_by_name(
+        self,
+        db: Session,
+        preset_names: tuple[str, ...],
+    ) -> dict[str, SyntheticExperiment]:
+        if not preset_names:
+            return {}
         experiments = (
             db.query(SyntheticExperiment)
             .filter(SyntheticExperiment.name.in_(preset_names))
@@ -954,144 +1004,125 @@ class AnalyticsReportingService:
                 SyntheticExperiment.id.desc(),
             )
             .all()
-            if preset_names
-            else []
         )
         experiment_by_name: dict[str, SyntheticExperiment] = {}
         for experiment in experiments:
             experiment_by_name.setdefault(str(experiment.name), experiment)
-        recent_runs = (
-            db.query(SyntheticExperimentRun)
-            .join(SyntheticExperiment)
-            .filter(
-                SyntheticExperiment.name.in_(preset_names),
-                SyntheticExperimentRun.created_at >= date_from,
-            )
-            .order_by(
-                SyntheticExperimentRun.created_at.desc(),
-                SyntheticExperimentRun.id.desc(),
-            )
-            .all()
-        )
-        all_preset_runs = (
+        return experiment_by_name
+
+    def _synthetic_preset_runs(
+        self,
+        db: Session,
+        preset_names: tuple[str, ...],
+        *,
+        date_from: datetime | None = None,
+    ) -> list[SyntheticExperimentRun]:
+        if not preset_names:
+            return []
+        query = (
             db.query(SyntheticExperimentRun)
             .join(SyntheticExperiment)
             .filter(SyntheticExperiment.name.in_(preset_names))
-            .order_by(
-                SyntheticExperimentRun.created_at.desc(),
-                SyntheticExperimentRun.id.desc(),
-            )
-            .all()
-            if preset_names
-            else []
         )
+        if date_from is not None:
+            query = query.filter(SyntheticExperimentRun.created_at >= date_from)
+        return query.order_by(
+            SyntheticExperimentRun.created_at.desc(),
+            SyntheticExperimentRun.id.desc(),
+        ).all()
+
+    @staticmethod
+    def _latest_synthetic_run_by_name(
+        runs: list[SyntheticExperimentRun],
+    ) -> dict[str, SyntheticExperimentRun]:
         latest_run_by_name: dict[str, SyntheticExperimentRun] = {}
-        for run in all_preset_runs:
+        for run in runs:
             if run.experiment is None:
                 continue
             latest_run_by_name.setdefault(str(run.experiment.name), run)
-        latest_run = (
-            db.query(SyntheticExperimentRun)
-            .join(SyntheticExperiment)
-            .filter(SyntheticExperiment.name.in_(preset_names))
-            .order_by(
-                SyntheticExperimentRun.created_at.desc(),
-                SyntheticExperimentRun.id.desc(),
-            )
-            .first()
-        )
-        preset_rows = []
-        for name in preset_names:
-            experiment = experiment_by_name.get(name)
-            latest_preset_run = latest_run_by_name.get(name)
-            summary = self._load_json_object(
-                latest_preset_run.summary_json if latest_preset_run else None
-            )
-            row_experiment_id = (
-                int(latest_preset_run.experiment_id)
-                if latest_preset_run
-                else int(experiment.id)
-                if experiment
-                else None
-            )
-            preset_rows.append(
-                {
-                    "name": name,
-                    "experiment_id": row_experiment_id,
-                    "latest_run_id": int(latest_preset_run.id) if latest_preset_run else None,
-                    "latest_run_status": latest_preset_run.status if latest_preset_run else None,
-                    "latest_finished_at": latest_preset_run.finished_at if latest_preset_run else None,
-                    "sample_status": summary.get("sample_status"),
-                    "total_settled_count": int(summary.get("total_settled_count") or 0),
-                    "missing_total_settled_count": int(
-                        summary.get("missing_total_settled_count") or 0
-                    ),
-                    "insufficient_operator_count": len(
-                        summary.get("insufficient_operators") or []
-                    ),
-                    "evidence_scope": self.SYNTHETIC_EVIDENCE_SCOPE,
-                    "canonical_only_reason": self.SYNTHETIC_CANONICAL_ONLY_REASON,
-                }
-            )
+        return latest_run_by_name
 
-        saved_preset_count = sum(1 for item in preset_rows if item["experiment_id"] is not None)
-        completed_preset_count = sum(
-            1 for item in preset_rows if item["latest_run_status"] == "completed"
+    def _synthetic_preset_row(
+        self,
+        name: str,
+        *,
+        experiment: SyntheticExperiment | None,
+        latest_preset_run: SyntheticExperimentRun | None,
+    ) -> dict[str, Any]:
+        summary = self._load_json_object(
+            latest_preset_run.summary_json if latest_preset_run else None
         )
-        failed_preset_count = sum(
-            1 for item in preset_rows if item["latest_run_status"] == "failed"
+        row_experiment_id = (
+            int(latest_preset_run.experiment_id)
+            if latest_preset_run
+            else int(experiment.id)
+            if experiment
+            else None
         )
-        sufficient_preset_count = sum(
-            1 for item in preset_rows if item["sample_status"] == SAMPLE_STATUS_SUFFICIENT
-        )
-        recent_completed_count = sum(1 for run in recent_runs if str(run.status) == "completed")
-        recent_failed_count = sum(1 for run in recent_runs if str(run.status) == "failed")
-        latest_summary = self._load_json_object(latest_run.summary_json if latest_run else None)
-        status, detail = self._synthetic_validation_status(
-            preset_count=len(preset_names),
-            saved_preset_count=saved_preset_count,
-            completed_preset_count=completed_preset_count,
-            failed_preset_count=failed_preset_count,
-            sufficient_preset_count=sufficient_preset_count,
-            recent_run_count=len(recent_runs),
-        )
-        detail = self._with_synthetic_scope_detail(detail)
         return {
-            "preset_count": len(preset_names),
-            "saved_preset_count": saved_preset_count,
-            "completed_preset_count": completed_preset_count,
-            "failed_preset_count": failed_preset_count,
-            "sufficient_preset_count": sufficient_preset_count,
-            "sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
-            "recent_run_count": len(recent_runs),
-            "recent_completed_count": recent_completed_count,
-            "recent_failed_count": recent_failed_count,
-            "status": status,
-            "detail": detail,
-            "latest": (
-                {
-                    "experiment_id": int(latest_run.experiment_id),
-                    "experiment_name": latest_run.experiment.name
-                    if latest_run.experiment
-                    else None,
-                    "run_id": int(latest_run.id),
-                    "status": latest_run.status,
-                    "created_at": latest_run.created_at,
-                    "finished_at": latest_run.finished_at,
-                    "sample_status": latest_summary.get("sample_status"),
-                    "total_settled_count": int(
-                        latest_summary.get("total_settled_count") or 0
-                    ),
-                    "missing_total_settled_count": int(
-                        latest_summary.get("missing_total_settled_count") or 0
-                    ),
-                    "evidence_scope": self.SYNTHETIC_EVIDENCE_SCOPE,
-                    "canonical_only_reason": self.SYNTHETIC_CANONICAL_ONLY_REASON,
-                }
-                if latest_run
-                else None
+            "name": name,
+            "experiment_id": row_experiment_id,
+            "latest_run_id": int(latest_preset_run.id) if latest_preset_run else None,
+            "latest_run_status": latest_preset_run.status if latest_preset_run else None,
+            "latest_finished_at": latest_preset_run.finished_at if latest_preset_run else None,
+            "sample_status": summary.get("sample_status"),
+            "total_settled_count": int(summary.get("total_settled_count") or 0),
+            "missing_total_settled_count": int(
+                summary.get("missing_total_settled_count") or 0
             ),
-            "presets": preset_rows,
+            "insufficient_operator_count": len(summary.get("insufficient_operators") or []),
+            "evidence_scope": self.SYNTHETIC_EVIDENCE_SCOPE,
+            "canonical_only_reason": self.SYNTHETIC_CANONICAL_ONLY_REASON,
+        }
+
+    def _synthetic_validation_counts(
+        self,
+        preset_rows: list[dict[str, Any]],
+        recent_runs: list[SyntheticExperimentRun],
+    ) -> dict[str, int]:
+        return {
+            "saved_preset_count": sum(
+                1 for item in preset_rows if item["experiment_id"] is not None
+            ),
+            "completed_preset_count": sum(
+                1 for item in preset_rows if item["latest_run_status"] == "completed"
+            ),
+            "failed_preset_count": sum(
+                1 for item in preset_rows if item["latest_run_status"] == "failed"
+            ),
+            "sufficient_preset_count": sum(
+                1 for item in preset_rows if item["sample_status"] == SAMPLE_STATUS_SUFFICIENT
+            ),
+            "recent_run_count": len(recent_runs),
+            "recent_completed_count": sum(
+                1 for run in recent_runs if str(run.status) == "completed"
+            ),
+            "recent_failed_count": sum(
+                1 for run in recent_runs if str(run.status) == "failed"
+            ),
+        }
+
+    def _synthetic_latest_run_summary(
+        self,
+        latest_run: SyntheticExperimentRun | None,
+    ) -> dict[str, Any] | None:
+        if latest_run is None:
+            return None
+        latest_summary = self._load_json_object(latest_run.summary_json)
+        return {
+            "experiment_id": int(latest_run.experiment_id),
+            "experiment_name": latest_run.experiment.name if latest_run.experiment else None,
+            "run_id": int(latest_run.id),
+            "status": latest_run.status,
+            "created_at": latest_run.created_at,
+            "finished_at": latest_run.finished_at,
+            "sample_status": latest_summary.get("sample_status"),
+            "total_settled_count": int(latest_summary.get("total_settled_count") or 0),
+            "missing_total_settled_count": int(
+                latest_summary.get("missing_total_settled_count") or 0
+            ),
+            "evidence_scope": self.SYNTHETIC_EVIDENCE_SCOPE,
+            "canonical_only_reason": self.SYNTHETIC_CANONICAL_ONLY_REASON,
         }
 
     def _synthetic_validation_status(
@@ -1142,29 +1173,58 @@ class AnalyticsReportingService:
         없음" instead of implying failure when there are simply no runs.
         """
         date_from = utc_now() - timedelta(days=days)
-        runs = (
+        runs = self._load_recent_smoke_runs(db, date_from=date_from)
+        cycle_count = len(runs)
+        passed_count = sum(1 for run in runs if bool(run.overall_passed))
+        failed_count = cycle_count - passed_count
+        current_streak = self._current_smoke_pass_streak(runs)
+        per_phase, failure_categories = self._build_smoke_phase_summary(runs)
+
+        return {
+            "cycle_count": cycle_count,
+            "passed_count": passed_count,
+            "failed_count": failed_count,
+            "pass_rate": self._rate(passed_count, cycle_count),
+            "current_streak": current_streak,
+            "healthy_streak_target": self.SMOKE_HEALTHY_STREAK,
+            "current_streak_meets_target": current_streak >= self.SMOKE_HEALTHY_STREAK,
+            "schedule_enabled": bool(settings.SMOKE_TEST_SCHEDULE_ENABLED),
+            "failure_category_breakdown": {
+                key: value for key, value in failure_categories.items() if value > 0
+            },
+            "per_phase": per_phase,
+            "latest": self._build_latest_smoke_summary(runs[0]) if runs else None,
+            "recent_failures": self._build_recent_smoke_failures(
+                runs,
+                recent_limit=recent_limit,
+            ),
+        }
+
+    def _load_recent_smoke_runs(
+        self,
+        db: Session,
+        *,
+        date_from: datetime,
+    ) -> list[SmokeTestRun]:
+        return (
             db.query(SmokeTestRun)
             .filter(SmokeTestRun.created_at >= date_from)
             .order_by(SmokeTestRun.created_at.desc(), SmokeTestRun.id.desc())
             .all()
         )
-        cycle_count = len(runs)
-        passed_count = sum(1 for run in runs if bool(run.overall_passed))
-        failed_count = cycle_count - passed_count
 
-        # Consecutive most-recent passing cycles (runs are newest-first).
+    def _current_smoke_pass_streak(self, runs: list[SmokeTestRun]) -> int:
         current_streak = 0
         for run in runs:
-            if bool(run.overall_passed):
-                current_streak += 1
-            else:
+            if not bool(run.overall_passed):
                 break
+            current_streak += 1
+        return current_streak
 
-        # Explode per-run trimmed phases for per-phase pass rates. A phase that a
-        # cycle *skipped* (recorded with passed=False and a "skipped …" detail
-        # because upstream failed / no eligible project) never actually ran, so it
-        # is excluded from BOTH the numerator and denominator — counting it would
-        # dishonestly drag the phase's pass_rate down for a phase that did not run.
+    def _build_smoke_phase_summary(
+        self,
+        runs: list[SmokeTestRun],
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
         phase_passed: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
         phase_attempted: dict[str, int] = {name: 0 for name in self.SMOKE_PHASE_NAMES}
         failure_categories: dict[str, int] = {
@@ -1194,43 +1254,28 @@ class AnalyticsReportingService:
             }
             for name in self.SMOKE_PHASE_NAMES
         ]
+        return per_phase, failure_categories
 
-        latest = None
-        if runs:
-            latest_run = runs[0]
-            latest = {
-                "started_at": latest_run.started_at,
-                "overall_passed": bool(latest_run.overall_passed),
-                "phases": [
-                    {
-                        "name": str(phase.get("name") or ""),
-                        "passed": bool(phase.get("passed")),
-                        "detail": str(phase.get("detail") or ""),
-                        "failure_category": (
-                            None
-                            if bool(phase.get("passed"))
-                            else self._smoke_failure_category(phase)
-                        ),
-                        "action_required": (
-                            None
-                            if bool(phase.get("passed"))
-                            else self._smoke_failure_action(phase)
-                        ),
-                        "retry_method": (
-                            None
-                            if bool(phase.get("passed"))
-                            else self._smoke_retry_method(phase)
-                        ),
-                        "skip_reason": self._smoke_skip_reason(phase),
-                        "evidence": self._smoke_phase_evidence(
-                            phase,
-                            smoke_run_id=int(latest_run.id),
-                        ),
-                    }
-                    for phase in self._load_smoke_phases(latest_run.phases)
-                ],
-            }
+    def _build_latest_smoke_summary(self, latest_run: SmokeTestRun) -> dict[str, Any]:
+        return {
+            "started_at": latest_run.started_at,
+            "overall_passed": bool(latest_run.overall_passed),
+            "phases": [
+                self._serialize_smoke_phase(
+                    phase,
+                    smoke_run_id=int(latest_run.id),
+                    include_passed_nulls=True,
+                )
+                for phase in self._load_smoke_phases(latest_run.phases)
+            ],
+        }
 
+    def _build_recent_smoke_failures(
+        self,
+        runs: list[SmokeTestRun],
+        *,
+        recent_limit: int,
+    ) -> list[dict[str, Any]]:
         recent_failures = []
         for run in runs:
             if bool(run.overall_passed):
@@ -1245,19 +1290,7 @@ class AnalyticsReportingService:
                 category = self._smoke_failure_category(phase)
                 run_categories[category] = run_categories.get(category, 0) + 1
             phase_details = [
-                {
-                    "name": str(phase.get("name") or ""),
-                    "passed": bool(phase.get("passed")),
-                    "detail": str(phase.get("detail") or ""),
-                    "failure_category": self._smoke_failure_category(phase),
-                    "action_required": self._smoke_failure_action(phase),
-                    "retry_method": self._smoke_retry_method(phase),
-                    "skip_reason": self._smoke_skip_reason(phase),
-                    "evidence": self._smoke_phase_evidence(
-                        phase,
-                        smoke_run_id=int(run.id),
-                    ),
-                }
+                self._serialize_smoke_phase(phase, smoke_run_id=int(run.id))
                 for phase in failed_phases
             ]
             recent_failures.append(
@@ -1289,22 +1322,36 @@ class AnalyticsReportingService:
             )
             if len(recent_failures) >= recent_limit:
                 break
+        return recent_failures
 
+    def _serialize_smoke_phase(
+        self,
+        phase: dict[str, Any],
+        *,
+        smoke_run_id: int,
+        include_passed_nulls: bool = False,
+    ) -> dict[str, Any]:
+        passed = bool(phase.get("passed"))
+        if include_passed_nulls and passed:
+            failure_category = None
+            action_required = None
+            retry_method = None
+        else:
+            failure_category = self._smoke_failure_category(phase)
+            action_required = self._smoke_failure_action(phase)
+            retry_method = self._smoke_retry_method(phase)
         return {
-            "cycle_count": cycle_count,
-            "passed_count": passed_count,
-            "failed_count": failed_count,
-            "pass_rate": self._rate(passed_count, cycle_count),
-            "current_streak": current_streak,
-            "healthy_streak_target": self.SMOKE_HEALTHY_STREAK,
-            "current_streak_meets_target": current_streak >= self.SMOKE_HEALTHY_STREAK,
-            "schedule_enabled": bool(settings.SMOKE_TEST_SCHEDULE_ENABLED),
-            "failure_category_breakdown": {
-                key: value for key, value in failure_categories.items() if value > 0
-            },
-            "per_phase": per_phase,
-            "latest": latest,
-            "recent_failures": recent_failures,
+            "name": str(phase.get("name") or ""),
+            "passed": passed,
+            "detail": str(phase.get("detail") or ""),
+            "failure_category": failure_category,
+            "action_required": action_required,
+            "retry_method": retry_method,
+            "skip_reason": self._smoke_skip_reason(phase),
+            "evidence": self._smoke_phase_evidence(
+                phase,
+                smoke_run_id=smoke_run_id,
+            ),
         }
 
     def _with_synthetic_scope_detail(self, detail: str) -> str:
@@ -1472,14 +1519,31 @@ class AnalyticsReportingService:
         synthetic_validation_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Build dashboard card payloads from detailed summaries."""
-        smoke_status, smoke_detail = self._smoke_test_status(smoke_test_summary)
+        return [
+            *self._crawl_dashboard_cards(crawl_summary),
+            *self._strategy_dashboard_cards(strategy_summary),
+            *self._task_dashboard_cards(task_summary),
+            self._telegram_delivery_card(notification_summary),
+            *self._ml_release_dashboard_cards(ml_release_summary),
+            *self._smoke_test_dashboard_cards(smoke_test_summary),
+            *self._synthetic_validation_dashboard_cards(synthetic_validation_summary),
+        ]
+
+    def _crawl_dashboard_cards(
+        self,
+        crawl_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         return [
             {
                 "key": "crawl_success_rate",
                 "label": "Crawl success rate",
                 "value": crawl_summary["success_rate"],
                 "unit": "ratio",
-                "status": self._status_for_rate(crawl_summary["success_rate"], warning=0.85, critical=0.65),
+                "status": self._status_for_rate(
+                    crawl_summary["success_rate"],
+                    warning=0.85,
+                    critical=0.65,
+                ),
                 "detail": f"{crawl_summary['job_count']} crawl job(s), {crawl_summary['failed_count']} failed.",
             },
             {
@@ -1490,16 +1554,35 @@ class AnalyticsReportingService:
                 "status": "healthy" if crawl_summary["total_result_count"] > 0 else "watch",
                 "detail": f"Average {crawl_summary['average_result_count'] or 0} item(s) per crawl.",
             },
+        ]
+
+    def _strategy_dashboard_cards(
+        self,
+        strategy_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        completion_status = (
+            "info"
+            if strategy_summary["run_count"] == 0
+            else self._status_for_rate(
+                strategy_summary["completion_rate"],
+                warning=0.85,
+                critical=0.65,
+            )
+        )
+        selection_status = (
+            "info"
+            if strategy_summary["evaluated_project_count"] == 0
+            else "healthy"
+            if strategy_summary["selected_candidate_count"] > 0
+            else "watch"
+        )
+        return [
             {
                 "key": "strategy_completion_rate",
                 "label": "Strategy run completion",
                 "value": strategy_summary["completion_rate"],
                 "unit": "ratio",
-                "status": (
-                    "info"
-                    if strategy_summary["run_count"] == 0
-                    else self._status_for_rate(strategy_summary["completion_rate"], warning=0.85, critical=0.65)
-                ),
+                "status": completion_status,
                 "detail": f"{strategy_summary['run_count']} run(s), {strategy_summary['failed_count']} failed.",
             },
             {
@@ -1507,11 +1590,7 @@ class AnalyticsReportingService:
                 "label": "Candidate selection rate",
                 "value": strategy_summary["selection_rate"],
                 "unit": "ratio",
-                "status": (
-                    "info"
-                    if strategy_summary["evaluated_project_count"] == 0
-                    else "healthy" if strategy_summary["selected_candidate_count"] > 0 else "watch"
-                ),
+                "status": selection_status,
                 "detail": (
                     f"{strategy_summary['selected_candidate_count']} selected from "
                     f"{strategy_summary['evaluated_project_count']} evaluated project(s)."
@@ -1525,6 +1604,13 @@ class AnalyticsReportingService:
                 "status": "healthy" if strategy_summary["notification_count"] > 0 else "info",
                 "detail": f"{strategy_summary['persisted_candidate_count']} persisted candidate(s).",
             },
+        ]
+
+    def _task_dashboard_cards(
+        self,
+        task_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        return [
             {
                 "key": "task_broker_health",
                 "label": "Task broker health",
@@ -1551,16 +1637,31 @@ class AnalyticsReportingService:
                 "value": task_summary["failure_rate"],
                 "unit": "ratio",
                 "status": task_summary["failure_status"],
-                "detail": f"{task_summary['failed_count']} failed from {task_summary['tracked_task_count']} tracked task(s).",
+                "detail": (
+                    f"{task_summary['failed_count']} failed from "
+                    f"{task_summary['tracked_task_count']} tracked task(s)."
+                ),
             },
-            {
-                "key": "telegram_delivery_rate",
-                "label": "Telegram delivery rate",
-                "value": notification_summary["telegram_success_rate"],
-                "unit": "ratio",
-                "status": notification_summary["telegram_status"],
-                "detail": notification_summary["telegram_detail"],
-            },
+        ]
+
+    @staticmethod
+    def _telegram_delivery_card(
+        notification_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "key": "telegram_delivery_rate",
+            "label": "Telegram delivery rate",
+            "value": notification_summary["telegram_success_rate"],
+            "unit": "ratio",
+            "status": notification_summary["telegram_status"],
+            "detail": notification_summary["telegram_detail"],
+        }
+
+    @staticmethod
+    def _ml_release_dashboard_cards(
+        ml_release_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        return [
             {
                 "key": "ml_release_gate",
                 "label": "ML release gate",
@@ -1577,6 +1678,14 @@ class AnalyticsReportingService:
                 "status": ml_release_summary["backtest_status"],
                 "detail": ml_release_summary["backtest_detail"],
             },
+        ]
+
+    def _smoke_test_dashboard_cards(
+        self,
+        smoke_test_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        smoke_status, smoke_detail = self._smoke_test_status(smoke_test_summary)
+        return [
             {
                 "key": "smoke_test_streak",
                 "label": "G-0 scheduled smoke streak",
@@ -1596,6 +1705,13 @@ class AnalyticsReportingService:
                     "G-0 scheduled smoke cycle(s) passed; per-operator G-2 evidence lives on monitor/experiment runs."
                 ),
             },
+        ]
+
+    @staticmethod
+    def _synthetic_validation_dashboard_cards(
+        synthetic_validation_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        return [
             {
                 "key": "synthetic_g1_presets",
                 "label": "G-1 preset 준비",

@@ -491,6 +491,46 @@ def build_sample_report(
     separate from actual awards. It also exposes an explicit synthetic-only gate
     so canonical operator leakage blocks repeatable-reporting readiness.
     """
+    (
+        by_preset,
+        category_rows,
+        business_rows,
+        budget_rows,
+        non_synthetic_slugs,
+    ) = _build_sample_report_rows(
+        preset_name=preset_name,
+        operator_results=operator_results,
+    )
+    lacking = _sample_report_lacking_groups(
+        by_preset=by_preset,
+        category_rows=category_rows,
+        business_rows=business_rows,
+        budget_rows=budget_rows,
+    )
+    synthetic_only = len(non_synthetic_slugs) == 0
+    ready = synthetic_only and not lacking and bool(operator_results)
+    return {
+        "preset_name": preset_name,
+        "group_sample_target": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
+        "operator_sample_target": SYNTHETIC_OPERATOR_SAMPLE_TARGET,
+        "run_total_sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+        "synthetic_only": synthetic_only,
+        "non_synthetic_operator_slugs": sorted(set(non_synthetic_slugs)),
+        "ready_for_repeatable_reporting": ready,
+        "report_status": _sample_report_status(ready, synthetic_only),
+        "by_preset": by_preset,
+        "by_category": category_rows,
+        "by_business_type": business_rows,
+        "by_budget_band": budget_rows,
+        "lacking_groups": lacking,
+    }
+
+
+def _build_sample_report_rows(
+    *,
+    preset_name: str | None,
+    operator_results: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     category_groups: dict[str, _ReportAccumulator] = {}
     business_groups: dict[str, _ReportAccumulator] = {}
     budget_groups: dict[str, _ReportAccumulator] = {}
@@ -564,6 +604,16 @@ def build_sample_report(
     budget_rows = _report_rows(
         budget_groups, dimension="budget_band", order=budget_order
     )
+    return by_preset, category_rows, business_rows, budget_rows, non_synthetic_slugs
+
+
+def _sample_report_lacking_groups(
+    *,
+    by_preset: list[dict[str, Any]],
+    category_rows: list[dict[str, Any]],
+    business_rows: list[dict[str, Any]],
+    budget_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     all_rows = by_preset + category_rows + business_rows + budget_rows
     lacking = [
         {
@@ -591,31 +641,15 @@ def build_sample_report(
                     "missing_settled_count": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
                 }
             )
-    synthetic_only = len(non_synthetic_slugs) == 0
-    ready = synthetic_only and not lacking and bool(operator_results)
-    return {
-        "preset_name": preset_name,
-        "group_sample_target": SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
-        "operator_sample_target": SYNTHETIC_OPERATOR_SAMPLE_TARGET,
-        "run_total_sample_target": SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
-        "synthetic_only": synthetic_only,
-        "non_synthetic_operator_slugs": sorted(set(non_synthetic_slugs)),
-        "ready_for_repeatable_reporting": ready,
-        "report_status": (
-            REPORT_STATUS_READY
-            if ready
-            else (
-                REPORT_STATUS_DATA_MIXED
-                if not synthetic_only
-                else SAMPLE_STATUS_INSUFFICIENT
-            )
-        ),
-        "by_preset": by_preset,
-        "by_category": category_rows,
-        "by_business_type": business_rows,
-        "by_budget_band": budget_rows,
-        "lacking_groups": lacking,
-    }
+    return lacking
+
+
+def _sample_report_status(ready: bool, synthetic_only: bool) -> str:
+    if ready:
+        return REPORT_STATUS_READY
+    if not synthetic_only:
+        return REPORT_STATUS_DATA_MIXED
+    return SAMPLE_STATUS_INSUFFICIENT
 
 
 def _safe_positive_int(value: Any, default: int = 0) -> int:
@@ -908,6 +942,20 @@ def _sample_gap_source_context(
         "blocked_by_warnings": blocked_by_warnings,
         "warnings": warnings,
     }
+
+
+def _sample_gap_candidate_warning_context(
+    gap: dict[str, Any],
+) -> tuple[list[str], list[str], bool]:
+    warnings = [str(code) for code in gap.get("warnings", []) or [] if str(code)]
+    blocked_by_warnings = sorted(
+        {
+            SAMPLE_GAP_WARNING_MIXED_DATA
+            for code in warnings
+            if code == SAMPLE_GAP_WARNING_MIXED_DATA
+        }
+    )
+    return warnings, blocked_by_warnings, not blocked_by_warnings
 
 
 def _sample_gap_cli_command(
@@ -1360,24 +1408,10 @@ class SyntheticExperimentService:
         if gap is None:
             return None
 
-        recommendation = gap.get("recommendation") or {}
-        actions = recommendation.get("actions") or []
-        action_lookup = {
-            str(action.get("code")): action
-            for action in actions
-            if isinstance(action, dict) and action.get("code")
-        }
-        selected_action_code = action_code or self._default_sample_gap_action_code(
-            gap, action_lookup
+        recommendation, action = self._resolve_sample_gap_candidate_action(
+            gap,
+            action_code=action_code,
         )
-        action = action_lookup.get(str(selected_action_code))
-        if action is None:
-            available = ", ".join(sorted(action_lookup)) or "none"
-            raise ValueError(
-                f"Unsupported sample-gap action '{selected_action_code}'. "
-                f"Available actions: {available}."
-            )
-
         preset_name = recommendation.get("preset_name")
         preset_name = str(preset_name) if preset_name else None
         definition = (
@@ -1406,14 +1440,9 @@ class SyntheticExperimentService:
             bool(target.get("operator_id_scope_ready"))
             for target in operator_targets
         )
-        warnings = [str(code) for code in gap.get("warnings", []) or [] if str(code)]
-        blocked_by_warnings = [
-            SAMPLE_GAP_WARNING_MIXED_DATA
-            for code in warnings
-            if code == SAMPLE_GAP_WARNING_MIXED_DATA
-        ]
-        blocked_by_warnings = sorted(set(blocked_by_warnings))
-        run_allowed = not blocked_by_warnings
+        warnings, blocked_by_warnings, run_allowed = (
+            _sample_gap_candidate_warning_context(gap)
+        )
         latest_run = self._latest_experiment_run(experiment)
         action_label = str(action.get("label") or action["code"])
         experiment_payload = {
@@ -1459,6 +1488,45 @@ class SyntheticExperimentService:
             experiment_payload=experiment_payload,
             source_context=source_context,
         )
+        return self._sample_gap_candidate_response(
+            gap=gap,
+            action=action,
+            action_label=action_label,
+            preset_name=preset_name,
+            params=params,
+            operator_slugs=operator_slugs,
+            operator_targets=operator_targets,
+            operator_id_scope_ready=operator_id_scope_ready,
+            experiment_payload=experiment_payload,
+            experiment=experiment,
+            latest_run=latest_run,
+            next_step=next_step,
+            execution_plan=execution_plan,
+            run_allowed=run_allowed,
+            blocked_by_warnings=blocked_by_warnings,
+            warnings=warnings,
+        )
+
+    def _sample_gap_candidate_response(
+        self,
+        *,
+        gap: dict[str, Any],
+        action: dict[str, Any],
+        action_label: str,
+        preset_name: Optional[str],
+        params: dict[str, Any],
+        operator_slugs: list[str],
+        operator_targets: list[dict[str, Any]],
+        operator_id_scope_ready: bool,
+        experiment_payload: dict[str, Any],
+        experiment: Optional[SyntheticExperiment],
+        latest_run: Optional[SyntheticExperimentRun],
+        next_step: str,
+        execution_plan: dict[str, Any],
+        run_allowed: bool,
+        blocked_by_warnings: bool,
+        warnings: list[str],
+    ) -> dict[str, Any]:
         return {
             "generated_at": datetime.now(timezone.utc),
             "gap": gap,
@@ -1484,6 +1552,32 @@ class SyntheticExperimentService:
                 blocked_by_warnings=blocked_by_warnings,
             ),
         }
+
+    def _resolve_sample_gap_candidate_action(
+        self,
+        gap: dict[str, Any],
+        *,
+        action_code: Optional[str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        recommendation = gap.get("recommendation") or {}
+        actions = recommendation.get("actions") or []
+        action_lookup = {
+            str(action.get("code")): action
+            for action in actions
+            if isinstance(action, dict) and action.get("code")
+        }
+        selected_action_code = action_code or self._default_sample_gap_action_code(
+            gap,
+            action_lookup,
+        )
+        action = action_lookup.get(str(selected_action_code))
+        if action is None:
+            available = ", ".join(sorted(action_lookup)) or "none"
+            raise ValueError(
+                f"Unsupported sample-gap action '{selected_action_code}'. "
+                f"Available actions: {available}."
+            )
+        return recommendation, action
 
     def materialize_sample_gap_candidate_run(
         self,

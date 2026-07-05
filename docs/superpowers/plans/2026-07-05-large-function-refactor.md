@@ -168,6 +168,52 @@ pytest tests/test_large_function_budgets.py tests/test_paper_bidding_backtest.py
 
 Observed: PASS.
 
+## Task 7: Split Remaining Development-Stage Large Candidates
+
+**Files:**
+- Modify: `tests/test_large_function_budgets.py`
+- Modify: `app/tasks/jobs.py`
+- Modify: `app/services/ml_release.py`
+- Modify: `app/services/opportunity_monitoring.py`
+- Modify: `app/services/analytics_reporting.py`
+- Modify: `app/services/ml_training.py`
+- Modify: `app/services/koneps/persistence.py`
+- Modify: `app/ai/predictors/historical.py`
+- Modify: `app/services/synthetic_experiment.py`
+- Modify: `app/api/operator.py`
+- Modify: `app/services/decision_analytics.py`
+- Modify: `app/services/classifier.py`
+
+- [x] **Step 1: Extend line-budget coverage**
+
+Added development-stage candidates that were previously deferred because they looked operational, release, or batch-oriented. The guard now covers 20 high-coupling functions across services, tasks, API, and predictor code.
+
+- [x] **Step 2: Refactor release, monitoring, and task orchestration**
+
+Split reserve-detail backfill chunk processing, ML release preflight/rollout checks, and strategy monitoring execution into focused helpers while preserving commit/publish boundaries and existing payload shapes.
+
+- [x] **Step 3: Refactor analytics, training, persistence, and API payload assembly**
+
+Split synthetic validation summaries, operations dashboard cards, ML training run orchestration, KONEPS crawl result persistence, operator dashboard assembly, recommendation feedback labels, historical rate-band resolution, and synthetic sample-gap candidate payload assembly.
+
+- [x] **Step 4: Refactor classifier budget assessment**
+
+Split construction-capacity, annual-revenue, and legacy capacity-score branches out of `NoticeClassifierService._assess_budget(...)`.
+
+- [x] **Step 5: Run final verification**
+
+Run:
+
+```bash
+pytest tests/test_large_function_budgets.py -q
+pytest tests/test_ml_training.py tests/test_ml_release.py tests/test_koneps_persistence.py tests/test_scsbid_persist_embedding_deferral.py tests/test_scsbid_reserve_detail_reuse.py tests/test_scsbid_reserve_detail_defer.py tests/test_analytics_reporting.py tests/test_operations_kpi.py tests/test_operator.py tests/test_dashboard_api.py tests/test_synthetic_experiment.py tests/test_synthetic_experiment_breakdown.py tests/test_recommendation_feedback_labels.py tests/test_construction_capacity_fields.py tests/test_region_preference_scoring.py tests/test_license_matching.py tests/test_marine_license_aliases.py tests/test_large_function_budgets.py -q
+python3 -m py_compile app/ai/predictors/historical.py app/api/operator.py app/services/analytics_reporting.py app/services/classifier.py app/services/decision_analytics.py app/services/koneps/persistence.py app/services/ml_release.py app/services/ml_training.py app/services/opportunity_monitoring.py app/services/synthetic_experiment.py app/tasks/jobs.py tests/test_large_function_budgets.py
+ruff check app/ai/predictors/historical.py app/api/operator.py app/services/analytics_reporting.py app/services/classifier.py app/services/decision_analytics.py app/services/koneps/persistence.py app/services/ml_release.py app/services/ml_training.py app/services/opportunity_monitoring.py app/services/synthetic_experiment.py app/tasks/jobs.py tests/test_large_function_budgets.py
+git diff --check
+```
+
+Observed: PASS. The combined focused behavior suite reported `289 passed, 12 warnings`; warnings are existing Celery `datetime.utcnow()` deprecations.
+
 ## Task 6: Split Price Prediction Guardrail Application
 
 **Files:**

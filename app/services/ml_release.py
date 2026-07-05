@@ -234,16 +234,58 @@ class RemoteObjectStorageClient:
                 )
             ]
 
+        client, client_checks = self._build_s3_client(bucket=bucket, prefix=prefix)
+        checks.extend(client_checks)
+        if client is None:
+            return checks
+
+        bucket_checks = self._preflight_s3_bucket_access(
+            client,
+            bucket=bucket,
+            prefix=prefix,
+        )
+        checks.extend(bucket_checks)
+        if not all(bool(check.get("passed")) for check in bucket_checks):
+            return checks
+
+        if not probe_write:
+            checks.append(
+                self._check(
+                    "object_storage_write_probe",
+                    True,
+                    "skipped",
+                    "Object storage write probe was skipped.",
+                    bucket=bucket,
+                    prefix=prefix,
+                )
+            )
+            return checks
+
+        checks.extend(
+            self._preflight_s3_write_probe(
+                client,
+                bucket=bucket,
+                prefix=prefix,
+                probe_name=probe_name,
+            )
+        )
+        return checks
+
+    def _build_s3_client(
+        self,
+        *,
+        bucket: str,
+        prefix: str,
+    ) -> tuple[Any | None, list[dict[str, Any]]]:
         try:
             import boto3  # type: ignore[import-not-found]
             from botocore.exceptions import (  # type: ignore[import-not-found]
                 BotoCoreError,
-                ClientError,
                 NoCredentialsError,
                 PartialCredentialsError,
             )
         except ImportError as exc:  # pragma: no cover - depends on deployment extras
-            return [
+            return None, [
                 self._check(
                     "object_storage_dependency",
                     False,
@@ -259,7 +301,7 @@ class RemoteObjectStorageClient:
             NoCredentialsError,
             PartialCredentialsError,
         ) as exc:  # pragma: no cover - depends on deployed env
-            return [
+            return None, [
                 self._check(
                     "object_storage_credentials",
                     False,
@@ -269,7 +311,7 @@ class RemoteObjectStorageClient:
                 )
             ]
         except BotoCoreError as exc:  # pragma: no cover - depends on deployed env
-            return [
+            return None, [
                 self._check(
                     "object_storage_target",
                     False,
@@ -279,7 +321,23 @@ class RemoteObjectStorageClient:
                     prefix=prefix,
                 )
             ]
+        return client, []
 
+    def _preflight_s3_bucket_access(
+        self,
+        client: Any,
+        *,
+        bucket: str,
+        prefix: str,
+    ) -> list[dict[str, Any]]:
+        from botocore.exceptions import (  # type: ignore[import-not-found]
+            BotoCoreError,
+            ClientError,
+            NoCredentialsError,
+            PartialCredentialsError,
+        )
+
+        checks: list[dict[str, Any]] = []
         try:
             client.head_bucket(Bucket=bucket)
         except (
@@ -330,7 +388,7 @@ class RemoteObjectStorageClient:
             )
             return checks
 
-        checks.append(
+        return [
             self._check(
                 "object_storage_target",
                 True,
@@ -339,20 +397,24 @@ class RemoteObjectStorageClient:
                 bucket=bucket,
                 prefix=prefix,
             )
-        )
-        if not probe_write:
-            checks.append(
-                self._check(
-                    "object_storage_write_probe",
-                    True,
-                    "skipped",
-                    "Object storage write probe was skipped.",
-                    bucket=bucket,
-                    prefix=prefix,
-                )
-            )
-            return checks
+        ]
 
+    def _preflight_s3_write_probe(
+        self,
+        client: Any,
+        *,
+        bucket: str,
+        prefix: str,
+        probe_name: str | None,
+    ) -> list[dict[str, Any]]:
+        from botocore.exceptions import (  # type: ignore[import-not-found]
+            BotoCoreError,
+            ClientError,
+            NoCredentialsError,
+            PartialCredentialsError,
+        )
+
+        checks: list[dict[str, Any]] = []
         object_name = probe_name or self._default_preflight_object_name()
         key = self._s3_key(object_name)
         try:
@@ -827,163 +889,26 @@ class MLReleasePromotionService:
             else bool(require_signature)
         )
 
-        manifest: dict[str, Any] | None = None
-        manifest_path: Path | None = None
-        if manifest_ref:
-            manifest_path = self._resolve_manifest_path(manifest_ref)
-            manifest_summary["path"] = str(manifest_path)
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except FileNotFoundError as exc:
-                checks.append(
-                    self._rollout_check(
-                        "manifest_load",
-                        False,
-                        "not_found",
-                        f"Release manifest was not found: {manifest_path}",
-                        error=str(exc),
-                    )
-                )
-            except json.JSONDecodeError as exc:
-                checks.append(
-                    self._rollout_check(
-                        "manifest_load",
-                        False,
-                        "invalid_json",
-                        f"Release manifest is not valid JSON: {manifest_path}",
-                        error=str(exc),
-                    )
-                )
-            else:
-                if not isinstance(manifest, dict):
-                    checks.append(
-                        self._rollout_check(
-                            "manifest_load",
-                            False,
-                            "invalid_json",
-                            f"Release manifest must decode to a JSON object: {manifest_path}",
-                        )
-                    )
-                    manifest = None
-                else:
-                    manifest_summary["release_tag"] = str(
-                        manifest.get("release_tag") or manifest_path.stem
-                    )
-                    checks.append(
-                        self._rollout_check(
-                            "manifest_load",
-                            True,
-                            "passed",
-                            "Release manifest can be loaded.",
-                            manifest_path=str(manifest_path),
-                        )
-                    )
+        manifest, manifest_path = self._load_rollout_manifest(
+            manifest_ref,
+            manifest_summary=manifest_summary,
+            checks=checks,
+        )
 
         if manifest is not None and manifest_path is not None:
-            try:
-                verification = self.verify_release_manifest(
-                    manifest,
-                    manifest_path=manifest_path,
-                    require_signature=signature_required,
-                )
-            except ValueError as exc:
-                manifest_summary["signature_status"] = "invalid"
-                checks.append(
-                    self._rollout_check(
-                        "manifest_signature",
-                        False,
-                        "invalid",
-                        str(exc),
-                        required=signature_required,
-                    )
-                )
-            else:
-                signature_status = (
-                    "verified" if verification.get("verified") else "missing"
-                )
-                manifest_summary["signature_status"] = signature_status
-                checks.append(
-                    self._rollout_check(
-                        "manifest_signature",
-                        True,
-                        signature_status,
-                        (
-                            "Release manifest signature is verified."
-                            if verification.get("verified")
-                            else "Release manifest has no signature and signature is not required."
-                        ),
-                        required=signature_required,
-                        **verification,
-                    )
-                )
-
-            artifact_checks = self._manifest_artifact_preflight_checks(manifest)
-            manifest_summary["artifact_count"] = len(artifact_checks)
-            checks.extend(artifact_checks)
-
-            promotion_gate = self._resolve_manifest_promotion_gate(manifest)
-            gate_passed = bool(promotion_gate.get("passed"))
-            checks.append(
-                self._rollout_check(
-                    "predictor_promotion_gate",
-                    gate_passed,
-                    str(
-                        promotion_gate.get("status")
-                        or ("passed" if gate_passed else "failed")
-                    ),
-                    (
-                        "Predictor promotion gate passed."
-                        if gate_passed
-                        else "Predictor promotion gate failed: "
-                        + "; ".join(
-                            str(reason)
-                            for reason in promotion_gate.get("reasons", [])
-                            if reason
-                        )
-                    ),
-                    policy=(
-                        promotion_gate.get("thresholds", {}).get("policy")
-                        if isinstance(promotion_gate.get("thresholds"), dict)
-                        else None
-                    ),
-                )
+            self._append_manifest_signature_check(
+                checks,
+                manifest_summary=manifest_summary,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                signature_required=signature_required,
             )
-
-            # Group calibration sample-count gate
-            calibration = (
-                (manifest.get("summary") or {}).get("group_calibration") or {}
+            self._append_manifest_artifact_and_gate_checks(
+                checks,
+                manifest_summary=manifest_summary,
+                manifest=manifest,
             )
-            if calibration:
-                min_samples = int(settings.GROUP_CALIBRATION_MIN_SAMPLES or 0)
-                failing_groups = [
-                    (group, int((stats or {}).get("sample_count") or 0))
-                    for group, stats in calibration.items()
-                    if int((stats or {}).get("sample_count") or 0) < min_samples
-                ]
-                if failing_groups:
-                    detail = ", ".join(
-                        f"{g}={n}" for g, n in failing_groups
-                    )
-                    checks.append(
-                        self._rollout_check(
-                            "group_calibration_sample_count",
-                            False,
-                            "failed",
-                            f"group_calibration sample_count < {min_samples}: {detail}",
-                            threshold=min_samples,
-                            failing_groups={g: n for g, n in failing_groups},
-                        )
-                    )
-                else:
-                    checks.append(
-                        self._rollout_check(
-                            "group_calibration_sample_count",
-                            True,
-                            "passed",
-                            f"All group_calibration groups meet sample_count >= {min_samples}.",
-                            threshold=min_samples,
-                        )
-                    )
+            self._append_group_calibration_check(checks, manifest=manifest)
 
         storage_preflight = RemoteObjectStorageClient(
             settings.ML_RELEASE_OBJECT_STORAGE_URL
@@ -1010,6 +935,189 @@ class MLReleasePromotionService:
                 if not bool(check.get("passed")) and check.get("detail")
             ],
         }
+
+    def _load_rollout_manifest(
+        self,
+        manifest_ref: str | Path | None,
+        *,
+        manifest_summary: dict[str, Any],
+        checks: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, Path | None]:
+        if not manifest_ref:
+            return None, None
+        manifest_path = self._resolve_manifest_path(manifest_ref)
+        manifest_summary["path"] = str(manifest_path)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            checks.append(
+                self._rollout_check(
+                    "manifest_load",
+                    False,
+                    "not_found",
+                    f"Release manifest was not found: {manifest_path}",
+                    error=str(exc),
+                )
+            )
+            return None, manifest_path
+        except json.JSONDecodeError as exc:
+            checks.append(
+                self._rollout_check(
+                    "manifest_load",
+                    False,
+                    "invalid_json",
+                    f"Release manifest is not valid JSON: {manifest_path}",
+                    error=str(exc),
+                )
+            )
+            return None, manifest_path
+        if not isinstance(manifest, dict):
+            checks.append(
+                self._rollout_check(
+                    "manifest_load",
+                    False,
+                    "invalid_json",
+                    f"Release manifest must decode to a JSON object: {manifest_path}",
+                )
+            )
+            return None, manifest_path
+        manifest_summary["release_tag"] = str(
+            manifest.get("release_tag") or manifest_path.stem
+        )
+        checks.append(
+            self._rollout_check(
+                "manifest_load",
+                True,
+                "passed",
+                "Release manifest can be loaded.",
+                manifest_path=str(manifest_path),
+            )
+        )
+        return manifest, manifest_path
+
+    def _append_manifest_signature_check(
+        self,
+        checks: list[dict[str, Any]],
+        *,
+        manifest_summary: dict[str, Any],
+        manifest: dict[str, Any],
+        manifest_path: Path,
+        signature_required: bool,
+    ) -> None:
+        try:
+            verification = self.verify_release_manifest(
+                manifest,
+                manifest_path=manifest_path,
+                require_signature=signature_required,
+            )
+        except ValueError as exc:
+            manifest_summary["signature_status"] = "invalid"
+            checks.append(
+                self._rollout_check(
+                    "manifest_signature",
+                    False,
+                    "invalid",
+                    str(exc),
+                    required=signature_required,
+                )
+            )
+            return
+        signature_status = "verified" if verification.get("verified") else "missing"
+        manifest_summary["signature_status"] = signature_status
+        checks.append(
+            self._rollout_check(
+                "manifest_signature",
+                True,
+                signature_status,
+                (
+                    "Release manifest signature is verified."
+                    if verification.get("verified")
+                    else "Release manifest has no signature and signature is not required."
+                ),
+                required=signature_required,
+                **verification,
+            )
+        )
+
+    def _append_manifest_artifact_and_gate_checks(
+        self,
+        checks: list[dict[str, Any]],
+        *,
+        manifest_summary: dict[str, Any],
+        manifest: dict[str, Any],
+    ) -> None:
+        artifact_checks = self._manifest_artifact_preflight_checks(manifest)
+        manifest_summary["artifact_count"] = len(artifact_checks)
+        checks.extend(artifact_checks)
+        promotion_gate = self._resolve_manifest_promotion_gate(manifest)
+        gate_passed = bool(promotion_gate.get("passed"))
+        checks.append(
+            self._rollout_check(
+                "predictor_promotion_gate",
+                gate_passed,
+                str(
+                    promotion_gate.get("status")
+                    or ("passed" if gate_passed else "failed")
+                ),
+                self._promotion_gate_detail(promotion_gate, gate_passed=gate_passed),
+                policy=(
+                    promotion_gate.get("thresholds", {}).get("policy")
+                    if isinstance(promotion_gate.get("thresholds"), dict)
+                    else None
+                ),
+            )
+        )
+
+    def _promotion_gate_detail(
+        self,
+        promotion_gate: dict[str, Any],
+        *,
+        gate_passed: bool,
+    ) -> str:
+        if gate_passed:
+            return "Predictor promotion gate passed."
+        reasons = "; ".join(
+            str(reason) for reason in promotion_gate.get("reasons", []) if reason
+        )
+        return f"Predictor promotion gate failed: {reasons}"
+
+    def _append_group_calibration_check(
+        self,
+        checks: list[dict[str, Any]],
+        *,
+        manifest: dict[str, Any],
+    ) -> None:
+        calibration = (manifest.get("summary") or {}).get("group_calibration") or {}
+        if not calibration:
+            return
+        min_samples = int(settings.GROUP_CALIBRATION_MIN_SAMPLES or 0)
+        failing_groups = [
+            (group, int((stats or {}).get("sample_count") or 0))
+            for group, stats in calibration.items()
+            if int((stats or {}).get("sample_count") or 0) < min_samples
+        ]
+        if failing_groups:
+            detail = ", ".join(f"{group}={count}" for group, count in failing_groups)
+            checks.append(
+                self._rollout_check(
+                    "group_calibration_sample_count",
+                    False,
+                    "failed",
+                    f"group_calibration sample_count < {min_samples}: {detail}",
+                    threshold=min_samples,
+                    failing_groups={group: count for group, count in failing_groups},
+                )
+            )
+            return
+        checks.append(
+            self._rollout_check(
+                "group_calibration_sample_count",
+                True,
+                "passed",
+                f"All group_calibration groups meet sample_count >= {min_samples}.",
+                threshold=min_samples,
+            )
+        )
 
     def apply_release_manifest(
         self,
