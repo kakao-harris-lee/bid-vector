@@ -186,6 +186,14 @@ class _AnalysisScores:
     execution_complexity_score: float
 
 
+@dataclass(frozen=True)
+class _AnalysisInputs:
+    classification: dict
+    similar_projects: list[Project]
+    market_insights: dict
+    user_historical_data: dict
+
+
 class OpportunityAnalysisService:
     """Combine fit, price, market, similarity, and action guidance into one analysis."""
 
@@ -251,21 +259,17 @@ class OpportunityAnalysisService:
         """Build a multi-angle bid opportunity analysis for one project."""
         operator, profile, strategy = self._resolve_operator_context(db, operator)
 
-        classification = self.classifier.classify(project=project, profile=profile)
-        similar_projects = self.similarity_service.find_similar_projects(
+        analysis_inputs = self._build_analysis_inputs(
             db,
-            project,
-            limit=request.similar_limit,
-            min_similarity=request.min_similarity,
-            same_category_only=request.same_category_only,
-        )
-
-        market_insights = self._build_market_insights(project, similar_projects)
-        user_historical_data = self._build_user_historical_data(
-            db,
+            project=project,
+            request=request,
+            profile=profile,
             operator_id=operator.id,
-            request_data=request.user_historical_data,
         )
+        classification = analysis_inputs.classification
+        similar_projects = analysis_inputs.similar_projects
+        market_insights = analysis_inputs.market_insights
+        user_historical_data = analysis_inputs.user_historical_data
         price_prediction, business_group = self._build_price_prediction(
             db,
             project=project,
@@ -368,6 +372,34 @@ class OpportunityAnalysisService:
             price_prediction=price_prediction,
             bid_recommendation=bid_recommendation,
             similar_projects=similar_projects,
+        )
+
+    def _build_analysis_inputs(
+        self,
+        db: Session,
+        *,
+        project: Project,
+        request: OpportunityAnalysisRequest,
+        profile: CompanyProfile,
+        operator_id: int,
+    ) -> _AnalysisInputs:
+        classification = self.classifier.classify(project=project, profile=profile)
+        similar_projects = self.similarity_service.find_similar_projects(
+            db,
+            project,
+            limit=request.similar_limit,
+            min_similarity=request.min_similarity,
+            same_category_only=request.same_category_only,
+        )
+        return _AnalysisInputs(
+            classification=classification,
+            similar_projects=similar_projects,
+            market_insights=self._build_market_insights(project, similar_projects),
+            user_historical_data=self._build_user_historical_data(
+                db,
+                operator_id=operator_id,
+                request_data=request.user_historical_data,
+            ),
         )
 
     def _resolve_operator_context(

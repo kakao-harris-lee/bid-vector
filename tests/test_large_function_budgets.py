@@ -16,7 +16,7 @@ import pytest
             "app.services.opportunity_analysis",
             "OpportunityAnalysisService",
             "analyze_project",
-            130,
+            125,
         ),
         (
             "app.services.paper_bidding_backtest",
@@ -82,6 +82,12 @@ import pytest
             "app.services.koneps.persistence",
             None,
             "persist_crawl_results",
+            125,
+        ),
+        (
+            "app.services.koneps.persistence",
+            None,
+            "update_project_from_item",
             125,
         ),
         (

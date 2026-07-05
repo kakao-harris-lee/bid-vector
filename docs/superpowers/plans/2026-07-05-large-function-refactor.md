@@ -26,7 +26,7 @@
 Add an inspect-based test that asserts:
 
 ```python
-("app.services.opportunity_analysis", "OpportunityAnalysisService", "analyze_project", 130)
+("app.services.opportunity_analysis", "OpportunityAnalysisService", "analyze_project", 125)
 ("app.services.paper_bidding_backtest", "PaperBiddingBacktestService", "_build_candidate_item", 105)
 ```
 
@@ -186,7 +186,7 @@ Observed: PASS.
 
 - [x] **Step 1: Extend line-budget coverage**
 
-Added development-stage candidates that were previously deferred because they looked operational, release, or batch-oriented. The guard now covers 20 high-coupling functions across services, tasks, API, and predictor code.
+Added development-stage candidates that were previously deferred because they looked operational, release, or batch-oriented. The guard now covers 21 high-coupling functions across services, tasks, API, and predictor code.
 
 - [x] **Step 2: Refactor release, monitoring, and task orchestration**
 
@@ -195,6 +195,10 @@ Split reserve-detail backfill chunk processing, ML release preflight/rollout che
 - [x] **Step 3: Refactor analytics, training, persistence, and API payload assembly**
 
 Split synthetic validation summaries, operations dashboard cards, ML training run orchestration, KONEPS crawl result persistence, operator dashboard assembly, recommendation feedback labels, historical rate-band resolution, and synthetic sample-gap candidate payload assembly.
+
+- [x] **Step 3b: Tighten the final top offenders**
+
+Tightened `OpportunityAnalysisService.analyze_project(...)` to a 125-line budget and added `update_project_from_item(...)` to the guard. A final AST scan showed no `app/` function above 125 lines.
 
 - [x] **Step 4: Refactor classifier budget assessment**
 
@@ -206,13 +210,13 @@ Run:
 
 ```bash
 pytest tests/test_large_function_budgets.py -q
-pytest tests/test_ml_training.py tests/test_ml_release.py tests/test_koneps_persistence.py tests/test_scsbid_persist_embedding_deferral.py tests/test_scsbid_reserve_detail_reuse.py tests/test_scsbid_reserve_detail_defer.py tests/test_analytics_reporting.py tests/test_operations_kpi.py tests/test_operator.py tests/test_dashboard_api.py tests/test_synthetic_experiment.py tests/test_synthetic_experiment_breakdown.py tests/test_recommendation_feedback_labels.py tests/test_construction_capacity_fields.py tests/test_region_preference_scoring.py tests/test_license_matching.py tests/test_marine_license_aliases.py tests/test_large_function_budgets.py -q
-python3 -m py_compile app/ai/predictors/historical.py app/api/operator.py app/services/analytics_reporting.py app/services/classifier.py app/services/decision_analytics.py app/services/koneps/persistence.py app/services/ml_release.py app/services/ml_training.py app/services/opportunity_monitoring.py app/services/synthetic_experiment.py app/tasks/jobs.py tests/test_large_function_budgets.py
-ruff check app/ai/predictors/historical.py app/api/operator.py app/services/analytics_reporting.py app/services/classifier.py app/services/decision_analytics.py app/services/koneps/persistence.py app/services/ml_release.py app/services/ml_training.py app/services/opportunity_monitoring.py app/services/synthetic_experiment.py app/tasks/jobs.py tests/test_large_function_budgets.py
+pytest tests/test_ml_training.py tests/test_ml_release.py tests/test_koneps_persistence.py tests/test_scsbid_persist_embedding_deferral.py tests/test_scsbid_reserve_detail_reuse.py tests/test_scsbid_reserve_detail_defer.py tests/test_analytics_reporting.py tests/test_operations_kpi.py tests/test_operator.py tests/test_dashboard_api.py tests/test_synthetic_experiment.py tests/test_synthetic_experiment_breakdown.py tests/test_recommendation_feedback_labels.py tests/test_construction_capacity_fields.py tests/test_region_preference_scoring.py tests/test_license_matching.py tests/test_marine_license_aliases.py tests/test_predictor_business_group.py tests/test_large_function_budgets.py -q
+python3 -m py_compile app/ai/predictors/historical.py app/api/operator.py app/services/analytics_reporting.py app/services/classifier.py app/services/decision_analytics.py app/services/koneps/persistence.py app/services/ml_release.py app/services/ml_training.py app/services/opportunity_analysis.py app/services/opportunity_monitoring.py app/services/synthetic_experiment.py app/tasks/jobs.py tests/test_large_function_budgets.py
+ruff check app/ai/predictors/historical.py app/api/operator.py app/services/analytics_reporting.py app/services/classifier.py app/services/decision_analytics.py app/services/koneps/persistence.py app/services/ml_release.py app/services/ml_training.py app/services/opportunity_analysis.py app/services/opportunity_monitoring.py app/services/synthetic_experiment.py app/tasks/jobs.py tests/test_large_function_budgets.py
 git diff --check
 ```
 
-Observed: PASS. The combined focused behavior suite reported `289 passed, 12 warnings`; warnings are existing Celery `datetime.utcnow()` deprecations.
+Observed: PASS. The combined focused behavior suite reported `305 passed, 12 warnings`; warnings are existing Celery `datetime.utcnow()` deprecations. Final AST scan reported `functions_over_125=0`.
 
 ## Task 6: Split Price Prediction Guardrail Application
 

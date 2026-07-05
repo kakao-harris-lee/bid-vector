@@ -270,90 +270,15 @@ def update_project_from_item(
         )
         if amount not in (None, "", 0, 0.0)
     ]
-    description_lines = [
-        (f"공고번호: {item.get('notice_number')}" if item.get("notice_number") else None),
-        (
-            f"공고기관: {item_metadata.get('issuing_agency')}"
-            if item_metadata.get("issuing_agency")
-            else None
-        ),
-        (
-            f"수요기관: {item_metadata.get('opening_demand_agency') or item_metadata.get('demand_agency')}"
-            if item_metadata.get("opening_demand_agency")
-            or item_metadata.get("demand_agency")
-            else None
-        ),
-        f"공고원문: {item.get('source_url')}" if item.get("source_url") else None,
-        (f"업무구분: {item.get('business_type')}" if item.get("business_type") else None),
-        (
-            f"개찰상태: {item_metadata.get('opening_status')}"
-            if item_metadata.get("opening_status")
-            else None
-        ),
-    ]
-    requirement_lines = [
-        f"지역요건: {item.get('region')}" if item.get("region") else None,
-        (
-            f"면허요건: {' '.join(item.get('license_codes') or [])}"
-            if item.get("license_codes")
-            else None
-        ),
-        (
-            f"기초금액: {float(item.get('base_amount')):.0f}"
-            if item.get("base_amount")
-            else None
-        ),
-        (
-            f"추정금액: {float(item.get('estimated_amount')):.0f}"
-            if item.get("estimated_amount")
-            else None
-        ),
-        (
-            f"계약방법: {item_metadata.get('contract_method')}"
-            if item_metadata.get("contract_method")
-            else None
-        ),
-    ]
+    description_lines = _project_description_lines(item, item_metadata)
+    requirement_lines = _project_requirement_lines(item, item_metadata)
 
     if item.get("title") and parsing.should_replace_project_title(
         project.title, item.get("title")
     ):
         project.title = str(item.get("title")).strip()
-    notice_number = item.get("notice_number")
-    # Persist notice_number in canonical (normalized) form so the indexed
-    # ``notice_number.in_(...)`` fast path in ``find_matching_project`` can
-    # rely on equality. Storing a non-canonical value (lower case / inner
-    # whitespace) would make the index probe miss and create duplicates.
-    normalized_notice_number = parsing.normalize_notice_number(notice_number)
-    if normalized_notice_number and (
-        not project.notice_number
-        or parsing.normalize_notice_number(project.notice_number)
-        == normalized_notice_number
-    ):
-        project.notice_number = normalized_notice_number
-    source_url = item.get("source_url")
-    if source_url and (
-        not project.source_url
-        or matching.normalize_source_url(project.source_url)
-        == matching.normalize_source_url(source_url)
-    ):
-        project.source_url = str(source_url).strip()
-    issuing_agency = item_metadata.get("issuing_agency")
-    if issuing_agency and (
-        not project.issuing_agency
-        or parsing.normalize_agency_name(project.issuing_agency)
-        == parsing.normalize_agency_name(issuing_agency)
-    ):
-        project.issuing_agency = str(issuing_agency).strip()
-    demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
-        "demand_agency"
-    )
-    if demand_agency and (
-        not project.demand_agency
-        or parsing.normalize_agency_name(project.demand_agency)
-        == parsing.normalize_agency_name(demand_agency)
-    ):
-        project.demand_agency = str(demand_agency).strip()
+    _update_project_notice_identity(project, item=item)
+    _update_project_agencies(project, item_metadata=item_metadata)
     project.description = parsing.merge_text_lines(
         project.description, description_lines
     )
@@ -380,6 +305,105 @@ def update_project_from_item(
 
     db_title = project.title or item.get("notice_number") or "KONEPS notice"
     project.title = db_title.strip()
+
+
+def _project_description_lines(
+    item: dict[str, Any],
+    item_metadata: dict[str, Any],
+) -> list[str | None]:
+    demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
+        "demand_agency"
+    )
+    return [
+        (f"공고번호: {item.get('notice_number')}" if item.get("notice_number") else None),
+        (
+            f"공고기관: {item_metadata.get('issuing_agency')}"
+            if item_metadata.get("issuing_agency")
+            else None
+        ),
+        f"수요기관: {demand_agency}" if demand_agency else None,
+        f"공고원문: {item.get('source_url')}" if item.get("source_url") else None,
+        (f"업무구분: {item.get('business_type')}" if item.get("business_type") else None),
+        (
+            f"개찰상태: {item_metadata.get('opening_status')}"
+            if item_metadata.get("opening_status")
+            else None
+        ),
+    ]
+
+
+def _project_requirement_lines(
+    item: dict[str, Any],
+    item_metadata: dict[str, Any],
+) -> list[str | None]:
+    return [
+        f"지역요건: {item.get('region')}" if item.get("region") else None,
+        (
+            f"면허요건: {' '.join(item.get('license_codes') or [])}"
+            if item.get("license_codes")
+            else None
+        ),
+        (
+            f"기초금액: {float(item.get('base_amount')):.0f}"
+            if item.get("base_amount")
+            else None
+        ),
+        (
+            f"추정금액: {float(item.get('estimated_amount')):.0f}"
+            if item.get("estimated_amount")
+            else None
+        ),
+        (
+            f"계약방법: {item_metadata.get('contract_method')}"
+            if item_metadata.get("contract_method")
+            else None
+        ),
+    ]
+
+
+def _update_project_notice_identity(
+    project: Project,
+    *,
+    item: dict[str, Any],
+) -> None:
+    notice_number = item.get("notice_number")
+    normalized_notice_number = parsing.normalize_notice_number(notice_number)
+    if normalized_notice_number and (
+        not project.notice_number
+        or parsing.normalize_notice_number(project.notice_number)
+        == normalized_notice_number
+    ):
+        project.notice_number = normalized_notice_number
+    source_url = item.get("source_url")
+    if source_url and (
+        not project.source_url
+        or matching.normalize_source_url(project.source_url)
+        == matching.normalize_source_url(source_url)
+    ):
+        project.source_url = str(source_url).strip()
+
+
+def _update_project_agencies(
+    project: Project,
+    *,
+    item_metadata: dict[str, Any],
+) -> None:
+    issuing_agency = item_metadata.get("issuing_agency")
+    if issuing_agency and (
+        not project.issuing_agency
+        or parsing.normalize_agency_name(project.issuing_agency)
+        == parsing.normalize_agency_name(issuing_agency)
+    ):
+        project.issuing_agency = str(issuing_agency).strip()
+    demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
+        "demand_agency"
+    )
+    if demand_agency and (
+        not project.demand_agency
+        or parsing.normalize_agency_name(project.demand_agency)
+        == parsing.normalize_agency_name(demand_agency)
+    ):
+        project.demand_agency = str(demand_agency).strip()
 
 
 def resolve_tender_result(
