@@ -249,13 +249,7 @@ class OpportunityAnalysisService:
         operator: User | None = None,
     ) -> dict:
         """Build a multi-angle bid opportunity analysis for one project."""
-        if operator is None:
-            operator = ensure_operator_account(db)
-            profile = ensure_operator_profile(db)
-            strategy = ensure_operator_strategy(db)
-        else:
-            profile = ensure_operator_profile_for(db, operator)
-            strategy = ensure_operator_strategy_for(db, operator)
+        operator, profile, strategy = self._resolve_operator_context(db, operator)
 
         classification = self.classifier.classify(project=project, profile=profile)
         similar_projects = self.similarity_service.find_similar_projects(
@@ -272,36 +266,13 @@ class OpportunityAnalysisService:
             operator_id=operator.id,
             request_data=request.user_historical_data,
         )
-
-        feedback_calibration = self.feedback_service.build_calibration_context(
+        price_prediction, business_group = self._build_price_prediction(
             db,
+            project=project,
+            request=request,
             operator_id=operator.id,
-            category=project.category,
-            agency_name=request.agency_name,
         )
-
-        business_type_code = getattr(project, "business_type_code", None)
-        business_group = resolve_business_group(business_type_code)
-        price_prediction = self.price_prediction_port.predict_price(
-            budget=float(project.budget_estimate or 0.0),
-            category=project.category or "other",
-            description=f"{project.description or ''} {project.requirements or ''}".strip(),
-            historical_records=self._load_price_history(db, project),
-            agency_name=request.agency_name,
-            feedback_calibration=feedback_calibration,
-            business_type_code=business_type_code,
-            business_group=business_group,
-            legal_floor_bid_rate=request.legal_floor_bid_rate,
-        )
-
-        bid_recommendation = self.bid_recommendation_port.recommend(
-            project_data={
-                "budget": float(project.budget_estimate or 0.0),
-                "category": project.category or "other",
-                "description": f"{project.title} {project.description} {project.requirements}".strip(),
-            },
-            user_data=user_historical_data,
-        )
+        bid_recommendation = self._build_bid_recommendation(project, user_historical_data)
 
         recommended_amount = self._resolve_recommended_amount(
             project=project,
@@ -328,76 +299,54 @@ class OpportunityAnalysisService:
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
         )
-        competitiveness_score = scores.competitiveness_score
-        expected_margin_score = scores.expected_margin_score
-        execution_complexity_score = scores.execution_complexity_score
 
-        category_priority_override = resolve_category_priority_override(strategy, project.category)
-        matched_score = self._apply_category_priority_override(
-            float(classification["score"]),
-            category_priority_override * 0.5,
-        )
-        probability_score = self._resolve_final_probability_score(
-            classification=classification,
-            price_prediction=price_prediction,
-            bid_recommendation=bid_recommendation,
-            similar_projects=similar_projects,
-            competitiveness_score=competitiveness_score,
-            capacity_score=float(profile.capacity_score or 0.0),
-            current_active_bids=current_active_bids,
-            max_active_bids=request.max_active_bids,
-            business_group=business_group,
-            category_priority_override=category_priority_override,
-        )
-
-        decision = self.decision_service.evaluate_opportunity(
-            BidDecisionRequest(
-                project_id=project.id,
-                recommended_amount=recommended_amount,
-                probability_score=probability_score,
-                matched_score=matched_score,
-                deadline_hours_remaining=deadline_hours_remaining,
+        category_priority_override, matched_score, probability_score = (
+            self._resolve_probability_context(
+                strategy=strategy,
+                project=project,
+                classification=classification,
+                price_prediction=price_prediction,
+                bid_recommendation=bid_recommendation,
+                similar_projects=similar_projects,
+                competitiveness_score=scores.competitiveness_score,
+                capacity_score=float(profile.capacity_score or 0.0),
                 current_active_bids=current_active_bids,
                 max_active_bids=request.max_active_bids,
-                current_workload_score=current_workload_score,
-                budget_estimate=float(project.budget_estimate or 0.0),
-                competitiveness_score=float(competitiveness_score),
-                expected_margin_score=expected_margin_score,
-                execution_complexity_score=execution_complexity_score,
-                workload_source=workload_source,
-            ),
-            db=db,
-            operator=operator,
+                business_group=business_group,
+            )
         )
 
-        strengths = self._build_strengths(
-            classification=classification,
-            price_prediction=price_prediction,
-            similar_projects=similar_projects,
-            competitiveness_score=competitiveness_score,
+        decision = self._evaluate_bid_decision(
+            db=db,
+            operator=operator,
+            project=project,
+            request=request,
+            recommended_amount=recommended_amount,
             probability_score=probability_score,
-            expected_margin_score=expected_margin_score,
+            matched_score=matched_score,
+            deadline_hours_remaining=deadline_hours_remaining,
+            current_active_bids=current_active_bids,
+            current_workload_score=current_workload_score,
+            competitiveness_score=scores.competitiveness_score,
+            expected_margin_score=scores.expected_margin_score,
+            execution_complexity_score=scores.execution_complexity_score,
+            workload_source=workload_source,
         )
-        risk_flags = self._build_risk_flags(
+        strengths, risk_flags = self._build_opportunity_flags(
+            project=project,
+            profile=profile,
             classification=classification,
             price_prediction=price_prediction,
             similar_projects=similar_projects,
             current_active_bids=current_active_bids,
             max_active_bids=request.max_active_bids,
             deadline_hours_remaining=deadline_hours_remaining,
-            expected_margin_score=expected_margin_score,
-            execution_complexity_score=execution_complexity_score,
-            project=project,
-            profile=profile,
+            competitiveness_score=scores.competitiveness_score,
+            probability_score=probability_score,
+            expected_margin_score=scores.expected_margin_score,
+            execution_complexity_score=scores.execution_complexity_score,
+            category_priority_override=category_priority_override,
         )
-        if category_priority_override > 0:
-            strengths.append(
-                f"운영 전략에서 {project.category or '미분류'} 카테고리를 우선 검토 대상으로 보정했습니다."
-            )
-        elif category_priority_override < 0:
-            risk_flags.append(
-                f"운영 전략에서 {project.category or '미분류'} 카테고리 우선순위를 낮춰 보수적으로 평가했습니다."
-            )
 
         return self._build_analysis_response(
             project=project,
@@ -420,6 +369,190 @@ class OpportunityAnalysisService:
             bid_recommendation=bid_recommendation,
             similar_projects=similar_projects,
         )
+
+    def _resolve_operator_context(
+        self,
+        db: Session,
+        operator: User | None,
+    ) -> tuple[User, CompanyProfile, object]:
+        if operator is None:
+            return (
+                ensure_operator_account(db),
+                ensure_operator_profile(db),
+                ensure_operator_strategy(db),
+            )
+        return (
+            operator,
+            ensure_operator_profile_for(db, operator),
+            ensure_operator_strategy_for(db, operator),
+        )
+
+    def _build_price_prediction(
+        self,
+        db: Session,
+        *,
+        project: Project,
+        request: OpportunityAnalysisRequest,
+        operator_id: int,
+    ) -> tuple[dict, str | None]:
+        feedback_calibration = self.feedback_service.build_calibration_context(
+            db,
+            operator_id=operator_id,
+            category=project.category,
+            agency_name=request.agency_name,
+        )
+        business_type_code = getattr(project, "business_type_code", None)
+        business_group = resolve_business_group(business_type_code)
+        return (
+            self.price_prediction_port.predict_price(
+                budget=float(project.budget_estimate or 0.0),
+                category=project.category or "other",
+                description=f"{project.description or ''} {project.requirements or ''}".strip(),
+                historical_records=self._load_price_history(db, project),
+                agency_name=request.agency_name,
+                feedback_calibration=feedback_calibration,
+                business_type_code=business_type_code,
+                business_group=business_group,
+                legal_floor_bid_rate=request.legal_floor_bid_rate,
+            ),
+            business_group,
+        )
+
+    def _build_bid_recommendation(
+        self,
+        project: Project,
+        user_historical_data: dict,
+    ) -> dict:
+        return self.bid_recommendation_port.recommend(
+            project_data={
+                "budget": float(project.budget_estimate or 0.0),
+                "category": project.category or "other",
+                "description": f"{project.title} {project.description} {project.requirements}".strip(),
+            },
+            user_data=user_historical_data,
+        )
+
+    def _evaluate_bid_decision(
+        self,
+        *,
+        db: Session,
+        operator: User,
+        project: Project,
+        request: OpportunityAnalysisRequest,
+        recommended_amount: float,
+        probability_score: float,
+        matched_score: float,
+        deadline_hours_remaining: float,
+        current_active_bids: int,
+        current_workload_score: float,
+        competitiveness_score: float,
+        expected_margin_score: float,
+        execution_complexity_score: float,
+        workload_source: str,
+    ) -> dict:
+        return self.decision_service.evaluate_opportunity(
+            BidDecisionRequest(
+                project_id=project.id,
+                recommended_amount=recommended_amount,
+                probability_score=probability_score,
+                matched_score=matched_score,
+                deadline_hours_remaining=deadline_hours_remaining,
+                current_active_bids=current_active_bids,
+                max_active_bids=request.max_active_bids,
+                current_workload_score=current_workload_score,
+                budget_estimate=float(project.budget_estimate or 0.0),
+                competitiveness_score=float(competitiveness_score),
+                expected_margin_score=expected_margin_score,
+                execution_complexity_score=execution_complexity_score,
+                workload_source=workload_source,
+            ),
+            db=db,
+            operator=operator,
+        )
+
+    def _resolve_probability_context(
+        self,
+        *,
+        strategy: object,
+        project: Project,
+        classification: dict,
+        price_prediction: dict,
+        bid_recommendation: dict,
+        similar_projects: list,
+        competitiveness_score: float,
+        capacity_score: float,
+        current_active_bids: int,
+        max_active_bids: int,
+        business_group: str | None,
+    ) -> tuple[float, float, float]:
+        category_priority_override = resolve_category_priority_override(
+            strategy,
+            project.category,
+        )
+        matched_score = self._apply_category_priority_override(
+            float(classification["score"]),
+            category_priority_override * 0.5,
+        )
+        probability_score = self._resolve_final_probability_score(
+            classification=classification,
+            price_prediction=price_prediction,
+            bid_recommendation=bid_recommendation,
+            similar_projects=similar_projects,
+            competitiveness_score=competitiveness_score,
+            capacity_score=capacity_score,
+            current_active_bids=current_active_bids,
+            max_active_bids=max_active_bids,
+            business_group=business_group,
+            category_priority_override=category_priority_override,
+        )
+        return category_priority_override, matched_score, probability_score
+
+    def _build_opportunity_flags(
+        self,
+        *,
+        project: Project,
+        profile: CompanyProfile,
+        classification: dict,
+        price_prediction: dict,
+        similar_projects: list,
+        current_active_bids: int,
+        max_active_bids: int,
+        deadline_hours_remaining: float,
+        competitiveness_score: float,
+        probability_score: float,
+        expected_margin_score: float,
+        execution_complexity_score: float,
+        category_priority_override: float,
+    ) -> tuple[list[str], list[str]]:
+        strengths = self._build_strengths(
+            classification=classification,
+            price_prediction=price_prediction,
+            similar_projects=similar_projects,
+            competitiveness_score=competitiveness_score,
+            probability_score=probability_score,
+            expected_margin_score=expected_margin_score,
+        )
+        risk_flags = self._build_risk_flags(
+            classification=classification,
+            price_prediction=price_prediction,
+            similar_projects=similar_projects,
+            current_active_bids=current_active_bids,
+            max_active_bids=max_active_bids,
+            deadline_hours_remaining=deadline_hours_remaining,
+            expected_margin_score=expected_margin_score,
+            execution_complexity_score=execution_complexity_score,
+            project=project,
+            profile=profile,
+        )
+        if category_priority_override > 0:
+            strengths.append(
+                f"운영 전략에서 {project.category or '미분류'} 카테고리를 우선 검토 대상으로 보정했습니다."
+            )
+        elif category_priority_override < 0:
+            risk_flags.append(
+                f"운영 전략에서 {project.category or '미분류'} 카테고리 우선순위를 낮춰 보수적으로 평가했습니다."
+            )
+        return strengths, risk_flags
 
     def _compute_scores(
         self,

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
@@ -41,6 +42,28 @@ from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.classifier import NoticeClassifierService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CandidatePredictionContext:
+    budget: float
+    data_cutoff_at: datetime
+    history: list[dict[str, Any]]
+    business_group: str | None
+    prediction: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CandidateDecisionContext:
+    selected_scenario: dict[str, Any]
+    paper_bid_amount: float
+    paper_bid_rate: float
+    matched_score: float
+    match_reasons: list[str]
+    match_source: str
+    probability_score: float
+    decision: dict[str, Any]
+    action: str
 
 
 class OperatorNotFoundError(ValueError):
@@ -704,6 +727,38 @@ class PaperBiddingBacktestService:
         history_limit: int,
         profile: CompanyProfile | None = None,
     ) -> dict[str, Any]:
+        prediction_context = self._build_candidate_prediction_context(
+            db,
+            project=project,
+            tender_result=tender_result,
+            data_cutoff_at=data_cutoff_at,
+            cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+            history_limit=history_limit,
+        )
+        decision_context = self._build_candidate_decision_context(
+            db,
+            project=project,
+            prediction_context=prediction_context,
+            scenario=scenario,
+            profile=profile,
+        )
+        return self._build_candidate_payload(
+            project=project,
+            prediction_context=prediction_context,
+            decision_context=decision_context,
+            strategy_version=strategy_version,
+        )
+
+    def _build_candidate_prediction_context(
+        self,
+        db: Session,
+        *,
+        project: Project,
+        tender_result: TenderResult | None,
+        data_cutoff_at: datetime | None,
+        cutoff_hours_before_deadline: int,
+        history_limit: int,
+    ) -> CandidatePredictionContext:
         budget = self._resolve_project_budget(project)
         if budget <= 0:
             raise ValueError(f"Project {project.id} has no usable budget")
@@ -738,6 +793,25 @@ class PaperBiddingBacktestService:
             business_type_code=business_type_code,
             business_group=business_group,
         )
+        return CandidatePredictionContext(
+            budget=budget,
+            data_cutoff_at=data_cutoff_at,
+            history=history,
+            business_group=business_group,
+            prediction=prediction,
+        )
+
+    def _build_candidate_decision_context(
+        self,
+        db: Session,
+        *,
+        project: Project,
+        prediction_context: CandidatePredictionContext,
+        scenario: str,
+        profile: CompanyProfile | None,
+    ) -> CandidateDecisionContext:
+        budget = prediction_context.budget
+        prediction = prediction_context.prediction
         selected_scenario = self._select_scenario(prediction, scenario=scenario)
         paper_bid_amount = round(float(selected_scenario["predicted_price"]), 2)
         paper_bid_rate = self._normalize_rate(
@@ -749,11 +823,12 @@ class PaperBiddingBacktestService:
         probability_score = self._estimate_probability_score(
             matched_score=matched_score,
             prediction=prediction,
-            history_count=len(history),
-            business_group=business_group,
+            history_count=len(prediction_context.history),
+            business_group=prediction_context.business_group,
         )
         deadline_hours_remaining = self._deadline_hours_remaining(
-            project=project, data_cutoff_at=data_cutoff_at
+            project=project,
+            data_cutoff_at=prediction_context.data_cutoff_at,
         )
         decision = self.decision_service.evaluate_opportunity(
             BidDecisionRequest(
@@ -780,23 +855,47 @@ class PaperBiddingBacktestService:
             db=db,
         )
         action = str(decision["action"])
+        return CandidateDecisionContext(
+            selected_scenario=selected_scenario,
+            paper_bid_amount=paper_bid_amount,
+            paper_bid_rate=paper_bid_rate,
+            matched_score=matched_score,
+            match_reasons=match_reasons,
+            match_source=match_source,
+            probability_score=probability_score,
+            decision=decision,
+            action=action,
+        )
+
+    def _build_candidate_payload(
+        self,
+        *,
+        project: Project,
+        prediction_context: CandidatePredictionContext,
+        decision_context: CandidateDecisionContext,
+        strategy_version: str,
+    ) -> dict[str, Any]:
+        budget = prediction_context.budget
+        prediction = prediction_context.prediction
+        selected_scenario = decision_context.selected_scenario
+        decision = decision_context.decision
         return {
             "project_id": int(project.id),
             "project_title": project.title,
             "notice_number": project.notice_number,
             "category": project.category,
             "issuing_agency": project.issuing_agency,
-            "data_cutoff_at": data_cutoff_at.isoformat(),
+            "data_cutoff_at": prediction_context.data_cutoff_at.isoformat(),
             "deadline": project.deadline.isoformat() if project.deadline else None,
             "budget_estimate": round(budget, 2),
             "scenario": str(selected_scenario["label"]),
-            "action": action,
-            "decision_status": self._decision_status_for_action(action),
-            "paper_bid_amount": paper_bid_amount,
-            "paper_bid_rate": round(paper_bid_rate, 6),
+            "action": decision_context.action,
+            "decision_status": self._decision_status_for_action(decision_context.action),
+            "paper_bid_amount": decision_context.paper_bid_amount,
+            "paper_bid_rate": round(decision_context.paper_bid_rate, 6),
             "priority_score": float(decision["priority_score"]),
-            "probability_score": probability_score,
-            "matched_score": matched_score,
+            "probability_score": decision_context.probability_score,
+            "matched_score": decision_context.matched_score,
             "predicted_price": float(prediction.get("predicted_price", 0.0) or 0.0),
             "predicted_bid_rate": self._normalize_rate(
                 float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
@@ -812,26 +911,26 @@ class PaperBiddingBacktestService:
             ),
             "model_version": str(prediction.get("model_version") or "current"),
             "strategy_version": strategy_version,
-            "historical_sample_size": len(history),
+            "historical_sample_size": len(prediction_context.history),
             "history_ids": [
                 int(record["historical_data_id"])
-                for record in history
+                for record in prediction_context.history
                 if record.get("historical_data_id") is not None
             ],
             "input_snapshot_hash": self._build_input_hash(
                 project=project,
-                data_cutoff_at=data_cutoff_at,
+                data_cutoff_at=prediction_context.data_cutoff_at,
                 scenario=str(selected_scenario["label"]),
-                history=history,
-                paper_bid_amount=paper_bid_amount,
+                history=prediction_context.history,
+                paper_bid_amount=decision_context.paper_bid_amount,
                 strategy_version=strategy_version,
             ),
-            "matched_score_source": match_source,
-            "match_reasons": match_reasons,
+            "matched_score_source": decision_context.match_source,
+            "match_reasons": decision_context.match_reasons,
             "reasoning": self._compose_reasoning(
                 decision_reasoning=str(decision["reasoning"]),
-                match_reasons=match_reasons,
-                match_source=match_source,
+                match_reasons=decision_context.match_reasons,
+                match_source=decision_context.match_source,
             ),
         }
 
