@@ -246,6 +246,9 @@ class KonepsTelegramSmokeTestService:
             "source_run_type",
             "source_run_id",
             "collected_count",
+            "recent_collection_jobs",
+            "recent_collection_count",
+            "recent_collection_last_at",
             "project_id",
             "project_title",
             "predicted_bid_rate",
@@ -292,6 +295,19 @@ class KonepsTelegramSmokeTestService:
         except (TypeError, ValueError):
             return None
 
+    # Recency window for the collection-pipeline health cross-check used when
+    # the live re-fetch legitimately returns zero notices. The KONEPS
+    # BidPublicInfoService single-day query serves ~0 rows during the KST
+    # overnight / pre-business-hours window (empirically the hourly beat itself
+    # returns 0 across roughly KST 00:00-08:00 and ramps to saturation through
+    # the business day). A daily smoke that fires inside that trough would flag
+    # a false failure even though the pipeline is healthy, so a zero live fetch
+    # falls back to "did the persisted hourly pipeline recently collect real
+    # notices?" — mirroring the sbert phase's "recent real row" philosophy
+    # instead of demanding this run produce a brand-new row. 26h comfortably
+    # spans a full daily collection cycle (business-hours data + margin).
+    KONEPS_COLLECT_RECENT_WINDOW_HOURS = 26
+
     def _phase_koneps_collect(self, db: Session) -> PhaseResult:
         result = PhaseResult(name="koneps_collect")
         try:
@@ -302,14 +318,103 @@ class KonepsTelegramSmokeTestService:
             collect_result = KonepsCollectorService().collect_notices(req)
             count = int(collect_result.get("collected_count") or 0)
             result.data["collected_count"] = count
-            result.passed = count >= 1
-            result.detail = f"collected {count}"
-            if not result.passed:
-                result.skip_reason = "KONEPS returned zero notices"
+
+            if count >= 1:
+                # Live API reachable and returning fresh notices this run.
+                result.passed = True
+                result.detail = f"collected {count}"
+                return self._finalize_phase(result)
+
+            # Zero live notices. The koneps-openapi path raises on HTTP / bad
+            # resultCode errors (caught below), so reaching here means the API
+            # answered cleanly with an empty window — the expected KST overnight
+            # trough. Validate pipeline health from the persisted hourly
+            # collection instead of failing on a time-of-day-fragile re-fetch.
+            health = self._recent_collection_health(db)
+            result.data.update(health["evidence"])
+            if health["healthy"]:
+                result.passed = True
+                result.detail = (
+                    f"collected 0 live (off-peak); pipeline healthy: "
+                    f"{health['recent_count']} notices via {health['recent_jobs']} "
+                    f"job(s) in last {self.KONEPS_COLLECT_RECENT_WINDOW_HOURS}h"
+                )
+                return self._finalize_phase(result)
+
+            # Zero live notices AND no recent successful persisted collection:
+            # the hourly pipeline is genuinely stalled/empty — a real failure.
+            # Pin the category to ``koneps_response`` (not the ``collected 0``
+            # token's default ``no_candidate``): the live fetch just reached
+            # KONEPS and got nothing while the hourly beat also persisted
+            # nothing for a full cycle, so the operator guidance should point at
+            # KONEPS availability / collection health, not "widen strategy
+            # filters" (which misdirects for a genuine stall).
+            result.detail = (
+                f"collected 0 live and no notices persisted in last "
+                f"{self.KONEPS_COLLECT_RECENT_WINDOW_HOURS}h"
+            )
+            result.failure_category = "koneps_response"
+            result.skip_reason = "KONEPS returned zero notices and pipeline is stale"
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
             logger.exception("smoke phase koneps_collect failed")
         return self._finalize_phase(result)
+
+    def _recent_collection_health(self, db: Session) -> dict[str, Any]:
+        """Summarise whether the hourly KONEPS collection recently succeeded.
+
+        Looks for completed ``koneps-openapi`` crawl jobs that persisted at
+        least one notice within ``KONEPS_COLLECT_RECENT_WINDOW_HOURS``. Returns
+        a ``healthy`` flag plus evidence counts so ``_phase_koneps_collect`` can
+        stay green when the live off-peak re-fetch returns zero while the beat
+        pipeline is demonstrably alive, and fail loudly when it is not.
+        """
+        from datetime import timedelta
+
+        from sqlalchemy import func
+
+        from app.core.time import utc_now
+        from app.models.models import CrawlJob
+
+        cutoff = utc_now() - timedelta(hours=self.KONEPS_COLLECT_RECENT_WINDOW_HOURS)
+        # Match the same ``koneps-openapi`` source the phase's live fetch uses
+        # (both intentionally target the default KONEPS_COLLECTION_SOURCE). The
+        # hourly beat persists jobs under ``request.source``; if an operator
+        # ever points collection at a non-default source, revisit this filter.
+        jobs, notices, last_at = (
+            db.query(
+                func.count(CrawlJob.id),
+                func.coalesce(func.sum(CrawlJob.result_count), 0),
+                func.max(CrawlJob.created_at),
+            )
+            .filter(
+                CrawlJob.source == "koneps-openapi",
+                CrawlJob.status == "completed",
+                CrawlJob.result_count > 0,
+                CrawlJob.created_at >= cutoff,
+            )
+            .one()
+        )
+        recent_jobs = int(jobs or 0)
+        recent_count = int(notices or 0)
+        # ``func.max`` may return a datetime (PostgreSQL) or an ISO string
+        # (SQLite test backend, which does not re-apply the column type).
+        if last_at is None:
+            last_at_iso = None
+        elif hasattr(last_at, "isoformat"):
+            last_at_iso = last_at.isoformat()
+        else:
+            last_at_iso = str(last_at)
+        return {
+            "healthy": recent_jobs >= 1 and recent_count >= 1,
+            "recent_jobs": recent_jobs,
+            "recent_count": recent_count,
+            "evidence": {
+                "recent_collection_jobs": recent_jobs,
+                "recent_collection_count": recent_count,
+                "recent_collection_last_at": last_at_iso,
+            },
+        }
 
     # Recency window for selecting a real embedded project to validate the
     # embedding -> prediction pipeline health. Decoupled from KONEPS collection
