@@ -770,6 +770,7 @@ def test_koneps_collect_passes_offpeak_when_pipeline_healthy(test_db, monkeypatc
 
 def test_koneps_collect_fails_when_live_zero_and_pipeline_stale(test_db, monkeypatch):
     """Zero live notices AND no recent successful collection is a real failure."""
+    from app.services.smoke_failure_taxonomy import guidance_for
     from app.services.smoke_test import KonepsTelegramSmokeTestService
 
     _patch_collect_notices(monkeypatch, collected_count=0)
@@ -780,8 +781,26 @@ def test_koneps_collect_fails_when_live_zero_and_pipeline_stale(test_db, monkeyp
     assert result.passed is False
     assert "no notices persisted" in result.detail
     assert result.skip_reason == "KONEPS returned zero notices and pipeline is stale"
-    # Failure is annotated with actionable guidance.
-    assert result.failure_category != ""
+    # A genuine stall must be classified as a KONEPS/collection problem, not the
+    # "collected 0" token's default no_candidate ("widen strategy filters"),
+    # which would misdirect the operator.
+    assert result.failure_category == "koneps_response"
+    assert result.action_required == guidance_for("koneps_response")["action_required"]
+
+
+def test_koneps_collect_health_sums_multiple_recent_jobs(test_db, monkeypatch):
+    """recent_collection_count sums result_count across all in-window jobs."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    _patch_collect_notices(monkeypatch, collected_count=0)
+    _make_crawl_job(test_db, result_count=120)
+    _make_crawl_job(test_db, result_count=80)
+
+    result = KonepsTelegramSmokeTestService()._phase_koneps_collect(test_db)
+
+    assert result.passed is True
+    assert result.data["recent_collection_jobs"] == 2
+    assert result.data["recent_collection_count"] == 200
 
 
 def test_koneps_collect_health_ignores_stale_failed_and_zero_jobs(test_db, monkeypatch):

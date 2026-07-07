@@ -343,10 +343,17 @@ class KonepsTelegramSmokeTestService:
 
             # Zero live notices AND no recent successful persisted collection:
             # the hourly pipeline is genuinely stalled/empty — a real failure.
+            # Pin the category to ``koneps_response`` (not the ``collected 0``
+            # token's default ``no_candidate``): the live fetch just reached
+            # KONEPS and got nothing while the hourly beat also persisted
+            # nothing for a full cycle, so the operator guidance should point at
+            # KONEPS availability / collection health, not "widen strategy
+            # filters" (which misdirects for a genuine stall).
             result.detail = (
                 f"collected 0 live and no notices persisted in last "
                 f"{self.KONEPS_COLLECT_RECENT_WINDOW_HOURS}h"
             )
+            result.failure_category = "koneps_response"
             result.skip_reason = "KONEPS returned zero notices and pipeline is stale"
         except Exception as exc:
             result.detail = f"exception: {type(exc).__name__}: {exc}"
@@ -370,6 +377,10 @@ class KonepsTelegramSmokeTestService:
         from app.models.models import CrawlJob
 
         cutoff = utc_now() - timedelta(hours=self.KONEPS_COLLECT_RECENT_WINDOW_HOURS)
+        # Match the same ``koneps-openapi`` source the phase's live fetch uses
+        # (both intentionally target the default KONEPS_COLLECTION_SOURCE). The
+        # hourly beat persists jobs under ``request.source``; if an operator
+        # ever points collection at a non-default source, revisit this filter.
         jobs, notices, last_at = (
             db.query(
                 func.count(CrawlJob.id),
