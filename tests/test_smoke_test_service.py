@@ -686,3 +686,147 @@ def test_sbert_embedding_passes_then_predict_price_skips_zero_budget(test_db, mo
     assert p3.passed is False
     assert p3.skip_reason == "no usable budget"
     assert p3.data["project_id"] == project.id
+
+
+# ---------------------------------------------------------------------------
+# koneps_collect phase: live fetch + off-peak pipeline-health fallback
+# ---------------------------------------------------------------------------
+
+
+def _make_crawl_job(
+    test_db,
+    *,
+    source="koneps-openapi",
+    status="completed",
+    result_count=100,
+    created_at="now",
+):
+    """Insert a CrawlJob row for the collection-health cross-check tests."""
+    from app.core.time import utc_now
+    from app.models.models import CrawlJob
+
+    if created_at == "now":
+        created_at = utc_now()
+    job = CrawlJob(
+        source=source,
+        status=status,
+        result_count=result_count,
+        created_at=created_at,
+    )
+    test_db.add(job)
+    test_db.commit()
+    test_db.refresh(job)
+    return job
+
+
+def _patch_collect_notices(monkeypatch, *, collected_count):
+    from app.services.koneps.collector import KonepsCollectorService
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, req: {
+            "collected_count": collected_count,
+            "items": [],
+            "metadata": {"resolved_mode": "openapi"},
+        },
+    )
+
+
+def test_koneps_collect_passes_on_fresh_live_notices(test_db, monkeypatch):
+    """A non-zero live fetch passes without consulting the health fallback."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    _patch_collect_notices(monkeypatch, collected_count=5)
+
+    result = KonepsTelegramSmokeTestService()._phase_koneps_collect(test_db)
+
+    assert result.passed is True
+    assert result.detail == "collected 5"
+    assert result.data["collected_count"] == 5
+    # No health cross-check fields when the live fetch already succeeded.
+    assert "recent_collection_count" not in result.data
+
+
+def test_koneps_collect_passes_offpeak_when_pipeline_healthy(test_db, monkeypatch):
+    """Zero live notices in the KST trough still passes when the hourly beat
+    recently persisted real notices (the collection pipeline is alive)."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    _patch_collect_notices(monkeypatch, collected_count=0)
+    _make_crawl_job(test_db, result_count=120)
+
+    result = KonepsTelegramSmokeTestService()._phase_koneps_collect(test_db)
+
+    assert result.passed is True
+    assert "off-peak" in result.detail
+    assert result.data["collected_count"] == 0
+    assert result.data["recent_collection_jobs"] == 1
+    assert result.data["recent_collection_count"] == 120
+    assert result.data["recent_collection_last_at"] is not None
+    # A passing phase must not carry failure annotations.
+    assert result.failure_category == ""
+
+
+def test_koneps_collect_fails_when_live_zero_and_pipeline_stale(test_db, monkeypatch):
+    """Zero live notices AND no recent successful collection is a real failure."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    _patch_collect_notices(monkeypatch, collected_count=0)
+    # No crawl jobs at all -> pipeline is stale.
+
+    result = KonepsTelegramSmokeTestService()._phase_koneps_collect(test_db)
+
+    assert result.passed is False
+    assert "no notices persisted" in result.detail
+    assert result.skip_reason == "KONEPS returned zero notices and pipeline is stale"
+    # Failure is annotated with actionable guidance.
+    assert result.failure_category != ""
+
+
+def test_koneps_collect_health_ignores_stale_failed_and_zero_jobs(test_db, monkeypatch):
+    """Jobs outside the window, failed jobs, and zero-count (trough) jobs do not
+    count as evidence of a healthy pipeline."""
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    _patch_collect_notices(monkeypatch, collected_count=0)
+    # Real data, but outside the 26h window.
+    _make_crawl_job(
+        test_db, result_count=500, created_at=utc_now() - timedelta(hours=48)
+    )
+    # Failed job inside the window.
+    _make_crawl_job(test_db, status="failed", result_count=0)
+    # Completed but zero-count inside the window (the trough itself).
+    _make_crawl_job(test_db, result_count=0)
+    # Wrong source inside the window.
+    _make_crawl_job(test_db, source="scsbid-openapi", result_count=200)
+
+    result = KonepsTelegramSmokeTestService()._phase_koneps_collect(test_db)
+
+    assert result.passed is False
+    assert result.data["recent_collection_jobs"] == 0
+    assert result.data["recent_collection_count"] == 0
+
+
+def test_koneps_collect_fails_on_live_exception_even_with_healthy_history(
+    test_db, monkeypatch
+):
+    """A raised live fetch (API down / bad resultCode) is a hard failure and is
+    not masked by recent healthy collection history."""
+    from app.services.koneps.collector import KonepsCollectorService
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    def _boom(self, req):
+        raise ValueError("KONEPS OpenAPI HTTP 500")
+
+    monkeypatch.setattr(KonepsCollectorService, "collect_notices", _boom)
+    _make_crawl_job(test_db, result_count=300)  # healthy history present
+
+    result = KonepsTelegramSmokeTestService()._phase_koneps_collect(test_db)
+
+    assert result.passed is False
+    assert "exception" in result.detail
+    assert "ValueError" in result.detail
