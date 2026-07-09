@@ -181,6 +181,8 @@ G2_EVIDENCE_REQUIRED_DAYS=7
 
 **정직 명세**: 이 beat draft의 하루 `pass` 판정은 operator별 evidence **ledger**(`build_g2_evidence_summary`의 `evidence_status=="ready"`, mixed_scope/blocking_gap 없음)만 기준으로 한다. `scripts/collect_g2_evidence.py`(fastlane)가 하는 **live endpoint-scope** 확인(candidate_preview scope 등)은 매일 재확인하지 않는다 — 그건 안정적인 구조 게이트로 fastlane이 검증한다. 그래서 beat draft의 `basis`/`operators`/`daily_status`에는 `"source": "collect_g2_evidence_beat"`가 찍혀 CLI draft와 구분된다. 하루 `status` 규칙: 대상 중 누락/에러가 하나라도 있으면 `fail`, 전원 present + 전원 `ready` + blocking gap 0이면 `pass`, 그 외 `partial`. `counted_days` 크레딧은 `pass`에서만 부여된다.
 
+**Rolling-window caveat (사람 리뷰어 필독)**: `evidence_status`는 30일 *trailing* window로 평가한다. 즉 ledger가 한 번 `ready`가 되면 window가 stale해질 때까지 매일 snapshot이 `pass`로 찍힌다 — 그래서 beat가 만든 `counted_days=7`은 "7일간 *새* forward 증적이 있었다"가 아니라 "7개 캘린더 날짜에 30일-window ledger가 ready였다"를 뜻한다. 이는 CLI collector의 snapshot 의미와 동일(그것도 rolling-window read)하므로 기존 정의를 약화시키지는 않지만, `counted_days=7 / ready_for_review=true`를 "7일 연속 신규 운영 증적"으로 과대 해석하면 안 된다. per-day 신규 증적을 요구하려면 여기(daily `pass` 규칙)에 freshness 게이트를 추가해야 하며, 이는 로드맵 판단 사항이다.
+
 누적된 daily draft로 exit review 게이트를 다시 계산하려면(사람 승인 아님):
 
 ```bash

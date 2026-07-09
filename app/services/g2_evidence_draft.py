@@ -13,6 +13,18 @@ re-run the CLI's live endpoint-scope checks (candidate_preview scope, etc.),
 which are a stable structural gate validated by the fastlane collector. Every
 ``operators`` / ``daily_status`` / ``blocking_gaps`` entry is stamped
 ``"source": "collect_g2_evidence_beat"`` so consumers can tell the two apart.
+
+Rolling-window caveat (interpret ``counted_days`` accordingly): each daily
+"pass" is a snapshot of ``build_g2_evidence_summary``, which evaluates a 30-day
+*trailing* window. Once the ledger becomes ready, every subsequent day snapshots
+"pass" until the window goes stale — so N counted beat-days can reflect a single
+sustained 30-day-ready window, NOT N days of *fresh* forward evidence. This
+matches the CLI collector's snapshot semantics (its per-day verdict is also a
+rolling-window read), so the beat does not weaken the established definition;
+but a human reading ``counted_days=7 / ready_for_review=true`` must read it as
+"the ledger passed on 7 calendar dates", not "7 days of new activity". The exit
+stays human-approved; add a freshness gate here if the roadmap ever requires
+per-day fresh evidence.
 """
 
 from __future__ import annotations

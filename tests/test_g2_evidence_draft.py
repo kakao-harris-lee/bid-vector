@@ -354,3 +354,69 @@ def test_beat_skips_draft_write_in_test_environment(tmp_path, test_db, monkeypat
     collect_g2_evidence()
 
     assert not (tmp_path / "daily").exists()
+
+
+def test_draft_write_failure_does_not_abort_sweep(tmp_path, test_db, monkeypatch):
+    """A draft-write exception must not roll back the analytics event or the sweep."""
+    import app.tasks.jobs as jobs_mod
+    from app.core.config import settings
+    from app.core.single_user import ensure_operator_account
+    from app.services.analytics_reporting import AnalyticsReportingService
+    from app.tasks.jobs import collect_g2_evidence
+
+    monkeypatch.setattr(jobs_mod, "SessionLocal", lambda: _NoCloseSession(test_db))
+    ensure_operator_account(test_db)
+    _seed_target_operator(test_db, operator_id=19, slug="alpha")
+
+    def fake_summary(self, db, *, window_days=30, recent_limit=5, operator=None):
+        return {
+            "operator_id": int(operator.id),
+            "evidence_status": "ready",
+            "smoke": {"status": "ready"},
+            "strategy_monitor": {"status": "ready"},
+            "decision_experiments": {"status": "ready"},
+            "synthetic_experiments": {"status": "ready"},
+            "notifications": {"status": "ready"},
+            "blocking_gaps": [],
+        }
+
+    monkeypatch.setattr(
+        AnalyticsReportingService, "build_g2_evidence_summary", fake_summary
+    )
+    monkeypatch.setattr(settings, "G2_EVIDENCE_WRITE_DAILY_DRAFT", True)
+
+    def _boom(*, target_summaries):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(jobs_mod, "_write_g2_daily_evidence_draft", _boom)
+
+    # The task must swallow the write failure and still return + keep the event.
+    result = collect_g2_evidence()
+
+    assert result["error_count"] == 0
+    assert test_db.query(Analytics).filter_by(event_type="collect_g2_evidence").count() == 1
+
+
+def test_shrunk_target_roster_cannot_pass():
+    """Fewer than MIN_OPERATORS_FLOOR ready targets is partial, never pass."""
+    row = daily_status_from_target_summaries(
+        operator_summaries=[_ready(19, "alpha"), _ready(20, "bravo")],
+        target_operator_ids=[19, 20],
+        run_date_kst="2026-07-09",
+    )
+    # Only two targets are ready — below the floor of 3 — so no counted day.
+    assert row["status"] == "partial"
+
+
+def test_config_target_operator_ids_parses_dedups_and_filters():
+    """CSV parser drops blank/non-int/non-positive tokens and dedups in order."""
+    from app.core.config import settings
+
+    original = settings.G2_EVIDENCE_TARGET_OPERATOR_IDS
+    try:
+        settings.G2_EVIDENCE_TARGET_OPERATOR_IDS = "19, 20, 20, x, -1, 0, 25"
+        assert settings.g2_evidence_target_operator_ids == [19, 20, 25]
+        settings.G2_EVIDENCE_TARGET_OPERATOR_IDS = ""
+        assert settings.g2_evidence_target_operator_ids == []
+    finally:
+        settings.G2_EVIDENCE_TARGET_OPERATOR_IDS = original
