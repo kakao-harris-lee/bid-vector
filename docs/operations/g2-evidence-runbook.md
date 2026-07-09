@@ -12,7 +12,7 @@
 - `/api/v1/operator/notification-channels`: operator별 masked notification route metadata 확인
 - `/api/v1/synthetic/experiments/sample-gaps/candidates`: sample-gap 기반 실행 계획 확인
 - `scripts/collect_g2_evidence.py`: operator 3개 이상에 대한 read-only HTTP evidence 파일을 `reports/g2-evidence/` 아래에 저장
-- `jobs.collect_g2_evidence` / `COLLECT_G2_EVIDENCE_*`: 매일 22:00 KST에 operator별 G-2 ledger 요약을 하나의 `collect_g2_evidence` analytics event로 snapshot. 기본 OFF이며 operator data write, monitor 실행, 외부 호출, Telegram 송신 없음
+- `jobs.collect_g2_evidence` / `COLLECT_G2_EVIDENCE_*`: 매일 22:00 KST에 operator별 G-2 ledger 요약을 하나의 `collect_g2_evidence` analytics event로 snapshot. 기본 OFF이며 operator data write, monitor 실행, 외부 호출, Telegram 송신 없음. `G2_EVIDENCE_WRITE_DAILY_DRAFT=true`(기본값)이면 같은 task가 `G2_EVIDENCE_TARGET_OPERATOR_IDS` 대상에 대해 하루치 ledger 기반 `manifest-draft.json`을 `reports/g2-evidence/daily/<YYYY-MM-DD KST>/`에 자동 write 해 `build_g2_exit_review`의 `counted_days`가 자동 누적됨(analytics event 외 유일한 추가 write, `ENVIRONMENT=test`에서 스킵)
 - `scripts/run_g2_synthetic_evidence.py`: 기본 dry-run, 승인 후 `--write`로 synthetic evidence run enqueue
 - `scripts/build_g2_exit_review.py` / `scripts/check_g2_exit_readiness.py` / `scripts/g2_blocking_gap_register.py`: `open`, `triaged`, `accepted_hold` gap을 unresolved로 취급하고, `resolved` 또는 `excluded`만 성공 근거로 넘김
 - `scripts/verify_g2_notification_targets.py`: operator별 `notification-channels.json`의 nested metadata/target context까지 raw secret-like target을 검사
@@ -168,9 +168,31 @@ COLLECT_G2_EVIDENCE_HOUR_KST=22
 COLLECT_G2_EVIDENCE_MINUTE=0
 COLLECT_G2_EVIDENCE_WINDOW_DAYS=30
 COLLECT_G2_EVIDENCE_RECENT_LIMIT=5
+# 일일 ledger 기반 manifest-draft.json 자동 write (counted_days 자동 누적)
+G2_EVIDENCE_WRITE_DAILY_DRAFT=true
+G2_EVIDENCE_TARGET_OPERATOR_IDS=19,20,25
+G2_EVIDENCE_DAILY_DRAFT_DIR=reports/g2-evidence/daily
+G2_EVIDENCE_REQUIRED_DAYS=7
 ```
 
 `jobs.collect_g2_evidence`는 canonical operator와 active `synthetic-*` operator를 훑고, compact summary를 **한 개의** `collect_g2_evidence` analytics event로 저장한다. 이 task는 strategy monitor를 실행하지 않고, operator data를 쓰지 않으며, 외부 KONEPS/Telegram 호출도 하지 않는다. 다만 analytics event를 DB에 남기므로 운영 DB에서 수동 실행하거나 schedule을 켤 때는 실행 창과 목적을 남긴다.
+
+`G2_EVIDENCE_WRITE_DAILY_DRAFT=true`(기본값)이면 같은 task가 `G2_EVIDENCE_TARGET_OPERATOR_IDS`(기본 `19,20,25`) 대상에 대해 하루치 `manifest-draft.json`을 `reports/g2-evidence/daily/<YYYY-MM-DD KST>/`에 자동으로 write 한다. 이 파일은 analytics event 외에 유일하게 허용된 추가 write이며, operator data write·monitor 실행·외부 호출은 여전히 없다. 실패해도 analytics event나 sweep을 중단시키지 않는다(로깅 후 계속). 이 write는 `ENVIRONMENT=test`에서 자동 스킵된다.
+
+**정직 명세**: 이 beat draft의 하루 `pass` 판정은 operator별 evidence **ledger**(`build_g2_evidence_summary`의 `evidence_status=="ready"`, mixed_scope/blocking_gap 없음)만 기준으로 한다. `scripts/collect_g2_evidence.py`(fastlane)가 하는 **live endpoint-scope** 확인(candidate_preview scope 등)은 매일 재확인하지 않는다 — 그건 안정적인 구조 게이트로 fastlane이 검증한다. 그래서 beat draft의 `basis`/`operators`/`daily_status`에는 `"source": "collect_g2_evidence_beat"`가 찍혀 CLI draft와 구분된다. 하루 `status` 규칙: 대상 중 누락/에러가 하나라도 있으면 `fail`, 전원 present + 전원 `ready` + blocking gap 0이면 `pass`, 그 외 `partial`. `counted_days` 크레딧은 `pass`에서만 부여된다.
+
+**Rolling-window caveat (사람 리뷰어 필독)**: `evidence_status`는 30일 *trailing* window로 평가한다. 즉 ledger가 한 번 `ready`가 되면 window가 stale해질 때까지 매일 snapshot이 `pass`로 찍힌다 — 그래서 beat가 만든 `counted_days=7`은 "7일간 *새* forward 증적이 있었다"가 아니라 "7개 캘린더 날짜에 30일-window ledger가 ready였다"를 뜻한다. 이는 CLI collector의 snapshot 의미와 동일(그것도 rolling-window read)하므로 기존 정의를 약화시키지는 않지만, `counted_days=7 / ready_for_review=true`를 "7일 연속 신규 운영 증적"으로 과대 해석하면 안 된다. per-day 신규 증적을 요구하려면 여기(daily `pass` 규칙)에 freshness 게이트를 추가해야 하며, 이는 로드맵 판단 사항이다.
+
+누적된 daily draft로 exit review 게이트를 다시 계산하려면(사람 승인 아님):
+
+```bash
+python scripts/build_g2_exit_review.py \
+  --evidence-root reports/g2-evidence \
+  --review-id g2-exit-draft-daily-$(date +%Y%m%d) \
+  --min-days 7 --min-operators 3
+```
+
+`review_gate_summary.counted_days >= min-days`, `operator_count >= min-operators`, `open_blocking_gap_count == 0`이면 `ready_for_review=true`가 되고, 이는 human review에 올릴 준비 신호일 뿐 G-2 approve 자체는 아니다.
 
 exit review에 scheduled snapshot을 근거로 쓰려면 해당 analytics event payload를 `reports/g2-evidence/$DAY/collect-g2-evidence.json` 같은 파일로 export해 manifest에 연결한다.
 
