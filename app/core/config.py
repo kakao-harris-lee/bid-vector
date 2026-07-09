@@ -158,6 +158,17 @@ class Settings(BaseSettings):
     COLLECT_G2_EVIDENCE_MINUTE: int = 0
     COLLECT_G2_EVIDENCE_WINDOW_DAYS: int = 30
     COLLECT_G2_EVIDENCE_RECENT_LIMIT: int = 5
+    # Daily ledger-based manifest-draft.json write. The collect_g2_evidence beat
+    # task writes one manifest-draft.json per KST day for the target operators so
+    # ``scripts/build_g2_exit_review.py`` can accumulate ``counted_days`` toward
+    # the G-2 exit review without a human running scripts/collect_g2_evidence.py
+    # every day. This draft's "pass" verdict is LEDGER-based (build_g2_evidence
+    # _summary), NOT the CLI's live endpoint-scope check. The only extra write is
+    # this local JSON file — no operator data, no execution, no external calls.
+    G2_EVIDENCE_TARGET_OPERATOR_IDS: str = "19,20,25"  # comma-separated operator ids
+    G2_EVIDENCE_WRITE_DAILY_DRAFT: bool = True
+    G2_EVIDENCE_DAILY_DRAFT_DIR: str = "reports/g2-evidence/daily"
+    G2_EVIDENCE_REQUIRED_DAYS: int = 7
     # Price-predictor ML training — weekly Celery-beat schedule (training-worker
     # executes via the ML training queue). Default OFF; opt-in via .env.
     # request_payload is left at None → trains the full dataset with task defaults
@@ -458,6 +469,28 @@ class Settings(BaseSettings):
     def uses_in_memory_celery(self) -> bool:
         """Return whether Celery should execute eagerly against the in-memory transport."""
         return (self.CELERY_BROKER_URL or "").strip().lower().startswith("memory://")
+
+    @property
+    def g2_evidence_target_operator_ids(self) -> List[int]:
+        """Parse the comma-separated G-2 evidence target operator ids into ints.
+
+        Deduplicates while preserving order and drops blank/non-positive tokens,
+        matching the CSV->list pattern used elsewhere (e.g. KONEPS categories).
+        """
+        ids: List[int] = []
+        seen: set[int] = set()
+        for token in str(self.G2_EVIDENCE_TARGET_OPERATOR_IDS or "").split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                value = int(token)
+            except ValueError:
+                continue
+            if value > 0 and value not in seen:
+                ids.append(value)
+                seen.add(value)
+        return ids
 
     @model_validator(mode="after")
     def _compose_database_url(self) -> "Settings":

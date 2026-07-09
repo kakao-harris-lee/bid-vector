@@ -1041,6 +1041,50 @@ def run_g2_candidate_recheck() -> dict:
         db.close()
 
 
+def _write_g2_daily_evidence_draft(*, target_summaries: list[dict[str, Any]]) -> None:
+    """Write today's ledger-based G-2 ``manifest-draft.json`` for the targets.
+
+    Best-effort and idempotent: the KST-day directory is overwritten on re-run so
+    ``scripts/build_g2_exit_review.py`` can accumulate ``counted_days``. Writes
+    ONLY this local JSON file — no operator data, no execution, no external
+    calls. Skipped in ``ENVIRONMENT=test`` to keep the repo working tree clean.
+    Callers wrap this in ``try/except`` so a write failure never aborts the sweep.
+    """
+    import json
+    from pathlib import Path
+
+    from app.core.time import kst_now
+    from app.services.g2_evidence_draft import build_daily_evidence_draft
+
+    if settings.ENVIRONMENT == "test":
+        return
+    target_ids = settings.g2_evidence_target_operator_ids
+    if not target_ids:
+        return
+
+    run_date_kst = kst_now().date().isoformat()
+    draft = build_daily_evidence_draft(
+        operator_summaries=target_summaries,
+        target_operator_ids=target_ids,
+        run_date_kst=run_date_kst,
+        required_days=max(1, int(settings.G2_EVIDENCE_REQUIRED_DAYS)),
+    )
+    repo_root = Path(__file__).resolve().parents[2]
+    draft_dir = repo_root / settings.G2_EVIDENCE_DAILY_DRAFT_DIR / run_date_kst
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    (draft_dir / "manifest-draft.json").write_text(
+        json.dumps(draft, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    logger.info(
+        "collect_g2_evidence wrote daily draft date=%s status=%s targets=%s path=%s",
+        run_date_kst,
+        draft["daily_status"][0]["status"],
+        len(target_ids),
+        draft_dir / "manifest-draft.json",
+    )
+
+
 @celery_app.task(name=COLLECT_G2_EVIDENCE_TASK_NAME)
 def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
     """Daily read-only snapshot of the per-operator G-2 evidence ledger.
@@ -1053,11 +1097,17 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
     a compact per-operator + aggregate roll-up so ``counted_days`` can accumulate
     toward the G-2 exit review.
 
+    When ``G2_EVIDENCE_WRITE_DAILY_DRAFT`` is on it ALSO writes one
+    ledger-based ``manifest-draft.json`` per KST day for the configured target
+    operators (``G2_EVIDENCE_TARGET_OPERATOR_IDS``) so ``build_g2_exit_review``
+    accumulates ``counted_days`` automatically. That draft is the ONLY extra
+    write.
+
     This is a pure *observation* tool: it reads existing data only and writes
     nothing to operator data (``operator_strategy_runs`` / ``bid_decision_records``
     / notifications), never runs the heavy strategy monitor, and never calls
-    external services or sends Telegram. The only permitted write is the single
-    analytics evidence event.
+    external services or sends Telegram. The only permitted writes are the single
+    analytics evidence event and the daily manifest-draft.json file.
 
     Each operator is summarized inside its own ``try/except`` so one failure
     cannot abort the whole sweep; failures are recorded per operator and the task
@@ -1090,6 +1140,10 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
             "notifications",
         )
         per_operator: list[dict[str, Any]] = []
+        # Full per-target ledger summaries (with blocking_gaps list) feeding the
+        # daily manifest-draft.json; a subset of the swept operators.
+        target_id_set = set(settings.g2_evidence_target_operator_ids)
+        target_summaries: list[dict[str, Any]] = []
         ready_count = 0
         error_count = 0
 
@@ -1104,17 +1158,28 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
                 evidence_status = str(summary.get("evidence_status") or "")
                 if evidence_status == "ready":
                     ready_count += 1
+                sections = {
+                    key: str((summary.get(key) or {}).get("status") or "")
+                    for key in section_keys
+                }
                 compact = {
                     "operator_id": int(op.id),
                     "username": str(op.username or ""),
                     "evidence_status": evidence_status,
                     "blocking_gaps_count": len(summary.get("blocking_gaps") or []),
-                    "sections": {
-                        key: str((summary.get(key) or {}).get("status") or "")
-                        for key in section_keys
-                    },
+                    "sections": sections,
                 }
                 per_operator.append(compact)
+                if int(op.id) in target_id_set:
+                    target_summaries.append(
+                        {
+                            "operator_id": int(op.id),
+                            "username": str(op.username or ""),
+                            "evidence_status": evidence_status,
+                            "sections": sections,
+                            "blocking_gaps": list(summary.get("blocking_gaps") or []),
+                        }
+                    )
             except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
                 error_count += 1
                 logger.exception(
@@ -1129,6 +1194,14 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
                         "error": type(exc).__name__,
                     }
                 )
+                if int(op.id) in target_id_set:
+                    target_summaries.append(
+                        {
+                            "operator_id": int(op.id),
+                            "username": str(op.username or ""),
+                            "error": type(exc).__name__,
+                        }
+                    )
 
         summary_payload = {
             "generated_window_days": window_days,
@@ -1147,6 +1220,15 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
         )
         db.add(analytics)
         db.commit()
+
+        # Additional permitted write: the daily ledger-based manifest draft so
+        # counted_days accumulates. Never let a draft-write failure abort the
+        # sweep or the analytics event already committed above.
+        if settings.G2_EVIDENCE_WRITE_DAILY_DRAFT:
+            try:
+                _write_g2_daily_evidence_draft(target_summaries=target_summaries)
+            except Exception:  # noqa: BLE001 — draft write must not abort the sweep
+                logger.exception("collect_g2_evidence daily draft write failed")
 
         logger.info(
             "collect_g2_evidence completed operators=%s ready=%s errors=%s window_days=%s",
