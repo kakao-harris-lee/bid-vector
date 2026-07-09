@@ -100,29 +100,40 @@ def reconstruct_pass_draft(
     return draft if draft["daily_status"][0]["status"] == "pass" else None
 
 
-def _passing_dates(
-    db, *, target_operator_ids: list[int], required_days: int
-) -> dict[str, dict[str, Any]]:
-    """Map each qualifying KST date -> its reconstructed pass draft.
+def _safe_json(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
-    A date qualifies if ANY of that day's ``collect_g2_evidence`` snapshots
-    reconstructs to a pass; the latest passing snapshot for the date wins.
+
+def select_pass_drafts(
+    *,
+    snapshots: list[tuple[Any, dict[str, Any]]],
+    target_operator_ids: list[int],
+    required_days: int,
+) -> dict[str, dict[str, Any]]:
+    """Map each KST date -> reconstructed pass draft, mirroring live beat semantics.
+
+    The live beat overwrites a KST day's draft on every run, so the *latest*
+    snapshot of a day is what would sit on disk. This mirrors that exactly: pick
+    the latest snapshot per KST date, and keep it only if that snapshot
+    reconstructs to a pass. A day that flickered ready->insufficient by its last
+    snapshot is therefore NOT counted — same as the live beat would have left it
+    — which avoids over-counting an intra-day-only pass.
     """
-    rows = (
-        db.query(Analytics)
-        .filter(Analytics.event_type == "collect_g2_evidence")
-        .order_by(Analytics.timestamp.asc())
-        .all()
-    )
+    latest: dict[str, tuple[Any, dict[str, Any]]] = {}
+    for timestamp, event_data in snapshots:
+        if timestamp is None:
+            continue
+        run_date_kst = to_kst(timestamp).date().isoformat()
+        current = latest.get(run_date_kst)
+        if current is None or timestamp >= current[0]:
+            latest[run_date_kst] = (timestamp, event_data)
+
     drafts: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if row.timestamp is None:
-            continue
-        run_date_kst = to_kst(row.timestamp).date().isoformat()
-        try:
-            event_data = json.loads(row.event_data or "{}")
-        except (TypeError, ValueError):
-            continue
+    for run_date_kst, (_, event_data) in latest.items():
         draft = reconstruct_pass_draft(
             event_data=event_data,
             target_operator_ids=target_operator_ids,
@@ -130,8 +141,26 @@ def _passing_dates(
             run_date_kst=run_date_kst,
         )
         if draft is not None:
-            drafts[run_date_kst] = draft  # ascending order -> latest pass wins
+            drafts[run_date_kst] = draft
     return drafts
+
+
+def _passing_dates(
+    db, *, target_operator_ids: list[int], required_days: int
+) -> dict[str, dict[str, Any]]:
+    """Load ``collect_g2_evidence`` snapshots and reconstruct per-day pass drafts."""
+    rows = (
+        db.query(Analytics)
+        .filter(Analytics.event_type == "collect_g2_evidence")
+        .order_by(Analytics.timestamp.asc())
+        .all()
+    )
+    snapshots = [(row.timestamp, _safe_json(row.event_data)) for row in rows]
+    return select_pass_drafts(
+        snapshots=snapshots,
+        target_operator_ids=target_operator_ids,
+        required_days=required_days,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
