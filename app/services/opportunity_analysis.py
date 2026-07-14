@@ -22,7 +22,7 @@ from app.core.single_user import (
     ensure_operator_strategy_for,
 )
 from app.core.time import ensure_utc, utc_now
-from app.models.models import Bid, BidDecisionRecord, CompanyProfile, Project, User
+from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorStrategy, Project, User
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.classifier import (
@@ -406,7 +406,7 @@ class OpportunityAnalysisService:
         self,
         db: Session,
         operator: User | None,
-    ) -> tuple[User, CompanyProfile, object]:
+    ) -> tuple[User, CompanyProfile, OperatorStrategy]:
         if operator is None:
             return (
                 ensure_operator_account(db),
@@ -505,7 +505,7 @@ class OpportunityAnalysisService:
     def _resolve_probability_context(
         self,
         *,
-        strategy: object,
+        strategy: OperatorStrategy,
         project: Project,
         classification: dict,
         price_prediction: dict,

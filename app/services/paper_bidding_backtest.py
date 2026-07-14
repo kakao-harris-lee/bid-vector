@@ -473,6 +473,8 @@ class PaperBiddingBacktestService:
                     profile=profile,
                 )
             except ValueError as project_exc:
+                # A single malformed project (e.g. 0 budget for ebiz4u-link
+                # imports) must not abort the whole run — skip + count it.
                 logger.warning(
                     "forward_paper: skipping project %s due to %s",
                     getattr(project, "id", "?"),

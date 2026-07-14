@@ -1524,7 +1524,7 @@ class SyntheticExperimentService:
         next_step: str,
         execution_plan: dict[str, Any],
         run_allowed: bool,
-        blocked_by_warnings: bool,
+        blocked_by_warnings: list[str],
         warnings: list[str],
     ) -> dict[str, Any]:
         return {
