@@ -159,6 +159,17 @@ def _merge_operator_entry(
     the newest counted day is a ledger-only draft, breaking the readiness
     ``operator_independence`` gate. Merging per field keeps the file-backed identity
     while volatile status still tracks the newest draft.
+
+    Two assumptions worth stating: (1) the merge is shallow, so a nested dict value
+    (``profile``/``strategy``/``notification_channel``) is replaced wholesale rather
+    than deep-merged. This is safe only because the identity dicts are emitted with a
+    fixed, complete shape by ``collect_g2_evidence.py::_build_manifest_operator`` or
+    omitted entirely by ledger-only drafts -- never partially. A future producer that
+    emits a partial identity dict would drop the older dict's sibling keys.
+    (2) Scalar provenance fields such as ``source`` follow the newest contributing
+    draft, so a composite record (fastlane identity + newest ledger status) reports
+    the ledger source; no gate consumes ``source`` and the exit-review doc records the
+    per-draft provenance separately.
     """
     merged = deepcopy(existing)
     for key, value in incoming.items():

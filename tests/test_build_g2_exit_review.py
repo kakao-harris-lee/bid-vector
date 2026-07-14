@@ -250,6 +250,123 @@ def test_merge_empty_field_does_not_clobber_earlier_non_empty(tmp_path):
     assert op19["strategy"]["path"] == "strategy-19-new.json"
 
 
+def test_merge_three_draft_chain_folds_correctly(tmp_path):
+    """A fastlane -> ledger -> ledger fold keeps file-backed identity and tracks the
+    newest volatile status across more than two drafts."""
+    evidence_root = tmp_path / "reports" / "g2-evidence"
+    output_dir = evidence_root / "review"
+    _write_manifest_draft(
+        evidence_root / "2026-07-04" / "manifest-draft.json",
+        review_id="fastlane",
+        date="2026-07-04",
+        operators=[_operator(19, "synthetic-a")],
+    )
+    mid = _ledger_only_operator(19, "synthetic-a")
+    mid["sections"] = {"smoke": "mixed_scope"}
+    _write_manifest_draft(
+        evidence_root / "2026-07-09" / "manifest-draft.json",
+        review_id="ledger-mid",
+        date="2026-07-09",
+        operators=[mid],
+    )
+    newest = _ledger_only_operator(19, "synthetic-a")
+    newest["evidence_status"] = "insufficient"
+    _write_manifest_draft(
+        evidence_root / "2026-07-14" / "manifest-draft.json",
+        review_id="ledger-new",
+        date="2026-07-14",
+        operators=[newest],
+    )
+
+    write_review_bundle(
+        evidence_root=evidence_root,
+        review_id="review",
+        output_dir=output_dir,
+        min_days=1,
+        min_operators=1,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    op19 = manifest["operators"][0]
+    # File-backed identity from the first draft survives two later ledger drafts.
+    assert op19["company"] == "Company 19"
+    assert op19["profile"]["path"] == "profile-19.json"
+    # Volatile status reflects the newest (third) draft, not the middle one.
+    assert op19["evidence_status"] == "insufficient"
+
+
+def test_merge_does_not_fabricate_identity_for_ledger_only_operator(tmp_path):
+    """An operator that appears only in ledger-only drafts must not gain file-backed
+    identity; the readiness gate then honestly fails instead of passing on nothing."""
+    evidence_root = tmp_path / "reports" / "g2-evidence"
+    output_dir = evidence_root / "review"
+    _write_manifest_draft(
+        evidence_root / "2026-07-13" / "manifest-draft.json",
+        review_id="ledger-a",
+        date="2026-07-13",
+        operators=[_ledger_only_operator(19, "synthetic-a")],
+    )
+    _write_manifest_draft(
+        evidence_root / "2026-07-14" / "manifest-draft.json",
+        review_id="ledger-b",
+        date="2026-07-14",
+        operators=[_ledger_only_operator(19, "synthetic-a")],
+    )
+
+    write_review_bundle(
+        evidence_root=evidence_root,
+        review_id="review",
+        output_dir=output_dir,
+        min_days=1,
+        min_operators=1,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    op19 = manifest["operators"][0]
+    assert "company" not in op19
+    assert "profile" not in op19
+    assert "strategy" not in op19
+    assert "notification_channel" not in op19
+
+
+def test_merge_preserves_zero_and_false_and_lets_them_overwrite(tmp_path):
+    """0 / False are meaningful (non-empty): they are preserved against an empty
+    incoming value and can themselves overwrite an earlier value."""
+    evidence_root = tmp_path / "reports" / "g2-evidence"
+    output_dir = evidence_root / "review"
+    older = _operator(19, "synthetic-a")
+    older["settled_count"] = 240  # non-empty earlier value
+    older["is_synthetic"] = True
+    _write_manifest_draft(
+        evidence_root / "2026-07-04" / "manifest-draft.json",
+        review_id="a",
+        date="2026-07-04",
+        operators=[older],
+    )
+    newer = _operator(19, "synthetic-a")
+    newer["settled_count"] = 0  # 0 must overwrite 240
+    newer["is_synthetic"] = False  # False must overwrite True
+    _write_manifest_draft(
+        evidence_root / "2026-07-14" / "manifest-draft.json",
+        review_id="b",
+        date="2026-07-14",
+        operators=[newer],
+    )
+
+    write_review_bundle(
+        evidence_root=evidence_root,
+        review_id="review",
+        output_dir=output_dir,
+        min_days=1,
+        min_operators=1,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    op19 = manifest["operators"][0]
+    assert op19["settled_count"] == 0
+    assert op19["is_synthetic"] is False
+
+
 def test_review_bundle_stays_draft_with_open_gaps(tmp_path):
     evidence_root = tmp_path / "reports" / "g2-evidence"
     output_dir = evidence_root / "review-with-gap"
