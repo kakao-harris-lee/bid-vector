@@ -175,6 +175,9 @@ class PricePredictionTrainingService:
             limit=options.limit,
             explicit_bid_rate_only=True,
         )
+        # Settlement-derived labels for 낙찰-가능성 calibration. Built from PaperBid +
+        # PaperBidSettlement (NOT from `dataset`), so settled outcomes can only ever
+        # be labels here — never price-prediction features.
         probability_calibration_dataset = dataset_service.build_probability_calibration_dataset(
             db,
             category=options.category,

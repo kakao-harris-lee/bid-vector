@@ -20,7 +20,6 @@ from app.ai.predictors.historical import (
     resolve_procurement_rate_band,
 )
 from app.ai.predictors.registry import (
-    build_default_predictor_registry,
     normalize_predictor_registry,
 )
 from app.core.config import settings
@@ -164,11 +163,6 @@ def _select_predictor(
         "backtest_sample_count": 0,
         "backtest_average_absolute_error_rate": None,
     }
-
-
-def _build_predictor_registry() -> dict[str, BasePricePredictor]:
-    """Build the in-process predictor registry."""
-    return build_default_predictor_registry()
 
 
 def _select_predictor_by_backtest(
