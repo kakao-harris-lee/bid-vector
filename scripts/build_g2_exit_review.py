@@ -138,6 +138,36 @@ def _operator_id(operator: dict[str, Any]) -> int | None:
     return None
 
 
+def _is_empty_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, list, dict, tuple, set)) and len(value) == 0:
+        return True
+    return False
+
+
+def _merge_operator_entry(
+    existing: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Field-level merge that prefers the newer (incoming) draft but never lets an
+    absent or empty incoming value erase a value already recorded.
+
+    Daily ``collect_g2_evidence`` beat drafts carry only rolling-ledger status
+    (``evidence_status``/``sections``) and omit the file-backed operator identity
+    (``company``/``profile``/``strategy``/``notification_channel``) that a fastlane
+    draft records. A plain last-write-wins overwrite would drop that identity whenever
+    the newest counted day is a ledger-only draft, breaking the readiness
+    ``operator_independence`` gate. Merging per field keeps the file-backed identity
+    while volatile status still tracks the newest draft.
+    """
+    merged = deepcopy(existing)
+    for key, value in incoming.items():
+        if _is_empty_value(value) and not _is_empty_value(merged.get(key)):
+            continue
+        merged[key] = deepcopy(value)
+    return merged
+
+
 def _merged_operators(drafts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     operators_by_id: dict[int, dict[str, Any]] = {}
     for draft in sorted(drafts, key=_draft_sort_key):
@@ -152,7 +182,10 @@ def _merged_operators(drafts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             clean = deepcopy(operator)
             clean["operator_id"] = operator_id
-            operators_by_id[operator_id] = clean
+            existing = operators_by_id.get(operator_id)
+            operators_by_id[operator_id] = (
+                clean if existing is None else _merge_operator_entry(existing, clean)
+            )
     return [operators_by_id[key] for key in sorted(operators_by_id)]
 
 

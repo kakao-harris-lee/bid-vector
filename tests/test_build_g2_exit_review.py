@@ -152,6 +152,104 @@ def test_build_review_bundle_combines_daily_manifest_drafts(tmp_path):
     assert exit_review.endswith("G-2 exit: pending\n")
 
 
+def _ledger_only_operator(operator_id: int, username: str) -> dict:
+    """A daily ``collect_g2_evidence`` beat draft entry: rolling-ledger status only,
+    no file-backed identity (no company/profile/strategy/notification_channel)."""
+    return {
+        "operator_id": operator_id,
+        "username": username,
+        "evidence_status": "ready",
+        "source": "collect_g2_evidence_beat",
+        "sections": {"decision_experiments": "ready", "smoke": "mixed_scope"},
+        "blocking_gap_ids": [],
+    }
+
+
+def test_merge_keeps_file_backed_identity_under_newer_ledger_only_draft(tmp_path):
+    """A newer ledger-only daily draft must not clobber the file-backed operator
+    identity from an earlier fastlane draft; volatile status still tracks newest."""
+    evidence_root = tmp_path / "reports" / "g2-evidence"
+    output_dir = evidence_root / "review"
+    targets = [
+        (19, "synthetic-gs-cleaning-metro"),
+        (20, "synthetic-gs-security-national"),
+        (25, "synthetic-cn-electric-telecom-national"),
+    ]
+    _write_manifest_draft(
+        evidence_root / "2026-07-04" / "manifest-draft.json",
+        review_id="fastlane-20260704",
+        date="2026-07-04",
+        operators=[_operator(oid, uname) for oid, uname in targets],
+    )
+    _write_manifest_draft(
+        evidence_root / "2026-07-14" / "manifest-draft.json",
+        review_id="daily-20260714",
+        date="2026-07-14",
+        operators=[_ledger_only_operator(oid, uname) for oid, uname in targets],
+    )
+
+    write_review_bundle(
+        evidence_root=evidence_root,
+        review_id="review",
+        output_dir=output_dir,
+        min_days=2,
+        min_operators=3,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    operators = {op["operator_id"]: op for op in manifest["operators"]}
+    assert set(operators) == {19, 20, 25}
+    op19 = operators[19]
+    # File-backed identity survives the newer ledger-only overwrite.
+    assert op19["company"] == "Company 19"
+    assert op19["profile"] == {"status": "pass", "path": "profile-19.json"}
+    assert op19["strategy"]["status"] == "pass"
+    assert op19["notification_channel"]["status"] == "pass"
+    assert op19["operator_scope_status"] == "pass"
+    # Volatile fields still reflect the newest (ledger) draft.
+    assert op19["evidence_status"] == "ready"
+    assert op19["sections"]["smoke"] == "mixed_scope"
+    assert op19["source"] == "collect_g2_evidence_beat"
+
+
+def test_merge_empty_field_does_not_clobber_earlier_non_empty(tmp_path):
+    """An empty value in a newer draft must not erase a richer earlier value."""
+    evidence_root = tmp_path / "reports" / "g2-evidence"
+    output_dir = evidence_root / "review"
+    _write_manifest_draft(
+        evidence_root / "2026-07-04" / "manifest-draft.json",
+        review_id="a",
+        date="2026-07-04",
+        operators=[_operator(19, "synthetic-a")],
+    )
+    sparse = _operator(19, "synthetic-a")
+    sparse["company"] = ""
+    sparse["profile"] = {}
+    sparse["strategy"] = {"status": "pass", "path": "strategy-19-new.json"}
+    _write_manifest_draft(
+        evidence_root / "2026-07-14" / "manifest-draft.json",
+        review_id="b",
+        date="2026-07-14",
+        operators=[sparse],
+    )
+
+    write_review_bundle(
+        evidence_root=evidence_root,
+        review_id="review",
+        output_dir=output_dir,
+        min_days=1,
+        min_operators=1,
+    )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    op19 = manifest["operators"][0]
+    # Empty company / empty profile in the newer draft do not erase earlier values.
+    assert op19["company"] == "Company 19"
+    assert op19["profile"] == {"status": "pass", "path": "profile-19.json"}
+    # A non-empty newer value still wins.
+    assert op19["strategy"]["path"] == "strategy-19-new.json"
+
+
 def test_review_bundle_stays_draft_with_open_gaps(tmp_path):
     evidence_root = tmp_path / "reports" / "g2-evidence"
     output_dir = evidence_root / "review-with-gap"
@@ -191,8 +289,10 @@ def test_review_bundle_stays_draft_with_open_gaps(tmp_path):
     assert manifest["status"] == "draft"
     assert manifest["review_gate_summary"]["ready_for_review"] is False
     assert manifest["review_gate_summary"]["open_blocking_gap_count"] == 1
-    assert (output_dir / "exit-review.md").read_text(encoding="utf-8").endswith(
-        "G-2 exit: pending\n"
+    assert (
+        (output_dir / "exit-review.md")
+        .read_text(encoding="utf-8")
+        .endswith("G-2 exit: pending\n")
     )
 
 
@@ -216,9 +316,7 @@ def test_review_bundle_stays_draft_with_triaged_and_accepted_hold_gaps(tmp_path)
                     "category": "missing evidence",
                     "description": f"gap for operator {operator_id}",
                     "status": gap_status,
-                    "treatment": (
-                        "hold" if gap_status == "accepted_hold" else "rerun"
-                    ),
+                    "treatment": ("hold" if gap_status == "accepted_hold" else "rerun"),
                 }
             ]
         _write_manifest_draft(
