@@ -311,6 +311,17 @@ class Settings(BaseSettings):
     ML_RELEASE_PREDICTOR_GATE_MAX_FALLBACK_RATE: float = 0.25
     GROUP_CALIBRATION_MIN_SAMPLES: int = 100
 
+    # Bid-decision action gates (BidDecisionService.evaluate_opportunity).
+    # These pin the two hard-coded action gates that can auto-promote/hold an
+    # opportunity independently of the operator's tuned bid_now/review
+    # thresholds. Defaults preserve the historical literals exactly.
+    #   - capacity-hold: at max active bids, hold (skip) while priority < this.
+    #   - force-bid: promote to bid_now when probability >= P AND matched >= M,
+    #     regardless of the priority score.
+    ALLOCATION_CAPACITY_HOLD_PRIORITY_THRESHOLD: float = 0.8
+    ALLOCATION_FORCE_BID_PROBABILITY_THRESHOLD: float = 0.8
+    ALLOCATION_FORCE_BID_MATCHED_THRESHOLD: float = 0.7
+
     # AI Features
     MODEL_CACHE_DIR: str = "./models"
     ENABLE_PRICE_PREDICTION: bool = True

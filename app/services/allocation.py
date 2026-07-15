@@ -4,6 +4,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.time import utc_now
 from app.core.single_user import (
@@ -117,10 +118,15 @@ class BidDecisionService:
             )
 
         action = "skip"
-        if request.current_active_bids >= request.max_active_bids and priority_score < 0.8:
+        if (
+            request.current_active_bids >= request.max_active_bids
+            and priority_score < settings.ALLOCATION_CAPACITY_HOLD_PRIORITY_THRESHOLD
+        ):
             reasons.append("현재 동시 관리 중인 입찰 수가 한도에 가까워 보수적으로 보류했습니다.")
         elif priority_score >= bid_now_threshold or (
-            request.probability_score >= 0.8 and request.matched_score >= 0.7
+            request.probability_score
+            >= settings.ALLOCATION_FORCE_BID_PROBABILITY_THRESHOLD
+            and request.matched_score >= settings.ALLOCATION_FORCE_BID_MATCHED_THRESHOLD
         ):
             action = "bid_now"
             reasons.append("우선순위가 높아 바로 투찰 검토 대상으로 올렸습니다.")
