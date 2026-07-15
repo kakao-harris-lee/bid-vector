@@ -1458,7 +1458,7 @@ class MLReleasePromotionService:
                         1.0,
                         min(
                             timeout_seconds,
-                            settings.ML_RELEASE_REMOTE_TRIGGER_PER_REQUEST_CAP_SECONDS,
+                            settings.ML_RELEASE_HTTP_READY_PER_REQUEST_CAP_SECONDS,
                         ),
                     ),
                 ) as response:

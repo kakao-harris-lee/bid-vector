@@ -62,6 +62,8 @@ def _clean_optional(value: str | None) -> str | None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from app.core.config import settings
+
     parser = argparse.ArgumentParser(
         description="Create or apply manifest-backed ML artifact promotions.",
     )
@@ -192,7 +194,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     apply_parser.add_argument(
         "--wait-for-health-url",
-        default="http://localhost:3000/health",
+        default=f"{settings.ML_RELEASE_REMOTE_TRIGGER_BASE_URL}/health",
         help="HTTP endpoint polled after compose restart and before remote rebuild.",
     )
     apply_parser.add_argument(
@@ -203,7 +205,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     apply_parser.add_argument(
         "--api-base-url",
-        default="http://localhost:3000",
+        default=settings.ML_RELEASE_REMOTE_TRIGGER_BASE_URL,
         help="Base URL for the running API when using --rebuild-embeddings-via-api.",
     )
     apply_parser.add_argument(

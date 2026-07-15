@@ -751,7 +751,7 @@ def test_ml_release_remote_trigger_settings_defaults():
     """신규 remote-trigger Settings 키 기본값이 기존 리터럴과 동일한지 확인."""
     assert settings.ML_RELEASE_REMOTE_TRIGGER_BASE_URL == "http://localhost:3000"
     assert settings.ML_RELEASE_REMOTE_TRIGGER_TIMEOUT_SECONDS == 120.0
-    assert settings.ML_RELEASE_REMOTE_TRIGGER_PER_REQUEST_CAP_SECONDS == 10.0
+    assert settings.ML_RELEASE_HTTP_READY_PER_REQUEST_CAP_SECONDS == 10.0
 
 
 def test_trigger_remote_embedding_rebuild_defaults_use_settings(tmp_path, monkeypatch):
