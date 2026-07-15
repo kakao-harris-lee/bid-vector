@@ -482,6 +482,14 @@ class Settings(BaseSettings):
     )
     CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: bool = True
     CLASSIFIER_SEMANTIC_MATCH_THRESHOLD: float = 0.35
+    # Semantic band edges expressed RELATIVE to CLASSIFIER_SEMANTIC_MATCH_THRESHOLD
+    # (same tuning family). ``strong`` = threshold + margin (매우 높음),
+    # ``base`` = threshold - margin (보통); the two absolute ceilings gate the
+    # low-similarity penalties (매우 낮음 <= very_low_max, 낮음 <= low_max).
+    CLASSIFIER_SEMANTIC_STRONG_MARGIN: float = 0.2
+    CLASSIFIER_SEMANTIC_BASE_MARGIN: float = 0.12
+    CLASSIFIER_SEMANTIC_VERY_LOW_MAX: float = 0.03
+    CLASSIFIER_SEMANTIC_LOW_MAX: float = 0.1
 
     # KONEPS / Crawling
     KONEPS_BASE_URL: str = "https://www.g2b.go.kr"

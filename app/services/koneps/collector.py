@@ -139,15 +139,36 @@ class KonepsCollectorService:
             "max_items": normalized_request.max_items,
         }
 
-        if openapi.is_openapi_source(normalized_request.source):
-            live_result = collection.collect_openapi_items(normalized_request)
-            items = live_result["items"]
-            response_metadata.update(live_result["metadata"])
-            job_status = "completed"
-        elif openapi.is_scsbid_openapi_source(normalized_request.source):
-            live_result = self._collect_scsbid_openapi_items(
-                normalized_request, db=db, defer_reserve_detail=defer_reserve_detail
-            )
+        # First-match source dispatch for the two OpenAPI ingestion paths. Both
+        # share the identical "call handler → items + metadata → completed" shape,
+        # so they collapse into an ordered (predicate, handler) list resolved by
+        # source; first match wins, preserving the openapi-before-scsbid order.
+        # The live/auto crawl branch below is NOT part of this table — it carries
+        # its own try/except fallback-to-mock control flow, so it stays open-coded
+        # (동등성 우선 — 무리한 통일 금지).
+        openapi_source_handlers = (
+            (
+                openapi.is_openapi_source,
+                lambda: collection.collect_openapi_items(normalized_request),
+            ),
+            (
+                openapi.is_scsbid_openapi_source,
+                lambda: self._collect_scsbid_openapi_items(
+                    normalized_request, db=db, defer_reserve_detail=defer_reserve_detail
+                ),
+            ),
+        )
+        matched_handler = next(
+            (
+                handler
+                for predicate, handler in openapi_source_handlers
+                if predicate(normalized_request.source)
+            ),
+            None,
+        )
+
+        if matched_handler is not None:
+            live_result = matched_handler()
             items = live_result["items"]
             response_metadata.update(live_result["metadata"])
             job_status = "completed"
