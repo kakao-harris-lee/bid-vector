@@ -22,7 +22,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -48,6 +48,13 @@ _NOTICE_SUFFIX_RE = re.compile(r"-\d+$")
 # detail summary dict (``reserve_prices``/``selected_numbers``/``planned_price``
 # /``base_amount``/``reserve_detail_total_count``).
 FetchDetail = Callable[[str, str | None], dict[str, Any]]
+
+
+class TelegramSender(Protocol):
+    """Minimal sender surface used by :func:`notify_telegram` (injectable in tests)."""
+
+    def send_message(self, message: str) -> dict[str, Any]:
+        ...
 
 
 def strip_notice_suffix(notice: str) -> str:
@@ -323,10 +330,19 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="RATE",
         help="직전 --notice 의 공고 낙찰하한율 (예: 0.87745, 선택)",
     )
+    parser.add_argument(
+        "--telegram",
+        action="store_true",
+        help=(
+            "개찰 완료(SETTLED) 공고가 하나라도 있으면 운영자 텔레그램으로 요약을 "
+            "전송한다. 전부 개찰 전이면 전송하지 않는다 (기본 꺼짐)."
+        ),
+    )
     return parser
 
 
-def parse_specs(argv: list[str] | None = None) -> list[dict[str, Any]]:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI args into a validated namespace (``specs`` + ``telegram`` flag)."""
     parser = build_parser()
     namespace = parser.parse_args(argv)
     specs = getattr(namespace, "specs", None) or []
@@ -335,7 +351,12 @@ def parse_specs(argv: list[str] | None = None) -> list[dict[str, Any]]:
     for spec in specs:
         if spec["bid"] is None:
             parser.error(f"--notice {spec['notice']} is missing a --bid")
-    return specs
+    namespace.specs = specs
+    return namespace
+
+
+def parse_specs(argv: list[str] | None = None) -> list[dict[str, Any]]:
+    return parse_args(argv).specs
 
 
 # ---------------------------------------------------------------------------
@@ -430,24 +451,120 @@ def _format_eligibility(result: dict[str, Any]) -> list[str]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Telegram alarm (opt-in; only fires when at least one notice is 개찰 완료)
+# ---------------------------------------------------------------------------
+
+
+def _settled_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only 개찰 완료 notices (verdict != VERDICT_NOT_SETTLED)."""
+    return [r for r in results if r.get("verdict") != VERDICT_NOT_SETTLED]
+
+
+def build_telegram_message(settled: list[dict[str, Any]]) -> str:
+    """Render a concise, factual Korean alarm for 개찰 완료 notices.
+
+    Reuses the console report's numbers (예정가격/내 투찰가/낙찰가/사업금액 대비 %).
+    No fabricated probabilities and no secrets — honesty §2.
+    """
+    header = (
+        f"[낙찰 적격/경쟁력 검증] 개찰 {len(settled)}건 "
+        f"(KST {kst_now():%Y-%m-%d %H:%M})"
+    )
+    lines = [header]
+    for result in settled:
+        notice = result.get("notice")
+        bid = result.get("bid")
+        base_amount = result.get("base_amount")
+        lines.append(
+            f"[{notice}] {result.get('verdict')} | 예정가 {_won(result.get('planned_price'))}"
+            f" | 내 투찰 {_won(bid)} | 낙찰가 {_won(result.get('winning_amount'))}"
+            f" | 사업금액대비 {_ratio_pct(bid, base_amount) if bid is not None else '-'}"
+        )
+    return "\n".join(lines)
+
+
+def _default_sender() -> TelegramSender:
+    """Instantiate the real Telegram service (no-ops in test/unconfigured)."""
+    from app.services.notifications.telegram import TelegramNotificationService
+
+    return TelegramNotificationService()
+
+
+def notify_telegram(
+    results: list[dict[str, Any]],
+    *,
+    sender: TelegramSender | None = None,
+) -> dict[str, Any]:
+    """Send a Telegram alarm iff at least one notice is 개찰 완료 (SETTLED).
+
+    Gate: if every notice is still 개찰 전 (VERDICT_NOT_SETTLED) we skip entirely
+    to avoid daily spam. Never raises — a delivery failure is captured and
+    returned as ``status='error'`` so the caller/cron run keeps going.
+    """
+    settled = _settled_results(results)
+    if not settled:
+        return {"status": "skipped", "sent": False, "settled_count": 0}
+
+    message = build_telegram_message(settled)
+    if sender is None:
+        sender = _default_sender()
+    try:
+        result = sender.send_message(message)
+    except Exception as exc:  # noqa: BLE001 - alarm failure must not abort the run
+        return {
+            "status": "error",
+            "sent": False,
+            "settled_count": len(settled),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "status": "sent",
+        "sent": bool((result or {}).get("sent")),
+        "settled_count": len(settled),
+        "result": result or {},
+    }
+
+
+def _print_telegram_outcome(outcome: dict[str, Any]) -> None:
+    """Echo the send result to stdout so the cron log shows whether it fired."""
+    status = outcome.get("status")
+    if status == "skipped":
+        print("[telegram] 전송 스킵 (개찰 완료 공고 없음)")
+    elif status == "error":
+        print(f"[telegram] 전송 오류: {outcome.get('error')}")
+    else:
+        result = outcome.get("result") or {}
+        print(
+            f"[telegram] 전송 시도 (개찰 {outcome.get('settled_count')}건) "
+            f"| sent={outcome.get('sent')} status={result.get('status')}"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
-    specs = parse_specs(argv)
+    namespace = parse_args(argv)
+    specs = namespace.specs
     print("=" * 72)
     print(f"낙찰 적격/경쟁력 검증 리포트 (KST {kst_now():%Y-%m-%d %H:%M:%S})")
     print(f"대상 공고 {len(specs)}건")
     print("=" * 72)
 
+    results: list[dict[str, Any]] = []
     db = SessionLocal()
     try:
         for spec in specs:
             result = verify_one(
                 db, spec["notice"], spec["bid"], spec["floor_rate"]
             )
+            results.append(result)
             for line in format_result(result):
                 print(line)
             print("-" * 72)
     finally:
         db.close()
+
+    if namespace.telegram:
+        _print_telegram_outcome(notify_telegram(results))
     return 0
 
 
