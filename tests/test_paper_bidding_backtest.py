@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.models.models import (
     CompanyProfile,
     HistoricalData,
@@ -1139,3 +1141,152 @@ def test_settlement_gate_unknown_for_category_without_floor_rate(test_db):
     assert settlement["estimated_price"] == 100_000_000
     assert settlement["minimum_bid_price"] is None
     assert settlement["would_have_won_final"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# 과세(VAT) 공고: 투찰가는 기초금액(base) 기준으로 산정돼야 한다
+# ---------------------------------------------------------------------------
+#
+# base_amount(기초금액; 과세면 VAT 포함) > budget_estimate(추정가격; ex-VAT). 과거
+# 낙찰률이 base 기준으로 정규화돼 있으므로 predictor budget 도 base 여야 한다. 이전엔
+# _resolve_project_budget(=budget_estimate)로 예측해 paper bid ≈ rate × 추정가격이
+# 되고, 낙찰하한(≈ base × 0.87) 미만으로 systematically 탈락(disqualified)했다.
+
+
+def _vat_settled_row(project: Project, *, base_amount: float) -> HistoricalData:
+    """Linked settled row carrying the 과세 base + base-relative reserve prices.
+
+    reserve_prices all == ``base_amount`` (selected 1..4) so the derived 예정가격 ==
+    base_amount and the 낙찰하한가 == base_amount × 0.87 (construction floor).
+    """
+    return HistoricalData(
+        project_id=project.id,
+        notice_number=f"VAT-{project.id}",
+        agency_name="Seoul",
+        category="construction",
+        base_amount=base_amount,
+        predicted_price=0.0,
+        bid_rate=0.88,
+        reserve_prices=json.dumps([base_amount] * 4),
+        selected_numbers=json.dumps([1, 2, 3, 4]),
+        opened_at=_dt(2025, 2, 2),
+    )
+
+
+def test_paper_bid_anchored_on_base_amount_not_disqualified(test_db):
+    """REGRESSION: a 과세 award where base_amount(110M) > budget_estimate(100M).
+
+    The paper bid must be computed on the base (기초금액), so paper_bid ≈ rate ×
+    110M — comparable to the base-relative winning_amount and ABOVE the base-relative
+    낙찰하한가. Computing it on 추정가격 would put the bid below the floor and cause a
+    systematic ``disqualified`` verdict (corrupting would_have_won_final /
+    amount_delta / absolute_error_rate for 과세 notices).
+    """
+    budget_estimate = 100_000_000
+    base_amount = 110_000_000  # 과세: 추정가격 × 1.1
+    target = _project(
+        deadline=_dt(2025, 3, 10),
+        created_at=_dt(2025, 2, 1),
+        budget=budget_estimate,
+    )
+    test_db.add(target)
+    test_db.flush()
+    # Unlinked history feeds the predictor at a ~0.88 base-relative rate.
+    for index in range(8):
+        test_db.add(
+            _historical_row(
+                None, opened_at=_dt(2025, 1, 1) + timedelta(days=index), bid_rate=0.88
+            )
+        )
+    test_db.add(_vat_settled_row(target, base_amount=base_amount))
+    result = TenderResult(
+        project_id=target.id,
+        winning_company="Winner",
+        winning_amount=97_000_000,  # base-relative (rate 0.8818 on 110M)
+        winning_rate=97_000_000 / base_amount,
+        result_status="awarded",
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.add(result)
+    test_db.commit()
+
+    service = PaperBiddingBacktestService()
+    item = service._build_candidate_item(
+        test_db,
+        project=target,
+        tender_result=result,
+        data_cutoff_at=_dt(2025, 3, 9),
+        scenario="base",
+        strategy_version="vat-base-test",
+        cutoff_hours_before_deadline=0,
+        history_limit=80,
+        profile=None,
+    )
+    settlement = service._build_settlement_item(
+        test_db, item=item, tender_result=result
+    )
+
+    rate = item["paper_bid_rate"]
+    assert rate > 0
+    # The paper bid is anchored on the 과세 base, ~10% higher than rate × 추정가격.
+    assert item["paper_bid_amount"] == pytest.approx(rate * base_amount, rel=1e-3)
+    assert item["paper_bid_amount"] > rate * budget_estimate * 1.05
+    # Reported budget_estimate stays the ex-VAT estimate (not the base).
+    assert item["budget_estimate"] == pytest.approx(budget_estimate)
+    # Floor is base-relative (construction 0.87).
+    assert settlement["minimum_bid_price"] == pytest.approx(base_amount * 0.87)
+    # The buggy ex-VAT bid WOULD have fallen below the floor (systematic
+    # disqualification)...
+    assert rate * budget_estimate < settlement["minimum_bid_price"]
+    # ...but the base-anchored bid clears it and is NOT disqualified.
+    assert item["paper_bid_amount"] >= settlement["minimum_bid_price"]
+    assert settlement["would_have_won_final"] != "disqualified"
+    assert settlement["would_have_won_final"] in {
+        "eligible_favorable",
+        "eligible_but_outbid",
+    }
+
+
+def test_settlement_winning_rate_fallback_divides_by_base(test_db):
+    """REGRESSION: a missing TenderResult.winning_rate is derived as
+    winning_amount / base_amount (기초금액), consistent with scsbid.py — NOT divided
+    by the ex-VAT 추정가격, which would inflate winning_rate by ~10% for 과세 공고."""
+    budget_estimate = 100_000_000
+    base_amount = 110_000_000
+    target = _project(
+        deadline=_dt(2025, 2, 1),
+        created_at=_dt(2025, 1, 20),
+        budget=budget_estimate,
+    )
+    test_db.add(target)
+    test_db.flush()
+    test_db.add(_vat_settled_row(target, base_amount=base_amount))
+    result = TenderResult(
+        project_id=target.id,
+        winning_company="Winner",
+        winning_amount=97_000_000,
+        winning_rate=0.0,  # missing -> forces the derived fallback
+        result_status="awarded",
+        announced_at=_dt(2025, 2, 2),
+    )
+    test_db.add(result)
+    test_db.flush()
+
+    item = {
+        "project_id": target.id,
+        "category": "construction",
+        "budget_estimate": budget_estimate,  # reported est (ex-VAT)
+        "paper_bid_amount": 96_800_000,
+        "paper_bid_rate": 0.88,
+    }
+    settlement = PaperBiddingBacktestService()._build_settlement_item(
+        test_db, item=item, tender_result=result
+    )
+
+    # winning_rate = 97M / 110M (base), NOT 97M / 100M (추정가격).
+    assert settlement["winning_rate"] == pytest.approx(
+        97_000_000 / base_amount, abs=1e-5
+    )
+    assert settlement["winning_rate"] != pytest.approx(
+        97_000_000 / budget_estimate, abs=1e-5
+    )

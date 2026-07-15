@@ -25,6 +25,7 @@ from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorStrategy, Project, User
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
+from app.services.bid_base import resolve_notice_bid_base
 from app.services.classifier import (
     NoticeClassifierService,
     REGION_PREFERENCE_PATTERN,
@@ -437,7 +438,10 @@ class OpportunityAnalysisService:
         business_group = resolve_business_group(business_type_code)
         return (
             self.price_prediction_port.predict_price(
-                budget=float(project.budget_estimate or 0.0),
+                # 투찰가는 추정가격이 아니라 기초금액/사업금액(배정예산) 기준으로
+                # 산정한다. 과세 공고에서 추정가격을 넘기면 ~10% 낮게 산정되어
+                # 낙찰하한 미만으로 낙될 위험이 있으므로 base_amount 를 해석해 넘긴다.
+                budget=resolve_notice_bid_base(db, project),
                 category=project.category or "other",
                 description=f"{project.description or ''} {project.requirements or ''}".strip(),
                 historical_records=self._load_price_history(db, project),
@@ -492,7 +496,14 @@ class OpportunityAnalysisService:
                 current_active_bids=current_active_bids,
                 max_active_bids=request.max_active_bids,
                 current_workload_score=current_workload_score,
-                budget_estimate=float(project.budget_estimate or 0.0),
+                # budget_capture_score = recommended_amount / budget_estimate.
+                # recommended_amount is now 기초금액/사업금액(base)-relative, so the
+                # denominator must be the SAME base — passing 추정가격(ex-VAT) here
+                # would make capture ≈ rate × 1.1 for 과세 공고 (clamped to 1.0),
+                # inflating opportunity/priority and the "예산 대비 추천가 유지율"
+                # reason. In allocation.py budget_estimate feeds ONLY the capture
+                # ratio + that reason, so aligning it to the base is correct.
+                budget_estimate=resolve_notice_bid_base(db, project),
                 competitiveness_score=float(competitiveness_score),
                 expected_margin_score=expected_margin_score,
                 execution_complexity_score=execution_complexity_score,
