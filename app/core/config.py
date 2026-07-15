@@ -386,6 +386,51 @@ class Settings(BaseSettings):
             "goods": 1.00,
         }
     )
+    # Agency-keyed bid-rate band (Lever 1 calibration).
+    #
+    # Provenance: derived from a 2026 29-notice 한국수산자원공단 적격심사 결과표.
+    # For these 적격심사 용역 the winner is the LOWEST eligible bid sitting at the
+    # per-notice 낙찰하한 (floor); a bid BELOW the realized floor is disqualified (낙하).
+    # The realized winning floors clustered at 88.001–88.053% of base (mean 88.016%,
+    # std 0.012%p). A backtest sweep over the 29 notices showed:
+    #   - target 88.00% → 29/29 낙하 (too low — clears no floor),
+    #   - target 88.06% → 1/29 낙하 (a single regime-shift anomaly) and 28/29 eligible
+    #     at +0.0–0.044%p above the floor (single-digit ranks vs human 17/29 낙하).
+    # So the MINIMUM (recommendation target) is set to the UPPER edge of the observed
+    # band (0.8806), not 88.00, while the MAXIMUM caps the band at 0.882. The category-
+    # scoped sample (agency-diluted) plus the service heuristic otherwise biases
+    # predict_price toward ~0.91, so we recenter through the EXISTING guardrail band
+    # (the same mechanism construction uses for its 0.93 ceiling) keyed by the issuing
+    # agency. Keys are NORMALIZED agency tokens (whitespace-stripped, lowercased — see
+    # normalize_agency_name) and match by normalized substring, so regional bureaus like
+    # "한국수산자원공단동해본부" / "한국수산자원공단남해본부" / "한국수산자원공단 제주본부"
+    # all inherit the headquarters band. Values are calibration data and are tunable by
+    # the settled-result feedback loop (PR C).
+    #
+    # NOTE (mechanism — the band does NOT depend on a high-negotiated trigger):
+    # the agency MINIMUM (0.8806) and MAXIMUM (0.882) are applied in
+    # _apply_prediction_guardrails AFTER the predictor runs. The ceiling clamps
+    # WHATEVER rate the predictor produced back into band UNCONDITIONALLY (ceiling
+    # wins), and the minimum raises any under-band scenario — regardless of the
+    # predictor's procurement_rate_band. There is NO reliance on service_high_negotiated:
+    # in resolve_procurement_rate_band the bare substring "조사" does NOT select that
+    # band. Specific 조사 compounds (영향조사 / 해저지형조사 / 석면조사 …) resolve to
+    # service_price_competitive, while a bare "효과조사" resolves to None. The band works
+    # purely as a post-predictor clamp keyed by the issuing agency.
+    #
+    # WARNING: agency keys MUST be HQ-specific. _resolve_agency_bid_rate matches by
+    # NORMALIZED substring, so a short key like "수산" would over-capture unrelated
+    # agencies — always key on the full headquarters token.
+    PREDICTION_AGENCY_MINIMUM_BID_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            "한국수산자원공단": 0.8806,
+        }
+    )
+    PREDICTION_AGENCY_MAXIMUM_BID_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            "한국수산자원공단": 0.882,
+        }
+    )
     # Weight applied to the reserve-price (복수예비가격) implied bid rate when
     # blending it into the competitive base rate. 0 disables the prior entirely.
     # The effective weight is further scaled down by reserve sample_count so that

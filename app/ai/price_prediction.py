@@ -16,6 +16,7 @@ from app.ai.predictors import (
 from app.ai.predictor_backtest import build_predictor_backtest_report
 from app.ai.predictors.historical import (
     clamp_bid_rate,
+    normalize_agency_name,
     normalize_category_key,
     resolve_procurement_rate_band,
 )
@@ -35,6 +36,9 @@ class GuardrailContext:
     floor_price: float | None
     safe_floor_price: float | None
     ceiling_price: float | None
+    floor_from_agency: bool = False
+    ceiling_from_agency: bool = False
+    agency_name: str | None = None
 
 
 _CATEGORY_FLOOR_RATE_ALIASES = {
@@ -107,6 +111,7 @@ def predict_price(
         category=context.category,
         business_group=business_group,
         legal_floor_bid_rate=legal_floor_bid_rate,
+        agency_name=agency_name,
     )
     prediction = _apply_bid_price_granularity(prediction, budget=context.budget)
     prediction = _attach_price_regime_metadata(prediction, context=context)
@@ -538,14 +543,16 @@ def _apply_prediction_guardrails(
     category: str | None,
     business_group: str | None = None,
     legal_floor_bid_rate: float | None = None,
+    agency_name: str | None = None,
 ) -> Dict[str, Any]:
-    """Apply category bid-rate guardrails after all statistical adjustments."""
+    """Apply category/group/agency bid-rate guardrails after all statistical adjustments."""
     guarded_prediction = dict(prediction)
     guardrail_context = _resolve_guardrail_context(
         budget=budget,
         category=category,
         business_group=business_group,
         legal_floor_bid_rate=legal_floor_bid_rate,
+        agency_name=agency_name,
     )
     _apply_guardrail_metadata(guarded_prediction, guardrail_context)
 
@@ -591,10 +598,20 @@ def _resolve_guardrail_context(
     category: str | None,
     business_group: str | None,
     legal_floor_bid_rate: float | None,
+    agency_name: str | None = None,
 ) -> GuardrailContext:
+    # Resolve the category/group baseline and the agency-tightened band separately so
+    # the guardrail reason can attribute the BINDING edge to the correct source. The
+    # agency band only RAISES the floor / LOWERS the ceiling, so a resolved value that
+    # differs from the baseline can only have been moved by the agency band.
+    base_configured_floor = _resolve_floor_bid_rate(
+        category,
+        business_group=business_group,
+    )
     configured_floor_bid_rate = _resolve_floor_bid_rate(
         category,
         business_group=business_group,
+        agency_name=agency_name,
     )
     normalized_legal_floor_bid_rate = _normalize_optional_bid_rate(legal_floor_bid_rate)
     floor_bid_rate = _max_optional_rate(
@@ -606,9 +623,29 @@ def _resolve_guardrail_context(
         normalized_legal_floor_bid_rate,
         floor_bid_rate,
     )
+    base_configured_ceiling = _resolve_ceiling_bid_rate(
+        category,
+        business_group=business_group,
+    )
     ceiling_bid_rate = _resolve_ceiling_bid_rate(
         category,
         business_group=business_group,
+        agency_name=agency_name,
+    )
+    # Attribution: the agency floor only binds when it raised the configured floor AND
+    # the legal floor did not override it (floor_bid_rate still equals the agency floor).
+    agency_raised_floor = configured_floor_bid_rate is not None and (
+        base_configured_floor is None
+        or configured_floor_bid_rate > base_configured_floor + 1e-9
+    )
+    floor_from_agency = (
+        agency_raised_floor
+        and floor_bid_rate is not None
+        and abs(floor_bid_rate - configured_floor_bid_rate) < 1e-9
+    )
+    ceiling_from_agency = ceiling_bid_rate is not None and (
+        base_configured_ceiling is None
+        or ceiling_bid_rate < base_configured_ceiling - 1e-9
     )
     if (
         floor_bid_rate is not None
@@ -616,10 +653,17 @@ def _resolve_guardrail_context(
         and ceiling_bid_rate < floor_bid_rate
     ):
         ceiling_bid_rate = floor_bid_rate
-    safe_floor_bid_rate = _resolve_safe_floor_bid_rate(
-        floor_bid_rate,
-        ceiling_bid_rate=ceiling_bid_rate,
-    )
+    # Safe-margin bypass (review Finding 1): the agency floor is a calibrated
+    # recommendation target already ABOVE the realized 낙찰하한 — NOT a hard legal
+    # floor — so it must NOT receive the generic PREDICTION_FLOOR_SAFETY_MARGIN_RATE.
+    # The recommendation should sit exactly at the calibrated target.
+    if floor_from_agency:
+        safe_floor_bid_rate = floor_bid_rate
+    else:
+        safe_floor_bid_rate = _resolve_safe_floor_bid_rate(
+            floor_bid_rate,
+            ceiling_bid_rate=ceiling_bid_rate,
+        )
     return GuardrailContext(
         normalized_legal_floor_bid_rate=normalized_legal_floor_bid_rate,
         floor_guardrail_source=floor_guardrail_source,
@@ -629,6 +673,9 @@ def _resolve_guardrail_context(
         floor_price=_guardrail_price(budget, floor_bid_rate),
         safe_floor_price=_guardrail_price(budget, safe_floor_bid_rate),
         ceiling_price=_guardrail_price(budget, ceiling_bid_rate),
+        floor_from_agency=floor_from_agency,
+        ceiling_from_agency=ceiling_from_agency,
+        agency_name=agency_name,
     )
 
 
@@ -811,6 +858,9 @@ def _mark_guardrail_application(
         ceiling_bid_rate=context.ceiling_bid_rate,
         floor_labels=floor_labels,
         ceiling_labels=ceiling_labels,
+        floor_from_agency=context.floor_from_agency,
+        ceiling_from_agency=context.ceiling_from_agency,
+        agency_name=context.agency_name,
     )
     guarded_prediction["guardrail_applied"] = True
     guarded_prediction["guardrail_reason"] = guardrail_reason
@@ -1001,11 +1051,25 @@ def _build_guardrail_reason(
     ceiling_bid_rate: float | None,
     floor_labels: list[str],
     ceiling_labels: list[str],
+    floor_from_agency: bool = False,
+    ceiling_from_agency: bool = False,
+    agency_name: str | None = None,
 ) -> str:
+    """Build an auditable guardrail reason.
+
+    Each edge is attributed to its ACTUAL source: when the binding floor/ceiling is the
+    agency-keyed value (it tightened the band beyond the category/group rate), the edge
+    reads "발주처 … 기관별 투찰률 밴드"; otherwise it stays "업종별"/"공고별 법정".
+    """
+    agency_label = str(agency_name or "").strip()
+    agency_segment = f"발주처{f' {agency_label}' if agency_label else ''} 기관별 투찰률 밴드의"
     reasons: list[str] = []
     if floor_bid_rate is not None and floor_labels:
         unique_labels = list(dict.fromkeys(floor_labels))
-        floor_label = _floor_guardrail_label(floor_guardrail_source)
+        if floor_from_agency:
+            floor_label = f"{agency_segment} 최소 투찰률"
+        else:
+            floor_label = _floor_guardrail_label(floor_guardrail_source)
         if safe_floor_bid_rate is not None and safe_floor_bid_rate > floor_bid_rate + 1e-9:
             reasons.append(
                 f"{floor_label} {floor_bid_rate:.3%}에 안전마진 "
@@ -1020,8 +1084,11 @@ def _build_guardrail_reason(
             )
     if ceiling_bid_rate is not None and ceiling_labels:
         unique_labels = list(dict.fromkeys(ceiling_labels))
+        ceiling_label = (
+            f"{agency_segment} 최대 투찰률" if ceiling_from_agency else "업종별 최대 투찰률"
+        )
         reasons.append(
-            f"업종별 최대 투찰률 {ceiling_bid_rate:.2%} 가드레일을 적용해 "
+            f"{ceiling_label} {ceiling_bid_rate:.2%} 가드레일을 적용해 "
             f"{', '.join(unique_labels)} 시나리오를 하향 보정했습니다."
         )
     return " ".join(reasons)
@@ -1091,12 +1158,48 @@ def _floor_guardrail_label(source: str | None) -> str:
     return "업종별 최소 투찰률"
 
 
-def _resolve_floor_bid_rate(category: str | None, business_group: str | None = None) -> float | None:
-    """Resolve a configured minimum bid-rate floor for the given category/group.
+def _resolve_agency_bid_rate(agency_name: str | None, rate_map: dict[str, float] | None) -> float | None:
+    """Look up an agency-keyed bid-rate band via normalized substring match.
+
+    Keys are normalized agency tokens (whitespace-stripped, lowercased — see
+    normalize_agency_name). A notice's issuing agency matches a key when the
+    normalized key is a substring of the normalized agency name, so regional
+    bureaus inherit the headquarters band (e.g. "한국수산자원공단동해본부" matches
+    the "한국수산자원공단" key). When several keys match, the most specific
+    (longest) key wins.
+    """
+    if not agency_name or not rate_map:
+        return None
+    normalized_agency = normalize_agency_name(agency_name)
+    if not normalized_agency:
+        return None
+    best_rate: float | None = None
+    best_key_len = -1
+    for raw_key, raw_rate in rate_map.items():
+        normalized_key = normalize_agency_name(raw_key)
+        if not normalized_key or normalized_key not in normalized_agency:
+            continue
+        if len(normalized_key) > best_key_len:
+            best_key_len = len(normalized_key)
+            best_rate = max(0.0, float(raw_rate or 0.0))
+    return best_rate
+
+
+def _resolve_floor_bid_rate(
+    category: str | None,
+    business_group: str | None = None,
+    agency_name: str | None = None,
+) -> float | None:
+    """Resolve a configured minimum bid-rate floor for the given category/group/agency.
 
     §4.7 guardrail: when both a group rate and a category rate exist, the group
     rate can never be LOWER than the category floor — the category floor is the
     hard lower bound.  Return max(group_rate, category_rate).
+
+    Agency band (Lever 1): an agency-keyed floor layers on top and TIGHTENS the
+    band by RAISING the floor (max wins), clamped to the hard clamp_bid_rate
+    [0.7, 1.4] bounds.  Non-matching agencies leave the category/group result
+    unchanged.
     """
     configured_floor_rates = settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES or {}
     normalized_category = _normalize_category_key(category)
@@ -1106,28 +1209,45 @@ def _resolve_floor_bid_rate(category: str | None, business_group: str | None = N
             category_rate = max(0.0, float(raw_floor_rate or 0.0))
             break
 
+    resolved_floor: float | None = None
     if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
         group_rates = settings.PREDICTION_GROUP_MINIMUM_BID_RATES or {}
         if business_group in group_rates:
             group_rate = float(group_rates[business_group])
             # Group floor must never undercut category floor (§4.7).
-            if category_rate is not None:
-                return max(group_rate, category_rate)
-            return group_rate
+            resolved_floor = max(group_rate, category_rate) if category_rate is not None else group_rate
 
-    if category_rate is not None:
-        return category_rate
+    if resolved_floor is None:
+        if category_rate is not None:
+            resolved_floor = category_rate
+        else:
+            default_floor_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MINIMUM_BID_RATE or 0.0))
+            resolved_floor = default_floor_rate or None
 
-    default_floor_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MINIMUM_BID_RATE or 0.0))
-    return default_floor_rate or None
+    agency_floor = _resolve_agency_bid_rate(agency_name, settings.PREDICTION_AGENCY_MINIMUM_BID_RATES)
+    if agency_floor is not None:
+        agency_floor = clamp_bid_rate(agency_floor)
+        # Agency floor TIGHTENS the band by RAISING the floor (max wins).
+        return max(resolved_floor, agency_floor) if resolved_floor is not None else agency_floor
+
+    return resolved_floor
 
 
-def _resolve_ceiling_bid_rate(category: str | None, business_group: str | None = None) -> float | None:
-    """Resolve a configured maximum bid-rate ceiling for the given category/group.
+def _resolve_ceiling_bid_rate(
+    category: str | None,
+    business_group: str | None = None,
+    agency_name: str | None = None,
+) -> float | None:
+    """Resolve a configured maximum bid-rate ceiling for the given category/group/agency.
 
     §4.7 guardrail: when both a group rate and a category rate exist, the group
     ceiling can never be HIGHER than the category ceiling — the category ceiling
     is the hard upper bound.  Return min(group_rate, category_rate).
+
+    Agency band (Lever 1): an agency-keyed ceiling layers on top and TIGHTENS the
+    band by LOWERING the ceiling (min wins), clamped to the hard clamp_bid_rate
+    [0.7, 1.4] bounds.  Non-matching agencies leave the category/group result
+    unchanged.
     """
     configured_ceiling_rates = settings.PREDICTION_CATEGORY_MAXIMUM_BID_RATES or {}
     normalized_category = _normalize_category_key(category)
@@ -1138,20 +1258,28 @@ def _resolve_ceiling_bid_rate(category: str | None, business_group: str | None =
             category_rate = ceiling_rate or None
             break
 
+    resolved_ceiling: float | None = None
     if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
         group_rates = settings.PREDICTION_GROUP_MAXIMUM_BID_RATES or {}
         if business_group in group_rates:
             group_rate = float(group_rates[business_group])
             # Group ceiling must never exceed category ceiling (§4.7).
-            if category_rate is not None:
-                return min(group_rate, category_rate)
-            return group_rate
+            resolved_ceiling = min(group_rate, category_rate) if category_rate is not None else group_rate
 
-    if category_rate is not None:
-        return category_rate
+    if resolved_ceiling is None:
+        if category_rate is not None:
+            resolved_ceiling = category_rate
+        else:
+            default_ceiling_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MAXIMUM_BID_RATE or 0.0))
+            resolved_ceiling = default_ceiling_rate or None
 
-    default_ceiling_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MAXIMUM_BID_RATE or 0.0))
-    return default_ceiling_rate or None
+    agency_ceiling = _resolve_agency_bid_rate(agency_name, settings.PREDICTION_AGENCY_MAXIMUM_BID_RATES)
+    if agency_ceiling is not None:
+        agency_ceiling = clamp_bid_rate(agency_ceiling)
+        # Agency ceiling TIGHTENS the band by LOWERING the ceiling (min wins).
+        return min(resolved_ceiling, agency_ceiling) if resolved_ceiling is not None else agency_ceiling
+
+    return resolved_ceiling
 
 
 def _normalize_category_key(value: Any) -> str:
