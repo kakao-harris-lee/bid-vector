@@ -10,6 +10,12 @@ from typing import Any
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.procurement_band_rules import (
+    SERVICE_BAND_RULES,
+    build_goods_band_rules,
+    resolve_band,
+    title_line,
+)
 from app.ai.predictors.rate_band_spec import (
     GROUP_BRANCH_BASE_BANDS,
     apply_band_to_base,
@@ -851,153 +857,19 @@ def resolve_procurement_rate_band(*, category: str, description: str) -> str | N
 
 
 def _resolve_goods_procurement_rate_band(normalized_text: str) -> str | None:
-    if _is_goods_deep_discount_notice(normalized_text):
-        return "goods_deep_discount"
-    if _is_goods_narrow_control_price_competitive(normalized_text):
-        return "goods_price_competitive"
-    goods_price_competitive_keywords = (
-        "소액수의 견적",
-        "견적 제출",
-        "견적제출",
-        "2단계",
-        "규격·가격",
-        "규격 가격",
-        "규격가격",
-        "가격분리",
-        "가격 분리",
-        "동시입찰",
-        "국내도서",
-        "도서 구매",
-        "운영장비 구입",
-        "데이터로거 구매",
-        "모니터 확장",
-        "상토 구입",
-        "원액주입설비",
-        "인명구조함",
-        "주방기구",
+    return resolve_band(
+        GOODS_BAND_RULES,
+        text=normalized_text,
+        title=title_line(normalized_text),
     )
-    if any(keyword in normalized_text for keyword in goods_price_competitive_keywords):
-        return "goods_price_competitive"
-    return None
 
 
 def _resolve_service_procurement_rate_band(normalized_text: str) -> str | None:
-    title_text = normalized_text.splitlines()[0] if normalized_text.splitlines() else normalized_text
-    explicit_direct_negotiated_keywords = (
-        "수의시담",
-        "수의 시담",
+    return resolve_band(
+        SERVICE_BAND_RULES,
+        text=normalized_text,
+        title=title_line(normalized_text),
     )
-    title_direct_negotiated_keywords = (
-        "수의계약",
-        "수의 계약",
-        "(수의)",
-        "[수의]",
-    )
-    if any(keyword in normalized_text for keyword in explicit_direct_negotiated_keywords) or any(
-        keyword in title_text for keyword in title_direct_negotiated_keywords
-    ):
-        return "service_direct_negotiated"
-
-    engineering_competitive_keywords = (
-        "해양이용협의",
-        "간이해양이용협의",
-        "해양환경영향",
-        "환경영향",
-        "사전영향조사",
-        "사후영향조사",
-        "사전·사후영향조사",
-        "영향조사",
-        "적지조사",
-        "해저지형조사",
-        "수심측량",
-        "지형 및 수심측량",
-        "실시설계",
-        "기본 및 실시설계",
-        "기본설계",
-        "서식환경",
-        "바다숲",
-        "인공어초",
-        "어초어장",
-        "해상풍력",
-        "pq 후 지명경쟁",
-    )
-    if any(keyword in normalized_text for keyword in engineering_competitive_keywords):
-        return "service_price_competitive"
-
-    service_low_tail_price_competitive_keywords = (
-        "건축기획",
-        "정밀안전진단",
-        "정밀안전점검",
-        "내진성능평가",
-        "석면조사",
-        "성능점검",
-        "시설 및 안전관리",
-        "경비용역",
-        "예초 용역",
-        "비용분석",
-    )
-    if any(keyword in normalized_text for keyword in service_low_tail_price_competitive_keywords):
-        return "service_price_competitive"
-
-    price_competitive_keywords = (
-        "폐기물",
-        "기술지도",
-        "사후환경",
-        "환경영향",
-        "pq",
-        "가격입찰",
-        "설계용역",
-        "감리",
-        "건설사업관리",
-        "처리용역",
-        "재활용",
-    )
-    if any(keyword in normalized_text for keyword in price_competitive_keywords):
-        return "service_price_competitive"
-
-    service_exception_price_competitive_keywords = (
-        "2단계",
-        "규격·가격",
-        "규격 가격",
-        "규격가격",
-        "가격분리",
-        "가격 분리",
-        "동시입찰",
-        "수학여행",
-        "현장체험학습",
-        "해외문화체험",
-        "버스",
-        "차량임차",
-        "차량 임차",
-        "임차용역",
-        "보험",
-        "자동차보험",
-        "재산종합보험",
-    )
-    if any(keyword in normalized_text for keyword in service_exception_price_competitive_keywords):
-        return "service_price_competitive"
-
-    high_negotiated_keywords = (
-        "협상에 의한 계약",
-        "협상",
-        "제안",
-        "위탁",
-        "운영",
-        "홍보",
-        "영상",
-        "콘텐츠",
-        "시스템",
-        "개발",
-        "출판",
-        "제작",
-        "마스터플랜",
-        "플랫폼",
-        "sns",
-        "서포터",
-    )
-    if any(keyword in normalized_text for keyword in high_negotiated_keywords):
-        return "service_high_negotiated"
-    return None
 
 
 def _is_goods_deep_discount_notice(normalized_text: str) -> bool:
@@ -1017,6 +889,14 @@ def _is_goods_narrow_control_price_competitive(normalized_text: str) -> bool:
         "계장",
     )
     return not any(keyword in normalized_text for keyword in high_rate_control_terms)
+
+
+# Goods rule table weaving the two named predicates (defined above) into their
+# leading order slots ahead of the verbatim price-competitive keyword rule.
+GOODS_BAND_RULES = build_goods_band_rules(
+    deep_discount_predicate=_is_goods_deep_discount_notice,
+    narrow_control_predicate=_is_goods_narrow_control_price_competitive,
+)
 
 
 def estimate_historical_confidence(*, sample_size: int, std_rate: float, margin: float) -> float:
