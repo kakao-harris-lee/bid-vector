@@ -39,6 +39,7 @@ from app.models.models import (
 from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
+from app.services.bid_base import resolve_notice_bid_base
 from app.services.classifier import NoticeClassifierService
 
 logger = logging.getLogger(__name__)
@@ -879,6 +880,17 @@ class PaperBiddingBacktestService:
         if budget <= 0:
             raise ValueError(f"Project {project.id} has no usable budget")
 
+        # 투찰가는 추정가격(ex-VAT)이 아니라 기초금액/사업금액(배정예산; 과세 공고면
+        # VAT 포함) 기준으로 산정한다. 과거 낙찰률(bid_rate/winning_rate)이 base
+        # 기준으로 정규화돼 있으므로 predictor budget 도 base 여야 과세 공고에서
+        # ~10% 낮게 산정돼 낙찰하한 미만으로 systematically 탈락하는 왜곡이 사라진다.
+        # (candidate 는 Project+TenderResult 에서 만들어져 HistoricalData 레코드가
+        # 이 지점에 없으므로 live 경로와 동일한 helper 로 base 를 해석한다.) 보고용
+        # budget_estimate 필드와 전략 예산밴드 필터는 그대로 est(``budget``)를 쓴다.
+        bid_base = resolve_notice_bid_base(db, project)
+        if bid_base <= 0:
+            bid_base = budget
+
         data_cutoff_at = data_cutoff_at or self.cutoff_service.resolve_data_cutoff_at(
             project,
             tender_result=tender_result,
@@ -896,7 +908,7 @@ class PaperBiddingBacktestService:
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
         prediction = self.price_prediction_port.predict_price(
-            budget=budget,
+            budget=bid_base,
             category=project.category or "other",
             description=" ".join(
                 part
@@ -1054,10 +1066,18 @@ class PaperBiddingBacktestService:
         self, db: Session, *, item: dict[str, Any], tender_result: TenderResult
     ) -> dict[str, Any]:
         winning_amount = float(tender_result.winning_amount or 0.0)
-        budget = float(item["budget_estimate"] or 0.0)
         winning_rate = self._normalize_rate(float(tender_result.winning_rate or 0.0))
-        if winning_rate <= 0 and budget > 0:
-            winning_rate = self._normalize_rate(winning_amount / budget)
+        if winning_rate <= 0:
+            # winning_rate 는 winning_amount / base_amount (기초금액; scsbid.py 와
+            # 동일한 base-relative 정규화)이므로, 결측 시 유도값도 추정가격(ex-VAT)이
+            # 아니라 base 로 나눠야 한다. base 로 나누지 않으면 과세 공고에서
+            # winning_rate 가 ~10% 높게 잡혀 paper bid(이제 base 기준)와 비교가
+            # 어긋난다. base 를 못 구하면 보고용 budget_estimate 로 폴백한다.
+            bid_base = self._resolve_settlement_bid_base(
+                db, tender_result=tender_result, item=item
+            )
+            if bid_base > 0:
+                winning_rate = self._normalize_rate(winning_amount / bid_base)
 
         paper_bid_amount = float(item["paper_bid_amount"] or 0.0)
         paper_bid_rate = self._normalize_rate(float(item["paper_bid_rate"] or 0.0))
@@ -1124,6 +1144,31 @@ class PaperBiddingBacktestService:
             ),
             "settlement_reason": eligibility_reason,
         }
+
+    def _resolve_settlement_bid_base(
+        self,
+        db: Session,
+        *,
+        tender_result: TenderResult,
+        item: dict[str, Any],
+    ) -> float:
+        """Resolve the base (기초금액/사업금액) to normalize a missing winning_rate against.
+
+        ``winning_rate`` is base-relative (``winning_amount / base_amount``), so a
+        derived fallback must divide by the notice base — not 추정가격(ex-VAT). Uses
+        the live-path helper on the award's project (기초금액 is a pre-bid attribute,
+        leak-safe) and falls back to the reported ``budget_estimate`` (면세 공고면
+        두 값이 같아 무해) when the project/base is unavailable.
+        """
+        project = getattr(tender_result, "project", None)
+        if project is not None:
+            base = resolve_notice_bid_base(db, project)
+            if base > 0:
+                return base
+        try:
+            return float(item.get("budget_estimate") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _score_eligibility_gate(
         self,

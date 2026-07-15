@@ -24,6 +24,7 @@ from app.schemas.schemas import (
     DocumentAnalysisRequest,
     PricePredictionRequest,
 )
+from app.services.bid_base import resolve_notice_bid_base
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 
@@ -56,8 +57,12 @@ class PredictionWorkflowService:
             agency_name=request.agency_name,
         )
 
+        # 투찰가는 추정가격(ex-VAT)이 아니라 기초금액/사업금액(배정예산) 기준으로
+        # 산정한다. 프로젝트의 최신 HistoricalData.base_amount 를 해석하되, 이를
+        # 얻지 못하면(0/falsy) 요청에 실린 명시적 budget_estimate 로 폴백한다.
+        resolved_bid_base = resolve_notice_bid_base(db, project)
         prediction = self.price_prediction_port.predict_price(
-            budget=request.budget_estimate,
+            budget=resolved_bid_base or request.budget_estimate,
             category=request.category,
             description=request.description,
             historical_records=self._load_price_history(db, category=request.category or project.category),
