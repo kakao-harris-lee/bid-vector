@@ -781,7 +781,7 @@ class KonepsCollectorService:
         url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
         params = {
             "type": "json",
-            "numOfRows": 100,
+            "numOfRows": settings.KONEPS_SCSBID_DETAIL_PAGE_SIZE,
             "pageNo": 1,
             "inqryDiv": "2",
             "bidNtceNo": notice_number,

@@ -1453,7 +1453,14 @@ class MLReleasePromotionService:
         while True:
             try:
                 with request.urlopen(
-                    url, timeout=max(1.0, min(timeout_seconds, 10.0))
+                    url,
+                    timeout=max(
+                        1.0,
+                        min(
+                            timeout_seconds,
+                            settings.ML_RELEASE_HTTP_READY_PER_REQUEST_CAP_SECONDS,
+                        ),
+                    ),
                 ) as response:
                     body = response.read().decode("utf-8", errors="replace")
                     return {
@@ -1478,15 +1485,19 @@ class MLReleasePromotionService:
         self,
         manifest_ref: str | Path,
         *,
-        base_url: str = "http://localhost:3000",
+        base_url: str | None = None,
         limit: int | None = None,
         offset: int | None = None,
         category: str | None = None,
         project_status: str | None = None,
         force: bool | None = None,
-        timeout_seconds: float = 120.0,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         """Trigger the API-based embedding rebuild endpoint using one stored manifest's defaults."""
+        if base_url is None:
+            base_url = settings.ML_RELEASE_REMOTE_TRIGGER_BASE_URL
+        if timeout_seconds is None:
+            timeout_seconds = settings.ML_RELEASE_REMOTE_TRIGGER_TIMEOUT_SECONDS
         manifest, _ = self.load_release_manifest(manifest_ref)
         recommended_env = dict(manifest.get("recommended_env") or {})
         if not recommended_env.get("CLASSIFIER_EMBEDDING_MODEL"):

@@ -216,3 +216,8 @@ def test_realtime_auth_can_be_disabled_for_local_development(client, monkeypatch
         ack = websocket.receive_json()
         assert ack["event_type"] == "connection.opened"
         assert ack["payload"]["authenticated"] is False
+
+
+def test_realtime_listener_reconnect_backoff_default():
+    """리스너 재접속 백오프 Settings 기본값이 기존 리터럴(5s)과 동일한지 확인."""
+    assert settings.REALTIME_LISTENER_RECONNECT_BACKOFF_SECONDS == 5.0
