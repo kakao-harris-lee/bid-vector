@@ -268,6 +268,9 @@ _CANDIDATE_BAND_MATRIX = {
     ("service_high_negotiated", (0.80, 0.85, 0.90)): (0.98, 1.0, 1.0),
     ("service_high_negotiated", (0.95, 1.00, 1.05)): (0.98, 1.0, 1.05),
     ("service_high_negotiated", (0.70, 0.78, 0.86)): (0.98, 1.0, 1.0),
+    # GAP D upper boundary: a conservative ALREADY above the 0.98 floor is a max()
+    # floor, not a cap, so it is preserved (not pulled down to 0.98).
+    ("service_high_negotiated", (0.99, 1.00, 1.02)): (0.99, 1.0, 1.02),
     ("service_direct_negotiated", (0.80, 0.85, 0.90)): (0.93, 0.95, 0.97),
     ("service_direct_negotiated", (0.95, 1.00, 1.05)): (0.95, 1.0, 1.05),
     ("service_direct_negotiated", (0.70, 0.78, 0.86)): (0.93, 0.95, 0.97),
@@ -678,6 +681,63 @@ def test_high_rate_disabled_returns_base_and_none(monkeypatch):
     )
     assert rate == 0.85
     assert ctx is None
+
+
+# --- tail trigger OR-branch isolation (mutation-kill) ------------------------
+# Each case satisfies EXACTLY ONE sub-condition of the compound trigger, so if a
+# refactor drops that sub-condition (or re-orders the OR into an AND) exactly this
+# case breaks — the others still cover the surviving sub-conditions.
+
+# goods trigger (:639-643):  ge_95_share>=0.35  OR  ge_98_share>=0.20  OR  recent_upper>=0.97
+@pytest.mark.parametrize(
+    "case_id, summary_over, expected_rate",
+    [
+        # only ge_95_share fires (ge_98=0, recent_upper=0.90 < 0.97)
+        ("only_ge95", dict(recent_median_bid_rate=0.95, recent_upper_quantile_bid_rate=0.90,
+                           upper_quantile_bid_rate=0.95, recent_rate_ge_0_95_share=0.40),
+         0.9299999999999999),
+        # only ge_98_share fires (ge_95=0, recent_upper=0.90 < 0.97)
+        ("only_ge98", dict(recent_median_bid_rate=0.95, recent_upper_quantile_bid_rate=0.90,
+                           upper_quantile_bid_rate=0.95, recent_rate_ge_0_98_share=0.25),
+         0.9299999999999999),
+        # only recent_upper>=0.97 fires (both share thresholds at 0)
+        ("only_upper", dict(recent_median_bid_rate=0.95, recent_upper_quantile_bid_rate=0.98,
+                            upper_quantile_bid_rate=0.95),
+         0.9465),
+    ],
+)
+def test_high_rate_goods_trigger_or_isolation(_pin_high_rate_settings, case_id, summary_over, expected_rate):
+    rate, ctx = apply_high_rate_distribution_adjustment(
+        0.85, category="goods", description="OO 물품 구매", business_group="goods",
+        budget=100_000_000.0, historical_summary=_summary(**summary_over),
+    )
+    assert ctx is not None, case_id
+    assert ctx["reason"] == "goods_recent_high_rate_tail", case_id
+    assert rate == expected_rate, case_id
+
+
+# service trigger (:650-653):  recent_median>=0.93  AND  (ge_93_share>=0.30 OR ge_95_share>=0.20)
+@pytest.mark.parametrize(
+    "case_id, summary_over, expected_rate",
+    [
+        # only ge_93_share fires the inner OR (ge_95=0)
+        ("only_ge93", dict(recent_median_bid_rate=0.94, recent_upper_quantile_bid_rate=0.95,
+                           upper_quantile_bid_rate=0.95, recent_rate_ge_0_93_share=0.40),
+         0.9309999999999999),
+        # only ge_95_share fires the inner OR (ge_93=0)
+        ("only_ge95", dict(recent_median_bid_rate=0.94, recent_upper_quantile_bid_rate=0.95,
+                           upper_quantile_bid_rate=0.95, recent_rate_ge_0_95_share=0.25),
+         0.9309999999999999),
+    ],
+)
+def test_high_rate_service_trigger_or_isolation(_pin_high_rate_settings, case_id, summary_over, expected_rate):
+    rate, ctx = apply_high_rate_distribution_adjustment(
+        0.90, category="service", description="OO 청소용역", business_group="service",
+        budget=100_000_000.0, historical_summary=_summary(**summary_over),
+    )
+    assert ctx is not None, case_id
+    assert ctx["reason"] == "service_recent_high_rate_tail", case_id
+    assert rate == expected_rate, case_id
 
 
 # ===========================================================================

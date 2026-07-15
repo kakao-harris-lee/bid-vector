@@ -36,6 +36,7 @@ from app.ai.predictors.historical import (
     build_heuristic_prediction,
     build_historical_prediction,
 )
+from app.ai.price_prediction import predict_price
 
 GOLDEN_DIR = Path(__file__).parent / "goldens" / "predictor"
 REGEN = os.environ.get("PREDICTOR_GOLDEN_REGEN") == "1"
@@ -55,6 +56,10 @@ def _pin_predictor_settings(monkeypatch):
     monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET", 0.93)
     monkeypatch.setattr(settings, "PREDICTION_RESERVE_PRIOR_WEIGHT", 0.2)
     monkeypatch.setattr(settings, "PREDICTION_RESERVE_PRIOR_FULL_CONFIDENCE_SAMPLES", 8)
+    # predict_price guardrail / granularity knobs (GAP A/C goldens depend on these).
+    monkeypatch.setattr(settings, "PREDICTION_FLOOR_SAFETY_MARGIN_RATE", 0.001)
+    monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY", 10)
+    monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET", 1_000_000.0)
     # Empty group calibration so build_historical_prediction never blends a manifest prior.
     monkeypatch.setattr(
         "app.ai.predictors.historical.load_group_calibration", lambda: {}, raising=False
@@ -278,6 +283,24 @@ HISTORICAL_CASES: list[dict[str, Any]] = [
         summary=_summary(sample_size=1, mean=0.88, median=0.88, recent_median=0.88,
                          quantile=0.88, std=0.0),
     ),
+    # --- GAP C: numeric high-rate tail ACTUALLY fires and flows into the
+    #     candidates / predicted_price / explanation / high_rate_tail_adjustment.
+    #     (Synthetic summaries: low base-driving rates but a high recent tail — the
+    #     dict fields are independent, which is exactly what exercises the branch.)
+    _historical_case(
+        "hist_goods_tail_fires", budget=100_000_000.0, category="goods",
+        description="OO 물품 구매", business_group="goods",
+        summary=_summary(sample_size=25, mean=0.85, median=0.85, recent_median=0.96,
+                         quantile=0.85, std=0.02, recent_sample_size=12, recent_upper=0.98,
+                         upper=0.98, ge95=0.40, ge98=0.25),
+    ),
+    _historical_case(
+        "hist_service_tail_fires", budget=100_000_000.0, category="service",
+        description="OO 청소용역", business_group="service",
+        summary=_summary(sample_size=25, mean=0.9, median=0.9, recent_median=0.94,
+                         quantile=0.9, std=0.02, recent_sample_size=12, recent_upper=0.95,
+                         upper=0.95, ge93=0.40),
+    ),
 ]
 
 
@@ -388,6 +411,55 @@ ENSEMBLE_CASES: list[dict[str, Any]] = [
 ]
 
 
+# GAP A: end-to-end predict_price cases where the category/group guardrail
+# ACTUALLY fires (guardrail_applied == True) — the anchor for the project #1
+# invariant ("a recommendation below the category 낙찰하한 is blocked"). The
+# guardrail is NOT disabled or bypassed; the inputs are built so the pre-guardrail
+# rate lands outside the band and the guardrail must clamp it back.
+def _predict_price_case(
+    case_id: str,
+    *,
+    budget: float,
+    category: str,
+    description: str,
+    rates: list[float],
+    business_group: str | None = None,
+    agency_name: str | None = None,
+    legal_floor_bid_rate: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": case_id,
+        "kind": "predict_price",
+        "budget": budget,
+        "category": category,
+        "description": description,
+        "records": _rate_records(rates),
+        "business_group": business_group,
+        "agency_name": agency_name,
+        "legal_floor_bid_rate": legal_floor_bid_rate,
+    }
+
+
+PREDICT_PRICE_CASES: list[dict[str, Any]] = [
+    # Floor raise: deep low-rate construction history (~0.75) sits below the 0.87
+    # category floor, so the guardrail lifts every scenario to the safe floor.
+    _predict_price_case(
+        "predict_guardrail_floor_raise_construction",
+        budget=100_000_000.0, category="construction",
+        description="낙찰하한 검증 토목공사", rates=[0.75 for _ in range(20)],
+        business_group=None,
+    ),
+    # Ceiling lower: high-rate construction history (~0.985) with the construction
+    # group ceiling 0.93 — the guardrail clamps the recommendation down to 0.93.
+    _predict_price_case(
+        "predict_guardrail_ceiling_lower_construction",
+        budget=810_000_000.0, category="construction",
+        description="제주대학교 안전환경개선 건축공사", rates=[0.985 for _ in range(60)],
+        business_group="construction", agency_name="제주대학교",
+    ),
+]
+
+
 # ---------------------------------------------------------------------------
 # Runners
 # ---------------------------------------------------------------------------
@@ -418,7 +490,28 @@ def _run_ensemble(case: dict[str, Any]) -> dict[str, Any]:
     return build_ensemble_prediction_payload(context, artifact=artifact)
 
 
-_RUNNERS = {"historical": _run_historical, "ensemble": _run_ensemble}
+def _run_predict_price(case: dict[str, Any]) -> dict[str, Any]:
+    result = predict_price(
+        budget=case["budget"],
+        category=case["category"],
+        description=case["description"],
+        historical_records=tuple(case["records"]),
+        agency_name=case.get("agency_name"),
+        business_group=case.get("business_group"),
+        legal_floor_bid_rate=case.get("legal_floor_bid_rate"),
+    )
+    # backtest_report (auto selector only) is a large nested structure not present
+    # under the historical preference; drop defensively so a config flip can't bloat
+    # the golden. It is absent in the test env (preferred predictor == historical).
+    result.pop("backtest_report", None)
+    return result
+
+
+_RUNNERS = {
+    "historical": _run_historical,
+    "ensemble": _run_ensemble,
+    "predict_price": _run_predict_price,
+}
 
 
 def _run(case: dict[str, Any]) -> dict[str, Any]:
@@ -433,12 +526,19 @@ def _assert_golden(case: dict[str, Any]) -> None:
     result = _run(case)
     serialized = _serialize(result)
     path = _golden_path(case["id"])
-    if REGEN or not path.exists():
+    if REGEN:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Store a pretty golden but compare on the canonical serialization.
         path.write_text(
             json.dumps(normalize(result), sort_keys=True, ensure_ascii=False, indent=2),
             encoding="utf-8",
+        )
+    elif not path.exists():
+        # A missing golden without an explicit regen is a HARD failure — never
+        # auto-create it, so an accidental deletion can't be masked as a pass.
+        raise AssertionError(
+            f"missing golden for {case['id']} at {path}; "
+            f"run PREDICTOR_GOLDEN_REGEN=1 pytest to (re)generate intentionally."
         )
     golden = json.loads(path.read_text(encoding="utf-8"))
     assert serialized == json.dumps(golden, sort_keys=True, ensure_ascii=False, default=str), (
@@ -446,7 +546,7 @@ def _assert_golden(case: dict[str, Any]) -> None:
     )
 
 
-ALL_CASES = HISTORICAL_CASES + ENSEMBLE_CASES
+ALL_CASES = HISTORICAL_CASES + ENSEMBLE_CASES + PREDICT_PRICE_CASES
 
 
 @pytest.mark.parametrize("case", ALL_CASES, ids=[c["id"] for c in ALL_CASES])
@@ -469,9 +569,60 @@ def test_case_ids_are_unique():
 
 def test_golden_case_count_is_pinned():
     # Lock the coverage size so a future edit can't silently drop cases.
-    assert len(HISTORICAL_CASES) == 18
+    assert len(HISTORICAL_CASES) == 20
     assert len(ENSEMBLE_CASES) == 12
-    assert len(ALL_CASES) == 30
+    assert len(PREDICT_PRICE_CASES) == 2
+    assert len(ALL_CASES) == 34
+
+
+# ---------------------------------------------------------------------------
+# GAP A anchor: guardrail actually fires (project #1 invariant, made legible
+# beyond the raw golden JSON so a careless regen can't quietly erase it).
+# ---------------------------------------------------------------------------
+def _case_by_id(case_id: str) -> dict[str, Any]:
+    return next(case for case in ALL_CASES if case["id"] == case_id)
+
+
+def test_guardrail_floor_raise_actually_fires():
+    result = _run(_case_by_id("predict_guardrail_floor_raise_construction"))
+    assert result["guardrail_applied"] is True
+    assert result["guardrail_reason"]  # non-empty auditable reason
+    assert result["floor_bid_rate"] == 0.87
+    floor = result["safe_floor_bid_rate"]
+    # every scenario is lifted to at least the safe floor — nothing prices below 낙찰하한.
+    assert result["predicted_bid_rate"] >= floor - 1e-9
+    for candidate in result["bid_rate_candidates"]:
+        assert candidate["bid_rate"] >= floor - 1e-9, candidate
+
+
+def test_guardrail_ceiling_lower_actually_fires():
+    result = _run(_case_by_id("predict_guardrail_ceiling_lower_construction"))
+    assert result["guardrail_applied"] is True
+    assert result["ceiling_bid_rate"] == 0.93
+    assert result["predicted_bid_rate"] <= 0.93 + 1e-9
+    for candidate in result["bid_rate_candidates"]:
+        assert candidate["bid_rate"] <= 0.93 + 1e-9, candidate
+
+
+# ---------------------------------------------------------------------------
+# GAP C anchor: the numeric high-rate tail actually fires and its footprint
+# reaches predicted_bid_rate / candidates / explanation.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "case_id, reason",
+    [
+        ("hist_goods_tail_fires", "goods_recent_high_rate_tail"),
+        ("hist_service_tail_fires", "service_recent_high_rate_tail"),
+    ],
+)
+def test_high_rate_tail_golden_actually_fires(case_id, reason):
+    result = _run(_case_by_id(case_id))
+    adjustment = result["high_rate_tail_adjustment"]
+    assert adjustment is not None
+    assert adjustment["reason"] == reason
+    # the lift reached the recommended rate and the explanation notes it.
+    assert result["predicted_bid_rate"] > adjustment["original_bid_rate"]
+    assert "최근 고율 낙찰 분포를 반영해" in result["explanation"]
 
 
 # ---------------------------------------------------------------------------
