@@ -12,6 +12,7 @@ import pytest
 
 from app.services.smoke_failure_taxonomy import (
     FAILURE_GUIDANCE,
+    FAILURE_RULES,
     SMOKE_FAILURE_CATEGORIES,
     classify_failure,
     guidance_for,
@@ -26,16 +27,33 @@ def test_guidance_map_keys_match_categories_and_are_complete():
         assert guidance.get("retry_method"), category
 
 
+def test_failure_rules_are_well_formed_and_known_categories():
+    """The rule table stays a list of (known-category, non-empty tokens)."""
+    seen = set()
+    for category, tokens in FAILURE_RULES:
+        assert category in SMOKE_FAILURE_CATEGORIES, category
+        assert category not in seen, f"duplicate rule category {category}"
+        seen.add(category)
+        assert isinstance(tokens, tuple) and tokens, category
+        assert all(isinstance(token, str) and token for token in tokens), category
+
+
 @pytest.mark.parametrize(
     ("name", "detail", "expected"),
     [
+        # One matching case per category (token- and name-driven paths).
         ("koneps_collect", "service key unauthorized 401", "credential"),
         ("worker_phase", "celery broker connection refused", "task_broker"),
         ("predict_price", "skipped — no eligible project", "no_candidate"),
+        ("koneps_collect", "collected 0 items today", "no_candidate"),
         ("telegram_ping", "Telegram API rejected", "telegram"),
         ("sbert_embedding", "OperationalError no such table", "db_schema"),
         ("candidate_generation", "strategy monitor failed", "candidate_generation"),
+        ("candidate_generation", "monitor produced nothing", "candidate_generation"),
+        ("some_phase", "strategy monitor blew up", "candidate_generation"),
         ("koneps_collect", "KONEPS OpenAPI timeout", "koneps_response"),
+        ("koneps_collect", "empty response body", "koneps_response"),
+        ("some_phase", "openapi gateway 502", "koneps_response"),
         ("predict_price", "guardrail exception", "prediction"),
         ("sbert_embedding", "unexpected model error", "prediction"),
         ("mystery", "nothing matches at all", "unknown"),
@@ -45,12 +63,25 @@ def test_classify_failure_mapping(name, detail, expected):
     assert classify_failure(name, detail) == expected
 
 
-def test_classify_failure_is_priority_ordered():
-    """Credential token wins over a co-occurring task/broker token."""
-    assert (
-        classify_failure("worker", "missing service key on celery worker")
-        == "credential"
-    )
+@pytest.mark.parametrize(
+    ("name", "detail", "expected"),
+    [
+        # credential (rule 1) wins over a co-occurring task/broker token.
+        ("worker", "missing service key on celery worker", "credential"),
+        # task_broker (rule 2) wins over a co-occurring no_candidate token.
+        ("phase", "worker found no candidate", "task_broker"),
+        # no_candidate (rule 3) wins over a co-occurring telegram token.
+        ("phase", "telegram: no candidate", "no_candidate"),
+        # db_schema (rule 5) wins over the name-aware candidate_generation rule.
+        ("candidate_generation", "database schema error", "db_schema"),
+        # A token rule wins over the name-aware koneps_response rule.
+        ("koneps_collect", "token missing", "credential"),
+    ],
+)
+def test_classify_failure_is_priority_ordered(name, detail, expected):
+    """First matching rule in FAILURE_RULES order wins; token rules precede
+    the name-aware rules."""
+    assert classify_failure(name, detail) == expected
 
 
 def test_guidance_for_unknown_category_falls_back():

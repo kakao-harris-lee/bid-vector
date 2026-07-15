@@ -18,6 +18,12 @@ from typing import Any
 from urllib import error as urlerror
 from urllib import parse, request
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.services.smoke_failure_taxonomy import classify_failure  # noqa: E402
+
 
 class SmokeFailure(Exception):
     """Raised when a required smoke-test step fails."""
@@ -61,27 +67,6 @@ FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
         "retry_method": "Rerun the same command after the logged root cause is corrected.",
     },
 }
-
-
-def classify_failure(name: str, detail: str) -> str:
-    text = f"{name} {detail}".strip().lower()
-    if any(token in text for token in ("credential", "unauthorized", "forbidden", "401", "403", "api key", "apikey", "service key", "token", "secret")):
-        return "credential"
-    if any(token in text for token in ("celery", "broker", "rabbit", "redis", "queue", "worker", "task")):
-        return "task_broker"
-    if any(token in text for token in ("no eligible", "no candidate", "no recent project", "no project", "returned=0", "persisted=0", "collected=0", "collected 0")):
-        return "no_candidate"
-    if "telegram" in text:
-        return "telegram"
-    if any(token in text for token in ("no such table", "no such column", "schema", "sqlalchemy", "operationalerror", "database")):
-        return "db_schema"
-    if "candidate" in text or "strategy monitor" in text:
-        return "candidate_generation"
-    if "koneps" in text or "openapi" in text or "crawl" in text:
-        return "koneps_response"
-    if "predict" in text or "embedding" in text:
-        return "prediction"
-    return "unknown"
 
 
 def failure_guidance(category: str) -> dict[str, str]:
