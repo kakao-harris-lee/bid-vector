@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 
+from app.core.bands import resolve_band
 from app.core.config import settings
 from app.models.models import CompanyProfile, Project
 
@@ -111,6 +112,52 @@ class NoticeClassifierService:
     CAPABILITY_MISMATCH_PENALTY = 0.25
     SEMANTIC_LOW_PENALTY = 0.18
     SEMANTIC_VERY_LOW_PENALTY = 0.3
+
+    # --- Declarative tier ladders & structural thresholds -----------------
+    # capacity_score budget fallback ladder (structural — the 0.8/0.4 boundaries
+    # are not operator-tuned). Each rung is (score, reason template); resolve_band
+    # walks it with the default ``>=`` compare, reproducing the original
+    # ``>= 0.8`` / ``>= 0.4`` / else cascade byte-for-byte. The ``float("-inf")``
+    # sentinel rung is the always-match fallback; its template carries no
+    # ``{capacity_score}`` placeholder (left untouched by ``.format``).
+    _CAPACITY_SCORE_BUDGET_BANDS = (
+        (
+            0.8,
+            (
+                CAPACITY_HIGH_SCORE,
+                "연매출 정보는 없지만 capacity_score={capacity_score:.2f}로 높아 예산 적합도에 보수적 가점을 반영했습니다.",
+            ),
+        ),
+        (
+            0.4,
+            (
+                CAPACITY_BASE_SCORE,
+                "연매출 정보가 없어 capacity_score={capacity_score:.2f} 기준으로 예산 적합도를 보수 평가했습니다.",
+            ),
+        ),
+        (
+            float("-inf"),
+            (0.0, "연매출 및 수행역량 정보가 부족해 예산 적합도는 보수적으로 평가했습니다."),
+        ),
+    )
+    # project-scale ladder (structural) → semantic scope text. resolve_band's
+    # default ``>=`` compare reproduces the ``>= 0.85`` / ``>= 0.65`` / ``>= 0.5``
+    # cascade; the ``float("-inf")`` rung is the "기본 프로젝트" fallback.
+    _PROJECT_SCOPE_BANDS = (
+        (0.85, "대형 복합 프로젝트"),
+        (0.65, "중대형 프로젝트"),
+        (0.5, "중형 프로젝트"),
+        (float("-inf"), "기본 프로젝트"),
+    )
+    # Shared borderline acceptance ratio for the 시공능력평가액/연매출 budget branches:
+    # a capacity/revenue-to-budget ratio at or above this (but below 1×) is a
+    # conservative "타이트하지만 통과" borderline. The 3×/1× rungs above it are
+    # self-documenting natural ratios and stay inline.
+    BUDGET_BORDERLINE_RATIO = 0.6
+    # 낙찰 실적 가점: total_awards × AWARD_BONUS_PER_AWARD, capped at AWARD_BONUS_CAP,
+    # stacked onto the capacity_score capability estimate.
+    AWARD_BONUS_PER_AWARD = 0.03
+    AWARD_BONUS_CAP = 0.25
 
     BUSINESS_TYPE_ALIASES = {
         "software": {"software", "소프트웨어", "sw", "ict", "정보화"},
@@ -596,7 +643,7 @@ class NoticeClassifierService:
                     f"{capacity_label}이 공고 예산 이상으로 시공능력 기준 필터를 충족합니다. (배수: {capacity_ratio:.1f})"
                 ],
             )
-        if capacity_ratio >= 0.6:
+        if capacity_ratio >= self.BUDGET_BORDERLINE_RATIO:
             return RuleAssessment(
                 score=self.BUDGET_BORDERLINE_SCORE,
                 passed=True,
@@ -632,7 +679,7 @@ class NoticeClassifierService:
                 passed=True,
                 reasons=[f"연매출이 공고 예산 이상으로 기본 예산 필터를 충족합니다. (배수: {revenue_ratio:.1f})"],
             )
-        if revenue_ratio >= 0.6:
+        if revenue_ratio >= self.BUDGET_BORDERLINE_RATIO:
             return RuleAssessment(
                 score=self.BUDGET_BORDERLINE_SCORE,
                 passed=True,
@@ -646,24 +693,13 @@ class NoticeClassifierService:
         )
 
     def _assess_capacity_score_budget(self, capacity_score: float) -> RuleAssessment:
-        if capacity_score >= 0.8:
-            return RuleAssessment(
-                score=self.CAPACITY_HIGH_SCORE,
-                passed=True,
-                reasons=[f"연매출 정보는 없지만 capacity_score={capacity_score:.2f}로 높아 예산 적합도에 보수적 가점을 반영했습니다."],
-            )
-
-        if capacity_score >= 0.4:
-            return RuleAssessment(
-                score=self.CAPACITY_BASE_SCORE,
-                passed=True,
-                reasons=[f"연매출 정보가 없어 capacity_score={capacity_score:.2f} 기준으로 예산 적합도를 보수 평가했습니다."],
-            )
-
+        score, reason_template = resolve_band(
+            capacity_score, self._CAPACITY_SCORE_BUDGET_BANDS
+        )
         return RuleAssessment(
-            score=0.0,
+            score=score,
             passed=True,
-            reasons=["연매출 및 수행역량 정보가 부족해 예산 적합도는 보수적으로 평가했습니다."],
+            reasons=[reason_template.format(capacity_score=capacity_score)],
         )
 
     def _assess_capability(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
@@ -723,7 +759,7 @@ class NoticeClassifierService:
         threshold = settings.CLASSIFIER_SEMANTIC_MATCH_THRESHOLD
         has_semantic_context = self._has_enough_semantic_context(project_text, profile_text)
 
-        if similarity >= threshold + 0.2:
+        if similarity >= threshold + settings.CLASSIFIER_SEMANTIC_STRONG_MARGIN:
             return RuleAssessment(
                 score=self.SEMANTIC_STRONG_SCORE,
                 passed=True,
@@ -737,14 +773,14 @@ class NoticeClassifierService:
                 reasons=[f"공고 내용과 업체 역량의 의미 유사도가 양호합니다. ({source_label}: {similarity:.2f})"],
             )
 
-        if similarity >= max(0.0, threshold - 0.12):
+        if similarity >= max(0.0, threshold - settings.CLASSIFIER_SEMANTIC_BASE_MARGIN):
             return RuleAssessment(
                 score=self.SEMANTIC_BASE_SCORE,
                 passed=True,
                 reasons=[f"의미 유사도가 보통 수준으로 확인되어 보수적 가점을 반영했습니다. ({source_label}: {similarity:.2f})"],
             )
 
-        if similarity <= 0.03:
+        if similarity <= settings.CLASSIFIER_SEMANTIC_VERY_LOW_MAX:
             return RuleAssessment(
                 score=0.0,
                 passed=not has_semantic_context,
@@ -752,7 +788,7 @@ class NoticeClassifierService:
                 reasons=[f"의미 유사도가 매우 낮아 규칙 기반 점수의 false positive 가능성을 줄이기 위해 {'차단 신호와 ' if has_semantic_context else ''}큰 감점을 반영했습니다. ({source_label}: {similarity:.2f})"],
             )
 
-        if similarity <= 0.1:
+        if similarity <= settings.CLASSIFIER_SEMANTIC_LOW_MAX:
             return RuleAssessment(
                 score=0.0,
                 passed=True,
@@ -871,15 +907,7 @@ class NoticeClassifierService:
     def _describe_project_scope(self, project: Project) -> str:
         """Describe project scale and complexity in text form for semantic matching."""
         required_capability = self._estimate_required_capability(project)
-        if required_capability >= 0.85:
-            scale = "대형 복합 프로젝트"
-        elif required_capability >= 0.65:
-            scale = "중대형 프로젝트"
-        elif required_capability >= 0.5:
-            scale = "중형 프로젝트"
-        else:
-            scale = "기본 프로젝트"
-
+        scale = resolve_band(required_capability, self._PROJECT_SCOPE_BANDS)
         return f"{scale} 요구역량 {required_capability:.2f}"
 
     def _describe_company_capability(self, profile: CompanyProfile) -> str:
@@ -981,7 +1009,10 @@ class NoticeClassifierService:
     def _estimate_company_capability(self, profile: CompanyProfile) -> float:
         """Estimate company execution capability using profile score and delivery history."""
         capacity_score = self._normalize_capacity_score(profile.capacity_score)
-        award_bonus = min(0.25, max(0, int(profile.total_awards or 0)) * 0.03)
+        award_bonus = min(
+            self.AWARD_BONUS_CAP,
+            max(0, int(profile.total_awards or 0)) * self.AWARD_BONUS_PER_AWARD,
+        )
         return min(1.0, max(capacity_score, capacity_score + award_bonus))
 
     def _estimate_required_capability(self, project: Project) -> float:
