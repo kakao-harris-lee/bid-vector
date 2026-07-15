@@ -109,7 +109,7 @@ docker compose --profile tasks config --quiet
 
 ## 4.5 설계 규칙 (선언적 구성 · 상태머신 · 크기 · 위임 · 패턴 · 파이프라인)
 
-고질적인 회귀는 대부분 **함수 안에 흩어진 매직값**과 **불어나는 조건 분기**에서 옵니다. 이를 막기 위해 값·규칙·특수케이스를 코드 흐름이 아니라 **선언적 데이터**(config · 상수 · 룩업표 · YAML/DSL)로 모으고, 코드는 그 데이터를 **해석만** 합니다. 아래 한도는 **소프트 가이드**(의미 있는 단일 책임이면 약간 초과 허용)이며, 리뷰어 에이전트가 PR에서 점검합니다. 파일 글롭별 상세 예시는 `.claude/rules/code-architecture.md`에 있습니다.
+고질적인 회귀는 대부분 **함수 안에 흩어진 매직값**과 **불어나는 조건 분기**에서 옵니다. 이를 막기 위해 값·규칙·특수케이스를 코드 흐름이 아니라 **선언적 데이터**(config · 상수 · 룩업표 · YAML/DSL)로 모으고, 코드는 그 데이터를 **해석만** 합니다. 아래 한도는 **소프트 가이드**(의미 있는 단일 책임이면 약간 초과 허용)이며, 리뷰어 에이전트가 PR에서 점검합니다.
 
 ### 1. 선언적 구성 (매직값을 함수 밖으로)
 
@@ -117,7 +117,17 @@ docker compose --profile tasks config --quiet
   - **런타임·환경 설정**(타임아웃, 큐 이름, 청크 크기, 기능 토글)은 `app/core/config.py`의 pydantic `Settings`에 선언하고 주입합니다. env 우선순위 함정 주의: 기존 키 **값 변경**은 `docker compose up -d` 재생성이 필요하고 `restart`로는 반영되지 않습니다.
   - **교차 모듈 도메인 상수·값 집합**은 `app/core/constants.py`에 단일 출처로 선언합니다(예: `ACTIVE_DECISION_STATUSES`).
   - **프론트 상수·설정**은 컴포넌트 안 매직값 대신 `frontend/src/shared/`(또는 feature 로컬 config)로 추출합니다.
-- Bad: 태스크 함수 안 `time_limit = 1800`.  Good: `settings.CELERY_TASK_TIME_LIMIT_SECONDS` 주입.
+
+```python
+# Bad — 매직값이 함수 안에 하드코딩
+task.apply_async(expires=86400, time_limit=1800)
+
+# Good — Settings에서 주입
+task.apply_async(
+    expires=settings.CELERY_RESULT_EXPIRES_SECONDS,
+    time_limit=settings.CELERY_TASK_TIME_LIMIT_SECONDS,
+)
+```
 
 ### 2. 상태·흐름은 룩업/전이표로 (중첩 if-else 금지)
 
@@ -138,11 +148,23 @@ ACTION_HANDLERS = {"create": do_create, "update": do_update, "cancel": do_cancel
 ACTION_HANDLERS[action](payload)
 ```
 
+- 프론트(React/TS)도 동일: `const ACTION_MAP = { create: doCreate, update: doUpdate } as const; ACTION_MAP[action]?.()`.
+
 ### 3. 예외·특수케이스는 데이터로 선언 (config/YAML/DSL)
 
 - 자주 바뀌거나 운영자가 튜닝하는 특수 규칙(게이트 키워드, 발주처 밴드, 카테고리 라우팅, 면허 별칭 등)은 코드 분기로 흩뿌리지 않고 **선언적 데이터**로 모읍니다: 상수 테이블 · `OperatorStrategy` 필드, 규칙이 커지면 **YAML/DSL descriptor + 얇은 로더/해석기**.
 - 실제 예: 해양 세그먼트 게이트의 `required_keywords`(OR 매칭)·`focus_categories`는 코드 `if`가 아니라 전략 **데이터**로 선언되고(`scripts/seed_marine_gate.py`, `docs/marine-engineering-gate.md`) 매처가 이를 해석합니다. 새 세그먼트는 **코드가 아니라 데이터**를 추가해 확장합니다.
-- 규칙 자체는 데이터로, 코드는 해석기(interpreter)만 유지합니다. 테스트는 규칙 데이터 케이스 단위로 붙입니다.
+- 규칙 자체는 데이터로, 코드는 해석기(interpreter)만 유지합니다. 테스트는 규칙 데이터 케이스 단위로 붙입니다. 규칙이 커지면 상수/모델 필드에서 선언 파일로 승격합니다(얇은 로더가 읽어 매칭만 수행):
+
+```yaml
+# 예시: 세그먼트 게이트를 데이터로 선언
+segments:
+  marine_engineering:
+    match: any            # any = OR, all = AND
+    required_keywords: ["항만", "어항", "방파제", "해양"]
+    focus_categories: ["construction", "engineering_service"]
+    exclude_keywords: ["하수관로"]
+```
 
 ### 4. 크기 한도 (초과 시 분해 권장)
 
@@ -177,6 +199,34 @@ ACTION_HANDLERS[action](payload)
 - **TDD 회귀 가드:** 버그 수정은 먼저 실패하는 재현 테스트를 찾거나 만들고, 고친 뒤 그 테스트가 통과하며 기존 테스트가 깨지지 않음을 확인합니다.
 - **테스트 실행:** 완료를 선언하기 전에 관련 테스트(`pytest`, `npm --prefix frontend run test`, build)를 실제로 돌립니다(§3·§9).
 - **불필요한 변경 금지:** 요청되지 않은, 잘 동작하는 코드는 리팩터·재작성·재포맷하지 않습니다.
+
+## 4.7 테스트·분석 용이성 설계 (포트 · 팩토리 · 주입 · 순수 함수)
+
+목적: 유닛 테스트를 **외부 I/O 없이** 돌릴 수 있게 seam(대체 지점)을 두고, 호출부가 구현이 아니라 **계약**에 의존하게 해 코드 추적을 쉽게 합니다. 이 패턴들은 이미 이 저장소에서 쓰이므로 새 코드도 따릅니다.
+
+### 1. 포트/인터페이스 (구현이 아니라 계약에 의존)
+
+- 도메인 경계는 구체 클래스가 아니라 **추상 포트**(`abc.ABC` + `@abstractmethod`)에 의존합니다. 호출부는 인터페이스만 알고 구현은 갈아끼웁니다.
+- 실재: `app/ai/service_interfaces.py`의 `PricePredictionPort`·`BidRecommendationPort`·`DocumentAnalysisPort`, `app/ai/predictors/base.py`의 `BasePricePredictor(ABC)`.
+- 효과: 테스트는 포트를 구현한 **가짜(fake)**를 주입해 DB·모델·네트워크 없이 검증합니다. 실재 예: `tests/test_prediction_predictors.py`의 `InjectedRegistryPredictor(BasePricePredictor)`.
+- 프론트: 컴포넌트는 구체 fetch가 아니라 훅/인터페이스에 의존하고, 테스트는 그 훅을 모킹합니다.
+
+### 2. 팩토리·레지스트리 (생성은 한 곳, 선택은 데이터로)
+
+- 구현 선택은 `if/elif`가 아니라 **문자열 키 → 구현 레지스트리(팩토리)**로 합니다(§4.5의 1·2와 같은 축).
+- 실재: `app/ai/predictors/registry.py`의 `build_default_predictor_registry() -> dict[str, BasePricePredictor]`(키 `"historical"`/`"lstm"`/`"ensemble"`), `normalize_predictor_registry(registry)`는 **주입된 레지스트리**를 받아 fallback을 보강합니다.
+- 효과: 새 구현 추가 = 레지스트리에 한 줄. 테스트·백테스트는 축소된 레지스트리를 주입해 특정 구현만 격리 검증합니다.
+
+### 3. 의존성 주입 (숨은 전역 대신 인자로)
+
+- 협력자(db 세션, `settings`, 레지스트리, 시간 함수)는 **함수 인자/생성자로 주입**하고, 함수 안에서 전역·싱글턴을 직접 부르지 않습니다. 이 주입 지점이 테스트의 seam입니다.
+- 실재: 라우터의 `Depends(get_db)`·`Depends(get_current_operator_optional)`, db 주입 service 클래스, 시간 헬퍼(`utc_now`/`kst_now`) 주입.
+- monkeypatch가 불가피하면 표면을 **delegator 한 곳으로 좁혀** 유지합니다(광범위 patch 금지).
+
+### 4. 순수 함수로 분리 (I/O와 계산 분리)
+
+- 점수·가격·자격 판정 같은 **결정 로직은 순수 함수**로 떼어 I/O(수집·DB·외부 호출)와 분리합니다. 순수 코어는 입력→출력만 검증하면 되어 TDD가 값 테이블로 끝납니다.
+- 부수효과는 얇은 경계(라우터·task)에서만 일으킵니다(§4.5의 5 위임, 7 파이프라인과 맞물림).
 
 ## 5. 서브에이전트
 
@@ -243,6 +293,7 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 - [ ] 시크릿/개인정보 로깅 없음
 - [ ] PR 본문에 어느 로드맵 단계/게이트와 연결되는지 명시
 - [ ] 설계 규칙(§4.5): 매직값 없음(config/`constants.py`로 선언), 3단계+ 조건 분기 없음(룩업/FSM), 특수케이스는 데이터로 선언(config/YAML/DSL), 파일/함수 크기 한도 준수(초과 시 분해 또는 사유), 기존 패턴·헬퍼 재사용(복붙 없음), 무거운 작업은 task 경로·외부 호출은 throttle/멱등(파이프라인 유지)
+- [ ] 테스트 용이성(§4.7): 경계는 포트/인터페이스에 의존, 구현 선택은 팩토리/레지스트리, 협력자는 주입(전역 직접 호출 금지), 결정 로직은 순수 함수로 분리
 
 ## 10. 워크플로
 
