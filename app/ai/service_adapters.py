@@ -60,6 +60,22 @@ class HeuristicDocumentAnalysisPort(DocumentAnalysisPort):
 
 
 class ExecutorDocumentAnalysisPort(DocumentAnalysisPort):
+    """LLM-executor implementation of ``DocumentAnalysisPort``.
+
+    This is an intentional seam in the ports/adapters design (introduced by
+    commit ``bcde4e3``): it routes document analysis through the
+    ``app.ai.llm_interfaces`` request/response contract and a
+    :class:`~app.ai.llm_interfaces.RequestExecutor`.
+
+    It is deliberately NOT wired into production yet — the factory
+    :func:`app.ai.factory.build_document_analysis_port` currently returns
+    :class:`HeuristicDocumentAnalysisPort`. This LLM path is the deferred
+    alternative that will be swapped in once an executor is configured.
+
+    Its request/response contract is exercised by
+    ``tests/test_ai_service_ports.py``. Keep it — it is not dead code.
+    """
+
     def __init__(
         self,
         *,
