@@ -125,7 +125,9 @@ class PostgresNotifyRealtimeFanoutBackend(RealtimeFanoutBackend):
             except Exception as exc:  # pragma: no cover - requires a live PostgreSQL outage
                 if not self._stopping:
                     logger.warning("Realtime PostgreSQL fanout listener reconnecting after error: %s", exc)
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(
+                        settings.REALTIME_LISTENER_RECONNECT_BACKOFF_SECONDS
+                    )
 
     async def _handle_notification_payload(self, raw_payload: str) -> None:
         """Decode one NOTIFY payload and forward it to the local manager."""

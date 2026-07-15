@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.core.config import settings
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collection import collect_openapi_items
 
@@ -346,3 +347,8 @@ def test_metadata_keys_present(monkeypatch):
         "query_type",
     ):
         assert key in meta, f"Missing metadata key: {key}"
+
+
+def test_openapi_collection_page_size_default():
+    """collect_openapi_items per-page Settings 기본값이 기존 리터럴(100)과 동일한지 확인."""
+    assert settings.KONEPS_OPENAPI_COLLECTION_PAGE_SIZE == 100

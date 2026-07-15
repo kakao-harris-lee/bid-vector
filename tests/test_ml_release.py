@@ -747,6 +747,65 @@ def test_trigger_remote_embedding_rebuild_uses_manifest_defaults(tmp_path, monke
     }
 
 
+def test_ml_release_remote_trigger_settings_defaults():
+    """신규 remote-trigger Settings 키 기본값이 기존 리터럴과 동일한지 확인."""
+    assert settings.ML_RELEASE_REMOTE_TRIGGER_BASE_URL == "http://localhost:3000"
+    assert settings.ML_RELEASE_REMOTE_TRIGGER_TIMEOUT_SECONDS == 120.0
+    assert settings.ML_RELEASE_REMOTE_TRIGGER_PER_REQUEST_CAP_SECONDS == 10.0
+
+
+def test_trigger_remote_embedding_rebuild_defaults_use_settings(tmp_path, monkeypatch):
+    """base_url/timeout 인자를 생략하면 Settings 값이 반영되어야 한다."""
+    repo_root = tmp_path / "repo"
+    embedding_dir = _write_embedding_snapshot(
+        repo_root / "models" / "embeddings" / "ko-sbert-v6"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-05-11-remote-rebuild-settings",
+            embedding_model_path=str(embedding_dir),
+            rebuild_limit=25,
+            rebuild_offset=5,
+            category="software",
+            project_status="open",
+            force_rebuild=False,
+        )
+    )
+
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_REMOTE_TRIGGER_BASE_URL", "http://injected.test"
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_REMOTE_TRIGGER_TIMEOUT_SECONDS", 33.0)
+
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"processed_count": 1}).encode("utf-8")
+
+        def getcode(self):
+            return 200
+
+    def fake_urlopen(request_object, timeout):
+        captured["url"] = request_object.full_url
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setattr("app.services.ml_release.request.urlopen", fake_urlopen)
+
+    service.trigger_remote_embedding_rebuild("2026-05-11-remote-rebuild-settings")
+
+    assert captured["timeout"] == 33.0
+    assert captured["url"].startswith("http://injected.test/api/v1/ml/backfills/")
+
+
 # ---------------------------------------------------------------------------
 # Task 18 — Group calibration sample-count preflight gate
 # ---------------------------------------------------------------------------

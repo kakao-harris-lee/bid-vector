@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     REALTIME_FANOUT_BACKEND: str = "local"
     REALTIME_POSTGRES_CHANNEL: str = "bid_vector_realtime_events"
     REALTIME_HISTORY_LIMIT: int = 100
+    REALTIME_LISTENER_RECONNECT_BACKOFF_SECONDS: float = 5.0
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED: bool = False
     OPERATOR_STRATEGY_MONITOR_INTERVAL_MINUTES: int = 30
     OPERATOR_STRATEGY_MONITOR_RUN_ON_STARTUP: bool = False
@@ -200,6 +201,8 @@ class Settings(BaseSettings):
     KONEPS_SCSBID_COLLECTION_CATEGORIES: str = "construction,service,goods"
     KONEPS_SCSBID_COLLECTION_LOOKBACK_DAYS: int = 3
     KONEPS_SCSBID_COLLECTION_PAGE_SIZE: int = 100
+    # Per-notice reserve-detail (예정가) fetch page size (ScsbidInfoService numOfRows).
+    KONEPS_SCSBID_DETAIL_PAGE_SIZE: int = 100
     KONEPS_SCSBID_COLLECTION_MAX_PAGES: int = 30
     KONEPS_SCSBID_COLLECTION_RESERVE_DETAIL: bool = True
     # Skip the per-notice reserve-detail HTTP fetch for awards that already have a
@@ -302,6 +305,9 @@ class Settings(BaseSettings):
     ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE: bool = False
     ML_RELEASE_OBJECT_STORAGE_URL: str = ""
     ML_RELEASE_REMOTE_STORAGE_AUTO_PUBLISH: bool = False
+    ML_RELEASE_REMOTE_TRIGGER_BASE_URL: str = "http://localhost:3000"
+    ML_RELEASE_REMOTE_TRIGGER_TIMEOUT_SECONDS: float = 120.0
+    ML_RELEASE_REMOTE_TRIGGER_PER_REQUEST_CAP_SECONDS: float = 10.0
     ML_RELEASE_PREDICTOR_GATE_POLICY: str = "standard"
     ML_RELEASE_PREDICTOR_GATE_MIN_DATASET_QUALITY_STATUS: str = ""
     ML_RELEASE_PREDICTOR_GATE_REQUIRE_REPORT: bool = False
@@ -478,6 +484,7 @@ class Settings(BaseSettings):
     KONEPS_OPENAPI_SERVICE_KEY: str = ""
     KONEPS_OPENAPI_ENCODED_SERVICE_KEY: str = ""
     KONEPS_OPENAPI_MAX_ITEMS: int = 500
+    KONEPS_OPENAPI_COLLECTION_PAGE_SIZE: int = 100  # BidPublicInfoService 호출당 페이지 크기
     KONEPS_OPENAPI_TIMEOUT_SECONDS: int = 20
     KONEPS_OPENAPI_REQUEST_DELAY_SECONDS: float = 0.2  # inter-page throttle for BidPublicInfoService pagination
     KONEPS_HEADLESS: bool = True

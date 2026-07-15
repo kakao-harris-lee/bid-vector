@@ -83,7 +83,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
 
     operation = openapi.openapi_operation_for_category(request.category)
     date_token = openapi.openapi_date_token(request.target_date)
-    per_page = 100  # KONEPS API 호출당 고정 페이지 크기
+    per_page = settings.KONEPS_OPENAPI_COLLECTION_PAGE_SIZE  # KONEPS API 호출당 고정 페이지 크기
     max_total = max(1, int(request.max_items))
     # Runaway guard: totalCount 누락 + API가 pageNo를 무시하고 full 중복 페이지를
     # 무한 반환하는 이중 오작동 시 무한 루프(→ Celery time limit SIGKILL → orphan)를

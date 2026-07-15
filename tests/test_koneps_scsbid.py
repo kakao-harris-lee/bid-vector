@@ -185,3 +185,8 @@ def test_build_award_item_falls_back_to_request_category_when_unspecified():
     )
     assert item is not None
     assert item["business_type"] == "용역"
+
+
+def test_scsbid_detail_page_size_default():
+    """reserve-detail fetch page-size Settings 기본값이 기존 리터럴(100)과 동일한지 확인."""
+    assert settings.KONEPS_SCSBID_DETAIL_PAGE_SIZE == 100
