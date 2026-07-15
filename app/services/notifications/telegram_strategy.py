@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 import re
@@ -24,6 +25,120 @@ from app.services.operator_strategy_tuning import (
     dump_category_priority_overrides,
     get_strategy_category_priority_overrides,
 )
+
+
+# Declarative field routing table.
+#
+# ``FieldSpec`` folds the previously duplicated alias→type routing (parsing in
+# ``_handle_set``/``_parse_assignment_updates`` and application in
+# ``_apply_updates``) into a single source of truth: one spec per stored
+# strategy field carries its parser, its ORM applier, and every alias that maps
+# to it. ``parser`` receives the entered (normalized) alias so numeric/boolean
+# error messages and clamping keep referencing the exact key the operator typed.
+FieldParser = Callable[["TelegramStrategyCommandProcessor", str, str], Any]
+FieldApplier = Callable[[Any, str, Any], None]
+
+
+@dataclass(frozen=True)
+class FieldSpec:
+    """Declarative parse/apply routing for one stored strategy field."""
+
+    target_field: str
+    parser: FieldParser
+    applier: FieldApplier
+    aliases: tuple[str, ...]
+
+
+def _parse_list_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
+    return processor._parse_list(raw_value)
+
+
+def _parse_number_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
+    return processor._parse_number(raw_value, field_name=normalized_key)
+
+
+def _parse_bool_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
+    return processor._parse_bool(raw_value, field_name=normalized_key)
+
+
+def _parse_overrides_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
+    return processor._parse_priority_overrides(raw_value)
+
+
+def _apply_list_field(strategy: Any, field_name: str, value: Any) -> None:
+    setattr(strategy, field_name, join_multi_value_text(value))
+
+
+def _apply_overrides_field(strategy: Any, field_name: str, value: Any) -> None:
+    strategy.category_priority_overrides = dump_category_priority_overrides(value)
+
+
+def _apply_workload_field(strategy: Any, field_name: str, value: Any) -> None:
+    strategy.auto_workload_penalty_multiplier = clamp_auto_workload_penalty_multiplier(float(value))
+
+
+def _apply_max_candidates_field(strategy: Any, field_name: str, value: Any) -> None:
+    strategy.max_recommended_candidates = max(1, min(int(value), 100))
+
+
+def _apply_plain_field(strategy: Any, field_name: str, value: Any) -> None:
+    setattr(strategy, field_name, value)
+
+
+_FIELD_SPEC_LIST: tuple[FieldSpec, ...] = (
+    FieldSpec("focus_categories", _parse_list_value, _apply_list_field, ("categories", "category", "focus_categories")),
+    FieldSpec("focus_regions", _parse_list_value, _apply_list_field, ("regions", "region", "focus_regions")),
+    FieldSpec("exclude_regions", _parse_list_value, _apply_list_field, ("exclude_regions",)),
+    FieldSpec("required_keywords", _parse_list_value, _apply_list_field, ("required_keywords", "keywords", "keyword")),
+    FieldSpec("exclude_keywords", _parse_list_value, _apply_list_field, ("exclude_keywords",)),
+    FieldSpec("min_budget_estimate", _parse_number_value, _apply_plain_field, ("min_budget", "min_budget_estimate")),
+    FieldSpec("max_budget_estimate", _parse_number_value, _apply_plain_field, ("max_budget", "max_budget_estimate")),
+    FieldSpec(
+        "minimum_match_score",
+        _parse_number_value,
+        _apply_plain_field,
+        ("match", "min_match", "minimum_match_score"),
+    ),
+    FieldSpec(
+        "minimum_probability_score",
+        _parse_number_value,
+        _apply_plain_field,
+        ("probability", "min_probability", "minimum_probability_score"),
+    ),
+    FieldSpec("bid_now_threshold", _parse_number_value, _apply_plain_field, ("bid_now", "bid_now_threshold")),
+    FieldSpec("review_threshold", _parse_number_value, _apply_plain_field, ("review", "review_threshold")),
+    FieldSpec(
+        "auto_workload_penalty_multiplier",
+        _parse_number_value,
+        _apply_workload_field,
+        ("workload_penalty", "auto_workload_penalty_multiplier"),
+    ),
+    FieldSpec(
+        "max_recommended_candidates",
+        _parse_number_value,
+        _apply_max_candidates_field,
+        ("limit", "max_candidates", "max_recommended_candidates"),
+    ),
+    FieldSpec(
+        "notify_only_high_priority",
+        _parse_bool_value,
+        _apply_plain_field,
+        ("high_priority", "high_priority_only", "notify_only_high_priority"),
+    ),
+    FieldSpec(
+        "category_priority_overrides",
+        _parse_overrides_value,
+        _apply_overrides_field,
+        ("category_priority_overrides", "priority_overrides"),
+    ),
+)
+
+# Keyed by canonical stored field (drives ``_apply_updates``).
+FIELD_SPECS: Mapping[str, FieldSpec] = {spec.target_field: spec for spec in _FIELD_SPEC_LIST}
+# Reverse index alias → spec (drives ``/strategy_set`` and step-flow parsing).
+FIELD_SPEC_BY_ALIAS: Mapping[str, FieldSpec] = {
+    alias: spec for spec in _FIELD_SPEC_LIST for alias in spec.aliases
+}
 
 
 @dataclass
@@ -92,45 +207,6 @@ class TelegramStrategyCommandProcessor:
         },
     }
 
-    LIST_FIELD_ALIASES = {
-        "categories": "focus_categories",
-        "category": "focus_categories",
-        "focus_categories": "focus_categories",
-        "regions": "focus_regions",
-        "region": "focus_regions",
-        "focus_regions": "focus_regions",
-        "exclude_regions": "exclude_regions",
-        "required_keywords": "required_keywords",
-        "keywords": "required_keywords",
-        "keyword": "required_keywords",
-        "exclude_keywords": "exclude_keywords",
-    }
-    NUMERIC_FIELD_ALIASES = {
-        "min_budget": "min_budget_estimate",
-        "min_budget_estimate": "min_budget_estimate",
-        "max_budget": "max_budget_estimate",
-        "max_budget_estimate": "max_budget_estimate",
-        "match": "minimum_match_score",
-        "min_match": "minimum_match_score",
-        "minimum_match_score": "minimum_match_score",
-        "probability": "minimum_probability_score",
-        "min_probability": "minimum_probability_score",
-        "minimum_probability_score": "minimum_probability_score",
-        "bid_now": "bid_now_threshold",
-        "bid_now_threshold": "bid_now_threshold",
-        "review": "review_threshold",
-        "review_threshold": "review_threshold",
-        "workload_penalty": "auto_workload_penalty_multiplier",
-        "auto_workload_penalty_multiplier": "auto_workload_penalty_multiplier",
-        "limit": "max_recommended_candidates",
-        "max_candidates": "max_recommended_candidates",
-        "max_recommended_candidates": "max_recommended_candidates",
-    }
-    BOOL_FIELD_ALIASES = {
-        "high_priority": "notify_only_high_priority",
-        "high_priority_only": "notify_only_high_priority",
-        "notify_only_high_priority": "notify_only_high_priority",
-    }
     CLEAR_GROUPS = {
         "categories": ("focus_categories",),
         "category": ("focus_categories",),
@@ -258,24 +334,14 @@ class TelegramStrategyCommandProcessor:
             raw_value = raw_value.strip()
 
             try:
-                if normalized_key in self.LIST_FIELD_ALIASES:
-                    parsed_updates[self.LIST_FIELD_ALIASES[normalized_key]] = self._parse_list(raw_value)
-                elif normalized_key in self.NUMERIC_FIELD_ALIASES:
-                    parsed_updates[self.NUMERIC_FIELD_ALIASES[normalized_key]] = self._parse_number(
-                        raw_value,
-                        field_name=normalized_key,
-                    )
-                elif normalized_key in self.BOOL_FIELD_ALIASES:
-                    parsed_updates[self.BOOL_FIELD_ALIASES[normalized_key]] = self._parse_bool(
-                        raw_value,
-                        field_name=normalized_key,
-                    )
-                elif normalized_key in {"category_priority_overrides", "priority_overrides"}:
-                    parsed_updates["category_priority_overrides"] = self._parse_priority_overrides(raw_value)
-                else:
-                    unknown_keys.append(raw_key)
+                resolved = self._resolve_assignment(normalized_key, raw_value)
             except ValueError as exc:
                 return self._build_help(str(exc))
+            if resolved is None:
+                unknown_keys.append(raw_key)
+            else:
+                target_field, value = resolved
+                parsed_updates[target_field] = value
 
         if unknown_keys:
             return self._build_help(f"지원하지 않는 항목: {', '.join(unknown_keys)}")
@@ -414,6 +480,17 @@ class TelegramStrategyCommandProcessor:
             }
         raise ValueError("지원하지 않는 전략 수정 항목입니다.")
 
+    def _resolve_assignment(self, normalized_key: str, raw_value: str) -> tuple[str, Any] | None:
+        """Resolve one normalized key=value into (target_field, parsed_value) via FIELD_SPECS.
+
+        Returns ``None`` when the key is not a supported alias. Parser failures
+        surface as ``ValueError`` so callers keep their own error handling.
+        """
+        spec = FIELD_SPEC_BY_ALIAS.get(normalized_key)
+        if spec is None:
+            return None
+        return spec.target_field, spec.parser(self, raw_value, normalized_key)
+
     def _parse_assignment_updates(self, args: list[str]) -> dict[str, Any]:
         """Parse key=value snippets using the same aliases as /strategy_set."""
         parsed_updates: dict[str, Any] = {}
@@ -425,22 +502,12 @@ class TelegramStrategyCommandProcessor:
             raw_key, raw_value = arg.split("=", maxsplit=1)
             normalized_key = raw_key.strip().lower().replace("-", "_")
             raw_value = raw_value.strip()
-            if normalized_key in self.LIST_FIELD_ALIASES:
-                parsed_updates[self.LIST_FIELD_ALIASES[normalized_key]] = self._parse_list(raw_value)
-            elif normalized_key in self.NUMERIC_FIELD_ALIASES:
-                parsed_updates[self.NUMERIC_FIELD_ALIASES[normalized_key]] = self._parse_number(
-                    raw_value,
-                    field_name=normalized_key,
-                )
-            elif normalized_key in self.BOOL_FIELD_ALIASES:
-                parsed_updates[self.BOOL_FIELD_ALIASES[normalized_key]] = self._parse_bool(
-                    raw_value,
-                    field_name=normalized_key,
-                )
-            elif normalized_key in {"category_priority_overrides", "priority_overrides"}:
-                parsed_updates["category_priority_overrides"] = self._parse_priority_overrides(raw_value)
-            else:
+            resolved = self._resolve_assignment(normalized_key, raw_value)
+            if resolved is None:
                 unknown_keys.append(raw_key)
+            else:
+                target_field, value = resolved
+                parsed_updates[target_field] = value
 
         if unknown_keys:
             raise ValueError(f"지원하지 않는 항목: {', '.join(unknown_keys)}")
@@ -681,16 +748,11 @@ class TelegramStrategyCommandProcessor:
     def _apply_updates(self, strategy, updates: dict[str, Any]) -> None:
         """Persist parsed update values onto the ORM object."""
         for field_name, value in updates.items():
-            if field_name in self.LIST_FIELD_ALIASES.values():
-                setattr(strategy, field_name, join_multi_value_text(value))
-            elif field_name == "category_priority_overrides":
-                strategy.category_priority_overrides = dump_category_priority_overrides(value)
-            elif field_name == "auto_workload_penalty_multiplier":
-                strategy.auto_workload_penalty_multiplier = clamp_auto_workload_penalty_multiplier(float(value))
-            elif field_name == "max_recommended_candidates":
-                strategy.max_recommended_candidates = max(1, min(int(value), 100))
-            else:
+            spec = FIELD_SPECS.get(field_name)
+            if spec is None:
                 setattr(strategy, field_name, value)
+            else:
+                spec.applier(strategy, field_name, value)
 
     def _default_value_for(self, field_name: str) -> Any:
         """Return the default value used when a Telegram clear command resets a field."""
