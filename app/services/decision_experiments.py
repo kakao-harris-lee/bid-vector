@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,158 @@ from app.services.operator_strategy_tuning import (
     get_strategy_auto_workload_penalty_multiplier,
     get_strategy_category_priority_overrides,
 )
+
+
+@dataclass(frozen=True)
+class _VerdictContext:
+    """Pre-computed inputs consumed by the verdict rule predicates and summaries."""
+
+    run: DecisionExperimentRun
+    sample_size: int
+    minimum_decision_sample: int
+    minimum_sample_reached: bool
+    guardrail_broken: bool
+    metric_improved: bool
+    period_elapsed: bool
+
+
+@dataclass(frozen=True)
+class _VerdictRule:
+    """One first-match verdict rule: a predicate plus its declarative outcome."""
+
+    predicate: Callable[[_VerdictContext], bool]
+    outcome: str
+    recommended_action: str
+    summary_builder: Callable[[_VerdictContext], str]
+
+
+# Ordered, first-match verdict machine. The improved branch is split into an
+# "improved + period elapsed" success rule and an "improved" watch rule so every
+# rule keeps a static outcome/action and a verbatim summary template.
+_VERDICT_RULES: tuple[_VerdictRule, ...] = (
+    _VerdictRule(
+        predicate=lambda ctx: not ctx.minimum_sample_reached,
+        outcome="insufficient_data",
+        recommended_action="collect_more_data",
+        summary_builder=lambda ctx: (
+            f"현재 표본 {ctx.sample_size}건으로는 실험 판단이 이릅니다. "
+            f"최소 {ctx.minimum_decision_sample}건이 쌓일 때까지 더 수집하세요."
+        ),
+    ),
+    _VerdictRule(
+        predicate=lambda ctx: ctx.guardrail_broken,
+        outcome="rollback",
+        recommended_action="rollback",
+        summary_builder=lambda ctx: (
+            f"가드레일 지표 `{ctx.run.guardrail_metric}`가 기준 대비 악화되었습니다. "
+            f"현재 변경안을 롤백하고 원인을 점검하는 편이 안전합니다."
+        ),
+    ),
+    _VerdictRule(
+        predicate=lambda ctx: ctx.metric_improved and ctx.period_elapsed,
+        outcome="success",
+        recommended_action="complete",
+        summary_builder=lambda ctx: (
+            f"목표 지표 `{ctx.run.target_metric}`가 기준 대비 개선되었습니다. "
+            f"현재 추세를 유지하며 실험을 종료하세요."
+        ),
+    ),
+    _VerdictRule(
+        predicate=lambda ctx: ctx.metric_improved,
+        outcome="watch",
+        recommended_action="continue",
+        summary_builder=lambda ctx: (
+            f"목표 지표 `{ctx.run.target_metric}`가 기준 대비 개선되었습니다. "
+            f"현재 추세를 유지하며 추가 표본을 수집하세요."
+        ),
+    ),
+    _VerdictRule(
+        predicate=lambda ctx: ctx.period_elapsed,
+        outcome="inconclusive",
+        recommended_action="complete",
+        summary_builder=lambda ctx: (
+            f"예정된 실험 기간은 종료되었지만 `{ctx.run.target_metric}` 개선이 충분하지 않았습니다. "
+            f"결과를 기록하고 다음 가설로 넘어가는 편이 좋습니다."
+        ),
+    ),
+    _VerdictRule(
+        predicate=lambda ctx: True,
+        outcome="watch",
+        recommended_action="continue",
+        summary_builder=lambda ctx: (
+            f"아직 목표 지표 `{ctx.run.target_metric}` 개선 폭이 충분하지 않습니다. "
+            f"기간 종료 전까지 추이를 더 관찰하세요."
+        ),
+    ),
+)
+
+
+@dataclass(frozen=True)
+class _LifecycleContext:
+    """Inputs consumed by the ``evaluate_run`` lifecycle transition rules."""
+
+    recommended_action: str
+    now: datetime
+    run_started_at: datetime
+    scheduled_end: datetime
+
+
+@dataclass(frozen=True)
+class _LifecycleRule:
+    """One first-match lifecycle rule mapping a verdict+timing to a run status."""
+
+    predicate: Callable[[_LifecycleContext], bool]
+    status: str
+    # ``None`` leaves ``ended_at`` untouched; otherwise it resolves the new value.
+    ended_at: Callable[[_LifecycleContext], datetime] | None
+
+
+# Ordered, first-match lifecycle machine for auto-evaluation. Only the rollback
+# and completed rules touch ``ended_at``; running/planned leave it unchanged.
+_EVALUATION_LIFECYCLE_RULES: tuple[_LifecycleRule, ...] = (
+    _LifecycleRule(
+        predicate=lambda ctx: ctx.recommended_action == "rollback",
+        status="rolled_back",
+        ended_at=lambda ctx: ctx.now,
+    ),
+    _LifecycleRule(
+        predicate=lambda ctx: ctx.now >= ctx.scheduled_end,
+        status="completed",
+        ended_at=lambda ctx: ctx.scheduled_end,
+    ),
+    _LifecycleRule(
+        predicate=lambda ctx: ctx.run_started_at <= ctx.now,
+        status="running",
+        ended_at=None,
+    ),
+    _LifecycleRule(
+        predicate=lambda ctx: True,
+        status="planned",
+        ended_at=None,
+    ),
+)
+
+
+@dataclass(frozen=True)
+class _StatusEffect:
+    """Side-effects applied by ``update_run`` for one manual target status."""
+
+    # ``None`` defers to the request outcome; otherwise the outcome is forced.
+    forced_outcome: str | None
+    # One of ``"set"`` (request.ended_at or now), ``"clear"`` (None), ``"keep"``.
+    ended_at: str
+
+
+# Manual status → side-effect table. Statuses are constrained by the request
+# schema to {planned, running, completed, rolled_back}; the default keeps the
+# prior ``ended_at`` for defensive parity with the original branch fallthrough.
+_UPDATE_STATUS_EFFECTS: dict[str, _StatusEffect] = {
+    "rolled_back": _StatusEffect(forced_outcome="rollback", ended_at="set"),
+    "completed": _StatusEffect(forced_outcome=None, ended_at="set"),
+    "planned": _StatusEffect(forced_outcome=None, ended_at="clear"),
+    "running": _StatusEffect(forced_outcome=None, ended_at="clear"),
+}
+_DEFAULT_STATUS_EFFECT = _StatusEffect(forced_outcome=None, ended_at="keep")
 
 
 class DecisionExperimentService:
@@ -209,16 +362,18 @@ class DecisionExperimentService:
         run.last_evaluated_at = now
         run.outcome = evaluation["outcome"]
 
-        if evaluation["recommended_action"] == "rollback":
-            run.status = "rolled_back"
-            run.ended_at = now
-        elif now >= scheduled_end:
-            run.status = "completed"
-            run.ended_at = scheduled_end
-        elif run_started_at <= now:
-            run.status = "running"
-        else:
-            run.status = "planned"
+        lifecycle_context = _LifecycleContext(
+            recommended_action=evaluation["recommended_action"],
+            now=now,
+            run_started_at=run_started_at,
+            scheduled_end=scheduled_end,
+        )
+        lifecycle = next(
+            rule for rule in _EVALUATION_LIFECYCLE_RULES if rule.predicate(lifecycle_context)
+        )
+        run.status = lifecycle.status
+        if lifecycle.ended_at is not None:
+            run.ended_at = lifecycle.ended_at(lifecycle_context)
 
         db.commit()
         db.refresh(run)
@@ -243,24 +398,33 @@ class DecisionExperimentService:
 
         if request.status is not None:
             run.status = request.status
-            if request.status == "rolled_back":
-                run.outcome = "rollback"
-                run.ended_at = ensure_utc(request.ended_at or utc_now())
-            elif request.status == "completed":
-                if request.outcome is not None:
-                    run.outcome = request.outcome
-                run.ended_at = ensure_utc(request.ended_at or utc_now())
-            else:
-                if request.outcome is not None:
-                    run.outcome = request.outcome
-                if request.status in {"planned", "running"}:
-                    run.ended_at = None
+            effect = _UPDATE_STATUS_EFFECTS.get(request.status, _DEFAULT_STATUS_EFFECT)
+            resolved_outcome = effect.forced_outcome if effect.forced_outcome is not None else request.outcome
+            if resolved_outcome is not None:
+                run.outcome = resolved_outcome
+            self._apply_status_ended_at(run, effect.ended_at, requested_ended_at=request.ended_at)
         elif request.outcome is not None:
             run.outcome = request.outcome
 
         db.commit()
         db.refresh(run)
         return self.get_run_detail(db, run_id=int(run.id), operator=target_operator)
+
+    def _apply_status_ended_at(
+        self,
+        run: DecisionExperimentRun,
+        mode: str,
+        *,
+        requested_ended_at: datetime | None,
+    ) -> None:
+        """Apply the ``ended_at`` side-effect for one manual status transition."""
+        ended_at_setters: dict[str, Callable[[], datetime | None]] = {
+            "set": lambda: ensure_utc(requested_ended_at or utc_now()),
+            "clear": lambda: None,
+        }
+        setter = ended_at_setters.get(mode)
+        if setter is not None:
+            run.ended_at = setter()
 
     def apply_threshold_adjustments(
         self,
@@ -440,7 +604,8 @@ class DecisionExperimentService:
     ) -> dict[str, Any]:
         """Convert metric deltas into an operator-friendly experiment verdict."""
         sample_size = int(current_summary.get("decision_count") or 0)
-        minimum_sample_reached = sample_size >= int(run.minimum_decision_sample or 1)
+        minimum_decision_sample = int(run.minimum_decision_sample or 1)
+        minimum_sample_reached = sample_size >= minimum_decision_sample
         baseline_target_value = self._resolve_metric_value(baseline_summary, str(run.target_metric or ""))
         current_target_value = self._resolve_metric_value(current_summary, str(run.target_metric or ""))
         target_delta = self._delta(current_target_value, baseline_target_value)
@@ -448,41 +613,25 @@ class DecisionExperimentService:
         current_guardrail_value = self._resolve_metric_value(current_summary, str(run.guardrail_metric or ""))
         guardrail_delta = self._delta(current_guardrail_value, baseline_guardrail_value)
 
-        if not minimum_sample_reached:
-            outcome = "insufficient_data"
-            recommended_action = "collect_more_data"
-            summary = (
-                f"현재 표본 {sample_size}건으로는 실험 판단이 이릅니다. "
-                f"최소 {int(run.minimum_decision_sample or 1)}건이 쌓일 때까지 더 수집하세요."
-            )
-        elif self._guardrail_broken(str(run.guardrail_metric or ""), baseline_guardrail_value, current_guardrail_value):
-            outcome = "rollback"
-            recommended_action = "rollback"
-            summary = (
-                f"가드레일 지표 `{run.guardrail_metric}`가 기준 대비 악화되었습니다. "
-                f"현재 변경안을 롤백하고 원인을 점검하는 편이 안전합니다."
-            )
-        elif self._metric_improved(str(run.expected_direction or "increase"), str(run.target_metric or ""), baseline_target_value, current_target_value):
-            outcome = "success" if evaluated_at >= scheduled_end else "watch"
-            recommended_action = "complete" if evaluated_at >= scheduled_end else "continue"
-            summary = (
-                f"목표 지표 `{run.target_metric}`가 기준 대비 개선되었습니다. "
-                f"현재 추세를 유지하며 {'실험을 종료' if recommended_action == 'complete' else '추가 표본을 수집'}하세요."
-            )
-        elif evaluated_at >= scheduled_end:
-            outcome = "inconclusive"
-            recommended_action = "complete"
-            summary = (
-                f"예정된 실험 기간은 종료되었지만 `{run.target_metric}` 개선이 충분하지 않았습니다. "
-                f"결과를 기록하고 다음 가설로 넘어가는 편이 좋습니다."
-            )
-        else:
-            outcome = "watch"
-            recommended_action = "continue"
-            summary = (
-                f"아직 목표 지표 `{run.target_metric}` 개선 폭이 충분하지 않습니다. "
-                f"기간 종료 전까지 추이를 더 관찰하세요."
-            )
+        context = _VerdictContext(
+            run=run,
+            sample_size=sample_size,
+            minimum_decision_sample=minimum_decision_sample,
+            minimum_sample_reached=minimum_sample_reached,
+            guardrail_broken=self._guardrail_broken(
+                str(run.guardrail_metric or ""),
+                baseline_guardrail_value,
+                current_guardrail_value,
+            ),
+            metric_improved=self._metric_improved(
+                str(run.expected_direction or "increase"),
+                str(run.target_metric or ""),
+                baseline_target_value,
+                current_target_value,
+            ),
+            period_elapsed=evaluated_at >= scheduled_end,
+        )
+        verdict = next(rule for rule in _VERDICT_RULES if rule.predicate(context))
 
         return {
             "evaluated_at": evaluated_at,
@@ -496,9 +645,9 @@ class DecisionExperimentService:
             "baseline_guardrail_value": baseline_guardrail_value,
             "current_guardrail_value": current_guardrail_value,
             "guardrail_delta": guardrail_delta,
-            "outcome": outcome,
-            "recommended_action": recommended_action,
-            "summary": summary,
+            "outcome": verdict.outcome,
+            "recommended_action": verdict.recommended_action,
+            "summary": verdict.summary_builder(context),
             "current_summary": current_summary,
         }
 
