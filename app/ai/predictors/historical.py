@@ -10,6 +10,12 @@ from typing import Any
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.rate_band_spec import (
+    GROUP_BRANCH_BASE_BANDS,
+    apply_band_to_base,
+    apply_band_to_candidates,
+    band_explanation_clause,
+)
 from app.utils.sequence_coercion import (
     coerce_integer_list,
     coerce_numeric_list,
@@ -539,20 +545,12 @@ def select_competitive_base_rate(
         base_rate = (recent_target * 0.6) + (robust_median * 0.3) + (heuristic_rate * 0.1)
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
-        if rate_band == "service_high_negotiated":
-            base_rate = max(base_rate, 1.0)
-        elif rate_band == "service_price_competitive":
-            base_rate = min(base_rate, 0.90)
-        return base_rate
+        return apply_band_to_base(base_rate, rate_band, only_bands=GROUP_BRANCH_BASE_BANDS)
     if business_group == "service" and sample_size >= 10:
         base_rate = (quantile_target * 0.5) + (robust_median * 0.35) + (heuristic_rate * 0.15)
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
-        if rate_band == "service_high_negotiated":
-            base_rate = max(base_rate, 1.0)
-        elif rate_band == "service_price_competitive":
-            base_rate = min(base_rate, 0.90)
-        return base_rate
+        return apply_band_to_base(base_rate, rate_band, only_bands=GROUP_BRANCH_BASE_BANDS)
 
     if sample_size >= 10:
         if normalized_category in {"service", "technical-service", "general-service"}:
@@ -818,17 +816,7 @@ def blend_reserve_prior(base_rate: float, *, reserve_context: dict[str, Any] | N
 def apply_procurement_rate_band(base_rate: float, *, category: str, description: str) -> float:
     """Apply procurement subtype bid-rate bands inferred from notice text."""
     rate_band = resolve_procurement_rate_band(category=category, description=description)
-    if rate_band == "service_high_negotiated":
-        return max(base_rate, 1.0)
-    if rate_band == "service_direct_negotiated":
-        return max(base_rate, 0.95)
-    if rate_band == "service_price_competitive":
-        return min(base_rate, 0.90)
-    if rate_band == "goods_deep_discount":
-        return min(base_rate, 0.78)
-    if rate_band == "goods_price_competitive":
-        return min(base_rate, 0.90)
-    return base_rate
+    return apply_band_to_base(base_rate, rate_band)
 
 
 def apply_procurement_candidate_band(
@@ -839,21 +827,12 @@ def apply_procurement_candidate_band(
     rate_band: str | None,
 ) -> tuple[float, float, float]:
     """Keep all scenarios consistent with the inferred procurement band."""
-    if rate_band == "service_high_negotiated":
-        return max(conservative_rate, 0.98), max(base_rate, 1.0), max(aggressive_rate, 1.0)
-    if rate_band == "service_direct_negotiated":
-        return (
-            max(conservative_rate, 0.93),
-            max(base_rate, 0.95),
-            max(aggressive_rate, 0.97),
-        )
-    if rate_band == "service_price_competitive":
-        return min(conservative_rate, 0.90), min(base_rate, 0.90), min(aggressive_rate, 0.90)
-    if rate_band == "goods_deep_discount":
-        return min(conservative_rate, 0.76), min(base_rate, 0.78), min(aggressive_rate, 0.84)
-    if rate_band == "goods_price_competitive":
-        return min(conservative_rate, 0.88), min(base_rate, 0.90), min(aggressive_rate, 0.91)
-    return conservative_rate, base_rate, aggressive_rate
+    return apply_band_to_candidates(
+        conservative_rate=conservative_rate,
+        base_rate=base_rate,
+        aggressive_rate=aggressive_rate,
+        rate_band=rate_band,
+    )
 
 
 def resolve_procurement_rate_band(*, category: str, description: str) -> str | None:
@@ -1221,16 +1200,9 @@ def build_historical_explanation(
     reserve_sample_count = int(reserve_pattern.get("sample_count", 0) or 0) if reserve_pattern else 0
     if reserve_sample_count > 0:
         details.append(f"예비가격 패턴 {reserve_sample_count}건도 함께 참고했습니다")
-    if rate_band == "service_high_negotiated":
-        details.append("협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다")
-    elif rate_band == "service_direct_negotiated":
-        details.append("수의시담/수의계약형 용역으로 보고 95% 이상 목표율을 적용했습니다")
-    elif rate_band == "service_price_competitive":
-        details.append("가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다")
-    elif rate_band == "goods_deep_discount":
-        details.append("2단계 급식/농산물형 물품으로 보고 78% 기준 저가 목표율을 적용했습니다")
-    elif rate_band == "goods_price_competitive":
-        details.append("견적/2단계/구매설치형 물품으로 보고 90% 기준, 91% 상한 목표율을 적용했습니다")
+    band_clause = band_explanation_clause(rate_band)
+    if band_clause is not None:
+        details.append(band_clause)
     if high_rate_adjustment:
         details.append("최근 고율 낙찰 분포를 반영해 기준 사정률을 상향 보정했습니다")
 

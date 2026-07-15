@@ -19,6 +19,7 @@ from app.ai.predictors.historical import (
     summarize_historical_records,
 )
 from app.ai.predictors.lstm import extract_bid_rate_series, infer_lstm_sequence_signal, load_lstm_artifact
+from app.ai.predictors.rate_band_spec import band_explanation_clause
 from app.core.config import settings
 
 _DEFAULT_COMPONENT_WEIGHTS = {
@@ -284,16 +285,9 @@ def _build_ensemble_explanation(
     )
     if agency_match_sample_size > 0:
         explanation += f" 동일 기관 이력 {agency_match_sample_size}건도 함께 반영했습니다."
-    if rate_band == "service_high_negotiated":
-        explanation += " 협상/위탁형 용역으로 보고 100% 근접 목표율을 적용했습니다."
-    elif rate_band == "service_direct_negotiated":
-        explanation += " 수의시담/수의계약형 용역으로 보고 95% 이상 목표율을 적용했습니다."
-    elif rate_band == "service_price_competitive":
-        explanation += " 가격경쟁형 용역으로 보고 90% 상한 목표율을 적용했습니다."
-    elif rate_band == "goods_deep_discount":
-        explanation += " 2단계 급식/농산물형 물품으로 보고 78% 기준 저가 목표율을 적용했습니다."
-    elif rate_band == "goods_price_competitive":
-        explanation += " 견적/2단계/구매설치형 물품으로 보고 90% 기준, 91% 상한 목표율을 적용했습니다."
+    band_clause = band_explanation_clause(rate_band)
+    if band_clause is not None:
+        explanation += f" {band_clause}."
     if high_rate_adjustment:
         explanation += " 최근 고율 낙찰 분포를 반영해 기준 사정률을 상향 보정했습니다."
     return explanation
