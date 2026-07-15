@@ -575,6 +575,7 @@ def _pin_high_rate_settings(monkeypatch):
     monkeypatch.setattr(settings, "PREDICTION_HIGH_RATE_TAIL_ADJUSTMENT_ENABLED", True)
     monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_BUDGET_MAX", 50_000_000.0)
     monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET", 0.93)
+    monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_MIN_RATE", 0.925)
 
 
 def _summary(**over):

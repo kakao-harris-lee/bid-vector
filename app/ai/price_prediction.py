@@ -283,6 +283,33 @@ def _attach_price_regime_metadata(
     return annotated_prediction
 
 
+@dataclass(frozen=True)
+class _PriceRegimeRule:
+    """One first-match price-regime rule keyed on a boolean signal flag.
+
+    The rule ORDER is the priority (the original elif chain), so this reads as an
+    order-preserving rule list — deliberately NOT a dict dispatch, since section
+    F of the characterization test locks both the routing order and the emitted
+    (label, confidence, review_required) triple.
+    """
+
+    signal_flag: str
+    label: str
+    confidence: float
+    review_required: bool
+
+
+# First-match order == the original elif priority:
+#   conflicting > deep_discount > near_100 > floor_bound; else ambiguous fallback.
+_PRICE_REGIME_RULES: tuple[_PriceRegimeRule, ...] = (
+    _PriceRegimeRule("conflicting", "ambiguous", 0.58, True),
+    _PriceRegimeRule("deep_discount", "deep_discount", 0.86, False),
+    _PriceRegimeRule("near_100", "near_100", 0.84, False),
+    _PriceRegimeRule("floor_bound", "floor_bound", 0.82, False),
+)
+_PRICE_REGIME_AMBIGUOUS_FALLBACK = _PriceRegimeRule("", "ambiguous", 0.45, True)
+
+
 def _build_price_regime_features(
     prediction: dict[str, Any],
     *,
@@ -297,26 +324,13 @@ def _build_price_regime_features(
     )
     signal_flags = _detect_price_regime_signals(category=category, text=text, rate_band=rate_band)
 
-    if signal_flags["conflicting"]:
-        price_regime_label = "ambiguous"
-        confidence = 0.58
-        review_required = True
-    elif signal_flags["deep_discount"]:
-        price_regime_label = "deep_discount"
-        confidence = 0.86
-        review_required = False
-    elif signal_flags["near_100"]:
-        price_regime_label = "near_100"
-        confidence = 0.84
-        review_required = False
-    elif signal_flags["floor_bound"]:
-        price_regime_label = "floor_bound"
-        confidence = 0.82
-        review_required = False
-    else:
-        price_regime_label = "ambiguous"
-        confidence = 0.45
-        review_required = True
+    matched_rule = next(
+        (rule for rule in _PRICE_REGIME_RULES if signal_flags[rule.signal_flag]),
+        _PRICE_REGIME_AMBIGUOUS_FALLBACK,
+    )
+    price_regime_label = matched_rule.label
+    confidence = matched_rule.confidence
+    review_required = matched_rule.review_required
 
     return {
         "buyer_sector": "unknown",
