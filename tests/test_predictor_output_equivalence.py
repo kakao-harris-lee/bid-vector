@@ -54,6 +54,7 @@ def _pin_predictor_settings(monkeypatch):
     monkeypatch.setattr(settings, "PREDICTION_HIGH_RATE_TAIL_ADJUSTMENT_ENABLED", True)
     monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_BUDGET_MAX", 50_000_000.0)
     monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET", 0.93)
+    monkeypatch.setattr(settings, "PREDICTION_SMALL_BUDGET_HIGH_RATE_MIN_RATE", 0.925)
     monkeypatch.setattr(settings, "PREDICTION_RESERVE_PRIOR_WEIGHT", 0.2)
     monkeypatch.setattr(settings, "PREDICTION_RESERVE_PRIOR_FULL_CONFIDENCE_SAMPLES", 8)
     # predict_price guardrail / granularity knobs (GAP A/C goldens depend on these).

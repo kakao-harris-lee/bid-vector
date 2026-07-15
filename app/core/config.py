@@ -463,6 +463,9 @@ class Settings(BaseSettings):
     PREDICTION_HIGH_RATE_TAIL_ADJUSTMENT_ENABLED: bool = True
     PREDICTION_SMALL_BUDGET_HIGH_RATE_BUDGET_MAX: float = 50_000_000.0
     PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET: float = 0.93
+    # Minimum candidate base rate a small construction award must already show
+    # before the small-budget target lift applies (below it the base stays put).
+    PREDICTION_SMALL_BUDGET_HIGH_RATE_MIN_RATE: float = 0.925
     PREDICTION_BID_PRICE_GRANULARITY: int = 10
     PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET: float = 1_000_000.0
     PREDICTION_BID_PRICE_ROUNDING_MODE: str = "floor"

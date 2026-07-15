@@ -10,6 +10,27 @@ from typing import Any
 import numpy as np
 
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.blend_tables import (
+    COMPETITIVE_SAMPLE_TIER_DEEP,
+    COMPETITIVE_SAMPLE_TIER_MODERATE,
+    COMPETITIVE_SAMPLE_TIER_SPARSE,
+    CONSTRUCTION_GROUP_DEEP_BLEND,
+    CONSTRUCTION_SMALL_BUDGET_REASON,
+    GOODS_HIGH_RATE_TAIL_RULE,
+    HIGH_RATE_EXCLUDED_BANDS,
+    HIGH_RATE_MIN_LIFT_EPSILON,
+    HIGH_RATE_MIN_RECENT_SAMPLE_SIZE,
+    HIGH_RATE_MIN_SAMPLE_SIZE,
+    MINIMAL_SAMPLE_BLEND,
+    MODERATE_SAMPLE_BLEND,
+    NOGROUP_DEEP_FALLBACK_BLEND,
+    PRESERVE_HISTORICAL_COMPONENT_REASON,
+    SERVICE_GROUP_DEEP_BLEND,
+    SERVICE_HIGH_NEGOTIATED_REASON,
+    SERVICE_HIGH_NEGOTIATED_TARGET_RATE,
+    SERVICE_HIGH_RATE_TAIL_RULE,
+    SPARSE_SAMPLE_BLEND,
+)
 from app.ai.predictors.procurement_band_rules import (
     SERVICE_BAND_RULES,
     build_goods_band_rules,
@@ -547,18 +568,26 @@ def select_competitive_base_rate(
     recent_target = recent_median_rate or robust_median
     quantile_target = competitive_quantile_rate or robust_median
 
-    if business_group == "construction" and sample_size >= 10:
-        base_rate = (recent_target * 0.6) + (robust_median * 0.3) + (heuristic_rate * 0.1)
+    if business_group == "construction" and sample_size >= COMPETITIVE_SAMPLE_TIER_DEEP:
+        base_rate = (
+            (recent_target * CONSTRUCTION_GROUP_DEEP_BLEND.w0)
+            + (robust_median * CONSTRUCTION_GROUP_DEEP_BLEND.w1)
+            + (heuristic_rate * CONSTRUCTION_GROUP_DEEP_BLEND.w2)
+        )
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
         return apply_band_to_base(base_rate, rate_band, only_bands=GROUP_BRANCH_BASE_BANDS)
-    if business_group == "service" and sample_size >= 10:
-        base_rate = (quantile_target * 0.5) + (robust_median * 0.35) + (heuristic_rate * 0.15)
+    if business_group == "service" and sample_size >= COMPETITIVE_SAMPLE_TIER_DEEP:
+        base_rate = (
+            (quantile_target * SERVICE_GROUP_DEEP_BLEND.w0)
+            + (robust_median * SERVICE_GROUP_DEEP_BLEND.w1)
+            + (heuristic_rate * SERVICE_GROUP_DEEP_BLEND.w2)
+        )
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         rate_band = resolve_procurement_rate_band(category=category, description=description)
         return apply_band_to_base(base_rate, rate_band, only_bands=GROUP_BRANCH_BASE_BANDS)
 
-    if sample_size >= 10:
+    if sample_size >= COMPETITIVE_SAMPLE_TIER_DEEP:
         if normalized_category in {"service", "technical-service", "general-service"}:
             base_rate = recent_target
             base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
@@ -567,18 +596,32 @@ def select_competitive_base_rate(
             base_rate = quantile_target
             base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
             return apply_procurement_rate_band(base_rate, category=category, description=description)
-        base_rate = (robust_median * 0.7) + (recent_target * 0.2) + (mean_rate * 0.1)
+        base_rate = (
+            (robust_median * NOGROUP_DEEP_FALLBACK_BLEND.w0)
+            + (recent_target * NOGROUP_DEEP_FALLBACK_BLEND.w1)
+            + (mean_rate * NOGROUP_DEEP_FALLBACK_BLEND.w2)
+        )
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         return apply_procurement_rate_band(base_rate, category=category, description=description)
-    if sample_size >= 5:
-        base_rate = (robust_median * 0.55) + (mean_rate * 0.35) + (heuristic_rate * 0.10)
+    if sample_size >= COMPETITIVE_SAMPLE_TIER_MODERATE:
+        base_rate = (
+            (robust_median * MODERATE_SAMPLE_BLEND.w0)
+            + (mean_rate * MODERATE_SAMPLE_BLEND.w1)
+            + (heuristic_rate * MODERATE_SAMPLE_BLEND.w2)
+        )
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         return apply_procurement_rate_band(base_rate, category=category, description=description)
-    if sample_size >= 2:
-        base_rate = (robust_median * 0.45) + (mean_rate * 0.35) + (heuristic_rate * 0.20)
+    if sample_size >= COMPETITIVE_SAMPLE_TIER_SPARSE:
+        base_rate = (
+            (robust_median * SPARSE_SAMPLE_BLEND.w0)
+            + (mean_rate * SPARSE_SAMPLE_BLEND.w1)
+            + (heuristic_rate * SPARSE_SAMPLE_BLEND.w2)
+        )
         base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
         return apply_procurement_rate_band(base_rate, category=category, description=description)
-    base_rate = (mean_rate * 0.55) + (heuristic_rate * 0.45)
+    base_rate = (mean_rate * MINIMAL_SAMPLE_BLEND.w0) + (
+        heuristic_rate * MINIMAL_SAMPLE_BLEND.w1
+    )
     base_rate = blend_reserve_prior(base_rate, reserve_context=reserve_context)
     return apply_procurement_rate_band(base_rate, category=category, description=description)
 
@@ -607,23 +650,22 @@ def apply_high_rate_distribution_adjustment(
 
     sample_size = int(historical_summary.get("sample_size", 0) or 0)
     recent_sample_size = int(historical_summary.get("recent_sample_size", 0) or 0)
-    if sample_size < 20 or recent_sample_size < 8:
+    if (
+        sample_size < HIGH_RATE_MIN_SAMPLE_SIZE
+        or recent_sample_size < HIGH_RATE_MIN_RECENT_SAMPLE_SIZE
+    ):
         return base_rate, None
 
     normalized_category = normalize_category_key(category)
     group = business_group or normalized_category
     rate_band = resolve_procurement_rate_band(category=category, description=description)
-    if rate_band in {
-        "service_price_competitive",
-        "goods_deep_discount",
-        "goods_price_competitive",
-    }:
+    if rate_band in HIGH_RATE_EXCLUDED_BANDS:
         return base_rate, None
     if rate_band == "service_high_negotiated":
-        adjusted_rate = max(base_rate, 1.0)
+        adjusted_rate = max(base_rate, SERVICE_HIGH_NEGOTIATED_TARGET_RATE)
         return adjusted_rate, build_high_rate_adjustment_context(
             group=group,
-            reason="service_high_negotiated",
+            reason=SERVICE_HIGH_NEGOTIATED_REASON,
             original_rate=base_rate,
             adjusted_rate=adjusted_rate,
             historical_summary=historical_summary,
@@ -640,53 +682,61 @@ def apply_high_rate_distribution_adjustment(
 
     reason: str | None = None
     target_rate: float | None = None
+    goods_rule = GOODS_HIGH_RATE_TAIL_RULE
+    service_rule = SERVICE_HIGH_RATE_TAIL_RULE
     if group == "goods" and (
-        recent_ge_95_share >= 0.35
-        or recent_ge_98_share >= 0.20
-        or recent_upper_rate >= 0.97
+        recent_ge_95_share >= goods_rule.recent_ge_95_share_min
+        or recent_ge_98_share >= goods_rule.recent_ge_98_share_min
+        or recent_upper_rate >= goods_rule.recent_upper_rate_min
     ):
         target_rate = (
-            (candidate_base_rate * 0.20)
-            + (max(recent_median_rate, upper_rate) * 0.25)
-            + (high_rate_anchor * 0.55)
+            (candidate_base_rate * goods_rule.candidate_weight)
+            + (max(recent_median_rate, upper_rate) * goods_rule.mid_weight)
+            + (high_rate_anchor * goods_rule.anchor_weight)
         )
-        reason = "goods_recent_high_rate_tail"
+        reason = goods_rule.reason
     elif group == "service" and (
-        recent_median_rate >= 0.93
-        and (recent_ge_93_share >= 0.30 or recent_ge_95_share >= 0.20)
-    ):
-        service_tail_anchor = min(high_rate_anchor, recent_median_rate + 0.02)
-        target_rate = (
-            (candidate_base_rate * 0.25)
-            + (recent_median_rate * 0.65)
-            + (service_tail_anchor * 0.10)
+        recent_median_rate >= service_rule.recent_median_min
+        and (
+            recent_ge_93_share >= service_rule.recent_ge_93_share_min
+            or recent_ge_95_share >= service_rule.recent_ge_95_share_min
         )
-        reason = "service_recent_high_rate_tail"
+    ):
+        service_tail_anchor = min(
+            high_rate_anchor, recent_median_rate + service_rule.tail_anchor_offset
+        )
+        target_rate = (
+            (candidate_base_rate * service_rule.candidate_weight)
+            + (recent_median_rate * service_rule.recent_median_weight)
+            + (service_tail_anchor * service_rule.tail_anchor_weight)
+        )
+        reason = service_rule.reason
     elif group == "construction":
         budget_value = float(budget or 0.0)
         small_budget_limit = float(settings.PREDICTION_SMALL_BUDGET_HIGH_RATE_BUDGET_MAX or 0.0)
         small_budget_target = float(settings.PREDICTION_SMALL_BUDGET_HIGH_RATE_TARGET or 0.0)
+        small_budget_min_rate = float(settings.PREDICTION_SMALL_BUDGET_HIGH_RATE_MIN_RATE or 0.0)
         if (
             small_budget_limit > 0
             and budget_value > 0
             and budget_value <= small_budget_limit
-            and candidate_base_rate >= 0.925
+            and candidate_base_rate >= small_budget_min_rate
             and small_budget_target > candidate_base_rate
         ):
             target_rate = small_budget_target
-            reason = "construction_small_budget_high_rate_target"
+            reason = CONSTRUCTION_SMALL_BUDGET_REASON
 
     if target_rate is None or reason is None:
         return candidate_base_rate, None if candidate_base_rate == base_rate else build_high_rate_adjustment_context(
             group=group,
-            reason="preserve_historical_component",
+            reason=PRESERVE_HISTORICAL_COMPONENT_REASON,
             original_rate=base_rate,
             adjusted_rate=candidate_base_rate,
             historical_summary=historical_summary,
         )
 
     adjusted_rate = max(candidate_base_rate, target_rate)
-    if adjusted_rate <= float(base_rate or 0.0) + 1e-9:
+    if adjusted_rate <= float(base_rate or 0.0) + HIGH_RATE_MIN_LIFT_EPSILON:
         return base_rate, None
 
     return adjusted_rate, build_high_rate_adjustment_context(
