@@ -42,8 +42,9 @@ def resolve_band(
     resolver with identical boundary semantics (no ``>`` vs ``>=`` drift).
 
     The last rung should carry a sentinel threshold that always matches, acting
-    as the fallback. If nothing matches (an empty or malformed ladder) the last
-    rung's payload is returned as a safety net.
+    as the fallback. On a non-empty ladder where no rung matches, the last
+    rung's payload is returned. ``bands`` must not be empty — an empty tuple
+    raises ``IndexError``.
     """
     for threshold, payload in bands:
         if compare(value, threshold):
