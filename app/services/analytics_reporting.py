@@ -50,6 +50,41 @@ from app.tasks.celery_app import (
 )
 
 
+def _resolve_g2_evidence_status(
+    *,
+    has_evidence: bool,
+    has_mixed_scope: bool,
+    has_ready: bool,
+    missing_gap: str | None = None,
+    mixed_scope_gap: str | None = None,
+    insufficient_gap: str | None = None,
+) -> tuple[str, str | None]:
+    """Resolve a G-2 evidence status and its blocking gap by canonical precedence.
+
+    Precedence (highest first): ``missing`` -> ``mixed_scope`` -> ``insufficient``
+    -> ``ready``. A component is:
+
+    - ``missing`` when it holds no evidence at all,
+    - ``mixed_scope`` when the only (or highest-priority) evidence is out of the
+      operator_id scope,
+    - ``insufficient`` when operator-scoped evidence exists but has not reached a
+      ready/completed threshold,
+    - ``ready`` otherwise.
+
+    Only the non-ready branches carry a blocking gap; ``ready`` never blocks.
+    Callers whose branch order matches this precedence share this resolver; those
+    with a different precedence (e.g. the smoke summary, which prefers ``ready``
+    over ``mixed_scope``) must not use it.
+    """
+    if not has_evidence:
+        return "missing", missing_gap
+    if has_mixed_scope:
+        return "mixed_scope", mixed_scope_gap
+    if not has_ready:
+        return "insufficient", insufficient_gap
+    return "ready", None
+
+
 class AnalyticsReportingService:
     """Build dashboard-ready cards for operational health and strategy outcomes."""
 
@@ -216,17 +251,14 @@ class AnalyticsReportingService:
             int(component.get("evidence_count") or 0) > 0
             for component in g2_ready_components
         )
-        if not has_any_evidence:
-            evidence_status = "missing"
-        elif any(
-            str(component.get("status")) == "mixed_scope"
-            for component in g2_ready_components
-        ):
-            evidence_status = "mixed_scope"
-        elif blocking_gaps:
-            evidence_status = "insufficient"
-        else:
-            evidence_status = "ready"
+        evidence_status, _ = _resolve_g2_evidence_status(
+            has_evidence=has_any_evidence,
+            has_mixed_scope=any(
+                str(component.get("status")) == "mixed_scope"
+                for component in g2_ready_components
+            ),
+            has_ready=not blocking_gaps,
+        )
 
         return {
             "operator_id": operator_id,
@@ -346,15 +378,13 @@ class AnalyticsReportingService:
         )
         completed_runs = [run for run in runs if str(run.status) == "completed"]
         failed_runs = [run for run in runs if str(run.status) == "failed"]
-        if completed_runs:
-            status = "ready"
-            blocking_gap = None
-        elif runs:
-            status = "insufficient"
-            blocking_gap = f"Strategy monitor has no completed run for operator_id={operator_id}."
-        else:
-            status = "missing"
-            blocking_gap = f"No strategy monitor evidence for operator_id={operator_id}."
+        status, blocking_gap = _resolve_g2_evidence_status(
+            has_evidence=bool(runs),
+            has_mixed_scope=False,
+            has_ready=bool(completed_runs),
+            insufficient_gap=f"Strategy monitor has no completed run for operator_id={operator_id}.",
+            missing_gap=f"No strategy monitor evidence for operator_id={operator_id}.",
+        )
 
         return {
             "status": status,
@@ -395,15 +425,13 @@ class AnalyticsReportingService:
             .all()
         )
         completed_runs = [run for run in runs if str(run.status) == "completed"]
-        if completed_runs:
-            status = "ready"
-            blocking_gap = None
-        elif runs:
-            status = "insufficient"
-            blocking_gap = f"Decision experiments exist but none completed for operator_id={operator_id}."
-        else:
-            status = "missing"
-            blocking_gap = f"No decision experiment evidence for operator_id={operator_id}."
+        status, blocking_gap = _resolve_g2_evidence_status(
+            has_evidence=bool(runs),
+            has_mixed_scope=False,
+            has_ready=bool(completed_runs),
+            insufficient_gap=f"Decision experiments exist but none completed for operator_id={operator_id}.",
+            missing_gap=f"No decision experiment evidence for operator_id={operator_id}.",
+        )
 
         outcome_counts: dict[str, int] = {}
         for run in runs:
@@ -472,24 +500,20 @@ class AnalyticsReportingService:
             if item["run_status"] == "completed"
             and item["sample_status"] == SAMPLE_STATUS_SUFFICIENT
         ]
-        if slug_only_results:
-            status = "mixed_scope"
-            blocking_gap = (
+        status, blocking_gap = _resolve_g2_evidence_status(
+            has_evidence=bool(operator_results or slug_only_results),
+            has_mixed_scope=bool(slug_only_results),
+            has_ready=bool(sufficient_operator_results),
+            mixed_scope_gap=(
                 "Synthetic experiment evidence for this operator is slug-scoped "
                 "without operator_id; rerun or backfill operator_id-scoped metrics."
-            )
-        elif sufficient_operator_results:
-            status = "ready"
-            blocking_gap = None
-        elif operator_results:
-            status = "insufficient"
-            blocking_gap = (
+            ),
+            insufficient_gap=(
                 f"Synthetic experiment evidence for operator_id={operator_id} exists "
                 "but has not reached completed/sufficient sample status."
-            )
-        else:
-            status = "missing"
-            blocking_gap = f"No operator_id-scoped synthetic experiment evidence for operator_id={operator_id}."
+            ),
+            missing_gap=f"No operator_id-scoped synthetic experiment evidence for operator_id={operator_id}.",
+        )
 
         return {
             "status": status,
