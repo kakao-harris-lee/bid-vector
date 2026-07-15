@@ -2,12 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchExperiments } from "@/shared/api";
 import {
   Badge,
-  type BadgeTone,
   Card,
   CardContent,
   CardHeader,
   CardTitle
 } from "@/shared/components/ui";
+import { experimentRunTone } from "@/shared/constants/statusTone";
 import { formatDateTime, formatPercent } from "@/shared/lib";
 import type {
   SyntheticExperimentResponse,
@@ -27,13 +27,6 @@ const STATUS_LABEL: Record<string, string> = {
   completed: "완료",
   failed: "실패"
 };
-
-function statusTone(status: string): BadgeTone {
-  if (status === "completed") return "healthy";
-  if (status === "failed") return "critical";
-  if (status === "running") return "info";
-  return "muted";
-}
 
 function latestRun(
   experiment: SyntheticExperimentResponse
@@ -105,7 +98,7 @@ export function ExperimentList({ token, selectedId, onSelect }: ExperimentListPr
                       {experiment.name}
                     </span>
                     {run ? (
-                      <Badge tone={statusTone(run.status)}>
+                      <Badge tone={experimentRunTone(run.status)}>
                         {STATUS_LABEL[run.status] ?? run.status}
                       </Badge>
                     ) : (

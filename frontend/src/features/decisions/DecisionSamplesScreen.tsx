@@ -27,18 +27,15 @@ function rateOrDash(value?: number | null): string {
   return formatPercent(value);
 }
 
-/** action/decision_status 라벨에 어울리는 Badge tone. */
+/** action/decision_status 라벨에 어울리는 Badge tone. 미지정 상태는 info. */
+const DECISION_STATUS_TONE: Record<string, "info" | "healthy" | "watch" | "critical"> = {
+  submitted: "healthy",
+  skipped: "critical",
+  reviewing: "watch"
+};
+
 function statusTone(status?: string | null): "info" | "healthy" | "watch" | "critical" {
-  switch (status) {
-    case "submitted":
-      return "healthy";
-    case "skipped":
-      return "critical";
-    case "reviewing":
-      return "watch";
-    default:
-      return "info";
-  }
+  return DECISION_STATUS_TONE[status ?? ""] ?? "info";
 }
 
 export function DecisionSamplesScreen() {

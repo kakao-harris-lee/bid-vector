@@ -120,10 +120,13 @@ export function labelBidStatus(status: DashboardBidItem["status"]): string {
 }
 
 export function statusFromBid(status: DashboardBidItem["status"]): DashboardStatus {
-  if (status === "accepted") return "healthy";
-  if (status === "rejected") return "critical";
-  if (status === "reviewed") return "watch";
-  return "info";
+  const map: Record<DashboardBidItem["status"], DashboardStatus> = {
+    submitted: "info",
+    reviewed: "watch",
+    accepted: "healthy",
+    rejected: "critical"
+  };
+  return map[status];
 }
 
 export { labelDecisionStatus } from "@/shared/constants/decisionLabels";
@@ -138,26 +141,37 @@ export function labelOutcome(status: string): string {
 }
 
 export function statusFromOutcome(status: string): DashboardStatus {
-  if (status === "won") return "healthy";
-  if (status === "lost") return "watch";
-  return "info";
+  const map: Record<string, DashboardStatus> = {
+    won: "healthy",
+    lost: "watch"
+  };
+  return map[status] ?? "info";
 }
 
 export function labelWorkItemStatus(item: DashboardWorkItem): string {
   if (item.status) return item.status;
-  if (item.severity === "critical") return "긴급";
-  if (item.severity === "watch") return "주의";
-  return "정보";
+  const severityLabels: Record<DashboardWorkItem["severity"], string> = {
+    critical: "긴급",
+    watch: "주의",
+    info: "정보"
+  };
+  return severityLabels[item.severity] ?? "정보";
 }
 
 export function statusFromSettlement(status: string): DashboardStatus {
-  const normalized = status.toLowerCase();
-  if (["settled", "completed", "healthy", "ready"].includes(normalized)) {
-    return "healthy";
-  }
-  if (["failed", "critical", "error"].includes(normalized)) return "critical";
-  if (["pending", "watch", "waiting"].includes(normalized)) return "watch";
-  return "info";
+  const map: Record<string, DashboardStatus> = {
+    settled: "healthy",
+    completed: "healthy",
+    healthy: "healthy",
+    ready: "healthy",
+    failed: "critical",
+    critical: "critical",
+    error: "critical",
+    pending: "watch",
+    watch: "watch",
+    waiting: "watch"
+  };
+  return map[status.toLowerCase()] ?? "info";
 }
 
 export function formatSettlementMilestone(

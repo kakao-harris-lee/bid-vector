@@ -1,3 +1,4 @@
+import { httpErrorMessage } from "./httpErrorMessages";
 import { ApiError, getStoredToken } from "./session";
 import type {
   BidDecisionTimelineResponse,
@@ -49,19 +50,11 @@ async function rawFetch<T>(
     if (response.status === 401 && typeof window !== "undefined") {
       window.dispatchEvent(new Event("bid-vector:session-expired"));
     }
-    throw new ApiError(response.status, errorMessage(response.status));
+    throw new ApiError(response.status, httpErrorMessage(response.status));
   }
   if (response.status === 204) return { data: undefined as T, response };
   const data = (await response.json()) as T;
   return { data, response };
-}
-
-function errorMessage(status: number): string {
-  if (status === 401) return "세션이 만료되었습니다.";
-  if (status === 403) return "권한이 없습니다.";
-  if (status === 404) return "요청한 자원을 찾을 수 없습니다.";
-  if (status >= 500) return "서버 오류가 발생했습니다.";
-  return "요청을 처리하지 못했습니다.";
 }
 
 function wrap<T>(promise: Promise<T>, fallback: string): Promise<T> {

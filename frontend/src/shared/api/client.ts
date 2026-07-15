@@ -1,3 +1,4 @@
+import { httpErrorMessage } from "./httpErrorMessages";
 import { ApiError, getStoredToken } from "./session";
 
 export interface RequestOptions extends Omit<RequestInit, "headers" | "body"> {
@@ -33,7 +34,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       // and the auth form handles the message itself.
       window.dispatchEvent(new Event("bid-vector:session-expired"));
     }
-    const message = messageForStatus(response.status);
+    const message = httpErrorMessage(response.status);
     throw new ApiError(response.status, message);
   }
 
@@ -43,14 +44,6 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
 function isAuthPath(path: string): boolean {
   return path.startsWith("/api/v1/auth/");
-}
-
-function messageForStatus(status: number): string {
-  if (status === 401) return "세션이 만료되었습니다.";
-  if (status === 403) return "권한이 없습니다.";
-  if (status === 404) return "요청한 자원을 찾을 수 없습니다.";
-  if (status >= 500) return "서버 오류가 발생했습니다.";
-  return "요청을 처리하지 못했습니다.";
 }
 
 export { ApiError };
