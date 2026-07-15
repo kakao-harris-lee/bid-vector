@@ -1,0 +1,41 @@
+{
+  "agency_match_sample_size": 0,
+  "bid_rate_candidates": [
+    {
+      "bid_rate": 0.8846,
+      "confidence_weight": 0.23,
+      "label": "conservative",
+      "predicted_price": 88462120.0
+    },
+    {
+      "bid_rate": 0.8926,
+      "confidence_weight": 0.54,
+      "label": "base",
+      "predicted_price": 89262120.0
+    },
+    {
+      "bid_rate": 0.8994,
+      "confidence_weight": 0.23,
+      "label": "aggressive",
+      "predicted_price": 89942120.0
+    }
+  ],
+  "competitive_target_bid_rate": 0.8926,
+  "confidence_score": 0.96,
+  "explanation": "artifact v1 ensemble이 historical(0.8871 × 50%), momentum(0.9000 × 20%), mean_reversion(0.8961 × 15%), lstm(0.8977 × 15%) 조합으로 기준 사정률을 계산했습니다.",
+  "feedback_calibration": null,
+  "floor_bid_rate": null,
+  "floor_price": null,
+  "guardrail_applied": false,
+  "guardrail_reason": null,
+  "high_rate_tail_adjustment": null,
+  "historical_sample_size": 16,
+  "model_version": "v2.0-ensemble",
+  "predicted_bid_rate": 0.8926,
+  "predicted_price": 89262120.0,
+  "price_range_max": 89942120.0,
+  "price_range_min": 88462120.0,
+  "pricing_mode": "historical_blend",
+  "procurement_rate_band": null,
+  "reserve_price_context": null
+}

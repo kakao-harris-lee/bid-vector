@@ -1,0 +1,55 @@
+{
+  "agency_match_sample_size": 0,
+  "bid_rate_candidates": [
+    {
+      "bid_rate": 0.8649,
+      "confidence_weight": 0.24,
+      "label": "conservative",
+      "predicted_price": 86488000.0
+    },
+    {
+      "bid_rate": 0.8769,
+      "confidence_weight": 0.52,
+      "label": "base",
+      "predicted_price": 87688000.0
+    },
+    {
+      "bid_rate": 0.8865,
+      "confidence_weight": 0.24,
+      "label": "aggressive",
+      "predicted_price": 88648000.0
+    }
+  ],
+  "competitive_target_bid_rate": 0.8769,
+  "confidence_score": 0.85,
+  "explanation": "최근 히스토리컬 데이터 20건의 사정률 분포를 반영해 기준 사정률 0.8769와 보수/기준/공격 시나리오를 계산했습니다. 예비가격 패턴 12건도 함께 참고했습니다",
+  "feedback_calibration": null,
+  "floor_bid_rate": null,
+  "floor_price": null,
+  "guardrail_applied": false,
+  "guardrail_reason": null,
+  "high_rate_tail_adjustment": null,
+  "historical_sample_size": 20,
+  "model_version": "v1.1-historical",
+  "predicted_bid_rate": 0.8769,
+  "predicted_price": 87688000.0,
+  "price_range_max": 88648000.0,
+  "price_range_min": 86488000.0,
+  "pricing_mode": "historical_blend",
+  "procurement_rate_band": null,
+  "reserve_price_context": {
+    "average_estimated_price_rate": 0.95,
+    "average_reserve_span_rate": 0.03,
+    "average_selected_number": 7.5,
+    "estimated_price_sample_count": 12,
+    "frequent_selected_numbers": [
+      1,
+      4,
+      7,
+      12
+    ],
+    "median_bid_to_estimated_price_rate": 0.88,
+    "median_estimated_price_rate": 0.95,
+    "sample_count": 12
+  }
+}
