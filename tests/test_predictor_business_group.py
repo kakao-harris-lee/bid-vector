@@ -357,3 +357,186 @@ def test_construction_group_ceiling_never_bypassed_for_high_history():
         assert scenario_rate <= ceiling + epsilon, (
             f"scenario '{label}' bid_rate {scenario_rate} > ceiling {ceiling}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Agency-keyed bid-rate band (Lever 1): 한국수산자원공단 recenter to the UPPER edge
+# of the realized 88.001–88.053% winning-floor band ([0.8806, 0.882]). Keys match
+# by NORMALIZED substring so regional bureaus inherit the HQ band.
+# ---------------------------------------------------------------------------
+
+
+def test_agency_floor_raises_above_category_for_fisheries():
+    """한국수산자원공단 agency floor(0.8806) RAISES the service category floor(0.87)."""
+    from app.ai.price_prediction import _resolve_floor_bid_rate
+
+    floor = _resolve_floor_bid_rate(
+        category="service", business_group="service", agency_name="한국수산자원공단"
+    )
+    assert floor == 0.8806, "agency floor(0.8806) must tighten above category/group floor(0.87)"
+
+
+def test_agency_ceiling_lowers_below_category_for_fisheries():
+    """한국수산자원공단 agency ceiling(0.882) LOWERS the service ceiling(1.0)."""
+    from app.ai.price_prediction import _resolve_ceiling_bid_rate
+
+    ceiling = _resolve_ceiling_bid_rate(
+        category="service", business_group="service", agency_name="한국수산자원공단"
+    )
+    assert ceiling == 0.882, "agency ceiling(0.882) must tighten below category/group ceiling(1.0)"
+
+
+def test_agency_band_matches_regional_bureau_substring():
+    """발주처 '한국수산자원공단동해본부' (regional bureau) inherits the HQ band via substring."""
+    from app.ai.price_prediction import _resolve_ceiling_bid_rate, _resolve_floor_bid_rate
+
+    for agency in (
+        "한국수산자원공단동해본부",
+        "한국수산자원공단남해본부",
+        "한국수산자원공단 제주본부",  # whitespace must be normalized away
+    ):
+        floor = _resolve_floor_bid_rate(
+            category="service", business_group="service", agency_name=agency
+        )
+        ceiling = _resolve_ceiling_bid_rate(
+            category="service", business_group="service", agency_name=agency
+        )
+        assert floor == 0.8806, f"{agency} should inherit agency floor 0.8806, got {floor}"
+        assert ceiling == 0.882, f"{agency} should inherit agency ceiling 0.882, got {ceiling}"
+
+
+def test_agency_band_longest_key_wins():
+    """When several agency keys match, the most specific (longest) key wins.
+
+    _resolve_agency_bid_rate takes the rate map directly, so we exercise the
+    substring-precedence logic without mutating global settings.
+    """
+    from app.ai.price_prediction import _resolve_agency_bid_rate
+
+    rate_map = {
+        "한국수산자원공단": 0.8806,
+        "한국수산자원공단동해본부": 0.885,  # more specific → must win for 동해본부
+    }
+    # 동해본부: both keys are substrings → longest (동해본부) wins.
+    assert _resolve_agency_bid_rate("한국수산자원공단동해본부", rate_map) == 0.885
+    # 남해본부: only the HQ key matches → HQ rate.
+    assert _resolve_agency_bid_rate("한국수산자원공단남해본부", rate_map) == 0.8806
+    # Whitespace in the issuing-agency name is normalized away before matching.
+    assert _resolve_agency_bid_rate("한국수산자원공단 동해본부", rate_map) == 0.885
+
+
+def test_agency_ceiling_does_not_undercut_protected_category_floor(monkeypatch):
+    """§4.7 protected floor precedence: a category floor ABOVE the agency ceiling
+    must NOT be undercut. The agency ceiling (0.882) tries to lower the band below
+    a protected 0.90 category floor; the ceiling<floor→ceiling=floor guard in
+    _apply_prediction_guardrails must hold, so no candidate prices below 0.90.
+    """
+    from app.ai import price_prediction as pp
+    from app.ai.price_prediction import (
+        _resolve_ceiling_bid_rate,
+        _resolve_floor_bid_rate,
+        predict_price,
+    )
+
+    # Inject a synthetic category whose floor (0.90) exceeds the agency ceiling (0.882).
+    monkeypatch.setitem(pp.settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES, "protectedfloor", 0.90)
+
+    floor = _resolve_floor_bid_rate(
+        category="protectedfloor", business_group=None, agency_name="한국수산자원공단"
+    )
+    ceiling = _resolve_ceiling_bid_rate(
+        category="protectedfloor", business_group=None, agency_name="한국수산자원공단"
+    )
+    # Resolver: agency floor(0.8806) cannot lower the protected category floor(0.90).
+    assert floor == 0.90, "protected category floor must not be undercut by the agency band"
+    # Resolver returns the agency ceiling (0.882); the guardrail then raises it to the floor.
+    assert ceiling == 0.882
+
+    pred = predict_price(
+        budget=100_000_000.0,
+        category="protectedfloor",
+        description="보호 floor 검증",
+        historical_records=[{"bid_rate": 0.80} for _ in range(20)],
+        agency_name="한국수산자원공단",
+        business_group=None,
+    )
+    # ceiling<floor guard equalizes the band at 0.90 → nothing prices below the floor.
+    assert pred["floor_bid_rate"] == 0.90
+    assert pred["predicted_bid_rate"] >= 0.90 - 1e-9
+    for candidate in pred["bid_rate_candidates"]:
+        assert candidate["bid_rate"] >= 0.90 - 1e-9, candidate
+
+
+def test_agency_band_unchanged_for_non_matching_agency():
+    """Non-matching agency (서울특별시) leaves category/group resolution untouched."""
+    from app.ai.price_prediction import _resolve_ceiling_bid_rate, _resolve_floor_bid_rate
+
+    floor = _resolve_floor_bid_rate(
+        category="service", business_group="service", agency_name="서울특별시"
+    )
+    ceiling = _resolve_ceiling_bid_rate(
+        category="service", business_group="service", agency_name="서울특별시"
+    )
+    # Identical to the no-agency resolution (category 0.87 / 1.0).
+    assert floor == _resolve_floor_bid_rate(category="service", business_group="service")
+    assert ceiling == _resolve_ceiling_bid_rate(category="service", business_group="service")
+    assert floor == 0.87
+    assert ceiling == 1.0
+
+
+def test_agency_band_stays_within_hard_bounds():
+    """Agency band resolves within the hard clamp_bid_rate [0.7, 1.4] bounds."""
+    from app.ai.price_prediction import _resolve_ceiling_bid_rate, _resolve_floor_bid_rate
+
+    floor = _resolve_floor_bid_rate(
+        category="service", business_group="service", agency_name="한국수산자원공단동해본부"
+    )
+    ceiling = _resolve_ceiling_bid_rate(
+        category="service", business_group="service", agency_name="한국수산자원공단동해본부"
+    )
+    assert 0.7 <= floor <= 1.4
+    assert 0.7 <= ceiling <= 1.4
+    # The band stays a valid (non-inverted) interval.
+    assert floor <= ceiling
+
+
+def test_agency_floor_vs_legal_floor_binding_and_safe_margin():
+    """agency floor vs legal floor: whichever is higher BINDS, and the generic safe
+    margin only re-applies when the AGENCY floor is NOT the binding edge (Finding 1).
+
+    Exercises _resolve_guardrail_context directly so the attribution + safe-margin
+    decision is asserted without granularity/candidate noise.
+    """
+    from app.ai.price_prediction import _resolve_guardrail_context
+    from app.core.config import settings
+
+    # The safe-margin bypass is only meaningful if a non-zero margin is configured.
+    assert settings.PREDICTION_FLOOR_SAFETY_MARGIN_RATE > 0
+
+    # Legal floor BELOW the agency floor → agency floor binds, safe margin bypassed.
+    below = _resolve_guardrail_context(
+        budget=100_000_000.0,
+        category="service",
+        business_group="service",
+        legal_floor_bid_rate=0.85,
+        agency_name="한국수산자원공단",
+    )
+    assert below.floor_from_agency is True
+    assert below.floor_bid_rate == 0.8806
+    assert below.safe_floor_bid_rate == 0.8806  # no margin (agency target sits at floor)
+
+    # Legal floor ABOVE the agency floor → legal binds, safe margin re-applies.
+    above = _resolve_guardrail_context(
+        budget=100_000_000.0,
+        category="service",
+        business_group="service",
+        legal_floor_bid_rate=0.881,
+        agency_name="한국수산자원공단",
+    )
+    assert above.floor_from_agency is False
+    assert above.floor_bid_rate == 0.881
+    assert above.safe_floor_bid_rate > above.floor_bid_rate  # generic margin re-applied
+
+    # Monotonic tightening either way: the binding floor never loosens.
+    assert above.floor_bid_rate >= below.floor_bid_rate
+    assert above.safe_floor_bid_rate >= below.safe_floor_bid_rate
