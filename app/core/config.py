@@ -524,6 +524,22 @@ class Settings(BaseSettings):
     TELEGRAM_POLLING_SCHEDULE_ENABLED: bool = False
     TELEGRAM_POLLING_INTERVAL_SECONDS: int = 30
 
+    # Opportunity analysis — strength / risk cutoffs
+    # Thresholds that gate the operator-facing 강점(strength) and 리스크(risk)
+    # phrases in OpportunityAnalysisService._build_strengths / _build_risk_flags.
+    # Names encode the comparison direction: *_MIN is a floor (value >= / >, or a
+    # "below this is a risk" boundary) and *_MAX is a ceiling ("at or above/below
+    # this is a risk"). Defaults are the current in-code literals — changing them
+    # only shifts when the advisory phrase renders; it does not alter any score.
+    OPPORTUNITY_STRENGTH_COMPETITIVENESS_MIN: float = 0.75
+    OPPORTUNITY_STRENGTH_MARGIN_MIN: float = 0.72
+    OPPORTUNITY_STRENGTH_PRICE_CONFIDENCE_MIN: float = 0.75
+    OPPORTUNITY_STRENGTH_PROBABILITY_MIN: float = 0.75
+    OPPORTUNITY_RISK_SIMILARITY_MIN: float = 0.4  # avg similarity below -> risk
+    OPPORTUNITY_RISK_PRICE_CONFIDENCE_MIN: float = 0.75  # confidence below -> risk
+    OPPORTUNITY_RISK_MARGIN_MAX: float = 0.45  # margin at/below -> risk
+    OPPORTUNITY_RISK_COMPLEXITY_MAX: float = 0.72  # complexity at/above -> risk
+
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost",

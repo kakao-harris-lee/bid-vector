@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import operator
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,8 @@ from app.ai.factory import build_bid_recommendation_port, build_price_prediction
 from app.ai.predictors.historical import apply_probability_calibration
 from app.ai.price_prediction import get_price_insights
 from app.ai.service_interfaces import BidRecommendationPort, PricePredictionPort
+from app.core.bands import resolve_band
+from app.core.config import settings
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import (
     ensure_operator_account,
@@ -38,6 +42,49 @@ from app.services.prediction_feedback import PredictionFeedbackService
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.operator_strategy_tuning import resolve_category_priority_override
 
+
+# --- Execution-complexity band ladders (see _estimate_execution_complexity_score) ---
+# Declarative rungs resolved by app.core.bands.resolve_band. The budget ladder is
+# a descending >= cascade; the deadline ladder an ascending <= cascade. Each ends
+# in a sentinel fallback rung so a signal is always produced. Values mirror the
+# previous inline if/elif thresholds exactly.
+_BUDGET_COMPLEXITY_BANDS: tuple[tuple[float, float], ...] = (
+    (500_000_000, 0.92),
+    (200_000_000, 0.78),
+    (100_000_000, 0.62),
+    (float("-inf"), 0.38),
+)
+_DEADLINE_COMPLEXITY_BANDS: tuple[tuple[float, float], ...] = (
+    (6, 1.0),
+    (24, 0.78),
+    (72, 0.52),
+    (float("inf"), 0.24),
+)
+# Signal used when the notice has no deadline (handled before the <= ladder).
+_DEADLINE_MISSING_COMPLEXITY_SIGNAL = 0.3
+
+# --- Frozen composite-score weight tables (each sums to 1.0) ---
+# Read-only weight maps for the two weighted-sum scores below. Kept as ordered,
+# immutable tables so the weights are declared once and a sum-to-1.0 invariant can
+# be asserted (see tests/test_opportunity_weight_tables.py). The arithmetic that
+# consumes them preserves the original left-associative order.
+_WORKLOAD_COMPOSITE_WEIGHTS = MappingProxyType(
+    {
+        "active_load_ratio": 0.5,
+        "average_priority": 0.25,
+        "urgent_ratio": 0.15,
+        "review_ratio": 0.1,
+    }
+)
+_EXPECTED_MARGIN_COMPOSITE_WEIGHTS = MappingProxyType(
+    {
+        "recommended_rate": 0.35,
+        "floor_headroom": 0.2,
+        "prediction_alignment": 0.2,
+        "price_confidence": 0.15,
+        "normalized_capacity": 0.1,
+    }
+)
 
 # Named constant for the region_bonus risk message so the in-region suppression
 # filter (see _build_risk_flags) matches by identity, not a fragile substring.
@@ -935,11 +982,12 @@ class OpportunityAnalysisService:
         ) / len(active_records)
         review_ratio = sum(1 for record in active_records if str(record.decision_status) == "reviewing") / len(active_records)
 
+        weights = _WORKLOAD_COMPOSITE_WEIGHTS
         workload_score = (
-            active_load_ratio * 0.5
-            + average_priority * 0.25
-            + urgent_ratio * 0.15
-            + review_ratio * 0.1
+            active_load_ratio * weights["active_load_ratio"]
+            + average_priority * weights["average_priority"]
+            + urgent_ratio * weights["urgent_ratio"]
+            + review_ratio * weights["review_ratio"]
         )
         return round(max(0.0, min(1.0, workload_score)), 2)
 
@@ -1056,12 +1104,13 @@ class OpportunityAnalysisService:
 
         prediction_alignment = max(0.0, 1.0 - min(abs(recommended_rate - predicted_bid_rate) / 0.12, 1.0))
 
+        weights = _EXPECTED_MARGIN_COMPOSITE_WEIGHTS
         expected_margin_score = (
-            recommended_rate * 0.35
-            + floor_headroom * 0.2
-            + prediction_alignment * 0.2
-            + price_confidence * 0.15
-            + normalized_capacity * 0.1
+            recommended_rate * weights["recommended_rate"]
+            + floor_headroom * weights["floor_headroom"]
+            + prediction_alignment * weights["prediction_alignment"]
+            + price_confidence * weights["price_confidence"]
+            + normalized_capacity * weights["normalized_capacity"]
         )
         return round(max(0.0, min(1.0, expected_margin_score)), 2)
 
@@ -1077,29 +1126,21 @@ class OpportunityAnalysisService:
     ) -> float:
         """Estimate delivery complexity from project scale, wording, schedule pressure, and current capacity."""
         project_budget = max(float(project.budget_estimate or 0.0), float(project.budget_max or 0.0))
-        if project_budget >= 500_000_000:
-            budget_signal = 0.92
-        elif project_budget >= 200_000_000:
-            budget_signal = 0.78
-        elif project_budget >= 100_000_000:
-            budget_signal = 0.62
-        else:
-            budget_signal = 0.38
+        budget_signal = resolve_band(project_budget, _BUDGET_COMPLEXITY_BANDS)
 
         project_text = " ".join(part for part in [project.title or "", project.description or "", project.requirements or ""] if part).lower()
         keyword_hits = sum(1 for keyword in self.EXECUTION_COMPLEXITY_KEYWORDS if keyword in project_text)
         keyword_signal = min(1.0, 0.24 + (keyword_hits * 0.08))
 
-        if deadline_hours_remaining is None:
-            deadline_signal = 0.3
-        elif deadline_hours_remaining <= 6:
-            deadline_signal = 1.0
-        elif deadline_hours_remaining <= 24:
-            deadline_signal = 0.78
-        elif deadline_hours_remaining <= 72:
-            deadline_signal = 0.52
-        else:
-            deadline_signal = 0.24
+        deadline_signal = (
+            _DEADLINE_MISSING_COMPLEXITY_SIGNAL
+            if deadline_hours_remaining is None
+            else resolve_band(
+                deadline_hours_remaining,
+                _DEADLINE_COMPLEXITY_BANDS,
+                compare=operator.le,
+            )
+        )
 
         active_load_ratio = min(1.0, current_active_bids / max(1, max_active_bids))
         match_friction = max(0.0, min(1.0, 1.0 - float(classification.get("score", 0.0) or 0.0)))
@@ -1129,15 +1170,15 @@ class OpportunityAnalysisService:
         strengths: list[str] = []
         if classification.get("matched", False):
             strengths.append("업체 자격·지역·역량 기준을 전반적으로 충족합니다.")
-        if competitiveness_score >= 0.75:
+        if competitiveness_score >= settings.OPPORTUNITY_STRENGTH_COMPETITIVENESS_MIN:
             strengths.append("추천 투찰가가 비교 기준 대비 경쟁력 있는 구간에 있습니다.")
-        if expected_margin_score >= 0.72:
+        if expected_margin_score >= settings.OPPORTUNITY_STRENGTH_MARGIN_MIN:
             strengths.append("예상 수익성 여력이 비교적 양호한 편입니다.")
-        if float(price_prediction.get("confidence_score", 0.0)) >= 0.75:
+        if float(price_prediction.get("confidence_score", 0.0)) >= settings.OPPORTUNITY_STRENGTH_PRICE_CONFIDENCE_MIN:
             strengths.append("가격 예측 신뢰도가 양호해 투찰 범위 판단에 활용할 수 있습니다.")
         if int(similar_projects.get("result_count", 0) or 0) > 0:
             strengths.append(f"유사 공고 {similar_projects['result_count']}건을 함께 비교해 참고 사례를 확보했습니다.")
-        if probability_score >= 0.75:
+        if probability_score >= settings.OPPORTUNITY_STRENGTH_PROBABILITY_MIN:
             strengths.append("종합 낙찰 가능성 점수가 높게 산출되었습니다.")
         return strengths[:5]
 
@@ -1163,16 +1204,16 @@ class OpportunityAnalysisService:
         similarity_scores = [float(item.get("similarity_score", 0.0) or 0.0) for item in similar_projects.get("results", [])]
         if not similarity_scores:
             risks.append("직접 비교 가능한 유사 공고 사례가 부족합니다.")
-        elif (sum(similarity_scores) / len(similarity_scores)) < 0.4:
+        elif (sum(similarity_scores) / len(similarity_scores)) < settings.OPPORTUNITY_RISK_SIMILARITY_MIN:
             risks.append("유사 사례와의 의미적 일치도가 높지 않아 비교 신뢰도가 제한적입니다.")
 
-        if float(price_prediction.get("confidence_score", 0.0)) < 0.75:
+        if float(price_prediction.get("confidence_score", 0.0)) < settings.OPPORTUNITY_RISK_PRICE_CONFIDENCE_MIN:
             risks.append("가격 예측 신뢰도가 아직 보수적 수준입니다.")
 
-        if expected_margin_score <= 0.45:
+        if expected_margin_score <= settings.OPPORTUNITY_RISK_MARGIN_MAX:
             risks.append("추천 투찰가 기준 예상 수익 여력이 낮아 손익 검토가 필요합니다.")
 
-        if execution_complexity_score >= 0.72:
+        if execution_complexity_score >= settings.OPPORTUNITY_RISK_COMPLEXITY_MAX:
             risks.append("통합 범위와 일정 압박을 감안할 때 실행 복잡도가 높은 편입니다.")
 
         if current_active_bids >= max_active_bids:
