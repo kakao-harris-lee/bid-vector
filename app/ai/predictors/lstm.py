@@ -23,6 +23,33 @@ _DEFAULT_LSTM_BLEND_WEIGHTS = {
     "trend": 0.10,
 }
 
+# --- Scenario-spread / candidate constants (moved verbatim from inline
+# arithmetic; call sites keep their expression shape so floats are exact). ---
+_SPREAD_FLOOR = 0.008
+_SPREAD_GAP_WEIGHT = 0.45
+_SPREAD_MULTIPLIER_FLOOR = 0.2
+_AGGRESSIVE_SPREAD_MULTIPLIER = 0.85
+_CANDIDATE_CONFIDENCE_WEIGHT_TAIL = 0.22
+_CANDIDATE_CONFIDENCE_WEIGHT_BASE = 0.56
+
+# --- Trend component blend weights (call-site operand order: mean, last,
+# projected). ---
+_TREND_MEAN_WEIGHT = 0.45
+_TREND_LAST_WEIGHT = 0.35
+_TREND_PROJECTED_WEIGHT = 0.20
+
+# --- LSTM confidence formula constants (base + per-signal weights, score
+# normalizers, output clamp). ---
+_CONFIDENCE_BASE = 0.54
+_CONFIDENCE_SAMPLE_WEIGHT = 0.18
+_CONFIDENCE_STABILITY_WEIGHT = 0.15
+_CONFIDENCE_AGREEMENT_WEIGHT = 0.1
+_CONFIDENCE_SEQUENCE_MULTIPLIER = 2
+_CONFIDENCE_STD_NORMALIZER = 0.06
+_CONFIDENCE_AGREEMENT_NORMALIZER = 0.08
+_CONFIDENCE_MIN = 0.45
+_CONFIDENCE_MAX = 0.97
+
 
 class LSTMBidRatePredictor(BasePricePredictor):
     """Sequence-model predictor backed by a persisted lightweight LSTM artifact."""
@@ -157,25 +184,27 @@ def build_lstm_prediction_payload(
     base_rate = clamp_bid_rate(signal["blended_rate"])
     spread = _estimate_lstm_spread(signal=signal, artifact=artifact)
     conservative_rate = clamp_bid_rate(base_rate - spread)
-    aggressive_rate = clamp_bid_rate(base_rate + (spread * 0.85))
+    aggressive_rate = clamp_bid_rate(
+        base_rate + (spread * _AGGRESSIVE_SPREAD_MULTIPLIER)
+    )
     candidates = [
         {
             "label": "conservative",
             "bid_rate": round(conservative_rate, 4),
             "predicted_price": round(context.budget * conservative_rate, 2),
-            "confidence_weight": 0.22,
+            "confidence_weight": _CANDIDATE_CONFIDENCE_WEIGHT_TAIL,
         },
         {
             "label": "base",
             "bid_rate": round(base_rate, 4),
             "predicted_price": round(context.budget * base_rate, 2),
-            "confidence_weight": 0.56,
+            "confidence_weight": _CANDIDATE_CONFIDENCE_WEIGHT_BASE,
         },
         {
             "label": "aggressive",
             "bid_rate": round(aggressive_rate, 4),
             "predicted_price": round(context.budget * aggressive_rate, 2),
-            "confidence_weight": 0.22,
+            "confidence_weight": _CANDIDATE_CONFIDENCE_WEIGHT_TAIL,
         },
     ]
     confidence_score = _estimate_lstm_confidence(signal=signal, artifact=artifact)
@@ -274,7 +303,11 @@ def _estimate_trend_rate(sequence_rates: list[float]) -> float:
         return clamp_bid_rate(float(recent_window[-1]))
     slope = float(np.polyfit(np.arange(recent_window.size), recent_window, 1)[0])
     projected_rate = float(recent_window[-1]) + slope
-    trend_rate = (float(recent_window.mean()) * 0.45) + (float(recent_window[-1]) * 0.35) + (projected_rate * 0.20)
+    trend_rate = (
+        (float(recent_window.mean()) * _TREND_MEAN_WEIGHT)
+        + (float(recent_window[-1]) * _TREND_LAST_WEIGHT)
+        + (projected_rate * _TREND_PROJECTED_WEIGHT)
+    )
     return clamp_bid_rate(trend_rate)
 
 
@@ -290,19 +323,44 @@ def _blend_predicted_rate(weights: dict[str, float], *, lstm_rate: float, histor
 
 def _estimate_lstm_spread(*, signal: dict[str, Any], artifact: dict[str, Any]) -> float:
     """Estimate conservative/base/aggressive spread around the sequence-model rate."""
-    base_gap = abs(float(signal["raw_lstm_rate"]) - float(signal["historical_rate"])) * 0.45
-    volatility_gap = float(signal["window_std"]) * max(float(artifact["scenario_spread_multiplier"]), 0.2)
-    return max(0.008, base_gap, volatility_gap)
+    base_gap = (
+        abs(float(signal["raw_lstm_rate"]) - float(signal["historical_rate"]))
+        * _SPREAD_GAP_WEIGHT
+    )
+    volatility_gap = float(signal["window_std"]) * max(
+        float(artifact["scenario_spread_multiplier"]), _SPREAD_MULTIPLIER_FLOOR
+    )
+    return max(_SPREAD_FLOOR, base_gap, volatility_gap)
 
 
 def _estimate_lstm_confidence(*, signal: dict[str, Any], artifact: dict[str, Any]) -> float:
     """Estimate confidence from sequence depth, stability, and agreement with the baseline."""
     sample_size = len(signal["sequence_rates"])
-    sample_score = min(sample_size / max(int(artifact["sequence_length"]) * 2, 1), 1.0)
-    stability_score = max(0.0, 1.0 - min(float(signal["window_std"]) / 0.06, 1.0))
-    agreement_score = max(0.0, 1.0 - min(abs(float(signal["raw_lstm_rate"]) - float(signal["historical_rate"])) / 0.08, 1.0))
-    confidence = 0.54 + (sample_score * 0.18) + (stability_score * 0.15) + (agreement_score * 0.1) + float(artifact["confidence_bias"])
-    return round(max(0.45, min(0.97, confidence)), 2)
+    sample_score = min(
+        sample_size
+        / max(int(artifact["sequence_length"]) * _CONFIDENCE_SEQUENCE_MULTIPLIER, 1),
+        1.0,
+    )
+    stability_score = max(
+        0.0, 1.0 - min(float(signal["window_std"]) / _CONFIDENCE_STD_NORMALIZER, 1.0)
+    )
+    agreement_score = max(
+        0.0,
+        1.0
+        - min(
+            abs(float(signal["raw_lstm_rate"]) - float(signal["historical_rate"]))
+            / _CONFIDENCE_AGREEMENT_NORMALIZER,
+            1.0,
+        ),
+    )
+    confidence = (
+        _CONFIDENCE_BASE
+        + (sample_score * _CONFIDENCE_SAMPLE_WEIGHT)
+        + (stability_score * _CONFIDENCE_STABILITY_WEIGHT)
+        + (agreement_score * _CONFIDENCE_AGREEMENT_WEIGHT)
+        + float(artifact["confidence_bias"])
+    )
+    return round(max(_CONFIDENCE_MIN, min(_CONFIDENCE_MAX, confidence)), 2)
 
 
 def _build_lstm_explanation(

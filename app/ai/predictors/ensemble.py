@@ -29,6 +29,36 @@ _DEFAULT_COMPONENT_WEIGHTS = {
     "lstm": 0.15,
 }
 
+# --- Scenario-spread / candidate constants (moved verbatim from the inline
+# arithmetic; the call sites keep their expression shape so floats are exact). ---
+_SPREAD_FLOOR = 0.008
+_SPREAD_HISTORICAL_STD_WEIGHT = 0.7
+_AGGRESSIVE_SPREAD_MULTIPLIER = 0.85
+_CANDIDATE_CONFIDENCE_WEIGHT_TAIL = 0.23
+_CANDIDATE_CONFIDENCE_WEIGHT_BASE = 0.54
+
+# --- Momentum / mean-reversion component blend weights (call-site operand order
+# preserved: momentum = mean, last, projected; mean-reversion = recent, anchor). ---
+_MOMENTUM_MEAN_WEIGHT = 0.35
+_MOMENTUM_LAST_WEIGHT = 0.45
+_MOMENTUM_PROJECTED_WEIGHT = 0.20
+_MEAN_REVERSION_RECENT_WEIGHT = 0.7
+_MEAN_REVERSION_ANCHOR_WEIGHT = 0.3
+
+# --- Ensemble confidence formula constants (base + per-signal weights, score
+# normalizers, diversity step/cap, output clamp). ---
+_CONFIDENCE_BASE = 0.55
+_CONFIDENCE_SAMPLE_WEIGHT = 0.16
+_CONFIDENCE_AGREEMENT_WEIGHT = 0.13
+_CONFIDENCE_STABILITY_WEIGHT = 0.1
+_CONFIDENCE_SAMPLE_SATURATION = 32
+_CONFIDENCE_SPREAD_NORMALIZER = 0.06
+_CONFIDENCE_STD_NORMALIZER = 0.06
+_CONFIDENCE_DIVERSITY_STEP = 0.03
+_CONFIDENCE_DIVERSITY_CAP = 0.09
+_CONFIDENCE_MIN = 0.45
+_CONFIDENCE_MAX = 0.97
+
 
 class EnsembleBidRatePredictor(BasePricePredictor):
     """Ensemble predictor that blends persisted component weights at inference time."""
@@ -141,12 +171,14 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
     component_spread = float(np.std(component_values)) if len(component_values) > 1 else 0.0
     historical_std = float(historical_summary.get("std_bid_rate") or 0.0)
     spread = max(
-        0.008,
+        _SPREAD_FLOOR,
         component_spread * float(artifact["scenario_spread_multiplier"]),
-        historical_std * 0.7,
+        historical_std * _SPREAD_HISTORICAL_STD_WEIGHT,
     )
     conservative_rate = clamp_bid_rate(base_rate - spread)
-    aggressive_rate = clamp_bid_rate(base_rate + (spread * 0.85))
+    aggressive_rate = clamp_bid_rate(
+        base_rate + (spread * _AGGRESSIVE_SPREAD_MULTIPLIER)
+    )
     conservative_rate, base_rate, aggressive_rate = apply_procurement_candidate_band(
         conservative_rate=conservative_rate,
         base_rate=base_rate,
@@ -158,19 +190,19 @@ def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifa
             "label": "conservative",
             "bid_rate": round(conservative_rate, 4),
             "predicted_price": round(context.budget * conservative_rate, 2),
-            "confidence_weight": 0.23,
+            "confidence_weight": _CANDIDATE_CONFIDENCE_WEIGHT_TAIL,
         },
         {
             "label": "base",
             "bid_rate": round(base_rate, 4),
             "predicted_price": round(context.budget * base_rate, 2),
-            "confidence_weight": 0.54,
+            "confidence_weight": _CANDIDATE_CONFIDENCE_WEIGHT_BASE,
         },
         {
             "label": "aggressive",
             "bid_rate": round(aggressive_rate, 4),
             "predicted_price": round(context.budget * aggressive_rate, 2),
-            "confidence_weight": 0.23,
+            "confidence_weight": _CANDIDATE_CONFIDENCE_WEIGHT_TAIL,
         },
     ]
     confidence_score = _estimate_ensemble_confidence(
@@ -236,7 +268,11 @@ def _estimate_momentum_rate(sequence_rates: list[float], *, window_size: int) ->
         return clamp_bid_rate(float(recent_window[-1]))
     slope = float(np.polyfit(np.arange(recent_window.size), recent_window, 1)[0])
     projected_rate = float(recent_window[-1]) + slope
-    momentum_rate = (float(recent_window.mean()) * 0.35) + (float(recent_window[-1]) * 0.45) + (projected_rate * 0.20)
+    momentum_rate = (
+        (float(recent_window.mean()) * _MOMENTUM_MEAN_WEIGHT)
+        + (float(recent_window[-1]) * _MOMENTUM_LAST_WEIGHT)
+        + (projected_rate * _MOMENTUM_PROJECTED_WEIGHT)
+    )
     return clamp_bid_rate(momentum_rate)
 
 
@@ -244,7 +280,9 @@ def _estimate_mean_reversion_rate(sequence_rates: list[float], *, anchor: float)
     """Estimate a component that favors recent data but gently reverts toward the historical anchor."""
     recent_window = np.asarray(sequence_rates[-min(len(sequence_rates), 8):], dtype=float)
     recent_mean = float(np.mean(recent_window)) if recent_window.size else float(anchor)
-    reverted_rate = (recent_mean * 0.7) + (float(anchor) * 0.3)
+    reverted_rate = (recent_mean * _MEAN_REVERSION_RECENT_WEIGHT) + (
+        float(anchor) * _MEAN_REVERSION_ANCHOR_WEIGHT
+    )
     return clamp_bid_rate(reverted_rate)
 
 
@@ -257,12 +295,26 @@ def _estimate_ensemble_confidence(
     confidence_bias: float,
 ) -> float:
     """Estimate confidence from sample depth and agreement across ensemble components."""
-    sample_score = min(sample_size / 32, 1.0)
-    agreement_score = max(0.0, 1.0 - min(component_spread / 0.06, 1.0))
-    stability_score = max(0.0, 1.0 - min(historical_std / 0.06, 1.0))
-    diversity_bonus = min(max(component_count - 1, 0) * 0.03, 0.09)
-    confidence = 0.55 + (sample_score * 0.16) + (agreement_score * 0.13) + (stability_score * 0.1) + diversity_bonus + confidence_bias
-    return round(max(0.45, min(0.97, confidence)), 2)
+    sample_score = min(sample_size / _CONFIDENCE_SAMPLE_SATURATION, 1.0)
+    agreement_score = max(
+        0.0, 1.0 - min(component_spread / _CONFIDENCE_SPREAD_NORMALIZER, 1.0)
+    )
+    stability_score = max(
+        0.0, 1.0 - min(historical_std / _CONFIDENCE_STD_NORMALIZER, 1.0)
+    )
+    diversity_bonus = min(
+        max(component_count - 1, 0) * _CONFIDENCE_DIVERSITY_STEP,
+        _CONFIDENCE_DIVERSITY_CAP,
+    )
+    confidence = (
+        _CONFIDENCE_BASE
+        + (sample_score * _CONFIDENCE_SAMPLE_WEIGHT)
+        + (agreement_score * _CONFIDENCE_AGREEMENT_WEIGHT)
+        + (stability_score * _CONFIDENCE_STABILITY_WEIGHT)
+        + diversity_bonus
+        + confidence_bias
+    )
+    return round(max(_CONFIDENCE_MIN, min(_CONFIDENCE_MAX, confidence)), 2)
 
 
 def _build_ensemble_explanation(
