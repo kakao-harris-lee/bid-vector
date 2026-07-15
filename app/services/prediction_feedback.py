@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -13,6 +14,25 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, TenderResult, User
+
+# Maximum number of ids bound into a single ``project_id.in_(...)`` clause.
+# PostgreSQL caps a statement at 65,535 bind parameters; the default 365-day
+# window can currently produce ~66k recent project ids, which overflows that
+# limit on its own. We chunk well under the cap so the other filter params in
+# each loader query still fit comfortably within one statement.
+_IN_CHUNK_SIZE = 20000
+
+
+def _chunked(ids: list[int], size: int | None = None) -> Iterator[list[int]]:
+    """Yield ``ids`` in successive slices of at most ``size`` elements.
+
+    ``size`` defaults to the module-level ``_IN_CHUNK_SIZE`` and is resolved at
+    call time (not bound as a default argument) so tests can monkeypatch the
+    constant to exercise the multi-chunk dedup path.
+    """
+    resolved_size = _IN_CHUNK_SIZE if size is None else size
+    for start in range(0, len(ids), resolved_size):
+        yield ids[start:start + resolved_size]
 
 
 @dataclass
@@ -235,18 +255,23 @@ class PredictionFeedbackService:
         if not project_ids:
             return {}
 
-        predictions = (
-            db.query(PricePrediction)
-            .filter(
-                PricePrediction.user_id == operator_id,
-                PricePrediction.project_id.in_(project_ids),
-            )
-            .order_by(PricePrediction.project_id.asc(), PricePrediction.created_at.desc(), PricePrediction.id.desc())
-            .all()
-        )
+        # ``project_ids`` can exceed PostgreSQL's 65,535 bind-parameter limit, so
+        # the IN filter is issued per chunk. Each project_id is unique and lands
+        # in exactly one chunk, so the same order_by keeps the first row seen per
+        # project as its latest.
         latest_by_project: dict[int, PricePrediction] = {}
-        for prediction in predictions:
-            latest_by_project.setdefault(int(prediction.project_id), prediction)
+        for chunk in _chunked(project_ids):
+            predictions = (
+                db.query(PricePrediction)
+                .filter(
+                    PricePrediction.user_id == operator_id,
+                    PricePrediction.project_id.in_(chunk),
+                )
+                .order_by(PricePrediction.project_id.asc(), PricePrediction.created_at.desc(), PricePrediction.id.desc())
+                .all()
+            )
+            for prediction in predictions:
+                latest_by_project.setdefault(int(prediction.project_id), prediction)
         return latest_by_project
 
     def _load_latest_histories(
@@ -259,18 +284,21 @@ class PredictionFeedbackService:
         if not project_ids:
             return {}
 
-        histories = (
-            db.query(HistoricalData)
-            .filter(
-                HistoricalData.project_id.isnot(None),
-                HistoricalData.project_id.in_(project_ids),
-            )
-            .order_by(HistoricalData.project_id.asc(), HistoricalData.opened_at.desc(), HistoricalData.created_at.desc(), HistoricalData.id.desc())
-            .all()
-        )
+        # See ``_load_latest_predictions``: chunk the IN list to stay under the
+        # bind-parameter limit while preserving the per-project latest ordering.
         latest_by_project: dict[int, HistoricalData] = {}
-        for history in histories:
-            latest_by_project.setdefault(int(history.project_id), history)
+        for chunk in _chunked(project_ids):
+            histories = (
+                db.query(HistoricalData)
+                .filter(
+                    HistoricalData.project_id.isnot(None),
+                    HistoricalData.project_id.in_(chunk),
+                )
+                .order_by(HistoricalData.project_id.asc(), HistoricalData.opened_at.desc(), HistoricalData.created_at.desc(), HistoricalData.id.desc())
+                .all()
+            )
+            for history in histories:
+                latest_by_project.setdefault(int(history.project_id), history)
         return latest_by_project
 
     def _load_latest_decisions(
@@ -284,18 +312,21 @@ class PredictionFeedbackService:
         if not project_ids:
             return {}
 
-        decisions = (
-            db.query(BidDecisionRecord)
-            .filter(
-                BidDecisionRecord.operator_id == operator_id,
-                BidDecisionRecord.project_id.in_(project_ids),
-            )
-            .order_by(BidDecisionRecord.project_id.asc(), BidDecisionRecord.updated_at.desc(), BidDecisionRecord.id.desc())
-            .all()
-        )
+        # See ``_load_latest_predictions``: chunk the IN list to stay under the
+        # bind-parameter limit while preserving the per-project latest ordering.
         latest_by_project: dict[int, BidDecisionRecord] = {}
-        for decision in decisions:
-            latest_by_project.setdefault(int(decision.project_id), decision)
+        for chunk in _chunked(project_ids):
+            decisions = (
+                db.query(BidDecisionRecord)
+                .filter(
+                    BidDecisionRecord.operator_id == operator_id,
+                    BidDecisionRecord.project_id.in_(chunk),
+                )
+                .order_by(BidDecisionRecord.project_id.asc(), BidDecisionRecord.updated_at.desc(), BidDecisionRecord.id.desc())
+                .all()
+            )
+            for decision in decisions:
+                latest_by_project.setdefault(int(decision.project_id), decision)
         return latest_by_project
 
     def _serialize_feedback_item(
