@@ -611,6 +611,10 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_telegram_polling_beat_schedule(),
             **build_stale_task_reconciler_beat_schedule(),
         },
+        # Resolved lazily by celery from the string path to avoid a circular
+        # import; auto-recovers from a corrupt shelve/dbm schedule db instead
+        # of crash-looping beat. See app/tasks/beat_scheduler.py.
+        "beat_scheduler": "app.tasks.beat_scheduler:SelfHealingScheduler",
     }
 
     if soft_time_limit is not None:
