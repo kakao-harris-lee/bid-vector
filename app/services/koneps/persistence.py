@@ -454,6 +454,16 @@ def resolve_tender_result(
     return tender_result
 
 
+def _crawl_event_name(status: str) -> str:
+    """Realtime event name for a crawl job's current status.
+
+    Frontend consumers key on the ``crawl.`` prefix (see frontend
+    useRealtimeEvents), but the suffix must still reflect actual status for
+    telemetry and any suffix-sensitive consumer.
+    """
+    return "crawl.completed" if status == "completed" else "crawl.fallback"
+
+
 def create_crawl_job(
     db: Session,
     request: CrawlRequest,
@@ -477,7 +487,7 @@ def create_crawl_job(
     db.commit()
     db.refresh(crawl_job)
     realtime_event_manager.publish_event(
-        "crawl.completed" if crawl_job.status == "completed" else "crawl.fallback",
+        _crawl_event_name(crawl_job.status),
         {
             "crawl_job_id": int(crawl_job.id),
             "project_id": (
@@ -554,7 +564,9 @@ def persist_crawl_results(
             deferred_embedding_project_ids
         )
 
-    return _commit_and_publish_crawl_job(db, crawl_job, event_name="crawl.failed")
+    return _commit_and_publish_crawl_job(
+        db, crawl_job, event_name=_crawl_event_name(crawl_job.status)
+    )
 
 
 def _apply_crawl_response_summary(

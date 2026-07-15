@@ -286,3 +286,52 @@ def test_write_delegators_forward_to_persistence(test_db, monkeypatch):
 
     assert service.mark_crawl_job_failed(test_db, "job", "err") == "failed-job"
     assert calls["mark"] == (test_db, "job", "err")
+
+
+def _capture_crawl_events(monkeypatch) -> list[str]:
+    """Patch the persistence module's realtime manager and record event names."""
+    events: list[str] = []
+
+    def _fake(event_type, payload=None):
+        events.append(event_type)
+        return {}
+
+    monkeypatch.setattr(
+        persistence.realtime_event_manager, "publish_event", _fake
+    )
+    return events
+
+
+def test_persist_crawl_results_publishes_completed_event(test_db, monkeypatch):
+    """The success path emits ``crawl.completed`` for a completed job, never ``crawl.failed``."""
+    events = _capture_crawl_events(monkeypatch)
+    crawl_job = persistence.create_crawl_job(test_db, _request())
+
+    persistence.persist_crawl_results(
+        test_db,
+        crawl_job,
+        _request(),
+        {"items": [], "job_status": "completed", "collected_count": 0},
+    )
+
+    assert crawl_job.status == "completed"
+    # create_crawl_job (running -> crawl.fallback) then the completed publish.
+    assert events[-1] == "crawl.completed"
+    assert "crawl.failed" not in events
+
+
+def test_persist_crawl_results_publishes_fallback_event(test_db, monkeypatch):
+    """A fallback job status maps to ``crawl.fallback`` (still not ``crawl.failed``)."""
+    events = _capture_crawl_events(monkeypatch)
+    crawl_job = persistence.create_crawl_job(test_db, _request())
+
+    persistence.persist_crawl_results(
+        test_db,
+        crawl_job,
+        _request(),
+        {"items": [], "job_status": "fallback", "collected_count": 0},
+    )
+
+    assert crawl_job.status == "fallback"
+    assert events[-1] == "crawl.fallback"
+    assert "crawl.failed" not in events
