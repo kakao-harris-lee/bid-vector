@@ -18,6 +18,7 @@ from app.models.models import (
     SyntheticExperimentResult,
     SyntheticExperimentRun,
 )
+from app.services.analytics_reporting import _resolve_g2_evidence_status
 
 
 def _bootstrap_operator(client):
@@ -547,6 +548,69 @@ def test_g2_evidence_summary_treats_smoke_as_supporting_and_dry_run_policy_as_no
     assert payload["notifications"]["source_run_type"] == "operator_notification_policy"
     assert payload["notifications"]["dry_run_policy_evidence_count"] == 1
     assert payload["notifications"]["evidence_count"] == 1
+
+
+def test_resolve_g2_evidence_status_missing_when_no_evidence():
+    """No evidence resolves to ``missing`` and returns the missing gap only."""
+    status, gap = _resolve_g2_evidence_status(
+        has_evidence=False,
+        has_mixed_scope=True,
+        has_ready=True,
+        missing_gap="none exists",
+        mixed_scope_gap="mixed",
+        insufficient_gap="short",
+    )
+    assert status == "missing"
+    assert gap == "none exists"
+
+
+def test_resolve_g2_evidence_status_mixed_scope_takes_precedence_over_ready():
+    """Mixed-scope evidence wins over ready per canonical precedence."""
+    status, gap = _resolve_g2_evidence_status(
+        has_evidence=True,
+        has_mixed_scope=True,
+        has_ready=True,
+        mixed_scope_gap="slug only",
+        insufficient_gap="short",
+    )
+    assert status == "mixed_scope"
+    assert gap == "slug only"
+
+
+def test_resolve_g2_evidence_status_insufficient_when_evidence_not_ready():
+    """Operator-scoped but not-ready evidence resolves to ``insufficient``."""
+    status, gap = _resolve_g2_evidence_status(
+        has_evidence=True,
+        has_mixed_scope=False,
+        has_ready=False,
+        insufficient_gap="not completed",
+    )
+    assert status == "insufficient"
+    assert gap == "not completed"
+
+
+def test_resolve_g2_evidence_status_ready_carries_no_blocking_gap():
+    """Ready evidence never returns a blocking gap even if gaps are supplied."""
+    status, gap = _resolve_g2_evidence_status(
+        has_evidence=True,
+        has_mixed_scope=False,
+        has_ready=True,
+        insufficient_gap="short",
+        missing_gap="none",
+    )
+    assert status == "ready"
+    assert gap is None
+
+
+def test_resolve_g2_evidence_status_gaps_default_to_none():
+    """Non-ready branches return ``None`` when their gap message is omitted."""
+    status, gap = _resolve_g2_evidence_status(
+        has_evidence=True,
+        has_mixed_scope=False,
+        has_ready=False,
+    )
+    assert status == "insufficient"
+    assert gap is None
 
 
 def test_operations_dashboard_reports_external_broker_and_stale_tasks(client, test_db, monkeypatch):
