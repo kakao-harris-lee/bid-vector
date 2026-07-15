@@ -76,42 +76,76 @@ FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
     },
 }
 
-_CREDENTIAL_TOKENS = (
-    "credential",
-    "unauthorized",
-    "forbidden",
-    "401",
-    "403",
-    "api key",
-    "apikey",
-    "service key",
-    "token",
-    "secret",
+# Ordered token-substring rules. ``classify_failure`` returns the first category
+# whose *any* token appears (case-insensitively) as a substring of the combined
+# ``"<name> <detail>"`` text. Rule order is the classification priority and must
+# be preserved: earlier categories win over later ones on co-occurring tokens.
+FAILURE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "credential",
+        (
+            "credential",
+            "unauthorized",
+            "forbidden",
+            "401",
+            "403",
+            "api key",
+            "apikey",
+            "service key",
+            "token",
+            "secret",
+        ),
+    ),
+    (
+        "task_broker",
+        ("celery", "broker", "rabbit", "redis", "queue", "worker", "task"),
+    ),
+    (
+        "no_candidate",
+        (
+            "no eligible",
+            "no candidate",
+            "no recent project",
+            "no project",
+            "collected 0",
+            "0 item",
+        ),
+    ),
+    ("telegram", ("telegram",)),
+    (
+        "db_schema",
+        (
+            "no such table",
+            "no such column",
+            "schema",
+            "sqlalchemy",
+            "operationalerror",
+            "database",
+        ),
+    ),
 )
-_TASK_BROKER_TOKENS = (
-    "celery",
-    "broker",
-    "rabbit",
-    "redis",
-    "queue",
-    "worker",
-    "task",
-)
-_NO_CANDIDATE_TOKENS = (
-    "no eligible",
-    "no candidate",
-    "no recent project",
-    "no project",
-    "collected 0",
-    "0 item",
-)
-_DB_SCHEMA_TOKENS = (
-    "no such table",
-    "no such column",
-    "schema",
-    "sqlalchemy",
-    "operationalerror",
-    "database",
+
+
+# Name-aware rules run after the token rules, in this order. They stay as named
+# predicates (not plain token data) because each combines an exact phase-name
+# match with a text-substring fallback — a composite condition that would lose
+# meaning if flattened into the token table above.
+def _is_candidate_generation(name_lower: str, text: str) -> bool:
+    return name_lower == "candidate_generation" or "strategy monitor" in text
+
+
+def _is_koneps_response(name_lower: str, text: str) -> bool:
+    return name_lower == "koneps_collect" or "koneps" in text or "openapi" in text
+
+
+def _is_prediction(name_lower: str, text: str) -> bool:
+    return name_lower in {"predict_price", "sbert_embedding"}
+
+
+_NAME_AWARE_RULES = (
+    ("candidate_generation", _is_candidate_generation),
+    ("koneps_response", _is_koneps_response),
+    ("prediction", _is_prediction),
 )
 
 
@@ -123,23 +157,13 @@ def classify_failure(name: str, detail: str) -> str:
     in priority order, returning ``"unknown"`` when nothing matches.
     """
     text = f"{name or ''} {detail or ''}".strip().lower()
-    if any(token in text for token in _CREDENTIAL_TOKENS):
-        return "credential"
-    if any(token in text for token in _TASK_BROKER_TOKENS):
-        return "task_broker"
-    if any(token in text for token in _NO_CANDIDATE_TOKENS):
-        return "no_candidate"
-    if "telegram" in text:
-        return "telegram"
-    if any(token in text for token in _DB_SCHEMA_TOKENS):
-        return "db_schema"
+    for category, tokens in FAILURE_RULES:
+        if any(token in text for token in tokens):
+            return category
     name_lower = str(name or "").strip().lower()
-    if name_lower == "candidate_generation" or "strategy monitor" in text:
-        return "candidate_generation"
-    if name_lower == "koneps_collect" or "koneps" in text or "openapi" in text:
-        return "koneps_response"
-    if name_lower in {"predict_price", "sbert_embedding"}:
-        return "prediction"
+    for category, predicate in _NAME_AWARE_RULES:
+        if predicate(name_lower, text):
+            return category
     return "unknown"
 
 
