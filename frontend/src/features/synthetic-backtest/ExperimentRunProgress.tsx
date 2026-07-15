@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { experimentRunCsvUrl, fetchExperimentRun } from "@/shared/api";
-import { Badge, type BadgeTone, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
+import { experimentRunTone } from "@/shared/constants/statusTone";
 import type { SyntheticExperimentRunResponse } from "@/shared/types/synthetic";
 import { Leaderboard } from "./Leaderboard";
 import { BreakdownView } from "./BreakdownView";
@@ -19,13 +20,6 @@ const TERMINAL_STATUSES = new Set(["completed", "failed"]);
 
 function isTerminal(status: string | undefined): boolean {
   return status != null && TERMINAL_STATUSES.has(status);
-}
-
-function statusTone(status: string | undefined): BadgeTone {
-  if (status === "completed") return "healthy";
-  if (status === "failed") return "critical";
-  if (status === "running") return "info";
-  return "muted";
 }
 
 function progressLabel(run: SyntheticExperimentRunResponse | undefined): string {
@@ -70,7 +64,7 @@ export function ExperimentRunProgress({
               CSV 다운로드
             </a>
           ) : null}
-          {status ? <Badge tone={statusTone(status)}>{status}</Badge> : null}
+          {status ? <Badge tone={experimentRunTone(status)}>{status}</Badge> : null}
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-xs">
