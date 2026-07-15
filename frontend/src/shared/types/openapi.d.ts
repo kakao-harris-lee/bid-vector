@@ -4,455 +4,6 @@
  */
 
 export interface paths {
-    "/api/v1/admin/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get System Stats
-         * @description Legacy compatibility endpoint returning singleton operator system stats.
-         */
-        get: operations["get_system_stats_api_v1_admin_stats_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Users
-         * @description Legacy compatibility endpoint returning the singleton operator snapshot.
-         */
-        get: operations["list_users_api_v1_admin_users_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/users/{user_id}/deactivate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Deactivate User
-         * @description Legacy compatibility endpoint for deactivating the singleton operator.
-         */
-        put: operations["deactivate_user_api_v1_admin_users__user_id__deactivate_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/accuracy-report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Accuracy Report
-         * @description Consolidate 추천가 vs 실제 낙찰가 정확도 (정산 완료 건만, 단일 운영자 기준).
-         */
-        get: operations["get_accuracy_report_api_v1_analytics_accuracy_report_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Decision Experiment Runs
-         * @description Return recent decision experiment runs for dashboard status tracking.
-         */
-        get: operations["list_decision_experiment_runs_api_v1_analytics_decision_experiments_get"];
-        put?: never;
-        /**
-         * Create Decision Experiment Run
-         * @description Persist one experiment plan so the operator can track execution and later evaluate outcomes.
-         */
-        post: operations["create_decision_experiment_run_api_v1_analytics_decision_experiments_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-experiments/{experiment_run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Decision Experiment Run Detail
-         * @description Return one persisted experiment run with its baseline snapshot and latest evaluation.
-         */
-        get: operations["get_decision_experiment_run_detail_api_v1_analytics_decision_experiments__experiment_run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Update Decision Experiment Run
-         * @description Manually update a persisted experiment run's notes or lifecycle state.
-         */
-        patch: operations["update_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__patch"];
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-experiments/{experiment_run_id}/apply-strategy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Apply Decision Experiment Strategy
-         * @description Apply one successful experiment's workload/category tuning to the operator strategy.
-         */
-        post: operations["apply_decision_experiment_strategy_api_v1_analytics_decision_experiments__experiment_run_id__apply_strategy_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-experiments/{experiment_run_id}/apply-thresholds": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Apply Decision Experiment Thresholds
-         * @description Apply one successful experiment's threshold recommendation to the operator strategy.
-         */
-        post: operations["apply_decision_experiment_thresholds_api_v1_analytics_decision_experiments__experiment_run_id__apply_thresholds_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-experiments/{experiment_run_id}/evaluate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Evaluate Decision Experiment Run
-         * @description Queue experiment re-evaluation instead of running it inside the API request.
-         */
-        post: operations["evaluate_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__evaluate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-funnel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Decision Funnel
-         * @description Summarize how persisted decision records progress through the operator workflow.
-         */
-        get: operations["get_decision_funnel_api_v1_analytics_decision_funnel_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-insights": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Decision Insights
-         * @description Summarize persisted bid-decision signals for tuning and operator review.
-         */
-        get: operations["get_decision_insights_api_v1_analytics_decision_insights_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/decision-recommendations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Decision Recommendations
-         * @description Return actionable tuning recommendations derived from the decision funnel analytics.
-         */
-        get: operations["get_decision_recommendations_api_v1_analytics_decision_recommendations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/event": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Log Event
-         * @description Log an analytics event for the singleton operator.
-         */
-        post: operations["log_event_api_v1_analytics_event_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/g2-evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get G2 Evidence Summary
-         * @description Return one operator-scoped evidence ledger for G-2 exit review.
-         */
-        get: operations["get_g2_evidence_summary_api_v1_analytics_g2_evidence_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/operations-dashboard": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Operations Dashboard
-         * @description Return dashboard cards for crawl health and strategy monitoring performance.
-         */
-        get: operations["get_operations_dashboard_api_v1_analytics_operations_dashboard_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/operations-kpi": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Operations Kpi
-         * @description Aggregate roadmap operating KPIs (manual override, conversion, accuracy, missed) in one call.
-         */
-        get: operations["get_operations_kpi_api_v1_analytics_operations_kpi_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/operator-stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Operator Stats
-         * @description Get singleton operator statistics.
-         */
-        get: operations["get_operator_stats_api_v1_analytics_operator_stats_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/prediction-feedback": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Prediction Feedback
-         * @description Compare stored prediction and recommendation amounts against actual tender results.
-         */
-        get: operations["get_prediction_feedback_api_v1_analytics_prediction_feedback_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/prediction-observability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Prediction Observability
-         * @description Summarize predictor selection, fallback, guardrails, and result accuracy.
-         */
-        get: operations["get_prediction_observability_api_v1_analytics_prediction_observability_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/recommendation-feedback-labels": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Recommendation Feedback Labels
-         * @description Export deduped recommendation-feedback labels joined with decision/project context.
-         */
-        get: operations["get_recommendation_feedback_labels_api_v1_analytics_recommendation_feedback_labels_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Analytics Summary
-         * @description Get repository-wide analytics summary for the singleton workflow.
-         */
-        get: operations["get_analytics_summary_api_v1_analytics_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/analytics/user-stats/{user_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get User Stats
-         * @deprecated
-         * @description Legacy compatibility alias for the new single-operator stats view.
-         */
-        get: operations["get_user_stats_api_v1_analytics_user_stats__user_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/auth/bootstrap": {
         parameters: {
             query?: never;
@@ -467,67 +18,6 @@ export interface paths {
          * @description Initialize the singleton operator account used by the service.
          */
         post: operations["register_api_v1_auth_bootstrap_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/auth/login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Login
-         * @deprecated
-         * @description Login the singleton operator account.
-         */
-        post: operations["login_api_v1_auth_login_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/auth/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Current User
-         * @description Get the current singleton operator profile.
-         */
-        get: operations["get_current_user_api_v1_auth_me_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/auth/password-reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reset Operator Password
-         * @description Reset the singleton operator password when the server reset token matches.
-         */
-        post: operations["reset_operator_password_api_v1_auth_password_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -575,6 +65,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @deprecated
+         * @description Login the singleton operator account.
+         */
+        post: operations["login_api_v1_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Operator Password
+         * @description Reset the singleton operator password when the server reset token matches.
+         */
+        post: operations["reset_operator_password_api_v1_auth_password_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Current User
+         * @description Get the current singleton operator profile.
+         */
+        get: operations["get_current_user_api_v1_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backtests/data-audit": {
         parameters: {
             query?: never;
@@ -589,26 +140,6 @@ export interface paths {
         get: operations["get_backtest_data_audit_api_v1_backtests_data_audit_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/backtests/paper-bidding/forward-runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Forward Paper Bidding Run
-         * @description Generate paper bids for currently open/re-notice projects.
-         */
-        post: operations["create_forward_paper_bidding_run_api_v1_backtests_paper_bidding_forward_runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -639,20 +170,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/backtests/paper-bidding/runs/{run_id}": {
+    "/api/v1/backtests/paper-bidding/forward-runs": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get Paper Bidding Run Detail
-         * @description Return one persisted paper-bidding run with bids and settlements.
-         */
-        get: operations["get_paper_bidding_run_detail_api_v1_backtests_paper_bidding_runs__run_id__get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /**
+         * Create Forward Paper Bidding Run
+         * @description Generate paper bids for currently open/re-notice projects.
+         */
+        post: operations["create_forward_paper_bidding_run_api_v1_backtests_paper_bidding_forward_runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -679,7 +210,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/bids/": {
+    "/api/v1/backtests/paper-bidding/runs/{run_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -687,58 +218,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Bids
-         * @description List bids for the singleton operator with optional filters.
+         * Get Paper Bidding Run Detail
+         * @description Return one persisted paper-bidding run with bids and settlements.
          */
-        get: operations["list_bids_api_v1_bids__get"];
-        put?: never;
-        /**
-         * Submit Bid
-         * @description Submit a bid for the singleton operator account.
-         */
-        post: operations["submit_bid_api_v1_bids__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/bids/{bid_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Bid
-         * @description Get bid details for the singleton operator.
-         */
-        get: operations["get_bid_api_v1_bids__bid_id__get"];
-        /**
-         * Update Bid
-         * @description Update a bid owned by the singleton operator.
-         */
-        put: operations["update_bid_api_v1_bids__bid_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/dashboard/bids": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Dashboard Bids
-         * @description Return submitted bids with their latest linked decision record.
-         */
-        get: operations["list_dashboard_bids_api_v1_dashboard_bids_get"];
+        get: operations["get_paper_bidding_run_detail_api_v1_backtests_paper_bidding_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -759,6 +242,26 @@ export interface paths {
          * @description Return bid-decision candidates for the mobile dashboard opportunity tab.
          */
         get: operations["list_dashboard_opportunities_api_v1_dashboard_opportunities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dashboard/bids": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Dashboard Bids
+         * @description Return submitted bids with their latest linked decision record.
+         */
+        get: operations["list_dashboard_bids_api_v1_dashboard_bids_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -799,682 +302,6 @@ export interface paths {
          * @description Return the mobile-first dashboard home payload centered on today's work.
          */
         get: operations["get_dashboard_summary_api_v1_dashboard_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/ml/backfills/project-embeddings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Enqueue Project Embedding Backfill
-         * @description Queue a project embedding backfill on the ML backfill queue.
-         */
-        post: operations["enqueue_project_embedding_backfill_api_v1_ml_backfills_project_embeddings_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/ml/backfills/project-embeddings/tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Project Embedding Backfill Task Status
-         * @description Inspect the status of a queued project embedding backfill.
-         */
-        get: operations["get_project_embedding_backfill_task_status_api_v1_ml_backfills_project_embeddings_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/ml/reevaluations/decision-experiments/tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Decision Experiment Reevaluation Job Status
-         * @description Inspect the status of a queued decision experiment re-evaluation.
-         */
-        get: operations["get_decision_experiment_reevaluation_job_status_api_v1_ml_reevaluations_decision_experiments_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/ml/reevaluations/decision-experiments/{experiment_run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Enqueue Decision Experiment Reevaluation Job
-         * @description Queue decision experiment re-evaluation on the ML re-evaluation queue.
-         */
-        post: operations["enqueue_decision_experiment_reevaluation_job_api_v1_ml_reevaluations_decision_experiments__experiment_run_id__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/ml/training/price-predictor": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Enqueue Price Predictor Training Job
-         * @description Queue price predictor training on the dedicated training queue.
-         */
-        post: operations["enqueue_price_predictor_training_job_api_v1_ml_training_price_predictor_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/ml/training/price-predictor/tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Price Predictor Training Job Status
-         * @description Inspect the status of a queued price predictor training job.
-         */
-        get: operations["get_price_predictor_training_job_status_api_v1_ml_training_price_predictor_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/allocate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Decide Bid Pursuit
-         * @deprecated
-         * @description Prioritize whether the single user should pursue a bid opportunity now.
-         */
-        post: operations["decide_bid_pursuit_api_v1_operations_allocate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decision": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Decide Bid Pursuit
-         * @description Prioritize whether the single user should pursue a bid opportunity now.
-         */
-        post: operations["decide_bid_pursuit_api_v1_operations_bid_decision_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decisions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Bid Decisions
-         * @description List persisted bid decision records for the singleton operator.
-         */
-        get: operations["list_bid_decisions_api_v1_operations_bid_decisions_get"];
-        put?: never;
-        /**
-         * Save Bid Decision
-         * @description Evaluate and persist a single-operator bid decision record.
-         */
-        post: operations["save_bid_decision_api_v1_operations_bid_decisions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decisions/{decision_record_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Bid Decision Detail
-         * @description Return one persisted bid decision with project context and same-project history.
-         */
-        get: operations["get_bid_decision_detail_api_v1_operations_bid_decisions__decision_record_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decisions/{decision_record_id}/actions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Apply Bid Decision Action
-         * @description Apply an inline dashboard action (submit/review/skip) to a bid decision record.
-         *
-         *     Reuses :meth:`BidDecisionService.apply_telegram_action` so the dashboard
-         *     and the Telegram inline buttons share the exact same transition rules
-         *     (action / decision_status / pursue_bid / reasoning notes). The optional
-         *     ``operator_id`` query parameter follows the standard operator-context
-         *     pattern: canonical/admin callers can target synthetic operator records,
-         *     non-privileged callers can only act on their own records.
-         */
-        post: operations["apply_bid_decision_action_api_v1_operations_bid_decisions__decision_record_id__actions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decisions/{decision_record_id}/bid-form-draft": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Bid Form Draft
-         * @description Build a 나라장터 투찰서 초안 mapped onto KONEPS 입력 항목 for one decision.
-         *
-         *     Reuses the PR7 summary aggregation, then maps recommended 투찰금액/투찰률,
-         *     공고 메타, 적격여부(추정), and the 카테고리 낙찰하한율(참고) onto field-label/value
-         *     pairs. 자동 제출은 하지 않습니다 — 운영자가 직접 나라장터에 입력·제출합니다.
-         *
-         *     ``format=csv`` / ``format=text`` return downloadable / printable renders of the
-         *     same data. 404 when the record id is unknown (or belongs to a different
-         *     operator) / the linked project is missing.
-         */
-        get: operations["get_bid_form_draft_api_v1_operations_bid_decisions__decision_record_id__bid_form_draft_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decisions/{decision_record_id}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Update Bid Decision Status
-         * @description Transition a persisted bid decision record between planned/reviewing/submitted/skipped.
-         *
-         *     Lightweight endpoint used by the decisions screen to flip status without
-         *     resubmitting the full BidDecisionSaveRequest payload.
-         */
-        patch: operations["update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch"];
-        trace?: never;
-    };
-    "/api/v1/operations/bid-decisions/{decision_record_id}/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Bid Decision Summary
-         * @description Aggregate one persisted bid decision into a decision-support summary.
-         *
-         *     Returns recommended bid amount/rate, price range, 가격 적합도(추정), reasoning,
-         *     the reference 카테고리 낙찰하한율, optional 분야 통계, notice metadata, and the
-         *     direct-submission notice. 404 when the record id is unknown (or belongs to a
-         *     different operator) / the linked project is missing.
-         */
-        get: operations["get_bid_decision_summary_api_v1_operations_bid_decisions__decision_record_id__summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/classify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Classify Notice
-         * @description Classify a project against the singleton operator's company profile.
-         */
-        post: operations["classify_notice_api_v1_operations_classify_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/crawl": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Crawl Notices
-         * @description Execute a crawl immediately and persist the resulting crawl history.
-         */
-        post: operations["crawl_notices_api_v1_operations_crawl_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/crawl/async": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Crawl Notices Async
-         * @description Queue a KONEPS crawl task and return a pollable task id.
-         */
-        post: operations["crawl_notices_async_api_v1_operations_crawl_async_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/crawl/tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Crawl Notices Task Status
-         * @description Inspect the current status and result of a queued KONEPS crawl task.
-         */
-        get: operations["get_crawl_notices_task_status_api_v1_operations_crawl_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/decision-samples": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Decision Samples
-         * @description List recent served recommendations + their latest predictions (audit evidence).
-         *
-         *     Resolved operator 기준. 정산 결과가 아니라 시스템이 산출·기록한 추천/예측
-         *     증적을 최근 순으로 반환한다. ``probability_score`` 는 가격 적합도(추정)이지
-         *     P(낙찰)이 아니다(§1.5). ``format=csv`` 는 평탄화된 다운로드용 CSV 를 반환한다.
-         */
-        get: operations["get_decision_samples_api_v1_operations_decision_samples_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/notify/telegram": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Notify Telegram
-         * @description Build and best-effort send a canonical legacy Telegram notification payload.
-         */
-        post: operations["notify_telegram_api_v1_operations_notify_telegram_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/opportunity-analysis": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Analyze Opportunity
-         * @description Run a multi-angle analysis and return the recommended bid action for one project.
-         */
-        post: operations["analyze_opportunity_api_v1_operations_opportunity_analysis_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/projects/{project_id}/bid-decision-timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Project Bid Decision Timeline
-         * @description Return recent persisted bid-decision history for one project.
-         */
-        get: operations["get_project_bid_decision_timeline_api_v1_operations_projects__project_id__bid_decision_timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/telegram/callback": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Handle Telegram Callback
-         * @description Handle Telegram inline button callbacks for bid-decision actions.
-         */
-        post: operations["handle_telegram_callback_api_v1_operations_telegram_callback_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/telegram/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Telegram Status
-         * @description Expose Telegram delivery and webhook diagnostics for local debugging.
-         */
-        get: operations["get_telegram_status_api_v1_operations_telegram_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/telegram/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sync Telegram Updates
-         * @description Fetch pending Telegram updates manually and process them immediately.
-         */
-        post: operations["sync_telegram_updates_api_v1_operations_telegram_sync_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operations/telegram/webhook": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Handle Telegram Webhook
-         * @description Process raw Telegram webhook updates for messages and inline callbacks.
-         */
-        post: operations["handle_telegram_webhook_api_v1_operations_telegram_webhook_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operator/accounts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Operator Accounts
-         * @description List operator accounts visible to the current bearer-token owner.
-         *
-         *     Privileged callers (canonical ``operator`` or ``is_admin``) receive the full
-         *     catalogue (canonical + ``synthetic-*``). Non-privileged callers receive only
-         *     their own row so the dropdown collapses to a single self-pick.
-         */
-        get: operations["list_operator_accounts_api_v1_operator_accounts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operator/dashboard": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Operator Dashboard
-         * @description Return a card-ready web dashboard payload for analysis, decisions, monitoring, and feedback.
-         */
-        get: operations["get_operator_dashboard_api_v1_operator_dashboard_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operator/notification-channels": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Operator Notification Channels
-         * @description Return masked notification route metadata for the resolved operator.
-         */
-        get: operations["list_operator_notification_channels_api_v1_operator_notification_channels_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operator/notifications": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Operator Notifications
-         * @description Return recent notifications for the singleton operator's web dashboard.
-         */
-        get: operations["list_operator_notifications_api_v1_operator_notifications_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operator/notifications/{notification_id}/read": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Mark Operator Notification Read
-         * @description Mark a notification as read from the web dashboard.
-         */
-        put: operations["mark_operator_notification_read_api_v1_operator_notifications__notification_id__read_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/operator/overview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Operator Overview
-         * @description Return a compact dashboard summary for the active operator context.
-         */
-        get: operations["get_operator_overview_api_v1_operator_overview_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1579,26 +406,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/operator/strategy/monitor/async": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Operator Strategy Monitor Async
-         * @description Queue operator strategy monitoring work and return a pollable task id.
-         */
-        post: operations["run_operator_strategy_monitor_async_api_v1_operator_strategy_monitor_async_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/operator/strategy/monitor/runs": {
         parameters: {
             query?: never;
@@ -1639,6 +446,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/strategy/monitor/async": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Operator Strategy Monitor Async
+         * @description Queue operator strategy monitoring work and return a pollable task id.
+         */
+        post: operations["run_operator_strategy_monitor_async_api_v1_operator_strategy_monitor_async_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operator/strategy/monitor/tasks/{task_id}": {
         parameters: {
             query?: never;
@@ -1659,47 +486,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/predictions/analyze-document": {
+    "/api/v1/operator/dashboard": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Analyze Project Document
-         * @description Analyze a project document within the singleton operator workflow.
+         * Get Operator Dashboard
+         * @description Return a card-ready web dashboard payload for analysis, decisions, monitoring, and feedback.
          */
-        post: operations["analyze_project_document_api_v1_predictions_analyze_document_post"];
+        get: operations["get_operator_dashboard_api_v1_operator_dashboard_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/predictions/bid-recommendation": {
+    "/api/v1/operator/overview": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Get Bid Recommendation Endpoint
-         * @description Get AI-powered bid recommendation for the singleton operator.
+         * Get Operator Overview
+         * @description Return a compact dashboard summary for the active operator context.
          */
-        post: operations["get_bid_recommendation_endpoint_api_v1_predictions_bid_recommendation_post"];
+        get: operations["get_operator_overview_api_v1_operator_overview_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/predictions/price": {
+    "/api/v1/operator/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Operator Accounts
+         * @description List operator accounts visible to the current bearer-token owner.
+         *
+         *     Privileged callers (canonical ``operator`` or ``is_admin``) receive the full
+         *     catalogue (canonical + ``synthetic-*``). Non-privileged callers receive only
+         *     their own row so the dropdown collapses to a single self-pick.
+         */
+        get: operations["list_operator_accounts_api_v1_operator_accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operator/notification-channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Operator Notification Channels
+         * @description Return masked notification route metadata for the resolved operator.
+         */
+        get: operations["list_operator_notification_channels_api_v1_operator_notification_channels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operator/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Operator Notifications
+         * @description Return recent notifications for the singleton operator's web dashboard.
+         */
+        get: operations["list_operator_notifications_api_v1_operator_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operator/notifications/{notification_id}/read": {
         parameters: {
             query?: never;
             header?: never;
@@ -1707,12 +598,12 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
         /**
-         * Predict Project Price
-         * @description Predict project price for the singleton operator.
+         * Mark Operator Notification Read
+         * @description Mark a notification as read from the web dashboard.
          */
-        post: operations["predict_project_price_api_v1_predictions_price_post"];
+        put: operations["mark_operator_notification_read_api_v1_operator_notifications__notification_id__read_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1832,26 +723,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{project_id}/embedding/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Refresh Project Embedding
-         * @description Rebuild one project's semantic embedding and persist the latest vector metadata.
-         */
-        post: operations["refresh_project_embedding_api_v1_projects__project_id__embedding_refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/projects/{project_id}/similar": {
         parameters: {
             query?: never;
@@ -1872,7 +743,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/synthetic/backtests/run": {
+    "/api/v1/projects/{project_id}/embedding/refresh": {
         parameters: {
             query?: never;
             header?: never;
@@ -1882,20 +753,116 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run Synthetic Backtest Endpoint
-         * @description Run the historical paper-bidding backtest for every synthetic operator.
-         *
-         *     Synchronous for now (small operator count + bounded `limit`). Frontend can
-         *     show a loading state; a Celery wrapper can wrap this later if needed.
+         * Refresh Project Embedding
+         * @description Rebuild one project's semantic embedding and persist the latest vector metadata.
          */
-        post: operations["run_synthetic_backtest_endpoint_api_v1_synthetic_backtests_run_post"];
+        post: operations["refresh_project_embedding_api_v1_projects__project_id__embedding_refresh_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/synthetic/backtests/run-async": {
+    "/api/v1/bids/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Bids
+         * @description List bids for the singleton operator with optional filters.
+         */
+        get: operations["list_bids_api_v1_bids__get"];
+        put?: never;
+        /**
+         * Submit Bid
+         * @description Submit a bid for the singleton operator account.
+         */
+        post: operations["submit_bid_api_v1_bids__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bids/{bid_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bid
+         * @description Get bid details for the singleton operator.
+         */
+        get: operations["get_bid_api_v1_bids__bid_id__get"];
+        /**
+         * Update Bid
+         * @description Update a bid owned by the singleton operator.
+         */
+        put: operations["update_bid_api_v1_bids__bid_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/predictions/price": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Predict Project Price */
+        post: operations["predict_project_price_api_v1_predictions_price_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/predictions/bid-recommendation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Bid Recommendation Endpoint */
+        post: operations["get_bid_recommendation_endpoint_api_v1_predictions_bid_recommendation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/predictions/analyze-document": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Analyze Project Document */
+        post: operations["analyze_project_document_api_v1_predictions_analyze_document_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ml/backfills/project-embeddings": {
         parameters: {
             query?: never;
             header?: never;
@@ -1905,20 +872,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run Synthetic Backtest Async Endpoint
-         * @description Queue the synthetic backtest in a Celery worker and return a pollable task id.
-         *
-         *     Use when the synchronous path could exceed the API request timeout
-         *     (12 operators × large `limit`, slow predictor warm-up, etc.).
+         * Enqueue Project Embedding Backfill
+         * @description Queue a project embedding backfill on the ML backfill queue.
          */
-        post: operations["run_synthetic_backtest_async_endpoint_api_v1_synthetic_backtests_run_async_post"];
+        post: operations["enqueue_project_embedding_backfill_api_v1_ml_backfills_project_embeddings_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/synthetic/backtests/tasks/{task_id}": {
+    "/api/v1/ml/backfills/project-embeddings/tasks/{task_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1926,12 +890,1015 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Synthetic Backtest Task Status Endpoint
-         * @description Inspect the status (+ result) of a queued synthetic backtest task.
+         * Get Project Embedding Backfill Task Status
+         * @description Inspect the status of a queued project embedding backfill.
          */
-        get: operations["get_synthetic_backtest_task_status_endpoint_api_v1_synthetic_backtests_tasks__task_id__get"];
+        get: operations["get_project_embedding_backfill_task_status_api_v1_ml_backfills_project_embeddings_tasks__task_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ml/training/price-predictor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enqueue Price Predictor Training Job
+         * @description Queue price predictor training on the dedicated training queue.
+         */
+        post: operations["enqueue_price_predictor_training_job_api_v1_ml_training_price_predictor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ml/training/price-predictor/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Price Predictor Training Job Status
+         * @description Inspect the status of a queued price predictor training job.
+         */
+        get: operations["get_price_predictor_training_job_status_api_v1_ml_training_price_predictor_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ml/reevaluations/decision-experiments/{experiment_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enqueue Decision Experiment Reevaluation Job
+         * @description Queue decision experiment re-evaluation on the ML re-evaluation queue.
+         */
+        post: operations["enqueue_decision_experiment_reevaluation_job_api_v1_ml_reevaluations_decision_experiments__experiment_run_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ml/reevaluations/decision-experiments/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Experiment Reevaluation Job Status
+         * @description Inspect the status of a queued decision experiment re-evaluation.
+         */
+        get: operations["get_decision_experiment_reevaluation_job_status_api_v1_ml_reevaluations_decision_experiments_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/event": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Log Event
+         * @description Log an analytics event for the singleton operator.
+         */
+        post: operations["log_event_api_v1_analytics_event_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Analytics Summary
+         * @description Get repository-wide analytics summary for the singleton workflow.
+         */
+        get: operations["get_analytics_summary_api_v1_analytics_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/operator-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operator Stats
+         * @description Get singleton operator statistics.
+         */
+        get: operations["get_operator_stats_api_v1_analytics_operator_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/prediction-feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Prediction Feedback
+         * @description Compare stored prediction and recommendation amounts against actual tender results.
+         */
+        get: operations["get_prediction_feedback_api_v1_analytics_prediction_feedback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/prediction-observability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Prediction Observability
+         * @description Summarize predictor selection, fallback, guardrails, and result accuracy.
+         */
+        get: operations["get_prediction_observability_api_v1_analytics_prediction_observability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/accuracy-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Accuracy Report
+         * @description Consolidate 추천가 vs 실제 낙찰가 정확도 (정산 완료 건만, 단일 운영자 기준).
+         */
+        get: operations["get_accuracy_report_api_v1_analytics_accuracy_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/operations-dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operations Dashboard
+         * @description Return dashboard cards for crawl health and strategy monitoring performance.
+         */
+        get: operations["get_operations_dashboard_api_v1_analytics_operations_dashboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/g2-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get G2 Evidence Summary
+         * @description Return one operator-scoped evidence ledger for G-2 exit review.
+         */
+        get: operations["get_g2_evidence_summary_api_v1_analytics_g2_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Insights
+         * @description Summarize persisted bid-decision signals for tuning and operator review.
+         */
+        get: operations["get_decision_insights_api_v1_analytics_decision_insights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-funnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Funnel
+         * @description Summarize how persisted decision records progress through the operator workflow.
+         */
+        get: operations["get_decision_funnel_api_v1_analytics_decision_funnel_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/operations-kpi": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operations Kpi
+         * @description Aggregate roadmap operating KPIs (manual override, conversion, accuracy, missed) in one call.
+         */
+        get: operations["get_operations_kpi_api_v1_analytics_operations_kpi_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/recommendation-feedback-labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Recommendation Feedback Labels
+         * @description Export deduped recommendation-feedback labels joined with decision/project context.
+         */
+        get: operations["get_recommendation_feedback_labels_api_v1_analytics_recommendation_feedback_labels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-recommendations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Recommendations
+         * @description Return actionable tuning recommendations derived from the decision funnel analytics.
+         */
+        get: operations["get_decision_recommendations_api_v1_analytics_decision_recommendations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Decision Experiment Runs
+         * @description Return recent decision experiment runs for dashboard status tracking.
+         */
+        get: operations["list_decision_experiment_runs_api_v1_analytics_decision_experiments_get"];
+        put?: never;
+        /**
+         * Create Decision Experiment Run
+         * @description Persist one experiment plan so the operator can track execution and later evaluate outcomes.
+         */
+        post: operations["create_decision_experiment_run_api_v1_analytics_decision_experiments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-experiments/{experiment_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Experiment Run Detail
+         * @description Return one persisted experiment run with its baseline snapshot and latest evaluation.
+         */
+        get: operations["get_decision_experiment_run_detail_api_v1_analytics_decision_experiments__experiment_run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Decision Experiment Run
+         * @description Manually update a persisted experiment run's notes or lifecycle state.
+         */
+        patch: operations["update_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-experiments/{experiment_run_id}/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluate Decision Experiment Run
+         * @description Queue experiment re-evaluation instead of running it inside the API request.
+         */
+        post: operations["evaluate_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-experiments/{experiment_run_id}/apply-thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Decision Experiment Thresholds
+         * @description Apply one successful experiment's threshold recommendation to the operator strategy.
+         */
+        post: operations["apply_decision_experiment_thresholds_api_v1_analytics_decision_experiments__experiment_run_id__apply_thresholds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/decision-experiments/{experiment_run_id}/apply-strategy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Decision Experiment Strategy
+         * @description Apply one successful experiment's workload/category tuning to the operator strategy.
+         */
+        post: operations["apply_decision_experiment_strategy_api_v1_analytics_decision_experiments__experiment_run_id__apply_strategy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/user-stats/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Stats
+         * @deprecated
+         * @description Legacy compatibility alias for the new single-operator stats view.
+         */
+        get: operations["get_user_stats_api_v1_analytics_user_stats__user_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Users
+         * @description Legacy compatibility endpoint returning the singleton operator snapshot.
+         */
+        get: operations["list_users_api_v1_admin_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get System Stats
+         * @description Legacy compatibility endpoint returning singleton operator system stats.
+         */
+        get: operations["get_system_stats_api_v1_admin_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{user_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Deactivate User
+         * @description Legacy compatibility endpoint for deactivating the singleton operator.
+         */
+        put: operations["deactivate_user_api_v1_admin_users__user_id__deactivate_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/crawl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Crawl Notices
+         * @description Execute a crawl immediately and persist the resulting crawl history.
+         */
+        post: operations["crawl_notices_api_v1_operations_crawl_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/crawl/async": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Crawl Notices Async
+         * @description Queue a KONEPS crawl task and return a pollable task id.
+         */
+        post: operations["crawl_notices_async_api_v1_operations_crawl_async_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/crawl/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Crawl Notices Task Status
+         * @description Inspect the current status and result of a queued KONEPS crawl task.
+         */
+        get: operations["get_crawl_notices_task_status_api_v1_operations_crawl_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/classify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Classify Notice
+         * @description Classify a project against the singleton operator's company profile.
+         */
+        post: operations["classify_notice_api_v1_operations_classify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/opportunity-analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Analyze Opportunity
+         * @description Run a multi-angle analysis and return the recommended bid action for one project.
+         */
+        post: operations["analyze_opportunity_api_v1_operations_opportunity_analysis_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Bid Pursuit
+         * @description Prioritize whether the single user should pursue a bid opportunity now.
+         */
+        post: operations["decide_bid_pursuit_api_v1_operations_bid_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/allocate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Bid Pursuit
+         * @deprecated
+         * @description Prioritize whether the single user should pursue a bid opportunity now.
+         */
+        post: operations["decide_bid_pursuit_api_v1_operations_allocate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Bid Decisions
+         * @description List persisted bid decision records for the singleton operator.
+         */
+        get: operations["list_bid_decisions_api_v1_operations_bid_decisions_get"];
+        put?: never;
+        /**
+         * Save Bid Decision
+         * @description Evaluate and persist a single-operator bid decision record.
+         */
+        post: operations["save_bid_decision_api_v1_operations_bid_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/projects/{project_id}/bid-decision-timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Bid Decision Timeline
+         * @description Return recent persisted bid-decision history for one project.
+         */
+        get: operations["get_project_bid_decision_timeline_api_v1_operations_projects__project_id__bid_decision_timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Bid Decision Status
+         * @description Transition a persisted bid decision record between planned/reviewing/submitted/skipped.
+         *
+         *     Lightweight endpoint used by the decisions screen to flip status without
+         *     resubmitting the full BidDecisionSaveRequest payload.
+         */
+        patch: operations["update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch"];
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Bid Decision Action
+         * @description Apply an inline dashboard action (submit/review/skip) to a bid decision record.
+         *
+         *     Reuses :meth:`BidDecisionService.apply_telegram_action` so the dashboard
+         *     and the Telegram inline buttons share the exact same transition rules
+         *     (action / decision_status / pursue_bid / reasoning notes). The optional
+         *     ``operator_id`` query parameter follows the standard operator-context
+         *     pattern: canonical/admin callers can target synthetic operator records,
+         *     non-privileged callers can only act on their own records.
+         */
+        post: operations["apply_bid_decision_action_api_v1_operations_bid_decisions__decision_record_id__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decisions/{decision_record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bid Decision Detail
+         * @description Return one persisted bid decision with project context and same-project history.
+         */
+        get: operations["get_bid_decision_detail_api_v1_operations_bid_decisions__decision_record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/notify/telegram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Notify Telegram
+         * @description Build and best-effort send a canonical legacy Telegram notification payload.
+         */
+        post: operations["notify_telegram_api_v1_operations_notify_telegram_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/telegram/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Handle Telegram Callback
+         * @description Handle Telegram inline button callbacks for bid-decision actions.
+         */
+        post: operations["handle_telegram_callback_api_v1_operations_telegram_callback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/telegram/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Handle Telegram Webhook
+         * @description Process raw Telegram webhook updates for messages and inline callbacks.
+         */
+        post: operations["handle_telegram_webhook_api_v1_operations_telegram_webhook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/telegram/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Telegram Updates
+         * @description Fetch pending Telegram updates manually and process them immediately.
+         */
+        post: operations["sync_telegram_updates_api_v1_operations_telegram_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/telegram/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Telegram Status
+         * @description Expose Telegram delivery and webhook diagnostics for local debugging.
+         */
+        get: operations["get_telegram_status_api_v1_operations_telegram_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bid Decision Summary
+         * @description Aggregate one persisted bid decision into a decision-support summary.
+         *
+         *     Returns recommended bid amount/rate, price range, 가격 적합도(추정), reasoning,
+         *     the reference 카테고리 낙찰하한율, optional 분야 통계, notice metadata, and the
+         *     direct-submission notice. 404 when the record id is unknown (or belongs to a
+         *     different operator) / the linked project is missing.
+         */
+        get: operations["get_bid_decision_summary_api_v1_operations_bid_decisions__decision_record_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/bid-form-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bid Form Draft
+         * @description Build a 나라장터 투찰서 초안 mapped onto KONEPS 입력 항목 for one decision.
+         *
+         *     Reuses the PR7 summary aggregation, then maps recommended 투찰금액/투찰률,
+         *     공고 메타, 적격여부(추정), and the 카테고리 낙찰하한율(참고) onto field-label/value
+         *     pairs. 자동 제출은 하지 않습니다 — 운영자가 직접 나라장터에 입력·제출합니다.
+         *
+         *     ``format=csv`` / ``format=text`` return downloadable / printable renders of the
+         *     same data. 404 when the record id is unknown (or belongs to a different
+         *     operator) / the linked project is missing.
+         */
+        get: operations["get_bid_form_draft_api_v1_operations_bid_decisions__decision_record_id__bid_form_draft_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/decision-samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Samples
+         * @description List recent served recommendations + their latest predictions (audit evidence).
+         *
+         *     Resolved operator 기준. 정산 결과가 아니라 시스템이 산출·기록한 추천/예측
+         *     증적을 최근 순으로 반환한다. ``probability_score`` 는 가격 적합도(추정)이지
+         *     P(낙찰)이 아니다(§1.5). ``format=csv`` 는 평탄화된 다운로드용 CSV 를 반환한다.
+         */
+        get: operations["get_decision_samples_api_v1_operations_decision_samples_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/operators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Synthetic Operators Endpoint
+         * @description Return seeded synthetic operators (`synthetic-*`).
+         */
+        get: operations["list_synthetic_operators_endpoint_api_v1_synthetic_operators_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/operators/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Synthetic Operators Endpoint
+         * @description Idempotent seed/upsert of the 12-archetype synthetic operator catalogue.
+         *
+         *     Optionally purges existing synthetic rows first (`purge=true`).
+         */
+        post: operations["seed_synthetic_operators_endpoint_api_v1_synthetic_operators_seed_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2014,6 +1981,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/synthetic/backtests/run-async": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Synthetic Backtest Async Endpoint
+         * @description Queue the synthetic backtest in a Celery worker and return a pollable task id.
+         *
+         *     Use when the synchronous path could exceed the API request timeout
+         *     (12 operators × large `limit`, slow predictor warm-up, etc.).
+         */
+        post: operations["run_synthetic_backtest_async_endpoint_api_v1_synthetic_backtests_run_async_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/backtests/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Synthetic Backtest Task Status Endpoint
+         * @description Inspect the status (+ result) of a queued synthetic backtest task.
+         */
+        get: operations["get_synthetic_backtest_task_status_endpoint_api_v1_synthetic_backtests_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/backtests/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Synthetic Backtest Endpoint
+         * @description Run the historical paper-bidding backtest for every synthetic operator.
+         *
+         *     Synchronous for now (small operator count + bounded `limit`). Frontend can
+         *     show a loading state; a Celery wrapper can wrap this later if needed.
+         */
+        post: operations["run_synthetic_backtest_endpoint_api_v1_synthetic_backtests_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/experiments": {
         parameters: {
             query?: never;
@@ -2032,31 +2065,6 @@ export interface paths {
          * @description Save a synthetic experiment definition.
          */
         post: operations["create_experiment_endpoint_api_v1_synthetic_experiments_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/synthetic/experiments/compare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Compare Experiment Runs Endpoint
-         * @description A/B compare two runs' per-operator metrics, joined by ``operator_slug``.
-         *
-         *     ``delta`` is ``B - A`` (positive => B higher). The two runs may belong to
-         *     different experiments -- the join is purely on the slug intersection.
-         *     Returns 404 when either run id is unknown. ``win_rate_*`` values stay
-         *     price-only estimates (NOT actual awards).
-         */
-        get: operations["compare_experiment_runs_endpoint_api_v1_synthetic_experiments_compare_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2097,6 +2105,31 @@ export interface paths {
          * @description Create/update the saved experiment backing a fixed G-1 preset.
          */
         post: operations["ensure_experiment_preset_endpoint_api_v1_synthetic_experiments_presets__preset_name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/synthetic/experiments/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compare Experiment Runs Endpoint
+         * @description A/B compare two runs' per-operator metrics, joined by ``operator_slug``.
+         *
+         *     ``delta`` is ``B - A`` (positive => B higher). The two runs may belong to
+         *     different experiments -- the join is purely on the slug intersection.
+         *     Returns 404 when either run id is unknown. ``win_rate_*`` values stay
+         *     price-only estimates (NOT actual awards).
+         */
+        get: operations["compare_experiment_runs_endpoint_api_v1_synthetic_experiments_compare_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2227,48 +2260,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/synthetic/operators": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Synthetic Operators Endpoint
-         * @description Return seeded synthetic operators (`synthetic-*`).
-         */
-        get: operations["list_synthetic_operators_endpoint_api_v1_synthetic_operators_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/synthetic/operators/seed": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Synthetic Operators Endpoint
-         * @description Idempotent seed/upsert of the 12-archetype synthetic operator catalogue.
-         *
-         *     Optionally purges existing synthetic rows first (`purge=true`).
-         */
-        post: operations["seed_synthetic_operators_endpoint_api_v1_synthetic_operators_seed_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/health": {
         parameters: {
             query?: never;
@@ -2298,12 +2289,12 @@ export interface components {
          * @description Per-category accuracy. ``category`` None 은 ``(미분류)`` 로 노출한다.
          */
         AccuracyReportCategory: {
-            /** Average Recommendation Error Rate */
-            average_recommendation_error_rate?: number | null;
             /** Category */
             category: string;
             /** Sample Count */
             sample_count: number;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
             /** Within 3Pct Rate */
             within_3pct_rate?: number | null;
         };
@@ -2317,14 +2308,14 @@ export interface components {
         AccuracyReportErrorBin: {
             /** Bin Label */
             bin_label: string;
-            /** Count */
-            count: number;
             /** Lower */
             lower: number;
-            /** Rate */
-            rate?: number | null;
             /** Upper */
             upper?: number | null;
+            /** Count */
+            count: number;
+            /** Rate */
+            rate?: number | null;
         };
         /**
          * AccuracyReportResponse
@@ -2334,23 +2325,23 @@ export interface components {
          *     정산 완료 건만 포함(미정산 제외) — would_have_won/price-only 추정 지표와 달리 실측이다.
          */
         AccuracyReportResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
+            summary: components["schemas"]["AccuracyReportSummary"];
             /** Error Distribution */
             error_distribution?: components["schemas"]["AccuracyReportErrorBin"][];
+            /** Per Category */
+            per_category?: components["schemas"]["AccuracyReportCategory"][];
+            /** Time Trend */
+            time_trend?: components["schemas"]["AccuracyReportTrendBucket"][];
             /** Items */
             items?: components["schemas"]["PredictionFeedbackItem"][];
             /** Notes */
             notes?: string[];
-            /** Operator Id */
-            operator_id: number;
-            /** Per Category */
-            per_category?: components["schemas"]["AccuracyReportCategory"][];
-            summary: components["schemas"]["AccuracyReportSummary"];
-            /** Time Trend */
-            time_trend?: components["schemas"]["AccuracyReportTrendBucket"][];
         };
         /**
          * AccuracyReportSummary
@@ -2360,44 +2351,44 @@ export interface components {
          *     단일 운영자(canonical) 기준이다. ``within_*`` 는 추천가 오차가 해당 임계 이하인 표본 수/비율.
          */
         AccuracyReportSummary: {
-            /** Average Prediction Error Rate */
-            average_prediction_error_rate?: number | null;
-            /** Average Recommendation Error Rate */
-            average_recommendation_error_rate?: number | null;
-            /**
-             * Limit
-             * @description 집계에 적용된 유효 상한(limit) 건수.
-             */
-            limit: number;
+            /** Period Days */
+            period_days: number;
             /**
              * Matched Sample Count
              * @description 정산 완료·매칭된 비교 표본 수(집계 대상 건수). 상한(limit)에 막히면 truncated=True.
              */
             matched_sample_count: number;
-            /** Period Days */
-            period_days: number;
-            /** Prediction Sample Count */
-            prediction_sample_count: number;
-            /** Recommendation Better Than Prediction Count */
-            recommendation_better_than_prediction_count: number;
-            /** Recommendation Sample Count */
-            recommendation_sample_count: number;
             /**
              * Truncated
              * @description 상한(limit) 도달로 가장 최근 건만 집계돼 일부 과거 비교 건이 누락됐을 수 있음.
              * @default false
              */
             truncated: boolean;
+            /**
+             * Limit
+             * @description 집계에 적용된 유효 상한(limit) 건수.
+             */
+            limit: number;
+            /** Recommendation Sample Count */
+            recommendation_sample_count: number;
+            /** Prediction Sample Count */
+            prediction_sample_count: number;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
+            /** Average Prediction Error Rate */
+            average_prediction_error_rate?: number | null;
+            /** Recommendation Better Than Prediction Count */
+            recommendation_better_than_prediction_count: number;
             /** Within 1Pct Count */
             within_1pct_count: number;
-            /** Within 1Pct Rate */
-            within_1pct_rate?: number | null;
             /** Within 3Pct Count */
             within_3pct_count: number;
-            /** Within 3Pct Rate */
-            within_3pct_rate?: number | null;
             /** Within 5Pct Count */
             within_5pct_count: number;
+            /** Within 1Pct Rate */
+            within_1pct_rate?: number | null;
+            /** Within 3Pct Rate */
+            within_3pct_rate?: number | null;
             /** Within 5Pct Rate */
             within_5pct_rate?: number | null;
         };
@@ -2406,93 +2397,81 @@ export interface components {
          * @description Weekly accuracy trend bucketed by ``announced_at`` (chronological).
          */
         AccuracyReportTrendBucket: {
-            /** Average Recommendation Error Rate */
-            average_recommendation_error_rate?: number | null;
-            /**
-             * Period End
-             * Format: date-time
-             */
-            period_end: string;
             /**
              * Period Start
              * Format: date-time
              */
             period_start: string;
+            /**
+             * Period End
+             * Format: date-time
+             */
+            period_end: string;
             /** Sample Count */
             sample_count: number;
+            /** Average Recommendation Error Rate */
+            average_recommendation_error_rate?: number | null;
         };
         /** AnalyticsEventRequest */
         AnalyticsEventRequest: {
-            /** Event Data */
-            event_data: {
-                [key: string]: unknown;
-            };
             /** Event Type */
             event_type: string;
+            /** Event Data */
+            event_data: Record<string, never>;
         };
         /** AnalyticsSummaryResponse */
         AnalyticsSummaryResponse: {
-            /**
-             * Mode
-             * @default single_operator
-             * @constant
-             */
-            mode: "single_operator";
             /** Operator Id */
             operator_id: number;
             /** Period Days */
             period_days: number;
             /** Total Bids */
             total_bids: number;
-            /** Total Events */
-            total_events: number;
             /** Total Projects */
             total_projects: number;
+            /** Total Events */
+            total_events: number;
+            /**
+             * Mode
+             * @default single_operator
+             * @constant
+             */
+            mode: "single_operator";
         };
         /** BackgroundJobResponse */
         BackgroundJobResponse: {
-            /** Detail */
-            detail: string;
-            /** Status */
-            status: string;
             /** Task Name */
             task_name: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail: string;
         };
         /** BacktestDataAuditResponse */
         BacktestDataAuditResponse: {
-            /** Category Breakdown */
-            category_breakdown?: {
-                [key: string]: unknown;
-            }[];
-            /** Date Range */
-            date_range?: {
-                [key: string]: unknown;
-            };
-            /** Filters */
-            filters?: {
-                [key: string]: unknown;
-            };
             /** Generated At */
             generated_at: string;
+            /** Filters */
+            filters?: Record<string, never>;
             /** Table Counts */
-            table_counts?: {
-                [key: string]: unknown;
-            };
+            table_counts?: Record<string, never>;
             /** Window Counts */
-            window_counts?: {
-                [key: string]: unknown;
-            };
+            window_counts?: Record<string, never>;
+            /** Date Range */
+            date_range?: Record<string, never>;
+            /** Category Breakdown */
+            category_breakdown?: Record<string, never>[];
         };
         /** BidCreate */
         BidCreate: {
             /** Bid Amount */
             bid_amount: number;
-            /** Description */
-            description: string;
-            /** Project Id */
-            project_id: number;
             /** Proposed Timeline */
             proposed_timeline: number;
+            /** Project Id */
+            project_id: number;
+            /** Description */
+            description: string;
         };
         /**
          * BidDecisionActionRequest
@@ -2512,85 +2491,58 @@ export interface components {
         };
         /** BidDecisionDetailResponse */
         BidDecisionDetailResponse: {
-            project: components["schemas"]["BidDecisionProjectSnapshot"];
             record: components["schemas"]["BidDecisionRecordResponse"];
-            /** Timeline */
-            timeline?: components["schemas"]["BidDecisionRecordResponse"][];
+            project: components["schemas"]["BidDecisionProjectSnapshot"];
             /** Timeline Count */
             timeline_count: number;
             /** Timeline Limit Applied */
             timeline_limit_applied: number;
+            /** Timeline */
+            timeline?: components["schemas"]["BidDecisionRecordResponse"][];
         };
         /** BidDecisionProjectSnapshot */
         BidDecisionProjectSnapshot: {
-            /** Budget Estimate */
-            budget_estimate: number;
-            /** Category */
-            category?: string | null;
-            /** Deadline */
-            deadline?: string | null;
-            /** Demand Agency */
-            demand_agency?: string | null;
             /** Id */
             id: number;
-            /** Issuing Agency */
-            issuing_agency?: string | null;
+            /** Title */
+            title: string;
+            /** Category */
+            category?: string | null;
+            /** Status */
+            status: string;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Deadline */
+            deadline?: string | null;
             /** Notice Number */
             notice_number?: string | null;
             /** Source Url */
             source_url?: string | null;
-            /** Status */
-            status: string;
-            /** Title */
-            title: string;
+            /** Issuing Agency */
+            issuing_agency?: string | null;
+            /** Demand Agency */
+            demand_agency?: string | null;
         };
         /** BidDecisionRecordResponse */
         BidDecisionRecordResponse: {
+            /** Id */
+            id: number;
+            /** Project Id */
+            project_id: number;
+            /** Operator Id */
+            operator_id: number;
+            /** Pursue Bid */
+            pursue_bid: boolean;
             /**
              * Action
              * @enum {string}
              */
             action: "bid_now" | "review" | "skip";
             /**
-             * Budget Capture Score
-             * @default 0
-             */
-            budget_capture_score: number;
-            /**
-             * Competitiveness Score
-             * @default 0
-             */
-            competitiveness_score: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Current Active Bids */
-            current_active_bids: number;
-            /** Current Workload Score */
-            current_workload_score: number;
-            /** Deadline Hours Remaining */
-            deadline_hours_remaining?: number | null;
-            /**
              * Decision Status
              * @enum {string}
              */
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /**
-             * Execution Complexity Score
-             * @default 0
-             */
-            execution_complexity_score: number;
-            /**
-             * Expected Margin Score
-             * @default 0
-             */
-            expected_margin_score: number;
-            /** First Decided At */
-            first_decided_at?: string | null;
-            /** Id */
-            id: number;
             /**
              * Initial Action
              * @default skip
@@ -2603,51 +2555,109 @@ export interface components {
              * @enum {string}
              */
             initial_decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /** Matched Score */
-            matched_score: number;
-            /** Max Active Bids */
-            max_active_bids: number;
-            /** Operator Id */
-            operator_id: number;
+            /** First Decided At */
+            first_decided_at?: string | null;
             /** Priority Score */
             priority_score: number;
-            /**
-             * Probability Score
-             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
-             */
-            probability_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Pursue Bid */
-            pursue_bid: boolean;
-            /** Reasoning */
-            reasoning: string;
-            /** Recommended Amount */
-            recommended_amount: number;
-            /** Risk Flags */
-            risk_flags?: string[];
-            score_breakdown?: components["schemas"]["BidDecisionScoreBreakdown"];
-            /** Strengths */
-            strengths?: string[];
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
             /**
              * Urgency Score
              * @default 0
              */
             urgency_score: number;
             /**
+             * Competitiveness Score
+             * @default 0
+             */
+            competitiveness_score: number;
+            /**
+             * Budget Capture Score
+             * @default 0
+             */
+            budget_capture_score: number;
+            /**
+             * Expected Margin Score
+             * @default 0
+             */
+            expected_margin_score: number;
+            /**
+             * Execution Complexity Score
+             * @default 0
+             */
+            execution_complexity_score: number;
+            /** Recommended Amount */
+            recommended_amount: number;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
+            probability_score: number;
+            /** Matched Score */
+            matched_score: number;
+            /** Deadline Hours Remaining */
+            deadline_hours_remaining?: number | null;
+            /** Current Active Bids */
+            current_active_bids: number;
+            /** Max Active Bids */
+            max_active_bids: number;
+            /** Current Workload Score */
+            current_workload_score: number;
+            /**
              * Workload Source
              * @default provided
              * @enum {string}
              */
             workload_source: "provided" | "auto";
+            score_breakdown?: components["schemas"]["BidDecisionScoreBreakdown"];
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
+            /** Reasoning */
+            reasoning: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** BidDecisionRequest */
         BidDecisionRequest: {
+            /** Project Id */
+            project_id: number;
+            /** Recommended Amount */
+            recommended_amount: number;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
+            probability_score: number;
+            /**
+             * Matched Score
+             * @default 0
+             */
+            matched_score: number;
+            /** Deadline Hours Remaining */
+            deadline_hours_remaining?: number | null;
+            /**
+             * Current Active Bids
+             * @default 0
+             */
+            current_active_bids: number;
+            /**
+             * Max Active Bids
+             * @default 3
+             */
+            max_active_bids: number;
+            /**
+             * Current Workload Score
+             * @default 0
+             */
+            current_workload_score: number;
             /** Budget Estimate */
             budget_estimate?: number | null;
             /**
@@ -2655,41 +2665,10 @@ export interface components {
              * @default 0.5
              */
             competitiveness_score: number;
-            /**
-             * Current Active Bids
-             * @default 0
-             */
-            current_active_bids: number;
-            /**
-             * Current Workload Score
-             * @default 0
-             */
-            current_workload_score: number;
-            /** Deadline Hours Remaining */
-            deadline_hours_remaining?: number | null;
-            /** Execution Complexity Score */
-            execution_complexity_score?: number | null;
             /** Expected Margin Score */
             expected_margin_score?: number | null;
-            /**
-             * Matched Score
-             * @default 0
-             */
-            matched_score: number;
-            /**
-             * Max Active Bids
-             * @default 3
-             */
-            max_active_bids: number;
-            /**
-             * Probability Score
-             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
-             */
-            probability_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Recommended Amount */
-            recommended_amount: number;
+            /** Execution Complexity Score */
+            execution_complexity_score?: number | null;
             /**
              * Workload Source
              * @default provided
@@ -2699,61 +2678,92 @@ export interface components {
         };
         /** BidDecisionResponse */
         BidDecisionResponse: {
+            /** Project Id */
+            project_id: number;
+            /** Pursue Bid */
+            pursue_bid: boolean;
             /**
              * Action
              * @enum {string}
              */
             action: "bid_now" | "review" | "skip";
-            /**
-             * Budget Capture Score
-             * @default 0.5
-             */
-            budget_capture_score: number;
-            /**
-             * Competitiveness Score
-             * @default 0.5
-             */
-            competitiveness_score: number;
-            /**
-             * Execution Complexity Score
-             * @default 0.35
-             */
-            execution_complexity_score: number;
-            /**
-             * Expected Margin Score
-             * @default 0.5
-             */
-            expected_margin_score: number;
             /** Priority Score */
             priority_score: number;
+            /** Recommended Amount */
+            recommended_amount: number;
             /**
              * Probability Score
              * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
              */
             probability_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Pursue Bid */
-            pursue_bid: boolean;
-            /** Reasoning */
-            reasoning: string;
-            /** Recommended Amount */
-            recommended_amount: number;
-            score_breakdown?: components["schemas"]["BidDecisionScoreBreakdown"];
             /**
              * Urgency Score
              * @default 0
              */
             urgency_score: number;
             /**
+             * Competitiveness Score
+             * @default 0.5
+             */
+            competitiveness_score: number;
+            /**
+             * Budget Capture Score
+             * @default 0.5
+             */
+            budget_capture_score: number;
+            /**
+             * Expected Margin Score
+             * @default 0.5
+             */
+            expected_margin_score: number;
+            /**
+             * Execution Complexity Score
+             * @default 0.35
+             */
+            execution_complexity_score: number;
+            /**
              * Workload Source
              * @default provided
              * @enum {string}
              */
             workload_source: "provided" | "auto";
+            score_breakdown?: components["schemas"]["BidDecisionScoreBreakdown"];
+            /** Reasoning */
+            reasoning: string;
         };
         /** BidDecisionSaveRequest */
         BidDecisionSaveRequest: {
+            /** Project Id */
+            project_id: number;
+            /** Recommended Amount */
+            recommended_amount: number;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
+            probability_score: number;
+            /**
+             * Matched Score
+             * @default 0
+             */
+            matched_score: number;
+            /** Deadline Hours Remaining */
+            deadline_hours_remaining?: number | null;
+            /**
+             * Current Active Bids
+             * @default 0
+             */
+            current_active_bids: number;
+            /**
+             * Max Active Bids
+             * @default 3
+             */
+            max_active_bids: number;
+            /**
+             * Current Workload Score
+             * @default 0
+             */
+            current_workload_score: number;
             /** Budget Estimate */
             budget_estimate?: number | null;
             /**
@@ -2761,132 +2771,101 @@ export interface components {
              * @default 0.5
              */
             competitiveness_score: number;
-            /**
-             * Current Active Bids
-             * @default 0
-             */
-            current_active_bids: number;
-            /**
-             * Current Workload Score
-             * @default 0
-             */
-            current_workload_score: number;
-            /** Deadline Hours Remaining */
-            deadline_hours_remaining?: number | null;
-            /** Decision Status */
-            decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
-            /** Execution Complexity Score */
-            execution_complexity_score?: number | null;
             /** Expected Margin Score */
             expected_margin_score?: number | null;
-            /**
-             * Matched Score
-             * @default 0
-             */
-            matched_score: number;
-            /**
-             * Max Active Bids
-             * @default 3
-             */
-            max_active_bids: number;
-            /**
-             * Probability Score
-             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
-             */
-            probability_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Recommended Amount */
-            recommended_amount: number;
-            /**
-             * Risk Flags
-             * @description Why this notice is risky; persisted into score_breakdown.
-             */
-            risk_flags?: string[];
-            /**
-             * Strengths
-             * @description Why this notice is pursuable; persisted into score_breakdown.
-             */
-            strengths?: string[];
+            /** Execution Complexity Score */
+            execution_complexity_score?: number | null;
             /**
              * Workload Source
              * @default provided
              * @enum {string}
              */
             workload_source: "provided" | "auto";
+            /** Decision Status */
+            decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
+            /**
+             * Strengths
+             * @description Why this notice is pursuable; persisted into score_breakdown.
+             */
+            strengths?: string[];
+            /**
+             * Risk Flags
+             * @description Why this notice is risky; persisted into score_breakdown.
+             */
+            risk_flags?: string[];
         };
         /** BidDecisionScoreBreakdown */
         BidDecisionScoreBreakdown: {
-            /**
-             * Active Load Ratio
-             * @default 0
-             */
-            active_load_ratio: number;
-            /**
-             * Auto Workload Penalty Multiplier
-             * @default 1
-             */
-            auto_workload_penalty_multiplier: number;
-            /**
-             * Budget Capture Signal
-             * @default 0.5
-             */
-            budget_capture_signal: number;
-            /**
-             * Competitiveness Signal
-             * @default 0.5
-             */
-            competitiveness_signal: number;
-            /**
-             * Execution Complexity Penalty
-             * @default 0
-             */
-            execution_complexity_penalty: number;
-            /**
-             * Execution Complexity Signal
-             * @default 0.35
-             */
-            execution_complexity_signal: number;
-            /**
-             * Expected Margin Signal
-             * @default 0.5
-             */
-            expected_margin_signal: number;
-            /**
-             * Load Penalty
-             * @default 0
-             */
-            load_penalty: number;
-            /**
-             * Matched Signal
-             * @default 0
-             */
-            matched_signal: number;
-            /**
-             * Opportunity Score
-             * @default 0
-             */
-            opportunity_score: number;
             /**
              * Probability Signal
              * @default 0
              */
             probability_signal: number;
             /**
-             * Total Penalty
+             * Matched Signal
              * @default 0
              */
-            total_penalty: number;
+            matched_signal: number;
             /**
              * Urgency Signal
              * @default 0
              */
             urgency_signal: number;
             /**
+             * Competitiveness Signal
+             * @default 0.5
+             */
+            competitiveness_signal: number;
+            /**
+             * Budget Capture Signal
+             * @default 0.5
+             */
+            budget_capture_signal: number;
+            /**
+             * Expected Margin Signal
+             * @default 0.5
+             */
+            expected_margin_signal: number;
+            /**
+             * Execution Complexity Signal
+             * @default 0.35
+             */
+            execution_complexity_signal: number;
+            /**
+             * Active Load Ratio
+             * @default 0
+             */
+            active_load_ratio: number;
+            /**
              * Workload Score Used
              * @default 0
              */
             workload_score_used: number;
+            /**
+             * Opportunity Score
+             * @default 0
+             */
+            opportunity_score: number;
+            /**
+             * Auto Workload Penalty Multiplier
+             * @default 1
+             */
+            auto_workload_penalty_multiplier: number;
+            /**
+             * Load Penalty
+             * @default 0
+             */
+            load_penalty: number;
+            /**
+             * Execution Complexity Penalty
+             * @default 0
+             */
+            execution_complexity_penalty: number;
+            /**
+             * Total Penalty
+             * @default 0
+             */
+            total_penalty: number;
         };
         /** BidDecisionStatusUpdateRequest */
         BidDecisionStatusUpdateRequest: {
@@ -2898,15 +2877,15 @@ export interface components {
         };
         /** BidDecisionTimelineResponse */
         BidDecisionTimelineResponse: {
-            /** Latest Decision Record Id */
-            latest_decision_record_id?: number | null;
-            /** Limit Applied */
-            limit_applied: number;
             /** Operator Id */
             operator_id: number;
             project: components["schemas"]["BidDecisionProjectSnapshot"];
             /** Result Count */
             result_count: number;
+            /** Limit Applied */
+            limit_applied: number;
+            /** Latest Decision Record Id */
+            latest_decision_record_id?: number | null;
             /** Timeline */
             timeline?: components["schemas"]["BidDecisionRecordResponse"][];
         };
@@ -2920,85 +2899,40 @@ export interface components {
          */
         BidFormDraftField: {
             /**
-             * Field Label
-             * @description 나라장터 입력 필드 라벨(한국어).
-             */
-            field_label: string;
-            /**
              * Key
              * @description 안정적 식별 키(프론트 매핑용, 영문 snake_case).
              */
             key: string;
             /**
-             * Note
-             * @description 항목별 정직 caveat(있으면).
+             * Field Label
+             * @description 나라장터 입력 필드 라벨(한국어).
              */
-            note?: string | null;
+            field_label: string;
+            /**
+             * Value
+             * @description 표시용 값(포맷 적용된 문자열). 미정 시 빈 문자열.
+             */
+            value: string;
             /**
              * Raw Value
              * @description 원시 수치(금액/비율). 비수치 항목은 null.
              */
             raw_value?: number | null;
             /**
-             * Value
-             * @description 표시용 값(포맷 적용된 문자열). 미정 시 빈 문자열.
+             * Note
+             * @description 항목별 정직 caveat(있으면).
              */
-            value: string;
+            note?: string | null;
         };
         /**
          * BidFormDraftResponse
          * @description 투찰서 초안 — 나라장터 입력 항목에 매핑된 구조화 산출물(자동 제출 아님).
          */
         BidFormDraftResponse: {
-            /**
-             * Budget Estimate
-             * @description 기초금액(추정가격). 예정가/실하한가는 개찰 전 미공개.
-             * @default 0
-             */
-            budget_estimate: number;
-            /**
-             * Business Type Label
-             * @description 업종(세부 분류 라벨).
-             */
-            business_type_label?: string | null;
-            /**
-             * Category
-             * @description 카테고리(분류).
-             */
-            category?: string | null;
-            /**
-             * Deadline
-             * @description 투찰 마감일시.
-             */
-            deadline?: string | null;
             /** Decision Record Id */
             decision_record_id: number;
-            /**
-             * Demand Agency
-             * @description 수요기관.
-             */
-            demand_agency?: string | null;
-            /**
-             * Direct Submission Notice
-             * @description 자동 제출이 아니며 운영자가 직접 제출한다는 정직 안내 문구.
-             * @default 이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다. 이 산출물은 KONEPS 를 호출하거나 자동으로 투찰서를 제출하지 않으며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
-             */
-            direct_submission_notice: string;
-            /**
-             * Eligibility Estimate
-             * @description 적격여부(추정) 라벨 — '적격 추정' / '하한 근접' / '하한 미만(주의)' / '판단 불가' 중 하나. 실제 적격/낙찰 아님.
-             */
-            eligibility_estimate: string;
-            /**
-             * Eligibility Note
-             * @default 카테고리 낙찰하한율(참고) 대비 추천 투찰가 위치에서 도출한 추정 라벨입니다. 실제 낙찰하한가는 개찰 시 예정가 기준으로 결정되며, 적격/낙찰을 보장하지 않습니다.
-             */
-            eligibility_note: string;
-            /**
-             * Fields
-             * @description 나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력.
-             */
-            fields: components["schemas"]["BidFormDraftField"][];
+            /** Operator Id */
+            operator_id: number;
             /**
              * Generated At
              * Format: date-time
@@ -3006,22 +2940,26 @@ export interface components {
              */
             generated_at: string;
             /**
-             * Lottery Numbers
-             * @description 복수예비가격 추첨번호(2개) 무작위 편의 픽. 공고번호 seed 로 재현 가능. 분석/유리가 아니며 개별 선택은 낙찰 결과에 영향 없음. 공고번호 부재 시 빈 리스트.
-             */
-            lottery_numbers?: number[];
-            /**
-             * Lottery Numbers Note
-             * @default 무작위 편의 픽입니다(공고번호 기준 재현 가능). 복수예비가격 15개 중 2개를 고르는 절차로, 예정가격은 전체 투찰자의 선택을 합산해 정해지므로 개별 번호 선택은 낙찰 결과에 영향이 없습니다. 분석·최적화 결과가 아니며, 공고에 따라 복수예비가격 절차가 적용되지 않을 수 있습니다.
-             */
-            lottery_numbers_note: string;
-            /**
              * Notice Number
              * @description 공고번호.
              */
             notice_number?: string | null;
-            /** Operator Id */
-            operator_id: number;
+            /**
+             * Title
+             * @description 공고명.
+             */
+            title: string;
+            /**
+             * Demand Agency
+             * @description 수요기관.
+             */
+            demand_agency?: string | null;
+            /**
+             * Budget Estimate
+             * @description 기초금액(추정가격). 예정가/실하한가는 개찰 전 미공개.
+             * @default 0
+             */
+            budget_estimate: number;
             /**
              * Recommended Amount
              * @description 추천 투찰금액(원).
@@ -3033,60 +2971,97 @@ export interface components {
              */
             recommended_bid_rate?: number | null;
             /**
-             * Title
-             * @description 공고명.
+             * Category
+             * @description 카테고리(분류).
              */
-            title: string;
+            category?: string | null;
+            /**
+             * Business Type Label
+             * @description 업종(세부 분류 라벨).
+             */
+            business_type_label?: string | null;
+            /**
+             * Deadline
+             * @description 투찰 마감일시.
+             */
+            deadline?: string | null;
+            /**
+             * Eligibility Estimate
+             * @description 적격여부(추정) 라벨 — '적격 추정' / '하한 근접' / '하한 미만(주의)' / '판단 불가' 중 하나. 실제 적격/낙찰 아님.
+             */
+            eligibility_estimate: string;
+            /**
+             * Eligibility Note
+             * @default 카테고리 낙찰하한율(참고) 대비 추천 투찰가 위치에서 도출한 추정 라벨입니다. 실제 낙찰하한가는 개찰 시 예정가 기준으로 결정되며, 적격/낙찰을 보장하지 않습니다.
+             */
+            eligibility_note: string;
+            /**
+             * Lottery Numbers
+             * @description 복수예비가격 추첨번호(2개) 무작위 편의 픽. 공고번호 seed 로 재현 가능. 분석/유리가 아니며 개별 선택은 낙찰 결과에 영향 없음. 공고번호 부재 시 빈 리스트.
+             */
+            lottery_numbers?: number[];
+            /**
+             * Lottery Numbers Note
+             * @default 무작위 편의 픽입니다(공고번호 기준 재현 가능). 복수예비가격 15개 중 2개를 고르는 절차로, 예정가격은 전체 투찰자의 선택을 합산해 정해지므로 개별 번호 선택은 낙찰 결과에 영향이 없습니다. 분석·최적화 결과가 아니며, 공고에 따라 복수예비가격 절차가 적용되지 않을 수 있습니다.
+             */
+            lottery_numbers_note: string;
+            /**
+             * Fields
+             * @description 나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력.
+             */
+            fields: components["schemas"]["BidFormDraftField"][];
+            /**
+             * Direct Submission Notice
+             * @description 자동 제출이 아니며 운영자가 직접 제출한다는 정직 안내 문구.
+             * @default 이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다. 이 산출물은 KONEPS 를 호출하거나 자동으로 투찰서를 제출하지 않으며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
+             */
+            direct_submission_notice: string;
         };
         /** BidRecommendationRequest */
         BidRecommendationRequest: {
             /** Project Id */
             project_id: number;
             /** User Historical Data */
-            user_historical_data?: {
-                [key: string]: unknown;
-            } | null;
+            user_historical_data?: Record<string, never> | null;
         };
         /** BidRecommendationResponse */
         BidRecommendationResponse: {
-            /** Confidence Score */
-            confidence_score: number;
-            /** Market Analysis */
-            market_analysis?: {
-                [key: string]: unknown;
-            } | null;
-            /** Reasoning */
-            reasoning: string;
             /** Recommended Bid */
             recommended_bid: number;
+            /** Confidence Score */
+            confidence_score: number;
+            /** Reasoning */
+            reasoning: string;
+            /** Market Analysis */
+            market_analysis?: Record<string, never> | null;
         };
         /** BidResponse */
         BidResponse: {
             /** Bid Amount */
             bid_amount: number;
+            /** Proposed Timeline */
+            proposed_timeline: number;
+            /** Id */
+            id: number;
+            /** Project Id */
+            project_id: number;
+            /** Operator Id */
+            operator_id: number;
+            /** User Id */
+            user_id: number;
+            /** Status */
+            status: string;
+            /** Decision Record Id */
+            decision_record_id?: number | null;
+            /** Decision Status */
+            decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
+            /** Score */
+            score?: number | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Decision Record Id */
-            decision_record_id?: number | null;
-            /** Decision Status */
-            decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
-            /** Id */
-            id: number;
-            /** Operator Id */
-            operator_id: number;
-            /** Project Id */
-            project_id: number;
-            /** Proposed Timeline */
-            proposed_timeline: number;
-            /** Score */
-            score?: number | null;
-            /** Status */
-            status: string;
-            /** User Id */
-            user_id: number;
         };
         /**
          * BidSummaryCategoryFloor
@@ -3096,10 +3071,10 @@ export interface components {
          *     아니라 **설정된 카테고리 최소 투찰률(참고)**이다.
          */
         BidSummaryCategoryFloor: {
-            /** Business Group */
-            business_group?: string | null;
             /** Category */
             category?: string | null;
+            /** Business Group */
+            business_group?: string | null;
             /**
              * Floor Bid Rate
              * @description 카테고리/그룹 최소 투찰률(참고). 미설정 시 null.
@@ -3124,139 +3099,100 @@ export interface components {
             /** Category */
             category?: string | null;
             /**
-             * Eligible Favorable Rate
-             * @description 적격성 게이트 추정 적격율(unknown 제외 분모).
+             * Settled Count
+             * @description 해당 분야 백테스트 표본 수.
+             * @default 0
              */
-            eligible_favorable_rate?: number | null;
+            settled_count: number;
             /**
              * Est Price Close Rate
              * @description 가격 근접 추정율(would_have_won_price_only / settled). 실제 낙찰 아님.
              */
             est_price_close_rate?: number | null;
             /**
+             * Eligible Favorable Rate
+             * @description 적격성 게이트 추정 적격율(unknown 제외 분모).
+             */
+            eligible_favorable_rate?: number | null;
+            /** Source Run Id */
+            source_run_id?: number | null;
+            /** Source Operator Slug */
+            source_operator_slug?: string | null;
+            /**
              * Note
              * @default 최신 백테스트 분야 추정 지표입니다(표본 수 동반). 실제 낙찰률이 아닌 가격/적격성 기반 추정이며, 표본이 적으면 신뢰도가 낮습니다.
              */
             note: string;
-            /**
-             * Settled Count
-             * @description 해당 분야 백테스트 표본 수.
-             * @default 0
-             */
-            settled_count: number;
-            /** Source Operator Slug */
-            source_operator_slug?: string | null;
-            /** Source Run Id */
-            source_run_id?: number | null;
         };
         /**
          * BidSummaryNoticeMeta
          * @description 공고 메타 — 투찰서 헤더 작성에 필요한 식별 정보.
          */
         BidSummaryNoticeMeta: {
+            /** Project Id */
+            project_id: number;
+            /** Title */
+            title: string;
+            /** Notice Number */
+            notice_number?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Business Type Label */
+            business_type_label?: string | null;
             /**
              * Budget Estimate
              * @description 공고 추정가격(예산). 예정가/실하한가는 개찰 전 미공개.
              * @default 0
              */
             budget_estimate: number;
-            /** Business Type Label */
-            business_type_label?: string | null;
-            /** Category */
-            category?: string | null;
-            /** Deadline */
-            deadline?: string | null;
             /** Demand Agency */
             demand_agency?: string | null;
             /** Issuing Agency */
             issuing_agency?: string | null;
-            /** Notice Number */
-            notice_number?: string | null;
-            /** Project Id */
-            project_id: number;
+            /** Deadline */
+            deadline?: string | null;
             /** Source Url */
             source_url?: string | null;
             /** Status */
             status?: string | null;
-            /** Title */
-            title: string;
         };
         /**
          * BidSummaryPrediction
          * @description 결정에 연결된 가격 예측 메타(없으면 null).
          */
         BidSummaryPrediction: {
+            /** Predicted Price */
+            predicted_price?: number | null;
+            /** Predicted Bid Rate */
+            predicted_bid_rate?: number | null;
+            /** Price Range Min */
+            price_range_min?: number | null;
+            /** Price Range Max */
+            price_range_max?: number | null;
             /** Confidence Score */
             confidence_score?: number | null;
-            /** Created At */
-            created_at?: string | null;
-            /**
-             * Floor Bid Rate
-             * @description 예측이 적용한 낙찰하한 가드레일 투찰률(있으면).
-             */
-            floor_bid_rate?: number | null;
+            /** Pricing Mode */
+            pricing_mode?: string | null;
+            /** Predictor Name */
+            predictor_name?: string | null;
             /**
              * Guardrail Applied
              * @default false
              */
             guardrail_applied: boolean;
-            /** Predicted Bid Rate */
-            predicted_bid_rate?: number | null;
-            /** Predicted Price */
-            predicted_price?: number | null;
-            /** Predictor Name */
-            predictor_name?: string | null;
-            /** Price Range Max */
-            price_range_max?: number | null;
-            /** Price Range Min */
-            price_range_min?: number | null;
-            /** Pricing Mode */
-            pricing_mode?: string | null;
+            /**
+             * Floor Bid Rate
+             * @description 예측이 적용한 낙찰하한 가드레일 투찰률(있으면).
+             */
+            floor_bid_rate?: number | null;
+            /** Created At */
+            created_at?: string | null;
         };
         /**
          * BidSummaryRecommendation
          * @description 추천 투찰가/투찰률/가격대 + 가격 적합도(추정) + 결정 상태.
          */
         BidSummaryRecommendation: {
-            /**
-             * Action
-             * @description bid_now / review / skip 중 현재 판단.
-             */
-            action: string;
-            /**
-             * Competitiveness Score
-             * @description 시장 경쟁력 점수(0-1).
-             * @default 0
-             */
-            competitiveness_score: number;
-            /**
-             * Decision Status
-             * @description planned / reviewing / submitted / skipped 워크플로 상태.
-             */
-            decision_status: string;
-            /**
-             * Matched Score
-             * @description 공고 적합도 점수(0-1).
-             * @default 0
-             */
-            matched_score: number;
-            /**
-             * Priority Score
-             * @description 종합 우선순위 점수(0-1).
-             * @default 0
-             */
-            priority_score: number;
-            /**
-             * Probability Score
-             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
-             */
-            probability_score: number;
-            /**
-             * Reasoning
-             * @description 결정 근거 서술(감사 가능).
-             * @default
-             */
-            reasoning: string;
             /**
              * Recommended Amount
              * @description 추천 투찰가(원).
@@ -3267,37 +3203,112 @@ export interface components {
              * @description 추천 투찰가 / 추정가격. budget_estimate>0 일 때만 산출.
              */
             recommended_bid_rate?: number | null;
-            /** Risk Flags */
-            risk_flags?: string[];
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
+            probability_score: number;
+            /**
+             * Action
+             * @description bid_now / review / skip 중 현재 판단.
+             */
+            action: string;
+            /**
+             * Decision Status
+             * @description planned / reviewing / submitted / skipped 워크플로 상태.
+             */
+            decision_status: string;
+            /**
+             * Priority Score
+             * @description 종합 우선순위 점수(0-1).
+             * @default 0
+             */
+            priority_score: number;
+            /**
+             * Matched Score
+             * @description 공고 적합도 점수(0-1).
+             * @default 0
+             */
+            matched_score: number;
+            /**
+             * Competitiveness Score
+             * @description 시장 경쟁력 점수(0-1).
+             * @default 0
+             */
+            competitiveness_score: number;
+            /**
+             * Reasoning
+             * @description 결정 근거 서술(감사 가능).
+             * @default
+             */
+            reasoning: string;
             /** Strengths */
             strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
         };
         /**
          * BidSummaryResponse
          * @description 투찰 의사결정 요약 — 운영자가 직접 투찰서를 작성할 때 참고하는 집계 산출물.
          */
         BidSummaryResponse: {
-            category_floor: components["schemas"]["BidSummaryCategoryFloor"];
             /** Decision Record Id */
             decision_record_id: number;
-            /**
-             * Direct Submission Notice
-             * @description 실제 나라장터 투찰서 제출은 운영자가 직접 진행한다는 안내 문구.
-             * @default 이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 하며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
-             */
-            direct_submission_notice: string;
-            /** @description 분야 통계(없거나 미산출 시 null — graceful). */
-            field_stat?: components["schemas"]["BidSummaryFieldStat"] | null;
+            /** Operator Id */
+            operator_id: number;
             /**
              * Generated At
              * Format: date-time
              */
             generated_at: string;
             notice: components["schemas"]["BidSummaryNoticeMeta"];
-            /** Operator Id */
-            operator_id: number;
-            prediction?: components["schemas"]["BidSummaryPrediction"] | null;
             recommendation: components["schemas"]["BidSummaryRecommendation"];
+            prediction?: components["schemas"]["BidSummaryPrediction"] | null;
+            category_floor: components["schemas"]["BidSummaryCategoryFloor"];
+            /** @description 분야 통계(없거나 미산출 시 null — graceful). */
+            field_stat?: components["schemas"]["BidSummaryFieldStat"] | null;
+            /**
+             * Direct Submission Notice
+             * @description 실제 나라장터 투찰서 제출은 운영자가 직접 진행한다는 안내 문구.
+             * @default 이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 하며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
+             */
+            direct_submission_notice: string;
+        };
+        /** BidTargetMenu */
+        BidTargetMenu: {
+            /** Options */
+            options: components["schemas"]["BidTargetOption"][];
+            /** Band Floor Rate */
+            band_floor_rate?: number | null;
+            /** Band Ceiling Rate */
+            band_ceiling_rate?: number | null;
+            /** Signals Summary */
+            signals_summary: string;
+            /** Caveat */
+            caveat: string;
+            /**
+             * Collapsed
+             * @default false
+             */
+            collapsed: boolean;
+        };
+        /** BidTargetOption */
+        BidTargetOption: {
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "recommended" | "aggressive" | "safe";
+            /** Stance */
+            stance: string;
+            /** Bid Rate */
+            bid_rate: number;
+            /** Bid Price */
+            bid_price?: number | null;
+            /** Risk Note */
+            risk_note: string;
+            /** Basis */
+            basis: string;
         };
         /** BidUpdate */
         BidUpdate: {
@@ -3318,261 +3329,253 @@ export interface components {
         };
         /** ClassificationResponse */
         ClassificationResponse: {
-            /** Criteria */
-            criteria?: {
-                [key: string]: unknown;
-            };
             /** Matched */
             matched: boolean;
-            /** Reasons */
-            reasons: string[];
             /** Score */
             score: number;
+            /** Reasons */
+            reasons: string[];
+            /** Criteria */
+            criteria?: Record<string, never>;
             /** Score Breakdown */
-            score_breakdown?: {
-                [key: string]: unknown;
-            };
+            score_breakdown?: Record<string, never>;
         };
         /** CrawlFailureItem */
         CrawlFailureItem: {
-            /** Completed At */
-            completed_at?: string | null;
             /** Crawl Job Id */
             crawl_job_id: number;
+            /** Source */
+            source: string;
+            /** Target Date */
+            target_date?: string | null;
+            /** Status */
+            status: string;
+            /** Error Message */
+            error_message?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Error Message */
-            error_message?: string | null;
-            /** Source */
-            source: string;
-            /** Status */
-            status: string;
-            /** Target Date */
-            target_date?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /** CrawlNoticeItem */
         CrawlNoticeItem: {
+            /** Notice Number */
+            notice_number: string;
+            /** Title */
+            title: string;
             /** Base Amount */
             base_amount: number;
+            /** Estimated Amount */
+            estimated_amount?: number | null;
+            /** Closing At */
+            closing_at?: string | null;
             /** Business Type */
             business_type?: string | null;
             /** Business Type Code */
             business_type_code?: string | null;
             /** Business Type Label */
             business_type_label?: string | null;
-            /** Closing At */
-            closing_at?: string | null;
-            /** Estimated Amount */
-            estimated_amount?: number | null;
-            /** License Codes */
-            license_codes?: string[];
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
-            /** Notice Number */
-            notice_number: string;
             /** Region */
             region?: string | null;
+            /** License Codes */
+            license_codes?: string[];
             /** Source Url */
             source_url?: string | null;
-            /** Title */
-            title: string;
+            /** Metadata */
+            metadata?: Record<string, never>;
         };
         /** CrawlOperationsSummary */
         CrawlOperationsSummary: {
-            /** Average Result Count */
-            average_result_count?: number | null;
+            /** Job Count */
+            job_count: number;
             /** Completed Count */
             completed_count: number;
+            /** Fallback Count */
+            fallback_count: number;
             /** Failed Count */
             failed_count: number;
+            /** Success Rate */
+            success_rate: number;
             /** Failure Rate */
             failure_rate: number;
+            /** Average Result Count */
+            average_result_count?: number | null;
+            /** Total Result Count */
+            total_result_count: number;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Failure At */
+            last_failure_at?: string | null;
             /** Failure Reason Breakdown */
             failure_reason_breakdown?: {
                 [key: string]: number;
             };
-            /** Fallback Count */
-            fallback_count: number;
-            /** Job Count */
-            job_count: number;
-            /** Last Failure At */
-            last_failure_at?: string | null;
-            /** Last Success At */
-            last_success_at?: string | null;
             /** Recent Failures */
             recent_failures?: components["schemas"]["CrawlFailureItem"][];
-            /** Success Rate */
-            success_rate: number;
-            /** Total Result Count */
-            total_result_count: number;
         };
         /** CrawlRequest */
         CrawlRequest: {
             /**
-             * Categories
-             * @description scsbid multi-category sweep. None falls back to the single `category`.
+             * Source
+             * @default koneps
              */
-            categories?: string[] | null;
+            source: string;
             /** Category */
             category?: string | null;
-            /**
-             * Collect Reserve Detail
-             * @description When False, skip per-item reserve-price detail fetches.
-             * @default true
-             */
-            collect_reserve_detail: boolean;
-            /**
-             * End Date
-             * @description scsbid award date-window end (YYYYMMDD or ISO).
-             */
-            end_date?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Keyword */
+            keyword?: string | null;
             /**
              * Execution Mode
              * @default mock
              * @enum {string}
              */
             execution_mode: "mock" | "live" | "auto";
-            /** Keyword */
-            keyword?: string | null;
-            /**
-             * Lookback Days
-             * @description scsbid rolling window: end=today, start=today-lookback_days.
-             */
-            lookback_days?: number | null;
             /**
              * Max Items
              * @default 10
              */
             max_items: number;
             /**
-             * Max Pages
-             * @description scsbid per-category page ceiling. Defaults to 30.
+             * Categories
+             * @description scsbid multi-category sweep. None falls back to the single `category`.
              */
-            max_pages?: number | null;
+            categories?: string[] | null;
+            /**
+             * Start Date
+             * @description scsbid award date-window start (YYYYMMDD or ISO).
+             */
+            start_date?: string | null;
+            /**
+             * End Date
+             * @description scsbid award date-window end (YYYYMMDD or ISO).
+             */
+            end_date?: string | null;
+            /**
+             * Lookback Days
+             * @description scsbid rolling window: end=today, start=today-lookback_days.
+             */
+            lookback_days?: number | null;
             /**
              * Page Size
              * @description scsbid numOfRows per page. Defaults to 100.
              */
             page_size?: number | null;
             /**
-             * Source
-             * @default koneps
+             * Max Pages
+             * @description scsbid per-category page ceiling. Defaults to 30.
              */
-            source: string;
+            max_pages?: number | null;
             /**
-             * Start Date
-             * @description scsbid award date-window start (YYYYMMDD or ISO).
+             * Collect Reserve Detail
+             * @description When False, skip per-item reserve-price detail fetches.
+             * @default true
              */
-            start_date?: string | null;
-            /** Target Date */
-            target_date?: string | null;
+            collect_reserve_detail: boolean;
         };
         /** CrawlResponse */
         CrawlResponse: {
+            /** Job Status */
+            job_status: string;
+            /** Source */
+            source: string;
             /** Collected Count */
             collected_count: number;
             /** Items */
             items: components["schemas"]["CrawlNoticeItem"][];
-            /** Job Status */
-            job_status: string;
             /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
-            /** Source */
-            source: string;
+            metadata?: Record<string, never>;
         };
         /** CrawlTaskResponse */
         CrawlTaskResponse: {
-            /** Crawl Job Id */
-            crawl_job_id: number;
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Detail */
             detail: string;
             /** Poll Url */
             poll_url: string;
+            /** Crawl Job Id */
+            crawl_job_id: number;
+        };
+        /** CrawlTaskStatusResponse */
+        CrawlTaskStatusResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
             /**
              * Status
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
-        };
-        /** CrawlTaskStatusResponse */
-        CrawlTaskStatusResponse: {
-            /** Crawl Job Id */
-            crawl_job_id?: number | null;
-            /** Detail */
-            detail: string;
-            /** Error */
-            error?: string | null;
             /** Raw Status */
             raw_status: string;
             /** Ready */
             ready: boolean;
-            result?: components["schemas"]["CrawlResponse"] | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Successful */
             successful: boolean;
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
+            /** Detail */
+            detail: string;
+            /** Crawl Job Id */
+            crawl_job_id?: number | null;
+            /** Error */
+            error?: string | null;
+            result?: components["schemas"]["CrawlResponse"] | null;
         };
         /**
          * CustomOperatorCloneRequest
          * @description Clone a preset/custom company into a new custom one with overrides.
          */
         CustomOperatorCloneRequest: {
-            /** Annual Revenue */
-            annual_revenue?: number | null;
-            /** Bid Now Threshold */
-            bid_now_threshold?: number | null;
-            /** Business Type */
-            business_type?: string | null;
-            /** Capacity Score */
-            capacity_score?: number | null;
             /** Company Name */
             company_name?: string | null;
-            /** Exclude Keywords */
-            exclude_keywords?: string[] | null;
-            /** Exclude Regions */
-            exclude_regions?: string[] | null;
+            /** Business Type */
+            business_type?: string | null;
+            /** License Codes */
+            license_codes?: string[] | null;
+            /** Region Codes */
+            region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
             /** Focus Categories */
             focus_categories?: string[] | null;
             /** Focus Regions */
             focus_regions?: string[] | null;
-            /** License Codes */
-            license_codes?: string[] | null;
-            /** Max Budget Estimate */
-            max_budget_estimate?: number | null;
-            /** Max Recommended Candidates */
-            max_recommended_candidates?: number | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
             /** Min Budget Estimate */
             min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
             /** Minimum Match Score */
             minimum_match_score?: number | null;
             /** Minimum Probability Score */
             minimum_probability_score?: number | null;
-            /** Name */
-            name?: string | null;
-            /** Region Codes */
-            region_codes?: string[] | null;
-            /** Required Keywords */
-            required_keywords?: string[] | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
             /** Review Threshold */
             review_threshold?: number | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
+            /** Name */
+            name?: string | null;
             /** Slug */
             slug?: string | null;
         };
@@ -3581,44 +3584,44 @@ export interface components {
          * @description Create a new custom synthetic company (``synthetic-custom-<slug>``).
          */
         CustomOperatorCreate: {
-            /** Annual Revenue */
-            annual_revenue?: number | null;
-            /** Bid Now Threshold */
-            bid_now_threshold?: number | null;
-            /** Business Type */
-            business_type?: string | null;
-            /** Capacity Score */
-            capacity_score?: number | null;
             /** Company Name */
             company_name?: string | null;
-            /** Exclude Keywords */
-            exclude_keywords?: string[] | null;
-            /** Exclude Regions */
-            exclude_regions?: string[] | null;
+            /** Business Type */
+            business_type?: string | null;
+            /** License Codes */
+            license_codes?: string[] | null;
+            /** Region Codes */
+            region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
             /** Focus Categories */
             focus_categories?: string[] | null;
             /** Focus Regions */
             focus_regions?: string[] | null;
-            /** License Codes */
-            license_codes?: string[] | null;
-            /** Max Budget Estimate */
-            max_budget_estimate?: number | null;
-            /** Max Recommended Candidates */
-            max_recommended_candidates?: number | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
             /** Min Budget Estimate */
             min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
             /** Minimum Match Score */
             minimum_match_score?: number | null;
             /** Minimum Probability Score */
             minimum_probability_score?: number | null;
-            /** Name */
-            name: string;
-            /** Region Codes */
-            region_codes?: string[] | null;
-            /** Required Keywords */
-            required_keywords?: string[] | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
             /** Review Threshold */
             review_threshold?: number | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
+            /** Name */
+            name: string;
             /**
              * Slug
              * @description Optional explicit slug; normalized to [a-z0-9-]. Derived from name when omitted.
@@ -3648,57 +3651,57 @@ export interface components {
          *     field set so the Phase 3 form can render without a second fetch.
          */
         CustomOperatorDetail: {
+            /** User Id */
+            user_id: number;
+            /** Username */
+            username: string;
+            /** Slug */
+            slug: string;
+            /**
+             * Is Custom
+             * @default true
+             */
+            is_custom: boolean;
+            /** Display Name */
+            display_name: string;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
             /**
              * Annual Revenue
              * @default 0
              */
             annual_revenue: number;
             /**
-             * Bid Now Threshold
-             * @default 0
-             */
-            bid_now_threshold: number;
-            /** Business Type */
-            business_type?: string | null;
-            /**
              * Capacity Score
              * @default 0
              */
             capacity_score: number;
-            /** Company */
-            company?: string | null;
-            /** Display Name */
-            display_name: string;
-            /** Exclude Keywords */
-            exclude_keywords?: string[];
-            /** Exclude Regions */
-            exclude_regions?: string[];
+            /** License Codes */
+            license_codes?: string[];
+            /** Region Codes */
+            region_codes?: string[];
             /** Focus Categories */
             focus_categories?: string[];
             /** Focus Regions */
             focus_regions?: string[];
-            /**
-             * Is Custom
-             * @default true
-             */
-            is_custom: boolean;
-            /** License Codes */
-            license_codes?: string[];
-            /**
-             * Max Budget Estimate
-             * @default 0
-             */
-            max_budget_estimate: number;
-            /**
-             * Max Recommended Candidates
-             * @default 0
-             */
-            max_recommended_candidates: number;
+            /** Exclude Regions */
+            exclude_regions?: string[];
+            /** Required Keywords */
+            required_keywords?: string[];
+            /** Exclude Keywords */
+            exclude_keywords?: string[];
             /**
              * Min Budget Estimate
              * @default 0
              */
             min_budget_estimate: number;
+            /**
+             * Max Budget Estimate
+             * @default 0
+             */
+            max_budget_estimate: number;
             /**
              * Minimum Match Score
              * @default 0
@@ -3709,90 +3712,88 @@ export interface components {
              * @default 0
              */
             minimum_probability_score: number;
-            /** Region Codes */
-            region_codes?: string[];
-            /** Required Keywords */
-            required_keywords?: string[];
+            /**
+             * Bid Now Threshold
+             * @default 0
+             */
+            bid_now_threshold: number;
             /**
              * Review Threshold
              * @default 0
              */
             review_threshold: number;
-            /** Slug */
-            slug: string;
-            /** User Id */
-            user_id: number;
-            /** Username */
-            username: string;
+            /**
+             * Max Recommended Candidates
+             * @default 0
+             */
+            max_recommended_candidates: number;
         };
         /**
          * CustomOperatorUpdate
          * @description Partial-update a custom synthetic company (all fields optional).
          */
         CustomOperatorUpdate: {
-            /** Annual Revenue */
-            annual_revenue?: number | null;
-            /** Bid Now Threshold */
-            bid_now_threshold?: number | null;
-            /** Business Type */
-            business_type?: string | null;
-            /** Capacity Score */
-            capacity_score?: number | null;
             /** Company Name */
             company_name?: string | null;
-            /** Exclude Keywords */
-            exclude_keywords?: string[] | null;
-            /** Exclude Regions */
-            exclude_regions?: string[] | null;
+            /** Business Type */
+            business_type?: string | null;
+            /** License Codes */
+            license_codes?: string[] | null;
+            /** Region Codes */
+            region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
             /** Focus Categories */
             focus_categories?: string[] | null;
             /** Focus Regions */
             focus_regions?: string[] | null;
-            /** License Codes */
-            license_codes?: string[] | null;
-            /** Max Budget Estimate */
-            max_budget_estimate?: number | null;
-            /** Max Recommended Candidates */
-            max_recommended_candidates?: number | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
             /** Min Budget Estimate */
             min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
             /** Minimum Match Score */
             minimum_match_score?: number | null;
             /** Minimum Probability Score */
             minimum_probability_score?: number | null;
-            /** Name */
-            name?: string | null;
-            /** Region Codes */
-            region_codes?: string[] | null;
-            /** Required Keywords */
-            required_keywords?: string[] | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
             /** Review Threshold */
             review_threshold?: number | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
+            /** Name */
+            name?: string | null;
         };
         /** DashboardBidItem */
         DashboardBidItem: {
-            /** Bid Amount */
-            bid_amount: number;
             /** Bid Id */
             bid_id: number;
+            project: components["schemas"]["DashboardProjectBrief"];
             /** Decision Record Id */
             decision_record_id?: number | null;
             /** Decision Status */
             decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
-            /** Detail Href */
-            detail_href: string;
-            project: components["schemas"]["DashboardProjectBrief"];
-            /** Proposed Timeline */
-            proposed_timeline: number;
+            /** Bid Amount */
+            bid_amount: number;
             /** Recommended Amount */
             recommended_amount?: number | null;
-            /** Score */
-            score?: number | null;
+            /** Proposed Timeline */
+            proposed_timeline: number;
             /**
              * Status
              * @enum {string}
              */
             status: "submitted" | "reviewed" | "accepted" | "rejected";
+            /** Score */
+            score?: number | null;
             /**
              * Submitted At
              * Format: date-time
@@ -3803,9 +3804,13 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Detail Href */
+            detail_href: string;
         };
         /** DashboardBidListResponse */
         DashboardBidListResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
@@ -3815,76 +3820,37 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
-            /** Items */
-            items?: components["schemas"]["DashboardBidItem"][];
-            /** Limit */
-            limit: number;
-            /** Operator Id */
-            operator_id: number;
             /** Returned Count */
             returned_count: number;
+            /** Limit */
+            limit: number;
+            /** Items */
+            items?: components["schemas"]["DashboardBidItem"][];
         };
         /** DashboardMetric */
         DashboardMetric: {
-            /** Detail */
-            detail: string;
             /** Key */
             key: string;
             /** Label */
             label: string;
+            /** Value */
+            value?: number | string | null;
+            /**
+             * Unit
+             * @default count
+             */
+            unit: string;
             /**
              * Status
              * @default info
              * @enum {string}
              */
             status: "healthy" | "watch" | "critical" | "info";
-            /**
-             * Unit
-             * @default count
-             */
-            unit: string;
-            /** Value */
-            value?: number | string | null;
+            /** Detail */
+            detail: string;
         };
         /** DashboardOpportunityItem */
         DashboardOpportunityItem: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "bid_now" | "review" | "skip";
-            /** Deadline Hours Remaining */
-            deadline_hours_remaining?: number | null;
-            /** Decision Record Id */
-            decision_record_id?: number | null;
-            /**
-             * Decision Status
-             * @enum {string}
-             */
-            decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /** Detail Href */
-            detail_href: string;
-            /** Matched Score */
-            matched_score: number;
-            /** Paper Bid Id */
-            paper_bid_id?: number | null;
-            /** Priority Score */
-            priority_score: number;
-            /**
-             * Probability Score
-             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
-             */
-            probability_score: number;
-            project: components["schemas"]["DashboardProjectBrief"];
-            /**
-             * Reasoning
-             * @default
-             */
-            reasoning: string;
-            /** Recommended Amount */
-            recommended_amount: number;
-            /** Risk Flags */
-            risk_flags?: string[];
             /**
              * Source
              * @default decision
@@ -3896,18 +3862,57 @@ export interface components {
              * @default 입찰 판단
              */
             source_label: string;
+            /** Decision Record Id */
+            decision_record_id?: number | null;
+            /** Paper Bid Id */
+            paper_bid_id?: number | null;
+            project: components["schemas"]["DashboardProjectBrief"];
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "bid_now" | "review" | "skip";
+            /**
+             * Decision Status
+             * @enum {string}
+             */
+            decision_status: "planned" | "reviewing" | "submitted" | "skipped";
+            /** Recommended Amount */
+            recommended_amount: number;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
+             */
+            probability_score: number;
+            /** Matched Score */
+            matched_score: number;
+            /** Priority Score */
+            priority_score: number;
+            /** Urgency Score */
+            urgency_score: number;
+            /** Deadline Hours Remaining */
+            deadline_hours_remaining?: number | null;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
             /** Strengths */
             strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
             /**
              * Updated At
              * Format: date-time
              */
             updated_at: string;
-            /** Urgency Score */
-            urgency_score: number;
+            /** Detail Href */
+            detail_href: string;
         };
         /** DashboardOpportunityListResponse */
         DashboardOpportunityListResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
@@ -3917,50 +3922,55 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
-            /** Items */
-            items?: components["schemas"]["DashboardOpportunityItem"][];
-            /** Limit */
-            limit: number;
-            /** Operator Id */
-            operator_id: number;
             /** Returned Count */
             returned_count: number;
+            /** Limit */
+            limit: number;
+            /** Items */
+            items?: components["schemas"]["DashboardOpportunityItem"][];
         };
         /** DashboardProjectBrief */
         DashboardProjectBrief: {
-            /** Budget Estimate */
-            budget_estimate: number;
-            /** Category */
-            category?: string | null;
-            /** Deadline */
-            deadline?: string | null;
-            /** Demand Agency */
-            demand_agency?: string | null;
-            /** Issuing Agency */
-            issuing_agency?: string | null;
-            /** Notice Number */
-            notice_number?: string | null;
             /** Project Id */
             project_id: number;
-            /** Status */
-            status: string;
             /** Title */
             title: string;
+            /** Category */
+            category?: string | null;
+            /** Notice Number */
+            notice_number?: string | null;
+            /** Issuing Agency */
+            issuing_agency?: string | null;
+            /** Demand Agency */
+            demand_agency?: string | null;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Deadline */
+            deadline?: string | null;
+            /** Status */
+            status: string;
         };
         /** DashboardResultItem */
         DashboardResultItem: {
-            /** Announced At */
-            announced_at?: string | null;
+            /** Tender Result Id */
+            tender_result_id: number;
+            project: components["schemas"]["DashboardProjectBrief"];
+            /** Winning Company */
+            winning_company?: string | null;
+            /** Winning Amount */
+            winning_amount: number;
+            /** Winning Rate */
+            winning_rate: number;
+            /** Result Status */
+            result_status: string;
             /**
              * Award Outcome
              * @default unknown
              * @enum {string}
              */
             award_outcome: "won" | "lost" | "unknown";
-            /** Detail Href */
-            detail_href: string;
-            /** Latest Decision Record Id */
-            latest_decision_record_id?: number | null;
+            /** Announced At */
+            announced_at?: string | null;
             /** Latest Prediction Id */
             latest_prediction_id?: number | null;
             /** Predicted Price */
@@ -3969,26 +3979,21 @@ export interface components {
             prediction_delta_amount?: number | null;
             /** Prediction Error Rate */
             prediction_error_rate?: number | null;
-            project: components["schemas"]["DashboardProjectBrief"];
+            /** Latest Decision Record Id */
+            latest_decision_record_id?: number | null;
+            /** Recommended Amount */
+            recommended_amount?: number | null;
             /** Recommendation Delta Amount */
             recommendation_delta_amount?: number | null;
             /** Recommendation Error Rate */
             recommendation_error_rate?: number | null;
-            /** Recommended Amount */
-            recommended_amount?: number | null;
-            /** Result Status */
-            result_status: string;
-            /** Tender Result Id */
-            tender_result_id: number;
-            /** Winning Amount */
-            winning_amount: number;
-            /** Winning Company */
-            winning_company?: string | null;
-            /** Winning Rate */
-            winning_rate: number;
+            /** Detail Href */
+            detail_href: string;
         };
         /** DashboardResultListResponse */
         DashboardResultListResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
@@ -3998,21 +4003,15 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
-            /** Items */
-            items?: components["schemas"]["DashboardResultItem"][];
-            /** Limit */
-            limit: number;
-            /** Operator Id */
-            operator_id: number;
             /** Returned Count */
             returned_count: number;
+            /** Limit */
+            limit: number;
+            /** Items */
+            items?: components["schemas"]["DashboardResultItem"][];
         };
         /** DashboardSectionSummary */
         DashboardSectionSummary: {
-            /** Count */
-            count: number;
-            /** Href */
-            href: string;
             /**
              * Key
              * @enum {string}
@@ -4020,15 +4019,21 @@ export interface components {
             key: "opportunities" | "bids" | "results";
             /** Label */
             label: string;
+            /** Count */
+            count: number;
             /**
              * Status
              * @default info
              * @enum {string}
              */
             status: "healthy" | "watch" | "critical" | "info";
+            /** Href */
+            href: string;
         };
         /** DashboardSummaryResponse */
         DashboardSummaryResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
@@ -4038,58 +4043,56 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
-            /** Metrics */
-            metrics?: components["schemas"]["DashboardMetric"][];
-            operational_status: components["schemas"]["DashboardMetric"];
-            /** Operator Id */
-            operator_id: number;
-            /**
-             * Realtime Href
-             * @default /api/v1/realtime/events
-             */
-            realtime_href: string;
-            /** Recent Bids */
-            recent_bids?: components["schemas"]["DashboardBidItem"][];
-            /** Recent Opportunities */
-            recent_opportunities?: components["schemas"]["DashboardOpportunityItem"][];
-            /** Recent Results */
-            recent_results?: components["schemas"]["DashboardResultItem"][];
-            /** Sections */
-            sections?: components["schemas"]["DashboardSectionSummary"][];
             /**
              * Today
              * Format: date
              */
             today: string;
+            operational_status: components["schemas"]["DashboardMetric"];
+            /** Metrics */
+            metrics?: components["schemas"]["DashboardMetric"][];
             /** Work Items */
             work_items?: components["schemas"]["DashboardWorkItem"][];
+            /** Sections */
+            sections?: components["schemas"]["DashboardSectionSummary"][];
+            /** Recent Opportunities */
+            recent_opportunities?: components["schemas"]["DashboardOpportunityItem"][];
+            /** Recent Bids */
+            recent_bids?: components["schemas"]["DashboardBidItem"][];
+            /** Recent Results */
+            recent_results?: components["schemas"]["DashboardResultItem"][];
+            /**
+             * Realtime Href
+             * @default /api/v1/realtime/events
+             */
+            realtime_href: string;
         };
         /** DashboardWorkItem */
         DashboardWorkItem: {
-            /** Due At */
-            due_at?: string | null;
-            /** Href */
-            href: string;
+            /** Key */
+            key: string;
             /**
              * Item Type
              * @enum {string}
              */
             item_type: "opportunity_due" | "bid_pending_result" | "result_review";
-            /** Key */
-            key: string;
-            /** Project Id */
-            project_id?: number | null;
             /**
              * Severity
              * @enum {string}
              */
             severity: "info" | "watch" | "critical";
-            /** Status */
-            status: string;
-            /** Subtitle */
-            subtitle: string;
             /** Title */
             title: string;
+            /** Subtitle */
+            subtitle: string;
+            /** Project Id */
+            project_id?: number | null;
+            /** Due At */
+            due_at?: string | null;
+            /** Status */
+            status: string;
+            /** Href */
+            href: string;
         };
         /** DecisionExperimentActionItem */
         DecisionExperimentActionItem: {
@@ -4098,18 +4101,6 @@ export interface components {
              * @enum {string}
              */
             action: "evaluate" | "mark_success" | "rollback" | "apply_thresholds" | "apply_strategy";
-            /**
-             * Dry Run Supported
-             * @default false
-             */
-            dry_run_supported: boolean;
-            /** Enabled */
-            enabled: boolean;
-            /**
-             * Force Supported
-             * @default false
-             */
-            force_supported: boolean;
             /** Label */
             label: string;
             /**
@@ -4119,12 +4110,22 @@ export interface components {
             method: "POST" | "PATCH";
             /** Path */
             path: string;
-            /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            };
+            /** Enabled */
+            enabled: boolean;
             /** Reason */
             reason: string;
+            /** Payload */
+            payload?: Record<string, never>;
+            /**
+             * Dry Run Supported
+             * @default false
+             */
+            dry_run_supported: boolean;
+            /**
+             * Force Supported
+             * @default false
+             */
+            force_supported: boolean;
         };
         /** DecisionExperimentApplicationHistoryItem */
         DecisionExperimentApplicationHistoryItem: {
@@ -4138,26 +4139,31 @@ export interface components {
         };
         /** DecisionExperimentEvaluation */
         DecisionExperimentEvaluation: {
-            /** Baseline Guardrail Value */
-            baseline_guardrail_value?: number | null;
-            /** Baseline Target Value */
-            baseline_target_value?: number | null;
-            /** Current Guardrail Value */
-            current_guardrail_value?: number | null;
-            current_summary: components["schemas"]["DecisionExperimentMetricSnapshot"];
-            /** Current Target Value */
-            current_target_value?: number | null;
             /**
              * Evaluated At
              * Format: date-time
              */
             evaluated_at: string;
-            /** Guardrail Delta */
-            guardrail_delta?: number | null;
-            /** Guardrail Metric */
-            guardrail_metric: string;
+            /** Sample Size */
+            sample_size: number;
             /** Minimum Sample Reached */
             minimum_sample_reached: boolean;
+            /** Target Metric */
+            target_metric: string;
+            /** Baseline Target Value */
+            baseline_target_value?: number | null;
+            /** Current Target Value */
+            current_target_value?: number | null;
+            /** Target Delta */
+            target_delta?: number | null;
+            /** Guardrail Metric */
+            guardrail_metric: string;
+            /** Baseline Guardrail Value */
+            baseline_guardrail_value?: number | null;
+            /** Current Guardrail Value */
+            current_guardrail_value?: number | null;
+            /** Guardrail Delta */
+            guardrail_delta?: number | null;
             /**
              * Outcome
              * @enum {string}
@@ -4168,49 +4174,44 @@ export interface components {
              * @enum {string}
              */
             recommended_action: "collect_more_data" | "continue" | "complete" | "rollback";
-            /** Sample Size */
-            sample_size: number;
             /** Summary */
             summary: string;
-            /** Target Delta */
-            target_delta?: number | null;
-            /** Target Metric */
-            target_metric: string;
+            current_summary: components["schemas"]["DecisionExperimentMetricSnapshot"];
         };
         /** DecisionExperimentMetricSnapshot */
         DecisionExperimentMetricSnapshot: {
-            /** Active Pending Count */
-            active_pending_count: number;
-            /** Auto Submission Rate */
-            auto_submission_rate?: number | null;
-            /** Best Category */
-            best_category?: string | null;
-            /** Best Category Submission Rate */
-            best_category_submission_rate?: number | null;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
-            /** Decision Count */
-            decision_count: number;
-            /** Overall Submission Rate */
-            overall_submission_rate?: number | null;
-            /** Provided Submission Rate */
-            provided_submission_rate?: number | null;
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
-            /** Submitted Count */
-            submitted_count: number;
-            /**
-             * Window End
-             * Format: date-time
-             */
-            window_end: string;
             /**
              * Window Start
              * Format: date-time
              */
             window_start: string;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
+            /** Decision Count */
+            decision_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Active Pending Count */
+            active_pending_count: number;
+            /** Overall Submission Rate */
+            overall_submission_rate?: number | null;
             /** Workflow Submission Rate */
             workflow_submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Auto Submission Rate */
+            auto_submission_rate?: number | null;
+            /** Provided Submission Rate */
+            provided_submission_rate?: number | null;
+            /** Best Category */
+            best_category?: string | null;
+            /** Best Category Submission Rate */
+            best_category_submission_rate?: number | null;
             /** Worst Category */
             worst_category?: string | null;
             /** Worst Category Submission Rate */
@@ -4218,99 +4219,135 @@ export interface components {
         };
         /** DecisionExperimentRunCreateRequest */
         DecisionExperimentRunCreateRequest: {
-            /**
-             * Baseline Days
-             * @default 14
-             */
-            baseline_days: number;
-            /** Duration Days */
-            duration_days: number;
+            /** Experiment Key */
+            experiment_key: string;
+            /** Recommendation Key */
+            recommendation_key: string;
+            /** Priority Rank */
+            priority_rank: number;
+            /** Title */
+            title: string;
+            /** Hypothesis */
+            hypothesis: string;
+            /** Suggested Change */
+            suggested_change: string;
+            /** Target Metric */
+            target_metric: string;
             /**
              * Expected Direction
              * @enum {string}
              */
             expected_direction: "increase" | "decrease" | "stabilize";
-            /** Experiment Key */
-            experiment_key: string;
-            /** Guardrail Metric */
-            guardrail_metric: string;
-            /** Hypothesis */
-            hypothesis: string;
-            /** Minimum Decision Sample */
-            minimum_decision_sample: number;
-            /** Notes */
-            notes?: string | null;
-            /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
-            /** Priority Rank */
-            priority_rank: number;
-            /** Recommendation Key */
-            recommendation_key: string;
-            /** Rollback Trigger */
-            rollback_trigger: string;
-            /** Started At */
-            started_at?: string | null;
             /** Success Criteria */
             success_criteria: string;
-            /** Suggested Change */
-            suggested_change: string;
-            /** Target Metric */
-            target_metric: string;
-            /** Title */
-            title: string;
+            /** Guardrail Metric */
+            guardrail_metric: string;
+            /** Minimum Decision Sample */
+            minimum_decision_sample: number;
+            /** Duration Days */
+            duration_days: number;
+            /** Rollback Trigger */
+            rollback_trigger: string;
+            /** Parameter Recommendation */
+            parameter_recommendation?: Record<string, never>;
+            /**
+             * Baseline Days
+             * @default 14
+             */
+            baseline_days: number;
+            /** Started At */
+            started_at?: string | null;
+            /** Notes */
+            notes?: string | null;
         };
         /** DecisionExperimentRunDetailResponse */
         DecisionExperimentRunDetailResponse: {
-            baseline_summary: components["schemas"]["DecisionExperimentMetricSnapshot"];
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Operator Id */
-            operator_id: number;
             run: components["schemas"]["DecisionExperimentRunResponse"];
+            baseline_summary: components["schemas"]["DecisionExperimentMetricSnapshot"];
         };
         /** DecisionExperimentRunListResponse */
         DecisionExperimentRunListResponse: {
-            /** Active Count */
-            active_count: number;
-            /**
-             * Applicable Count
-             * @default 0
-             */
-            applicable_count: number;
-            /** Application Status Counts */
-            application_status_counts?: {
-                [key: string]: number;
-            };
-            /**
-             * Applied Count
-             * @default 0
-             */
-            applied_count: number;
-            /**
-             * Blocked Count
-             * @default 0
-             */
-            blocked_count: number;
-            /** Completed Count */
-            completed_count: number;
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
+            /** Result Count */
+            result_count: number;
+            /**
+             * Total Match Count
+             * @default 0
+             */
+            total_match_count: number;
+            /**
+             * Sort
+             * @default needs_attention
+             * @enum {string}
+             */
+            sort: "needs_attention" | "created_desc" | "created_asc" | "priority" | "last_evaluated_desc" | "application";
+            /** Active Count */
+            active_count: number;
+            /** Completed Count */
+            completed_count: number;
+            /** Rolled Back Count */
+            rolled_back_count: number;
             /**
              * Failed Count
              * @default 0
              */
             failed_count: number;
             /**
+             * Success Count
+             * @default 0
+             */
+            success_count: number;
+            /**
+             * Pending Count
+             * @default 0
+             */
+            pending_count: number;
+            /**
              * Inconclusive Count
              * @default 0
              */
             inconclusive_count: number;
+            /**
+             * Rollback Count
+             * @default 0
+             */
+            rollback_count: number;
+            /**
+             * Applicable Count
+             * @default 0
+             */
+            applicable_count: number;
+            /**
+             * Ready To Apply Count
+             * @default 0
+             */
+            ready_to_apply_count: number;
+            /**
+             * Applied Count
+             * @default 0
+             */
+            applied_count: number;
+            /**
+             * Partially Applied Count
+             * @default 0
+             */
+            partially_applied_count: number;
+            /**
+             * Blocked Count
+             * @default 0
+             */
+            blocked_count: number;
             /**
              * Not Ready Count
              * @default 0
@@ -4321,113 +4358,100 @@ export interface components {
              * @default 0
              */
             not_supported_count: number;
-            /** Operator Id */
-            operator_id: number;
+            /** Application Status Counts */
+            application_status_counts?: {
+                [key: string]: number;
+            };
             /** Outcome Counts */
             outcome_counts?: {
                 [key: string]: number;
             };
-            /**
-             * Partially Applied Count
-             * @default 0
-             */
-            partially_applied_count: number;
-            /**
-             * Pending Count
-             * @default 0
-             */
-            pending_count: number;
-            /**
-             * Ready To Apply Count
-             * @default 0
-             */
-            ready_to_apply_count: number;
-            /** Result Count */
-            result_count: number;
             /** Review Bucket Counts */
             review_bucket_counts?: {
                 [key: string]: number;
             };
-            /**
-             * Rollback Count
-             * @default 0
-             */
-            rollback_count: number;
-            /** Rolled Back Count */
-            rolled_back_count: number;
             /** Runs */
             runs?: components["schemas"]["DecisionExperimentRunResponse"][];
-            /**
-             * Sort
-             * @default needs_attention
-             * @enum {string}
-             */
-            sort: "needs_attention" | "created_desc" | "created_asc" | "priority" | "last_evaluated_desc" | "application";
-            /**
-             * Success Count
-             * @default 0
-             */
-            success_count: number;
-            /**
-             * Total Match Count
-             * @default 0
-             */
-            total_match_count: number;
         };
         /** DecisionExperimentRunResponse */
         DecisionExperimentRunResponse: {
-            /** Application Detail */
-            application_detail: string;
-            /** Application History */
-            application_history?: components["schemas"]["DecisionExperimentApplicationHistoryItem"][];
+            /** Id */
+            id: number;
+            /** Operator Id */
+            operator_id: number;
+            /** Experiment Key */
+            experiment_key: string;
+            /** Recommendation Key */
+            recommendation_key: string;
             /**
-             * Application Status
+             * Status
              * @enum {string}
              */
-            application_status: "not_supported" | "not_ready" | "ready" | "partially_applied" | "applied" | "blocked";
-            /** Applied Apply Types */
-            applied_apply_types?: ("thresholds" | "strategy")[];
-            /** Baseline Days */
-            baseline_days: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Duration Days */
-            duration_days: number;
-            /** Ended At */
-            ended_at?: string | null;
+            status: "planned" | "running" | "completed" | "rolled_back" | "failed";
+            /** Outcome */
+            outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
+            /** Priority Rank */
+            priority_rank: number;
+            /** Title */
+            title: string;
+            /** Hypothesis */
+            hypothesis: string;
+            /** Suggested Change */
+            suggested_change: string;
+            /** Target Metric */
+            target_metric: string;
             /**
              * Expected Direction
              * @enum {string}
              */
             expected_direction: "increase" | "decrease" | "stabilize";
-            /** Experiment Key */
-            experiment_key: string;
+            /** Success Criteria */
+            success_criteria: string;
             /** Guardrail Metric */
             guardrail_metric: string;
-            /** Hypothesis */
-            hypothesis: string;
-            /** Id */
-            id: number;
-            /** Last Evaluated At */
-            last_evaluated_at?: string | null;
-            latest_evaluation?: components["schemas"]["DecisionExperimentEvaluation"] | null;
             /** Minimum Decision Sample */
             minimum_decision_sample: number;
-            /** Next Actions */
-            next_actions?: components["schemas"]["DecisionExperimentActionItem"][];
+            /** Duration Days */
+            duration_days: number;
+            /** Baseline Days */
+            baseline_days: number;
+            /** Rollback Trigger */
+            rollback_trigger: string;
             /** Notes */
             notes?: string | null;
-            /** Operator Id */
-            operator_id: number;
-            /** Outcome */
-            outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
-            /** Priority Rank */
-            priority_rank: number;
-            /** Recommendation Key */
-            recommendation_key: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Last Evaluated At */
+            last_evaluated_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            latest_evaluation?: components["schemas"]["DecisionExperimentEvaluation"] | null;
+            /** Supported Apply Types */
+            supported_apply_types?: ("thresholds" | "strategy")[];
+            /** Applied Apply Types */
+            applied_apply_types?: ("thresholds" | "strategy")[];
+            /**
+             * Application Status
+             * @enum {string}
+             */
+            application_status: "not_supported" | "not_ready" | "ready" | "partially_applied" | "applied" | "blocked";
+            /** Application Detail */
+            application_detail: string;
+            /** Application History */
+            application_history?: components["schemas"]["DecisionExperimentApplicationHistoryItem"][];
             /**
              * Review Bucket
              * @enum {string}
@@ -4437,51 +4461,24 @@ export interface components {
             review_priority: number;
             /** Review Reason */
             review_reason: string;
-            /** Rollback Trigger */
-            rollback_trigger: string;
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "planned" | "running" | "completed" | "rolled_back" | "failed";
-            /** Success Criteria */
-            success_criteria: string;
-            /** Suggested Change */
-            suggested_change: string;
-            /** Supported Apply Types */
-            supported_apply_types?: ("thresholds" | "strategy")[];
-            /** Target Metric */
-            target_metric: string;
-            /** Title */
-            title: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
+            /** Next Actions */
+            next_actions?: components["schemas"]["DecisionExperimentActionItem"][];
         };
         /** DecisionExperimentRunUpdateRequest */
         DecisionExperimentRunUpdateRequest: {
-            /** Append Note */
-            append_note?: string | null;
-            /** Ended At */
-            ended_at?: string | null;
+            /** Status */
+            status?: ("planned" | "running" | "completed" | "rolled_back") | null;
             /** Outcome */
             outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
             /** Replace Notes */
             replace_notes?: string | null;
-            /** Status */
-            status?: ("planned" | "running" | "completed" | "rolled_back") | null;
+            /** Append Note */
+            append_note?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
         };
         /** DecisionExperimentStrategyApplyRequest */
         DecisionExperimentStrategyApplyRequest: {
-            /** Append Note */
-            append_note?: string | null;
             /**
              * Dry Run
              * @default false
@@ -4492,37 +4489,37 @@ export interface components {
              * @default false
              */
             force: boolean;
+            /** Append Note */
+            append_note?: string | null;
         };
         /** DecisionExperimentStrategyApplyResponse */
         DecisionExperimentStrategyApplyResponse: {
-            /** Applied */
-            applied: boolean;
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Detail */
-            detail: string;
-            /** Dry Run */
-            dry_run: boolean;
-            /** Experiment Key */
-            experiment_key: string;
-            /** Latest Outcome */
-            latest_outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
-            /** Operator Id */
-            operator_id: number;
-            /** Recommendation Key */
-            recommendation_key: string;
             /** Run Id */
             run_id: number;
-            strategy_tuning: components["schemas"]["DecisionStrategyTuningSnapshot"];
+            /** Experiment Key */
+            experiment_key: string;
+            /** Recommendation Key */
+            recommendation_key: string;
+            /** Applied */
+            applied: boolean;
+            /** Dry Run */
+            dry_run: boolean;
+            /** Latest Outcome */
+            latest_outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
             /** Strategy Updates */
             strategy_updates?: components["schemas"]["DecisionStrategyAdjustmentItem"][];
+            strategy_tuning: components["schemas"]["DecisionStrategyTuningSnapshot"];
+            /** Detail */
+            detail: string;
         };
         /** DecisionExperimentThresholdApplyRequest */
         DecisionExperimentThresholdApplyRequest: {
-            /** Append Note */
-            append_note?: string | null;
             /**
              * Dry Run
              * @default false
@@ -4533,180 +4530,172 @@ export interface components {
              * @default false
              */
             force: boolean;
+            /** Append Note */
+            append_note?: string | null;
         };
         /** DecisionExperimentThresholdApplyResponse */
         DecisionExperimentThresholdApplyResponse: {
-            /** Applied */
-            applied: boolean;
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Detail */
-            detail: string;
-            /** Dry Run */
-            dry_run: boolean;
-            /** Experiment Key */
-            experiment_key: string;
-            /** Latest Outcome */
-            latest_outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
-            /** Operator Id */
-            operator_id: number;
-            /** Recommendation Key */
-            recommendation_key: string;
             /** Run Id */
             run_id: number;
-            strategy_thresholds: components["schemas"]["DecisionStrategyThresholdSnapshot"];
+            /** Experiment Key */
+            experiment_key: string;
+            /** Recommendation Key */
+            recommendation_key: string;
+            /** Applied */
+            applied: boolean;
+            /** Dry Run */
+            dry_run: boolean;
+            /** Latest Outcome */
+            latest_outcome?: ("insufficient_data" | "watch" | "success" | "rollback" | "inconclusive") | null;
             /** Threshold Updates */
             threshold_updates?: components["schemas"]["DecisionThresholdAdjustmentItem"][];
+            strategy_thresholds: components["schemas"]["DecisionStrategyThresholdSnapshot"];
+            /** Detail */
+            detail: string;
         };
         /** DecisionFunnelBreakdownItem */
         DecisionFunnelBreakdownItem: {
-            /** Active Pending Count */
-            active_pending_count: number;
-            /** Average Expected Margin Score */
-            average_expected_margin_score?: number | null;
-            /** Average Hours To Submit */
-            average_hours_to_submit?: number | null;
-            /** Average Priority Score */
-            average_priority_score?: number | null;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
+            /** Segment */
+            segment: string;
             /** Decision Count */
             decision_count: number;
+            /** Project Count */
+            project_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Active Pending Count */
+            active_pending_count: number;
+            /** Skipped Count */
+            skipped_count: number;
             /** Entry Bid Now Count */
             entry_bid_now_count: number;
             /** Entry Review Count */
             entry_review_count: number;
             /** Entry Skip Count */
             entry_skip_count: number;
-            /** Project Count */
-            project_count: number;
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
-            /** Segment */
-            segment: string;
-            /** Skipped Count */
-            skipped_count: number;
-            /** Submission Rate */
-            submission_rate?: number | null;
             /** Submitted After Bid Now Count */
             submitted_after_bid_now_count: number;
             /** Submitted After Review Count */
             submitted_after_review_count: number;
             /** Submitted After Skip Count */
             submitted_after_skip_count: number;
-            /** Submitted Count */
-            submitted_count: number;
+            /** Submission Rate */
+            submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Average Priority Score */
+            average_priority_score?: number | null;
+            /** Average Expected Margin Score */
+            average_expected_margin_score?: number | null;
+            /** Average Hours To Submit */
+            average_hours_to_submit?: number | null;
         };
         /** DecisionFunnelComparisonSummary */
         DecisionFunnelComparisonSummary: {
-            /** Active Pending Count Delta */
-            active_pending_count_delta: number;
-            /** Average Hours To Submit Delta */
-            average_hours_to_submit_delta?: number | null;
-            /** Bid Now Submission Rate Delta */
-            bid_now_submission_rate_delta?: number | null;
+            /**
+             * Current Period Start
+             * Format: date-time
+             */
+            current_period_start: string;
             /**
              * Current Period End
              * Format: date-time
              */
             current_period_end: string;
             /**
-             * Current Period Start
+             * Previous Period Start
              * Format: date-time
              */
-            current_period_start: string;
-            /** Decision Count Delta */
-            decision_count_delta: number;
-            /** Overall Submission Rate Delta */
-            overall_submission_rate_delta?: number | null;
+            previous_period_start: string;
             /**
              * Previous Period End
              * Format: date-time
              */
             previous_period_end: string;
-            /**
-             * Previous Period Start
-             * Format: date-time
-             */
-            previous_period_start: string;
+            /** Decision Count Delta */
+            decision_count_delta: number;
             /** Project Count Delta */
             project_count_delta: number;
-            /** Review Submission Rate Delta */
-            review_submission_rate_delta?: number | null;
-            /** Skipped Count Delta */
-            skipped_count_delta: number;
             /** Submitted Count Delta */
             submitted_count_delta: number;
+            /** Active Pending Count Delta */
+            active_pending_count_delta: number;
+            /** Skipped Count Delta */
+            skipped_count_delta: number;
+            /** Overall Submission Rate Delta */
+            overall_submission_rate_delta?: number | null;
             /** Workflow Submission Rate Delta */
             workflow_submission_rate_delta?: number | null;
+            /** Bid Now Submission Rate Delta */
+            bid_now_submission_rate_delta?: number | null;
+            /** Review Submission Rate Delta */
+            review_submission_rate_delta?: number | null;
+            /** Average Hours To Submit Delta */
+            average_hours_to_submit_delta?: number | null;
         };
         /** DecisionFunnelPeriodSummary */
         DecisionFunnelPeriodSummary: {
-            /** Active Pending Count */
-            active_pending_count: number;
-            /** Average Hours To Submit */
-            average_hours_to_submit?: number | null;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
+            /**
+             * Period Start
+             * Format: date-time
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date-time
+             */
+            period_end: string;
             /** Decision Count */
             decision_count: number;
-            /** Direct Submitted Count */
-            direct_submitted_count: number;
+            /** Project Count */
+            project_count: number;
+            /** Active Pending Count */
+            active_pending_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Skipped Count */
+            skipped_count: number;
             /** Entry Bid Now Count */
             entry_bid_now_count: number;
             /** Entry Review Count */
             entry_review_count: number;
             /** Entry Skip Count */
             entry_skip_count: number;
-            /** Overall Submission Rate */
-            overall_submission_rate?: number | null;
-            /**
-             * Period End
-             * Format: date-time
-             */
-            period_end: string;
-            /**
-             * Period Start
-             * Format: date-time
-             */
-            period_start: string;
-            /** Project Count */
-            project_count: number;
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
-            /** Skipped Count */
-            skipped_count: number;
+            /** Direct Submitted Count */
+            direct_submitted_count: number;
             /** Submitted After Bid Now Count */
             submitted_after_bid_now_count: number;
             /** Submitted After Review Count */
             submitted_after_review_count: number;
             /** Submitted After Skip Count */
             submitted_after_skip_count: number;
-            /** Submitted Count */
-            submitted_count: number;
+            /** Overall Submission Rate */
+            overall_submission_rate?: number | null;
             /** Workflow Submission Rate */
             workflow_submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Average Hours To Submit */
+            average_hours_to_submit?: number | null;
         };
         /** DecisionFunnelRecentSubmissionItem */
         DecisionFunnelRecentSubmissionItem: {
-            /**
-             * Current Action
-             * @enum {string}
-             */
-            current_action: "bid_now" | "review" | "skip";
-            /**
-             * Current Decision Status
-             * @enum {string}
-             */
-            current_decision_status: "planned" | "reviewing" | "submitted" | "skipped";
             /** Decision Record Id */
             decision_record_id: number;
-            /** First Decided At */
-            first_decided_at?: string | null;
-            /** Hours To Submit */
-            hours_to_submit?: number | null;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
             /**
              * Initial Action
              * @enum {string}
@@ -4717,172 +4706,182 @@ export interface components {
              * @enum {string}
              */
             initial_decision_status: "planned" | "reviewing" | "submitted" | "skipped";
+            /**
+             * Current Action
+             * @enum {string}
+             */
+            current_action: "bid_now" | "review" | "skip";
+            /**
+             * Current Decision Status
+             * @enum {string}
+             */
+            current_decision_status: "planned" | "reviewing" | "submitted" | "skipped";
             /** Priority Score */
             priority_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Project Title */
-            project_title: string;
             /** Recommended Amount */
             recommended_amount: number;
-            /** Risk Flags */
-            risk_flags?: string[];
-            /** Strengths */
-            strengths?: string[];
+            /** First Decided At */
+            first_decided_at?: string | null;
             /**
              * Submitted At
              * Format: date-time
              */
             submitted_at: string;
+            /** Hours To Submit */
+            hours_to_submit?: number | null;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
         };
         /** DecisionFunnelResponse */
         DecisionFunnelResponse: {
-            /** Active Pending Count */
-            active_pending_count: number;
-            /** Agency Breakdown */
-            agency_breakdown?: components["schemas"]["DecisionFunnelBreakdownItem"][];
-            /** Average Hours To Submit */
-            average_hours_to_submit?: number | null;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
-            /**
-             * Breakdown Limit Applied
-             * @default 5
-             */
-            breakdown_limit_applied: number;
-            /** Category Breakdown */
-            category_breakdown?: components["schemas"]["DecisionFunnelBreakdownItem"][];
-            comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /**
-             * Current Period End
-             * Format: date-time
-             */
-            current_period_end: string;
+            /** Period Days */
+            period_days: number;
+            /** Decision Count */
+            decision_count: number;
+            /** Project Count */
+            project_count: number;
+            /** Active Pending Count */
+            active_pending_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Skipped Count */
+            skipped_count: number;
+            /** Entry Bid Now Count */
+            entry_bid_now_count: number;
+            /** Entry Review Count */
+            entry_review_count: number;
+            /** Entry Skip Count */
+            entry_skip_count: number;
+            /** Direct Submitted Count */
+            direct_submitted_count: number;
+            /** Submitted After Bid Now Count */
+            submitted_after_bid_now_count: number;
+            /** Submitted After Review Count */
+            submitted_after_review_count: number;
+            /** Submitted After Skip Count */
+            submitted_after_skip_count: number;
+            /** Overall Submission Rate */
+            overall_submission_rate?: number | null;
+            /** Workflow Submission Rate */
+            workflow_submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Average Hours To Submit */
+            average_hours_to_submit?: number | null;
             /**
              * Current Period Start
              * Format: date-time
              */
             current_period_start: string;
-            /** Decision Count */
-            decision_count: number;
-            /** Direct Submitted Count */
-            direct_submitted_count: number;
-            /** Entry Bid Now Count */
-            entry_bid_now_count: number;
-            /** Entry Review Count */
-            entry_review_count: number;
-            /** Entry Skip Count */
-            entry_skip_count: number;
-            /** Operator Id */
-            operator_id: number;
-            /** Overall Submission Rate */
-            overall_submission_rate?: number | null;
-            /** Period Days */
-            period_days: number;
+            /**
+             * Current Period End
+             * Format: date-time
+             */
+            current_period_end: string;
             previous_period: components["schemas"]["DecisionFunnelPeriodSummary"];
-            /** Project Count */
-            project_count: number;
-            /** Recent Submissions */
-            recent_submissions?: components["schemas"]["DecisionFunnelRecentSubmissionItem"][];
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
-            /** Skipped Count */
-            skipped_count: number;
-            /** Submitted After Bid Now Count */
-            submitted_after_bid_now_count: number;
-            /** Submitted After Review Count */
-            submitted_after_review_count: number;
-            /** Submitted After Skip Count */
-            submitted_after_skip_count: number;
-            /** Submitted Count */
-            submitted_count: number;
-            /** Trend */
-            trend?: components["schemas"]["DecisionFunnelTrendItem"][];
+            comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
             /**
              * Trend Bucket Days
              * @default 7
              */
             trend_bucket_days: number;
-            /** Workflow Submission Rate */
-            workflow_submission_rate?: number | null;
+            /**
+             * Breakdown Limit Applied
+             * @default 5
+             */
+            breakdown_limit_applied: number;
+            /** Trend */
+            trend?: components["schemas"]["DecisionFunnelTrendItem"][];
+            /** Category Breakdown */
+            category_breakdown?: components["schemas"]["DecisionFunnelBreakdownItem"][];
             /** Workload Source Breakdown */
             workload_source_breakdown?: components["schemas"]["DecisionFunnelBreakdownItem"][];
+            /** Agency Breakdown */
+            agency_breakdown?: components["schemas"]["DecisionFunnelBreakdownItem"][];
+            /** Recent Submissions */
+            recent_submissions?: components["schemas"]["DecisionFunnelRecentSubmissionItem"][];
         };
         /** DecisionFunnelTrendItem */
         DecisionFunnelTrendItem: {
-            /** Active Pending Count */
-            active_pending_count: number;
-            /** Average Expected Margin Score */
-            average_expected_margin_score?: number | null;
-            /** Average Hours To Submit */
-            average_hours_to_submit?: number | null;
-            /** Average Priority Score */
-            average_priority_score?: number | null;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
-            /**
-             * Bucket End
-             * Format: date
-             */
-            bucket_end: string;
             /**
              * Bucket Start
              * Format: date
              */
             bucket_start: string;
+            /**
+             * Bucket End
+             * Format: date
+             */
+            bucket_end: string;
             /** Decision Count */
             decision_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Active Pending Count */
+            active_pending_count: number;
+            /** Skipped Count */
+            skipped_count: number;
             /** Entry Bid Now Count */
             entry_bid_now_count: number;
             /** Entry Review Count */
             entry_review_count: number;
             /** Entry Skip Count */
             entry_skip_count: number;
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
-            /** Skipped Count */
-            skipped_count: number;
-            /** Submission Rate */
-            submission_rate?: number | null;
             /** Submitted After Bid Now Count */
             submitted_after_bid_now_count: number;
             /** Submitted After Review Count */
             submitted_after_review_count: number;
             /** Submitted After Skip Count */
             submitted_after_skip_count: number;
-            /** Submitted Count */
-            submitted_count: number;
+            /** Submission Rate */
+            submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Average Priority Score */
+            average_priority_score?: number | null;
+            /** Average Expected Margin Score */
+            average_expected_margin_score?: number | null;
+            /** Average Hours To Submit */
+            average_hours_to_submit?: number | null;
         };
         /** DecisionInsightsRecentItem */
         DecisionInsightsRecentItem: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Project Id */
+            project_id: number;
             /**
              * Action
              * @enum {string}
              */
             action: "bid_now" | "review" | "skip";
-            /** Budget Capture Score */
-            budget_capture_score: number;
-            /** Competitiveness Score */
-            competitiveness_score: number;
-            /** Decision Record Id */
-            decision_record_id: number;
             /**
              * Decision Status
              * @enum {string}
              */
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /** Execution Complexity Score */
-            execution_complexity_score: number;
-            /** Expected Margin Score */
-            expected_margin_score: number;
             /** Priority Score */
             priority_score: number;
-            /** Project Id */
-            project_id: number;
+            /** Expected Margin Score */
+            expected_margin_score: number;
+            /** Execution Complexity Score */
+            execution_complexity_score: number;
+            /** Competitiveness Score */
+            competitiveness_score: number;
+            /** Budget Capture Score */
+            budget_capture_score: number;
             /**
              * Updated At
              * Format: date-time
@@ -4891,171 +4890,160 @@ export interface components {
         };
         /** DecisionInsightsResponse */
         DecisionInsightsResponse: {
-            /** Action Breakdown */
-            action_breakdown?: {
-                [key: string]: number;
-            };
-            /** Auto Workload Count */
-            auto_workload_count: number;
-            /** Average Budget Capture Score */
-            average_budget_capture_score?: number | null;
-            /** Average Competitiveness Score */
-            average_competitiveness_score?: number | null;
-            /** Average Execution Complexity Score */
-            average_execution_complexity_score?: number | null;
-            /** Average Expected Margin Score */
-            average_expected_margin_score?: number | null;
-            /** Average Priority Score */
-            average_priority_score?: number | null;
-            /** Bid Now Count */
-            bid_now_count: number;
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** High Priority Count */
-            high_priority_count: number;
-            /** Operator Id */
-            operator_id: number;
             /** Period Days */
             period_days: number;
-            /** Provided Workload Count */
-            provided_workload_count: number;
-            /** Recent Decisions */
-            recent_decisions?: components["schemas"]["DecisionInsightsRecentItem"][];
             /** Result Count */
             result_count: number;
+            /** High Priority Count */
+            high_priority_count: number;
+            /** Bid Now Count */
+            bid_now_count: number;
             /** Review Count */
             review_count: number;
             /** Skip Count */
             skip_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Auto Workload Count */
+            auto_workload_count: number;
+            /** Provided Workload Count */
+            provided_workload_count: number;
+            /** Average Priority Score */
+            average_priority_score?: number | null;
+            /** Average Expected Margin Score */
+            average_expected_margin_score?: number | null;
+            /** Average Execution Complexity Score */
+            average_execution_complexity_score?: number | null;
+            /** Average Competitiveness Score */
+            average_competitiveness_score?: number | null;
+            /** Average Budget Capture Score */
+            average_budget_capture_score?: number | null;
             /** Status Breakdown */
             status_breakdown?: {
                 [key: string]: number;
             };
-            /** Submitted Count */
-            submitted_count: number;
+            /** Action Breakdown */
+            action_breakdown?: {
+                [key: string]: number;
+            };
+            /** Recent Decisions */
+            recent_decisions?: components["schemas"]["DecisionInsightsRecentItem"][];
         };
         /** DecisionRecommendationExperiment */
         DecisionRecommendationExperiment: {
-            /** Duration Days */
-            duration_days: number;
+            /** Experiment Key */
+            experiment_key: string;
+            /** Recommendation Key */
+            recommendation_key: string;
+            /** Priority Rank */
+            priority_rank: number;
+            /** Title */
+            title: string;
+            /** Hypothesis */
+            hypothesis: string;
+            /** Suggested Change */
+            suggested_change: string;
+            /** Target Metric */
+            target_metric: string;
             /**
              * Expected Direction
              * @enum {string}
              */
             expected_direction: "increase" | "decrease" | "stabilize";
-            /** Experiment Key */
-            experiment_key: string;
-            /** Guardrail Metric */
-            guardrail_metric: string;
-            /** Hypothesis */
-            hypothesis: string;
-            /** Minimum Decision Sample */
-            minimum_decision_sample: number;
-            /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
-            /** Priority Rank */
-            priority_rank: number;
-            /** Recommendation Key */
-            recommendation_key: string;
-            /** Rollback Trigger */
-            rollback_trigger: string;
             /** Success Criteria */
             success_criteria: string;
-            /** Suggested Change */
-            suggested_change: string;
-            /** Target Metric */
-            target_metric: string;
-            /** Title */
-            title: string;
+            /** Guardrail Metric */
+            guardrail_metric: string;
+            /** Minimum Decision Sample */
+            minimum_decision_sample: number;
+            /** Duration Days */
+            duration_days: number;
+            /** Rollback Trigger */
+            rollback_trigger: string;
+            /** Parameter Recommendation */
+            parameter_recommendation?: Record<string, never>;
         };
         /** DecisionRecommendationHistoryAdjustment */
         DecisionRecommendationHistoryAdjustment: {
-            /** Applied Count */
-            applied_count: number;
-            /** Failed Count */
-            failed_count: number;
-            /** Pending Count */
-            pending_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "neutral" | "promoted" | "deprioritized";
             /** Priority Delta */
             priority_delta: number;
             /** Reason */
             reason: string;
             /** Recent Run Count */
             recent_run_count: number;
-            /** Rollback Count */
-            rollback_count: number;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "neutral" | "promoted" | "deprioritized";
             /** Success Count */
             success_count: number;
+            /** Rollback Count */
+            rollback_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Pending Count */
+            pending_count: number;
+            /** Applied Count */
+            applied_count: number;
         };
         /** DecisionRecommendationItem */
         DecisionRecommendationItem: {
-            experiment_plan?: components["schemas"]["DecisionRecommendationExperiment"] | null;
-            history_adjustment: components["schemas"]["DecisionRecommendationHistoryAdjustment"];
             /** Key */
             key: string;
-            /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Priority Score
-             * @default 0
-             */
-            priority_score: number;
             /**
              * Severity
              * @enum {string}
              */
             severity: "info" | "watch" | "action";
-            /** Suggested Adjustment */
-            suggested_adjustment?: string | null;
-            /** Summary */
-            summary: string;
-            /** Supporting Metrics */
-            supporting_metrics?: {
-                [key: string]: unknown;
-            };
             /** Title */
             title: string;
+            /** Summary */
+            summary: string;
+            /** Suggested Adjustment */
+            suggested_adjustment?: string | null;
+            /** Supporting Metrics */
+            supporting_metrics?: Record<string, never>;
+            /**
+             * Priority Score
+             * @default 0
+             */
+            priority_score: number;
+            history_adjustment: components["schemas"]["DecisionRecommendationHistoryAdjustment"];
+            /** Parameter Recommendation */
+            parameter_recommendation?: Record<string, never>;
+            experiment_plan?: components["schemas"]["DecisionRecommendationExperiment"] | null;
         };
         /** DecisionRecommendationResponse */
         DecisionRecommendationResponse: {
-            /** Active Pending Count */
-            active_pending_count: number;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
-            comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Decision Count */
-            decision_count: number;
-            /** Experiment Count */
-            experiment_count: number;
-            /** Experiment History */
-            experiment_history?: {
-                [key: string]: unknown;
-            };
-            /** Experiments */
-            experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
-            /** Headline */
-            headline: string;
-            /** Operator Id */
-            operator_id: number;
-            /** Overall Submission Rate */
-            overall_submission_rate?: number | null;
             /** Period Days */
             period_days: number;
+            /** Decision Count */
+            decision_count: number;
+            /** Submitted Count */
+            submitted_count: number;
+            /** Active Pending Count */
+            active_pending_count: number;
+            /** Overall Submission Rate */
+            overall_submission_rate?: number | null;
+            /** Workflow Submission Rate */
+            workflow_submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
             /** Recommendation Count */
             recommendation_count: number;
             /**
@@ -5063,15 +5051,18 @@ export interface components {
              * @default 5
              */
             recommendation_limit_applied: number;
+            /** Experiment Count */
+            experiment_count: number;
+            /** Headline */
+            headline: string;
+            comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
+            /** Experiment History */
+            experiment_history?: Record<string, never>;
+            recommended_next_experiment?: components["schemas"]["DecisionRecommendationExperiment"] | null;
+            /** Experiments */
+            experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
             /** Recommendations */
             recommendations?: components["schemas"]["DecisionRecommendationItem"][];
-            recommended_next_experiment?: components["schemas"]["DecisionRecommendationExperiment"] | null;
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
-            /** Submitted Count */
-            submitted_count: number;
-            /** Workflow Submission Rate */
-            workflow_submission_rate?: number | null;
         };
         /**
          * DecisionSampleItem
@@ -5079,87 +5070,46 @@ export interface components {
          */
         DecisionSampleItem: {
             /**
-             * Action
-             * @description 추천 액션(bid_now/skip 등).
-             */
-            action?: string | null;
-            /**
-             * Budget Estimate
-             * @description 기초금액(추정가격, 원).
-             */
-            budget_estimate?: number | null;
-            /**
-             * Category
-             * @description 카테고리(분류).
-             */
-            category?: string | null;
-            /**
-             * Competitiveness Score
-             * @description 경쟁력 점수.
-             */
-            competitiveness_score?: number | null;
-            /**
-             * Created At
-             * @description 이 추천 기록이 생성된 시각(UTC).
-             */
-            created_at?: string | null;
-            /**
-             * Deadline
-             * @description 투찰 마감일시.
-             */
-            deadline?: string | null;
-            /**
-             * Decided At
-             * @description 최초 결정 시각(first_decided_at).
-             */
-            decided_at?: string | null;
-            /**
              * Decision Record Id
              * @description BidDecisionRecord id.
              */
             decision_record_id: number;
-            /**
-             * Decision Status
-             * @description 결정 상태(planned/reviewing/submitted/skipped).
-             */
-            decision_status?: string | null;
-            /**
-             * Demand Agency
-             * @description 수요기관.
-             */
-            demand_agency?: string | null;
-            /**
-             * Matched Score
-             * @description 프로필 적합도(매칭) 점수.
-             */
-            matched_score?: number | null;
-            /**
-             * Notice Number
-             * @description 공고번호.
-             */
-            notice_number?: string | null;
-            /** @description 이 공고에 대한 최신 서빙 예측 증적. 저장된 예측이 없으면 null. */
-            prediction?: components["schemas"]["DecisionSamplePrediction"] | null;
-            /**
-             * Priority Score
-             * @description 우선순위 점수.
-             */
-            priority_score?: number | null;
-            /**
-             * Probability Score
-             * @description 가격 적합도(추정) 점수. P(낙찰) 아님(§1.5).
-             */
-            probability_score?: number | null;
             /**
              * Project Id
              * @description 연결된 공고 id.
              */
             project_id: number;
             /**
-             * Reasoning
-             * @description 추천 근거(감사용 기록).
+             * Notice Number
+             * @description 공고번호.
              */
-            reasoning?: string | null;
+            notice_number?: string | null;
+            /**
+             * Title
+             * @description 공고명.
+             * @default
+             */
+            title: string;
+            /**
+             * Demand Agency
+             * @description 수요기관.
+             */
+            demand_agency?: string | null;
+            /**
+             * Category
+             * @description 카테고리(분류).
+             */
+            category?: string | null;
+            /**
+             * Budget Estimate
+             * @description 기초금액(추정가격, 원).
+             */
+            budget_estimate?: number | null;
+            /**
+             * Deadline
+             * @description 투찰 마감일시.
+             */
+            deadline?: string | null;
             /**
              * Recommended Amount
              * @description 추천 투찰금액(원).
@@ -5172,16 +5122,57 @@ export interface components {
              */
             recommended_bid_rate?: number | null;
             /**
-             * Title
-             * @description 공고명.
-             * @default
+             * Action
+             * @description 추천 액션(bid_now/skip 등).
              */
-            title: string;
+            action?: string | null;
+            /**
+             * Decision Status
+             * @description 결정 상태(planned/reviewing/submitted/skipped).
+             */
+            decision_status?: string | null;
+            /**
+             * Probability Score
+             * @description 가격 적합도(추정) 점수. P(낙찰) 아님(§1.5).
+             */
+            probability_score?: number | null;
+            /**
+             * Priority Score
+             * @description 우선순위 점수.
+             */
+            priority_score?: number | null;
+            /**
+             * Matched Score
+             * @description 프로필 적합도(매칭) 점수.
+             */
+            matched_score?: number | null;
+            /**
+             * Competitiveness Score
+             * @description 경쟁력 점수.
+             */
+            competitiveness_score?: number | null;
+            /**
+             * Reasoning
+             * @description 추천 근거(감사용 기록).
+             */
+            reasoning?: string | null;
+            /**
+             * Decided At
+             * @description 최초 결정 시각(first_decided_at).
+             */
+            decided_at?: string | null;
+            /**
+             * Created At
+             * @description 이 추천 기록이 생성된 시각(UTC).
+             */
+            created_at?: string | null;
             /**
              * Updated At
              * @description 이 추천 기록이 마지막으로 갱신된 시각(UTC).
              */
             updated_at?: string | null;
+            /** @description 이 공고에 대한 최신 서빙 예측 증적. 저장된 예측이 없으면 null. */
+            prediction?: components["schemas"]["DecisionSamplePrediction"] | null;
         };
         /**
          * DecisionSamplePrediction
@@ -5189,51 +5180,56 @@ export interface components {
          */
         DecisionSamplePrediction: {
             /**
-             * Confidence Score
-             * @description 예측 신뢰도(0-1).
-             */
-            confidence_score?: number | null;
-            /**
-             * Created At
-             * @description 이 예측이 기록된 시각(UTC).
-             */
-            created_at?: string | null;
-            /**
              * Predicted Price
              * @description 서빙된 예측 투찰가(원).
              */
             predicted_price?: number | null;
-            /**
-             * Predictor Family
-             * @description predictor 계열(statistical/ml 등).
-             */
-            predictor_family?: string | null;
-            /**
-             * Predictor Name
-             * @description 예측을 산출한 predictor 이름.
-             */
-            predictor_name?: string | null;
-            /**
-             * Price Range Max
-             * @description 예측 가격 범위 상한(원).
-             */
-            price_range_max?: number | null;
             /**
              * Price Range Min
              * @description 예측 가격 범위 하한(원).
              */
             price_range_min?: number | null;
             /**
+             * Price Range Max
+             * @description 예측 가격 범위 상한(원).
+             */
+            price_range_max?: number | null;
+            /**
+             * Confidence Score
+             * @description 예측 신뢰도(0-1).
+             */
+            confidence_score?: number | null;
+            /**
+             * Predictor Name
+             * @description 예측을 산출한 predictor 이름.
+             */
+            predictor_name?: string | null;
+            /**
+             * Predictor Family
+             * @description predictor 계열(statistical/ml 등).
+             */
+            predictor_family?: string | null;
+            /**
              * Pricing Mode
              * @description 가격 산출 모드(heuristic/model 등).
              */
             pricing_mode?: string | null;
+            /**
+             * Created At
+             * @description 이 예측이 기록된 시각(UTC).
+             */
+            created_at?: string | null;
         };
         /**
          * DecisionSamplesResponse
          * @description 최근 추천/예측 증적 샘플 목록(감사 목적, 정산 결과 아님).
          */
         DecisionSamplesResponse: {
+            /**
+             * Operator Id
+             * @description 현재 응답 범위로 해소된 운영자 id.
+             */
+            operator_id: number;
             /**
              * Current Operator Id
              * @description 현재 응답 범위로 해소된 운영자 id.
@@ -5245,16 +5241,31 @@ export interface components {
              */
             current_operator_username: string;
             /**
+             * Period Days
+             * @description 조회 기간(일). created_at >= now-days.
+             */
+            period_days: number;
+            /**
+             * Limit
+             * @description 요청한 최대 샘플 수.
+             */
+            limit: number;
+            /**
+             * Sample Count
+             * @description 반환된 샘플 수.
+             */
+            sample_count: number;
+            /**
              * Generated At
              * Format: date-time
              * @description 이 목록을 생성한 시각(UTC).
              */
             generated_at: string;
             /**
-             * Limit
-             * @description 요청한 최대 샘플 수.
+             * Truncated
+             * @description sample_count 가 limit 에 도달했는지. true 면 더 오래된 기록이 잘림.
              */
-            limit: number;
+            truncated: boolean;
             /**
              * Notes
              * @description 감사 증적/추정 라벨/단일 운영자 기준에 대한 정직 안내 문구.
@@ -5262,59 +5273,39 @@ export interface components {
              */
             notes: string;
             /**
-             * Operator Id
-             * @description 현재 응답 범위로 해소된 운영자 id.
-             */
-            operator_id: number;
-            /**
-             * Period Days
-             * @description 조회 기간(일). created_at >= now-days.
-             */
-            period_days: number;
-            /**
-             * Sample Count
-             * @description 반환된 샘플 수.
-             */
-            sample_count: number;
-            /**
              * Samples
              * @description 최근 순(created_at desc) 추천 증적 샘플 리스트.
              */
             samples?: components["schemas"]["DecisionSampleItem"][];
-            /**
-             * Truncated
-             * @description sample_count 가 limit 에 도달했는지. true 면 더 오래된 기록이 잘림.
-             */
-            truncated: boolean;
         };
         /** DecisionStrategyAdjustmentItem */
         DecisionStrategyAdjustmentItem: {
-            /** Delta */
-            delta?: number | {
-                [key: string]: number;
-            } | null;
-            /**
-             * Direction
-             * @enum {string}
-             */
-            direction: "increase" | "decrease" | "replace";
-            /** Label */
-            label: string;
             /**
              * Parameter
              * @enum {string}
              */
             parameter: "auto_workload_penalty_multiplier" | "category_priority_overrides";
+            /** Label */
+            label: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease" | "replace";
             /** Previous Value */
             previous_value: number | {
                 [key: string]: number;
             };
-            /** Rationale */
-            rationale: string;
             /** Suggested Value */
             suggested_value: number | {
                 [key: string]: number;
             };
+            /** Delta */
+            delta?: number | {
+                [key: string]: number;
+            } | null;
+            /** Rationale */
+            rationale: string;
         };
         /** DecisionStrategyThresholdSnapshot */
         DecisionStrategyThresholdSnapshot: {
@@ -5334,44 +5325,44 @@ export interface components {
         };
         /** DecisionThresholdAdjustmentItem */
         DecisionThresholdAdjustmentItem: {
-            /** Delta */
-            delta: number;
-            /**
-             * Direction
-             * @enum {string}
-             */
-            direction: "increase" | "decrease";
-            /** Label */
-            label: string;
             /**
              * Parameter
              * @enum {string}
              */
             parameter: "bid_now_threshold" | "review_threshold";
+            /** Label */
+            label: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
             /** Previous Value */
             previous_value: number;
-            /** Rationale */
-            rationale: string;
             /** Suggested Value */
             suggested_value: number;
+            /** Delta */
+            delta: number;
+            /** Rationale */
+            rationale: string;
         };
         /** DocumentAnalysisRequest */
         DocumentAnalysisRequest: {
+            /** Project Id */
+            project_id: number;
             /** Document Content */
             document_content: string;
             /** Document Type */
             document_type: string;
-            /** Project Id */
-            project_id: number;
         };
         /** DocumentAnalysisResponse */
         DocumentAnalysisResponse: {
+            /** Key Requirements */
+            key_requirements: string[];
             /** Complexity Score */
             complexity_score: number;
             /** Estimated Effort */
             estimated_effort: number;
-            /** Key Requirements */
-            key_requirements: string[];
             /** Risks */
             risks: string[];
         };
@@ -5380,25 +5371,10 @@ export interface components {
             /** Category */
             category?: string | null;
             /**
-             * History Limit
-             * @default 80
-             */
-            history_limit: number;
-            /**
              * Limit
              * @default 100
              */
             limit: number;
-            /**
-             * Model Version
-             * @default current
-             */
-            model_version: string;
-            /**
-             * Persist
-             * @default true
-             */
-            persist: boolean;
             /**
              * Scenario
              * @default base
@@ -5410,46 +5386,51 @@ export interface components {
              * @default forward-paper
              */
             strategy_version: string;
+            /**
+             * Model Version
+             * @default current
+             */
+            model_version: string;
+            /**
+             * History Limit
+             * @default 80
+             */
+            history_limit: number;
+            /**
+             * Persist
+             * @default true
+             */
+            persist: boolean;
         };
         /** G2EvidenceSummaryResponse */
         G2EvidenceSummaryResponse: {
-            /** Blocking Gaps */
-            blocking_gaps?: string[];
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Decision Experiments */
-            decision_experiments?: {
-                [key: string]: unknown;
-            };
+            /** Window Days */
+            window_days: number;
             /**
              * Evidence Status
              * @enum {string}
              */
             evidence_status: "ready" | "insufficient" | "mixed_scope" | "missing";
-            /** Notifications */
-            notifications?: {
-                [key: string]: unknown;
-            };
-            /** Operator Id */
-            operator_id: number;
             /** Smoke */
-            smoke?: {
-                [key: string]: unknown;
-            };
+            smoke?: Record<string, never>;
             /** Strategy Monitor */
-            strategy_monitor?: {
-                [key: string]: unknown;
-            };
+            strategy_monitor?: Record<string, never>;
+            /** Decision Experiments */
+            decision_experiments?: Record<string, never>;
+            /** Synthetic Experiments */
+            synthetic_experiments?: Record<string, never>;
+            /** Notifications */
+            notifications?: Record<string, never>;
+            /** Blocking Gaps */
+            blocking_gaps?: string[];
             /** Supporting Gaps */
             supporting_gaps?: string[];
-            /** Synthetic Experiments */
-            synthetic_experiments?: {
-                [key: string]: unknown;
-            };
-            /** Window Days */
-            window_days: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -5458,126 +5439,90 @@ export interface components {
         };
         /** LegacyAdminActionResponse */
         LegacyAdminActionResponse: {
-            /**
-             * Mode
-             * @default single_operator
-             * @constant
-             */
-            mode: "single_operator";
+            /** Status */
+            status: string;
             /** Operator Id */
             operator_id: number;
             /** Requested User Id */
             requested_user_id: number;
-            /** Status */
-            status: string;
-        };
-        /** LegacyAdminStatsResponse */
-        LegacyAdminStatsResponse: {
-            /** Active Users */
-            active_users: number;
             /**
              * Mode
              * @default single_operator
              * @constant
              */
             mode: "single_operator";
+        };
+        /** LegacyAdminStatsResponse */
+        LegacyAdminStatsResponse: {
             /** Operator Id */
             operator_id: number;
-            /** Total Bids */
-            total_bids: number;
-            /** Total Projects */
-            total_projects: number;
             /** Total Users */
             total_users: number;
+            /** Active Users */
+            active_users: number;
+            /** Total Projects */
+            total_projects: number;
+            /** Total Bids */
+            total_bids: number;
+            /**
+             * Mode
+             * @default single_operator
+             * @constant
+             */
+            mode: "single_operator";
         };
         /** MLReleaseManifestSummaryItem */
         MLReleaseManifestSummaryItem: {
-            /** Backtest Average Absolute Error Rate */
-            backtest_average_absolute_error_rate?: number | null;
-            /** Backtest Sample Count */
-            backtest_sample_count: number;
-            /** Best Predictor Key */
-            best_predictor_key?: string | null;
-            /** Best Predictor Name */
-            best_predictor_name?: string | null;
-            /** Dataset Quality Status */
-            dataset_quality_status?: string | null;
+            /** Manifest Path */
+            manifest_path: string;
+            /** Release Tag */
+            release_tag: string;
+            /** Validated On */
+            validated_on?: string | null;
             /**
-             * Detail
-             * @default
+             * Signature Status
+             * @enum {string}
              */
-            detail: string;
+            signature_status: "verified" | "missing" | "invalid";
+            /** Gate Status */
+            gate_status: string;
             /** Gate Passed */
             gate_passed?: boolean | null;
             /** Gate Policy */
             gate_policy?: string | null;
-            /** Gate Status */
-            gate_status: string;
-            /** Manifest Path */
-            manifest_path: string;
+            /** Backtest Sample Count */
+            backtest_sample_count: number;
+            /** Backtest Average Absolute Error Rate */
+            backtest_average_absolute_error_rate?: number | null;
+            /** Dataset Quality Status */
+            dataset_quality_status?: string | null;
+            /** Best Predictor Key */
+            best_predictor_key?: string | null;
+            /** Best Predictor Name */
+            best_predictor_name?: string | null;
             /** Recommended Docker Target */
             recommended_docker_target?: string | null;
-            /** Release Tag */
-            release_tag: string;
             /**
              * Remote Storage Enabled
              * @default false
              */
             remote_storage_enabled: boolean;
             /**
-             * Signature Status
-             * @enum {string}
+             * Detail
+             * @default
              */
-            signature_status: "verified" | "missing" | "invalid";
-            /** Validated On */
-            validated_on?: string | null;
+            detail: string;
         };
         /** MLReleaseOperationsSummary */
         MLReleaseOperationsSummary: {
-            /** Backtest Detail */
-            backtest_detail: string;
-            /**
-             * Backtest Status
-             * @enum {string}
-             */
-            backtest_status: "healthy" | "watch" | "critical" | "info";
-            /** Detail */
-            detail: string;
-            /** Latest Backtest Average Absolute Error Rate */
-            latest_backtest_average_absolute_error_rate?: number | null;
-            /** Latest Backtest Sample Count */
-            latest_backtest_sample_count: number;
-            /** Latest Best Predictor Key */
-            latest_best_predictor_key?: string | null;
-            /** Latest Dataset Quality Status */
-            latest_dataset_quality_status?: string | null;
-            /** Latest Gate Passed */
-            latest_gate_passed?: boolean | null;
-            /** Latest Gate Policy */
-            latest_gate_policy?: string | null;
-            /** Latest Gate Status */
-            latest_gate_status: string;
-            /** Latest Manifest Path */
-            latest_manifest_path?: string | null;
-            /** Latest Release Tag */
-            latest_release_tag?: string | null;
-            /**
-             * Latest Signature Status
-             * @enum {string}
-             */
-            latest_signature_status: "verified" | "missing" | "invalid";
-            /** Latest Validated On */
-            latest_validated_on?: string | null;
-            /** Manifest Count */
-            manifest_count: number;
             /** Manifest Dir */
             manifest_dir: string;
-            /** Recent Manifests */
-            recent_manifests?: components["schemas"]["MLReleaseManifestSummaryItem"][];
-            /** Remote Auto Publish */
-            remote_auto_publish: boolean;
+            /** Manifest Count */
+            manifest_count: number;
             /** Remote Storage Configured */
             remote_storage_configured: boolean;
+            /** Remote Auto Publish */
+            remote_auto_publish: boolean;
             /** Retention Limit */
             retention_limit: number;
             /**
@@ -5585,13 +5530,67 @@ export interface components {
              * @enum {string}
              */
             status: "healthy" | "watch" | "critical" | "info";
+            /** Detail */
+            detail: string;
+            /** Latest Release Tag */
+            latest_release_tag?: string | null;
+            /** Latest Manifest Path */
+            latest_manifest_path?: string | null;
+            /** Latest Validated On */
+            latest_validated_on?: string | null;
+            /**
+             * Latest Signature Status
+             * @enum {string}
+             */
+            latest_signature_status: "verified" | "missing" | "invalid";
+            /** Latest Gate Status */
+            latest_gate_status: string;
+            /** Latest Gate Passed */
+            latest_gate_passed?: boolean | null;
+            /** Latest Gate Policy */
+            latest_gate_policy?: string | null;
+            /** Latest Best Predictor Key */
+            latest_best_predictor_key?: string | null;
+            /** Latest Dataset Quality Status */
+            latest_dataset_quality_status?: string | null;
+            /** Latest Backtest Sample Count */
+            latest_backtest_sample_count: number;
+            /** Latest Backtest Average Absolute Error Rate */
+            latest_backtest_average_absolute_error_rate?: number | null;
+            /**
+             * Backtest Status
+             * @enum {string}
+             */
+            backtest_status: "healthy" | "watch" | "critical" | "info";
+            /** Backtest Detail */
+            backtest_detail: string;
+            /** Recent Manifests */
+            recent_manifests?: components["schemas"]["MLReleaseManifestSummaryItem"][];
         };
         /** MLTaskResponse */
         MLTaskResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /** Queue */
+            queue: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Detail */
             detail: string;
             /** Poll Url */
             poll_url: string;
+        };
+        /** MLTaskStatusResponse */
+        MLTaskStatusResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
             /** Queue */
             queue: string;
             /**
@@ -5599,157 +5598,137 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
-        };
-        /** MLTaskStatusResponse */
-        MLTaskStatusResponse: {
-            /** Detail */
-            detail: string;
-            /** Error */
-            error?: string | null;
-            /** Queue */
-            queue: string;
             /** Raw Status */
             raw_status: string;
             /** Ready */
             ready: boolean;
-            /** Result */
-            result?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Successful */
             successful: boolean;
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
+            /** Detail */
+            detail: string;
+            /** Error */
+            error?: string | null;
+            /** Result */
+            result?: Record<string, never> | null;
         };
         /** NotificationOperationsSummary */
         NotificationOperationsSummary: {
-            /** Bid Submission Notification Count */
-            bid_submission_notification_count: number;
-            /** Decision Notification Count */
-            decision_notification_count: number;
             /** Notification Count */
             notification_count: number;
-            /** Recent Telegram Failures */
-            recent_telegram_failures?: components["schemas"]["TelegramDeliveryFailureItem"][];
+            /** Unread Count */
+            unread_count: number;
+            /** Decision Notification Count */
+            decision_notification_count: number;
+            /** Bid Submission Notification Count */
+            bid_submission_notification_count: number;
             /** Telegram Configured */
             telegram_configured: boolean;
             /** Telegram Delivery Attempt Count */
             telegram_delivery_attempt_count: number;
-            /** Telegram Detail */
-            telegram_detail: string;
-            /** Telegram Failed Count */
-            telegram_failed_count: number;
-            /** Telegram Failure Reason Breakdown */
-            telegram_failure_reason_breakdown?: {
-                [key: string]: number;
-            };
-            /** Telegram Pending Configuration Count */
-            telegram_pending_configuration_count: number;
             /** Telegram Sent Count */
             telegram_sent_count: number;
+            /** Telegram Failed Count */
+            telegram_failed_count: number;
+            /** Telegram Pending Configuration Count */
+            telegram_pending_configuration_count: number;
             /** Telegram Skipped Count */
             telegram_skipped_count: number;
+            /** Telegram Success Rate */
+            telegram_success_rate: number;
             /**
              * Telegram Status
              * @enum {string}
              */
             telegram_status: "healthy" | "watch" | "critical" | "info";
+            /** Telegram Detail */
+            telegram_detail: string;
             /** Telegram Status Counts */
             telegram_status_counts?: {
                 [key: string]: number;
             };
-            /** Telegram Success Rate */
-            telegram_success_rate: number;
-            /** Unread Count */
-            unread_count: number;
+            /** Telegram Failure Reason Breakdown */
+            telegram_failure_reason_breakdown?: {
+                [key: string]: number;
+            };
+            /** Recent Telegram Failures */
+            recent_telegram_failures?: components["schemas"]["TelegramDeliveryFailureItem"][];
         };
         /** NotificationResponse */
         NotificationResponse: {
+            /** Id */
+            id: number;
+            /** Title */
+            title: string;
+            /** Message */
+            message: string;
+            /** Type */
+            type: string;
+            /** Is Read */
+            is_read: boolean;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Id */
-            id: number;
-            /** Is Read */
-            is_read: boolean;
-            /** Message */
-            message: string;
-            /** Title */
-            title: string;
-            /** Type */
-            type: string;
         };
         /** OperationsDashboardCard */
         OperationsDashboardCard: {
-            /** Detail */
-            detail: string;
             /** Key */
             key: string;
             /** Label */
             label: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "healthy" | "watch" | "critical" | "info";
+            /** Value */
+            value: number;
             /**
              * Unit
              * @enum {string}
              */
             unit: "ratio" | "count";
-            /** Value */
-            value: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "watch" | "critical" | "info";
+            /** Detail */
+            detail: string;
         };
         /** OperationsDashboardResponse */
         OperationsDashboardResponse: {
-            /** Cards */
-            cards?: components["schemas"]["OperationsDashboardCard"][];
-            crawl: components["schemas"]["CrawlOperationsSummary"];
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            ml_release: components["schemas"]["MLReleaseOperationsSummary"];
-            notifications: components["schemas"]["NotificationOperationsSummary"];
-            /** Operator Id */
-            operator_id: number;
             /** Period Days */
             period_days: number;
-            smoke_test: components["schemas"]["SmokeTestOperationsSummary"];
+            crawl: components["schemas"]["CrawlOperationsSummary"];
             strategy: components["schemas"]["StrategyOperationsSummary"];
-            synthetic_validation: components["schemas"]["SyntheticValidationOperationsSummary"];
             tasks: components["schemas"]["TaskOperationsSummary"];
+            notifications: components["schemas"]["NotificationOperationsSummary"];
+            ml_release: components["schemas"]["MLReleaseOperationsSummary"];
+            smoke_test: components["schemas"]["SmokeTestOperationsSummary"];
+            synthetic_validation: components["schemas"]["SyntheticValidationOperationsSummary"];
+            /** Cards */
+            cards?: components["schemas"]["OperationsDashboardCard"][];
         };
         /**
          * OperationsKpiConversion
          * @description Conversion KPI (e): recommendation-to-submission rates reused from the funnel.
          */
         OperationsKpiConversion: {
-            /** Average Hours To Submit */
-            average_hours_to_submit?: number | null;
-            /** Bid Now Submission Rate */
-            bid_now_submission_rate?: number | null;
             /** Decision Count */
             decision_count: number;
-            /** Overall Submission Rate */
-            overall_submission_rate?: number | null;
-            /** Review Submission Rate */
-            review_submission_rate?: number | null;
             /** Submitted Count */
             submitted_count: number;
+            /** Overall Submission Rate */
+            overall_submission_rate?: number | null;
+            /** Bid Now Submission Rate */
+            bid_now_submission_rate?: number | null;
+            /** Review Submission Rate */
+            review_submission_rate?: number | null;
+            /** Average Hours To Submit */
+            average_hours_to_submit?: number | null;
         };
         /**
          * OperationsKpiManualOverride
@@ -5758,98 +5737,98 @@ export interface components {
         OperationsKpiManualOverride: {
             /** Decision Count */
             decision_count: number;
-            /** Modification Rate */
-            modification_rate?: number | null;
             /** Modified Count */
             modified_count: number;
+            /** Modification Rate */
+            modification_rate?: number | null;
         };
         /**
          * OperationsKpiMissedOpportunities
          * @description Missed-opportunity KPI (b): bid_now/review recommendations left past deadline.
          */
         OperationsKpiMissedOpportunities: {
-            /** Items */
-            items?: components["schemas"]["OperationsKpiMissedOpportunityItem"][];
             /** Missed Count */
             missed_count: number;
+            /** Items */
+            items?: components["schemas"]["OperationsKpiMissedOpportunityItem"][];
         };
         /**
          * OperationsKpiMissedOpportunityItem
          * @description One recommended-but-unactioned tender whose deadline has already passed.
          */
         OperationsKpiMissedOpportunityItem: {
-            /** Deadline */
-            deadline?: string | null;
             /** Decision Record Id */
             decision_record_id: number;
-            /** Decision Status */
-            decision_status: string;
-            /** Initial Action */
-            initial_action: string;
-            /** Priority Score */
-            priority_score: number;
             /** Project Id */
             project_id: number;
             /** Project Title */
             project_title: string;
+            /** Deadline */
+            deadline?: string | null;
+            /** Initial Action */
+            initial_action: string;
+            /** Decision Status */
+            decision_status: string;
+            /** Priority Score */
+            priority_score: number;
         };
         /**
          * OperationsKpiPredictionAccuracy
          * @description Prediction-accuracy KPI (f): error rates reused from prediction feedback.
          */
         OperationsKpiPredictionAccuracy: {
+            /** Result Count */
+            result_count: number;
+            /** Prediction Sample Count */
+            prediction_sample_count: number;
+            /** Recommendation Sample Count */
+            recommendation_sample_count: number;
             /** Average Prediction Error Rate */
             average_prediction_error_rate?: number | null;
             /** Average Recommendation Error Rate */
             average_recommendation_error_rate?: number | null;
-            /** Prediction Sample Count */
-            prediction_sample_count: number;
             /** Prediction Within 1 Percent Count */
             prediction_within_1_percent_count: number;
             /** Prediction Within 3 Percent Count */
             prediction_within_3_percent_count: number;
-            /** Recommendation Sample Count */
-            recommendation_sample_count: number;
             /** Recommendation Within 1 Percent Count */
             recommendation_within_1_percent_count: number;
             /** Recommendation Within 3 Percent Count */
             recommendation_within_3_percent_count: number;
-            /** Result Count */
-            result_count: number;
         };
         /**
          * OperationsKpiRecommendationFeedback
          * @description Recommendation-usefulness KPI (c): operator 👍/👎 votes on recommendations.
          */
         OperationsKpiRecommendationFeedback: {
-            /** Feedback Count */
-            feedback_count: number;
+            /** Useful Count */
+            useful_count: number;
             /** Not Useful Count */
             not_useful_count: number;
             /** Review Value Rate */
             review_value_rate?: number | null;
-            /** Useful Count */
-            useful_count: number;
+            /** Feedback Count */
+            feedback_count: number;
         };
         /**
          * OperationsKpiResponse
          * @description Roadmap C-1 instrumentation: operating KPIs aggregated in one call.
          */
         OperationsKpiResponse: {
-            conversion: components["schemas"]["OperationsKpiConversion"];
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            manual_override: components["schemas"]["OperationsKpiManualOverride"];
-            missed_opportunities: components["schemas"]["OperationsKpiMissedOpportunities"];
-            /** Operator Id */
-            operator_id: number;
             /** Period Days */
             period_days: number;
+            manual_override: components["schemas"]["OperationsKpiManualOverride"];
+            conversion: components["schemas"]["OperationsKpiConversion"];
             prediction_accuracy: components["schemas"]["OperationsKpiPredictionAccuracy"];
-            recommendation_feedback: components["schemas"]["OperationsKpiRecommendationFeedback"];
+            missed_opportunities: components["schemas"]["OperationsKpiMissedOpportunities"];
             review_time: components["schemas"]["OperationsKpiReviewTime"];
+            recommendation_feedback: components["schemas"]["OperationsKpiRecommendationFeedback"];
             settlement_coverage: components["schemas"]["OperationsKpiSettlementCoverage"];
         };
         /**
@@ -5871,35 +5850,34 @@ export interface components {
          *     Coverage rates are ``None`` when their denominator (paper-bid count) is zero.
          */
         OperationsKpiSettlementCoverage: {
+            /** Total Paper Bids */
+            total_paper_bids: number;
+            /** Settled Count */
+            settled_count: number;
             /** Coverage Rate */
             coverage_rate?: number | null;
-            /** Forward Coverage Rate */
-            forward_coverage_rate?: number | null;
             /** Forward Paper Bids */
             forward_paper_bids: number;
             /** Forward Settled Count */
             forward_settled_count: number;
-            /** Settled Count */
-            settled_count: number;
-            /** Total Paper Bids */
-            total_paper_bids: number;
+            /** Forward Coverage Rate */
+            forward_coverage_rate?: number | null;
         };
         /**
          * OperatorAccountItem
          * @description Compact operator-account row used by the company-switcher dropdown.
          */
         OperatorAccountItem: {
-            /** Business Type */
-            business_type?: string | null;
-            /** Company */
-            company?: string | null;
+            /** Operator Id */
+            operator_id: number;
+            /** Username */
+            username: string;
             /** Full Name */
             full_name?: string | null;
-            /**
-             * Is Active
-             * @default true
-             */
-            is_active: boolean;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
             /**
              * Is Canonical
              * @default false
@@ -5910,15 +5888,16 @@ export interface components {
              * @default false
              */
             is_synthetic: boolean;
-            /** Operator Id */
-            operator_id: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
             /**
              * Profile Configured
              * @default false
              */
             profile_configured: boolean;
-            /** Username */
-            username: string;
         };
         /**
          * OperatorAccountListResponse
@@ -5941,46 +5920,46 @@ export interface components {
         };
         /** OperatorDashboardCard */
         OperatorDashboardCard: {
-            /** Detail */
-            detail: string;
-            /** Href */
-            href?: string | null;
             /** Key */
             key: string;
             /** Label */
             label: string;
+            /** Value */
+            value?: number | string | null;
+            /**
+             * Unit
+             * @default count
+             */
+            unit: string;
             /**
              * Status
              * @default info
              * @enum {string}
              */
             status: "healthy" | "watch" | "critical" | "info";
-            /**
-             * Unit
-             * @default count
-             */
-            unit: string;
-            /** Value */
-            value?: number | string | null;
+            /** Detail */
+            detail: string;
+            /** Href */
+            href?: string | null;
         };
         /** OperatorDashboardDecisionItem */
         OperatorDashboardDecisionItem: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
             /**
              * Action
              * @enum {string}
              */
             action: "bid_now" | "review" | "skip";
-            /** Analysis Href */
-            analysis_href: string;
-            /** Decision Record Id */
-            decision_record_id: number;
             /**
              * Decision Status
              * @enum {string}
              */
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /** Detail Href */
-            detail_href: string;
             /** Priority Score */
             priority_score: number;
             /**
@@ -5988,10 +5967,6 @@ export interface components {
              * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
              */
             probability_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Project Title */
-            project_title: string;
             /** Recommended Amount */
             recommended_amount: number;
             /**
@@ -5999,69 +5974,60 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Detail Href */
+            detail_href: string;
+            /** Analysis Href */
+            analysis_href: string;
         };
         /** OperatorDashboardFeedbackSummary */
         OperatorDashboardFeedbackSummary: {
+            /** Result Count */
+            result_count: number;
+            /** Prediction Sample Count */
+            prediction_sample_count: number;
+            /** Recommendation Sample Count */
+            recommendation_sample_count: number;
             /** Average Prediction Error Rate */
             average_prediction_error_rate?: number | null;
             /** Average Recommendation Error Rate */
             average_recommendation_error_rate?: number | null;
-            /** Href */
-            href: string;
-            /** Prediction Sample Count */
-            prediction_sample_count: number;
             /** Recommendation Better Than Prediction Count */
             recommendation_better_than_prediction_count: number;
-            /** Recommendation Sample Count */
-            recommendation_sample_count: number;
-            /** Result Count */
-            result_count: number;
+            /** Href */
+            href: string;
         };
         /** OperatorDashboardResponse */
         OperatorDashboardResponse: {
-            /** Action Hrefs */
-            action_hrefs?: {
-                [key: string]: string;
-            };
-            /** Cards */
-            cards?: components["schemas"]["OperatorDashboardCard"][];
-            /** Current Operator Id */
-            current_operator_id: number;
-            /** Current Operator Username */
-            current_operator_username: string;
-            feedback_summary: components["schemas"]["OperatorDashboardFeedbackSummary"];
+            /** Operator Id */
+            operator_id: number;
             /**
              * Generated At
              * Format: date-time
              */
             generated_at: string;
-            /** Operator Id */
-            operator_id: number;
-            overview: components["schemas"]["OperatorOverviewResponse"];
             /** Period Days */
             period_days: number;
+            overview: components["schemas"]["OperatorOverviewResponse"];
+            /** Cards */
+            cards?: components["schemas"]["OperatorDashboardCard"][];
             /** Recent Decisions */
             recent_decisions?: components["schemas"]["OperatorDashboardDecisionItem"][];
             /** Recent Monitor Runs */
             recent_monitor_runs?: components["schemas"]["OperatorDashboardRunItem"][];
+            feedback_summary: components["schemas"]["OperatorDashboardFeedbackSummary"];
+            /** Action Hrefs */
+            action_hrefs?: {
+                [key: string]: string;
+            };
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorDashboardRunItem */
         OperatorDashboardRunItem: {
-            /** Completed At */
-            completed_at?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Detail Href */
-            detail_href: string;
             /** Monitor Run Id */
             monitor_run_id: number;
-            /** Notification Count */
-            notification_count: number;
-            /** Persisted Candidate Count */
-            persisted_candidate_count: number;
             /**
              * Status
              * @enum {string}
@@ -6069,13 +6035,26 @@ export interface components {
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Trigger Source */
             trigger_source: string;
+            /** Persisted Candidate Count */
+            persisted_candidate_count: number;
+            /** Notification Count */
+            notification_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Detail Href */
+            detail_href: string;
         };
         /** OperatorLoginRequest */
         OperatorLoginRequest: {
-            /** Password */
-            password: string;
             /** Username */
             username: string;
+            /** Password */
+            password: string;
         };
         /**
          * OperatorNotificationChannelItem
@@ -6084,248 +6063,243 @@ export interface components {
         OperatorNotificationChannelItem: {
             /** Channel Id */
             channel_id?: number | null;
+            /** Operator Id */
+            operator_id: number;
             /** Channel Type */
             channel_type: string;
-            /** Created At */
-            created_at?: string | null;
+            /** Route Key */
+            route_key: string;
+            /** Target Label */
+            target_label?: string | null;
+            /**
+             * Is Active
+             * @default false
+             */
+            is_active: boolean;
             /**
              * Dry Run Only
              * @default true
              */
             dry_run_only: boolean;
             /**
-             * Is Active
-             * @default false
-             */
-            is_active: boolean;
-            /** Operator Id */
-            operator_id: number;
-            /** Route Key */
-            route_key: string;
-            /**
              * Source
              * @default operator_notification_channels
              */
             source: string;
-            /** Target Label */
-            target_label?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
             /** Verified At */
             verified_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
         };
         /**
          * OperatorNotificationChannelListResponse
          * @description Notification channels visible for the resolved operator context.
          */
         OperatorNotificationChannelListResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
             /** Channel Count */
             channel_count: number;
             /** Channels */
             channels?: components["schemas"]["OperatorNotificationChannelItem"][];
-            /** Current Operator Id */
-            current_operator_id: number;
-            /** Current Operator Username */
-            current_operator_username: string;
-            /** Operator Id */
-            operator_id: number;
         };
         /** OperatorOverviewResponse */
         OperatorOverviewResponse: {
-            /** Active Bid Count */
-            active_bid_count: number;
+            /** Operator Id */
+            operator_id: number;
+            /** Project Count */
+            project_count: number;
             /** Bid Count */
             bid_count: number;
+            /** Active Bid Count */
+            active_bid_count: number;
+            /** Prediction Count */
+            prediction_count: number;
+            /** Unread Notification Count */
+            unread_notification_count: number;
+            /** Recent Event Count */
+            recent_event_count: number;
+            /** Profile Configured */
+            profile_configured: boolean;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Operator Id */
-            operator_id: number;
-            /** Prediction Count */
-            prediction_count: number;
-            /** Profile Configured */
-            profile_configured: boolean;
-            /** Project Count */
-            project_count: number;
-            /** Recent Event Count */
-            recent_event_count: number;
-            /** Unread Notification Count */
-            unread_notification_count: number;
         };
         /** OperatorPasswordResetRequest */
         OperatorPasswordResetRequest: {
-            /** New Password */
-            new_password: string;
-            /** Reset Token */
-            reset_token: string;
             /** Username */
             username?: string | null;
+            /** Reset Token */
+            reset_token: string;
+            /** New Password */
+            new_password: string;
         };
         /** OperatorProfileResponse */
         OperatorProfileResponse: {
-            /** Annual Revenue */
-            annual_revenue: number;
-            /**
-             * Awarded Contract Limit
-             * @default 0
-             */
-            awarded_contract_limit: number;
-            /** Business Type */
-            business_type: string;
-            /** Capacity Score */
-            capacity_score: number;
+            /** Operator Id */
+            operator_id: number;
+            /** Username */
+            username: string;
+            /** Email */
+            email: string;
+            /** Full Name */
+            full_name?: string | null;
             /** Company */
             company?: string | null;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Business Type */
+            business_type: string;
+            /** License Codes */
+            license_codes?: string[];
+            /** Region Codes */
+            region_codes?: string[];
+            /** Annual Revenue */
+            annual_revenue: number;
+            /** Capacity Score */
+            capacity_score: number;
             /**
              * Construction Capacity Amount
              * @default 0
              */
             construction_capacity_amount: number;
             /**
-             * Created At
-             * Format: date-time
+             * Awarded Contract Limit
+             * @default 0
              */
-            created_at: string;
+            awarded_contract_limit: number;
+            /** Total Awards */
+            total_awards: number;
+            /** Profile Configured */
+            profile_configured: boolean;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Email */
-            email: string;
-            /** Full Name */
-            full_name?: string | null;
-            /** Is Active */
-            is_active: boolean;
-            /** License Codes */
-            license_codes?: string[];
-            /** Operator Id */
-            operator_id: number;
-            /** Profile Configured */
-            profile_configured: boolean;
-            /** Region Codes */
-            region_codes?: string[];
-            /** Total Awards */
-            total_awards: number;
-            /** Username */
-            username: string;
         };
         /** OperatorProfileUpdate */
         OperatorProfileUpdate: {
-            /** Annual Revenue */
-            annual_revenue?: number | null;
-            /** Awarded Contract Limit */
-            awarded_contract_limit?: number | null;
-            /** Business Type */
-            business_type?: string | null;
-            /** Capacity Score */
-            capacity_score?: number | null;
-            /** Company */
-            company?: string | null;
-            /** Construction Capacity Amount */
-            construction_capacity_amount?: number | null;
+            /** Username */
+            username?: string | null;
             /** Email */
             email?: string | null;
             /** Full Name */
             full_name?: string | null;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
             /** License Codes */
             license_codes?: string[] | null;
             /** Region Codes */
             region_codes?: string[] | null;
+            /** Annual Revenue */
+            annual_revenue?: number | null;
+            /** Capacity Score */
+            capacity_score?: number | null;
+            /** Construction Capacity Amount */
+            construction_capacity_amount?: number | null;
+            /** Awarded Contract Limit */
+            awarded_contract_limit?: number | null;
             /** Total Awards */
             total_awards?: number | null;
-            /** Username */
-            username?: string | null;
         };
         /** OperatorStatsResponse */
         OperatorStatsResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Period Days */
+            period_days: number;
+            /** Total Bids */
+            total_bids: number;
+            /** Total Events */
+            total_events: number;
             /** Bids Count */
             bids_count: number;
+            /** Requested User Id */
+            requested_user_id?: number | null;
             /**
              * Mode
              * @default single_operator
              * @constant
              */
             mode: "single_operator";
-            /** Operator Id */
-            operator_id: number;
-            /** Period Days */
-            period_days: number;
-            /** Requested User Id */
-            requested_user_id?: number | null;
-            /** Total Bids */
-            total_bids: number;
-            /** Total Events */
-            total_events: number;
         };
         /** OperatorStrategyCandidateItem */
         OperatorStrategyCandidateItem: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "bid_now" | "review" | "skip";
-            /** Analysis Summary */
-            analysis_summary: string;
-            /** Budget Estimate */
-            budget_estimate: number;
+            /** Project Id */
+            project_id: number;
+            /** Title */
+            title: string;
             /** Category */
             category?: string | null;
+            /** Budget Estimate */
+            budget_estimate: number;
             /** Deadline */
             deadline?: string | null;
             /** Matched Score */
             matched_score: number;
-            /** Priority Score */
-            priority_score: number;
             /**
              * Probability Score
              * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
              */
             probability_score: number;
-            /** Project Id */
-            project_id: number;
+            /** Priority Score */
+            priority_score: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "bid_now" | "review" | "skip";
             /** Recommended Amount */
             recommended_amount: number;
+            /** Analysis Summary */
+            analysis_summary: string;
             /** Strategy Reasons */
             strategy_reasons?: string[];
-            /** Title */
-            title: string;
         };
         /** OperatorStrategyCandidatesResponse */
         OperatorStrategyCandidatesResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Evaluated Project Count */
+            evaluated_project_count: number;
+            /** Returned Candidate Count */
+            returned_candidate_count: number;
+            /** High Priority Only */
+            high_priority_only: boolean;
             /** Candidates */
             candidates?: components["schemas"]["OperatorStrategyCandidateItem"][];
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Evaluated Project Count */
-            evaluated_project_count: number;
-            /** High Priority Only */
-            high_priority_only: boolean;
-            /** Operator Id */
-            operator_id: number;
-            /** Returned Candidate Count */
-            returned_candidate_count: number;
         };
         /** OperatorStrategyMonitorRequest */
         OperatorStrategyMonitorRequest: {
-            /** Current Workload Score */
-            current_workload_score?: number | null;
-            /** High Priority Only */
-            high_priority_only?: boolean | null;
             /** Limit */
             limit?: number | null;
+            /** High Priority Only */
+            high_priority_only?: boolean | null;
             /**
              * Max Active Bids
              * @default 3
              */
             max_active_bids: number;
-            /**
-             * Min Similarity
-             * @default 0.15
-             */
-            min_similarity: number;
+            /** Current Workload Score */
+            current_workload_score?: number | null;
             /**
              * Same Category Only
              * @default true
@@ -6336,80 +6310,75 @@ export interface components {
              * @default 3
              */
             similar_limit: number;
+            /**
+             * Min Similarity
+             * @default 0.15
+             */
+            min_similarity: number;
         };
         /** OperatorStrategyMonitorResponse */
         OperatorStrategyMonitorResponse: {
-            /** Continuing Candidate Count */
-            continuing_candidate_count: number;
-            /** Continuing Candidate Project Ids */
-            continuing_candidate_project_ids?: number[];
-            /** Current Operator Id */
-            current_operator_id?: number | null;
-            /** Current Operator Username */
-            current_operator_username?: string | null;
-            /** Dropped Candidate Count */
-            dropped_candidate_count: number;
-            /** Dropped Candidate Project Ids */
-            dropped_candidate_project_ids?: number[];
-            /** Evaluated Project Count */
-            evaluated_project_count: number;
-            /** High Priority Only */
-            high_priority_only: boolean;
-            /** Limit Applied */
-            limit_applied: number;
             /** Monitor Run Id */
             monitor_run_id?: number | null;
-            /** New Candidate Count */
-            new_candidate_count: number;
-            /** New Candidate Project Ids */
-            new_candidate_project_ids?: number[];
-            /** Notification Count */
-            notification_count: number;
-            /** Operator Id */
-            operator_id: number;
-            /** Persisted Candidate Count */
-            persisted_candidate_count: number;
-            /** Previous Run Id */
-            previous_run_id?: number | null;
-            /** Results */
-            results?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
-            /** Selected Candidate Count */
-            selected_candidate_count: number;
             /** Task Id */
             task_id?: string | null;
             /** Trigger Source */
             trigger_source?: string | null;
+            /** Previous Run Id */
+            previous_run_id?: number | null;
+            /** Operator Id */
+            operator_id: number;
+            /** Current Operator Id */
+            current_operator_id?: number | null;
+            /** Current Operator Username */
+            current_operator_username?: string | null;
+            /** Evaluated Project Count */
+            evaluated_project_count: number;
+            /** Selected Candidate Count */
+            selected_candidate_count: number;
+            /** Persisted Candidate Count */
+            persisted_candidate_count: number;
+            /** Notification Count */
+            notification_count: number;
+            /** New Candidate Count */
+            new_candidate_count: number;
+            /** Continuing Candidate Count */
+            continuing_candidate_count: number;
+            /** Dropped Candidate Count */
+            dropped_candidate_count: number;
+            /** High Priority Only */
+            high_priority_only: boolean;
+            /** Limit Applied */
+            limit_applied: number;
+            /** New Candidate Project Ids */
+            new_candidate_project_ids?: number[];
+            /** Continuing Candidate Project Ids */
+            continuing_candidate_project_ids?: number[];
+            /** Dropped Candidate Project Ids */
+            dropped_candidate_project_ids?: number[];
+            /** Results */
+            results?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
         };
         /** OperatorStrategyMonitorResultItem */
         OperatorStrategyMonitorResultItem: {
+            /** Project Id */
+            project_id: number;
+            /** Title */
+            title: string;
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Notification Id */
+            notification_id?: number | null;
             /**
              * Action
              * @enum {string}
              */
             action: "bid_now" | "review" | "skip";
-            /** Analysis Summary */
-            analysis_summary: string;
-            /** Decision Record Id */
-            decision_record_id: number;
             /**
              * Decision Status
              * @enum {string}
              */
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /**
-             * Is New Candidate
-             * @default false
-             */
-            is_new_candidate: boolean;
-            /** Matched Score */
-            matched_score: number;
-            /**
-             * Notification Created
-             * @default false
-             */
-            notification_created: boolean;
-            /** Notification Id */
-            notification_id?: number | null;
             /** Priority Score */
             priority_score: number;
             /**
@@ -6417,183 +6386,191 @@ export interface components {
              * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
              */
             probability_score: number;
-            /** Project Id */
-            project_id: number;
+            /** Matched Score */
+            matched_score: number;
             /** Recommended Amount */
             recommended_amount: number;
+            /** Analysis Summary */
+            analysis_summary: string;
+            /**
+             * Is New Candidate
+             * @default false
+             */
+            is_new_candidate: boolean;
+            /**
+             * Notification Created
+             * @default false
+             */
+            notification_created: boolean;
             /** Strategy Reasons */
             strategy_reasons?: string[];
-            /** Title */
-            title: string;
         };
         /** OperatorStrategyMonitorTaskResponse */
         OperatorStrategyMonitorTaskResponse: {
-            /** Current Operator Id */
-            current_operator_id: number;
-            /** Current Operator Username */
-            current_operator_username: string;
-            /** Detail */
-            detail: string;
+            /** Task Id */
+            task_id: string;
             /** Monitor Run Id */
             monitor_run_id: number;
             /** Operator Id */
             operator_id: number;
-            /** Poll Url */
-            poll_url: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
-        };
-        /** OperatorStrategyMonitorTaskStatusResponse */
-        OperatorStrategyMonitorTaskStatusResponse: {
-            /** Current Operator Id */
-            current_operator_id?: number | null;
-            /** Current Operator Username */
-            current_operator_username?: string | null;
-            /** Detail */
-            detail: string;
-            /** Error */
-            error?: string | null;
-            /** Monitor Run Id */
-            monitor_run_id?: number | null;
-            /** Operator Id */
-            operator_id?: number | null;
-            /** Raw Status */
-            raw_status: string;
-            /** Ready */
-            ready: boolean;
-            result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Successful */
-            successful: boolean;
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
-        };
-        /** OperatorStrategyResponse */
-        OperatorStrategyResponse: {
-            /** Auto Workload Penalty Multiplier */
-            auto_workload_penalty_multiplier: number;
-            /** Bid Now Threshold */
-            bid_now_threshold: number;
-            /** Category Priority Overrides */
-            category_priority_overrides?: {
-                [key: string]: number;
-            };
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Exclude Keywords */
-            exclude_keywords?: string[];
-            /** Exclude Regions */
-            exclude_regions?: string[];
+            /** Task Name */
+            task_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** Detail */
+            detail: string;
+            /** Poll Url */
+            poll_url: string;
+        };
+        /** OperatorStrategyMonitorTaskStatusResponse */
+        OperatorStrategyMonitorTaskStatusResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Monitor Run Id */
+            monitor_run_id?: number | null;
+            /** Operator Id */
+            operator_id?: number | null;
+            /** Current Operator Id */
+            current_operator_id?: number | null;
+            /** Current Operator Username */
+            current_operator_username?: string | null;
+            /** Task Name */
+            task_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** Raw Status */
+            raw_status: string;
+            /** Ready */
+            ready: boolean;
+            /** Successful */
+            successful: boolean;
+            /** Detail */
+            detail: string;
+            /** Error */
+            error?: string | null;
+            result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
+        };
+        /** OperatorStrategyResponse */
+        OperatorStrategyResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Focus Categories */
             focus_categories?: string[];
             /** Focus Regions */
             focus_regions?: string[];
-            /** Max Budget Estimate */
-            max_budget_estimate: number;
-            /** Max Recommended Candidates */
-            max_recommended_candidates: number;
+            /** Exclude Regions */
+            exclude_regions?: string[];
+            /** Required Keywords */
+            required_keywords?: string[];
+            /** Exclude Keywords */
+            exclude_keywords?: string[];
             /** Min Budget Estimate */
             min_budget_estimate: number;
+            /** Max Budget Estimate */
+            max_budget_estimate: number;
             /** Minimum Match Score */
             minimum_match_score: number;
             /** Minimum Probability Score */
             minimum_probability_score: number;
-            /** Notify Only High Priority */
-            notify_only_high_priority: boolean;
-            /** Operator Id */
-            operator_id: number;
-            /** Required Keywords */
-            required_keywords?: string[];
+            /** Bid Now Threshold */
+            bid_now_threshold: number;
             /** Review Threshold */
             review_threshold: number;
+            /** Auto Workload Penalty Multiplier */
+            auto_workload_penalty_multiplier: number;
+            /** Category Priority Overrides */
+            category_priority_overrides?: {
+                [key: string]: number;
+            };
+            /** Notify Only High Priority */
+            notify_only_high_priority: boolean;
+            /** Max Recommended Candidates */
+            max_recommended_candidates: number;
             /** Strategy Configured */
             strategy_configured: boolean;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
         };
         /** OperatorStrategyRunDetailResponse */
         OperatorStrategyRunDetailResponse: {
-            /** Completed At */
-            completed_at?: string | null;
-            /** Continuing Candidate Count */
-            continuing_candidate_count: number;
-            /** Continuing Candidates */
-            continuing_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
+            /** Id */
+            id: number;
+            /** Operator Id */
+            operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Trigger Source */
+            trigger_source: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** High Priority Only */
+            high_priority_only: boolean;
+            /** Limit Applied */
+            limit_applied: number;
+            /** Evaluated Project Count */
+            evaluated_project_count: number;
+            /** Selected Candidate Count */
+            selected_candidate_count: number;
+            /** Persisted Candidate Count */
+            persisted_candidate_count: number;
+            /** Notification Count */
+            notification_count: number;
+            /** Error Message */
+            error_message?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Current Operator Id */
-            current_operator_id: number;
-            /** Current Operator Username */
-            current_operator_username: string;
-            /** Dropped Candidate Count */
-            dropped_candidate_count: number;
-            /** Dropped Candidates */
-            dropped_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
-            /** Error Message */
-            error_message?: string | null;
-            /** Evaluated Project Count */
-            evaluated_project_count: number;
-            /** High Priority Only */
-            high_priority_only: boolean;
-            /** Id */
-            id: number;
-            /** Limit Applied */
-            limit_applied: number;
-            /** New Candidate Count */
-            new_candidate_count: number;
-            /** New Candidates */
-            new_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
-            /** Notification Count */
-            notification_count: number;
-            /** Operator Id */
-            operator_id: number;
-            /** Persisted Candidate Count */
-            persisted_candidate_count: number;
-            /** Previous Run Id */
-            previous_run_id?: number | null;
-            /** Request Payload */
-            request_payload?: {
-                [key: string]: unknown;
-            };
-            result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
-            /** Selected Candidate Count */
-            selected_candidate_count: number;
             /** Started At */
             started_at?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Task Id */
-            task_id?: string | null;
-            /** Trigger Source */
-            trigger_source: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Previous Run Id */
+            previous_run_id?: number | null;
+            /** New Candidate Count */
+            new_candidate_count: number;
+            /** Continuing Candidate Count */
+            continuing_candidate_count: number;
+            /** Dropped Candidate Count */
+            dropped_candidate_count: number;
+            /** Request Payload */
+            request_payload?: Record<string, never>;
+            result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
+            /** New Candidates */
+            new_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
+            /** Continuing Candidates */
+            continuing_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
+            /** Dropped Candidates */
+            dropped_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
         };
         /** OperatorStrategyRunListResponse */
         OperatorStrategyRunListResponse: {
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Operator Id */
-            operator_id: number;
             /** Result Count */
             result_count: number;
             /** Runs */
@@ -6601,110 +6578,105 @@ export interface components {
         };
         /** OperatorStrategyRunResponse */
         OperatorStrategyRunResponse: {
-            /** Completed At */
-            completed_at?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
+            /** Id */
+            id: number;
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Error Message */
-            error_message?: string | null;
-            /** Evaluated Project Count */
-            evaluated_project_count: number;
-            /** High Priority Only */
-            high_priority_only: boolean;
-            /** Id */
-            id: number;
-            /** Limit Applied */
-            limit_applied: number;
-            /** Notification Count */
-            notification_count: number;
-            /** Operator Id */
-            operator_id: number;
-            /** Persisted Candidate Count */
-            persisted_candidate_count: number;
-            /** Selected Candidate Count */
-            selected_candidate_count: number;
-            /** Started At */
-            started_at?: string | null;
+            /** Task Id */
+            task_id?: string | null;
+            /** Trigger Source */
+            trigger_source: string;
             /**
              * Status
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Task Id */
-            task_id?: string | null;
-            /** Trigger Source */
-            trigger_source: string;
+            /** High Priority Only */
+            high_priority_only: boolean;
+            /** Limit Applied */
+            limit_applied: number;
+            /** Evaluated Project Count */
+            evaluated_project_count: number;
+            /** Selected Candidate Count */
+            selected_candidate_count: number;
+            /** Persisted Candidate Count */
+            persisted_candidate_count: number;
+            /** Notification Count */
+            notification_count: number;
+            /** Error Message */
+            error_message?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /** OperatorStrategyUpdate */
         OperatorStrategyUpdate: {
-            /** Auto Workload Penalty Multiplier */
-            auto_workload_penalty_multiplier?: number | null;
-            /** Bid Now Threshold */
-            bid_now_threshold?: number | null;
-            /** Category Priority Overrides */
-            category_priority_overrides?: {
-                [key: string]: number;
-            } | null;
-            /** Exclude Keywords */
-            exclude_keywords?: string[] | null;
-            /** Exclude Regions */
-            exclude_regions?: string[] | null;
             /** Focus Categories */
             focus_categories?: string[] | null;
             /** Focus Regions */
             focus_regions?: string[] | null;
-            /** Max Budget Estimate */
-            max_budget_estimate?: number | null;
-            /** Max Recommended Candidates */
-            max_recommended_candidates?: number | null;
+            /** Exclude Regions */
+            exclude_regions?: string[] | null;
+            /** Required Keywords */
+            required_keywords?: string[] | null;
+            /** Exclude Keywords */
+            exclude_keywords?: string[] | null;
             /** Min Budget Estimate */
             min_budget_estimate?: number | null;
+            /** Max Budget Estimate */
+            max_budget_estimate?: number | null;
             /** Minimum Match Score */
             minimum_match_score?: number | null;
             /** Minimum Probability Score */
             minimum_probability_score?: number | null;
-            /** Notify Only High Priority */
-            notify_only_high_priority?: boolean | null;
-            /** Required Keywords */
-            required_keywords?: string[] | null;
+            /** Bid Now Threshold */
+            bid_now_threshold?: number | null;
             /** Review Threshold */
             review_threshold?: number | null;
+            /** Auto Workload Penalty Multiplier */
+            auto_workload_penalty_multiplier?: number | null;
+            /** Category Priority Overrides */
+            category_priority_overrides?: {
+                [key: string]: number;
+            } | null;
+            /** Notify Only High Priority */
+            notify_only_high_priority?: boolean | null;
+            /** Max Recommended Candidates */
+            max_recommended_candidates?: number | null;
         };
         /** OpportunityAnalysisRequest */
         OpportunityAnalysisRequest: {
+            /** Project Id */
+            project_id: number;
             /** Agency Name */
             agency_name?: string | null;
-            /**
-             * Current Active Bids
-             * @description Optional what-if override. When omitted, the service counts active bid decisions from the DB.
-             */
-            current_active_bids?: number | null;
-            /** Current Workload Score */
-            current_workload_score?: number | null;
             /**
              * Legal Floor Bid Rate
              * @description 공고별 법정 낙찰하한율. 메일/공고 분석값을 가격 예측 guardrail에 전달합니다.
              */
             legal_floor_bid_rate?: number | null;
             /**
+             * Current Active Bids
+             * @description Optional what-if override. When omitted, the service counts active bid decisions from the DB.
+             */
+            current_active_bids?: number | null;
+            /**
              * Max Active Bids
              * @default 3
              */
             max_active_bids: number;
-            /**
-             * Min Similarity
-             * @default 0.15
-             */
-            min_similarity: number;
-            /** Project Id */
-            project_id: number;
+            /** Current Workload Score */
+            current_workload_score?: number | null;
             /**
              * Same Category Only
              * @default true
@@ -6715,275 +6687,264 @@ export interface components {
              * @default 3
              */
             similar_limit: number;
+            /**
+             * Min Similarity
+             * @default 0.15
+             */
+            min_similarity: number;
             /** User Historical Data */
-            user_historical_data?: {
-                [key: string]: unknown;
-            } | null;
+            user_historical_data?: Record<string, never> | null;
         };
         /** OpportunityAnalysisResponse */
         OpportunityAnalysisResponse: {
-            /** Analysis Summary */
-            analysis_summary: string;
-            bid_recommendation: components["schemas"]["BidRecommendationResponse"];
-            classification: components["schemas"]["ClassificationResponse"];
-            /** Current Active Bids */
-            current_active_bids: number;
-            /** Current Workload Score */
-            current_workload_score: number;
-            /** Deadline Hours Remaining */
-            deadline_hours_remaining?: number | null;
-            decision: components["schemas"]["BidDecisionResponse"];
-            market_insights: components["schemas"]["OpportunityMarketInsights"];
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
+            /** Operator Id */
+            operator_id: number;
             /** Matched */
             matched: boolean;
             /** Matched Score */
             matched_score: number;
-            /** Max Active Bids */
-            max_active_bids: number;
-            /** Operator Id */
-            operator_id: number;
-            price_prediction: components["schemas"]["PricePredictionResponse"];
             /**
              * Probability Score
              * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
              */
             probability_score: number;
-            /** Project Id */
-            project_id: number;
-            /** Project Title */
-            project_title: string;
             /** Recommended Amount */
             recommended_amount: number;
-            /** Risk Flags */
-            risk_flags?: string[];
-            similar_projects: components["schemas"]["ProjectSimilaritySearchResponse"];
-            /** Strategy Adjustments */
-            strategy_adjustments?: {
-                [key: string]: number;
-            };
-            /** Strengths */
-            strengths?: string[];
+            /** Deadline Hours Remaining */
+            deadline_hours_remaining?: number | null;
+            /** Current Active Bids */
+            current_active_bids: number;
+            /** Max Active Bids */
+            max_active_bids: number;
+            /** Current Workload Score */
+            current_workload_score: number;
             /**
              * Workload Source
              * @default provided
              * @enum {string}
              */
             workload_source: "provided" | "auto";
+            /** Strategy Adjustments */
+            strategy_adjustments?: {
+                [key: string]: number;
+            };
+            /** Analysis Summary */
+            analysis_summary: string;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
+            market_insights: components["schemas"]["OpportunityMarketInsights"];
+            classification: components["schemas"]["ClassificationResponse"];
+            price_prediction: components["schemas"]["PricePredictionResponse"];
+            bid_recommendation: components["schemas"]["BidRecommendationResponse"];
+            similar_projects: components["schemas"]["ProjectSimilaritySearchResponse"];
+            decision: components["schemas"]["BidDecisionResponse"];
         };
         /** OpportunityMarketInsights */
         OpportunityMarketInsights: {
             /** Average Bid */
             average_bid: number;
-            /** Competitiveness Score */
-            competitiveness_score: number;
-            /** Max Bid */
-            max_bid: number;
             /** Median Bid */
             median_bid: number;
-            /** Min Bid */
-            min_bid: number;
             /** Std Dev */
             std_dev: number;
+            /** Min Bid */
+            min_bid: number;
+            /** Max Bid */
+            max_bid: number;
+            /** Competitiveness Score */
+            competitiveness_score: number;
         };
         /** PaperBiddingRunDetailResponse */
         PaperBiddingRunDetailResponse: {
-            /** Candidate Count */
-            candidate_count: number;
-            /** Category Filter */
-            category_filter?: string | null;
-            /** Completed At */
-            completed_at?: string | null;
-            /** Data Cutoff Policy */
-            data_cutoff_policy: string;
             /** Id */
             id: number;
-            /** Mode */
-            mode: string;
-            /** Model Version */
-            model_version: string;
             /** Operator Id */
             operator_id: number;
-            /** Paper Bid Count */
-            paper_bid_count: number;
-            /** Paper Bids */
-            paper_bids?: {
-                [key: string]: unknown;
-            }[];
-            /** Request */
-            request?: {
-                [key: string]: unknown;
-            };
+            /** Status */
+            status: string;
+            /** Mode */
+            mode: string;
             /** Scenario */
             scenario: string;
+            /** Category Filter */
+            category_filter?: string | null;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Model Version */
+            model_version: string;
+            /** Target Start At */
+            target_start_at?: string | null;
+            /** Target End At */
+            target_end_at?: string | null;
+            /** Data Cutoff Policy */
+            data_cutoff_policy: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Candidate Count */
+            candidate_count: number;
+            /** Paper Bid Count */
+            paper_bid_count: number;
             /** Settled Count */
             settled_count: number;
             /** Settlement Overview */
-            settlement_overview?: {
-                [key: string]: unknown;
-            };
-            /** Settlements */
-            settlements?: {
-                [key: string]: unknown;
-            }[];
-            /** Started At */
-            started_at?: string | null;
-            /** Status */
-            status: string;
-            /** Strategy Version */
-            strategy_version: string;
+            settlement_overview?: Record<string, never>;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            };
-            /** Target End At */
-            target_end_at?: string | null;
-            /** Target Start At */
-            target_start_at?: string | null;
+            summary?: Record<string, never>;
+            /** Request */
+            request?: Record<string, never>;
+            /** Paper Bids */
+            paper_bids?: Record<string, never>[];
+            /** Settlements */
+            settlements?: Record<string, never>[];
         };
         /** PaperBiddingRunExecutionResponse */
         PaperBiddingRunExecutionResponse: {
-            /** Items */
-            items?: {
-                [key: string]: unknown;
-            }[];
-            /** Request */
-            request?: {
-                [key: string]: unknown;
-            };
             /** Run Id */
             run_id?: number | null;
-            /** Settlements */
-            settlements?: {
-                [key: string]: unknown;
-            }[];
+            /** Request */
+            request?: Record<string, never>;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            };
+            summary?: Record<string, never>;
+            /** Items */
+            items?: Record<string, never>[];
+            /** Settlements */
+            settlements?: Record<string, never>[];
         };
         /** PaperBiddingRunListItem */
         PaperBiddingRunListItem: {
-            /** Candidate Count */
-            candidate_count: number;
-            /** Category Filter */
-            category_filter?: string | null;
-            /** Completed At */
-            completed_at?: string | null;
-            /** Data Cutoff Policy */
-            data_cutoff_policy: string;
             /** Id */
             id: number;
-            /** Mode */
-            mode: string;
-            /** Model Version */
-            model_version: string;
             /** Operator Id */
             operator_id: number;
-            /** Paper Bid Count */
-            paper_bid_count: number;
+            /** Status */
+            status: string;
+            /** Mode */
+            mode: string;
             /** Scenario */
             scenario: string;
+            /** Category Filter */
+            category_filter?: string | null;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Model Version */
+            model_version: string;
+            /** Target Start At */
+            target_start_at?: string | null;
+            /** Target End At */
+            target_end_at?: string | null;
+            /** Data Cutoff Policy */
+            data_cutoff_policy: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Candidate Count */
+            candidate_count: number;
+            /** Paper Bid Count */
+            paper_bid_count: number;
             /** Settled Count */
             settled_count: number;
             /** Settlement Overview */
-            settlement_overview?: {
-                [key: string]: unknown;
-            };
-            /** Started At */
-            started_at?: string | null;
-            /** Status */
-            status: string;
-            /** Strategy Version */
-            strategy_version: string;
+            settlement_overview?: Record<string, never>;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            };
-            /** Target End At */
-            target_end_at?: string | null;
-            /** Target Start At */
-            target_start_at?: string | null;
+            summary?: Record<string, never>;
         };
         /** PaperBiddingRunListResponse */
         PaperBiddingRunListResponse: {
-            /** Items */
-            items?: components["schemas"]["PaperBiddingRunListItem"][];
-            /** Limit */
-            limit: number;
             /** Operator Id */
             operator_id: number;
             /** Returned Count */
             returned_count: number;
+            /** Limit */
+            limit: number;
+            /** Items */
+            items?: components["schemas"]["PaperBiddingRunListItem"][];
         };
         /** PaperBiddingRunRequest */
         PaperBiddingRunRequest: {
             /** Category */
             category?: string | null;
-            /**
-             * Cutoff Hours Before Deadline
-             * @default 2
-             */
-            cutoff_hours_before_deadline: number;
+            /** Start At */
+            start_at?: string | null;
             /** End At */
             end_at?: string | null;
-            /**
-             * History Limit
-             * @default 80
-             */
-            history_limit: number;
             /**
              * Limit
              * @default 100
              */
             limit: number;
             /**
-             * Model Version
-             * @default current
-             */
-            model_version: string;
-            /**
-             * Persist
-             * @default false
-             */
-            persist: boolean;
-            /**
              * Scenario
              * @default base
              * @enum {string}
              */
             scenario: "conservative" | "base" | "aggressive";
-            /** Settle Actions */
-            settle_actions?: ("bid_now" | "review" | "skip")[];
-            /** Start At */
-            start_at?: string | null;
             /**
              * Strategy Version
              * @default local-backtest
              */
             strategy_version: string;
+            /**
+             * Model Version
+             * @default current
+             */
+            model_version: string;
+            /**
+             * Cutoff Hours Before Deadline
+             * @default 2
+             */
+            cutoff_hours_before_deadline: number;
+            /**
+             * History Limit
+             * @default 80
+             */
+            history_limit: number;
+            /** Settle Actions */
+            settle_actions?: ("bid_now" | "review" | "skip")[];
+            /**
+             * Persist
+             * @default false
+             */
+            persist: boolean;
         };
         /** PaperBiddingSummaryResponse */
         PaperBiddingSummaryResponse: {
-            /** Completed Count */
-            completed_count: number;
-            latest_run?: components["schemas"]["PaperBiddingRunListItem"] | null;
-            /** Latest Summary */
-            latest_summary?: {
-                [key: string]: unknown;
-            };
             /** Operator Id */
             operator_id: number;
+            latest_run?: components["schemas"]["PaperBiddingRunListItem"] | null;
             /** Run Count */
             run_count: number;
+            /** Completed Count */
+            completed_count: number;
+            /** Latest Summary */
+            latest_summary?: Record<string, never>;
         };
         /** PredictionFeedbackItem */
         PredictionFeedbackItem: {
-            /** Announced At */
-            announced_at?: string | null;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
             /** Category */
             category?: string | null;
-            /** Latest Decision Record Id */
-            latest_decision_record_id?: number | null;
+            /** Tender Result Id */
+            tender_result_id: number;
+            /** Result Status */
+            result_status: string;
+            /** Announced At */
+            announced_at?: string | null;
+            /** Winning Amount */
+            winning_amount: number;
+            /** Winning Rate */
+            winning_rate: number;
             /** Latest Prediction Id */
             latest_prediction_id?: number | null;
             /** Predicted Price */
@@ -6992,142 +6953,130 @@ export interface components {
             prediction_delta_amount?: number | null;
             /** Prediction Error Rate */
             prediction_error_rate?: number | null;
-            /** Project Id */
-            project_id: number;
-            /** Project Title */
-            project_title: string;
+            /** Latest Decision Record Id */
+            latest_decision_record_id?: number | null;
+            /** Recommended Amount */
+            recommended_amount?: number | null;
             /** Recommendation Delta Amount */
             recommendation_delta_amount?: number | null;
             /** Recommendation Error Rate */
             recommendation_error_rate?: number | null;
             /** Recommendation Improved Vs Prediction */
             recommendation_improved_vs_prediction?: boolean | null;
-            /** Recommended Amount */
-            recommended_amount?: number | null;
-            /** Result Status */
-            result_status: string;
-            /** Tender Result Id */
-            tender_result_id: number;
-            /** Winning Amount */
-            winning_amount: number;
-            /** Winning Rate */
-            winning_rate: number;
         };
         /** PredictionFeedbackResponse */
         PredictionFeedbackResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
+            /** Period Days */
+            period_days: number;
+            /** Result Count */
+            result_count: number;
+            /** Prediction Sample Count */
+            prediction_sample_count: number;
+            /** Recommendation Sample Count */
+            recommendation_sample_count: number;
             /** Average Prediction Error Rate */
             average_prediction_error_rate?: number | null;
             /** Average Recommendation Error Rate */
             average_recommendation_error_rate?: number | null;
-            /** Current Operator Id */
-            current_operator_id: number;
-            /** Current Operator Username */
-            current_operator_username: string;
-            /** Items */
-            items?: components["schemas"]["PredictionFeedbackItem"][];
-            /** Operator Id */
-            operator_id: number;
-            /** Period Days */
-            period_days: number;
-            /** Prediction Sample Count */
-            prediction_sample_count: number;
             /** Prediction Within 1 Percent Count */
             prediction_within_1_percent_count: number;
             /** Prediction Within 3 Percent Count */
             prediction_within_3_percent_count: number;
-            /** Recommendation Better Than Prediction Count */
-            recommendation_better_than_prediction_count: number;
-            /** Recommendation Sample Count */
-            recommendation_sample_count: number;
             /** Recommendation Within 1 Percent Count */
             recommendation_within_1_percent_count: number;
             /** Recommendation Within 3 Percent Count */
             recommendation_within_3_percent_count: number;
-            /** Result Count */
-            result_count: number;
+            /** Recommendation Better Than Prediction Count */
+            recommendation_better_than_prediction_count: number;
+            /** Items */
+            items?: components["schemas"]["PredictionFeedbackItem"][];
         };
         /** PredictionObservabilityResponse */
         PredictionObservabilityResponse: {
-            /** Accuracy Sample Count */
-            accuracy_sample_count: number;
-            /** Average Absolute Error Rate */
-            average_absolute_error_rate?: number | null;
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Fallback Count */
-            fallback_count: number;
-            /** Fallback Rate */
-            fallback_rate: number;
-            /** Fallback Reason Breakdown */
-            fallback_reason_breakdown?: {
-                [key: string]: number;
-            };
-            /** Guardrail Count */
-            guardrail_count: number;
-            /** Guardrail Rate */
-            guardrail_rate: number;
-            /** Guardrail Reason Breakdown */
-            guardrail_reason_breakdown?: {
-                [key: string]: number;
-            };
-            /** Operator Id */
-            operator_id: number;
-            /** Performance Trend */
-            performance_trend?: components["schemas"]["PredictionPerformanceTrendItem"][];
             /** Period Days */
             period_days: number;
             /** Prediction Count */
             prediction_count: number;
-            /** Predictor Breakdown */
-            predictor_breakdown?: components["schemas"]["PredictionPredictorBreakdownItem"][];
-            /** Pricing Mode Breakdown */
-            pricing_mode_breakdown?: components["schemas"]["PredictionPricingModeBreakdownItem"][];
-            /** Within 1 Percent Count */
-            within_1_percent_count: number;
-            /** Within 3 Percent Count */
-            within_3_percent_count: number;
-        };
-        /** PredictionPerformanceTrendItem */
-        PredictionPerformanceTrendItem: {
+            /** Fallback Count */
+            fallback_count: number;
+            /** Fallback Rate */
+            fallback_rate: number;
+            /** Guardrail Count */
+            guardrail_count: number;
+            /** Guardrail Rate */
+            guardrail_rate: number;
             /** Accuracy Sample Count */
             accuracy_sample_count: number;
             /** Average Absolute Error Rate */
             average_absolute_error_rate?: number | null;
-            /** Average Backtest Error Rate */
-            average_backtest_error_rate?: number | null;
-            /** Backtest Sample Count */
-            backtest_sample_count: number;
-            /**
-             * Bucket End
-             * Format: date-time
-             */
-            bucket_end: string;
+            /** Within 1 Percent Count */
+            within_1_percent_count: number;
+            /** Within 3 Percent Count */
+            within_3_percent_count: number;
+            /** Predictor Breakdown */
+            predictor_breakdown?: components["schemas"]["PredictionPredictorBreakdownItem"][];
+            /** Pricing Mode Breakdown */
+            pricing_mode_breakdown?: components["schemas"]["PredictionPricingModeBreakdownItem"][];
+            /** Performance Trend */
+            performance_trend?: components["schemas"]["PredictionPerformanceTrendItem"][];
+            /** Fallback Reason Breakdown */
+            fallback_reason_breakdown?: {
+                [key: string]: number;
+            };
+            /** Guardrail Reason Breakdown */
+            guardrail_reason_breakdown?: {
+                [key: string]: number;
+            };
+        };
+        /** PredictionPerformanceTrendItem */
+        PredictionPerformanceTrendItem: {
             /**
              * Bucket Start
              * Format: date-time
              */
             bucket_start: string;
+            /**
+             * Bucket End
+             * Format: date-time
+             */
+            bucket_end: string;
+            /** Prediction Count */
+            prediction_count: number;
             /** Fallback Rate */
             fallback_rate: number;
             /** Guardrail Rate */
             guardrail_rate: number;
-            /** Prediction Count */
-            prediction_count: number;
-        };
-        /** PredictionPredictorBreakdownItem */
-        PredictionPredictorBreakdownItem: {
             /** Accuracy Sample Count */
             accuracy_sample_count: number;
             /** Average Absolute Error Rate */
             average_absolute_error_rate?: number | null;
-            /** Average Confidence Score */
-            average_confidence_score?: number | null;
-            /** Average Predicted Bid Rate */
-            average_predicted_bid_rate?: number | null;
-            /** Average Training Window Size */
-            average_training_window_size?: number | null;
+            /** Backtest Sample Count */
+            backtest_sample_count: number;
+            /** Average Backtest Error Rate */
+            average_backtest_error_rate?: number | null;
+        };
+        /** PredictionPredictorBreakdownItem */
+        PredictionPredictorBreakdownItem: {
+            /** Predictor Name */
+            predictor_name: string;
+            /** Predictor Family */
+            predictor_family: string;
+            /** Prediction Count */
+            prediction_count: number;
+            /** Selection Rate */
+            selection_rate: number;
             /** Fallback Count */
             fallback_count: number;
             /** Fallback Rate */
@@ -7136,21 +7085,29 @@ export interface components {
             guardrail_count: number;
             /** Guardrail Rate */
             guardrail_rate: number;
-            /** Prediction Count */
-            prediction_count: number;
-            /** Predictor Family */
-            predictor_family: string;
-            /** Predictor Name */
-            predictor_name: string;
-            /** Selection Rate */
-            selection_rate: number;
+            /** Accuracy Sample Count */
+            accuracy_sample_count: number;
+            /** Average Absolute Error Rate */
+            average_absolute_error_rate?: number | null;
             /** Within 1 Percent Count */
             within_1_percent_count: number;
             /** Within 3 Percent Count */
             within_3_percent_count: number;
+            /** Average Confidence Score */
+            average_confidence_score?: number | null;
+            /** Average Training Window Size */
+            average_training_window_size?: number | null;
+            /** Average Predicted Bid Rate */
+            average_predicted_bid_rate?: number | null;
         };
         /** PredictionPricingModeBreakdownItem */
         PredictionPricingModeBreakdownItem: {
+            /** Pricing Mode */
+            pricing_mode: string;
+            /** Prediction Count */
+            prediction_count: number;
+            /** Selection Rate */
+            selection_rate: number;
             /** Fallback Count */
             fallback_count: number;
             /** Fallback Rate */
@@ -7159,123 +7116,144 @@ export interface components {
             guardrail_count: number;
             /** Guardrail Rate */
             guardrail_rate: number;
-            /** Prediction Count */
-            prediction_count: number;
-            /** Pricing Mode */
-            pricing_mode: string;
-            /** Selection Rate */
-            selection_rate: number;
         };
         /** PricePredictionFeedbackCalibration */
         PricePredictionFeedbackCalibration: {
-            /** Agency Match Sample Count */
-            agency_match_sample_count: number;
-            /** Applied Adjustment Rate */
-            applied_adjustment_rate: number;
-            /** Average Absolute Error Rate */
-            average_absolute_error_rate: number;
-            /** Average Signed Error Rate */
-            average_signed_error_rate: number;
             /** Sample Count */
             sample_count: number;
+            /** Agency Match Sample Count */
+            agency_match_sample_count: number;
+            /** Average Signed Error Rate */
+            average_signed_error_rate: number;
+            /** Average Absolute Error Rate */
+            average_absolute_error_rate: number;
+            /** Applied Adjustment Rate */
+            applied_adjustment_rate: number;
         };
         /** PricePredictionRequest */
         PricePredictionRequest: {
-            /** Agency Name */
-            agency_name?: string | null;
+            /** Project Id */
+            project_id: number;
             /** Budget Estimate */
             budget_estimate: number;
             /** Category */
             category: string;
             /** Description */
             description: string;
+            /** Agency Name */
+            agency_name?: string | null;
             /**
              * Legal Floor Bid Rate
              * @description 공고별 법정 낙찰하한율. 0.87995 또는 87.995 모두 허용.
              */
             legal_floor_bid_rate?: number | null;
-            /** Project Id */
-            project_id: number;
         };
         /** PricePredictionReservePattern */
         PricePredictionReservePattern: {
-            /**
-             * Average Estimated Price Rate
-             * @default 0
-             */
-            average_estimated_price_rate: number;
+            /** Sample Count */
+            sample_count: number;
             /** Average Reserve Span Rate */
             average_reserve_span_rate: number;
-            /** Average Selected Number */
-            average_selected_number: number;
             /**
              * Estimated Price Sample Count
              * @default 0
              */
             estimated_price_sample_count: number;
-            /** Frequent Selected Numbers */
-            frequent_selected_numbers?: number[];
             /**
-             * Median Bid To Estimated Price Rate
+             * Average Estimated Price Rate
              * @default 0
              */
-            median_bid_to_estimated_price_rate: number;
+            average_estimated_price_rate: number;
             /**
              * Median Estimated Price Rate
              * @default 0
              */
             median_estimated_price_rate: number;
-            /** Sample Count */
-            sample_count: number;
+            /**
+             * Median Bid To Estimated Price Rate
+             * @default 0
+             */
+            median_bid_to_estimated_price_rate: number;
+            /** Average Selected Number */
+            average_selected_number: number;
+            /** Frequent Selected Numbers */
+            frequent_selected_numbers?: number[];
         };
         /** PricePredictionResponse */
         PricePredictionResponse: {
+            /** Predicted Price */
+            predicted_price: number;
+            /** Price Range Min */
+            price_range_min: number;
+            /** Price Range Max */
+            price_range_max: number;
+            /** Confidence Score */
+            confidence_score: number;
+            /** Model Version */
+            model_version: string;
             /**
-             * Agency Match Sample Size
-             * @default 0
+             * Predictor Name
+             * @default historical_statistical
              */
-            agency_match_sample_size: number;
-            /** Backtest Average Absolute Error Rate */
-            backtest_average_absolute_error_rate?: number | null;
-            /** Backtest Report */
-            backtest_report?: {
-                [key: string]: unknown;
-            } | null;
+            predictor_name: string;
+            /**
+             * Predictor Family
+             * @default statistical
+             */
+            predictor_family: string;
+            /** Fallback Reason */
+            fallback_reason?: string | null;
+            /**
+             * Selector Name
+             * @default configured_preference
+             */
+            selector_name: string;
+            /** Selection Reason */
+            selection_reason?: string | null;
             /**
              * Backtest Sample Count
              * @default 0
              */
             backtest_sample_count: number;
-            /** Bid Price Granularity */
-            bid_price_granularity?: number | null;
-            /** Bid Price Rounding Mode */
-            bid_price_rounding_mode?: string | null;
-            /** Bid Rate Candidates */
-            bid_rate_candidates?: components["schemas"]["PricePredictionScenario"][];
-            /** Ceiling Bid Rate */
-            ceiling_bid_rate?: number | null;
-            /** Ceiling Price */
-            ceiling_price?: number | null;
+            /** Backtest Average Absolute Error Rate */
+            backtest_average_absolute_error_rate?: number | null;
+            /** Backtest Report */
+            backtest_report?: Record<string, never> | null;
+            /**
+             * Training Window Size
+             * @default 0
+             */
+            training_window_size: number;
+            /**
+             * Pricing Mode
+             * @default heuristic
+             * @enum {string}
+             */
+            pricing_mode: "historical_blend" | "heuristic";
+            /**
+             * Historical Sample Size
+             * @default 0
+             */
+            historical_sample_size: number;
+            /**
+             * Agency Match Sample Size
+             * @default 0
+             */
+            agency_match_sample_size: number;
+            /**
+             * Predicted Bid Rate
+             * @default 0
+             */
+            predicted_bid_rate: number;
             /** Competitive Target Bid Rate */
             competitive_target_bid_rate?: number | null;
-            /** Confidence Score */
-            confidence_score: number;
-            /**
-             * Explanation
-             * @default
-             */
-            explanation: string;
-            /** Fallback Reason */
-            fallback_reason?: string | null;
+            /** Procurement Rate Band */
+            procurement_rate_band?: string | null;
+            /** Bid Rate Candidates */
+            bid_rate_candidates?: components["schemas"]["PricePredictionScenario"][];
+            bid_target_menu?: components["schemas"]["BidTargetMenu"] | null;
+            reserve_price_context?: components["schemas"]["PricePredictionReservePattern"] | null;
             feedback_calibration?: components["schemas"]["PricePredictionFeedbackCalibration"] | null;
-            /** Floor Bid Rate */
-            floor_bid_rate?: number | null;
-            /** Floor Guardrail Source */
-            floor_guardrail_source?: string | null;
-            /** Floor Price */
-            floor_price?: number | null;
-            /** Floor Safety Margin Rate */
-            floor_safety_margin_rate?: number | null;
             /**
              * Guardrail Applied
              * @default false
@@ -7283,85 +7261,64 @@ export interface components {
             guardrail_applied: boolean;
             /** Guardrail Reason */
             guardrail_reason?: string | null;
-            /**
-             * Historical Sample Size
-             * @default 0
-             */
-            historical_sample_size: number;
             /** Legal Floor Bid Rate */
             legal_floor_bid_rate?: number | null;
-            /** Model Version */
-            model_version: string;
-            /**
-             * Predicted Bid Rate
-             * @default 0
-             */
-            predicted_bid_rate: number;
-            /** Predicted Price */
-            predicted_price: number;
-            /**
-             * Predictor Family
-             * @default statistical
-             */
-            predictor_family: string;
-            /**
-             * Predictor Name
-             * @default historical_statistical
-             */
-            predictor_name: string;
+            /** Floor Guardrail Source */
+            floor_guardrail_source?: string | null;
+            /** Floor Bid Rate */
+            floor_bid_rate?: number | null;
+            /** Floor Price */
+            floor_price?: number | null;
+            /** Floor Safety Margin Rate */
+            floor_safety_margin_rate?: number | null;
+            /** Safe Floor Bid Rate */
+            safe_floor_bid_rate?: number | null;
+            /** Safe Floor Price */
+            safe_floor_price?: number | null;
+            /** Ceiling Bid Rate */
+            ceiling_bid_rate?: number | null;
+            /** Ceiling Price */
+            ceiling_price?: number | null;
+            /** Bid Price Granularity */
+            bid_price_granularity?: number | null;
+            /** Bid Price Rounding Mode */
+            bid_price_rounding_mode?: string | null;
             /**
              * Price Granularity Applied
              * @default false
              */
             price_granularity_applied: boolean;
-            /** Price Range Max */
-            price_range_max: number;
-            /** Price Range Min */
-            price_range_min: number;
-            /** Price Regime Confidence */
-            price_regime_confidence?: number | null;
             price_regime_features?: components["schemas"]["PriceRegimeFeatures"];
             /** Price Regime Label */
             price_regime_label?: string | null;
-            /**
-             * Pricing Mode
-             * @default heuristic
-             * @enum {string}
-             */
-            pricing_mode: "historical_blend" | "heuristic";
-            /** Procurement Rate Band */
-            procurement_rate_band?: string | null;
-            /** Recommended Candidate Label */
-            recommended_candidate_label?: string | null;
-            /** Recommended Selector Reason */
-            recommended_selector_reason?: string | null;
-            reserve_price_context?: components["schemas"]["PricePredictionReservePattern"] | null;
+            /** Price Regime Confidence */
+            price_regime_confidence?: number | null;
             /**
              * Review Required
              * @default false
              */
             review_required: boolean;
-            /** Safe Floor Bid Rate */
-            safe_floor_bid_rate?: number | null;
-            /** Safe Floor Price */
-            safe_floor_price?: number | null;
-            /** Selection Reason */
-            selection_reason?: string | null;
+            /** Recommended Candidate Label */
+            recommended_candidate_label?: string | null;
+            /** Recommended Selector Reason */
+            recommended_selector_reason?: string | null;
             /**
-             * Selector Name
-             * @default configured_preference
+             * Explanation
+             * @default
              */
-            selector_name: string;
-            /**
-             * Training Window Size
-             * @default 0
-             */
-            training_window_size: number;
+            explanation: string;
         };
         /** PricePredictionScenario */
         PricePredictionScenario: {
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "conservative" | "base" | "aggressive";
             /** Bid Rate */
             bid_rate: number;
+            /** Predicted Price */
+            predicted_price: number;
             /** Confidence Weight */
             confidence_weight: number;
             /**
@@ -7369,36 +7326,26 @@ export interface components {
              * @default false
              */
             guardrail_applied: boolean;
-            /**
-             * Label
-             * @enum {string}
-             */
-            label: "conservative" | "base" | "aggressive";
-            /** Pre Granularity Price */
-            pre_granularity_price?: number | null;
             /** Pre Guardrail Bid Rate */
             pre_guardrail_bid_rate?: number | null;
             /** Pre Guardrail Price */
             pre_guardrail_price?: number | null;
-            /** Predicted Price */
-            predicted_price: number;
             /**
              * Price Granularity Applied
              * @default false
              */
             price_granularity_applied: boolean;
+            /** Pre Granularity Price */
+            pre_granularity_price?: number | null;
         };
         /** PricePredictionTrainingRequest */
         PricePredictionTrainingRequest: {
-            /** Agency Name */
-            agency_name?: string | null;
+            /** Release Tag */
+            release_tag?: string | null;
             /** Category */
             category?: string | null;
-            /**
-             * Create Manifest
-             * @default true
-             */
-            create_manifest: boolean;
+            /** Agency Name */
+            agency_name?: string | null;
             /**
              * Limit
              * @default 500
@@ -7407,283 +7354,284 @@ export interface components {
             /** Notes */
             notes?: string | null;
             /**
+             * Create Manifest
+             * @default true
+             */
+            create_manifest: boolean;
+            /**
              * Publish Remote
              * @default true
              */
             publish_remote: boolean;
-            /** Release Tag */
-            release_tag?: string | null;
         };
         /** PriceRegimeFeatures */
         PriceRegimeFeatures: {
-            /** Agency Recent Rate Profile */
-            agency_recent_rate_profile?: {
-                [key: string]: unknown;
-            };
-            /** Amount Bucket */
-            amount_bucket?: string | null;
-            /** Award Method */
-            award_method?: string | null;
-            /** Business Group */
-            business_group?: string | null;
-            /** Business Type Code */
-            business_type_code?: string | null;
             /** Buyer Sector */
             buyer_sector?: string | null;
             /** Buyer Type */
             buyer_type?: string | null;
+            /** Notice Category */
+            notice_category?: string | null;
+            /** Business Type Code */
+            business_type_code?: string | null;
+            /** Business Group */
+            business_group?: string | null;
             /** Construction Or Service Type */
             construction_or_service_type?: string | null;
             /** Contract Method */
             contract_method?: string | null;
-            /** Data Quality Flags */
-            data_quality_flags?: string[];
-            /** Denominator Type */
-            denominator_type?: string | null;
+            /** Award Method */
+            award_method?: string | null;
             /** Evaluation Method */
             evaluation_method?: string | null;
-            /** Legal Floor Bid Rate */
-            legal_floor_bid_rate?: number | null;
-            /** Notice Category */
-            notice_category?: string | null;
-            /** Price Regime Confidence */
-            price_regime_confidence?: number | null;
-            /** Price Regime Label */
-            price_regime_label?: string | null;
             /** Price Submission Mode */
             price_submission_mode?: string | null;
-            /** Procurement Rate Band */
-            procurement_rate_band?: string | null;
-            /** Regime Signals */
-            regime_signals?: string[];
+            /** Denominator Type */
+            denominator_type?: string | null;
+            /** Legal Floor Bid Rate */
+            legal_floor_bid_rate?: number | null;
             /**
              * Reserve Price Context Available
              * @default false
              */
             reserve_price_context_available: boolean;
+            /** Amount Bucket */
+            amount_bucket?: string | null;
+            /** Agency Recent Rate Profile */
+            agency_recent_rate_profile?: Record<string, never>;
+            /** Data Quality Flags */
+            data_quality_flags?: string[];
+            /** Procurement Rate Band */
+            procurement_rate_band?: string | null;
+            /** Price Regime Label */
+            price_regime_label?: string | null;
+            /** Price Regime Confidence */
+            price_regime_confidence?: number | null;
             /**
              * Review Required
              * @default false
              */
             review_required: boolean;
+            /** Regime Signals */
+            regime_signals?: string[];
         };
         /** ProjectCreate */
         ProjectCreate: {
-            /** Budget Estimate */
-            budget_estimate: number;
-            /** Budget Max */
-            budget_max?: number | null;
-            /** Budget Min */
-            budget_min?: number | null;
-            /** Category */
-            category: string;
-            /** Deadline */
-            deadline?: string | null;
-            /** Demand Agency */
-            demand_agency?: string | null;
-            /** Description */
-            description: string;
-            /** Issuing Agency */
-            issuing_agency?: string | null;
-            /** Notice Number */
-            notice_number?: string | null;
-            /** Requirements */
-            requirements: string;
-            /** Source Url */
-            source_url?: string | null;
             /** Title */
             title: string;
+            /** Description */
+            description: string;
+            /** Requirements */
+            requirements: string;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Category */
+            category: string;
+            /** Notice Number */
+            notice_number?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Issuing Agency */
+            issuing_agency?: string | null;
+            /** Demand Agency */
+            demand_agency?: string | null;
+            /** Budget Min */
+            budget_min?: number | null;
+            /** Budget Max */
+            budget_max?: number | null;
+            /** Deadline */
+            deadline?: string | null;
         };
         /** ProjectEmbeddingBatchRefreshResponse */
         ProjectEmbeddingBatchRefreshResponse: {
-            /** Category */
-            category?: string | null;
-            /** Force */
-            force: boolean;
+            /** Processed Count */
+            processed_count: number;
             /** Limit */
             limit: number;
             /** Offset */
             offset: number;
-            /** Processed Count */
-            processed_count: number;
-            /** Project Ids */
-            project_ids?: number[];
+            /** Category */
+            category?: string | null;
             /** Project Status */
             project_status?: string | null;
-            /** Results */
-            results?: components["schemas"]["ProjectEmbeddingRefreshResponse"][];
+            /** Force */
+            force: boolean;
             /** Vector Storage Enabled */
             vector_storage_enabled: boolean;
+            /** Project Ids */
+            project_ids?: number[];
+            /** Results */
+            results?: components["schemas"]["ProjectEmbeddingRefreshResponse"][];
         };
         /** ProjectEmbeddingBatchRefreshTaskResponse */
         ProjectEmbeddingBatchRefreshTaskResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Detail */
             detail: string;
             /** Poll Url */
             poll_url: string;
+        };
+        /** ProjectEmbeddingBatchRefreshTaskStatusResponse */
+        ProjectEmbeddingBatchRefreshTaskStatusResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
             /**
              * Status
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
-        };
-        /** ProjectEmbeddingBatchRefreshTaskStatusResponse */
-        ProjectEmbeddingBatchRefreshTaskStatusResponse: {
-            /** Detail */
-            detail: string;
-            /** Error */
-            error?: string | null;
             /** Raw Status */
             raw_status: string;
             /** Ready */
             ready: boolean;
-            result?: components["schemas"]["ProjectEmbeddingBatchRefreshResponse"] | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
             /** Successful */
             successful: boolean;
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
+            /** Detail */
+            detail: string;
+            /** Error */
+            error?: string | null;
+            result?: components["schemas"]["ProjectEmbeddingBatchRefreshResponse"] | null;
         };
         /** ProjectEmbeddingRefreshResponse */
         ProjectEmbeddingRefreshResponse: {
-            /** Category */
-            category?: string | null;
-            /** Embedding Dimensions */
-            embedding_dimensions: number;
-            /** Embedding Model */
-            embedding_model?: string | null;
-            /** Embedding Updated At */
-            embedding_updated_at?: string | null;
             /** Project Id */
             project_id: number;
-            /** Semantic Text Length */
-            semantic_text_length: number;
             /** Title */
             title: string;
-            /** Vector Persisted */
-            vector_persisted: boolean;
+            /** Category */
+            category?: string | null;
+            /** Embedding Model */
+            embedding_model?: string | null;
+            /** Semantic Text Length */
+            semantic_text_length: number;
+            /** Embedding Dimensions */
+            embedding_dimensions: number;
+            /** Embedding Updated At */
+            embedding_updated_at?: string | null;
             /** Vector Storage Enabled */
             vector_storage_enabled: boolean;
+            /** Vector Persisted */
+            vector_persisted: boolean;
         };
         /** ProjectResponse */
         ProjectResponse: {
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Requirements */
+            requirements: string;
             /** Budget Estimate */
             budget_estimate: number;
             /** Category */
             category: string;
+            /** Notice Number */
+            notice_number?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Issuing Agency */
+            issuing_agency?: string | null;
+            /** Demand Agency */
+            demand_agency?: string | null;
+            /** Id */
+            id: number;
+            /** Status */
+            status: string;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Demand Agency */
-            demand_agency?: string | null;
-            /** Description */
-            description: string;
-            /** Id */
-            id: number;
-            /** Issuing Agency */
-            issuing_agency?: string | null;
-            /** Notice Number */
-            notice_number?: string | null;
-            /** Requirements */
-            requirements: string;
-            /** Source Url */
-            source_url?: string | null;
-            /** Status */
-            status: string;
-            /** Title */
-            title: string;
         };
         /** ProjectSimilaritySearchResponse */
         ProjectSimilaritySearchResponse: {
+            /** Target Project Id */
+            target_project_id: number;
+            /** Target Project Title */
+            target_project_title: string;
+            /** Target Embedding Model */
+            target_embedding_model?: string | null;
+            /**
+             * Search Mode
+             * @enum {string}
+             */
+            search_mode: "postgres_vector" | "python_fallback";
+            /** Same Category Only */
+            same_category_only: boolean;
             /** Min Similarity */
             min_similarity: number;
             /** Result Count */
             result_count: number;
             /** Results */
             results?: components["schemas"]["SimilarProjectItem"][];
-            /** Same Category Only */
-            same_category_only: boolean;
-            /**
-             * Search Mode
-             * @enum {string}
-             */
-            search_mode: "postgres_vector" | "python_fallback";
-            /** Target Embedding Model */
-            target_embedding_model?: string | null;
-            /** Target Project Id */
-            target_project_id: number;
-            /** Target Project Title */
-            target_project_title: string;
         };
         /**
          * RecommendationFeedbackLabelBreakdown
          * @description Useful/not_useful split for a single category or action bucket.
          */
         RecommendationFeedbackLabelBreakdown: {
-            /** Not Useful */
-            not_useful: number;
-            /** Rate */
-            rate?: number | null;
-            /** Total */
-            total: number;
             /** Useful */
             useful: number;
+            /** Not Useful */
+            not_useful: number;
+            /** Total */
+            total: number;
+            /** Rate */
+            rate?: number | null;
         };
         /**
          * RecommendationFeedbackLabelItem
          * @description One operator-verdict label joined with its decision/project context.
          */
         RecommendationFeedbackLabelItem: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string;
+            /** Project Category */
+            project_category?: string | null;
+            /** Project Business Type Code */
+            project_business_type_code?: string | null;
             /**
              * Action
              * @enum {string}
              */
             action: "bid_now" | "review" | "skip";
-            /** Decision Record Id */
-            decision_record_id: number;
             /**
              * Decision Status
              * @enum {string}
              */
             decision_status: "planned" | "reviewing" | "submitted" | "skipped";
-            /** Feedback At */
-            feedback_at?: string | null;
             /** Priority Score */
             priority_score: number;
-            /** Project Business Type Code */
-            project_business_type_code?: string | null;
-            /** Project Category */
-            project_category?: string | null;
-            /** Project Id */
-            project_id: number;
-            /** Project Title */
-            project_title: string;
-            /**
-             * Reasoning
-             * @default
-             */
-            reasoning: string;
-            /** Risk Flags */
-            risk_flags?: string[];
-            /** Strengths */
-            strengths?: string[];
             /**
              * Verdict
              * @enum {string}
              */
             verdict: "useful" | "not_useful";
+            /** Feedback At */
+            feedback_at?: string | null;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /** Strengths */
+            strengths?: string[];
+            /** Risk Flags */
+            risk_flags?: string[];
         };
         /**
          * RecommendationFeedbackLabelsResponse
@@ -7696,141 +7644,134 @@ export interface components {
          *     label rows, newest feedback first.
          */
         RecommendationFeedbackLabelsResponse: {
-            /** By Action */
-            by_action?: {
-                [key: string]: components["schemas"]["RecommendationFeedbackLabelBreakdown"];
-            };
-            /** By Category */
-            by_category?: {
-                [key: string]: components["schemas"]["RecommendationFeedbackLabelBreakdown"];
-            };
+            /** Operator Id */
+            operator_id: number;
             /** Current Operator Id */
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
-            /** Items */
-            items?: components["schemas"]["RecommendationFeedbackLabelItem"][];
-            /** Label Count */
-            label_count: number;
-            /** Not Useful Count */
-            not_useful_count: number;
-            /** Operator Id */
-            operator_id: number;
             /** Period Days */
             period_days: number;
-            /** Review Value Rate */
-            review_value_rate?: number | null;
+            /** Label Count */
+            label_count: number;
             /** Useful Count */
             useful_count: number;
+            /** Not Useful Count */
+            not_useful_count: number;
+            /** Review Value Rate */
+            review_value_rate?: number | null;
+            /** By Category */
+            by_category?: {
+                [key: string]: components["schemas"]["RecommendationFeedbackLabelBreakdown"];
+            };
+            /** By Action */
+            by_action?: {
+                [key: string]: components["schemas"]["RecommendationFeedbackLabelBreakdown"];
+            };
+            /** Items */
+            items?: components["schemas"]["RecommendationFeedbackLabelItem"][];
         };
         /** SimilarProjectItem */
         SimilarProjectItem: {
-            /** Budget Estimate */
-            budget_estimate: number;
+            /** Project Id */
+            project_id: number;
+            /** Title */
+            title: string;
             /** Category */
             category?: string | null;
+            /** Status */
+            status: string;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Deadline */
+            deadline?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Deadline */
-            deadline?: string | null;
-            /** Embedding Model */
-            embedding_model?: string | null;
-            /** Project Id */
-            project_id: number;
             /** Similarity Score */
             similarity_score: number;
-            /** Status */
-            status: string;
-            /** Title */
-            title: string;
+            /** Embedding Model */
+            embedding_model?: string | null;
         };
         /** SmokeTestLatestPhase */
         SmokeTestLatestPhase: {
-            /** Action Required */
-            action_required?: string | null;
-            /** Detail */
-            detail: string;
-            /** Evidence */
-            evidence?: {
-                [key: string]: unknown;
-            };
-            /** Failure Category */
-            failure_category?: string | null;
             /** Name */
             name: string;
             /** Passed */
             passed: boolean;
+            /** Detail */
+            detail: string;
+            /** Failure Category */
+            failure_category?: string | null;
+            /** Action Required */
+            action_required?: string | null;
             /** Retry Method */
             retry_method?: string | null;
             /** Skip Reason */
             skip_reason?: string | null;
+            /** Evidence */
+            evidence?: Record<string, never>;
         };
         /** SmokeTestLatestRun */
         SmokeTestLatestRun: {
+            /** Started At */
+            started_at?: string | null;
             /** Overall Passed */
             overall_passed: boolean;
             /** Phases */
             phases?: components["schemas"]["SmokeTestLatestPhase"][];
-            /** Started At */
-            started_at?: string | null;
         };
         /** SmokeTestOperationsSummary */
         SmokeTestOperationsSummary: {
+            /**
+             * Cycle Count
+             * @description 기간 내 스모크 사이클 수
+             */
+            cycle_count: number;
+            /** Passed Count */
+            passed_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /**
+             * Pass Rate
+             * @description 스모크 사이클 통과율 (통과/전체, 데이터 없으면 0.0)
+             */
+            pass_rate: number;
             /**
              * Current Streak
              * @description 최근 연속 통과 사이클 수 (N일 연속 green 신호)
              */
             current_streak: number;
             /**
-             * Current Streak Meets Target
-             * @default false
-             */
-            current_streak_meets_target: boolean;
-            /**
-             * Cycle Count
-             * @description 기간 내 스모크 사이클 수
-             */
-            cycle_count: number;
-            /** Failed Count */
-            failed_count: number;
-            /** Failure Category Breakdown */
-            failure_category_breakdown?: {
-                [key: string]: number;
-            };
-            /**
              * Healthy Streak Target
              * @description G-0에서 요구하는 연속 green 사이클 수
              * @default 7
              */
             healthy_streak_target: number;
-            latest?: components["schemas"]["SmokeTestLatestRun"] | null;
             /**
-             * Pass Rate
-             * @description 스모크 사이클 통과율 (통과/전체, 데이터 없으면 0.0)
+             * Current Streak Meets Target
+             * @default false
              */
-            pass_rate: number;
-            /** Passed Count */
-            passed_count: number;
-            /** Per Phase */
-            per_phase?: components["schemas"]["SmokeTestPhaseRate"][];
-            /** Recent Failures */
-            recent_failures?: components["schemas"]["SmokeTestRecentFailure"][];
+            current_streak_meets_target: boolean;
             /**
              * Schedule Enabled
              * @description 스모크 스케줄(SMOKE_TEST_SCHEDULE_ENABLED) 활성 여부
              */
             schedule_enabled: boolean;
+            /** Failure Category Breakdown */
+            failure_category_breakdown?: {
+                [key: string]: number;
+            };
+            /** Per Phase */
+            per_phase?: components["schemas"]["SmokeTestPhaseRate"][];
+            latest?: components["schemas"]["SmokeTestLatestRun"] | null;
+            /** Recent Failures */
+            recent_failures?: components["schemas"]["SmokeTestRecentFailure"][];
         };
         /** SmokeTestPhaseRate */
         SmokeTestPhaseRate: {
-            /**
-             * Evaluated Count
-             * @description 해당 단계가 실제 시도된(스킵 제외) 사이클 수
-             */
-            evaluated_count: number;
             /** Name */
             name: string;
             /**
@@ -7838,168 +7779,171 @@ export interface components {
              * @description 시도분 대비 통과율 (스킵 제외, 시도 0이면 0.0)
              */
             pass_rate: number;
+            /**
+             * Evaluated Count
+             * @description 해당 단계가 실제 시도된(스킵 제외) 사이클 수
+             */
+            evaluated_count: number;
         };
         /** SmokeTestRecentFailure */
         SmokeTestRecentFailure: {
+            /** Started At */
+            started_at?: string | null;
             /** Failed Phases */
             failed_phases?: string[];
-            /** Failure Actions */
-            failure_actions?: string[];
             /** Failure Categories */
             failure_categories?: string[];
             /** Failure Category Breakdown */
             failure_category_breakdown?: {
                 [key: string]: number;
             };
-            /** Phase Details */
-            phase_details?: components["schemas"]["SmokeTestLatestPhase"][];
+            /** Failure Actions */
+            failure_actions?: string[];
             /** Retry Methods */
             retry_methods?: string[];
-            /** Started At */
-            started_at?: string | null;
+            /** Phase Details */
+            phase_details?: components["schemas"]["SmokeTestLatestPhase"][];
         };
         /** StrategyFailureItem */
         StrategyFailureItem: {
-            /** Completed At */
-            completed_at?: string | null;
+            /** Run Id */
+            run_id: number;
+            /** Trigger Source */
+            trigger_source: string;
+            /** Status */
+            status: string;
+            /** Error Message */
+            error_message?: string | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            /** Error Message */
-            error_message?: string | null;
-            /** Run Id */
-            run_id: number;
-            /** Status */
-            status: string;
-            /** Trigger Source */
-            trigger_source: string;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /** StrategyOperationsSummary */
         StrategyOperationsSummary: {
-            /** Average Selected Candidates */
-            average_selected_candidates?: number | null;
+            /** Run Count */
+            run_count: number;
             /** Completed Count */
             completed_count: number;
-            /** Completion Rate */
-            completion_rate: number;
-            /** Evaluated Project Count */
-            evaluated_project_count: number;
             /** Failed Count */
             failed_count: number;
+            /** Running Count */
+            running_count: number;
+            /** Completion Rate */
+            completion_rate: number;
             /** Failure Rate */
             failure_rate: number;
-            /** Failure Reason Breakdown */
-            failure_reason_breakdown?: {
-                [key: string]: number;
-            };
+            /** Evaluated Project Count */
+            evaluated_project_count: number;
+            /** Selected Candidate Count */
+            selected_candidate_count: number;
+            /** Persisted Candidate Count */
+            persisted_candidate_count: number;
+            /** Notification Count */
+            notification_count: number;
+            /** Selection Rate */
+            selection_rate: number;
+            /** Persistence Rate */
+            persistence_rate: number;
+            /** Notification Rate */
+            notification_rate: number;
+            /** Average Selected Candidates */
+            average_selected_candidates?: number | null;
             /** Last Completed At */
             last_completed_at?: string | null;
             /** Last Failure At */
             last_failure_at?: string | null;
-            /** Notification Count */
-            notification_count: number;
-            /** Notification Rate */
-            notification_rate: number;
-            /** Persisted Candidate Count */
-            persisted_candidate_count: number;
-            /** Persistence Rate */
-            persistence_rate: number;
+            /** Failure Reason Breakdown */
+            failure_reason_breakdown?: {
+                [key: string]: number;
+            };
             /** Recent Failures */
             recent_failures?: components["schemas"]["StrategyFailureItem"][];
-            /** Run Count */
-            run_count: number;
-            /** Running Count */
-            running_count: number;
-            /** Selected Candidate Count */
-            selected_candidate_count: number;
-            /** Selection Rate */
-            selection_rate: number;
         };
         /** SyntheticBacktestOperatorResult */
         SyntheticBacktestOperatorResult: {
-            /**
-             * Annual Revenue
-             * @default 0
-             */
-            annual_revenue: number;
-            /** Average Absolute Bid Rate Error */
-            average_absolute_bid_rate_error?: number | null;
-            /**
-             * Bid Now Threshold
-             * @default 0
-             */
-            bid_now_threshold: number;
-            /** Bid Submission Rate */
-            bid_submission_rate?: number | null;
-            /** Business Type */
-            business_type?: string | null;
-            /**
-             * Candidate Count
-             * @default 0
-             */
-            candidate_count: number;
-            /**
-             * Capacity Score
-             * @default 0
-             */
-            capacity_score: number;
-            /** Company */
-            company?: string | null;
-            /** Display Name */
-            display_name: string;
+            /** User Id */
+            user_id: number;
+            /** Username */
+            username: string;
+            /** Slug */
+            slug: string;
             /**
              * Is Custom
              * @default false
              */
             is_custom: boolean;
+            /** Display Name */
+            display_name: string;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
             /**
-             * Paper Bid Count
+             * Annual Revenue
              * @default 0
              */
-            paper_bid_count: number;
+            annual_revenue: number;
+            /**
+             * Capacity Score
+             * @default 0
+             */
+            capacity_score: number;
+            /**
+             * Bid Now Threshold
+             * @default 0
+             */
+            bid_now_threshold: number;
             /**
              * Review Threshold
              * @default 0
              */
             review_threshold: number;
             /**
+             * Candidate Count
+             * @default 0
+             */
+            candidate_count: number;
+            /**
+             * Paper Bid Count
+             * @default 0
+             */
+            paper_bid_count: number;
+            /**
              * Settled Count
              * @default 0
              */
             settled_count: number;
-            /** Settlement Items */
-            settlement_items?: components["schemas"]["SyntheticBacktestSettlementItem"][];
-            /**
-             * Settlement Sample Count
-             * @default 0
-             */
-            settlement_sample_count: number;
-            /** Slug */
-            slug: string;
-            /** User Id */
-            user_id: number;
-            /** Username */
-            username: string;
-            /** Win Rate On Settled */
-            win_rate_on_settled?: number | null;
             /**
              * Would Have Won Count
              * @default 0
              */
             would_have_won_count: number;
+            /** Win Rate On Settled */
+            win_rate_on_settled?: number | null;
+            /** Bid Submission Rate */
+            bid_submission_rate?: number | null;
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
+            /**
+             * Settlement Sample Count
+             * @default 0
+             */
+            settlement_sample_count: number;
+            /** Settlement Items */
+            settlement_items?: components["schemas"]["SyntheticBacktestSettlementItem"][];
         };
         /** SyntheticBacktestRunRequest */
         SyntheticBacktestRunRequest: {
-            /** Category */
-            category?: string | null;
-            /** Cutoff Hours Before Deadline */
-            cutoff_hours_before_deadline?: number | null;
+            /** Start At */
+            start_at?: string | null;
             /** End At */
             end_at?: string | null;
-            /** History Limit */
-            history_limit?: number | null;
+            /** Category */
+            category?: string | null;
             /**
              * Limit
              * @default 100
@@ -8010,42 +7954,34 @@ export interface components {
              * @default base
              */
             scenario: string;
-            /** Settle Actions */
-            settle_actions?: ("bid_now" | "review" | "skip")[];
             /** Slugs */
             slugs?: string[] | null;
-            /** Start At */
-            start_at?: string | null;
+            /** Cutoff Hours Before Deadline */
+            cutoff_hours_before_deadline?: number | null;
+            /** History Limit */
+            history_limit?: number | null;
+            /** Settle Actions */
+            settle_actions?: ("bid_now" | "review" | "skip")[];
         };
         /** SyntheticBacktestRunResponse */
         SyntheticBacktestRunResponse: {
+            /** Operator Count */
+            operator_count: number;
             /** Category */
             category?: string | null;
+            /** Start At */
+            start_at?: string | null;
             /** End At */
             end_at?: string | null;
             /** Limit */
             limit: number;
-            /** Operator Count */
-            operator_count: number;
-            /** Results */
-            results?: components["schemas"]["SyntheticBacktestOperatorResult"][];
             /** Scenario */
             scenario: string;
-            /** Start At */
-            start_at?: string | null;
+            /** Results */
+            results?: components["schemas"]["SyntheticBacktestOperatorResult"][];
         };
         /** SyntheticBacktestSettlementItem */
         SyntheticBacktestSettlementItem: {
-            /** Absolute Bid Rate Error */
-            absolute_bid_rate_error?: number | null;
-            /** Bid Amount */
-            bid_amount?: number | null;
-            /** Category */
-            category?: string | null;
-            /** Decision Action */
-            decision_action?: string | null;
-            /** Paper Bid Id */
-            paper_bid_id?: number | null;
             /** Project Id */
             project_id?: number | null;
             /**
@@ -8053,62 +7989,72 @@ export interface components {
              * @default
              */
             project_title: string;
-            /** Settled At */
-            settled_at?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Paper Bid Id */
+            paper_bid_id?: number | null;
+            /** Decision Action */
+            decision_action?: string | null;
+            /** Bid Amount */
+            bid_amount?: number | null;
             /** Winning Amount */
             winning_amount?: number | null;
+            /** Absolute Bid Rate Error */
+            absolute_bid_rate_error?: number | null;
             /**
              * Would Have Won
              * @default false
              */
             would_have_won: boolean;
+            /** Settled At */
+            settled_at?: string | null;
         };
         /** SyntheticBacktestTaskResponse */
         SyntheticBacktestTaskResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /** Queue */
+            queue: string;
+            /** Status */
+            status: string;
             /** Detail */
             detail: string;
             /** Poll Url */
             poll_url: string;
-            /** Queue */
-            queue: string;
-            /** Status */
-            status: string;
+        };
+        /** SyntheticBacktestTaskStatusResponse */
+        SyntheticBacktestTaskStatusResponse: {
             /** Task Id */
             task_id: string;
             /** Task Name */
             task_name: string;
-        };
-        /** SyntheticBacktestTaskStatusResponse */
-        SyntheticBacktestTaskStatusResponse: {
-            /** Detail */
-            detail: string;
-            /** Error */
-            error?: string | null;
             /** Queue */
             queue: string;
+            /** Status */
+            status: string;
             /** Raw Status */
             raw_status: string;
             /** Ready */
             ready: boolean;
-            result?: components["schemas"]["SyntheticBacktestRunResponse"] | null;
-            /** Status */
-            status: string;
             /** Successful */
             successful: boolean;
-            /** Task Id */
-            task_id: string;
-            /** Task Name */
-            task_name: string;
+            /** Detail */
+            detail: string;
+            /** Error */
+            error?: string | null;
+            result?: components["schemas"]["SyntheticBacktestRunResponse"] | null;
         };
         /**
          * SyntheticExperimentBreakdown
          * @description Per-operator settlement breakdown (category + budget band).
          */
         SyntheticExperimentBreakdown: {
-            /** By Budget Band */
-            by_budget_band?: components["schemas"]["SyntheticExperimentBudgetBandBreakdown"][];
             /** By Category */
             by_category?: components["schemas"]["SyntheticExperimentCategoryBreakdown"][];
+            /** By Budget Band */
+            by_budget_band?: components["schemas"]["SyntheticExperimentBudgetBandBreakdown"][];
         };
         /**
          * SyntheticExperimentBudgetBandBreakdown
@@ -8121,43 +8067,43 @@ export interface components {
          *     ``latest_result_time``).
          */
         SyntheticExperimentBudgetBandBreakdown: {
-            /** Avg Abs Bid Rate Error */
-            avg_abs_bid_rate_error?: number | null;
             /** Budget Band */
             budget_band: string;
             /**
-             * Eligibility Judged Count
+             * Settled Count
              * @default 0
              */
-            eligibility_judged_count: number;
+            settled_count: number;
+            /**
+             * Would Have Won Count
+             * @default 0
+             */
+            would_have_won_count: number;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Est Price Close Rate */
+            est_price_close_rate?: number | null;
+            /**
+             * Eligible Favorable Count
+             * @default 0
+             */
+            eligible_favorable_count: number;
             /**
              * Eligibility Unknown Count
              * @default 0
              */
             eligibility_unknown_count: number;
             /**
-             * Eligible Favorable Count
+             * Eligibility Judged Count
              * @default 0
              */
-            eligible_favorable_count: number;
+            eligibility_judged_count: number;
             /** Eligible Favorable Rate */
             eligible_favorable_rate?: number | null;
-            /** Est Price Close Rate */
-            est_price_close_rate?: number | null;
+            /** Avg Abs Bid Rate Error */
+            avg_abs_bid_rate_error?: number | null;
             /** Latest Result Time */
             latest_result_time?: string | null;
-            /**
-             * Settled Count
-             * @default 0
-             */
-            settled_count: number;
-            /** Win Rate */
-            win_rate?: number | null;
-            /**
-             * Would Have Won Count
-             * @default 0
-             */
-            would_have_won_count: number;
         };
         /**
          * SyntheticExperimentCategoryBreakdown
@@ -8177,43 +8123,43 @@ export interface components {
          *     (freshness of the newest award in the group).
          */
         SyntheticExperimentCategoryBreakdown: {
-            /** Avg Abs Bid Rate Error */
-            avg_abs_bid_rate_error?: number | null;
             /** Category */
             category: string;
             /**
-             * Eligibility Judged Count
+             * Settled Count
              * @default 0
              */
-            eligibility_judged_count: number;
+            settled_count: number;
+            /**
+             * Would Have Won Count
+             * @default 0
+             */
+            would_have_won_count: number;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Est Price Close Rate */
+            est_price_close_rate?: number | null;
+            /**
+             * Eligible Favorable Count
+             * @default 0
+             */
+            eligible_favorable_count: number;
             /**
              * Eligibility Unknown Count
              * @default 0
              */
             eligibility_unknown_count: number;
             /**
-             * Eligible Favorable Count
+             * Eligibility Judged Count
              * @default 0
              */
-            eligible_favorable_count: number;
+            eligibility_judged_count: number;
             /** Eligible Favorable Rate */
             eligible_favorable_rate?: number | null;
-            /** Est Price Close Rate */
-            est_price_close_rate?: number | null;
+            /** Avg Abs Bid Rate Error */
+            avg_abs_bid_rate_error?: number | null;
             /** Latest Result Time */
             latest_result_time?: string | null;
-            /**
-             * Settled Count
-             * @default 0
-             */
-            settled_count: number;
-            /** Win Rate */
-            win_rate?: number | null;
-            /**
-             * Would Have Won Count
-             * @default 0
-             */
-            would_have_won_count: number;
         };
         /**
          * SyntheticExperimentCompareDelta
@@ -8222,23 +8168,23 @@ export interface components {
          *     settled rows).
          */
         SyntheticExperimentCompareDelta: {
-            /** Average Absolute Bid Rate Error */
-            average_absolute_bid_rate_error?: number | null;
-            /** Bid Submission Rate */
-            bid_submission_rate?: number | null;
             /** Win Rate On Settled */
             win_rate_on_settled?: number | null;
+            /** Bid Submission Rate */
+            bid_submission_rate?: number | null;
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
         };
         /**
          * SyntheticExperimentCompareOperator
          * @description One operator present in BOTH runs, with its A/B metrics and their delta.
          */
         SyntheticExperimentCompareOperator: {
+            /** Operator Slug */
+            operator_slug: string;
             a: components["schemas"]["SyntheticExperimentCompareSide"];
             b: components["schemas"]["SyntheticExperimentCompareSide"];
             delta: components["schemas"]["SyntheticExperimentCompareDelta"];
-            /** Operator Slug */
-            operator_slug: string;
         };
         /**
          * SyntheticExperimentCompareResponse
@@ -8249,28 +8195,26 @@ export interface components {
          *     experiments. All ``win_rate_*`` values remain price-only estimates.
          */
         SyntheticExperimentCompareResponse: {
+            run_a: components["schemas"]["SyntheticExperimentCompareRunHeader"];
+            run_b: components["schemas"]["SyntheticExperimentCompareRunHeader"];
+            /** Operators */
+            operators?: components["schemas"]["SyntheticExperimentCompareOperator"][];
             /** Only In A */
             only_in_a?: string[];
             /** Only In B */
             only_in_b?: string[];
-            /** Operators */
-            operators?: components["schemas"]["SyntheticExperimentCompareOperator"][];
-            run_a: components["schemas"]["SyntheticExperimentCompareRunHeader"];
-            run_b: components["schemas"]["SyntheticExperimentCompareRunHeader"];
         };
         /**
          * SyntheticExperimentCompareRunHeader
          * @description Minimal run identity + summary embedded in a compare response.
          */
         SyntheticExperimentCompareRunHeader: {
-            /** Experiment Id */
-            experiment_id: number;
             /** Id */
             id: number;
+            /** Experiment Id */
+            experiment_id: number;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
         };
         /**
          * SyntheticExperimentCompareSide
@@ -8280,27 +8224,27 @@ export interface components {
          *     through unchanged. Any field may be ``None`` (e.g. no settled rows).
          */
         SyntheticExperimentCompareSide: {
-            /** Average Absolute Bid Rate Error */
-            average_absolute_bid_rate_error?: number | null;
-            /** Bid Submission Rate */
-            bid_submission_rate?: number | null;
-            /** Settled Count */
-            settled_count?: number | null;
             /** Win Rate On Settled */
             win_rate_on_settled?: number | null;
+            /** Settled Count */
+            settled_count?: number | null;
+            /** Bid Submission Rate */
+            bid_submission_rate?: number | null;
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
         };
         /**
          * SyntheticExperimentCreate
          * @description Request payload for creating (saving) a synthetic experiment.
          */
         SyntheticExperimentCreate: {
-            /** Description */
-            description?: string | null;
             /** Name */
             name: string;
+            /** Description */
+            description?: string | null;
+            params: components["schemas"]["SyntheticExperimentParams"];
             /** Operator Slugs */
             operator_slugs?: string[] | null;
-            params: components["schemas"]["SyntheticExperimentParams"];
         };
         /**
          * SyntheticExperimentParams
@@ -8313,14 +8257,12 @@ export interface components {
          *     legacy boolean form as well as the explicit action list.
          */
         SyntheticExperimentParams: {
-            /** Category */
-            category?: string | null;
-            /** Cutoff Hours */
-            cutoff_hours?: number | null;
+            /** Start At */
+            start_at?: string | null;
             /** End At */
             end_at?: string | null;
-            /** History Limit */
-            history_limit?: number | null;
+            /** Category */
+            category?: string | null;
             /**
              * Limit
              * @default 100
@@ -8331,29 +8273,31 @@ export interface components {
              * @default base
              */
             scenario: string;
+            /** Cutoff Hours */
+            cutoff_hours?: number | null;
+            /** History Limit */
+            history_limit?: number | null;
             /** Settle Actions */
             settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
-            /** Start At */
-            start_at?: string | null;
         };
         /**
          * SyntheticExperimentPreset
          * @description Fixed G-1 experiment preset definition and persistence state.
          */
         SyntheticExperimentPreset: {
+            /** Name */
+            name: string;
             /** Description */
             description: string;
+            params: components["schemas"]["SyntheticExperimentParams"];
+            /** Operator Slugs */
+            operator_slugs?: string[];
             /** Experiment Id */
             experiment_id?: number | null;
             /** Latest Run Id */
             latest_run_id?: number | null;
             /** Latest Run Status */
             latest_run_status?: string | null;
-            /** Name */
-            name: string;
-            /** Operator Slugs */
-            operator_slugs?: string[];
-            params: components["schemas"]["SyntheticExperimentParams"];
         };
         /** SyntheticExperimentPresetListResponse */
         SyntheticExperimentPresetListResponse: {
@@ -8365,39 +8309,34 @@ export interface components {
          * @description Full synthetic experiment detail including run history.
          */
         SyntheticExperimentResponse: {
-            /** Created At */
-            created_at?: string | null;
-            /** Description */
-            description?: string | null;
             /** Id */
             id: number;
             /** Name */
             name: string;
+            /** Description */
+            description?: string | null;
+            params: components["schemas"]["SyntheticExperimentParams"];
             /** Operator Slugs */
             operator_slugs?: string[];
-            params: components["schemas"]["SyntheticExperimentParams"];
-            /** Runs */
-            runs?: components["schemas"]["SyntheticExperimentRunSummary"][];
+            /** Created At */
+            created_at?: string | null;
             /** Updated At */
             updated_at?: string | null;
+            /** Runs */
+            runs?: components["schemas"]["SyntheticExperimentRunSummary"][];
         };
         /**
          * SyntheticExperimentResultItem
          * @description Per-operator result persisted for a synthetic experiment run.
          */
         SyntheticExperimentResultItem: {
-            breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
-            /** Metrics */
-            metrics?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Missing Settled Count
-             * @default 0
-             */
-            missing_settled_count: number;
             /** Operator Slug */
             operator_slug: string;
+            /** Metrics */
+            metrics?: Record<string, never>;
+            /** Settlement Sample */
+            settlement_sample?: unknown | null;
+            breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
             /**
              * Sample Status
              * @default insufficient_sample
@@ -8413,8 +8352,11 @@ export interface components {
              * @default 0
              */
             settled_count: number;
-            /** Settlement Sample */
-            settlement_sample?: unknown | null;
+            /**
+             * Missing Settled Count
+             * @default 0
+             */
+            missing_settled_count: number;
         };
         /**
          * SyntheticExperimentRunCreateRequest
@@ -8422,63 +8364,57 @@ export interface components {
          */
         SyntheticExperimentRunCreateRequest: {
             /** Source Sample Gap Candidate */
-            source_sample_gap_candidate?: {
-                [key: string]: unknown;
-            } | null;
+            source_sample_gap_candidate?: Record<string, never> | null;
         };
         /**
          * SyntheticExperimentRunResponse
          * @description Detailed status/result payload for a single experiment run (polling).
          */
         SyntheticExperimentRunResponse: {
-            /** Created At */
-            created_at?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Experiment Id */
-            experiment_id: number;
-            /** Finished At */
-            finished_at?: string | null;
             /** Id */
             id: number;
-            /** Results */
-            results?: components["schemas"]["SyntheticExperimentResultItem"][];
-            /** Started At */
-            started_at?: string | null;
+            /** Experiment Id */
+            experiment_id: number;
             /** Status */
             status: string;
-            /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
             /** Task Id */
             task_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Summary */
+            summary?: Record<string, never> | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Results */
+            results?: components["schemas"]["SyntheticExperimentResultItem"][];
         };
         /**
          * SyntheticExperimentRunSummary
          * @description Lightweight run summary embedded in an experiment detail response.
          */
         SyntheticExperimentRunSummary: {
-            /** Created At */
-            created_at?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Experiment Id */
-            experiment_id: number;
-            /** Finished At */
-            finished_at?: string | null;
             /** Id */
             id: number;
-            /** Started At */
-            started_at?: string | null;
+            /** Experiment Id */
+            experiment_id: number;
             /** Status */
             status: string;
-            /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
             /** Task Id */
             task_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Summary */
+            summary?: Record<string, never> | null;
+            /** Created At */
+            created_at?: string | null;
         };
         /**
          * SyntheticExperimentSampleGapAction
@@ -8487,18 +8423,16 @@ export interface components {
         SyntheticExperimentSampleGapAction: {
             /** Code */
             code: string;
-            /** Detail */
-            detail: string;
             /** Label */
             label: string;
+            /** Detail */
+            detail: string;
         };
         /**
          * SyntheticExperimentSampleGapCandidateRequest
          * @description Select one sample gap and ask for a read-only experiment/run candidate.
          */
         SyntheticExperimentSampleGapCandidateRequest: {
-            /** Action Code */
-            action_code?: string | null;
             /**
              * Dimension
              * @enum {string}
@@ -8511,6 +8445,8 @@ export interface components {
              * @default 20
              */
             max_runs: number;
+            /** Action Code */
+            action_code?: string | null;
         };
         /**
          * SyntheticExperimentSampleGapExecutionPlan
@@ -8518,43 +8454,37 @@ export interface components {
          */
         SyntheticExperimentSampleGapExecutionPlan: {
             /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "blocked" | "run_existing_experiment" | "save_preset_then_run" | "create_experiment_then_run";
+            /**
              * Approval Required
              * @default true
              */
             approval_required: boolean;
-            /** Cli Command */
-            cli_command: string;
             /**
              * Dry Run Default
              * @default true
              */
             dry_run_default: boolean;
-            experiment_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
-            /** Instructions */
-            instructions?: string[];
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "blocked" | "run_existing_experiment" | "save_preset_then_run" | "create_experiment_then_run";
-            preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
-            run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             /** Source Context */
-            source_context?: {
-                [key: string]: unknown;
-            };
+            source_context?: Record<string, never>;
+            preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
+            experiment_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
+            run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
+            /** Cli Command */
+            cli_command: string;
             /** Write Cli Command */
             write_cli_command?: string | null;
+            /** Instructions */
+            instructions?: string[];
         };
         /**
          * SyntheticExperimentSampleGapHttpRequest
          * @description Concrete follow-up API request for materializing a sample-gap candidate.
          */
         SyntheticExperimentSampleGapHttpRequest: {
-            /** Body */
-            body?: {
-                [key: string]: unknown;
-            };
             /**
              * Method
              * @constant
@@ -8562,12 +8492,16 @@ export interface components {
             method: "POST";
             /** Path */
             path: string;
+            /** Body */
+            body?: Record<string, never>;
         };
         /**
          * SyntheticExperimentSampleGapItem
          * @description Aggregated lacking group from recent completed synthetic experiment runs.
          */
         SyntheticExperimentSampleGapItem: {
+            /** Priority */
+            priority: number;
             /**
              * Dimension
              * @enum {string}
@@ -8575,25 +8509,23 @@ export interface components {
             dimension: "preset" | "category" | "business_type" | "budget_band";
             /** Key */
             key: string;
+            /** Settled Count */
+            settled_count: number;
+            /** Sample Target */
+            sample_target: number;
             /** Missing Settled Count */
             missing_settled_count: number;
-            /** Priority */
-            priority: number;
-            recommendation: components["schemas"]["SyntheticExperimentSampleGapRecommendation"];
+            /** Total Missing Settled Count */
+            total_missing_settled_count: number;
+            /** Source Run Count */
+            source_run_count: number;
             /** Related Preset Names */
             related_preset_names?: string[];
             /** Related Run Ids */
             related_run_ids?: number[];
             /** Related Runs */
             related_runs?: components["schemas"]["SyntheticExperimentSampleGapRunReference"][];
-            /** Sample Target */
-            sample_target: number;
-            /** Settled Count */
-            settled_count: number;
-            /** Source Run Count */
-            source_run_count: number;
-            /** Total Missing Settled Count */
-            total_missing_settled_count: number;
+            recommendation: components["schemas"]["SyntheticExperimentSampleGapRecommendation"];
             /** Warnings */
             warnings?: string[];
         };
@@ -8602,140 +8534,134 @@ export interface components {
          * @description Operator-id preflight resolution for a selected synthetic slug.
          */
         SyntheticExperimentSampleGapOperatorTarget: {
+            /** Slug */
+            slug: string;
+            /** Username */
+            username: string;
             /** Operator Id */
             operator_id?: number | null;
-            /**
-             * Operator Id Scope Ready
-             * @default false
-             */
-            operator_id_scope_ready: boolean;
+            /** User Id */
+            user_id?: number | null;
             /**
              * Resolved
              * @default false
              */
             resolved: boolean;
-            /** Slug */
-            slug: string;
-            /** User Id */
-            user_id?: number | null;
-            /** Username */
-            username: string;
+            /**
+             * Operator Id Scope Ready
+             * @default false
+             */
+            operator_id_scope_ready: boolean;
         };
         /**
          * SyntheticExperimentSampleGapPlanResponse
          * @description Read-only plan connecting sample_report gaps to operator follow-up work.
          */
         SyntheticExperimentSampleGapPlanResponse: {
-            /** Gap Count */
-            gap_count: number;
-            /** Gaps */
-            gaps?: components["schemas"]["SyntheticExperimentSampleGapItem"][];
             /**
              * Generated At
              * Format: date-time
              */
             generated_at: string;
-            /** Legacy Summary Run Count */
-            legacy_summary_run_count: number;
             /** Max Runs */
             max_runs: number;
             /** Scanned Completed Run Count */
             scanned_completed_run_count: number;
             /** Source Run Count */
             source_run_count: number;
+            /** Legacy Summary Run Count */
+            legacy_summary_run_count: number;
+            /** Gap Count */
+            gap_count: number;
             /** Warnings */
             warnings?: components["schemas"]["SyntheticExperimentSampleGapWarning"][];
+            /** Gaps */
+            gaps?: components["schemas"]["SyntheticExperimentSampleGapItem"][];
         };
         /**
          * SyntheticExperimentSampleGapRecommendation
          * @description Recommended backtest preset/params/actions for one gap.
          */
         SyntheticExperimentSampleGapRecommendation: {
-            /** Actions */
-            actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
-            /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
             /** Preset Name */
             preset_name?: string | null;
+            /** Params */
+            params?: Record<string, never>;
+            /** Actions */
+            actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
         };
         /**
          * SyntheticExperimentSampleGapRunCandidateResponse
          * @description Runnable follow-up candidate derived from one sample-gap recommendation.
          */
         SyntheticExperimentSampleGapRunCandidateResponse: {
-            /** Action Code */
-            action_code: string;
-            /** Action Label */
-            action_label: string;
-            /** Blocked By Warnings */
-            blocked_by_warnings?: string[];
-            execution_plan: components["schemas"]["SyntheticExperimentSampleGapExecutionPlan"];
-            /** Experiment Id */
-            experiment_id?: number | null;
-            experiment_payload: components["schemas"]["SyntheticExperimentCreate"];
-            gap: components["schemas"]["SyntheticExperimentSampleGapItem"];
             /**
              * Generated At
              * Format: date-time
              */
             generated_at: string;
-            /** Latest Run Id */
-            latest_run_id?: number | null;
-            /** Latest Run Status */
-            latest_run_status?: string | null;
-            /** Message */
-            message: string;
-            /**
-             * Next Step
-             * @enum {string}
-             */
-            next_step: "resolve_mixed_data" | "run_existing_experiment" | "save_preset" | "create_experiment";
+            gap: components["schemas"]["SyntheticExperimentSampleGapItem"];
+            /** Action Code */
+            action_code: string;
+            /** Action Label */
+            action_label: string;
+            /** Preset Name */
+            preset_name?: string | null;
+            params: components["schemas"]["SyntheticExperimentParams"];
+            /** Operator Slugs */
+            operator_slugs?: string[];
+            /** Operator Targets */
+            operator_targets?: components["schemas"]["SyntheticExperimentSampleGapOperatorTarget"][];
             /**
              * Operator Id Scope Ready
              * @default false
              */
             operator_id_scope_ready: boolean;
-            /** Operator Slugs */
-            operator_slugs?: string[];
-            /** Operator Targets */
-            operator_targets?: components["schemas"]["SyntheticExperimentSampleGapOperatorTarget"][];
-            params: components["schemas"]["SyntheticExperimentParams"];
-            /** Preset Name */
-            preset_name?: string | null;
+            experiment_payload: components["schemas"]["SyntheticExperimentCreate"];
+            /** Experiment Id */
+            experiment_id?: number | null;
+            /** Latest Run Id */
+            latest_run_id?: number | null;
+            /** Latest Run Status */
+            latest_run_status?: string | null;
+            /**
+             * Next Step
+             * @enum {string}
+             */
+            next_step: "resolve_mixed_data" | "run_existing_experiment" | "save_preset" | "create_experiment";
+            execution_plan: components["schemas"]["SyntheticExperimentSampleGapExecutionPlan"];
             /** Run Allowed */
             run_allowed: boolean;
+            /** Blocked By Warnings */
+            blocked_by_warnings?: string[];
             /** Warnings */
             warnings?: string[];
+            /** Message */
+            message: string;
         };
         /**
          * SyntheticExperimentSampleGapRunReference
          * @description Run context attached to one sample gap.
          */
         SyntheticExperimentSampleGapRunReference: {
-            /** Category */
-            category?: string | null;
-            /** End At */
-            end_at?: unknown | null;
-            /** Experiment Id */
-            experiment_id: number;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Limit */
-            limit?: number | null;
-            /** Operator Slugs */
-            operator_slugs?: string[];
-            /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
-            /** Preset Name */
-            preset_name?: string | null;
-            /** Report Status */
-            report_status?: string | null;
             /** Run Id */
             run_id: number;
+            /** Experiment Id */
+            experiment_id: number;
+            /** Preset Name */
+            preset_name?: string | null;
+            /** Status */
+            status: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Start At */
+            start_at?: unknown | null;
+            /** End At */
+            end_at?: unknown | null;
+            /** Category */
+            category?: string | null;
+            /** Limit */
+            limit?: number | null;
             /**
              * Scenario
              * @default base
@@ -8743,15 +8669,17 @@ export interface components {
             scenario: string;
             /** Settle Actions */
             settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
-            /** Start At */
-            start_at?: unknown | null;
-            /** Status */
-            status: string;
+            /** Params */
+            params?: Record<string, never>;
+            /** Operator Slugs */
+            operator_slugs?: string[];
             /**
              * Synthetic Only
              * @default true
              */
             synthetic_only: boolean;
+            /** Report Status */
+            report_status?: string | null;
             /** Warnings */
             warnings?: string[];
         };
@@ -8764,50 +8692,50 @@ export interface components {
             code: string;
             /** Message */
             message: string;
-            /** Operator Slugs */
-            operator_slugs?: string[];
             /** Run Ids */
             run_ids?: number[];
+            /** Operator Slugs */
+            operator_slugs?: string[];
         };
         /** SyntheticOperatorItem */
         SyntheticOperatorItem: {
+            /** User Id */
+            user_id: number;
+            /** Username */
+            username: string;
+            /** Slug */
+            slug: string;
+            /**
+             * Is Custom
+             * @default false
+             */
+            is_custom: boolean;
+            /** Display Name */
+            display_name: string;
+            /** Company */
+            company?: string | null;
+            /** Business Type */
+            business_type?: string | null;
             /**
              * Annual Revenue
              * @default 0
              */
             annual_revenue: number;
             /**
-             * Bid Now Threshold
-             * @default 0
-             */
-            bid_now_threshold: number;
-            /** Business Type */
-            business_type?: string | null;
-            /**
              * Capacity Score
              * @default 0
              */
             capacity_score: number;
-            /** Company */
-            company?: string | null;
-            /** Display Name */
-            display_name: string;
             /**
-             * Is Custom
-             * @default false
+             * Bid Now Threshold
+             * @default 0
              */
-            is_custom: boolean;
+            bid_now_threshold: number;
             /**
              * Review Threshold
              * @default 0
              */
             review_threshold: number;
-            /** Slug */
-            slug: string;
-            /** User Id */
-            user_id: number;
-            /** Username */
-            username: string;
         };
         /** SyntheticOperatorListResponse */
         SyntheticOperatorListResponse: {
@@ -8826,102 +8754,92 @@ export interface components {
         };
         /** SyntheticSeedResponse */
         SyntheticSeedResponse: {
-            /** Operators */
-            operators?: components["schemas"]["SyntheticOperatorItem"][];
+            /** Seeded Count */
+            seeded_count: number;
             /**
              * Purged Count
              * @default 0
              */
             purged_count: number;
-            /** Seeded Count */
-            seeded_count: number;
+            /** Operators */
+            operators?: components["schemas"]["SyntheticOperatorItem"][];
         };
         /** SyntheticValidationLatestRun */
         SyntheticValidationLatestRun: {
-            /** Created At */
-            created_at?: string | null;
             /** Experiment Id */
             experiment_id: number;
             /** Experiment Name */
             experiment_name?: string | null;
-            /** Finished At */
-            finished_at?: string | null;
-            /**
-             * Missing Total Settled Count
-             * @default 0
-             */
-            missing_total_settled_count: number;
             /** Run Id */
             run_id: number;
-            /** Sample Status */
-            sample_status?: string | null;
             /** Status */
             status: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Sample Status */
+            sample_status?: string | null;
             /**
              * Total Settled Count
              * @default 0
              */
             total_settled_count: number;
+            /**
+             * Missing Total Settled Count
+             * @default 0
+             */
+            missing_total_settled_count: number;
         };
         /**
          * SyntheticValidationOperationsSummary
          * @description G-1 synthetic experiment health shown alongside smoke-test telemetry.
          */
         SyntheticValidationOperationsSummary: {
-            /** Completed Preset Count */
-            completed_preset_count: number;
-            /** Detail */
-            detail: string;
-            /** Failed Preset Count */
-            failed_preset_count: number;
-            latest?: components["schemas"]["SyntheticValidationLatestRun"] | null;
             /** Preset Count */
             preset_count: number;
-            /** Presets */
-            presets?: components["schemas"]["SyntheticValidationPresetStatus"][];
-            /** Recent Completed Count */
-            recent_completed_count: number;
-            /** Recent Failed Count */
-            recent_failed_count: number;
-            /** Recent Run Count */
-            recent_run_count: number;
+            /** Saved Preset Count */
+            saved_preset_count: number;
+            /** Completed Preset Count */
+            completed_preset_count: number;
+            /** Failed Preset Count */
+            failed_preset_count: number;
+            /** Sufficient Preset Count */
+            sufficient_preset_count: number;
             /**
              * Sample Target
              * @default 100
              */
             sample_target: number;
-            /** Saved Preset Count */
-            saved_preset_count: number;
+            /** Recent Run Count */
+            recent_run_count: number;
+            /** Recent Completed Count */
+            recent_completed_count: number;
+            /** Recent Failed Count */
+            recent_failed_count: number;
             /**
              * Status
              * @enum {string}
              */
             status: "healthy" | "watch" | "critical" | "info";
-            /** Sufficient Preset Count */
-            sufficient_preset_count: number;
+            /** Detail */
+            detail: string;
+            latest?: components["schemas"]["SyntheticValidationLatestRun"] | null;
+            /** Presets */
+            presets?: components["schemas"]["SyntheticValidationPresetStatus"][];
         };
         /** SyntheticValidationPresetStatus */
         SyntheticValidationPresetStatus: {
+            /** Name */
+            name: string;
             /** Experiment Id */
             experiment_id?: number | null;
-            /**
-             * Insufficient Operator Count
-             * @default 0
-             */
-            insufficient_operator_count: number;
-            /** Latest Finished At */
-            latest_finished_at?: string | null;
             /** Latest Run Id */
             latest_run_id?: number | null;
             /** Latest Run Status */
             latest_run_status?: string | null;
-            /**
-             * Missing Total Settled Count
-             * @default 0
-             */
-            missing_total_settled_count: number;
-            /** Name */
-            name: string;
+            /** Latest Finished At */
+            latest_finished_at?: string | null;
             /** Sample Status */
             sample_status?: string | null;
             /**
@@ -8929,52 +8847,85 @@ export interface components {
              * @default 0
              */
             total_settled_count: number;
+            /**
+             * Missing Total Settled Count
+             * @default 0
+             */
+            missing_total_settled_count: number;
+            /**
+             * Insufficient Operator Count
+             * @default 0
+             */
+            insufficient_operator_count: number;
         };
         /** TaskBrokerHealth */
         TaskBrokerHealth: {
-            /** Detail */
-            detail: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport: string;
             /**
              * Health Status
              * @enum {string}
              */
             health_status: "healthy" | "watch" | "critical" | "info";
-            /** Transport */
-            transport: string;
-            /** Url */
-            url: string;
+            /** Detail */
+            detail: string;
         };
         /** TaskOperationsItem */
         TaskOperationsItem: {
-            /** Age Seconds */
-            age_seconds?: number | null;
-            /** Completed At */
-            completed_at?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Detail */
-            detail: string;
-            /** Error Message */
-            error_message?: string | null;
-            /** Queue */
-            queue: string;
-            /** Record Id */
-            record_id: number;
             /** Source */
             source: string;
-            /** Started At */
-            started_at?: string | null;
-            /** Status */
-            status: string;
+            /** Record Id */
+            record_id: number;
             /** Task Id */
             task_id?: string | null;
             /** Task Name */
             task_name: string;
+            /** Queue */
+            queue: string;
+            /** Status */
+            status: string;
+            /** Detail */
+            detail: string;
+            /** Error Message */
+            error_message?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Age Seconds */
+            age_seconds?: number | null;
         };
         /** TaskOperationsSummary */
         TaskOperationsSummary: {
+            broker: components["schemas"]["TaskBrokerHealth"];
+            result_backend: components["schemas"]["TaskResultBackendHealth"];
+            runtime: components["schemas"]["TaskRuntimeHealth"];
+            /** Queues */
+            queues?: components["schemas"]["TaskQueueDiagnostic"][];
+            /** Tracked Task Count */
+            tracked_task_count: number;
+            /** Queued Count */
+            queued_count: number;
+            /** Running Count */
+            running_count: number;
             /** Active Count */
             active_count: number;
+            /** Completed Count */
+            completed_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Retry Count */
+            retry_count: number;
+            /** Failure Rate */
+            failure_rate: number;
+            /** Stale Task Threshold Seconds */
+            stale_task_threshold_seconds: number;
+            /** Stale Task Count */
+            stale_task_count: number;
             /** Average Queue Wait Seconds */
             average_queue_wait_seconds?: number | null;
             /** Average Runtime Seconds */
@@ -8984,42 +8935,19 @@ export interface components {
              * @enum {string}
              */
             backlog_status: "healthy" | "watch" | "critical" | "info";
-            broker: components["schemas"]["TaskBrokerHealth"];
-            /** Completed Count */
-            completed_count: number;
-            /** Failed Count */
-            failed_count: number;
-            /** Failure Rate */
-            failure_rate: number;
             /**
              * Failure Status
              * @enum {string}
              */
             failure_status: "healthy" | "watch" | "critical" | "info";
-            /** Queued Count */
-            queued_count: number;
-            /** Queues */
-            queues?: components["schemas"]["TaskQueueDiagnostic"][];
+            /** Risk Flags */
+            risk_flags?: string[];
             /** Recent Delayed Tasks */
             recent_delayed_tasks?: components["schemas"]["TaskOperationsItem"][];
             /** Recent Failures */
             recent_failures?: components["schemas"]["TaskOperationsItem"][];
             /** Recent Retries */
             recent_retries?: components["schemas"]["TaskOperationsItem"][];
-            result_backend: components["schemas"]["TaskResultBackendHealth"];
-            /** Retry Count */
-            retry_count: number;
-            /** Risk Flags */
-            risk_flags?: string[];
-            /** Running Count */
-            running_count: number;
-            runtime: components["schemas"]["TaskRuntimeHealth"];
-            /** Stale Task Count */
-            stale_task_count: number;
-            /** Stale Task Threshold Seconds */
-            stale_task_threshold_seconds: number;
-            /** Tracked Task Count */
-            tracked_task_count: number;
         };
         /** TaskQueueDiagnostic */
         TaskQueueDiagnostic: {
@@ -9032,68 +8960,68 @@ export interface components {
         };
         /** TaskResultBackendHealth */
         TaskResultBackendHealth: {
-            /** Detail */
-            detail: string;
+            /** Url */
+            url: string;
+            /** Transport */
+            transport: string;
             /**
              * Health Status
              * @enum {string}
              */
             health_status: "healthy" | "watch" | "critical" | "info";
-            /** Transport */
-            transport: string;
-            /** Url */
-            url: string;
+            /** Detail */
+            detail: string;
         };
         /** TaskRuntimeHealth */
         TaskRuntimeHealth: {
-            /** Broker Connection Max Retries */
-            broker_connection_max_retries: number;
-            /** Broker Connection Retry On Startup */
-            broker_connection_retry_on_startup: boolean;
-            /** Broker Publish Max Retries */
-            broker_publish_max_retries: number;
-            /** Detail */
-            detail: string;
             /** Eager Mode */
             eager_mode: boolean;
+            /** Inline Ml Tasks Allowed */
+            inline_ml_tasks_allowed: boolean;
+            /** Worker Concurrency */
+            worker_concurrency: number;
+            /** Worker Prefetch Multiplier */
+            worker_prefetch_multiplier: number;
+            /** Worker Max Tasks Per Child */
+            worker_max_tasks_per_child: number;
+            /** Task Time Limit Seconds */
+            task_time_limit_seconds: number;
+            /** Task Soft Time Limit Seconds */
+            task_soft_time_limit_seconds: number;
+            /** Result Expires Seconds */
+            result_expires_seconds: number;
+            /** Task Track Started */
+            task_track_started: boolean;
+            /** Worker Send Task Events */
+            worker_send_task_events: boolean;
+            /** Task Send Sent Event */
+            task_send_sent_event: boolean;
+            /** Broker Connection Retry On Startup */
+            broker_connection_retry_on_startup: boolean;
+            /** Broker Connection Max Retries */
+            broker_connection_max_retries: number;
+            /** Broker Publish Max Retries */
+            broker_publish_max_retries: number;
             /**
              * Health Status
              * @enum {string}
              */
             health_status: "healthy" | "watch" | "critical" | "info";
-            /** Inline Ml Tasks Allowed */
-            inline_ml_tasks_allowed: boolean;
-            /** Result Expires Seconds */
-            result_expires_seconds: number;
-            /** Task Send Sent Event */
-            task_send_sent_event: boolean;
-            /** Task Soft Time Limit Seconds */
-            task_soft_time_limit_seconds: number;
-            /** Task Time Limit Seconds */
-            task_time_limit_seconds: number;
-            /** Task Track Started */
-            task_track_started: boolean;
-            /** Worker Concurrency */
-            worker_concurrency: number;
-            /** Worker Max Tasks Per Child */
-            worker_max_tasks_per_child: number;
-            /** Worker Prefetch Multiplier */
-            worker_prefetch_multiplier: number;
-            /** Worker Send Task Events */
-            worker_send_task_events: boolean;
+            /** Detail */
+            detail: string;
         };
         /** TelegramActionResponse */
         TelegramActionResponse: {
-            /** Action */
-            action?: ("bid_now" | "review" | "skip") | null;
-            /** Decision Record Id */
-            decision_record_id?: number | null;
-            /** Decision Status */
-            decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
-            /** Detail */
-            detail: string;
             /** Status */
             status: string;
+            /** Detail */
+            detail: string;
+            /** Decision Record Id */
+            decision_record_id?: number | null;
+            /** Action */
+            action?: ("bid_now" | "review" | "skip") | null;
+            /** Decision Status */
+            decision_status?: ("planned" | "reviewing" | "submitted" | "skipped") | null;
         };
         /** TelegramCallbackChat */
         TelegramCallbackChat: {
@@ -9102,28 +9030,26 @@ export interface components {
         };
         /** TelegramCallbackMessage */
         TelegramCallbackMessage: {
-            chat: components["schemas"]["TelegramCallbackChat"];
             /** Message Id */
             message_id: number;
+            chat: components["schemas"]["TelegramCallbackChat"];
         };
         /** TelegramCallbackQuery */
         TelegramCallbackQuery: {
-            /** Data */
-            data: string;
             /** Id */
             id: string;
+            /** Data */
+            data: string;
             message?: components["schemas"]["TelegramCallbackMessage"] | null;
         };
         /** TelegramCallbackUpdateRequest */
         TelegramCallbackUpdateRequest: {
-            callback_query: components["schemas"]["TelegramCallbackQuery"];
             /** Update Id */
             update_id?: number | null;
+            callback_query: components["schemas"]["TelegramCallbackQuery"];
         };
         /** TelegramDeliveryFailureItem */
         TelegramDeliveryFailureItem: {
-            /** Detail */
-            detail: string;
             /** Event Id */
             event_id: number;
             /** Notification Id */
@@ -9132,6 +9058,8 @@ export interface components {
             source: string;
             /** Status */
             status: string;
+            /** Detail */
+            detail: string;
             /**
              * Timestamp
              * Format: date-time
@@ -9140,10 +9068,10 @@ export interface components {
         };
         /** TelegramNotificationRequest */
         TelegramNotificationRequest: {
-            /** Message */
-            message: string;
             /** Title */
             title: string;
+            /** Message */
+            message: string;
             /** Url */
             url?: string | null;
         };
@@ -9151,25 +9079,6 @@ export interface components {
         TelegramStatusResponse: {
             /** Configured */
             configured: boolean;
-            /** Delivery Chat Id */
-            delivery_chat_id?: string | null;
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
-            /**
-             * Has Custom Certificate
-             * @default false
-             */
-            has_custom_certificate: boolean;
-            /** Known Chat Ids */
-            known_chat_ids?: string[];
-            /**
-             * Pending Update Count
-             * @default 0
-             */
-            pending_update_count: number;
             /**
              * Status
              * @default healthy
@@ -9177,30 +9086,47 @@ export interface components {
              */
             status: "healthy" | "watch" | "error";
             /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Delivery Chat Id */
+            delivery_chat_id?: string | null;
+            /**
+             * Pending Update Count
+             * @default 0
+             */
+            pending_update_count: number;
+            /**
              * Webhook Url
              * @default
              */
             webhook_url: string;
+            /**
+             * Has Custom Certificate
+             * @default false
+             */
+            has_custom_certificate: boolean;
+            /** Known Chat Ids */
+            known_chat_ids?: string[];
         };
         /** TelegramSyncResponse */
         TelegramSyncResponse: {
+            /** Status */
+            status: string;
             /** Detail */
             detail: string;
-            /** Known Chat Ids */
-            known_chat_ids?: string[];
             /** Processed Count */
             processed_count: number;
             /** Processed Update Ids */
             processed_update_ids?: number[];
-            /** Status */
-            status: string;
+            /** Known Chat Ids */
+            known_chat_ids?: string[];
         };
         /** TokenResponse */
         TokenResponse: {
             /** Access Token */
             access_token: string;
-            /** Operator Id */
-            operator_id?: number | null;
             /** Refresh Token */
             refresh_token: string;
             /**
@@ -9208,43 +9134,45 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+            /** Operator Id */
+            operator_id?: number | null;
             /** Username */
             username?: string | null;
         };
         /** UserCreate */
         UserCreate: {
-            /** Company */
-            company?: string | null;
+            /** Username */
+            username: string;
             /** Email */
             email: string;
             /** Full Name */
             full_name: string;
+            /** Company */
+            company?: string | null;
             /** Password */
             password: string;
-            /** Username */
-            username: string;
         };
         /** UserResponse */
         UserResponse: {
-            /** Company */
-            company?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
+            /** Username */
+            username: string;
             /** Email */
             email: string;
             /** Full Name */
             full_name: string;
+            /** Company */
+            company?: string | null;
             /** Id */
             id: number;
             /** Is Active */
             is_active: boolean;
             /** Is Admin */
             is_admin: boolean;
-            /** Username */
-            username: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -9264,800 +9192,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    get_system_stats_api_v1_admin_stats_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LegacyAdminStatsResponse"];
-                };
-            };
-        };
-    };
-    list_users_api_v1_admin_users_get: {
-        parameters: {
-            query?: {
-                skip?: number;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deactivate_user_api_v1_admin_users__user_id__deactivate_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                user_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LegacyAdminActionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_accuracy_report_api_v1_analytics_accuracy_report_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                limit?: number;
-                trend_bucket_days?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccuracyReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_decision_experiment_runs_api_v1_analytics_decision_experiments_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                status?: string | null;
-                outcome?: string | null;
-                application_status?: string | null;
-                sort?: string;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionExperimentRunListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_decision_experiment_run_api_v1_analytics_decision_experiments_post: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DecisionExperimentRunCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionExperimentRunDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_decision_experiment_run_detail_api_v1_analytics_decision_experiments__experiment_run_id__get: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path: {
-                experiment_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionExperimentRunDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__patch: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path: {
-                experiment_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DecisionExperimentRunUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionExperimentRunDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    apply_decision_experiment_strategy_api_v1_analytics_decision_experiments__experiment_run_id__apply_strategy_post: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path: {
-                experiment_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DecisionExperimentStrategyApplyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionExperimentStrategyApplyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    apply_decision_experiment_thresholds_api_v1_analytics_decision_experiments__experiment_run_id__apply_thresholds_post: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path: {
-                experiment_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DecisionExperimentThresholdApplyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionExperimentThresholdApplyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    evaluate_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__evaluate_post: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path: {
-                experiment_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_decision_funnel_api_v1_analytics_decision_funnel_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                limit?: number;
-                breakdown_limit?: number;
-                trend_bucket_days?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionFunnelResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_decision_insights_api_v1_analytics_decision_insights_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionInsightsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_decision_recommendations_api_v1_analytics_decision_recommendations_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                breakdown_limit?: number;
-                trend_bucket_days?: number;
-                recommendation_limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionRecommendationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    log_event_api_v1_analytics_event_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AnalyticsEventRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_g2_evidence_summary_api_v1_analytics_g2_evidence_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                recent_limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["G2EvidenceSummaryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_operations_dashboard_api_v1_analytics_operations_dashboard_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                recent_limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperationsDashboardResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_operations_kpi_api_v1_analytics_operations_kpi_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                missed_limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperationsKpiResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_operator_stats_api_v1_analytics_operator_stats_get: {
-        parameters: {
-            query?: {
-                days?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorStatsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_prediction_feedback_api_v1_analytics_prediction_feedback_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PredictionFeedbackResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_prediction_observability_api_v1_analytics_prediction_observability_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                trend_bucket_days?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PredictionObservabilityResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_recommendation_feedback_labels_api_v1_analytics_recommendation_feedback_labels_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecommendationFeedbackLabelsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_analytics_summary_api_v1_analytics_summary_get: {
-        parameters: {
-            query?: {
-                days?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AnalyticsSummaryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_user_stats_api_v1_analytics_user_stats__user_id__get: {
-        parameters: {
-            query?: {
-                days?: number;
-            };
-            header?: never;
-            path: {
-                user_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorStatsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     register_api_v1_auth_bootstrap_post: {
         parameters: {
             query?: never;
@@ -10078,95 +9212,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    login_api_v1_auth_login_post: {
-        parameters: {
-            query?: {
-                username?: string | null;
-                password?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["OperatorLoginRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TokenResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_current_user_api_v1_auth_me_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserResponse"];
-                };
-            };
-        };
-    };
-    reset_operator_password_api_v1_auth_password_reset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OperatorPasswordResetRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TokenResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10249,6 +9294,95 @@ export interface operations {
             };
         };
     };
+    login_api_v1_auth_login_post: {
+        parameters: {
+            query?: {
+                username?: string | null;
+                password?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["OperatorLoginRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_operator_password_api_v1_auth_password_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorPasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_current_user_api_v1_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+        };
+    };
     get_backtest_data_audit_api_v1_backtests_data_audit_get: {
         parameters: {
             query?: {
@@ -10267,39 +9401,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacktestDataAuditResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_forward_paper_bidding_run_api_v1_backtests_paper_bidding_forward_runs_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ForwardPaperBiddingRunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PaperBiddingRunExecutionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10378,16 +9479,18 @@ export interface operations {
             };
         };
     };
-    get_paper_bidding_run_detail_api_v1_backtests_paper_bidding_runs__run_id__get: {
+    create_forward_paper_bidding_run_api_v1_backtests_paper_bidding_forward_runs_post: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                run_id: number;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForwardPaperBiddingRunRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -10395,7 +9498,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PaperBiddingRunDetailResponse"];
+                    "application/json": components["schemas"]["PaperBiddingRunExecutionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10429,79 +9532,12 @@ export interface operations {
             };
         };
     };
-    list_bids_api_v1_bids__get: {
-        parameters: {
-            query?: {
-                skip?: number;
-                limit?: number;
-                project_id?: number;
-                status?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    submit_bid_api_v1_bids__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bid_api_v1_bids__bid_id__get: {
+    get_paper_bidding_run_detail_api_v1_backtests_paper_bidding_runs__run_id__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                bid_id: number;
+                run_id: number;
             };
             cookie?: never;
         };
@@ -10513,75 +9549,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BidResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_bid_api_v1_bids__bid_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                bid_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_dashboard_bids_api_v1_dashboard_bids_get: {
-        parameters: {
-            query?: {
-                status?: string | null;
-                limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DashboardBidListResponse"];
+                    "application/json": components["schemas"]["PaperBiddingRunDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10615,6 +9583,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardOpportunityListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_dashboard_bids_api_v1_dashboard_bids_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardBidListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10679,1071 +9680,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardSummaryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    enqueue_project_embedding_backfill_api_v1_ml_backfills_project_embeddings_post: {
-        parameters: {
-            query?: {
-                limit?: number;
-                offset?: number;
-                category?: string | null;
-                project_status?: string | null;
-                force?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_project_embedding_backfill_task_status_api_v1_ml_backfills_project_embeddings_tasks__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_decision_experiment_reevaluation_job_status_api_v1_ml_reevaluations_decision_experiments_tasks__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    enqueue_decision_experiment_reevaluation_job_api_v1_ml_reevaluations_decision_experiments__experiment_run_id__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                experiment_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    enqueue_price_predictor_training_job_api_v1_ml_training_price_predictor_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PricePredictionTrainingRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_price_predictor_training_job_status_api_v1_ml_training_price_predictor_tasks__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MLTaskStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    decide_bid_pursuit_api_v1_operations_allocate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidDecisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    decide_bid_pursuit_api_v1_operations_bid_decision_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidDecisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_bid_decisions_api_v1_operations_bid_decisions_get: {
-        parameters: {
-            query?: {
-                decision_status?: string | null;
-                project_id?: number | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionRecordResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    save_bid_decision_api_v1_operations_bid_decisions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidDecisionSaveRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bid_decision_detail_api_v1_operations_bid_decisions__decision_record_id__get: {
-        parameters: {
-            query?: {
-                timeline_limit?: number;
-            };
-            header?: never;
-            path: {
-                decision_record_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    apply_bid_decision_action_api_v1_operations_bid_decisions__decision_record_id__actions_post: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path: {
-                decision_record_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidDecisionActionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bid_form_draft_api_v1_operations_bid_decisions__decision_record_id__bid_form_draft_get: {
-        parameters: {
-            query?: {
-                /** @description 응답 포맷. json(기본, 구조화) / csv / text(평문). */
-                format?: "json" | "csv" | "text";
-            };
-            header?: never;
-            path: {
-                decision_record_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidFormDraftResponse"];
-                    "text/csv": unknown;
-                    "text/plain": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                decision_record_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidDecisionStatusUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bid_decision_summary_api_v1_operations_bid_decisions__decision_record_id__summary_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                decision_record_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidSummaryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    classify_notice_api_v1_operations_classify_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ClassificationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClassificationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    crawl_notices_api_v1_operations_crawl_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrawlRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrawlResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    crawl_notices_async_api_v1_operations_crawl_async_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrawlRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrawlTaskResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_crawl_notices_task_status_api_v1_operations_crawl_tasks__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrawlTaskStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_decision_samples_api_v1_operations_decision_samples_get: {
-        parameters: {
-            query?: {
-                /** @description 조회 기간(일). created_at >= now-days 범위의 추천 기록만 포함. */
-                days?: number;
-                /** @description 최대 샘플 수(최근 순). 상한 도달 시 truncated=true. */
-                limit?: number;
-                /** @description 응답 포맷. json(기본, 구조화) / csv(다운로드). */
-                format?: "json" | "csv";
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionSamplesResponse"];
-                    "text/csv": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    notify_telegram_api_v1_operations_notify_telegram_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TelegramNotificationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackgroundJobResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    analyze_opportunity_api_v1_operations_opportunity_analysis_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OpportunityAnalysisRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OpportunityAnalysisResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_project_bid_decision_timeline_api_v1_operations_projects__project_id__bid_decision_timeline_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                project_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidDecisionTimelineResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    handle_telegram_callback_api_v1_operations_telegram_callback_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TelegramCallbackUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramActionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_telegram_status_api_v1_operations_telegram_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramStatusResponse"];
-                };
-            };
-        };
-    };
-    sync_telegram_updates_api_v1_operations_telegram_sync_post: {
-        parameters: {
-            query?: {
-                limit?: number;
-                timeout_seconds?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramSyncResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    handle_telegram_webhook_api_v1_operations_telegram_webhook_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Telegram-Bot-Api-Secret-Token"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramSyncResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_operator_accounts_api_v1_operator_accounts_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorAccountListResponse"];
-                };
-            };
-        };
-    };
-    get_operator_dashboard_api_v1_operator_dashboard_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                limit?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorDashboardResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_operator_notification_channels_api_v1_operator_notification_channels_get: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorNotificationChannelListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_operator_notifications_api_v1_operator_notifications_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                unread_only?: boolean;
-                notification_type?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotificationResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_operator_notification_read_api_v1_operator_notifications__notification_id__read_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                notification_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotificationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_operator_overview_api_v1_operator_overview_get: {
-        parameters: {
-            query?: {
-                days?: number;
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorOverviewResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11957,41 +9893,6 @@ export interface operations {
             };
         };
     };
-    run_operator_strategy_monitor_async_api_v1_operator_strategy_monitor_async_post: {
-        parameters: {
-            query?: {
-                operator_id?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OperatorStrategyMonitorRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OperatorStrategyMonitorTaskResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_operator_strategy_monitor_runs_api_v1_operator_strategy_monitor_runs_get: {
         parameters: {
             query?: {
@@ -12058,6 +9959,41 @@ export interface operations {
             };
         };
     };
+    run_operator_strategy_monitor_async_api_v1_operator_strategy_monitor_async_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorStrategyMonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorStrategyMonitorTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_operator_strategy_monitor_status_api_v1_operator_strategy_monitor_tasks__task_id__get: {
         parameters: {
             query?: {
@@ -12091,18 +10027,18 @@ export interface operations {
             };
         };
     };
-    analyze_project_document_api_v1_predictions_analyze_document_post: {
+    get_operator_dashboard_api_v1_operator_dashboard_get: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number;
+                limit?: number;
+                operator_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DocumentAnalysisRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -12110,7 +10046,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DocumentAnalysisResponse"];
+                    "application/json": components["schemas"]["OperatorDashboardResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12124,18 +10060,17 @@ export interface operations {
             };
         };
     };
-    get_bid_recommendation_endpoint_api_v1_predictions_bid_recommendation_post: {
+    get_operator_overview_api_v1_operator_overview_get: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number;
+                operator_id?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidRecommendationRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -12143,7 +10078,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BidRecommendationResponse"];
+                    "application/json": components["schemas"]["OperatorOverviewResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12157,18 +10092,14 @@ export interface operations {
             };
         };
     };
-    predict_project_price_api_v1_predictions_price_post: {
+    list_operator_accounts_api_v1_operator_accounts_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PricePredictionRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -12176,7 +10107,93 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PricePredictionResponse"];
+                    "application/json": components["schemas"]["OperatorAccountListResponse"];
+                };
+            };
+        };
+    };
+    list_operator_notification_channels_api_v1_operator_notification_channels_get: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorNotificationChannelListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_operator_notifications_api_v1_operator_notifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                unread_only?: boolean;
+                notification_type?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_operator_notification_read_api_v1_operator_notifications__notification_id__read_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12432,39 +10449,6 @@ export interface operations {
             };
         };
     };
-    refresh_project_embedding_api_v1_projects__project_id__embedding_refresh_post: {
-        parameters: {
-            query?: {
-                force?: boolean;
-            };
-            header?: never;
-            path: {
-                project_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectEmbeddingRefreshResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_similar_projects_api_v1_projects__project_id__similar_get: {
         parameters: {
             query?: {
@@ -12500,7 +10484,74 @@ export interface operations {
             };
         };
     };
-    run_synthetic_backtest_endpoint_api_v1_synthetic_backtests_run_post: {
+    refresh_project_embedding_api_v1_projects__project_id__embedding_refresh_post: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEmbeddingRefreshResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bids_api_v1_bids__get: {
+        parameters: {
+            query?: {
+                skip?: number;
+                limit?: number;
+                project_id?: number;
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_bid_api_v1_bids__post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12509,7 +10560,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SyntheticBacktestRunRequest"];
+                "application/json": components["schemas"]["BidCreate"];
             };
         };
         responses: {
@@ -12519,7 +10570,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyntheticBacktestRunResponse"];
+                    "application/json": components["schemas"]["BidResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12533,7 +10584,73 @@ export interface operations {
             };
         };
     };
-    run_synthetic_backtest_async_endpoint_api_v1_synthetic_backtests_run_async_post: {
+    get_bid_api_v1_bids__bid_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bid_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_bid_api_v1_bids__bid_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bid_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    predict_project_price_api_v1_predictions_price_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -12542,17 +10659,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SyntheticBacktestRunRequest"];
+                "application/json": components["schemas"]["PricePredictionRequest"];
             };
         };
         responses: {
             /** @description Successful Response */
-            202: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyntheticBacktestTaskResponse"];
+                    "application/json": components["schemas"]["PricePredictionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12566,7 +10683,108 @@ export interface operations {
             };
         };
     };
-    get_synthetic_backtest_task_status_endpoint_api_v1_synthetic_backtests_tasks__task_id__get: {
+    get_bid_recommendation_endpoint_api_v1_predictions_bid_recommendation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidRecommendationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidRecommendationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analyze_project_document_api_v1_predictions_analyze_document_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentAnalysisRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAnalysisResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_project_embedding_backfill_api_v1_ml_backfills_project_embeddings_post: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                category?: string | null;
+                project_status?: string | null;
+                force?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_embedding_backfill_task_status_api_v1_ml_backfills_project_embeddings_tasks__task_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12583,7 +10801,1671 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyntheticBacktestTaskStatusResponse"];
+                    "application/json": components["schemas"]["MLTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_price_predictor_training_job_api_v1_ml_training_price_predictor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PricePredictionTrainingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_price_predictor_training_job_status_api_v1_ml_training_price_predictor_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_decision_experiment_reevaluation_job_api_v1_ml_reevaluations_decision_experiments__experiment_run_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_experiment_reevaluation_job_status_api_v1_ml_reevaluations_decision_experiments_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    log_event_api_v1_analytics_event_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyticsEventRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_summary_api_v1_analytics_summary_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_operator_stats_api_v1_analytics_operator_stats_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorStatsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_prediction_feedback_api_v1_analytics_prediction_feedback_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PredictionFeedbackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_prediction_observability_api_v1_analytics_prediction_observability_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                trend_bucket_days?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PredictionObservabilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_accuracy_report_api_v1_analytics_accuracy_report_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+                trend_bucket_days?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccuracyReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_operations_dashboard_api_v1_analytics_operations_dashboard_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                recent_limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsDashboardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_g2_evidence_summary_api_v1_analytics_g2_evidence_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                recent_limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["G2EvidenceSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_insights_api_v1_analytics_decision_insights_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionInsightsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_funnel_api_v1_analytics_decision_funnel_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+                breakdown_limit?: number;
+                trend_bucket_days?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionFunnelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_operations_kpi_api_v1_analytics_operations_kpi_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                missed_limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsKpiResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recommendation_feedback_labels_api_v1_analytics_recommendation_feedback_labels_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationFeedbackLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_recommendations_api_v1_analytics_decision_recommendations_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                breakdown_limit?: number;
+                trend_bucket_days?: number;
+                recommendation_limit?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionRecommendationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_decision_experiment_runs_api_v1_analytics_decision_experiments_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                status?: string | null;
+                outcome?: string | null;
+                application_status?: string | null;
+                sort?: string;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionExperimentRunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_decision_experiment_run_api_v1_analytics_decision_experiments_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionExperimentRunCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionExperimentRunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_experiment_run_detail_api_v1_analytics_decision_experiments__experiment_run_id__get: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionExperimentRunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__patch: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionExperimentRunUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionExperimentRunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_decision_experiment_run_api_v1_analytics_decision_experiments__experiment_run_id__evaluate_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_decision_experiment_thresholds_api_v1_analytics_decision_experiments__experiment_run_id__apply_thresholds_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionExperimentThresholdApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionExperimentThresholdApplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_decision_experiment_strategy_api_v1_analytics_decision_experiments__experiment_run_id__apply_strategy_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionExperimentStrategyApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionExperimentStrategyApplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_stats_api_v1_analytics_user_stats__user_id__get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorStatsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_v1_admin_users_get: {
+        parameters: {
+            query?: {
+                skip?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_system_stats_api_v1_admin_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyAdminStatsResponse"];
+                };
+            };
+        };
+    };
+    deactivate_user_api_v1_admin_users__user_id__deactivate_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyAdminActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    crawl_notices_api_v1_operations_crawl_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CrawlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    crawl_notices_async_api_v1_operations_crawl_async_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CrawlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_crawl_notices_task_status_api_v1_operations_crawl_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    classify_notice_api_v1_operations_classify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClassificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analyze_opportunity_api_v1_operations_opportunity_analysis_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpportunityAnalysisRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpportunityAnalysisResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_bid_pursuit_api_v1_operations_bid_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_bid_pursuit_api_v1_operations_allocate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bid_decisions_api_v1_operations_bid_decisions_get: {
+        parameters: {
+            query?: {
+                decision_status?: string | null;
+                project_id?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionRecordResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_bid_decision_api_v1_operations_bid_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_bid_decision_timeline_api_v1_operations_projects__project_id__bid_decision_timeline_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionTimelineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_bid_decision_status_api_v1_operations_bid_decisions__decision_record_id__status_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionStatusUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_bid_decision_action_api_v1_operations_bid_decisions__decision_record_id__actions_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BidDecisionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionRecordResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bid_decision_detail_api_v1_operations_bid_decisions__decision_record_id__get: {
+        parameters: {
+            query?: {
+                timeline_limit?: number;
+            };
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidDecisionDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    notify_telegram_api_v1_operations_notify_telegram_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramNotificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    handle_telegram_callback_api_v1_operations_telegram_callback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramCallbackUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    handle_telegram_webhook_api_v1_operations_telegram_webhook_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Telegram-Bot-Api-Secret-Token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramSyncResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_telegram_updates_api_v1_operations_telegram_sync_post: {
+        parameters: {
+            query?: {
+                limit?: number;
+                timeout_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramSyncResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_telegram_status_api_v1_operations_telegram_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramStatusResponse"];
+                };
+            };
+        };
+    };
+    get_bid_decision_summary_api_v1_operations_bid_decisions__decision_record_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bid_form_draft_api_v1_operations_bid_decisions__decision_record_id__bid_form_draft_get: {
+        parameters: {
+            query?: {
+                /** @description 응답 포맷. json(기본, 구조화) / csv / text(평문). */
+                format?: "json" | "csv" | "text";
+            };
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidFormDraftResponse"];
+                    "text/csv": unknown;
+                    "text/plain": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_samples_api_v1_operations_decision_samples_get: {
+        parameters: {
+            query?: {
+                /** @description 조회 기간(일). created_at >= now-days 범위의 추천 기록만 포함. */
+                days?: number;
+                /** @description 최대 샘플 수(최근 순). 상한 도달 시 truncated=true. */
+                limit?: number;
+                /** @description 응답 포맷. json(기본, 구조화) / csv(다운로드). */
+                format?: "json" | "csv";
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionSamplesResponse"];
+                    "text/csv": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_synthetic_operators_endpoint_api_v1_synthetic_operators_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticOperatorListResponse"];
+                };
+            };
+        };
+    };
+    seed_synthetic_operators_endpoint_api_v1_synthetic_operators_seed_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticSeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticSeedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12762,6 +12644,103 @@ export interface operations {
             };
         };
     };
+    run_synthetic_backtest_async_endpoint_api_v1_synthetic_backtests_run_async_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticBacktestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticBacktestTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_synthetic_backtest_task_status_endpoint_api_v1_synthetic_backtests_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticBacktestTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_synthetic_backtest_endpoint_api_v1_synthetic_backtests_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyntheticBacktestRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticBacktestRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_experiments_endpoint_api_v1_synthetic_experiments_get: {
         parameters: {
             query?: never;
@@ -12815,40 +12794,6 @@ export interface operations {
             };
         };
     };
-    compare_experiment_runs_endpoint_api_v1_synthetic_experiments_compare_get: {
-        parameters: {
-            query: {
-                /** @description Run id for the A (baseline) side. */
-                run_a: number;
-                /** @description Run id for the B (candidate) side. */
-                run_b: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SyntheticExperimentCompareResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_experiment_presets_endpoint_api_v1_synthetic_experiments_presets_get: {
         parameters: {
             query?: never;
@@ -12887,6 +12832,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyntheticExperimentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_experiment_runs_endpoint_api_v1_synthetic_experiments_compare_get: {
+        parameters: {
+            query: {
+                /** @description Run id for the A (baseline) side. */
+                run_a: number;
+                /** @description Run id for the B (candidate) side. */
+                run_b: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyntheticExperimentCompareResponse"];
                 };
             };
             /** @description Validation Error */
@@ -13082,59 +13061,6 @@ export interface operations {
                 };
                 content: {
                     "text/csv": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_synthetic_operators_endpoint_api_v1_synthetic_operators_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SyntheticOperatorListResponse"];
-                };
-            };
-        };
-    };
-    seed_synthetic_operators_endpoint_api_v1_synthetic_operators_seed_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SyntheticSeedRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SyntheticSeedResponse"];
                 };
             };
             /** @description Validation Error */

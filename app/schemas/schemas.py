@@ -789,6 +789,24 @@ class PricePredictionScenario(BaseModel):
     pre_granularity_price: Optional[float] = Field(default=None, ge=0.0)
 
 
+class BidTargetOption(BaseModel):
+    label: Literal["recommended", "aggressive", "safe"]
+    stance: str
+    bid_rate: float = Field(ge=0.0)
+    bid_price: Optional[float] = Field(default=None, ge=0.0)
+    risk_note: str
+    basis: str
+
+
+class BidTargetMenu(BaseModel):
+    options: List[BidTargetOption]
+    band_floor_rate: Optional[float] = Field(default=None, ge=0.0)
+    band_ceiling_rate: Optional[float] = Field(default=None, ge=0.0)
+    signals_summary: str
+    caveat: str
+    collapsed: bool = False
+
+
 class PricePredictionReservePattern(BaseModel):
     sample_count: int = Field(ge=0)
     average_reserve_span_rate: float = Field(ge=0.0)
@@ -854,6 +872,7 @@ class PricePredictionResponse(BaseModel):
     competitive_target_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     procurement_rate_band: Optional[str] = None
     bid_rate_candidates: List[PricePredictionScenario] = Field(default_factory=list)
+    bid_target_menu: Optional[BidTargetMenu] = None
     reserve_price_context: Optional[PricePredictionReservePattern] = None
     feedback_calibration: Optional[PricePredictionFeedbackCalibration] = None
     guardrail_applied: bool = False

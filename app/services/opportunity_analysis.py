@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.ai.bid_recommendation import calculate_competitiveness_score
+from app.ai.bid_target import build_bid_target_menu
 from app.ai.business_group import resolve_business_group
 from app.ai.factory import build_bid_recommendation_port, build_price_prediction_port
 from app.ai.predictors.historical import apply_probability_calibration
@@ -26,6 +27,7 @@ from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorSt
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.bid_base import resolve_notice_bid_base
+from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.classifier import (
     NoticeClassifierService,
     REGION_PREFERENCE_PATTERN,
@@ -436,23 +438,37 @@ class OpportunityAnalysisService:
         )
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
-        return (
-            self.price_prediction_port.predict_price(
-                # 투찰가는 추정가격이 아니라 기초금액/사업금액(배정예산) 기준으로
-                # 산정한다. 과세 공고에서 추정가격을 넘기면 ~10% 낮게 산정되어
-                # 낙찰하한 미만으로 낙될 위험이 있으므로 base_amount 를 해석해 넘긴다.
-                budget=resolve_notice_bid_base(db, project),
-                category=project.category or "other",
-                description=f"{project.description or ''} {project.requirements or ''}".strip(),
-                historical_records=self._load_price_history(db, project),
-                agency_name=request.agency_name,
-                feedback_calibration=feedback_calibration,
-                business_type_code=business_type_code,
-                business_group=business_group,
-                legal_floor_bid_rate=request.legal_floor_bid_rate,
-            ),
-            business_group,
+        # 투찰가는 추정가격이 아니라 기초금액/사업금액(배정예산) 기준으로 산정한다.
+        # 과세 공고에서 추정가격을 넘기면 ~10% 낮게 산정되어 낙찰하한 미만으로 낙될
+        # 위험이 있으므로 base_amount 를 해석해 넘긴다.
+        bid_base = resolve_notice_bid_base(db, project)
+        prediction = self.price_prediction_port.predict_price(
+            budget=bid_base,
+            category=project.category or "other",
+            description=f"{project.description or ''} {project.requirements or ''}".strip(),
+            historical_records=self._load_price_history(db, project),
+            agency_name=request.agency_name,
+            feedback_calibration=feedback_calibration,
+            business_type_code=business_type_code,
+            business_group=business_group,
+            legal_floor_bid_rate=request.legal_floor_bid_rate,
         )
+        # 발주처 밴드(floor/ceiling) 위에 공고별 신호로 위치를 조정한 3종 투찰가
+        # 메뉴를 additive 레이어로 첨부한다. 밴드가 발주처(agency) 밴드에서 왔을
+        # 때만 첨부한다. 넓은 업종(category) 밴드는 발주처별 정밀도가 없어 메뉴/
+        # recommended_amount 오버라이드를 유발하면 안 되므로 제외한다(fallback 유지).
+        if prediction.get("floor_from_agency") or prediction.get("ceiling_from_agency"):
+            menu = build_bid_target_menu(
+                floor_bid_rate=prediction.get("floor_bid_rate"),
+                ceiling_bid_rate=prediction.get("ceiling_bid_rate"),
+                budget=bid_base,
+                signals=resolve_bid_target_signals(
+                    db, agency_name=request.agency_name, category=project.category
+                ),
+            )
+            if menu is not None:
+                prediction["bid_target_menu"] = menu
+        return (prediction, business_group)
 
     def _build_bid_recommendation(
         self,
@@ -813,7 +829,20 @@ class OpportunityAnalysisService:
         )
 
     def _resolve_recommended_amount(self, project: Project, price_prediction: dict, bid_recommendation: dict) -> float:
-        """Clamp the bid recommendation into a sensible, budget-aware range."""
+        """Clamp the bid recommendation into a sensible, budget-aware range.
+
+        ★결정1: when a per-notice 투찰가 메뉴 was assembled (발주처 밴드가 있어
+        메뉴가 존재), align the recommended amount to the menu's 'recommended'
+        option 투찰가 (사업금액 base × 위치조정 rate) so the headline
+        recommended_amount and the menu never disagree. The budget-aware clamping
+        below is kept as the fallback when there is no menu.
+        """
+        menu = (price_prediction or {}).get("bid_target_menu")
+        if menu:
+            for option in menu.get("options", []):
+                if option.get("label") == "recommended" and option.get("bid_price") is not None:
+                    return float(option["bid_price"])
+
         budget_cap = float(project.budget_estimate or 0.0)
         price_lower = float(price_prediction.get("price_range_min", 0.0) or 0.0)
         price_upper = float(price_prediction.get("price_range_max", 0.0) or 0.0)

@@ -17,6 +17,7 @@ from app.ai.service_interfaces import (
     DocumentAnalysisPort,
     PricePredictionPort,
 )
+from app.ai.bid_target import build_bid_target_menu
 from app.core.single_user import ensure_operator_account
 from app.models.models import PricePrediction, Project
 from app.schemas.schemas import (
@@ -25,6 +26,7 @@ from app.schemas.schemas import (
     PricePredictionRequest,
 )
 from app.services.bid_base import resolve_notice_bid_base
+from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
 
@@ -70,6 +72,24 @@ class PredictionWorkflowService:
             feedback_calibration=feedback_calibration,
             legal_floor_bid_rate=request.legal_floor_bid_rate,
         )
+
+        # 발주처 밴드(floor/ceiling) 위에 공고별 신호로 위치를 조정한 3종 투찰가
+        # 메뉴를 additive 레이어로 첨부한다. 밴드가 발주처(agency) 밴드에서 왔을
+        # 때만 첨부한다. 넓은 업종(category) 밴드는 발주처별 정밀도가 없어 메뉴를
+        # 유발하면 안 되므로 제외한다.
+        if prediction.get("floor_from_agency") or prediction.get("ceiling_from_agency"):
+            menu = build_bid_target_menu(
+                floor_bid_rate=prediction.get("floor_bid_rate"),
+                ceiling_bid_rate=prediction.get("ceiling_bid_rate"),
+                budget=resolved_bid_base or request.budget_estimate,
+                signals=resolve_bid_target_signals(
+                    db,
+                    agency_name=request.agency_name,
+                    category=request.category or project.category,
+                ),
+            )
+            if menu is not None:
+                prediction["bid_target_menu"] = menu
 
         db_prediction = self._build_price_prediction_row(
             operator_id=operator.id,
