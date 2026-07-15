@@ -454,17 +454,20 @@ class OpportunityAnalysisService:
             legal_floor_bid_rate=request.legal_floor_bid_rate,
         )
         # 발주처 밴드(floor/ceiling) 위에 공고별 신호로 위치를 조정한 3종 투찰가
-        # 메뉴를 additive 레이어로 첨부한다. 밴드가 없으면(None) 메뉴도 없다.
-        menu = build_bid_target_menu(
-            floor_bid_rate=prediction.get("floor_bid_rate"),
-            ceiling_bid_rate=prediction.get("ceiling_bid_rate"),
-            budget=bid_base,
-            signals=resolve_bid_target_signals(
-                db, agency_name=request.agency_name, category=project.category
-            ),
-        )
-        if menu is not None:
-            prediction["bid_target_menu"] = menu
+        # 메뉴를 additive 레이어로 첨부한다. 밴드가 발주처(agency) 밴드에서 왔을
+        # 때만 첨부한다. 넓은 업종(category) 밴드는 발주처별 정밀도가 없어 메뉴/
+        # recommended_amount 오버라이드를 유발하면 안 되므로 제외한다(fallback 유지).
+        if prediction.get("floor_from_agency") or prediction.get("ceiling_from_agency"):
+            menu = build_bid_target_menu(
+                floor_bid_rate=prediction.get("floor_bid_rate"),
+                ceiling_bid_rate=prediction.get("ceiling_bid_rate"),
+                budget=bid_base,
+                signals=resolve_bid_target_signals(
+                    db, agency_name=request.agency_name, category=project.category
+                ),
+            )
+            if menu is not None:
+                prediction["bid_target_menu"] = menu
         return (prediction, business_group)
 
     def _build_bid_recommendation(

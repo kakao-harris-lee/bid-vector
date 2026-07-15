@@ -718,6 +718,8 @@ def _apply_guardrail_metadata(
         else None
     )
     guarded_prediction["ceiling_price"] = context.ceiling_price
+    guarded_prediction["floor_from_agency"] = bool(context.floor_from_agency)
+    guarded_prediction["ceiling_from_agency"] = bool(context.ceiling_from_agency)
 
 
 def _guard_bid_rate_candidates(
