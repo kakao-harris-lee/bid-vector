@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable
 
 import numpy as np
 
+from app.ai import guardrail_core
+from app.ai.guardrail_core import GuardrailConfig
 from app.ai.predictors import (
     BasePricePredictor,
     PricePredictionContext,
@@ -16,7 +17,6 @@ from app.ai.predictors import (
 from app.ai.predictor_backtest import build_predictor_backtest_report
 from app.ai.predictors.historical import (
     clamp_bid_rate,
-    normalize_agency_name,
     normalize_category_key,
     resolve_procurement_rate_band,
 )
@@ -40,20 +40,6 @@ class GuardrailContext:
     ceiling_from_agency: bool = False
     agency_name: str | None = None
 
-
-_CATEGORY_FLOOR_RATE_ALIASES = {
-    "general-service": "service",
-    "service": "service",
-    "일반용역": "service",
-    "technical-service": "technical-service",
-    "기술용역": "technical-service",
-    "goods": "goods",
-    "물품": "goods",
-    "construction": "construction",
-    "공사": "construction",
-    "software": "software",
-    "소프트웨어": "software",
-}
 
 _PREDICTOR_KEY_ALIASES = {
     "default": "historical",
@@ -614,15 +600,20 @@ def _resolve_guardrail_context(
     legal_floor_bid_rate: float | None,
     agency_name: str | None = None,
 ) -> GuardrailContext:
+    # Collect every guardrail setting read once at the boundary (§4.7.4), then run
+    # the pure core on the immutable snapshot.
+    config = GuardrailConfig.from_settings(settings)
     # Resolve the category/group baseline and the agency-tightened band separately so
     # the guardrail reason can attribute the BINDING edge to the correct source. The
     # agency band only RAISES the floor / LOWERS the ceiling, so a resolved value that
     # differs from the baseline can only have been moved by the agency band.
-    base_configured_floor = _resolve_floor_bid_rate(
+    base_configured_floor = guardrail_core.resolve_floor_bid_rate(
+        config,
         category,
         business_group=business_group,
     )
-    configured_floor_bid_rate = _resolve_floor_bid_rate(
+    configured_floor_bid_rate = guardrail_core.resolve_floor_bid_rate(
+        config,
         category,
         business_group=business_group,
         agency_name=agency_name,
@@ -637,11 +628,13 @@ def _resolve_guardrail_context(
         normalized_legal_floor_bid_rate,
         floor_bid_rate,
     )
-    base_configured_ceiling = _resolve_ceiling_bid_rate(
+    base_configured_ceiling = guardrail_core.resolve_ceiling_bid_rate(
+        config,
         category,
         business_group=business_group,
     )
-    ceiling_bid_rate = _resolve_ceiling_bid_rate(
+    ceiling_bid_rate = guardrail_core.resolve_ceiling_bid_rate(
+        config,
         category,
         business_group=business_group,
         agency_name=agency_name,
@@ -674,7 +667,8 @@ def _resolve_guardrail_context(
     if floor_from_agency:
         safe_floor_bid_rate = floor_bid_rate
     else:
-        safe_floor_bid_rate = _resolve_safe_floor_bid_rate(
+        safe_floor_bid_rate = guardrail_core.resolve_safe_floor_bid_rate(
+            config,
             floor_bid_rate,
             ceiling_bid_rate=ceiling_bid_rate,
         )
@@ -892,148 +886,8 @@ def _mark_guardrail_application(
 
 def _apply_bid_price_granularity(prediction: Dict[str, Any], *, budget: float) -> Dict[str, Any]:
     """Round final bid prices to an operator-facing currency unit."""
-    granularity = int(settings.PREDICTION_BID_PRICE_GRANULARITY or 0)
-    min_budget = float(settings.PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET or 0.0)
-    if granularity <= 1 or budget <= 0 or budget < min_budget:
-        return prediction
-
-    rounded_prediction = dict(prediction)
-    rounding_mode = str(settings.PREDICTION_BID_PRICE_ROUNDING_MODE or "floor").strip().lower()
-    floor_price = _optional_float(prediction.get("safe_floor_price") or prediction.get("floor_price"))
-    ceiling_price = _optional_float(prediction.get("ceiling_price"))
-
-    rounded_candidates: list[dict[str, Any]] = []
-    for candidate in prediction.get("bid_rate_candidates", []):
-        rounded_candidates.append(
-            _round_candidate_price_to_granularity(
-                candidate,
-                budget=budget,
-                granularity=granularity,
-                rounding_mode=rounding_mode,
-                floor_price=floor_price,
-                ceiling_price=ceiling_price,
-            )
-        )
-
-    if rounded_candidates:
-        base_candidate = next(
-            (candidate for candidate in rounded_candidates if candidate.get("label") == "base"),
-            rounded_candidates[0],
-        )
-        rounded_prediction["bid_rate_candidates"] = rounded_candidates
-        rounded_prediction["predicted_price"] = round(float(base_candidate.get("predicted_price", 0.0) or 0.0), 2)
-        rounded_prediction["predicted_bid_rate"] = round(float(base_candidate.get("bid_rate", 0.0) or 0.0), 6)
-        rounded_prediction["price_range_min"] = min(float(candidate["predicted_price"]) for candidate in rounded_candidates)
-        rounded_prediction["price_range_max"] = max(float(candidate["predicted_price"]) for candidate in rounded_candidates)
-        applied = any(candidate.get("price_granularity_applied") for candidate in rounded_candidates)
-    else:
-        original_price = _resolve_prediction_price(prediction, budget=budget)
-        rounded_price = _round_price_to_granularity(
-            original_price,
-            granularity=granularity,
-            rounding_mode=rounding_mode,
-            floor_price=floor_price,
-            ceiling_price=ceiling_price,
-        )
-        rounded_prediction["predicted_price"] = rounded_price
-        rounded_prediction["predicted_bid_rate"] = round(rounded_price / budget, 6)
-        rounded_prediction["price_range_min"] = min(
-            rounded_price,
-            _round_price_to_granularity(
-                _optional_float(prediction.get("price_range_min")) or rounded_price,
-                granularity=granularity,
-                rounding_mode=rounding_mode,
-                floor_price=floor_price,
-                ceiling_price=ceiling_price,
-            ),
-        )
-        rounded_prediction["price_range_max"] = max(
-            rounded_price,
-            _round_price_to_granularity(
-                _optional_float(prediction.get("price_range_max")) or rounded_price,
-                granularity=granularity,
-                rounding_mode=rounding_mode,
-                floor_price=floor_price,
-                ceiling_price=ceiling_price,
-            ),
-        )
-        applied = abs(rounded_price - original_price) > 1e-9
-
-    rounded_prediction["bid_price_granularity"] = granularity
-    rounded_prediction["bid_price_rounding_mode"] = rounding_mode
-    rounded_prediction["price_granularity_applied"] = bool(applied)
-    return rounded_prediction
-
-
-def _round_candidate_price_to_granularity(
-    candidate: dict[str, Any],
-    *,
-    budget: float,
-    granularity: int,
-    rounding_mode: str,
-    floor_price: float | None,
-    ceiling_price: float | None,
-) -> dict[str, Any]:
-    original_price = _resolve_prediction_price(candidate, budget=budget)
-    rounded_price = _round_price_to_granularity(
-        original_price,
-        granularity=granularity,
-        rounding_mode=rounding_mode,
-        floor_price=floor_price,
-        ceiling_price=ceiling_price,
-    )
-    changed = abs(rounded_price - original_price) > 1e-9
-    rounded_candidate = {
-        **candidate,
-        "bid_rate": round(rounded_price / budget, 6),
-        "predicted_price": rounded_price,
-        "price_granularity_applied": changed,
-        "pre_granularity_price": round(original_price, 2) if changed else None,
-    }
-    return rounded_candidate
-
-
-def _round_price_to_granularity(
-    price: float,
-    *,
-    granularity: int,
-    rounding_mode: str,
-    floor_price: float | None,
-    ceiling_price: float | None,
-) -> float:
-    safe_price = max(0.0, float(price or 0.0))
-    unit = max(1, int(granularity))
-    if rounding_mode == "ceil":
-        rounded_price = math.ceil(safe_price / unit) * unit
-    elif rounding_mode == "nearest":
-        rounded_price = round(safe_price / unit) * unit
-    else:
-        rounded_price = math.floor(safe_price / unit) * unit
-
-    if floor_price is not None and rounded_price < floor_price:
-        rounded_price = math.ceil(float(floor_price) / unit) * unit
-    if ceiling_price is not None and rounded_price > ceiling_price:
-        rounded_price = math.floor(float(ceiling_price) / unit) * unit
-    return float(max(0, rounded_price))
-
-
-def _resolve_prediction_price(payload: dict[str, Any], *, budget: float) -> float:
-    price = _optional_float(payload.get("predicted_price") or payload.get("price"))
-    if price is not None and price > 0:
-        return price
-    bid_rate = _optional_float(payload.get("bid_rate") or payload.get("predicted_bid_rate"))
-    if bid_rate is not None and bid_rate > 0:
-        return float(budget) * bid_rate
-    return 0.0
-
-
-def _optional_float(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    config = GuardrailConfig.from_settings(settings)
+    return guardrail_core.apply_bid_price_granularity(prediction, budget=budget, config=config)
 
 
 def _clamp_rate_to_guardrails(
@@ -1152,20 +1006,6 @@ def _resolve_floor_guardrail_source(
     return "category"
 
 
-def _resolve_safe_floor_bid_rate(
-    floor_bid_rate: float | None,
-    *,
-    ceiling_bid_rate: float | None,
-) -> float | None:
-    if floor_bid_rate is None:
-        return None
-    safety_margin = max(0.0, float(settings.PREDICTION_FLOOR_SAFETY_MARGIN_RATE or 0.0))
-    safe_floor_bid_rate = float(floor_bid_rate) + safety_margin
-    if ceiling_bid_rate is not None:
-        safe_floor_bid_rate = min(safe_floor_bid_rate, float(ceiling_bid_rate))
-    return max(float(floor_bid_rate), safe_floor_bid_rate)
-
-
 def _floor_guardrail_label(source: str | None) -> str:
     if source == "legal":
         return "공고별 법정 최소 투찰률"
@@ -1175,30 +1015,13 @@ def _floor_guardrail_label(source: str | None) -> str:
 
 
 def _resolve_agency_bid_rate(agency_name: str | None, rate_map: dict[str, float] | None) -> float | None:
-    """Look up an agency-keyed bid-rate band via normalized substring match.
+    """Backward-compatible shim; delegates to the pure guardrail core.
 
-    Keys are normalized agency tokens (whitespace-stripped, lowercased — see
-    normalize_agency_name). A notice's issuing agency matches a key when the
-    normalized key is a substring of the normalized agency name, so regional
-    bureaus inherit the headquarters band (e.g. "한국수산자원공단동해본부" matches
-    the "한국수산자원공단" key). When several keys match, the most specific
-    (longest) key wins.
+    Preserved so external importers (paper_bidding_backtest, tests) keep the
+    ``app.ai.price_prediction`` symbol. The resolution itself lives in
+    :mod:`app.ai.guardrail_core`.
     """
-    if not agency_name or not rate_map:
-        return None
-    normalized_agency = normalize_agency_name(agency_name)
-    if not normalized_agency:
-        return None
-    best_rate: float | None = None
-    best_key_len = -1
-    for raw_key, raw_rate in rate_map.items():
-        normalized_key = normalize_agency_name(raw_key)
-        if not normalized_key or normalized_key not in normalized_agency:
-            continue
-        if len(normalized_key) > best_key_len:
-            best_key_len = len(normalized_key)
-            best_rate = max(0.0, float(raw_rate or 0.0))
-    return best_rate
+    return guardrail_core.resolve_agency_bid_rate(agency_name, rate_map)
 
 
 def _resolve_floor_bid_rate(
@@ -1206,47 +1029,11 @@ def _resolve_floor_bid_rate(
     business_group: str | None = None,
     agency_name: str | None = None,
 ) -> float | None:
-    """Resolve a configured minimum bid-rate floor for the given category/group/agency.
-
-    §4.7 guardrail: when both a group rate and a category rate exist, the group
-    rate can never be LOWER than the category floor — the category floor is the
-    hard lower bound.  Return max(group_rate, category_rate).
-
-    Agency band (Lever 1): an agency-keyed floor layers on top and TIGHTENS the
-    band by RAISING the floor (max wins), clamped to the hard clamp_bid_rate
-    [0.7, 1.4] bounds.  Non-matching agencies leave the category/group result
-    unchanged.
-    """
-    configured_floor_rates = settings.PREDICTION_CATEGORY_MINIMUM_BID_RATES or {}
-    normalized_category = _normalize_category_key(category)
-    category_rate: float | None = None
-    for raw_category, raw_floor_rate in configured_floor_rates.items():
-        if _normalize_category_key(raw_category) == normalized_category:
-            category_rate = max(0.0, float(raw_floor_rate or 0.0))
-            break
-
-    resolved_floor: float | None = None
-    if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
-        group_rates = settings.PREDICTION_GROUP_MINIMUM_BID_RATES or {}
-        if business_group in group_rates:
-            group_rate = float(group_rates[business_group])
-            # Group floor must never undercut category floor (§4.7).
-            resolved_floor = max(group_rate, category_rate) if category_rate is not None else group_rate
-
-    if resolved_floor is None:
-        if category_rate is not None:
-            resolved_floor = category_rate
-        else:
-            default_floor_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MINIMUM_BID_RATE or 0.0))
-            resolved_floor = default_floor_rate or None
-
-    agency_floor = _resolve_agency_bid_rate(agency_name, settings.PREDICTION_AGENCY_MINIMUM_BID_RATES)
-    if agency_floor is not None:
-        agency_floor = clamp_bid_rate(agency_floor)
-        # Agency floor TIGHTENS the band by RAISING the floor (max wins).
-        return max(resolved_floor, agency_floor) if resolved_floor is not None else agency_floor
-
-    return resolved_floor
+    """Backward-compatible shim; delegates to the pure guardrail core."""
+    config = GuardrailConfig.from_settings(settings)
+    return guardrail_core.resolve_floor_bid_rate(
+        config, category, business_group=business_group, agency_name=agency_name
+    )
 
 
 def _resolve_ceiling_bid_rate(
@@ -1254,54 +1041,11 @@ def _resolve_ceiling_bid_rate(
     business_group: str | None = None,
     agency_name: str | None = None,
 ) -> float | None:
-    """Resolve a configured maximum bid-rate ceiling for the given category/group/agency.
-
-    §4.7 guardrail: when both a group rate and a category rate exist, the group
-    ceiling can never be HIGHER than the category ceiling — the category ceiling
-    is the hard upper bound.  Return min(group_rate, category_rate).
-
-    Agency band (Lever 1): an agency-keyed ceiling layers on top and TIGHTENS the
-    band by LOWERING the ceiling (min wins), clamped to the hard clamp_bid_rate
-    [0.7, 1.4] bounds.  Non-matching agencies leave the category/group result
-    unchanged.
-    """
-    configured_ceiling_rates = settings.PREDICTION_CATEGORY_MAXIMUM_BID_RATES or {}
-    normalized_category = _normalize_category_key(category)
-    category_rate: float | None = None
-    for raw_category, raw_ceiling_rate in configured_ceiling_rates.items():
-        if _normalize_category_key(raw_category) == normalized_category:
-            ceiling_rate = max(0.0, float(raw_ceiling_rate or 0.0))
-            category_rate = ceiling_rate or None
-            break
-
-    resolved_ceiling: float | None = None
-    if business_group and settings.BUSINESS_GROUP_CALIBRATION_ENABLED:
-        group_rates = settings.PREDICTION_GROUP_MAXIMUM_BID_RATES or {}
-        if business_group in group_rates:
-            group_rate = float(group_rates[business_group])
-            # Group ceiling must never exceed category ceiling (§4.7).
-            resolved_ceiling = min(group_rate, category_rate) if category_rate is not None else group_rate
-
-    if resolved_ceiling is None:
-        if category_rate is not None:
-            resolved_ceiling = category_rate
-        else:
-            default_ceiling_rate = max(0.0, float(settings.PREDICTION_DEFAULT_MAXIMUM_BID_RATE or 0.0))
-            resolved_ceiling = default_ceiling_rate or None
-
-    agency_ceiling = _resolve_agency_bid_rate(agency_name, settings.PREDICTION_AGENCY_MAXIMUM_BID_RATES)
-    if agency_ceiling is not None:
-        agency_ceiling = clamp_bid_rate(agency_ceiling)
-        # Agency ceiling TIGHTENS the band by LOWERING the ceiling (min wins).
-        return min(resolved_ceiling, agency_ceiling) if resolved_ceiling is not None else agency_ceiling
-
-    return resolved_ceiling
-
-
-def _normalize_category_key(value: Any) -> str:
-    """Normalize category labels for configuration lookups."""
-    normalized_value = str(value or "").strip().lower()
-    return _CATEGORY_FLOOR_RATE_ALIASES.get(normalized_value, normalized_value)
+    """Backward-compatible shim; delegates to the pure guardrail core."""
+    config = GuardrailConfig.from_settings(settings)
+    return guardrail_core.resolve_ceiling_bid_rate(
+        config, category, business_group=business_group, agency_name=agency_name
+    )
 
 
 def _append_model_version_suffix(model_version: str, suffix: str) -> str:
