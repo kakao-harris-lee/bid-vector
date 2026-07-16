@@ -1,0 +1,91 @@
+"""Declarative scoring configuration for the rule-based notice classifier.
+
+All axis weights, mismatch penalties, structural ratios, and tier-band ladders
+live here as declarative data (CLAUDE.md §"Declarative Configurations"). The
+``NoticeClassifierService`` re-exports these as class attributes for its public
+surface, and the per-axis modules import them directly.
+"""
+
+# --- Axis scores (positive contributions) ------------------------------------
+MATCH_THRESHOLD = 0.65
+EXACT_BUSINESS_TYPE_SCORE = 0.35
+RELATED_BUSINESS_TYPE_SCORE = 0.2
+LICENSE_MATCH_SCORE = 0.25
+LICENSE_NEUTRAL_SCORE = 0.05
+REGION_MATCH_SCORE = 0.2
+REGION_ADVISORY_SCORE = 0.12
+REGION_NEUTRAL_SCORE = 0.05
+# Additive bonus stacked on the region-match score when the construction notice
+# advertises a 지역가산점/지역우대 condition AND the operator's region overlaps the
+# notice region — an in-region competitive advantage. Capped so the region axis
+# stays bounded at REGION_MATCH_SCORE + REGION_PREFERENCE_BONUS (= 0.28).
+# Heuristic matching signal, not an 적격심사 가산점 calculation.
+REGION_PREFERENCE_BONUS = 0.08
+BUDGET_STRONG_SCORE = 0.2
+BUDGET_GOOD_SCORE = 0.15
+BUDGET_BORDERLINE_SCORE = 0.1
+CAPACITY_HIGH_SCORE = 0.12
+CAPACITY_BASE_SCORE = 0.06
+CAPABILITY_STRONG_SCORE = 0.15
+CAPABILITY_GOOD_SCORE = 0.1
+CAPABILITY_BORDERLINE_SCORE = 0.05
+SEMANTIC_STRONG_SCORE = 0.18
+SEMANTIC_GOOD_SCORE = 0.12
+SEMANTIC_BASE_SCORE = 0.05
+
+# --- Mismatch penalties (negative contributions) -----------------------------
+BUSINESS_TYPE_MISMATCH_PENALTY = 0.3
+LICENSE_MISMATCH_PENALTY = 0.35
+REGION_MISMATCH_PENALTY = 0.3
+BUDGET_MISMATCH_PENALTY = 0.25
+CAPABILITY_MISMATCH_PENALTY = 0.25
+SEMANTIC_LOW_PENALTY = 0.18
+SEMANTIC_VERY_LOW_PENALTY = 0.3
+
+# --- Structural ratios & bonuses ---------------------------------------------
+# Shared borderline acceptance ratio for the 시공능력평가액/연매출 budget branches:
+# a capacity/revenue-to-budget ratio at or above this (but below 1×) is a
+# conservative "타이트하지만 통과" borderline. The 3×/1× rungs above it are
+# self-documenting natural ratios and stay inline.
+BUDGET_BORDERLINE_RATIO = 0.6
+# 낙찰 실적 가점: total_awards × AWARD_BONUS_PER_AWARD, capped at AWARD_BONUS_CAP,
+# stacked onto the capacity_score capability estimate.
+AWARD_BONUS_PER_AWARD = 0.03
+AWARD_BONUS_CAP = 0.25
+
+# --- Declarative tier ladders & structural thresholds ------------------------
+# capacity_score budget fallback ladder (structural — the 0.8/0.4 boundaries
+# are not operator-tuned). Each rung is (score, reason template); resolve_band
+# walks it with the default ``>=`` compare, reproducing the original
+# ``>= 0.8`` / ``>= 0.4`` / else cascade byte-for-byte. The ``float("-inf")``
+# sentinel rung is the always-match fallback; its template carries no
+# ``{capacity_score}`` placeholder (left untouched by ``.format``).
+CAPACITY_SCORE_BUDGET_BANDS = (
+    (
+        0.8,
+        (
+            CAPACITY_HIGH_SCORE,
+            "연매출 정보는 없지만 capacity_score={capacity_score:.2f}로 높아 예산 적합도에 보수적 가점을 반영했습니다.",
+        ),
+    ),
+    (
+        0.4,
+        (
+            CAPACITY_BASE_SCORE,
+            "연매출 정보가 없어 capacity_score={capacity_score:.2f} 기준으로 예산 적합도를 보수 평가했습니다.",
+        ),
+    ),
+    (
+        float("-inf"),
+        (0.0, "연매출 및 수행역량 정보가 부족해 예산 적합도는 보수적으로 평가했습니다."),
+    ),
+)
+# project-scale ladder (structural) → semantic scope text. resolve_band's
+# default ``>=`` compare reproduces the ``>= 0.85`` / ``>= 0.65`` / ``>= 0.5``
+# cascade; the ``float("-inf")`` rung is the "기본 프로젝트" fallback.
+PROJECT_SCOPE_BANDS = (
+    (0.85, "대형 복합 프로젝트"),
+    (0.65, "중대형 프로젝트"),
+    (0.5, "중형 프로젝트"),
+    (float("-inf"), "기본 프로젝트"),
+)
