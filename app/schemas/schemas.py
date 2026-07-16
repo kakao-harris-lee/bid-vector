@@ -899,11 +899,9 @@ class PricePredictionResponse(BaseModel):
 
 
 # Bid Recommendation Schemas
-class BidRecommendationRequest(BaseModel):
-    project_id: int
-    user_historical_data: Optional[dict] = None
-
-
+# NOTE: BidRecommendationResponse survives as a nested field of
+# OpportunityAnalysisResponse (opportunity-analysis 경로가 사용). 전용
+# request 스키마(BidRecommendationRequest)는 dead 엔드포인트와 함께 제거됨.
 class BidRecommendationResponse(BaseModel):
     recommended_bid: float
     confidence_score: float

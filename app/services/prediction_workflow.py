@@ -8,12 +8,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.ai.factory import (
-    build_bid_recommendation_port,
     build_document_analysis_port,
     build_price_prediction_port,
 )
 from app.ai.service_interfaces import (
-    BidRecommendationPort,
     DocumentAnalysisPort,
     PricePredictionPort,
 )
@@ -21,7 +19,6 @@ from app.ai.bid_target import build_bid_target_menu
 from app.core.single_user import ensure_operator_account
 from app.models.models import PricePrediction, Project
 from app.schemas.schemas import (
-    BidRecommendationRequest,
     DocumentAnalysisRequest,
     PricePredictionRequest,
 )
@@ -36,13 +33,11 @@ class PredictionWorkflowService:
         self,
         *,
         price_prediction_port: PricePredictionPort | None = None,
-        bid_recommendation_port: BidRecommendationPort | None = None,
         document_analysis_port: DocumentAnalysisPort | None = None,
         dataset_service: PredictionDatasetService | None = None,
         feedback_service: PredictionFeedbackService | None = None,
     ) -> None:
         self.price_prediction_port = price_prediction_port or build_price_prediction_port()
-        self.bid_recommendation_port = bid_recommendation_port or build_bid_recommendation_port()
         self.document_analysis_port = document_analysis_port or build_document_analysis_port()
         self.dataset_service = dataset_service or PredictionDatasetService()
         self.feedback_service = feedback_service or PredictionFeedbackService()
@@ -100,19 +95,6 @@ class PredictionWorkflowService:
         db.commit()
 
         return prediction
-
-    def build_bid_recommendation(self, db: Session, request: BidRecommendationRequest) -> dict[str, Any]:
-        """Get AI-powered bid recommendation for the singleton operator."""
-        project = self._load_project(db, request.project_id)
-
-        return self.bid_recommendation_port.recommend(
-            project_data={
-                "budget": project.budget_estimate,
-                "category": project.category,
-                "description": project.description,
-            },
-            user_data=request.user_historical_data or {},
-        )
 
     def analyze_project_document(self, db: Session, request: DocumentAnalysisRequest) -> dict[str, Any]:
         """Analyze a project document within the singleton operator workflow."""

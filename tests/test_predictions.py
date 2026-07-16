@@ -411,37 +411,6 @@ def test_predict_price_summarizes_selected_reserve_estimated_price_rates():
     assert context["median_bid_to_estimated_price_rate"] > 0.0
 
 
-def test_bid_recommendation(client):
-    """Test bid recommendation endpoint"""
-    # Create a project
-    project_response = client.post(
-        "/api/v1/projects/",
-        json={
-            "title": "Test Project",
-            "description": "Test description",
-            "requirements": "Test requirements",
-            "budget_estimate": 10000.0,
-            "category": "software",
-        }
-    )
-
-    project_id = project_response.json()["id"]
-
-    # Get bid recommendation
-    response = client.post(
-        "/api/v1/predictions/bid-recommendation",
-        json={
-            "project_id": project_id,
-            "user_historical_data": {"average_bid": 8000.0, "win_rate": 0.5},
-        }
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "recommended_bid" in data
-    assert "reasoning" in data
-
-
 def test_document_analysis(client):
     """Test document analysis endpoint"""
     # Create a project

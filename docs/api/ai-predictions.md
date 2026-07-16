@@ -1,13 +1,12 @@
 # AI Predictions API
 
 > 베이스 경로: `/api/v1/predictions` · 베이스 URL 예시: `http://localhost:3000`
-> 인증: 세 엔드포인트 모두 명시적 Bearer 토큰 의존성이 없습니다. 단, `/price`는 내부에서 canonical operator 계정을 강제 확보해 예측 결과를 그 운영자에게 귀속시킵니다(단일 운영자 모델).
+> 인증: 두 엔드포인트 모두 명시적 Bearer 토큰 의존성이 없습니다. 단, `/price`는 내부에서 canonical operator 계정을 강제 확보해 예측 결과를 그 운영자에게 귀속시킵니다(단일 운영자 모델).
 
-가격 예측·투찰 추천·문서 분석 3종 AI 엔드포인트입니다. 모두 요청의 `project_id`로 대상 공고(`Project`)를 먼저 조회하고, 없으면 `404`를 반환합니다.
+가격 예측·문서 분석 2종 AI 엔드포인트입니다. 모두 요청의 `project_id`로 대상 공고(`Project`)를 먼저 조회하고, 없으면 `404`를 반환합니다.
 
 ## 목차
 - [POST /api/v1/predictions/price](#post-apiv1predictionsprice) — 공고 적정 투찰가·투찰률 예측 (결과 영속화)
-- [POST /api/v1/predictions/bid-recommendation](#post-apiv1predictionsbid-recommendation) — 운영자 이력 기반 투찰 추천
 - [POST /api/v1/predictions/analyze-document](#post-apiv1predictionsanalyze-document) — 공고 문서 요구사항·리스크 분석
 
 ---
@@ -144,60 +143,6 @@ curl -X POST http://localhost:3000/api/v1/predictions/price \
   "bid_price_rounding_mode": "floor",
   "price_granularity_applied": false,
   "explanation": "최근 동일 카테고리 낙찰 이력 72건과 기관 매칭 9건을 블렌드해 산출. 낙찰하한 0.88 이상 유지."
-}
-```
-
-**에러**
-| 코드 | 의미 |
-|---|---|
-| 404 | `project_id`에 해당하는 공고 없음 (`{"detail": "Project not found"}`) |
-| 422 | 요청 본문 필수 필드 누락·타입 불일치 |
-
-```json
-{ "detail": "Project not found" }
-```
-
----
-
-## POST /api/v1/predictions/bid-recommendation
-
-대상 공고의 예산·카테고리·설명과 운영자 과거 데이터를 입력으로 AI 기반 투찰 추천가(`recommended_bid`)와 근거(`reasoning`)를 산출합니다.
-
-- 언제 쓰나: 정밀 가격 예측(`/price`)과 별개로, 운영자 이력을 곁들인 간단한 추천이 필요할 때.
-- 도메인: DB write나 operator 귀속이 없는 순수 추론. 응답 `reasoning`에 추천 근거가, `market_analysis`(선택)에 시장 맥락이 담깁니다. `/price`의 guardrail 필드 세트는 포함되지 않습니다.
-
-**파라미터**
-| 위치 | 이름 | 타입 | 필수 | 설명 |
-|---|---|---|---|---|
-| body | project_id | int | 예 | 대상 공고 ID |
-| body | user_historical_data | dict\|null | 아니오 | 운영자 과거 투찰 데이터 |
-
-**요청 예시**
-```bash
-curl -X POST http://localhost:3000/api/v1/predictions/bid-recommendation \
-  -H "Content-Type: application/json" \
-  -d '{
-    "project_id": 1024,
-    "user_historical_data": { "avg_bid_rate": 0.903, "win_count": 12 }
-  }'
-```
-```json
-{
-  "project_id": 1024,
-  "user_historical_data": { "avg_bid_rate": 0.903, "win_count": 12 }
-}
-```
-
-**응답 200**
-```json
-{
-  "recommended_bid": 433440000,
-  "confidence_score": 0.71,
-  "reasoning": "운영자 평균 투찰률 0.903과 카테고리 시장가를 반영해 0.903 수준 권장.",
-  "market_analysis": {
-    "category_median_bid_rate": 0.899,
-    "competitor_estimate": 7
-  }
 }
 ```
 
