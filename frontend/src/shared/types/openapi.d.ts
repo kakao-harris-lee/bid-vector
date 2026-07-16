@@ -828,23 +828,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/predictions/bid-recommendation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Get Bid Recommendation Endpoint */
-        post: operations["get_bid_recommendation_endpoint_api_v1_predictions_bid_recommendation_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/predictions/analyze-document": {
         parameters: {
             query?: never;
@@ -3016,13 +2999,6 @@ export interface components {
              * @default 이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다. 이 산출물은 KONEPS 를 호출하거나 자동으로 투찰서를 제출하지 않으며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
              */
             direct_submission_notice: string;
-        };
-        /** BidRecommendationRequest */
-        BidRecommendationRequest: {
-            /** Project Id */
-            project_id: number;
-            /** User Historical Data */
-            user_historical_data?: Record<string, never> | null;
         };
         /** BidRecommendationResponse */
         BidRecommendationResponse: {
@@ -10670,39 +10646,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PricePredictionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bid_recommendation_endpoint_api_v1_predictions_bid_recommendation_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BidRecommendationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BidRecommendationResponse"];
                 };
             };
             /** @description Validation Error */

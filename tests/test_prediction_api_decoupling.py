@@ -21,14 +21,6 @@ class StubPredictionWorkflow:
             "explanation": "stub",
         }
 
-    def build_bid_recommendation(self, db, request):
-        return {
-            "recommended_bid": 9000.0,
-            "confidence_score": 0.8,
-            "reasoning": "stub recommendation",
-            "market_analysis": {"source": "stub"},
-        }
-
     def analyze_project_document(self, db, request):
         return {
             "key_requirements": ["stub requirement"],
@@ -64,31 +56,6 @@ def test_prediction_routes_use_workflow_dependency_for_price_prediction(client):
 
         assert response.status_code == 200
         assert response.json()["predictor_name"] == "stub_predictor"
-    finally:
-        client.app.dependency_overrides.clear()
-
-
-def test_prediction_routes_use_workflow_dependency_for_bid_recommendation(client):
-    client.app.dependency_overrides[get_prediction_workflow] = lambda: StubPredictionWorkflow()
-    try:
-        project = client.post(
-            "/api/v1/projects/",
-            json={
-                "title": "Dependency Project",
-                "description": "desc",
-                "requirements": "req",
-                "budget_estimate": 10_000.0,
-                "category": "software",
-            },
-        ).json()
-
-        response = client.post(
-            "/api/v1/predictions/bid-recommendation",
-            json={"project_id": project["id"], "user_historical_data": {}},
-        )
-
-        assert response.status_code == 200
-        assert response.json()["reasoning"] == "stub recommendation"
     finally:
         client.app.dependency_overrides.clear()
 
