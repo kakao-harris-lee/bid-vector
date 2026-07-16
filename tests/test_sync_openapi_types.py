@@ -79,6 +79,30 @@ def test_check_mode_passes_when_generated_types_match_target(tmp_path: Path):
     assert "OpenAPI types are up to date" in stdout.getvalue()
 
 
+def test_write_openapi_schema_preserves_natural_key_order(tmp_path: Path):
+    # The checked-in openapi.d.ts is generated in app.openapi()'s natural
+    # (router-registration) order. Sorting keys here would reorder ~9k lines
+    # and make --check falsely report drift, so insertion order must be kept.
+    schema = {
+        "openapi": "3.1.0",
+        "info": {"title": "Test API", "version": "0.1.0"},
+        "paths": {
+            "/zeta": {},
+            "/alpha": {},
+            "/mid": {},
+        },
+    }
+    output_path = tmp_path / "openapi.json"
+
+    sync_openapi_types.write_openapi_schema(schema, output_path)
+
+    written = output_path.read_text(encoding="utf-8")
+    assert list(json.loads(written)["paths"].keys()) == ["/zeta", "/alpha", "/mid"]
+    assert (
+        written.index('"/zeta"') < written.index('"/alpha"') < written.index('"/mid"')
+    )
+
+
 def test_write_mode_replaces_target_with_generated_types(tmp_path: Path):
     frontend_dir = tmp_path / "frontend"
     target = frontend_dir / "src" / "shared" / "types" / "openapi.d.ts"
