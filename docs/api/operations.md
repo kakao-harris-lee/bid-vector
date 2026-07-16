@@ -303,12 +303,6 @@ curl -X POST http://localhost:3000/api/v1/operations/opportunity-analysis \
     ],
     "explanation": "최근 동일 업종 낙찰 패턴 기반 추정"
   },
-  "bid_recommendation": {
-    "recommended_bid": 112000000,
-    "confidence_score": 0.7,
-    "reasoning": "시장 평균 대비 경쟁력 있는 투찰가",
-    "market_analysis": null
-  },
   "similar_projects": {
     "target_project_id": 1024,
     "target_project_title": "OO청 정보시스템 유지보수 용역",

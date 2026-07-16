@@ -2401,7 +2401,9 @@ def test_opportunity_analysis_endpoint_returns_multi_angle_analysis(client, test
     assert payload["matched"] is True
     assert payload["matched_score"] >= 0.65
     assert payload["price_prediction"]["predicted_price"] > 0
-    assert payload["bid_recommendation"]["recommended_bid"] > 0
+    # bid_recommendation is computed internally (feeds recommended_amount / the
+    # probability blend) but is intentionally not surfaced in the response.
+    assert "bid_recommendation" not in payload
     assert payload["recommended_amount"] > 0
     assert payload["market_insights"]["competitiveness_score"] >= 0.0
     assert payload["similar_projects"]["result_count"] >= 1

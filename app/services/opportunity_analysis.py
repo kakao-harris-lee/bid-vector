@@ -420,7 +420,6 @@ class OpportunityAnalysisService:
             risk_flags=risk_flags,
             market_insights=market_insights,
             price_prediction=price_prediction,
-            bid_recommendation=bid_recommendation,
             similar_projects=similar_projects,
         )
 
@@ -791,14 +790,15 @@ class OpportunityAnalysisService:
         risk_flags: list[str],
         market_insights: dict,
         price_prediction: dict,
-        bid_recommendation: dict,
         similar_projects: dict,
     ) -> dict:
         """Assemble the final analysis response dict.
 
-        Pure extraction of the terminal ``return {...}`` in ``analyze_project``.
-        Field names, values, ordering, and the nested ``_build_summary`` call are
-        unchanged.
+        The ``bid_recommendation`` dict is computed internally (feeds
+        ``recommended_amount`` and the probability blend) but is intentionally
+        NOT surfaced here: it carried a caveat-less confidence_score with no
+        external consumer. Other field names, values, ordering, and the nested
+        ``_build_summary`` call are unchanged.
         """
         return {
             "project_id": project.id,
@@ -829,7 +829,6 @@ class OpportunityAnalysisService:
             "market_insights": market_insights,
             "classification": classification,
             "price_prediction": price_prediction,
-            "bid_recommendation": bid_recommendation,
             "similar_projects": similar_projects,
             "decision": decision,
         }
