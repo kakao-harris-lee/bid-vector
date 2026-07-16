@@ -183,3 +183,82 @@ def test_strategy_scheduler_preserves_started_log_string(monkeypatch, caplog):
 def test_base_scheduler_is_abstract():
     with pytest.raises(TypeError):
         BaseInProcessScheduler()
+
+
+class _FakeDBSession:
+    """Minimal session double: records that it was closed."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_paper_scheduler_uses_injected_session_factory(monkeypatch):
+    session = _FakeDBSession()
+    factory_calls = []
+
+    def factory():
+        factory_calls.append(1)
+        return session
+
+    received = {}
+
+    class _FakeBacktestService:
+        def run_forward_paper_bidding(self, db, **payload):
+            received["db"] = db
+            received["payload"] = payload
+            return {
+                "run_id": 1,
+                "summary": {"candidate_count": 0, "paper_bid_count": 0},
+            }
+
+    monkeypatch.setattr(
+        "app.services.paper_bidding_scheduler.PaperBiddingBacktestService",
+        _FakeBacktestService,
+    )
+
+    scheduler = PaperBiddingForwardScheduler(session_factory=factory)
+    scheduler._run_once_sync({"category": None, "limit": 1})
+
+    assert factory_calls == [1]
+    assert received["db"] is session
+    assert received["payload"] == {"category": None, "limit": 1}
+    assert session.closed is True
+
+
+def test_strategy_scheduler_uses_injected_session_factory(monkeypatch):
+    session = _FakeDBSession()
+    factory_calls = []
+
+    def factory():
+        factory_calls.append(1)
+        return session
+
+    received = {}
+
+    class _FakeMonitoringService:
+        SCHEDULED_TRIGGER_SOURCE = "scheduled"
+
+        def execute_monitoring(self, db, *, request, trigger_source):
+            received["db"] = db
+            received["trigger_source"] = trigger_source
+            return {
+                "persisted_candidate_count": 0,
+                "notification_count": 0,
+                "monitor_run_id": None,
+            }
+
+    monkeypatch.setattr(
+        "app.services.strategy_scheduler.StrategyMonitoringService",
+        _FakeMonitoringService,
+    )
+
+    scheduler = OperatorStrategyScheduler(session_factory=factory)
+    scheduler._run_once_sync(scheduler.build_request())
+
+    assert factory_calls == [1]
+    assert received["db"] is session
+    assert received["trigger_source"] == "scheduled"
+    assert session.closed is True

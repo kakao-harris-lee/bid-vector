@@ -16,10 +16,11 @@ import logging
 import shlex
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models.models import (
     SyntheticExperiment,
@@ -2193,16 +2194,18 @@ class SyntheticExperimentService:
         }
 
 
-def run_experiment_backtest(payload: dict[str, Any]) -> dict[str, Any]:
+def run_experiment_backtest(
+    payload: dict[str, Any],
+    session_factory: Callable[[], Session] = SessionLocal,
+) -> dict[str, Any]:
     """Execute an experiment-scoped backtest inside a fresh DB session.
 
-    Invoked by the Celery task. Opens its own ``SessionLocal`` so it is safe in
-    both eager (memory://) and worker execution. Persists the run/result
-    lifecycle when ``run_id`` is present in the payload.
+    Invoked by the Celery task. Opens its own session via ``session_factory``
+    (defaulting to ``SessionLocal``) so it is safe in both eager (memory://) and
+    worker execution. Persists the run/result lifecycle when ``run_id`` is
+    present in the payload.
     """
-    from app.core.database import SessionLocal
-
-    db = SessionLocal()
+    db = session_factory()
     run_id = payload.get("run_id")
     service = SyntheticExperimentService(db)
     try:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
+
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -16,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 class OperatorStrategyScheduler(BaseInProcessScheduler):
     """Run stored strategy monitoring on a fixed interval when enabled."""
+
+    def __init__(self, session_factory: Callable[[], Session] = SessionLocal) -> None:
+        super().__init__()
+        self._session_factory = session_factory
 
     def is_enabled(self) -> bool:
         """Return whether periodic strategy monitoring is enabled."""
@@ -56,7 +62,7 @@ class OperatorStrategyScheduler(BaseInProcessScheduler):
 
     def _run_once_sync(self, request: OperatorStrategyMonitorRequest) -> None:
         """Run one scheduled cycle in a plain sync DB session."""
-        db = SessionLocal()
+        db = self._session_factory()
         try:
             result = StrategyMonitoringService().execute_monitoring(
                 db,
