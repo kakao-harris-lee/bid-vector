@@ -65,8 +65,11 @@ def default_schema_provider() -> dict[str, Any]:
 
 
 def write_openapi_schema(schema: dict[str, Any], output_path: Path) -> None:
+    # Preserve the natural (router-registration) key order of app.openapi(); the
+    # checked-in openapi.d.ts is generated in that order, so sorting keys here
+    # would reorder ~9k lines and make --check falsely report drift.
     output_path.write_text(
-        json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(schema, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
