@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
+
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -15,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 class PaperBiddingForwardScheduler(BaseInProcessScheduler):
     """Run forward paper-bidding on a fixed interval when enabled."""
+
+    def __init__(self, session_factory: Callable[[], Session] = SessionLocal) -> None:
+        super().__init__()
+        self._session_factory = session_factory
 
     def is_enabled(self) -> bool:
         """Return whether periodic forward paper-bidding is enabled."""
@@ -67,7 +73,7 @@ class PaperBiddingForwardScheduler(BaseInProcessScheduler):
         return self.build_request_payload()
 
     def _run_once_sync(self, payload: dict) -> None:
-        db = SessionLocal()
+        db = self._session_factory()
         try:
             result = PaperBiddingBacktestService().run_forward_paper_bidding(
                 db, **payload

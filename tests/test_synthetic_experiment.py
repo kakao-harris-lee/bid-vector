@@ -953,3 +953,40 @@ def test_eager_run_failure_marks_failed(client, monkeypatch, test_db):
     assert db_run is not None
     assert db_run.status == "failed"
     assert db_run.error
+
+
+def test_run_experiment_backtest_uses_injected_session_factory(monkeypatch):
+    """The module helper opens its session through the injected factory."""
+    from app.services import synthetic_experiment as se
+
+    class _FakeDBSession:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = _FakeDBSession()
+    factory_calls = []
+
+    def factory():
+        factory_calls.append(1)
+        return session
+
+    received = {}
+
+    class _FakeBacktestService:
+        def run_for_all(self, db, **kwargs):
+            received["db"] = db
+            return {"ok": True}
+
+    monkeypatch.setattr(se, "SyntheticBacktestService", _FakeBacktestService)
+
+    # ``run_id`` absent -> no lifecycle persistence, so the fake session only
+    # needs to satisfy the backtest call and the finally-block close.
+    result = se.run_experiment_backtest({}, session_factory=factory)
+
+    assert result == {"ok": True}
+    assert factory_calls == [1]
+    assert received["db"] is session
+    assert session.closed is True

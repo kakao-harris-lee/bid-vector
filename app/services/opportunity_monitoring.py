@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from typing import Callable
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
@@ -70,10 +72,11 @@ class StrategyMonitoringService:
     ASYNC_TRIGGER_SOURCE = "manual_async"
     SCHEDULED_TRIGGER_SOURCE = "scheduled"
 
-    def __init__(self) -> None:
+    def __init__(self, session_factory: Callable[[], Session] = SessionLocal) -> None:
         self.analysis_service = OpportunityAnalysisService()
         self.decision_service = BidDecisionService()
         self.notification_service = OperatorNotificationService()
+        self._session_factory = session_factory
 
     def preview_candidates(
         self,
@@ -727,11 +730,9 @@ class StrategyMonitoringService:
 
     def _write_run_failure_on_new_session(self, *, run_id: int, error_message: str) -> bool:
         """Finalize a run as failed on a fresh session when the live one is poisoned."""
-        from app.core.database import SessionLocal
-
         recovery_db: Session | None = None
         try:
-            recovery_db = SessionLocal()
+            recovery_db = self._session_factory()
             return self._write_run_failure(recovery_db, run_id=run_id, error_message=error_message)
         except Exception:  # noqa: BLE001 — recovery is strictly best-effort
             return False
