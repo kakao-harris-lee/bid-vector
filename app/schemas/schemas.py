@@ -898,17 +898,6 @@ class PricePredictionResponse(BaseModel):
     explanation: str = ""
 
 
-# Bid Recommendation Schemas
-# NOTE: BidRecommendationResponse survives as a nested field of
-# OpportunityAnalysisResponse (opportunity-analysis 경로가 사용). 전용
-# request 스키마(BidRecommendationRequest)는 dead 엔드포인트와 함께 제거됨.
-class BidRecommendationResponse(BaseModel):
-    recommended_bid: float
-    confidence_score: float
-    reasoning: str
-    market_analysis: Optional[dict] = None
-
-
 # Document Analysis Schemas
 class DocumentAnalysisRequest(BaseModel):
     project_id: int
@@ -2367,7 +2356,6 @@ class OpportunityAnalysisResponse(BaseModel):
     market_insights: OpportunityMarketInsights
     classification: ClassificationResponse
     price_prediction: PricePredictionResponse
-    bid_recommendation: BidRecommendationResponse
     similar_projects: ProjectSimilaritySearchResponse
     decision: BidDecisionResponse
 

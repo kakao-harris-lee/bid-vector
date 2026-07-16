@@ -3000,17 +3000,6 @@ export interface components {
              */
             direct_submission_notice: string;
         };
-        /** BidRecommendationResponse */
-        BidRecommendationResponse: {
-            /** Recommended Bid */
-            recommended_bid: number;
-            /** Confidence Score */
-            confidence_score: number;
-            /** Reasoning */
-            reasoning: string;
-            /** Market Analysis */
-            market_analysis?: Record<string, never> | null;
-        };
         /** BidResponse */
         BidResponse: {
             /** Bid Amount */
@@ -6717,7 +6706,6 @@ export interface components {
             market_insights: components["schemas"]["OpportunityMarketInsights"];
             classification: components["schemas"]["ClassificationResponse"];
             price_prediction: components["schemas"]["PricePredictionResponse"];
-            bid_recommendation: components["schemas"]["BidRecommendationResponse"];
             similar_projects: components["schemas"]["ProjectSimilaritySearchResponse"];
             decision: components["schemas"]["BidDecisionResponse"];
         };
