@@ -1,5 +1,7 @@
 # AI Decoupling Refactor Implementation Plan
 
+> **아카이브 주의(2026-07):** 이 문서는 완료된 계획 아카이브입니다. 일부 참조(HTTP 엔드포인트 `/api/v1/predictions/bid-recommendation`와 라우트 핸들러 `get_bid_recommendation_endpoint()`)는 이후 #185에서 dead 엔드포인트로 제거되었습니다. 아래 예시/단계는 당시 계획 시점 기준이며 현행 코드와 다를 수 있습니다. (`app/ai/bid_recommendation.py`의 `get_bid_recommendation()` 헬퍼 자체는 유지됩니다.)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce coupling around AI/prediction workflows while preserving current API responses, persistence fields, and deterministic prediction behavior.

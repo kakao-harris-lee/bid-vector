@@ -85,6 +85,16 @@ _EXPECTED_MARGIN_COMPOSITE_WEIGHTS = MappingProxyType(
         "normalized_capacity": 0.1,
     }
 )
+_EXECUTION_COMPLEXITY_COMPOSITE_WEIGHTS = MappingProxyType(
+    {
+        "budget_signal": 0.3,
+        "keyword_signal": 0.25,
+        "deadline_signal": 0.15,
+        "active_load_ratio": 0.1,
+        "match_friction": 0.1,
+        "capacity_friction": 0.1,
+    }
+)
 
 # Named constant for the region_bonus risk message so the in-region suppression
 # filter (see _build_risk_flags) matches by identity, not a fragile substring.
@@ -1145,13 +1155,14 @@ class OpportunityAnalysisService:
         match_friction = max(0.0, min(1.0, 1.0 - float(classification.get("score", 0.0) or 0.0)))
         capacity_friction = max(0.0, min(1.0, 1.0 - self._normalize_capacity_score(capacity_score)))
 
+        weights = _EXECUTION_COMPLEXITY_COMPOSITE_WEIGHTS
         complexity_score = (
-            budget_signal * 0.3
-            + keyword_signal * 0.25
-            + deadline_signal * 0.15
-            + active_load_ratio * 0.1
-            + match_friction * 0.1
-            + capacity_friction * 0.1
+            budget_signal * weights["budget_signal"]
+            + keyword_signal * weights["keyword_signal"]
+            + deadline_signal * weights["deadline_signal"]
+            + active_load_ratio * weights["active_load_ratio"]
+            + match_friction * weights["match_friction"]
+            + capacity_friction * weights["capacity_friction"]
         )
         return round(max(0.0, min(1.0, complexity_score)), 2)
 
