@@ -419,9 +419,11 @@ def test_allocation_reasoning_label_is_honest():
     """allocation reasoning 문구가 '가격 적합도(추정)'을 쓴다."""
     import inspect
 
-    from app.services import allocation
+    from app.services import allocation, allocation_core
 
-    source = inspect.getsource(allocation)
+    # The reason assembly was extracted into the pure allocation_core (PR-16), so
+    # the honesty-spec label now lives there; check both the service and its core.
+    source = inspect.getsource(allocation) + inspect.getsource(allocation_core)
     assert "가격 적합도(추정) 점수" in source
     assert "낙찰 가능성 점수" not in source
 

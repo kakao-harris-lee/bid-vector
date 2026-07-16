@@ -16,6 +16,7 @@ from app.core.single_user import (
 )
 from app.models.models import BidDecisionRecord, Project, User
 from app.schemas.schemas import BidDecisionRequest
+from app.services import allocation_core
 from app.services.operator_strategy_tuning import (
     DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
     get_strategy_auto_workload_penalty_multiplier,
@@ -90,51 +91,35 @@ class BidDecisionService:
         total_penalty = load_penalty + complexity_penalty
         priority_score = max(0.0, min(1.0, opportunity_score - total_penalty))
 
-        reasons = [
-            f"가격 적합도(추정) 점수 {request.probability_score:.2f}를 반영했습니다.",
-            f"공고 적합도 점수 {request.matched_score:.2f}를 반영했습니다.",
-            f"마감 임박도 점수 {urgency_score:.2f}를 반영했습니다.",
-            f"시장 경쟁력 점수 {competitiveness_score:.2f}를 반영했습니다.",
-        ]
-
-        if request.budget_estimate and request.budget_estimate > 0:
-            reasons.append(f"예산 대비 추천가 유지율 {budget_capture_score:.2f}를 반영했습니다.")
-        reasons.append(f"예상 수익성 점수 {expected_margin_score:.2f}를 반영했습니다.")
-
-        if request.workload_source == "auto":
-            reasons.append(f"현재 진행 중인 입찰 현황을 바탕으로 업무부하 점수 {request.current_workload_score:.2f}를 자동 산정했습니다.")
-            if round(auto_workload_penalty_multiplier, 4) != DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER:
-                reasons.append(
-                    f"자동 업무부하 감점 배율 {auto_workload_penalty_multiplier:.2f}를 적용했습니다."
-                )
-        elif request.current_workload_score > 0:
-            reasons.append(f"입력된 업무부하 점수 {request.current_workload_score:.2f}를 반영했습니다.")
-
-        if load_penalty > 0:
-            reasons.append(f"현재 진행 중인 입찰/업무 부담으로 {load_penalty:.2f} 감점을 적용했습니다.")
-        if complexity_penalty > 0:
-            reasons.append(
-                f"실행 복잡도 점수 {execution_complexity_score:.2f}를 반영해 {complexity_penalty:.2f} 추가 감점을 적용했습니다."
-            )
-
-        action = "skip"
-        if (
-            request.current_active_bids >= request.max_active_bids
-            and priority_score < settings.ALLOCATION_CAPACITY_HOLD_PRIORITY_THRESHOLD
-        ):
-            reasons.append("현재 동시 관리 중인 입찰 수가 한도에 가까워 보수적으로 보류했습니다.")
-        elif priority_score >= bid_now_threshold or (
-            request.probability_score
-            >= settings.ALLOCATION_FORCE_BID_PROBABILITY_THRESHOLD
-            and request.matched_score >= settings.ALLOCATION_FORCE_BID_MATCHED_THRESHOLD
-        ):
-            action = "bid_now"
-            reasons.append("우선순위가 높아 바로 투찰 검토 대상으로 올렸습니다.")
-        elif priority_score >= review_threshold:
-            action = "review"
-            reasons.append("즉시 투찰까지는 아니지만 추가 검토 가치가 있어 검토 대기열에 올렸습니다.")
-        else:
-            reasons.append("현재 기준에서는 우선순위가 낮아 보류하는 편이 유리합니다.")
+        # Collect the gate thresholds once at the boundary, then run the pure
+        # decision core on the computed scores (§4.7.4).
+        decision = allocation_core.decide(
+            allocation_core.DecisionSignals(
+                probability_score=request.probability_score,
+                matched_score=request.matched_score,
+                urgency_score=urgency_score,
+                competitiveness_score=competitiveness_score,
+                budget_capture_score=budget_capture_score,
+                expected_margin_score=expected_margin_score,
+                execution_complexity_score=execution_complexity_score,
+                budget_estimate=request.budget_estimate,
+                workload_source=request.workload_source,
+                current_workload_score=request.current_workload_score,
+                auto_workload_penalty_multiplier=auto_workload_penalty_multiplier,
+                load_penalty=load_penalty,
+                complexity_penalty=complexity_penalty,
+                priority_score=priority_score,
+                current_active_bids=request.current_active_bids,
+                max_active_bids=request.max_active_bids,
+            ),
+            allocation_core.AllocationThresholds.from_settings(
+                settings,
+                bid_now_threshold=bid_now_threshold,
+                review_threshold=review_threshold,
+            ),
+        )
+        action = decision.action
+        reasons = decision.reasons
 
         return {
             "project_id": request.project_id,
