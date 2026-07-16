@@ -20,6 +20,58 @@ from app.core.time import utc_now
 from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
 from app.services.prediction_dataset import PredictionDatasetService
 
+# ---------------------------------------------------------------------------
+# Training-time artifact hyperparameters
+#
+# These numeric constants are baked into the predictor artifacts (LSTM/ensemble)
+# and the dataset-quality gate at TRAINING time. They are intentionally kept as
+# module-level named constants and NOT promoted to Settings: each value is
+# written into the on-disk artifact and covered by the signed release manifest's
+# sha256, so making them env-tunable would let two runs over the same dataset
+# emit divergent artifacts and break reproducibility / the promotion gate.
+# Literals and arithmetic order are preserved verbatim (float-identical).
+# Characterized by tests/test_ml_training_constants.py.
+# ---------------------------------------------------------------------------
+
+# Sequence/window bounds shared by the LSTM and ensemble artifact builders.
+_SEQUENCE_LENGTH_MIN = 3
+_SEQUENCE_LENGTH_MAX = 12
+_MOMENTUM_WINDOW_MIN = 3
+_MOMENTUM_WINDOW_MAX = 6
+
+# LSTM artifact.
+_LSTM_DEFAULT_STD = 0.025  # std used when a run has <2 bid-rate samples
+_LSTM_MIN_STD = 0.01  # floor so a zero-variance history still yields a usable scale
+_LSTM_OUTPUT_SCALE_STD_FACTOR = 0.35
+_LSTM_SCENARIO_SPREAD_MULTIPLIER = 1.0
+_LSTM_CONFIDENCE_BIAS_CAP = 0.08
+_LSTM_CONFIDENCE_BIAS_SAMPLE_DIVISOR = 1000
+# Flat dict of immutable floats; copied on use so the artifact never aliases it.
+_LSTM_BLEND_WEIGHTS = {"lstm": 0.6, "historical": 0.3, "trend": 0.1}
+
+# Ensemble artifact.
+_SCENARIO_SPREAD_STD_THRESHOLD = 0.04
+_SCENARIO_SPREAD_MULTIPLIER_NARROW = 1.0
+_SCENARIO_SPREAD_MULTIPLIER_WIDE = 1.15
+_ENSEMBLE_CONFIDENCE_BIAS_CAP = 0.06
+_ENSEMBLE_CONFIDENCE_BIAS_SAMPLE_DIVISOR = 1200
+_ENSEMBLE_COMPONENT_WEIGHTS = {
+    "historical": 0.5,
+    "momentum": 0.2,
+    "mean_reversion": 0.15,
+    "lstm": 0.15,
+}
+
+# Dataset-quality gate thresholds & scoring weights.
+_QUALITY_PROJECT_DIVERSITY_TARGET = 3
+_QUALITY_AGENCY_DIVERSITY_TARGET = 2
+_QUALITY_LINKED_RESULT_COVERAGE_MIN = 0.25
+_QUALITY_RESERVE_PATTERN_COVERAGE_MIN = 0.25
+_QUALITY_BID_RATE_VARIANCE_MAX = 0.08
+_QUALITY_SCORE_BASE = 100
+_QUALITY_SCORE_BLOCKING_PENALTY = 40
+_QUALITY_SCORE_WARNING_PENALTY = 10
+
 
 @dataclass(frozen=True)
 class TrainingRunOptions:
@@ -596,52 +648,57 @@ class PricePredictionTrainingService:
         self._append_quality_check(
             checks,
             name="project_diversity",
-            passed=project_count >= min(3, max(1, sample_count)),
+            passed=project_count >= min(_QUALITY_PROJECT_DIVERSITY_TARGET, max(1, sample_count)),
             severity="warning",
             value=project_count,
-            threshold=min(3, max(1, sample_count)),
+            threshold=min(_QUALITY_PROJECT_DIVERSITY_TARGET, max(1, sample_count)),
             detail="Dataset should include more than one project before release comparison is trusted.",
         )
         self._append_quality_check(
             checks,
             name="agency_diversity",
-            passed=bool(agency_name) or agency_count >= min(2, max(1, sample_count)),
+            passed=bool(agency_name) or agency_count >= min(_QUALITY_AGENCY_DIVERSITY_TARGET, max(1, sample_count)),
             severity="warning",
             value=agency_count,
-            threshold=min(2, max(1, sample_count)),
+            threshold=min(_QUALITY_AGENCY_DIVERSITY_TARGET, max(1, sample_count)),
             detail="Global training should include multiple agencies; agency-scoped runs are exempt.",
         )
         self._append_quality_check(
             checks,
             name="linked_result_coverage",
-            passed=linked_result_coverage >= 0.25,
+            passed=linked_result_coverage >= _QUALITY_LINKED_RESULT_COVERAGE_MIN,
             severity="warning",
             value=round(linked_result_coverage, 4),
-            threshold=0.25,
+            threshold=_QUALITY_LINKED_RESULT_COVERAGE_MIN,
             detail="Linked tender results improve post-training auditability.",
         )
         self._append_quality_check(
             checks,
             name="reserve_pattern_coverage",
-            passed=reserve_pattern_coverage >= 0.25,
+            passed=reserve_pattern_coverage >= _QUALITY_RESERVE_PATTERN_COVERAGE_MIN,
             severity="warning",
             value=round(reserve_pattern_coverage, 4),
-            threshold=0.25,
+            threshold=_QUALITY_RESERVE_PATTERN_COVERAGE_MIN,
             detail="Reserve-price samples improve scenario spread validation.",
         )
         self._append_quality_check(
             checks,
             name="bid_rate_variance",
-            passed=sample_count < 2 or std_bid_rate <= 0.08,
+            passed=sample_count < 2 or std_bid_rate <= _QUALITY_BID_RATE_VARIANCE_MAX,
             severity="warning",
             value=round(float(std_bid_rate), 6),
-            threshold=0.08,
+            threshold=_QUALITY_BID_RATE_VARIANCE_MAX,
             detail="Very high bid-rate variance should be reviewed before promotion.",
         )
 
         blocking_issue_count = sum(1 for check in checks if not check["passed"] and check["severity"] == "blocking")
         warning_count = sum(1 for check in checks if not check["passed"] and check["severity"] == "warning")
-        score = max(0, 100 - (blocking_issue_count * 40) - (warning_count * 10))
+        score = max(
+            0,
+            _QUALITY_SCORE_BASE
+            - (blocking_issue_count * _QUALITY_SCORE_BLOCKING_PENALTY)
+            - (warning_count * _QUALITY_SCORE_WARNING_PENALTY),
+        )
         status = "failed" if blocking_issue_count else ("warning" if warning_count else "passed")
 
         return {
@@ -1088,23 +1145,21 @@ class PricePredictionTrainingService:
     def _build_lstm_artifact(self, *, release_tag: str, bid_rates: list[float]) -> dict[str, Any]:
         """Create a valid lightweight LSTM artifact from dataset statistics."""
         average_bid_rate = mean(bid_rates)
-        std_bid_rate = max(pstdev(bid_rates) if len(bid_rates) > 1 else 0.025, 0.01)
-        sequence_length = max(3, min(len(bid_rates), 12))
+        std_bid_rate = max(pstdev(bid_rates) if len(bid_rates) > 1 else _LSTM_DEFAULT_STD, _LSTM_MIN_STD)
+        sequence_length = max(_SEQUENCE_LENGTH_MIN, min(len(bid_rates), _SEQUENCE_LENGTH_MAX))
         return {
             "artifact_version": "1",
             "model_version": f"{release_tag}-lstm",
             "sequence_length": sequence_length,
             "input_center": round(float(average_bid_rate), 6),
             "input_scale": round(float(std_bid_rate), 6),
-            "output_scale": round(float(std_bid_rate) * 0.35, 6),
+            "output_scale": round(float(std_bid_rate) * _LSTM_OUTPUT_SCALE_STD_FACTOR, 6),
             "output_bias": round(float(average_bid_rate), 6),
-            "scenario_spread_multiplier": 1.0,
-            "confidence_bias": min(0.08, len(bid_rates) / 1000),
-            "blend_weights": {
-                "lstm": 0.6,
-                "historical": 0.3,
-                "trend": 0.1,
-            },
+            "scenario_spread_multiplier": _LSTM_SCENARIO_SPREAD_MULTIPLIER,
+            "confidence_bias": min(
+                _LSTM_CONFIDENCE_BIAS_CAP, len(bid_rates) / _LSTM_CONFIDENCE_BIAS_SAMPLE_DIVISOR
+            ),
+            "blend_weights": dict(_LSTM_BLEND_WEIGHTS),
             "weights": {
                 "W_i": [[0.7]],
                 "U_i": [[0.1]],
@@ -1136,16 +1191,17 @@ class PricePredictionTrainingService:
         artifact = {
             "artifact_version": "1",
             "model_version": f"{release_tag}-ensemble",
-            "sequence_length": max(3, min(len(bid_rates), 12)),
-            "momentum_window": max(3, min(len(bid_rates), 6)),
-            "scenario_spread_multiplier": 1.0 if std_bid_rate < 0.04 else 1.15,
-            "confidence_bias": min(0.06, len(bid_rates) / 1200),
-            "component_weights": {
-                "historical": 0.5,
-                "momentum": 0.2,
-                "mean_reversion": 0.15,
-                "lstm": 0.15,
-            },
+            "sequence_length": max(_SEQUENCE_LENGTH_MIN, min(len(bid_rates), _SEQUENCE_LENGTH_MAX)),
+            "momentum_window": max(_MOMENTUM_WINDOW_MIN, min(len(bid_rates), _MOMENTUM_WINDOW_MAX)),
+            "scenario_spread_multiplier": (
+                _SCENARIO_SPREAD_MULTIPLIER_NARROW
+                if std_bid_rate < _SCENARIO_SPREAD_STD_THRESHOLD
+                else _SCENARIO_SPREAD_MULTIPLIER_WIDE
+            ),
+            "confidence_bias": min(
+                _ENSEMBLE_CONFIDENCE_BIAS_CAP, len(bid_rates) / _ENSEMBLE_CONFIDENCE_BIAS_SAMPLE_DIVISOR
+            ),
+            "component_weights": dict(_ENSEMBLE_COMPONENT_WEIGHTS),
             "lstm_artifact_path": self._relative_path_from(
                 lstm_artifact_path,
                 base_path=self.repo_root / "models" / "predictors" / "ensemble",
