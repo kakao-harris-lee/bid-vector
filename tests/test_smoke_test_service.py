@@ -849,3 +849,142 @@ def test_koneps_collect_fails_on_live_exception_even_with_healthy_history(
     assert result.passed is False
     assert "exception" in result.detail
     assert "ValueError" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# Collaborator injection seams (PR-15): each phase resolves its collaborator
+# from an injected instance when provided, else lazily builds the default at
+# the same call site (per-call lifetime unchanged).
+# ---------------------------------------------------------------------------
+def test_koneps_collect_phase_uses_injected_collector():
+    """An injected collector short-circuits the default KonepsCollectorService()."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _FakeCollector:
+        def __init__(self):
+            self.calls = 0
+
+        def collect_notices(self, req):
+            self.calls += 1
+            return {"collected_count": 5, "items": [], "metadata": {}}
+
+    fake = _FakeCollector()
+    svc = KonepsTelegramSmokeTestService(koneps_collector=fake)
+    result = svc._phase_koneps_collect(MagicMock())
+
+    assert fake.calls == 1
+    assert result.passed is True
+    assert result.detail == "collected 5"
+
+
+def test_predict_price_phase_uses_injected_cutoff_service(monkeypatch):
+    """An injected cutoff service short-circuits the default BacktestCutoffService()."""
+    import app.ai.business_group as bg_mod
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _StubProject:
+        id = 1
+        budget_estimate = 100_000_000.0
+        title = "t"
+        description = ""
+        requirements = ""
+        category = "software"
+        business_type_code = None
+        issuing_agency = None
+        demand_agency = None
+
+    class _StubQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def one(self):
+            return _StubProject()
+
+    class _StubDB:
+        def query(self, *a, **k):
+            return _StubQuery()
+
+    class _FakeCutoff:
+        def __init__(self):
+            self.cutoff_calls = 0
+            self.history_calls = 0
+
+        def resolve_data_cutoff_at(self, *a, **k):
+            self.cutoff_calls += 1
+            return None
+
+        def load_price_history_at_cutoff(self, *a, **k):
+            self.history_calls += 1
+            return []
+
+    class _RatePort:
+        def predict_price(self, **kwargs):
+            return {"predicted_bid_rate": 0.9, "predictor_name": "stub"}
+
+    monkeypatch.setattr(bg_mod, "resolve_business_group", lambda code: None)
+    cutoff = _FakeCutoff()
+    svc = KonepsTelegramSmokeTestService(
+        price_prediction_port=_RatePort(),
+        backtest_cutoff_service=cutoff,
+    )
+    result = svc._phase_predict_price(_StubDB(), {"id": 1})
+
+    assert cutoff.cutoff_calls == 1
+    assert cutoff.history_calls == 1
+    assert result.passed is True
+
+
+def test_candidate_generation_phase_uses_injected_monitoring_service():
+    """An injected monitoring service short-circuits the default StrategyMonitoringService()."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    class _FakeMonitor:
+        def __init__(self):
+            self.calls = 0
+
+        def execute_monitoring(self, db, *, request, trigger_source):
+            self.calls += 1
+            return {
+                "monitor_run_id": 77,
+                "operator_id": 42,
+                "current_operator_id": 42,
+                "current_operator_username": "operator",
+                "evaluated_project_count": 5,
+                "selected_candidate_count": 0,
+                "persisted_candidate_count": 0,
+                "notification_count": 0,
+                "new_candidate_count": 0,
+            }
+
+    fake = _FakeMonitor()
+    svc = KonepsTelegramSmokeTestService(strategy_monitoring_service=fake)
+    result = svc._phase_candidate_generation(MagicMock())
+
+    assert fake.calls == 1
+    assert result.passed is True
+    assert result.data["monitor_run_id"] == 77
+
+
+def test_telegram_ping_phase_uses_injected_telegram_service():
+    """An injected telegram service short-circuits the default TelegramNotificationService()."""
+    from app.services.smoke_test import KonepsTelegramSmokeTestService, SmokeTestReport
+
+    class _FakeTelegram:
+        def __init__(self):
+            self.sent = []
+
+        def is_configured(self):
+            return True
+
+        def send_message(self, text):
+            self.sent.append(text)
+            return {"sent": True, "status": "ok", "telegram_message_id": 99}
+
+    fake = _FakeTelegram()
+    svc = KonepsTelegramSmokeTestService(telegram_service=fake)
+    report = SmokeTestReport()
+    result = svc._phase_telegram_ping(report=report, prior_phases=[])
+
+    assert len(fake.sent) == 1
+    assert result.passed is True
+    assert report.telegram_message_id == 99

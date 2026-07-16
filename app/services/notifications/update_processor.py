@@ -38,9 +38,28 @@ class TelegramUpdateProcessor:
         "⛔보류": "skip",
     }
 
-    def __init__(self, telegram_service: TelegramNotificationService | None = None) -> None:
+    def __init__(
+        self,
+        telegram_service: TelegramNotificationService | None = None,
+        *,
+        notification_service: OperatorNotificationService | None = None,
+        decision_service: BidDecisionService | None = None,
+    ) -> None:
         self.telegram = telegram_service or TelegramNotificationService()
         self.strategy_processor = TelegramStrategyCommandProcessor()
+        # Injectable collaborators. Kept as the injected value (or ``None``) and
+        # resolved per use site so an un-injected processor creates a fresh
+        # instance exactly where — and as often as — it did before.
+        self._notification_service = notification_service
+        self._decision_service = decision_service
+
+    def _resolve_notification_service(self) -> OperatorNotificationService:
+        """Return the injected notification service, or a fresh default instance."""
+        return self._notification_service or OperatorNotificationService()
+
+    def _resolve_decision_service(self) -> BidDecisionService:
+        """Return the injected decision service, or a fresh default instance."""
+        return self._decision_service or BidDecisionService()
 
     def process_update(self, db: Session, update: dict) -> dict[str, object]:
         """Process one Telegram update payload."""
@@ -149,7 +168,7 @@ class TelegramUpdateProcessor:
             raise ValueError("Bid decision record not found")
 
         record_operator_id = int(record.operator_id)
-        notification_service = OperatorNotificationService()
+        notification_service = self._resolve_notification_service()
         if route.operator_id is not None:
             if int(route.operator_id) != record_operator_id:
                 raise ValueError("Bid decision record not found")
@@ -176,7 +195,7 @@ class TelegramUpdateProcessor:
         chat_id: int | None = None,
         send_chat_ack: bool = False,
     ) -> dict[str, object]:
-        decision_service = BidDecisionService()
+        decision_service = self._resolve_decision_service()
         record = decision_service.apply_telegram_action(db, decision_record_id, requested_action)
         if expected_operator_id is not None and int(record.operator_id) != int(expected_operator_id):
             raise ValueError("Bid decision record not found")
@@ -185,7 +204,7 @@ class TelegramUpdateProcessor:
         if project is None:
             raise ValueError("Project not found")
 
-        OperatorNotificationService().create_bid_decision_notification(
+        self._resolve_notification_service().create_bid_decision_notification(
             db,
             operator_id=record.operator_id,
             project=project,

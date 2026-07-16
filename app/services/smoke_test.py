@@ -25,6 +25,10 @@ from app.services.smoke_failure_taxonomy import (
 
 if TYPE_CHECKING:
     from app.models.models import SmokeTestRun
+    from app.services.backtest_cutoff import BacktestCutoffService
+    from app.services.koneps.collector import KonepsCollectorService
+    from app.services.notifications.telegram import TelegramNotificationService
+    from app.services.opportunity_monitoring import StrategyMonitoringService
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +74,20 @@ class KonepsTelegramSmokeTestService:
         self,
         *,
         price_prediction_port: PricePredictionPort | None = None,
+        koneps_collector: KonepsCollectorService | None = None,
+        backtest_cutoff_service: BacktestCutoffService | None = None,
+        strategy_monitoring_service: StrategyMonitoringService | None = None,
+        telegram_service: TelegramNotificationService | None = None,
     ) -> None:
         self.price_prediction_port = price_prediction_port or build_price_prediction_port()
+        # Injectable phase collaborators. Stored as the injected value (or
+        # ``None``) and resolved inside each phase so an un-injected service
+        # keeps the original lazy import + per-call instantiation, i.e. the same
+        # creation point and lifetime as before.
+        self._koneps_collector = koneps_collector
+        self._backtest_cutoff_service = backtest_cutoff_service
+        self._strategy_monitoring_service = strategy_monitoring_service
+        self._telegram_service = telegram_service
 
     def run(self, db: Session) -> SmokeTestReport:
         report = SmokeTestReport(started_at=datetime.now(timezone.utc).isoformat())
@@ -315,7 +331,8 @@ class KonepsTelegramSmokeTestService:
             from app.services.koneps.collector import KonepsCollectorService
 
             req = CrawlRequest(source="koneps-openapi", execution_mode="live", max_items=10)
-            collect_result = KonepsCollectorService().collect_notices(req)
+            collector = self._koneps_collector or KonepsCollectorService()
+            collect_result = collector.collect_notices(req)
             count = int(collect_result.get("collected_count") or 0)
             result.data["collected_count"] = count
 
@@ -531,7 +548,7 @@ class KonepsTelegramSmokeTestService:
                 return self._finalize_phase(result)
             desc = " ".join(p for p in [project.title, project.description or "", project.requirements or ""] if p)
             bg = resolve_business_group(project.business_type_code)
-            cs = BacktestCutoffService()
+            cs = self._backtest_cutoff_service or BacktestCutoffService()
             cutoff = cs.resolve_data_cutoff_at(project, tender_result=None, hours_before_deadline=0)
             history = cs.load_price_history_at_cutoff(
                 db, category=project.category,
@@ -570,7 +587,8 @@ class KonepsTelegramSmokeTestService:
             from app.services.opportunity_monitoring import StrategyMonitoringService
 
             request = OperatorStrategyMonitorRequest(limit=3, high_priority_only=True)
-            monitor_result = StrategyMonitoringService().execute_monitoring(
+            monitor = self._strategy_monitoring_service or StrategyMonitoringService()
+            monitor_result = monitor.execute_monitoring(
                 db,
                 request=request,
                 trigger_source=StrategyMonitoringService.SCHEDULED_TRIGGER_SOURCE,
@@ -617,7 +635,7 @@ class KonepsTelegramSmokeTestService:
         result = PhaseResult(name="telegram_ping")
         try:
             from app.services.notifications.telegram import TelegramNotificationService
-            svc = TelegramNotificationService()
+            svc = self._telegram_service or TelegramNotificationService()
             if not svc.is_configured():
                 result.detail = "telegram not configured"
                 return self._finalize_phase(result)

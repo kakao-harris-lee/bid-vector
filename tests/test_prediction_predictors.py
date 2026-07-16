@@ -178,6 +178,110 @@ def test_normalize_predictor_registry_keeps_explicit_empty_mapping_sparse():
     assert "ensemble" not in registry
 
 
+class _RecordingHistoricalPredictor(BasePricePredictor):
+    """Fake historical anchor that records calls and returns a sentinel rate.
+
+    Injected into the ensemble/LSTM payload builders to prove the historical
+    statistical anchor is consumed through the injection seam (not a hard-coded
+    ``HistoricalStatisticalPredictor()`` inside the function body).
+    """
+
+    name = "recording_historical"
+    family = "test"
+
+    def __init__(self, *, bid_rate: float) -> None:
+        self._bid_rate = bid_rate
+        self.calls = 0
+
+    def predict(self, context: PricePredictionContext) -> dict:
+        self.calls += 1
+        return {
+            "predicted_bid_rate": self._bid_rate,
+            "predicted_price": round(context.budget * self._bid_rate, 2),
+            "confidence_score": 0.6,
+            "model_version": "recording-historical",
+            "pricing_mode": "historical_blend",
+            "historical_sample_size": context.historical_sample_size,
+            "agency_match_sample_size": 0,
+            "bid_rate_candidates": [],
+            "explanation": "recording historical",
+        }
+
+
+def test_build_ensemble_prediction_payload_consumes_injected_historical_predictor(monkeypatch):
+    from app.ai.predictors.ensemble import build_ensemble_prediction_payload, load_ensemble_artifact
+
+    # Keep the historical anchor the only injection point under test: no LSTM
+    # component (base artifact has none) and no configured LSTM path.
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MODEL_PATH", "")
+
+    artifact = load_ensemble_artifact(
+        {
+            "artifact_version": "1",
+            "model_version": "v2.0-ensemble",
+            "sequence_length": 8,
+            "momentum_window": 5,
+            "scenario_spread_multiplier": 1.05,
+            "confidence_bias": 0.02,
+            "component_weights": {"historical": 0.5, "momentum": 0.3, "mean_reversion": 0.2},
+        }
+    )
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        category="software",
+        description="ensemble injection",
+        historical_records=tuple(_build_bid_rate_history(12)),
+    )
+    fake = _RecordingHistoricalPredictor(bid_rate=0.8123)
+
+    payload = build_ensemble_prediction_payload(context, artifact=artifact, historical_predictor=fake)
+
+    # The injected fake is the anchor: called exactly once, and its sentinel
+    # rate flows into the ensemble's "historical" component (surfaced verbatim
+    # in the explanation's component breakdown).
+    assert fake.calls == 1
+    assert "historical(0.8123" in payload["explanation"]
+
+
+def test_infer_lstm_sequence_signal_consumes_injected_historical_predictor():
+    from app.ai.predictors.lstm import infer_lstm_sequence_signal, load_lstm_artifact
+
+    artifact = load_lstm_artifact(
+        {
+            "artifact_version": "1",
+            "model_version": "v2.0-lstm",
+            "sequence_length": 6,
+            "input_center": 0.9,
+            "input_scale": 0.05,
+            "output_scale": 0.03,
+            "output_bias": 0.9,
+            "scenario_spread_multiplier": 1.1,
+            "confidence_bias": 0.03,
+            "blend_weights": {"lstm": 0.72, "historical": 0.18, "trend": 0.10},
+            "weights": {
+                "W_i": [[0.9]], "U_i": [[0.15]], "b_i": [3.0],
+                "W_f": [[0.2]], "U_f": [[0.05]], "b_f": [2.8],
+                "W_o": [[0.4]], "U_o": [[0.1]], "b_o": [2.5],
+                "W_c": [[1.1]], "U_c": [[0.2]], "b_c": [0.0],
+                "dense_W": [0.85], "dense_b": [0.0],
+            },
+        }
+    )
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        category="software",
+        description="lstm injection",
+        historical_records=tuple(_build_bid_rate_history(12)),
+    )
+    fake = _RecordingHistoricalPredictor(bid_rate=0.8123)
+
+    signal = infer_lstm_sequence_signal(context, artifact=artifact, historical_predictor=fake)
+
+    # The injected fake is the historical anchor blended into the sequence signal.
+    assert fake.calls == 1
+    assert signal["historical_rate"] == 0.8123
+
+
 def test_predict_price_reports_historical_predictor_metadata_by_default():
     """The baseline historical predictor should identify itself in the response payload."""
     prediction = predict_price(

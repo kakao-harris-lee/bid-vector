@@ -119,13 +119,25 @@ def load_ensemble_artifact(model_source: str | Path | dict[str, Any]) -> dict[st
     }
 
 
-def build_ensemble_prediction_payload(context: PricePredictionContext, *, artifact: dict[str, Any]) -> dict[str, Any]:
-    """Blend multiple bid-rate components into the normalized prediction payload."""
+def build_ensemble_prediction_payload(
+    context: PricePredictionContext,
+    *,
+    artifact: dict[str, Any],
+    historical_predictor: BasePricePredictor | None = None,
+) -> dict[str, Any]:
+    """Blend multiple bid-rate components into the normalized prediction payload.
+
+    ``historical_predictor`` is an injectable seam over the historical
+    statistical anchor. When it is ``None`` the payload lazily constructs the
+    default :class:`HistoricalStatisticalPredictor` at the same point (and with
+    the same per-call lifetime) as before, so production behavior is unchanged.
+    """
     sequence_rates = extract_bid_rate_series(context.historical_records)
     if not sequence_rates:
         raise ValueError("No usable historical bid-rate sequence was available for ensemble inference.")
 
-    historical_prediction = HistoricalStatisticalPredictor().predict(context)
+    historical_predictor = historical_predictor or HistoricalStatisticalPredictor()
+    historical_prediction = historical_predictor.predict(context)
     historical_summary = summarize_historical_records(
         context.historical_records,
         agency_name=context.agency_name,

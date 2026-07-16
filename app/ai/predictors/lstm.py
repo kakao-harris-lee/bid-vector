@@ -136,13 +136,25 @@ def load_lstm_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, A
     }
 
 
-def infer_lstm_sequence_signal(context: PricePredictionContext, *, artifact: dict[str, Any]) -> dict[str, Any]:
-    """Run the persisted sequence model and blend it with stable historical signals."""
+def infer_lstm_sequence_signal(
+    context: PricePredictionContext,
+    *,
+    artifact: dict[str, Any],
+    historical_predictor: BasePricePredictor | None = None,
+) -> dict[str, Any]:
+    """Run the persisted sequence model and blend it with stable historical signals.
+
+    ``historical_predictor`` is an injectable seam over the historical
+    statistical anchor. When it is ``None`` the signal lazily constructs the
+    default :class:`HistoricalStatisticalPredictor` at the same point (and with
+    the same per-call lifetime) as before, so production behavior is unchanged.
+    """
     sequence_rates = extract_bid_rate_series(context.historical_records)
     if not sequence_rates:
         raise ValueError("No usable historical bid-rate sequence was available for LSTM inference.")
 
-    historical_prediction = HistoricalStatisticalPredictor().predict(context)
+    historical_predictor = historical_predictor or HistoricalStatisticalPredictor()
+    historical_prediction = historical_predictor.predict(context)
     historical_summary = summarize_historical_records(
         context.historical_records,
         agency_name=context.agency_name,
