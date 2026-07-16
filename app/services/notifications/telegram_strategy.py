@@ -1,152 +1,52 @@
-"""Telegram command helpers for operator strategy edits."""
+"""Telegram command helpers for operator strategy edits.
+
+Command orchestration and pending-edit persistence live here. The declarative
+field routing table (``FIELD_SPECS``), the leaf string parsers, and the outbound
+message rendering were split into sibling modules and are re-exported below so
+the public import contract (tests import ``FIELD_SPECS`` / ``FIELD_SPEC_BY_ALIAS``
+/ ``TelegramStrategyCommandProcessor`` from here) stays intact:
+
+- ``telegram_strategy_fields``: ``FieldSpec`` table + parse/apply/validate helpers
+- ``telegram_strategy_parsing``: stateless token/number/bool/list parsers
+- ``telegram_strategy_render``: status text, help, and inline-keyboard markup
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 import re
-import shlex
 from typing import Any, ClassVar
 
 from sqlalchemy.orm import Session
 
 from app.core.single_user import (
-    DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
-    DEFAULT_OPERATOR_REVIEW_THRESHOLD,
     ensure_operator_account,
     ensure_operator_strategy,
-    join_multi_value_text,
-    split_multi_value_text,
 )
 from app.models.models import Analytics
-from app.services.operator_strategy_tuning import (
-    clamp_auto_workload_penalty_multiplier,
-    dump_category_priority_overrides,
-    get_strategy_category_priority_overrides,
+from app.services.notifications import telegram_strategy_fields as fields
+from app.services.notifications import telegram_strategy_parsing as parsing
+from app.services.notifications import telegram_strategy_render as render
+from app.services.notifications.telegram_strategy_fields import (
+    FIELD_SPEC_BY_ALIAS,
+    FIELD_SPECS,
+    FieldApplier,
+    FieldParser,
+    FieldSpec,
 )
+from app.services.notifications.telegram_strategy_render import TelegramStrategyReply
 
-
-# Declarative field routing table.
-#
-# ``FieldSpec`` folds the previously duplicated alias→type routing (parsing in
-# ``_handle_set``/``_parse_assignment_updates`` and application in
-# ``_apply_updates``) into a single source of truth: one spec per stored
-# strategy field carries its parser, its ORM applier, and every alias that maps
-# to it. ``parser`` receives the entered (normalized) alias so numeric/boolean
-# error messages and clamping keep referencing the exact key the operator typed.
-FieldParser = Callable[["TelegramStrategyCommandProcessor", str, str], Any]
-FieldApplier = Callable[[Any, str, Any], None]
-
-
-@dataclass(frozen=True)
-class FieldSpec:
-    """Declarative parse/apply routing for one stored strategy field."""
-
-    target_field: str
-    parser: FieldParser
-    applier: FieldApplier
-    aliases: tuple[str, ...]
-
-
-def _parse_list_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
-    return processor._parse_list(raw_value)
-
-
-def _parse_number_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
-    return processor._parse_number(raw_value, field_name=normalized_key)
-
-
-def _parse_bool_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
-    return processor._parse_bool(raw_value, field_name=normalized_key)
-
-
-def _parse_overrides_value(processor: "TelegramStrategyCommandProcessor", raw_value: str, normalized_key: str) -> Any:
-    return processor._parse_priority_overrides(raw_value)
-
-
-def _apply_list_field(strategy: Any, field_name: str, value: Any) -> None:
-    setattr(strategy, field_name, join_multi_value_text(value))
-
-
-def _apply_overrides_field(strategy: Any, field_name: str, value: Any) -> None:
-    strategy.category_priority_overrides = dump_category_priority_overrides(value)
-
-
-def _apply_workload_field(strategy: Any, field_name: str, value: Any) -> None:
-    strategy.auto_workload_penalty_multiplier = clamp_auto_workload_penalty_multiplier(float(value))
-
-
-def _apply_max_candidates_field(strategy: Any, field_name: str, value: Any) -> None:
-    strategy.max_recommended_candidates = max(1, min(int(value), 100))
-
-
-def _apply_plain_field(strategy: Any, field_name: str, value: Any) -> None:
-    setattr(strategy, field_name, value)
-
-
-_FIELD_SPEC_LIST: tuple[FieldSpec, ...] = (
-    FieldSpec("focus_categories", _parse_list_value, _apply_list_field, ("categories", "category", "focus_categories")),
-    FieldSpec("focus_regions", _parse_list_value, _apply_list_field, ("regions", "region", "focus_regions")),
-    FieldSpec("exclude_regions", _parse_list_value, _apply_list_field, ("exclude_regions",)),
-    FieldSpec("required_keywords", _parse_list_value, _apply_list_field, ("required_keywords", "keywords", "keyword")),
-    FieldSpec("exclude_keywords", _parse_list_value, _apply_list_field, ("exclude_keywords",)),
-    FieldSpec("min_budget_estimate", _parse_number_value, _apply_plain_field, ("min_budget", "min_budget_estimate")),
-    FieldSpec("max_budget_estimate", _parse_number_value, _apply_plain_field, ("max_budget", "max_budget_estimate")),
-    FieldSpec(
-        "minimum_match_score",
-        _parse_number_value,
-        _apply_plain_field,
-        ("match", "min_match", "minimum_match_score"),
-    ),
-    FieldSpec(
-        "minimum_probability_score",
-        _parse_number_value,
-        _apply_plain_field,
-        ("probability", "min_probability", "minimum_probability_score"),
-    ),
-    FieldSpec("bid_now_threshold", _parse_number_value, _apply_plain_field, ("bid_now", "bid_now_threshold")),
-    FieldSpec("review_threshold", _parse_number_value, _apply_plain_field, ("review", "review_threshold")),
-    FieldSpec(
-        "auto_workload_penalty_multiplier",
-        _parse_number_value,
-        _apply_workload_field,
-        ("workload_penalty", "auto_workload_penalty_multiplier"),
-    ),
-    FieldSpec(
-        "max_recommended_candidates",
-        _parse_number_value,
-        _apply_max_candidates_field,
-        ("limit", "max_candidates", "max_recommended_candidates"),
-    ),
-    FieldSpec(
-        "notify_only_high_priority",
-        _parse_bool_value,
-        _apply_plain_field,
-        ("high_priority", "high_priority_only", "notify_only_high_priority"),
-    ),
-    FieldSpec(
-        "category_priority_overrides",
-        _parse_overrides_value,
-        _apply_overrides_field,
-        ("category_priority_overrides", "priority_overrides"),
-    ),
-)
-
-# Keyed by canonical stored field (drives ``_apply_updates``).
-FIELD_SPECS: Mapping[str, FieldSpec] = {spec.target_field: spec for spec in _FIELD_SPEC_LIST}
-# Reverse index alias → spec (drives ``/strategy_set`` and step-flow parsing).
-FIELD_SPEC_BY_ALIAS: Mapping[str, FieldSpec] = {
-    alias: spec for spec in _FIELD_SPEC_LIST for alias in spec.aliases
-}
-
-
-@dataclass
-class TelegramStrategyReply:
-    """Outbound Telegram strategy response plus optional inline keyboard."""
-
-    message: str
-    reply_markup: dict[str, object] | None = None
+__all__ = [
+    "FIELD_SPECS",
+    "FIELD_SPEC_BY_ALIAS",
+    "FieldApplier",
+    "FieldParser",
+    "FieldSpec",
+    "PendingStrategyEdit",
+    "TelegramStrategyCommandProcessor",
+    "TelegramStrategyReply",
+]
 
 
 @dataclass
@@ -169,83 +69,15 @@ class TelegramStrategyCommandProcessor:
     PENDING_EVENT_FETCH_LIMIT = 100
     PENDING_EDITS: ClassVar[dict[str, PendingStrategyEdit]] = {}
 
-    EDIT_FIELDS = {
-        "categories": {
-            "label": "업종",
-            "example": "software,security",
-            "help": "쉼표로 구분해 관심 업종을 입력하세요. 비우려면 clear를 입력하세요.",
-        },
-        "regions": {
-            "label": "지역",
-            "example": "서울특별시,경기도",
-            "help": "쉼표로 구분해 관심 지역을 입력하세요. 비우려면 clear를 입력하세요.",
-        },
-        "keywords": {
-            "label": "키워드",
-            "example": "AI,데이터",
-            "help": "쉼표로 구분해 필수 키워드를 입력하세요. 비우려면 clear를 입력하세요.",
-        },
-        "budget": {
-            "label": "예산",
-            "example": "90000000 180000000",
-            "help": "최소/최대 예산을 공백으로 입력하세요. 또는 min_budget=90000000 max_budget=180000000 형식을 사용할 수 있습니다.",
-        },
-        "thresholds": {
-            "label": "임계치",
-            "example": "match=0.65 probability=0.60 bid_now=0.75 review=0.50",
-            "help": "0~1 사이 값으로 적합/확률/즉시투찰/검토 임계치를 입력하세요.",
-        },
-        "notification": {
-            "label": "알림 범위",
-            "example": "high_priority 또는 all",
-            "help": "고우선순위만 받으려면 high_priority, 모든 후보를 받으려면 all을 입력하세요.",
-        },
-        "limit": {
-            "label": "후보 수",
-            "example": "10",
-            "help": "전략 모니터링에서 추천할 최대 후보 수를 1~100 사이 숫자로 입력하세요.",
-        },
-    }
-
-    CLEAR_GROUPS = {
-        "categories": ("focus_categories",),
-        "category": ("focus_categories",),
-        "regions": ("focus_regions",),
-        "region": ("focus_regions",),
-        "exclude_regions": ("exclude_regions",),
-        "keywords": ("required_keywords",),
-        "keyword": ("required_keywords",),
-        "exclude_keywords": ("exclude_keywords",),
-        "budget": ("min_budget_estimate", "max_budget_estimate"),
-        "thresholds": ("minimum_match_score", "minimum_probability_score", "bid_now_threshold", "review_threshold"),
-        "priority_overrides": ("category_priority_overrides",),
-        "high_priority": ("notify_only_high_priority",),
-        "limit": ("max_recommended_candidates",),
-        "all": (
-            "focus_categories",
-            "focus_regions",
-            "exclude_regions",
-            "required_keywords",
-            "exclude_keywords",
-            "min_budget_estimate",
-            "max_budget_estimate",
-            "minimum_match_score",
-            "minimum_probability_score",
-            "bid_now_threshold",
-            "review_threshold",
-            "auto_workload_penalty_multiplier",
-            "category_priority_overrides",
-            "notify_only_high_priority",
-            "max_recommended_candidates",
-        ),
-    }
+    EDIT_FIELDS = fields.EDIT_FIELDS
+    CLEAR_GROUPS = fields.CLEAR_GROUPS
 
     def process_text(self, db: Session, text: str, *, chat_id: int | str | None = None) -> TelegramStrategyReply | None:
         """Return a Telegram reply when the text is a supported strategy command."""
-        tokens = self._split_tokens(text)
+        tokens = parsing.split_tokens(text)
         chat_key = self._chat_key(chat_id)
 
-        command = self._normalize_command(tokens[0]) if tokens else ""
+        command = parsing.normalize_command(tokens[0]) if tokens else ""
         if command not in self.COMMANDS:
             if chat_key and self._get_pending_edit(db, chat_key) is not None and text.strip():
                 return self._handle_step_value(db, chat_key, text.strip())
@@ -377,7 +209,7 @@ class TelegramStrategyCommandProcessor:
         if not fields_to_clear:
             return self._build_help("초기화할 전략 항목이 없습니다.")
 
-        self._apply_updates(strategy, {field: self._default_value_for(field) for field in fields_to_clear})
+        self._apply_updates(strategy, {field: fields.default_value_for(field) for field in fields_to_clear})
         db.commit()
         db.refresh(strategy)
         return f"{self._build_strategy_status(db, include_help=False)}\n\n전략 항목을 초기화했습니다."
@@ -414,7 +246,7 @@ class TelegramStrategyCommandProcessor:
                 "적용 전 확인",
                 f"항목: {field['label']}",
                 f"현재 값: {self._current_value_for(db, pending.field_key)}",
-                f"새 값: {self._format_updates(pending.field_key, updates)}",
+                f"새 값: {render.format_updates(pending.field_key, updates)}",
                 "적용 또는 취소를 선택하세요.",
             ]),
             reply_markup=self._build_apply_cancel_markup(),
@@ -450,15 +282,15 @@ class TelegramStrategyCommandProcessor:
     def _parse_step_updates(self, field_key: str, raw_value: str) -> dict[str, Any]:
         """Parse one button-selected strategy field into ORM update values."""
         if field_key == "categories":
-            return {"focus_categories": self._parse_list(raw_value)}
+            return {"focus_categories": parsing.parse_list(raw_value)}
         if field_key == "regions":
-            return {"focus_regions": self._parse_list(raw_value)}
+            return {"focus_regions": parsing.parse_list(raw_value)}
         if field_key == "keywords":
-            return {"required_keywords": self._parse_list(raw_value)}
+            return {"required_keywords": parsing.parse_list(raw_value)}
         if field_key == "budget":
             return self._parse_budget_step(raw_value)
         if field_key == "thresholds":
-            updates = self._parse_assignment_updates(self._split_tokens(raw_value))
+            updates = self._parse_assignment_updates(parsing.split_tokens(raw_value))
             allowed_fields = {
                 "minimum_match_score",
                 "minimum_probability_score",
@@ -470,10 +302,10 @@ class TelegramStrategyCommandProcessor:
                 raise ValueError("임계치 값이 없습니다.")
             return updates
         if field_key == "notification":
-            return {"notify_only_high_priority": self._parse_notification_scope(raw_value)}
+            return {"notify_only_high_priority": parsing.parse_notification_scope(raw_value)}
         if field_key == "limit":
             return {
-                "max_recommended_candidates": self._parse_number(
+                "max_recommended_candidates": parsing.parse_number(
                     raw_value,
                     field_name="max_recommended_candidates",
                 )
@@ -516,7 +348,7 @@ class TelegramStrategyCommandProcessor:
     def _parse_budget_step(self, raw_value: str) -> dict[str, float]:
         """Parse button-flow budget input."""
         if "=" in raw_value:
-            updates = self._parse_assignment_updates(self._split_tokens(raw_value))
+            updates = self._parse_assignment_updates(parsing.split_tokens(raw_value))
             budget_updates = {
                 key: value
                 for key, value in updates.items()
@@ -531,301 +363,57 @@ class TelegramStrategyCommandProcessor:
         if len(values) != 2:
             raise ValueError("예산은 최소/최대 두 숫자로 입력해야 합니다.")
         return {
-            "min_budget_estimate": float(self._parse_number(values[0], field_name="min_budget")),
-            "max_budget_estimate": float(self._parse_number(values[1], field_name="max_budget")),
+            "min_budget_estimate": float(parsing.parse_number(values[0], field_name="min_budget")),
+            "max_budget_estimate": float(parsing.parse_number(values[1], field_name="max_budget")),
         }
-
-    def _parse_notification_scope(self, raw_value: str) -> bool:
-        """Parse notification range labels into notify_only_high_priority."""
-        normalized = raw_value.strip().lower().replace("-", "_").replace(" ", "_")
-        if normalized in {"high", "high_priority", "high_priority_only", "only", "고우선순위", "고우선순위만"}:
-            return True
-        if normalized in {"all", "all_candidates", "전체", "전체후보", "모두"}:
-            return False
-        return self._parse_bool(raw_value, field_name="notification")
 
     def _build_step_error_reply(self, db: Session, field_key: str, error_message: str) -> TelegramStrategyReply:
         """Report validation errors without mutating the stored strategy."""
         field = self.EDIT_FIELDS[field_key]
-        return TelegramStrategyReply(
-            "\n".join([
-                f"처리 실패: {error_message}",
-                f"현재 값: {self._current_value_for(db, field_key)}",
-                f"올바른 예시: {field['example']}",
-            ]),
-            reply_markup=self._build_cancel_markup(),
+        return render.build_step_error_reply(
+            example=field["example"],
+            current_value=self._current_value_for(db, field_key),
+            error_message=error_message,
+            cancel_markup=self._build_cancel_markup(),
         )
 
     def _build_strategy_status(self, db: Session, *, include_help: bool) -> str:
         """Build a concise strategy summary suitable for Telegram."""
-        strategy = ensure_operator_strategy(db)
-        lines = [
-            "[ 입찰 전략 ]",
-            f"관심 업종: {self._format_list(split_multi_value_text(strategy.focus_categories))}",
-            f"관심 지역: {self._format_list(split_multi_value_text(strategy.focus_regions))}",
-            f"제외 지역: {self._format_list(split_multi_value_text(strategy.exclude_regions))}",
-            f"필수 키워드: {self._format_list(split_multi_value_text(strategy.required_keywords))}",
-            f"제외 키워드: {self._format_list(split_multi_value_text(strategy.exclude_keywords))}",
-            f"예산 범위: {float(strategy.min_budget_estimate or 0.0):,.0f} ~ {float(strategy.max_budget_estimate or 0.0):,.0f}",
-            (
-                "임계치: "
-                f"적합 {float(strategy.minimum_match_score or 0.0):.2f}, "
-                f"확률 {float(strategy.minimum_probability_score or 0.0):.2f}, "
-                f"즉시투찰 {float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD):.2f}, "
-                f"검토 {float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD):.2f}"
-            ),
-            f"고우선순위만 알림: {'예' if bool(strategy.notify_only_high_priority) else '아니오'}",
-            f"최대 후보 수: {int(strategy.max_recommended_candidates or 10)}",
-        ]
-        overrides = get_strategy_category_priority_overrides(strategy)
-        if overrides:
-            lines.append(
-                "카테고리 보정: "
-                + ", ".join(f"{category}={value:+.2f}" for category, value in sorted(overrides.items()))
-            )
-        if include_help:
-            lines.extend(["", self._build_help(None)])
-        return "\n".join(lines)
+        return render.build_strategy_status(ensure_operator_strategy(db), include_help=include_help)
 
     def _build_help(self, error_message: str | None) -> str:
         """Build command help, optionally prefixed with an error."""
-        lines: list[str] = []
-        if error_message:
-            lines.append(f"처리 실패: {error_message}")
-            lines.append("")
-        lines.extend([
-            "사용법:",
-            "/strategy",
-            "/strategy_set categories=software,security regions=서울 keywords=AI,데이터 min_budget=90000000 max_budget=180000000 match=0.65 probability=0.60 bid_now=0.75 review=0.50 high_priority=true limit=10",
-            "/strategy_clear categories regions keywords budget thresholds",
-        ])
-        return "\n".join(lines)
+        return render.build_help(error_message)
 
     def _build_strategy_edit_markup(self) -> dict[str, object]:
         """Build the /strategy inline edit buttons."""
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "업종", "callback_data": self._build_callback_data("categories")},
-                    {"text": "지역", "callback_data": self._build_callback_data("regions")},
-                    {"text": "키워드", "callback_data": self._build_callback_data("keywords")},
-                ],
-                [
-                    {"text": "예산", "callback_data": self._build_callback_data("budget")},
-                    {"text": "임계치", "callback_data": self._build_callback_data("thresholds")},
-                ],
-                [
-                    {"text": "알림 범위", "callback_data": self._build_callback_data("notification")},
-                    {"text": "후보 수", "callback_data": self._build_callback_data("limit")},
-                ],
-            ],
-        }
+        return render.build_strategy_edit_markup(self._build_callback_data)
 
     def _build_apply_cancel_markup(self) -> dict[str, object]:
         """Build confirmation buttons for a parsed step edit."""
-        return {
-            "inline_keyboard": [[
-                {"text": "적용", "callback_data": self._build_callback_data(self.APPLY_CALLBACK)},
-                {"text": "취소", "callback_data": self._build_callback_data(self.CANCEL_CALLBACK)},
-            ]],
-        }
+        return render.build_apply_cancel_markup(
+            self._build_callback_data, self.APPLY_CALLBACK, self.CANCEL_CALLBACK
+        )
 
     def _build_cancel_markup(self) -> dict[str, object]:
         """Build a single cancel button for value entry prompts."""
-        return {
-            "inline_keyboard": [[
-                {"text": "취소", "callback_data": self._build_callback_data(self.CANCEL_CALLBACK)},
-            ]],
-        }
+        return render.build_cancel_markup(self._build_callback_data, self.CANCEL_CALLBACK)
 
     def _build_callback_data(self, action: str) -> str:
         """Build compact callback data within Telegram's 64-byte limit."""
         return f"{self.CALLBACK_PREFIX}:{action}"
 
-    def _split_tokens(self, text: str) -> list[str]:
-        """Split command text while allowing quoted values."""
-        try:
-            return shlex.split((text or "").strip())
-        except ValueError:
-            return (text or "").strip().split()
-
-    def _normalize_command(self, token: str) -> str:
-        """Normalize Telegram slash commands that may include a bot username suffix."""
-        command = token.strip().lower()
-        if "@" in command:
-            command = command.split("@", maxsplit=1)[0]
-        return command
-
-    def _parse_list(self, value: str) -> list[str]:
-        """Parse comma or semicolon separated values."""
-        if value.strip().lower() in {"", "-", "none", "null", "clear"}:
-            return []
-        normalized = value.replace(";", ",")
-        return [item.strip() for item in normalized.split(",") if item.strip()]
-
-    def _parse_number(self, value: str, *, field_name: str) -> float | int:
-        """Parse a positive numeric field."""
-        try:
-            parsed = float(value.replace(",", ""))
-        except ValueError:
-            raise ValueError(f"{field_name} 값은 숫자여야 합니다.") from None
-
-        if field_name in {"limit", "max_candidates", "max_recommended_candidates"}:
-            return max(1, min(int(parsed), 100))
-        return parsed
-
-    def _parse_bool(self, value: str, *, field_name: str) -> bool:
-        """Parse a compact boolean option."""
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "y", "on", "예", "네"}:
-            return True
-        if normalized in {"0", "false", "no", "n", "off", "아니오", "아니요"}:
-            return False
-        raise ValueError(f"{field_name} 값은 true 또는 false여야 합니다.")
-
-    def _parse_priority_overrides(self, value: str) -> dict[str, float]:
-        """Parse category priority adjustments like software:+0.1,hardware:-0.2."""
-        if value.strip().lower() in {"", "-", "none", "null", "clear"}:
-            return {}
-
-        overrides: dict[str, float] = {}
-        for item in value.replace(";", ",").split(","):
-            if not item.strip():
-                continue
-            if ":" in item:
-                category, raw_score = item.split(":", maxsplit=1)
-            elif "=" in item:
-                category, raw_score = item.split("=", maxsplit=1)
-            else:
-                raise ValueError("category_priority_overrides는 category:+0.1 형식이어야 합니다.")
-            category = category.strip()
-            if not category:
-                continue
-            try:
-                overrides[category] = float(raw_score.strip())
-            except ValueError:
-                raise ValueError(f"{category} 보정값은 숫자여야 합니다.") from None
-        return overrides
-
     def _validate_updates(self, strategy, updates: dict[str, Any]) -> str | None:
         """Validate score ranges and cross-field threshold ordering."""
-        numeric_ranges = {
-            "min_budget_estimate": (0.0, None),
-            "max_budget_estimate": (0.0, None),
-            "minimum_match_score": (0.0, 1.0),
-            "minimum_probability_score": (0.0, 1.0),
-            "bid_now_threshold": (0.0, 1.0),
-            "review_threshold": (0.0, 1.0),
-            "auto_workload_penalty_multiplier": (0.0, 2.0),
-            "max_recommended_candidates": (1, 100),
-        }
-        for field_name, (min_value, max_value) in numeric_ranges.items():
-            if field_name not in updates:
-                continue
-            value = float(updates[field_name])
-            if value < min_value:
-                return f"{field_name} 값은 {min_value} 이상이어야 합니다."
-            if max_value is not None and value > max_value:
-                return f"{field_name} 값은 {max_value} 이하여야 합니다."
-
-        next_bid_now = float(updates.get(
-            "bid_now_threshold",
-            strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
-        ))
-        next_review = float(updates.get(
-            "review_threshold",
-            strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD,
-        ))
-        if next_review > next_bid_now:
-            return "review_threshold는 bid_now_threshold보다 클 수 없습니다."
-
-        next_min_budget = float(updates.get("min_budget_estimate", strategy.min_budget_estimate or 0.0))
-        next_max_budget = float(updates.get("max_budget_estimate", strategy.max_budget_estimate or 0.0))
-        if next_min_budget > 0 and next_max_budget > 0 and next_min_budget > next_max_budget:
-            return "min_budget은 max_budget보다 클 수 없습니다."
-        return None
+        return fields.validate_updates(strategy, updates)
 
     def _apply_updates(self, strategy, updates: dict[str, Any]) -> None:
         """Persist parsed update values onto the ORM object."""
-        for field_name, value in updates.items():
-            spec = FIELD_SPECS.get(field_name)
-            if spec is None:
-                setattr(strategy, field_name, value)
-            else:
-                spec.applier(strategy, field_name, value)
-
-    def _default_value_for(self, field_name: str) -> Any:
-        """Return the default value used when a Telegram clear command resets a field."""
-        defaults: dict[str, Any] = {
-            "focus_categories": [],
-            "focus_regions": [],
-            "exclude_regions": [],
-            "required_keywords": [],
-            "exclude_keywords": [],
-            "min_budget_estimate": 0.0,
-            "max_budget_estimate": 0.0,
-            "minimum_match_score": 0.6,
-            "minimum_probability_score": 0.55,
-            "bid_now_threshold": DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
-            "review_threshold": DEFAULT_OPERATOR_REVIEW_THRESHOLD,
-            "auto_workload_penalty_multiplier": 1.0,
-            "category_priority_overrides": {},
-            "notify_only_high_priority": True,
-            "max_recommended_candidates": 10,
-        }
-        return defaults[field_name]
+        fields.apply_updates(strategy, updates)
 
     def _current_value_for(self, db: Session, field_key: str) -> str:
         """Format the current value for one button-edit field."""
-        strategy = ensure_operator_strategy(db)
-        if field_key == "categories":
-            return self._format_list(split_multi_value_text(strategy.focus_categories))
-        if field_key == "regions":
-            return self._format_list(split_multi_value_text(strategy.focus_regions))
-        if field_key == "keywords":
-            return self._format_list(split_multi_value_text(strategy.required_keywords))
-        if field_key == "budget":
-            return f"{float(strategy.min_budget_estimate or 0.0):,.0f} ~ {float(strategy.max_budget_estimate or 0.0):,.0f}"
-        if field_key == "thresholds":
-            return (
-                f"적합 {float(strategy.minimum_match_score or 0.0):.2f}, "
-                f"확률 {float(strategy.minimum_probability_score or 0.0):.2f}, "
-                f"즉시투찰 {float(strategy.bid_now_threshold or DEFAULT_OPERATOR_BID_NOW_THRESHOLD):.2f}, "
-                f"검토 {float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD):.2f}"
-            )
-        if field_key == "notification":
-            return "고우선순위만" if bool(strategy.notify_only_high_priority) else "전체 후보"
-        if field_key == "limit":
-            return str(int(strategy.max_recommended_candidates or 10))
-        return "확인 불가"
-
-    def _format_updates(self, field_key: str, updates: dict[str, Any]) -> str:
-        """Format staged updates for confirmation."""
-        if field_key in {"categories", "regions", "keywords"}:
-            value = next(iter(updates.values()))
-            return self._format_list(value)
-        if field_key == "budget":
-            min_budget = updates.get("min_budget_estimate")
-            max_budget = updates.get("max_budget_estimate")
-            parts = []
-            if min_budget is not None:
-                parts.append(f"최소 {float(min_budget):,.0f}")
-            if max_budget is not None:
-                parts.append(f"최대 {float(max_budget):,.0f}")
-            return ", ".join(parts)
-        if field_key == "thresholds":
-            labels = {
-                "minimum_match_score": "적합",
-                "minimum_probability_score": "확률",
-                "bid_now_threshold": "즉시투찰",
-                "review_threshold": "검토",
-            }
-            return ", ".join(f"{labels[key]} {float(value):.2f}" for key, value in updates.items())
-        if field_key == "notification":
-            return "고우선순위만" if updates.get("notify_only_high_priority") else "전체 후보"
-        if field_key == "limit":
-            return str(int(updates["max_recommended_candidates"]))
-        return str(updates)
+        return render.current_value_for(ensure_operator_strategy(db), field_key)
 
     def _chat_key(self, chat_id: int | str | None) -> str | None:
         """Normalize Telegram chat ids for pending edit storage."""
@@ -899,7 +487,3 @@ class TelegramStrategyCommandProcessor:
         except json.JSONDecodeError:
             return {}
         return payload if isinstance(payload, dict) else {}
-
-    def _format_list(self, values: list[str]) -> str:
-        """Format a list for a compact Telegram status message."""
-        return ", ".join(values) if values else "없음"
