@@ -12,7 +12,10 @@ win/낙하 probabilities. The true 낙찰하한 depends on the 복수예비가�
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+
+from app.ai.construction_scenario import resolve_scenario_anchor_rates
 
 # recommended anchor: 15% up from the floor → near the competitive 최저적격 target.
 _BASE_ADJUSTMENT = 0.15
@@ -71,13 +74,34 @@ def build_bid_target_menu(
     ceiling_bid_rate: float | None,
     budget: float | None,
     signals: BidTargetSignals | None,
+    floor_anchor_offsets: Mapping[str, float] | None = None,
 ) -> dict | None:
-    """Return a 3-option bid target menu, or None when there is no agency band."""
+    """Return a 3-option bid target menu, or None when there is no band.
+
+    Two positioning modes share this one menu surface (no parallel path):
+
+    - **발주처 밴드**(default): the recommended is positioned *within* the agency
+      band [floor, ceiling] by the per-notice ``signals``. aggressive=floor,
+      safe=ceiling.
+    - **공사 floor 앵커**(``floor_anchor_offsets`` 제공 시): the three options are
+      anchored to ``floor + 선언 offset``(과거 실낙찰 초과분 백분위수), clamped inside
+      the same [floor, ceiling] guardrail band. Used when an era-correct 공사 법정
+      하한(#197)이 해석되고 발주처 밴드가 없을 때 — 상위 gate 가 우선순위(밴드 우선)를
+      정한다. 낙찰 확률 표현 없이 stance/basis 로 percentile 근거만 드러낸다(§2).
+    """
     if floor_bid_rate is None or ceiling_bid_rate is None:
         return None
     floor = float(floor_bid_rate)
     ceiling = float(ceiling_bid_rate)
     collapsed = ceiling <= floor + 1e-9
+    if floor_anchor_offsets:
+        return _build_floor_anchored_menu(
+            floor=floor,
+            ceiling=ceiling,
+            budget=budget,
+            offsets=floor_anchor_offsets,
+            collapsed=collapsed,
+        )
     adjustment = _resolve_position_adjustment(signals)
     recommended = floor if collapsed else floor + adjustment * (ceiling - floor)
     recommended = min(max(recommended, floor), ceiling)
@@ -114,6 +138,75 @@ def build_bid_target_menu(
         "band_floor_rate": floor,
         "band_ceiling_rate": ceiling,
         "signals_summary": _build_signals_summary(signals, adjustment),
+        "caveat": CAVEAT,
+        "collapsed": collapsed,
+    }
+
+
+# 공사 floor 앵커 시나리오 문구(공격/추천/안전 = p25/p50/p75). 낙찰 확률 표현 금지(§2):
+# stance/risk_note/basis 는 percentile 근거·낙하 위험만 서술한다.
+_ANCHORED_OPTION_SPECS = {
+    "recommended": (
+        "과거 중앙값(p50) 앵커",
+        "과거 실낙찰 중앙값 수준의 균형 투찰가입니다.",
+        "p50",
+    ),
+    "aggressive": (
+        "경쟁력 높음 · 낙하 위험 있음",
+        "하한 근접(p25). 실현 낙찰하한이 더 높으면 낙(실격) 위험이 있습니다.",
+        "p25",
+    ),
+    "safe": (
+        "낙하 위험 낮음 · 경쟁력 낮음",
+        "여유 상향(p75). 낙 위험은 낮지만 더 낮게 투찰한 적격자에게 밀릴 수 있습니다.",
+        "p75",
+    ),
+}
+
+
+def _build_floor_anchored_menu(
+    *,
+    floor: float,
+    ceiling: float,
+    budget: float | None,
+    offsets: Mapping[str, float],
+    collapsed: bool,
+) -> dict | None:
+    """공사 법정 하한 + 백분위수 offset 으로 앵커한 3종 메뉴(공고별 밴드 대체 경로 아님).
+
+    앵커 rate 는 ``resolve_scenario_anchor_rates`` 단일 출처를 써 predict_price 후보
+    앵커와 항상 일치한다. red line: 결과는 반드시 [floor, ceiling] 안이다.
+    """
+    anchored = resolve_scenario_anchor_rates(
+        floor_bid_rate=floor,
+        ceiling_bid_rate=ceiling,
+        offsets=offsets,
+    )
+    if anchored is None:
+        return None
+    band_note = f"법정 낙찰하한 {floor:.3%} + 과거 실낙찰 초과분 백분위수"
+    options = []
+    for label in ("recommended", "aggressive", "safe"):
+        stance, risk_note, percentile = _ANCHORED_OPTION_SPECS[label]
+        rate = anchored[label]
+        options.append(
+            {
+                "label": label,
+                "stance": stance,
+                "bid_rate": rate,
+                "bid_price": _price(budget, rate),
+                "risk_note": risk_note,
+                "basis": f"{band_note}({percentile})",
+            }
+        )
+    return {
+        "options": options,
+        "band_floor_rate": floor,
+        "band_ceiling_rate": ceiling,
+        "signals_summary": (
+            "공사 법정 하한 앵커: 과거 실낙찰 초과분 백분위수(p25/p50/p75, 표본 기반 "
+            "캘리브레이션 — 개찰 누적 시 재캘리브레이션)로 시나리오를 배치했습니다."
+        ),
         "caveat": CAVEAT,
         "collapsed": collapsed,
     }

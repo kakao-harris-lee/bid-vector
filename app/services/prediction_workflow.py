@@ -16,6 +16,8 @@ from app.ai.service_interfaces import (
     PricePredictionPort,
 )
 from app.ai.bid_target import build_bid_target_menu
+from app.ai.construction_scenario import is_construction_era_floor_resolved
+from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.models.models import PricePrediction, Project
 from app.schemas.schemas import (
@@ -76,19 +78,35 @@ class PredictionWorkflowService:
             reference_date=reference_date,
         )
 
-        # 발주처 밴드(floor/ceiling) 위에 공고별 신호로 위치를 조정한 3종 투찰가
-        # 메뉴를 additive 레이어로 첨부한다. 밴드가 발주처(agency) 밴드에서 왔을
-        # 때만 첨부한다. 넓은 업종(category) 밴드는 발주처별 정밀도가 없어 메뉴를
-        # 유발하면 안 되므로 제외한다.
-        if prediction.get("floor_from_agency") or prediction.get("ceiling_from_agency"):
+        # 3종 투찰가 메뉴(추천/공격/안전)를 additive 레이어로 첨부한다. 두 경로가 한
+        # 표면을 공유하며 우선순위는 여기서 선언적으로 고정한다:
+        #   1) 발주처(agency) 밴드가 있으면 공고별 신호로 밴드 내 위치를 조정(더 특이적).
+        #   2) 밴드가 없고 공사 era-correct 법정 하한(#197)이 해석되면 floor+백분위수 앵커.
+        # 넓은 업종(category) 밴드만 있는 경우는 발주처별 정밀도가 없어 제외한다(fallback 유지).
+        agency_band = bool(
+            prediction.get("floor_from_agency") or prediction.get("ceiling_from_agency")
+        )
+        construction_anchor = not agency_band and is_construction_era_floor_resolved(
+            request.category or project.category, estimation_amount, reference_date
+        )
+        if agency_band or construction_anchor:
             menu = build_bid_target_menu(
                 floor_bid_rate=prediction.get("floor_bid_rate"),
                 ceiling_bid_rate=prediction.get("ceiling_bid_rate"),
                 budget=resolved_bid_base or request.budget_estimate,
-                signals=resolve_bid_target_signals(
-                    db,
-                    agency_name=request.agency_name,
-                    category=request.category or project.category,
+                signals=(
+                    resolve_bid_target_signals(
+                        db,
+                        agency_name=request.agency_name,
+                        category=request.category or project.category,
+                    )
+                    if agency_band
+                    else None
+                ),
+                floor_anchor_offsets=(
+                    None
+                    if agency_band
+                    else settings.PREDICTION_CONSTRUCTION_SCENARIO_FLOOR_OFFSETS
                 ),
             )
             if menu is not None:
