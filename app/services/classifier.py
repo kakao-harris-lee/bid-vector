@@ -1,255 +1,83 @@
-"""Rule-based notice classification service."""
+"""Rule-based notice classification service.
 
-import re
-from dataclasses import dataclass
+Public surface. The per-axis scoring logic lives in the
+``app.services.classification`` package (config/taxonomy/text + region /
+eligibility / budget / semantic modules); this file keeps the historical import
+surface — ``NoticeClassifierService``, ``RuleAssessment`` and the module-level
+``is_construction_project`` / ``detect_regional_preference`` /
+``REGION_PREFERENCE_PATTERN`` helpers (imported by ``opportunity_analysis`` and
+the tests) — and delegates to that package. Behaviour is unchanged.
+"""
 
-from app.core.bands import resolve_band
 from app.core.config import settings
 from app.models.models import CompanyProfile, Project
+from app.services.classification import budget as budget_axis
+from app.services.classification import config, eligibility, taxonomy
+from app.services.classification import region as region_axis
+from app.services.classification import semantic as semantic_axis
+from app.services.classification import text as text_utils
+from app.services.classification.assessment import RuleAssessment
+from app.services.classification.region import (  # re-exported public surface
+    REGION_PREFERENCE_PATTERN,
+    detect_regional_preference,
+    is_construction_project,
+)
 
-
-def is_construction_project(project: Project) -> bool:
-    """Shared 건설/공사 detector used by both the 도급한도 budget gate and the
-    construction risk heuristics (``opportunity_analysis``).
-
-    Single source of truth so the budget axis and the risk-flag never disagree
-    on ambiguous categories (e.g. "건설사업관리", "설계·감리"): the raw category is
-    lowercased/stripped and treated as construction when it equals or contains
-    one of ``construction``/``공사``/``건설``. An empty category returns False.
-    """
-    raw_category = (getattr(project, "category", None) or "").strip().lower()
-    if not raw_category:
-        return False
-    # Direct hits + common Korean aliases used across the codebase.
-    if raw_category in {"construction", "공사", "건설"}:
-        return True
-    # Tolerant prefix/suffix forms (e.g. "construction-civil", "건축공사", "토목공사업").
-    if "construction" in raw_category:
-        return True
-    if "공사" in raw_category or "건설" in raw_category:
-        return True
-    return False
-
-
-# Single source of truth for the 지역가산점/소재지 가산/본사 가산 signal. Both the
-# classifier region-score boost (``_assess_region``) and the opportunity_analysis
-# region_bonus risk flag reuse THIS compiled pattern so the score-boost and the
-# risk-flag can never disagree on what "지역가산점" means (PR #98 lesson — one
-# definition). Detection is a regex heuristic over notice text and is
-# construction-gated by callers; it is a matching signal, NOT a substitute for an
-# actual 적격심사 가산점 계산.
-REGION_PREFERENCE_PATTERN = re.compile(r"지역\s*가산(?:점)?|소재지\s*가산|본사\s*가산")
-
-# 매치 직후 짧은 윈도우 내 부정어가 있으면 신호로 잡지 않음
-# (예: "지역 가산점 없음", "소재지 가산 미적용" → 우대 아님). Mirrors
-# opportunity_analysis._NEGATION_NEAR_MATCH so both modules negate identically.
-_REGION_PREFERENCE_NEGATION = re.compile(r"\s*(?:없|미적용|불요|무관|면제|미요구|미해당)")
-
-
-def detect_regional_preference(text: str) -> bool:
-    """Return True if ``text`` advertises a 지역가산점/지역우대 condition.
-
-    Hits ``REGION_PREFERENCE_PATTERN`` AND is not immediately negated — the ~12
-    characters following the match are checked for a negation word (없/미적용/불요/
-    무관/면제/미요구/미해당), matching opportunity_analysis's near-match negation
-    guard so the shared signal cannot drift between the two modules.
-    """
-    if not text:
-        return False
-    normalized = str(text).lower()
-    hit = REGION_PREFERENCE_PATTERN.search(normalized)
-    if hit is None:
-        return False
-    tail = normalized[hit.end():hit.end() + 12]
-    if _REGION_PREFERENCE_NEGATION.match(tail):
-        return False
-    return True
-
-
-@dataclass
-class RuleAssessment:
-    """Result of a single rule-based classification check."""
-
-    score: float
-    passed: bool
-    reasons: list[str]
-    penalty: float = 0.0
+__all__ = [
+    "NoticeClassifierService",
+    "RuleAssessment",
+    "REGION_PREFERENCE_PATTERN",
+    "detect_regional_preference",
+    "is_construction_project",
+]
 
 
 class NoticeClassifierService:
     """Classify project fit against company profile."""
 
-    MATCH_THRESHOLD = 0.65
-    EXACT_BUSINESS_TYPE_SCORE = 0.35
-    RELATED_BUSINESS_TYPE_SCORE = 0.2
-    LICENSE_MATCH_SCORE = 0.25
-    LICENSE_NEUTRAL_SCORE = 0.05
-    REGION_MATCH_SCORE = 0.2
-    REGION_ADVISORY_SCORE = 0.12
-    REGION_NEUTRAL_SCORE = 0.05
-    # Additive bonus stacked on the region-match score when the construction
-    # notice advertises a 지역가산점/지역우대 condition AND the operator's region
-    # overlaps the notice region — an in-region competitive advantage. Capped so
-    # the region axis stays bounded at REGION_MATCH_SCORE + REGION_PREFERENCE_BONUS
-    # (= 0.28). Heuristic matching signal, not an 적격심사 가산점 calculation.
-    REGION_PREFERENCE_BONUS = 0.08
-    BUDGET_STRONG_SCORE = 0.2
-    BUDGET_GOOD_SCORE = 0.15
-    BUDGET_BORDERLINE_SCORE = 0.1
-    CAPACITY_HIGH_SCORE = 0.12
-    CAPACITY_BASE_SCORE = 0.06
-    CAPABILITY_STRONG_SCORE = 0.15
-    CAPABILITY_GOOD_SCORE = 0.1
-    CAPABILITY_BORDERLINE_SCORE = 0.05
-    SEMANTIC_STRONG_SCORE = 0.18
-    SEMANTIC_GOOD_SCORE = 0.12
-    SEMANTIC_BASE_SCORE = 0.05
+    # --- Scoring weights & penalties (declarative — classification.config) ---
+    MATCH_THRESHOLD = config.MATCH_THRESHOLD
+    EXACT_BUSINESS_TYPE_SCORE = config.EXACT_BUSINESS_TYPE_SCORE
+    RELATED_BUSINESS_TYPE_SCORE = config.RELATED_BUSINESS_TYPE_SCORE
+    LICENSE_MATCH_SCORE = config.LICENSE_MATCH_SCORE
+    LICENSE_NEUTRAL_SCORE = config.LICENSE_NEUTRAL_SCORE
+    REGION_MATCH_SCORE = config.REGION_MATCH_SCORE
+    REGION_ADVISORY_SCORE = config.REGION_ADVISORY_SCORE
+    REGION_NEUTRAL_SCORE = config.REGION_NEUTRAL_SCORE
+    REGION_PREFERENCE_BONUS = config.REGION_PREFERENCE_BONUS
+    BUDGET_STRONG_SCORE = config.BUDGET_STRONG_SCORE
+    BUDGET_GOOD_SCORE = config.BUDGET_GOOD_SCORE
+    BUDGET_BORDERLINE_SCORE = config.BUDGET_BORDERLINE_SCORE
+    CAPACITY_HIGH_SCORE = config.CAPACITY_HIGH_SCORE
+    CAPACITY_BASE_SCORE = config.CAPACITY_BASE_SCORE
+    CAPABILITY_STRONG_SCORE = config.CAPABILITY_STRONG_SCORE
+    CAPABILITY_GOOD_SCORE = config.CAPABILITY_GOOD_SCORE
+    CAPABILITY_BORDERLINE_SCORE = config.CAPABILITY_BORDERLINE_SCORE
+    SEMANTIC_STRONG_SCORE = config.SEMANTIC_STRONG_SCORE
+    SEMANTIC_GOOD_SCORE = config.SEMANTIC_GOOD_SCORE
+    SEMANTIC_BASE_SCORE = config.SEMANTIC_BASE_SCORE
 
-    BUSINESS_TYPE_MISMATCH_PENALTY = 0.3
-    LICENSE_MISMATCH_PENALTY = 0.35
-    REGION_MISMATCH_PENALTY = 0.3
-    BUDGET_MISMATCH_PENALTY = 0.25
-    CAPABILITY_MISMATCH_PENALTY = 0.25
-    SEMANTIC_LOW_PENALTY = 0.18
-    SEMANTIC_VERY_LOW_PENALTY = 0.3
+    BUSINESS_TYPE_MISMATCH_PENALTY = config.BUSINESS_TYPE_MISMATCH_PENALTY
+    LICENSE_MISMATCH_PENALTY = config.LICENSE_MISMATCH_PENALTY
+    REGION_MISMATCH_PENALTY = config.REGION_MISMATCH_PENALTY
+    BUDGET_MISMATCH_PENALTY = config.BUDGET_MISMATCH_PENALTY
+    CAPABILITY_MISMATCH_PENALTY = config.CAPABILITY_MISMATCH_PENALTY
+    SEMANTIC_LOW_PENALTY = config.SEMANTIC_LOW_PENALTY
+    SEMANTIC_VERY_LOW_PENALTY = config.SEMANTIC_VERY_LOW_PENALTY
 
-    # --- Declarative tier ladders & structural thresholds -----------------
-    # capacity_score budget fallback ladder (structural — the 0.8/0.4 boundaries
-    # are not operator-tuned). Each rung is (score, reason template); resolve_band
-    # walks it with the default ``>=`` compare, reproducing the original
-    # ``>= 0.8`` / ``>= 0.4`` / else cascade byte-for-byte. The ``float("-inf")``
-    # sentinel rung is the always-match fallback; its template carries no
-    # ``{capacity_score}`` placeholder (left untouched by ``.format``).
-    _CAPACITY_SCORE_BUDGET_BANDS = (
-        (
-            0.8,
-            (
-                CAPACITY_HIGH_SCORE,
-                "연매출 정보는 없지만 capacity_score={capacity_score:.2f}로 높아 예산 적합도에 보수적 가점을 반영했습니다.",
-            ),
-        ),
-        (
-            0.4,
-            (
-                CAPACITY_BASE_SCORE,
-                "연매출 정보가 없어 capacity_score={capacity_score:.2f} 기준으로 예산 적합도를 보수 평가했습니다.",
-            ),
-        ),
-        (
-            float("-inf"),
-            (0.0, "연매출 및 수행역량 정보가 부족해 예산 적합도는 보수적으로 평가했습니다."),
-        ),
-    )
-    # project-scale ladder (structural) → semantic scope text. resolve_band's
-    # default ``>=`` compare reproduces the ``>= 0.85`` / ``>= 0.65`` / ``>= 0.5``
-    # cascade; the ``float("-inf")`` rung is the "기본 프로젝트" fallback.
-    _PROJECT_SCOPE_BANDS = (
-        (0.85, "대형 복합 프로젝트"),
-        (0.65, "중대형 프로젝트"),
-        (0.5, "중형 프로젝트"),
-        (float("-inf"), "기본 프로젝트"),
-    )
-    # Shared borderline acceptance ratio for the 시공능력평가액/연매출 budget branches:
-    # a capacity/revenue-to-budget ratio at or above this (but below 1×) is a
-    # conservative "타이트하지만 통과" borderline. The 3×/1× rungs above it are
-    # self-documenting natural ratios and stay inline.
-    BUDGET_BORDERLINE_RATIO = 0.6
-    # 낙찰 실적 가점: total_awards × AWARD_BONUS_PER_AWARD, capped at AWARD_BONUS_CAP,
-    # stacked onto the capacity_score capability estimate.
-    AWARD_BONUS_PER_AWARD = 0.03
-    AWARD_BONUS_CAP = 0.25
+    BUDGET_BORDERLINE_RATIO = config.BUDGET_BORDERLINE_RATIO
+    AWARD_BONUS_PER_AWARD = config.AWARD_BONUS_PER_AWARD
+    AWARD_BONUS_CAP = config.AWARD_BONUS_CAP
 
-    BUSINESS_TYPE_ALIASES = {
-        "software": {"software", "소프트웨어", "sw", "ict", "정보화"},
-        "technical-service": {"technical-service", "기술용역", "엔지니어링", "설계", "감리"},
-        "service": {"service", "general-service", "일반용역", "용역"},
-        "goods": {"goods", "물품", "구매", "납품"},
-        "construction": {"construction", "공사", "건설"},
-        "other": {"other", "기타"},
-    }
-    RELATED_BUSINESS_TYPES = {
-        "software": {"technical-service", "service"},
-        "technical-service": {"software", "service"},
-        "service": {"software", "technical-service"},
-        "goods": set(),
-        "construction": set(),
-        "other": set(),
-    }
-    REGION_ALIASES = {
-        "전국": ("전국",),
-        "서울": ("서울", "서울시", "서울특별시"),
-        "부산": ("부산", "부산시", "부산광역시"),
-        "대구": ("대구", "대구시", "대구광역시"),
-        "인천": ("인천", "인천시", "인천광역시"),
-        "광주": ("광주", "광주시", "광주광역시"),
-        "대전": ("대전", "대전시", "대전광역시"),
-        "울산": ("울산", "울산시", "울산광역시"),
-        "세종": ("세종", "세종시", "세종특별자치시"),
-        "경기": ("경기", "경기도"),
-        "강원": ("강원", "강원도", "강원특별자치도"),
-        "충북": ("충북", "충청북도"),
-        "충남": ("충남", "충청남도"),
-        "전북": ("전북", "전라북도", "전북특별자치도"),
-        "전남": ("전남", "전라남도"),
-        "경북": ("경북", "경상북도"),
-        "경남": ("경남", "경상남도"),
-        "제주": ("제주", "제주도", "제주특별자치도"),
-    }
-    LICENSE_CODE_PATTERN = re.compile(r"\b[A-Z]{2,}\d{2,}\b")
-    LICENSE_CONTEXT_KEYWORDS = ("면허", "자격", "등록", "보유", "필수", "필요", "요건", "제한")
-    LICENSE_ALIASES = {
-        "SW001": ("SW001", "소프트웨어사업자", "소프트웨어 사업자", "sw사업자"),
-        "NET001": ("NET001", "정보통신공사업", "정보통신공사"),
-        "ENG001": ("ENG001", "엔지니어링사업", "엔지니어링", "기술사", "감리"),
-        "SEC001": ("SEC001", "정보보호전문서비스", "보안관제", "isms"),
-        "ELE001": ("ELE001", "전기공사업", "전기"),
-        "FIRE001": ("FIRE001", "소방시설", "소방"),
-        # 건설 면허 (front stores the exact "○○공사업" strings; aliases below must
-        # contain them verbatim so profile.license_codes ↔ project requirement
-        # matching works). Bare "건축"/"토목"/"기계"/"가스"/"조경" are deliberately
-        # NOT aliases — they are too generic and would over-match.
-        "ARC001": ("ARC001", "건축공사업"),
-        "CIV001": ("CIV001", "토목공사업"),
-        "CIVARC001": ("CIVARC001", "토목건축공사업"),
-        "LND001": ("LND001", "조경공사업"),
-        "ENV001": ("ENV001", "산업환경설비공사업", "산업·환경설비공사업", "산업·환경설비"),
-        "INT001": ("INT001", "실내건축공사업"),
-        "MEC001": ("MEC001", "기계설비공사업"),
-        "GAS001": ("GAS001", "가스시설공사업"),
-        # 해양 엔지니어링·기술용역 면허 (해양엔지니어링협회 게이트, Phase 1).
-        # 시공(공사) 면허가 아니라 설계·감리·조사·측량 등 기술용역 면허군이다.
-        # bare 단어("해양"/"항만"/"측량")는 과매칭이라 별칭에서 제외하고
-        # 다자 합성어만 별칭으로 둔다(기존 건설 면허 주석과 동일 원칙).
-        # "…기술사" 접미 별칭은 두지 않는다: "기술사"는 기존 ENG001 별칭이라
-        # 어차피 ENG001과 함께 잡히고(엔지니어링 계열), 루트 별칭이 substring으로
-        # 커버하므로 중복일 뿐이다(추출 결과 불변, 중복만 제거).
-        "PORT001": ("PORT001", "항만및해안", "항만설계"),
-        "MAR001": ("MAR001", "해양엔지니어링"),
-        "HYDRO001": ("HYDRO001", "수로조사", "수로측량", "해양조사"),
-    }
-    REGION_RESTRICTION_KEYWORDS = (
-        "지역제한",
-        "소재 업체",
-        "소재업체",
-        "소재지",
-        "업체만",
-        "입찰 가능",
-        "참여 가능",
-        "관할",
-        "등록 업체",
-        "제한경쟁",
-    )
-    COMPLEXITY_KEYWORDS = {
-        "통합",
-        "고도화",
-        "운영",
-        "유지관리",
-        "24시간",
-        "대규모",
-        "다기관",
-        "클라우드",
-        "센터",
-    }
+    # --- Reference taxonomy (declarative — classification.taxonomy) ----------
+    BUSINESS_TYPE_ALIASES = taxonomy.BUSINESS_TYPE_ALIASES
+    RELATED_BUSINESS_TYPES = taxonomy.RELATED_BUSINESS_TYPES
+    REGION_ALIASES = taxonomy.REGION_ALIASES
+    LICENSE_CODE_PATTERN = taxonomy.LICENSE_CODE_PATTERN
+    LICENSE_CONTEXT_KEYWORDS = taxonomy.LICENSE_CONTEXT_KEYWORDS
+    LICENSE_ALIASES = taxonomy.LICENSE_ALIASES
+    REGION_RESTRICTION_KEYWORDS = taxonomy.REGION_RESTRICTION_KEYWORDS
+    COMPLEXITY_KEYWORDS = taxonomy.COMPLEXITY_KEYWORDS
 
     _embedding_model = None
     _embedding_model_name: str | None = None
@@ -311,642 +139,61 @@ class NoticeClassifierService:
             for axis, assessment in assessments.items()
         }
 
+    # --- Per-axis delegators (impl in app.services.classification.*) ---------
     def _assess_business_type(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Evaluate whether the company business type fits the project category."""
-        project_type = self._normalize_business_type(project.category)
-        profile_type = self._normalize_business_type(profile.business_type)
-
-        if not project_type or not profile_type:
-            return RuleAssessment(
-                score=0.0,
-                passed=False,
-                penalty=self.BUSINESS_TYPE_MISMATCH_PENALTY,
-                reasons=["업무 구분 정보가 부족해 1차 업종 필터를 통과시키지 않았습니다."],
-            )
-
-        if project_type == profile_type:
-            return RuleAssessment(
-                score=self.EXACT_BUSINESS_TYPE_SCORE,
-                passed=True,
-                reasons=[f"업무 구분이 일치합니다. (공고: {project.category} / 업체: {profile.business_type})"],
-            )
-
-        if profile_type in self.RELATED_BUSINESS_TYPES.get(project_type, set()) or project_type in self.RELATED_BUSINESS_TYPES.get(profile_type, set()):
-            return RuleAssessment(
-                score=self.RELATED_BUSINESS_TYPE_SCORE,
-                passed=True,
-                reasons=[f"업무 구분이 인접 분야로 확인되어 부분 적합으로 반영했습니다. (공고: {project.category} / 업체: {profile.business_type})"],
-            )
-
-        return RuleAssessment(
-            score=0.0,
-            passed=False,
-            penalty=self.BUSINESS_TYPE_MISMATCH_PENALTY,
-            reasons=[f"업무 구분이 달라 1차 업종 필터를 통과하지 못했습니다. (공고: {project.category} / 업체: {profile.business_type})"],
-        )
+        return eligibility.assess_business_type(project, profile)
 
     def _assess_license(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Evaluate whether the company holds the licenses explicitly required by the project."""
-        required_licenses = self._extract_license_tokens(
-            self._collect_project_text(project, include_title=False),
-            require_context=True,
-        )
-        profile_licenses = self._extract_license_tokens(profile.license_codes)
+        return eligibility.assess_license(project, profile)
 
-        if not required_licenses:
-            return RuleAssessment(
-                score=self.LICENSE_NEUTRAL_SCORE,
-                passed=True,
-                reasons=["공고에 필수 면허 코드가 명시되지 않아 면허 조건은 중립 처리했습니다."],
-            )
-
-        if not profile_licenses:
-            return RuleAssessment(
-                score=0.0,
-                passed=False,
-                penalty=self.LICENSE_MISMATCH_PENALTY,
-                reasons=[
-                    f"공고 필수 면허({', '.join(sorted(required_licenses))})가 확인됐지만 업체 보유 면허 정보가 없습니다."
-                ],
-            )
-
-        missing_licenses = required_licenses - profile_licenses
-        if not missing_licenses:
-            return RuleAssessment(
-                score=self.LICENSE_MATCH_SCORE,
-                passed=True,
-                reasons=[f"필수 면허 코드를 모두 보유하고 있습니다: {', '.join(sorted(required_licenses))}."],
-            )
-
-        matched_licenses = required_licenses & profile_licenses
-        matched_suffix = (
-            f" 보유 면허 중 일치 항목: {', '.join(sorted(matched_licenses))}." if matched_licenses else ""
-        )
-        return RuleAssessment(
-            score=0.0,
-            passed=False,
-            penalty=self.LICENSE_MISMATCH_PENALTY,
-            reasons=[
-                f"필수 면허 코드가 일부 부족합니다. 누락: {', '.join(sorted(missing_licenses))}.{matched_suffix}".strip()
-            ],
-        )
-
-    def _region_match_context(
-        self, project: Project, profile: CompanyProfile
-    ) -> tuple[set[str], bool, set[str], set[str], bool]:
-        """Derive the region-scoring context ONCE so the boost decision
-        (``region_preference_boost_applies``) and the base scoring
-        (``_assess_region``) never re-derive regions independently.
-
-        Returns ``(project_regions, has_strict_region_limit, profile_regions,
-        overlap, is_neutral_notice)`` where ``is_neutral_notice`` mirrors the
-        ``not project_regions or "전국" in project_regions`` short-circuit that
-        grants NO positive region-match (and therefore NO boost).
-        """
-        project_regions, has_strict_region_limit = self._extract_project_regions(project)
-        profile_regions = self._extract_regions(profile.region_codes)
-        overlap = project_regions & profile_regions
-        is_neutral_notice = not project_regions or "전국" in project_regions
-        return (
-            project_regions,
-            has_strict_region_limit,
-            profile_regions,
-            overlap,
-            is_neutral_notice,
-        )
+    def _assess_region(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
+        return region_axis.assess_region(project, profile)
 
     def region_preference_boost_applies(
         self, project: Project, profile: CompanyProfile | None
     ) -> bool:
-        """Single source of truth for "does the 지역가산점/지역우대 boost apply to
-        this (project, profile)?"
+        """Single source of truth for the 지역가산점/지역우대 boost decision.
 
-        BOTH the classifier region-score boost (``_assess_region``) and the
-        opportunity_analysis region_bonus risk-suppression call THIS method, so
-        the boost and the risk-suppression can never disagree (PR #98/#101
-        pattern-consolidation lesson — one definition).
-
-        Returns True iff ALL of:
-          1. the notice is a construction project (``is_construction_project``);
-          2. the notice text advertises 지역가산점/지역우대 (negation-guarded
-             ``detect_regional_preference``);
-          3. the operator earns a positive region MATCH under the SAME rules
-             ``_assess_region`` uses — i.e. the notice has a specific region
-             restriction (NOT the 전국/neutral short-circuit) AND the operator is
-             region-eligible (``project_regions & profile_regions`` non-empty OR
-             ``"전국" in profile_regions``, matching the strict-match branch that
-             already treats a 전국 profile as eligible).
-
-        This is a regex-heuristic matching signal over notice text, NOT a
-        substitute for an actual 적격심사 가산점 계산.
+        Delegates to ``classification.region`` so the classifier boost and the
+        opportunity_analysis region_bonus risk-suppression share one definition.
         """
-        if profile is None:
-            return False
-        if not is_construction_project(project):
-            return False
-        if not detect_regional_preference(self._collect_project_text(project)):
-            return False
-
-        (
-            _project_regions,
-            _has_strict_region_limit,
-            profile_regions,
-            overlap,
-            is_neutral_notice,
-        ) = self._region_match_context(project, profile)
-
-        if is_neutral_notice:
-            return False
-        return bool(overlap) or "전국" in profile_regions
-
-    def _boosted_region_assessment(
-        self, base_score: float, matched_regions: set[str]
-    ) -> RuleAssessment:
-        """Build the boosted region assessment (advisory 0.12→0.20,
-        strict/전국-match 0.2→0.28), capped at
-        ``REGION_MATCH_SCORE + REGION_PREFERENCE_BONUS`` (= 0.28).
-
-        Only called when ``region_preference_boost_applies`` returned True, so
-        the boost and the risk-suppression stay byte-for-byte symmetric.
-        """
-        cap = self.REGION_MATCH_SCORE + self.REGION_PREFERENCE_BONUS
-        boosted_score = min(cap, base_score + self.REGION_PREFERENCE_BONUS)
-        if matched_regions:
-            reason = (
-                "공고에 지역가산점/지역우대 조건이 있고 업체 수행지역"
-                f"({', '.join(sorted(matched_regions))})이 일치해 지역우대 가점을 반영했습니다."
-            )
-        else:
-            reason = (
-                "공고에 지역가산점/지역우대 조건이 있고 업체가 전국 대응 가능으로 "
-                "등록되어 있어 지역우대 가점을 반영했습니다."
-            )
-        return RuleAssessment(score=boosted_score, passed=True, reasons=[reason])
-
-    def _assess_region(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Evaluate whether the company can serve the project's regions."""
-        (
-            project_regions,
-            has_strict_region_limit,
-            profile_regions,
-            overlap,
-            is_neutral_notice,
-        ) = self._region_match_context(project, profile)
-
-        if is_neutral_notice:
-            return RuleAssessment(
-                score=self.REGION_NEUTRAL_SCORE,
-                passed=True,
-                reasons=["공고에 지역 제한이 명확하지 않거나 전국 대상으로 보여 지역 조건은 중립 처리했습니다."],
-            )
-
-        boost_applies = self.region_preference_boost_applies(project, profile)
-
-        if not has_strict_region_limit:
-            if "전국" in profile_regions or overlap:
-                if boost_applies:
-                    return self._boosted_region_assessment(
-                        self.REGION_ADVISORY_SCORE, overlap
-                    )
-                return RuleAssessment(
-                    score=self.REGION_ADVISORY_SCORE,
-                    passed=True,
-                    reasons=[
-                        f"공고에 언급된 지역({', '.join(sorted(project_regions))})과 업체 수행지역이 겹쳐 참고 가점을 반영했습니다."
-                    ],
-                )
-
-            return RuleAssessment(
-                score=self.REGION_NEUTRAL_SCORE,
-                passed=True,
-                reasons=["공고에 지역 언급은 있으나 명시적 제한으로 보지 않아 지역 불일치로 감점하지 않았습니다."],
-            )
-
-        if "전국" in profile_regions:
-            if boost_applies:
-                return self._boosted_region_assessment(self.REGION_MATCH_SCORE, overlap)
-            return RuleAssessment(
-                score=self.REGION_MATCH_SCORE,
-                passed=True,
-                reasons=[f"업체가 전국 대응 가능으로 등록되어 있어 제한지역({', '.join(sorted(project_regions))})을 충족합니다."],
-            )
-
-        if not profile_regions:
-            return RuleAssessment(
-                score=0.0,
-                passed=False,
-                penalty=self.REGION_MISMATCH_PENALTY,
-                reasons=[f"공고 제한지역은 {', '.join(sorted(project_regions))}인데 업체 수행 지역 정보가 등록되어 있지 않습니다."],
-            )
-
-        if overlap:
-            if boost_applies:
-                return self._boosted_region_assessment(self.REGION_MATCH_SCORE, overlap)
-            return RuleAssessment(
-                score=self.REGION_MATCH_SCORE,
-                passed=True,
-                reasons=[f"수행 가능 지역이 공고 제한지역과 일치합니다: {', '.join(sorted(overlap))}."],
-            )
-
-        return RuleAssessment(
-            score=0.0,
-            passed=False,
-            penalty=self.REGION_MISMATCH_PENALTY,
-            reasons=[
-                f"공고 제한지역({', '.join(sorted(project_regions))})과 업체 수행지역({', '.join(sorted(profile_regions))})이 일치하지 않습니다."
-            ],
-        )
+        return region_axis.region_preference_boost_applies(project, profile)
 
     def _assess_budget(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Evaluate whether the company appears to have enough financial capacity."""
-        budget_estimate = float(project.budget_estimate or 0.0)
-        annual_revenue = float(profile.annual_revenue or 0.0)
-        capacity_score = self._normalize_capacity_score(profile.capacity_score)
-        construction_capacity_amount = float(
-            getattr(profile, "construction_capacity_amount", 0.0) or 0.0
-        )
-        awarded_contract_limit = float(
-            getattr(profile, "awarded_contract_limit", 0.0) or 0.0
-        )
-        project_type = self._normalize_business_type(project.category)
-
-        if budget_estimate <= 0:
-            return RuleAssessment(
-                score=0.0,
-                passed=True,
-                reasons=["공고 예산 정보가 없어 예산 적합도는 참고 점수에서 제외했습니다."],
-            )
-
-        # Construction HARD CEILING: 도급한도(awarded_contract_limit) is a legal cap
-        # on a single award — exceeding it means 신규 도급 불가 regardless of how
-        # strong 시공능력평가액 is. This must fail the budget axis BEFORE the 시공능력
-        # ratio branch can pass it. Uses the broad 건설/공사 predicate
-        # (``is_construction_project``) — the SAME definition as the
-        # opportunity_analysis 도급한도 risk-flag — so the budget gate and the risk
-        # reason never disagree on ambiguous categories (e.g. "건설사업관리",
-        # "설계·감리"). When 도급한도 is not provided (<= 0) the check is skipped
-        # entirely so all existing behaviour is preserved.
-        if (
-            is_construction_project(project)
-            and awarded_contract_limit > 0
-            and budget_estimate > awarded_contract_limit
-        ):
-            return RuleAssessment(
-                score=0.0,
-                passed=False,
-                penalty=self.BUDGET_MISMATCH_PENALTY,
-                reasons=[
-                    f"공고 예산({budget_estimate:,.0f}원)이 업체 도급한도({awarded_contract_limit:,.0f}원)를 "
-                    f"초과해 신규 도급이 어렵습니다."
-                ],
-            )
-
-        # Construction-only: when the operator has filled in 시공능력평가액 it
-        # is the canonical 도급가능규모 indicator and outranks annual_revenue
-        # /capacity_score. The legacy fallbacks below run unchanged when the
-        # field is left at its default (0.0).
-        if project_type == "construction" and construction_capacity_amount > 0:
-            return self._assess_construction_capacity_budget(
-                budget_estimate=budget_estimate,
-                construction_capacity_amount=construction_capacity_amount,
-            )
-
-        if annual_revenue > 0:
-            return self._assess_revenue_budget(
-                budget_estimate=budget_estimate,
-                annual_revenue=annual_revenue,
-            )
-
-        return self._assess_capacity_score_budget(capacity_score)
-
-    def _assess_construction_capacity_budget(
-        self,
-        *,
-        budget_estimate: float,
-        construction_capacity_amount: float,
-    ) -> RuleAssessment:
-        capacity_ratio = construction_capacity_amount / budget_estimate
-        capacity_label = f"시공능력평가액 {construction_capacity_amount:,.0f}원"
-        if capacity_ratio >= 3:
-            return RuleAssessment(
-                score=self.BUDGET_STRONG_SCORE,
-                passed=True,
-                reasons=[
-                    f"{capacity_label}이 공고 예산의 {capacity_ratio:.1f}배 수준으로 도급 가능 규모가 충분합니다."
-                ],
-            )
-        if capacity_ratio >= 1:
-            return RuleAssessment(
-                score=self.BUDGET_GOOD_SCORE,
-                passed=True,
-                reasons=[
-                    f"{capacity_label}이 공고 예산 이상으로 시공능력 기준 필터를 충족합니다. (배수: {capacity_ratio:.1f})"
-                ],
-            )
-        if capacity_ratio >= self.BUDGET_BORDERLINE_RATIO:
-            return RuleAssessment(
-                score=self.BUDGET_BORDERLINE_SCORE,
-                passed=True,
-                reasons=[
-                    f"{capacity_label}이 공고 예산 대비 다소 타이트하지만 시공능력 기준으로 보수적 통과 처리했습니다. (배수: {capacity_ratio:.1f})"
-                ],
-            )
-        return RuleAssessment(
-            score=0.0,
-            passed=False,
-            penalty=self.BUDGET_MISMATCH_PENALTY,
-            reasons=[
-                f"{capacity_label}이 공고 예산 대비 부족해 시공능력 기준 필터를 통과하지 못했습니다. (배수: {capacity_ratio:.1f})"
-            ],
-        )
-
-    def _assess_revenue_budget(
-        self,
-        *,
-        budget_estimate: float,
-        annual_revenue: float,
-    ) -> RuleAssessment:
-        revenue_ratio = annual_revenue / budget_estimate
-        if revenue_ratio >= 3:
-            return RuleAssessment(
-                score=self.BUDGET_STRONG_SCORE,
-                passed=True,
-                reasons=[f"연매출이 공고 예산의 {revenue_ratio:.1f}배 수준으로 예산 대응 여력이 충분합니다."],
-            )
-        if revenue_ratio >= 1:
-            return RuleAssessment(
-                score=self.BUDGET_GOOD_SCORE,
-                passed=True,
-                reasons=[f"연매출이 공고 예산 이상으로 기본 예산 필터를 충족합니다. (배수: {revenue_ratio:.1f})"],
-            )
-        if revenue_ratio >= self.BUDGET_BORDERLINE_RATIO:
-            return RuleAssessment(
-                score=self.BUDGET_BORDERLINE_SCORE,
-                passed=True,
-                reasons=[f"연매출이 공고 예산 대비 다소 타이트하지만 1차 수행 가능 범위로 판단했습니다. (배수: {revenue_ratio:.1f})"],
-            )
-        return RuleAssessment(
-            score=0.0,
-            passed=False,
-            penalty=self.BUDGET_MISMATCH_PENALTY,
-            reasons=[f"연매출이 공고 예산 대비 낮아 예산 적합도 필터를 통과하지 못했습니다. (배수: {revenue_ratio:.1f})"],
-        )
+        return budget_axis.assess_budget(project, profile)
 
     def _assess_capacity_score_budget(self, capacity_score: float) -> RuleAssessment:
-        score, reason_template = resolve_band(
-            capacity_score, self._CAPACITY_SCORE_BUDGET_BANDS
-        )
-        return RuleAssessment(
-            score=score,
-            passed=True,
-            reasons=[reason_template.format(capacity_score=capacity_score)],
-        )
+        return budget_axis.assess_capacity_score_budget(capacity_score)
 
     def _assess_capability(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Evaluate whether the company's operational capability seems adequate for the project size."""
-        available_capability = self._estimate_company_capability(profile)
-        required_capability = self._estimate_required_capability(project)
-
-        if available_capability >= required_capability + 0.15:
-            return RuleAssessment(
-                score=self.CAPABILITY_STRONG_SCORE,
-                passed=True,
-                reasons=[
-                    f"업체 수행능력(capacity_score/실적 반영 {available_capability:.2f})이 요구 수준({required_capability:.2f})보다 충분히 높습니다."
-                ],
-            )
-
-        if available_capability >= required_capability:
-            return RuleAssessment(
-                score=self.CAPABILITY_GOOD_SCORE,
-                passed=True,
-                reasons=[
-                    f"업체 수행능력(capacity_score/실적 반영 {available_capability:.2f})이 요구 수준({required_capability:.2f})을 충족합니다."
-                ],
-            )
-
-        if available_capability + 0.1 >= required_capability:
-            return RuleAssessment(
-                score=self.CAPABILITY_BORDERLINE_SCORE,
-                passed=True,
-                reasons=[
-                    f"업체 수행능력이 요구 수준({required_capability:.2f})에 근접해 보수적으로 통과 처리했습니다. 현재 추정치: {available_capability:.2f}."
-                ],
-            )
-
-        return RuleAssessment(
-            score=0.0,
-            passed=False,
-            penalty=self.CAPABILITY_MISMATCH_PENALTY,
-            reasons=[
-                f"업체 수행능력(capacity_score/실적 반영 {available_capability:.2f})이 요구 수준({required_capability:.2f})보다 낮아 수행 범위 필터를 통과하지 못했습니다."
-            ],
-        )
+        return budget_axis.assess_capability(project, profile)
 
     def _assess_semantic_similarity(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
-        """Blend semantic similarity between project text and company capability summary."""
-        if not settings.ENABLE_SEMANTIC_CLASSIFICATION:
-            return RuleAssessment(
-                score=0.0,
-                passed=True,
-                reasons=["의미 기반 분류가 비활성화되어 규칙 기반 점수만 사용했습니다."],
-            )
-
-        project_text = self._build_project_semantic_text(project)
-        profile_text = self._build_profile_semantic_text(profile)
-        similarity, source = self._compute_semantic_similarity(project_text, profile_text)
-        source_label = "임베딩 모델" if source == "sentence-transformers" else "fallback 유사도"
-        threshold = settings.CLASSIFIER_SEMANTIC_MATCH_THRESHOLD
-        has_semantic_context = self._has_enough_semantic_context(project_text, profile_text)
-
-        if similarity >= threshold + settings.CLASSIFIER_SEMANTIC_STRONG_MARGIN:
-            return RuleAssessment(
-                score=self.SEMANTIC_STRONG_SCORE,
-                passed=True,
-                reasons=[f"공고와 업체 역량 요약의 의미 유사도가 매우 높습니다. ({source_label}: {similarity:.2f})"],
-            )
-
-        if similarity >= threshold:
-            return RuleAssessment(
-                score=self.SEMANTIC_GOOD_SCORE,
-                passed=True,
-                reasons=[f"공고 내용과 업체 역량의 의미 유사도가 양호합니다. ({source_label}: {similarity:.2f})"],
-            )
-
-        if similarity >= max(0.0, threshold - settings.CLASSIFIER_SEMANTIC_BASE_MARGIN):
-            return RuleAssessment(
-                score=self.SEMANTIC_BASE_SCORE,
-                passed=True,
-                reasons=[f"의미 유사도가 보통 수준으로 확인되어 보수적 가점을 반영했습니다. ({source_label}: {similarity:.2f})"],
-            )
-
-        if similarity <= settings.CLASSIFIER_SEMANTIC_VERY_LOW_MAX:
-            return RuleAssessment(
-                score=0.0,
-                passed=not has_semantic_context,
-                penalty=self.SEMANTIC_VERY_LOW_PENALTY,
-                reasons=[f"의미 유사도가 매우 낮아 규칙 기반 점수의 false positive 가능성을 줄이기 위해 {'차단 신호와 ' if has_semantic_context else ''}큰 감점을 반영했습니다. ({source_label}: {similarity:.2f})"],
-            )
-
-        if similarity <= settings.CLASSIFIER_SEMANTIC_LOW_MAX:
-            return RuleAssessment(
-                score=0.0,
-                passed=True,
-                penalty=self.SEMANTIC_LOW_PENALTY,
-                reasons=[f"의미 유사도가 낮아 최종 추천 점수를 보수적으로 낮췄습니다. ({source_label}: {similarity:.2f})"],
-            )
-
-        return RuleAssessment(
-            score=0.0,
-            passed=True,
-            reasons=[f"의미 유사도는 중간 이하 수준이어서 추가 가점 없이 유지했습니다. ({source_label}: {similarity:.2f})"],
+        # Pass the (patchable) bound method so tests monkeypatching
+        # ``_compute_semantic_similarity`` on the instance are still consulted.
+        return semantic_axis.assess_semantic_similarity(
+            project, profile, self._compute_semantic_similarity
         )
 
-    def _normalize_business_type(self, value: str | None) -> str | None:
-        """Map raw business types to a stable canonical value."""
-        if not value:
-            return None
-
-        normalized = value.strip().lower()
-        for canonical, aliases in self.BUSINESS_TYPE_ALIASES.items():
-            if normalized == canonical:
-                return canonical
-            if any(alias in normalized for alias in aliases):
-                return canonical
-
-        return normalized
-
-    def _extract_regions(self, text: str | None) -> set[str]:
-        """Extract normalized Korean region names from free-form text."""
-        if not text:
-            return set()
-
-        found_regions = set()
-        normalized_text = str(text)
-        for canonical, aliases in self.REGION_ALIASES.items():
-            if any(alias in normalized_text for alias in aliases):
-                found_regions.add(canonical)
-        return found_regions
-
-    def _extract_project_regions(self, project: Project) -> tuple[set[str], bool]:
-        """Extract project regions and whether they appear as a strict participation limit."""
-        project_text = self._collect_project_text(project)
-        project_regions = self._extract_regions(project_text)
-        has_strict_limit = any(keyword in project_text for keyword in self.REGION_RESTRICTION_KEYWORDS)
-        return project_regions, has_strict_limit
-
-    def _collect_project_text(self, project: Project, include_title: bool = True) -> str:
-        """Collect project fields into a single searchable text blob."""
-        fields = [project.description, project.requirements]
-        if include_title:
-            fields.insert(0, project.title)
-        return " ".join(filter(None, fields))
-
-    def _build_project_semantic_text(self, project: Project) -> str:
-        """Build a semantic text summary for the project."""
-        project_type = self._normalize_business_type(project.category)
-        project_regions, _ = self._extract_project_regions(project)
-        project_licenses = self._extract_license_tokens(self._collect_project_text(project), require_context=False)
-        parts = [self._collect_project_text(project)]
-
-        if project.category:
-            parts.append(f"공고업종 {project.category}")
-        if project_type:
-            parts.append("업종동의어 " + " ".join(sorted(self.BUSINESS_TYPE_ALIASES.get(project_type, {project_type}))))
-        if project_regions:
-            parts.append("지역요건 " + " ".join(sorted(project_regions)))
-        if project_licenses:
-            parts.append("필수면허 " + " ".join(sorted(project_licenses)))
-        parts.append(self._describe_project_scope(project))
-
-        return " ".join(part for part in parts if part)
-
-    def _extract_license_tokens(self, text: str | None, require_context: bool = False) -> set[str]:
-        """Extract normalized license tokens from text or stored company profile data."""
-        if not text:
-            return set()
-
-        raw_text = str(text)
-        normalized_text = raw_text.upper()
-        extracted = {match.upper() for match in self.LICENSE_CODE_PATTERN.findall(normalized_text)}
-
-        if not require_context or any(keyword in raw_text for keyword in self.LICENSE_CONTEXT_KEYWORDS):
-            lowered_text = raw_text.lower()
-            for canonical, aliases in self.LICENSE_ALIASES.items():
-                if any(alias.lower() in lowered_text for alias in aliases):
-                    extracted.add(canonical)
-
-        # NOTE on substring nesting: alias matching is plain substring matching,
-        # so a longer construction-license name extracts the shorter one too —
-        # e.g. "실내건축공사업"(INT001) and "토목건축공사업"(CIVARC001) both contain
-        # "건축공사업"(ARC001). When a notice and a profile use the same long name,
-        # both sides extract the same superset and the comparison stays symmetric
-        # (still matches correctly). A profile holding ONLY the bare "건축공사업"
-        # vs. a notice requiring "실내건축공사업" correctly mismatches (INT001 missing
-        # from the profile). This recall-first behaviour is covered by the
-        # `_assess_license` nesting tests rather than special-cased here.
-        return extracted
-
-    def _build_profile_semantic_text(self, profile: CompanyProfile) -> str:
-        """Build a semantic text summary for the company profile."""
-        profile_type = self._normalize_business_type(profile.business_type)
-        profile_licenses = self._extract_license_tokens(profile.license_codes)
-        profile_regions = self._extract_regions(profile.region_codes)
-        parts = [f"업체업종 {profile.business_type}"]
-
-        if profile_type:
-            parts.append("업종동의어 " + " ".join(sorted(self.BUSINESS_TYPE_ALIASES.get(profile_type, {profile_type}))))
-        if profile_licenses:
-            parts.append("보유면허 " + " ".join(sorted(profile_licenses)))
-        if profile_regions:
-            parts.append("수행지역 " + " ".join(sorted(profile_regions)))
-        parts.append(self._describe_company_capability(profile))
-
-        return " ".join(part for part in parts if part)
+    def _compute_semantic_similarity(self, project_text: str, profile_text: str) -> tuple[float, str]:
+        return semantic_axis.compute_semantic_similarity(
+            project_text, profile_text, self._get_embedding_model
+        )
 
     def _describe_project_scope(self, project: Project) -> str:
-        """Describe project scale and complexity in text form for semantic matching."""
-        required_capability = self._estimate_required_capability(project)
-        scale = resolve_band(required_capability, self._PROJECT_SCOPE_BANDS)
-        return f"{scale} 요구역량 {required_capability:.2f}"
+        return semantic_axis.describe_project_scope(project)
 
-    def _describe_company_capability(self, profile: CompanyProfile) -> str:
-        """Describe company capability as text for semantic matching."""
-        available_capability = self._estimate_company_capability(profile)
-        annual_revenue = float(profile.annual_revenue or 0.0)
-        awards = int(profile.total_awards or 0)
+    def _build_project_semantic_text(self, project: Project) -> str:
+        return semantic_axis.build_project_semantic_text(project)
 
-        if annual_revenue >= 1_000_000_000:
-            revenue_band = "대형 프로젝트 대응 가능"
-        elif annual_revenue >= 300_000_000:
-            revenue_band = "중대형 프로젝트 대응 가능"
-        elif annual_revenue > 0:
-            revenue_band = "중형 프로젝트 대응 가능"
-        else:
-            revenue_band = "매출 정보 부족"
+    def _normalize_business_type(self, value: str | None) -> str | None:
+        return text_utils.normalize_business_type(value)
 
-        if awards >= 5:
-            award_band = "낙찰 실적 다수"
-        elif awards >= 2:
-            award_band = "낙찰 실적 보유"
-        else:
-            award_band = "낙찰 실적 제한적"
+    def _extract_license_tokens(self, text: str | None, require_context: bool = False) -> set[str]:
+        return text_utils.extract_license_tokens(text, require_context)
 
-        return f"업체역량 {available_capability:.2f} {revenue_band} {award_band}"
-
-    def _compute_semantic_similarity(self, project_text: str, profile_text: str) -> tuple[float, str]:
-        """Compute semantic similarity using sentence-transformers with a lexical fallback."""
-        if not project_text.strip() or not profile_text.strip():
-            return 0.0, "fallback-empty"
-
-        if settings.ENVIRONMENT != "test":
-            model = self._get_embedding_model()
-            if model is not None:
-                embeddings = model.encode([project_text, profile_text], normalize_embeddings=True)
-                similarity = float(embeddings[0] @ embeddings[1])
-                return max(0.0, min(1.0, similarity)), "sentence-transformers"
-
-        return self._fallback_semantic_similarity(project_text, profile_text), "fallback-lexical"
+    def _tokenize_semantic_text(self, text: str) -> list[str]:
+        return text_utils.tokenize_semantic_text(text)
 
     @classmethod
     def _get_embedding_model(cls):
@@ -973,71 +220,3 @@ class NoticeClassifierService:
             cls._embedding_model_name = model_name
             cls._embedding_model_failed = True
             return None
-
-    def _fallback_semantic_similarity(self, project_text: str, profile_text: str) -> float:
-        """Fallback lexical similarity used in tests or offline environments."""
-        project_tokens = self._tokenize_semantic_text(project_text)
-        profile_tokens = self._tokenize_semantic_text(profile_text)
-
-        if not project_tokens or not profile_tokens:
-            return 0.0
-
-        project_token_set = set(project_tokens)
-        profile_token_set = set(profile_tokens)
-        overlap = project_token_set & profile_token_set
-        similarity = (2 * len(overlap)) / (len(project_token_set) + len(profile_token_set))
-        return round(max(0.0, min(1.0, similarity)), 4)
-
-    def _tokenize_semantic_text(self, text: str) -> list[str]:
-        """Tokenize semantic text into comparable units for the fallback scorer."""
-        raw_tokens = re.findall(r"[A-Z]{2,}\d{2,}|[A-Za-z]{2,}|[가-힣]{2,}", text.upper())
-        normalized_tokens: list[str] = []
-        for token in raw_tokens:
-            normalized_token = token.strip().lower()
-            if len(normalized_token) < 2:
-                continue
-            normalized_tokens.append(normalized_token)
-        return normalized_tokens
-
-    def _has_enough_semantic_context(self, project_text: str, profile_text: str) -> bool:
-        """Return whether both sides have enough tokens to treat a very low similarity as a blocker."""
-        return (
-            len(set(self._tokenize_semantic_text(project_text))) >= 4
-            and len(set(self._tokenize_semantic_text(profile_text))) >= 4
-        )
-
-    def _estimate_company_capability(self, profile: CompanyProfile) -> float:
-        """Estimate company execution capability using profile score and delivery history."""
-        capacity_score = self._normalize_capacity_score(profile.capacity_score)
-        award_bonus = min(
-            self.AWARD_BONUS_CAP,
-            max(0, int(profile.total_awards or 0)) * self.AWARD_BONUS_PER_AWARD,
-        )
-        return min(1.0, max(capacity_score, capacity_score + award_bonus))
-
-    def _estimate_required_capability(self, project: Project) -> float:
-        """Estimate the capability level a project likely requires."""
-        project_budget = max(float(project.budget_estimate or 0.0), float(project.budget_max or 0.0))
-        if project_budget >= 500_000_000:
-            required = 0.85
-        elif project_budget >= 200_000_000:
-            required = 0.7
-        elif project_budget >= 100_000_000:
-            required = 0.55
-        else:
-            required = 0.4
-
-        project_text = self._collect_project_text(project)
-        required += min(0.15, sum(0.03 for keyword in self.COMPLEXITY_KEYWORDS if keyword in project_text))
-        return min(1.0, required)
-
-    def _normalize_capacity_score(self, value: float | None) -> float:
-        """Normalize capacity scores that may come in either 0-1 or 0-100 scales."""
-        if value is None:
-            return 0.0
-
-        normalized = float(value)
-        if normalized > 1:
-            normalized /= 100.0
-
-        return max(0.0, min(1.0, normalized))
