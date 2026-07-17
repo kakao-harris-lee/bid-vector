@@ -193,6 +193,10 @@ def _row_in_counted_window(row: dict[str, Any], counted_pass_dates: set[str]) ->
     if _status(row.get("status")) != PASS_STATUS:
         return False
     date = row.get("date")
+    # Membership is effectively a no-op for pass rows: a pass row's own date is
+    # always in ``counted_pass_dates`` by construction. The load-bearing filter
+    # is ``status == pass`` above; this guard only rejects a hypothetical pass row
+    # whose date was somehow excluded upstream.
     if date and str(date) not in counted_pass_dates:
         return False
     return True
@@ -229,6 +233,9 @@ def _summarize_daily_window(
         "excluded_rows": len(daily_status) - len(in_window),
         "ledger_only_days": sorted(ledger_days),
         "file_backed_days": sorted(file_backed_days),
+        # Dates carried by a ledger-only beat draft with no file-backed row on the
+        # same date -- i.e. days whose only evidence is the rolling ledger snapshot.
+        "ledger_only_exclusive_days": sorted(ledger_days - file_backed_days),
     }
 
 

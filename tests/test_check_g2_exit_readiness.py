@@ -682,6 +682,7 @@ def test_cli_accepts_ledger_only_beat_days_without_paths(tmp_path, monkeypatch):
     window = report["daily_evidence_window"]
     assert window["ledger_only_days"] == ["2026-06-24"]
     assert window["file_backed_days"] == ["2026-06-23"]
+    assert window["ledger_only_exclusive_days"] == ["2026-06-24"]
     assert window["excluded_rows"] == 0
 
 
@@ -730,6 +731,120 @@ def test_cli_still_flags_file_backed_counted_row_missing_snapshot_path(
         "daily_status[1].collect_g2_evidence_snapshot.path",
         "path_does_not_exist",
     ) in missing
+
+
+def test_cli_fails_closed_on_stamp_shape_mismatch(tmp_path, monkeypatch):
+    """Lock fail-closed: a source stamp that disagrees with the operator cell
+    shape must red the gate, never silently pass. A ledger stamp on a
+    fastlane-shaped cell (no ``evidence_status``) and a fastlane stamp on a
+    ledger-shaped cell (no ``g2_evidence_status``) both fail their own check."""
+    operator_ids = [101, 102, 103]
+    manifest = _manifest()
+    manifest["evidence_window"]["counted_days"] = 3
+
+    # Ledger stamp, but fastlane-shaped cells -> ledger check sees no evidence_status.
+    ledger_stamp_fastlane_cells = _ledger_only_row("2026-06-22", operator_ids)
+    ledger_stamp_fastlane_cells["operators"] = _daily_row("2026-06-22", operator_ids)[
+        "operators"
+    ]
+    # Fastlane stamp (+ existing path), but ledger-shaped cells -> fastlane check
+    # sees no g2_evidence_status.
+    fastlane_stamp_ledger_cells = _daily_row("2026-06-23", operator_ids)
+    fastlane_stamp_ledger_cells["operators"] = _ledger_only_row(
+        "2026-06-23", operator_ids
+    )["operators"]
+
+    manifest["daily_status"] = [
+        ledger_stamp_fastlane_cells,
+        fastlane_stamp_ledger_cells,
+        _daily_row("2026-06-24", operator_ids),
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "3",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 1
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is False
+    routing = next(
+        gate for gate in report["gates"] if gate["gate_id"] == "routing_isolation"
+    )
+    assert routing["passed"] is False
+    failures = set(routing["failures"])
+    assert (
+        "daily_status[0].operators[101] evidence_status is None" in failures
+    )  # ledger check on fastlane-shaped cell
+    assert (
+        "daily_status[1].operators[101] g2_evidence_status is None" in failures
+    )  # fastlane check on ledger-shaped cell
+
+
+def test_cli_still_flags_stale_pass_draft_with_bad_substatus(tmp_path, monkeypatch):
+    """Reproduce the 2026-07-15 residual: two fastlane *pass* drafts on one date
+    where the stale draft carries a per-operator BAD sub-status
+    (``strategy_monitor`` missing). Windowing excludes only non-pass rows, so a
+    stale *pass* draft stays evaluated and its file-backed defect stays red."""
+    operator_ids = [101, 102, 103]
+    manifest = _manifest()
+    stale = _daily_row("2026-06-23", operator_ids)
+    stale["collect_g2_evidence_snapshot"][
+        "path"
+    ] = "reports/g2-evidence/2026-06-23/run-0/g2-evidence-summary.json"
+    for operator_id in operator_ids:
+        stale["operators"][str(operator_id)]["strategy_monitor"] = "missing"
+    manifest["daily_status"] = [
+        stale,
+        _daily_row("2026-06-23", operator_ids),
+        _daily_row("2026-06-24", operator_ids),
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "2",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 1
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is False
+    routing = next(
+        gate for gate in report["gates"] if gate["gate_id"] == "routing_isolation"
+    )
+    assert routing["passed"] is False
+    assert (
+        "daily_status[0].operators[101] strategy_monitor is missing"
+        in routing["failures"]
+    )
+    assert report["daily_evidence_window"]["excluded_rows"] == 0
 
 
 def test_cli_returns_two_and_writes_error_report_for_invalid_manifest(tmp_path):

@@ -167,7 +167,7 @@ Manifest는 사람이 읽을 수 있는 JSON으로 유지한다. 모든 `path`�
 
 - `operators[]`에는 G-2 판정에 포함할 operator만 넣는다. 제외한 operator는 `excluded_evidence` 또는 review note에 사유를 남긴다.
 - `profile.path`, `strategy.path`, `notification_channel.path`는 operator별 최신 상태 파일을 가리킨다. 날짜별로 값이 바뀌면 `daily_status`와 `evidence_paths`에 해당 날짜 파일을 모두 남긴다.
-- `collect_g2_evidence_snapshot.path`는 `scripts/collect_g2_evidence.py`의 `g2-evidence-summary.json` 또는 `collect_g2_evidence` analytics event payload를 export한 파일을 가리킨다. DB event만 있고 파일이 없으면 manifest에는 `missing`으로 표시하고 review 전에 export한다.
+- `collect_g2_evidence_snapshot.path`는 `scripts/collect_g2_evidence.py`의 `g2-evidence-summary.json` 또는 `collect_g2_evidence` analytics event payload를 export한 파일을 가리킨다. DB event만 있고 파일이 없으면 manifest에는 `missing`으로 표시하고 review 전에 export한다. 단, ledger-only `collect_g2_evidence` beat 행(`source=collect_g2_evidence_beat`)은 설계상 파일 path 없이 ledger 스냅샷만 남기므로 `check_g2_exit_readiness.py`의 path 존재 요구에서 면제된다(파일-backed fastlane 행은 그대로 엄격). readiness report의 `daily_evidence_window.ledger_only_exclusive_days`로 파일-backed 없이 ledger-only인 날짜를 확인한다.
 - `daily_status[].status=pass`는 해당 날짜가 G-2 판단에 계산 가능하다는 뜻이다. `partial`은 재실행 또는 gap 처리가 필요하고, `excluded`는 `approve`의 N일 카운트에 넣지 않는다.
 - `blocking_gaps[].status=resolved`는 resolution path가 실제로 존재하고 reviewer가 원 gap 해소를 확인했을 때만 사용한다.
 - `excluded` gap은 G-2 성공 증거로 쓰지 않는다는 뜻이지 성공 처리가 아니다. `accepted_hold`가 하나라도 남아 있으면 최종 판정은 `hold`다.
