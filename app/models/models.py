@@ -290,6 +290,14 @@ class BidDecisionRecord(Base):
     workload_source = Column(String(20), default="provided")
     score_breakdown = Column(Text, default="{}")
     reasoning = Column(Text, default="")
+    # Real-bid tracking (distinct from recommended_amount, which stays the
+    # system recommendation). Populated when the operator registers an actual
+    # KONEPS submission so the post-개찰 낙찰결과 알림 파이프라인can verify it.
+    submitted_bid_amount = Column(Float, nullable=True)
+    submitted_floor_rate = Column(Float, nullable=True)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+    # Idempotency marker for the award-result Telegram (set once, after send).
+    award_notified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
