@@ -471,6 +471,20 @@ class Settings(BaseSettings):
     # -result feedback loop as real 기초금액 accrues). The 1.0 default is a no-op for
     # agencies without a calibrated 사정률. WARNING: this is a HYPOTHESIS-based fix
     # (no post-opening 낙찰가 measured yet); re-calibrate once 개찰 results confirm.
+    #
+    # WARNING (basis coupling — the band and its assessment rate MOVE TOGETHER):
+    # the AGENCY_MINIMUM/MAXIMUM values above are 예정가-basis BECAUSE they were
+    # calibrated on pre-fix scsbid rows (base_amt == planned_price fallback). The
+    # scsbid fix in this same PR stops that fallback, so NEW settled rows are
+    # 기초금액-basis. If the feedback loop (PR C) ever RE-DERIVES the agency band
+    # from post-fix rows, the re-derived band is ALREADY 기초금액-basis and its
+    # entry here MUST be reset to 1.0 — keeping the old E[사정률] would apply the
+    # conversion TWICE and push the band ~0.5%p too LOW (the inverse bug).
+    #
+    # WARNING (coverage coupling): when adding a new agency to AGENCY_MINIMUM/
+    # MAXIMUM above, decide its entry here in the same change — a missing key is a
+    # 1.0 no-op, which silently reintroduces the +0.5%p bug for any agency whose
+    # band was calibrated on 예정가-basis rows. Keep the three maps in sync.
     PREDICTION_AGENCY_BAND_ASSESSMENT_RATES: dict[str, float] = Field(
         default_factory=lambda: {
             # mean(99.782%, 99.260%) ≈ 0.9952 from the two postmortem notices.

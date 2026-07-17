@@ -146,8 +146,11 @@ def resolve_band_assessment_rate(
 
     Resolution mirrors the band lookup: per-agency empirical rate via normalized
     substring match, else the global default (1.0 == no-op). Any missing / non-positive
-    value collapses to 1.0 so the conversion can only LOWER (never RAISE) the band — the
-    category/legal 낙찰하한 floor therefore stays protected regardless of this factor.
+    value collapses to 1.0. With the shipped rates (all ≤ 1) the conversion only LOWERS
+    the band; a configured 사정률 > 1 is legitimate (복수예비가격 추첨 can put 예정가
+    ABOVE 기초금액 for some agencies) and would raise it — either way the red line is
+    unaffected: resolve_floor_bid_rate re-applies max(category/group floor, converted
+    agency floor) plus the legal 낙찰하한, so no value here can undercut the hard floor.
     """
     rate = resolve_agency_bid_rate(agency_name, config.agency_band_assessment_rates)
     if rate is not None and rate > 0:
