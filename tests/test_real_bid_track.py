@@ -55,11 +55,15 @@ def test_register_real_bid_by_project_id(client, test_db):
     assert body["decision_status"] == "submitted"
     assert body["award_public"] is False
     assert body["award_notified_at"] is None
+    # Honesty (§2): with no prior system recommendation, recommended_amount stays
+    # NULL — the actual bid must not be surfaced as a "system recommendation".
+    assert body["recommended_amount"] is None
 
     # A BidDecisionRecord was persisted with the submitted fields.
     record = test_db.query(BidDecisionRecord).filter_by(project_id=project.id).one()
     assert record.submitted_bid_amount == 77_529_785
     assert record.submitted_at is not None
+    assert record.recommended_amount is None
 
 
 def test_register_real_bid_by_notice_number_strips_suffix(client, test_db):

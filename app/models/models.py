@@ -274,7 +274,11 @@ class BidDecisionRecord(Base):
     initial_action = Column(String(50), default="skip")
     initial_decision_status = Column(String(50), default="planned")
     first_decided_at = Column(DateTime(timezone=True), default=utc_now)
-    recommended_amount = Column(Float, default=0.0)
+    # Nullable with no Python default: a real-bid-only record (no prior system
+    # recommendation) must stay NULL so the actual submitted bid is never read
+    # as a "system recommendation" (§2 정직 명세). Decision paths that do produce
+    # a recommendation set this explicitly; all readers are null-safe.
+    recommended_amount = Column(Float, nullable=True)
     probability_score = Column(Float, default=0.0)
     matched_score = Column(Float, default=0.0)
     priority_score = Column(Float, default=0.0)

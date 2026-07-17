@@ -75,15 +75,16 @@ class RealBidTrackService:
         submitted_ts = ensure_utc(submitted_at) if submitted_at is not None else now
 
         if record is None:
+            # No prior system recommendation existed. Intentionally leave
+            # recommended_amount NULL — seeding it with the actual bid would
+            # misrepresent the operator's submission as a system recommendation
+            # (§2 정직 명세). The distinct submitted_bid_amount carries the actual.
             record = BidDecisionRecord(
                 project_id=project.id,
                 operator_id=operator.id,
                 initial_action="bid_now",
                 initial_decision_status="submitted",
                 first_decided_at=now,
-                # No prior recommendation existed; seed it with the actual bid so
-                # downstream views still have a non-null amount.
-                recommended_amount=float(bid_amount),
             )
             db.add(record)
 
