@@ -256,6 +256,25 @@ class HistoricalData(Base):
     # are re-checked at most once per RECHECK window instead of every 6h sweep,
     # which otherwise burns the ScsbidInfoService rate limit (HTTP 429).
     reserve_detail_checked_at = Column(DateTime(timezone=True), nullable=True)
+    # --- base_amount provenance classification (backfilled, NEVER overwrites
+    # base_amount) ---------------------------------------------------------
+    # 66% of stored ``base_amount`` values are NOT the real 기초금액 (integer
+    # 원화); they are derived/polluted (예: win÷winning_rate 역산 = 예정가-basis,
+    # or a base×1.1 VAT division). These columns tag that provenance so the
+    # feedback/calibration loop can filter them out. ``classify_base_basis`` is
+    # the single source of truth (app/services/base_amount_basis.py).
+    #
+    # WARNING: any 밴드 캘리브레이션 / 백테스트 / 피드백 재추정 that consumes
+    # ``base_amount`` MUST restrict to rows where ``base_amount_basis == 'clean'``.
+    # Calibrating on non-clean rows re-derives 예정가-basis pollution and reintroduces
+    # the +0.5%p 밴드 bias (see PREDICTION_AGENCY_BAND_ASSESSMENT_RATES notes).
+    base_amount_basis = Column(String(30), nullable=True, index=True)
+    # Estimated real 기초금액 for non-clean rows ONLY (추정치 — NOT the ground
+    # truth base_amount). Derived from 복수예비가격 midpoint when 15 reserves
+    # exist; NULL when unrecoverable or when the row is already 'clean'.
+    base_amount_estimated = Column(Float, nullable=True)
+    # Idempotency marker: set once the basis classifier has processed this row.
+    basis_checked_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     project = relationship("Project", back_populates="historical_records")
