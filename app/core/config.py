@@ -366,6 +366,24 @@ class Settings(BaseSettings):
     # candidates. This keeps the "conservative" scenario near the legal floor
     # without letting rounding/reserve-price variance land below it.
     PREDICTION_FLOOR_SAFETY_MARGIN_RATE: float = 0.001
+    # 공사(construction) era-correct 법정 낙찰하한 tier(#197)가 해석되는 공고에서 3종
+    # 투찰 시나리오(공격/추천/안전) 타깃을 "guardrail 이 최종 해석한 floor + offset"으로
+    # 앵커한다. offset 은 무변환(예정가-basis) tier floor 대비 실낙찰(win÷기초금액)
+    # 초과분의 백분위수다 — 값·규칙을 코드 분기가 아니라 선언 데이터로 둔다(§4.5.1/§4.5.3).
+    #
+    # 근거(2026-07-17 측정, clean-basis 공사 정착행 n=2,051; basis='clean',
+    # winning_amount>0, era floor 해석 가능): (win÷기초금액 − 무변환 era_floor) 분포
+    #   p25=+0.0016(공격, 최저적격 경쟁·낙하 위험), p50=+0.0053(추천), p75=+0.0148(안전).
+    # p5=−0.0065(<0: 사정률<1 효과·지방계약 혼입) → 공격의 낙하 위험이 실재하는 근거이며,
+    # p95≈+0.10(수의/단독응찰 tail)이라 ceiling(0.93)은 내리지 않는다.
+    # ⚠ 표본/가설 기반이며 개찰 데이터 누적 시 재캘리브레이션 대상(운영자 튜너블).
+    PREDICTION_CONSTRUCTION_SCENARIO_FLOOR_OFFSETS: dict[str, float] = Field(
+        default_factory=lambda: {
+            "aggressive": 0.0016,
+            "recommended": 0.0053,
+            "safe": 0.0148,
+        }
+    )
     BUSINESS_GROUP_CODE_PREFIXES: dict[str, list[str]] = Field(
         default_factory=lambda: {
             "construction": ["04"],

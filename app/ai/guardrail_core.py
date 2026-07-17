@@ -68,6 +68,10 @@ class GuardrailConfig:
     agency_maximum_bid_rates: Mapping[str, float] | None
     agency_band_assessment_rates: Mapping[str, float] | None
     default_band_assessment_rate: float
+    # Scenario-anchor calibration (read by price_prediction, not by the floor/ceiling
+    # resolvers here). Defaulted so manual GuardrailConfig(...) construction stays
+    # backward-compatible; from_settings always supplies it.
+    construction_scenario_floor_offsets: Mapping[str, float] | None = None
 
     @classmethod
     def from_settings(cls, settings: Any) -> "GuardrailConfig":
@@ -99,6 +103,9 @@ class GuardrailConfig:
             agency_band_assessment_rates=settings.PREDICTION_AGENCY_BAND_ASSESSMENT_RATES,
             default_band_assessment_rate=max(
                 0.0, float(settings.PREDICTION_DEFAULT_BAND_ASSESSMENT_RATE or 0.0)
+            ),
+            construction_scenario_floor_offsets=(
+                settings.PREDICTION_CONSTRUCTION_SCENARIO_FLOOR_OFFSETS or None
             ),
         )
 
