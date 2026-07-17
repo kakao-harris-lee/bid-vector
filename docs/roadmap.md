@@ -1,6 +1,6 @@
 # bid-vector 로드맵
 
-기준일: 2026-07-03
+기준일: 2026-07-17
 
 이 문서는 `bid-vector`의 단계별 목표와 exit gate를 정리하는 단일 로드맵입니다. 오래된 계획 문서보다 현재 코드와 이 문서를 우선합니다.
 
@@ -9,6 +9,8 @@
 0~1단계의 핵심 빌드는 대부분 완료되어 있습니다. 2단계는 독립 가상 사업자 운영 검증으로 진입했고, G-2 exit 판단을 위한 evidence API, 알림 채널 메타데이터, sample-gap 기반 synthetic evidence 실행 계획, **관리자/사용자 웹 물리 분리(별도 Vite 번들)**, 운영 runbook, operator-scoped synthetic evidence, read-only evidence 수집/스냅샷 경로가 `main`에 반영되었습니다. 2026-06-22 기준으로 **G-0 smoke가 실제 스케줄에서 5 phase 전부 green으로 실증**됐고(smoke ML phase fix #106), **G-2 라이브 증적 축적이 시작**됐으며(사업자별 strategy monitor 실행 + dry-run 알림채널 + 일일 후보 재확인 자동화), 운영 안정화(celerybeat 복구, KST 스케줄 정합, monitor run 고아 정리/reconciler)도 반영됐습니다. 2026-06-24 기준으로 synthetic experiment 결과는 `operator_id`가 붙어야 G-2 ledger에 집계되고, 일일 evidence snapshot은 `reports/g2-evidence/` 파일 수집과 `collect_g2_evidence` analytics event로 축적할 수 있습니다.
 
 2026-07-03 기준으로 개발 노트북에서 처리 가능한 G-2 검증 하드닝, OpenAPI 타입 동기화 가드, 추천 투찰가 guardrail/holdout 백테스트, 세부 조달 세그먼트 밴드와 10원 단위 보정도 `main`에 반영되었습니다. 현재 운영 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다. 추천 품질 쪽은 최신 낙찰 holdout 개선이 들어왔지만, 다음 개발 항목은 `procurement_rate_band`보다 세밀한 feature extractor, selector 분리, legal floor/분모 품질 강화입니다.
+
+**2026-07-17 기준으로 G-2 exit가 운영자 승인(approve)되었습니다** — 번들 `reports/g2-evidence/g2-exit-20260717/` (counted 14/7일, operators 3/3, 구조 게이트 4/4, blocking gap 0, manifest status=reviewed). 승인은 caveat 2건(counted 14일 중 per-operator 파일 증적 4일·나머지 ledger-only, 전부 synthetic+dry-run으로 실송신 0)을 인지한 상태에서 이루어졌으며, 실사용 forward 증적은 G-3 게이트에서 별도 검증합니다. 이로써 **2단계 종료, 3단계(제한 실증 서비스) 착수 가능** 상태입니다. 운영 감시는 celerybeat 항구성(self-heal #161, ~07-29 재발 창)과 스모크 streak 회복(~07-22 7연속 예상)을 계속합니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
@@ -26,8 +28,8 @@
 |---|---|---|---|
 | 0 | 단일 운영자 검증 기반 | 빌드 완료, 관찰 중 | 실제 키와 스케줄로 매일 깨지지 않는가 |
 | 1 | 가상 회사 실험실 | 구현됨, 실행 후보 연결됨, 표본 실행 필요 | 업종/규모별 가상 회사에서 추천 품질이 검증되는가 |
-| 2 | 독립 가상 사업자 운영 검증 | 진행 중, 실행/증적 축적 필요 | 각 회사가 독립 ID/사업자 정보로 서비스처럼 운영되는가 |
-| 3 | 제한 실증 서비스 | G-2 후 착수 | 실제 사업자가 매일 써도 업무 시간이 줄고 추천이 유효한가 |
+| 2 | 독립 가상 사업자 운영 검증 | **종료 (G-2 exit 승인 2026-07-17)** | 각 회사가 독립 ID/사업자 정보로 서비스처럼 운영되는가 |
+| 3 | 제한 실증 서비스 | **착수 가능** (G-2 승인됨) | 실제 사업자가 매일 써도 업무 시간이 줄고 추천이 유효한가 |
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
 
 ## 최근 반영된 작업
