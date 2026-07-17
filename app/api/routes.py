@@ -16,6 +16,7 @@ from app.api import (
     operator,
     predictions,
     projects,
+    real_bids,
     realtime,
     synthetic,
 )
@@ -41,5 +42,6 @@ router.include_router(
 router.include_router(
     decision_samples.router, prefix="/operations", tags=["Decision Samples"]
 )
+router.include_router(real_bids.router, prefix="/operations", tags=["Real Bids"])
 router.include_router(realtime.router, prefix="/realtime", tags=["Realtime"])
 router.include_router(synthetic.router, tags=["Synthetic"])

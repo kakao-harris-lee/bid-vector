@@ -106,6 +106,7 @@ G2_CANDIDATE_RECHECK_TASK_NAME = "jobs.run_g2_candidate_recheck"
 COLLECT_G2_EVIDENCE_TASK_NAME = "jobs.collect_g2_evidence"
 TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
+NOTIFY_AWARD_RESULTS_TASK_NAME = "jobs.notify_award_results"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -124,6 +125,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         SMOKE_TEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         G2_CANDIDATE_RECHECK_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         COLLECT_G2_EVIDENCE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        NOTIFY_AWARD_RESULTS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
@@ -216,6 +218,32 @@ def build_forward_settlement_beat_schedule() -> dict[str, dict[str, object]]:
             "kwargs": {
                 "limit": max(1, int(settings.FORWARD_SETTLEMENT_LIMIT)),
                 "persist": bool(settings.FORWARD_SETTLEMENT_PERSIST),
+            },
+        }
+    }
+
+
+def build_award_result_notify_beat_schedule() -> dict[str, dict[str, object]]:
+    """Build the periodic schedule entry for the award-result Telegram alarm.
+
+    Sweeps tracked real bids (``BidDecisionRecord.submitted_bid_amount`` set,
+    ``award_notified_at IS NULL``) whose 개찰 result is now public and sends the
+    operator one factual 적격/경쟁력 summary per bid (idempotent via
+    ``award_notified_at``). Runs on an interval so freshly-published winners are
+    picked up after the scsbid 6h collection. Defaults to OFF; opt-in via
+    ``AWARD_RESULT_NOTIFY_SCHEDULE_ENABLED``.
+    """
+    if not settings.AWARD_RESULT_NOTIFY_SCHEDULE_ENABLED:
+        return {}
+
+    return {
+        "award_result_notify_periodic": {
+            "task": NOTIFY_AWARD_RESULTS_TASK_NAME,
+            "schedule": float(
+                max(1, settings.AWARD_RESULT_NOTIFY_INTERVAL_MINUTES) * 60
+            ),
+            "kwargs": {
+                "limit": max(1, int(settings.AWARD_RESULT_NOTIFY_LIMIT)),
             },
         }
     }
@@ -599,6 +627,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_operator_strategy_monitor_beat_schedule(),
             **build_paper_bidding_forward_beat_schedule(),
             **build_forward_settlement_beat_schedule(),
+            **build_award_result_notify_beat_schedule(),
             **build_historical_backtest_beat_schedule(),
             **build_koneps_collection_beat_schedule(),
             **build_scsbid_collection_beat_schedule(),

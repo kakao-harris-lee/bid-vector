@@ -1846,6 +1846,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/real-bids": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Real Bids
+         * @description List the singleton operator's registered real bids (recent-first).
+         */
+        get: operations["list_real_bids_api_v1_operations_real_bids_get"];
+        put?: never;
+        /**
+         * Register Real Bid
+         * @description Register an actual KONEPS submission for the singleton operator.
+         */
+        post: operations["register_real_bid_api_v1_operations_real_bids_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/synthetic/operators": {
         parameters: {
             query?: never;
@@ -7540,6 +7564,90 @@ export interface components {
             results?: components["schemas"]["SimilarProjectItem"][];
         };
         /**
+         * RealBidListResponse
+         * @description 실투찰 목록 응답(최근 순, 운영자 스코프).
+         */
+        RealBidListResponse: {
+            /** Operator Id */
+            operator_id: number;
+            /** Count */
+            count: number;
+            /** Records */
+            records: components["schemas"]["RealBidRecord"][];
+        };
+        /**
+         * RealBidRecord
+         * @description 실투찰 기록 1건(개찰 결과 상태 포함).
+         */
+        RealBidRecord: {
+            /** Decision Record Id */
+            decision_record_id: number;
+            /** Project Id */
+            project_id: number | null;
+            /** Notice Number */
+            notice_number: string | null;
+            /** Project Title */
+            project_title: string | null;
+            /** Submitted Bid Amount */
+            submitted_bid_amount: number | null;
+            /** Submitted Floor Rate */
+            submitted_floor_rate: number | null;
+            /** Recommended Amount */
+            recommended_amount: number | null;
+            /** Submitted At */
+            submitted_at: string | null;
+            /** Award Notified At */
+            award_notified_at: string | null;
+            /** Decision Status */
+            decision_status: string;
+            /** Winning Company */
+            winning_company: string | null;
+            /** Winning Amount */
+            winning_amount: number | null;
+            /** Award Public */
+            award_public: boolean;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /**
+         * RealBidRecordRequest
+         * @description 실투찰 등록 요청. project_id 또는 notice_number 중 하나 이상 필수.
+         */
+        RealBidRecordRequest: {
+            /**
+             * Project Id
+             * @description 대상 프로젝트 ID
+             */
+            project_id?: number | null;
+            /**
+             * Notice Number
+             * @description 공고번호(차수 접미사 -000 은 매칭 시 제거). project_id 없을 때 사용.
+             */
+            notice_number?: string | null;
+            /**
+             * Bid Amount
+             * @description 실제 제출한 투찰가(원)
+             */
+            bid_amount: number;
+            /**
+             * Floor Rate
+             * @description 공고 낙찰하한율(비율, 예: 0.87745). 개찰 후 적격 판정에 사용.
+             */
+            floor_rate?: number | null;
+            /**
+             * Submitted At
+             * @description 실제 제출 시각(생략 시 등록 시각)
+             */
+            submitted_at?: string | null;
+            /**
+             * Note
+             * @description 운영자 메모(감사 근거에 추가)
+             */
+            note?: string | null;
+        };
+        /**
          * RecommendationFeedbackLabelBreakdown
          * @description Useful/not_useful split for a single category or action bucket.
          */
@@ -12344,6 +12452,70 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DecisionSamplesResponse"];
                     "text/csv": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_real_bids_api_v1_operations_real_bids_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealBidListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_real_bid_api_v1_operations_real_bids_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RealBidRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealBidRecord"];
                 };
             };
             /** @description Validation Error */

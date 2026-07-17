@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     FORWARD_SETTLEMENT_INTERVAL_MINUTES: int = 720  # 12h
     FORWARD_SETTLEMENT_LIMIT: int = 200
     FORWARD_SETTLEMENT_PERSIST: bool = True
+    # Award-result Telegram — periodically verify tracked real bids whose 개찰
+    # result is now public (winner in TenderResult) and, once per bid, send the
+    # operator a factual 적격/경쟁력 summary. Idempotent via
+    # BidDecisionRecord.award_notified_at. Runs after the scsbid 6h collection so
+    # freshly-published winners are picked up. Default OFF; opt-in via .env.
+    AWARD_RESULT_NOTIFY_SCHEDULE_ENABLED: bool = False
+    AWARD_RESULT_NOTIFY_INTERVAL_MINUTES: int = 360  # 6h
+    AWARD_RESULT_NOTIFY_LIMIT: int = 50
     HISTORICAL_BACKTEST_SCHEDULE_ENABLED: bool = False
     HISTORICAL_BACKTEST_INTERVAL_MINUTES: int = 1440  # 24h
     HISTORICAL_BACKTEST_LOOKBACK_DAYS: int = 30

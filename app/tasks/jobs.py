@@ -27,6 +27,7 @@ from app.tasks.celery_app import (
     FORWARD_SETTLEMENT_TASK_NAME,
     G2_CANDIDATE_RECHECK_TASK_NAME,
     HISTORICAL_BACKTEST_TASK_NAME,
+    NOTIFY_AWARD_RESULTS_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
@@ -843,6 +844,24 @@ def settle_forward_paper_bids(
             operator_id=int(operator_id) if operator_id is not None else None,
             limit=int(limit or 200),
             persist=bool(persist),
+        )
+    finally:
+        db.close()
+
+
+@celery_app.task(name=NOTIFY_AWARD_RESULTS_TASK_NAME)
+def notify_award_results(limit: int = 50) -> dict:
+    """Send the operator a one-shot 낙찰결과 Telegram for newly-awarded real bids.
+
+    Idempotent: each tracked bid is notified at most once (award_notified_at).
+    Telegram delivery is skipped in ENVIRONMENT=test by the notification service.
+    """
+    from app.services.award_notifications import AwardResultNotificationService
+
+    db = SessionLocal()
+    try:
+        return AwardResultNotificationService().collect_and_notify(
+            db, limit=int(limit or 50)
         )
     finally:
         db.close()
