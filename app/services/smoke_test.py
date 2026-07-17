@@ -539,6 +539,7 @@ class KonepsTelegramSmokeTestService:
             from app.ai.business_group import resolve_business_group
             from app.models.models import Project
             from app.services.backtest_cutoff import BacktestCutoffService
+            from app.services.bid_base import resolve_notice_legal_floor_inputs
 
             project = db.query(Project).filter(Project.id == project_info["id"]).one()
             if not project.budget_estimate or project.budget_estimate <= 0:
@@ -556,6 +557,13 @@ class KonepsTelegramSmokeTestService:
                 cutoff_at=cutoff, exclude_project_id=int(project.id),
                 limit=80, explicit_bid_rate_only=True,
             )
+            # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 스모크가
+            # 실 공고에 대해 production live 경로와 동일한 era-correct guardrail 을
+            # 태우도록 공고 자신의 날짜를 넘긴다(소급 없음). tier floor 는 [0.7, 1.0]
+            # 안이라 아래 rate 범위 검증을 깨지 않는다.
+            estimation_amount, reference_date = resolve_notice_legal_floor_inputs(
+                project
+            )
             pred = self.price_prediction_port.predict_price(
                 budget=float(project.budget_estimate),
                 category=project.category or "other",
@@ -565,6 +573,8 @@ class KonepsTelegramSmokeTestService:
                 feedback_calibration=None,
                 business_type_code=project.business_type_code,
                 business_group=bg,
+                estimation_amount=estimation_amount,
+                reference_date=reference_date,
             )
             rate = float(pred.get("predicted_bid_rate") or 0)
             result.data["predicted_bid_rate"] = rate

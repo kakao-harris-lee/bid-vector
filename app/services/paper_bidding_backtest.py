@@ -39,7 +39,10 @@ from app.models.models import (
 from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
-from app.services.bid_base import resolve_notice_bid_base
+from app.services.bid_base import (
+    resolve_notice_bid_base,
+    resolve_notice_legal_floor_inputs,
+)
 from app.services.classifier import NoticeClassifierService
 
 logger = logging.getLogger(__name__)
@@ -907,6 +910,10 @@ class PaperBiddingBacktestService:
         )
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
+        # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 백테스트가
+        # 과거 공고를 평가할 때 그 공고 자신의 날짜를 기준일로 넘겨, 2026-01-30 신율을
+        # 소급하지 않고 "그 시점"의 구/신율을 era-correct 하게 적용한다(시간 누수 차단).
+        estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
@@ -920,6 +927,8 @@ class PaperBiddingBacktestService:
             feedback_calibration=None,
             business_type_code=business_type_code,
             business_group=business_group,
+            estimation_amount=estimation_amount,
+            reference_date=reference_date,
         )
         return CandidatePredictionContext(
             budget=budget,
