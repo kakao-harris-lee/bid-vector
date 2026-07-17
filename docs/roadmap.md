@@ -344,6 +344,28 @@ SaaS 세부 설계 축:
     `recommended_selector_reason`을 함께 보여준다. `ambiguous`는 자동 단일 추천보다 검토 필요 상태를 우선한다.
 14. 릴리스 gate: `price_regime_features` schema, extractor unit test, 레짐별 confusion/worst-case 리포트,
     추천 후보 selector 회귀 비교, OpenAPI 타입 동기화, 최신 낙찰 holdout이 모두 남아야 운영 후보로 본다.
+15. competitiveness predictor 재설계 (별도 제안, 2026-07-17 정리 — G-3 관찰 종료 후 착수):
+    - 현행: `app/ai/bid_recommendation.py::calculate_competitiveness_score`가 추천가/market_avg 비율의
+      4버킷 계단값(0.95/0.75/0.50/0.25, 경계 0.8/1.0/1.2)을 반환한다. `market_data.average_bid` 부재 시
+      `project_data.budget`으로 폴백하므로 실질적으로는 "추천가 vs 기초금액" 비율 지표에 가깝다.
+      소비 경로: `opportunity_analysis._compute_scores` → `market_insights.competitiveness_score` →
+      probability blend(가중치 0.18)·expected_margin_score → `BidDecisionRecord.competitiveness_score`
+      persist → bid_summary → BidSummaryScreen "시장 경쟁력" 사용자 노출.
+    - 문제: (a) 4단 계단값이 % 점수처럼 노출되어 연속 지표로 오인될 소지(정직 명세 관점),
+      (b) 시장 평균 부재 시 budget 폴백이라 "시장" 의미가 희석됨, (c) predictor가 이미 보유한
+      이력 분포·price_range·투찰가 메뉴 정보를 활용하지 않음.
+    - 제안(권장안): 이력 낙찰가율 분포 percentile 지표로 대체 — 동일 그룹/세그먼트 유사 공고의
+      낙찰가율 분포에서 추천가율의 위치를 연속값으로 산출하고, 라벨을 "시장 경쟁력" 대신
+      "가격 위치(유사 공고 분포 대비 추정)"류의 정직한 표현 + 표본 수 병기로 교체한다.
+      보조안: predictor price_range/candidate 밴드 내 위치 기반 연속 점수. 구현은 순수 함수
+      resolver(분포 입력 주입) + 선언 테이블로 두고, 표본 부족 시 fallback(현행 4버킷 유지 또는
+      `unknown` 표기)을 명시한다.
+    - 전제/게이트: ① 사용자 노출값 + persist 필드라 값 정의 변경은 G-3 관찰 종료 후(지표 연속성),
+      ② probability blend 0.18 항 입력이 바뀌므로 특성화·백테스트 재검증 필수(위 12번 split 정책 준수),
+      ③ 기존 persist 값과의 비교 가능성 확보(신 필드 병행 또는 마이그레이션 계획), ④ ml-reviewer 검수 +
+      정직 명세 라벨 리뷰, ⑤ 프론트 라벨/툴팁 변경은 ko 문구 리뷰 포함.
+    - 산출물: competitiveness resolver(순수 함수 + 선언 테이블) · 특성화/차등 테스트 ·
+      BidSummary 라벨 갱신 · 개선 전후 백테스트 비교 리포트(고정 JSON 경로).
 
 ## 원격 데이터/모델 접근 로드맵
 
