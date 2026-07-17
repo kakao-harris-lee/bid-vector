@@ -20,8 +20,11 @@ predictor 에 넘기는 ``budget`` 도 base_amount 여야 이중과세 없이 �
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy.orm import Session
 
+from app.core.time import to_kst
 from app.models.models import HistoricalData, Project
 
 
@@ -59,3 +62,33 @@ def resolve_notice_bid_base(db: Session, project: Project) -> float:
         return float(getattr(project, "budget_estimate", 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def resolve_notice_legal_floor_inputs(
+    project: Project,
+) -> tuple[float | None, date | None]:
+    """Return (추정가격, 공고 기준일) for the construction legal 낙찰하한 tier.
+
+    The tier bracket is keyed on the notice **추정가격** (``Project.budget_estimate``,
+    ex-VAT), NOT the 기초금액 ``resolve_notice_bid_base`` returns for pricing (#162) —
+    the legal 적격심사 표 구간(10억/50억/100억) is defined on 추정가격. VAT 비일관 이력
+    때문에 경계 부근 구간 오분류 가능성이 있다(legal_floor_spec caveat 참조).
+
+    The reference date is the notice's KST calendar day (``created_at`` ≈ 공고 수집일,
+    the closest 공고일 proxy we store). Using the notice's OWN date — not "today" —
+    makes the tier leakage-safe: a historical notice resolves the rate that was in
+    effect at its announcement, so a backtest/analysis over past 공고 never has the
+    2026-01-30 신율 applied retroactively.
+
+    Either element is ``None`` when unavailable → the caller passes it through and the
+    tier is simply not applied (the existing flat floor is preserved).
+    """
+    try:
+        estimation = float(getattr(project, "budget_estimate", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        estimation = 0.0
+    estimation_amount = estimation if estimation > 0 else None
+
+    created_at = getattr(project, "created_at", None)
+    reference_date = to_kst(created_at).date() if created_at is not None else None
+    return estimation_amount, reference_date

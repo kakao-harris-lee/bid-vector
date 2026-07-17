@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any, Mapping
 
 from app.ai.predictors.historical import clamp_bid_rate, normalize_agency_name
+from app.ai.predictors.legal_floor_spec import (
+    resolve_construction_qualification_floor,
+)
 
 
 _CATEGORY_FLOOR_RATE_ALIASES = {
@@ -164,12 +168,25 @@ def resolve_floor_bid_rate(
     category: str | None,
     business_group: str | None = None,
     agency_name: str | None = None,
+    *,
+    estimation_amount: float | None = None,
+    reference_date: date | datetime | None = None,
 ) -> float | None:
     """Resolve a configured minimum bid-rate floor for the given category/group/agency.
 
     §4.7 guardrail: when both a group rate and a category rate exist, the group
     rate can never be LOWER than the category floor — the category floor is the
     hard lower bound.  Return max(group_rate, category_rate).
+
+    Construction legal tier (2026-01-30 +2%p): for the ``construction`` category the
+    national 적격심사 낙찰하한 depends on the notice 추정가격 (estimation_amount) and its
+    effective date (reference_date). The 예정가-basis tier value is converted to a
+    기초금액 basis via E[사정률] (resolve_band_assessment_rate — 1.0 default is a no-op)
+    and then folded in with ``max()``. Because it is ONLY ever a ``max()`` term, the
+    tier can never LOWER the floor: for every input the result is
+    ``max(existing floor, tier)`` ≥ the existing floor (red line — see
+    tests/test_guardrail_legal_floor.py). The tier is skipped (no change) unless the
+    category is construction AND both estimation_amount and reference_date resolve.
 
     Agency band (Lever 1): an agency-keyed floor layers on top and TIGHTENS the
     band by RAISING the floor (max wins), clamped to the hard clamp_bid_rate
@@ -198,6 +215,19 @@ def resolve_floor_bid_rate(
         else:
             default_floor_rate = config.default_minimum_bid_rate
             resolved_floor = default_floor_rate or None
+
+    # Construction legal 낙찰하한 tier (구간·시행일 인지). Fold in with max() so it can
+    # only RAISE the floor — the existing category/group flat still hard-bounds via
+    # max(), preserving the red line for every input (incl. old-rate tiers < 0.87).
+    if normalized_category == "construction":
+        tier_floor = resolve_construction_qualification_floor(estimation_amount, reference_date)
+        if tier_floor is not None:
+            # 예정가-basis tier → 기초금액 basis via E[사정률] (same conversion as the
+            # agency band edge; 1.0 default is a no-op). clamp keeps it in [0.7, 1.4].
+            tier_floor = clamp_bid_rate(tier_floor * resolve_band_assessment_rate(agency_name, config))
+            resolved_floor = (
+                max(resolved_floor, tier_floor) if resolved_floor is not None else tier_floor
+            )
 
     agency_floor = resolve_agency_bid_rate(agency_name, config.agency_minimum_bid_rates)
     if agency_floor is not None:

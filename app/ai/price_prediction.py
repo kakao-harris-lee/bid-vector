@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any, Dict, Iterable
 
 import numpy as np
@@ -69,9 +70,18 @@ def predict_price(
     business_group: str | None = None,
     legal_floor_bid_rate: float | None = None,
     *,
+    estimation_amount: float | None = None,
+    reference_date: date | datetime | None = None,
     predictor_registry: Mapping[str, BasePricePredictor] | None = None,
 ) -> Dict[str, Any]:
-    """Predict project price using the configured predictor stack with safe fallback."""
+    """Predict project price using the configured predictor stack with safe fallback.
+
+    ``estimation_amount`` (추정가격) and ``reference_date`` (공고 기준일) drive the
+    construction legal 낙찰하한 tier (2026-01-30 +2%p). Both default to ``None`` so
+    non-construction / date-less callers are unaffected (tier not applied — the
+    existing flat floor is preserved). ``estimation_amount`` is the notice 추정가격,
+    NOT the 기초금액 ``budget`` used for pricing (#162).
+    """
     context = PricePredictionContext(
         budget=float(budget or 0.0),
         category=str(category or "other"),
@@ -98,6 +108,8 @@ def predict_price(
         business_group=business_group,
         legal_floor_bid_rate=legal_floor_bid_rate,
         agency_name=agency_name,
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
     )
     prediction = _apply_bid_price_granularity(prediction, budget=context.budget)
     prediction = _attach_price_regime_metadata(prediction, context=context)
@@ -544,6 +556,8 @@ def _apply_prediction_guardrails(
     business_group: str | None = None,
     legal_floor_bid_rate: float | None = None,
     agency_name: str | None = None,
+    estimation_amount: float | None = None,
+    reference_date: date | datetime | None = None,
 ) -> Dict[str, Any]:
     """Apply category/group/agency bid-rate guardrails after all statistical adjustments."""
     guarded_prediction = dict(prediction)
@@ -553,6 +567,8 @@ def _apply_prediction_guardrails(
         business_group=business_group,
         legal_floor_bid_rate=legal_floor_bid_rate,
         agency_name=agency_name,
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
     )
     _apply_guardrail_metadata(guarded_prediction, guardrail_context)
 
@@ -599,6 +615,8 @@ def _resolve_guardrail_context(
     business_group: str | None,
     legal_floor_bid_rate: float | None,
     agency_name: str | None = None,
+    estimation_amount: float | None = None,
+    reference_date: date | datetime | None = None,
 ) -> GuardrailContext:
     # Collect every guardrail setting read once at the boundary (§4.7.4), then run
     # the pure core on the immutable snapshot.
@@ -606,17 +624,24 @@ def _resolve_guardrail_context(
     # Resolve the category/group baseline and the agency-tightened band separately so
     # the guardrail reason can attribute the BINDING edge to the correct source. The
     # agency band only RAISES the floor / LOWERS the ceiling, so a resolved value that
-    # differs from the baseline can only have been moved by the agency band.
+    # differs from the baseline can only have been moved by the agency band. The
+    # construction legal tier (estimation_amount/reference_date) is passed to BOTH so
+    # it sits in the baseline too — that keeps the agency attribution isolated to the
+    # agency band and lets a binding tier floor still receive the safety margin.
     base_configured_floor = guardrail_core.resolve_floor_bid_rate(
         config,
         category,
         business_group=business_group,
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
     )
     configured_floor_bid_rate = guardrail_core.resolve_floor_bid_rate(
         config,
         category,
         business_group=business_group,
         agency_name=agency_name,
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
     )
     normalized_legal_floor_bid_rate = _normalize_optional_bid_rate(legal_floor_bid_rate)
     floor_bid_rate = _max_optional_rate(
