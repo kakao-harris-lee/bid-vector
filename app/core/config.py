@@ -493,6 +493,13 @@ class Settings(BaseSettings):
     # MAXIMUM above, decide its entry here in the same change — a missing key is a
     # 1.0 no-op, which silently reintroduces the +0.5%p bug for any agency whose
     # band was calibrated on 예정가-basis rows. Keep the three maps in sync.
+    #
+    # WARNING (basis provenance — feedback loop must filter to clean rows): any
+    # RE-CALIBRATION of this band from settled rows MUST restrict to
+    # ``HistoricalData.base_amount_basis == 'clean'`` (see models.py + backfill
+    # scripts/backfill_base_amount_basis.py). 66% of stored base_amount values are
+    # derived (예정가 역산/VAT), and re-deriving the band from them re-injects the
+    # exact 예정가-basis pollution these notes warn about.
     PREDICTION_AGENCY_BAND_ASSESSMENT_RATES: dict[str, float] = Field(
         default_factory=lambda: {
             # mean(99.782%, 99.260%) ≈ 0.9952 from the two postmortem notices.

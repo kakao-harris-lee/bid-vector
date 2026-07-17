@@ -26,6 +26,11 @@ from app.ai.predictors.historical import resolve_procurement_rate_band
 from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
+from app.services.base_amount_basis import (
+    ALL_BASES,
+    BASIS_CLEAN,
+    classify_base_basis,
+)
 from app.services.bid_base import resolve_notice_legal_floor_inputs
 from app.services.prediction_dataset import PredictionDatasetService
 
@@ -122,6 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional JSON output path. Defaults to models/reports/latest-award-holdout-<timestamp>.json.",
     )
+    parser.add_argument(
+        "--include-contaminated",
+        action="store_true",
+        help=(
+            "Fold non-clean (derived/suspect base_amount) targets back into the "
+            "summary/breakdown/worst aggregates. Default: clean-only aggregation "
+            "(contaminated targets stay in the report but are excluded from stats)."
+        ),
+    )
     return parser
 
 
@@ -214,6 +228,21 @@ def base_amount(project: Project, historical: HistoricalData) -> float | None:
         amount_float(historical.base_amount)
         or amount_float(project.budget_amount)
         or amount_float(project.estimated_price)
+    )
+
+
+def resolve_base_basis(historical: HistoricalData, result: TenderResult) -> str:
+    """Classify the stored base_amount provenance (reuses the canonical pure fn).
+
+    Detects rows whose ``base_amount`` is derived from award values (예정가 역산 /
+    VAT division) rather than a real 기초금액, so they can be excluded from the
+    error aggregates. Uses the RAW stored ``historical.base_amount`` (not the
+    budget fallback) with the row's normalized winning rate.
+    """
+    return classify_base_basis(
+        getattr(historical, "base_amount", None),
+        amount_float(result.winning_amount),
+        normalize_rate(result.winning_rate),
     )
 
 
@@ -576,6 +605,7 @@ def evaluate_target(
     return {
         "group": target.group,
         "group_source": target.group_source,
+        "basis": resolve_base_basis(historical, result),
         "notice_number": historical.notice_number or project.notice_number,
         "project_id": historical.project_id,
         "title": project.title or getattr(historical, "title", None),
@@ -631,6 +661,22 @@ def evaluate_target(
 
 def format_threshold(threshold: float) -> str:
     return f"{threshold * 100:.1f}%"
+
+
+def partition_targets_by_basis(
+    rows: list[dict[str, Any]], *, include_contaminated: bool
+) -> tuple[list[dict[str, Any]], int]:
+    """Split evaluated targets into the aggregation set + excluded-contaminated count.
+
+    Summary / breakdown / worst aggregates use only ``basis == 'clean'`` targets by
+    default so derived (예정가 역산 / VAT) or suspect base_amount rows cannot skew the
+    error stats. The full target rows still appear in the report for transparency;
+    pass ``include_contaminated`` to fold them back into the aggregates.
+    """
+    if include_contaminated:
+        return list(rows), 0
+    clean = [row for row in rows if row.get("basis") == BASIS_CLEAN]
+    return clean, len(rows) - len(clean)
 
 
 def aggregate(rows: list[dict[str, Any]], thresholds: tuple[float, ...]) -> dict[str, Any]:
@@ -733,6 +779,7 @@ def report_short_target(row: dict[str, Any]) -> dict[str, Any]:
     actual = row.get("actual") or {}
     return {
         "group": row.get("group"),
+        "basis": row.get("basis"),
         "amount_bucket": row.get("amount_bucket"),
         "procurement_rate_band": row.get("procurement_rate_band"),
         "data_quality_flags": row.get("data_quality_flags") or [],
@@ -799,6 +846,22 @@ def main() -> int:
     finally:
         db.close()
 
+    # Base-amount contamination guard: exclude derived/suspect base_amount targets
+    # from the error aggregates by default so 예정가 역산/VAT rows cannot skew the
+    # stats. The full target rows remain in the report for transparency.
+    aggregation_rows, excluded_contaminated = partition_targets_by_basis(
+        rows, include_contaminated=args.include_contaminated
+    )
+    summary = aggregate(aggregation_rows, thresholds)
+    summary["aggregation_basis"] = (
+        "all" if args.include_contaminated else "clean_only"
+    )
+    summary["excluded_contaminated"] = excluded_contaminated
+    summary["basis_counts"] = {
+        basis: sum(1 for row in rows if row.get("basis") == basis)
+        for basis in ALL_BASES
+    }
+
     report = {
         "generated_at": generated_at.isoformat(),
         "method": "latest_awarded_notices_per_business_group_holdout",
@@ -811,6 +874,7 @@ def main() -> int:
             "notice_numbers": list(notice_numbers),
             "timestamp_grace_hours": args.timestamp_grace_hours,
             "thresholds": list(thresholds),
+            "include_contaminated": args.include_contaminated,
             "utc_now": display_dt(now),
         },
         "selection_notes": [
@@ -818,15 +882,19 @@ def main() -> int:
             "Target project and notice are excluded from prediction history.",
             "Training cutoff is one second before the stricter of source event time and result availability time.",
             "Only explicit settled bid-rate evidence is used for historical records.",
+            "Summary/breakdown/worst aggregates exclude non-clean base_amount targets "
+            "(derived 예정가 역산/VAT or suspect) by default; see summary.basis_counts and "
+            "breakdowns.by_basis. Use --include-contaminated to fold them in.",
         ],
-        "summary": aggregate(rows, thresholds),
+        "summary": summary,
         "breakdowns": {
-            "by_group": aggregate_by_key(rows, key="group", thresholds=thresholds),
-            "by_amount_bucket": aggregate_by_key(rows, key="amount_bucket", thresholds=thresholds),
-            "by_procurement_rate_band": aggregate_by_key(rows, key="procurement_rate_band", thresholds=thresholds),
-            "by_data_quality_flag": aggregate_by_flag(rows, thresholds),
+            "by_group": aggregate_by_key(aggregation_rows, key="group", thresholds=thresholds),
+            "by_amount_bucket": aggregate_by_key(aggregation_rows, key="amount_bucket", thresholds=thresholds),
+            "by_procurement_rate_band": aggregate_by_key(aggregation_rows, key="procurement_rate_band", thresholds=thresholds),
+            "by_data_quality_flag": aggregate_by_flag(aggregation_rows, thresholds),
+            "by_basis": aggregate_by_key(rows, key="basis", thresholds=thresholds),
         },
-        "worst_recommended_targets": worst_targets(rows, limit=args.worst_limit),
+        "worst_recommended_targets": worst_targets(aggregation_rows, limit=args.worst_limit),
         "targets": rows,
     }
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
