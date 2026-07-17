@@ -22,7 +22,10 @@ from app.schemas.schemas import (
     DocumentAnalysisRequest,
     PricePredictionRequest,
 )
-from app.services.bid_base import resolve_notice_bid_base
+from app.services.bid_base import (
+    resolve_notice_bid_base,
+    resolve_notice_legal_floor_inputs,
+)
 from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
@@ -58,6 +61,9 @@ class PredictionWorkflowService:
         # 산정한다. 프로젝트의 최신 HistoricalData.base_amount 를 해석하되, 이를
         # 얻지 못하면(0/falsy) 요청에 실린 명시적 budget_estimate 로 폴백한다.
         resolved_bid_base = resolve_notice_bid_base(db, project)
+        # 공사 법정 낙찰하한 tier(구간·시행일 인지) 입력. 추정가격은 기초금액과 별개로
+        # 구간 판정에 쓰이고, 기준일은 공고 시점 하한(구/신율)을 소급 없이 고른다.
+        estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
         prediction = self.price_prediction_port.predict_price(
             budget=resolved_bid_base or request.budget_estimate,
             category=request.category,
@@ -66,6 +72,8 @@ class PredictionWorkflowService:
             agency_name=request.agency_name,
             feedback_calibration=feedback_calibration,
             legal_floor_bid_rate=request.legal_floor_bid_rate,
+            estimation_amount=estimation_amount,
+            reference_date=reference_date,
         )
 
         # 발주처 밴드(floor/ceiling) 위에 공고별 신호로 위치를 조정한 3종 투찰가

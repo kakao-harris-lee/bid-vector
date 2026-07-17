@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -433,6 +434,8 @@ def _predict_price_case(
     business_group: str | None = None,
     agency_name: str | None = None,
     legal_floor_bid_rate: float | None = None,
+    estimation_amount: float | None = None,
+    reference_date: date | None = None,
 ) -> dict[str, Any]:
     return {
         "id": case_id,
@@ -444,6 +447,8 @@ def _predict_price_case(
         "business_group": business_group,
         "agency_name": agency_name,
         "legal_floor_bid_rate": legal_floor_bid_rate,
+        "estimation_amount": estimation_amount,
+        "reference_date": reference_date,
     }
 
 
@@ -476,6 +481,17 @@ PREDICT_PRICE_CASES: list[dict[str, Any]] = [
         budget=88_042_000.0, category="service",
         description="어초어장 조성 관리 용역", rates=[0.905 for _ in range(20)],
         business_group="service", agency_name="한국수산자원공단",
+    ),
+    # 공사 법정 낙찰하한 tier (2026-01-30 +2%p): a 5억 (<10억) construction notice
+    # dated after the revision resolves the 신율 tier 0.89745 (예정가 basis × default
+    # E[사정률] 1.0 == no-op). The deep low-rate history (~0.80) prices below it, so
+    # the tier floor lifts every scenario to 0.89745 — the fix for flat 0.87 undershoot.
+    _predict_price_case(
+        "predict_construction_legal_floor_tier_new",
+        budget=500_000_000.0, category="construction",
+        description="OO 토목공사 법정하한 검증", rates=[0.80 for _ in range(20)],
+        business_group="construction",
+        estimation_amount=500_000_000.0, reference_date=date(2026, 2, 1),
     ),
 ]
 
@@ -519,6 +535,8 @@ def _run_predict_price(case: dict[str, Any]) -> dict[str, Any]:
         agency_name=case.get("agency_name"),
         business_group=case.get("business_group"),
         legal_floor_bid_rate=case.get("legal_floor_bid_rate"),
+        estimation_amount=case.get("estimation_amount"),
+        reference_date=case.get("reference_date"),
     )
     # backtest_report (auto selector only) is a large nested structure not present
     # under the historical preference; drop defensively so a config flip can't bloat
@@ -593,8 +611,10 @@ def test_golden_case_count_is_pinned():
     assert len(ENSEMBLE_CASES) == 12
     # +1: predict_agency_band_assessment_marine locks the E[사정률] base-alignment path
     # (base 정합화 P0) — the first golden exercising the agency band THROUGH the guardrail.
-    assert len(PREDICT_PRICE_CASES) == 3
-    assert len(ALL_CASES) == 35
+    # +1: predict_construction_legal_floor_tier_new locks the 2026-01-30 construction
+    # legal 낙찰하한 tier (구간·시행일 인지) raising the floor above the flat 0.87.
+    assert len(PREDICT_PRICE_CASES) == 4
+    assert len(ALL_CASES) == 36
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +644,18 @@ def test_guardrail_ceiling_lower_actually_fires():
     assert result["predicted_bid_rate"] <= 0.93 + 1e-9
     for candidate in result["bid_rate_candidates"]:
         assert candidate["bid_rate"] <= 0.93 + 1e-9, candidate
+
+
+def test_construction_legal_floor_tier_actually_fires():
+    # 2026-01-30 신율: a 5억 (<10억) construction notice floor is the 0.89745 tier,
+    # ABOVE the flat 0.87 — proves the tier binds and lifts the recommendation.
+    result = _run(_case_by_id("predict_construction_legal_floor_tier_new"))
+    assert result["guardrail_applied"] is True
+    assert result["floor_bid_rate"] == 0.89745
+    floor = result["safe_floor_bid_rate"]
+    assert result["predicted_bid_rate"] >= floor - 1e-9
+    for candidate in result["bid_rate_candidates"]:
+        assert candidate["bid_rate"] >= floor - 1e-9, candidate
 
 
 # ---------------------------------------------------------------------------

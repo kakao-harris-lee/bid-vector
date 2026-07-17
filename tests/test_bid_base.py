@@ -6,11 +6,16 @@ KONEPS 적격심사 투찰가는 추정가격(ex-VAT, ``Project.budget_estimate`
 에 넘기는 ``budget`` 도 base_amount 여야 올바른(VAT 포함) 투찰 금액이 나온다.
 """
 
+from datetime import UTC, date, datetime
+
 import pytest
 
 from app.models.models import HistoricalData, Project
 from app.schemas.schemas import PricePredictionRequest
-from app.services.bid_base import resolve_notice_bid_base
+from app.services.bid_base import (
+    resolve_notice_bid_base,
+    resolve_notice_legal_floor_inputs,
+)
 from app.services.prediction_workflow import PredictionWorkflowService
 
 # A VAT (과세) notice: 기초금액 = 추정가격 × 1.1.
@@ -218,3 +223,77 @@ def test_predict_price_falls_back_to_budget_when_base_missing(test_db):
 
     assert _fed_budget(prediction) == pytest.approx(_BUDGET_ESTIMATE, rel=1e-3)
     assert prediction["predicted_price"] == pytest.approx(rate * _BUDGET_ESTIMATE, rel=1e-3)
+
+
+# --------------------------------------------------------------------------- #
+# resolve_notice_legal_floor_inputs — construction legal 낙찰하한 tier inputs.
+# Leakage-critical: the tier resolver keys on these, so pin the estimation
+# coercion and the KST-day derivation (the ±1-day error right at the 2026-01-30
+# 신율 시행일 boundary is what a UTC/KST slip would introduce).
+# --------------------------------------------------------------------------- #
+
+
+def _legal_floor_project(
+    *, budget_estimate=3_000_000_000.0, created_at=None
+) -> Project:
+    """In-memory project (no flush) — the helper reads attributes directly and
+    needs no DB. ``created_at`` is set explicitly because the column default only
+    fires at INSERT time."""
+    return Project(
+        title="법정하한 입력 검증",
+        budget_estimate=budget_estimate,
+        category="construction",
+        created_at=created_at,
+    )
+
+
+@pytest.mark.parametrize(
+    "budget_estimate, expected",
+    [
+        (500_000_000.0, 500_000_000.0),  # 양수 → 그대로
+        (0.0, None),  # 0 → None (구간 판정 불가)
+        (-1.0, None),  # 음수 → None
+        (None, None),  # 없음 → None
+    ],
+)
+def test_legal_floor_inputs_estimation_amount(budget_estimate, expected):
+    project = _legal_floor_project(
+        budget_estimate=budget_estimate, created_at=datetime(2026, 2, 1, tzinfo=UTC)
+    )
+    estimation, _ = resolve_notice_legal_floor_inputs(project)
+    if expected is None:
+        assert estimation is None
+    else:
+        assert estimation == pytest.approx(expected)
+
+
+def test_legal_floor_inputs_reference_date_at_kst_midnight_boundary():
+    """KST = UTC+9, so KST 자정 = UTC 15:00. A notice created at UTC 2026-01-29
+    15:00 is KST 2026-01-30 00:00 → the 신율 시행일 date, not 2026-01-29."""
+    project = _legal_floor_project(created_at=datetime(2026, 1, 29, 15, 0, tzinfo=UTC))
+    _, reference_date = resolve_notice_legal_floor_inputs(project)
+    assert reference_date == date(2026, 1, 30)
+
+
+def test_legal_floor_inputs_reference_date_just_before_kst_midnight():
+    """UTC 2026-01-29 14:59 == KST 2026-01-29 23:59 → still the 구율 date."""
+    project = _legal_floor_project(created_at=datetime(2026, 1, 29, 14, 59, tzinfo=UTC))
+    _, reference_date = resolve_notice_legal_floor_inputs(project)
+    assert reference_date == date(2026, 1, 29)
+
+
+def test_legal_floor_inputs_naive_created_at_assumed_utc():
+    """SQLite stores naive UTC datetimes; to_kst assumes naive == UTC, so the same
+    15:00 straddle still lands on the KST-next-day date."""
+    project = _legal_floor_project(created_at=datetime(2026, 1, 29, 15, 0))  # naive
+    _, reference_date = resolve_notice_legal_floor_inputs(project)
+    assert reference_date == date(2026, 1, 30)
+
+
+def test_legal_floor_inputs_no_created_at_returns_none_reference():
+    """created_at 없음 → reference_date None → 리졸버가 tier 미적용(소급 방지).
+    추정가격은 있어도 날짜가 없으면 tier 를 걸지 않는다."""
+    project = _legal_floor_project(created_at=None)
+    estimation, reference_date = resolve_notice_legal_floor_inputs(project)
+    assert estimation == pytest.approx(3_000_000_000.0)
+    assert reference_date is None

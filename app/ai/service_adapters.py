@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping as MappingABC
+from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 
 from app.ai.bid_recommendation import get_bid_recommendation
@@ -30,6 +31,8 @@ class FunctionPricePredictionPort(PricePredictionPort):
         business_type_code: str | None = None,
         business_group: str | None = None,
         legal_floor_bid_rate: float | None = None,
+        estimation_amount: float | None = None,
+        reference_date: date | datetime | None = None,
     ) -> dict[str, Any]:
         return predict_price(
             budget=budget,
@@ -41,6 +44,8 @@ class FunctionPricePredictionPort(PricePredictionPort):
             business_type_code=business_type_code,
             business_group=business_group,
             legal_floor_bid_rate=legal_floor_bid_rate,
+            estimation_amount=estimation_amount,
+            reference_date=reference_date,
         )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 
 
@@ -20,8 +21,14 @@ class PricePredictionPort(ABC):
         business_type_code: str | None = None,
         business_group: str | None = None,
         legal_floor_bid_rate: float | None = None,
+        estimation_amount: float | None = None,
+        reference_date: date | datetime | None = None,
     ) -> dict[str, Any]:
-        """Return a normalized price prediction payload."""
+        """Return a normalized price prediction payload.
+
+        ``estimation_amount`` (추정가격) and ``reference_date`` (공고 기준일) drive the
+        construction legal 낙찰하한 tier; both default to ``None`` (tier not applied).
+        """
 
 
 class BidRecommendationPort(ABC):

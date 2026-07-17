@@ -1053,6 +1053,11 @@ def test_price_prediction_endpoint_accepts_notice_legal_floor_rate(client, test_
     ])
     test_db.commit()
 
+    # 추정가격 4946만원(<10억) construction 공고는 2026-01-30 신율 tier 0.89745 가
+    # 하한이므로(project.created_at=오늘 → 신율), 요청 주입 legal_floor 가 "legal"
+    # 소스로 바인딩하려면 그 tier 보다 높아야 한다(최종 floor = 모든 소스의 max).
+    # 90.5% 를 주입해 percent-style 수용 + legal 바인딩을 검증한다. (tier 미만 주입이
+    # tier 에 눌리는 경로는 test_guardrail_legal_floor.py 가 커버.)
     response = client.post(
         "/api/v1/predictions/price",
         json={
@@ -1060,16 +1065,16 @@ def test_price_prediction_endpoint_accepts_notice_legal_floor_rate(client, test_
             "budget_estimate": 49_461_000.0,
             "category": "construction",
             "description": "R26BK01603215-000 하한율 검증",
-            "legal_floor_bid_rate": 87.995,
+            "legal_floor_bid_rate": 90.5,
         },
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["floor_guardrail_source"] == "legal"
-    assert data["legal_floor_bid_rate"] == pytest.approx(0.87995, abs=0.000001)
-    assert data["floor_bid_rate"] == pytest.approx(0.87995, abs=0.000001)
-    assert data["safe_floor_bid_rate"] == pytest.approx(0.88095, abs=0.000001)
+    assert data["legal_floor_bid_rate"] == pytest.approx(0.905, abs=0.000001)
+    assert data["floor_bid_rate"] == pytest.approx(0.905, abs=0.000001)
+    assert data["safe_floor_bid_rate"] == pytest.approx(0.906, abs=0.000001)
     assert all(
         item["bid_rate"] >= data["safe_floor_bid_rate"]
         for item in data["bid_rate_candidates"]

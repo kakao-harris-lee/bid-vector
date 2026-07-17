@@ -30,7 +30,10 @@ from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorStrategy, Project, User
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
-from app.services.bid_base import resolve_notice_bid_base
+from app.services.bid_base import (
+    resolve_notice_bid_base,
+    resolve_notice_legal_floor_inputs,
+)
 from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.classifier import (
     NoticeClassifierService,
@@ -498,6 +501,9 @@ class OpportunityAnalysisService:
         # 과세 공고에서 추정가격을 넘기면 ~10% 낮게 산정되어 낙찰하한 미만으로 낙될
         # 위험이 있으므로 base_amount 를 해석해 넘긴다.
         bid_base = resolve_notice_bid_base(db, project)
+        # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 소급 없이 그
+        # 공고 시점의 구/신율을 적용한다.
+        estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
@@ -508,6 +514,8 @@ class OpportunityAnalysisService:
             business_type_code=business_type_code,
             business_group=business_group,
             legal_floor_bid_rate=request.legal_floor_bid_rate,
+            estimation_amount=estimation_amount,
+            reference_date=reference_date,
         )
         # 발주처 밴드(floor/ceiling) 위에 공고별 신호로 위치를 조정한 3종 투찰가
         # 메뉴를 additive 레이어로 첨부한다. 밴드가 발주처(agency) 밴드에서 왔을
