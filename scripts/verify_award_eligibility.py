@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Post-개찰 낙찰 적격/경쟁력 검증 리포트.
+"""Post-개찰 낙찰 적격/경쟁력 검증 리포트 (thin CLI shim).
 
 하나 이상의 공고에 대해, 개찰(결과 공개) 이후 운영자가 산정했던 투찰가가
 실현된 낙찰하한가 대비 적격이었는지, 그리고 실제 낙찰자 대비 얼마나
 경쟁력이 있었는지를 사실값만으로 출력한다.
+
+검증 코어(``verify_one``)와 텔레그램 메시지 빌더(``build_telegram_message``)는
+``app.services.award_verification`` 로 추출되어 낙찰결과 자동 텔레그램 beat
+태스크와 공유된다(collector delegator 패턴). 이 스크립트는 CLI 파싱 + 콘솔
+리포트 포맷 + ``--telegram`` 게이트만 담당한다.
 
 이 스크립트는 KONEPS 예비가격 상세를 라이브로 조회하므로(외부 호출), DB와
 KONEPS 접근이 가능한 운영 호스트에서만 실행한다. 결과는 stdout으로만 나가고
@@ -19,237 +24,47 @@ KONEPS 접근이 가능한 운영 호스트에서만 실행한다. 결과는 std
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sqlalchemy.orm import Session
-
-from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.time import kst_now
-from app.models.models import HistoricalData, Project, TenderResult
+from app.services.award_verification import (  # re-exported for tests + callers
+    VERDICT_ELIGIBLE_OUTBID,
+    VERDICT_ELIGIBLE_WINNABLE,
+    VERDICT_NOT_SETTLED,
+    VERDICT_UNDERCUT,
+    VERDICT_UNDETERMINED,
+    TelegramSender,
+    _pct,
+    _ratio_pct,
+    _settled_results,
+    _signed_pp,
+    _signed_won,
+    _won,
+    build_telegram_message,
+    strip_notice_suffix,
+    verify_one,
+)
 
-# Verdict codes (also asserted by tests).
-VERDICT_NOT_SETTLED = "미적재/개찰 전"
-VERDICT_ELIGIBLE_WINNABLE = "적격+낙찰가능"
-VERDICT_ELIGIBLE_OUTBID = "적격+밀림"
-VERDICT_UNDERCUT = "낙하"
-VERDICT_UNDETERMINED = "미확정(낙찰하한율 필요)"
-
-_NOTICE_SUFFIX_RE = re.compile(r"-\d+$")
-
-# A KONEPS ``FetchDetail`` takes ``(notice, category)`` and returns the reserve
-# detail summary dict (``reserve_prices``/``selected_numbers``/``planned_price``
-# /``base_amount``/``reserve_detail_total_count``).
-FetchDetail = Callable[[str, str | None], dict[str, Any]]
-
-
-class TelegramSender(Protocol):
-    """Minimal sender surface used by :func:`notify_telegram` (injectable in tests)."""
-
-    def send_message(self, message: str) -> dict[str, Any]:
-        ...
-
-
-def strip_notice_suffix(notice: str) -> str:
-    """Drop a trailing 차수 suffix (e.g. ``-000``) so LIKE matching works.
-
-    Project.notice_number is often stored without the order suffix that KONEPS
-    appends, so we match on the base number prefix.
-    """
-    return _NOTICE_SUFFIX_RE.sub("", str(notice or "").strip())
-
-
-def _default_fetch_detail(notice: str, category: str | None) -> dict[str, Any]:
-    """Live KONEPS reserve-detail fetch. Never logs the service key."""
-    from app.services.koneps.collector import KonepsCollectorService
-
-    service = KonepsCollectorService()
-    return service._fetch_scsbid_reserve_detail(
-        {"bidNtceNo": notice},
-        category=category,
-        service_key=str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip(),
-    )
-
-
-def _coerce_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _rate_to_fraction(value: Any) -> float | None:
-    """Normalize a rate that may be stored as a ratio or a percentage."""
-    numeric = _coerce_float(value)
-    if numeric is None or numeric <= 0:
-        return None
-    return numeric / 100.0 if numeric > 1.5 else numeric
-
-
-def _find_project(db: Session, base_notice: str) -> Project | None:
-    if not base_notice:
-        return None
-    return (
-        db.query(Project)
-        .filter(Project.notice_number.like(f"{base_notice}%"))
-        .order_by(Project.id.asc())
-        .first()
-    )
-
-
-def _historical_base_amount(db: Session, project: Project | None) -> float | None:
-    if project is None:
-        return None
-    record = (
-        db.query(HistoricalData)
-        .filter(HistoricalData.project_id == project.id)
-        .order_by(HistoricalData.id.desc())
-        .first()
-    )
-    if record is None:
-        return None
-    amount = _coerce_float(record.base_amount)
-    return amount if amount and amount > 0 else None
-
-
-def _tender_result(db: Session, project: Project | None) -> TenderResult | None:
-    if project is None:
-        return None
-    return (
-        db.query(TenderResult)
-        .filter(TenderResult.project_id == project.id)
-        .order_by(TenderResult.id.desc())
-        .first()
-    )
-
-
-def _eligibility(
-    *, bid: float, floor_rate: float | None, planned_price: float | None
-) -> dict[str, Any]:
-    """Compute 적격 판정 vs the realized 낙찰하한가 when we can."""
-    if floor_rate is None or not planned_price or planned_price <= 0:
-        return {"floor_price": None, "eligible": None, "margin_won": None, "margin_pp": None}
-    floor_price = floor_rate * planned_price
-    return {
-        "floor_price": floor_price,
-        "eligible": bid >= floor_price,
-        "margin_won": bid - floor_price,
-        "margin_pp": (bid - floor_price) / planned_price * 100.0,
-    }
-
-
-def _competitiveness(
-    *, bid: float, winning_amount: float | None, denominator: float | None
-) -> dict[str, Any]:
-    if winning_amount is None or winning_amount <= 0:
-        return {"won": None, "pp": None}
-    pp = None
-    if denominator and denominator > 0:
-        pp = (bid - winning_amount) / denominator * 100.0
-    return {"won": bid - winning_amount, "pp": pp}
-
-
-def _verdict(
-    *, eligible: bool | None, bid: float, winning_amount: float | None
-) -> str:
-    if eligible is None:
-        return VERDICT_UNDETERMINED
-    if not eligible:
-        return VERDICT_UNDERCUT
-    if winning_amount is not None and winning_amount > 0 and bid >= winning_amount:
-        return VERDICT_ELIGIBLE_OUTBID
-    return VERDICT_ELIGIBLE_WINNABLE
-
-
-def verify_one(
-    db: Session,
-    notice: str,
-    bid: float,
-    floor_rate: float | None,
-    *,
-    fetch_detail: FetchDetail = _default_fetch_detail,
-) -> dict[str, Any]:
-    """Verify a single (notice, bid, floor_rate) after 개찰. Returns a result dict.
-
-    Structured so ``main()`` only formats it and tests can inject ``fetch_detail``
-    (or monkeypatch ``KonepsCollectorService._fetch_scsbid_reserve_detail``).
-    """
-    base_notice = strip_notice_suffix(notice)
-    project = _find_project(db, base_notice)
-    category = project.category if project is not None else None
-
-    detail: dict[str, Any] = {}
-    reserve_error: str | None = None
-    try:
-        detail = fetch_detail(base_notice, category) or {}
-    except Exception as exc:  # noqa: BLE001 - one bad notice must not abort the run
-        reserve_error = f"{type(exc).__name__}: {exc}"
-
-    reserve_prices = list(detail.get("reserve_prices") or [])
-    selected_numbers = list(detail.get("selected_numbers") or [])
-    planned_price = _coerce_float(detail.get("planned_price"))
-    reserve_base = _coerce_float(detail.get("base_amount"))
-    total_count = int(detail.get("reserve_detail_total_count") or 0)
-
-    result = _tender_result(db, project)
-    winning_amount = _coerce_float(result.winning_amount) if result else None
-    base_amount = reserve_base or _historical_base_amount(db, project)
-
-    settled = (
-        total_count > 0
-        or bool(reserve_prices)
-        or (winning_amount is not None and winning_amount > 0)
-    )
-
-    base: dict[str, Any] = {
-        "notice": notice,
-        "base_notice": base_notice,
-        "project_id": project.id if project is not None else None,
-        "category": category,
-        "bid": bid,
-        "floor_rate": floor_rate,
-        "reserve_error": reserve_error,
-        "settled": settled,
-    }
-    if not settled:
-        base["verdict"] = VERDICT_NOT_SETTLED
-        return base
-
-    eligibility = _eligibility(bid=bid, floor_rate=floor_rate, planned_price=planned_price)
-    denominator = planned_price if (planned_price and planned_price > 0) else base_amount
-    competitiveness = _competitiveness(
-        bid=bid, winning_amount=winning_amount, denominator=denominator
-    )
-    base.update(
-        {
-            "planned_price": planned_price,
-            "reserve_price_count": len(reserve_prices),
-            "selected_numbers": selected_numbers,
-            "base_amount": base_amount,
-            "winning_company": result.winning_company if result else None,
-            "winning_amount": winning_amount,
-            "winning_rate": _rate_to_fraction(result.winning_rate) if result else None,
-            "floor_price": eligibility["floor_price"],
-            "eligible": eligibility["eligible"],
-            "eligibility_margin_won": eligibility["margin_won"],
-            "eligibility_margin_pp": eligibility["margin_pp"],
-            "competitiveness_won": competitiveness["won"],
-            "competitiveness_pp": competitiveness["pp"],
-            "verdict": _verdict(
-                eligible=eligibility["eligible"], bid=bid, winning_amount=winning_amount
-            ),
-        }
-    )
-    return base
+__all__ = [
+    "VERDICT_ELIGIBLE_OUTBID",
+    "VERDICT_ELIGIBLE_WINNABLE",
+    "VERDICT_NOT_SETTLED",
+    "VERDICT_UNDERCUT",
+    "VERDICT_UNDETERMINED",
+    "build_telegram_message",
+    "format_result",
+    "notify_telegram",
+    "parse_specs",
+    "strip_notice_suffix",
+    "verify_one",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -360,30 +175,8 @@ def parse_specs(argv: list[str] | None = None) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Formatting
+# Console formatting
 # ---------------------------------------------------------------------------
-
-
-def _won(value: float | None) -> str:
-    return "-" if value is None else f"{value:,.0f}원"
-
-
-def _signed_won(value: float | None) -> str:
-    return "-" if value is None else f"{value:+,.0f}원"
-
-
-def _pct(fraction: float | None) -> str:
-    return "-" if fraction is None else f"{fraction * 100:.3f}%"
-
-
-def _signed_pp(value: float | None) -> str:
-    return "-" if value is None else f"{value:+.3f}%p"
-
-
-def _ratio_pct(numerator: float, denominator: float | None) -> str:
-    if not denominator or denominator <= 0:
-        return "-"
-    return f"{numerator / denominator * 100:.3f}%"
 
 
 def format_result(result: dict[str, Any]) -> list[str]:
@@ -454,34 +247,6 @@ def _format_eligibility(result: dict[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Telegram alarm (opt-in; only fires when at least one notice is 개찰 완료)
 # ---------------------------------------------------------------------------
-
-
-def _settled_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep only 개찰 완료 notices (verdict != VERDICT_NOT_SETTLED)."""
-    return [r for r in results if r.get("verdict") != VERDICT_NOT_SETTLED]
-
-
-def build_telegram_message(settled: list[dict[str, Any]]) -> str:
-    """Render a concise, factual Korean alarm for 개찰 완료 notices.
-
-    Reuses the console report's numbers (예정가격/내 투찰가/낙찰가/사업금액 대비 %).
-    No fabricated probabilities and no secrets — honesty §2.
-    """
-    header = (
-        f"[낙찰 적격/경쟁력 검증] 개찰 {len(settled)}건 "
-        f"(KST {kst_now():%Y-%m-%d %H:%M})"
-    )
-    lines = [header]
-    for result in settled:
-        notice = result.get("notice")
-        bid = result.get("bid")
-        base_amount = result.get("base_amount")
-        lines.append(
-            f"[{notice}] {result.get('verdict')} | 예정가 {_won(result.get('planned_price'))}"
-            f" | 내 투찰 {_won(bid)} | 낙찰가 {_won(result.get('winning_amount'))}"
-            f" | 사업금액대비 {_ratio_pct(bid, base_amount) if bid is not None else '-'}"
-        )
-    return "\n".join(lines)
 
 
 def _default_sender() -> TelegramSender:
