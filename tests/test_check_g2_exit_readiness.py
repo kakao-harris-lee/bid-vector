@@ -96,9 +96,9 @@ def _stray_fail_row(date: str, operator_ids: list[int]) -> dict:
     row = _daily_row(date, operator_ids)
     row["status"] = "fail"
     row["collect_g2_evidence_snapshot"]["status"] = "fail"
-    row["collect_g2_evidence_snapshot"]["path"] = (
-        f"reports/g2-evidence/{date}/run-0/g2-evidence-summary.json"
-    )
+    row["collect_g2_evidence_snapshot"][
+        "path"
+    ] = f"reports/g2-evidence/{date}/run-0/g2-evidence-summary.json"
     for operator_id in operator_ids:
         row["operators"][str(operator_id)]["candidate_preview"] = "missing"
         row["operators"][str(operator_id)]["strategy_monitor"] = "missing"
@@ -692,7 +692,6 @@ def test_cli_still_flags_file_backed_counted_row_missing_snapshot_path(
     """Guard: a file-backed (fastlane) counted pass row whose snapshot path does
     not resolve must still red the gate. The window fix must never weaken the
     file-backed path check."""
-    operator_ids = [101, 102, 103]
     manifest = _manifest()
     missing_snapshot_path = (
         "reports/g2-evidence/2026-06-24/run-1/never-written-summary.json"
@@ -725,8 +724,7 @@ def test_cli_still_flags_file_backed_counted_row_missing_snapshot_path(
     assert report["ready_for_human_review"] is False
     assert report["global_checks"]["no_missing_evidence_paths"] is False
     missing = {
-        (item["location"], item["reason"])
-        for item in report["missing_evidence_paths"]
+        (item["location"], item["reason"]) for item in report["missing_evidence_paths"]
     }
     assert (
         "daily_status[1].collect_g2_evidence_snapshot.path",
