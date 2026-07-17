@@ -7,6 +7,12 @@ era-correct 공사 법정 낙찰하한 tier(#197 ``resolve_construction_qualific
 predict_price 의 후보 앵커와 공고별 투찰가 메뉴(``bid_target``)가 이 **단일 출처**를
 공유해 두 표면이 항상 일치한다(병렬 경로 아님).
 
+전제(두 표면 일치 조건): 후보 경로는 [safe_floor(=floor+안전마진), ceiling], 메뉴 경로는
+[floor, ceiling]로 clamp 된다. 따라서 일치는 **aggressive offset ≥
+PREDICTION_FLOOR_SAFETY_MARGIN_RATE(기본 0.001)** 전제에서만 성립한다. 운영자가
+aggressive offset 을 안전마진 아래로 튜닝하면 후보는 safe_floor 로 들리고 메뉴는
+floor+offset 이 되어 두 표면이 갈라진다 — offset 튜닝 시 이 전제를 지킬 것.
+
 basis 일관성(중요)
 ------------------
 측정 offset 은 (win÷기초금액 − **무변환** tier floor)이므로, 앵커도 무변환 floor 위에

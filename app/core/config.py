@@ -511,6 +511,12 @@ class Settings(BaseSettings):
     # MAXIMUM above, decide its entry here in the same change — a missing key is a
     # 1.0 no-op, which silently reintroduces the +0.5%p bug for any agency whose
     # band was calibrated on 예정가-basis rows. Keep the three maps in sync.
+    # The construction scenario anchor adds a FOURTH coupling: an agency listed
+    # ONLY here (assessment ≠ 1.0, no MIN/MAX band) converts the guardrail floor,
+    # and the anchor then stacks its UNCONVERTED-basis offsets
+    # (PREDICTION_CONSTRUCTION_SCENARIO_FLOOR_OFFSETS) on that converted floor —
+    # a mixed-basis anchor (the band-priority gate only fires on MIN/MAX bands).
+    # If you ever add an assessment-only agency, gate the anchor for it too.
     #
     # WARNING (basis provenance — feedback loop must filter to clean rows): any
     # RE-CALIBRATION of this band from settled rows MUST restrict to
