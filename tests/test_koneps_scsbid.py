@@ -187,6 +187,65 @@ def test_build_award_item_falls_back_to_request_category_when_unspecified():
     assert item["business_type"] == "용역"
 
 
+# --------------------------------------------------------------------------- #
+# base 정합화(P0): 예정가(planned_price)를 base_amount로 폴백 저장하지 않는다.
+# base_amt==planned_est 오염이 발주처 밴드를 예정가 기준으로 캘리브레이션시킨 원인이다.
+# --------------------------------------------------------------------------- #
+def test_build_award_item_does_not_use_planned_price_as_base_amount():
+    """detail에 기초금액이 없고 예정가만 있으면 base_amount가 예정가로 폴백되면 안 된다."""
+    req = CrawlRequest(source="scsbid-openapi", category="용역")
+    raw_item = {
+        "bidNtceNo": "20260201-001",
+        "sucsfbidAmt": "100000000",  # 낙찰가
+        "sucsfbidRate": "87.5",       # 낙찰률(≈낙찰가/기초금액)
+    }
+    # 기초금액(base_amount)은 없고 예정가(planned_price)만 존재하는 reserve detail.
+    detail = {"planned_price": 121_000_000}
+    item = scsbid.build_scsbid_award_item(
+        raw_item, detail=detail, request=req, operation="getOpengResultListInfoServc"
+    )
+    assert item is not None
+    # base_amount는 예정가(121_000_000)가 아니라 낙찰가/낙찰률 추정치(≈기초금액)여야 한다.
+    assert item["base_amount"] != pytest.approx(121_000_000.0)
+    assert item["base_amount"] == pytest.approx(100_000_000.0 / 0.875)
+    # 예정가는 별도 필드로 유지되어 이후 사정률(예정가/기초금액) 캘리브레이션이 가능하다.
+    assert item["metadata"]["planned_price"] == 121_000_000
+    # 투찰률(bid_rate)은 낙찰가/기초금액 추정치 = 낙찰률로 회복된다(예정가 기준 왜곡 아님).
+    assert item["metadata"]["bid_rate"] == pytest.approx(0.875)
+
+
+def test_build_award_item_planned_price_not_derived_from_rate():
+    """detail이 비면 예정가는 None으로 남아야 base_amt==planned 재오염을 막는다."""
+    req = CrawlRequest(source="scsbid-openapi", category="용역")
+    raw_item = {
+        "bidNtceNo": "20260201-002",
+        "sucsfbidAmt": "50000000",
+        "sucsfbidRate": "88.0",
+    }
+    item = scsbid.build_scsbid_award_item(
+        raw_item, detail={}, request=req, operation="getOpengResultListInfoServc"
+    )
+    assert item is not None
+    # 낙찰가/낙찰률은 기초금액 추정치이지 예정가가 아니므로 예정가로 저장되면 안 된다.
+    assert item["metadata"]["planned_price"] is None
+    # base_amount는 낙찰가/낙찰률 추정치(≈기초금액)로 채워진다.
+    assert item["base_amount"] == pytest.approx(50_000_000.0 / 0.88)
+
+
+def test_build_award_item_prefers_real_base_amount_when_present():
+    """진짜 기초금액이 있으면 그대로 쓰고 예정가와 구분된다(회귀 방지)."""
+    req = CrawlRequest(source="scsbid-openapi", category="용역")
+    raw_item = {"bidNtceNo": "N-3", "sucsfbidAmt": "100000000", "sucsfbidRate": "90"}
+    detail = {"base_amount": 120_000_000, "planned_price": 119_500_000}
+    item = scsbid.build_scsbid_award_item(
+        raw_item, detail=detail, request=req, operation="getOpengResultListInfoServc"
+    )
+    assert item is not None
+    assert item["base_amount"] == pytest.approx(120_000_000.0)
+    assert item["metadata"]["planned_price"] == 119_500_000
+    assert item["base_amount"] != item["metadata"]["planned_price"]
+
+
 def test_scsbid_detail_page_size_default():
     """reserve-detail fetch page-size Settings 기본값이 기존 리터럴(100)과 동일한지 확인."""
     assert settings.KONEPS_SCSBID_DETAIL_PAGE_SIZE == 100
