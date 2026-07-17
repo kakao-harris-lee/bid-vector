@@ -11,6 +11,10 @@ import numpy as np
 
 from app.ai import guardrail_core
 from app.ai.guardrail_core import GuardrailConfig
+from app.ai.construction_scenario import (
+    is_construction_era_floor_resolved,
+    resolve_scenario_anchor_rates,
+)
 from app.ai.predictors import (
     BasePricePredictor,
     PricePredictionContext,
@@ -40,6 +44,10 @@ class GuardrailContext:
     floor_from_agency: bool = False
     ceiling_from_agency: bool = False
     agency_name: str | None = None
+    # 공사 era-correct 법정 하한 앵커(#197 tier 해석 + 발주처 밴드 부재 시). stance→rate
+    # (aggressive/recommended/safe), floor+offset 을 [floor, ceiling] 로 clamp 한 값.
+    # None 이면 앵커 미적용(기존 clamp 동작 그대로).
+    construction_scenario_anchor: dict[str, float] | None = None
 
 
 _PREDICTOR_KEY_ALIASES = {
@@ -596,6 +604,9 @@ def _apply_prediction_guardrails(
             )
         )
 
+    if guardrail_context.construction_scenario_anchor is not None:
+        _annotate_construction_scenario_anchor(guarded_prediction, guardrail_context)
+
     if not floor_applied_labels and not ceiling_applied_labels:
         return guarded_prediction
 
@@ -606,6 +617,32 @@ def _apply_prediction_guardrails(
         ceiling_labels=ceiling_applied_labels,
     )
     return guarded_prediction
+
+
+def _annotate_construction_scenario_anchor(
+    guarded_prediction: Dict[str, Any],
+    context: GuardrailContext,
+) -> None:
+    """공사 floor 앵커 적용을 설명 문구에 정직하게 남긴다(정직 명세 §2).
+
+    낙찰 확률/단정 표현 없이, 앵커가 '과거 실낙찰 초과분 백분위수(historical percentile)
+    기반'임과 공격 시나리오의 낙하(실격) 위험을 드러낸다.
+    """
+    anchor = context.construction_scenario_anchor or {}
+    floor = context.floor_bid_rate
+    if floor is None:
+        return
+    aggressive_rate = float(anchor.get("aggressive", floor))
+    note = (
+        f"공사 법정 낙찰하한 {floor:.3%} 위에 과거 실낙찰 초과분 백분위수(p25/p50/p75, "
+        f"표본 기반 캘리브레이션)로 공격/추천/안전 시나리오를 앵커했습니다. 공격 시나리오"
+        f"({aggressive_rate:.3%})는 최저적격 경쟁 타깃으로, 실현 낙찰하한이 더 높으면 "
+        f"낙(실격) 위험이 있습니다."
+    )
+    guarded_prediction["explanation"] = _append_explanation_note(
+        str(guarded_prediction.get("explanation", "") or ""),
+        note,
+    )
 
 
 def _resolve_guardrail_context(
@@ -697,6 +734,21 @@ def _resolve_guardrail_context(
             floor_bid_rate,
             ceiling_bid_rate=ceiling_bid_rate,
         )
+    # 공사 시나리오 floor 앵커: era-correct tier floor(#197)가 해석되고 발주처 밴드가
+    # 없을 때만 켠다. 발주처 밴드가 있으면(agency 가 더 특이적) 기존 밴드/positioning 이
+    # 우선이므로 앵커를 적용하지 않는다(우선순위를 선언적으로 고정). 앵커 기준은 위에서
+    # 최종 해석한 floor_bid_rate 다(basis 일관성은 construction_scenario docstring 참조).
+    construction_scenario_anchor: dict[str, float] | None = None
+    if (
+        not floor_from_agency
+        and not ceiling_from_agency
+        and is_construction_era_floor_resolved(category, estimation_amount, reference_date)
+    ):
+        construction_scenario_anchor = resolve_scenario_anchor_rates(
+            floor_bid_rate=floor_bid_rate,
+            ceiling_bid_rate=ceiling_bid_rate,
+            offsets=config.construction_scenario_floor_offsets,
+        )
     return GuardrailContext(
         normalized_legal_floor_bid_rate=normalized_legal_floor_bid_rate,
         floor_guardrail_source=floor_guardrail_source,
@@ -709,6 +761,7 @@ def _resolve_guardrail_context(
         floor_from_agency=floor_from_agency,
         ceiling_from_agency=ceiling_from_agency,
         agency_name=agency_name,
+        construction_scenario_anchor=construction_scenario_anchor,
     )
 
 
@@ -778,6 +831,34 @@ def _guard_bid_rate_candidates(
     return guarded_candidates, floor_applied_labels, ceiling_applied_labels
 
 
+# 후보 taxonomy(통계 spread)와 시나리오 stance(투찰 전략)는 축이 다르다: 후보
+# conservative=최저 추정가(낮은 율)=최경쟁=공격 stance, base=추천, aggressive=최고 추정가
+# (높은 율)=낙하 안전=안전 stance. 값 기준(offset 오름차순)으로도 일치한다. 룩업으로
+# 브리지를 선언한다(§4.5.2). 앵커가 켜졌을 때만 사용된다.
+_CANDIDATE_LABEL_TO_SCENARIO_STANCE = {
+    "conservative": "aggressive",
+    "base": "recommended",
+    "aggressive": "safe",
+}
+
+
+def _resolve_candidate_target_rate(
+    candidate: dict[str, Any],
+    *,
+    context: GuardrailContext,
+    original_bid_rate: float,
+) -> float:
+    """공사 앵커가 켜지면 후보 stance 의 floor-앵커 rate 로, 아니면 원래 rate 로 target 결정."""
+    anchor = context.construction_scenario_anchor
+    if not anchor:
+        return original_bid_rate
+    stance = _CANDIDATE_LABEL_TO_SCENARIO_STANCE.get(str(candidate.get("label") or "base"))
+    if stance is None:
+        return original_bid_rate
+    anchored_rate = anchor.get(stance)
+    return float(anchored_rate) if anchored_rate is not None else original_bid_rate
+
+
 def _guard_candidate_bid_rate(
     candidate: dict[str, Any],
     *,
@@ -785,8 +866,15 @@ def _guard_candidate_bid_rate(
     context: GuardrailContext,
 ) -> tuple[dict[str, Any], bool, bool]:
     original_bid_rate = float(candidate.get("bid_rate", 0.0) or 0.0)
+    # 앵커 target(공사 floor 앵커) 또는 원래 rate 를 기존 guardrail clamp 에 그대로 통과시킨다
+    # (후보 clamp 재사용 — 병렬 경로 없음). 결과는 항상 [safe_floor, ceiling] 안이다.
+    target_bid_rate = _resolve_candidate_target_rate(
+        candidate,
+        context=context,
+        original_bid_rate=original_bid_rate,
+    )
     guarded_bid_rate = _clamp_rate_to_guardrails(
-        original_bid_rate,
+        target_bid_rate,
         floor_bid_rate=context.safe_floor_bid_rate,
         ceiling_bid_rate=context.ceiling_bid_rate,
     )
