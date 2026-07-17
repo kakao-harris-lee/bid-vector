@@ -26,6 +26,7 @@ from app.ai.predictors.historical import resolve_procurement_rate_band
 from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
+from app.services.bid_base import resolve_notice_legal_floor_inputs
 from app.services.prediction_dataset import PredictionDatasetService
 
 DEFAULT_GROUPS = ("construction", "service", "goods")
@@ -529,6 +530,11 @@ def evaluate_target(
         or normalize_category(service, historical.category)
         or target.group
     )
+    # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). #197 live 경로와
+    # 동일 헬퍼로 공고 자신의 날짜를 넘겨, 홀드아웃 평가가 그 시점의 구/신율을
+    # era-correct 하게 적용하도록 한다(2026-01-30 신율 소급 없음). estimation_amount는
+    # 추정가격(budget_estimate)이라 pricing base(budget=기초금액)와 별개다.
+    estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
     prediction = predict_price(
         budget=budget,
         category=category,
@@ -537,6 +543,8 @@ def evaluate_target(
         agency_name=project.issuing_agency or project.demand_agency,
         business_type_code=project.business_type_code,
         business_group=target.group,
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
     )
 
     recommended = scenario_metrics(
