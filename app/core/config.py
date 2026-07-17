@@ -448,6 +448,36 @@ class Settings(BaseSettings):
             "한국수산자원공단": 0.882,
         }
     )
+    # E[사정률] = E[예정가격 / 기초금액]. base 정합화(P0).
+    #
+    # The agency bands above (0.8806~0.882) were calibrated as 낙찰가 / 예정가:
+    # scsbid persistence stored 예정가(planned_price) into base_amount when the
+    # reserve detail lacked a real 기초금액, so this agency's settled rows had
+    # base_amt == planned_est and every derived rate was a 예정가-basis ratio. The
+    # MINIMUM 0.8806 was picked to sit at "88.06% of 예정가" — the sweep sweet spot
+    # (28/29 eligible, single-digit ranks) — and was INTENDED to be applied to 예정가.
+    # But 투찰가 is computed as rate × 사업금액(기초금액, #162). 예정가 is only
+    # ~99.3~99.8% of 기초금액 (실측 한국수산자원공단 99.782% / 99.260%), so multiplying
+    # a 예정가-basis band directly by 기초금액 lands ~+0.5%p high on the 예정가 basis
+    # → the recommendation drifts to the 81~90th 낙찰 percentile (postmortem 52위/25위).
+    #
+    # Alignment: 기초금액-기준 목표율 = 예정가-기준 밴드율 × E[사정률]. The conversion is a
+    # pure declarative multiplier applied to the AGENCY band edges ONLY (see
+    # guardrail_core.resolve_band_assessment_rate). The category/group/legal 낙찰하한
+    # guardrail is UNTOUCHED — resolve_floor_bid_rate still returns max(category, agency),
+    # so a converted (lowered) agency floor can never undercut the hard floor.
+    #
+    # Values are per-agency empirical means of 예정가/기초금액 (refined by the settled
+    # -result feedback loop as real 기초금액 accrues). The 1.0 default is a no-op for
+    # agencies without a calibrated 사정률. WARNING: this is a HYPOTHESIS-based fix
+    # (no post-opening 낙찰가 measured yet); re-calibrate once 개찰 results confirm.
+    PREDICTION_AGENCY_BAND_ASSESSMENT_RATES: dict[str, float] = Field(
+        default_factory=lambda: {
+            # mean(99.782%, 99.260%) ≈ 0.9952 from the two postmortem notices.
+            "한국수산자원공단": 0.9952,
+        }
+    )
+    PREDICTION_DEFAULT_BAND_ASSESSMENT_RATE: float = 1.0
     # Weight applied to the reserve-price (복수예비가격) implied bid rate when
     # blending it into the competitive base rate. 0 disables the prior entirely.
     # The effective weight is further scaled down by reserve sample_count so that

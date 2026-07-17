@@ -55,7 +55,12 @@ def test_from_settings_normalizes_boundary_values(config):
         ("construction", "construction", None, 0.87),
         ("goods", None, None, 0.84),
         ("nonexistent-cat", None, None, None),    # no category, default 0.0 -> None
-        ("technical-service", None, "한국수산자원공단동해본부", 0.8806),  # agency raises floor
+        # agency raises floor above the service category floor(0.87), but the 예정가-basis
+        # band is converted to a 기초금액 basis via E[사정률]=0.9952 (base 정합화 P0):
+        # 0.8806 → 0.876373 (still > 0.87, so the agency edge binds). NOTE: for the
+        # technical-service category (floor 0.88) the converted agency floor no longer
+        # raises it — the category floor correctly dominates (guardrail red line).
+        ("service", None, "한국수산자원공단동해본부", pytest.approx(0.8806 * 0.9952)),
     ],
 )
 def test_resolve_floor_bid_rate(config, category, business_group, agency_name, expected):
@@ -75,7 +80,9 @@ def test_resolve_floor_bid_rate(config, category, business_group, agency_name, e
         ("construction", None, None, 0.93),
         ("service", None, None, 1.0),
         ("construction", "construction", None, 0.93),
-        ("technical-service", None, "한국수산자원공단", 0.882),  # agency lowers ceiling
+        # agency lowers ceiling, converted to 기초금액 basis via E[사정률]=0.9952
+        # (base 정합화 P0): 0.882 → 0.877766.
+        ("technical-service", None, "한국수산자원공단", pytest.approx(0.882 * 0.9952)),
         ("nonexistent-cat", None, None, 1.0),                   # default max 1.0
     ],
 )
