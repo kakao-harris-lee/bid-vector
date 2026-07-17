@@ -10,6 +10,8 @@
 
 2026-07-03 기준으로 개발 노트북에서 처리 가능한 G-2 검증 하드닝, OpenAPI 타입 동기화 가드, 추천 투찰가 guardrail/holdout 백테스트, 세부 조달 세그먼트 밴드와 10원 단위 보정도 `main`에 반영되었습니다. 현재 운영 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다. 추천 품질 쪽은 최신 낙찰 holdout 개선이 들어왔지만, 다음 개발 항목은 `procurement_rate_band`보다 세밀한 feature extractor, selector 분리, legal floor/분모 품질 강화입니다.
 
+**2026-07-17 기준으로 G-2 exit가 운영자 승인(approve)되었습니다** — 번들 `reports/g2-evidence/g2-exit-20260717/` (counted 14/7일, operators 3/3, 구조 게이트 4/4, blocking gap 0, manifest status=reviewed). 승인은 caveat 2건(counted 14일 중 per-operator 파일 증적 4일·나머지 ledger-only, 전부 synthetic+dry-run으로 실송신 0)을 인지한 상태에서 이루어졌으며, 실사용 forward 증적은 G-3 게이트에서 별도 검증합니다. 이로써 **2단계 종료, 3단계(제한 실증 서비스) 착수 가능** 상태입니다. 운영 감시는 celerybeat 항구성(self-heal #161, ~07-29 재발 창)과 스모크 streak 회복(~07-22 7연속 예상)을 계속합니다.
+
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
 
 ## 핵심 목표
