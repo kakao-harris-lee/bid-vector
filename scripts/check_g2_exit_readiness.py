@@ -13,6 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.services.g2_evidence_draft import (  # noqa: E402
+    DAILY_STATUS_SOURCE,
+    DRAFT_SOURCE,
+)
 from scripts._common import positive_int  # noqa: E402
 from scripts.verify_g2_notification_targets import (  # noqa: E402
     VerificationInputError,
@@ -25,6 +29,11 @@ READY_MANIFEST_STATUSES = {"ready_for_review", "reviewed"}
 PASS_STATUS = "pass"
 READY_EVIDENCE_STATUS = "ready"
 BAD_OPERATOR_STATUSES = {"fail", "missing", "mixed_scope"}
+# Source stamps that mark a daily_status row as a ledger-only ``collect_g2_evidence``
+# beat draft (PR#155). These rows intentionally omit a file path and carry the ledger
+# cell shape (``evidence_status``/``sections``), so file-backed path and fastlane
+# per-operator cell checks are a category error for them (see g2_evidence_draft.py).
+LEDGER_ONLY_ROW_SOURCES = {DAILY_STATUS_SOURCE.lower(), DRAFT_SOURCE.lower()}
 REQUIRED_EVIDENCE_PATH_KEYS = {
     "g2_evidence",
     "candidate_preview",
@@ -159,6 +168,77 @@ def _pass_daily_status_count(daily_status: list[dict[str, Any]]) -> int:
     return len(pass_dates) + undated_pass_count
 
 
+def _counted_pass_dates(daily_status: list[dict[str, Any]]) -> set[str]:
+    """Distinct dated pass-dates that make up counted evidence.
+
+    Mirrors ``build_g2_exit_review._counted_days`` (distinct pass-date semantics):
+    every ``status == "pass"`` row with a date contributes its date. Undated pass
+    rows are counted in-window individually by ``_row_in_counted_window``.
+    """
+    return {
+        str(row.get("date"))
+        for row in daily_status
+        if _status(row.get("status")) == PASS_STATUS and row.get("date")
+    }
+
+
+def _row_in_counted_window(row: dict[str, Any], counted_pass_dates: set[str]) -> bool:
+    """Whether a daily_status row is part of the counted evidence window.
+
+    A row counts only when it is a ``pass`` row whose date is in the counted
+    pass-date set (or is an undated pass row). Non-pass rows -- e.g. a stray
+    ``fail`` draft on a date that a separate pass draft already counts -- are not
+    counted evidence and are excluded from window-scoped evaluation.
+    """
+    if _status(row.get("status")) != PASS_STATUS:
+        return False
+    date = row.get("date")
+    # Membership is effectively a no-op for pass rows: a pass row's own date is
+    # always in ``counted_pass_dates`` by construction. The load-bearing filter
+    # is ``status == pass`` above; this guard only rejects a hypothetical pass row
+    # whose date was somehow excluded upstream.
+    if date and str(date) not in counted_pass_dates:
+        return False
+    return True
+
+
+def _row_is_ledger_only(row: dict[str, Any]) -> bool:
+    """Whether a daily_status row is a ledger-only ``collect_g2_evidence`` beat
+    draft (identified by its source stamp), which omits a file path by design."""
+    snapshot = _as_dict(row.get("collect_g2_evidence_snapshot"))
+    sources = {_status(row.get("source")), _status(snapshot.get("source"))}
+    return bool(sources & LEDGER_ONLY_ROW_SOURCES)
+
+
+def _summarize_daily_window(
+    daily_status: list[dict[str, Any]], counted_pass_dates: set[str]
+) -> dict[str, Any]:
+    """Honest annotation of how daily rows were scoped for evaluation."""
+    in_window = [
+        row for row in daily_status if _row_in_counted_window(row, counted_pass_dates)
+    ]
+    ledger_days = {
+        str(row.get("date"))
+        for row in in_window
+        if _row_is_ledger_only(row) and row.get("date")
+    }
+    file_backed_days = {
+        str(row.get("date"))
+        for row in in_window
+        if not _row_is_ledger_only(row) and row.get("date")
+    }
+    return {
+        "counted_pass_dates": sorted(counted_pass_dates),
+        "evaluated_rows": len(in_window),
+        "excluded_rows": len(daily_status) - len(in_window),
+        "ledger_only_days": sorted(ledger_days),
+        "file_backed_days": sorted(file_backed_days),
+        # Dates carried by a ledger-only beat draft with no file-backed row on the
+        # same date -- i.e. days whose only evidence is the rolling ledger snapshot.
+        "ledger_only_exclusive_days": sorted(ledger_days - file_backed_days),
+    }
+
+
 def _path_exists(path: str, *, repo_root: Path) -> bool:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -285,8 +365,15 @@ def _daily_path_checks(
     *,
     repo_root: Path,
     missing_paths: list[dict[str, Any]],
+    counted_pass_dates: set[str],
 ) -> None:
     for index, row in enumerate(daily_status):
+        if not _row_in_counted_window(row, counted_pass_dates):
+            continue
+        # Ledger-only beat drafts intentionally record no file path (PR#155);
+        # requiring one is a category error. File-backed rows stay strict.
+        if _row_is_ledger_only(row):
+            continue
         snapshot = _as_dict(row.get("collect_g2_evidence_snapshot"))
         _check_path(
             missing_paths,
@@ -660,15 +747,57 @@ def _operator_independence_gate(
     )
 
 
+def _fastlane_cell_failures(
+    row_index: int, operator_id: Any, cell: dict[str, Any]
+) -> list[str]:
+    """Per-operator routing checks for a file-backed (fastlane) daily cell."""
+    failures: list[str] = []
+    if _status(cell.get("g2_evidence_status")) != READY_EVIDENCE_STATUS:
+        failures.append(
+            f"daily_status[{row_index}].operators[{operator_id}] "
+            f"g2_evidence_status is {cell.get('g2_evidence_status')}"
+        )
+    for key, value in cell.items():
+        if key == "blocking_gap_ids":
+            continue
+        if _status(value) in BAD_OPERATOR_STATUSES:
+            failures.append(
+                f"daily_status[{row_index}].operators[{operator_id}] "
+                f"{key} is {value}"
+            )
+    return failures
+
+
+def _ledger_cell_failures(
+    row_index: int, operator_id: Any, cell: dict[str, Any]
+) -> list[str]:
+    """Per-operator routing check for a ledger-only beat daily cell.
+
+    Beat cells use the ledger shape (``evidence_status``/``sections``), so the
+    authoritative per-operator verdict is ``evidence_status``. The fastlane
+    ``g2_evidence_status`` key and the nested ``sections`` sub-detail (already
+    vetted by the beat's own day-level pass rule) are not re-derived here.
+    """
+    if _status(cell.get("evidence_status")) != READY_EVIDENCE_STATUS:
+        return [
+            f"daily_status[{row_index}].operators[{operator_id}] "
+            f"evidence_status is {cell.get('evidence_status')}"
+        ]
+    return []
+
+
 def _routing_isolation_gate(
     operators: list[dict[str, Any]],
     daily_status: list[dict[str, Any]],
     notification_failures: list[dict[str, Any]],
     blockers: list[dict[str, Any]],
+    counted_pass_dates: set[str],
 ) -> dict[str, Any]:
-    failures = [
-        f"{len(notification_failures)} notification failure(s) require review"
-    ] if notification_failures else []
+    failures = (
+        [f"{len(notification_failures)} notification failure(s) require review"]
+        if notification_failures
+        else []
+    )
     evidence_paths: list[str] = []
     if blockers:
         failures.append(f"{len(blockers)} blocking gap(s) are unresolved")
@@ -685,30 +814,22 @@ def _routing_isolation_gate(
             evidence_paths.extend(path for path in g2_paths if isinstance(path, str))
 
     for row_index, row in enumerate(daily_status):
-        if _status(row.get("status")) not in {"pass", "excluded"}:
-            failures.append(
-                f"daily_status[{row_index}] status is {row.get('status')}"
-            )
+        # Only counted-evidence rows are evaluated: a stray fail/partial draft on
+        # an otherwise-counted date is not counted evidence and is skipped.
+        if not _row_in_counted_window(row, counted_pass_dates):
+            continue
+        cell_failures = (
+            _ledger_cell_failures
+            if _row_is_ledger_only(row)
+            else _fastlane_cell_failures
+        )
         for operator_id, operator_status in _as_dict(row.get("operators")).items():
             if not isinstance(operator_status, dict):
                 failures.append(
                     f"daily_status[{row_index}].operators[{operator_id}] is invalid"
                 )
                 continue
-            g2_status = _status(operator_status.get("g2_evidence_status"))
-            if g2_status != READY_EVIDENCE_STATUS:
-                failures.append(
-                    f"daily_status[{row_index}].operators[{operator_id}] "
-                    f"g2_evidence_status is {operator_status.get('g2_evidence_status')}"
-                )
-            for key, value in operator_status.items():
-                if key == "blocking_gap_ids":
-                    continue
-                if _status(value) in BAD_OPERATOR_STATUSES:
-                    failures.append(
-                        f"daily_status[{row_index}].operators[{operator_id}] "
-                        f"{key} is {value}"
-                    )
+            failures.extend(cell_failures(row_index, operator_id, operator_status))
     return _gate_result(
         "routing_isolation",
         failures=failures,
@@ -734,7 +855,9 @@ def _admin_surface_gate(
         operator_label = _operator_label(operator, index)
         dashboard_paths = _dashboard_paths(operator)
         operations_paths = [
-            path for path in dashboard_paths if path.endswith("operations-dashboard.json")
+            path
+            for path in dashboard_paths
+            if path.endswith("operations-dashboard.json")
         ]
         evidence_paths.extend(operations_paths)
         if not operations_paths:
@@ -798,10 +921,17 @@ def evaluate_readiness(
     counted_days = _int_or_zero(evidence_window.get("counted_days"))
     pass_daily_status_count = _pass_daily_status_count(daily_status)
     operator_count = len(operators)
+    counted_pass_dates = _counted_pass_dates(daily_status)
+    daily_evidence_window = _summarize_daily_window(daily_status, counted_pass_dates)
 
     missing_paths: list[dict[str, Any]] = []
     _operator_path_checks(operators, repo_root=repo_root, missing_paths=missing_paths)
-    _daily_path_checks(daily_status, repo_root=repo_root, missing_paths=missing_paths)
+    _daily_path_checks(
+        daily_status,
+        repo_root=repo_root,
+        missing_paths=missing_paths,
+        counted_pass_dates=counted_pass_dates,
+    )
     _action_path_checks(
         action_register,
         repo_root=repo_root,
@@ -821,6 +951,7 @@ def evaluate_readiness(
             daily_status,
             notification_failures,
             blocking_gaps,
+            counted_pass_dates,
         ),
         _admin_surface_gate(operators, min_operators=min_operators),
         _user_surface_gate(operators, min_operators=min_operators),
@@ -836,8 +967,8 @@ def evaluate_readiness(
         "no_missing_evidence_paths": not missing_paths,
         "all_collect_snapshots_passed": not collect_snapshot_failures,
     }
-    ready_for_human_review = (
-        all(gate["passed"] for gate in gates) and all(global_checks.values())
+    ready_for_human_review = all(gate["passed"] for gate in gates) and all(
+        global_checks.values()
     )
     return {
         "manifest": str(manifest_path),
@@ -855,6 +986,7 @@ def evaluate_readiness(
             "missing_evidence_path_count": len(missing_paths),
         },
         "global_checks": global_checks,
+        "daily_evidence_window": daily_evidence_window,
         "gates": gates,
         "open_blocking_gaps": blocking_gaps,
         "notification_failures": notification_failures,

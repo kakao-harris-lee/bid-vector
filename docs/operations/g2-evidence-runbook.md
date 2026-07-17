@@ -509,6 +509,8 @@ python scripts/check_g2_exit_readiness.py \
 
 이 명령은 로컬 `manifest.json`, 참조 파일 존재 여부, pass day의 `collect_g2_evidence_snapshot.status`, 그리고 operator별 `notification-channels.json`의 masking/dry-run 안전성을 확인한다. exit code `0`은 human review에 올릴 준비가 됐다는 뜻이고, G-2 approve 자체는 아니다.
 
+daily_status 검사는 **counted 증적 window**(`status=pass`이고 counted pass-date에 속하는 행, `build_g2_exit_review`의 `_counted_days` 의미론과 정합)에만 적용된다. 같은 날짜의 stray `fail`/`partial` 행은 counted 증적이 아니므로 gate 평가에서 제외된다. ledger-only `collect_g2_evidence` beat 행(`source=collect_g2_evidence_beat`/`app/tasks/jobs.py::collect_g2_evidence` 스탬프)은 PR#155 설계상 파일 path 없이 ledger 스냅샷만 남기므로 `collect_g2_evidence_snapshot.path` 존재 요구에서 면제되고, per-operator 셀은 fastlane `g2_evidence_status`가 아니라 ledger `evidence_status` 기준으로 평가된다. 파일-backed(fastlane) 행의 path·per-operator 검사는 그대로 엄격하게 유지된다. readiness report의 `daily_evidence_window`에 `counted_pass_dates`, `evaluated_rows`/`excluded_rows`, `file_backed_days`, `ledger_only_days`, `ledger_only_exclusive_days`(파일-backed 행 없이 ledger-only 전용인 날짜)를 표기하므로 리뷰어가 window 구성을 손수 계산하지 않아도 된다.
+
 권장 review 산출물:
 
 - `reports/g2-evidence/<review_id>/manifest.json`: operator별 profile/strategy/channel/evidence path, 날짜별 status, `blocking_gaps` 처리 상태, dry-run/승인 후 실행 항목을 구조화한다.

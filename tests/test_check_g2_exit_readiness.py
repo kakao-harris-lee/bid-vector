@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 
+from app.services.g2_evidence_draft import DAILY_STATUS_SOURCE
 from scripts.check_g2_exit_readiness import main
 
 
@@ -85,6 +86,56 @@ def _daily_row(date: str, operator_ids: list[int]) -> dict:
     }
 
 
+def _stray_fail_row(date: str, operator_ids: list[int]) -> dict:
+    """A stray fastlane ``fail`` draft for a date that is separately counted.
+
+    Mirrors the 2026-07-03 fastlane run that produced an early ``fail`` draft
+    (with per-operator ``missing`` sub-statuses) alongside a later clean ``pass``
+    draft. The fail draft is not counted evidence.
+    """
+    row = _daily_row(date, operator_ids)
+    row["status"] = "fail"
+    row["collect_g2_evidence_snapshot"]["status"] = "fail"
+    row["collect_g2_evidence_snapshot"][
+        "path"
+    ] = f"reports/g2-evidence/{date}/run-0/g2-evidence-summary.json"
+    for operator_id in operator_ids:
+        row["operators"][str(operator_id)]["candidate_preview"] = "missing"
+        row["operators"][str(operator_id)]["strategy_monitor"] = "missing"
+    return row
+
+
+def _ledger_only_row(date: str, operator_ids: list[int]) -> dict:
+    """A ledger-only ``collect_g2_evidence`` beat draft row (PR#155).
+
+    These beat drafts intentionally omit a file path and carry the ledger cell
+    shape (``evidence_status``/``sections``) rather than the fastlane cell shape.
+    """
+    return {
+        "date": date,
+        "status": "pass",
+        "summary": f"collect_g2_evidence beat ledger snapshot {date}",
+        "source": DAILY_STATUS_SOURCE,
+        "collect_g2_evidence_snapshot": {
+            "status": "pass",
+            "source": DAILY_STATUS_SOURCE,
+        },
+        "operators": {
+            str(operator_id): {
+                "evidence_status": "ready",
+                "sections": {
+                    "smoke": "mixed_scope",
+                    "strategy_monitor": "ready",
+                    "decision_experiments": "ready",
+                    "synthetic_experiments": "ready",
+                    "notifications": "ready",
+                },
+            }
+            for operator_id in operator_ids
+        },
+    }
+
+
 def _manifest(*, status: str = "ready_for_review") -> dict:
     operator_ids = [101, 102, 103]
     return {
@@ -155,7 +206,9 @@ def _write_referenced_files(
         for evidence_paths in operator["evidence_paths"].values():
             paths.update(evidence_paths)
     for row in manifest["daily_status"]:
-        paths.add(row["collect_g2_evidence_snapshot"]["path"])
+        snapshot_path = row["collect_g2_evidence_snapshot"].get("path")
+        if snapshot_path:
+            paths.add(snapshot_path)
     for item in manifest["action_register"]["dry_run_items"]:
         paths.add(item["output_path"])
 
@@ -541,6 +594,257 @@ def test_cli_reports_malformed_notification_evidence_as_not_ready(
         and "not valid JSON" in item["message"]
         for item in report["notification_failures"]
     )
+
+
+def test_cli_ignores_stray_fail_row_outside_counted_evidence(tmp_path, monkeypatch):
+    """A stray fastlane ``fail`` draft on an otherwise-counted date must not red
+    the readiness gate: it is not part of the counted evidence window."""
+    operator_ids = [101, 102, 103]
+    manifest = _manifest()
+    manifest["daily_status"] = [
+        _stray_fail_row("2026-06-23", operator_ids),
+        _daily_row("2026-06-23", operator_ids),
+        _daily_row("2026-06-24", operator_ids),
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "2",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is True
+    routing = next(
+        gate for gate in report["gates"] if gate["gate_id"] == "routing_isolation"
+    )
+    assert routing["passed"] is True
+    assert routing["failures"] == []
+    assert report["daily_evidence_window"]["excluded_rows"] == 1
+    assert report["daily_evidence_window"]["counted_pass_dates"] == [
+        "2026-06-23",
+        "2026-06-24",
+    ]
+
+
+def test_cli_accepts_ledger_only_beat_days_without_paths(tmp_path, monkeypatch):
+    """Ledger-only beat drafts (PR#155) carry no file path and use the ledger
+    cell shape; they must be accepted and annotated, not red the gate."""
+    operator_ids = [101, 102, 103]
+    manifest = _manifest()
+    manifest["daily_status"] = [
+        _daily_row("2026-06-23", operator_ids),
+        _ledger_only_row("2026-06-24", operator_ids),
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "2",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is True
+    assert report["global_checks"]["no_missing_evidence_paths"] is True
+    assert report["missing_evidence_paths"] == []
+    routing = next(
+        gate for gate in report["gates"] if gate["gate_id"] == "routing_isolation"
+    )
+    assert routing["passed"] is True
+    window = report["daily_evidence_window"]
+    assert window["ledger_only_days"] == ["2026-06-24"]
+    assert window["file_backed_days"] == ["2026-06-23"]
+    assert window["ledger_only_exclusive_days"] == ["2026-06-24"]
+    assert window["excluded_rows"] == 0
+
+
+def test_cli_still_flags_file_backed_counted_row_missing_snapshot_path(
+    tmp_path,
+    monkeypatch,
+):
+    """Guard: a file-backed (fastlane) counted pass row whose snapshot path does
+    not resolve must still red the gate. The window fix must never weaken the
+    file-backed path check."""
+    manifest = _manifest()
+    missing_snapshot_path = (
+        "reports/g2-evidence/2026-06-24/run-1/never-written-summary.json"
+    )
+    manifest["daily_status"][1]["collect_g2_evidence_snapshot"][
+        "path"
+    ] = missing_snapshot_path
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest, skip={missing_snapshot_path})
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "2",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 1
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is False
+    assert report["global_checks"]["no_missing_evidence_paths"] is False
+    missing = {
+        (item["location"], item["reason"]) for item in report["missing_evidence_paths"]
+    }
+    assert (
+        "daily_status[1].collect_g2_evidence_snapshot.path",
+        "path_does_not_exist",
+    ) in missing
+
+
+def test_cli_fails_closed_on_stamp_shape_mismatch(tmp_path, monkeypatch):
+    """Lock fail-closed: a source stamp that disagrees with the operator cell
+    shape must red the gate, never silently pass. A ledger stamp on a
+    fastlane-shaped cell (no ``evidence_status``) and a fastlane stamp on a
+    ledger-shaped cell (no ``g2_evidence_status``) both fail their own check."""
+    operator_ids = [101, 102, 103]
+    manifest = _manifest()
+    manifest["evidence_window"]["counted_days"] = 3
+
+    # Ledger stamp, but fastlane-shaped cells -> ledger check sees no evidence_status.
+    ledger_stamp_fastlane_cells = _ledger_only_row("2026-06-22", operator_ids)
+    ledger_stamp_fastlane_cells["operators"] = _daily_row("2026-06-22", operator_ids)[
+        "operators"
+    ]
+    # Fastlane stamp (+ existing path), but ledger-shaped cells -> fastlane check
+    # sees no g2_evidence_status.
+    fastlane_stamp_ledger_cells = _daily_row("2026-06-23", operator_ids)
+    fastlane_stamp_ledger_cells["operators"] = _ledger_only_row(
+        "2026-06-23", operator_ids
+    )["operators"]
+
+    manifest["daily_status"] = [
+        ledger_stamp_fastlane_cells,
+        fastlane_stamp_ledger_cells,
+        _daily_row("2026-06-24", operator_ids),
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "3",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 1
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is False
+    routing = next(
+        gate for gate in report["gates"] if gate["gate_id"] == "routing_isolation"
+    )
+    assert routing["passed"] is False
+    failures = set(routing["failures"])
+    assert (
+        "daily_status[0].operators[101] evidence_status is None" in failures
+    )  # ledger check on fastlane-shaped cell
+    assert (
+        "daily_status[1].operators[101] g2_evidence_status is None" in failures
+    )  # fastlane check on ledger-shaped cell
+
+
+def test_cli_still_flags_stale_pass_draft_with_bad_substatus(tmp_path, monkeypatch):
+    """Reproduce the 2026-07-15 residual: two fastlane *pass* drafts on one date
+    where the stale draft carries a per-operator BAD sub-status
+    (``strategy_monitor`` missing). Windowing excludes only non-pass rows, so a
+    stale *pass* draft stays evaluated and its file-backed defect stays red."""
+    operator_ids = [101, 102, 103]
+    manifest = _manifest()
+    stale = _daily_row("2026-06-23", operator_ids)
+    stale["collect_g2_evidence_snapshot"][
+        "path"
+    ] = "reports/g2-evidence/2026-06-23/run-0/g2-evidence-summary.json"
+    for operator_id in operator_ids:
+        stale["operators"][str(operator_id)]["strategy_monitor"] = "missing"
+    manifest["daily_status"] = [
+        stale,
+        _daily_row("2026-06-23", operator_ids),
+        _daily_row("2026-06-24", operator_ids),
+    ]
+    manifest_path = _write_manifest(tmp_path, manifest)
+    _write_referenced_files(tmp_path, manifest)
+    output_path = tmp_path / "readiness.json"
+
+    monkeypatch.chdir(tmp_path)
+    code = main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--output",
+            str(output_path),
+            "--min-days",
+            "2",
+            "--min-operators",
+            "3",
+        ],
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 1
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["ready_for_human_review"] is False
+    routing = next(
+        gate for gate in report["gates"] if gate["gate_id"] == "routing_isolation"
+    )
+    assert routing["passed"] is False
+    assert (
+        "daily_status[0].operators[101] strategy_monitor is missing"
+        in routing["failures"]
+    )
+    assert report["daily_evidence_window"]["excluded_rows"] == 0
 
 
 def test_cli_returns_two_and_writes_error_report_for_invalid_manifest(tmp_path):
