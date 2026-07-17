@@ -138,6 +138,38 @@ def test_smoke_predict_price_phase_uses_injected_prediction_port(test_db):
     assert port.calls[0]["business_type_code"] == "0621"
 
 
+def test_smoke_predict_price_phase_passes_era_correct_floor_inputs(test_db):
+    """The smoke self-test drives the SAME era-correct construction 낙찰하한 tier as
+    production (#197 후속): it passes the notice's 추정가격 + its OWN KST 공고일 so the
+    smoke exercises the real guardrail path. The fixed fake rate (0.9) still sits in
+    [0.7, 1.0], so the era wiring does not break the band check."""
+    from datetime import UTC, date, datetime
+
+    from app.models.models import Project
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    project = Project(
+        title="항만 준설 공사",
+        description="항만 준설 및 방파제 보강",
+        requirements="토목공사업 면허",
+        budget_estimate=500_000_000.0,
+        category="construction",
+        business_type_code=None,
+        created_at=datetime(2026, 2, 15, 0, 0, tzinfo=UTC),  # KST 2026-02-15 → 신율
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    port = CapturingPredictionPort()
+    service = KonepsTelegramSmokeTestService(price_prediction_port=port)
+    result = service._phase_predict_price(test_db, {"id": project.id})
+
+    assert result.passed is True  # fake 0.9 ∈ [0.7, 1.0] — era wiring keeps the band
+    call = port.calls[0]
+    assert call["estimation_amount"] == 500_000_000.0
+    assert call["reference_date"] == date(2026, 2, 15)
+
+
 @pytest.mark.parametrize(
     "rate, expected",
     [
