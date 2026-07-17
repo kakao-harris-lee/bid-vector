@@ -36,6 +36,11 @@ _INTEGER_TOLERANCE = 1e-6  # a real 기초금액 (원화) is an exact float inte
 _YEGA_TOLERANCE = 1.0  # |base × winning_rate − winning_amount| < 1원
 _VAT_TOLERANCE = 0.01  # |base × 1.1 − round(base × 1.1)| < 0.01
 _VAT_MULTIPLIER = 1.1
+# ``TenderResult.winning_rate`` is stored on mixed scales (scsbid persists a
+# fraction e.g. 0.875; HTML parsing a percentage e.g. 87.5 — see
+# app/services/bid_target_signals.py). Values above this threshold are
+# percentage-scale and divided by 100 before use.
+_PERCENTAGE_SCALE_THRESHOLD = 1.5
 
 # 복수예비가격: KONEPS always publishes 15 reserve prices straddling 기초금액 by
 # roughly ±2~3%, so their midpoint recovers the base for a polluted row.
@@ -53,6 +58,25 @@ def _safe_float(value: Any) -> float | None:
     if result != result or result in (float("inf"), float("-inf")):  # NaN/inf
         return None
     return result
+
+
+def normalize_winning_rate(value: Any) -> float | None:
+    """Normalize a mixed-scale ``TenderResult.winning_rate`` to a bid-rate fraction.
+
+    scsbid persists a fraction (0.875) while HTML parsing persists a percentage
+    (87.5); callers MUST normalize before passing the rate to
+    ``classify_base_basis`` or a percentage-form 예정가-역산 row fails the
+    derived-yega check (base × 87.5 ≠ winning_amount) and is mislabeled
+    ``suspect-fractional``. No validity-range gate is applied, so a genuinely low
+    award rate stays usable for the derived-yega match; non-positive / non-numeric
+    returns None (the derived-yega check is then skipped).
+    """
+    rate = _safe_float(value)
+    if rate is None or rate <= 0:
+        return None
+    if rate > _PERCENTAGE_SCALE_THRESHOLD:
+        rate = rate / 100.0
+    return rate
 
 
 @dataclass(frozen=True)
@@ -158,4 +182,7 @@ def estimate_base_amount_from_reserves(reserve_prices: Any) -> float | None:
     values = _coerce_reserve_prices(reserve_prices)
     if len(values) < RESERVE_PRICE_COUNT:
         return None
+    # Range midpoint (min+max)/2, not the mean: 복수예비가격 straddle 기초금액
+    # symmetrically by construction, so the range center is the robust base
+    # estimate and is insensitive to how the draws cluster within the band.
     return float(round((min(values) + max(values)) / 2))

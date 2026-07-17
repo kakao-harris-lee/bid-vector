@@ -43,6 +43,7 @@ from app.services.base_amount_basis import (  # noqa: E402
     BASIS_CLEAN,
     classify_base_basis,
     estimate_base_amount_from_reserves,
+    normalize_winning_rate,
 )
 
 
@@ -73,12 +74,13 @@ class BackfillStats:
 def _load_result_map(
     db: Session, project_ids: list[int]
 ) -> dict[int, tuple[float, float]]:
-    """Map project_id -> (winning_amount, winning_rate), preferring a settled row.
+    """Map project_id -> (winning_amount, normalized_rate), preferring a settled row.
 
     A project may have several ``TenderResult`` rows; pick one with a real
     ``winning_amount > 0`` when available (that is the row a 예정가 역산 would have
-    used). ``project_ids`` is one chunk (<= chunk_size), so the IN() list stays
-    well under the 65535-parameter limit.
+    used). The winning_rate is normalized to a fraction (mixed-scale column) so the
+    derived-yega check matches the holdout path. ``project_ids`` is one chunk
+    (<= chunk_size), so the IN() list stays well under the 65535-parameter limit.
     """
     if not project_ids:
         return {}
@@ -96,7 +98,11 @@ def _load_result_map(
         if project_id is None:
             continue
         amount = float(winning_amount or 0.0)
-        rate = float(winning_rate or 0.0)
+        # Normalize the mixed-scale winning_rate to a fraction so percentage-form
+        # rows (HTML parsing, e.g. 87.5) classify identically to the holdout path;
+        # an unnormalized percent rate fails the derived-yega match and mislabels a
+        # 예정가-역산 row as suspect-fractional.
+        rate = normalize_winning_rate(winning_rate) or 0.0
         current = best.get(project_id)
         # Prefer the first row we see, but upgrade to a settled (amount>0) row.
         if current is None or (amount > 0 and current[0] <= 0):

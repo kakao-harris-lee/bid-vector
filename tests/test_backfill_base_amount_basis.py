@@ -140,3 +140,25 @@ def test_chunking_covers_all_rows(seeded_db):
 def test_limit_caps_scanned_rows(seeded_db):
     stats = backfill.run_backfill(seeded_db, apply=False, limit=2)
     assert stats.scanned == 2
+
+
+def test_percent_form_winning_rate_classified_as_derived_yega(test_db):
+    """A percentage-scale winning_rate (88.035) must be normalized before classify.
+
+    TenderResult.winning_rate is mixed-scale (HTML parsing persists a percentage).
+    Without normalization, base × 88.035 ≠ winning_amount, so this 예정가-역산 row
+    would be mislabeled suspect-fractional instead of derived-yega (and the two
+    backfill/holdout paths would disagree on the same row).
+    """
+    test_db.add(
+        HistoricalData(id=1, project_id=1, base_amount=_YEGA_BASE, reserve_prices="[]")
+    )
+    test_db.add(
+        TenderResult(project_id=1, winning_amount=43_996_200.0, winning_rate=88.035)
+    )
+    test_db.commit()
+
+    backfill.run_backfill(test_db, apply=True)
+
+    row = {r.id: r for r in test_db.query(HistoricalData).all()}[1]
+    assert row.base_amount_basis == BASIS_DERIVED_YEGA

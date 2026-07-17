@@ -13,6 +13,7 @@ from app.services.base_amount_basis import (
     RESERVE_PRICE_COUNT,
     classify_base_basis,
     estimate_base_amount_from_reserves,
+    normalize_winning_rate,
 )
 
 # Real postmortem case: 43,996,200 ÷ 0.88035 = 49,975,805.0775 (예정가-basis 오염).
@@ -56,6 +57,28 @@ def test_classify_defaults_missing_winning_args():
     """winning_amount/winning_rate default to None without raising."""
     assert classify_base_basis(43_996_200.0) == BASIS_CLEAN
     assert classify_base_basis(_YEGA_BASE) == BASIS_SUSPECT_FRACTIONAL
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (0.88035, 0.88035),  # already a fraction (scsbid) — passthrough
+        (88.035, 0.88035),  # percentage (HTML parsing) — divided by 100
+        (0.4, 0.4),  # genuinely low fraction — no range gate
+        (150.0, 1.5),  # percentage boundary case
+        (1.5, 1.5),  # at threshold — not divided
+        (0, None),  # non-positive → None
+        (-5.0, None),
+        (None, None),
+        ("x", None),  # non-numeric → None
+    ],
+)
+def test_normalize_winning_rate(value, expected):
+    result = normalize_winning_rate(value)
+    if expected is None:
+        assert result is None
+    else:
+        assert result == pytest.approx(expected)
 
 
 def _reserves(base: float, count: int = RESERVE_PRICE_COUNT) -> list[float]:
