@@ -1,5 +1,7 @@
 """Tests for business_group propagation through PricePredictionContext."""
 
+import pytest
+
 from app.ai.price_prediction import predict_price
 from app.ai.predictors.base import PricePredictionContext
 from app.models.models import Project  # noqa: F401 — registers models to Base.metadata
@@ -361,35 +363,53 @@ def test_construction_group_ceiling_never_bypassed_for_high_history():
 
 # ---------------------------------------------------------------------------
 # Agency-keyed bid-rate band (Lever 1): 한국수산자원공단 recenter to the UPPER edge
-# of the realized 88.001–88.053% winning-floor band ([0.8806, 0.882]). Keys match
-# by NORMALIZED substring so regional bureaus inherit the HQ band.
+# of the realized 88.001–88.053% winning-floor band. The raw 예정가-basis band
+# [0.8806, 0.882] is converted to a 기초금액 basis via E[사정률] (base 정합화 P0), so
+# the resolver returns raw × E[사정률]. Keys match by NORMALIZED substring so regional
+# bureaus inherit the HQ band.
 # ---------------------------------------------------------------------------
 
 
+def _marine_edges():
+    """Converted (기초금액-basis) marine agency band = raw 예정가-basis band × E[사정률]."""
+    from app.core.config import settings
+
+    assessment = settings.PREDICTION_AGENCY_BAND_ASSESSMENT_RATES["한국수산자원공단"]
+    return (
+        settings.PREDICTION_AGENCY_MINIMUM_BID_RATES["한국수산자원공단"] * assessment,
+        settings.PREDICTION_AGENCY_MAXIMUM_BID_RATES["한국수산자원공단"] * assessment,
+    )
+
+
 def test_agency_floor_raises_above_category_for_fisheries():
-    """한국수산자원공단 agency floor(0.8806) RAISES the service category floor(0.87)."""
+    """한국수산자원공단 converted agency floor RAISES the service category floor(0.87)."""
     from app.ai.price_prediction import _resolve_floor_bid_rate
 
     floor = _resolve_floor_bid_rate(
         category="service", business_group="service", agency_name="한국수산자원공단"
     )
-    assert floor == 0.8806, "agency floor(0.8806) must tighten above category/group floor(0.87)"
+    marine_floor, _ = _marine_edges()
+    assert floor == pytest.approx(marine_floor), "converted agency floor must tighten above category/group floor(0.87)"
+    assert floor > 0.87
 
 
 def test_agency_ceiling_lowers_below_category_for_fisheries():
-    """한국수산자원공단 agency ceiling(0.882) LOWERS the service ceiling(1.0)."""
+    """한국수산자원공단 converted agency ceiling LOWERS the service ceiling(1.0)."""
     from app.ai.price_prediction import _resolve_ceiling_bid_rate
 
     ceiling = _resolve_ceiling_bid_rate(
         category="service", business_group="service", agency_name="한국수산자원공단"
     )
-    assert ceiling == 0.882, "agency ceiling(0.882) must tighten below category/group ceiling(1.0)"
+    _, marine_ceiling = _marine_edges()
+    assert ceiling == pytest.approx(marine_ceiling), "converted agency ceiling must tighten below category/group ceiling(1.0)"
+    assert ceiling < 1.0
 
 
 def test_agency_band_matches_regional_bureau_substring():
     """발주처 '한국수산자원공단동해본부' (regional bureau) inherits the HQ band via substring."""
     from app.ai.price_prediction import _resolve_ceiling_bid_rate, _resolve_floor_bid_rate
 
+    marine_floor, marine_ceiling = _marine_edges()
     for agency in (
         "한국수산자원공단동해본부",
         "한국수산자원공단남해본부",
@@ -401,8 +421,8 @@ def test_agency_band_matches_regional_bureau_substring():
         ceiling = _resolve_ceiling_bid_rate(
             category="service", business_group="service", agency_name=agency
         )
-        assert floor == 0.8806, f"{agency} should inherit agency floor 0.8806, got {floor}"
-        assert ceiling == 0.882, f"{agency} should inherit agency ceiling 0.882, got {ceiling}"
+        assert floor == pytest.approx(marine_floor), f"{agency} should inherit converted agency floor, got {floor}"
+        assert ceiling == pytest.approx(marine_ceiling), f"{agency} should inherit converted agency ceiling, got {ceiling}"
 
 
 def test_agency_band_longest_key_wins():
@@ -447,10 +467,11 @@ def test_agency_ceiling_does_not_undercut_protected_category_floor(monkeypatch):
     ceiling = _resolve_ceiling_bid_rate(
         category="protectedfloor", business_group=None, agency_name="한국수산자원공단"
     )
-    # Resolver: agency floor(0.8806) cannot lower the protected category floor(0.90).
+    # Resolver: the converted agency floor cannot lower the protected category floor(0.90).
     assert floor == 0.90, "protected category floor must not be undercut by the agency band"
-    # Resolver returns the agency ceiling (0.882); the guardrail then raises it to the floor.
-    assert ceiling == 0.882
+    # Resolver returns the converted agency ceiling; the guardrail then raises it to the floor.
+    _, marine_ceiling = _marine_edges()
+    assert ceiling == pytest.approx(marine_ceiling)
 
     pred = predict_price(
         budget=100_000_000.0,
@@ -521,20 +542,25 @@ def test_agency_floor_vs_legal_floor_binding_and_safe_margin():
         legal_floor_bid_rate=0.85,
         agency_name="한국수산자원공단",
     )
+    marine_floor, _ = _marine_edges()
     assert below.floor_from_agency is True
-    assert below.floor_bid_rate == 0.8806
-    assert below.safe_floor_bid_rate == 0.8806  # no margin (agency target sits at floor)
+    assert below.floor_bid_rate == pytest.approx(marine_floor)
+    assert below.safe_floor_bid_rate == pytest.approx(marine_floor)  # no margin (agency target sits at floor)
 
-    # Legal floor ABOVE the agency floor → legal binds, safe margin re-applies.
+    # Legal floor just ABOVE the converted agency floor but still WITHIN the converted
+    # band → legal binds and the generic safe margin re-applies (there is headroom below
+    # the converted ceiling). A legal floor above the whole band would collapse it (the
+    # ceiling<floor guard), leaving no margin room — so it is derived from the band edge.
+    legal_above = marine_floor + 0.0001
     above = _resolve_guardrail_context(
         budget=100_000_000.0,
         category="service",
         business_group="service",
-        legal_floor_bid_rate=0.881,
+        legal_floor_bid_rate=legal_above,
         agency_name="한국수산자원공단",
     )
     assert above.floor_from_agency is False
-    assert above.floor_bid_rate == 0.881
+    assert above.floor_bid_rate == pytest.approx(legal_above)
     assert above.safe_floor_bid_rate > above.floor_bid_rate  # generic margin re-applied
 
     # Monotonic tightening either way: the binding floor never loosens.

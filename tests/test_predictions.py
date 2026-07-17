@@ -716,12 +716,25 @@ def test_predict_price_applies_maximum_bid_rate_guardrail():
 # ---------------------------------------------------------------------------
 
 
+def _marine_band_edges():
+    """Converted (기초금액-basis) agency band edges = raw 예정가-basis band × E[사정률].
+
+    base 정합화(P0): the band was calibrated as 낙찰가/예정가 but is applied to 사업금액
+    (기초금액), so guardrail_core multiplies it by E[사정률] (< 1) before clamping. These
+    read from settings so the test tracks any future 사정률 re-calibration.
+    """
+    assessment = settings.PREDICTION_AGENCY_BAND_ASSESSMENT_RATES["한국수산자원공단"]
+    floor = settings.PREDICTION_AGENCY_MINIMUM_BID_RATES["한국수산자원공단"] * assessment
+    ceiling = settings.PREDICTION_AGENCY_MAXIMUM_BID_RATES["한국수산자원공단"] * assessment
+    return floor, ceiling
+
+
 def _fisheries_service_history():
     """Small synthetic service sample blending ~0.875–0.91 winning rates.
 
-    Spread is wide enough that the conservative scenario falls below the agency
-    floor (0.8806) and the base/aggressive scenarios push above the agency ceiling
-    (0.882), so BOTH guardrail edges engage.
+    Spread is wide enough that the conservative scenario falls below the converted
+    agency floor (~0.8764) and the base/aggressive scenarios push above the converted
+    agency ceiling (~0.8778), so BOTH guardrail edges engage.
     """
     return [
         {"bid_rate": rate}
@@ -730,15 +743,17 @@ def _fisheries_service_history():
 
 
 def test_predict_price_applies_agency_bid_rate_band_for_fisheries(monkeypatch):
-    """한국수산자원공단 적격심사 용역: agency band recenters every scenario into [0.8806, 0.882].
+    """한국수산자원공단 적격심사 용역: agency band recenters every scenario into the
+    CONVERTED (기초금액-basis) band [~0.8764, ~0.8778].
 
-    The recenter targets the UPPER edge of the realized 88.001–88.053% winning-floor
-    band (recommendation ≈ 88.06%) and flows THROUGH _apply_prediction_guardrails (no
-    post-hoc candidate mutation) — the same mechanism construction uses for its 0.93
-    ceiling. Bid-price granularity is disabled here so the band edges are asserted
-    exactly (granularity is exercised separately by the granularity tests).
+    The raw band [0.8806, 0.882] targets 88.06% of 예정가; base 정합화(P0) converts it
+    to a 기초금액 basis via E[사정률] so rate × 사업금액 lands at the intended 예정가-basis
+    target instead of ~+0.5%p above it. Flows THROUGH _apply_prediction_guardrails (no
+    post-hoc candidate mutation). Bid-price granularity is disabled so the band edges
+    are asserted exactly.
     """
     monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY", 0)
+    floor_rate, ceiling_rate = _marine_band_edges()
     budget = 44964545.0
     prediction = predict_price(
         budget=budget,
@@ -750,15 +765,20 @@ def test_predict_price_applies_agency_bid_rate_band_for_fisheries(monkeypatch):
     )
 
     assert prediction["guardrail_applied"] is True
-    assert prediction["floor_bid_rate"] == 0.8806
-    assert prediction["ceiling_bid_rate"] == 0.882
-    # Every scenario must be recentered into the 88.06–88.2% agency band.
+    assert prediction["floor_bid_rate"] == pytest.approx(floor_rate)
+    assert prediction["ceiling_bid_rate"] == pytest.approx(ceiling_rate)
+    # Every scenario must be recentered into the converted agency band. Candidate rates
+    # are rounded to 4dp for display, so compare band membership at that precision.
+    floor_4, ceiling_4 = round(floor_rate, 4), round(ceiling_rate, 4)
     for candidate in prediction["bid_rate_candidates"]:
-        assert 0.8806 <= candidate["bid_rate"] <= 0.882, candidate
-    # predicted (base) rate lands inside the band; recommendation/conservative ≈ 88.06%.
-    assert 0.8806 <= prediction["predicted_bid_rate"] <= 0.882
-    assert prediction["price_range_min"] == round(budget * 0.8806, 2)
-    assert prediction["price_range_max"] <= round(budget * 0.882, 2) + 1e-6
+        assert floor_4 - 1e-9 <= candidate["bid_rate"] <= ceiling_4 + 1e-9, candidate
+    # predicted (base) rate lands inside the converted band.
+    assert floor_4 - 1e-9 <= prediction["predicted_bid_rate"] <= ceiling_4 + 1e-9
+    # Every scenario is recentered into the converted band, so all prices fall within
+    # [budget*floor, budget*ceiling] (with the tight ~0.14%p band, the ~0.9 predictor
+    # rates pin to the ceiling — no candidate prices below the floor).
+    assert prediction["price_range_min"] >= round(budget * floor_rate, 2) - 1.0
+    assert prediction["price_range_max"] <= round(budget * ceiling_rate, 2) + 1.0
     # Reason attributes the binding edge to the agency band (not "업종별") and is auditable.
     assert "투찰률" in prediction["guardrail_reason"]
     assert "발주처" in prediction["guardrail_reason"]
@@ -796,8 +816,9 @@ def test_predict_price_no_agency_band_for_non_matching_agency():
     seoul_rates = [c["bid_rate"] for c in seoul["bid_rate_candidates"]]
     baseline_rates = [c["bid_rate"] for c in no_agency["bid_rate_candidates"]]
     assert seoul_rates == baseline_rates, "non-matching agency must match no-agency behavior"
-    # And it must NOT be squeezed into the fisheries [0.8806, 0.882] band.
-    assert any(not (0.8806 <= rate <= 0.882) for rate in seoul_rates), (
+    # And it must NOT be squeezed into the converted fisheries band.
+    floor_rate, ceiling_rate = _marine_band_edges()
+    assert any(not (floor_rate <= rate <= ceiling_rate) for rate in seoul_rates), (
         f"서울특별시 must not be clamped to the agency band: {seoul_rates}"
     )
 
@@ -806,11 +827,12 @@ def test_agency_floor_bypasses_generic_safety_margin(monkeypatch):
     """Review Finding 1: the agency floor is a CALIBRATED recommendation target (already
     above the realized 낙찰하한), NOT a hard legal floor, so it must NOT receive the
     generic PREDICTION_FLOOR_SAFETY_MARGIN_RATE. The recommendation sits EXACTLY at the
-    agency floor (0.8806), not at floor+margin.
+    converted agency floor (base 정합화 P0), not at floor+margin.
     """
     monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY", 0)
     # The bypass is only meaningful if a non-zero margin is otherwise configured.
     assert settings.PREDICTION_FLOOR_SAFETY_MARGIN_RATE > 0
+    floor_rate, _ = _marine_band_edges()
     budget = 44964545.0
     prediction = predict_price(
         budget=budget,
@@ -821,13 +843,13 @@ def test_agency_floor_bypasses_generic_safety_margin(monkeypatch):
         business_group="service",
     )
 
-    assert prediction["floor_bid_rate"] == 0.8806
-    # Safe floor equals the RAW agency floor — no safety margin layered on top.
-    assert prediction["safe_floor_bid_rate"] == 0.8806
+    assert prediction["floor_bid_rate"] == pytest.approx(floor_rate)
+    # Safe floor equals the converted agency floor — no safety margin layered on top.
+    assert prediction["safe_floor_bid_rate"] == pytest.approx(floor_rate)
     assert prediction["floor_safety_margin_rate"] == 0.0
-    # price_range_min sits at the agency floor (0.8806), NOT at floor+margin.
-    assert prediction["price_range_min"] == round(budget * 0.8806, 2)
-    margin_price = round(budget * (0.8806 + settings.PREDICTION_FLOOR_SAFETY_MARGIN_RATE), 2)
+    # price_range_min sits at the converted agency floor, NOT at floor+margin.
+    assert prediction["price_range_min"] == pytest.approx(round(budget * floor_rate, 2))
+    margin_price = round(budget * (floor_rate + settings.PREDICTION_FLOOR_SAFETY_MARGIN_RATE), 2)
     assert prediction["price_range_min"] != margin_price
 
 
@@ -839,6 +861,7 @@ def test_agency_ceiling_clamps_high_negotiated_fisheries_rate(monkeypatch):
     band UNCONDITIONALLY (ceiling wins).
     """
     monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY", 0)
+    _, ceiling_rate = _marine_band_edges()
     budget = 120_000_000.0
     prediction = predict_price(
         budget=budget,
@@ -849,11 +872,13 @@ def test_agency_ceiling_clamps_high_negotiated_fisheries_rate(monkeypatch):
         business_group="service",
     )
 
-    assert prediction["ceiling_bid_rate"] == 0.882
-    assert prediction["predicted_bid_rate"] <= 0.882 + 1e-9
+    assert prediction["ceiling_bid_rate"] == pytest.approx(ceiling_rate)
+    # Display rates round to 4dp, so compare the ceiling at that precision.
+    ceiling_4 = round(ceiling_rate, 4)
+    assert prediction["predicted_bid_rate"] <= ceiling_4 + 1e-9
     for candidate in prediction["bid_rate_candidates"]:
-        assert candidate["bid_rate"] <= 0.882 + 1e-9, candidate
-    assert prediction["price_range_max"] <= round(budget * 0.882, 2) + 1e-6
+        assert candidate["bid_rate"] <= ceiling_4 + 1e-9, candidate
+    assert prediction["price_range_max"] <= round(budget * ceiling_rate, 2) + 1e-6
     # The binding ceiling is attributed to the agency band, not "업종별".
     assert "발주처" in prediction["guardrail_reason"]
     assert "기관별 투찰률 밴드" in prediction["guardrail_reason"]

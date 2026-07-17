@@ -110,9 +110,13 @@ def build_scsbid_award_item(
     title = str(raw_item.get("bidNtceNm") or notice_number).strip()
     winning_amount = parsing.coerce_amount(raw_item.get("sucsfbidAmt"))
     success_rate = parsing.normalize_bid_rate_value(raw_item.get("sucsfbidRate"))
+    # base 정합화(P0): 기초금액(사업금액)은 reserve detail 상세의 base_amount, 없으면
+    # 낙찰가/낙찰률(≈기초금액) 추정치만 쓴다. 예정가(planned_price)를 base_amount 폴백
+    # 으로 저장하지 않는다 — 예정가와 기초금액을 뒤섞으면(base_amt==planned_est) 이후
+    # 사정률(예정가/기초금액) 캘리브레이션의 분모가 오염되고 투찰률(낙찰가/기초금액)도
+    # 예정가 기준으로 왜곡된다(발주처 밴드가 예정가 기준으로 캘리브레이션된 원인).
     base_amount = (
         detail.get("base_amount")
-        or detail.get("planned_price")
         or (
             winning_amount / success_rate
             if winning_amount is not None and success_rate
@@ -121,11 +125,9 @@ def build_scsbid_award_item(
         or winning_amount
         or 0.0
     )
-    planned_price = detail.get("planned_price") or (
-        winning_amount / success_rate
-        if winning_amount is not None and success_rate
-        else None
-    )
+    # 예정가는 reserve detail 상세에서만 취득한다. 낙찰가/낙찰률은 기초금액 추정치이지
+    # 예정가가 아니므로 예정가 폴백으로 쓰면 base_amt==planned가 되어 재오염된다.
+    planned_price = detail.get("planned_price")
     bid_rate = (
         winning_amount / base_amount
         if winning_amount is not None and float(base_amount or 0.0) > 0

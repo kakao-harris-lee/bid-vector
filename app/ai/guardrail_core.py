@@ -62,6 +62,8 @@ class GuardrailConfig:
     group_maximum_bid_rates: Mapping[str, float]
     default_maximum_bid_rate: float
     agency_maximum_bid_rates: Mapping[str, float] | None
+    agency_band_assessment_rates: Mapping[str, float] | None
+    default_band_assessment_rate: float
 
     @classmethod
     def from_settings(cls, settings: Any) -> "GuardrailConfig":
@@ -90,6 +92,10 @@ class GuardrailConfig:
                 0.0, float(settings.PREDICTION_DEFAULT_MAXIMUM_BID_RATE or 0.0)
             ),
             agency_maximum_bid_rates=settings.PREDICTION_AGENCY_MAXIMUM_BID_RATES,
+            agency_band_assessment_rates=settings.PREDICTION_AGENCY_BAND_ASSESSMENT_RATES,
+            default_band_assessment_rate=max(
+                0.0, float(settings.PREDICTION_DEFAULT_BAND_ASSESSMENT_RATE or 0.0)
+            ),
         )
 
 
@@ -124,6 +130,33 @@ def resolve_agency_bid_rate(agency_name: str | None, rate_map: dict[str, float] 
             best_key_len = len(normalized_key)
             best_rate = max(0.0, float(raw_rate or 0.0))
     return best_rate
+
+
+def resolve_band_assessment_rate(
+    agency_name: str | None,
+    config: GuardrailConfig,
+) -> float:
+    """E[예정가/기초금액] — converts a 예정가-basis agency band to a 기초금액 basis.
+
+    The agency bands (PREDICTION_AGENCY_*_BID_RATES) were calibrated as 낙찰가/예정가,
+    but the guardrail multiplies them by the notice 사업금액(기초금액, #162). 예정가 is a
+    few tenths of a percent BELOW 기초금액, so a 예정가-basis rate applied to 기초금액
+    lands ~+0.5%p too high. Multiply the agency band by E[사정률] (< 1) to recover the
+    intended 예정가-basis target.
+
+    Resolution mirrors the band lookup: per-agency empirical rate via normalized
+    substring match, else the global default (1.0 == no-op). Any missing / non-positive
+    value collapses to 1.0. With the shipped rates (all ≤ 1) the conversion only LOWERS
+    the band; a configured 사정률 > 1 is legitimate (복수예비가격 추첨 can put 예정가
+    ABOVE 기초금액 for some agencies) and would raise it — either way the red line is
+    unaffected: resolve_floor_bid_rate re-applies max(category/group floor, converted
+    agency floor) plus the legal 낙찰하한, so no value here can undercut the hard floor.
+    """
+    rate = resolve_agency_bid_rate(agency_name, config.agency_band_assessment_rates)
+    if rate is not None and rate > 0:
+        return rate
+    default_rate = config.default_band_assessment_rate
+    return default_rate if default_rate and default_rate > 0 else 1.0
 
 
 def resolve_floor_bid_rate(
@@ -168,8 +201,12 @@ def resolve_floor_bid_rate(
 
     agency_floor = resolve_agency_bid_rate(agency_name, config.agency_minimum_bid_rates)
     if agency_floor is not None:
-        agency_floor = clamp_bid_rate(agency_floor)
-        # Agency floor TIGHTENS the band by RAISING the floor (max wins).
+        # Convert the 예정가-basis band edge to a 기초금액 basis (E[사정률]) BEFORE the
+        # hard clamp, then TIGHTEN by RAISING the floor (max wins). The category/group
+        # floor still hard-bounds via max(), so the conversion can never undercut it.
+        agency_floor = clamp_bid_rate(
+            agency_floor * resolve_band_assessment_rate(agency_name, config)
+        )
         return max(resolved_floor, agency_floor) if resolved_floor is not None else agency_floor
 
     return resolved_floor
@@ -218,8 +255,12 @@ def resolve_ceiling_bid_rate(
 
     agency_ceiling = resolve_agency_bid_rate(agency_name, config.agency_maximum_bid_rates)
     if agency_ceiling is not None:
-        agency_ceiling = clamp_bid_rate(agency_ceiling)
-        # Agency ceiling TIGHTENS the band by LOWERING the ceiling (min wins).
+        # Same 예정가→기초금액 conversion (E[사정률]) as the floor edge, so the whole band
+        # shifts uniformly and keeps its calibrated width. TIGHTEN by LOWERING the
+        # ceiling (min wins).
+        agency_ceiling = clamp_bid_rate(
+            agency_ceiling * resolve_band_assessment_rate(agency_name, config)
+        )
         return min(resolved_ceiling, agency_ceiling) if resolved_ceiling is not None else agency_ceiling
 
     return resolved_ceiling

@@ -61,6 +61,12 @@ def _pin_predictor_settings(monkeypatch):
     monkeypatch.setattr(settings, "PREDICTION_FLOOR_SAFETY_MARGIN_RATE", 0.001)
     monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY", 10)
     monkeypatch.setattr(settings, "PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET", 1_000_000.0)
+    # Agency band + E[사정률] conversion pinned so the base-alignment golden is
+    # reproducible regardless of the host .env (base 정합화 P0).
+    monkeypatch.setattr(settings, "PREDICTION_AGENCY_MINIMUM_BID_RATES", {"한국수산자원공단": 0.8806})
+    monkeypatch.setattr(settings, "PREDICTION_AGENCY_MAXIMUM_BID_RATES", {"한국수산자원공단": 0.882})
+    monkeypatch.setattr(settings, "PREDICTION_AGENCY_BAND_ASSESSMENT_RATES", {"한국수산자원공단": 0.9952})
+    monkeypatch.setattr(settings, "PREDICTION_DEFAULT_BAND_ASSESSMENT_RATE", 1.0)
     # Empty group calibration so build_historical_prediction never blends a manifest prior.
     monkeypatch.setattr(
         "app.ai.predictors.historical.load_group_calibration", lambda: {}, raising=False
@@ -458,6 +464,19 @@ PREDICT_PRICE_CASES: list[dict[str, Any]] = [
         description="제주대학교 안전환경개선 건축공사", rates=[0.985 for _ in range(60)],
         business_group="construction", agency_name="제주대학교",
     ),
+    # base 정합화(P0): the 한국수산자원공단 예정가-basis band [0.8806, 0.882] is
+    # converted to a 기초금액 basis via E[사정률]=0.9952 BEFORE it clamps the
+    # 사업금액-based bid. Locks that the effective band edges land ~0.44%p BELOW the
+    # raw band (floor 0.8806→0.876, ceiling 0.882→0.877), which is the fix for the
+    # 52위/25위 postmortem. The service history (~0.905) prices above the converted
+    # ceiling, so the ceiling binds and the recommendation resolves deterministically
+    # inside the aligned band. budget is the real 사업금액 from the postmortem notice.
+    _predict_price_case(
+        "predict_agency_band_assessment_marine",
+        budget=88_042_000.0, category="service",
+        description="어초어장 조성 관리 용역", rates=[0.905 for _ in range(20)],
+        business_group="service", agency_name="한국수산자원공단",
+    ),
 ]
 
 
@@ -572,8 +591,10 @@ def test_golden_case_count_is_pinned():
     # Lock the coverage size so a future edit can't silently drop cases.
     assert len(HISTORICAL_CASES) == 20
     assert len(ENSEMBLE_CASES) == 12
-    assert len(PREDICT_PRICE_CASES) == 2
-    assert len(ALL_CASES) == 34
+    # +1: predict_agency_band_assessment_marine locks the E[사정률] base-alignment path
+    # (base 정합화 P0) — the first golden exercising the agency band THROUGH the guardrail.
+    assert len(PREDICT_PRICE_CASES) == 3
+    assert len(ALL_CASES) == 35
 
 
 # ---------------------------------------------------------------------------
