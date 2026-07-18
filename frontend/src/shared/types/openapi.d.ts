@@ -7628,7 +7628,7 @@ export interface components {
             notice_number?: string | null;
             /**
              * Bid Amount
-             * @description 실제 제출한 투찰가(원)
+             * @description 실제 제출한 투찰가(원, 정수)
              */
             bid_amount: number;
             /**
