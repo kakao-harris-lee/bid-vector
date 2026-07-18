@@ -27,6 +27,16 @@ def _payload(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {"response": {"body": {"items": items, "totalCount": len(items)}}}
 
 
+def _result_payload(result_code: str, message: str = "") -> dict[str, Any]:
+    """An OpenAPI envelope carrying a header resultCode (quota/throttle case)."""
+    return {
+        "response": {
+            "header": {"resultCode": result_code, "resultMsg": message},
+            "body": {"items": [], "totalCount": 0},
+        }
+    }
+
+
 class _FakeFetch:
     """Records calls and returns a per-notice payload (or raises)."""
 
@@ -82,6 +92,25 @@ def test_latest_order_item_handles_unparseable_orders():
         {"bidNtceOrd": "2", "sucsfbidLwltRate": "85"},
     ]
     assert backfill.latest_order_item(items)["sucsfbidLwltRate"] == "85"
+
+
+@pytest.mark.parametrize("code", ["00", "03", ""])
+def test_raise_for_result_code_allows_ok_codes(code):
+    # "00"/"03" are success; an empty/absent code is treated as OK.
+    backfill.raise_for_result_code(_result_payload(code))
+
+
+@pytest.mark.parametrize("code", ["22", "30", "99"])
+def test_raise_for_result_code_raises_on_error_code(code):
+    # Quota/throttle come back as HTTP 200 + non-OK resultCode -> must raise.
+    with pytest.raises(ValueError):
+        backfill.raise_for_result_code(_result_payload(code, "LIMITED_NUMBER"))
+
+
+def test_raise_for_result_code_message_excludes_secret():
+    # The error surfaces the code/message but never a service key.
+    with pytest.raises(ValueError, match="resultCode=22"):
+        backfill.raise_for_result_code(_result_payload("22", "quota exceeded"))
 
 
 # --- Target selection ---------------------------------------------------------
@@ -230,6 +259,62 @@ def test_run_backfill_aborts_on_consecutive_errors(seeded_targets):
     assert stats.aborted is True
     assert stats.processed == 1  # stopped after the first consecutive error
     assert stats.errors == 1
+
+
+def test_run_backfill_quota_200_trips_abort_guard(seeded_targets):
+    """HTTP 200 + error resultCode must count as an error and hit the guard.
+
+    Regression: a quota/throttle response is HTTP 200 (so the fetch itself does
+    not raise) but carries a non-OK resultCode. Without the header check it would
+    parse to zero items -> no_value -> the consecutive-error counter resets and
+    the run never aborts against a live rate limit. The check runs inside
+    run_backfill, so the injected fake fetch exercises the real guard path.
+    """
+    targets = backfill.load_targets(seeded_targets)  # ids 2, 1
+    fetch = _FakeFetch(
+        {
+            "R0002": _result_payload("22", "LIMITED_NUMBER_OF_SERVICE_REQUESTS"),
+            "R0001": _result_payload("22", "LIMITED_NUMBER_OF_SERVICE_REQUESTS"),
+        }
+    )
+
+    stats = backfill.run_backfill(
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        delay=0,
+        max_consecutive_errors=1,
+        log=lambda *_: None,
+    )
+
+    assert stats.aborted is True
+    assert stats.errors == 1
+    assert stats.no_value == 0  # quota-200 is an error, never a silent no_value
+    assert stats.processed == 1  # aborted before touching the second notice
+
+
+def test_run_backfill_blank_notice_counts_skipped_without_fetch(test_db):
+    """A row with an empty notice number is skipped (no fetch, no throttle)."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="   ",  # normalizes to empty
+            category="service",
+            status="open",
+            award_floor_rate=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)
+    fetch = _FakeFetch({})  # any call would KeyError
+
+    stats = backfill.run_backfill(test_db, targets, fetch=fetch, delay=0)
+
+    assert fetch.calls == []  # blank notice never fetched
+    assert stats.skipped_blank == 1
+    assert stats.no_value == 0
+    assert stats.updated == 0
 
 
 def test_run_backfill_idempotent_skips_already_valued(seeded_targets):

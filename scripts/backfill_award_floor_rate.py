@@ -59,6 +59,8 @@ from app.services.koneps import http_client, openapi, parsing  # noqa: E402
 _RESPONSE_TYPE = "json"
 _PAGE_NO = 1
 _INQUIRY_DIV_NOTICE_NUMBER = "2"  # inqryDiv=2 => filter by bidNtceNo
+# OpenAPI header resultCodes that mean success ("03" = normal service, no data).
+_OK_RESULT_CODES = {"00", "03"}
 
 # argparse defaults (magic values declared here, never inline in a function).
 DEFAULT_DELAY_SECONDS = 1.0
@@ -82,6 +84,7 @@ class BackfillStats:
     processed: int = 0
     updated: int = 0
     no_value: int = 0
+    skipped_blank: int = 0
     errors: int = 0
     aborted: bool = False
     elapsed_seconds: float = 0.0
@@ -94,6 +97,7 @@ class BackfillStats:
             "processed": self.processed,
             "updated": self.updated,
             "no_value": self.no_value,
+            "skipped_blank": self.skipped_blank,
             "errors": self.errors,
             "aborted": self.aborted,
             "elapsed_seconds": round(self.elapsed_seconds, 2),
@@ -134,6 +138,28 @@ def parse_floor_rate(payload: dict[str, Any]) -> float | None:
     if item is None:
         return None
     return parsing.normalize_bid_rate_value(item.get("sucsfbidLwltRate"))
+
+
+def raise_for_result_code(payload: dict[str, Any]) -> None:
+    """Raise ``ValueError`` when the OpenAPI header carries a non-OK resultCode.
+
+    KONEPS / data.go.kr signals quota-exceeded and key-throttle as **HTTP 200
+    with an error ``resultCode``** in the envelope header, not a 4xx status. If
+    those slipped through, they would parse to zero items and be miscounted as
+    ``no_value``, resetting the consecutive-error counter so the abort guard
+    never fires against a rate limit. Surfacing them as a per-notice error feeds
+    the guard. Mirrors the collector's notice-list / reserve-detail validation
+    (``collector.py``). An empty resultCode is treated as OK — some payload
+    shapes omit the header.
+    """
+    header = openapi.openapi_header(payload)
+    result_code = str(header.get("resultCode") or "").strip()
+    if result_code and result_code not in _OK_RESULT_CODES:
+        result_message = str(header.get("resultMsg") or "").strip()
+        raise ValueError(
+            f"KONEPS BidPublicInfoService resultCode={result_code}: "
+            f"{result_message or 'unknown error'}"
+        )
 
 
 # --- IO seam: default real-API fetch -----------------------------------------
@@ -251,20 +277,28 @@ def run_backfill(
 
     consecutive_errors = 0
     pending = 0
-    for index, (project_id, notice_number, category) in enumerate(targets):
-        if index > 0 and delay > 0:
-            sleep(delay)
-
+    api_called = False
+    for project_id, notice_number, category in targets:
         stats.processed += 1
         normalized = parsing.normalize_notice_number(notice_number)
         if not normalized:
-            # No notice number to query with — leave NULL (re-tryable), not an
-            # API failure, so do not trip the consecutive-error guard.
-            stats.no_value += 1
+            # No notice number to query with — leave NULL (re-tryable). No API
+            # call happens, so skip the throttle and the error guard entirely.
+            stats.skipped_blank += 1
             continue
+
+        # Throttle only *between* real API calls, so a run of blank skips does
+        # not burn wall-clock on sleeps that guard nothing.
+        if api_called and delay > 0:
+            sleep(delay)
+        api_called = True
 
         try:
             payload = fetch(normalized, category)
+            # data.go.kr returns quota/throttle errors as HTTP 200 + error
+            # resultCode; treat that as a per-notice failure so the abort guard
+            # actually fires against a rate limit (not silent no_value).
+            raise_for_result_code(payload)
         except Exception as exc:  # noqa: BLE001 - record and continue
             stats.errors += 1
             consecutive_errors += 1
@@ -413,8 +447,9 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"[floor-backfill] target={summary['target_count']} "
         f"processed={summary['processed']} updated={summary['updated']} "
-        f"no_value={summary['no_value']} errors={summary['errors']} "
-        f"aborted={summary['aborted']} elapsed={summary['elapsed_seconds']}s"
+        f"no_value={summary['no_value']} skipped_blank={summary['skipped_blank']} "
+        f"errors={summary['errors']} aborted={summary['aborted']} "
+        f"elapsed={summary['elapsed_seconds']}s"
     )
     if args.dry_run and summary["sample"]:
         print(f"[floor-backfill] sample={summary['sample']}")
