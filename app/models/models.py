@@ -329,6 +329,13 @@ class BidDecisionRecord(Base):
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     # Idempotency marker for the award-result Telegram (set once, after send).
     award_notified_at = Column(DateTime(timezone=True), nullable=True)
+    # Win/loss outcome of the real bid, persisted once the winner is public
+    # (operator company-name vs TenderResult.winning_company). "won"/"lost";
+    # NULL = 미확정. §2 정직 명세: never pre-filled by estimate — set only after
+    # the winner is known, and by name-match (never by amount alone, since the
+    # same 개찰 can carry identical 투찰가 across distinct companies).
+    award_outcome = Column(String(20), nullable=True, index=True)
+    award_outcome_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

@@ -146,6 +146,38 @@ class RealBidTrackService:
             .all()
         )
 
+    def tracked_pending_outcome(
+        self,
+        db: Session,
+        *,
+        operator: User,
+        limit: int = 50,
+    ) -> list[BidDecisionRecord]:
+        """Already-notified real bids whose win/loss outcome is still unrecorded.
+
+        Recovery target for the outcome backfill pass: the outcome could not be
+        judged at notify time — the operator 상호 was unset, or the 낙찰자 상호
+        arrived after the notification (피드 랙). ``award_notified_at`` already
+        excludes these from :meth:`tracked_pending_award`, so without this query
+        their ``award_outcome`` would stay NULL forever (고아).
+        """
+        limit = max(1, min(int(limit), 500))
+        return (
+            db.query(BidDecisionRecord)
+            .filter(
+                BidDecisionRecord.operator_id == operator.id,
+                BidDecisionRecord.submitted_bid_amount.isnot(None),
+                BidDecisionRecord.award_notified_at.isnot(None),
+                BidDecisionRecord.award_outcome.is_(None),
+            )
+            .order_by(
+                BidDecisionRecord.submitted_at.asc().nullsfirst(),
+                BidDecisionRecord.id.asc(),
+            )
+            .limit(limit)
+            .all()
+        )
+
     def serialize_record(self, db: Session, record: BidDecisionRecord) -> dict:
         """Build an operator-facing real-bid payload with the latest award info."""
         project = record.project
@@ -162,6 +194,8 @@ class RealBidTrackService:
             "recommended_amount": _coerce_float(record.recommended_amount),
             "submitted_at": record.submitted_at,
             "award_notified_at": record.award_notified_at,
+            "award_outcome": str(record.award_outcome) if record.award_outcome else None,
+            "award_outcome_at": record.award_outcome_at,
             "decision_status": str(record.decision_status or ""),
             "winning_company": winning_company,
             "winning_amount": winning_amount,

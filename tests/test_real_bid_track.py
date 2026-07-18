@@ -180,6 +180,28 @@ def test_list_real_bids_surfaces_award_when_public(client, test_db):
 # --------------------------------------------------------------------------- #
 # Service — recommendation preservation + pending query
 # --------------------------------------------------------------------------- #
+def test_list_surfaces_award_outcome_fields(client, test_db):
+    """serialize_record exposes award_outcome/at: NULL by default, then the
+    persisted win/loss once the pipeline records it."""
+    project = _seed_project(test_db)
+    client.post(REAL_BIDS_PATH, json={"project_id": project.id, "bid_amount": 77_000_000})
+
+    record = client.get(REAL_BIDS_PATH).json()["records"][0]
+    assert "award_outcome" in record
+    assert record["award_outcome"] is None
+    assert record["award_outcome_at"] is None
+
+    # Simulate the pipeline persisting the outcome.
+    row = test_db.query(BidDecisionRecord).filter_by(project_id=project.id).one()
+    row.award_outcome = "won"
+    row.award_outcome_at = utc_now()
+    test_db.commit()
+
+    record = client.get(REAL_BIDS_PATH).json()["records"][0]
+    assert record["award_outcome"] == "won"
+    assert record["award_outcome_at"] is not None
+
+
 def test_record_real_bid_preserves_existing_recommendation(test_db):
     project = _seed_project(test_db)
     operator = ensure_operator_account(test_db)

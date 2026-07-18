@@ -15,6 +15,15 @@ service_key 등 시크릿은 절대 로그/출력에 남기지 않는다.
 KONEPS 접근이 가능한 호스트에서만 실호출된다. 테스트는 ``fetch_detail`` 을
 주입하거나 ``KonepsCollectorService._fetch_scsbid_reserve_detail`` 를
 monkeypatch 해 라이브 호출 없이 검증한다.
+
+또한 이 모듈은 실투찰의 **낙찰/패찰 판정 순수 함수**를 제공한다(§4.7 — I/O 없음):
+``normalize_company_name`` 은 상호에서 법인 접두·접미(주식회사·(주)·㈜·유한회사·
+(유) 등)와 공백을 제거해 표기 차이를 흡수하고, ``determine_award_outcome`` 은
+운영자 상호와 낙찰자 상호의 정규화 비교로만 ``"won"``/``"lost"`` 를 판정한다(어느
+한쪽 상호가 없으면 ``None`` — 불확실하면 미기록). 금액은 판정에 쓰지 않는다(동일
+개찰에 동일 투찰가 복수 업체가 실존하는 도메인, §2 정직 명세). 이 판정은
+``award_notifications`` 파이프라인이 ``BidDecisionRecord.award_outcome`` 에
+영속화한다.
 """
 
 from __future__ import annotations
@@ -57,6 +66,71 @@ def strip_notice_suffix(notice: str) -> str:
     appends, so we match on the base number prefix.
     """
     return _NOTICE_SUFFIX_RE.sub("", str(notice or "").strip())
+
+
+# Legal-entity tokens stripped before comparing company names. KONEPS records
+# the same company inconsistently (예: "주식회사 해담" vs "(주)해담"), so name
+# equality is judged on the bare 상호 with these forms and whitespace removed.
+_COMPANY_LEGAL_TOKENS = (
+    "주식회사",
+    "유한책임회사",
+    "유한회사",
+    "합자회사",
+    "합명회사",
+    "(주)",
+    "（주）",
+    "㈜",
+    "(유)",
+    "（유）",
+    "㈔",
+)
+
+# Award outcome codes persisted on BidDecisionRecord.award_outcome.
+AWARD_OUTCOME_WON = "won"
+AWARD_OUTCOME_LOST = "lost"
+
+
+def normalize_company_name(value: Any) -> str:
+    """Normalize a 상호 for equality: drop legal forms + whitespace, casefold.
+
+    Pure and side-effect free. Returns ``""`` for empty/None so callers can treat
+    an unknown name as "no basis to judge" (§2 정직 — 불확실하면 미기록).
+    """
+    text = re.sub(r"\s+", "", str(value or "").strip())
+    if not text:
+        return ""
+    for token in _COMPANY_LEGAL_TOKENS:
+        text = text.replace(token, "")
+    return text.casefold()
+
+
+def determine_award_outcome(
+    winning_company: Any,
+    winning_amount: Any,
+    operator_company_name: Any,
+    submitted_bid_amount: Any,
+) -> str | None:
+    """Judge a real bid as won/lost by operator vs winner 상호. None if unknown.
+
+    Pure decision core (§4.7) — no I/O. Rules (§2 정직 명세):
+
+    - No operator 상호 (프로필명 부재) → ``None`` (미기록; 불확실하면 남기지 않음).
+    - No public 낙찰자 상호 → ``None`` (낙찰자 미확정). ``winning_amount`` alone
+      never decides an outcome: the same 개찰 can carry identical 투찰가 across
+      distinct companies, so amount-only judgement is forbidden.
+    - Normalized 상호 매칭 성공 → ``"won"``.
+    - 낙찰자 확정됐고 상호 불일치 → ``"lost"``.
+
+    ``winning_amount`` / ``submitted_bid_amount`` are accepted for caller
+    symmetry and audit only; they are deliberately excluded from the verdict.
+    """
+    operator_name = normalize_company_name(operator_company_name)
+    if not operator_name:
+        return None
+    winner_name = normalize_company_name(winning_company)
+    if not winner_name:
+        return None
+    return AWARD_OUTCOME_WON if winner_name == operator_name else AWARD_OUTCOME_LOST
 
 
 def _default_fetch_detail(notice: str, category: str | None) -> dict[str, Any]:
@@ -308,8 +382,13 @@ def build_telegram_message(settled: list[dict[str, Any]]) -> str:
         notice = result.get("notice")
         bid = result.get("bid")
         base_amount = result.get("base_amount")
+        # Optional 낙찰/패찰 tag when the caller resolved the outcome (name-match
+        # vs 낙찰자). Absent for callers that don't judge outcome (CLI report).
+        outcome_tag = {AWARD_OUTCOME_WON: "낙찰 ", AWARD_OUTCOME_LOST: "패찰 "}.get(
+            result.get("award_outcome"), ""
+        )
         lines.append(
-            f"[{notice}] {result.get('verdict')} | 예정가 {_won(result.get('planned_price'))}"
+            f"[{notice}] {outcome_tag}{result.get('verdict')} | 예정가 {_won(result.get('planned_price'))}"
             f" | 내 투찰 {_won(bid)} | 낙찰가 {_won(result.get('winning_amount'))}"
             f" | 사업금액대비 {_ratio_pct(bid, base_amount) if bid is not None else '-'}"
         )

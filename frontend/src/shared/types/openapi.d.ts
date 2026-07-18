@@ -7598,6 +7598,10 @@ export interface components {
             submitted_at: string | null;
             /** Award Notified At */
             award_notified_at: string | null;
+            /** Award Outcome */
+            award_outcome: string | null;
+            /** Award Outcome At */
+            award_outcome_at: string | null;
             /** Decision Status */
             decision_status: string;
             /** Winning Company */
