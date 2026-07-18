@@ -12,6 +12,8 @@ the core surfaces here as well as in the predictor golden suite.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from app.ai import guardrail_core as gc
@@ -161,10 +163,66 @@ def test_apply_bid_price_granularity_base_path(config):
     assert rounded["price_granularity_applied"] is True
 
 
-def test_apply_bid_price_granularity_below_min_budget_is_noop(config):
-    pred = {"predicted_price": 12347.0, "predicted_bid_rate": 0.617}
-    # budget < PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET -> returned unchanged.
-    assert gc.apply_bid_price_granularity(dict(pred), budget=500.0, config=config) == pred
+def test_apply_bid_price_granularity_below_min_budget_quantizes_to_won(config):
+    """투찰가 정수 정합: below min_budget no longer skips — it snaps to the 1원 unit.
+
+    Previously a budget under PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET returned the
+    fractional price unchanged; the integer contract now floors 785.2 -> 785 원 and
+    records the honest applied unit (1, not the configured 10).
+    """
+    pred = {"predicted_price": 785.2, "predicted_bid_rate": 0.617}
+    rounded = gc.apply_bid_price_granularity(dict(pred), budget=500.0, config=config)
+    assert rounded["predicted_price"] == 785.0
+    assert rounded["bid_price_granularity"] == 1
+    assert rounded["price_granularity_applied"] is True
+
+
+def test_apply_bid_price_granularity_zero_granularity_quantizes_to_won(config):
+    """granularity=0 (currency snap disabled) still yields an integer 원 price."""
+    zero_config = dataclasses.replace(config, bid_price_granularity=0)
+    pred = {"predicted_price": 12347.6, "predicted_bid_rate": 0.617}
+    # budget >= min_budget, but granularity<=1 -> effective unit is 1원.
+    rounded = gc.apply_bid_price_granularity(dict(pred), budget=2_000_000.0, config=zero_config)
+    assert rounded["predicted_price"] == 12347.0
+    assert rounded["bid_price_granularity"] == 1
+    assert rounded["price_granularity_applied"] is True
+
+
+def test_apply_bid_price_granularity_non_positive_budget_is_noop(config):
+    """budget <= 0 remains the sole early return (the bid-rate divides by budget)."""
+    pred = {"predicted_price": 785.2, "predicted_bid_rate": 0.617}
+    assert gc.apply_bid_price_granularity(dict(pred), budget=0.0, config=config) == pred
+    assert gc.apply_bid_price_granularity(dict(pred), budget=-5.0, config=config) == pred
+
+
+def test_apply_bid_price_granularity_floor_protection_at_won_unit(config):
+    """floor 보호(round_price_to_granularity clamp)가 unit=1 에서도 유지된다."""
+    # budget < min_budget -> unit=1; price below the safe floor must be bumped UP to
+    # the ceil of the floor (integer, never under the floor — guardrail red line).
+    pred = {"predicted_price": 785.2, "floor_price": 790.5}
+    rounded = gc.apply_bid_price_granularity(dict(pred), budget=1_000.0, config=config)
+    assert rounded["predicted_price"] == 791.0
+    assert rounded["bid_price_granularity"] == 1
+
+
+def test_apply_bid_price_granularity_candidate_path_below_min_budget(config):
+    """Candidate path also snaps every fractional candidate to the 1원 unit."""
+    pred = {
+        "predicted_price": 785.2,
+        "predicted_bid_rate": 0.617,
+        "bid_rate_candidates": [
+            {"label": "base", "bid_rate": 0.7852, "predicted_price": 785.2},
+            {"label": "safe", "bid_rate": 0.9008, "predicted_price": 900.8},
+        ],
+    }
+    rounded = gc.apply_bid_price_granularity(dict(pred), budget=1_000.0, config=config)
+    assert rounded["predicted_price"] == 785.0
+    assert rounded["bid_price_granularity"] == 1
+    base = rounded["bid_rate_candidates"][0]
+    assert base["predicted_price"] == 785.0
+    assert base["price_granularity_applied"] is True
+    assert base["pre_granularity_price"] == 785.2
+    assert rounded["bid_rate_candidates"][1]["predicted_price"] == 900.0
 
 
 def test_apply_bid_price_granularity_candidate_path(config):
