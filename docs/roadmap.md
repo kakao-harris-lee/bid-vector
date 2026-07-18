@@ -10,6 +10,8 @@
 
 2026-07-03 기준으로 개발 노트북에서 처리 가능한 G-2 검증 하드닝, OpenAPI 타입 동기화 가드, 추천 투찰가 guardrail/holdout 백테스트, 세부 조달 세그먼트 밴드와 10원 단위 보정도 `main`에 반영되었습니다. 현재 운영 병목은 대형 기능 추가가 아니라 **N일 운영 증적 축적, 실제 표본 실행(대부분 synthetic 사업자는 좁은 niche × 얇은 입찰가능 재고로 후보가 thin함 — 재고 누적 대기), 사업자별 알림 대상 확인, G-2 exit review**입니다. 추천 품질 쪽은 최신 낙찰 holdout 개선이 들어왔지만, 다음 개발 항목은 `procurement_rate_band`보다 세밀한 feature extractor, selector 분리, legal floor/분모 품질 강화입니다.
 
+2026-07-18 기준으로 Phase 3 초기 후속이 반영되었습니다 — 공사 법정 낙찰하한율 개정 반영 완주(#197~#200, 공사 추천 오차 0.305% 실증), 실투찰 검증 파이프라인 완비(#201~#203: 낙찰하한율 자동 수집·검증 폴백·backfill, 투찰가 정수 정합), 실투찰 2건은 **적격+낙찰가능** 판정 확정 후 낙찰자 공표 대기. 현재 병목은 빌드가 아니라 **두 공고의 낙찰자 확정 수집(#195 가설 재검증 트리거)**과 엔지니어링협회 실증 코어 착수입니다.
+
 **2026-07-17 기준으로 G-2 exit가 운영자 승인(approve)되었습니다** — 번들 `reports/g2-evidence/g2-exit-20260717/` (counted 14/7일, operators 3/3, 구조 게이트 4/4, blocking gap 0, manifest status=reviewed). 승인은 caveat 2건(counted 14일 중 per-operator 파일 증적 4일·나머지 ledger-only, 전부 synthetic+dry-run으로 실송신 0)을 인지한 상태에서 이루어졌으며, 실사용 forward 증적은 G-3 게이트에서 별도 검증합니다. 이로써 **2단계 종료, 3단계(제한 실증 서비스) 착수 가능** 상태입니다. 운영 감시는 celerybeat 항구성(self-heal #161, ~07-29 재발 창)과 스모크 streak 회복(~07-22 7연속 예상)을 계속합니다.
 
 현재 검증 환경은 외부 실사용자 SaaS가 아닙니다. 운영자 1명이 가상의 여러 회사를 만들고, 입찰 종류별 추천, 가상 투찰, 정산, 정확도 리포트, smoke test 자동화를 반복하면서 서비스 가능성을 확인하는 단계입니다.
@@ -33,6 +35,13 @@
 | 4 | SaaS/수수료 사업화 | G-3 후 착수 | 과금, 보안, 운영지원까지 견딜 수 있는가 |
 
 ## 최근 반영된 작업
+
+2026-07-17~18 (PR #194~#203)로 다음이 `main`에 반영·배포되었습니다. 상세는 "Phase 3. 제한 실증 서비스"의 착수 현황을 기준으로 합니다.
+
+- Phase 3 착수: 실투찰 1차 사후분석 → 발주처 밴드 base 정합화(#195), 실투찰 트랙 + 낙찰결과 자동 텔레그램(#194).
+- 공사 법정 낙찰하한율 개정 반영: 시행일·구간 인지 선언 테이블(#197) → era-correct 백테스트/홀드아웃 wiring(#198) → 공사 시나리오 floor 앵커 캘리브레이션(#200, 공사 추천 오차 3.33%→0.305%). `HistoricalData.base_amount` 출처(basis) 태깅 backfill + 홀드아웃 오염 가드(#199).
+- 낙찰하한율 자동화: 공고 수집 시 `sucsfbidLwltRate` 저장 + 낙찰 검증 폴백(#201), 기존 공고 backfill 스크립트·부분 실행(#202).
+- 투찰가 정수 정합: 최종 예측가 원 단위 보장 + 실투찰 등록 금액 정수 강제 — 보고값/등록값/제출값 불일치 재발 방지(#203).
 
 2026-07-03 (`7aa4e6f` 포함)로 다음이 `main`에 반영되었습니다.
 
@@ -199,7 +208,9 @@ Exit gate G-2:
 - **착수 배경 — 실투찰 1차 사후분석**: 운영자가 공고별 투찰가 메뉴('공격')를 그대로 사용해 실제 투찰한 2건(`R26BK01627948`, `R26BK01628093`)이 각각 52위/25위로 순위 밖. 원인 1순위는 발주처 밴드의 base 불일치(예정가-기준 캘리브레이션 밴드를 사업금액에 곱해 예정가 기준 약 +0.5%p 위로 추천), 2순위는 적격심사 밀집 게임의 구조적 상한. 낙찰 결과 텔레그램 알림 부재는 자동 알림 기능 자체가 없었던 것이 원인(수동 CLI만 존재).
 - **P0 완료 (#195)**: 발주처 밴드를 E[사정률](예정가/기초금액, 발주처별 실측 평균) 변환으로 사업금액 기준에 정합화 + scsbid가 예정가를 `base_amount`로 폴백 저장하던 오염 경로 제거. guardrail red line(카테고리/법정 하한 `max()` 구조) 불변 — ml-reviewer 확인. **가설 기반 수정이므로 두 공고의 개찰 결과(낙찰가)가 수집되면 재검증·재캘리브레이션 필수.**
 - **WS-1 완료 (#194)**: 실투찰 트랙(`BidDecisionRecord` 실투찰 컬럼 4개 + `/api/v1/operations/real-bids` API — 실투찰가는 `submitted_bid_amount`에, 시스템 추천 `recommended_amount`와 구분 저장, §2 정직 명세) + 낙찰결과 자동 텔레그램(`jobs.notify_award_results`, opt-in beat 6시간 주기, DB-only 공표 게이트, 발송 성공 시에만 `award_notified_at` 마킹 — 멱등). 2026-07-17 배포·스케줄 ON, 실투찰 2건 등록 완료.
-- **후속(우선순위 순)**: ① 공사 법정 낙찰하한율 개정(2026-01-30 국가계약 +2%p) 반영 — flat `0.87` 하드코딩을 구간 인지 구조로. ② 개찰 결과 누적 후 예정가 범위·투찰 전략 분석 재검증(홀드아웃 백테스트 비교 포함). ③ LLM 활용은 하이브리드 방침 확정 — 수치 예측은 통계/ML 유지(tabular 회귀 대비 열세·비결정성·감사불가), LLM은 공고문 자격조건 feature 추출·레짐 분류·특약 리스크 요약에 한정(아래 "해야 할 일"의 공고 식별 항목과 정합).
+- **후속 ① 완료 (#197→#198→#200, 2026-07-17)**: 공사 법정 낙찰하한율 개정(2026-01-30 국가계약 +2%p)을 시행일·추정가격 구간 인지 선언 테이블로 반영(#197), 백테스트·스모크·홀드아웃 predict 경로에 era-correct wiring(#198), 공사 시나리오를 era-correct 법정 하한 앵커로 캘리브레이션(#200 — clean 표본 n=2,051 percentile, 공사 추천 오차 3.33%→0.305% 실증). 부수로 `HistoricalData.base_amount` 출처 분류(basis) 태깅 backfill 65,137행 + 홀드아웃 오염 가드(#199).
+- **실투찰 검증 파이프라인 완비 (2026-07-18, #201/#202/#203)**: "미확정(낙찰하한율 필요)" 원인 3종 진단 — (a) 등록 투찰가가 실제 제출가와 원 단위 불일치 → 실제 제출가+공고 하한율(88%)로 재등록, 재발 방지로 최종 예측가 원 단위 정수 보장+등록 정수 강제(#203); (b) 낙찰하한율 미수집 → 공고 수집 시 `sucsfbidLwltRate`를 `Project.award_floor_rate`로 자동 저장 + `verify_one` 폴백(운영자 미입력 시 공고값, `floor_rate_source` 감사 필드)(#201); (c) 기존 공고 backfill 스크립트(#202) — open+마감 미도래 대상, 일일 쿼터 분할(1차 1,202건 적재, 잔여는 매일 아침 자동 재개). 두 실투찰은 **적격+낙찰가능** 판정 확정, 낙찰자 공표 시 beat 자동 텔레그램으로 경쟁력 비교까지 발송.
+- **잔여 후속(우선순위 순)**: ① 두 공고 낙찰자 확정 수집 후 #195 발주처 밴드 가설 재검증·재캘리브레이션(홀드아웃 비교 포함) — 파이프라인 준비 완료, 공표 대기만 남음. ② LLM 활용은 하이브리드 방침 확정 — 수치 예측은 통계/ML 유지(tabular 회귀 대비 열세·비결정성·감사불가), LLM은 공고문 자격조건 feature 추출·레짐 분류·특약 리스크 요약에 한정(아래 "해야 할 일"의 공고 식별 항목과 정합). ③ 개찰 참가업체별 순위/투찰금액 수집(현재 낙찰자 1건만 수집 — 실투찰 순위 사후분석용).
 
 범위:
 
@@ -439,16 +450,18 @@ SaaS 세부 설계 축:
 
 ## 다음 우선순위
 
-1. G-2 운영 증적 축적: 3개 이상 가상 사업자별 profile, strategy, notification channel, strategy monitor, decision experiment, synthetic experiment, G-2 evidence ledger를 `reports/g2-evidence/`와 `collect_g2_evidence` snapshot으로 N일 단위 저장한다.
-2. G-2 blocking gap 해소: `/api/v1/analytics/g2-evidence`의 `blocking_gaps`를 operator별 TODO로 관리하고 `open`/`triaged`/`accepted_hold`를 모두 unresolved로 다룬다. `mixed_scope`/`missing` 상태를 제거하고, slug-only synthetic result는 operator_id-scoped evidence로 재실행 또는 보정한다.
-3. G-1 표본 실행: sample-gap candidates를 dry-run으로 검토하고 승인 후 synthetic evidence run을 enqueue하여 operator_id-scoped settled sample 증적을 쌓는다.
-4. G-2 알림 대상 검증: 사업자별 Telegram/app notification 대상 식별자, `dry_run_only`, masking, 실제 송신 가능 범위를 운영표로 관리한다.
-5. G-0 관찰: scheduled smoke 핵심 phase green을 7일 이상 확보하고 실패 원인을 dashboard와 문서만으로 구분한다.
-6. G-2 exit review: `docs/operations/g2-exit-review-template.md`의 manifest/checklist로 3개 이상 operator가 exit gate를 만족하는지 판정한다.
-7. 추천 품질 세그먼트 후속: `procurement_rate_band`보다 세밀한 `price_regime_features`를 만들고,
+G-2 exit 승인(2026-07-17)으로 이전 1~6번(G-2 증적 축적·blocking gap·표본 실행·알림 대상 검증·exit review)은 완료·종결되었습니다. Phase 3 기준 우선순위는 다음과 같습니다.
+
+1. 실투찰 재검증(대기): 실투찰 2건(`R26BK01627948`, `R26BK01628093`)의 낙찰자 확정이 수집되면 #195 발주처 밴드 가설을 재검증·재캘리브레이션한다(홀드아웃 비교 포함). 수집·적격 판정·자동 텔레그램 파이프라인은 준비 완료.
+2. 엔지니어링협회 실증 코어: cohort 정의, 협회 조건 공고의 구조화 feature 추출(자격 조건 vs 기관명/과업명 라벨 분리), positive/negative 실증 데이터셋 구축(Phase 3 "해야 할 일" 상단 항목들).
+3. 사업자 온보딩·전달 채널: 사업자번호 기반 반자동 온보딩, 투찰 보고서 메일 전달, 알림 품질 조정.
+4. LLM 하이브리드 착수: 공고문 자격조건 feature 추출·레짐 분류·특약 리스크 요약에 한정해 적용(수치 예측은 통계/ML 유지).
+5. 추천 품질 세그먼트 후속: `procurement_rate_band`보다 세밀한 `price_regime_features`를 만들고,
    `floor_bound`/`near_100`/`deep_discount`/`ambiguous` 레짐별 calibration, recommended selector 분리,
    legal floor/예정가격 분모 품질 검사, 기관 group holdout과 최신 N건 rolling holdout을 구현한다.
-8. API/OpenAPI 타입 정합: API schema 변경 시 `npm --prefix frontend run sync-types`와 `check:sync-types`를 실행해 generated frontend type drift를 막는다.
+6. 개찰 데이터 폭 확장: 참가업체별 순위/투찰금액 수집(실투찰 순위 사후분석용), 기존 공고 낙찰하한율 backfill 잔여분 완료(일일 쿼터 분할 자동 재개 중).
+7. API/OpenAPI 타입 정합: API schema 변경 시 `npm --prefix frontend run sync-types`와 `check:sync-types`를 실행해 generated frontend type drift를 막는다.
+8. 운영 관찰 유지: celerybeat 항구성(self-heal #161, ~07-29 재발 창), 스모크 streak 회복(~07-22), 일일 KONEPS 쿼터 예산(대량 backfill은 `--limit` 분할 — 2026-07-18 쿼터 소진으로 당일 수집 파이프라인이 함께 멎은 교훈).
 9. G-3 전까지 SaaS 멀티테넌트 전체 전환은 보류한다.
 
 ## 관련 문서
