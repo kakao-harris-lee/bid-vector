@@ -303,6 +303,11 @@ def update_project_from_item(
     if item.get("business_type_label") is not None:
         project.business_type_label = item.get("business_type_label")
 
+    # 공고 낙찰하한율은 값이 있을 때만 갱신한다. scsbid/재수집 아이템이 이 필드를
+    # 실어오지 않는 경우(None) 기존 값을 지우지 않도록 덮어쓰지 않는다.
+    if item.get("award_floor_rate") is not None:
+        project.award_floor_rate = item.get("award_floor_rate")
+
     db_title = project.title or item.get("notice_number") or "KONEPS notice"
     project.title = db_title.strip()
 

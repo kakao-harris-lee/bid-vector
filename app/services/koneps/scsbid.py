@@ -145,6 +145,9 @@ def build_scsbid_award_item(
         "title": title,
         "base_amount": float(base_amount or 0.0),
         "estimated_amount": float(planned_price or base_amount or 0.0),
+        "award_floor_rate": parsing.normalize_bid_rate_value(
+            raw_item.get("sucsfbidLwltRate")
+        ),
         "closing_at": parsing.coerce_datetime(opened_at),
         "business_type": resolved_category or request.category,
         "region": parsing.extract_region([demand_agency, title]),

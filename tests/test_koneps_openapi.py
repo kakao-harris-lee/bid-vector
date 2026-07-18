@@ -132,6 +132,48 @@ def test_build_openapi_notice_item():
     assert item["metadata"]["mode"] == "openapi"
     assert item["metadata"]["openapi_operation"] == "getBidPblancListInfoCnstwk"
     assert item["metadata"]["demand_agency"] == "서울시청"
+    # No sucsfbidLwltRate on this row -> award floor rate stays None.
+    assert item["award_floor_rate"] is None
+
+
+def test_build_openapi_notice_item_extracts_award_floor_rate():
+    """``sucsfbidLwltRate`` (percent string) is normalized into a fraction."""
+    request = CrawlRequest(source="koneps-openapi", category="service")
+
+    def _item(rate):
+        raw = {"bidNtceNo": "R26BK01627948", "bidNtceNm": "테스트", "sucsfbidLwltRate": rate}
+        return openapi.build_openapi_notice_item(
+            raw, request=request, operation="getBidPblancListInfoServc"
+        )
+
+    assert _item("88")["award_floor_rate"] == 0.88
+    assert _item("87.995")["award_floor_rate"] == 0.87995
+    assert _item(88)["award_floor_rate"] == 0.88
+    # Missing / empty / zero-like values degrade to None (never fabricated).
+    assert _item("")["award_floor_rate"] is None
+    assert _item("0")["award_floor_rate"] is None
+    assert _item(None)["award_floor_rate"] is None
+
+
+def test_build_scsbid_award_item_extracts_award_floor_rate_when_present():
+    """The scsbid builder mirrors the field when the row carries it (else None)."""
+    from app.services.koneps import scsbid
+
+    request = CrawlRequest(source="scsbid-openapi", category="construction")
+    detail = {"reserve_prices": [], "selected_numbers": [], "planned_price": None,
+              "base_amount": None, "raw_reserve_detail_items": []}
+
+    with_rate = scsbid.build_scsbid_award_item(
+        {"bidNtceNo": "R26BK01628093", "bidNtceNm": "개찰", "sucsfbidLwltRate": "88"},
+        detail=detail, request=request, operation="getScsbidListSttusCnstwk",
+    )
+    without_rate = scsbid.build_scsbid_award_item(
+        {"bidNtceNo": "R26BK01628093", "bidNtceNm": "개찰"},
+        detail=detail, request=request, operation="getScsbidListSttusCnstwk",
+    )
+
+    assert with_rate["award_floor_rate"] == 0.88
+    assert without_rate["award_floor_rate"] is None
 
 
 def test_build_openapi_notice_item_requires_notice_number():
