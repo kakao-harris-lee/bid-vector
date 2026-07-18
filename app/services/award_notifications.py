@@ -34,6 +34,7 @@ from app.services.award_verification import (
     _default_fetch_detail,
     _tender_result,
     build_telegram_message,
+    determine_award_outcome,
     verify_one,
 )
 from app.services.real_bid_track import RealBidTrackService
@@ -68,6 +69,12 @@ class AwardResultNotificationService:
                 "notified_count": 0,
                 "pending_count": len(pending),
             }
+
+        # Persist win/loss as soon as the winner is public — BEFORE the send, so
+        # the 과거 입찰 기록 survives even if the Telegram delivery below fails.
+        # Idempotent (never overwrites a prior verdict); independent of the
+        # award_notified_at send marker.
+        self._record_outcomes(db, operator, gated, now=now)
 
         message = build_telegram_message([result for _, result in gated])
         sender = sender or self._default_sender()
@@ -139,6 +146,42 @@ class AwardResultNotificationService:
             record.award_notified_at = stamp
         db.commit()
         return len(records)
+
+    def _record_outcomes(
+        self,
+        db: Session,
+        operator: User,
+        gated: list[tuple[BidDecisionRecord, dict[str, Any]]],
+        *,
+        now: datetime | None,
+    ) -> int:
+        """Persist won/lost by 상호 매칭 vs 낙찰자; surface it to the alarm message.
+
+        Recorded once per real bid (idempotent — a prior verdict is never
+        overwritten) and only when a public 낙찰자 상호 is known. Amount is never
+        used for the verdict (§2 정직 명세). Returns the count newly recorded.
+        """
+        operator_name = operator.company if operator is not None else None
+        stamp = now or utc_now()
+        changed = 0
+        for record, result in gated:
+            outcome = determine_award_outcome(
+                result.get("winning_company"),
+                result.get("winning_amount"),
+                operator_name,
+                _coerce_float(record.submitted_bid_amount),
+            )
+            if outcome is not None and record.award_outcome is None:
+                record.award_outcome = outcome
+                record.award_outcome_at = stamp
+                changed += 1
+            # Surface the persisted verdict to the alarm 낙찰/패찰 tag (uses the
+            # stored value on idempotent retries after a prior send failure).
+            if record.award_outcome is not None:
+                result["award_outcome"] = record.award_outcome
+        if changed:
+            db.commit()
+        return changed
 
     def _default_sender(self) -> TelegramSender:
         """Instantiate the real Telegram service (no-ops in test/unconfigured)."""

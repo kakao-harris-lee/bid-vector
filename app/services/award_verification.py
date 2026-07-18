@@ -59,6 +59,71 @@ def strip_notice_suffix(notice: str) -> str:
     return _NOTICE_SUFFIX_RE.sub("", str(notice or "").strip())
 
 
+# Legal-entity tokens stripped before comparing company names. KONEPS records
+# the same company inconsistently (예: "주식회사 해담" vs "(주)해담"), so name
+# equality is judged on the bare 상호 with these forms and whitespace removed.
+_COMPANY_LEGAL_TOKENS = (
+    "주식회사",
+    "유한책임회사",
+    "유한회사",
+    "합자회사",
+    "합명회사",
+    "(주)",
+    "（주）",
+    "㈜",
+    "(유)",
+    "（유）",
+    "㈔",
+)
+
+# Award outcome codes persisted on BidDecisionRecord.award_outcome.
+AWARD_OUTCOME_WON = "won"
+AWARD_OUTCOME_LOST = "lost"
+
+
+def normalize_company_name(value: Any) -> str:
+    """Normalize a 상호 for equality: drop legal forms + whitespace, casefold.
+
+    Pure and side-effect free. Returns ``""`` for empty/None so callers can treat
+    an unknown name as "no basis to judge" (§2 정직 — 불확실하면 미기록).
+    """
+    text = re.sub(r"\s+", "", str(value or "").strip())
+    if not text:
+        return ""
+    for token in _COMPANY_LEGAL_TOKENS:
+        text = text.replace(token, "")
+    return text.casefold()
+
+
+def determine_award_outcome(
+    winning_company: Any,
+    winning_amount: Any,
+    operator_company_name: Any,
+    submitted_bid_amount: Any,
+) -> str | None:
+    """Judge a real bid as won/lost by operator vs winner 상호. None if unknown.
+
+    Pure decision core (§4.7) — no I/O. Rules (§2 정직 명세):
+
+    - No operator 상호 (프로필명 부재) → ``None`` (미기록; 불확실하면 남기지 않음).
+    - No public 낙찰자 상호 → ``None`` (낙찰자 미확정). ``winning_amount`` alone
+      never decides an outcome: the same 개찰 can carry identical 투찰가 across
+      distinct companies, so amount-only judgement is forbidden.
+    - Normalized 상호 매칭 성공 → ``"won"``.
+    - 낙찰자 확정됐고 상호 불일치 → ``"lost"``.
+
+    ``winning_amount`` / ``submitted_bid_amount`` are accepted for caller
+    symmetry and audit only; they are deliberately excluded from the verdict.
+    """
+    operator_name = normalize_company_name(operator_company_name)
+    if not operator_name:
+        return None
+    winner_name = normalize_company_name(winning_company)
+    if not winner_name:
+        return None
+    return AWARD_OUTCOME_WON if winner_name == operator_name else AWARD_OUTCOME_LOST
+
+
 def _default_fetch_detail(notice: str, category: str | None) -> dict[str, Any]:
     """Live KONEPS reserve-detail fetch. Never logs the service key."""
     from app.services.koneps.collector import KonepsCollectorService
@@ -308,8 +373,13 @@ def build_telegram_message(settled: list[dict[str, Any]]) -> str:
         notice = result.get("notice")
         bid = result.get("bid")
         base_amount = result.get("base_amount")
+        # Optional 낙찰/패찰 tag when the caller resolved the outcome (name-match
+        # vs 낙찰자). Absent for callers that don't judge outcome (CLI report).
+        outcome_tag = {AWARD_OUTCOME_WON: "낙찰 ", AWARD_OUTCOME_LOST: "패찰 "}.get(
+            result.get("award_outcome"), ""
+        )
         lines.append(
-            f"[{notice}] {result.get('verdict')} | 예정가 {_won(result.get('planned_price'))}"
+            f"[{notice}] {outcome_tag}{result.get('verdict')} | 예정가 {_won(result.get('planned_price'))}"
             f" | 내 투찰 {_won(bid)} | 낙찰가 {_won(result.get('winning_amount'))}"
             f" | 사업금액대비 {_ratio_pct(bid, base_amount) if bid is not None else '-'}"
         )
