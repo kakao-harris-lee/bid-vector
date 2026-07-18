@@ -1,5 +1,5 @@
 """Database models"""
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -55,6 +55,11 @@ class Project(Base):
     # 공고 낙찰하한율 (KONEPS sucsfbidLwltRate). fraction 저장 (예: 0.88 = 88%).
     # 운영자가 별도 하한율을 입력하지 않았을 때 낙찰 적격 검증의 폴백으로 쓴다.
     award_floor_rate = Column(Float, nullable=True)
+    # 수집 시 KONEPS 자격 관련 원문(면허제한·업종·참가제한지역 등)을 dict로 보존한다
+    # (PR-B 라벨 추출의 원천). 현재 소비자 없음 — classifier/requirements/게이트는
+    # 이 컬럼을 읽지 않으며 추천 동작에 영향이 없다. none_as_null=True로 미설정/None을
+    # JSON null이 아닌 SQL NULL로 저장해 backfill의 ``IS NULL`` 재개 키가 정확히 맞는다.
+    eligibility_raw = Column(JSON(none_as_null=True), nullable=True)
     status = Column(String(50), default="open")  # open, re_notice, closed, awarded, failed, cancelled
     created_at = Column(DateTime(timezone=True), default=utc_now)
     deadline = Column(DateTime(timezone=True))

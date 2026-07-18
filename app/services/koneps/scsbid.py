@@ -148,6 +148,7 @@ def build_scsbid_award_item(
         "award_floor_rate": parsing.normalize_bid_rate_value(
             raw_item.get("sucsfbidLwltRate")
         ),
+        "eligibility_raw": openapi.extract_eligibility_raw(raw_item),
         "closing_at": parsing.coerce_datetime(opened_at),
         "business_type": resolved_category or request.category,
         "region": parsing.extract_region([demand_agency, title]),

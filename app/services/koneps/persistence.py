@@ -308,6 +308,13 @@ def update_project_from_item(
     if item.get("award_floor_rate") is not None:
         project.award_floor_rate = item.get("award_floor_rate")
 
+    # 공고 참가자격 raw 필드도 비어있지 않은 dict일 때만 저장한다. scsbid/재수집
+    # 아이템이 자격 원문을 싣지 않으면(None/빈 dict) 기존 값을 지우지 않는다
+    # (award_floor_rate와 동일 가드). 이 컬럼은 PR-B 라벨 추출의 원천이며 현재
+    # 소비자가 없다.
+    if item.get("eligibility_raw"):
+        project.eligibility_raw = item.get("eligibility_raw")
+
     db_title = project.title or item.get("notice_number") or "KONEPS notice"
     project.title = db_title.strip()
 
