@@ -57,6 +57,9 @@ class RealBidRecord(BaseModel):
     recommended_amount: Optional[float]
     submitted_at: Optional[datetime]
     award_notified_at: Optional[datetime]
+    # 낙찰/패찰 여부(과거 입찰 기록). "won"/"lost"; None = 개찰 전/미확정.
+    award_outcome: Optional[str]
+    award_outcome_at: Optional[datetime]
     decision_status: str
     winning_company: Optional[str]
     winning_amount: Optional[float]

@@ -162,6 +162,8 @@ class RealBidTrackService:
             "recommended_amount": _coerce_float(record.recommended_amount),
             "submitted_at": record.submitted_at,
             "award_notified_at": record.award_notified_at,
+            "award_outcome": str(record.award_outcome) if record.award_outcome else None,
+            "award_outcome_at": record.award_outcome_at,
             "decision_status": str(record.decision_status or ""),
             "winning_company": winning_company,
             "winning_amount": winning_amount,
