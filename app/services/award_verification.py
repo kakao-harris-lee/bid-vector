@@ -15,6 +15,15 @@ service_key 등 시크릿은 절대 로그/출력에 남기지 않는다.
 KONEPS 접근이 가능한 호스트에서만 실호출된다. 테스트는 ``fetch_detail`` 을
 주입하거나 ``KonepsCollectorService._fetch_scsbid_reserve_detail`` 를
 monkeypatch 해 라이브 호출 없이 검증한다.
+
+또한 이 모듈은 실투찰의 **낙찰/패찰 판정 순수 함수**를 제공한다(§4.7 — I/O 없음):
+``normalize_company_name`` 은 상호에서 법인 접두·접미(주식회사·(주)·㈜·유한회사·
+(유) 등)와 공백을 제거해 표기 차이를 흡수하고, ``determine_award_outcome`` 은
+운영자 상호와 낙찰자 상호의 정규화 비교로만 ``"won"``/``"lost"`` 를 판정한다(어느
+한쪽 상호가 없으면 ``None`` — 불확실하면 미기록). 금액은 판정에 쓰지 않는다(동일
+개찰에 동일 투찰가 복수 업체가 실존하는 도메인, §2 정직 명세). 이 판정은
+``award_notifications`` 파이프라인이 ``BidDecisionRecord.award_outcome`` 에
+영속화한다.
 """
 
 from __future__ import annotations
