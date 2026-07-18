@@ -295,12 +295,16 @@ def build_openapi_notice_item(
         str(raw_item.get(key) or "")
         for key in ("indstrytyCd", "indstrytyNm", "lcnsLmtNm", "prtcptLmtRgnNm")
     )
+    award_floor_rate = parsing.normalize_bid_rate_value(
+        raw_item.get("sucsfbidLwltRate")
+    )
 
     return {
         "notice_number": notice_number,
         "title": title,
         "base_amount": float(base_amount or 0.0),
         "estimated_amount": float(estimated_amount or base_amount or 0.0),
+        "award_floor_rate": award_floor_rate,
         "closing_at": closing_at,
         "business_type": business_type or request.category,
         "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,

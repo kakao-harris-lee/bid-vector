@@ -155,6 +155,52 @@ def test_undetermined_without_floor_rate(test_db):
     assert any("낙찰가보다 낮게 투찰" in line for line in lines)
 
 
+def test_submitted_floor_rate_takes_priority_over_notice(test_db):
+    """When the operator supplied a floor rate, the notice value is ignored."""
+    project = _project(test_db)
+    project.award_floor_rate = 0.90  # would push the floor higher if used
+    test_db.flush()
+    _tender_result(
+        test_db, project, company="가상건설", amount=89_000_000, rate=0.89
+    )
+    result = verify_one(
+        test_db, NOTICE, 88_000_000, 0.87745, fetch_detail=_settled_detail()
+    )
+    assert result["floor_rate"] == 0.87745
+    assert result["floor_rate_source"] == "submitted"
+    assert result["floor_price"] == pytest.approx(87_745_000.0)
+    assert result["eligible"] is True
+
+
+def test_notice_floor_rate_used_when_submitted_missing(test_db):
+    """No operator floor rate -> fall back to the collected 공고 낙찰하한율."""
+    project = _project(test_db)
+    project.award_floor_rate = 0.87745
+    test_db.flush()
+    _tender_result(
+        test_db, project, company="가상건설", amount=89_000_000, rate=0.89
+    )
+    result = verify_one(test_db, NOTICE, 88_000_000, None, fetch_detail=_settled_detail())
+    assert result["floor_rate"] == 0.87745
+    assert result["floor_rate_source"] == "notice"
+    assert result["floor_price"] == pytest.approx(87_745_000.0)
+    assert result["eligible"] is True
+    assert result["verdict"] == VERDICT_ELIGIBLE_WINNABLE
+
+
+def test_undetermined_without_submitted_or_notice_floor(test_db):
+    """No floor rate anywhere keeps the existing UNDETERMINED behaviour."""
+    project = _project(test_db)  # no award_floor_rate set
+    _tender_result(
+        test_db, project, company="가상건설", amount=89_000_000, rate=0.89
+    )
+    result = verify_one(test_db, NOTICE, 88_000_000, None, fetch_detail=_settled_detail())
+    assert result["floor_rate"] is None
+    assert result["floor_rate_source"] is None
+    assert result["eligible"] is None
+    assert result["verdict"] == VERDICT_UNDETERMINED
+
+
 def test_settled_via_tender_result_when_reserve_empty(test_db):
     """No reserve detail but a real TenderResult still counts as settled."""
     project = _project(test_db)

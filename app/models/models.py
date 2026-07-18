@@ -52,6 +52,9 @@ class Project(Base):
     source_url = Column(Text, nullable=True)
     issuing_agency = Column(String(255), nullable=True, index=True)
     demand_agency = Column(String(255), nullable=True, index=True)
+    # 공고 낙찰하한율 (KONEPS sucsfbidLwltRate). fraction 저장 (예: 0.88 = 88%).
+    # 운영자가 별도 하한율을 입력하지 않았을 때 낙찰 적격 검증의 폴백으로 쓴다.
+    award_floor_rate = Column(Float, nullable=True)
     status = Column(String(50), default="open")  # open, re_notice, closed, awarded, failed, cancelled
     created_at = Column(DateTime(timezone=True), default=utc_now)
     deadline = Column(DateTime(timezone=True))

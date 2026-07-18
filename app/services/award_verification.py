@@ -180,6 +180,16 @@ def verify_one(
     project = _find_project(db, base_notice)
     category = project.category if project is not None else None
 
+    # 낙찰하한율 근거: 운영자 입력(submitted)이 우선. 없으면 공고 수집 시 저장한
+    # Project.award_floor_rate(notice)로 폴백한다. 어떤 근거로 판정했는지 §2 정직
+    # 명세에 따라 결과 dict에 남긴다.
+    floor_rate_source: str | None = "submitted" if floor_rate is not None else None
+    if floor_rate is None and project is not None:
+        notice_floor = _rate_to_fraction(project.award_floor_rate)
+        if notice_floor is not None:
+            floor_rate = notice_floor
+            floor_rate_source = "notice"
+
     detail: dict[str, Any] = {}
     reserve_error: str | None = None
     try:
@@ -210,6 +220,7 @@ def verify_one(
         "category": category,
         "bid": bid,
         "floor_rate": floor_rate,
+        "floor_rate_source": floor_rate_source,
         "reserve_error": reserve_error,
         "settled": settled,
     }
