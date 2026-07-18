@@ -97,6 +97,32 @@ def test_register_real_bid_rejects_non_positive_amount(client, test_db):
     assert response.status_code == 422
 
 
+def test_register_real_bid_rejects_fractional_amount(client, test_db):
+    """투찰가 정수 정합: a fractional 투찰가 (원 미만 소수) is a 422 — the system only
+    accepts integer 원 amounts submittable to KONEPS verbatim."""
+    project = _seed_project(test_db)
+    response = client.post(
+        REAL_BIDS_PATH, json={"project_id": project.id, "bid_amount": 77_529_785.2}
+    )
+    assert response.status_code == 422
+
+
+def test_register_real_bid_accepts_integral_float_amount(client, test_db):
+    """A JSON number with no fractional part (77529790.0) is an integer 원 value and
+    must pass, stored as the integer amount."""
+    project = _seed_project(test_db)
+    response = client.post(
+        REAL_BIDS_PATH,
+        json={"project_id": project.id, "bid_amount": 77_529_790.0},
+    )
+    assert response.status_code == 200
+    assert response.json()["submitted_bid_amount"] == 77_529_790
+
+    record = test_db.query(BidDecisionRecord).filter_by(project_id=project.id).one()
+    assert record.submitted_bid_amount == 77_529_790
+    assert record.submitted_bid_amount == int(record.submitted_bid_amount)
+
+
 # --------------------------------------------------------------------------- #
 # API — list
 # --------------------------------------------------------------------------- #

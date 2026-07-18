@@ -64,7 +64,7 @@ class RealBidTrackService:
         *,
         operator: User,
         project: Project,
-        bid_amount: float,
+        bid_amount: int,
         floor_rate: float | None = None,
         submitted_at: datetime | None = None,
         note: str | None = None,

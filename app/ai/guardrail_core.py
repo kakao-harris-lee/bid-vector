@@ -395,11 +395,27 @@ def apply_bid_price_granularity(
     budget: float,
     config: GuardrailConfig,
 ) -> dict[str, Any]:
-    """Round final bid prices to an operator-facing currency unit."""
+    """Round final bid prices to an operator-facing currency unit.
+
+    Contract (투찰가 정수 정합): the system's final bid price must be an integer 원
+    amount the operator can submit to KONEPS verbatim — a fractional 투찰가 (e.g.
+    77_529_785.2) must never leave the predictor. The configured currency
+    granularity applies only when ``granularity > 1 AND budget >= min_budget``;
+    outside that window we still quantize to the 1원 unit so the integer guarantee
+    holds for every price. ``budget <= 0`` is the ONLY early return, because the
+    bid-rate below divides by ``budget`` (a non-positive budget has no meaningful
+    quantization). The floor/ceiling clamp inside ``round_price_to_granularity`` is
+    unchanged (guardrail floor 보호 우회 금지) — it applies identically at unit=1.
+    """
     granularity = config.bid_price_granularity
     min_budget = config.bid_price_granularity_min_budget
-    if granularity <= 1 or budget <= 0 or budget < min_budget:
+    if budget <= 0:
         return prediction
+
+    # Effective currency unit: the configured granularity when it applies, else the
+    # 1원 unit. round_*_to_granularity floor unit to max(1, int(...)), so unit=1 is a
+    # plain integer-원 snap while preserving the same floor/ceiling protection.
+    unit = granularity if (granularity > 1 and budget >= min_budget) else 1
 
     rounded_prediction = dict(prediction)
     rounding_mode = config.bid_price_rounding_mode
@@ -412,7 +428,7 @@ def apply_bid_price_granularity(
             round_candidate_price_to_granularity(
                 candidate,
                 budget=budget,
-                granularity=granularity,
+                granularity=unit,
                 rounding_mode=rounding_mode,
                 floor_price=floor_price,
                 ceiling_price=ceiling_price,
@@ -434,7 +450,7 @@ def apply_bid_price_granularity(
         original_price = resolve_prediction_price(prediction, budget=budget)
         rounded_price = round_price_to_granularity(
             original_price,
-            granularity=granularity,
+            granularity=unit,
             rounding_mode=rounding_mode,
             floor_price=floor_price,
             ceiling_price=ceiling_price,
@@ -445,7 +461,7 @@ def apply_bid_price_granularity(
             rounded_price,
             round_price_to_granularity(
                 optional_float(prediction.get("price_range_min")) or rounded_price,
-                granularity=granularity,
+                granularity=unit,
                 rounding_mode=rounding_mode,
                 floor_price=floor_price,
                 ceiling_price=ceiling_price,
@@ -455,7 +471,7 @@ def apply_bid_price_granularity(
             rounded_price,
             round_price_to_granularity(
                 optional_float(prediction.get("price_range_max")) or rounded_price,
-                granularity=granularity,
+                granularity=unit,
                 rounding_mode=rounding_mode,
                 floor_price=floor_price,
                 ceiling_price=ceiling_price,
@@ -463,7 +479,7 @@ def apply_bid_price_granularity(
         )
         applied = abs(rounded_price - original_price) > 1e-9
 
-    rounded_prediction["bid_price_granularity"] = granularity
+    rounded_prediction["bid_price_granularity"] = unit
     rounded_prediction["bid_price_rounding_mode"] = rounding_mode
     rounded_prediction["price_granularity_applied"] = bool(applied)
     return rounded_prediction

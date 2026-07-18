@@ -22,7 +22,7 @@ class RealBidRecordRequest(BaseModel):
         max_length=100,
         description="공고번호(차수 접미사 -000 은 매칭 시 제거). project_id 없을 때 사용.",
     )
-    bid_amount: float = Field(gt=0, description="실제 제출한 투찰가(원)")
+    bid_amount: int = Field(gt=0, description="실제 제출한 투찰가(원, 정수)")
     floor_rate: Optional[float] = Field(
         default=None,
         gt=0,
