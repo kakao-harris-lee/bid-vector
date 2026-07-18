@@ -12,6 +12,9 @@
 - canonical operator 채널만 사용한다(synthetic 제외).
 - 발송이 실제로 시도된 경우에만(``status='sent'``) ``award_notified_at`` 을
   기록한다. 발송 예외(``status='error'``)면 기록하지 않아 다음 사이클에 재시도된다.
+- 통지 시점에 낙찰/패찰을 판정하지 못한(운영자 상호 미설정·낙찰자 상호 피드 랙)
+  이미 통지된 레코드는 **outcome 회복 패스**가 재통지 없이 ``award_outcome`` 만
+  뒤늦게 채운다(상호가 정규화 후 비어있으면 외부 조회 없이 스킵).
 - ``ENVIRONMENT=test`` 텔레그램 스킵은 ``TelegramNotificationService`` 가 담당한다.
 - 시크릿/개인정보는 로그/메시지에 남기지 않는다.
 """
@@ -35,6 +38,7 @@ from app.services.award_verification import (
     _tender_result,
     build_telegram_message,
     determine_award_outcome,
+    normalize_company_name,
     verify_one,
 )
 from app.services.real_bid_track import RealBidTrackService
@@ -57,6 +61,14 @@ class AwardResultNotificationService:
         operator = operator or ensure_operator_account(db)
         fetch_detail = fetch_detail or _default_fetch_detail
 
+        # Backfill outcomes for already-notified bids that could not be judged at
+        # notify time (operator 상호 미설정 or 낙찰자 상호 피드 랙). Runs first and
+        # never re-notifies; skipped without any external fetch while the operator
+        # has no 상호 to match against.
+        recovered = self._recover_outcomes(
+            db, operator, fetch_detail=fetch_detail, limit=limit, now=now
+        )
+
         pending = RealBidTrackService().tracked_pending_award(
             db, operator=operator, limit=limit
         )
@@ -68,6 +80,7 @@ class AwardResultNotificationService:
                 "sent": False,
                 "notified_count": 0,
                 "pending_count": len(pending),
+                "outcome_recovered": recovered,
             }
 
         # Persist win/loss as soon as the winner is public — BEFORE the send, so
@@ -87,6 +100,7 @@ class AwardResultNotificationService:
                 "sent": False,
                 "notified_count": 0,
                 "pending_count": len(pending),
+                "outcome_recovered": recovered,
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
@@ -96,6 +110,7 @@ class AwardResultNotificationService:
             "sent": bool((send_result or {}).get("sent")),
             "notified_count": marked,
             "pending_count": len(pending),
+            "outcome_recovered": recovered,
             "result": send_result or {},
         }
 
@@ -182,6 +197,38 @@ class AwardResultNotificationService:
         if changed:
             db.commit()
         return changed
+
+    def _recover_outcomes(
+        self,
+        db: Session,
+        operator: User,
+        *,
+        fetch_detail: FetchDetail,
+        limit: int,
+        now: datetime | None,
+    ) -> int:
+        """Backfill award_outcome for already-notified bids without re-notifying.
+
+        Reaches the 고아 records that :meth:`_record_outcomes` never got to judge:
+        the operator 상호 was empty at notify time (later set), or the 낙찰자 상호
+        arrived after the notification (``_award_public`` goes true on 낙찰가 alone
+        while KONEPS merges winner name/amount independently). Runs the same
+        public-award gate + :meth:`_record_outcomes`, but never sends a message
+        nor stamps ``award_notified_at`` (재통지 금지). Returns the count recorded.
+
+        Skipped entirely — no external fetch — while the operator has no 상호 to
+        match against, so an unset 상호 never triggers a KONEPS re-query per cycle.
+        """
+        operator_name = operator.company if operator is not None else None
+        if not normalize_company_name(operator_name):
+            return 0
+        pending = RealBidTrackService().tracked_pending_outcome(
+            db, operator=operator, limit=limit
+        )
+        gated = self._verify_public_awards(db, pending, fetch_detail=fetch_detail)
+        if not gated:
+            return 0
+        return self._record_outcomes(db, operator, gated, now=now)
 
     def _default_sender(self) -> TelegramSender:
         """Instantiate the real Telegram service (no-ops in test/unconfigured)."""

@@ -290,20 +290,103 @@ def test_outcome_records_lost_when_winner_is_another_company(test_db):
 
 
 def test_outcome_is_none_when_operator_company_unknown(test_db):
-    # Canonical operator has no 상호 -> no basis to judge (§2) -> stays NULL,
-    # even though the alarm still sends the factual verdict.
+    # Canonical operator has no 상호 -> no basis to judge (§2) -> outcome stays
+    # NULL, while the factual eligibility/competitiveness alarm still sends.
+    ensure_operator_account(test_db)  # company == ""
+    operator = ensure_operator_account(test_db)
+    project = _seed_project(test_db)
+    record = _track_bid(test_db, operator, project)
+    _add_winner(test_db, project, company="가상건설")
+    sender = _RecordingSender()
+
+    AwardResultNotificationService().collect_and_notify(
+        test_db, sender=sender, fetch_detail=_settled_fetch, now=FIXED_NOW
+    )
+    test_db.refresh(record)
+    assert record.award_outcome is None
+    assert record.award_outcome_at is None
+    # The alarm still fires (outcome NULL only means no 낙찰/패찰 tag).
+    assert len(sender.messages) == 1
+
+
+def test_outcome_recovered_after_company_set_without_renotify(test_db):
+    """Orphan (a): notified while 상호 미설정 -> recovered on a later cycle, no re-send."""
     ensure_operator_account(test_db)  # company == ""
     operator = ensure_operator_account(test_db)
     project = _seed_project(test_db)
     record = _track_bid(test_db, operator, project)
     _add_winner(test_db, project, company="가상건설")
 
-    AwardResultNotificationService().collect_and_notify(
-        test_db, sender=_RecordingSender(), fetch_detail=_settled_fetch, now=FIXED_NOW
+    first_sender = _RecordingSender()
+    first = AwardResultNotificationService().collect_and_notify(
+        test_db, sender=first_sender, fetch_detail=_settled_fetch, now=FIXED_NOW
+    )
+    assert first["status"] == "sent"
+    assert len(first_sender.messages) == 1
+    test_db.refresh(record)
+    assert record.award_notified_at is not None
+    assert record.award_outcome is None  # empty 상호 -> could not judge
+
+    # Operator sets its 상호 later; the next cycle backfills the outcome only.
+    operator.company = "가상건설"
+    test_db.commit()
+    later = datetime(2026, 7, 18, 3, 0, tzinfo=timezone.utc)
+    recovery_sender = _RecordingSender()
+    second = AwardResultNotificationService().collect_and_notify(
+        test_db, sender=recovery_sender, fetch_detail=_settled_fetch, now=later
+    )
+    test_db.refresh(record)
+    assert record.award_outcome == "won"
+    assert ensure_utc(record.award_outcome_at) == later
+    assert recovery_sender.messages == []  # 재통지 금지
+    assert second["outcome_recovered"] == 1
+
+
+def test_recovery_skipped_without_operator_company_makes_no_fetch(test_db):
+    """Orphan present but 상호 미설정 -> recovery skips with no external KONEPS fetch."""
+    operator = ensure_operator_account(test_db)  # company == ""
+    project = _seed_project(test_db)
+    record = _track_bid(test_db, operator, project)
+    record.award_notified_at = FIXED_NOW  # already notified, outcome still NULL
+    test_db.commit()
+    _add_winner(test_db, project, company="가상건설")
+
+    calls: list[str] = []
+
+    def _counting_fetch(notice, category):
+        calls.append(notice)
+        return _settled_fetch(notice, category)
+
+    outcome = AwardResultNotificationService().collect_and_notify(
+        test_db, sender=_RecordingSender(), fetch_detail=_counting_fetch
     )
     test_db.refresh(record)
     assert record.award_outcome is None
-    assert record.award_outcome_at is None
+    assert calls == []  # guard short-circuited before any reserve-detail fetch
+    assert outcome["outcome_recovered"] == 0
+
+
+def test_recovery_keeps_null_when_winner_company_not_yet_public(test_db):
+    """Orphan (b): 낙찰가만 공표되고 낙찰자 상호는 피드 랙 -> NULL 유지, 다음 사이클 재시도 가능."""
+    operator = ensure_operator_account(test_db)
+    operator.company = "가상건설"
+    test_db.commit()
+    project = _seed_project(test_db)
+    record = _track_bid(test_db, operator, project)
+    record.award_notified_at = FIXED_NOW
+    test_db.commit()
+    # Winner 낙찰가 public but winning_company not yet merged.
+    _add_winner(test_db, project, company="", amount=89_000_000.0)
+
+    outcome = AwardResultNotificationService().collect_and_notify(
+        test_db, sender=_RecordingSender(), fetch_detail=_settled_fetch
+    )
+    test_db.refresh(record)
+    assert record.award_outcome is None
+    assert outcome["outcome_recovered"] == 0
+    # Still queued for a later recovery cycle.
+    pending = RealBidTrackService().tracked_pending_outcome(test_db, operator=operator)
+    assert record.id in {r.id for r in pending}
 
 
 def test_outcome_stays_null_when_award_not_public(test_db):
