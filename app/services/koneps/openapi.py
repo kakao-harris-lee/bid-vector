@@ -232,6 +232,36 @@ def openapi_item_list(body: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(item) for item in raw_items if isinstance(item, dict)]
 
 
+# 공고 참가자격 관련 KONEPS raw 필드(한글 원문) 선언 테이블. 여기 선언된 키 중
+# 비어있지 않은 값만 공고 item에 ``eligibility_raw`` dict로 보존한다(PR-B 라벨
+# 추출의 원천). 규칙은 데이터로, 코드는 해석기만 유지한다(§4.5). PR-B에서 자격
+# 관련 키(면허등급/실적/지역제한 세부 등)를 이 테이블에 확장 예정.
+ELIGIBILITY_RAW_KEYS = (
+    "lcnsLmtNm",  # 면허제한(한글 원문)
+    "indstrytyCd",  # 업종 코드
+    "indstrytyNm",  # 업종명
+    "prtcptLmtRgnNm",  # 참가제한지역명
+)
+
+
+def extract_eligibility_raw(raw_item: dict[str, Any]) -> dict[str, Any] | None:
+    """공고 raw item에서 참가자격 관련 원문 필드만 골라 dict로 보존한다.
+
+    ``ELIGIBILITY_RAW_KEYS``에 선언된 키 중 **비어있지 않은 값**만 복사한다. 전부
+    결측이면 ``None``을 돌려준다(빈 dict 저장을 피해, 재수집이 기존 값을 지우지
+    않도록). 순수 함수 — IO/DB 없음.
+    """
+    raw: dict[str, Any] = {}
+    for key in ELIGIBILITY_RAW_KEYS:
+        value = raw_item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            raw[key] = text
+    return raw or None
+
+
 def build_openapi_notice_item(
     raw_item: dict[str, Any],
     *,
@@ -305,6 +335,7 @@ def build_openapi_notice_item(
         "base_amount": float(base_amount or 0.0),
         "estimated_amount": float(estimated_amount or base_amount or 0.0),
         "award_floor_rate": award_floor_rate,
+        "eligibility_raw": extract_eligibility_raw(raw_item),
         "closing_at": closing_at,
         "business_type": business_type or request.category,
         "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,

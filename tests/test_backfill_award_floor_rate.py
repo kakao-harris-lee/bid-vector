@@ -118,35 +118,38 @@ def test_raise_for_result_code_message_excludes_secret():
 
 @pytest.fixture
 def seeded_targets(test_db):
-    """Open+NULL notices with staggered deadlines plus rows that must be excluded."""
+    """Open notices missing eligibility_raw with staggered deadlines plus rows that must be excluded."""
     now = utc_now()
     test_db.add_all(
         [
-            # eligible: NULL rate, open, future deadline (later)
+            # eligible: NULL eligibility, open, future deadline (later)
             Project(
                 id=1,
                 notice_number="R0001",
                 category="service",
                 status="open",
                 award_floor_rate=None,
+                eligibility_raw=None,
                 deadline=now + timedelta(days=5),
             ),
-            # eligible: NULL rate, open, future deadline (sooner -> first)
+            # eligible: NULL eligibility, open, future deadline (sooner -> first)
             Project(
                 id=2,
                 notice_number="R0002",
                 category="construction",
                 status="open",
                 award_floor_rate=None,
+                eligibility_raw=None,
                 deadline=now + timedelta(days=1),
             ),
-            # excluded: already has a floor rate
+            # excluded: already has eligibility_raw (resume key satisfied)
             Project(
                 id=3,
                 notice_number="R0003",
                 category="service",
                 status="open",
                 award_floor_rate=0.88,
+                eligibility_raw={"lcnsLmtNm": "토목공사업"},
                 deadline=now + timedelta(days=2),
             ),
             # excluded: not open
@@ -156,6 +159,7 @@ def seeded_targets(test_db):
                 category="service",
                 status="closed",
                 award_floor_rate=None,
+                eligibility_raw=None,
                 deadline=now + timedelta(days=2),
             ),
             # excluded: deadline in the past (outside default window)
@@ -165,6 +169,7 @@ def seeded_targets(test_db):
                 category="service",
                 status="open",
                 award_floor_rate=None,
+                eligibility_raw=None,
                 deadline=now - timedelta(days=2),
             ),
         ]
@@ -210,6 +215,7 @@ def test_run_backfill_counts_and_persists(seeded_targets):
     assert stats.processed == 2
     assert stats.updated == 1
     assert stats.no_value == 1
+    assert stats.eligibility_saved == 0  # rate-only payloads carry no eligibility
     assert stats.errors == 0
     # persisted value on the updated project
     rows = {r.id: r for r in seeded_targets.query(Project).all()}
@@ -318,20 +324,24 @@ def test_run_backfill_blank_notice_counts_skipped_without_fetch(test_db):
 
 
 def test_run_backfill_idempotent_skips_already_valued(seeded_targets):
-    """A project that already has a floor rate is never in the target set/fetched."""
+    """A project that already has eligibility_raw is never in the target set/fetched."""
     targets = backfill.load_targets(seeded_targets)  # ids 2, 1 only (id 3 excluded)
     fetch = _FakeFetch(
         {
-            "R0002": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "87"}]),
-            "R0001": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "86"}]),
+            "R0002": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "87", "lcnsLmtNm": "토목공사업"}]
+            ),
+            "R0001": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "86", "indstrytyNm": "건축공사업"}]
+            ),
         }
     )
 
     backfill.run_backfill(seeded_targets, targets, fetch=fetch, delay=0)
 
     fetched = {notice for notice, _ in fetch.calls}
-    assert "R0003" not in fetched  # already-valued notice never queried
-    # a second run finds nothing new (all now valued)
+    assert "R0003" not in fetched  # eligibility-set notice never queried
+    # a second run finds nothing new (all now carry eligibility_raw -> drop out)
     remaining = backfill.load_targets(seeded_targets)
     assert remaining == []
 
@@ -353,3 +363,149 @@ def test_dry_run_does_not_call_fetch(seeded_targets):
     # nothing written
     rows = {r.id: r for r in seeded_targets.query(Project).all()}
     assert rows[2].award_floor_rate is None
+
+
+# --- Eligibility raw (dual-purpose backfill) ----------------------------------
+
+
+def test_parse_eligibility_raw_from_latest_order():
+    """Eligibility raw is read off the same latest-차수 row as the floor rate."""
+    payload = _payload(
+        [
+            {"bidNtceOrd": "1", "lcnsLmtNm": "구버전"},
+            {"bidNtceOrd": "2", "lcnsLmtNm": "토목공사업", "prtcptLmtRgnNm": "부산"},
+        ]
+    )
+    assert backfill.parse_eligibility_raw(payload) == {
+        "lcnsLmtNm": "토목공사업",
+        "prtcptLmtRgnNm": "부산",
+    }
+
+
+def test_parse_eligibility_raw_empty_items_is_none():
+    assert backfill.parse_eligibility_raw(_payload([])) is None
+
+
+def test_parse_eligibility_raw_no_fields_is_none():
+    # A row with a floor rate but no eligibility field -> None.
+    payload = _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "88"}])
+    assert backfill.parse_eligibility_raw(payload) is None
+
+
+def test_load_targets_keys_on_eligibility_null_not_floor(test_db):
+    """Target selection keys on eligibility_raw IS NULL, independent of floor rate."""
+    now = utc_now()
+    test_db.add_all(
+        [
+            # floor already set but eligibility NULL -> still a target
+            Project(
+                id=10,
+                notice_number="R0010",
+                category="service",
+                status="open",
+                award_floor_rate=0.88,
+                eligibility_raw=None,
+                deadline=now + timedelta(days=1),
+            ),
+            # floor NULL but eligibility already set -> excluded
+            Project(
+                id=11,
+                notice_number="R0011",
+                category="service",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw={"lcnsLmtNm": "x"},
+                deadline=now + timedelta(days=2),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    ids = [t[0] for t in backfill.load_targets(test_db)]
+    assert 10 in ids  # floor-set-but-eligibility-null is still targeted
+    assert 11 not in ids  # eligibility already saved -> skipped
+
+
+def test_run_backfill_saves_both_floor_and_eligibility(seeded_targets):
+    """A target with NULL floor gets both columns from one fetch."""
+    targets = backfill.load_targets(seeded_targets)  # ids 2, 1
+    fetch = _FakeFetch(
+        {
+            "R0002": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "87", "lcnsLmtNm": "토목공사업"}]
+            ),
+            "R0001": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "86", "indstrytyNm": "건축공사업"}]
+            ),
+        }
+    )
+
+    stats = backfill.run_backfill(
+        seeded_targets, targets, fetch=fetch, delay=0, chunk_size=1
+    )
+
+    assert stats.updated == 2
+    assert stats.eligibility_saved == 2
+    assert stats.no_value == 0
+    rows = {r.id: r for r in seeded_targets.query(Project).all()}
+    assert rows[2].award_floor_rate == pytest.approx(0.87)
+    assert rows[2].eligibility_raw == {"lcnsLmtNm": "토목공사업"}
+    assert rows[1].award_floor_rate == pytest.approx(0.86)
+    assert rows[1].eligibility_raw == {"indstrytyNm": "건축공사업"}
+
+
+def test_run_backfill_does_not_overwrite_existing_floor(test_db):
+    """A target already carrying a floor keeps it; only eligibility is written."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="R0001",
+            category="service",
+            status="open",
+            award_floor_rate=0.90,
+            eligibility_raw=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)  # id 1 (eligibility NULL)
+    fetch = _FakeFetch(
+        {
+            "R0001": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "80", "lcnsLmtNm": "토목공사업"}]
+            ),
+        }
+    )
+
+    stats = backfill.run_backfill(test_db, targets, fetch=fetch, delay=0)
+
+    assert stats.updated == 0  # floor already set -> not touched
+    assert stats.no_value == 0  # and not counted as no_value either
+    assert stats.eligibility_saved == 1
+    row = test_db.query(Project).filter(Project.id == 1).one()
+    assert row.award_floor_rate == pytest.approx(0.90)  # unchanged, not 0.80
+    assert row.eligibility_raw == {"lcnsLmtNm": "토목공사업"}
+
+
+def test_run_backfill_eligibility_only_target_no_floor_no_value(test_db):
+    """A floor-set target with an eligibility-only payload saves eligibility, no no_value."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="R0001",
+            category="service",
+            status="open",
+            award_floor_rate=0.90,  # already set -> floor path skipped entirely
+            eligibility_raw=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)
+    fetch = _FakeFetch({"R0001": _payload([{"bidNtceOrd": "1", "lcnsLmtNm": "토목공사업"}])})
+
+    stats = backfill.run_backfill(test_db, targets, fetch=fetch, delay=0)
+
+    assert stats.no_value == 0
+    assert stats.updated == 0
+    assert stats.eligibility_saved == 1

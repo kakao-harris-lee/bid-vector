@@ -183,6 +183,62 @@ def test_update_project_keeps_award_floor_rate_when_item_missing(test_db):
     assert project.award_floor_rate == 0.88
 
 
+def test_update_project_persists_eligibility_raw(test_db):
+    """An item carrying a non-empty eligibility_raw dict writes it onto the project."""
+    project = Project(
+        title="placeholder",
+        description="",
+        requirements="",
+        budget_estimate=0.0,
+        category="construction",
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    item = _award_item("R26BK01628300")
+    item["eligibility_raw"] = {"lcnsLmtNm": "토목공사업", "prtcptLmtRgnNm": "부산광역시"}
+    persistence.update_project_from_item(project, item=item, request=_request())
+
+    assert project.eligibility_raw == {
+        "lcnsLmtNm": "토목공사업",
+        "prtcptLmtRgnNm": "부산광역시",
+    }
+
+
+def test_update_project_keeps_eligibility_raw_when_item_missing(test_db):
+    """A re-collected/scsbid item without eligibility raw must not wipe the stored dict."""
+    stored = {"lcnsLmtNm": "토목공사업"}
+    project = Project(
+        title="placeholder",
+        description="",
+        requirements="",
+        budget_estimate=0.0,
+        category="construction",
+        notice_number="R26BK01628301",
+        eligibility_raw=stored,
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    # No eligibility_raw key at all -> keep the existing value.
+    persistence.update_project_from_item(
+        project, item=_award_item("R26BK01628301"), request=_request()
+    )
+    assert project.eligibility_raw == stored
+
+    # Explicit None -> keep.
+    none_item = _award_item("R26BK01628301")
+    none_item["eligibility_raw"] = None
+    persistence.update_project_from_item(project, item=none_item, request=_request())
+    assert project.eligibility_raw == stored
+
+    # Empty dict (all raw fields blank) -> keep.
+    empty_item = _award_item("R26BK01628301")
+    empty_item["eligibility_raw"] = {}
+    persistence.update_project_from_item(project, item=empty_item, request=_request())
+    assert project.eligibility_raw == stored
+
+
 def test_resolve_project_creation_persists_award_floor_rate(test_db):
     """A brand-new project created for an item stores the notice floor rate."""
     historical = HistoricalData(notice_number="NEW-FLOOR")

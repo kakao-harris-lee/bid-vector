@@ -1,30 +1,43 @@
 #!/usr/bin/env python3
-"""Backfill Project.award_floor_rate for notices collected before #201.
+"""Backfill Project.award_floor_rate 및 eligibility_raw for pre-collected notices.
 
-``Project.award_floor_rate`` (fraction, e.g. ``0.88``) was added in #201 and is
-populated going forward by the collector from KONEPS ``sucsfbidLwltRate``. Every
-notice collected before that release stored ``NULL``. This one-off script fills
-those gaps by targeted-querying the BidPublicInfoService list operation
-(``getBidPblancListInfoServc`` / ...``Cnstwk`` / ...) for each open notice and
-persisting the normalized floor rate.
+This one-off targeted-queries the BidPublicInfoService list operation
+(``getBidPblancListInfoServc`` / ...``Cnstwk`` / ...) once per open notice and
+fills two columns that older rows are missing:
 
-Targeting rule: ``award_floor_rate IS NULL AND status='open' AND deadline >=
-now`` (imminent notices first). ``--include-past-days N`` widens the deadline
-window into the recent past; ``--limit`` caps the run; ``--dry-run`` counts the
-target set (and prints a sample) without any external call.
+- ``award_floor_rate`` (fraction, e.g. ``0.88``; added #201) — the notice's
+  낙찰하한율 from ``sucsfbidLwltRate``.
+- ``eligibility_raw`` (JSON) — the notice's 참가자격 관련 원문(면허제한/업종/참가
+  제한지역 등) preserved verbatim as the source for later 라벨 추출. No consumer
+  today; persisting only.
+
+Targeting rule: ``eligibility_raw IS NULL AND status='open' AND deadline >= now``
+(imminent notices first). Keying the resume on ``eligibility_raw`` (not
+``award_floor_rate``) lets one targeted query fill both columns and drops each
+row from the re-query set once its eligibility raw is saved — this also retires
+the old inefficiency where notices that legitimately have no floor rate stayed
+``award_floor_rate IS NULL`` and were re-fetched on every run. ``--include-past-
+days N`` widens the deadline window into the recent past; ``--limit`` caps the
+run; ``--dry-run`` counts the target set (and prints a sample) without any
+external call.
+
+Per-column write rule (both mirror the collector's persistence guard):
+``award_floor_rate`` is written **only when the row's current value is NULL**
+(an already-set floor is never overwritten); ``eligibility_raw`` is written when
+the fetched notice carries a non-empty raw dict. A row whose fetch yields
+neither stays ``eligibility_raw IS NULL`` (re-tryable, not marked).
 
 Call discipline (§4.5.7): serial, throttled (``--delay`` seconds between calls),
 never a concurrent burst. A per-notice HTTP/parse failure is counted and the run
 continues; ``--max-consecutive-errors`` consecutive failures abort the run
-(rate-limit / outage guard). The ``award_floor_rate IS NULL`` filter is itself
-the resume point — a re-run only revisits rows still missing a value, and a
-notice that legitimately has no floor rate stays ``NULL`` (re-tryable, not
-marked). A partial commit lands every ``--chunk-size`` updates.
+(rate-limit / outage guard). A partial commit lands every ``--chunk-size``
+updates.
 
-Decision logic (response items -> latest 차수 -> fraction) is isolated as pure
-functions; the fetch is an injected callable (default = real API), so tests
-exercise the whole run with a fake fetch and no network. Secrets (service key)
-are never logged.
+Decision logic (response items -> latest 차수 -> fraction / raw dict) is isolated
+as pure functions (``parse_floor_rate`` and ``openapi.extract_eligibility_raw``
+are reused, never re-implemented); the fetch is an injected callable (default =
+real API), so tests exercise the whole run with a fake fetch and no network.
+Secrets (service key) are never logged.
 
 Usage (runs inside the api container):
     docker exec bid_vector_api python scripts/backfill_award_floor_rate.py --dry-run
@@ -84,6 +97,7 @@ class BackfillStats:
     processed: int = 0
     updated: int = 0
     no_value: int = 0
+    eligibility_saved: int = 0
     skipped_blank: int = 0
     errors: int = 0
     aborted: bool = False
@@ -97,6 +111,7 @@ class BackfillStats:
             "processed": self.processed,
             "updated": self.updated,
             "no_value": self.no_value,
+            "eligibility_saved": self.eligibility_saved,
             "skipped_blank": self.skipped_blank,
             "errors": self.errors,
             "aborted": self.aborted,
@@ -138,6 +153,22 @@ def parse_floor_rate(payload: dict[str, Any]) -> float | None:
     if item is None:
         return None
     return parsing.normalize_bid_rate_value(item.get("sucsfbidLwltRate"))
+
+
+def parse_eligibility_raw(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the latest-차수 참가자격 raw dict from an OpenAPI payload.
+
+    Reuses ``openapi.extract_eligibility_raw`` (never re-implements the key
+    table) against the same latest-order row ``parse_floor_rate`` reads, so both
+    columns come from one consistent notice revision. Returns ``None`` when the
+    response has no items or none of the eligibility fields are present.
+    """
+    body = openapi.openapi_body(payload)
+    items = openapi.openapi_item_list(body)
+    item = latest_order_item(items)
+    if item is None:
+        return None
+    return openapi.extract_eligibility_raw(item)
 
 
 def raise_for_result_code(payload: dict[str, Any]) -> None:
@@ -223,24 +254,31 @@ def load_targets(
     include_past_days: int = DEFAULT_INCLUDE_PAST_DAYS,
     limit: int | None = None,
     now: datetime | None = None,
-) -> list[tuple[int, str, str | None]]:
-    """Return (id, notice_number, category) for open notices missing a floor rate.
+) -> list[tuple[int, str, str | None, float | None]]:
+    """Return (id, notice_number, category, award_floor_rate) for open targets.
 
-    Filter: ``award_floor_rate IS NULL AND status='open' AND deadline >= cutoff``
+    Filter: ``eligibility_raw IS NULL AND status='open' AND deadline >= cutoff``
     where ``cutoff = now - include_past_days``. Ordered by ``deadline`` ascending
-    (imminent first) so a capped/interrupted run helps the soonest notices.
+    (imminent first) so a capped/interrupted run helps the soonest notices. The
+    current ``award_floor_rate`` rides along so the run loop can honour the
+    "write floor only when currently NULL" guard without a second query.
     """
     cutoff = (now or utc_now()) - timedelta(days=max(0, include_past_days))
     query = (
-        db.query(Project.id, Project.notice_number, Project.category)
-        .filter(Project.award_floor_rate.is_(None))
+        db.query(
+            Project.id,
+            Project.notice_number,
+            Project.category,
+            Project.award_floor_rate,
+        )
+        .filter(Project.eligibility_raw.is_(None))
         .filter(Project.status == "open")
         .filter(Project.deadline >= cutoff)
         .order_by(Project.deadline.asc(), Project.id.asc())
     )
     if limit is not None:
         query = query.limit(limit)
-    return [(row[0], row[1], row[2]) for row in query.all()]
+    return [(row[0], row[1], row[2], row[3]) for row in query.all()]
 
 
 # --- Run loop -----------------------------------------------------------------
@@ -248,7 +286,7 @@ def load_targets(
 
 def run_backfill(
     db: Session,
-    targets: list[tuple[int, str, str | None]],
+    targets: list[tuple[int, str, str | None, float | None]],
     *,
     fetch: FetchFn,
     dry_run: bool = False,
@@ -260,25 +298,28 @@ def run_backfill(
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
 ) -> BackfillStats:
-    """Fill ``award_floor_rate`` for ``targets`` (serial, throttled, resumable).
+    """Fill ``award_floor_rate``/``eligibility_raw`` for ``targets``.
 
-    On ``dry_run`` the fetch is never called: only the target count and a small
-    notice-number sample are reported. Otherwise each notice is fetched with a
-    ``delay``-second throttle between calls, the floor rate is persisted when
-    present, and a commit lands every ``chunk_size`` updates.
+    Serial, throttled, resumable. On ``dry_run`` the fetch is never called: only
+    the target count and a small notice-number sample are reported. Otherwise
+    each notice is fetched once with a ``delay``-second throttle between calls;
+    from that single response the floor rate is written **only when the row's
+    current floor is NULL** and the eligibility raw dict is written when present.
+    Both columns are staged into one per-notice UPDATE, and a commit lands every
+    ``chunk_size`` written rows.
     """
     started = time.monotonic()
     stats = BackfillStats(dry_run=dry_run, target_count=len(targets))
 
     if dry_run:
-        stats.sample = [notice for _, notice, _ in targets[:sample_size]]
+        stats.sample = [notice for _, notice, _, _ in targets[:sample_size]]
         stats.elapsed_seconds = time.monotonic() - started
         return stats
 
     consecutive_errors = 0
     pending = 0
     api_called = False
-    for project_id, notice_number, category in targets:
+    for project_id, notice_number, category, current_floor in targets:
         stats.processed += 1
         normalized = parsing.normalize_notice_number(notice_number)
         if not normalized:
@@ -316,15 +357,30 @@ def run_backfill(
             continue
         consecutive_errors = 0
 
-        rate = parse_floor_rate(payload)
-        if rate is None:
-            stats.no_value += 1
-        else:
+        update_values: dict[Any, Any] = {}
+
+        # Floor rate: fill only when the row's current value is NULL — never
+        # overwrite an already-set floor (mirrors the persistence guard). A
+        # notice whose current floor is already set is not counted as no_value.
+        if current_floor is None:
+            rate = parse_floor_rate(payload)
+            if rate is None:
+                stats.no_value += 1
+            else:
+                update_values[Project.award_floor_rate] = rate
+                stats.updated += 1
+
+        # Eligibility raw: fill when the notice carries a non-empty raw dict.
+        eligibility = parse_eligibility_raw(payload)
+        if eligibility:
+            update_values[Project.eligibility_raw] = eligibility
+            stats.eligibility_saved += 1
+
+        if update_values:
             db.query(Project).filter(Project.id == project_id).update(
-                {Project.award_floor_rate: rate},
+                update_values,
                 synchronize_session=False,
             )
-            stats.updated += 1
             pending += 1
             if pending >= chunk_size:
                 db.commit()
@@ -334,7 +390,8 @@ def run_backfill(
             log(
                 f"[floor-backfill] {_kst_stamp()} processed={stats.processed}/"
                 f"{stats.target_count} updated={stats.updated} "
-                f"no_value={stats.no_value} errors={stats.errors}"
+                f"no_value={stats.no_value} eligibility={stats.eligibility_saved} "
+                f"errors={stats.errors}"
             )
 
     if pending:
@@ -447,7 +504,9 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"[floor-backfill] target={summary['target_count']} "
         f"processed={summary['processed']} updated={summary['updated']} "
-        f"no_value={summary['no_value']} skipped_blank={summary['skipped_blank']} "
+        f"no_value={summary['no_value']} "
+        f"eligibility_saved={summary['eligibility_saved']} "
+        f"skipped_blank={summary['skipped_blank']} "
         f"errors={summary['errors']} aborted={summary['aborted']} "
         f"elapsed={summary['elapsed_seconds']}s"
     )
