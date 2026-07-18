@@ -1,11 +1,29 @@
 """Test configuration and fixtures"""
 import os
+import tempfile
+import uuid
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-TEST_DATABASE_URL = "sqlite:///./test.db"
+# Per-process isolated SQLite file. A fixed repo-root ./test.db lets concurrent
+# pytest processes in the same checkout corrupt each other ("attempt to write a
+# readonly database" / missing-table flakes); the uuid also prevents reusing a
+# stale file left behind by a crashed earlier run.
+_TEST_DB_PATH = os.path.join(
+    tempfile.gettempdir(), f"bid-vector-test-{os.getpid()}-{uuid.uuid4().hex[:8]}.db"
+)
+TEST_DATABASE_URL = f"sqlite:///{_TEST_DB_PATH}"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Remove this process's test database (and SQLite journal) after the run."""
+    for path in (_TEST_DB_PATH, f"{_TEST_DB_PATH}-journal"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 # Force test processes to use the lightweight SQLite database even when Docker
 # Compose injects PostgreSQL split env vars for the application runtime or they
