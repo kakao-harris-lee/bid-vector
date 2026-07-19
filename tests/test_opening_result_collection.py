@@ -20,7 +20,7 @@ from datetime import timedelta
 import app.services.opening_result_collection as oc
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
-from app.models.models import Project, TenderResult
+from app.models.models import BidDecisionRecord, Project, TenderResult
 from app.services.koneps import openapi
 from app.services.koneps.persistence import resolve_tender_result
 from app.services.opening_result_collection import OpeningResultCollectionService
@@ -599,3 +599,30 @@ def test_resolve_tender_result_no_shell_creates_new_row(test_db):
     row = test_db.query(TenderResult).filter_by(project_id=project.id).one()
     assert row.winning_company == "낙찰건설"
     assert row.opening_rank1_company is None
+
+
+def test_candidate_projects_dedupes_multiple_real_bid_records(test_db):
+    """실투찰 레코드가 다건인 프로젝트도 후보에 1회만 오른다 (파이썬 dedupe).
+
+    회귀 가드: 엔티티 전체 SELECT DISTINCT 는 Postgres json 컬럼
+    (Project.eligibility_raw)에 동등 연산자가 없어 UndefinedFunction 으로 죽는다
+    (라이브 실증 2026-07-19). dedupe 는 쿼리가 아니라 id 집합으로 수행해야 한다.
+    """
+    project = _seed_real_bid(test_db, notice_number="R26BK00000021")
+    operator = ensure_operator_account(test_db)
+    test_db.add(
+        BidDecisionRecord(
+            project_id=project.id,
+            operator_id=operator.id,
+            submitted_bid_amount=51_000_000.0,
+            submitted_at=utc_now(),
+        )
+    )
+    test_db.commit()
+
+    fetch = _FakeFetch([_row_for("R26BK00000021")])
+    result = OpeningResultCollectionService().collect(test_db, fetch=fetch)
+
+    assert result["candidate_count"] == 1
+    assert result["checked_count"] == 1
+    assert len(fetch.calls) == 1
