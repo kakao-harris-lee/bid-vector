@@ -7610,6 +7610,18 @@ export interface components {
             winning_amount: number | null;
             /** Award Public */
             award_public: boolean;
+            /** Opening Rank1 Company */
+            opening_rank1_company?: string | null;
+            /** Opening Rank1 Amount */
+            opening_rank1_amount?: number | null;
+            /** Opening Rank1 Rate */
+            opening_rank1_rate?: number | null;
+            /** Opening Participant Count */
+            opening_participant_count?: number | null;
+            /** Opened At */
+            opened_at?: string | null;
+            /** Opening Rank1 Is Ours */
+            opening_rank1_is_ours?: boolean | null;
             /** Created At */
             created_at: string | null;
             /** Updated At */
