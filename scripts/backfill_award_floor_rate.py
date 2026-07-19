@@ -96,7 +96,9 @@ FetchFn = Callable[[str, str | None], dict[str, Any]]
 # A callable that maps (notice_number, bid_notice_ord) -> decoded payload dict
 # (the getBidPblancListInfoLicenseLimit sub-call — 자격 상세 rows). Category is
 # not a parameter of this single operation, so it is not passed.
-LicenseLimitFetchFn = Callable[[str, int], dict[str, Any]]
+# The 차수 argument is the raw zero-padded string ("000") — KONEPS silently
+# returns totalCount=0 for an int-coerced ord (live-measured 2026-07-19).
+LicenseLimitFetchFn = Callable[[str, str], dict[str, Any]]
 
 
 @dataclass
@@ -183,7 +185,7 @@ def parse_floor_rate(payload: dict[str, Any]) -> float | None:
 
 def _needs_license_limit(
     flags: dict[str, Any] | None,
-    bid_notice_ord: int | None,
+    bid_notice_ord: str | None,
 ) -> bool:
     """Whether to fetch the license-limit sub-operation for this notice.
 
@@ -192,7 +194,7 @@ def _needs_license_limit(
     participation limit return nothing useful from the sub-operation, so they are
     not called (saves half the KONEPS quota).
     """
-    if not flags or bid_notice_ord is None:
+    if not flags or not str(bid_notice_ord or "").strip():
         return False
     return str(flags.get("indstrytyLmtYn") or "").strip().upper() == "Y"
 
@@ -298,7 +300,7 @@ def make_license_limit_fetch(
     operation = openapi.LICENSE_LIMIT_OPERATION
     endpoint = f"{resolved_url}/{operation}"
 
-    def fetch(notice_number: str, bid_notice_ord: int) -> dict[str, Any]:
+    def fetch(notice_number: str, bid_notice_ord: str) -> dict[str, Any]:
         params = {
             "type": _RESPONSE_TYPE,
             "numOfRows": num_of_rows,
@@ -465,8 +467,11 @@ def run_backfill(
                 stats.updated += 1
 
         flags = openapi.extract_eligibility_flags(item) if item else None
+        # Keep the 차수 as the raw zero-padded string ("000") — int-coercing it
+        # makes the sub-call silently return totalCount=0 (live-measured
+        # 2026-07-19: ord=0 → 0 rows, ord="000" → real rows).
         bid_notice_ord = (
-            parsing.coerce_int_value(item.get("bidNtceOrd")) if item else None
+            str(item.get("bidNtceOrd") or "").strip() if item else None
         )
 
         # 2. License-limit sub-call, only for 업종제한 notices (required param
@@ -477,7 +482,7 @@ def run_backfill(
         if _needs_license_limit(flags, bid_notice_ord):
             try:
                 throttle()
-                sub_payload = fetch_license_limit(normalized, int(bid_notice_ord))
+                sub_payload = fetch_license_limit(normalized, bid_notice_ord)
                 raise_for_result_code(sub_payload)
             except Exception as exc:  # noqa: BLE001 - record and continue
                 # Mark failed so eligibility is not written (row stays NULL for
