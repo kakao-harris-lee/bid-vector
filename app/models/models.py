@@ -408,6 +408,18 @@ class TenderResult(Base):
     announced_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
+    # 개찰 1위(잠정) 스냅샷 — 낙찰 확정(winning_*)과 구분되는 개찰 직후 신호.
+    # 수의계약이면 1위=사실상 확정이나 적격심사는 1위부터 캐스케이드라 1위≠낙찰
+    # 가능(§2 정직 명세). 사업자번호는 제로패딩 보존 문자열(#210). opening_checked_at
+    # 은 수집 패스의 recheck backoff 마커(NULL=미조회).
+    opening_rank1_company = Column(String(255), nullable=True)
+    opening_rank1_business_no = Column(String(20), nullable=True)
+    opening_rank1_amount = Column(Float, nullable=True)
+    opening_rank1_rate = Column(Float, nullable=True)
+    opening_participant_count = Column(Integer, nullable=True)
+    opened_at = Column(DateTime(timezone=True), nullable=True)
+    opening_checked_at = Column(DateTime(timezone=True), nullable=True)
+
     project = relationship("Project", back_populates="tender_results")
 
 
