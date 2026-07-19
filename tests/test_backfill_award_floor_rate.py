@@ -38,7 +38,7 @@ def _result_payload(result_code: str, message: str = "") -> dict[str, Any]:
 
 
 class _FakeFetch:
-    """Records calls and returns a per-notice payload (or raises)."""
+    """Records targeted-query calls and returns a per-notice payload (or raises)."""
 
     def __init__(self, responses: dict[str, Any]) -> None:
         self._responses = responses
@@ -47,6 +47,26 @@ class _FakeFetch:
     def __call__(self, notice_number: str, category: str | None) -> dict[str, Any]:
         self.calls.append((notice_number, category))
         result = self._responses[notice_number]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class _FakeLicenseLimitFetch:
+    """Records license-limit sub-call args and returns a per-notice payload.
+
+    Unconfigured notices default to an empty item list (a notice with no license
+    limit), so a Y-flagged notice without an explicit sub-response still resolves
+    to a flags-only eligibility dict.
+    """
+
+    def __init__(self, responses: dict[str, Any] | None = None) -> None:
+        self._responses = responses or {}
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, notice_number: str, bid_notice_ord: int) -> dict[str, Any]:
+        self.calls.append((notice_number, bid_notice_ord))
+        result = self._responses.get(notice_number, _payload([]))
         if isinstance(result, Exception):
             raise result
         return result
@@ -92,6 +112,41 @@ def test_latest_order_item_handles_unparseable_orders():
         {"bidNtceOrd": "2", "sucsfbidLwltRate": "85"},
     ]
     assert backfill.latest_order_item(items)["sucsfbidLwltRate"] == "85"
+
+
+def test_latest_item_from_payload_picks_latest_order():
+    payload = _payload(
+        [
+            {"bidNtceOrd": "1", "tag": "a"},
+            {"bidNtceOrd": "3", "tag": "c"},
+            {"bidNtceOrd": "2", "tag": "b"},
+        ]
+    )
+    assert backfill.latest_item_from_payload(payload)["tag"] == "c"
+
+
+def test_latest_item_from_payload_empty_is_none():
+    assert backfill.latest_item_from_payload(_payload([])) is None
+
+
+def test_floor_rate_from_item():
+    assert backfill.floor_rate_from_item({"sucsfbidLwltRate": "88"}) == pytest.approx(
+        0.88
+    )
+    assert backfill.floor_rate_from_item({"sucsfbidLwltRate": "n/a"}) is None
+    assert backfill.floor_rate_from_item({}) is None
+    assert backfill.floor_rate_from_item(None) is None
+
+
+def test_needs_license_limit_only_when_flagged_and_order_known():
+    # 업종제한 flag "Y" (any case) + a known 차수 -> sub-call needed.
+    assert backfill._needs_license_limit({"indstrytyLmtYn": "Y"}, 1) is True
+    assert backfill._needs_license_limit({"indstrytyLmtYn": "y"}, 2) is True
+    # Not flagged, or no 차수, or no flags at all -> no sub-call.
+    assert backfill._needs_license_limit({"indstrytyLmtYn": "N"}, 1) is False
+    assert backfill._needs_license_limit({"indstrytyLmtYn": "Y"}, None) is False
+    assert backfill._needs_license_limit(None, 1) is False
+    assert backfill._needs_license_limit({}, 1) is False
 
 
 @pytest.mark.parametrize("code", ["00", "03", ""])
@@ -149,7 +204,7 @@ def seeded_targets(test_db):
                 category="service",
                 status="open",
                 award_floor_rate=0.88,
-                eligibility_raw={"lcnsLmtNm": "토목공사업"},
+                eligibility_raw={"flags": {"indstrytyLmtYn": "N"}},
                 deadline=now + timedelta(days=2),
             ),
             # excluded: not open
@@ -196,6 +251,40 @@ def test_load_targets_limit_caps_results(seeded_targets):
     assert [t[0] for t in targets] == [2]
 
 
+def test_load_targets_keys_on_eligibility_null_not_floor(test_db):
+    """Target selection keys on eligibility_raw IS NULL, independent of floor rate."""
+    now = utc_now()
+    test_db.add_all(
+        [
+            # floor already set but eligibility NULL -> still a target
+            Project(
+                id=10,
+                notice_number="R0010",
+                category="service",
+                status="open",
+                award_floor_rate=0.88,
+                eligibility_raw=None,
+                deadline=now + timedelta(days=1),
+            ),
+            # floor NULL but eligibility already set -> excluded
+            Project(
+                id=11,
+                notice_number="R0011",
+                category="service",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw={"flags": {"indstrytyLmtYn": "N"}},
+                deadline=now + timedelta(days=2),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    ids = [t[0] for t in backfill.load_targets(test_db)]
+    assert 10 in ids  # floor-set-but-eligibility-null is still targeted
+    assert 11 not in ids  # eligibility already saved -> skipped
+
+
 # --- Run loop -----------------------------------------------------------------
 
 
@@ -207,16 +296,24 @@ def test_run_backfill_counts_and_persists(seeded_targets):
             "R0001": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "n/a"}]),
         }
     )
+    license_limit = _FakeLicenseLimitFetch()
 
     stats = backfill.run_backfill(
-        seeded_targets, targets, fetch=fetch, delay=0, chunk_size=1
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        chunk_size=1,
     )
 
     assert stats.processed == 2
     assert stats.updated == 1
     assert stats.no_value == 1
-    assert stats.eligibility_saved == 0  # rate-only payloads carry no eligibility
+    assert stats.eligibility_saved == 0  # rate-only payloads carry no flags
+    assert stats.license_limit_calls == 0
     assert stats.errors == 0
+    assert license_limit.calls == []  # no 업종제한 flag -> no sub-call
     # persisted value on the updated project
     rows = {r.id: r for r in seeded_targets.query(Project).all()}
     assert rows[2].award_floor_rate == pytest.approx(0.87)
@@ -231,9 +328,15 @@ def test_run_backfill_records_errors_without_dying(seeded_targets):
             "R0001": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "85"}]),
         }
     )
+    license_limit = _FakeLicenseLimitFetch()
 
     stats = backfill.run_backfill(
-        seeded_targets, targets, fetch=fetch, delay=0, log=lambda *_: None
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        log=lambda *_: None,
     )
 
     assert stats.processed == 2  # error on first did not abort the run
@@ -252,11 +355,13 @@ def test_run_backfill_aborts_on_consecutive_errors(seeded_targets):
             "R0001": RuntimeError("HTTP 429"),
         }
     )
+    license_limit = _FakeLicenseLimitFetch()
 
     stats = backfill.run_backfill(
         seeded_targets,
         targets,
         fetch=fetch,
+        fetch_license_limit=license_limit,
         delay=0,
         max_consecutive_errors=1,
         log=lambda *_: None,
@@ -283,11 +388,13 @@ def test_run_backfill_quota_200_trips_abort_guard(seeded_targets):
             "R0001": _result_payload("22", "LIMITED_NUMBER_OF_SERVICE_REQUESTS"),
         }
     )
+    license_limit = _FakeLicenseLimitFetch()
 
     stats = backfill.run_backfill(
         seeded_targets,
         targets,
         fetch=fetch,
+        fetch_license_limit=license_limit,
         delay=0,
         max_consecutive_errors=1,
         log=lambda *_: None,
@@ -314,10 +421,14 @@ def test_run_backfill_blank_notice_counts_skipped_without_fetch(test_db):
     test_db.commit()
     targets = backfill.load_targets(test_db)
     fetch = _FakeFetch({})  # any call would KeyError
+    license_limit = _FakeLicenseLimitFetch()
 
-    stats = backfill.run_backfill(test_db, targets, fetch=fetch, delay=0)
+    stats = backfill.run_backfill(
+        test_db, targets, fetch=fetch, fetch_license_limit=license_limit, delay=0
+    )
 
     assert fetch.calls == []  # blank notice never fetched
+    assert license_limit.calls == []
     assert stats.skipped_blank == 1
     assert stats.no_value == 0
     assert stats.updated == 0
@@ -329,19 +440,26 @@ def test_run_backfill_idempotent_skips_already_valued(seeded_targets):
     fetch = _FakeFetch(
         {
             "R0002": _payload(
-                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "87", "lcnsLmtNm": "토목공사업"}]
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "87", "indstrytyLmtYn": "N"}]
             ),
             "R0001": _payload(
-                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "86", "indstrytyNm": "건축공사업"}]
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "86", "indstrytyLmtYn": "N"}]
             ),
         }
     )
+    license_limit = _FakeLicenseLimitFetch()
 
-    backfill.run_backfill(seeded_targets, targets, fetch=fetch, delay=0)
+    backfill.run_backfill(
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+    )
 
     fetched = {notice for notice, _ in fetch.calls}
     assert "R0003" not in fetched  # eligibility-set notice never queried
-    # a second run finds nothing new (all now carry eligibility_raw -> drop out)
+    # a second run finds nothing new (flags-only dicts completed both rows)
     remaining = backfill.load_targets(seeded_targets)
     assert remaining == []
 
@@ -349,12 +467,19 @@ def test_run_backfill_idempotent_skips_already_valued(seeded_targets):
 def test_dry_run_does_not_call_fetch(seeded_targets):
     targets = backfill.load_targets(seeded_targets)  # ids 2, 1
     fetch = _FakeFetch({})  # any call would KeyError
+    license_limit = _FakeLicenseLimitFetch()
 
     stats = backfill.run_backfill(
-        seeded_targets, targets, fetch=fetch, dry_run=True, sample_size=5
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        dry_run=True,
+        sample_size=5,
     )
 
     assert fetch.calls == []  # no API calls in dry-run
+    assert license_limit.calls == []
     assert stats.dry_run is True
     assert stats.target_count == 2
     assert stats.processed == 0
@@ -365,97 +490,65 @@ def test_dry_run_does_not_call_fetch(seeded_targets):
     assert rows[2].award_floor_rate is None
 
 
-# --- Eligibility raw (dual-purpose backfill) ----------------------------------
+# --- Eligibility raw (flags + license-limit sub-call) -------------------------
 
 
-def test_parse_eligibility_raw_from_latest_order():
-    """Eligibility raw is read off the same latest-차수 row as the floor rate."""
-    payload = _payload(
-        [
-            {"bidNtceOrd": "1", "lcnsLmtNm": "구버전"},
-            {"bidNtceOrd": "2", "lcnsLmtNm": "토목공사업", "prtcptLmtRgnNm": "부산"},
-        ]
-    )
-    assert backfill.parse_eligibility_raw(payload) == {
-        "lcnsLmtNm": "토목공사업",
-        "prtcptLmtRgnNm": "부산",
-    }
-
-
-def test_parse_eligibility_raw_empty_items_is_none():
-    assert backfill.parse_eligibility_raw(_payload([])) is None
-
-
-def test_parse_eligibility_raw_no_fields_is_none():
-    # A row with a floor rate but no eligibility field -> None.
-    payload = _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "88"}])
-    assert backfill.parse_eligibility_raw(payload) is None
-
-
-def test_load_targets_keys_on_eligibility_null_not_floor(test_db):
-    """Target selection keys on eligibility_raw IS NULL, independent of floor rate."""
-    now = utc_now()
-    test_db.add_all(
-        [
-            # floor already set but eligibility NULL -> still a target
-            Project(
-                id=10,
-                notice_number="R0010",
-                category="service",
-                status="open",
-                award_floor_rate=0.88,
-                eligibility_raw=None,
-                deadline=now + timedelta(days=1),
-            ),
-            # floor NULL but eligibility already set -> excluded
-            Project(
-                id=11,
-                notice_number="R0011",
-                category="service",
-                status="open",
-                award_floor_rate=None,
-                eligibility_raw={"lcnsLmtNm": "x"},
-                deadline=now + timedelta(days=2),
-            ),
-        ]
-    )
-    test_db.commit()
-
-    ids = [t[0] for t in backfill.load_targets(test_db)]
-    assert 10 in ids  # floor-set-but-eligibility-null is still targeted
-    assert 11 not in ids  # eligibility already saved -> skipped
-
-
-def test_run_backfill_saves_both_floor_and_eligibility(seeded_targets):
-    """A target with NULL floor gets both columns from one fetch."""
+def test_run_backfill_saves_floor_and_synthesized_eligibility(seeded_targets):
+    """A Y-flagged target gets floor + flags + license_limits from two calls; an
+    N-flagged one saves flags-only with no sub-call."""
     targets = backfill.load_targets(seeded_targets)  # ids 2, 1
     fetch = _FakeFetch(
         {
             "R0002": _payload(
-                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "87", "lcnsLmtNm": "토목공사업"}]
+                [{"bidNtceOrd": "2", "sucsfbidLwltRate": "87", "indstrytyLmtYn": "Y"}]
             ),
             "R0001": _payload(
-                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "86", "indstrytyNm": "건축공사업"}]
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "86", "indstrytyLmtYn": "N"}]
+            ),
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch(
+        {
+            "R0002": _payload(
+                [
+                    {
+                        "lcnsLmtNm": "종합여행업/1261",
+                        "permsnIndstrytyList": "",
+                        "lmtGrpNo": "1",
+                        "lmtSno": "1",
+                    }
+                ]
             ),
         }
     )
 
     stats = backfill.run_backfill(
-        seeded_targets, targets, fetch=fetch, delay=0, chunk_size=1
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        chunk_size=1,
     )
 
     assert stats.updated == 2
     assert stats.eligibility_saved == 2
+    assert stats.license_limit_calls == 1
     assert stats.no_value == 0
+    # Only the Y-flagged notice triggered a sub-call, keyed on its latest 차수.
+    assert license_limit.calls == [("R0002", 2)]
     rows = {r.id: r for r in seeded_targets.query(Project).all()}
     assert rows[2].award_floor_rate == pytest.approx(0.87)
-    assert rows[2].eligibility_raw == {"lcnsLmtNm": "토목공사업"}
+    assert rows[2].eligibility_raw == {
+        "flags": {"indstrytyLmtYn": "Y"},
+        "license_limits": [{"lcnsLmtNm": "종합여행업/1261", "lmtGrpNo": "1", "lmtSno": "1"}],
+    }
     assert rows[1].award_floor_rate == pytest.approx(0.86)
-    assert rows[1].eligibility_raw == {"indstrytyNm": "건축공사업"}
+    assert rows[1].eligibility_raw == {"flags": {"indstrytyLmtYn": "N"}}
 
 
 def test_run_backfill_does_not_overwrite_existing_floor(test_db):
-    """A target already carrying a floor keeps it; only eligibility is written."""
+    """A target already carrying a floor keeps it; flags-only eligibility is written."""
     test_db.add(
         Project(
             id=1,
@@ -472,23 +565,27 @@ def test_run_backfill_does_not_overwrite_existing_floor(test_db):
     fetch = _FakeFetch(
         {
             "R0001": _payload(
-                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "80", "lcnsLmtNm": "토목공사업"}]
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "80", "indstrytyLmtYn": "N"}]
             ),
         }
     )
+    license_limit = _FakeLicenseLimitFetch()
 
-    stats = backfill.run_backfill(test_db, targets, fetch=fetch, delay=0)
+    stats = backfill.run_backfill(
+        test_db, targets, fetch=fetch, fetch_license_limit=license_limit, delay=0
+    )
 
     assert stats.updated == 0  # floor already set -> not touched
     assert stats.no_value == 0  # and not counted as no_value either
     assert stats.eligibility_saved == 1
+    assert license_limit.calls == []  # N-flag -> no sub-call
     row = test_db.query(Project).filter(Project.id == 1).one()
     assert row.award_floor_rate == pytest.approx(0.90)  # unchanged, not 0.80
-    assert row.eligibility_raw == {"lcnsLmtNm": "토목공사업"}
+    assert row.eligibility_raw == {"flags": {"indstrytyLmtYn": "N"}}
 
 
-def test_run_backfill_eligibility_only_target_no_floor_no_value(test_db):
-    """A floor-set target with an eligibility-only payload saves eligibility, no no_value."""
+def test_run_backfill_eligibility_only_target_flags_only(test_db):
+    """A floor-set target with a flags-only notice saves flags, no floor, no no_value."""
     test_db.add(
         Project(
             id=1,
@@ -502,10 +599,192 @@ def test_run_backfill_eligibility_only_target_no_floor_no_value(test_db):
     )
     test_db.commit()
     targets = backfill.load_targets(test_db)
-    fetch = _FakeFetch({"R0001": _payload([{"bidNtceOrd": "1", "lcnsLmtNm": "토목공사업"}])})
+    fetch = _FakeFetch(
+        {"R0001": _payload([{"bidNtceOrd": "1", "indstrytyLmtYn": "N"}])}
+    )
+    license_limit = _FakeLicenseLimitFetch()
 
-    stats = backfill.run_backfill(test_db, targets, fetch=fetch, delay=0)
+    stats = backfill.run_backfill(
+        test_db, targets, fetch=fetch, fetch_license_limit=license_limit, delay=0
+    )
 
     assert stats.no_value == 0
     assert stats.updated == 0
     assert stats.eligibility_saved == 1
+    row = test_db.query(Project).filter(Project.id == 1).one()
+    assert row.eligibility_raw == {"flags": {"indstrytyLmtYn": "N"}}
+
+
+def test_run_backfill_flagged_notice_with_license_rows(test_db):
+    """A Y-flagged notice with no floor still fetches and stores license limits."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="R0001",
+            category="construction",
+            status="open",
+            award_floor_rate=None,
+            eligibility_raw=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)
+    fetch = _FakeFetch(
+        {"R0001": _payload([{"bidNtceOrd": "3", "indstrytyLmtYn": "Y"}])}
+    )
+    license_limit = _FakeLicenseLimitFetch(
+        {
+            "R0001": _payload(
+                [
+                    {"lcnsLmtNm": "엔지니어링사업자(항만및해안)", "permsnIndstrytyList": "항만설계"},
+                    {"lcnsLmtNm": "해양엔지니어링"},
+                ]
+            )
+        }
+    )
+
+    stats = backfill.run_backfill(
+        test_db, targets, fetch=fetch, fetch_license_limit=license_limit, delay=0
+    )
+
+    assert stats.license_limit_calls == 1
+    assert stats.eligibility_saved == 1
+    assert license_limit.calls == [("R0001", 3)]
+    row = test_db.query(Project).filter(Project.id == 1).one()
+    assert row.eligibility_raw == {
+        "flags": {"indstrytyLmtYn": "Y"},
+        "license_limits": [
+            {"lcnsLmtNm": "엔지니어링사업자(항만및해안)", "permsnIndstrytyList": "항만설계"},
+            {"lcnsLmtNm": "해양엔지니어링"},
+        ],
+    }
+
+
+def test_run_backfill_license_limit_failure_leaves_eligibility_null(test_db):
+    """A sub-call failure is a per-notice error: floor lands, eligibility stays NULL."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="R0001",
+            category="service",
+            status="open",
+            award_floor_rate=None,
+            eligibility_raw=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)
+    fetch = _FakeFetch(
+        {
+            "R0001": _payload(
+                [{"bidNtceOrd": "3", "sucsfbidLwltRate": "88", "indstrytyLmtYn": "Y"}]
+            )
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch({"R0001": RuntimeError("HTTP 500")})
+
+    stats = backfill.run_backfill(
+        test_db,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        log=lambda *_: None,
+    )
+
+    assert stats.errors == 1
+    assert stats.eligibility_saved == 0
+    assert stats.license_limit_calls == 0  # counted only on success
+    assert stats.updated == 1  # floor still landed
+    assert license_limit.calls == [("R0001", 3)]
+    row = test_db.query(Project).filter(Project.id == 1).one()
+    assert row.award_floor_rate == pytest.approx(0.88)
+    assert row.eligibility_raw is None  # NULL -> retried next run
+    assert [t[0] for t in backfill.load_targets(test_db)] == [1]  # still a target
+
+
+def test_run_backfill_sub_call_quota_200_counts_error(test_db):
+    """A quota/throttle 200 on the sub-call is a per-notice error, not silent."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="R0001",
+            category="service",
+            status="open",
+            award_floor_rate=None,
+            eligibility_raw=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)
+    fetch = _FakeFetch(
+        {
+            "R0001": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "88", "indstrytyLmtYn": "Y"}]
+            )
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch({"R0001": _result_payload("22", "LIMITED")})
+
+    stats = backfill.run_backfill(
+        test_db,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        log=lambda *_: None,
+    )
+
+    assert stats.errors == 1
+    assert stats.eligibility_saved == 0
+    row = test_db.query(Project).filter(Project.id == 1).one()
+    assert row.eligibility_raw is None
+
+
+def test_run_backfill_throttles_between_all_calls(test_db):
+    """The throttle sleeps between every API call, including the license-limit sub-call."""
+    test_db.add(
+        Project(
+            id=1,
+            notice_number="R0001",
+            category="service",
+            status="open",
+            award_floor_rate=None,
+            eligibility_raw=None,
+            deadline=utc_now() + timedelta(days=1),
+        )
+    )
+    test_db.commit()
+    targets = backfill.load_targets(test_db)
+    fetch = _FakeFetch(
+        {
+            "R0001": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "88", "indstrytyLmtYn": "Y"}]
+            )
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch(
+        {"R0001": _payload([{"lcnsLmtNm": "토목공사업"}])}
+    )
+    sleeps: list[float] = []
+
+    backfill.run_backfill(
+        test_db,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=1.5,
+        sleep=lambda seconds: sleeps.append(seconds),
+    )
+
+    # Two calls for one notice: the first is not delayed, the sub-call sleeps once.
+    assert sleeps == [1.5]
+    assert license_limit.calls == [("R0001", 1)]
+    row = test_db.query(Project).filter(Project.id == 1).one()
+    assert row.eligibility_raw == {
+        "flags": {"indstrytyLmtYn": "Y"},
+        "license_limits": [{"lcnsLmtNm": "토목공사업"}],
+    }

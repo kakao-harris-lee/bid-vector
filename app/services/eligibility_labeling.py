@@ -1,7 +1,11 @@
 """협회/엔지니어링 자격조건 룰 기반 라벨 추출 (순수 해석기).
 
-``Project.eligibility_raw``(KONEPS 참가자격 원문: 면허제한 ``lcnsLmtNm`` /
-업종 ``indstrytyCd``·``indstrytyNm`` / 참가제한지역 ``prtcptLmtRgnNm``)에서
+``Project.eligibility_raw`` 구조(backfill 스크립트가 유일 writer, 실측 2026-07-19):
+``{"flags": {...참가자격 플래그...}, "license_limits": [{"lcnsLmtNm": ...,
+"permsnIndstrytyList": ..., "lmtGrpNo": ..., "lmtSno": ...}, ...]}``. 자격 판정
+소스는 ``license_limits`` 행의 ``lcnsLmtNm``(면허제한 한글 원문)이며,
+``permsnIndstrytyList``(허용 업종 목록)는 비어있지 않을 때 함께 본다. flags는
+Y/N 플래그라 라벨 근거가 아니고 ``has_eligibility_data`` 존재 판정에만 쓰인다.
 로드맵(docs/roadmap.md 216·227행)이 요구하는 구조화 자격 라벨을 뽑는다.
 
 설계 원칙:
@@ -9,20 +13,24 @@
   테이블이 커지면 YAML/DSL descriptor + 얇은 로더로 승격한다.
 - 순수 함수 — IO/DB/네트워크 접근 없음. 저장·추천 반영은 후속 PR의 의도적 결정
   이며 이 모듈에는 소비자가 없다(on-demand 계산만).
-- provenance 필수(§2 정직): 어떤 필드의 어떤 원문 조각이 어떤 용어로 매칭됐는지
-  ``matches`` 로 남긴다. ``lcnsLmtNm``·``indstrytyNm`` 은 **참가자격 맥락**이므로
-  매칭을 자격 조건으로 간주하지만, ``title`` 매칭은 기관명/과업명 오탐 축이라
-  참고 증거로만 기록하고(``source_field="title"``) bool/tech_fields 판정에는
-  넣지 않는다(로드맵의 라벨 분리 요구).
+- provenance 필수(§2 정직): 어느 필드의 어떤 원문 조각이 어떤 용어로 매칭됐는지
+  ``matches`` 로 남긴다. ``license_limits.lcnsLmtNm``·``license_limits.
+  permsnIndstrytyList`` 는 **참가자격 맥락**이므로 매칭을 자격 조건으로 간주하지만,
+  ``title`` 매칭은 기관명/과업명 오탐 축이라 참고 증거로만 기록하고
+  (``source_field="title"``) bool/tech_fields 판정에는 넣지 않는다.
 """
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 __all__ = [
     "FLAG_ASSOCIATION",
     "FLAG_ENGINEERING_BUSINESS",
+    "FLAGS_KEY",
+    "LICENSE_LIMITS_KEY",
+    "LICENSE_LIMIT_SOURCE_FIELDS",
     "LABEL_SOURCE_FIELDS",
     "TITLE_SOURCE",
     "QualificationTerm",
@@ -38,10 +46,20 @@ __all__ = [
 FLAG_ASSOCIATION = "association"
 FLAG_ENGINEERING_BUSINESS = "engineering_business"
 
-# eligibility_raw 중 자격 라벨의 **판정 근거로 삼는** 필드. 면허제한·업종명은
-# 참가자격을 담는 한글 원문이다. ``indstrytyCd`` 는 숫자 코드, ``prtcptLmtRgnNm``
-# 은 지역 축이라 라벨 소스에서 제외한다(리포트는 원문 샘플로 별도 관찰).
-LABEL_SOURCE_FIELDS = ("lcnsLmtNm", "indstrytyNm")
+# eligibility_raw 구조 키(openapi.build_eligibility_raw 와 단일 출처).
+FLAGS_KEY = "flags"
+LICENSE_LIMITS_KEY = "license_limits"
+
+# ``license_limits`` 행에서 자격 라벨의 **판정 근거로 삼는** 필드. lcnsLmtNm(면허
+# 제한 원문)이 주 소스이고, permsnIndstrytyList(허용 업종 목록)는 비면 함께 본다.
+# lmtGrpNo/lmtSno 는 식별자라 매칭 소스에서 제외한다.
+LICENSE_LIMIT_SOURCE_FIELDS = ("lcnsLmtNm", "permsnIndstrytyList")
+
+# 매칭 provenance 의 source_field 값(리포트의 eligibility-hit 판정과 단일 출처).
+# ``license_limits.lcnsLmtNm`` / ``license_limits.permsnIndstrytyList`` 형태.
+LABEL_SOURCE_FIELDS = tuple(
+    f"{LICENSE_LIMITS_KEY}.{field}" for field in LICENSE_LIMIT_SOURCE_FIELDS
+)
 
 # title 은 참고 증거로만 기록하는 별도 소스(오탐 축 분리).
 TITLE_SOURCE = "title"
@@ -194,6 +212,60 @@ def _match_tech_fields(normalized: str) -> list[str]:
     return hits
 
 
+def _match_text(
+    text: str, source_field: str
+) -> tuple[list[EligibilityMatch], set[str], list[str]]:
+    """한 원문 조각을 매칭해 (matches, flag 집합, 기술부문 표준명) 을 돌려준다."""
+    normalized = _normalize(text)
+    evidence = _clip_evidence(text)
+    matches: list[EligibilityMatch] = []
+    flags: set[str] = set()
+    tech_names: list[str] = []
+    for canonical, flag in _match_qualifications(normalized):
+        matches.append(EligibilityMatch(canonical, source_field, evidence))
+        flags.add(flag)
+    for name in _match_tech_fields(normalized):
+        matches.append(EligibilityMatch(name, source_field, evidence))
+        tech_names.append(name)
+    return matches, flags, tech_names
+
+
+def _has_flag_content(flags: object) -> bool:
+    """flags dict 에 비어있지 않은 값이 하나라도 있는지."""
+    return isinstance(flags, dict) and any(
+        str(value).strip() for value in flags.values() if value is not None
+    )
+
+
+def _has_license_limit_content(license_limits: object) -> bool:
+    """license_limits 리스트에 비어있지 않은 행이 하나라도 있는지."""
+    return isinstance(license_limits, list) and any(
+        isinstance(row, dict)
+        and any(str(value).strip() for value in row.values() if value is not None)
+        for row in license_limits
+    )
+
+
+def _iter_license_limit_texts(license_limits: object) -> Iterator[tuple[str, str]]:
+    """license_limits 행에서 (source_field, 원문) 매칭 소스를 순회한다(순수).
+
+    ``LICENSE_LIMIT_SOURCE_FIELDS`` 만 소스로 삼고 비어있지 않은 값만 내보낸다.
+    source_field 는 ``license_limits.<field>`` 형태 provenance.
+    """
+    if not isinstance(license_limits, list):
+        return
+    for row in license_limits:
+        if not isinstance(row, dict):
+            continue
+        for field in LICENSE_LIMIT_SOURCE_FIELDS:
+            raw_value = row.get(field)
+            if raw_value is None:
+                continue
+            text = str(raw_value).strip()
+            if text:
+                yield f"{LICENSE_LIMITS_KEY}.{field}", text
+
+
 def extract_eligibility_labels(
     eligibility_raw: dict | None,
     *,
@@ -201,54 +273,39 @@ def extract_eligibility_labels(
 ) -> EligibilityLabels:
     """참가자격 원문에서 협회/엔지니어링 자격 라벨을 룰로 추출한다(순수 함수).
 
-    ``eligibility_raw`` 의 ``LABEL_SOURCE_FIELDS``(면허제한/업종명) 매칭만
-    bool·tech_fields 판정에 반영하고, ``title`` 매칭은 참고 증거로만 ``matches``
-    에 남긴다(기관명/과업명 오탐 축 분리). ``has_eligibility_data`` 는 참가자격
-    원문 존재 여부만 반영하며, 원문이 없으면 라벨은 전부 기본값이다. IO/DB 접근
-    없음.
+    ``eligibility_raw["license_limits"][]`` 의 ``lcnsLmtNm``/``permsnIndstrytyList``
+    매칭만 bool·tech_fields 판정에 반영하고, ``title`` 매칭은 참고 증거로만
+    ``matches`` 에 남긴다(기관명/과업명 오탐 축 분리). ``has_eligibility_data`` 는
+    flags 또는 license_limits 존재 여부만 반영하며, 없으면 라벨은 전부 기본값이다.
+    IO/DB 접근 없음.
     """
     association = False
     engineering = False
     tech_fields: list[str] = []
     matches: list[EligibilityMatch] = []
-
     has_data = False
+
     if isinstance(eligibility_raw, dict):
-        has_data = any(
-            str(value).strip()
-            for value in eligibility_raw.values()
-            if value is not None
+        flags_raw = eligibility_raw.get(FLAGS_KEY)
+        license_limits = eligibility_raw.get(LICENSE_LIMITS_KEY)
+        has_data = _has_flag_content(flags_raw) or _has_license_limit_content(
+            license_limits
         )
-        for source_field in LABEL_SOURCE_FIELDS:
-            raw_value = eligibility_raw.get(source_field)
-            if raw_value is None:
-                continue
-            text = str(raw_value).strip()
-            if not text:
-                continue
-            normalized = _normalize(text)
-            evidence = _clip_evidence(text)
-            for canonical, flag in _match_qualifications(normalized):
-                matches.append(EligibilityMatch(canonical, source_field, evidence))
-                if flag == FLAG_ASSOCIATION:
-                    association = True
-                elif flag == FLAG_ENGINEERING_BUSINESS:
-                    engineering = True
-            for name in _match_tech_fields(normalized):
-                matches.append(EligibilityMatch(name, source_field, evidence))
+        for source_field, text in _iter_license_limit_texts(license_limits):
+            hit_matches, hit_flags, hit_tech = _match_text(text, source_field)
+            matches.extend(hit_matches)
+            if FLAG_ASSOCIATION in hit_flags:
+                association = True
+            if FLAG_ENGINEERING_BUSINESS in hit_flags:
+                engineering = True
+            for name in hit_tech:
                 if name not in tech_fields:
                     tech_fields.append(name)
 
     # title 은 참고 증거로만 — bool/tech_fields 에 영향 주지 않는다.
-    if title:
-        text = title.strip()
-        if text:
-            normalized = _normalize(text)
-            evidence = _clip_evidence(text)
-            for canonical, _flag in _match_qualifications(normalized):
-                matches.append(EligibilityMatch(canonical, TITLE_SOURCE, evidence))
-            for name in _match_tech_fields(normalized):
-                matches.append(EligibilityMatch(name, TITLE_SOURCE, evidence))
+    if title and title.strip():
+        title_matches, _flags, _tech = _match_text(title.strip(), TITLE_SOURCE)
+        matches.extend(title_matches)
 
     return EligibilityLabels(
         association_required=association,

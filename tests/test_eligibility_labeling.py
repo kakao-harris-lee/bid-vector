@@ -40,7 +40,9 @@ def _row(eligibility_raw: dict | None, title: str | None = None) -> Any:
 
 
 def test_engineering_business_and_tech_field_from_license_field():
-    labels = extract_eligibility_labels({"lcnsLmtNm": "엔지니어링사업자(항만및해안)"})
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업자(항만및해안)"}]}
+    )
 
     assert labels.has_eligibility_data is True
     assert labels.engineering_business_required is True
@@ -48,31 +50,42 @@ def test_engineering_business_and_tech_field_from_license_field():
     assert labels.tech_fields == ("항만및해안",)
     # provenance: 어느 필드/원문이 어떤 용어로 잡혔는지 남는다.
     terms = {(m.term, m.source_field) for m in labels.matches}
-    assert ("엔지니어링사업자", "lcnsLmtNm") in terms
-    assert ("항만및해안", "lcnsLmtNm") in terms
+    assert ("엔지니어링사업자", "license_limits.lcnsLmtNm") in terms
+    assert ("항만및해안", "license_limits.lcnsLmtNm") in terms
     assert all(m.evidence == "엔지니어링사업자(항만및해안)" for m in labels.matches)
 
 
 def test_association_required_from_membership_text():
-    labels = extract_eligibility_labels({"lcnsLmtNm": "한국엔지니어링협회 가입 업체"})
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "한국엔지니어링협회 가입 업체"}]}
+    )
 
     assert labels.association_required is True
     assert labels.engineering_business_required is False
     assert any(
-        m.term == "엔지니어링협회" and m.source_field == "lcnsLmtNm" for m in labels.matches
+        m.term == "엔지니어링협회" and m.source_field == "license_limits.lcnsLmtNm"
+        for m in labels.matches
     )
 
 
-def test_association_matches_with_internal_whitespace_variant():
-    # 공백 변형("엔지니어링 협회")도 정규화가 흡수해 잡힌다.
-    labels = extract_eligibility_labels({"indstrytyNm": "엔지니어링 협회 회원"})
+def test_association_matches_from_permitted_industry_whitespace_variant():
+    # permsnIndstrytyList 원문 + 공백 변형("엔지니어링 협회")도 정규화가 흡수해 잡힌다.
+    labels = extract_eligibility_labels(
+        {
+            "license_limits": [
+                {"lcnsLmtNm": "종합공사업", "permsnIndstrytyList": "엔지니어링 협회 회원"}
+            ]
+        }
+    )
 
     assert labels.association_required is True
-    assert any(m.source_field == "indstrytyNm" for m in labels.matches)
+    assert any(
+        m.source_field == "license_limits.permsnIndstrytyList" for m in labels.matches
+    )
 
 
 def test_unrelated_license_yields_no_labels():
-    labels = extract_eligibility_labels({"lcnsLmtNm": "정보통신공사업"})
+    labels = extract_eligibility_labels({"license_limits": [{"lcnsLmtNm": "정보통신공사업"}]})
 
     assert labels.has_eligibility_data is True
     assert labels.association_required is False
@@ -83,7 +96,9 @@ def test_unrelated_license_yields_no_labels():
 
 def test_tech_field_alias_maps_to_standard_name():
     # 별칭 "수로측량"·"해양조사" → 표준명 "수로조사" 로 정규화되고 중복 제거된다.
-    labels = extract_eligibility_labels({"lcnsLmtNm": "수로측량", "indstrytyNm": "해양조사"})
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "수로측량"}, {"lcnsLmtNm": "해양조사"}]}
+    )
 
     assert labels.tech_fields == ("수로조사",)
 
@@ -91,7 +106,7 @@ def test_tech_field_alias_maps_to_standard_name():
 def test_title_match_is_reference_only_not_a_requirement():
     # title 에만 자격 용어가 있으면 bool 판정에 넣지 않고 참고 증거로만 남긴다.
     labels = extract_eligibility_labels(
-        {"lcnsLmtNm": "정보통신공사업"},
+        {"license_limits": [{"lcnsLmtNm": "정보통신공사업"}]},
         title="○○ 엔지니어링사업자 대상 항만및해안 용역",
     )
 
@@ -119,17 +134,20 @@ def test_empty_dict_returns_defaults():
     assert labels.matches == ()
 
 
-def test_region_only_eligibility_has_data_but_no_labels():
-    # 지역 축만 있어도 참가자격 데이터는 존재하나 라벨은 안 붙는다.
-    labels = extract_eligibility_labels({"prtcptLmtRgnNm": "서울"})
+def test_flags_only_eligibility_has_data_but_no_labels():
+    # 플래그만 있어도 참가자격 데이터는 존재하나 라벨은 안 붙는다.
+    labels = extract_eligibility_labels({"flags": {"indstrytyLmtYn": "N"}})
 
     assert labels.has_eligibility_data is True
     assert labels.association_required is False
     assert labels.tech_fields == ()
+    assert labels.matches == ()
 
 
 def test_to_dict_shape():
-    payload = extract_eligibility_labels({"lcnsLmtNm": "엔지니어링사업자(항만및해안)"}).to_dict()
+    payload = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업자(항만및해안)"}]}
+    ).to_dict()
 
     assert set(payload) == {
         "association_required",
@@ -159,9 +177,9 @@ def test_tech_field_codes_present():
 
 def test_aggregate_distribution_counts_labels():
     rows = [
-        _row({"lcnsLmtNm": "한국엔지니어링협회 가입"}),
-        _row({"lcnsLmtNm": "엔지니어링사업자(항만및해안)"}),
-        _row({"lcnsLmtNm": "해양엔지니어링"}),
+        _row({"license_limits": [{"lcnsLmtNm": "한국엔지니어링협회 가입"}]}),
+        _row({"license_limits": [{"lcnsLmtNm": "엔지니어링사업자(항만및해안)"}]}),
+        _row({"license_limits": [{"lcnsLmtNm": "해양엔지니어링"}]}),
         _row(None),  # eligibility 데이터 없음 → 집계 제외
     ]
 
@@ -176,9 +194,21 @@ def test_aggregate_distribution_counts_labels():
 
 def test_aggregate_collects_unmatched_raw_samples():
     rows = [
-        _row({"lcnsLmtNm": "정보통신공사업", "indstrytyNm": "정보통신공사업"}),
-        _row({"lcnsLmtNm": "정보통신공사업", "indstrytyNm": "전기공사업"}),
-        _row({"lcnsLmtNm": "엔지니어링사업자"}),  # 매칭됨 → 미매칭 아님
+        _row(
+            {
+                "license_limits": [
+                    {"lcnsLmtNm": "정보통신공사업", "permsnIndstrytyList": "정보통신공사업"}
+                ]
+            }
+        ),
+        _row(
+            {
+                "license_limits": [
+                    {"lcnsLmtNm": "정보통신공사업", "permsnIndstrytyList": "전기공사업"}
+                ]
+            }
+        ),
+        _row({"license_limits": [{"lcnsLmtNm": "엔지니어링사업자"}]}),  # 매칭됨 → 미매칭 아님
     ]
 
     summary = report.aggregate_labels(rows)
@@ -191,7 +221,7 @@ def test_aggregate_collects_unmatched_raw_samples():
 
 def test_aggregate_title_only_match_is_unmatched():
     # title 참고 매칭만 있는 공고는 라벨 근거가 없으므로 미매칭으로 집계된다.
-    rows = [_row({"lcnsLmtNm": "정보통신공사업"}, title="엔지니어링사업자 용역")]
+    rows = [_row({"license_limits": [{"lcnsLmtNm": "정보통신공사업"}]}, title="엔지니어링사업자 용역")]
 
     summary = report.aggregate_labels(rows)
 
@@ -201,7 +231,9 @@ def test_aggregate_title_only_match_is_unmatched():
 
 
 def test_render_summary_is_kst_and_lists_samples():
-    summary = report.aggregate_labels([_row({"lcnsLmtNm": "정보통신공사업"})])
+    summary = report.aggregate_labels(
+        [_row({"license_limits": [{"lcnsLmtNm": "정보통신공사업"}]})]
+    )
     text = report.render_summary(summary, samples=5, top_tech_fields=5)
 
     assert "KST" in text
@@ -221,7 +253,7 @@ def test_load_rows_filters_null_eligibility(test_db):
                 id=1,
                 notice_number="R0001",
                 title="항만 용역",
-                eligibility_raw={"lcnsLmtNm": "엔지니어링사업자"},
+                eligibility_raw={"license_limits": [{"lcnsLmtNm": "엔지니어링사업자"}]},
             ),
             Project(
                 id=2,
@@ -236,4 +268,4 @@ def test_load_rows_filters_null_eligibility(test_db):
     rows = report.load_rows(test_db)
 
     assert [r.notice_number for r in rows] == ["R0001"]
-    assert rows[0].eligibility_raw == {"lcnsLmtNm": "엔지니어링사업자"}
+    assert rows[0].eligibility_raw == {"license_limits": [{"lcnsLmtNm": "엔지니어링사업자"}]}
