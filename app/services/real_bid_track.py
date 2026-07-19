@@ -25,6 +25,7 @@ from app.services.award_verification import (
     _coerce_float,
     _find_project,
     _tender_result,
+    normalize_company_name,
     strip_notice_suffix,
 )
 
@@ -184,6 +185,15 @@ class RealBidTrackService:
         tender = _tender_result(db, project)
         winning_company = str(tender.winning_company).strip() if tender and tender.winning_company else None
         winning_amount = _coerce_float(tender.winning_amount) if tender else None
+        # 개찰 1위(잠정) — 낙찰 확정(winning_*)이 아니다. 적격심사는 1위부터
+        # 캐스케이드라 1위≠낙찰 가능(수의계약이면 사실상 확정). 낙찰이 확정되면
+        # 낙찰피드가 최신 TenderResult 를 새로 만들 수 있어 이 잠정 신호는 자연히
+        # 낙찰 확정으로 전환된다(§2 정직 명세).
+        opening_rank1_company = (
+            str(tender.opening_rank1_company).strip()
+            if tender and tender.opening_rank1_company
+            else None
+        )
         return {
             "decision_record_id": int(record.id),
             "project_id": int(record.project_id) if record.project_id is not None else None,
@@ -200,9 +210,38 @@ class RealBidTrackService:
             "winning_company": winning_company,
             "winning_amount": winning_amount,
             "award_public": bool(winning_company or (winning_amount and winning_amount > 0)),
+            # 개찰 1위(잠정): 낙찰 확정 아님(적격심사 캐스케이드 가능), 수의계약이면
+            # 사실상 확정. is_ours 는 운영자 상호↔1위 상호 정규화 매칭(상호 부재 시 None).
+            "opening_rank1_company": opening_rank1_company,
+            "opening_rank1_amount": _coerce_float(tender.opening_rank1_amount) if tender else None,
+            "opening_rank1_rate": _coerce_float(tender.opening_rank1_rate) if tender else None,
+            "opening_participant_count": (
+                int(tender.opening_participant_count)
+                if tender and tender.opening_participant_count is not None
+                else None
+            ),
+            "opened_at": tender.opened_at if tender else None,
+            "opening_rank1_is_ours": self._opening_rank1_is_ours(record, opening_rank1_company),
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         }
+
+    @staticmethod
+    def _opening_rank1_is_ours(
+        record: BidDecisionRecord, opening_rank1_company: str | None
+    ) -> bool | None:
+        """Whether the 개찰 1위 상호 matches the operator's 상호 (None if unknown).
+
+        Reuses ``normalize_company_name`` (#208) so 표기 차이(주식회사/(주) 등)를
+        흡수한다. Returns ``None`` when either the operator 상호 or the 1위 상호 is
+        absent — 불확실하면 판정하지 않는다(§2 정직 명세). 금액은 쓰지 않는다.
+        """
+        operator = record.operator
+        operator_name = normalize_company_name(operator.company if operator else None)
+        rank1_name = normalize_company_name(opening_rank1_company)
+        if not operator_name or not rank1_name:
+            return None
+        return operator_name == rank1_name
 
     def _latest_record(
         self,

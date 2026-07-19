@@ -267,6 +267,27 @@ class Settings(BaseSettings):
     # recheck-gate (back off after it was checked and found empty) are complementary.
     # 0 disables the recheck-gate.
     KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS: int = 48
+    # 개찰 1위(잠정) 수집 패스 — 실투찰 등록 공고 한정으로 개찰 직후 1위 업체 정보 +
+    # 참가자 수를 날짜 윈도 조회로 채운다(ScsbidInfoService getOpengResultListInfo*).
+    # 6h notify_award_results 태스크 경로에서 예외 격리로 호출된다.
+    # 사이클당 처리 상한(실투찰이 소수라 작게 유지; 외부 rate limit 존중).
+    KONEPS_OPENING_RESULT_COLLECTION_MAX_ITEMS: int = 20
+    # 날짜 윈도 조회 페이지 크기(numOfRows, <=999). 개찰 하루치가 다수라 크게.
+    KONEPS_OPENING_RESULT_PAGE_SIZE: int = 999
+    # 미매칭(개찰 미공개/윈도 밖) 후보 재조회 backoff(시간). 매칭 실패도
+    # opening_checked_at 을 스탬프해 이 시간 안에는 재조회하지 않는다. 0 disables.
+    KONEPS_OPENING_RESULT_RECHECK_HOURS: int = 6
+    # 개찰결과 목록 외부 호출 사이 딜레이(초). getOpengResultListInfo* 계열은 #146
+    # 실측에서 같은 계열(reserve-detail)이 목록 계열(0.2s)보다 강한 rate limit(HTTP
+    # 429)을 보여, 목록 페이지 딜레이보다 슬랙한 전용 1.0s 가 필요했다. 페이지 간 +
+    # 윈도 그룹 간 모든 연속 호출 사이에 적용(첫 호출 전엔 없음). 0 disables.
+    KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS: float = 1.0
+    # 윈도 그룹 fetch 가 연속 N회 실패하면 남은 그룹을 버리고 패스를 중단한다(#202
+    # 쿼터-abort 패턴). 미스탬프로 남겨 다음 사이클에 재시도. 성공 시 카운터 리셋.
+    KONEPS_OPENING_RESULT_MAX_CONSECUTIVE_ERRORS: int = 3
+    # 날짜 윈도 페이지네이션 러너웨이 가드(페이지 상한). totalCount 결손 시 short-page
+    # 종료에 의존하므로 상한을 둬 무한 루프를 막는다(collection.py max_pages 패턴).
+    KONEPS_OPENING_RESULT_MAX_PAGES: int = 5
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50

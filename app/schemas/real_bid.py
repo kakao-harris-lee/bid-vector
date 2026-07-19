@@ -64,6 +64,15 @@ class RealBidRecord(BaseModel):
     winning_company: Optional[str]
     winning_amount: Optional[float]
     award_public: bool
+    # 개찰 1위(잠정) — 낙찰 확정(winning_*)이 아니다. 적격심사는 1위부터 캐스케이드라
+    # 1위≠낙찰 가능(수의계약이면 사실상 확정). opening_rank1_is_ours 는 운영자 상호↔
+    # 1위 상호 정규화 매칭; 상호 또는 1위 정보 부재 시 None.
+    opening_rank1_company: Optional[str] = None
+    opening_rank1_amount: Optional[float] = None
+    opening_rank1_rate: Optional[float] = None
+    opening_participant_count: Optional[int] = None
+    opened_at: Optional[datetime] = None
+    opening_rank1_is_ours: Optional[bool] = None
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
