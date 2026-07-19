@@ -74,6 +74,15 @@ MIGRATION_ADDED_COLUMNS = {
     },
     "crawl_jobs": {"celery_task_id"},
     "paper_bid_settlements": {"estimated_price", "minimum_bid_price"},
+    "tender_results": {
+        "opening_rank1_company",
+        "opening_rank1_business_no",
+        "opening_rank1_amount",
+        "opening_rank1_rate",
+        "opening_participant_count",
+        "opened_at",
+        "opening_checked_at",
+    },
 }
 
 ALEMBIC_INTERNAL_TABLES = {"alembic_version"}
