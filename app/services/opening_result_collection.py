@@ -224,6 +224,10 @@ class OpeningResultCollectionService:
         recheck_hours = max(0, int(settings.KONEPS_OPENING_RESULT_RECHECK_HOURS or 0))
         backoff_cutoff = now - timedelta(hours=recheck_hours) if recheck_hours else None
 
+        # NOTE: 엔티티 전체 SELECT DISTINCT 는 Postgres 에서 json 컬럼
+        # (Project.eligibility_raw)에 동등 연산자가 없어 UndefinedFunction 으로
+        # 실패한다(라이브 실증 2026-07-19; SQLite 테스트는 통과하는 dialect 갭).
+        # 중복 제거(실투찰 레코드 다건 join)는 파이썬 측 id dedupe 로 수행한다.
         projects = (
             db.query(Project)
             .join(BidDecisionRecord, BidDecisionRecord.project_id == Project.id)
@@ -234,12 +238,15 @@ class OpeningResultCollectionService:
                 Project.deadline < now,
             )
             .order_by(Project.deadline.desc())
-            .distinct()
             .all()
         )
 
         candidates: list[Project] = []
+        seen_project_ids: set[int] = set()
         for project in projects:
+            if project.id in seen_project_ids:
+                continue
+            seen_project_ids.add(project.id)
             if self._already_handled(db, project, backoff_cutoff=backoff_cutoff):
                 continue
             candidates.append(project)
