@@ -62,9 +62,9 @@ class _FakeLicenseLimitFetch:
 
     def __init__(self, responses: dict[str, Any] | None = None) -> None:
         self._responses = responses or {}
-        self.calls: list[tuple[str, int]] = []
+        self.calls: list[tuple[str, str]] = []
 
-    def __call__(self, notice_number: str, bid_notice_ord: int) -> dict[str, Any]:
+    def __call__(self, notice_number: str, bid_notice_ord: str) -> dict[str, Any]:
         self.calls.append((notice_number, bid_notice_ord))
         result = self._responses.get(notice_number, _payload([]))
         if isinstance(result, Exception):
@@ -493,6 +493,38 @@ def test_dry_run_does_not_call_fetch(seeded_targets):
 # --- Eligibility raw (flags + license-limit sub-call) -------------------------
 
 
+def test_run_backfill_passes_zero_padded_ord_to_license_limit_call(seeded_targets):
+    """The 차수 "000" must reach the sub-call verbatim (zero-padding preserved).
+
+    Live-measured 2026-07-19: getBidPblancListInfoLicenseLimit returns
+    totalCount=0 for bidNtceOrd=0 but real rows for bidNtceOrd="000" — an int
+    coercion silently drops every first-order notice's license limits.
+    """
+    targets = backfill.load_targets(seeded_targets)
+    fetch = _FakeFetch(
+        {
+            "R0002": _payload(
+                [{"bidNtceOrd": "000", "sucsfbidLwltRate": "87", "indstrytyLmtYn": "Y"}]
+            ),
+            "R0001": _payload(
+                [{"bidNtceOrd": "000", "sucsfbidLwltRate": "86", "indstrytyLmtYn": "Y"}]
+            ),
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch()
+
+    backfill.run_backfill(
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        chunk_size=1,
+    )
+
+    assert [ord_value for _, ord_value in license_limit.calls] == ["000", "000"]
+
+
 def test_run_backfill_saves_floor_and_synthesized_eligibility(seeded_targets):
     """A Y-flagged target gets floor + flags + license_limits from two calls; an
     N-flagged one saves flags-only with no sub-call."""
@@ -536,7 +568,9 @@ def test_run_backfill_saves_floor_and_synthesized_eligibility(seeded_targets):
     assert stats.license_limit_calls == 1
     assert stats.no_value == 0
     # Only the Y-flagged notice triggered a sub-call, keyed on its latest 차수.
-    assert license_limit.calls == [("R0002", 2)]
+    # The 차수 must be the raw zero-padding-preserving string, never an int:
+    # KONEPS silently returns totalCount=0 for ord=0 (live-measured 2026-07-19).
+    assert license_limit.calls == [("R0002", "2")]
     rows = {r.id: r for r in seeded_targets.query(Project).all()}
     assert rows[2].award_floor_rate == pytest.approx(0.87)
     assert rows[2].eligibility_raw == {
@@ -650,7 +684,7 @@ def test_run_backfill_flagged_notice_with_license_rows(test_db):
 
     assert stats.license_limit_calls == 1
     assert stats.eligibility_saved == 1
-    assert license_limit.calls == [("R0001", 3)]
+    assert license_limit.calls == [("R0001", "3")]
     row = test_db.query(Project).filter(Project.id == 1).one()
     assert row.eligibility_raw == {
         "flags": {"indstrytyLmtYn": "Y"},
@@ -698,7 +732,7 @@ def test_run_backfill_license_limit_failure_leaves_eligibility_null(test_db):
     assert stats.eligibility_saved == 0
     assert stats.license_limit_calls == 0  # counted only on success
     assert stats.updated == 1  # floor still landed
-    assert license_limit.calls == [("R0001", 3)]
+    assert license_limit.calls == [("R0001", "3")]
     row = test_db.query(Project).filter(Project.id == 1).one()
     assert row.award_floor_rate == pytest.approx(0.88)
     assert row.eligibility_raw is None  # NULL -> retried next run
@@ -782,7 +816,7 @@ def test_run_backfill_throttles_between_all_calls(test_db):
 
     # Two calls for one notice: the first is not delayed, the sub-call sleeps once.
     assert sleeps == [1.5]
-    assert license_limit.calls == [("R0001", 1)]
+    assert license_limit.calls == [("R0001", "1")]
     row = test_db.query(Project).filter(Project.id == 1).one()
     assert row.eligibility_raw == {
         "flags": {"indstrytyLmtYn": "Y"},
