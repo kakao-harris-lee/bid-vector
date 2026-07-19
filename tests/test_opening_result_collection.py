@@ -7,6 +7,9 @@ Covers (§4.7 — fetch 주입 seam 으로 라이브 KONEPS IO 없이):
 - ``build_opening_result_summary`` 투영 + bidNtceNo 부재 시 None.
 - 수집 패스: 매칭 upsert / opening_checked_at 스탬프 / backoff 재조회 억제 /
   미매칭 재시도 / winning_* 불변 / 사이클 상한 / 같은 윈도 1콜 묶음 / fetch 예외 격리.
+- 방어: 그룹 간 throttle / 연속오류 서킷브레이커 / 페이지네이션 totalCount 결손
+  방어 + max_pages 가드.
+- 병합: resolve_tender_result 가 opening shell 을 재사용해 winning_* 를 같은 행에.
 - serializer ``opening_rank1_is_ours``: won / lost / None(상호·1위 부재).
 """
 
@@ -14,10 +17,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import app.services.opening_result_collection as oc
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import Project, TenderResult
 from app.services.koneps import openapi
+from app.services.koneps.persistence import resolve_tender_result
 from app.services.opening_result_collection import OpeningResultCollectionService
 from app.services.real_bid_track import RealBidTrackService
 
@@ -45,7 +50,7 @@ def test_parse_openg_corp_info_measured_rows():
 
 
 def test_parse_openg_corp_info_preserves_business_no_zero_padding():
-    """사업자번호는 제로패딩 문자열 그대로 — int 변환 금지(#210)."""
+    """사업자번호는 제로패딩 문자열 그대로 — int 변환 금지(#210 교훈 준용)."""
     parsed = openapi.parse_openg_corp_info("주식회사영^0012345678^대표^1000^80.0")
     assert parsed["business_no"] == "0012345678"
     assert isinstance(parsed["business_no"], str)
@@ -383,3 +388,214 @@ def test_serialize_opening_rank1_is_ours_none_without_rank1(test_db):
     payload = RealBidTrackService().serialize_record(test_db, record)
     assert payload["opening_rank1_is_ours"] is None
     assert payload["opening_rank1_company"] is None
+
+
+# --------------------------------------------------------------------------- #
+# 방어 — throttle / 서킷브레이커
+# --------------------------------------------------------------------------- #
+def _seed_bid_category(test_db, *, notice_number: str, category: str, days_ago: int):
+    project = Project(
+        title=notice_number,
+        budget_estimate=100_000_000.0,
+        category=category,
+        notice_number=notice_number,
+        status="open",
+        deadline=utc_now() - timedelta(days=days_ago),
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+    RealBidTrackService().record_real_bid(
+        test_db,
+        operator=ensure_operator_account(test_db),
+        project=project,
+        bid_amount=50_000_000,
+    )
+    return project
+
+
+class _SequencedFetch:
+    """앞 ``fail_first`` 호출은 예외, 이후는 빈 결과를 반환하며 호출 수를 센다."""
+
+    def __init__(self, *, fail_first: int = 0):
+        self.fail_first = fail_first
+        self.calls = 0
+
+    def __call__(self, operation, begin, end):
+        self.calls += 1
+        if self.calls <= self.fail_first:
+            raise ValueError("boom")
+        return []
+
+
+def test_collect_throttles_between_groups(test_db):
+    """첫 외부 호출 전에는 sleep 없음, 그룹 간 연속 호출 사이에만 throttle."""
+    _seed_bid_category(
+        test_db, notice_number="R26TA0001", category="service", days_ago=1
+    )
+    _seed_bid_category(
+        test_db, notice_number="R26TA0002", category="construction", days_ago=1
+    )
+    sleeps: list[float] = []
+    fetch = _FakeFetch([])
+    result = OpeningResultCollectionService().collect(
+        test_db, fetch=fetch, sleep=sleeps.append
+    )
+    assert result["group_count"] == 2
+    # 2그룹 → 첫 호출 전엔 없음 + 그룹2 앞에 1회.
+    assert sleeps == [oc.settings.KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS]
+
+
+def test_collect_circuit_breaker_aborts_on_consecutive_errors(test_db, monkeypatch):
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_MAX_CONSECUTIVE_ERRORS", 3)
+    for i, cat in enumerate(("service", "construction", "goods", "foreign")):
+        _seed_bid_category(
+            test_db, notice_number=f"R26CB000{i}", category=cat, days_ago=i + 1
+        )
+    fetch = _SequencedFetch(fail_first=99)  # 항상 실패
+    result = OpeningResultCollectionService().collect(
+        test_db, fetch=fetch, sleep=lambda _s: None
+    )
+    assert result["aborted"] is True
+    assert result["status"] == "aborted"
+    assert result["error_count"] == 3  # 3연속에서 중단
+    assert result["checked_count"] == 0
+    assert fetch.calls == 3  # 4번째 그룹은 호출하지 않음
+
+
+def test_collect_circuit_breaker_resets_on_success(test_db, monkeypatch):
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_MAX_CONSECUTIVE_ERRORS", 3)
+    for i, cat in enumerate(("service", "construction", "goods")):
+        _seed_bid_category(
+            test_db, notice_number=f"R26RS000{i}", category=cat, days_ago=i + 1
+        )
+    fetch = _SequencedFetch(fail_first=2)  # 2연속 실패 후 성공 → 리셋
+    result = OpeningResultCollectionService().collect(
+        test_db, fetch=fetch, sleep=lambda _s: None
+    )
+    assert result["aborted"] is False
+    assert result["error_count"] == 2
+    assert fetch.calls == 3
+
+
+# --------------------------------------------------------------------------- #
+# 방어 — 페이지네이션 (live fetch, http 계층 주입)
+# --------------------------------------------------------------------------- #
+class _FakeResp:
+    def __init__(self, payload, status_code: int = 200):
+        self._payload = payload
+        self.status_code = status_code
+        self.text = ""
+
+
+def _install_fake_http(monkeypatch, page_factory, *, total_count):
+    """http_client 를 주입해 ``_live_fetch_opening_results`` 페이지네이션을 구동한다."""
+    seen: dict[str, int] = {"max_page": 0}
+
+    def fake_request(url, *, params, service_key, operation):
+        page_no = int(params["pageNo"])
+        seen["max_page"] = max(seen["max_page"], page_no)
+        body: dict = {"items": {"item": page_factory(page_no)}}
+        if total_count is not None:
+            body["totalCount"] = total_count
+        payload = {"response": {"header": {"resultCode": "00"}, "body": body}}
+        return _FakeResp(payload), "variant"
+
+    monkeypatch.setattr(
+        oc.http_client, "request_openapi_with_key_variants", fake_request
+    )
+    monkeypatch.setattr(oc.http_client, "load_openapi_json", lambda resp: resp._payload)
+    return seen
+
+
+def test_live_fetch_paginates_when_totalcount_missing(monkeypatch):
+    """totalCount 결손 시 short-page 로 종료(1페이지 조기절단 없이 2페이지 수집)."""
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_PAGE_SIZE", 2)
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS", 0.0)
+
+    def factory(page_no):
+        if page_no == 1:
+            return [{"bidNtceNo": "N1"}, {"bidNtceNo": "N2"}]  # full page
+        if page_no == 2:
+            return [{"bidNtceNo": "N3"}]  # short page → stop
+        return []
+
+    seen = _install_fake_http(monkeypatch, factory, total_count=None)
+    rows = oc._live_fetch_opening_results("getOpengResultListInfoServc", "0", "1")
+    assert len(rows) == 3
+    assert seen["max_page"] == 2  # 3페이지는 조회하지 않음
+
+
+def test_live_fetch_max_pages_guard(monkeypatch):
+    """totalCount 결손 + 매 페이지 full 이어도 max_pages 로 러너웨이를 막는다."""
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_PAGE_SIZE", 2)
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_MAX_PAGES", 3)
+    monkeypatch.setattr(oc.settings, "KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS", 0.0)
+
+    seen = _install_fake_http(
+        monkeypatch,
+        lambda p: [{"bidNtceNo": f"N{p}a"}, {"bidNtceNo": f"N{p}b"}],  # 항상 full
+        total_count=None,
+    )
+    rows = oc._live_fetch_opening_results("getOpengResultListInfoServc", "0", "1")
+    assert seen["max_page"] == 3  # max_pages 에서 멈춤
+    assert len(rows) == 6
+
+
+# --------------------------------------------------------------------------- #
+# 병합 — resolve_tender_result opening shell 재사용
+# --------------------------------------------------------------------------- #
+def test_resolve_tender_result_reuses_opening_shell(test_db):
+    """현실 순서(개찰 수집 먼저 → 낙찰 피드 나중): 같은 행에 opening_*+winning_* 공존."""
+    project = _seed_real_bid(test_db, notice_number="R26MG0001")
+    OpeningResultCollectionService().collect(
+        test_db, fetch=_FakeFetch([_row_for("R26MG0001")])
+    )
+    # 개찰 shell 1행 존재(참가자수/개찰시각 포함, winning 미확정).
+    shell = test_db.query(TenderResult).filter_by(project_id=project.id).one()
+    assert shell.opening_rank1_company == "주식회사해림"
+    assert shell.winning_company in (None, "")
+
+    # 낙찰 피드 도착 → shell 재사용(새 행 생성 금지).
+    resolve_tender_result(
+        test_db,
+        project_id=project.id,
+        item_metadata={
+            "winning_company": "주식회사해림",
+            "winning_amount": 77_308_840,
+            "winning_rate": 0.88001,
+            "opening_announced_at": "2026-07-16T15:00:00",
+        },
+        crawl_job_status="completed",
+    )
+    test_db.commit()
+
+    rows = test_db.query(TenderResult).filter_by(project_id=project.id).all()
+    assert len(rows) == 1  # 새 행 없음
+    merged = rows[0]
+    assert merged.winning_company == "주식회사해림"
+    assert merged.winning_amount == 77_308_840
+    # opening_* 보존(참가자수·개찰시각은 winning_* 에 등가물 없음).
+    assert merged.opening_rank1_company == "주식회사해림"
+    assert merged.opening_participant_count == 7
+    assert merged.opened_at is not None
+
+
+def test_resolve_tender_result_no_shell_creates_new_row(test_db):
+    """opening shell 이 없으면 기존 동작 유지(새 행 생성)."""
+    project = _seed_real_bid(test_db, notice_number="R26MG0002")
+    resolve_tender_result(
+        test_db,
+        project_id=project.id,
+        item_metadata={
+            "winning_company": "낙찰건설",
+            "winning_amount": 78_000_000,
+            "winning_rate": 0.78,
+            "opening_announced_at": "2026-07-16T15:00:00",
+        },
+        crawl_job_status="completed",
+    )
+    test_db.commit()
+    row = test_db.query(TenderResult).filter_by(project_id=project.id).one()
+    assert row.winning_company == "낙찰건설"
+    assert row.opening_rank1_company is None

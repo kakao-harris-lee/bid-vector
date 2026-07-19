@@ -14,15 +14,17 @@
   클라이언트에서 ``bidNtceNo`` 로 매칭한다(기존 낙찰피드와 동일 제약).
 - 외부 호출은 rate limit 을 존중해 직렬 + throttle 하고, 사이클당 상한을 둔다.
   같은 (카테고리, 마감일) 그룹은 **1콜로 묶어** 중복 호출을 막는다.
-- 매칭 여부와 무관하게 ``opening_checked_at`` 을 스탬프해 backoff 안에서는
-  재조회하지 않는다(미매칭=개찰 미공개/윈도 밖이면 backoff 후 재시도).
+- fetch 가 성공한 그룹의 후보에 한해(매칭 여부 무관) ``opening_checked_at`` 을
+  스탬프해 backoff 안에서는 재조회하지 않는다(미매칭=개찰 미공개/윈도 밖이면
+  backoff 후 재시도). fetch 예외 그룹은 미스탬프로 남겨 다음 사이클에 재시도한다.
 - 외부 호출이므로 task 경로(6h ``notify_award_results``)에서만, 알림 흐름을 막지
   않게 예외 격리로 호출된다. 시크릿(service_key)은 로그/출력에 남기지 않는다.
 
-개찰 1위 수집 뒤 낙찰이 확정되면 낙찰피드가 별도 ``TenderResult`` 를 만들 수 있고
-(``resolve_tender_result`` 는 낙찰자/공개시각으로 매칭), serializer 는 최신 행을
-읽으므로 화면은 자연스럽게 "개찰 1위(잠정) → 낙찰 확정" 으로 전환된다. 개찰 1위는
-낙찰 확정 전 잠정 신호이므로 이 전환은 의도된 동작이다.
+개찰 1위 수집 뒤 낙찰이 확정되면, 낙찰피드의 ``resolve_tender_result`` 가 이 opening
+전용 shell 행(낙찰자 미확정: winning_company 비어 있고 announced_at NULL)을 재사용해
+winning_* 를 **같은 행에 병합**한다. 따라서 serializer 는 opening_rank1_* 와
+winning_* 가 공존하는 한 행을 읽고, 화면은 "개찰 1위(잠정) → 낙찰 확정" 으로
+전환되되 참가자수·개찰시각(winning_* 에 등가물 없음)은 보존된다.
 """
 
 from __future__ import annotations
@@ -53,19 +55,21 @@ def _live_fetch_opening_results(
 
     Mirrors ``KonepsCollectorService._fetch_scsbid_reserve_detail`` (key-variant
     client + resultCode 가드) but sweeps a date window (``inqryDiv="1"``) with
-    ``numOfRows`` pagination — 공고번호 표적조회는 불가(실측).
+    ``numOfRows`` pagination — 공고번호 표적조회는 불가(실측). ``totalCount`` 결손
+    시 short-page(마지막 페이지가 page_size 미만)로 종료하고, ``MAX_PAGES`` 러너웨이
+    가드로 상한을 둔다. 페이지 사이에는 전용 딜레이를 둔다(rate limit).
     """
     service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
     url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
     page_size = max(1, min(int(settings.KONEPS_OPENING_RESULT_PAGE_SIZE or 999), 999))
-    delay = max(
-        0.0, float(settings.KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS or 0.0)
-    )
+    max_pages = max(1, int(settings.KONEPS_OPENING_RESULT_MAX_PAGES or 1))
+    delay = max(0.0, float(settings.KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS or 0.0))
 
     rows: list[dict[str, Any]] = []
-    page_no = 1
     total_count: int | None = None
-    while True:
+    for page_no in range(1, max_pages + 1):
+        if page_no > 1 and delay:
+            time.sleep(delay)
         params = {
             "type": "json",
             "numOfRows": page_size,
@@ -93,17 +97,17 @@ def _live_fetch_opening_results(
         body = openapi.openapi_body(payload)
         page_rows = openapi.openapi_item_list(body)
         rows.extend(page_rows)
+        # totalCount 는 결손 시 None 유지(0 으로 강제하면 1페이지에서 조용히 절단됨).
         if total_count is None:
-            total_count = parsing.safe_int(body.get("totalCount")) or 0
-        if (
-            not page_rows
-            or len(rows) >= total_count
-            or page_no * page_size >= total_count
+            total_count = parsing.safe_int(body.get("totalCount"))
+        # 빈/짧은 페이지는 자연 종료(totalCount 유무와 무관). totalCount 를 알면 그
+        # 카운트 도달로도 종료한다.
+        if not page_rows or len(page_rows) < page_size:
+            break
+        if total_count is not None and (
+            len(rows) >= total_count or page_no * page_size >= total_count
         ):
             break
-        page_no += 1
-        if delay:
-            time.sleep(delay)
     return rows
 
 
@@ -118,16 +122,22 @@ class OpeningResultCollectionService:
         limit: int | None = None,
         fetch: FetchOpeningResults | None = None,
         now: datetime | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> dict[str, Any]:
         """Fill opening rank-1 info for tracked real bids past their deadline.
 
         Returns a summary dict (counts). Groups candidates by (operation, KST
         마감일) so each date window is fetched exactly once, matches feed rows by
-        ``bidNtceNo``, and stamps ``opening_checked_at`` on every candidate
-        (matched or not) so a backoff throttles re-queries.
+        ``bidNtceNo``, and stamps ``opening_checked_at`` on the candidates of any
+        group **whose fetch succeeded** (matched or not) so a backoff throttles
+        re-queries. A group whose fetch raised is left un-stamped (retried next
+        cycle). Consecutive fetch errors trip a circuit breaker that aborts the
+        remaining groups. Every external call after the first is throttled by a
+        dedicated delay(rate limit).
         """
         operator = operator or ensure_operator_account(db)
         fetch = fetch or _live_fetch_opening_results
+        sleep = sleep or time.sleep
         stamp = now or utc_now()
         cap = max(
             1,
@@ -136,6 +146,12 @@ class OpeningResultCollectionService:
                 if limit is not None
                 else settings.KONEPS_OPENING_RESULT_COLLECTION_MAX_ITEMS
             ),
+        )
+        delay = max(
+            0.0, float(settings.KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS or 0.0)
+        )
+        max_consecutive = max(
+            1, int(settings.KONEPS_OPENING_RESULT_MAX_CONSECUTIVE_ERRORS or 1)
         )
 
         candidates = self._candidate_projects(
@@ -148,18 +164,35 @@ class OpeningResultCollectionService:
                 "matched_count": 0,
                 "checked_count": 0,
                 "group_count": 0,
+                "error_count": 0,
+                "aborted": False,
             }
 
         groups = self._group_by_window(candidates)
         matched = 0
         checked = 0
-        for (operation, begin, end), projects in groups.items():
+        error_count = 0
+        consecutive_errors = 0
+        aborted = False
+        for index, ((operation, begin, end), projects) in enumerate(groups.items()):
+            # 첫 외부 호출 전에는 sleep 없음; 이후 모든 연속 호출(성공/실패 무관, 특히
+            # 429 뒤) 사이에 throttle 을 둔다.
+            if index > 0 and delay:
+                sleep(delay)
             try:
                 rows = fetch(operation, begin, end)
-            except Exception:  # noqa: BLE001 - one window must not abort the pass
+            except Exception:  # noqa: BLE001 - a bad window must not abort the pass
                 # Leave these candidates un-stamped so the next cycle retries the
                 # window; a transient fetch error should not consume the backoff.
+                error_count += 1
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive:
+                    # 연속 오류가 임계에 도달하면 남은 그룹을 버리고 중단한다(쿼터
+                    # 소진 방어). 남은 후보는 미스탬프라 다음 사이클에 재시도된다.
+                    aborted = True
+                    break
                 continue
+            consecutive_errors = 0
             by_base = self._index_rows_by_base_notice(rows)
             for project in projects:
                 summary = by_base.get(strip_notice_suffix(project.notice_number or ""))
@@ -169,11 +202,13 @@ class OpeningResultCollectionService:
                     matched += 1
         db.commit()
         return {
-            "status": "ok",
+            "status": "aborted" if aborted else "ok",
             "candidate_count": len(candidates),
             "matched_count": matched,
             "checked_count": checked,
             "group_count": len(groups),
+            "error_count": error_count,
+            "aborted": aborted,
         }
 
     def _candidate_projects(

@@ -277,6 +277,17 @@ class Settings(BaseSettings):
     # 미매칭(개찰 미공개/윈도 밖) 후보 재조회 backoff(시간). 매칭 실패도
     # opening_checked_at 을 스탬프해 이 시간 안에는 재조회하지 않는다. 0 disables.
     KONEPS_OPENING_RESULT_RECHECK_HOURS: int = 6
+    # 개찰결과 목록 외부 호출 사이 딜레이(초). getOpengResultListInfo* 계열은 #146
+    # 실측에서 같은 계열(reserve-detail)이 목록 계열(0.2s)보다 강한 rate limit(HTTP
+    # 429)을 보여, 목록 페이지 딜레이보다 슬랙한 전용 1.0s 가 필요했다. 페이지 간 +
+    # 윈도 그룹 간 모든 연속 호출 사이에 적용(첫 호출 전엔 없음). 0 disables.
+    KONEPS_OPENING_RESULT_REQUEST_DELAY_SECONDS: float = 1.0
+    # 윈도 그룹 fetch 가 연속 N회 실패하면 남은 그룹을 버리고 패스를 중단한다(#202
+    # 쿼터-abort 패턴). 미스탬프로 남겨 다음 사이클에 재시도. 성공 시 카운터 리셋.
+    KONEPS_OPENING_RESULT_MAX_CONSECUTIVE_ERRORS: int = 3
+    # 날짜 윈도 페이지네이션 러너웨이 가드(페이지 상한). totalCount 결손 시 short-page
+    # 종료에 의존하므로 상한을 둬 무한 루프를 막는다(collection.py max_pages 패턴).
+    KONEPS_OPENING_RESULT_MAX_PAGES: int = 5
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50
