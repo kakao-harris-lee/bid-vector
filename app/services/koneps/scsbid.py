@@ -148,7 +148,9 @@ def build_scsbid_award_item(
         "award_floor_rate": parsing.normalize_bid_rate_value(
             raw_item.get("sucsfbidLwltRate")
         ),
-        "eligibility_raw": openapi.extract_eligibility_raw(raw_item),
+        # eligibility_raw는 배출하지 않는다: scsbid 개찰 응답에 자격 상세가 없고,
+        # eligibility_raw의 유일한 writer는 backfill 스크립트로 일원화한다(openapi.py
+        # build_openapi_notice_item 주석 참조).
         "closing_at": parsing.coerce_datetime(opened_at),
         "business_type": resolved_category or request.category,
         "region": parsing.extract_region([demand_agency, title]),

@@ -141,7 +141,11 @@ def test_build_openapi_notice_item_extracts_award_floor_rate():
     request = CrawlRequest(source="koneps-openapi", category="service")
 
     def _item(rate):
-        raw = {"bidNtceNo": "R26BK01627948", "bidNtceNm": "테스트", "sucsfbidLwltRate": rate}
+        raw = {
+            "bidNtceNo": "R26BK01627948",
+            "bidNtceNm": "테스트",
+            "sucsfbidLwltRate": rate,
+        }
         return openapi.build_openapi_notice_item(
             raw, request=request, operation="getBidPblancListInfoServc"
         )
@@ -160,102 +164,135 @@ def test_build_scsbid_award_item_extracts_award_floor_rate_when_present():
     from app.services.koneps import scsbid
 
     request = CrawlRequest(source="scsbid-openapi", category="construction")
-    detail = {"reserve_prices": [], "selected_numbers": [], "planned_price": None,
-              "base_amount": None, "raw_reserve_detail_items": []}
+    detail = {
+        "reserve_prices": [],
+        "selected_numbers": [],
+        "planned_price": None,
+        "base_amount": None,
+        "raw_reserve_detail_items": [],
+    }
 
     with_rate = scsbid.build_scsbid_award_item(
         {"bidNtceNo": "R26BK01628093", "bidNtceNm": "개찰", "sucsfbidLwltRate": "88"},
-        detail=detail, request=request, operation="getScsbidListSttusCnstwk",
+        detail=detail,
+        request=request,
+        operation="getScsbidListSttusCnstwk",
     )
     without_rate = scsbid.build_scsbid_award_item(
         {"bidNtceNo": "R26BK01628093", "bidNtceNm": "개찰"},
-        detail=detail, request=request, operation="getScsbidListSttusCnstwk",
+        detail=detail,
+        request=request,
+        operation="getScsbidListSttusCnstwk",
     )
 
     assert with_rate["award_floor_rate"] == 0.88
     assert without_rate["award_floor_rate"] is None
 
 
-def test_extract_eligibility_raw_copies_declared_fields():
-    """Only the declared eligibility keys are copied, stripped of whitespace."""
+def test_extract_eligibility_flags_copies_declared_flag_keys():
+    """Only the declared participation-flag keys are copied, whitespace-stripped."""
     raw = {
-        "lcnsLmtNm": " 토목공사업 ",
-        "indstrytyCd": "0101",
-        "indstrytyNm": "토목공사업",
-        "prtcptLmtRgnNm": "서울특별시",
+        "indstrytyLmtYn": " Y ",
+        "bidPrtcptLmtYn": "N",
+        "rgnLmtBidLocplcJdgmBssNm": "주된 영업소",
+        "lcnsLmtNm": "토목공사업",  # detail key absent from list responses -> dropped
         "bidNtceNm": "무관한 필드",  # not an eligibility key -> dropped
     }
-    assert openapi.extract_eligibility_raw(raw) == {
-        "lcnsLmtNm": "토목공사업",
-        "indstrytyCd": "0101",
-        "indstrytyNm": "토목공사업",
-        "prtcptLmtRgnNm": "서울특별시",
+    assert openapi.extract_eligibility_flags(raw) == {
+        "indstrytyLmtYn": "Y",
+        "bidPrtcptLmtYn": "N",
+        "rgnLmtBidLocplcJdgmBssNm": "주된 영업소",
     }
 
 
-def test_extract_eligibility_raw_excludes_blank_values():
-    """Empty / whitespace / None values are never copied."""
+def test_extract_eligibility_flags_excludes_blank_and_missing():
+    """Empty / whitespace / None values are never copied; all-missing -> None."""
     raw = {
-        "lcnsLmtNm": "토목공사업",
-        "indstrytyCd": "   ",  # whitespace -> excluded
-        "indstrytyNm": "",  # empty -> excluded
-        "prtcptLmtRgnNm": None,  # None -> excluded
+        "indstrytyLmtYn": "Y",
+        "bidPrtcptLmtYn": "   ",  # whitespace -> excluded
+        "prdctClsfcLmtYn": "",  # empty -> excluded
+        "cmmnSpldmdCorpRgnLmtYn": None,  # None -> excluded
     }
-    assert openapi.extract_eligibility_raw(raw) == {"lcnsLmtNm": "토목공사업"}
+    assert openapi.extract_eligibility_flags(raw) == {"indstrytyLmtYn": "Y"}
+    assert openapi.extract_eligibility_flags({"bidNtceNm": "무관"}) is None
+    assert openapi.extract_eligibility_flags({}) is None
 
 
-def test_extract_eligibility_raw_all_missing_is_none():
-    """No eligibility field present -> None (never an empty dict)."""
-    assert openapi.extract_eligibility_raw({"bidNtceNm": "무관"}) is None
-    assert openapi.extract_eligibility_raw({}) is None
+def test_build_eligibility_raw_combines_flags_and_license_limits():
+    """Both parts present -> nested {"flags", "license_limits"} with projected rows."""
+    flags = {"indstrytyLmtYn": "Y"}
+    license_limit_items = [
+        {
+            "lcnsLmtNm": " 종합여행업/1261 ",
+            "permsnIndstrytyList": "",  # blank -> dropped from the projected row
+            "lmtGrpNo": "1",
+            "lmtSno": "1",
+            "bidNtceNo": "R0001",  # not a declared license-limit key -> dropped
+        }
+    ]
+    assert openapi.build_eligibility_raw(flags, license_limit_items) == {
+        "flags": {"indstrytyLmtYn": "Y"},
+        "license_limits": [{"lcnsLmtNm": "종합여행업/1261", "lmtGrpNo": "1", "lmtSno": "1"}],
+    }
 
 
-def test_build_openapi_notice_item_includes_eligibility_raw():
-    """The built notice item carries the preserved eligibility raw dict."""
+def test_build_eligibility_raw_flags_only_and_limits_only():
+    """Each part is omitted when empty; a flags-only notice still yields a dict."""
+    assert openapi.build_eligibility_raw({"indstrytyLmtYn": "N"}, []) == {
+        "flags": {"indstrytyLmtYn": "N"}
+    }
+    assert openapi.build_eligibility_raw(None, [{"lcnsLmtNm": "토목공사업"}]) == {
+        "license_limits": [{"lcnsLmtNm": "토목공사업"}]
+    }
+
+
+def test_build_eligibility_raw_both_empty_is_none():
+    """No flags and no non-empty license rows -> None (never an empty dict)."""
+    assert openapi.build_eligibility_raw(None, []) is None
+    assert openapi.build_eligibility_raw(None, None) is None
+    # A license row with only blank values contributes nothing.
+    assert (
+        openapi.build_eligibility_raw(None, [{"lcnsLmtNm": "  ", "lmtSno": ""}]) is None
+    )
+    assert openapi.build_eligibility_raw({}, []) is None
+
+
+def test_build_openapi_notice_item_does_not_emit_eligibility_raw():
+    """The collection feed no longer carries eligibility_raw (writer is the backfill)."""
     request = CrawlRequest(source="koneps-openapi", category="construction")
     raw = {
         "bidNtceNo": "R26BK01628100",
         "bidNtceNm": "테스트 공사",
+        "indstrytyLmtYn": "Y",
         "lcnsLmtNm": "토목공사업",
-        "indstrytyNm": "토목공사업",
-        "prtcptLmtRgnNm": "부산광역시",
     }
     item = openapi.build_openapi_notice_item(
         raw, request=request, operation="getBidPblancListInfoCnstwk"
     )
-    assert item["eligibility_raw"] == {
-        "lcnsLmtNm": "토목공사업",
-        "indstrytyNm": "토목공사업",
-        "prtcptLmtRgnNm": "부산광역시",
-    }
-    # A row with no eligibility fields yields None (not an empty dict).
-    bare = openapi.build_openapi_notice_item(
-        {"bidNtceNo": "R26BK01628101", "bidNtceNm": "무자격필드"},
-        request=request,
-        operation="getBidPblancListInfoCnstwk",
-    )
-    assert bare["eligibility_raw"] is None
+    assert "eligibility_raw" not in item
 
 
-def test_build_scsbid_award_item_includes_eligibility_raw_when_present():
-    """The scsbid builder mirrors eligibility raw when the row carries it."""
+def test_build_scsbid_award_item_does_not_emit_eligibility_raw():
+    """The scsbid builder likewise no longer emits eligibility_raw."""
     from app.services.koneps import scsbid
 
     request = CrawlRequest(source="scsbid-openapi", category="construction")
-    detail = {"reserve_prices": [], "selected_numbers": [], "planned_price": None,
-              "base_amount": None, "raw_reserve_detail_items": []}
+    detail = {
+        "reserve_prices": [],
+        "selected_numbers": [],
+        "planned_price": None,
+        "base_amount": None,
+        "raw_reserve_detail_items": [],
+    }
 
-    with_fields = scsbid.build_scsbid_award_item(
-        {"bidNtceNo": "R26BK01628200", "bidNtceNm": "개찰", "lcnsLmtNm": "토목공사업"},
-        detail=detail, request=request, operation="getScsbidListSttusCnstwk",
-    )
-    without_fields = scsbid.build_scsbid_award_item(
-        {"bidNtceNo": "R26BK01628200", "bidNtceNm": "개찰"},
-        detail=detail, request=request, operation="getScsbidListSttusCnstwk",
+    item = scsbid.build_scsbid_award_item(
+        {"bidNtceNo": "R26BK01628200", "bidNtceNm": "개찰", "indstrytyLmtYn": "Y"},
+        detail=detail,
+        request=request,
+        operation="getScsbidListSttusCnstwk",
     )
 
-    assert with_fields["eligibility_raw"] == {"lcnsLmtNm": "토목공사업"}
-    assert without_fields["eligibility_raw"] is None
+    assert "eligibility_raw" not in item
 
 
 def test_build_openapi_notice_item_requires_notice_number():

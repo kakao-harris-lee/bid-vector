@@ -76,8 +76,9 @@ def aggregate_labels(rows: Iterable[ReportRow]) -> ReportSummary:
     """공고 행들을 순회하며 라벨 분포와 미매칭 원문 빈도를 집계한다(순수 함수).
 
     미매칭 = 참가자격 데이터는 있으나 규칙이 협회/엔지니어링/기술부문 라벨을
-    하나도 못 붙인 공고(eligibility 소스 매칭 0건). 이 경우의 ``lcnsLmtNm``/
-    ``indstrytyNm`` 원문을 빈도 집계해 규칙 캘리브레이션 대상으로 노출한다.
+    하나도 못 붙인 공고(eligibility 소스 매칭 0건). 이 경우 license_limits 행의
+    ``lcnsLmtNm``/``permsnIndstrytyList`` 원문을 빈도 집계해 규칙 캘리브레이션
+    대상으로 노출한다.
     """
     summary = ReportSummary()
     for row in rows:
@@ -92,8 +93,8 @@ def aggregate_labels(rows: Iterable[ReportRow]) -> ReportSummary:
         for name in labels.tech_fields:
             summary.tech_field_counts[name] += 1
 
-        # eligibility 소스(면허/업종)에서 잡힌 매칭이 하나도 없으면 미매칭.
-        # title 참고 매칭은 라벨 근거가 아니므로 미매칭 판정에서 제외한다.
+        # eligibility 소스(license_limits 면허/허용업종)에서 잡힌 매칭이 하나도
+        # 없으면 미매칭. title 참고 매칭은 라벨 근거가 아니므로 제외한다.
         eligibility_hit = any(
             match.source_field in LABEL_SOURCE_FIELDS for match in labels.matches
         )
@@ -101,12 +102,15 @@ def aggregate_labels(rows: Iterable[ReportRow]) -> ReportSummary:
             continue
         summary.unmatched_total += 1
         raw = row.eligibility_raw or {}
-        license_text = str(raw.get("lcnsLmtNm") or "").strip()
-        industry_text = str(raw.get("indstrytyNm") or "").strip()
-        if license_text:
-            summary.unmatched_license[license_text] += 1
-        if industry_text:
-            summary.unmatched_industry[industry_text] += 1
+        for limit_row in raw.get("license_limits") or []:
+            if not isinstance(limit_row, dict):
+                continue
+            license_text = str(limit_row.get("lcnsLmtNm") or "").strip()
+            industry_text = str(limit_row.get("permsnIndstrytyList") or "").strip()
+            if license_text:
+                summary.unmatched_license[license_text] += 1
+            if industry_text:
+                summary.unmatched_industry[industry_text] += 1
     return summary
 
 
@@ -129,7 +133,7 @@ def render_summary(
         *_count_lines(summary.tech_field_counts, top_tech_fields),
         f"{_LOG_PREFIX} unmatched lcnsLmtNm(top) — 규칙 캘리브레이션 대상:",
         *_count_lines(summary.unmatched_license, samples),
-        f"{_LOG_PREFIX} unmatched indstrytyNm(top) — 규칙 캘리브레이션 대상:",
+        f"{_LOG_PREFIX} unmatched permsnIndstrytyList(top) — 규칙 캘리브레이션 대상:",
         *_count_lines(summary.unmatched_industry, samples),
     ]
     return "\n".join(lines)

@@ -232,34 +232,98 @@ def openapi_item_list(body: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(item) for item in raw_items if isinstance(item, dict)]
 
 
-# 공고 참가자격 관련 KONEPS raw 필드(한글 원문) 선언 테이블. 여기 선언된 키 중
-# 비어있지 않은 값만 공고 item에 ``eligibility_raw`` dict로 보존한다(PR-B 라벨
-# 추출의 원천). 규칙은 데이터로, 코드는 해석기만 유지한다(§4.5). PR-B에서 자격
-# 관련 키(면허등급/실적/지역제한 세부 등)를 이 테이블에 확장 예정.
+# 공고 목록/표적조회 응답이 실제로 싣는 참가자격 **플래그** 필드 선언 테이블
+# (실측 2026-07-19). 목록 응답에는 면허명 등 자격 상세가 **없고** 아래 플래그와
+# 소액 필드만 온다 — 자격 상세는 ``LICENSE_LIMIT_OPERATION`` 서브콜로만 얻는다.
+# 여기 선언된 키 중 비어있지 않은 값만 flags dict로 보존한다. 규칙은 데이터로,
+# 코드는 해석기만 유지한다(§4.5). 값은 대개 "Y"/"N" 또는 지역판단기준 코드/명이다.
 ELIGIBILITY_RAW_KEYS = (
-    "lcnsLmtNm",  # 면허제한(한글 원문)
-    "indstrytyCd",  # 업종 코드
-    "indstrytyNm",  # 업종명
-    "prtcptLmtRgnNm",  # 참가제한지역명
+    "indstrytyLmtYn",  # 업종제한 여부
+    "bidPrtcptLmtYn",  # 입찰참가제한 여부
+    "prdctClsfcLmtYn",  # 물품분류제한 여부
+    "cmmnSpldmdCorpRgnLmtYn",  # 공동수급체 지역제한 여부
+    "rgnLmtBidLocplcJdgmBssCd",  # 지역제한 낙찰지 판단기준 코드
+    "rgnLmtBidLocplcJdgmBssNm",  # 지역제한 낙찰지 판단기준 명
+)
+
+# 참가자격 상세 서브 오퍼레이션(실측 2026-07-19). 목록/표적조회 item에는 면허명
+# 등 자격 상세가 없고 이 오퍼레이션만이 lcnsLmtNm/permsnIndstrytyList 등을 돌려
+# 준다(BidPublicInfoService 소속 — ``KONEPS_OPENAPI_BID_PUBLIC_INFO_URL`` 사용).
+# 필수 파라미터(실측): inqryDiv=2 + bidNtceNo + bidNtceOrd(차수). bidNtceOrd 누락 시
+# resultCode 08("필수값 입력 에러"). 제한 없는 공고는 resultCode 00 + totalCount=0.
+LICENSE_LIMIT_OPERATION = "getBidPblancListInfoLicenseLimit"
+
+# 자격 상세(license-limit) 서브 응답 rows에서 보존하는 키 선언 테이블. lcnsLmtNm
+# (면허제한 한글 원문)이 자격 판정의 주 소스이고, permsnIndstrytyList(허용 업종
+# 목록)와 그룹/일련번호는 provenance·식별용이다.
+LICENSE_LIMIT_ITEM_KEYS = (
+    "lcnsLmtNm",  # 면허제한(한글 원문) — 자격 판정 주 소스
+    "permsnIndstrytyList",  # 허용 업종 목록
+    "lmtGrpNo",  # 제한 그룹 번호
+    "lmtSno",  # 제한 일련번호
 )
 
 
-def extract_eligibility_raw(raw_item: dict[str, Any]) -> dict[str, Any] | None:
-    """공고 raw item에서 참가자격 관련 원문 필드만 골라 dict로 보존한다.
+def extract_eligibility_flags(raw_item: dict[str, Any]) -> dict[str, Any] | None:
+    """공고 item에서 참가자격 **플래그** 필드만 골라 dict로 보존한다(순수 함수).
 
     ``ELIGIBILITY_RAW_KEYS``에 선언된 키 중 **비어있지 않은 값**만 복사한다. 전부
-    결측이면 ``None``을 돌려준다(빈 dict 저장을 피해, 재수집이 기존 값을 지우지
-    않도록). 순수 함수 — IO/DB 없음.
+    결측이면 ``None``. 목록/표적조회 응답에는 자격 상세가 없고 플래그만 있으므로
+    (실측) 이 함수는 그 플래그만 추출한다. IO/DB 없음.
     """
-    raw: dict[str, Any] = {}
+    flags: dict[str, Any] = {}
     for key in ELIGIBILITY_RAW_KEYS:
         value = raw_item.get(key)
         if value is None:
             continue
         text = str(value).strip()
         if text:
-            raw[key] = text
-    return raw or None
+            flags[key] = text
+    return flags or None
+
+
+def _project_license_limit_item(raw_item: dict[str, Any]) -> dict[str, Any] | None:
+    """license-limit 서브 응답 한 행을 ``LICENSE_LIMIT_ITEM_KEYS``로 투영한다.
+
+    선언된 키 중 비어있지 않은 값만 남긴다. 전부 결측이면 ``None``. 순수 함수.
+    """
+    projected: dict[str, Any] = {}
+    for key in LICENSE_LIMIT_ITEM_KEYS:
+        value = raw_item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            projected[key] = text
+    return projected or None
+
+
+def build_eligibility_raw(
+    flags: dict[str, Any] | None,
+    license_limit_items: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """플래그 + license-limit rows를 ``eligibility_raw`` 구조로 합성한다(순수 함수).
+
+    반환 ``{"flags": {...}, "license_limits": [{...}, ...]}``. 각 파트는 비어있으면
+    생략하고, 둘 다 비어있으면 ``None``(빈 dict 저장을 피해, 재수집이 ``IS NULL``
+    재개 시맨틱을 깨지 않도록). license_limits 행은 ``LICENSE_LIMIT_ITEM_KEYS``로
+    투영한다. IO/DB 없음.
+    """
+    result: dict[str, Any] = {}
+    if flags:
+        result["flags"] = dict(flags)
+    projected_limits = [
+        projected
+        for projected in (
+            _project_license_limit_item(raw)
+            for raw in (license_limit_items or [])
+            if isinstance(raw, dict)
+        )
+        if projected
+    ]
+    if projected_limits:
+        result["license_limits"] = projected_limits
+    return result or None
 
 
 def build_openapi_notice_item(
@@ -335,7 +399,10 @@ def build_openapi_notice_item(
         "base_amount": float(base_amount or 0.0),
         "estimated_amount": float(estimated_amount or base_amount or 0.0),
         "award_floor_rate": award_floor_rate,
-        "eligibility_raw": extract_eligibility_raw(raw_item),
+        # eligibility_raw는 여기서 배출하지 않는다: 목록/표적조회 응답에 자격 상세가
+        # 없고(실측 2026-07-19), 유일한 writer는 backfill 스크립트(표적조회 + license-
+        # limit 서브콜)로 일원화한다. 수집 피드가 flags-only를 쓰면 IS NULL 재개
+        # 시맨틱이 깨져 상세가 영영 안 채워진다.
         "closing_at": closing_at,
         "business_type": business_type or request.category,
         "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,
