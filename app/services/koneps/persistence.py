@@ -453,6 +453,22 @@ def resolve_tender_result(
                 tender_result = candidate
                 break
 
+        if tender_result is None:
+            # 현실 순서(개찰 1위 수집이 먼저 → 낙찰 피드가 나중)에서 남는 opening
+            # 전용 shell(낙찰자 미확정: winning_company 비어 있고 announced_at NULL)을
+            # 재사용해 winning_* 를 같은 행에 병합한다. 그러지 않으면 새 행이 생겨
+            # opening_rank1_*/참가자수/opened_at 이 최신행만 읽는 serializer 에서
+            # 소실된다(참가자수·개찰시각은 winning_* 에 등가물이 없어 영구 소실).
+            # 기존 매칭(announced_at/winning 동등)이 모두 실패했을 때만 발동하므로
+            # 기존 케이스 동작은 불변이다.
+            for candidate in candidates:
+                if (
+                    not str(candidate.winning_company or "").strip()
+                    and candidate.announced_at is None
+                ):
+                    tender_result = candidate
+                    break
+
     if tender_result is None:
         tender_result = TenderResult(project_id=project_id)
         db.add(tender_result)
