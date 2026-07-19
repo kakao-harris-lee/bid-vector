@@ -6,7 +6,8 @@ operator sees "개찰 1위 = 우리 여부" as a **잠정 신호**, kept distinc
 적격심사는 1위부터 캐스케이드라 1위≠낙찰 가능):
 
   * ``opening_rank1_company``      — String(255): 개찰 1위 상호.
-  * ``opening_rank1_business_no``  — String(20): 사업자번호(제로패딩 보존 문자열, #210).
+  * ``opening_rank1_business_no``  — String(20): 사업자번호(제로패딩 보존 문자열 —
+    #210 교훈 준용: KONEPS 식별자 int 변환 금지).
   * ``opening_rank1_amount``       — Float: 1위 투찰금액.
   * ``opening_rank1_rate``         — Float: 1위 투찰률(비율).
   * ``opening_participant_count``  — Integer: 참가자 수.

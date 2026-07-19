@@ -146,7 +146,8 @@ def parse_openg_corp_info(value: Any) -> dict[str, Any] | None:
 
     - Empty/None, or no 상호 in the first field → ``None`` (no basis to record).
     - ``business_no`` is kept as the raw string with only outer whitespace
-      trimmed — 사업자번호 is zero-padded and must never be int-coerced (#210).
+      trimmed — 사업자번호 is zero-padded and must never be int-coerced (applying
+      the lesson of #210, a 차수 int-coercion 사고: KONEPS 식별자는 int 변환 금지).
     - ``amount`` / ``rate`` are best-effort numeric; missing 필드 → ``None``.
       ``rate`` is normalized to a fraction (e.g. "88.001" → 0.88001) so it
       matches the ``winning_rate`` convention.
@@ -178,8 +179,9 @@ def build_opening_result_summary(raw_item: dict[str, Any]) -> dict[str, Any] | N
 
     Pure projection (§4.7) mirroring ``scsbid.build_scsbid_award_item`` — no IO,
     no DB. Returns ``None`` when the row has no ``bidNtceNo`` to match against.
-    ``notice_number`` / ``bid_notice_order`` stay raw strings (제로패딩 보존,
-    #210); the suffix-aware project matching is done by the caller.
+    ``notice_number`` / ``bid_notice_order`` stay raw strings (제로패딩 보존 —
+    #210의 교훈 준용: KONEPS 식별자 int 변환 금지); the suffix-aware project
+    matching is done by the caller.
     """
     notice_number = str(raw_item.get("bidNtceNo") or "").strip()
     if not notice_number:
