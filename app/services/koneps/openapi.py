@@ -79,6 +79,23 @@ SCSBID_RESERVE_DETAIL_OPERATIONS = {
     "frgcpt": "getOpengResultListInfoFrgcptPreparPcDetail",
     "외자": "getOpengResultListInfoFrgcptPreparPcDetail",
 }
+# 개찰 1위(잠정) 결과 목록 오퍼레이션. ScsbidInfoService ``getOpengResultListInfo*``
+# 계열로, 행에 ``opengCorpInfo``(1위 캐럿 문자열) + ``prtcptCnum``(참가자수)을 싣는다
+# (실측 2026-07-19). reserve-detail 계열과 같은 카테고리 키 집합을 유지한다.
+SCSBID_OPENING_RESULT_OPERATIONS = {
+    "construction": "getOpengResultListInfoCnstwk",
+    "공사": "getOpengResultListInfoCnstwk",
+    "service": "getOpengResultListInfoServc",
+    "general-service": "getOpengResultListInfoServc",
+    "technical-service": "getOpengResultListInfoServc",
+    "software": "getOpengResultListInfoServc",
+    "용역": "getOpengResultListInfoServc",
+    "goods": "getOpengResultListInfoThng",
+    "물품": "getOpengResultListInfoThng",
+    "foreign": "getOpengResultListInfoFrgcpt",
+    "frgcpt": "getOpengResultListInfoFrgcpt",
+    "외자": "getOpengResultListInfoFrgcpt",
+}
 
 
 def is_openapi_source(source: str | None) -> bool:
@@ -109,6 +126,73 @@ def scsbid_reserve_detail_operation_for_category(
         normalized_category,
         "getOpengResultListInfoServcPreparPcDetail",
     )
+
+
+def opening_result_operation_for_category(category: str | None) -> str:
+    """Choose the ScsbidInfoService 개찰결과 목록 operation for a category."""
+    normalized_category = str(category or "").strip().lower()
+    return SCSBID_OPENING_RESULT_OPERATIONS.get(
+        normalized_category,
+        "getOpengResultListInfoServc",
+    )
+
+
+def parse_openg_corp_info(value: Any) -> dict[str, Any] | None:
+    """Parse the 개찰 1위 caret string into its fields, or None when unusable.
+
+    Rows carry the top bidder as ``opengCorpInfo`` =
+    ``"업체명^사업자번호^대표자명^투찰금액^투찰률"`` (실측). Pure and side-effect
+    free (§4.7). Rules:
+
+    - Empty/None, or no 상호 in the first field → ``None`` (no basis to record).
+    - ``business_no`` is kept as the raw string with only outer whitespace
+      trimmed — 사업자번호 is zero-padded and must never be int-coerced (#210).
+    - ``amount`` / ``rate`` are best-effort numeric; missing 필드 → ``None``.
+      ``rate`` is normalized to a fraction (e.g. "88.001" → 0.88001) so it
+      matches the ``winning_rate`` convention.
+    """
+    if value is None:
+        return None
+    parts = str(value).split("^")
+    company = parts[0].strip() if parts else ""
+    if not company:
+        return None
+
+    def _field(index: int) -> str | None:
+        if len(parts) <= index:
+            return None
+        text = parts[index].strip()
+        return text or None
+
+    return {
+        "company": company,
+        "business_no": _field(1),
+        "representative": _field(2),
+        "amount": parsing.coerce_amount(_field(3)),
+        "rate": parsing.normalize_bid_rate_value(_field(4)),
+    }
+
+
+def build_opening_result_summary(raw_item: dict[str, Any]) -> dict[str, Any] | None:
+    """Project one 개찰결과 목록 row into the fields the collector persists.
+
+    Pure projection (§4.7) mirroring ``scsbid.build_scsbid_award_item`` — no IO,
+    no DB. Returns ``None`` when the row has no ``bidNtceNo`` to match against.
+    ``notice_number`` / ``bid_notice_order`` stay raw strings (제로패딩 보존,
+    #210); the suffix-aware project matching is done by the caller.
+    """
+    notice_number = str(raw_item.get("bidNtceNo") or "").strip()
+    if not notice_number:
+        return None
+    order = raw_item.get("bidNtceOrd")
+    return {
+        "notice_number": notice_number,
+        "bid_notice_order": str(order).strip() if order is not None else None,
+        "rank1": parse_openg_corp_info(raw_item.get("opengCorpInfo")),
+        "participant_count": parsing.safe_int(raw_item.get("prtcptCnum")),
+        "opened_at": parsing.coerce_datetime(raw_item.get("opengDt")),
+        "progress": str(raw_item.get("progrsDivCdNm") or "").strip() or None,
+    }
 
 
 def summarize_scsbid_reserve_detail(rows: list[dict[str, Any]]) -> dict[str, Any]:

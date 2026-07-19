@@ -857,9 +857,16 @@ def notify_award_results(limit: int = 50) -> dict:
     Telegram delivery is skipped in ENVIRONMENT=test by the notification service.
     """
     from app.services.award_notifications import AwardResultNotificationService
+    from app.services.opening_result_collection import OpeningResultCollectionService
 
     db = SessionLocal()
     try:
+        # 개찰 1위(잠정) 수집을 먼저 시도한다. 외부 호출이 실패해도 낙찰결과 알림
+        # 흐름을 막지 않도록 예외를 격리한다(시크릿은 로그에 남기지 않음).
+        try:
+            OpeningResultCollectionService().collect(db)
+        except Exception:  # noqa: BLE001 - opening collection must not block the alarm
+            db.rollback()
         return AwardResultNotificationService().collect_and_notify(
             db, limit=int(limit or 50)
         )

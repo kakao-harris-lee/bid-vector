@@ -267,6 +267,16 @@ class Settings(BaseSettings):
     # recheck-gate (back off after it was checked and found empty) are complementary.
     # 0 disables the recheck-gate.
     KONEPS_SCSBID_RESERVE_DETAIL_RECHECK_HOURS: int = 48
+    # 개찰 1위(잠정) 수집 패스 — 실투찰 등록 공고 한정으로 개찰 직후 1위 업체 정보 +
+    # 참가자 수를 날짜 윈도 조회로 채운다(ScsbidInfoService getOpengResultListInfo*).
+    # 6h notify_award_results 태스크 경로에서 예외 격리로 호출된다.
+    # 사이클당 처리 상한(실투찰이 소수라 작게 유지; 외부 rate limit 존중).
+    KONEPS_OPENING_RESULT_COLLECTION_MAX_ITEMS: int = 20
+    # 날짜 윈도 조회 페이지 크기(numOfRows, <=999). 개찰 하루치가 다수라 크게.
+    KONEPS_OPENING_RESULT_PAGE_SIZE: int = 999
+    # 미매칭(개찰 미공개/윈도 밖) 후보 재조회 backoff(시간). 매칭 실패도
+    # opening_checked_at 을 스탬프해 이 시간 안에는 재조회하지 않는다. 0 disables.
+    KONEPS_OPENING_RESULT_RECHECK_HOURS: int = 6
     BUSINESS_TYPE_ENRICHMENT_SCHEDULE_ENABLED: bool = False
     BUSINESS_TYPE_ENRICHMENT_INTERVAL_MINUTES: int = 15
     BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT: int = 50
