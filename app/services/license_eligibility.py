@@ -52,20 +52,23 @@ A 가 중간처리업, 구성원 B 가 수집·운반업). ``lmtSno`` 가 그룹
 - §2 정직: 모르는 것을 판정으로 만들지 않는다. 자격 데이터가 없거나 보유 면허
   정보가 없으면 :data:`VERDICT_UNKNOWN` 이며 **ineligible 로 취급하지 않는다**.
 
-알려진 한계 (**eligible 정밀도 미검증 — wiring 전 선결 과제**): taxonomy 의 포괄
-별칭(ENG001 의 bare "엔지니어링"·"감리" 등)은 원래 키워드성 매칭용이라 면허 대조에
-쓰면 거칠다. 2026-07-20 라이브 eligible 3건의 내역은 다음과 같다.
+eligible 정밀도 (2026-07-21 ENG001 배제 정밀화): taxonomy 의 ENG001 별칭은 전부
+포괄 substring("엔지니어링사업"·"엔지니어링"·"감리"·"기술사")이라 서로 다른
+전문분야를 한 코드로 collapse 시켜 면허 대조 오탐을 냈다(2026-07-20 라이브 eligible
+3건 중 1건 = "정보시스템 감리법인/6146" 서민금융진흥원 AI 플랫폼 감리가 프로필
+"엔지니어링"과 ENG001 로 만난 명백한 오탐 — 해양 엔지니어링과 무관). ENG001 에는
+전문분야를 구분하는 구체 별칭이 하나도 없어(코드 자체 외 전부 포괄어)
+:data:`IMPRECISE_MATCH_CODES` 로 이 코드를 면허 대조 키에서 배제했다. 이제 그런
+이름들은 원문 정규화 키로 비교돼 전문분야가 구분된다(예: "엔지니어링사업(해양)" ↔
+"엔지니어링사업(전기설비)" ↔ "정보시스템 감리법인" 은 더 이상 서로/프로필과
+매칭되지 않는다). taxonomy 는 건드리지 않아 추천·게이트 경로는 불변이다.
 
-- **1건 = 명백한 오탐**: "정보시스템 감리법인/6146"(서민금융진흥원 AI 플랫폼 감리)이
-  포괄 별칭 "감리" 를 타고 프로필의 "엔지니어링" 과 ENG001 으로 만났다. 해양
-  엔지니어링과 무관하다.
-- **2건 = 도메인 확인 필요**: "건설엔지니어링업(종합)/4966" 등(청동천 건설사업관리
-  용역)은 실제 엔지니어링 면허라 자격 여부를 코드가 단정할 수 없다.
-
-즉 정밀도는 **미검증**이지 0 이 아니다. 과매칭은 eligible 을 관대하게 만드는
-방향이라 "ineligible 은 보수적"이라는 성질은 유지되지만, eligible 을 자격 신호로
-쓰려면 별칭 정밀화가 먼저다. 이 한계는 :data:`ELIGIBLE_PRECISION_CAVEAT` 로
-노출되어 리포트 출력에도 함께 고지된다.
+남은 한계(정밀도 **여전히 미검증**): (1) 실제 엔지니어링 면허의 전문분야 적합성은
+코드가 단정할 수 없어 **도메인 확인 필요**하다("건설엔지니어링업(종합)/4966" 등).
+(2) 일부 구체 코드는 하위 종목을 아직 collapse 한다 — HYDRO001 은 "해양조사"·
+"수로조사"·"수로측량" 을 공유해 "해양조사정보업(수로측량업/해도제작업/해양관측업)"
+을 구분하지 못한다(현재 운영자는 셋 다 보유해 오탐으로 드러나지 않음). 이 한계는
+:data:`ELIGIBLE_PRECISION_CAVEAT` 로 리포트 출력에도 함께 고지된다.
 """
 from __future__ import annotations
 
@@ -79,6 +82,7 @@ from app.services.eligibility_labeling import LICENSE_LIMITS_KEY
 __all__ = [
     "GROUP_SEMANTICS_ASSUMPTION",
     "ELIGIBLE_PRECISION_CAVEAT",
+    "IMPRECISE_MATCH_CODES",
     "LICENSE_NAME_FIELD",
     "GROUP_NO_FIELD",
     "UNGROUPED_KEY",
@@ -105,9 +109,10 @@ GROUP_SEMANTICS_ASSUMPTION = (
 # 이 리포트가 wiring 여부를 결정하는 산출물이므로, 출력만 보는 사람이 eligible 을
 # 검증된 자격 신호로 오독하지 않도록 stdout 에도 반드시 함께 노출한다(§2 정직).
 ELIGIBLE_PRECISION_CAVEAT = (
-    "주의 — eligible 정밀도 미검증: 2026-07-20 라이브 eligible 3건 중 1건은 명백한 오탐"
-    "(정보시스템 감리법인 — 포괄 별칭 '감리' 경로), 2건은 실제 엔지니어링 면허라 도메인 확인 필요. "
-    "taxonomy 포괄 별칭(ENG001 '엔지니어링'·'감리') 정밀화 전까지 eligible 을 자격 신호로 쓰지 말 것."
+    "주의 — eligible 정밀도 부분 검증: 과거 오탐(정보시스템 감리법인 — 포괄 별칭 '감리' 경로)은 "
+    "ENG001 포괄 별칭을 면허 대조 키에서 배제(IMPRECISE_MATCH_CODES)해 제거했다. "
+    "다만 실제 엔지니어링 면허의 전문분야 적합성은 도메인 확인 필요이고, 일부 코드(HYDRO001 해양조사 계열)는 "
+    "하위 종목을 collapse 할 수 있어 정밀도는 아직 미검증이다."
 )
 
 # license_limits 행에서 읽는 필드 (매직값 금지 §4.5.1 — eligibility_labeling 과
@@ -130,6 +135,23 @@ VERDICT_VALUES = (VERDICT_ELIGIBLE, VERDICT_INELIGIBLE, VERDICT_UNKNOWN)
 _CODE_SUFFIX_RE = re.compile(r"/\s*\d+\s*$")
 # 원문 정규화 키에서 제거하는 구분 문자(공백·가운뎃점·괄호·문장부호).
 _KEY_NOISE_RE = re.compile(r"[\s·・‧⋅,.\-_/()\[\]（）]+")
+
+# 면허 대조에서 배제하는 canonical 코드 (2026-07-21 실측 정밀화 — 규칙=데이터).
+#
+# taxonomy 의 ENG001 별칭은 전부 포괄 substring("엔지니어링사업"·"엔지니어링"·
+# "감리"·"기술사")이라 서로 다른 전문분야를 한 코드로 collapse 시켜 면허 대조
+# 오탐을 낸다: "엔지니어링사업(해양)"·"엔지니어링사업(전기설비)"·"정보시스템 감리법인"
+# 이 모두 ENG001 로 뭉쳐 프로필 "엔지니어링"과 매칭됐다(2026-07-20 라이브 eligible
+# 3건 중 1건 = AI 플랫폼 감리 용역의 명백한 오탐). ENG001 에는 전문분야를 구분하는
+# 구체 별칭이 하나도 없어(코드 자체 "ENG001" 외 전부 포괄어) 이 코드를 대조 키에서
+# 빼면 해당 이름들이 원문 정규화 키로 비교돼 전문분야가 구분된다.
+#
+# taxonomy 에서 별칭을 지우지 않고 이 모듈에서만 배제하는 이유: extract_license_tokens
+# 는 **살아있는 추천 경로**(classification/semantic.py 의 역량요약 임베딩 텍스트)와
+# marine 게이트 정규화(scripts/seed_marine_gate.py)가 공유하므로, taxonomy 를 건드리면
+# 면허 대조와 무관한 추천 점수·게이트 동작이 함께 바뀐다. 정밀화는 면허 대조 축에서만
+# 필요하므로 배제 규칙을 이 모듈 로컬 데이터로 둔다.
+IMPRECISE_MATCH_CODES = frozenset({"ENG001"})
 
 # unknown 사유 문구(고정 근거).
 _NO_DATA_EVIDENCE = "면허요건(license_limits) 데이터 없음 — 판정 불가"
@@ -235,6 +257,19 @@ def normalize_license_key(value: str) -> str:
     return _KEY_NOISE_RE.sub("", without_code).lower()
 
 
+def _matchable_license_codes(text: str | None) -> set[str]:
+    """면허 대조용 canonical 코드 — 포괄 코드(:data:`IMPRECISE_MATCH_CODES`)는 배제.
+
+    classifier 의 :func:`extract_license_tokens` 로 명시 코드·구체 별칭을 뽑되,
+    전문분야를 collapse 시키는 포괄 코드(ENG001)는 제거한다. 배제로 코드가 비면
+    호출부가 원문 정규화 키로 비교하므로(전문분야 구분 보존) 배제된 이름이 대조에서
+    사라지지 않는다. taxonomy 자체는 건드리지 않아 추천/게이트 경로는 불변이다.
+    """
+    return (
+        set(extract_license_tokens(text, require_context=False)) - IMPRECISE_MATCH_CODES
+    )
+
+
 def _display_name(value: str) -> str:
     """면허명에서 코드 접미를 뗀 표시용 이름."""
     return _CODE_SUFFIX_RE.sub("", value.strip()).strip()
@@ -251,7 +286,7 @@ def _requirement_from_name(raw_name: str) -> LicenseRequirement | None:
     if not text:
         return None
 
-    codes = extract_license_tokens(text, require_context=False)
+    codes = _matchable_license_codes(text)
     if codes:
         return LicenseRequirement(
             raw=text,
@@ -280,7 +315,7 @@ def profile_license_keys(license_codes: str | None) -> frozenset[str]:
     if not license_codes or not license_codes.strip():
         return frozenset()
 
-    keys: set[str] = set(extract_license_tokens(license_codes))
+    keys: set[str] = _matchable_license_codes(license_codes)
     for entry in split_multi_value_text(license_codes):
         normalized = normalize_license_key(entry)
         if normalized:

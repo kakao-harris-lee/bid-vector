@@ -11,6 +11,9 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from app.core.single_user import split_multi_value_text
 from app.core.time import utc_now
 from app.services.license_eligibility import (
     ELIGIBLE_PRECISION_CAVEAT,
@@ -225,23 +228,21 @@ def test_unregistered_license_matches_when_profile_literally_holds_it():
     assert result.verdict == VERDICT_ELIGIBLE
 
 
-def test_generic_alias_overmatch_is_a_known_limitation():
-    """알려진 한계(특성화): taxonomy 의 포괄 별칭이 무관한 면허를 매칭시킨다.
+def test_generic_eng001_alias_no_longer_overmatches():
+    """정밀화 회귀 가드(의도된 변경 — 과거 특성화값 eligible → ineligible).
 
-    ENG001 별칭에는 bare "엔지니어링"·"감리" 가 들어있어(taxonomy.py:51) 공고의
-    "정보시스템 감리법인" 이 프로필의 "엔지니어링" 과 ENG001 으로 만나 eligible 이
-    된다. 2026-07-20 라이브 eligible 3건 중 **이 1건은 명백한 오탐**이고(해양
-    엔지니어링과 무관한 AI 플랫폼 감리 용역), 나머지 2건은 실제 엔지니어링
-    면허라 도메인 확인이 필요하다 — 즉 정밀도는 **미검증**이지 0 이 아니다.
-    이 축을 추천에 연결(D2)하기 전에 별칭 정밀화가 선행돼야 한다. 현재 동작을
-    고정해 이후 개선이 회귀가 아니라 의도된 변경으로 드러나게 한다.
+    ENG001 별칭에는 bare "감리" 가 들어있어(taxonomy.py) 과거엔 공고 "정보시스템
+    감리법인" 이 프로필의 "엔지니어링" 과 ENG001 으로 만나 eligible 이 됐다(2026-07-20
+    라이브 오탐, 해양 엔지니어링과 무관한 AI 플랫폼 감리 용역). 이제 ENG001 은
+    :data:`IMPRECISE_MATCH_CODES` 로 면허 대조 키에서 배제되므로, 이 이름은 원문
+    정규화 키("정보시스템감리법인")로 비교돼 프로필과 매칭되지 않는다.
     """
     result = assess_license_eligibility(
         {"license_limits": [{"lcnsLmtNm": "정보시스템 감리법인", "lmtGrpNo": "1"}]},
         MARINE_PROFILE,
     )
 
-    assert result.verdict == VERDICT_ELIGIBLE  # 과매칭 — 정밀도 한계
+    assert result.verdict == VERDICT_INELIGIBLE  # ENG001 배제 — 오탐 제거
 
 
 # --- 파싱 불가 행 노출 --------------------------------------------------------
@@ -312,11 +313,96 @@ def test_normalize_license_key_strips_code_suffix_and_separators():
 def test_profile_license_keys_holds_both_codes_and_raw_names():
     keys = profile_license_keys(MARINE_PROFILE)
 
-    # taxonomy canonical 코드
-    assert {"ENG001", "PORT001", "MAR001", "HYDRO001"} <= keys
-    # 항목별 원문 정규화 키(별칭 미등재 면허 비교용)
+    # taxonomy canonical 코드 — ENG001 은 IMPRECISE_MATCH_CODES 로 대조 키에서 배제된다.
+    assert {"PORT001", "MAR001", "HYDRO001"} <= keys
+    assert "ENG001" not in keys
+    # 항목별 원문 정규화 키(별칭 미등재/포괄배제 면허 비교용)
     assert "항만및해안" in keys
     assert profile_license_keys(None) == frozenset()
+
+
+# --- ENG001 포괄 별칭 정밀화: 실보유 5면허 대조 (2026-07-21 확정) -------------
+
+# 운영자 실보유 면허 5종(2026-07-21)의 license_codes 저장 표현.
+# "엔지니어링사업(항만, 해안)" 은 내부 쉼표가 있어 split_multi_value_text 가 토큰을
+# 깨뜨리므로 저장 시 내부 쉼표를 가운뎃점(·)으로 바꾼다. normalize_license_key 가
+# 쉼표·공백·가운뎃점을 모두 제거하므로 공고 원문("항만, 해안")과 동일 키로 매칭된다.
+OPERATOR_LICENSES_2026_07_21 = (
+    "엔지니어링사업(해양), 엔지니어링사업(항만·해안), " "해양조사정보업(수로측량업), 해양조사정보업(해도제작업), 해양조사정보업(해양관측업)"
+)
+
+
+def test_operator_license_storage_splits_into_five_tokens():
+    """내부 쉼표(항만·해안)를 가운뎃점으로 둔 저장 표현이 정확히 5토큰으로 쪼개진다."""
+    assert split_multi_value_text(OPERATOR_LICENSES_2026_07_21) == [
+        "엔지니어링사업(해양)",
+        "엔지니어링사업(항만·해안)",
+        "해양조사정보업(수로측량업)",
+        "해양조사정보업(해도제작업)",
+        "해양조사정보업(해양관측업)",
+    ]
+
+
+def test_stored_port_haean_token_normalizes_to_notice_comma_form():
+    """저장형 '항만·해안'(가운뎃점)이 공고형 '항만, 해안'(쉼표)과 같은 키로 정규화된다."""
+    assert normalize_license_key("엔지니어링사업(항만·해안)") == normalize_license_key(
+        "엔지니어링사업(항만, 해안)/1234"
+    )
+
+
+@pytest.mark.parametrize(
+    "notice_license, expected_verdict",
+    [
+        # 실보유 종목과 같은 전문분야 → eligible.
+        ("엔지니어링사업(해양)/5678", VERDICT_ELIGIBLE),
+        ("엔지니어링사업(항만, 해안)/1234", VERDICT_ELIGIBLE),
+        ("해양조사정보업(수로측량업)/5034", VERDICT_ELIGIBLE),
+        ("해양조사정보업(해도제작업)/5035", VERDICT_ELIGIBLE),
+        # 무관 전문분야 → ineligible (과거 ENG001 collapse 로 오탐이던 것들).
+        ("엔지니어링사업(전기설비)/9001", VERDICT_INELIGIBLE),
+        ("정보시스템 감리법인/6146", VERDICT_INELIGIBLE),
+        ("건설엔지니어링업(종합)/4966", VERDICT_INELIGIBLE),
+    ],
+)
+def test_operator_five_licenses_match_only_their_specialty(
+    notice_license, expected_verdict
+):
+    """실보유 5면허가 같은 전문분야 공고만 매칭하고 무관 전문분야는 배제한다.
+
+    ENG001 배제 전에는 "정보시스템 감리법인"·"건설엔지니어링업(종합)" 이 프로필
+    엔지니어링과 ENG001 로 collapse 돼 eligible 이었다. 정밀화 후엔 원문 정규화
+    키/구체 코드로 비교돼 구분된다. "전기설비" 는 "전기"→ELE001 을 함께 요구하는데
+    프로필이 ELE001 을 보유하지 않아 배제된다.
+    """
+    result = assess_license_eligibility(
+        {"license_limits": [{"lcnsLmtNm": notice_license, "lmtGrpNo": "1"}]},
+        OPERATOR_LICENSES_2026_07_21,
+    )
+
+    assert result.verdict == expected_verdict
+
+
+def test_distinct_engineering_specialties_do_not_cross_match():
+    """전문분야가 다른 엔지니어링 면허끼리 매칭되지 않는다(핵심 collapse 오탐 수정).
+
+    ENG001 배제 전에는 "엔지니어링사업(해양)"·"엔지니어링사업(항만·해안)" 이 모두
+    ENG001 하나로 뭉쳐, 해양만 보유해도 항만 요구 공고에 eligible 로 뜨는 오탐이
+    있었다. 정밀화 후엔 원문 정규화 키로 비교돼 서로 다른 종목으로 구분된다.
+    """
+    only_marine = "엔지니어링사업(해양)"
+
+    cross = assess_license_eligibility(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업(항만, 해안)/1234", "lmtGrpNo": "1"}]},
+        only_marine,
+    )
+    assert cross.verdict == VERDICT_INELIGIBLE
+
+    # 자기 종목 공고에는 여전히 eligible.
+    same = assess_license_eligibility(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업(해양)/5678", "lmtGrpNo": "1"}]},
+        only_marine,
+    )
+    assert same.verdict == VERDICT_ELIGIBLE
 
 
 # --- 리포트 집계 (fake rows, DB 접속 없음) ------------------------------------
