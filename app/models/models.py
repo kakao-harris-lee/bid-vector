@@ -675,3 +675,36 @@ class SyntheticExperimentResult(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     run = relationship("SyntheticExperimentRun", back_populates="results")
+
+
+class NoticeEligibilityLabel(Base):
+    """공고 참가자격 식별 라벨(협회/엔지니어링 조건) — 소스별 1라벨.
+
+    ML 실증 데이터셋(로드맵 Phase 3)·G-3 식별 precision/recall 리포트의 원천.
+    라벨은 이 단계에선 데이터로만 존재하며 classifier/수집/추천은 읽지 않는다.
+    ``label`` 은 ``eligibility_labeling.LABEL_VALUES``, ``source`` 는
+    ``LABEL_SOURCES`` 값이다(매직값 금지 §4.5.1). ``(project_id, source)`` 유니크로
+    소스별 1라벨을 강제하고 재생성은 upsert 한다. ``rationale`` 은 감사용 근거
+    요약(매칭 term/필드·사유), ``labeler_version`` 은 규칙 버전 추적이다.
+    """
+    __tablename__ = "notice_eligibility_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "source",
+            name="uq_notice_eligibility_labels_project_source",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer, ForeignKey("projects.id"), nullable=False, index=True
+    )
+    label = Column(String(20), nullable=False)
+    source = Column(String(20), nullable=False)
+    rationale = Column(Text, nullable=True)
+    labeler_version = Column(String(50), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    project = relationship("Project")
