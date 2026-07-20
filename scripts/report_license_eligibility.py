@@ -4,8 +4,12 @@
 열린 공고(``status='open'`` 이고 마감이 지나지 않은 것)를 순회하며
 ``app.services.license_eligibility.assess_license_eligibility`` 로 참가 자격을
 판정하고, ① 자격 데이터 커버리지 ② verdict 분포 ③ **후속 wiring 영향 추정**
-(eligible 공고 샘플 / ineligible 상위 요구 면허 빈도) ④ 그룹 의미론 가정 고지를
-stdout 으로 요약한다.
+(eligible 공고 샘플 / ineligible 상위 요구 면허 빈도) ④ 한계 고지(eligible 정밀도
+미검증 · 그룹 의미론 가정 · unknown≠ineligible)를 stdout 으로 요약한다.
+
+④ 는 장식이 아니다. 이 리포트가 wiring 여부를 결정하는 산출물이라 **출력만 보는
+사람**이 eligible 을 검증된 자격 신호로 오독하면 안 되므로, 한계는 코드 주석이
+아니라 stdout 에 함께 실린다(§2 정직).
 
 이 리포트의 목적은 "면허 축을 추천에 연결하면 무엇이 걸러지는가"를 **먼저
 계측**하는 것이다. 판정은 아직 분류/추천/수집 어디에서도 소비되지 않으며,
@@ -39,6 +43,7 @@ from app.core.single_user import get_operator_profile  # noqa: E402
 from app.core.time import kst_now, utc_now  # noqa: E402
 from app.models.models import Project  # noqa: E402
 from app.services.license_eligibility import (  # noqa: E402
+    ELIGIBLE_PRECISION_CAVEAT,
     GROUP_SEMANTICS_ASSUMPTION,
     VERDICT_ELIGIBLE,
     VERDICT_INELIGIBLE,
@@ -85,6 +90,12 @@ class ReportSummary:
     total: int = 0
     with_eligibility: int = 0
     without_eligibility: int = 0
+    # license_limits 행은 있으나 면허명을 하나도 읽지 못한 공고(=판정 근거 0).
+    # without_eligibility(행 자체 없음)와 구분해야 커버리지 해석이 정확해진다.
+    unparsable_only: int = 0
+    # 일부 행만 못 읽고 판정은 내려진 공고 — 요건이 줄어든 채 판정된 것이라
+    # eligible 쪽으로 관대할 수 있다(신뢰도 저하 신호).
+    partial_unparsable: int = 0
     verdict_counts: Counter = field(default_factory=Counter)
     eligible_samples: list[EligibleSample] = field(default_factory=list)
     ineligible_required: Counter = field(default_factory=Counter)
@@ -101,9 +112,11 @@ def aggregate_eligibility(
 ) -> ReportSummary:
     """공고 행들을 판정해 커버리지·verdict 분포·영향 추정을 집계한다(순수 함수).
 
-    ``with_eligibility`` 는 면허요건 데이터가 있어 판정 근거가 존재한 공고 수이고,
-    ``without_eligibility`` 는 데이터 부재(=unknown)다. ineligible 공고의 요구
-    면허를 빈도 집계해 "무엇 때문에 걸러지는가"를 노출한다.
+    ``with_eligibility`` 는 면허요건 데이터가 있어 판정 근거가 존재한 공고 수다.
+    근거가 없는 공고는 **행 자체가 없는 경우**(``without_eligibility``)와 **행은
+    있으나 면허명을 못 읽은 경우**(``unparsable_only``)로 나눠 센다 — 둘을 합치면
+    "자격 데이터가 아예 없다"는 잘못된 해석이 되기 때문이다. ineligible 공고의
+    요구 면허를 빈도 집계해 "무엇 때문에 걸러지는가"를 노출한다.
     """
     summary = ReportSummary()
     for row in rows:
@@ -113,6 +126,10 @@ def aggregate_eligibility(
 
         if result.has_eligibility_data:
             summary.with_eligibility += 1
+            if result.has_unparsable_rows:
+                summary.partial_unparsable += 1
+        elif result.has_unparsable_rows:
+            summary.unparsable_only += 1
         else:
             summary.without_eligibility += 1
 
@@ -163,13 +180,16 @@ def render_summary(
         (
             f"{_LOG_PREFIX} 커버리지 — open_notices={summary.total} "
             f"with_eligibility={summary.with_eligibility} "
-            f"without_eligibility={summary.without_eligibility}"
+            f"without_eligibility={summary.without_eligibility} "
+            f"unparsable_only={summary.unparsable_only} "
+            f"partial_unparsable={summary.partial_unparsable}"
         ),
         f"{_LOG_PREFIX} verdict 분포 — {_verdict_line(summary.verdict_counts)}",
-        f"{_LOG_PREFIX} eligible 샘플 (후속 wiring 시 통과 대상):",
+        f"{_LOG_PREFIX} eligible 샘플 (후속 wiring 시 통과 대상 — 정밀도 미검증, 아래 주의):",
         *_sample_lines(summary.eligible_samples),
         f"{_LOG_PREFIX} ineligible 상위 요구 면허 (무엇 때문에 걸러지나):",
         *_count_lines(summary.ineligible_required, top_required),
+        f"{_LOG_PREFIX} {ELIGIBLE_PRECISION_CAVEAT}",
         f"{_LOG_PREFIX} {GROUP_SEMANTICS_ASSUMPTION}",
         f"{_LOG_PREFIX} unknown 은 자격 데이터/보유 면허 정보 부재이며 ineligible(부적격)이 아니다.",
     ]

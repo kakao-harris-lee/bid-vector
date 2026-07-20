@@ -13,6 +13,7 @@ from typing import Any
 
 from app.core.time import utc_now
 from app.services.license_eligibility import (
+    ELIGIBLE_PRECISION_CAVEAT,
     GROUP_SEMANTICS_ASSUMPTION,
     UNGROUPED_KEY,
     VERDICT_ELIGIBLE,
@@ -229,10 +230,11 @@ def test_generic_alias_overmatch_is_a_known_limitation():
 
     ENG001 별칭에는 bare "엔지니어링"·"감리" 가 들어있어(taxonomy.py:51) 공고의
     "정보시스템 감리법인" 이 프로필의 "엔지니어링" 과 ENG001 으로 만나 eligible 이
-    된다. 라이브 리포트의 eligible 3건이 전부 이 경로였다(2026-07-20 실측).
-    실제 감리법인 자격을 뜻하지 않으므로 **eligible 정밀도는 아직 증명되지
-    않았고**, 이 축을 추천에 연결(D2)하기 전에 별칭 정밀화가 선행돼야 한다.
-    현재 동작을 고정해 이후 개선이 회귀가 아니라 의도된 변경으로 드러나게 한다.
+    된다. 2026-07-20 라이브 eligible 3건 중 **이 1건은 명백한 오탐**이고(해양
+    엔지니어링과 무관한 AI 플랫폼 감리 용역), 나머지 2건은 실제 엔지니어링
+    면허라 도메인 확인이 필요하다 — 즉 정밀도는 **미검증**이지 0 이 아니다.
+    이 축을 추천에 연결(D2)하기 전에 별칭 정밀화가 선행돼야 한다. 현재 동작을
+    고정해 이후 개선이 회귀가 아니라 의도된 변경으로 드러나게 한다.
     """
     result = assess_license_eligibility(
         {"license_limits": [{"lcnsLmtNm": "정보시스템 감리법인", "lmtGrpNo": "1"}]},
@@ -240,6 +242,66 @@ def test_generic_alias_overmatch_is_a_known_limitation():
     )
 
     assert result.verdict == VERDICT_ELIGIBLE  # 과매칭 — 정밀도 한계
+
+
+# --- 파싱 불가 행 노출 --------------------------------------------------------
+
+
+def test_unparsable_rows_are_counted_when_all_rows_fail():
+    result = assess_license_eligibility(
+        {"license_limits": [{"lmtGrpNo": "1"}, {"lmtGrpNo": "2"}]}, MARINE_PROFILE
+    )
+
+    assert result.verdict == VERDICT_UNKNOWN
+    assert result.unparsable_rows == 2
+    assert result.has_unparsable_rows is True
+    # 행이 아예 없는 경우와 구분된다.
+    assert assess_license_eligibility(None, MARINE_PROFILE).unparsable_rows == 0
+
+
+def test_partially_unparsable_rows_are_surfaced_in_verdict():
+    """일부 행만 못 읽으면 판정은 **줄어든 요건**으로 내려진다 — 그 사실을 남긴다.
+
+    조용히 버리면 요건이 줄어 eligible 쪽으로 관대해지는데 결과만 봐서는 알 수
+    없다. 판정은 그대로 내리되 건수와 evidence 로 신뢰도 저하를 노출한다.
+    """
+    result = assess_license_eligibility(
+        {
+            "license_limits": [
+                {"lcnsLmtNm": "해양엔지니어링/1001", "lmtGrpNo": "1"},
+                {"lmtGrpNo": "1"},  # 면허명 없음 — 요건에서 빠진다
+            ]
+        },
+        MARINE_PROFILE,
+    )
+
+    assert result.verdict == VERDICT_ELIGIBLE
+    assert result.unparsable_rows == 1
+    assert any("읽지 못한 행 1건" in line for line in result.evidence)
+
+
+def test_aggregate_splits_unparsable_from_missing_data():
+    rows = [
+        _row({"license_limits": [{"lmtGrpNo": "1"}]}, notice_number="R0001"),  # 파싱 불가
+        _row(None, notice_number="R0002"),  # 행 자체 없음
+        _row(
+            {
+                "license_limits": [
+                    {"lcnsLmtNm": "해양엔지니어링/1001", "lmtGrpNo": "1"},
+                    {"lmtGrpNo": "1"},
+                ]
+            },
+            notice_number="R0003",
+        ),  # 일부만 파싱 불가 — 판정은 내려짐
+    ]
+
+    summary = report.aggregate_eligibility(rows, MARINE_PROFILE)
+
+    # 파싱 불가와 데이터 부재를 합치면 "자격 데이터가 아예 없다"는 오해가 생긴다.
+    assert summary.unparsable_only == 1
+    assert summary.without_eligibility == 1
+    assert summary.with_eligibility == 1
+    assert summary.partial_unparsable == 1
 
 
 def test_normalize_license_key_strips_code_suffix_and_separators():
@@ -323,6 +385,27 @@ def test_render_summary_is_kst_and_states_group_assumption():
     # 그룹 의미론 가정과 unknown≠ineligible 고지가 리포트에 함께 나온다.
     assert GROUP_SEMANTICS_ASSUMPTION in text
     assert "ineligible(부적격)이 아니다" in text
+
+
+def test_render_summary_warns_eligible_precision_is_unverified():
+    """stdout 만 보는 사람이 eligible 을 검증된 자격 신호로 오독하면 안 된다.
+
+    이 리포트가 wiring 결정 산출물이므로 정밀도 한계는 코드 주석이 아니라
+    출력에 실려야 한다(§2 정직). eligible 이 0건이어도 고지는 유지된다.
+    """
+    eligible_raw = {"license_limits": [{"lcnsLmtNm": "해양엔지니어링/1001", "lmtGrpNo": "1"}]}
+    text = report.render_summary(
+        report.aggregate_eligibility([_row(eligible_raw)], MARINE_PROFILE),
+        profile_license_codes=MARINE_PROFILE,
+        top_required=5,
+    )
+
+    assert ELIGIBLE_PRECISION_CAVEAT in text
+    # 문구는 실패를 과장하지도 축소하지도 않는다 — 미검증이지 "전부 오탐"이 아니다.
+    assert "미검증" in ELIGIBLE_PRECISION_CAVEAT
+    assert "도메인 확인 필요" in ELIGIBLE_PRECISION_CAVEAT
+    # eligible 샘플 헤더 자체에도 주의가 붙어 목록만 보고 넘어가지 않게 한다.
+    assert "정밀도 미검증" in text.split("eligible 샘플")[1].split("\n")[0]
 
 
 # --- load_rows: 열린 공고 필터 (test_db SQLite 픽스처) ------------------------

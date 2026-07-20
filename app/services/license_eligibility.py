@@ -24,6 +24,21 @@ license_codes`` 를 대조해 **"이 공고에 우리가 참가 자격이 있는
 또한 **단독 사업자 기준**이라 공동수급체(컨소시엄) 구성으로 요건을 나눠 갖는
 경우는 고려하지 않는다.
 
+가정이 틀렸을 때의 **영향 크기**(2026-07-20 코퍼스 실측, license_limits 보유
+591건): 그룹 수는 1개 430건(73%)·2개 126·3개 26·4개 7·6개 2 이고, 그룹 내 면허
+수는 1개 702그룹(88%)·2개 84·3개 5·4개 7·5개 2 다. 즉 **OR 가정은 73% 공고에서
+무의미**(단일 그룹)하고 **AND 가정이 답을 바꾸는 공고는 76건(13%)뿐**이라, 가정이
+틀려도 흔들리는 범위는 좁다.
+
+다만 위 실측 샘플은 **비전형**이다(그룹1 ⊂ 그룹2 형태는 다중 그룹 161건 중
+20건, 12%). 그리고 그 형태에는 논리적 긴장이 있다 — OR 로 읽으면 그룹1만으로
+통과되어 더 엄격한 그룹2가 잉여가 되고, AND 로 읽으면 그룹1이 그룹2에 흡수되어
+잉여가 된다. 어느 쪽으로 읽어도 한 그룹이 남는다. 이를 설명하는 **대안 해석**:
+``lmtGrpNo`` 가 대안이 아니라 **공동수급체 구성원 슬롯**일 수 있다(그룹2 = 구성원
+A 가 중간처리업, 구성원 B 가 수집·운반업). ``lmtSno`` 가 그룹을 가로질러 1,2,3 으로
+이어지는 점과 수집·운반업 행에만 ``permsnIndstrytyList``(허용 결합 업종)가 붙은
+점이 이 해석을 지지한다. 소비(wiring) 전에 KONEPS 문서로 확인할 값어치가 있다.
+
 설계 원칙:
 
 - 순수 함수 — IO/DB/네트워크 접근 없음. 이 모듈에는 **소비자가 없다**(분류/추천/
@@ -38,11 +53,19 @@ license_codes`` 를 대조해 **"이 공고에 우리가 참가 자격이 있는
   정보가 없으면 :data:`VERDICT_UNKNOWN` 이며 **ineligible 로 취급하지 않는다**.
 
 알려진 한계 (**eligible 정밀도 미검증 — wiring 전 선결 과제**): taxonomy 의 포괄
-별칭(ENG001 의 bare "엔지니어링"·"감리" 등)이 무관한 면허를 매칭시킨다. 예컨대
-공고의 "정보시스템 감리법인" 이 프로필의 "엔지니어링" 과 ENG001 으로 만나
-eligible 이 된다. 2026-07-20 라이브 리포트의 eligible 3건은 전부 이 경로였다.
-과매칭은 eligible 을 관대하게 만드는 방향이라 "ineligible 은 보수적"이라는 성질은
-유지되지만, eligible 을 신호로 쓰려면 별칭 정밀화가 먼저 필요하다.
+별칭(ENG001 의 bare "엔지니어링"·"감리" 등)은 원래 키워드성 매칭용이라 면허 대조에
+쓰면 거칠다. 2026-07-20 라이브 eligible 3건의 내역은 다음과 같다.
+
+- **1건 = 명백한 오탐**: "정보시스템 감리법인/6146"(서민금융진흥원 AI 플랫폼 감리)이
+  포괄 별칭 "감리" 를 타고 프로필의 "엔지니어링" 과 ENG001 으로 만났다. 해양
+  엔지니어링과 무관하다.
+- **2건 = 도메인 확인 필요**: "건설엔지니어링업(종합)/4966" 등(청동천 건설사업관리
+  용역)은 실제 엔지니어링 면허라 자격 여부를 코드가 단정할 수 없다.
+
+즉 정밀도는 **미검증**이지 0 이 아니다. 과매칭은 eligible 을 관대하게 만드는
+방향이라 "ineligible 은 보수적"이라는 성질은 유지되지만, eligible 을 자격 신호로
+쓰려면 별칭 정밀화가 먼저다. 이 한계는 :data:`ELIGIBLE_PRECISION_CAVEAT` 로
+노출되어 리포트 출력에도 함께 고지된다.
 """
 from __future__ import annotations
 
@@ -55,6 +78,7 @@ from app.services.eligibility_labeling import LICENSE_LIMITS_KEY
 
 __all__ = [
     "GROUP_SEMANTICS_ASSUMPTION",
+    "ELIGIBLE_PRECISION_CAVEAT",
     "LICENSE_NAME_FIELD",
     "GROUP_NO_FIELD",
     "UNGROUPED_KEY",
@@ -75,6 +99,15 @@ __all__ = [
 GROUP_SEMANTICS_ASSUMPTION = (
     "가정 — 실데이터로 재검증 필요: lmtGrpNo 그룹 간 = 대안(OR), 그룹 내 = 모두 필요(AND). "
     "실측 샘플 형태에 기반한 해석이며 공동수급체 구성은 고려하지 않는다(단독 사업자 기준)."
+)
+
+# eligible 정밀도 한계 고지 — 코드/리포트가 같은 문구를 쓰도록 단일 출처로 선언한다.
+# 이 리포트가 wiring 여부를 결정하는 산출물이므로, 출력만 보는 사람이 eligible 을
+# 검증된 자격 신호로 오독하지 않도록 stdout 에도 반드시 함께 노출한다(§2 정직).
+ELIGIBLE_PRECISION_CAVEAT = (
+    "주의 — eligible 정밀도 미검증: 2026-07-20 라이브 eligible 3건 중 1건은 명백한 오탐"
+    "(정보시스템 감리법인 — 포괄 별칭 '감리' 경로), 2건은 실제 엔지니어링 면허라 도메인 확인 필요. "
+    "taxonomy 포괄 별칭(ENG001 '엔지니어링'·'감리') 정밀화 전까지 eligible 을 자격 신호로 쓰지 말 것."
 )
 
 # license_limits 행에서 읽는 필드 (매직값 금지 §4.5.1 — eligibility_labeling 과
@@ -157,11 +190,20 @@ class LicenseEligibility:
     missing_by_group: dict[str, tuple[str, ...]]  # 그룹 번호 → 부족 면허명
     required_any: tuple[str, ...]  # 요구 면허명 전체(그룹 간 OR 이므로 "이 중")
     evidence: tuple[str, ...]
+    # 면허명을 읽지 못해 요건에서 빠진 license_limits 행 수. 전부 못 읽으면
+    # unknown 이지만, 일부만 못 읽으면 판정은 **줄어든 요건**으로 내려진다
+    # (요건이 빠지는 방향 = eligible 쪽으로 관대해짐)는 사실을 노출한다.
+    unparsable_rows: int = 0
 
     @property
     def has_eligibility_data(self) -> bool:
         """판정 근거가 되는 면허요건 데이터가 있었는지."""
         return bool(self.required_any)
+
+    @property
+    def has_unparsable_rows(self) -> bool:
+        """면허명을 읽지 못한 행이 하나라도 있었는지(판정 신뢰도 저하 신호)."""
+        return self.unparsable_rows > 0
 
     def to_dict(self) -> dict:
         return {
@@ -173,7 +215,9 @@ class LicenseEligibility:
             },
             "required_any": list(self.required_any),
             "evidence": list(self.evidence),
+            "unparsable_rows": self.unparsable_rows,
             "group_semantics_assumption": GROUP_SEMANTICS_ASSUMPTION,
+            "eligible_precision_caveat": ELIGIBLE_PRECISION_CAVEAT,
         }
 
 
@@ -247,34 +291,48 @@ def profile_license_keys(license_codes: str | None) -> frozenset[str]:
 # --- 그룹 파싱 (순수) ---------------------------------------------------------
 
 
+def _parse_rows(eligibility_raw: dict | None) -> tuple[list[LicenseGroup], int]:
+    """면허제한 행을 그룹으로 묶고, 면허명을 읽지 못한 행 수를 함께 돌려준다.
+
+    읽지 못한 행을 세는 이유: 조용히 버리면 요건이 줄어들어 판정이 eligible 쪽으로
+    관대해지는데, 그 사실이 결과에서 보이지 않는다. 호출부가 신뢰도를 판단할 수
+    있도록 개수를 노출한다.
+    """
+    if not isinstance(eligibility_raw, dict):
+        return [], 0
+
+    rows = eligibility_raw.get(LICENSE_LIMITS_KEY)
+    if not isinstance(rows, list):
+        return [], 0
+
+    grouped: dict[str, list[LicenseRequirement]] = {}
+    unparsable = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            unparsable += 1
+            continue
+        requirement = _requirement_from_name(str(row.get(LICENSE_NAME_FIELD) or ""))
+        if requirement is None:
+            unparsable += 1
+            continue
+        group_no = str(row.get(GROUP_NO_FIELD) or "").strip() or UNGROUPED_KEY
+        grouped.setdefault(group_no, []).append(requirement)
+
+    groups = [
+        LicenseGroup(group_no=group_no, requirements=tuple(requirements))
+        for group_no, requirements in grouped.items()
+        if requirements
+    ]
+    return groups, unparsable
+
+
 def parse_license_limit_groups(eligibility_raw: dict | None) -> list[LicenseGroup]:
     """``eligibility_raw`` 의 면허제한 행을 ``lmtGrpNo`` 기준 그룹으로 묶는다.
 
     그룹 번호가 비었거나 없는 행은 :data:`UNGROUPED_KEY` 하나로 모여 단일 그룹
     (AND)으로 취급된다. 그룹 순서는 처음 등장 순서를 유지한다. IO 접근 없음.
     """
-    if not isinstance(eligibility_raw, dict):
-        return []
-
-    rows = eligibility_raw.get(LICENSE_LIMITS_KEY)
-    if not isinstance(rows, list):
-        return []
-
-    grouped: dict[str, list[LicenseRequirement]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        requirement = _requirement_from_name(str(row.get(LICENSE_NAME_FIELD) or ""))
-        if requirement is None:
-            continue
-        group_no = str(row.get(GROUP_NO_FIELD) or "").strip() or UNGROUPED_KEY
-        grouped.setdefault(group_no, []).append(requirement)
-
-    return [
-        LicenseGroup(group_no=group_no, requirements=tuple(requirements))
-        for group_no, requirements in grouped.items()
-        if requirements
-    ]
+    return _parse_rows(eligibility_raw)[0]
 
 
 # --- 판정 (순수) -------------------------------------------------------------
@@ -290,7 +348,11 @@ def _required_any(groups: list[LicenseGroup]) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _unknown(evidence: str, required_any: tuple[str, ...] = ()) -> LicenseEligibility:
+def _unknown(
+    evidence: str,
+    required_any: tuple[str, ...] = (),
+    unparsable_rows: int = 0,
+) -> LicenseEligibility:
     """판정 불가 결과를 만든다(자격 데이터 부재 또는 보유 면허 미기재)."""
     return LicenseEligibility(
         verdict=VERDICT_UNKNOWN,
@@ -298,6 +360,7 @@ def _unknown(evidence: str, required_any: tuple[str, ...] = ()) -> LicenseEligib
         missing_by_group={},
         required_any=required_any,
         evidence=(evidence,),
+        unparsable_rows=unparsable_rows,
     )
 
 
@@ -315,18 +378,21 @@ def assess_license_eligibility(
     그룹 의미론은 :data:`GROUP_SEMANTICS_ASSUMPTION` 의 해석 가정을 따른다.
     IO/DB 접근 없음.
     """
-    groups = parse_license_limit_groups(eligibility_raw)
+    groups, unparsable_rows = _parse_rows(eligibility_raw)
     if not groups:
         has_rows = isinstance(eligibility_raw, dict) and bool(
             eligibility_raw.get(LICENSE_LIMITS_KEY)
         )
-        return _unknown(_UNPARSABLE_EVIDENCE if has_rows else _NO_DATA_EVIDENCE)
+        return _unknown(
+            _UNPARSABLE_EVIDENCE if has_rows else _NO_DATA_EVIDENCE,
+            unparsable_rows=unparsable_rows,
+        )
 
     required_any = _required_any(groups)
     profile_keys = profile_license_keys(profile_license_codes)
     if not profile_keys:
         # 보유 면허 미기재는 "미보유"가 아니라 데이터 공백이다.
-        return _unknown(_NO_PROFILE_EVIDENCE, required_any)
+        return _unknown(_NO_PROFILE_EVIDENCE, required_any, unparsable_rows)
 
     matched_groups: list[str] = []
     missing_by_group: dict[str, tuple[str, ...]] = {}
@@ -343,10 +409,14 @@ def assess_license_eligibility(
         matched_groups.append(group.group_no)
         evidence.append(f"그룹 {group.group_no} 충족 — 요구: {', '.join(group.names())}")
 
+    if unparsable_rows:
+        evidence.append(f"면허명을 읽지 못한 행 {unparsable_rows}건이 요건에서 빠졌다 — 판정이 관대할 수 있음")
+
     return LicenseEligibility(
         verdict=VERDICT_ELIGIBLE if matched_groups else VERDICT_INELIGIBLE,
         matched_groups=tuple(matched_groups),
         missing_by_group=missing_by_group,
         required_any=required_any,
         evidence=tuple(evidence),
+        unparsable_rows=unparsable_rows,
     )
