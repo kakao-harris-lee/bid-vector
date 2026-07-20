@@ -33,18 +33,48 @@ __all__ = [
     "LICENSE_LIMIT_SOURCE_FIELDS",
     "LABEL_SOURCE_FIELDS",
     "TITLE_SOURCE",
+    "LABEL_POSITIVE",
+    "LABEL_NEGATIVE",
+    "LABEL_AMBIGUOUS",
+    "LABEL_VALUES",
+    "SOURCE_RULE",
+    "SOURCE_LLM",
+    "SOURCE_OPERATOR",
+    "LABEL_SOURCES",
+    "LABELER_VERSION",
     "QualificationTerm",
     "TechField",
     "ASSOCIATION_QUALIFICATION_TERMS",
     "TECH_FIELD_TERMS",
     "EligibilityMatch",
     "EligibilityLabels",
+    "EligibilityVerdict",
     "extract_eligibility_labels",
+    "classify_eligibility",
 ]
 
 # 자격 라벨 flag 종류 — 어떤 bool 라벨을 켜는지 선언에 쓴다.
 FLAG_ASSOCIATION = "association"
 FLAG_ENGINEERING_BUSINESS = "engineering_business"
+
+# 영속화 라벨 값(§2 정직): positive=협회/엔지니어링 자격 조건이 참가자격에 명시,
+# negative=자격 데이터가 있고 해당 조건 없음, ambiguous=자격 데이터 부재/판정 불가.
+# 매직값 금지(§4.5.1) — 라벨/소스 값의 단일 출처이며 모델·스크립트·리포트가 참조한다.
+LABEL_POSITIVE = "positive"
+LABEL_NEGATIVE = "negative"
+LABEL_AMBIGUOUS = "ambiguous"
+LABEL_VALUES = (LABEL_POSITIVE, LABEL_NEGATIVE, LABEL_AMBIGUOUS)
+
+# 라벨 소스: rule=이 룰 해석기, llm=후속 LLM 하이브리드, operator=운영자 정답.
+# 소스별 1라벨(NoticeEligibilityLabel 의 (project_id, source) 유니크)이며 이 PR 은
+# rule 만 생성한다(llm/operator 는 후속 단계에서 채운다).
+SOURCE_RULE = "rule"
+SOURCE_LLM = "llm"
+SOURCE_OPERATOR = "operator"
+LABEL_SOURCES = (SOURCE_RULE, SOURCE_LLM, SOURCE_OPERATOR)
+
+# 룰 라벨러 버전 — 규칙 테이블/매핑 로직이 바뀌면 올려 라벨 재생성을 추적한다.
+LABELER_VERSION = "rule-v1"
 
 # eligibility_raw 구조 키(openapi.build_eligibility_raw 와 단일 출처).
 FLAGS_KEY = "flags"
@@ -314,3 +344,64 @@ def extract_eligibility_labels(
         matches=tuple(matches),
         has_eligibility_data=has_data,
     )
+
+
+# --- 라벨 판정 (룰 라벨 → positive/negative/ambiguous, 순수) -------------------
+
+# rationale 에 나열할 자격 매칭 최대 개수(리포트/감사 가독성).
+_RATIONALE_MAX_MATCHES = 5
+
+# 라벨별 고정 근거 문구(매칭이 없는 negative/ambiguous 는 사유가 고정이다).
+_NEGATIVE_RATIONALE = "참가자격 데이터 존재, 협회/엔지니어링/기술부문 매칭 0"
+_AMBIGUOUS_RATIONALE = "참가자격 데이터 부재 — 판정 불가"
+
+
+@dataclass(frozen=True)
+class EligibilityVerdict:
+    """룰 라벨 판정 결과 — 저장할 라벨 + 감사용 근거 요약(§2 정직)."""
+
+    label: str  # LABEL_POSITIVE | LABEL_NEGATIVE | LABEL_AMBIGUOUS
+    rationale: str
+
+
+def _positive_rationale(labels: EligibilityLabels) -> str:
+    """positive 판정 근거를 자격-소스 매칭의 term/필드/원문으로 요약한다(순수).
+
+    title 참고 매칭(``TITLE_SOURCE``)은 라벨 근거가 아니므로 제외하고, 자격
+    소스(``LABEL_SOURCE_FIELDS``) 매칭만 중복 없이 상한 개수까지 나열한다.
+    """
+    parts: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for match in labels.matches:
+        if match.source_field not in LABEL_SOURCE_FIELDS:
+            continue
+        key = (match.term, match.source_field)
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(f"{match.term}[{match.source_field}]: {match.evidence}")
+        if len(parts) >= _RATIONALE_MAX_MATCHES:
+            break
+    return "; ".join(parts)
+
+
+def classify_eligibility(labels: EligibilityLabels) -> EligibilityVerdict:
+    """추출된 라벨을 저장용 판정(positive/negative/ambiguous)으로 매핑한다(순수).
+
+    - positive: 협회/엔지니어링 자격 조건 또는 기술부문이 참가자격에 명시.
+    - negative: 참가자격 데이터는 있으나 위 조건이 하나도 없음.
+    - ambiguous: 참가자격 데이터 자체가 없어 판정 불가.
+
+    ``association_required``·``engineering_business_required``·``tech_fields`` 는
+    자격-소스(license_limits) 매칭에서만 세워지므로(title 은 참고 증거) 이 매핑은
+    자격 조건 명시 여부에만 의존한다. IO/DB 접근 없음.
+    """
+    if (
+        labels.association_required
+        or labels.engineering_business_required
+        or labels.tech_fields
+    ):
+        return EligibilityVerdict(LABEL_POSITIVE, _positive_rationale(labels))
+    if labels.has_eligibility_data:
+        return EligibilityVerdict(LABEL_NEGATIVE, _NEGATIVE_RATIONALE)
+    return EligibilityVerdict(LABEL_AMBIGUOUS, _AMBIGUOUS_RATIONALE)
