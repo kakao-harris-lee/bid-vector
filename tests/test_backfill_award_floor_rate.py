@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from app.core.time import utc_now
-from app.models.models import Project
+from app.models.models import OperatorStrategy, Project, User
 
 # Load the script module by path (scripts/ is not an importable package).
 _SPEC = importlib.util.spec_from_file_location(
@@ -283,6 +283,296 @@ def test_load_targets_keys_on_eligibility_null_not_floor(test_db):
     ids = [t[0] for t in backfill.load_targets(test_db)]
     assert 10 in ids  # floor-set-but-eligibility-null is still targeted
     assert 11 not in ids  # eligibility already saved -> skipped
+
+
+# --- Operator-candidate-first tiering -----------------------------------------
+
+
+def _seed_strategy(db, **overrides) -> OperatorStrategy:
+    """Persist the canonical operator plus a watch strategy (default: marine gate)."""
+    operator = User(username="operator", email="op@example.com", hashed_password="x")
+    db.add(operator)
+    db.flush()
+    fields = dict(
+        focus_categories="",
+        focus_regions="",
+        exclude_regions="",
+        required_keywords="항만,방파제",
+        exclude_keywords="",
+        min_budget_estimate=0.0,
+        max_budget_estimate=0.0,
+    )
+    fields.update(overrides)
+    strategy = OperatorStrategy(user_id=operator.id, **fields)
+    db.add(strategy)
+    db.commit()
+    return strategy
+
+
+@pytest.fixture
+def tiered_targets(test_db):
+    """Two gate-matching notices with LATE deadlines + two imminent off-scope ones.
+
+    Deadline order alone would pick the off-scope notices first, so any test that
+    sees the gate-matching ids first is seeing the tiering work.
+    """
+    now = utc_now()
+    test_db.add_all(
+        [
+            # off-scope, most imminent -> tier 2 despite the earliest deadline
+            Project(
+                id=1,
+                notice_number="R0001",
+                title="○○청사 신축공사",
+                description="공고기관: ○○시청",
+                requirements="철근콘크리트 구조",
+                category="construction",
+                status="open",
+                eligibility_raw=None,
+                deadline=now + timedelta(days=1),
+            ),
+            # off-scope, second most imminent -> tier 2
+            Project(
+                id=2,
+                notice_number="R0002",
+                title="여행업 위탁 용역",
+                description="공고기관: ○○공사",
+                requirements="",
+                category="service",
+                status="open",
+                eligibility_raw=None,
+                deadline=now + timedelta(days=2),
+            ),
+            # operator candidate, later deadline -> tier 1 (second inside tier)
+            Project(
+                id=3,
+                notice_number="R0003",
+                title="○○항 준설공사",
+                description="공고기관: ○○지방해양수산청",
+                requirements="항만 준설 및 사석 투하",
+                category="construction",
+                status="open",
+                eligibility_raw=None,
+                deadline=now + timedelta(days=9),
+            ),
+            # operator candidate, earlier of the two -> tier 1 first
+            Project(
+                id=4,
+                notice_number="R0004",
+                title="○○ 방파제 보강공사",
+                description="공고기관: ○○시청",
+                requirements="케이슨 거치",
+                category="construction",
+                status="open",
+                eligibility_raw=None,
+                deadline=now + timedelta(days=5),
+            ),
+        ]
+    )
+    test_db.commit()
+    return test_db
+
+
+def test_select_targets_puts_operator_candidates_first(tiered_targets):
+    """Core regression: a gate-matching notice outranks a sooner off-scope one."""
+    _seed_strategy(tiered_targets)
+    selection = backfill.select_targets(tiered_targets)
+    # tier 1 (ids 4, 3 — deadline asc) before tier 2 (ids 1, 2 — deadline asc)
+    assert [t[0] for t in selection.targets] == [4, 3, 1, 2]
+    assert selection.operator_priority is True
+    assert selection.tier1_count == 2
+    assert selection.tier2_count == 2
+
+
+def test_select_targets_keeps_deadline_order_inside_each_tier(tiered_targets):
+    """Tiering reorders across tiers only; inside a tier it stays imminent-first."""
+    _seed_strategy(tiered_targets)
+    ids = [t[0] for t in backfill.select_targets(tiered_targets).targets]
+    assert ids[:2] == [4, 3]  # tier 1: day 5 before day 9
+    assert ids[2:] == [1, 2]  # tier 2: day 1 before day 2
+
+
+def test_select_targets_limit_spends_the_quota_on_tier1(tiered_targets):
+    """A capped run fills from tier 1 first (the whole point of the change)."""
+    _seed_strategy(tiered_targets)
+    selection = backfill.select_targets(tiered_targets, limit=2)
+    assert [t[0] for t in selection.targets] == [4, 3]
+    assert selection.tier1_count == 2
+    assert selection.tier2_count == 0
+
+
+def test_select_targets_limit_counts_partial_tier1(tiered_targets):
+    """Tier counts describe the SELECTED set, not the scanned one."""
+    _seed_strategy(tiered_targets)
+    selection = backfill.select_targets(tiered_targets, limit=1)
+    assert [t[0] for t in selection.targets] == [4]
+    assert (selection.tier1_count, selection.tier2_count) == (1, 0)
+
+    selection = backfill.select_targets(tiered_targets, limit=3)
+    assert [t[0] for t in selection.targets] == [4, 3, 1]
+    assert (selection.tier1_count, selection.tier2_count) == (2, 1)
+
+
+def test_select_targets_without_strategy_falls_back_to_deadline_order(tiered_targets):
+    """No operator strategy at all -> unchanged legacy ordering."""
+    selection = backfill.select_targets(tiered_targets)
+    assert [t[0] for t in selection.targets] == [1, 2, 4, 3]
+    assert selection.operator_priority is False
+    assert (selection.tier1_count, selection.tier2_count) == (0, 4)
+
+
+def test_select_targets_empty_watch_rules_falls_back(tiered_targets):
+    """A strategy with no watch rules matches everything -> not a usable gate."""
+    _seed_strategy(
+        tiered_targets,
+        required_keywords="",
+        focus_categories="",
+        focus_regions="",
+        exclude_regions="",
+        exclude_keywords="",
+    )
+    selection = backfill.select_targets(tiered_targets)
+    assert [t[0] for t in selection.targets] == [1, 2, 4, 3]
+    assert selection.operator_priority is False
+
+
+def test_select_targets_no_operator_priority_restores_legacy_order(tiered_targets):
+    """The --no-operator-priority escape hatch ignores an existing gate."""
+    _seed_strategy(tiered_targets)
+    selection = backfill.select_targets(tiered_targets, operator_priority=False)
+    assert [t[0] for t in selection.targets] == [1, 2, 4, 3]
+    assert selection.operator_priority is False
+
+
+def test_select_targets_does_not_create_operator_rows(tiered_targets):
+    """Target selection is read-only: it must not seed an operator/strategy row."""
+    backfill.select_targets(tiered_targets)
+    assert tiered_targets.query(User).count() == 0
+    assert tiered_targets.query(OperatorStrategy).count() == 0
+
+
+def test_select_targets_gate_projects_are_never_persisted(tiered_targets):
+    """The transient Projects built for the gate must not reach the session.
+
+    The tier decision needs a Project-shaped object per candidate row; those are
+    constructed detached, so a later commit in the run loop must not insert them.
+    """
+    _seed_strategy(tiered_targets)
+    backfill.select_targets(tiered_targets)
+    tiered_targets.commit()
+    assert tiered_targets.query(Project).count() == 4
+
+
+def test_select_targets_scan_cap_leaves_the_tail_in_sql_order(
+    tiered_targets, monkeypatch
+):
+    """Past the scan cap, rows keep plain deadline order (never gate-checked)."""
+    monkeypatch.setattr(backfill, "OPERATOR_PRIORITY_SCAN_CEILING", 2)
+    monkeypatch.setattr(backfill, "OPERATOR_PRIORITY_SCAN_FLOOR", 1)
+    monkeypatch.setattr(backfill, "OPERATOR_PRIORITY_SCAN_MULTIPLIER", 1)
+    _seed_strategy(tiered_targets)
+
+    selection = backfill.select_targets(tiered_targets)
+    # Only ids 1, 2 (the two most imminent) are scanned; both are tier 2, so the
+    # unscanned tail (4, 3) is appended in deadline order behind them.
+    assert [t[0] for t in selection.targets] == [1, 2, 4, 3]
+    assert selection.tier1_count == 0
+
+
+def test_load_targets_is_a_thin_wrapper_over_select_targets(tiered_targets):
+    """load_targets returns exactly the selection's target list."""
+    _seed_strategy(tiered_targets)
+    assert backfill.load_targets(tiered_targets) == (
+        backfill.select_targets(tiered_targets).targets
+    )
+
+
+def test_operator_priority_scan_cap_is_clamped():
+    """Scan cap = limit x multiplier, clamped into [floor, ceiling]."""
+    floor = backfill.OPERATOR_PRIORITY_SCAN_FLOOR
+    ceiling = backfill.OPERATOR_PRIORITY_SCAN_CEILING
+    multiplier = backfill.OPERATOR_PRIORITY_SCAN_MULTIPLIER
+
+    assert backfill.operator_priority_scan_cap(None) == ceiling
+    assert backfill.operator_priority_scan_cap(1) == floor  # tiny limit -> floor
+    assert backfill.operator_priority_scan_cap(ceiling) == ceiling  # huge -> ceiling
+    mid = (floor // multiplier) * 2
+    assert backfill.operator_priority_scan_cap(mid) == mid * multiplier
+
+
+def test_partition_by_tier_preserves_input_order():
+    """The partition is pure and stable within each bucket."""
+    rows = [(1, "A", None, None), (2, "B", None, None), (3, "C", None, None)]
+    tier1, tier2 = backfill.partition_by_tier(rows, lambda row: row[0] % 2 == 1)
+    assert [r[0] for r in tier1] == [1, 3]
+    assert [r[0] for r in tier2] == [2]
+
+
+def test_parser_defaults_operator_priority_on():
+    """Priority is the default; the flag is opt-out only."""
+    assert backfill.build_parser().parse_args([]).no_operator_priority is False
+    opted_out = backfill.build_parser().parse_args(["--no-operator-priority"])
+    assert opted_out.no_operator_priority is True
+
+
+def test_stats_report_tier_counts():
+    """The run summary carries the tier breakdown (dry-run included)."""
+    stats = backfill.BackfillStats(dry_run=True, target_count=3)
+    stats.tier1_selected = 2
+    stats.tier2_selected = 1
+    stats.operator_priority = True
+    summary = stats.as_dict()
+    assert summary["tier1_selected"] == 2
+    assert summary["tier2_selected"] == 1
+    assert summary["operator_priority"] is True
+
+
+def test_priority_line_mentions_operator_candidate_count():
+    """The one-line KST summary names how many operator candidates were included."""
+    line = backfill._priority_line(
+        backfill.TargetSelection(
+            targets=[], tier1_count=7, tier2_count=3, operator_priority=True
+        )
+    )
+    assert "운영자 후보 우선 7건 포함" in line
+    assert "tier1_selected=7" in line and "tier2_selected=3" in line
+    assert "KST" in line
+
+    off = backfill._priority_line(
+        backfill.TargetSelection(
+            targets=[], tier1_count=0, tier2_count=3, operator_priority=False
+        )
+    )
+    assert "미적용" in off
+
+
+def test_main_dry_run_reports_operator_priority(tiered_targets, monkeypatch, capsys):
+    """End-to-end CLI wiring: --dry-run tiers the set, prints it, makes no call."""
+    _seed_strategy(tiered_targets)
+    monkeypatch.setattr(backfill, "SessionLocal", lambda: tiered_targets)
+
+    assert backfill.main(["--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert "DRY-RUN" in out
+    assert "운영자 후보 우선 2건 포함" in out
+    assert "tier1_selected=2" in out
+    # The dry-run sample is the tiered order: operator candidates first.
+    assert "'R0004', 'R0003'" in out
+
+
+def test_main_no_operator_priority_reports_legacy_order(
+    tiered_targets, monkeypatch, capsys
+):
+    """The opt-out flag reaches selection and is reflected in the summary line."""
+    _seed_strategy(tiered_targets)
+    monkeypatch.setattr(backfill, "SessionLocal", lambda: tiered_targets)
+
+    assert backfill.main(["--dry-run", "--no-operator-priority"]) == 0
+
+    out = capsys.readouterr().out
+    assert "미적용" in out
+    assert "'R0001', 'R0002'" in out
 
 
 # --- Run loop -----------------------------------------------------------------

@@ -16,8 +16,16 @@ second license-limit sub-call (``getBidPblancListInfoLicenseLimit``) to pull the
   면허제한 rows (``lcnsLmtNm``/``permsnIndstrytyList`` 등) from the sub-call. The
   source for later 라벨 추출 (PR-B); persisting only, no runtime consumer today.
 
-Targeting rule: ``eligibility_raw IS NULL AND status='open' AND deadline >= now``
-(imminent notices first). Keying the resume on ``eligibility_raw`` (not
+Targeting rule: ``eligibility_raw IS NULL AND status='open' AND deadline >= now``.
+Targets are ordered **operator candidates first**: tier 1 = notices that pass the
+operator's cheap watch-rule gate (the same filters the strategy monitor uses, no
+ML), tier 2 = everything else, each tier deadline-ascending. Tier 2 is still
+collected (it feeds the label / ML dataset) but must not eat the daily quota
+ahead of notices the operator could actually bid on — plain deadline order spent
+most of a run on soon-to-expire, out-of-scope notices (실측 2026-07-20: 자격 원문
+760건 중 610건이 이미 마감, 운영자 게이트 매칭 열린 공고 170건 중 보유 5건).
+``--no-operator-priority`` restores plain deadline order, as does the absence of a
+usable strategy gate. Keying the resume on ``eligibility_raw`` (not
 ``award_floor_rate``) lets one pass fill both columns and drops each row from the
 re-query set once its eligibility raw is saved. A notice that carries flags is
 completed even with a flags-only dict (no re-query); only a fetch failure leaves
@@ -69,9 +77,14 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
+from app.core.single_user import get_operator_strategy  # noqa: E402
 from app.core.time import kst_now, utc_now  # noqa: E402
-from app.models.models import Project  # noqa: E402
+from app.models.models import OperatorStrategy, Project  # noqa: E402
 from app.services.koneps import http_client, openapi, parsing  # noqa: E402
+from app.services.opportunity_monitoring import (  # noqa: E402
+    has_watch_rules,
+    matches_strategy_watch_rules,
+)
 
 # BidPublicInfoService protocol constants for a single-notice targeted query.
 # (Tunable knobs — window/limit/delay/rows — are argparse defaults below.)
@@ -90,6 +103,22 @@ DEFAULT_NUM_OF_ROWS = 10
 DEFAULT_PROGRESS_EVERY = 200
 DEFAULT_SAMPLE_SIZE = 10
 
+# Operator-priority tiering. The target set is ordered tier 1 (open notices that
+# pass the operator's watch-rule gate) then tier 2 (everything else), deadline
+# ascending inside each tier. Tier 2 is kept — it still feeds the label/ML
+# dataset — but must not eat the daily quota ahead of notices the operator can
+# actually bid on.
+# Bound on how many candidate rows are pulled into Python for the tier decision.
+# Rows past the cap keep plain SQL deadline order (tier 2 semantics): the gate is
+# a cheap in-memory predicate, but the scan set must stay bounded regardless of
+# how large the open-notice backlog grows.
+OPERATOR_PRIORITY_SCAN_MULTIPLIER = 20
+OPERATOR_PRIORITY_SCAN_FLOOR = 2_000
+OPERATOR_PRIORITY_SCAN_CEILING = 20_000
+
+# Row shape returned to the run loop: (id, notice_number, category, floor rate).
+TargetRow = tuple[int, str, str | None, float | None]
+
 # A callable that maps (notice_number, category) -> decoded OpenAPI payload dict
 # (the BidPublicInfoService list targeted query — floor rate + eligibility flags).
 FetchFn = Callable[[str, str | None], dict[str, Any]]
@@ -107,6 +136,9 @@ class BackfillStats:
 
     dry_run: bool = False
     target_count: int = 0
+    tier1_selected: int = 0
+    tier2_selected: int = 0
+    operator_priority: bool = False
     processed: int = 0
     updated: int = 0
     no_value: int = 0
@@ -122,6 +154,9 @@ class BackfillStats:
         return {
             "dry_run": self.dry_run,
             "target_count": self.target_count,
+            "tier1_selected": self.tier1_selected,
+            "tier2_selected": self.tier2_selected,
+            "operator_priority": self.operator_priority,
             "processed": self.processed,
             "updated": self.updated,
             "no_value": self.no_value,
@@ -329,37 +364,201 @@ def make_license_limit_fetch(
 # --- Target selection (DB read) ----------------------------------------------
 
 
+@dataclass
+class TargetSelection:
+    """An ordered target list plus how it was tiered."""
+
+    targets: list[TargetRow]
+    tier1_count: int = 0
+    tier2_count: int = 0
+    operator_priority: bool = False
+
+
+# Columns the run loop consumes, and the extra columns the watch-rule gate reads.
+# Loaded explicitly (never whole ORM rows) so a large scan stays cheap.
+_TARGET_COLUMNS = (
+    Project.id,
+    Project.notice_number,
+    Project.category,
+    Project.award_floor_rate,
+)
+_GATE_COLUMNS = (
+    Project.title,
+    Project.description,
+    Project.requirements,
+    Project.budget_estimate,
+)
+
+
+def operator_priority_scan_cap(limit: int | None) -> int:
+    """How many candidate rows may be pulled into Python for the tier decision."""
+    if limit is None:
+        return OPERATOR_PRIORITY_SCAN_CEILING
+    return min(
+        OPERATOR_PRIORITY_SCAN_CEILING,
+        max(OPERATOR_PRIORITY_SCAN_FLOOR, limit * OPERATOR_PRIORITY_SCAN_MULTIPLIER),
+    )
+
+
+def partition_by_tier(
+    rows: list[Any],
+    is_operator_candidate: Callable[[Any], bool],
+) -> tuple[list[TargetRow], list[TargetRow]]:
+    """Split deadline-ordered candidate rows into (tier 1, tier 2) target rows.
+
+    Pure: order inside each tier is the input order (deadline ascending), so the
+    concatenation is "operator candidates first, each tier still imminent-first".
+    """
+    tier1: list[TargetRow] = []
+    tier2: list[TargetRow] = []
+    for row in rows:
+        bucket = tier1 if is_operator_candidate(row) else tier2
+        bucket.append(_as_target_row(row))
+    return tier1, tier2
+
+
+def _as_target_row(row: Any) -> TargetRow:
+    """Narrow a candidate query row to the tuple the run loop consumes."""
+    return (row[0], row[1], row[2], row[3])
+
+
+def _gate_project(row: Any) -> Project:
+    """Build a transient Project carrying only the fields the gate reads.
+
+    Not added to the session — the gate needs a Project-shaped object, and this
+    keeps the scan query to the few columns it actually uses.
+    """
+    return Project(
+        title=row.title,
+        description=row.description,
+        requirements=row.requirements,
+        category=row.category,
+        budget_estimate=row.budget_estimate,
+    )
+
+
+def _target_query(
+    db: Session,
+    cutoff: datetime,
+    *,
+    columns: tuple[Any, ...],
+    limit: int | None = None,
+    offset: int | None = None,
+):
+    """Base target query: eligibility NULL, open, deadline in window, imminent first."""
+    query = (
+        db.query(*columns)
+        .filter(Project.eligibility_raw.is_(None))
+        .filter(Project.status == "open")
+        .filter(Project.deadline >= cutoff)
+        .order_by(Project.deadline.asc(), Project.id.asc())
+    )
+    if offset is not None:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    return query
+
+
+def _resolve_watch_strategy(db: Session) -> OperatorStrategy | None:
+    """The canonical operator's watch strategy, or ``None`` when it is no gate.
+
+    Read-only on purpose (``get_operator_strategy``, not ``ensure_...``): target
+    selection must never create an operator/strategy row as a side effect, and a
+    ``--dry-run`` must stay write-free. A missing strategy, or one with every
+    watch field empty, yields ``None`` so selection falls back to plain
+    deadline order.
+    """
+    strategy = get_operator_strategy(db)
+    return strategy if has_watch_rules(strategy) else None
+
+
+def select_targets(
+    db: Session,
+    *,
+    include_past_days: int = DEFAULT_INCLUDE_PAST_DAYS,
+    limit: int | None = None,
+    now: datetime | None = None,
+    operator_priority: bool = True,
+) -> TargetSelection:
+    """Return the ordered target set for one run, with its tier breakdown.
+
+    Filter: ``eligibility_raw IS NULL AND status='open' AND deadline >= cutoff``
+    where ``cutoff = now - include_past_days``; the current ``award_floor_rate``
+    rides along so the run loop can honour the "write floor only when currently
+    NULL" guard without a second query.
+
+    Order: with ``operator_priority`` (default) the set is tier 1 (passes the
+    operator's watch-rule gate) then tier 2 (the rest), ``deadline`` ascending
+    inside each tier — a capped or interrupted run then spends its quota on
+    notices the operator could actually bid on instead of burning it on soon-to-
+    expire, out-of-scope notices. Without a usable strategy gate, or with
+    ``operator_priority=False``, the order is plain ``deadline`` ascending.
+    """
+    cutoff = (now or utc_now()) - timedelta(days=max(0, include_past_days))
+    strategy = _resolve_watch_strategy(db) if operator_priority else None
+
+    if strategy is None:
+        rows = _target_query(db, cutoff, columns=_TARGET_COLUMNS, limit=limit).all()
+        targets = [_as_target_row(row) for row in rows]
+        return TargetSelection(
+            targets=targets,
+            tier1_count=0,
+            tier2_count=len(targets),
+            operator_priority=False,
+        )
+
+    scan_cap = operator_priority_scan_cap(limit)
+    scanned = _target_query(
+        db, cutoff, columns=_TARGET_COLUMNS + _GATE_COLUMNS, limit=scan_cap
+    ).all()
+    tier1, tier2 = partition_by_tier(
+        scanned,
+        lambda row: matches_strategy_watch_rules(_gate_project(row), strategy),
+    )
+    ordered = tier1 + tier2
+
+    if len(scanned) >= scan_cap and (limit is None or limit > scan_cap):
+        # The scan cap was reached and the run still wants more rows: append the
+        # unscanned tail in SQL deadline order (tier 2 — never gate-checked).
+        ordered.extend(
+            _as_target_row(row)
+            for row in _target_query(
+                db, cutoff, columns=_TARGET_COLUMNS, limit=None, offset=scan_cap
+            ).all()
+        )
+
+    if limit is not None:
+        ordered = ordered[:limit]
+    tier1_selected = min(len(tier1), len(ordered))
+    return TargetSelection(
+        targets=ordered,
+        tier1_count=tier1_selected,
+        tier2_count=len(ordered) - tier1_selected,
+        operator_priority=True,
+    )
+
+
 def load_targets(
     db: Session,
     *,
     include_past_days: int = DEFAULT_INCLUDE_PAST_DAYS,
     limit: int | None = None,
     now: datetime | None = None,
-) -> list[tuple[int, str, str | None, float | None]]:
-    """Return (id, notice_number, category, award_floor_rate) for open targets.
+    operator_priority: bool = True,
+) -> list[TargetRow]:
+    """Ordered ``(id, notice_number, category, award_floor_rate)`` targets.
 
-    Filter: ``eligibility_raw IS NULL AND status='open' AND deadline >= cutoff``
-    where ``cutoff = now - include_past_days``. Ordered by ``deadline`` ascending
-    (imminent first) so a capped/interrupted run helps the soonest notices. The
-    current ``award_floor_rate`` rides along so the run loop can honour the
-    "write floor only when currently NULL" guard without a second query.
+    Thin wrapper over :func:`select_targets` for callers that do not need the
+    tier breakdown.
     """
-    cutoff = (now or utc_now()) - timedelta(days=max(0, include_past_days))
-    query = (
-        db.query(
-            Project.id,
-            Project.notice_number,
-            Project.category,
-            Project.award_floor_rate,
-        )
-        .filter(Project.eligibility_raw.is_(None))
-        .filter(Project.status == "open")
-        .filter(Project.deadline >= cutoff)
-        .order_by(Project.deadline.asc(), Project.id.asc())
-    )
-    if limit is not None:
-        query = query.limit(limit)
-    return [(row[0], row[1], row[2], row[3]) for row in query.all()]
+    return select_targets(
+        db,
+        include_past_days=include_past_days,
+        limit=limit,
+        now=now,
+        operator_priority=operator_priority,
+    ).targets
 
 
 # --- Run loop -----------------------------------------------------------------
@@ -538,6 +737,19 @@ def _kst_stamp() -> str:
     return kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
 
 
+def _priority_line(selection: TargetSelection) -> str:
+    """One KST-stamped line describing how this run's target set was tiered."""
+    if not selection.operator_priority:
+        headline = "운영자 후보 우선 미적용 (전략 게이트 없음 또는 --no-operator-priority)"
+    else:
+        headline = f"운영자 후보 우선 {selection.tier1_count}건 포함"
+    return (
+        f"{_kst_stamp()} {headline} "
+        f"tier1_selected={selection.tier1_count} "
+        f"tier2_selected={selection.tier2_count}"
+    )
+
+
 # --- CLI ----------------------------------------------------------------------
 
 
@@ -596,6 +808,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SAMPLE_SIZE,
         help="How many notice numbers to show in the --dry-run sample.",
     )
+    parser.add_argument(
+        "--no-operator-priority",
+        action="store_true",
+        help=(
+            "Disable operator-candidate-first tiering and process targets in "
+            "plain deadline order (legacy behaviour)."
+        ),
+    )
     return parser
 
 
@@ -604,11 +824,13 @@ def main(argv: list[str] | None = None) -> int:
 
     db = SessionLocal()
     try:
-        targets = load_targets(
+        selection = select_targets(
             db,
             include_past_days=args.include_past_days,
             limit=args.limit,
+            operator_priority=not args.no_operator_priority,
         )
+        targets = selection.targets
         fetch: FetchFn | None = None
         fetch_license_limit: LicenseLimitFetchFn | None = None
         if not args.dry_run:
@@ -631,6 +853,9 @@ def main(argv: list[str] | None = None) -> int:
             progress_every=max(0, args.progress_every),
             sample_size=max(0, args.sample_size),
         )
+        stats.tier1_selected = selection.tier1_count
+        stats.tier2_selected = selection.tier2_count
+        stats.operator_priority = selection.operator_priority
         if args.dry_run:
             db.rollback()
     finally:
@@ -639,6 +864,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = stats.as_dict()
     mode = "DRY-RUN (no API, no write)" if args.dry_run else "APPLIED"
     print(f"[floor-backfill] {_kst_stamp()} {mode}")
+    print(f"[floor-backfill] {_priority_line(selection)}")
     print(
         f"[floor-backfill] target={summary['target_count']} "
         f"processed={summary['processed']} updated={summary['updated']} "

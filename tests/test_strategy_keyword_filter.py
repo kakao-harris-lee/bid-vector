@@ -14,7 +14,11 @@ from __future__ import annotations
 
 from app.core.single_user import join_multi_value_text
 from app.models.models import OperatorStrategy, Project
-from app.services.opportunity_monitoring import StrategyMonitoringService
+from app.services.opportunity_monitoring import (
+    StrategyMonitoringService,
+    has_watch_rules,
+    matches_strategy_watch_rules,
+)
 from scripts.seed_marine_gate import (
     MARINE_FOCUS_CATEGORIES,
     MARINE_REQUIRED_KEYWORDS,
@@ -178,3 +182,49 @@ def test_generic_construction_is_excluded_by_keyword_and():
     )
     result = _service()._apply_strategy_filters(project, _marine_strategy())
     assert result.matched is False
+
+
+# ---------------------------------------------------------------------------
+# Public watch-rule delegators (used by non-monitor callers, e.g. backfill)
+# ---------------------------------------------------------------------------
+
+
+def test_matches_strategy_watch_rules_agrees_with_the_filter():
+    """The public delegator returns exactly _apply_strategy_filters().matched."""
+    passing = Project(
+        title="○○항 방파제 보강공사",
+        description="공고기관: ○○지방해양수산청",
+        requirements="방파제 케이슨 거치",
+        category="construction",
+    )
+    failing = Project(
+        title="○○청사 신축공사",
+        description="공고기관: ○○시청",
+        requirements="철근콘크리트 구조",
+        category="construction",
+    )
+    strategy = _marine_strategy()
+
+    assert matches_strategy_watch_rules(passing, strategy) is True
+    assert matches_strategy_watch_rules(failing, strategy) is False
+    for project in (passing, failing):
+        assert matches_strategy_watch_rules(project, strategy) == (
+            _service()._apply_strategy_filters(project, strategy).matched
+        )
+
+
+def test_has_watch_rules_detects_an_actual_gate():
+    """Only a strategy that can narrow the notice set counts as a gate."""
+    assert has_watch_rules(_marine_strategy()) is True
+    assert has_watch_rules(_strategy(required_keywords="항만")) is True
+    assert has_watch_rules(_strategy(exclude_regions="제주")) is True
+    assert has_watch_rules(_strategy(min_budget_estimate=1_000_000.0)) is True
+    assert has_watch_rules(_strategy(max_budget_estimate=1_000_000.0)) is True
+
+
+def test_has_watch_rules_false_for_empty_or_missing_strategy():
+    """An all-empty strategy matches every notice, so it is not a usable gate."""
+    assert has_watch_rules(_strategy()) is False
+    assert has_watch_rules(None) is False
+    # Thresholds are not watch rules — they never narrow the pre-filter pass.
+    assert has_watch_rules(_strategy(minimum_match_score=0.9)) is False
