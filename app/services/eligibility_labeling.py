@@ -74,7 +74,9 @@ SOURCE_OPERATOR = "operator"
 LABEL_SOURCES = (SOURCE_RULE, SOURCE_LLM, SOURCE_OPERATOR)
 
 # 룰 라벨러 버전 — 규칙 테이블/매핑 로직이 바뀌면 올려 라벨 재생성을 추적한다.
-LABELER_VERSION = "rule-v1"
+# rule-v2: TECH_FIELD_TERMS 에 해양 엔지니어링/기술사 면허 용어 추가(캘리브레이션,
+# #207 후속). 라벨 재생성 시 버전으로 갱신분을 추적한다.
+LABELER_VERSION = "rule-v2"
 
 # eligibility_raw 구조 키(openapi.build_eligibility_raw 와 단일 출처).
 FLAGS_KEY = "flags"
@@ -151,12 +153,42 @@ ASSOCIATION_QUALIFICATION_TERMS: tuple[QualificationTerm, ...] = (
 # docs/marine-engineering-gate.md 3절에서 근거를 두고 시드했다. 실데이터(내일부터
 # 적재)로 report 스크립트가 미매칭 원문을 surface 하면 여기에 출처를 달아
 # 확장한다(추측 용어 남발 금지). 표준명은 해당 면허군의 대표 한글명이다.
+#
+# 별칭 정밀화 원칙(ENG001 포괄어 오탐 교훈): bare "엔지니어링"·"해양"·"항만"
+# 같은 포괄어는 과매칭이라 넣지 않고, **전문분야가 붙은 구체 형태**만 둔다.
+# ``_normalize`` 는 공백만 제거하고 괄호/쉼표/가운뎃점은 남기므로(paren-stripped
+# "엔지니어링사업해양" 은 원문 "엔지니어링사업(해양)" 에 substring 으로 안 잡힌다),
+# 코퍼스 실측 면허명은 **여는 괄호까지 포함한 앵커**로 선언한다. 여는 괄호 뒤
+# 구분자(", " → 정규화 후 ","·"·")가 형태별로 달라도 앵커가 그 앞에서 끊겨
+# ``엔지니어링사업(항만, 해안)``·``엔지니어링사업(항만·해안)`` 를 모두 잡고,
+# 비해양 전문분야 ``엔지니어링사업(전기설비)``·``(정보통신)`` 은 앵커에 해양/항만
+# 도메인어가 박혀 있어 오탐되지 않는다(회귀 가드 테스트로 고정).
 TECH_FIELD_TERMS: tuple[TechField, ...] = (
     # PORT001: 항만및해안, 항만설계 (taxonomy.py:74, marine gate 3절).
-    TechField(name="항만및해안", code="PORT001", aliases=("항만및해안", "항만설계")),
+    # ``엔지니어링사업(항만, 해안)`` (코퍼스 실측 면허 3579) 을 항만·해안
+    # 엔지니어링으로 매핑한다. 여는 괄호 앵커라 comma/가운뎃점 구분자 무관.
+    TechField(
+        name="항만및해안",
+        code="PORT001",
+        aliases=("항만및해안", "항만설계", "엔지니어링사업(항만"),
+    ),
     # MAR001: 해양엔지니어링 (taxonomy.py:75, marine gate 3절).
-    TechField(name="해양엔지니어링", code="MAR001", aliases=("해양엔지니어링",)),
+    # ``엔지니어링사업(해양)`` (코퍼스 실측 면허 3599) 을 해양엔지니어링으로 매핑.
+    TechField(
+        name="해양엔지니어링",
+        code="MAR001",
+        aliases=("해양엔지니어링", "엔지니어링사업(해양"),
+    ),
+    # MAR001(해양 기술용역군): ``기술사사무소(해양)`` (코퍼스 실측 면허 7383) —
+    # 해양 기술사 사무소. 해양엔지니어링과 구분되는 표준명으로 provenance 를
+    # 보존하되 면허군 코드는 MAR001(해양엔지니어링 계열)을 공유한다.
+    TechField(
+        name="해양기술사",
+        code="MAR001",
+        aliases=("기술사사무소(해양",),
+    ),
     # HYDRO001: 수로조사/수로측량/해양조사 (taxonomy.py:76, marine gate 3절).
+    # 코퍼스 ``해양조사정보업(수로측량업/…)`` 은 "수로측량"·"해양조사" 별칭이 흡수.
     TechField(
         name="수로조사",
         code="HYDRO001",
