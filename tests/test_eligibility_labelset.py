@@ -78,6 +78,31 @@ def test_positive_from_tech_field_only():
     assert "항만및해안" in verdict.rationale
 
 
+def test_positive_from_marine_engineering_license_terms():
+    # #207 캘리브레이션: 해양 엔지니어링/기술사 면허(코퍼스 실측) → positive.
+    for lcns, tech in (
+        ("엔지니어링사업(해양)", "해양엔지니어링"),
+        ("엔지니어링사업(항만, 해안)", "항만및해안"),
+        ("기술사사무소(해양)", "해양기술사"),
+    ):
+        verdict = _verdict({"license_limits": [{"lcnsLmtNm": lcns}]})
+
+        assert verdict.label == LABEL_POSITIVE, lcns
+        assert tech in verdict.rationale, lcns
+
+
+def test_non_marine_engineering_specialties_stay_negative():
+    # 오탐 회귀 가드: 비해양 전문분야 면허는 negative(자격 데이터는 존재).
+    for lcns in (
+        "엔지니어링사업(전기설비)",
+        "엔지니어링사업(정보통신)",
+        "정보시스템 감리법인",
+    ):
+        assert (
+            _verdict({"license_limits": [{"lcnsLmtNm": lcns}]}).label == LABEL_NEGATIVE
+        ), lcns
+
+
 def test_negative_when_data_present_but_no_match():
     verdict = _verdict({"license_limits": [{"lcnsLmtNm": "정보통신공사업"}]})
 

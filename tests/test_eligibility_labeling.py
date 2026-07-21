@@ -103,6 +103,79 @@ def test_tech_field_alias_maps_to_standard_name():
     assert labels.tech_fields == ("수로조사",)
 
 
+# --- 세그먼트 라벨러 캘리브레이션: 해양 엔지니어링/기술사 면허 용어 (#207 후속) ----
+
+
+def test_marine_engineering_business_license_maps_to_tech_field():
+    # 코퍼스 실측 면허 3599 "엔지니어링사업(해양)" → 해양엔지니어링 tech_field.
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업(해양)"}]}
+    )
+
+    assert labels.has_eligibility_data is True
+    assert labels.tech_fields == ("해양엔지니어링",)
+    assert any(
+        m.term == "해양엔지니어링" and m.source_field == "license_limits.lcnsLmtNm"
+        for m in labels.matches
+    )
+
+
+def test_marine_port_engineering_business_license_maps_to_tech_field():
+    # 코퍼스 실측 면허 3579 "엔지니어링사업(항만, 해안)" → 항만및해안 tech_field.
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업(항만, 해안)"}]}
+    )
+
+    assert labels.tech_fields == ("항만및해안",)
+
+
+def test_marine_port_engineering_middle_dot_variant_maps_to_tech_field():
+    # 가운뎃점 변형 "엔지니어링사업(항만·해안)" 도 여는 괄호 앵커로 동일하게 잡힌다.
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "엔지니어링사업(항만·해안)"}]}
+    )
+
+    assert labels.tech_fields == ("항만및해안",)
+
+
+def test_marine_engineer_office_license_maps_to_tech_field():
+    # 코퍼스 실측 면허 7383 "기술사사무소(해양)" → 해양기술사 tech_field.
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "기술사사무소(해양)"}]}
+    )
+
+    assert labels.tech_fields == ("해양기술사",)
+
+
+def test_marine_hydro_survey_corpus_form_maps_to_hydro_field():
+    # 코퍼스 실측 "해양조사정보업(수로측량업/해도제작업/해양관측업)" → 수로조사 유지.
+    labels = extract_eligibility_labels(
+        {"license_limits": [{"lcnsLmtNm": "해양조사정보업(수로측량업/해도제작업/해양관측업)"}]}
+    )
+
+    assert labels.tech_fields == ("수로조사",)
+
+
+def test_non_marine_engineering_specialties_are_not_matched():
+    # 오탐 회귀 가드(핵심): 비해양 전문분야 면허는 tech_field/자격 라벨로 안 잡힌다.
+    for lcns in (
+        "엔지니어링사업(전기설비)",
+        "엔지니어링사업(정보통신)",
+        "정보시스템 감리법인",
+    ):
+        labels = extract_eligibility_labels({"license_limits": [{"lcnsLmtNm": lcns}]})
+
+        assert labels.tech_fields == (), lcns
+        assert labels.engineering_business_required is False, lcns
+        assert labels.association_required is False, lcns
+
+
+def test_marine_tech_field_names_present():
+    # 신규 해양 표준명이 테이블에서 사라지지 않도록 고정(캘리브레이션 회귀 가드).
+    names = {tf.name for tf in TECH_FIELD_TERMS}
+    assert {"해양엔지니어링", "항만및해안", "수로조사", "해양기술사"} <= names
+
+
 def test_title_match_is_reference_only_not_a_requirement():
     # title 에만 자격 용어가 있으면 bool 판정에 넣지 않고 참고 증거로만 남긴다.
     labels = extract_eligibility_labels(
