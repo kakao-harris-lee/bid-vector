@@ -652,6 +652,21 @@ class Settings(BaseSettings):
     OPPORTUNITY_RISK_MARGIN_MAX: float = 0.45  # margin at/below -> risk
     OPPORTUNITY_RISK_COMPLEXITY_MAX: float = 0.72  # complexity at/above -> risk
 
+    # License-eligibility gate — screen recommendation candidates against the
+    # operator's held licenses (CompanyProfile.license_codes) vs each notice's
+    # published 면허요건 (Project.eligibility_raw["license_limits"]) via
+    # app.services.license_eligibility.assess_license_eligibility. When ON the
+    # candidate screening in StrategyMonitoringService drops only notices whose
+    # verdict is DATA-CONFIRMED ``ineligible`` (we lack a required license),
+    # BEFORE the expensive per-candidate ML analysis. ``unknown`` (no 면허요건
+    # data or no held-license data — 92% of open notices) and ``eligible`` are
+    # NEVER suppressed, so the coverage gap can only lose precision, never recall.
+    # Default OFF: while disabled the gate code path never runs (no extra DB
+    # query, no behavior change), so merging this is a no-op for live
+    # recommendations. Activate via .env only after reviewing the read-only
+    # scripts/report_license_gate_impact.py simulation.
+    LICENSE_ELIGIBILITY_GATE_ENABLED: bool = False
+
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost",
