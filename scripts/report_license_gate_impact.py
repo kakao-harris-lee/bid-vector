@@ -75,7 +75,7 @@ _LOG_PREFIX = "[license-gate-impact]"
 
 @dataclass(frozen=True)
 class ExcludedNotice:
-    """게이트 ON 시 제외될 공고 하나 — 어떤 요구 면허 때문인지 남긴다."""
+    """게이트 ON 시 제외될 공고 하나 — 공고가 요구하는 면허 목록을 남긴다."""
 
     notice_number: str
     title: str
@@ -91,7 +91,11 @@ class ImpactSummary:
     reaches_gate: int = 0
     verdict_counts: Counter = field(default_factory=Counter)
     excluded: list[ExcludedNotice] = field(default_factory=list)
-    ineligible_required: Counter = field(default_factory=Counter)
+    # 제외 사유 = 운영자가 실제로 **미보유**한 면허의 빈도(요구 면허 전체가 아니라).
+    # 보유 면허(예: 엔지니어링사업 항만·해안)가 사유로 뜨면 오도되므로, 판정 결과의
+    # missing_by_group(실제 누락)만 센다. 어느 그룹의 누락을 셀지는
+    # _representative_missing 이 정의한다.
+    ineligible_missing: Counter = field(default_factory=Counter)
 
 
 # --- 시뮬레이션 (순수 — DB 접근 없음) ----------------------------------------
@@ -125,8 +129,8 @@ def simulate_gate_impact(
 
         if result.verdict != VERDICT_INELIGIBLE:
             continue
-        for name in result.required_any:
-            summary.ineligible_required[name] += 1
+        for name in _representative_missing(result):
+            summary.ineligible_missing[name] += 1
         if len(summary.excluded) < samples:
             summary.excluded.append(
                 ExcludedNotice(
@@ -136,6 +140,24 @@ def simulate_gate_impact(
                 )
             )
     return summary
+
+
+def _representative_missing(result) -> tuple[str, ...]:
+    """제외 사유로 집계할 '실제 미보유' 면허 — 가장 가까운(누락 최소) 그룹 기준.
+
+    ineligible 은 모든 그룹이 미충족이라 그룹마다 누락 면허 집합이 있다. 어느 그룹의
+    누락을 대표로 셀지 정의가 필요한데, **누락 수가 가장 적은 그룹**(=자격에 가장
+    근접한 대안)의 누락을 쓴다 — "무엇만 더 갖추면 이 공고에 참가 가능한가"라는 운영자
+    액션 관점에서 가장 유용하기 때문이다. 전 그룹 누락의 합집합을 쓰면 이미 보유한
+    다른 대안에서의 무관한 누락까지 섞여 사유가 부풀려진다. 동수면 처음 등장한
+    그룹(dict 삽입 순서 = assess 의 그룹 등장 순서)을 대표로 한다.
+
+    운영자가 보유한 면허는 어느 그룹의 누락에도 들어가지 않으므로(그룹의 missing 은
+    미충족 요건만 담는다) 사유 목록에 결코 나타나지 않는다 — N1 오도 제거의 핵심.
+    """
+    if not result.missing_by_group:
+        return ()
+    return tuple(min(result.missing_by_group.values(), key=len))
 
 
 def _clip_title(title: str | None) -> str:
@@ -171,8 +193,8 @@ def render_summary(
         ),
         f"{_LOG_PREFIX} 제외 공고 샘플 (공고번호 | 공고명 | 요구 면허):",
         *_excluded_lines(summary.excluded),
-        f"{_LOG_PREFIX} ineligible 상위 요구 면허 (무엇 때문에 제외되나):",
-        *_count_lines(summary.ineligible_required, DEFAULT_SAMPLES),
+        f"{_LOG_PREFIX} 제외 사유(미보유 면허) 상위 — 가장 가까운 그룹 기준, '무엇을 더 갖추면 되나' (보유 면허는 제외):",
+        *_count_lines(summary.ineligible_missing, DEFAULT_SAMPLES),
         f"{_LOG_PREFIX} unknown 은 자격 데이터/보유 면허 정보 부재이며 ineligible(부적격)이 아니다 — 게이트는 절대 억제하지 않는다.",
         f"{_LOG_PREFIX} {ELIGIBLE_PRECISION_CAVEAT}",
         f"{_LOG_PREFIX} {GROUP_SEMANTICS_ASSUMPTION}",
