@@ -4,10 +4,12 @@ These functions were extracted verbatim from ``KonepsCollectorService``
 (``collector.py``). They have no IO (``requests`` / Playwright ``page``), DB
 (``Session`` / ``db.query`` / ``db.add``), or instance-state dependencies --
 they operate only on plain dicts, the request schema, ``HistoricalData`` rows
-(read-only attribute access), the KST clock, and the already-extracted pure
-helpers in ``parsing`` / ``openapi`` plus the module-level ``settings`` (scsbid
-collection config) -- so they live here as module-level pure functions to keep
-the collector class focused on orchestration, DB persistence, and IO.
+(read-only attribute access), the KST clock, the already-extracted pure helpers
+in ``parsing`` / ``openapi``, the pure 기초금액-복구 helper in
+``base_amount_basis`` (``estimate_base_amount_from_reserves``), plus the
+module-level ``settings`` (scsbid collection config) -- so they live here as
+module-level pure functions to keep the collector class focused on
+orchestration, DB persistence, and IO.
 
 Behavior is intentionally identical to the original methods; this module is a
 pure relocation, not a rewrite (including the KST-anchored date window used by
@@ -28,6 +30,7 @@ from app.core.config import settings
 from app.core.time import kst_now
 from app.models.models import HistoricalData
 from app.schemas.schemas import CrawlRequest
+from app.services.base_amount_basis import estimate_base_amount_from_reserves
 from app.services.koneps import openapi, parsing
 
 
@@ -110,27 +113,32 @@ def build_scsbid_award_item(
     title = str(raw_item.get("bidNtceNm") or notice_number).strip()
     winning_amount = parsing.coerce_amount(raw_item.get("sucsfbidAmt"))
     success_rate = parsing.normalize_bid_rate_value(raw_item.get("sucsfbidRate"))
-    # base 정합화(P0): 기초금액(사업금액)은 reserve detail 상세의 base_amount, 없으면
-    # 낙찰가/낙찰률(≈기초금액) 추정치만 쓴다. 예정가(planned_price)를 base_amount 폴백
-    # 으로 저장하지 않는다 — 예정가와 기초금액을 뒤섞으면(base_amt==planned_est) 이후
-    # 사정률(예정가/기초금액) 캘리브레이션의 분모가 오염되고 투찰률(낙찰가/기초금액)도
-    # 예정가 기준으로 왜곡된다(발주처 밴드가 예정가 기준으로 캘리브레이션된 원인).
-    base_amount = (
-        detail.get("base_amount")
-        or (
-            winning_amount / success_rate
-            if winning_amount is not None and success_rate
-            else None
-        )
-        or winning_amount
-        or 0.0
+    # base 정합화(P1): KONEPS ``sucsfbidRate`` = 낙찰가/**예정가**(사정률-기준)이므로
+    # ``winning_amount / success_rate`` 는 기초금액이 아니라 **예정가**다(실측 확정).
+    # 따라서 이 값을 base_amount 로 저장하면 base==예정가 오염이 발생해(발주처 밴드가
+    # 예정가 기준으로 떠서 실투찰이 하한 아래로 내려간 근본원인) 절대 base 로 쓰지 않는다.
+    #   - base_amount 는 reserve detail 상세의 실 기초금액(``detail['base_amount']``) 만.
+    #   - 실 기초금액이 없으면 복수예비가격 15개 중앙값으로 기초금액을 복구해 추정치
+    #     (``base_amount_estimated``)로만 노출한다(원본 base 는 오염값으로 채우지 않음).
+    #   - 둘 다 불가하면 base 는 미상(0.0)으로 남기고, persistence 가드가 기존의 더 나은
+    #     base 를 이 0.0 으로 덮지 않게 한다.
+    detail_base = parsing.coerce_amount(detail.get("base_amount"))
+    base_amount = detail_base if detail_base and detail_base > 0 else None
+    recovered_base = estimate_base_amount_from_reserves(detail.get("reserve_prices"))
+    # 예정가: reserve detail 상세값 우선, 없으면 낙찰가/success_rate(=낙찰가/예정가) 역산
+    # 추정 예정가. 예정가는 planned_price / estimated_amount 로만 흐르고 base 로 승격하지
+    # 않는다.
+    planned_price_estimate = (
+        winning_amount / success_rate
+        if winning_amount is not None and success_rate
+        else None
     )
-    # 예정가는 reserve detail 상세에서만 취득한다. 낙찰가/낙찰률은 기초금액 추정치이지
-    # 예정가가 아니므로 예정가 폴백으로 쓰면 base_amt==planned가 되어 재오염된다.
-    planned_price = detail.get("planned_price")
+    planned_price = detail.get("planned_price") or planned_price_estimate
+    # 투찰률(bid_rate) = 낙찰가/기초금액. 실 기초금액이 있을 때만 역산하고, 없으면
+    # success_rate(낙찰가/예정가)를 유지한다(기존 동작 — base 미상 시 회귀 없음).
     bid_rate = (
         winning_amount / base_amount
-        if winning_amount is not None and float(base_amount or 0.0) > 0
+        if winning_amount is not None and base_amount and base_amount > 0
         else success_rate
     )
     opened_at = (
@@ -143,8 +151,12 @@ def build_scsbid_award_item(
     return {
         "notice_number": notice_number,
         "title": title,
-        "base_amount": float(base_amount or 0.0),
-        "estimated_amount": float(planned_price or base_amount or 0.0),
+        # base 미상(실 기초금액 없음)이면 0.0 을 배출한다. persistence 가 이 0.0 으로
+        # 기존 base 를 덮지 않도록 가드하므로, 예정가 오염값이 base 로 새어들지 않는다.
+        "base_amount": float(base_amount) if base_amount and base_amount > 0 else 0.0,
+        "estimated_amount": (
+            float(planned_price) if planned_price and planned_price > 0 else 0.0
+        ),
         "award_floor_rate": parsing.normalize_bid_rate_value(
             raw_item.get("sucsfbidLwltRate")
         ),
@@ -177,7 +189,13 @@ def build_scsbid_award_item(
             "final_success_date": raw_item.get("fnlSucsfDate"),
             "reserve_prices": detail.get("reserve_prices") or [],
             "selected_numbers": detail.get("selected_numbers") or [],
-            "planned_price": detail.get("planned_price"),
+            # 예정가: 상세값 우선, 없으면 낙찰가/success_rate(=예정가) 역산 추정치.
+            "planned_price": planned_price,
+            # 복수예비가격 15개로 복구한 기초금액 추정치(원본 base 는 오염값으로 채우지
+            # 않고, 여기·persistence 의 base_amount_estimated 로만 흐른다).
+            "base_amount_estimated": (
+                float(recovered_base) if recovered_base else None
+            ),
             "reserve_detail_error": detail.get("reserve_detail_error"),
             "raw_openapi_item": raw_item,
             "raw_reserve_detail_items": detail.get("raw_reserve_detail_items") or [],
