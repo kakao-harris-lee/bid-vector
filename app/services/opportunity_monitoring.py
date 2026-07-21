@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+import logging
 from typing import Callable
 
 from sqlalchemy import or_
@@ -26,9 +27,15 @@ from app.core.single_user import (
 from app.models.models import OperatorStrategy, OperatorStrategyRun, Project, User
 from app.schemas.schemas import BidDecisionSaveRequest, OpportunityAnalysisRequest, OperatorStrategyMonitorRequest
 from app.services.allocation import BidDecisionService
+from app.services.license_eligibility import (
+    VERDICT_INELIGIBLE,
+    assess_license_eligibility,
+)
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.opportunity_analysis import OpportunityAnalysisService
 from app.services.realtime import realtime_event_manager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -807,12 +814,25 @@ class StrategyMonitoringService:
         if scan_limit is not None:
             query = query.limit(max(1, int(scan_limit)))
         open_projects = query.all()
+        # Held-license context for the license-eligibility gate. Resolved once
+        # per scan (never per candidate) and only when the gate is enabled — so a
+        # disabled gate adds no DB query and no behavior change (see
+        # _resolve_license_gate_profile_codes).
+        license_gate_codes = self._resolve_license_gate_profile_codes(db, operator)
         evaluations: list[StrategyCandidateEvaluation] = []
         evaluated_project_count = 0
 
         for project in open_projects:
             filter_result = self._apply_strategy_filters(project, strategy)
             if not filter_result.matched:
+                continue
+
+            # License-eligibility gate — cheap eligibility_raw ↔ held-license
+            # check placed BEFORE the expensive ML analysis. Only a data-confirmed
+            # ineligible verdict drops the candidate; unknown/eligible pass
+            # through unchanged. Excluded here (not counted as evaluated) because
+            # no ML analysis runs, mirroring the strategy-filter miss above.
+            if self._license_gate_excludes(project, license_gate_codes):
                 continue
 
             evaluated_project_count += 1
@@ -852,6 +872,52 @@ class StrategyMonitoringService:
             )
         )
         return evaluations, evaluated_project_count
+
+    def _resolve_license_gate_profile_codes(
+        self, db: Session, operator: User
+    ) -> str | None:
+        """Held-license string for the license gate, or ``None`` when it is off.
+
+        Returns ``None`` (gate inert) unless ``LICENSE_ELIGIBILITY_GATE_ENABLED``
+        is set, so while disabled the gate performs no DB query and cannot change
+        candidate selection. When enabled the operator's already-ensured company
+        profile supplies ``license_codes`` (an empty/absent value stays neutral —
+        the assessment then returns ``unknown``, which never excludes).
+        """
+        if not settings.LICENSE_ELIGIBILITY_GATE_ENABLED:
+            return None
+        profile = ensure_operator_profile_for(db, operator)
+        return profile.license_codes if profile is not None else None
+
+    def _license_gate_excludes(
+        self, project: Project, profile_license_codes: str | None
+    ) -> bool:
+        """Whether the license gate rules ``project`` out (ineligible verdict only).
+
+        Delegates the verdict to the pure
+        :func:`assess_license_eligibility` interpreter (no DB/IO here). Only a
+        data-confirmed ``ineligible`` (a published 면허요건 the operator provably
+        lacks) excludes; ``unknown`` (no requirement data or no held-license data)
+        and ``eligible`` pass through so a coverage gap never suppresses a
+        candidate (§2 정직). ``None`` codes mean the gate is disabled → no-op.
+
+        The exclusion reason (요구 면허 목록) is logged for audit; the notice is
+        dropped like any other pre-filter miss, so nothing is persisted for it.
+        """
+        if profile_license_codes is None:
+            return False
+        assessment = assess_license_eligibility(
+            getattr(project, "eligibility_raw", None), profile_license_codes
+        )
+        if assessment.verdict != VERDICT_INELIGIBLE:
+            return False
+        required = ", ".join(assessment.required_any) or "(요건 미상)"
+        logger.info(
+            "[license-gate] 후보 제외 project_id=%s 사유=필수면허 미보유(요구: %s, 보유 없음)",
+            getattr(project, "id", None),
+            required,
+        )
+        return True
 
     def _preview_scan_limit(self, resolved_limit: int) -> int:
         """Bound preview work so a UI read cannot scan the full production table."""
