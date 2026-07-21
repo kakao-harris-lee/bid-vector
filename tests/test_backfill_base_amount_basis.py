@@ -142,6 +142,79 @@ def test_limit_caps_scanned_rows(seeded_db):
     assert stats.scanned == 2
 
 
+def test_reclassify_clean_corrects_mislabeled_rows(test_db):
+    """--reclassify-clean flips a mislabeled 'clean' 예정가-역산 row to derived-yega.
+
+    Reproduces the P1 finding: an earlier backfill stamped a 예정가-역산 base 'clean'
+    (e.g. before the settled TenderResult join was available). Re-examining the
+    'clean' bucket with the winning result now re-classifies it, fills the reserve
+    estimate, and leaves genuine clean rows untouched. base_amount is never mutated.
+    """
+    # genuine clean integer base (stays clean)
+    test_db.add(
+        HistoricalData(
+            id=1,
+            project_id=1,
+            base_amount=43_996_200.0,
+            base_amount_basis=BASIS_CLEAN,
+            reserve_prices="[]",
+        )
+    )
+    # mislabeled 'clean' but actually 예정가 역산 (non-integer, base×rate==winning)
+    test_db.add(
+        HistoricalData(
+            id=2,
+            project_id=2,
+            base_amount=_YEGA_BASE,
+            base_amount_basis=BASIS_CLEAN,
+            reserve_prices=_reserves(_YEGA_BASE),
+        )
+    )
+    # a non-clean row is NOT selected by the clean filter (left as-is)
+    test_db.add(
+        HistoricalData(
+            id=3,
+            project_id=3,
+            base_amount=_VAT_BASE,
+            base_amount_basis=BASIS_DERIVED_VAT,
+            reserve_prices="[]",
+        )
+    )
+    test_db.add(
+        TenderResult(project_id=2, winning_amount=43_996_200.0, winning_rate=0.88035)
+    )
+    test_db.commit()
+
+    # dry-run: measures without writing
+    dry = backfill.run_backfill(test_db, apply=False, basis_filter=BASIS_CLEAN)
+    assert dry.scanned == 2  # only the two 'clean' rows
+    assert dry.reclassified == 1  # row 2 flips
+    assert dry.by_basis[BASIS_DERIVED_YEGA] == 1
+    assert dry.by_basis[BASIS_CLEAN] == 1
+    assert len(dry.samples) == 1
+    assert dry.samples[0]["id"] == 2
+    assert dry.samples[0]["from_basis"] == BASIS_CLEAN
+    assert dry.samples[0]["to_basis"] == BASIS_DERIVED_YEGA
+    by_id = {r.id: r for r in test_db.query(HistoricalData).all()}
+    assert by_id[2].base_amount_basis == BASIS_CLEAN  # dry-run wrote nothing
+
+    # apply: persists the correction; base_amount never mutated
+    applied = backfill.run_backfill(test_db, apply=True, basis_filter=BASIS_CLEAN)
+    assert applied.reclassified == 1
+    by_id = {r.id: r for r in test_db.query(HistoricalData).all()}
+    assert by_id[1].base_amount_basis == BASIS_CLEAN  # genuine clean unchanged
+    assert by_id[1].base_amount == 43_996_200.0
+    assert by_id[2].base_amount_basis == BASIS_DERIVED_YEGA  # corrected
+    assert by_id[2].base_amount == pytest.approx(_YEGA_BASE)  # original untouched
+    assert by_id[2].base_amount_estimated is not None  # reserves ⇒ estimate filled
+    assert by_id[3].base_amount_basis == BASIS_DERIVED_VAT  # not selected, unchanged
+
+    # idempotent: a second pass finds one fewer clean row and no new flips
+    again = backfill.run_backfill(test_db, apply=True, basis_filter=BASIS_CLEAN)
+    assert again.scanned == 1  # only the genuine clean row remains in the bucket
+    assert again.reclassified == 0
+
+
 def test_percent_form_winning_rate_classified_as_derived_yega(test_db):
     """A percentage-scale winning_rate (88.035) must be normalized before classify.
 

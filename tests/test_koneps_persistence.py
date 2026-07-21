@@ -12,8 +12,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.schemas.schemas import CrawlRequest
+from app.services.base_amount_basis import (
+    BASIS_CLEAN,
+    BASIS_DERIVED_YEGA,
+    BASIS_SUSPECT_FRACTIONAL,
+)
 from app.services.koneps import persistence
 from app.services.koneps.collector import KonepsCollectorService
 
@@ -419,9 +426,7 @@ def _capture_crawl_events(monkeypatch) -> list[str]:
         events.append(event_type)
         return {}
 
-    monkeypatch.setattr(
-        persistence.realtime_event_manager, "publish_event", _fake
-    )
+    monkeypatch.setattr(persistence.realtime_event_manager, "publish_event", _fake)
     return events
 
 
@@ -458,3 +463,93 @@ def test_persist_crawl_results_publishes_fallback_event(test_db, monkeypatch):
     assert crawl_job.status == "fallback"
     assert events[-1] == "crawl.fallback"
     assert "crawl.failed" not in events
+
+
+# --------------------------------------------------------------------------- #
+# base 정합화(P1): 개찰 후 UPDATE 가 기존의 더 나은 base 를 0.0(미상)/예정가로 덮지
+# 않게 가드하고, base_amount_basis 를 최종 base 기준으로 태깅한다.
+# --------------------------------------------------------------------------- #
+def _update_base(historical, *, base_amount, estimated_amount=0.0, metadata=None):
+    """Drive the private base-field updater with a scsbid-shaped item."""
+    item = {"base_amount": base_amount, "estimated_amount": estimated_amount}
+    persistence._update_historical_record_from_item(
+        historical,
+        item=item,
+        item_metadata=metadata or {},
+        request=_request(),
+    )
+
+
+def test_base_guard_keeps_existing_base_when_incoming_is_zero(test_db):
+    """A post-개찰 pass with base_amount=0.0 (미상) must not clobber a stored base."""
+    historical = HistoricalData(
+        notice_number="GUARD-1", base_amount=100_000_000.0, predicted_price=99_000_000.0
+    )
+    test_db.add(historical)
+    test_db.flush()
+
+    _update_base(
+        historical,
+        base_amount=0.0,
+        estimated_amount=0.0,
+        metadata={"winning_amount": 88_000_000.0, "winning_rate": 0.88},
+    )
+
+    assert historical.base_amount == 100_000_000.0  # preserved, not zeroed
+    assert historical.predicted_price == 99_000_000.0  # preserved
+
+
+def test_base_guard_writes_real_positive_incoming_base(test_db):
+    """A real 기초금액 (positive) overwrites and is tagged clean."""
+    historical = HistoricalData(notice_number="GUARD-2")
+    test_db.add(historical)
+    test_db.flush()
+
+    _update_base(
+        historical,
+        base_amount=120_000_000.0,
+        estimated_amount=121_000_000.0,
+        metadata={"winning_amount": 100_000_000.0, "winning_rate": 0.85},
+    )
+
+    assert historical.base_amount == 120_000_000.0
+    assert historical.predicted_price == 121_000_000.0
+    assert historical.base_amount_basis == BASIS_CLEAN
+    assert historical.basis_checked_at is not None
+
+
+def test_base_guard_persists_recovered_estimate_without_touching_base(test_db):
+    """A recovered 기초금액 lands in base_amount_estimated; base_amount stays 미상(unset)."""
+    historical = HistoricalData(notice_number="GUARD-3")
+    test_db.add(historical)
+    test_db.flush()
+
+    _update_base(
+        historical,
+        base_amount=0.0,
+        estimated_amount=45_000_000.0,
+        metadata={"base_amount_estimated": 30_000_000.0},
+    )
+
+    assert historical.base_amount_estimated == 30_000_000.0
+    # base_amount was never fed a positive value → stays falsy, tagged suspect.
+    assert not historical.base_amount
+    assert historical.base_amount_basis == BASIS_SUSPECT_FRACTIONAL
+
+
+def test_base_guard_tags_yega_when_stored_base_is_yega_reversal(test_db):
+    """If the stored base equals 예정가 역산, the write tags it derived-yega (not clean)."""
+    yega_base = 43_996_200.0 / 0.88035  # non-integer 예정가 역산
+    historical = HistoricalData(notice_number="GUARD-4", base_amount=yega_base)
+    test_db.add(historical)
+    test_db.flush()
+
+    # incoming base 0.0 keeps the (polluted) stored base; classify tags it yega.
+    _update_base(
+        historical,
+        base_amount=0.0,
+        metadata={"winning_amount": 43_996_200.0, "winning_rate": 0.88035},
+    )
+
+    assert historical.base_amount == pytest.approx(yega_base)  # unchanged
+    assert historical.base_amount_basis == BASIS_DERIVED_YEGA

@@ -188,34 +188,36 @@ def test_build_award_item_falls_back_to_request_category_when_unspecified():
 
 
 # --------------------------------------------------------------------------- #
-# base 정합화(P0): 예정가(planned_price)를 base_amount로 폴백 저장하지 않는다.
-# base_amt==planned_est 오염이 발주처 밴드를 예정가 기준으로 캘리브레이션시킨 원인이다.
+# base 정합화(P1): KONEPS ``sucsfbidRate`` = 낙찰가/**예정가**(실측 확정)이므로
+# ``winning_amount / success_rate`` 는 기초금액이 아니라 예정가다. 이 값을 base_amount
+# 로 폴백 저장하면 base==예정가 오염이 생겨 발주처 밴드가 예정가 기준으로 떠서 실투찰이
+# 하한 아래로 내려간다. 따라서 base_amount 는 실 기초금액(detail)만, 없으면 미상(0.0).
 # --------------------------------------------------------------------------- #
-def test_build_award_item_does_not_use_planned_price_as_base_amount():
-    """detail에 기초금액이 없고 예정가만 있으면 base_amount가 예정가로 폴백되면 안 된다."""
+def test_build_award_item_does_not_use_winning_over_rate_as_base_amount():
+    """detail에 실 기초금액이 없으면 base_amount는 예정가(=낙찰가/success_rate)로 폴백되면 안 된다."""
     req = CrawlRequest(source="scsbid-openapi", category="용역")
     raw_item = {
         "bidNtceNo": "20260201-001",
         "sucsfbidAmt": "100000000",  # 낙찰가
-        "sucsfbidRate": "87.5",       # 낙찰률(≈낙찰가/기초금액)
+        "sucsfbidRate": "87.5",  # success_rate = 낙찰가/예정가 (NOT 낙찰가/기초금액)
     }
-    # 기초금액(base_amount)은 없고 예정가(planned_price)만 존재하는 reserve detail.
+    # 실 기초금액(base_amount) 없이 예정가(planned_price)만 존재하는 reserve detail.
     detail = {"planned_price": 121_000_000}
+    yega_reversal = 100_000_000.0 / 0.875  # = 예정가(114,285,714), 기초금액이 아님
     item = scsbid.build_scsbid_award_item(
         raw_item, detail=detail, request=req, operation="getOpengResultListInfoServc"
     )
     assert item is not None
-    # base_amount는 예정가(121_000_000)가 아니라 낙찰가/낙찰률 추정치(≈기초금액)여야 한다.
-    assert item["base_amount"] != pytest.approx(121_000_000.0)
-    assert item["base_amount"] == pytest.approx(100_000_000.0 / 0.875)
-    # 예정가는 별도 필드로 유지되어 이후 사정률(예정가/기초금액) 캘리브레이션이 가능하다.
+    # base_amount는 예정가 역산값으로 오염되지 않는다 — 실 기초금액이 없으므로 미상(0.0).
+    assert item["base_amount"] == 0.0
+    assert item["base_amount"] != pytest.approx(yega_reversal)
+    # 예정가는 detail 상세값을 그대로 노출한다(별도 필드; base 로 승격하지 않는다).
     assert item["metadata"]["planned_price"] == 121_000_000
-    # 투찰률(bid_rate)은 낙찰가/기초금액 추정치 = 낙찰률로 회복된다(예정가 기준 왜곡 아님).
-    assert item["metadata"]["bid_rate"] == pytest.approx(0.875)
+    assert item["estimated_amount"] == pytest.approx(121_000_000.0)
 
 
-def test_build_award_item_planned_price_not_derived_from_rate():
-    """detail이 비면 예정가는 None으로 남아야 base_amt==planned 재오염을 막는다."""
+def test_build_award_item_planned_price_recovered_from_rate_when_detail_empty():
+    """detail이 비면 예정가(planned_price)는 낙찰가/success_rate로 역산되고 base_amount는 미상이다."""
     req = CrawlRequest(source="scsbid-openapi", category="용역")
     raw_item = {
         "bidNtceNo": "20260201-002",
@@ -226,10 +228,49 @@ def test_build_award_item_planned_price_not_derived_from_rate():
         raw_item, detail={}, request=req, operation="getOpengResultListInfoServc"
     )
     assert item is not None
-    # 낙찰가/낙찰률은 기초금액 추정치이지 예정가가 아니므로 예정가로 저장되면 안 된다.
-    assert item["metadata"]["planned_price"] is None
-    # base_amount는 낙찰가/낙찰률 추정치(≈기초금액)로 채워진다.
-    assert item["base_amount"] == pytest.approx(50_000_000.0 / 0.88)
+    # 낙찰가/success_rate = 예정가 추정치 → planned_price/estimated_amount 로만 흐른다.
+    assert item["metadata"]["planned_price"] == pytest.approx(50_000_000.0 / 0.88)
+    assert item["estimated_amount"] == pytest.approx(50_000_000.0 / 0.88)
+    # base_amount는 예정가로 오염되지 않고 미상(0.0)으로 남는다.
+    assert item["base_amount"] == 0.0
+
+
+def test_build_award_item_recovers_base_estimate_from_reserves():
+    """실 기초금액이 없어도 15개 복수예비가격이 있으면 base_amount_estimated로만 복구한다."""
+    req = CrawlRequest(source="scsbid-openapi", category="공사")
+    base = 30_000_000.0
+    spread = base * 0.025
+    step = (2 * spread) / 14
+    reserves = [round(base - spread + step * i) for i in range(15)]
+    raw_item = {
+        "bidNtceNo": "20260301-001",
+        "sucsfbidAmt": "26000000",
+        "sucsfbidRate": "90.0",
+    }
+    item = scsbid.build_scsbid_award_item(
+        raw_item,
+        detail={"reserve_prices": reserves},
+        request=req,
+        operation="getOpengResultListInfoServc",
+    )
+    assert item is not None
+    # 복구값은 base_amount_estimated(추정)로만 흐르고 원본 base_amount는 미상(0.0).
+    assert item["base_amount"] == 0.0
+    assert item["metadata"]["base_amount_estimated"] == pytest.approx(base, abs=1.0)
+
+
+def test_build_award_item_no_base_estimate_without_full_reserves():
+    """복수예비가격이 15개 미만이면 base_amount_estimated는 채워지지 않는다."""
+    req = CrawlRequest(source="scsbid-openapi", category="용역")
+    item = scsbid.build_scsbid_award_item(
+        {"bidNtceNo": "N-9", "sucsfbidAmt": "1000", "sucsfbidRate": "90"},
+        detail={"reserve_prices": [999, 1001]},
+        request=req,
+        operation="getOpengResultListInfoServc",
+    )
+    assert item is not None
+    assert item["base_amount"] == 0.0
+    assert item["metadata"]["base_amount_estimated"] is None
 
 
 def test_build_award_item_prefers_real_base_amount_when_present():

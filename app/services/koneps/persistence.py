@@ -30,6 +30,10 @@ from sqlalchemy.orm import Session
 from app.core.time import utc_now
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.schemas.schemas import CrawlRequest
+from app.services.base_amount_basis import (
+    classify_base_basis,
+    normalize_winning_rate,
+)
 from app.services.koneps import matching, parsing, scsbid
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.realtime import realtime_event_manager
@@ -620,7 +624,9 @@ def _persist_crawl_item(
     defer_embeddings: bool,
 ) -> tuple[Project | None, bool]:
     item_metadata = item.get("metadata", {})
-    historical_record = _resolve_historical_record(db, notice_number=item.get("notice_number"))
+    historical_record = _resolve_historical_record(
+        db, notice_number=item.get("notice_number")
+    )
     project, embedding_deferred = resolve_project_for_item(
         db,
         item=item,
@@ -677,8 +683,9 @@ def _update_historical_record_from_item(
         or ""
     )
     historical_record.category = matching.resolve_project_category(item, request)
-    historical_record.base_amount = item.get("base_amount") or 0.0
-    historical_record.predicted_price = item.get("estimated_amount") or item.get("base_amount") or 0.0
+    _update_historical_base_fields(
+        historical_record, item=item, item_metadata=item_metadata
+    )
     historical_record.bid_rate = (
         parsing.normalize_bid_rate_value(
             item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
@@ -690,6 +697,54 @@ def _update_historical_record_from_item(
         item_metadata.get("opening_announced_at")
         or item_metadata.get("opening_scheduled_at")
     )
+
+
+def _update_historical_base_fields(
+    historical_record: HistoricalData,
+    *,
+    item: dict[str, Any],
+    item_metadata: dict[str, Any],
+) -> None:
+    """Persist base_amount / predicted_price with an anti-clobber guard + provenance tag.
+
+    Root cause (P1): a scsbid 개찰 pass now emits ``base_amount == 0.0`` when reserve
+    detail carries no real 기초금액 (the 예정가 폴백 was removed at the source —
+    ``app/services/koneps/scsbid.py`` — because ``낙찰가 / success_rate`` is 예정가,
+    not 기초금액). A blind ``base_amount = item.get(...) or 0.0`` would then overwrite
+    a better base captured by an earlier collection with ``0.0`` on the post-개찰 pass —
+    the exact regression that let 예정가 오염 reach ``base_amount``. So we overwrite ONLY
+    when the incoming value is a positive amount; otherwise the previously-stored base
+    is preserved.
+
+    ``base_amount_estimated`` (복수예비가격-복구 기초금액) is recorded when provided, and
+    ``base_amount_basis`` is tagged from the FINAL stored base so newly-collected rows
+    carry correct provenance without a separate backfill pass. The original
+    ``base_amount`` is NEVER overwritten with an estimate/예정가 (정직 명세 §2 — 원본
+    불변, 추정은 ``base_amount_estimated`` 로만).
+    """
+    incoming_base = parsing.coerce_amount(item.get("base_amount"))
+    if incoming_base is not None and incoming_base > 0:
+        historical_record.base_amount = float(incoming_base)
+
+    incoming_estimated = parsing.coerce_amount(item.get("estimated_amount"))
+    if incoming_estimated is not None and incoming_estimated > 0:
+        historical_record.predicted_price = float(incoming_estimated)
+    elif incoming_base is not None and incoming_base > 0:
+        historical_record.predicted_price = float(incoming_base)
+
+    recovered = parsing.coerce_amount(item_metadata.get("base_amount_estimated"))
+    if recovered is not None and recovered > 0:
+        historical_record.base_amount_estimated = float(recovered)
+
+    # Provenance: classify the FINAL stored base with the row's winning result so a
+    # calibration/holdout loop filtering to ``base_amount_basis == 'clean'`` never
+    # picks up a 예정가-역산 / VAT-파생 / 미상 base.
+    winning_amount = parsing.coerce_amount(item_metadata.get("winning_amount"))
+    winning_rate = normalize_winning_rate(item_metadata.get("winning_rate"))
+    historical_record.base_amount_basis = classify_base_basis(
+        historical_record.base_amount, winning_amount, winning_rate
+    )
+    historical_record.basis_checked_at = utc_now()
 
 
 def _update_historical_reserve_fields(

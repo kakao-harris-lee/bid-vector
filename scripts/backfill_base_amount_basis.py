@@ -18,6 +18,10 @@ Usage:
     python scripts/backfill_base_amount_basis.py --apply
     python scripts/backfill_base_amount_basis.py --apply --chunk-size 2000
     python scripts/backfill_base_amount_basis.py --apply --recheck  # re-classify all
+    # Correct rows mislabeled 'clean' (예정가-역산 base stamped clean before the
+    # settled TenderResult join existed) -> re-tag to derived-yega, fill estimate.
+    python scripts/backfill_base_amount_basis.py --reclassify-clean --dry-run
+    python scripts/backfill_base_amount_basis.py --reclassify-clean --apply
 """
 from __future__ import annotations
 
@@ -53,15 +57,22 @@ class BackfillStats:
 
     applied: bool = False
     recheck: bool = False
+    basis_filter: str | None = None
     scanned: int = 0
     by_basis: Counter = field(default_factory=Counter)
     estimated_filled: int = 0  # non-clean rows that got an estimate
     estimated_missing: int = 0  # non-clean rows without recoverable reserves
+    # Rows whose freshly-computed basis differs from the ``basis_filter`` bucket
+    # they were selected from (e.g. a row stored 'clean' that re-classifies as
+    # derived-yega). Only meaningful when ``basis_filter`` is set.
+    reclassified: int = 0
+    samples: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "applied": self.applied,
             "recheck": self.recheck,
+            "basis_filter": self.basis_filter,
             "scanned": self.scanned,
             "by_basis": {
                 basis: int(self.by_basis.get(basis, 0)) for basis in ALL_BASES
@@ -69,6 +80,10 @@ class BackfillStats:
             "estimated_filled": self.estimated_filled,
             "estimated_missing": self.estimated_missing,
         }
+        if self.basis_filter is not None:
+            result["reclassified"] = self.reclassified
+            result["samples"] = self.samples
+        return result
 
 
 def _load_result_map(
@@ -123,17 +138,29 @@ def _classify_record(
     return basis, estimated
 
 
+_MAX_SAMPLES = 12  # dry-run before/after evidence rows (per reclassify run)
+
+
 def run_backfill(
     db: Session,
     *,
     apply: bool,
     recheck: bool = False,
+    basis_filter: str | None = None,
     chunk_size: int = 1000,
     limit: int | None = None,
     progress: bool = False,
 ) -> BackfillStats:
-    """Classify base_amount provenance in id-ordered chunks (commit per chunk)."""
-    stats = BackfillStats(applied=apply, recheck=recheck)
+    """Classify base_amount provenance in id-ordered chunks (commit per chunk).
+
+    ``basis_filter`` targets a re-classification pass at rows whose *stored*
+    ``base_amount_basis`` equals the given bucket (e.g. ``'clean'``), regardless of
+    ``basis_checked_at``. This corrects rows that an earlier backfill mislabeled —
+    a 예정가-역산 base that was stamped 'clean' before the settled ``TenderResult``
+    join was available re-classifies to derived-yega here. The original
+    ``base_amount`` is NEVER mutated; only the provenance tag / estimate move.
+    """
+    stats = BackfillStats(applied=apply, recheck=recheck, basis_filter=basis_filter)
     last_id = 0
     while True:
         remaining = None if limit is None else limit - stats.scanned
@@ -142,7 +169,11 @@ def run_backfill(
         page_limit = chunk_size if remaining is None else min(chunk_size, remaining)
 
         query = db.query(HistoricalData).filter(HistoricalData.id > last_id)
-        if not recheck:
+        if basis_filter is not None:
+            # Re-examine an existing basis bucket (ignore basis_checked_at — the
+            # whole point is to revisit already-stamped rows in that bucket).
+            query = query.filter(HistoricalData.base_amount_basis == basis_filter)
+        elif not recheck:
             query = query.filter(HistoricalData.basis_checked_at.is_(None))
         chunk = query.order_by(HistoricalData.id.asc()).limit(page_limit).all()
         if not chunk:
@@ -153,6 +184,7 @@ def run_backfill(
         stamp = utc_now()
         for record in chunk:
             last_id = record.id
+            previous_basis = record.base_amount_basis
             basis, estimated = _classify_record(record, result_map)
             stats.scanned += 1
             stats.by_basis[basis] += 1
@@ -161,6 +193,22 @@ def run_backfill(
                     stats.estimated_filled += 1
                 else:
                     stats.estimated_missing += 1
+            if basis_filter is not None and basis != basis_filter:
+                stats.reclassified += 1
+                if len(stats.samples) < _MAX_SAMPLES:
+                    stats.samples.append(
+                        {
+                            "id": record.id,
+                            "base_amount": (
+                                float(record.base_amount)
+                                if record.base_amount is not None
+                                else None
+                            ),
+                            "from_basis": previous_basis,
+                            "to_basis": basis,
+                            "estimated": estimated,
+                        }
+                    )
             if apply:
                 record.base_amount_basis = basis
                 record.base_amount_estimated = estimated
@@ -203,6 +251,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Re-classify rows already stamped with basis_checked_at.",
     )
+    parser.add_argument(
+        "--reclassify-clean",
+        action="store_true",
+        help=(
+            "Re-examine rows currently stored as base_amount_basis='clean' and "
+            "correct any that are actually derived-yega/VAT/suspect (e.g. a 예정가-"
+            "역산 base mislabeled 'clean' before the settled TenderResult join). "
+            "base_amount is never mutated; only the provenance tag/estimate move."
+        ),
+    )
     parser.add_argument("--chunk-size", type=int, default=1000)
     parser.add_argument(
         "--limit",
@@ -223,12 +281,15 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     chunk_size = max(1, args.chunk_size)
 
+    basis_filter = BASIS_CLEAN if args.reclassify_clean else None
+
     db = SessionLocal()
     try:
         stats = run_backfill(
             db,
             apply=args.apply,
             recheck=args.recheck,
+            basis_filter=basis_filter,
             chunk_size=chunk_size,
             limit=args.limit,
             progress=True,
