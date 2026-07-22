@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
 import { useShellContext } from "@/app/dashboardContext";
 import { formatCurrencyCompact } from "@/shared/lib";
+import { EligibilityFeedbackButtons } from "./EligibilityFeedbackButtons";
 import { useStrategyCandidatesQuery } from "./hooks";
 
 const CANDIDATE_LIMIT = 5;
@@ -73,6 +74,10 @@ export function CandidatesPreview() {
                         {formatCurrencyCompact(candidate.budget_estimate)}
                       </span>
                     </div>
+                    <EligibilityFeedbackButtons
+                      projectId={candidate.project_id}
+                      session={session}
+                    />
                   </li>
                 ))
               )}
