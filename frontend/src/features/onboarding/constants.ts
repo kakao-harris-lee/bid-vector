@@ -77,6 +77,10 @@ export const FIELD_META: Record<string, FieldMeta> = {
   business_type: { label: "업무 구분", kind: "text", target: "profile", codeValued: true },
   license_codes: { label: "보유 면허 코드", kind: "chips", target: "profile" },
   region_codes: { label: "수행 지역 코드", kind: "chips", target: "profile" },
+  // cohort 정체성(협회 가입/기술부문) — license/region 과 동일한 다중값 chips.
+  // 값이 이미 한국어 명칭이라 codeValued 매핑 없이 raw 표시(§8 ko 단일 번들).
+  tech_fields: { label: "기술부문/전문분야", kind: "chips", target: "profile" },
+  association_memberships: { label: "협회 가입", kind: "chips", target: "profile" },
   focus_categories: { label: "관심 카테고리", kind: "chips", target: "strategy", codeValued: true },
   focus_regions: { label: "관심 지역", kind: "chips", target: "strategy" },
   min_budget_estimate: { label: "최소 예산", kind: "number", target: "strategy" },
@@ -135,6 +139,8 @@ export const APPLY_FIELDS = [
   "business_type",
   "license_codes",
   "region_codes",
+  "tech_fields",
+  "association_memberships",
   "focus_categories",
   "focus_regions",
   "min_budget_estimate",
