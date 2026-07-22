@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Send,
   Sliders,
+  Sparkles,
   Target,
   Trophy
 } from "lucide-react";
@@ -44,6 +45,7 @@ export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon:
 };
 
 export const PROFILE_ROUTE_PATH = "/dashboard/profile";
+export const ONBOARDING_ROUTE_PATH = "/dashboard/onboarding";
 export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
 export const PROJECTS_ROUTE_PATH = "/dashboard/projects";
 export const GUIDE_ROUTE_PATH = "/dashboard/guide";
@@ -71,6 +73,7 @@ export function routeKeyFromPath(pathname: string): RouteKey {
 export function bottomNavKeyForPath(pathname: string): RouteKey | null {
   if (pathname.startsWith("/admin")) return null;
   if (pathname.startsWith(GUIDE_ROUTE_PATH)) return null;
+  if (pathname.startsWith(ONBOARDING_ROUTE_PATH)) return null;
   if (pathname.startsWith(PROFILE_ROUTE_PATH)) return null;
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return null;
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return null;
@@ -85,6 +88,7 @@ export function bottomNavKeyForPath(pathname: string): RouteKey | null {
 
 function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(GUIDE_ROUTE_PATH)) return "이용 가이드";
+  if (pathname.startsWith(ONBOARDING_ROUTE_PATH)) return "사업자 온보딩";
   if (pathname.startsWith(PROFILE_ROUTE_PATH)) return "업체 정보";
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";
   if (pathname.startsWith(PROJECTS_ROUTE_PATH)) return "공고 탐색";
@@ -143,6 +147,7 @@ export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
   const onAccuracyReport = location.pathname.startsWith(ACCURACY_REPORT_ROUTE_PATH);
   const onDecisionSamples = location.pathname.startsWith(DECISION_SAMPLES_ROUTE_PATH);
   const onGuide = location.pathname.startsWith(GUIDE_ROUTE_PATH);
+  const onOnboarding = location.pathname.startsWith(ONBOARDING_ROUTE_PATH);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useRealtimeEvents(session);
@@ -215,6 +220,12 @@ export function Shell({ surface = "user" }: { surface?: "user" | "admin" }) {
             </>
           ) : (
             <>
+              <IconButton
+                label="사업자 온보딩"
+                onClick={() => navigate(onOnboarding ? homePath : ONBOARDING_ROUTE_PATH)}
+              >
+                <Sparkles size={18} />
+              </IconButton>
               <IconButton
                 label="공고 탐색"
                 onClick={() => navigate(onProjects ? homePath : PROJECTS_ROUTE_PATH)}
