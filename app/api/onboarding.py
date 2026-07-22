@@ -13,10 +13,20 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import get_current_operator_optional
-from app.core.single_user import resolve_read_operator
+from app.core.single_user import resolve_read_operator, resolve_write_operator
 from app.models.models import User
-from app.schemas.onboarding import OnboardingSuggestionsResponse
-from app.services.onboarding import OnboardingSeed, suggest_onboarding_fields
+from app.schemas.onboarding import (
+    OnboardingApplyRequest,
+    OnboardingApplyResponse,
+    OnboardingSuggestionsResponse,
+)
+from app.services.onboarding import (
+    ApplyDecision,
+    OnboardingApplyError,
+    OnboardingSeed,
+    apply_onboarding_decisions,
+    suggest_onboarding_fields,
+)
 
 router = APIRouter()
 
@@ -57,4 +67,38 @@ def get_onboarding_suggestions(
         "strategy": [item.to_dict() for item in bundle.strategy],
         "current_operator_id": int(target.id),
         "current_operator_username": str(target.username or ""),
+    }
+
+
+@router.post("/onboarding-suggestions/apply", response_model=OnboardingApplyResponse)
+def apply_onboarding_suggestions(
+    request: OnboardingApplyRequest,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """사용자가 확정한 후보 값만 현재 operator 의 프로필/전략에 부분 반영한다.
+
+    write 스코프 해석은 기존 PUT ``/operator/profile`` 과 동일한
+    ``resolve_write_operator`` (self-only, cross-operator 는 403)를 재사용해
+    canonical/synthetic 격리를 보장한다 — apply 는 요청 operator 자신의 행에만 쓴다.
+    확정값 검증 실패(알 수 없는 필드/타입/화이트리스트)는 422 로 거부한다(설계 §3).
+    """
+    operator = resolve_write_operator(db, current_operator, operator_id)
+    decisions = [
+        ApplyDecision(field=item.field.value, value=item.value)
+        for item in request.decisions
+    ]
+    try:
+        result = apply_onboarding_decisions(db, operator=operator, decisions=decisions)
+    except OnboardingApplyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    return {
+        "applied": [item.to_dict() for item in result.applied],
+        "ignored": [item.to_dict() for item in result.ignored],
+        "current_operator_id": int(operator.id),
+        "current_operator_username": str(operator.username or ""),
     }

@@ -20,6 +20,7 @@ from app.core.single_user import (
     ensure_operator_strategy_for,
     join_multi_value_text,
     resolve_read_operator,
+    resolve_write_operator,
     split_multi_value_text,
 )
 from app.core.time import utc_now
@@ -87,25 +88,13 @@ INTERNAL_OPERATOR_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending
 _resolve_operator_for_read = resolve_read_operator
 
 
-def _resolve_operator_for_write(
-    db: Session,
-    current_operator: User | None,
-    operator_id: int | None,
-) -> User:
-    """Return the operator that a PUT /operator/* endpoint may mutate.
-
-    Writes are restricted to the bearer-token owner ("self only"). If
-    ``operator_id`` is supplied it must match the actor's id; otherwise the
-    request is rejected with 403. Synthetic-company edits remain available via
-    the dedicated /synthetic/custom-operators/{slug} routes.
-    """
-    actor = current_operator or ensure_operator_account(db)
-    if operator_id is not None and int(operator_id) != int(actor.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot edit another operator's data",
-        )
-    return actor
+# Write-scoped operator resolution (self-only; 403 on cross-operator writes) is
+# shared by PUT /operator/profile, PUT /operator/strategy, the eligibility
+# feedback route, and the onboarding apply endpoint. See
+# app.core.single_user.resolve_write_operator for the canonical/synthetic write
+# isolation policy. Kept as a thin alias so existing call sites and their names
+# remain stable.
+_resolve_operator_for_write = resolve_write_operator
 
 
 def _append_operator_query(path: str, operator_id: int) -> str:
