@@ -47,15 +47,13 @@ ignore_errors = true
 # Phase 1a — first strict islands. Exact names win over the app.* wildcard above,
 # so ONLY these modules are strictly checked; the rest stays grandfathered.
 # Phase 1b adds app.domain.reliable_base (basis-aware 기초금액 선택 — #199 태그 소비자).
-# Phase 2a adds app.services.koneps.http_client (KONEPS transport + resultCode
-# envelope validation — the single ``check_result_code`` helper consolidating 4
-# copy-paste sites; the whole module is strict-green).
+# These pure-domain modules import no untyped third-party deps, so they get the
+# strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
 module = [
     "app.domain.money",
     "app.domain.basis_conversion",
     "app.domain.reliable_base",
-    "app.services.koneps.http_client",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
@@ -63,9 +61,22 @@ disallow_incomplete_defs = true
 warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
-# Third-party deps without stubs (e.g. ``requests`` in http_client) must not fail
-# a strict island — same policy as the global ``ignore_missing_imports`` above,
+
+# Phase 2a — app.services.koneps.http_client (KONEPS transport + resultCode
+# envelope validation: the single ``check_result_code`` helper consolidating 4
+# copy-paste sites; the whole module is strict-green). Kept in its own block so
+# the ``import-untyped`` relaxation below is scoped to it and does NOT weaken the
+# pure-domain island above. ``requests`` ships no stubs, so importing it must not
+# fail a strict island — the same policy as the global ``ignore_missing_imports``,
 # which silences module-not-found but not the ``import-untyped`` code.
+[[tool.mypy.overrides]]
+module = ["app.services.koneps.http_client"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
 disable_error_code = ["import-untyped"]
 
 # ---------------------------------------------------------------------------
