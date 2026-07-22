@@ -23,6 +23,7 @@ from app.services.license_eligibility import (
     VERDICT_INELIGIBLE,
     VERDICT_UNKNOWN,
     assess_license_eligibility,
+    license_limit_names,
     normalize_license_key,
     parse_license_limit_groups,
     profile_license_keys,
@@ -533,3 +534,47 @@ def test_load_rows_filters_open_and_undeadlined(test_db):
 
     assert [r.notice_number for r in rows] == ["R0001"]
     assert rows[0].eligibility_raw == LIVE_WASTE_LIMITS
+
+
+# --- license_limit_names (표시명 평탄화, 온보딩 후보용) -----------------------
+
+
+def test_license_limit_names_strips_code_suffix_and_dedupes():
+    """면허명을 코드 접미 제거·등장순·중복 제거로 평탄화한다(그룹 의미론 무관)."""
+    names = license_limit_names(LIVE_WASTE_LIMITS)
+
+    # "/1253"·"/6728" 접미가 떨어지고, 두 그룹에 중복 등장한 중간처리업은 1회만.
+    assert names == ("건설폐기물 중간처리업", "건설폐기물 수집·운반업")
+
+
+def test_license_limit_names_preserve_precision_no_eng001_collapse():
+    """실 corpus 형식 면허명이 전문분야를 구분해 남고 ENG001 로 붕괴하지 않는다.
+
+    canonical 코드로 뽑으면 ENG001 포괄 별칭이 해양/항만/전기설비를 한 코드로
+    collapse 시키고 HYDRO001 이 해양조사 하위 종목을 collapse 하지만, 표시명은
+    이 정밀 신호를 보존한다(온보딩 license_codes 후보 네임스페이스 근거).
+    """
+    eligibility_raw = {
+        "license_limits": [
+            {"lcnsLmtNm": "엔지니어링사업(해양)", "lmtGrpNo": "1"},
+            {"lcnsLmtNm": "엔지니어링사업(항만, 해안)", "lmtGrpNo": "2"},
+            {"lcnsLmtNm": "엔지니어링사업(전기설비)", "lmtGrpNo": "3"},
+            {"lcnsLmtNm": "해양조사정보업(수로측량업)/5034", "lmtGrpNo": "4"},
+        ]
+    }
+    names = license_limit_names(eligibility_raw)
+
+    assert names == (
+        "엔지니어링사업(해양)",
+        "엔지니어링사업(항만, 해안)",
+        "엔지니어링사업(전기설비)",
+        "해양조사정보업(수로측량업)",
+    )
+    assert "ENG001" not in names
+
+
+def test_license_limit_names_empty_when_no_limits():
+    """면허요건이 없으면 빈 튜플(비-dict·결측 포함)."""
+    assert license_limit_names(None) == ()
+    assert license_limit_names({}) == ()
+    assert license_limit_names({"flags": {"association": "Y"}}) == ()
