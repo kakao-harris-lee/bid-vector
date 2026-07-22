@@ -1,4 +1,5 @@
 import type { BadgeTone } from "@/shared/components/ui";
+import type { OnboardingApplyField } from "@/shared/api";
 
 /**
  * 온보딩 wizard 의 선언적 구성(§4.5-1/2/3).
@@ -61,6 +62,11 @@ export interface FieldMeta {
   label: string;
   kind: FieldKind;
   target: FieldTarget;
+  /**
+   * 값이 canonical 코드(예: `technical-service`)라 표시할 때 한국어로 매핑해야 하는지.
+   * 면허/지역은 이미 한국어라 매핑 대상이 아니다(§8 ko 단일 번들).
+   */
+  codeValued?: boolean;
 }
 
 /**
@@ -68,10 +74,10 @@ export interface FieldMeta {
  * 키는 백엔드 `OnboardingApplyField` enum 과 동일해야 한다(apply 화이트리스트).
  */
 export const FIELD_META: Record<string, FieldMeta> = {
-  business_type: { label: "업무 구분", kind: "text", target: "profile" },
+  business_type: { label: "업무 구분", kind: "text", target: "profile", codeValued: true },
   license_codes: { label: "보유 면허 코드", kind: "chips", target: "profile" },
   region_codes: { label: "수행 지역 코드", kind: "chips", target: "profile" },
-  focus_categories: { label: "관심 카테고리", kind: "chips", target: "strategy" },
+  focus_categories: { label: "관심 카테고리", kind: "chips", target: "strategy", codeValued: true },
   focus_regions: { label: "관심 지역", kind: "chips", target: "strategy" },
   min_budget_estimate: { label: "최소 예산", kind: "number", target: "strategy" },
   max_budget_estimate: { label: "최대 예산", kind: "number", target: "strategy" }
@@ -79,6 +85,66 @@ export const FIELD_META: Record<string, FieldMeta> = {
 
 export function fieldMeta(field: string): FieldMeta {
   return FIELD_META[field] ?? { label: field, kind: "text", target: "profile" };
+}
+
+/**
+ * canonical 업무구분/카테고리 코드 → 한국어 라벨(§4.5-1, ko 단일 번들 §8).
+ * `app/services/classification/taxonomy.py` `BUSINESS_TYPE_ALIASES` 정본 키에 대응하며,
+ * project.category(focus_categories 소스)도 같은 taxonomy 키를 공유한다.
+ */
+export const VALUE_LABELS: Record<string, string> = {
+  software: "소프트웨어",
+  "technical-service": "기술용역",
+  service: "용역",
+  goods: "물품",
+  construction: "공사",
+  other: "기타"
+};
+
+/**
+ * codeValued 필드값을 표시용 한국어로 매핑한다. **미지 코드는 raw 그대로 노출**하고
+ * (조용한 오표시 금지), 저장/전송 값은 바꾸지 않는다 — 표시 전용 매핑이다.
+ */
+export function displayValue(field: string, value: string): string {
+  if (!fieldMeta(field).codeValued) return value;
+  return VALUE_LABELS[value] ?? value;
+}
+
+// --- 후보 출처(source) 라벨 --------------------------------------------------
+
+/**
+ * 후보 출처 코드 → 한국어 라벨(§4.5-1/2). 현재 백엔드는 internal_notices 단일 source
+ * 지만, source 를 데이터로 구동해 백엔드가 외부확인/직접입력 source 를 추가해도
+ * **미지 source 는 raw 그대로 노출**한다(조용한 오표시 금지, 설계 §2).
+ */
+export const SOURCE_META: Record<string, string> = {
+  internal_notices: "내부 공고 추론"
+};
+
+export function sourceLabel(source: string): string {
+  return SOURCE_META[source] ?? source;
+}
+
+// --- apply 화이트리스트(런타임 가드) -----------------------------------------
+
+/**
+ * apply 로 전송 가능한 필드 집합. `satisfies` 로 백엔드 `OnboardingApplyField` union 과
+ * 컴파일 타임에 묶어, 두 곳이 어긋나면 빌드가 깨지게 한다.
+ */
+export const APPLY_FIELDS = [
+  "business_type",
+  "license_codes",
+  "region_codes",
+  "focus_categories",
+  "focus_regions",
+  "min_budget_estimate",
+  "max_budget_estimate"
+] as const satisfies readonly OnboardingApplyField[];
+
+const APPLY_FIELD_SET: ReadonlySet<string> = new Set(APPLY_FIELDS);
+
+export function isApplyField(field: string): field is OnboardingApplyField {
+  return APPLY_FIELD_SET.has(field);
 }
 
 // --- 후보 결정 상태 ---------------------------------------------------------

@@ -6,6 +6,7 @@ import type { OnboardingFieldSuggestion, OnboardingSuggestionValue } from "@/sha
 import {
   DECISION_STATUS_META,
   fieldMeta,
+  sourceLabel,
   type DecisionStatus
 } from "./constants";
 import type { DecisionState } from "./decisions";
@@ -82,7 +83,7 @@ export function SuggestionCard({ suggestion, decision, onDecision }: SuggestionC
       <dl className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-muted)]">
         <div className="flex items-center gap-1">
           <dt className="sr-only">출처</dt>
-          <dd>출처 내부 공고 추론</dd>
+          <dd>{sourceLabel(suggestion.source)}</dd>
         </div>
         <div className="flex items-center gap-1">
           <dt>신뢰도</dt>

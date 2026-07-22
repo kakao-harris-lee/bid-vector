@@ -3,13 +3,17 @@ import { ChipInput } from "@/shared/components";
 import { Input } from "@/shared/components/ui";
 import { formatCurrency } from "@/shared/lib";
 import type { OnboardingSuggestionValue } from "@/shared/api";
-import { fieldMeta, type FieldKind } from "./constants";
+import { displayValue, fieldMeta, type FieldKind } from "./constants";
 
 function toStringList(value: OnboardingSuggestionValue): string[] {
   return Array.isArray(value) ? value : [];
 }
 
-/** 후보값을 읽기 전용으로 표시(칩/텍스트/통화). 편집 종류는 필드 메타로 룩업(§4.5-2). */
+/**
+ * 후보값을 읽기 전용으로 표시(칩/텍스트/통화). 편집 종류는 필드 메타로 룩업(§4.5-2).
+ * codeValued 필드(업무구분/카테고리)는 canonical 코드를 한국어로 **표시만** 매핑한다
+ * (저장/전송 값 불변, ko 단일 번들 §8). 편집기는 raw 코드를 그대로 다룬다.
+ */
 export function SuggestionValueDisplay({
   field,
   value
@@ -30,7 +34,7 @@ export function SuggestionValueDisplay({
             key={item}
             className="rounded-full bg-[var(--color-secondary)] px-2 py-0.5 text-xs text-[var(--color-secondary-foreground)]"
           >
-            {item}
+            {displayValue(field, item)}
           </li>
         ))}
       </ul>
@@ -43,7 +47,11 @@ export function SuggestionValueDisplay({
       </span>
     );
   }
-  return <span className="text-sm font-medium">{typeof value === "string" ? value : "-"}</span>;
+  return (
+    <span className="text-sm font-medium">
+      {typeof value === "string" ? displayValue(field, value) : "-"}
+    </span>
+  );
 }
 
 export interface SuggestionValueEditorProps {

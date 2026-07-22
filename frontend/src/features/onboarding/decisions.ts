@@ -1,10 +1,9 @@
 import type {
-  OnboardingApplyField,
   OnboardingApplyRequest,
   OnboardingFieldSuggestion,
   OnboardingSuggestionValue
 } from "@/shared/api";
-import type { DecisionStatus } from "./constants";
+import { isApplyField, type DecisionStatus } from "./constants";
 
 /** 후보별 사용자 결정(상태 + 편집된 값). I/O 없는 순수 상태(§4.7-4). */
 export interface DecisionState {
@@ -36,11 +35,10 @@ export function buildApplyDecisions(
   const decisions: NonNullable<OnboardingApplyRequest["decisions"]> = [];
   for (const suggestion of suggestions) {
     const decision = effectiveDecision(suggestion, overrides);
-    if (decision.status === "accepted") {
-      decisions.push({
-        field: suggestion.field as OnboardingApplyField,
-        value: decision.value
-      });
+    // accepted 이고, apply 화이트리스트에 있는 필드만 전송(미지 필드는 방어적으로 skip).
+    // isApplyField 가 `suggestion.field` 를 OnboardingApplyField 로 좁혀 cast 가 불필요하다.
+    if (decision.status === "accepted" && isApplyField(suggestion.field)) {
+      decisions.push({ field: suggestion.field, value: decision.value });
     }
   }
   return decisions;
