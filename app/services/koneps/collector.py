@@ -599,14 +599,9 @@ class KonepsCollectorService:
                 f"Tried service key variants: {state.key_variant}."
             )
         payload = http_client.load_openapi_json(response)
-        header = openapi.openapi_header(payload)
-        result_code = str(header.get("resultCode") or "").strip()
-        result_message = str(header.get("resultMsg") or "").strip()
-        if result_code and result_code not in {"00", "03"}:
-            raise ValueError(
-                f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
-                f"{result_message or 'unknown error'}"
-            )
+        result_code, result_message = http_client.check_result_code(
+            payload, source="ScsbidInfoService returned"
+        )
         state.last_result_code = result_code or state.last_result_code
         state.last_result_message = result_message or state.last_result_message
 
@@ -820,14 +815,9 @@ class KonepsCollectorService:
             )
 
         payload = http_client.load_openapi_json(response)
-        header = openapi.openapi_header(payload)
-        result_code = str(header.get("resultCode") or "").strip()
-        result_message = str(header.get("resultMsg") or "").strip()
-        if result_code and result_code not in {"00", "03"}:
-            raise ValueError(
-                f"KONEPS ScsbidInfoService returned resultCode={result_code}: "
-                f"{result_message or 'unknown error'}"
-            )
+        result_code, result_message = http_client.check_result_code(
+            payload, source="ScsbidInfoService returned"
+        )
 
         body = openapi.openapi_body(payload)
         rows = openapi.openapi_item_list(body)

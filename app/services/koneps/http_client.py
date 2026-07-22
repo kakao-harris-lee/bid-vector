@@ -76,6 +76,47 @@ def load_openapi_json(response: requests.Response) -> dict[str, Any]:
     return payload
 
 
+# resultCode envelope validation (consolidated from 4 copy-paste sites: the
+# scsbid list / reserve-detail checks in ``collector.py``, the notice-list check
+# in ``collection.py``, and the standalone helper in
+# ``scripts/backfill_award_floor_rate.py``). Behavior is preserved exactly; each
+# site keeps its verbatim message via the ``source`` subject below. It lives here
+# next to ``load_openapi_json`` — the other decode-and-validate step — because
+# http_client already owns turning a raw response into a validated OpenAPI payload
+# and already imports ``openapi`` (no cycle: ``openapi`` never imports
+# ``http_client``).
+OK_RESULT_CODES = frozenset({"00", "03"})
+
+
+def check_result_code(payload: dict[str, Any], *, source: str) -> tuple[str, str]:
+    """Reject a non-OK OpenAPI ``resultCode``; return the ``(code, message)`` pair.
+
+    KONEPS / data.go.kr signal quota-exceeded and key-throttle as **HTTP 200 with
+    an error ``resultCode``** in the envelope header, not a 4xx status. If that
+    slipped through, the payload would parse to zero items and be miscounted as
+    "no data", so every caller must reject non-OK codes explicitly. ``00``/``03``
+    are success ("03" = normal service, empty result set); an empty/absent code is
+    treated as OK because some payload shapes omit the header.
+
+    ``source`` is the message subject inserted between ``"KONEPS "`` and
+    ``" resultCode="`` (e.g. ``"ScsbidInfoService returned"`` or
+    ``"BidPublicInfoService"``). It carries each call site's original wording so
+    this consolidation preserves the per-site message verbatim; the service key is
+    never included. Only ``resultCode`` is validated here — ``totalCount`` handling
+    stays with each caller, which counts it differently. The returned pair is
+    stripped and ready for callers that echo it into collection state.
+    """
+    header = openapi.openapi_header(payload)
+    result_code = str(header.get("resultCode") or "").strip()
+    result_message = str(header.get("resultMsg") or "").strip()
+    if result_code and result_code not in OK_RESULT_CODES:
+        raise ValueError(
+            f"KONEPS {source} resultCode={result_code}: "
+            f"{result_message or 'unknown error'}"
+        )
+    return result_code, result_message
+
+
 def fetch_detail_html_payload(source_url: str) -> dict[str, str | None]:
     """Fetch + parse a single KONEPS detail page, returning the business-type fields.
 
