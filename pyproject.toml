@@ -42,17 +42,18 @@ ignore_errors = true
 # example below. Because exact names win over the `app.*` wildcard above, only
 # that module is checked; the rest of the tree remains grandfathered. Do NOT add
 # legacy modules here without first typing them — that reintroduces the ~686
-# false positives. Phase 1 (app.domain.money / app.domain.basis_conversion) will
-# uncomment and populate this block.
+# false positives.
 #
-# [[tool.mypy.overrides]]
-# module = ["app.domain.money", "app.domain.basis_conversion"]
-# ignore_errors = false
-# disallow_untyped_defs = true
-# disallow_incomplete_defs = true
-# warn_return_any = true
-# no_implicit_optional = true
-# strict_equality = true
+# Phase 1a — first strict islands. Exact names win over the app.* wildcard above,
+# so ONLY these two modules are strictly checked; the rest stays grandfathered.
+[[tool.mypy.overrides]]
+module = ["app.domain.money", "app.domain.basis_conversion"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
 
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)

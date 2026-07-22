@@ -22,9 +22,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping
 
-from app.ai.predictors.historical import clamp_bid_rate, normalize_agency_name
 from app.ai.predictors.legal_floor_spec import (
     resolve_construction_qualification_floor,
+)
+from app.domain.basis_conversion import (
+    convert_yega_band_to_base,
+    resolve_agency_bid_rate,
+    # re-exported for existing callers/tests that import it from guardrail_core
+    resolve_band_assessment_rate as resolve_band_assessment_rate,
 )
 
 
@@ -116,60 +121,6 @@ def normalize_category_key(value: Any) -> str:
     return _CATEGORY_FLOOR_RATE_ALIASES.get(normalized_value, normalized_value)
 
 
-def resolve_agency_bid_rate(agency_name: str | None, rate_map: dict[str, float] | None) -> float | None:
-    """Look up an agency-keyed bid-rate band via normalized substring match.
-
-    Keys are normalized agency tokens (whitespace-stripped, lowercased — see
-    normalize_agency_name). A notice's issuing agency matches a key when the
-    normalized key is a substring of the normalized agency name, so regional
-    bureaus inherit the headquarters band (e.g. "한국수산자원공단동해본부" matches
-    the "한국수산자원공단" key). When several keys match, the most specific
-    (longest) key wins.
-    """
-    if not agency_name or not rate_map:
-        return None
-    normalized_agency = normalize_agency_name(agency_name)
-    if not normalized_agency:
-        return None
-    best_rate: float | None = None
-    best_key_len = -1
-    for raw_key, raw_rate in rate_map.items():
-        normalized_key = normalize_agency_name(raw_key)
-        if not normalized_key or normalized_key not in normalized_agency:
-            continue
-        if len(normalized_key) > best_key_len:
-            best_key_len = len(normalized_key)
-            best_rate = max(0.0, float(raw_rate or 0.0))
-    return best_rate
-
-
-def resolve_band_assessment_rate(
-    agency_name: str | None,
-    config: GuardrailConfig,
-) -> float:
-    """E[예정가/기초금액] — converts a 예정가-basis agency band to a 기초금액 basis.
-
-    The agency bands (PREDICTION_AGENCY_*_BID_RATES) were calibrated as 낙찰가/예정가,
-    but the guardrail multiplies them by the notice 사업금액(기초금액, #162). 예정가 is a
-    few tenths of a percent BELOW 기초금액, so a 예정가-basis rate applied to 기초금액
-    lands ~+0.5%p too high. Multiply the agency band by E[사정률] (< 1) to recover the
-    intended 예정가-basis target.
-
-    Resolution mirrors the band lookup: per-agency empirical rate via normalized
-    substring match, else the global default (1.0 == no-op). Any missing / non-positive
-    value collapses to 1.0. With the shipped rates (all ≤ 1) the conversion only LOWERS
-    the band; a configured 사정률 > 1 is legitimate (복수예비가격 추첨 can put 예정가
-    ABOVE 기초금액 for some agencies) and would raise it — either way the red line is
-    unaffected: resolve_floor_bid_rate re-applies max(category/group floor, converted
-    agency floor) plus the legal 낙찰하한, so no value here can undercut the hard floor.
-    """
-    rate = resolve_agency_bid_rate(agency_name, config.agency_band_assessment_rates)
-    if rate is not None and rate > 0:
-        return rate
-    default_rate = config.default_band_assessment_rate
-    return default_rate if default_rate and default_rate > 0 else 1.0
-
-
 def resolve_floor_bid_rate(
     config: GuardrailConfig,
     category: str | None,
@@ -230,20 +181,19 @@ def resolve_floor_bid_rate(
         tier_floor = resolve_construction_qualification_floor(estimation_amount, reference_date)
         if tier_floor is not None:
             # 예정가-basis tier → 기초금액 basis via E[사정률] (same conversion as the
-            # agency band edge; 1.0 default is a no-op). clamp keeps it in [0.7, 1.4].
-            tier_floor = clamp_bid_rate(tier_floor * resolve_band_assessment_rate(agency_name, config))
+            # agency band edge; 1.0 default is a no-op; clamp keeps it in [0.7, 1.4]).
+            # Single-source: basis_conversion.convert_yega_band_to_base.
+            tier_floor = convert_yega_band_to_base(tier_floor, agency_name, config)
             resolved_floor = (
                 max(resolved_floor, tier_floor) if resolved_floor is not None else tier_floor
             )
 
     agency_floor = resolve_agency_bid_rate(agency_name, config.agency_minimum_bid_rates)
     if agency_floor is not None:
-        # Convert the 예정가-basis band edge to a 기초금액 basis (E[사정률]) BEFORE the
-        # hard clamp, then TIGHTEN by RAISING the floor (max wins). The category/group
-        # floor still hard-bounds via max(), so the conversion can never undercut it.
-        agency_floor = clamp_bid_rate(
-            agency_floor * resolve_band_assessment_rate(agency_name, config)
-        )
+        # Convert the 예정가-basis band edge to a 기초금액 basis (E[사정률]) with the hard
+        # clamp, then TIGHTEN by RAISING the floor (max wins). The category/group floor
+        # still hard-bounds via max(), so the conversion can never undercut it.
+        agency_floor = convert_yega_band_to_base(agency_floor, agency_name, config)
         return max(resolved_floor, agency_floor) if resolved_floor is not None else agency_floor
 
     return resolved_floor
@@ -295,9 +245,7 @@ def resolve_ceiling_bid_rate(
         # Same 예정가→기초금액 conversion (E[사정률]) as the floor edge, so the whole band
         # shifts uniformly and keeps its calibrated width. TIGHTEN by LOWERING the
         # ceiling (min wins).
-        agency_ceiling = clamp_bid_rate(
-            agency_ceiling * resolve_band_assessment_rate(agency_name, config)
-        )
+        agency_ceiling = convert_yega_band_to_base(agency_ceiling, agency_name, config)
         return min(resolved_ceiling, agency_ceiling) if resolved_ceiling is not None else agency_ceiling
 
     return resolved_ceiling
