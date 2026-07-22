@@ -11,6 +11,7 @@ the tests) — and delegates to that package. Behaviour is unchanged.
 
 from app.core.config import settings
 from app.models.models import CompanyProfile, Project
+from app.services.classification import association as association_axis
 from app.services.classification import budget as budget_axis
 from app.services.classification import config, eligibility, taxonomy
 from app.services.classification import region as region_axis
@@ -41,6 +42,8 @@ class NoticeClassifierService:
     RELATED_BUSINESS_TYPE_SCORE = config.RELATED_BUSINESS_TYPE_SCORE
     LICENSE_MATCH_SCORE = config.LICENSE_MATCH_SCORE
     LICENSE_NEUTRAL_SCORE = config.LICENSE_NEUTRAL_SCORE
+    ASSOCIATION_NEUTRAL_SCORE = config.ASSOCIATION_NEUTRAL_SCORE
+    ASSOCIATION_MATCH_SCORE = config.ASSOCIATION_MATCH_SCORE
     REGION_MATCH_SCORE = config.REGION_MATCH_SCORE
     REGION_ADVISORY_SCORE = config.REGION_ADVISORY_SCORE
     REGION_NEUTRAL_SCORE = config.REGION_NEUTRAL_SCORE
@@ -59,6 +62,7 @@ class NoticeClassifierService:
 
     BUSINESS_TYPE_MISMATCH_PENALTY = config.BUSINESS_TYPE_MISMATCH_PENALTY
     LICENSE_MISMATCH_PENALTY = config.LICENSE_MISMATCH_PENALTY
+    ASSOCIATION_MISMATCH_PENALTY = config.ASSOCIATION_MISMATCH_PENALTY
     REGION_MISMATCH_PENALTY = config.REGION_MISMATCH_PENALTY
     BUDGET_MISMATCH_PENALTY = config.BUDGET_MISMATCH_PENALTY
     CAPABILITY_MISMATCH_PENALTY = config.CAPABILITY_MISMATCH_PENALTY
@@ -94,6 +98,7 @@ class NoticeClassifierService:
         axis_assessments = {
             "business_type": self._assess_business_type(project, profile),
             "license": self._assess_license(project, profile),
+            "association": self._assess_association(project, profile),
             "region": self._assess_region(project, profile),
             "budget": self._assess_budget(project, profile),
             "capability": self._assess_capability(project, profile),
@@ -145,6 +150,9 @@ class NoticeClassifierService:
 
     def _assess_license(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
         return eligibility.assess_license(project, profile)
+
+    def _assess_association(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
+        return association_axis.assess_association(project, profile)
 
     def _assess_region(self, project: Project, profile: CompanyProfile) -> RuleAssessment:
         return region_axis.assess_region(project, profile)
