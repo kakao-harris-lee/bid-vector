@@ -121,10 +121,11 @@ def operation_family(operation: str | None) -> OperationFamily:
 # 기초금액 키가 없으면 base==예정가 오염이, 둘 다 있으면 예정가가 먼저 선택되는 함정이
 # 생긴다(#220). 각 키의 실제 basis 를 데이터로 선언해 검증기가 해석만 한다.
 _TRUE_BASE_KEYS: tuple[str, ...] = ("bssAmt", "bssamt", "bssAmtPurcnstcst")
-# 그룹 내부 키 순서는 openapi.build_openapi_notice_item 의 base_amount 후보 리스트
-# (openapi.py:436-444)와 **정확히 일치**시킨다 — 예산 2키(asignBdgtAmt, bdgtAmt) 다음
-# 예정가 2키(presmptPrce, presmptAmt). 순서가 어긋나면 위반 detail 의 resolved_key 와
-# --dry-run 표시가 프로덕션이 실제 고른 키와 달라진다(판정 자체는 그룹 경계가 같아 불변).
+# 이 순서가 base_amount 해석의 **단일 출처**다: openapi.build_openapi_notice_item 이
+# ``BASE_RESOLUTION_ORDER`` 를 import 해 base_amount 후보로 그대로 소비한다(더는 인라인
+# 리스트를 두지 않는다). 그룹 내부 순서는 예산 2키(asignBdgtAmt, bdgtAmt) 다음 예정가
+# 2키(presmptPrce, presmptAmt) — 여기서 정한 순서를 프로덕션이 곧 따른다. 같은 상수를
+# 공유하므로 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 드리프트할 수 없다.
 # tests/test_koneps_field_contract.py 의 드리프트 가드가 실제 build_openapi_notice_item
 # 해석과 동치임을 실행으로 확인한다.
 _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
@@ -133,10 +134,21 @@ _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
     "presmptPrce",  # 추정가격(부가세 포함) — 기초금액 아님
     "presmptAmt",  # 추정금액 — 기초금액 아님
 )
-# openapi.build_openapi_notice_item 의 base_amount 후보 순서와 **동일**하게 유지한다
-# (여기서 순서를 바꾸면 검증이 프로덕션 해석과 어긋난다). 예산·예정가 키가 기초금액
-# 키보다 앞선다는 사실 자체가 #220 함정이며, 이 검증기가 그것을 표면화한다.
+# 예산·예정가 키가 기초금액 키보다 앞선다는 사실 자체가 #220 함정이며, 이 검증기가
+# 그것을 표면화한다. openapi 가 이 상수를 소비하므로 여기가 그 순서의 유일한 정의처다.
 BASE_RESOLUTION_ORDER: tuple[str, ...] = _YEGA_OR_BUDGET_KEYS + _TRUE_BASE_KEYS
+# 추정가격(estimated_amount) 해석 순서 — base 와 **별도** 후보 집합(단일 출처). base 와
+# 달리 추정가격은 추정가격 키(presmptPrce/presmptAmt)를 **먼저** 시도하고 예산 키로만
+# 폴백하며, 기초금액 키(bssAmt*)는 포함하지 않는다: 추정가격의 basis 는 BUDGET_ESTIMATE
+# 라 기초금액과 섞지 않는다(#162). openapi.build_openapi_notice_item 의 estimated_amount
+# 후보가 이 상수를 그대로 소비한다(인라인 리스트 제거). 후보 전부 BUDGET_ESTIMATE basis
+# 라 base 와 달리 기초금액-우선 재정렬 대상이 아니다.
+ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
+    "presmptPrce",  # 추정가격(부가세 포함)
+    "presmptAmt",  # 추정금액
+    "asignBdgtAmt",  # 배정예산액(폴백)
+    "bdgtAmt",  # 예산금액(폴백)
+)
 _KEY_BASIS: dict[str, Basis] = {
     **{key: Basis.BASE_AMOUNT for key in _TRUE_BASE_KEYS},
     "presmptPrce": Basis.BUDGET_ESTIMATE,

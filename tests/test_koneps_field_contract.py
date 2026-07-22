@@ -41,6 +41,15 @@ _PRODUCTION_BASE_ORDER = (
     "bssAmtPurcnstcst",
 )
 
+# openapi.build_openapi_notice_item 의 estimated_amount 후보 순서(추정가격 우선)를 옮긴
+# 기대값. base 와 달리 추정가격 키가 먼저이고 기초금액 키(bssAmt*)는 없다.
+_PRODUCTION_ESTIMATED_ORDER = (
+    "presmptPrce",
+    "presmptAmt",
+    "asignBdgtAmt",
+    "bdgtAmt",
+)
+
 
 def _kinds(violations):
     return [v.kind for v in violations]
@@ -206,6 +215,47 @@ def test_base_resolution_order_agrees_with_production_build():
         assert built["base_amount"] == expected_value, (
             f"suffix i={i}: 프로덕션이 {expected_key} 를 고르지 않음 — "
             f"BASE_RESOLUTION_ORDER 가 openapi 후보 순서와 어긋남"
+        )
+
+
+# --- estimated_amount 단일출처 순서 가드 -------------------------------------
+
+
+def test_estimated_resolution_order_matches_documented_production_order():
+    # openapi.build_openapi_notice_item 의 estimated_amount 후보(추정가격 우선)와 일치.
+    assert fc.ESTIMATED_RESOLUTION_ORDER == _PRODUCTION_ESTIMATED_ORDER
+
+
+def test_estimated_resolution_order_excludes_true_base_keys():
+    # 추정가격은 기초금액과 섞지 않는다(#162): 기초금액 키는 후보에 없어야 하고,
+    # base 후보와는 의도적으로 다른 순서/집합이어야 한다.
+    for base_key in ("bssAmt", "bssamt", "bssAmtPurcnstcst"):
+        assert base_key not in fc.ESTIMATED_RESOLUTION_ORDER
+    assert fc.ESTIMATED_RESOLUTION_ORDER != fc.BASE_RESOLUTION_ORDER
+
+
+def test_estimated_resolution_order_agrees_with_production_build():
+    """행동 드리프트 가드: 실제 ``build_openapi_notice_item`` 이 estimated_amount 를
+    고르는 키가 ``ESTIMATED_RESOLUTION_ORDER`` 예측과 일치하는지 실행으로 확인한다.
+
+    각 접미(suffix) 케이스에서 ``order[i:]`` 만 서로 다른 양수로 채우면 프로덕션은
+    ``order[i]`` 를 estimated_amount 로 골라야 한다(추정가격이 양수라 base 폴백 안 탐).
+    openapi 인라인 리스트가 field_contract 상수와 어긋나면 이 assert 가 깨진다.
+    """
+    request = _drift_guard_request()
+    order = fc.ESTIMATED_RESOLUTION_ORDER
+    for i, expected_key in enumerate(order):
+        raw_item = {"bidNtceNo": "20260600002", "bidNtceNm": "추정 드리프트 가드"}
+        for offset, key in enumerate(order[i:]):
+            raw_item[key] = str(1_000_000 * (i + offset + 1))
+        expected_value = float(raw_item[expected_key])
+        built = openapi.build_openapi_notice_item(
+            raw_item, request=request, operation=_NOTICE_OP
+        )
+        assert built is not None
+        assert built["estimated_amount"] == expected_value, (
+            f"suffix i={i}: 프로덕션 estimated_amount 가 {expected_key} 를 고르지 않음 — "
+            f"ESTIMATED_RESOLUTION_ORDER 가 openapi 후보 순서와 어긋남"
         )
 
 
