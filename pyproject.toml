@@ -1,0 +1,81 @@
+# Project tooling config (Phase 0: typecheck + CI foundation).
+#
+# This file intentionally carries ONLY static-analysis configuration. It changes
+# no application behaviour. See docs/design/typecheck-ci-improvement.md for the
+# initiative goals, the mypy "island ratchet" plan, and the over-engineering
+# guardrails (no global Money rewrite).
+
+# ---------------------------------------------------------------------------
+# mypy — gradual typing via the "island" model
+# ---------------------------------------------------------------------------
+# The current app/ tree is 147 largely-untyped files built on old-style
+# SQLAlchemy `Column(...)` models that declarative_base() cannot expose as their
+# runtime types. Running mypy over it produces ~686 findings that are almost all
+# the well-known `Column[str]`-vs-`str` false positives, not real bugs.
+#
+# Rather than rewrite legacy annotations now (out of scope, behaviour-risk), we:
+#   1. keep the global profile lenient (NO strict flags here), and
+#   2. grandfather the whole app.* tree with ignore_errors below, so `mypy app/`
+#      is green today, and
+#   3. ratchet forward by flipping ONE module at a time to strict via an
+#      exact-name override (see the commented island example at the bottom).
+#
+# Exact module names beat the `app.*` wildcard regardless of section order, so a
+# strict island is fully checked while the rest of app.* stays grandfathered.
+[tool.mypy]
+python_version = "3.12"
+# Third-party packages without type stubs (sqlalchemy old-style, celery,
+# python-telegram-bot, boto3, ...) must not fail the run.
+ignore_missing_imports = true
+# Follow imports for name resolution but don't surface errors from imported
+# (grandfathered) modules.
+follow_imports = "silent"
+warn_unused_configs = true
+
+# --- Legacy grandfather: keep the current untyped tree green ----------------
+[[tool.mypy.overrides]]
+module = ["app", "app.*"]
+ignore_errors = true
+
+# --- Ratchet islands (Phase 1+) --------------------------------------------
+# To bring a NEW module under strict typing, add an exact-name override like the
+# example below. Because exact names win over the `app.*` wildcard above, only
+# that module is checked; the rest of the tree remains grandfathered. Do NOT add
+# legacy modules here without first typing them — that reintroduces the ~686
+# false positives. Phase 1 (app.domain.money / app.domain.basis_conversion) will
+# uncomment and populate this block.
+#
+# [[tool.mypy.overrides]]
+# module = ["app.domain.money", "app.domain.basis_conversion"]
+# ignore_errors = false
+# disallow_untyped_defs = true
+# disallow_incomplete_defs = true
+# warn_return_any = true
+# no_implicit_optional = true
+# strict_equality = true
+
+# ---------------------------------------------------------------------------
+# ruff — lint (real errors, not style churn)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+# 88 is the black/PEP-8-adjacent convention already used across the tree.
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+# Mirror ruff's sensible default set: pyflakes (F) + the correctness slice of
+# pycodestyle (E4/E7/E9). E501 (line-too-long) is intentionally NOT enforced:
+# the tree has ~1.8k lines over 88 chars and this PR does zero reformatting
+# (config-only). line-length above still governs the formatter and any future
+# E501 opt-in. Widen this set module-by-module as the code is cleaned up.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Grandfathered pre-existing findings so CI is green without touching app logic
+# (config-only PR). Each entry is a known legacy issue to clean up in a later
+# pass; see docs/design/typecheck-ci-improvement.md. Remove the entry when fixed.
+"app/ai/bid_recommendation.py" = ["F841"]        # dead local `user_avg_bid` (ml-owned file)
+"app/api/admin.py" = ["F401"]                    # unused import: models.User
+"app/api/analytics.py" = ["F401"]                # unused import: models.BidDecisionRecord
+"app/services/allocation.py" = ["F821"]          # false positive: quoted forward-ref, name is lazily imported in-body
+"app/services/project_similarity.py" = ["E741"]  # ambiguous one-letter var `l`
