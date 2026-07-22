@@ -2,11 +2,13 @@
 
 운영자 식별 피드백(적합/부적합/보류) → ``NoticeEligibilityLabel(source="operator")``
 upsert 를 라우터·서비스 두 층에서 검증한다. verdict→label 매핑·멱등 upsert·rule
-라벨과의 (project_id, source) 공존·경계 검증(422/404)을 값 테이블로 고정한다.
+라벨과의 (project_id, source) 공존·경계 검증(422/404/403)을 값 테이블로 고정한다.
+synthetic operator 오염 거부·cross-operator 거부도 라우터에서 검증한다.
 """
 from __future__ import annotations
 
-from app.models.models import NoticeEligibilityLabel, Project
+from app.core.security import get_password_hash
+from app.models.models import NoticeEligibilityLabel, Project, User
 from app.services.eligibility_feedback import (
     record_operator_label,
     upsert_eligibility_label,
@@ -52,6 +54,31 @@ def _operator_label(test_db, project_id: int) -> NoticeEligibilityLabel | None:
     )
 
 
+def _create_operator(test_db, *, username: str, password: str = "password123") -> User:
+    """Persist a login-capable operator account and return it (with id)."""
+    user = User(
+        username=username,
+        email=f"{username}@example.com",
+        full_name=username,
+        company=f"{username} Co",
+        hashed_password=get_password_hash(password),
+        is_active=True,
+    )
+    test_db.add(user)
+    test_db.commit()
+    test_db.refresh(user)
+    return user
+
+
+def _login(client, username: str, password: str = "password123") -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/session",
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 # --- route ------------------------------------------------------------------
 
 
@@ -73,6 +100,8 @@ def test_submit_feedback_persists_operator_label(client, test_db):
     assert payload["source"] == SOURCE_OPERATOR
     assert payload["labeler_version"] == OPERATOR_LABELER_VERSION
     assert VERDICT_FIT in payload["rationale"]
+    # 감사(§8): 제출 operator 계정이 rationale 에 남는다.
+    assert "operator=" in payload["rationale"]
     assert payload["operator_id"] >= 1
 
     stored = _operator_label(test_db, project_id)
@@ -170,6 +199,37 @@ def test_operator_label_coexists_with_rule_label(client, test_db):
         .all()
     }
     assert labels == {SOURCE_RULE: LABEL_NEGATIVE, SOURCE_OPERATOR: LABEL_POSITIVE}
+
+
+def test_submit_feedback_rejects_synthetic_operator(client, test_db):
+    """synthetic operator 는 정답 세트 오염 방지를 위해 403(라벨 미저장)."""
+    _create_operator(test_db, username="synthetic-lab")
+    project_id = _make_project(test_db)
+    headers = _login(client, "synthetic-lab")
+
+    response = client.post(
+        "/api/v1/operator/eligibility-feedback",
+        json={"project_id": project_id, "verdict": VERDICT_FIT},
+        headers=headers,
+    )
+    assert response.status_code == 403
+    assert _operator_label(test_db, project_id) is None
+
+
+def test_submit_feedback_rejects_cross_operator(client, test_db):
+    """actor≠operator_id(cross-operator) write 는 403(라벨 미저장)."""
+    actor = _create_operator(test_db, username="feedback-actor")
+    project_id = _make_project(test_db)
+    headers = _login(client, "feedback-actor")
+
+    response = client.post(
+        "/api/v1/operator/eligibility-feedback",
+        params={"operator_id": actor.id + 1},
+        json={"project_id": project_id, "verdict": VERDICT_FIT},
+        headers=headers,
+    )
+    assert response.status_code == 403
+    assert _operator_label(test_db, project_id) is None
 
 
 # --- service ----------------------------------------------------------------

@@ -65,9 +65,18 @@ def upsert_eligibility_label(
     return existing, False
 
 
-def _operator_rationale(verdict: str) -> str:
-    """운영자 피드백 라벨의 감사 근거 문구(verdict 원문 포함)."""
-    return f"{_OPERATOR_RATIONALE_PREFIX}: {verdict}"
+def _operator_rationale(verdict: str, operator: User | None) -> str:
+    """운영자 피드백 라벨의 감사 근거 문구(verdict + 제출 operator 원문).
+
+    라벨에 operator 차원(FK)이 없으므로 어느 계정이 판정했는지를 rationale 에
+    남겨 감사 가능하게 한다(§2 정직·§8 감사). operator 미상이면 verdict 만 남긴다.
+    username 은 계정 식별자일 뿐 사업자 개인정보가 아니다.
+    """
+    base = f"{_OPERATOR_RATIONALE_PREFIX}: {verdict}"
+    username = getattr(operator, "username", None) if operator is not None else None
+    if username:
+        return f"{base} (operator={username})"
+    return base
 
 
 def record_operator_label(
@@ -81,10 +90,10 @@ def record_operator_label(
 
     verdict→label 매핑은 ``eligibility_labeling.OPERATOR_VERDICT_TO_LABEL`` 단일
     출처를 쓴다. 미지원 verdict 는 ``KeyError`` 로 조기 실패하며, 정상 경로에선
-    스키마가 앞단에서 422 로 거른다. project 존재 검증은 라우터 책임이고 여기선
-    매핑·upsert 만 한다. ``operator`` 는 write-context(단일 운영자 모델에선 canonical
-    operator) 로 라벨에 별도 차원이 없어 감사 문맥으로만 받는다. commit 은
-    호출부(엔드포인트 트랜잭션)가 관리하며, 여기선 flush 로 id/타임스탬프만 확정한다.
+    스키마가 앞단에서 422 로 거른다. project 존재 검증·synthetic 오염 거부는 라우터
+    책임이고 여기선 매핑·upsert 만 한다. ``operator`` 는 제출 계정으로, 라벨에 별도
+    차원이 없어 rationale 감사 문맥으로 남긴다(§8). commit 은 호출부(엔드포인트
+    트랜잭션)가 관리하며, 여기선 flush 로 id/타임스탬프만 확정한다.
     """
     label = OPERATOR_VERDICT_TO_LABEL[verdict]
     record, _created = upsert_eligibility_label(
@@ -92,7 +101,7 @@ def record_operator_label(
         project_id=int(project.id),
         label=label,
         source=SOURCE_OPERATOR,
-        rationale=_operator_rationale(verdict),
+        rationale=_operator_rationale(verdict, operator),
         labeler_version=OPERATOR_LABELER_VERSION,
     )
     db.flush()

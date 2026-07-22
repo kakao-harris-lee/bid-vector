@@ -626,6 +626,7 @@ export interface paths {
          *     식별 피드백은 투찰 결정(BidDecisionRecord)과 별개 축으로, 어느 공고든
          *     (eligibility_raw 유무 무관) 저장한다. precision/recall 은 리포트가 rule∩operator
          *     교집합에서만 산출하므로 rule 라벨이 뒤늦게 backfill 되면 지표에 자동 편입된다.
+         *     정답 세트 오염 방지를 위해 synthetic operator 는 거부한다(canonical 만 허용).
          */
         post: operations["submit_eligibility_feedback_api_v1_operator_eligibility_feedback_post"];
         delete?: never;

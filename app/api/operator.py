@@ -1124,6 +1124,23 @@ def mark_operator_notification_read(notification_id: int, db: Session = Depends(
     return OperatorNotificationService().mark_as_read(db, notification)
 
 
+def _reject_synthetic_labeler(operator: User) -> None:
+    """synthetic-* 검증 계정의 식별 정답 라벨 write 를 거부한다(403).
+
+    operator 라벨 유니크가 ``(project_id, source="operator")`` 로 operator 차원이
+    없어, synthetic operator 제출이 canonical 운영자 피드백과 같은 행을 덮어써
+    precision/recall 정답 세트를 오염시킨다. 핵심 불변식(synthetic 데이터를 canonical
+    에 섞지 않음, CLAUDE.md §8)을 지키려 정답 세트는 실제 운영자 피드백만 받는다.
+    판별은 파일 내 단일 출처 ``_SYNTHETIC_USERNAME_PREFIX`` 를 재사용한다.
+    """
+    username = operator.username or ""
+    if username.startswith(_SYNTHETIC_USERNAME_PREFIX):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="synthetic operator는 식별 정답 라벨을 남길 수 없습니다.",
+        )
+
+
 @router.post("/eligibility-feedback", response_model=EligibilityFeedbackResponse)
 def submit_eligibility_feedback(
     request: EligibilityFeedbackRequest,
@@ -1136,8 +1153,10 @@ def submit_eligibility_feedback(
     식별 피드백은 투찰 결정(BidDecisionRecord)과 별개 축으로, 어느 공고든
     (eligibility_raw 유무 무관) 저장한다. precision/recall 은 리포트가 rule∩operator
     교집합에서만 산출하므로 rule 라벨이 뒤늦게 backfill 되면 지표에 자동 편입된다.
+    정답 세트 오염 방지를 위해 synthetic operator 는 거부한다(canonical 만 허용).
     """
     operator = _resolve_operator_for_write(db, current_operator, operator_id)
+    _reject_synthetic_labeler(operator)
     project = (
         db.query(Project).filter(Project.id == request.project_id).one_or_none()
     )
