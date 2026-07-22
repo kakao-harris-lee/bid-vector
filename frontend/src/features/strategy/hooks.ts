@@ -4,9 +4,14 @@ import {
   fetchStrategyCandidates,
   fetchStrategyRuns,
   queryKeys,
+  submitEligibilityFeedback,
   updateStrategy,
+  type EligibilityFeedbackRequest,
+  type EligibilityFeedbackResponse,
   type StrategyCandidatesQuery
 } from "@/shared/api";
+import { ApiError } from "@/shared/api/session";
+import { toastApi } from "@/shared/components/ui";
 import type {
   OperatorStrategyResponse,
   OperatorStrategyUpdatePayload
@@ -61,6 +66,30 @@ export function useUpdateStrategyMutation(session: AuthSession | null) {
       queryClient.setQueryData(queryKeys.strategy.detail(null), data);
       // Broadcast — every cached variant (including impersonation reads).
       queryClient.invalidateQueries({ queryKey: ["strategy"] });
+    }
+  });
+}
+
+/**
+ * Records the operator's daily eligibility judgement for a recommended notice
+ * (적합/부적합/보류). The backend upserts an operator-source label, so we don't
+ * invalidate the candidate list — the recommendation stays put while the caller
+ * highlights the chosen verdict locally. Errors surface as Korean toasts;
+ * silent 401s are handled by the session-expired modal, mirroring
+ * `useApplyBidDecisionActionMutation`.
+ */
+export function useEligibilityFeedbackMutation(session: AuthSession | null) {
+  return useMutation<EligibilityFeedbackResponse, Error, EligibilityFeedbackRequest>({
+    mutationFn: (payload) => submitEligibilityFeedback(payload, session?.token),
+    onSuccess: (data) => {
+      toastApi.success({ title: `'${data.verdict}' 피드백을 저장했습니다` });
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 401) return;
+      toastApi.danger({
+        title: "식별 피드백 실패",
+        description: error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요."
+      });
     }
   });
 }
