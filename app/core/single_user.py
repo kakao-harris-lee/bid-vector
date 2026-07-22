@@ -117,6 +117,42 @@ def resolve_read_operator(
     return resolve_target_operator(db, current_operator, operator_id)
 
 
+# Shared 403 detail for the write-scope resolver. Kept as a single source so the
+# PUT /operator/* endpoints and the onboarding apply endpoint return the same
+# message on a cross-operator write attempt.
+WRITE_OPERATOR_FORBIDDEN_DETAIL = "Cannot edit another operator's data"
+
+
+def resolve_write_operator(
+    db: Session,
+    current_operator: User | None,
+    operator_id: int | None,
+) -> User:
+    """Resolve the operator whose data a write (PUT/POST) endpoint may mutate.
+
+    Writes are restricted to the bearer-token owner ("self only"): if
+    ``operator_id`` is supplied it must match the actor's id, otherwise the
+    request is rejected with ``403`` (:data:`WRITE_OPERATOR_FORBIDDEN_DETAIL`).
+    When no bearer token is present the actor falls back to the canonical
+    singleton operator (legacy single-user path).
+
+    This is the single enforcement point for canonical/synthetic write
+    isolation: a synthetic operator can only mutate its own ``CompanyProfile`` /
+    ``OperatorStrategy`` row and never the canonical operator's (and vice
+    versa). Cross-company synthetic edits remain available only via the
+    dedicated ``/synthetic/custom-operators/{slug}`` routes. Behavior-preserving
+    extraction of the previously inline ``_resolve_operator_for_write`` helper in
+    ``app.api.operator`` so the apply endpoint can reuse the same policy.
+    """
+    actor = current_operator or ensure_operator_account(db)
+    if operator_id is not None and int(operator_id) != int(actor.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=WRITE_OPERATOR_FORBIDDEN_DETAIL,
+        )
+    return actor
+
+
 def get_operator_profile(db: Session, allow_fallback: bool = True) -> CompanyProfile | None:
     """Resolve the canonical company profile used for classification and planning."""
     operator = get_operator_account(db)

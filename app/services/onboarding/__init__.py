@@ -6,6 +6,13 @@
 §2 "KONEPS/내부 공고 후보"). persistence·외부 호출·국세청 조회는 후속 PR로 분리한다.
 """
 
+from app.services.onboarding.apply import (
+    APPLYABLE_FIELDS,
+    ApplyDecision,
+    ApplyResult,
+    OnboardingApplyError,
+    apply_onboarding_decisions,
+)
 from app.services.onboarding.suggestions import (
     FieldSuggestion,
     NoticeFeatures,
@@ -17,6 +24,11 @@ from app.services.onboarding.suggestions import (
 )
 
 __all__ = [
+    "APPLYABLE_FIELDS",
+    "ApplyDecision",
+    "ApplyResult",
+    "OnboardingApplyError",
+    "apply_onboarding_decisions",
     "FieldSuggestion",
     "NoticeFeatures",
     "OnboardingSeed",

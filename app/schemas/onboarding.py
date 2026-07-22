@@ -12,9 +12,20 @@ region_codes/focus_categories/focus_regions), 실수(min/max_budget_estimate)로
 
 from __future__ import annotations
 
+import enum
 from typing import List, Union
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.services.onboarding.suggestions import (
+    FIELD_BUSINESS_TYPE,
+    FIELD_FOCUS_CATEGORIES,
+    FIELD_FOCUS_REGIONS,
+    FIELD_LICENSE_CODES,
+    FIELD_MAX_BUDGET,
+    FIELD_MIN_BUDGET,
+    FIELD_REGION_CODES,
+)
 
 
 class OnboardingFieldSuggestion(BaseModel):
@@ -45,3 +56,65 @@ class OnboardingSuggestionsResponse(BaseModel):
     )
     current_operator_id: int = Field(description="응답이 스코프된 운영자 id(라우터 컨벤션)")
     current_operator_username: str = Field(description="응답이 스코프된 운영자 username")
+
+
+class OnboardingApplyField(str, enum.Enum):
+    """apply 가 받는 확정 필드 집합. 값은 GET 후보(``FIELD_*``)와 동일 단일 출처를
+    재사용해(§4.6) 두 엔드포인트가 정확히 같은 필드명을 쓰도록 고정한다. Pydantic 이
+    미지원 필드명을 422 로 거른다(설계 §3 확정 필드).
+    """
+
+    BUSINESS_TYPE = FIELD_BUSINESS_TYPE
+    LICENSE_CODES = FIELD_LICENSE_CODES
+    REGION_CODES = FIELD_REGION_CODES
+    FOCUS_CATEGORIES = FIELD_FOCUS_CATEGORIES
+    FOCUS_REGIONS = FIELD_FOCUS_REGIONS
+    MIN_BUDGET_ESTIMATE = FIELD_MIN_BUDGET
+    MAX_BUDGET_ESTIMATE = FIELD_MAX_BUDGET
+
+
+class OnboardingApplyDecision(BaseModel):
+    """사용자가 검토·확정한 단일 필드 결정. 서버는 이 값을 **그대로 신뢰**하되
+    타입/화이트리스트만 검증한다(설계 §3, 정직 명세 §2 — 서버가 후보를 재계산하지 않음).
+    """
+
+    field: OnboardingApplyField = Field(description="반영할 확정 필드명(GET 후보와 동일 집합)")
+    value: Union[str, float, List[str]] = Field(
+        description="확정값(필드 종류별 형태: 문자열/숫자/문자열 리스트)"
+    )
+
+
+class OnboardingApplyRequest(BaseModel):
+    """확정된 필드 결정 리스트. 명시적으로 넘어온(=accepted) 필드만 반영한다."""
+
+    decisions: List[OnboardingApplyDecision] = Field(
+        default_factory=list, description="반영할 확정 필드 결정 목록(빈 목록은 no-op)"
+    )
+
+
+class OnboardingAppliedField(BaseModel):
+    """반영된 확정 필드 요약(어떤 필드가 어떤 값으로 갱신됐는지, 설계 §3)."""
+
+    field: str = Field(description="반영된 필드명")
+    target: str = Field(description="반영 대상(profile=CompanyProfile / strategy=OperatorStrategy)")
+    value: Union[str, float, List[str]] = Field(description="저장된 정규화 값")
+
+
+class OnboardingIgnoredField(BaseModel):
+    """반영되지 않은(무시된) 필드 + 사유(예: 중복 필드)."""
+
+    field: str = Field(description="무시된 필드명")
+    reason: str = Field(description="무시 사유(한국어)")
+
+
+class OnboardingApplyResponse(BaseModel):
+    """apply 결과 — 반영/무시 요약 + operator envelope(기존 operator 응답 컨벤션)."""
+
+    applied: List[OnboardingAppliedField] = Field(
+        default_factory=list, description="반영된 확정 필드 목록"
+    )
+    ignored: List[OnboardingIgnoredField] = Field(
+        default_factory=list, description="무시된 필드 + 사유"
+    )
+    current_operator_id: int = Field(description="반영이 스코프된 운영자 id")
+    current_operator_username: str = Field(description="반영이 스코프된 운영자 username")
