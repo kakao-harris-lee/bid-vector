@@ -32,9 +32,10 @@
 from __future__ import annotations
 
 import enum
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Callable, Union
+from typing import Callable, Optional, Union
 
 from sqlalchemy.orm import Session
 
@@ -44,7 +45,7 @@ from app.core.single_user import (
     join_multi_value_text,
     split_multi_value_text,
 )
-from app.models.models import User
+from app.models.models import OnboardingSuggestion, User
 from app.services.classification import taxonomy
 from app.services.classification.text import normalize_business_type
 from app.services.onboarding.suggestions import (
@@ -82,6 +83,28 @@ class FieldKind(str, enum.Enum):
     BUSINESS_TYPE = "business_type"  # 단일 문자열 + canonical 화이트리스트
     STRING_LIST = "string_list"  # 문자열 리스트 → 다중값 텍스트 저장
     NUMBER = "number"  # 0 이상 실수
+
+
+class DecisionStatus(str, enum.Enum):
+    """온보딩 후보에 대한 운영자 결정 상태(설계 §3).
+
+    감사 로그(``onboarding_suggestions.status``)와 요청 스키마
+    (``OnboardingApplyDecision.status``)가 공유하는 허용값 단일 출처다(매직값 금지
+    §4.5.1). 반영 대상은 :data:`REFLECTED_STATUSES` 로만 선언한다 — status 별 분기를
+    코드에 흩뿌리지 않는다.
+    """
+
+    ACCEPTED = "accepted"  # 후보 그대로 확정 → 반영 + 기록
+    MODIFIED = "modified"  # 사용자가 값을 고쳐 확정 → 반영 + 기록
+    REJECTED = "rejected"  # 후보 거부 → 기록만(프로필/전략 불변)
+    PENDING = "pending"  # 아직 결정 안 함 → 기록만(프로필/전략 불변)
+
+
+# 프로필/전략에 반영되는 결정 상태(선언 집합, §4.5.2/§4.5.3). 나머지 상태
+# (rejected/pending)는 감사에만 기록하고 반영하지 않는다(정직 명세 §2).
+REFLECTED_STATUSES: frozenset[DecisionStatus] = frozenset(
+    {DecisionStatus.ACCEPTED, DecisionStatus.MODIFIED}
+)
 
 
 @dataclass(frozen=True)
@@ -147,10 +170,17 @@ class ApplyDecision:
     """서비스 입력 DTO — 스키마(Pydantic)와 분리해 값 테이블 테스트를 쉽게 한다.
 
     ``field`` 는 :data:`APPLYABLE_FIELDS` 의 키 문자열이다(라우터가 enum → str 로 언팩).
+    ``status`` 는 기본 ``accepted`` 라 status 를 보내지 않는 현재 프론트({field,value})가
+    하위호환으로 수락 결정으로 처리된다(설계 §3). ``source``/``confidence``/``reason`` 은
+    GET 후보에서 온 감사 메타로, 있으면 그대로 기록하고 없으면 null 이다.
     """
 
     field: str
     value: ApplyValue
+    status: DecisionStatus = DecisionStatus.ACCEPTED
+    source: Optional[str] = None
+    confidence: Optional[float] = None
+    reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -186,10 +216,11 @@ class IgnoredField:
 
 @dataclass(frozen=True)
 class ApplyResult:
-    """apply 결과 묶음 — 반영/무시 목록."""
+    """apply 결과 묶음 — 반영/무시 목록 + 감사에 기록된 결정 수."""
 
     applied: list[AppliedField]
     ignored: list[IgnoredField]
+    recorded: int
 
 
 # --- 순수 검증/정규화 (kind → coercer 디스패치, §4.5.2) ------------------------
@@ -235,6 +266,54 @@ def _coerce(spec: ApplyFieldSpec, value: ApplyValue) -> CoercedValue:
     return _COERCERS[spec.kind](spec, value)
 
 
+# --- 감사 로그 빌드 (순수: 결정 → append-only 행, §4.7.4) ---------------------
+
+
+@dataclass(frozen=True)
+class AuditRow:
+    """감사 로그에 append 될 단일 결정 레코드(순수 데이터).
+
+    ``user_id`` 는 여기서 담지 않는다 — persistence 경계에서 operator 스코프로 부여해
+    per-operator/synthetic 격리를 한 곳에서 강제한다. ``value`` 는 str/float/list 원형을
+    JSON 텍스트로 직렬화해 복원 가능하게 남긴다.
+    """
+
+    field: str
+    value: str  # JSON 직렬 텍스트
+    status: str
+    source: Optional[str]
+    confidence: Optional[float]
+    reason: Optional[str]
+
+
+def _serialize_audit_value(value: ApplyValue) -> str:
+    """결정값(str/float/list[str])을 복원 가능한 JSON 텍스트로 직렬화한다(순수).
+
+    한글이 escape 되지 않게 ``ensure_ascii=False`` 로 사람이 읽을 수 있는 감사 값을
+    남긴다. ``json.loads`` 로 원형(문자열/숫자/리스트)이 그대로 복원된다.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
+def build_audit_rows(decisions: Sequence[ApplyDecision]) -> list[AuditRow]:
+    """전달된 **모든** 결정을 감사 로그 행으로 변환한다(순수 — DB/operator 무관).
+
+    반영 여부(status)와 무관하게 1결정=1행으로 만든다(append-only, 각 apply=이벤트).
+    반영은 accepted/modified 만이지만 거부/보류 결정도 감사에는 남긴다(설계 §3).
+    """
+    return [
+        AuditRow(
+            field=decision.field,
+            value=_serialize_audit_value(decision.value),
+            status=decision.status.value,
+            source=decision.source,
+            confidence=decision.confidence,
+            reason=decision.reason,
+        )
+        for decision in decisions
+    ]
+
+
 # --- write 경계 (검증은 순수, 반영만 IO) -------------------------------------
 
 
@@ -244,38 +323,60 @@ def apply_onboarding_decisions(
     operator: User,
     decisions: Sequence[ApplyDecision],
 ) -> ApplyResult:
-    """확정된 온보딩 필드만 operator 자신의 프로필/전략에 부분 반영한다.
+    """모든 온보딩 결정을 감사에 기록하고, accepted/modified 만 프로필/전략에 반영한다.
 
     ``operator`` 는 라우터의 ``resolve_write_operator`` 로 이미 self-only 스코프가
     해석된 계정이다 — 이 함수는 그 operator 의 자기 ``CompanyProfile``/
-    ``OperatorStrategy`` 행에만 쓴다(canonical/synthetic 격리는 스코프 해석에서 보장).
+    ``OperatorStrategy`` 행에만 쓰고, 감사(``onboarding_suggestions``)도 그 operator 의
+    ``user_id`` 로만 남긴다(canonical/synthetic 격리는 스코프 해석에서 보장).
 
     처리 순서:
-    1. 모든 결정을 검증/정규화한다. 알 수 없는 필드/타입/화이트리스트 위반은
-       :class:`OnboardingApplyError` (→422) 로 전체 요청을 거부한다.
-    2. 같은 필드가 여러 번 오면 **마지막 값**을 적용하고 앞선 중복은 무시로 기록한다.
-    3. 대상 행은 필요할 때만(lazy) 확보하고, 넘어온 필드만 갱신한 뒤 한 번 commit 한다.
-       반영할 필드가 없으면(빈 요청) no-op 로 아무 것도 쓰지 않는다.
+    1. 필드 화이트리스트를 검증하고 **반영 대상**(accepted/modified)만 값을 정규화한다.
+       알 수 없는 필드/타입/화이트리스트 위반은 :class:`OnboardingApplyError` (→422)로
+       전체 요청을 거부한다(원자적: 이때 감사에도 아무 것도 남기지 않는다). rejected/
+       pending 은 반영하지 않으므로 값 검증 없이 원형 그대로 기록만 한다.
+    2. **감사 기록**: 모든 결정을 append-only 로 남긴다(1결정=1행, 각 apply=이벤트).
+       이 단계는 순수 :func:`build_audit_rows` 로 행을 만들고 operator 스코프로만 add 한다.
+    3. **반영**: 같은 필드가 여러 번 오면 **마지막 값**을 적용하고 앞선 중복은 무시로
+       기록한다. 대상 행은 필요할 때만(lazy) 확보하고 넘어온 필드만 갱신한다.
+    4. 쓸 것이 있으면(감사 행 또는 반영 필드) 한 번 commit 한다. 빈 요청은 no-op 다.
     """
-    # 1. 검증/정규화 — 위치와 무관하게 잘못된 값이 하나라도 있으면 422.
-    coerced: list[tuple[ApplyFieldSpec, CoercedValue]] = []
+    # 1. 검증/정규화 — 반영 대상만 coerce(위치 무관, 잘못된 값 하나라도 있으면 422).
+    #    rejected/pending 은 프로필에 쓰지 않으므로 값 타입 검증 없이 원형 기록만 한다.
+    reflected: list[tuple[ApplyFieldSpec, CoercedValue]] = []
     for decision in decisions:
         spec = APPLYABLE_FIELDS.get(decision.field)
         if spec is None:
             raise OnboardingApplyError(decision.field, "알 수 없는 필드입니다.")
-        coerced.append((spec, _coerce(spec, decision.value)))
+        if decision.status in REFLECTED_STATUSES:
+            reflected.append((spec, _coerce(spec, decision.value)))
 
-    # 2. 중복 필드 dedup(last-wins) — 앞선 중복은 무시로 기록.
+    # 2. 감사 기록 — 순수 빌더로 행을 만들고 operator 스코프로만 append(append-only).
+    audit_rows = build_audit_rows(decisions)
+    for row in audit_rows:
+        db.add(
+            OnboardingSuggestion(
+                user_id=operator.id,
+                field=row.field,
+                value=row.value,
+                status=row.status,
+                source=row.source,
+                confidence=row.confidence,
+                reason=row.reason,
+            )
+        )
+
+    # 3. 반영 대상 dedup(last-wins) — 앞선 중복은 무시로 기록.
     final: dict[str, tuple[ApplyFieldSpec, CoercedValue]] = {}
     ignored: list[IgnoredField] = []
-    for spec, value in coerced:
+    for spec, value in reflected:
         if spec.field in final:
             ignored.append(
                 IgnoredField(spec.field, "중복 필드: 마지막 값이 적용됩니다.")
             )
         final[spec.field] = (spec, value)
 
-    # 3. 대상 행 lazy 확보 후 반영 — 선언 순서(APPLYABLE_FIELDS)로 결정적 출력.
+    # 대상 행 lazy 확보 후 반영 — 선언 순서(APPLYABLE_FIELDS)로 결정적 출력.
     profile = None
     strategy = None
     applied: list[AppliedField] = []
@@ -295,10 +396,11 @@ def apply_onboarding_decisions(
             AppliedField(spec.field, spec.target.value, value.display_value)
         )
 
-    if applied:
+    # 4. 감사 행 또는 반영이 있으면 한 번 commit. 빈 요청은 아무 것도 쓰지 않는다.
+    if audit_rows or applied:
         db.commit()
 
-    return ApplyResult(applied=applied, ignored=ignored)
+    return ApplyResult(applied=applied, ignored=ignored, recorded=len(audit_rows))
 
 
 __all__ = [
@@ -306,12 +408,16 @@ __all__ = [
     "VALID_BUSINESS_TYPES",
     "FieldTarget",
     "FieldKind",
+    "DecisionStatus",
+    "REFLECTED_STATUSES",
     "ApplyFieldSpec",
     "APPLYABLE_FIELDS",
     "OnboardingApplyError",
     "ApplyDecision",
     "AppliedField",
     "IgnoredField",
+    "AuditRow",
+    "build_audit_rows",
     "ApplyResult",
     "apply_onboarding_decisions",
 ]

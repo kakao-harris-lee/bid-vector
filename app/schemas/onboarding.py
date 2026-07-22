@@ -13,10 +13,11 @@ region_codes/focus_categories/focus_regions), 실수(min/max_budget_estimate)로
 from __future__ import annotations
 
 import enum
-from typing import List, Union
+from typing import List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.onboarding.apply import DecisionStatus
 from app.services.onboarding.suggestions import (
     FIELD_ASSOCIATION_MEMBERSHIPS,
     FIELD_BUSINESS_TYPE,
@@ -78,13 +79,32 @@ class OnboardingApplyField(str, enum.Enum):
 
 
 class OnboardingApplyDecision(BaseModel):
-    """사용자가 검토·확정한 단일 필드 결정. 서버는 이 값을 **그대로 신뢰**하되
-    타입/화이트리스트만 검증한다(설계 §3, 정직 명세 §2 — 서버가 후보를 재계산하지 않음).
+    """사용자가 검토한 단일 필드 결정. 서버는 이 값을 **그대로 신뢰**하되 반영 대상
+    (accepted/modified)만 타입/화이트리스트를 검증한다(설계 §3, 정직 명세 §2 — 서버가
+    후보를 재계산하지 않음).
+
+    ``status`` 는 선택이며 기본이 ``accepted`` 라 status 를 보내지 않는 현재 프론트
+    ({field,value})가 하위호환으로 수락 결정으로 처리된다. ``source``/``confidence``/
+    ``reason`` 은 GET 후보에서 온 감사 메타(있으면 감사에 기록, 없으면 null)로,
+    반영 로직에는 영향을 주지 않는다.
     """
 
     field: OnboardingApplyField = Field(description="반영할 확정 필드명(GET 후보와 동일 집합)")
     value: Union[str, float, List[str]] = Field(
         description="확정값(필드 종류별 형태: 문자열/숫자/문자열 리스트)"
+    )
+    status: DecisionStatus = Field(
+        default=DecisionStatus.ACCEPTED,
+        description="결정 상태(accepted/rejected/modified/pending). 미전달 시 accepted(하위호환)",
+    )
+    source: Optional[str] = Field(
+        default=None, description="후보 출처(GET 후보 provenance, 감사용)"
+    )
+    confidence: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0, description="후보 신뢰도(GET 후보 provenance, 감사용)"
+    )
+    reason: Optional[str] = Field(
+        default=None, description="도출 근거(GET 후보 provenance, 감사용)"
     )
 
 
@@ -112,13 +132,16 @@ class OnboardingIgnoredField(BaseModel):
 
 
 class OnboardingApplyResponse(BaseModel):
-    """apply 결과 — 반영/무시 요약 + operator envelope(기존 operator 응답 컨벤션)."""
+    """apply 결과 — 반영/무시 요약 + 감사 기록 수 + operator envelope."""
 
     applied: List[OnboardingAppliedField] = Field(
         default_factory=list, description="반영된 확정 필드 목록"
     )
     ignored: List[OnboardingIgnoredField] = Field(
         default_factory=list, description="무시된 필드 + 사유"
+    )
+    recorded: int = Field(
+        default=0, ge=0, description="감사(onboarding_suggestions)에 기록된 결정 수"
     )
     current_operator_id: int = Field(description="반영이 스코프된 운영자 id")
     current_operator_username: str = Field(description="반영이 스코프된 운영자 username")
