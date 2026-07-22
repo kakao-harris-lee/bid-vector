@@ -492,3 +492,27 @@ def test_endpoint_empty_request_records_nothing(client, test_db):
     assert response.status_code == 200, response.text
     assert response.json()["recorded"] == 0
     assert test_db.query(OnboardingSuggestion).count() == 0
+
+
+def test_endpoint_oversized_source_returns_422(client, test_db):
+    """source 가 감사 컬럼 String(50)을 넘으면 API 경계에서 422 로 막는다.
+
+    길이 제약이 없으면 SQLite(CI)는 통과하지만 Postgres commit 시
+    StringDataRightTruncation → 500 이 된다(라우터 try/except 는 OnboardingApplyError
+    만 잡아 미포착). max_length=50 으로 SQLite≡Postgres 정합을 맞춰 truncation 500
+    대신 422 로 거부한다. 실패 요청은 감사에 남지 않는다.
+    """
+    response = client.post(
+        _APPLY_URL,
+        json={
+            "decisions": [
+                {
+                    "field": "business_type",
+                    "value": "construction",
+                    "source": "x" * 51,  # 컬럼 한도(50) 초과
+                }
+            ]
+        },
+    )
+    assert response.status_code == 422
+    assert test_db.query(OnboardingSuggestion).count() == 0

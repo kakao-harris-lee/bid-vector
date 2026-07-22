@@ -98,7 +98,9 @@ class OnboardingApplyDecision(BaseModel):
         description="결정 상태(accepted/rejected/modified/pending). 미전달 시 accepted(하위호환)",
     )
     source: Optional[str] = Field(
-        default=None, description="후보 출처(GET 후보 provenance, 감사용)"
+        default=None,
+        max_length=50,
+        description="후보 출처(GET 후보 provenance, 감사용). 감사 컬럼 String(50)과 정합",
     )
     confidence: Optional[float] = Field(
         default=None, ge=0.0, le=1.0, description="후보 신뢰도(GET 후보 provenance, 감사용)"
