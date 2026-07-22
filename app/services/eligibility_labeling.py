@@ -51,7 +51,10 @@ __all__ = [
     "QualificationTerm",
     "TechField",
     "ASSOCIATION_QUALIFICATION_TERMS",
+    "ASSOCIATION_MEMBERSHIP_CANONICALS",
     "TECH_FIELD_TERMS",
+    "match_association_terms",
+    "required_association_memberships",
     "EligibilityMatch",
     "EligibilityLabels",
     "EligibilityVerdict",
@@ -170,6 +173,16 @@ ASSOCIATION_QUALIFICATION_TERMS: tuple[QualificationTerm, ...] = (
         flag=FLAG_ENGINEERING_BUSINESS,
         variants=("엔지니어링활동주체",),
     ),
+)
+
+# 협회 **가입**(FLAG_ASSOCIATION) canonical 집합 — ``association_memberships`` 필드
+# 의미와 정합하는 자격 용어만 담는다(엔지니어링사업자/활동주체 = 사업 신고라 제외).
+# 온보딩 후보 제안(``onboarding.suggestions``)과 classifier 협회 축
+# (``classification.association``)이 이 **단일 출처**를 공유한다(§4.5.1, 복붙 금지).
+ASSOCIATION_MEMBERSHIP_CANONICALS: frozenset[str] = frozenset(
+    term.canonical
+    for term in ASSOCIATION_QUALIFICATION_TERMS
+    if term.flag == FLAG_ASSOCIATION
 )
 
 # 기술부문·전문분야 사전. classifier ``LICENSE_ALIASES``(해양 기술용역 면허군
@@ -461,3 +474,47 @@ def classify_eligibility(labels: EligibilityLabels) -> EligibilityVerdict:
     if labels.has_eligibility_data:
         return EligibilityVerdict(LABEL_NEGATIVE, _NEGATIVE_RATIONALE)
     return EligibilityVerdict(LABEL_AMBIGUOUS, _AMBIGUOUS_RATIONALE)
+
+
+# --- 협회 가입 매칭 (classifier 협회 축 · 온보딩 후보 공용, 순수) --------------
+
+
+def match_association_terms(text: str | None) -> frozenset[str]:
+    """자유 텍스트에서 협회 가입(FLAG_ASSOCIATION) canonical 용어를 매칭한다(순수).
+
+    ``_normalize`` (공백 제거+소문자) 후 variant substring 매칭으로 "한국엔지니어링
+    협회"·"엔지니어링 협회" 같은 표면 변형을 canonical("엔지니어링협회")로 정규화한다.
+    협회 **가입** flag 용어만 반환하므로 엔지니어링사업자/활동주체(사업 신고)는
+    제외된다 — 프로필 ``association_memberships`` 정규화와 공고 요건 추출이 같은
+    매칭 규칙을 공유한다. IO/DB 접근 없음.
+    """
+    if not text or not text.strip():
+        return frozenset()
+    normalized = _normalize(text)
+    return frozenset(
+        canonical
+        for canonical, flag in _match_qualifications(normalized)
+        if flag == FLAG_ASSOCIATION
+    )
+
+
+def required_association_memberships(
+    eligibility_raw: dict | None,
+) -> frozenset[str]:
+    """공고 참가자격이 요구하는 협회 가입 canonical 집합을 추출한다(순수).
+
+    ``extract_eligibility_labels`` 의 룰 해석기를 재사용하며(복붙 금지, §4.6),
+    license_limits 소스(``LABEL_SOURCE_FIELDS``) 매칭 중 협회 가입 canonical
+    (``ASSOCIATION_MEMBERSHIP_CANONICALS``)만 취한다. ``title`` 매칭은 기관명/과업명
+    오탐 축이라 애초에 넘기지 않아 제외된다(#207 교훈). 자격 데이터가 없거나 협회
+    요건이 없으면 빈 집합을 돌려준다. IO/DB 접근 없음.
+    """
+    if not isinstance(eligibility_raw, dict):
+        return frozenset()
+    labels = extract_eligibility_labels(eligibility_raw)
+    return frozenset(
+        match.term
+        for match in labels.matches
+        if match.source_field in LABEL_SOURCE_FIELDS
+        and match.term in ASSOCIATION_MEMBERSHIP_CANONICALS
+    )

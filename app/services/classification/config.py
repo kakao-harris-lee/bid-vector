@@ -32,6 +32,12 @@ CAPABILITY_BORDERLINE_SCORE = 0.05
 SEMANTIC_STRONG_SCORE = 0.18
 SEMANTIC_GOOD_SCORE = 0.12
 SEMANTIC_BASE_SCORE = 0.05
+# 협회 가입(cohort) 축. 요건이 명시되지 않은 대다수 공고는 완전 중립이어야 하므로
+# neutral 은 **반드시 0.0** 이다 — score/matched/blocking_axes 를 축 추가 전과
+# byte-identical 로 유지해 baseline shift 를 막는다(license-axis 커버리지 비대칭
+# 교훈). match 는 license 축과 대칭인 소폭 가점.
+ASSOCIATION_NEUTRAL_SCORE = 0.0
+ASSOCIATION_MATCH_SCORE = 0.05
 
 # --- Mismatch penalties (negative contributions) -----------------------------
 BUSINESS_TYPE_MISMATCH_PENALTY = 0.3
@@ -41,6 +47,9 @@ BUDGET_MISMATCH_PENALTY = 0.25
 CAPABILITY_MISMATCH_PENALTY = 0.25
 SEMANTIC_LOW_PENALTY = 0.18
 SEMANTIC_VERY_LOW_PENALTY = 0.3
+# 협회 요건이 명시된 공고에서 미가입 operator 를 거르는 hard 게이트 penalty
+# (license 축과 동일 강도). 요건 없는 공고는 이 penalty 를 절대 부과하지 않는다.
+ASSOCIATION_MISMATCH_PENALTY = 0.35
 
 # --- Structural ratios & bonuses ---------------------------------------------
 # Shared borderline acceptance ratio for the 시공능력평가액/연매출 budget branches:

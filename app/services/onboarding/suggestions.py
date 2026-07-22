@@ -51,8 +51,7 @@ from app.services.classification.text import (
     normalize_business_type,
 )
 from app.services.eligibility_labeling import (
-    ASSOCIATION_QUALIFICATION_TERMS,
-    FLAG_ASSOCIATION,
+    ASSOCIATION_MEMBERSHIP_CANONICALS,
     LABEL_SOURCE_FIELDS,
     extract_eligibility_labels,
 )
@@ -77,15 +76,11 @@ FIELD_FOCUS_REGIONS = "focus_regions"
 FIELD_MIN_BUDGET = "min_budget_estimate"
 FIELD_MAX_BUDGET = "max_budget_estimate"
 
-# 협회 가입 후보로 제안할 canonical 집합 — eligibility_labeling 의 선언 데이터를
-# 그대로 재사용한다(§4.6, 매직값 금지 §4.5.1). ``FLAG_ASSOCIATION`` (협회 가입)
-# 용어만 제안하고 엔지니어링사업자/활동주체(사업 신고, FLAG_ENGINEERING_BUSINESS)는
-# 협회 가입이 아니므로 제외한다 — 필드 의미(association_memberships)에 정합.
-_ASSOCIATION_MEMBERSHIP_CANONICALS: frozenset[str] = frozenset(
-    term.canonical
-    for term in ASSOCIATION_QUALIFICATION_TERMS
-    if term.flag == FLAG_ASSOCIATION
-)
+# 협회 가입 후보로 제안할 canonical 집합 — eligibility_labeling 의 단일 출처
+# ``ASSOCIATION_MEMBERSHIP_CANONICALS`` 를 그대로 재사용한다(§4.6, 복붙 금지).
+# 협회 가입 용어만 담고 엔지니어링사업자/활동주체(사업 신고)는 제외돼 있어
+# 필드 의미(association_memberships)에 정합하며, classifier 협회 축과 어휘를 공유한다.
+_ASSOCIATION_MEMBERSHIP_CANONICALS: frozenset[str] = ASSOCIATION_MEMBERSHIP_CANONICALS
 
 # 후보는 확정이 아니므로 항상 사용자 확인이 필요하다(설계 §2, 정직 명세 §2).
 NEEDS_CONFIRMATION = True
