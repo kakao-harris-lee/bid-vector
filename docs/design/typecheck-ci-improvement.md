@@ -107,3 +107,48 @@ make lint        # ruff check app/
 make typecheck   # mypy app/
 make test        # pytest -v --cov=app
 ```
+
+## 신규 KONEPS 수집 필드 추가 절차 (Phase 2c 실배치 검증 게이트)
+
+반복 버그(#209 자격상세 목록 부재, #210 차수 int 파괴, #220 success_rate=예정가)는 전부
+**신규 수집 필드를 소비 전에 실배치 검증하지 않아** 라이브에서 터졌다("기능추가→라이브실측→
+사후수정"). 재발을 막기 위해, KONEPS 응답에서 **새 필드를 소비 코드에 넣기 전에** 아래
+절차를 따른다.
+
+1. **소비 전 실배치 검증.** 소량의 실 KONEPS 응답으로 그 필드가 정말 기대한 의미/타입/존재
+   인지 assert 한다(읽기 전용, throttle, resultCode 게이트, 시크릿 미출력):
+
+   ```bash
+   # 계약만 출력 (호출 없음)
+   docker exec bid_vector_api python scripts/verify_koneps_field_contract.py --dry-run
+   # 공고 목록 5건 실배치 검증
+   docker exec bid_vector_api python scripts/verify_koneps_field_contract.py \
+       --scope notice --category service --limit 5
+   # 개찰/낙찰 목록 (success_rate/차수 계약)
+   docker exec bid_vector_api python scripts/verify_koneps_field_contract.py \
+       --scope scsbid --category construction --limit 5
+   ```
+
+   리포트의 **미지(unknown) 필드** 목록에 그 신규 필드가 뜬다 — 소비 전에 사람이 검토하라는
+   신호다. 값의 스케일/타입/범위를 실 응답으로 눈으로 확인한다.
+
+2. **계약을 데이터로 등록.** 함정 소지가 있는 필드(율/식별자/금액 basis/계열 제한)는
+   `app/services/koneps/field_contract.py` 의 선언 테이블에 등록한다(§4.5.3 규칙=데이터):
+   - 율/식별자 트랩 → `FIELD_CONTRACTS` 에 `FieldContract` 한 줄(raw 이름·개념·basis·스케일·
+     제로패딩·예상 범위·`present_in` 계열·실측 출처 주석).
+   - 금액 base 후보 키 → `BASE_RESOLUTION_ORDER` / `_KEY_BASIS` / `_TRUE_BASE_KEYS`.
+   - 소비 코드가 다루기 시작한 키 → `KNOWN_FIELDS` (미지 목록에서 빠지도록).
+   - 규칙은 데이터로만 추가하고, 코드는 순수 검증기(해석기)만 유지한다. 각 계약에 위반/정상
+     값-테이블 유닛 테스트를 붙인다(`tests/test_koneps_field_contract.py`).
+
+3. **함정 기준선(실측 확정).** 계약이 인코딩하는 확정 사실:
+   - `sucsfbidRate`(success_rate) = 낙찰가/**예정가**(사정률), 기초금액 아님. 범위 ~0.5~1.0.
+   - `bidNtceOrd` = 차수, **제로패딩 문자열**("000"). int 변환 시 "000"→0 으로 KONEPS 빈 응답.
+   - `base_amount` 후보 키에 예산/예정가/기초금액이 뒤섞임 — 예정가/예산이 기초금액보다 먼저
+     선택되면 base==예정가 오염.
+   - `sucsfbidLwltRate`(낙찰하한율) = 광범위 목록엔 없고 표적조회(inqryDiv=2)/서브op만.
+   - KONEPS 는 잘못된 파라미터·쿼터에 **HTTP 200 + 에러 resultCode** 를 준다(`check_result_code`
+     게이트가 검증).
+
+`field_contract` 는 mypy strict 아일랜드다(과설계 금지: `app.domain.money.Basis` 만 재사용하는
+자립 순수 모듈). 스크립트는 그 순수 검증기를 실 응답에 태우는 얇은 IO 경계다.
