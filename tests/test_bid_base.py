@@ -14,6 +14,7 @@ from app.models.models import HistoricalData, Project
 from app.schemas.schemas import PricePredictionRequest
 from app.services.bid_base import (
     resolve_notice_bid_base,
+    resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
 )
 from app.services.prediction_workflow import PredictionWorkflowService
@@ -297,3 +298,119 @@ def test_legal_floor_inputs_no_created_at_returns_none_reference():
     estimation, reference_date = resolve_notice_legal_floor_inputs(project)
     assert estimation == pytest.approx(3_000_000_000.0)
     assert reference_date is None
+
+
+# --------------------------------------------------------------------------- #
+# resolve_notice_legal_floor_bid_rate — wire the notice's OWN published 낙찰하한율
+# (award_floor_rate, #201) into the prediction guardrail floor. This closes the
+# safety gap where a published 하한 of 0.88 could still let a 0.876 recommendation
+# pass because only the category floor (0.87) was consulted (P3a).
+#
+# RED LINE: guardrail_core folds the value with max() only, so a published 하한 can
+# ONLY RAISE the recommendation floor, never lower the category/legal floor.
+# --------------------------------------------------------------------------- #
+
+# PREDICTION_CATEGORY_MINIMUM_BID_RATES["service"] — the configured floor a service
+# notice falls back to when nothing raises it.
+_SERVICE_CATEGORY_FLOOR = 0.87
+
+
+@pytest.mark.parametrize(
+    "award_floor_rate, request_legal, expected",
+    [
+        (0.88, None, 0.88),  # published fraction folded in
+        (88.0, None, 0.88),  # published percent normalized (>1.5 → /100)
+        (None, None, None),  # nothing published/requested → None (config floor kept)
+        (0.0, None, None),  # non-positive published → None (ignored)
+        (None, 0.90, 0.90),  # request-only (unchanged pre-existing behavior)
+        (0.85, 0.90, 0.90),  # request wins over published
+        (0.88, 0.86, 0.86),  # explicit client override respected even if lower
+    ],
+)
+def test_resolve_legal_floor_bid_rate_precedence(award_floor_rate, request_legal, expected):
+    """Pure precedence table: explicit request value wins; else the published
+    award_floor_rate (normalized); else None."""
+    project = Project(
+        title="낙찰하한 wiring", category="service", award_floor_rate=award_floor_rate
+    )
+    resolved = resolve_notice_legal_floor_bid_rate(
+        project, request_legal_floor_bid_rate=request_legal
+    )
+    if expected is None:
+        assert resolved is None
+    else:
+        assert resolved == pytest.approx(expected)
+
+
+def _predict_with_award(
+    test_db,
+    *,
+    award_floor_rate=None,
+    request_legal_floor_bid_rate=None,
+    category: str = "service",
+) -> dict:
+    """Run the real prediction workflow for a notice carrying a published 낙찰하한율."""
+    _seed_price_history(test_db, category=category)
+    project = _make_project(test_db, category=category)
+    project.award_floor_rate = award_floor_rate
+    test_db.commit()
+
+    service = PredictionWorkflowService()
+    request = PricePredictionRequest(
+        project_id=project.id,
+        budget_estimate=_BUDGET_ESTIMATE,
+        category=category,
+        description="낙찰하한 wiring 검증",
+        legal_floor_bid_rate=request_legal_floor_bid_rate,
+    )
+    return service.predict_project_price(test_db, request)
+
+
+def test_predict_price_raises_floor_to_published_award_floor(test_db):
+    """Published 하한 0.88 > category floor 0.87 → guardrail floor rises to 0.88, so a
+    0.876 recommendation can no longer pass (the P3a gap is closed)."""
+    prediction = _predict_with_award(test_db, award_floor_rate=0.88)
+
+    assert prediction["legal_floor_bid_rate"] == pytest.approx(0.88)
+    assert prediction["floor_bid_rate"] == pytest.approx(0.88)
+    assert prediction["floor_bid_rate"] > _SERVICE_CATEGORY_FLOOR  # RAISED above category
+    assert prediction["floor_guardrail_source"] == "legal"
+
+
+def test_predict_price_normalizes_percent_award_floor(test_db):
+    """Published 하한 stored as a percent (88) normalizes to the 0.88 fraction floor."""
+    prediction = _predict_with_award(test_db, award_floor_rate=88.0)
+
+    assert prediction["legal_floor_bid_rate"] == pytest.approx(0.88)
+    assert prediction["floor_bid_rate"] == pytest.approx(0.88)
+
+
+def test_predict_price_award_below_category_floor_does_not_lower_floor(test_db):
+    """RED LINE: a published 하한 (0.85) BELOW the category floor (0.87) is ignored by
+    max() — the floor is NEVER lowered below the configured category/legal floor."""
+    prediction = _predict_with_award(test_db, award_floor_rate=0.85)
+
+    assert prediction["floor_bid_rate"] == pytest.approx(_SERVICE_CATEGORY_FLOOR)
+    assert prediction["floor_bid_rate"] > 0.85  # not lowered to the published value
+    # The category floor remains the binding edge; the lower legal term does not bind.
+    assert prediction["floor_guardrail_source"] == "category"
+
+
+def test_predict_price_no_award_floor_preserves_configured_floor(test_db):
+    """No published 하한 and no request value → behavior unchanged: floor stays at the
+    configured category floor and no legal floor is recorded."""
+    prediction = _predict_with_award(test_db, award_floor_rate=None)
+
+    assert prediction["legal_floor_bid_rate"] is None
+    assert prediction["floor_bid_rate"] == pytest.approx(_SERVICE_CATEGORY_FLOOR)
+    assert prediction["floor_guardrail_source"] == "category"
+
+
+def test_predict_price_request_legal_floor_overrides_published_award(test_db):
+    """An explicit client legal_floor_bid_rate wins over the published award_floor_rate."""
+    prediction = _predict_with_award(
+        test_db, award_floor_rate=0.88, request_legal_floor_bid_rate=0.90
+    )
+
+    assert prediction["legal_floor_bid_rate"] == pytest.approx(0.90)
+    assert prediction["floor_bid_rate"] == pytest.approx(0.90)
