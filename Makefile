@@ -1,4 +1,4 @@
-.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-up-server docker-down docker-logs docker-logs-tasks docker-logs-server production-smoke ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
+.PHONY: help install install-runtime install-ml-embedding install-ml-training install-dev install-browser dev test lint typecheck format clean docker-build docker-build-runtime docker-build-embedding docker-build-training docker-build-ml-full docker-up docker-up-tasks docker-up-server docker-down docker-logs docker-logs-tasks docker-logs-server production-smoke ml-release-manifest ml-release-preflight ml-release-apply ml-release-rebuild ml-release-rollout
 
 REBUILD_LIMIT ?= 100
 REBUILD_OFFSET ?= 0
@@ -21,7 +21,8 @@ help:
 	@echo "  make install-browser - Install Chromium for live crawling"
 	@echo "  make dev          - Run development server"
 	@echo "  make test         - Run tests"
-	@echo "  make lint         - Run linting checks"
+	@echo "  make lint         - Run linting checks (ruff)"
+	@echo "  make typecheck    - Run mypy type checks (lenient legacy, strict islands)"
 	@echo "  make format       - Format code"
 	@echo "  make clean        - Clean cache and temporary files"
 	@echo "  make docker-build - Build the compose-selected Docker image target"
@@ -67,8 +68,10 @@ test:
 	pytest -v --cov=app
 
 lint:
-	flake8 app/
-	black --check app/
+	ruff check app/
+
+typecheck:
+	mypy app/
 
 format:
 	black app/
