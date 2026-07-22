@@ -86,7 +86,14 @@ def apply_onboarding_suggestions(
     """
     operator = resolve_write_operator(db, current_operator, operator_id)
     decisions = [
-        ApplyDecision(field=item.field.value, value=item.value)
+        ApplyDecision(
+            field=item.field.value,
+            value=item.value,
+            status=item.status,
+            source=item.source,
+            confidence=item.confidence,
+            reason=item.reason,
+        )
         for item in request.decisions
     ]
     try:
@@ -99,6 +106,7 @@ def apply_onboarding_suggestions(
     return {
         "applied": [item.to_dict() for item in result.applied],
         "ignored": [item.to_dict() for item in result.ignored],
+        "recorded": result.recorded,
         "current_operator_id": int(operator.id),
         "current_operator_username": str(operator.username or ""),
     }

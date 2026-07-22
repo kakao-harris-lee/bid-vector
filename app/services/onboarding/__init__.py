@@ -10,6 +10,7 @@ from app.services.onboarding.apply import (
     APPLYABLE_FIELDS,
     ApplyDecision,
     ApplyResult,
+    DecisionStatus,
     OnboardingApplyError,
     apply_onboarding_decisions,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "APPLYABLE_FIELDS",
     "ApplyDecision",
     "ApplyResult",
+    "DecisionStatus",
     "OnboardingApplyError",
     "apply_onboarding_decisions",
     "FieldSuggestion",

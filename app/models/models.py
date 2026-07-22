@@ -714,3 +714,43 @@ class NoticeEligibilityLabel(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     project = relationship("Project")
+
+
+class OnboardingSuggestion(Base):
+    """온보딩 후보에 대한 운영자 결정(수락/거부/수정)의 append-only 감사 로그.
+
+    설계 근거: ``docs/superpowers/specs/
+    2026-07-03-business-number-guided-onboarding-design.md`` §3 "수정하거나 거부한
+    후보도 저장해 다음 온보딩 규칙 개선에 사용". apply 엔드포인트가 받은 각 결정을
+    **1결정=1행**으로 기록한다 — 재적용은 upsert 가 아니라 새 행이므로 멱등을 강제하지
+    않고(각 apply=이벤트) 온보딩 규칙 학습의 시계열 원천이 된다. 프로필/전략 반영과
+    무관하게 ``rejected``/``pending`` 결정도 여기에는 남는다(정직 명세 §2: 거부/보류는
+    프로필에 반영하지 않되 감사에는 남긴다).
+
+    per-operator/synthetic 격리: ``user_id`` 는 apply 를 수행한 operator(자기 스코프,
+    ``resolve_write_operator`` 로 해석된 계정)로만 채운다 — synthetic 결정이 canonical
+    감사에 섞이지 않는다. 이 테이블은 데이터로만 존재하며 추천/분류/수집 동작을 바꾸지
+    않는다.
+
+    컬럼 의미:
+    - ``field`` — ``onboarding.apply.APPLYABLE_FIELDS`` 키(대상 프로필/전략 컬럼명).
+    - ``value`` — 사용자가 결정한 값의 JSON 직렬 텍스트(str/float/list 원형 복원).
+    - ``status`` — ``onboarding.apply.DecisionStatus`` 값(accepted/rejected/modified/
+      pending). 허용값은 서비스 enum 단일 출처를 재사용한다(매직값 금지 §4.5.1).
+    - ``source``/``confidence``/``reason`` — GET 후보에서 온 provenance(있으면 기록,
+      없으면 null). 감사 행은 불변이라 ``updated_at`` 을 두지 않는다.
+    """
+
+    __tablename__ = "onboarding_suggestions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    field = Column(String(50), nullable=False)
+    value = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False)
+    source = Column(String(50), nullable=True)
+    confidence = Column(Float, nullable=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+
+    user = relationship("User")
