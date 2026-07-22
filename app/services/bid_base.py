@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import to_kst
 from app.models.models import HistoricalData, Project
+from app.services.award_verification import _rate_to_fraction
 
 
 def resolve_notice_bid_base(db: Session, project: Project) -> float:
@@ -92,3 +93,30 @@ def resolve_notice_legal_floor_inputs(
     created_at = getattr(project, "created_at", None)
     reference_date = to_kst(created_at).date() if created_at is not None else None
     return estimation_amount, reference_date
+
+
+def resolve_notice_legal_floor_bid_rate(
+    project: Project,
+    *,
+    request_legal_floor_bid_rate: float | None = None,
+) -> float | None:
+    """Return the effective legal 낙찰하한율 to feed the prediction guardrail floor.
+
+    Precedence (declarative): an explicit client-supplied ``legal_floor_bid_rate``
+    on the request wins (operator override is respected); otherwise we fall back to
+    the notice's OWN published 낙찰하한율 ``Project.award_floor_rate`` (#201). The
+    published value may be stored as a fraction (0.88) or a percent (88), so it is
+    normalized via ``_rate_to_fraction`` (reused, not re-derived).
+
+    RED LINE: guardrail_core folds this value into the floor with ``max()`` only
+    (``_max_optional_rate(configured_floor, legal_floor)``), so a published 하한 can
+    only RAISE the recommendation floor — it can never lower the category/legal floor.
+    A published rate *below* the configured floor is therefore ignored by that max().
+    When both the request value and the published rate are absent this returns
+    ``None`` and the existing configured floor is preserved unchanged (the case for
+    open notices without a published 하한). It is leakage-safe: ``award_floor_rate``
+    is published on the notice itself, not future information.
+    """
+    if request_legal_floor_bid_rate is not None:
+        return request_legal_floor_bid_rate
+    return _rate_to_fraction(getattr(project, "award_floor_rate", None))

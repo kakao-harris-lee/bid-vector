@@ -33,6 +33,7 @@ from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.bid_base import (
     resolve_notice_bid_base,
+    resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
 )
 from app.services.bid_target_signals import resolve_bid_target_signals
@@ -505,6 +506,13 @@ class OpportunityAnalysisService:
         # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 소급 없이 그
         # 공고 시점의 구/신율을 적용한다.
         estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
+        # 공고 자신의 published 낙찰하한율(award_floor_rate, #201)을 guardrail floor 에
+        # 반영한다(prediction_workflow 와 동일 규칙). 클라이언트 override 우선, 없으면
+        # 공고 published 하한 폴백. guardrail_core 가 max() 로만 폴드하므로 floor 를
+        # 올리기만 한다(red line).
+        legal_floor_bid_rate = resolve_notice_legal_floor_bid_rate(
+            project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
+        )
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
@@ -514,7 +522,7 @@ class OpportunityAnalysisService:
             feedback_calibration=feedback_calibration,
             business_type_code=business_type_code,
             business_group=business_group,
-            legal_floor_bid_rate=request.legal_floor_bid_rate,
+            legal_floor_bid_rate=legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
         )

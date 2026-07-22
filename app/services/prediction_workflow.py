@@ -26,6 +26,7 @@ from app.schemas.schemas import (
 )
 from app.services.bid_base import (
     resolve_notice_bid_base,
+    resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
 )
 from app.services.bid_target_signals import resolve_bid_target_signals
@@ -66,6 +67,13 @@ class PredictionWorkflowService:
         # 공사 법정 낙찰하한 tier(구간·시행일 인지) 입력. 추정가격은 기초금액과 별개로
         # 구간 판정에 쓰이고, 기준일은 공고 시점 하한(구/신율)을 소급 없이 고른다.
         estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
+        # 공고 자신의 published 낙찰하한율(award_floor_rate, #201)을 guardrail floor 에
+        # 반영한다. 클라이언트가 명시한 legal_floor_bid_rate 가 있으면 그것을 우선하고,
+        # 없으면 공고의 published 하한으로 폴백한다. guardrail_core 는 이 값을 configured
+        # floor 와 max() 로만 폴드하므로 floor 를 올리기만 하고 내리지 않는다(red line).
+        legal_floor_bid_rate = resolve_notice_legal_floor_bid_rate(
+            project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
+        )
         prediction = self.price_prediction_port.predict_price(
             budget=resolved_bid_base or request.budget_estimate,
             category=request.category,
@@ -73,7 +81,7 @@ class PredictionWorkflowService:
             historical_records=self._load_price_history(db, category=request.category or project.category),
             agency_name=request.agency_name,
             feedback_calibration=feedback_calibration,
-            legal_floor_bid_rate=request.legal_floor_bid_rate,
+            legal_floor_bid_rate=legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
         )
