@@ -121,11 +121,17 @@ def operation_family(operation: str | None) -> OperationFamily:
 # 기초금액 키가 없으면 base==예정가 오염이, 둘 다 있으면 예정가가 먼저 선택되는 함정이
 # 생긴다(#220). 각 키의 실제 basis 를 데이터로 선언해 검증기가 해석만 한다.
 _TRUE_BASE_KEYS: tuple[str, ...] = ("bssAmt", "bssamt", "bssAmtPurcnstcst")
+# 그룹 내부 키 순서는 openapi.build_openapi_notice_item 의 base_amount 후보 리스트
+# (openapi.py:436-444)와 **정확히 일치**시킨다 — 예산 2키(asignBdgtAmt, bdgtAmt) 다음
+# 예정가 2키(presmptPrce, presmptAmt). 순서가 어긋나면 위반 detail 의 resolved_key 와
+# --dry-run 표시가 프로덕션이 실제 고른 키와 달라진다(판정 자체는 그룹 경계가 같아 불변).
+# tests/test_koneps_field_contract.py 의 드리프트 가드가 실제 build_openapi_notice_item
+# 해석과 동치임을 실행으로 확인한다.
 _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
-    "presmptPrce",  # 추정가격(부가세 포함) — 기초금액 아님
-    "presmptAmt",  # 추정금액 — 기초금액 아님
     "asignBdgtAmt",  # 배정예산액 — 기초금액 아님
     "bdgtAmt",  # 예산금액 — 기초금액 아님
+    "presmptPrce",  # 추정가격(부가세 포함) — 기초금액 아님
+    "presmptAmt",  # 추정금액 — 기초금액 아님
 )
 # openapi.build_openapi_notice_item 의 base_amount 후보 순서와 **동일**하게 유지한다
 # (여기서 순서를 바꾸면 검증이 프로덕션 해석과 어긋난다). 예산·예정가 키가 기초금액

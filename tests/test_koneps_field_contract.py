@@ -12,7 +12,9 @@
 """
 
 from app.domain.money import Basis
+from app.schemas.schemas import CrawlRequest
 from app.services.koneps import field_contract as fc
+from app.services.koneps import openapi
 from app.services.koneps.field_contract import (
     OperationFamily,
     Severity,
@@ -24,6 +26,20 @@ _NOTICE_OP = "getBidPblancListInfoServc"
 _LICENSE_OP = "getBidPblancListInfoLicenseLimit"
 _RESERVE_OP = "getOpengResultListInfoServcPreparPcDetail"
 _OPENING_OP = "getOpengResultListInfoServc"
+
+# openapi.build_openapi_notice_item 의 base_amount 후보 키 순서(openapi.py:436-444)를
+# 그대로 옮긴 기대값. field_contract.BASE_RESOLUTION_ORDER 가 이것과 같아야 위반 detail
+# 의 resolved_key·--dry-run 표시가 프로덕션이 실제 고른 키와 일치한다. 아래 행동 가드
+# 테스트가 실제 build_openapi_notice_item 해석과 동치임을 실행으로 확인한다.
+_PRODUCTION_BASE_ORDER = (
+    "asignBdgtAmt",
+    "bdgtAmt",
+    "presmptPrce",
+    "presmptAmt",
+    "bssAmt",
+    "bssamt",
+    "bssAmtPurcnstcst",
+)
 
 
 def _kinds(violations):
@@ -151,6 +167,46 @@ def test_base_basis_only_checks_notice_list_family():
     item = {"presmptPrce": "100000000"}
     assert fc.validate_base_basis(item, OperationFamily.SCSBID_AWARD) == []
     assert fc.validate_base_basis(item, OperationFamily.RESERVE_DETAIL) == []
+
+
+# --- base 해석 순서 드리프트 가드 (프로덕션 충실성) --------------------------
+
+
+def test_base_resolution_order_matches_documented_production_order():
+    # openapi.py:436-444 후보 리스트를 그대로 옮긴 기대값과 정확히 일치해야 한다
+    # (그룹 내부 순서 포함 — 예산 2키 다음 예정가 2키).
+    assert fc.BASE_RESOLUTION_ORDER == _PRODUCTION_BASE_ORDER
+
+
+def _drift_guard_request() -> CrawlRequest:
+    return CrawlRequest(source="koneps-openapi", category="service")
+
+
+def test_base_resolution_order_agrees_with_production_build():
+    """행동 드리프트 가드: 실제 ``build_openapi_notice_item`` 이 base_amount 를 고르는
+    키가 ``BASE_RESOLUTION_ORDER`` 예측과 일치하는지 실행으로 확인한다.
+
+    각 접미(suffix) 케이스에서 ``order[i:]`` 키만 서로 다른 값으로 채우면 프로덕션은
+    ``order[i]`` (첫 후보)를 골라야 한다. field_contract 순서가 openapi 순서와 어긋나면
+    (향후 어느 쪽이 바뀌든) 이 assert 가 깨져 드리프트를 잡는다. 상수 추출 없이 실제
+    프로덕션 함수를 실행하므로 openapi 인라인 리스트 변경도 포착한다.
+    """
+    request = _drift_guard_request()
+    order = fc.BASE_RESOLUTION_ORDER
+    for i, expected_key in enumerate(order):
+        raw_item = {"bidNtceNo": "20260600001", "bidNtceNm": "드리프트 가드"}
+        for offset, key in enumerate(order[i:]):
+            # 값이 겹치지 않도록 각 키에 구별되는 양수를 준다.
+            raw_item[key] = str(1_000_000 * (i + offset + 1))
+        expected_value = float(raw_item[expected_key])
+        built = openapi.build_openapi_notice_item(
+            raw_item, request=request, operation=_NOTICE_OP
+        )
+        assert built is not None
+        assert built["base_amount"] == expected_value, (
+            f"suffix i={i}: 프로덕션이 {expected_key} 를 고르지 않음 — "
+            f"BASE_RESOLUTION_ORDER 가 openapi 후보 순서와 어긋남"
+        )
 
 
 # --- 계열 밖 필드 배치 (#209) -------------------------------------------------
