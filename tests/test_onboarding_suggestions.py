@@ -245,6 +245,42 @@ def test_association_membership_candidate_from_frequent_requirement():
     assert "엔지니어링협회(2건)" in suggestion.reason
 
 
+def test_engineering_business_term_does_not_surface_as_association_candidate():
+    """FLAG_ENGINEERING_BUSINESS 용어(사업 신고)는 협회 후보로 surface 되지 않는다.
+
+    회귀 가드(리뷰 지적): association_memberships 는 협회 **가입**(FLAG_ASSOCIATION,
+    엔지니어링협회)만 제안하고 엔지니어링사업자/활동주체(엔지니어링산업 진흥법상
+    사업 신고, FLAG_ENGINEERING_BUSINESS)는 협회 가입이 아니라 제외한다. 자격
+    원문에 engineering_business 용어가 MIN_SUPPORTING_NOTICES 이상 있어도 협회
+    후보가 나오면 안 된다 — 이 의도적 필터가 미래에 느슨해지지 않도록 고정한다.
+    필터가 사는 실제 경로(project_to_features → aggregate_suggestions)를 태운다.
+    """
+    projects = [
+        Project(
+            title="해양 기술용역 사업",
+            description="",
+            requirements="",
+            budget_estimate=100_000_000.0,
+            category="technical-service",
+            eligibility_raw={
+                "flags": {},
+                "license_limits": [{"lcnsLmtNm": "엔지니어링사업자"}],
+            },
+        )
+        for _ in range(MIN_SUPPORTING_NOTICES)
+    ]
+    features = [project_to_features(project) for project in projects]
+
+    # 특성 레벨: engineering_business 용어는 association 신호를 세우지 않는다(중립).
+    for feature in features:
+        assert feature.association_memberships == frozenset()
+
+    bundle = aggregate_suggestions(features, seed=_SEED)
+
+    # 후보 레벨: MIN_SUPPORTING_NOTICES 만큼 있어도 협회 후보로 승격되지 않는다.
+    assert _by_field(bundle.profile, FIELD_ASSOCIATION_MEMBERSHIPS) is None
+
+
 def test_cohort_signals_absent_yield_no_candidates():
     """자격/cohort 데이터가 없는 매칭 공고는 cohort 후보를 내지 않는다(빈, 중립)."""
     features = [
