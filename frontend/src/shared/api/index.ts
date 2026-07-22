@@ -16,4 +16,5 @@ export * from "./synthetic";
 export * from "./operations";
 export * from "./notifications";
 export * from "./operator";
+export * from "./onboarding";
 export { queryKeys } from "./queryKeys";

@@ -635,6 +635,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/onboarding-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Onboarding Suggestions
+         * @description 내부 공고에서 회사 프로필/전략 필드 후보를 역추천한다(persist 없음).
+         */
+        get: operations["get_onboarding_suggestions_api_v1_operator_onboarding_suggestions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operator/onboarding-suggestions/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Onboarding Suggestions
+         * @description 사용자가 확정한 후보 값만 현재 operator 의 프로필/전략에 부분 반영한다.
+         *
+         *     write 스코프 해석은 기존 PUT ``/operator/profile`` 과 동일한
+         *     ``resolve_write_operator`` (self-only, cross-operator 는 403)를 재사용해
+         *     canonical/synthetic 격리를 보장한다 — apply 는 요청 operator 자신의 행에만 쓴다.
+         *     확정값 검증 실패(알 수 없는 필드/타입/화이트리스트)는 422 로 거부한다(설계 §3).
+         */
+        post: operations["apply_onboarding_suggestions_api_v1_operator_onboarding_suggestions_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/": {
         parameters: {
             query?: never;
@@ -5722,6 +5767,184 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * OnboardingAppliedField
+         * @description 반영된 확정 필드 요약(어떤 필드가 어떤 값으로 갱신됐는지, 설계 §3).
+         */
+        OnboardingAppliedField: {
+            /**
+             * Field
+             * @description 반영된 필드명
+             */
+            field: string;
+            /**
+             * Target
+             * @description 반영 대상(profile=CompanyProfile / strategy=OperatorStrategy)
+             */
+            target: string;
+            /**
+             * Value
+             * @description 저장된 정규화 값
+             */
+            value: string | number | string[];
+        };
+        /**
+         * OnboardingApplyDecision
+         * @description 사용자가 검토·확정한 단일 필드 결정. 서버는 이 값을 **그대로 신뢰**하되
+         *     타입/화이트리스트만 검증한다(설계 §3, 정직 명세 §2 — 서버가 후보를 재계산하지 않음).
+         */
+        OnboardingApplyDecision: {
+            /** @description 반영할 확정 필드명(GET 후보와 동일 집합) */
+            field: components["schemas"]["OnboardingApplyField"];
+            /**
+             * Value
+             * @description 확정값(필드 종류별 형태: 문자열/숫자/문자열 리스트)
+             */
+            value: string | number | string[];
+        };
+        /**
+         * OnboardingApplyField
+         * @description apply 가 받는 확정 필드 집합. 값은 GET 후보(``FIELD_*``)와 동일 단일 출처를
+         *     재사용해(§4.6) 두 엔드포인트가 정확히 같은 필드명을 쓰도록 고정한다. Pydantic 이
+         *     미지원 필드명을 422 로 거른다(설계 §3 확정 필드).
+         * @enum {string}
+         */
+        OnboardingApplyField: "business_type" | "license_codes" | "region_codes" | "focus_categories" | "focus_regions" | "min_budget_estimate" | "max_budget_estimate";
+        /**
+         * OnboardingApplyRequest
+         * @description 확정된 필드 결정 리스트. 명시적으로 넘어온(=accepted) 필드만 반영한다.
+         */
+        OnboardingApplyRequest: {
+            /**
+             * Decisions
+             * @description 반영할 확정 필드 결정 목록(빈 목록은 no-op)
+             */
+            decisions?: components["schemas"]["OnboardingApplyDecision"][];
+        };
+        /**
+         * OnboardingApplyResponse
+         * @description apply 결과 — 반영/무시 요약 + operator envelope(기존 operator 응답 컨벤션).
+         */
+        OnboardingApplyResponse: {
+            /**
+             * Applied
+             * @description 반영된 확정 필드 목록
+             */
+            applied?: components["schemas"]["OnboardingAppliedField"][];
+            /**
+             * Ignored
+             * @description 무시된 필드 + 사유
+             */
+            ignored?: components["schemas"]["OnboardingIgnoredField"][];
+            /**
+             * Current Operator Id
+             * @description 반영이 스코프된 운영자 id
+             */
+            current_operator_id: number;
+            /**
+             * Current Operator Username
+             * @description 반영이 스코프된 운영자 username
+             */
+            current_operator_username: string;
+        };
+        /**
+         * OnboardingFieldSuggestion
+         * @description 단일 필드 후보 + provenance(설계 §2: source/confidence/needs_confirmation/reason).
+         */
+        OnboardingFieldSuggestion: {
+            /**
+             * Field
+             * @description 후보가 채우는 대상 필드명(CompanyProfile/OperatorStrategy 컬럼)
+             */
+            field: string;
+            /**
+             * Value
+             * @description 추천 후보값(필드 종류별 형태)
+             */
+            value: string | number | string[];
+            /**
+             * Source
+             * @description 후보 출처(현재 슬라이스는 internal_notices 단일)
+             */
+            source: string;
+            /**
+             * Confidence
+             * @description 후보 신뢰도(0~1, 확정 아님)
+             */
+            confidence: number;
+            /**
+             * Needs Confirmation
+             * @description 사용자 확정 필요 여부 — 항상 True
+             */
+            needs_confirmation: boolean;
+            /**
+             * Reason
+             * @description 도출 근거(몇 건 공고에서 나왔는지 등, 한국어)
+             */
+            reason: string;
+            /**
+             * Matched Notice Count
+             * @description 이 후보를 지지한 공고 수
+             */
+            matched_notice_count: number;
+        };
+        /**
+         * OnboardingIgnoredField
+         * @description 반영되지 않은(무시된) 필드 + 사유(예: 중복 필드).
+         */
+        OnboardingIgnoredField: {
+            /**
+             * Field
+             * @description 무시된 필드명
+             */
+            field: string;
+            /**
+             * Reason
+             * @description 무시 사유(한국어)
+             */
+            reason: string;
+        };
+        /**
+         * OnboardingSuggestionsResponse
+         * @description 프로필/전략 후보 묶음 + 매칭 요약(후보 없음 원인 진단 포함).
+         */
+        OnboardingSuggestionsResponse: {
+            /**
+             * Keywords
+             * @description 정규화된 조회 키워드
+             */
+            keywords?: string[];
+            /**
+             * Matched Notice Count
+             * @description seed 에 매칭된 내부 공고 수
+             */
+            matched_notice_count: number;
+            /**
+             * Diagnostics
+             * @description 후보 유무/원인 요약(설계 §4)
+             */
+            diagnostics: string;
+            /**
+             * Profile
+             * @description CompanyProfile 후보 묶음
+             */
+            profile?: components["schemas"]["OnboardingFieldSuggestion"][];
+            /**
+             * Strategy
+             * @description OperatorStrategy 후보 묶음
+             */
+            strategy?: components["schemas"]["OnboardingFieldSuggestion"][];
+            /**
+             * Current Operator Id
+             * @description 응답이 스코프된 운영자 id(라우터 컨벤션)
+             */
+            current_operator_id: number;
+            /**
+             * Current Operator Username
+             * @description 응답이 스코프된 운영자 username
+             */
+            current_operator_username: string;
+        };
         /** OperationsDashboardCard */
         OperationsDashboardCard: {
             /** Key */
@@ -10379,6 +10602,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EligibilityFeedbackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_onboarding_suggestions_api_v1_operator_onboarding_suggestions_get: {
+        parameters: {
+            query?: {
+                /** @description 역추천 seed 키워드(반복 파라미터). 최소 1개 필요 */
+                keywords?: string[] | null;
+                /** @description 지역 힌트(선택) */
+                region?: string | null;
+                /** @description 예산 하한 힌트(선택) */
+                min_budget?: number | null;
+                /** @description 예산 상한 힌트(선택) */
+                max_budget?: number | null;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingSuggestionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_onboarding_suggestions_api_v1_operator_onboarding_suggestions_apply_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OnboardingApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingApplyResponse"];
                 };
             };
             /** @description Validation Error */

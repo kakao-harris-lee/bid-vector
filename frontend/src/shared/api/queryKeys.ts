@@ -32,6 +32,26 @@ export const queryKeys = {
     detail: (operatorId: OperatorScope = null) =>
       ["profile", "detail", { operatorId }] as const
   },
+  onboarding: {
+    suggestions: (
+      keywords: string[],
+      region: string | null,
+      minBudget: number | null,
+      maxBudget: number | null,
+      operatorId: OperatorScope = null
+    ) =>
+      [
+        "onboarding",
+        "suggestions",
+        {
+          keywords: [...keywords].sort(),
+          region: region ?? null,
+          minBudget: minBudget ?? null,
+          maxBudget: maxBudget ?? null
+        },
+        { operatorId }
+      ] as const
+  },
   strategy: {
     detail: (operatorId: OperatorScope = null) =>
       ["strategy", "detail", { operatorId }] as const,
