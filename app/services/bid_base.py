@@ -20,13 +20,17 @@ predictor 에 넘기는 ``budget`` 도 base_amount 여야 이중과세 없이 �
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from sqlalchemy.orm import Session
 
 from app.core.time import to_kst
+from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
 from app.models.models import HistoricalData, Project
 from app.services.award_verification import _rate_to_fraction
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_notice_bid_base(db: Session, project: Project) -> float:
@@ -40,6 +44,16 @@ def resolve_notice_bid_base(db: Session, project: Project) -> float:
     to the 추정가격 fallback despite a usable base being on record. When no row
     carries a positive base we fall back to ``project.budget_estimate`` (면세
     공고에서는 두 값이 동일하므로 안전하며, 회귀도 없다).
+
+    basis-aware: once the latest positive-base row is chosen, ``get_reliable_base``
+    inspects that row's ``base_amount_basis`` (#199). A ``clean`` row (or an
+    unclassified ``NULL`` basis — the common case for open notices) returns its
+    ``base_amount`` unchanged, so pricing is byte-identical. Only a row whose basis
+    is explicitly non-clean (derived-yega/derived-vat/suspect) AND carries a
+    reserve-recovered ``base_amount_estimated`` substitutes that estimate, defending
+    the 예측 base against 예정가-basis pollution. This closes the #199 consumer gap;
+    its live impact is ~0 today because open notices carry no post-settlement
+    pollution (measured — see scripts/measure_reliable_base_impact.py).
     """
     project_id = getattr(project, "id", None)
     if project_id is not None:
@@ -53,12 +67,22 @@ def resolve_notice_bid_base(db: Session, project: Project) -> float:
             .first()
         )
         if record is not None:
-            try:
-                base_value = float(record.base_amount or 0.0)
-            except (TypeError, ValueError):
-                base_value = 0.0
-            if base_value > 0:
-                return base_value
+            reliable = get_reliable_base(
+                base_amount=record.base_amount,
+                basis=record.base_amount_basis,
+                base_amount_estimated=record.base_amount_estimated,
+            )
+            if reliable.source is ReliableBaseSource.RESERVE_ESTIMATE:
+                logger.debug(
+                    "resolve_notice_bid_base: project=%s non-clean basis=%s → "
+                    "reserve estimate %s (raw base_amount %s rejected)",
+                    project_id,
+                    record.base_amount_basis,
+                    reliable.value,
+                    record.base_amount,
+                )
+            if reliable.value is not None and reliable.value > 0:
+                return float(reliable.value)
     try:
         return float(getattr(project, "budget_estimate", 0.0) or 0.0)
     except (TypeError, ValueError):

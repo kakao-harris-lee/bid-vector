@@ -45,9 +45,14 @@ ignore_errors = true
 # false positives.
 #
 # Phase 1a — first strict islands. Exact names win over the app.* wildcard above,
-# so ONLY these two modules are strictly checked; the rest stays grandfathered.
+# so ONLY these modules are strictly checked; the rest stays grandfathered.
+# Phase 1b adds app.domain.reliable_base (basis-aware 기초금액 선택 — #199 태그 소비자).
 [[tool.mypy.overrides]]
-module = ["app.domain.money", "app.domain.basis_conversion"]
+module = [
+    "app.domain.money",
+    "app.domain.basis_conversion",
+    "app.domain.reliable_base",
+]
 ignore_errors = false
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

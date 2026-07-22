@@ -42,17 +42,28 @@ def _make_project(
     return project
 
 
-def _add_base_row(db, project: Project, base_amount: float) -> HistoricalData:
+def _add_base_row(
+    db,
+    project: Project,
+    base_amount: float,
+    *,
+    base_amount_basis: str | None = None,
+    base_amount_estimated: float | None = None,
+) -> HistoricalData:
     """Attach the collected 기초금액 for a project.
 
     ``bid_rate`` is left at 0 so this row is NOT loaded as a training sample
     (``explicit_bid_rate_only``); it exists purely to carry the base amount.
+    ``base_amount_basis`` / ``base_amount_estimated`` default to unset (NULL), which
+    is the common state for open notices before #199 backfill classifies them.
     """
     record = HistoricalData(
         project_id=project.id,
         category=project.category,
         base_amount=base_amount,
         bid_rate=0.0,
+        base_amount_basis=base_amount_basis,
+        base_amount_estimated=base_amount_estimated,
     )
     db.add(record)
     db.flush()
@@ -150,6 +161,85 @@ def test_resolve_bid_base_prefers_older_positive_over_latest_zero(test_db):
     assert resolved == pytest.approx(_VAT_BASE_AMOUNT)
     assert resolved != pytest.approx(_BUDGET_ESTIMATE)
     assert older.base_amount == pytest.approx(_VAT_BASE_AMOUNT)
+
+
+# --------------------------------------------------------------------------- #
+# basis-aware wiring (#199 base_amount_basis consumer). clean/unclassified rows
+# MUST resolve byte-identically to the pre-wiring behavior; only an explicitly
+# non-clean basis with a reserve-recovered estimate substitutes that estimate.
+# --------------------------------------------------------------------------- #
+
+_RESERVE_ESTIMATE = 48_000_000.0  # distinct from _VAT_BASE_AMOUNT / _BUDGET_ESTIMATE
+
+
+def test_resolve_bid_base_clean_basis_unchanged(test_db):
+    """clean basis → base_amount 그대로. estimate가 있어도 무시(회귀 가드)."""
+    project = _make_project(test_db)
+    _add_base_row(
+        test_db,
+        project,
+        _VAT_BASE_AMOUNT,
+        base_amount_basis="clean",
+        base_amount_estimated=_RESERVE_ESTIMATE,
+    )
+    test_db.commit()
+
+    resolved = resolve_notice_bid_base(test_db, project)
+
+    assert resolved == pytest.approx(_VAT_BASE_AMOUNT)
+    assert resolved != pytest.approx(_RESERVE_ESTIMATE)
+
+
+def test_resolve_bid_base_null_basis_unchanged(test_db):
+    """basis 미분류(NULL) → base_amount 폴백. open 공고 흔한 경우, 라이브 불변."""
+    project = _make_project(test_db)
+    _add_base_row(
+        test_db,
+        project,
+        _VAT_BASE_AMOUNT,
+        base_amount_basis=None,
+        base_amount_estimated=_RESERVE_ESTIMATE,
+    )
+    test_db.commit()
+
+    resolved = resolve_notice_bid_base(test_db, project)
+
+    assert resolved == pytest.approx(_VAT_BASE_AMOUNT)
+
+
+def test_resolve_bid_base_derived_yega_prefers_estimate(test_db):
+    """derived-yega(예정가-basis 오염) + reserve 추정치 → 추정치로 방어 대체."""
+    project = _make_project(test_db)
+    _add_base_row(
+        test_db,
+        project,
+        _VAT_BASE_AMOUNT,  # polluted 예정가-basis value
+        base_amount_basis="derived-yega",
+        base_amount_estimated=_RESERVE_ESTIMATE,
+    )
+    test_db.commit()
+
+    resolved = resolve_notice_bid_base(test_db, project)
+
+    assert resolved == pytest.approx(_RESERVE_ESTIMATE)
+    assert resolved != pytest.approx(_VAT_BASE_AMOUNT)
+
+
+def test_resolve_bid_base_derived_yega_without_estimate_keeps_base(test_db):
+    """derived-yega인데 복구 추정치가 없으면 base_amount 폴백(기존 동작 보존)."""
+    project = _make_project(test_db)
+    _add_base_row(
+        test_db,
+        project,
+        _VAT_BASE_AMOUNT,
+        base_amount_basis="derived-yega",
+        base_amount_estimated=None,
+    )
+    test_db.commit()
+
+    resolved = resolve_notice_bid_base(test_db, project)
+
+    assert resolved == pytest.approx(_VAT_BASE_AMOUNT)
 
 
 # --------------------------------------------------------------------------- #
