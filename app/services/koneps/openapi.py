@@ -21,6 +21,10 @@ from app.core.config import settings
 from app.core.time import utc_now
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import parsing
+from app.services.koneps.field_contract import (
+    BASE_RESOLUTION_ORDER,
+    ESTIMATED_RESOLUTION_ORDER,
+)
 
 
 OPENAPI_SOURCE_ALIASES = {
@@ -431,21 +435,11 @@ def build_openapi_notice_item(
     title = str(
         raw_item.get("bidNtceNm") or raw_item.get("ntceNm") or notice_number
     ).strip()
-    base_amount = first_openapi_amount(
-        raw_item,
-        [
-            "asignBdgtAmt",
-            "bdgtAmt",
-            "presmptPrce",
-            "presmptAmt",
-            "bssAmt",
-            "bssamt",
-            "bssAmtPurcnstcst",
-        ],
-    )
+    # base_amount/estimated_amount 후보 키는 field_contract 가 단일 출처로 선언한다
+    # (#220 base==예정가 오염의 발원지 정리 — 순서·basis 는 그 모듈에서만 바뀐다).
+    base_amount = first_openapi_amount(raw_item, list(BASE_RESOLUTION_ORDER))
     estimated_amount = first_openapi_amount(
-        raw_item,
-        ["presmptPrce", "presmptAmt", "asignBdgtAmt", "bdgtAmt"],
+        raw_item, list(ESTIMATED_RESOLUTION_ORDER)
     )
     business_type = str(
         raw_item.get("bsnsDivNm")
