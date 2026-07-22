@@ -18,6 +18,7 @@ from typing import List, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.onboarding.suggestions import (
+    FIELD_ASSOCIATION_MEMBERSHIPS,
     FIELD_BUSINESS_TYPE,
     FIELD_FOCUS_CATEGORIES,
     FIELD_FOCUS_REGIONS,
@@ -25,6 +26,7 @@ from app.services.onboarding.suggestions import (
     FIELD_MAX_BUDGET,
     FIELD_MIN_BUDGET,
     FIELD_REGION_CODES,
+    FIELD_TECH_FIELDS,
 )
 
 
@@ -67,6 +69,8 @@ class OnboardingApplyField(str, enum.Enum):
     BUSINESS_TYPE = FIELD_BUSINESS_TYPE
     LICENSE_CODES = FIELD_LICENSE_CODES
     REGION_CODES = FIELD_REGION_CODES
+    TECH_FIELDS = FIELD_TECH_FIELDS
+    ASSOCIATION_MEMBERSHIPS = FIELD_ASSOCIATION_MEMBERSHIPS
     FOCUS_CATEGORIES = FIELD_FOCUS_CATEGORIES
     FOCUS_REGIONS = FIELD_FOCUS_REGIONS
     MIN_BUDGET_ESTIMATE = FIELD_MIN_BUDGET

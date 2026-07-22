@@ -145,6 +145,8 @@ def _build_operator_profile_response(
     total_awards: int,
     construction_capacity_amount: float = 0.0,
     awarded_contract_limit: float = 0.0,
+    association_memberships: list[str] | None = None,
+    tech_fields: list[str] | None = None,
 ) -> OperatorProfileResponse:
     return OperatorProfileResponse(
         operator_id=operator.id,
@@ -157,6 +159,8 @@ def _build_operator_profile_response(
         business_type=business_type,
         license_codes=license_codes,
         region_codes=region_codes,
+        association_memberships=association_memberships or [],
+        tech_fields=tech_fields or [],
         annual_revenue=annual_revenue,
         capacity_score=capacity_score,
         construction_capacity_amount=construction_capacity_amount,
@@ -365,6 +369,10 @@ def get_operator_profile_endpoint(
             profile.construction_capacity_amount or 0.0
         ),
         awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
+        association_memberships=split_multi_value_text(
+            profile.association_memberships
+        ),
+        tech_fields=split_multi_value_text(profile.tech_fields),
     )
 
 
@@ -407,6 +415,12 @@ def update_operator_profile(
         profile.license_codes = join_multi_value_text(request.license_codes)
     if request.region_codes is not None:
         profile.region_codes = join_multi_value_text(request.region_codes)
+    if request.association_memberships is not None:
+        profile.association_memberships = join_multi_value_text(
+            request.association_memberships
+        )
+    if request.tech_fields is not None:
+        profile.tech_fields = join_multi_value_text(request.tech_fields)
     if request.annual_revenue is not None:
         profile.annual_revenue = request.annual_revenue
     if request.capacity_score is not None:
@@ -436,6 +450,10 @@ def update_operator_profile(
             profile.construction_capacity_amount or 0.0
         ),
         awarded_contract_limit=float(profile.awarded_contract_limit or 0.0),
+        association_memberships=split_multi_value_text(
+            profile.association_memberships
+        ),
+        tech_fields=split_multi_value_text(profile.tech_fields),
     )
 
 

@@ -71,6 +71,8 @@ MIGRATION_ADDED_COLUMNS = {
     "company_profiles": {
         "construction_capacity_amount",
         "awarded_contract_limit",
+        "association_memberships",
+        "tech_fields",
     },
     "crawl_jobs": {"celery_task_id"},
     "paper_bid_settlements": {"estimated_price", "minimum_bid_price"},

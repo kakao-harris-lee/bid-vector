@@ -93,6 +93,10 @@ class OperatorProfileUpdate(BaseModel):
     business_type: Optional[str] = None
     license_codes: Optional[List[str]] = None
     region_codes: Optional[List[str]] = None
+    # cohort 정체성(협회 가입/기술부문). license_codes/region_codes 와 동일한 다중값
+    # list[str] 캡처. None 이면 불변(부분 업데이트), 넘어오면 갱신.
+    association_memberships: Optional[List[str]] = None
+    tech_fields: Optional[List[str]] = None
     annual_revenue: Optional[float] = Field(default=None, ge=0.0)
     capacity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     # 시공능력평가액(원). Construction-only manual annual input; 0 means
@@ -115,6 +119,8 @@ class OperatorProfileResponse(BaseModel):
     business_type: str
     license_codes: List[str] = Field(default_factory=list)
     region_codes: List[str] = Field(default_factory=list)
+    association_memberships: List[str] = Field(default_factory=list)
+    tech_fields: List[str] = Field(default_factory=list)
     annual_revenue: float
     capacity_score: float
     construction_capacity_amount: float = 0.0
