@@ -71,6 +71,33 @@ const emptySuggestions: OnboardingSuggestionsResponse = {
   strategy: []
 };
 
+// cohort 정체성(협회 가입/기술부문) 후보 — license_codes 와 동일한 다중값 profile 후보.
+// 값이 이미 한국어 명칭이라 raw chips 로 노출된다(codeValued 매핑 없음).
+const cohortSuggestions: OnboardingSuggestionsResponse = {
+  ...suggestions,
+  profile: [
+    {
+      field: "tech_fields",
+      value: ["수로측량업"],
+      source: "internal_notices",
+      confidence: 0.6,
+      needs_confirmation: true,
+      reason: "매칭 공고 7건에서 기술부문 추정",
+      matched_notice_count: 7
+    },
+    {
+      field: "association_memberships",
+      value: ["한국수로측량협회"],
+      source: "internal_notices",
+      confidence: 0.5,
+      needs_confirmation: true,
+      reason: "매칭 공고 4건에서 협회 제한",
+      matched_notice_count: 4
+    }
+  ],
+  strategy: []
+};
+
 const applyResponse: OnboardingApplyResponse = {
   applied: [{ field: "business_type", target: "profile", value: "construction" }],
   ignored: [{ field: "license_codes", reason: "확정하지 않음" }],
@@ -286,5 +313,44 @@ describe("OnboardingWizard", () => {
     // 결과 단계로 전이하지 않음 — 여전히 review(반영 버튼 존재)
     expect(screen.getByRole("button", { name: /수락한 .*건 반영/ })).toBeInTheDocument();
     expect(screen.queryByText("반영된 필드 1건")).not.toBeInTheDocument();
+  });
+
+  it("cohort 후보(기술부문/협회 가입)를 다른 profile 후보와 동일하게 draft로 렌더한다", async () => {
+    installFetchMock({ suggestionsPayload: cohortSuggestions });
+    renderWizard();
+    await submitSeed();
+
+    // FIELD_META 룩업이 raw 필드명 대신 한국어 라벨을 주고(카드 aria-label),
+    // 값은 이미 한국어라 codeValued 매핑 없이 raw chips 로 노출된다.
+    const techCard = await screen.findByRole("listitem", { name: "기술부문/전문분야 후보" });
+    const assocCard = screen.getByRole("listitem", { name: "협회 가입 후보" });
+    expect(within(techCard).getByText("수로측량업")).toBeInTheDocument();
+    expect(within(assocCard).getByText("한국수로측량협회")).toBeInTheDocument();
+    // 다른 후보와 동일하게 draft("추천 후보 · 확인 필요")로 시작(확정 아님, §2 정직 명세)
+    expect(within(techCard).getByText("추천 후보 · 확인 필요")).toBeInTheDocument();
+    expect(within(assocCard).getByText("추천 후보 · 확인 필요")).toBeInTheDocument();
+  });
+
+  it("수락한 cohort 후보(기술부문/협회 가입)를 apply decisions에 포함한다", async () => {
+    const fetchMock = installFetchMock({ suggestionsPayload: cohortSuggestions });
+    renderWizard();
+    const user = await submitSeed();
+
+    const techCard = await screen.findByRole("listitem", { name: "기술부문/전문분야 후보" });
+    const assocCard = screen.getByRole("listitem", { name: "협회 가입 후보" });
+    await user.click(within(techCard).getByRole("button", { name: "수락" }));
+    await user.click(within(assocCard).getByRole("button", { name: "수락" }));
+
+    await user.click(screen.getByRole("button", { name: /수락한 2건 반영/ }));
+
+    await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
+    const [, init] = applyCalls(fetchMock)[0]!;
+    // 다중값(문자열 리스트) 그대로 apply payload 에 담긴다(APPLY_FIELDS 화이트리스트 통과)
+    expect(JSON.parse(String(init?.body))).toEqual({
+      decisions: [
+        { field: "tech_fields", value: ["수로측량업"] },
+        { field: "association_memberships", value: ["한국수로측량협회"] }
+      ]
+    });
   });
 });

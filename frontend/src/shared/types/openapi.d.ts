@@ -5809,7 +5809,7 @@ export interface components {
          *     미지원 필드명을 422 로 거른다(설계 §3 확정 필드).
          * @enum {string}
          */
-        OnboardingApplyField: "business_type" | "license_codes" | "region_codes" | "focus_categories" | "focus_regions" | "min_budget_estimate" | "max_budget_estimate";
+        OnboardingApplyField: "business_type" | "license_codes" | "region_codes" | "tech_fields" | "association_memberships" | "focus_categories" | "focus_regions" | "min_budget_estimate" | "max_budget_estimate";
         /**
          * OnboardingApplyRequest
          * @description 확정된 필드 결정 리스트. 명시적으로 넘어온(=accepted) 필드만 반영한다.
@@ -6440,6 +6440,10 @@ export interface components {
             license_codes?: string[];
             /** Region Codes */
             region_codes?: string[];
+            /** Association Memberships */
+            association_memberships?: string[];
+            /** Tech Fields */
+            tech_fields?: string[];
             /** Annual Revenue */
             annual_revenue: number;
             /** Capacity Score */
@@ -6479,6 +6483,10 @@ export interface components {
             license_codes?: string[] | null;
             /** Region Codes */
             region_codes?: string[] | null;
+            /** Association Memberships */
+            association_memberships?: string[] | null;
+            /** Tech Fields */
+            tech_fields?: string[] | null;
             /** Annual Revenue */
             annual_revenue?: number | null;
             /** Capacity Score */
