@@ -19,10 +19,19 @@
   테스트는 :func:`aggregate_suggestions` 를 진입점으로 쓴다.
 - **매직값 금지**(§4.5.1): 임계·confidence 밴드·top-N·백분위는 모듈 상단 상수
   테이블로 선언한다. 이 모듈 전용이라 config Settings 로 승격하지 않는다.
-- **패턴 재사용**(§4.6): 면허 코드 추출은 classifier 의
-  ``extract_license_tokens`` 를, 지역/업무구분 정규화는
-  ``classification.text`` 헬퍼를, 자격 원문 키는 ``eligibility_labeling`` 의
-  선언 상수를 재사용한다(복붙 금지).
+- **패턴 재사용**(§4.6): 면허명 추출은 ``license_eligibility.
+  license_limit_names`` (corpus-anchored 파서·코드 접미 제거 재사용)를, 지역/
+  업무구분 정규화는 ``classification.text`` 헬퍼를 재사용한다(복붙 금지).
+
+license_codes 후보의 네임스페이스(면허명, 코드 아님) 근거: ``CompanyProfile.
+license_codes`` 는 한글 면허명을 저장하고(front chip·canonical operator 값
+["엔지니어링","항만및해안",...]), 두 소비자(classifier ``assess_license`` 와
+``license_eligibility.assess_license_eligibility``)가 그 값을 재토큰화해
+비교한다. classifier 의 ``extract_license_tokens`` 를 원문 면허명에 돌리면
+ENG001 포괄 별칭이 해양/항만/전기설비 전문분야를 한 코드로 collapse 시키므로
+(``엔지니어링사업(해양)`` → ENG001), 정밀 신호가 소실된다. 반대로 면허 **표시명**
+은 전문분야를 구분해 보존하고 두 소비자 경로(원문 정규화 키 비교)에 정합한다.
+따라서 후보값은 canonical 코드가 아니라 면허 표시명이다.
 """
 
 from __future__ import annotations
@@ -31,21 +40,17 @@ import math
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Optional, Union
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.models import Project
 from app.services.classification.text import (
-    extract_license_tokens,
     extract_project_regions,
     normalize_business_type,
 )
-from app.services.eligibility_labeling import (
-    LICENSE_LIMIT_SOURCE_FIELDS,
-    LICENSE_LIMITS_KEY,
-)
+from app.services.license_eligibility import license_limit_names
 
 # --- 후보 소스/필드 이름 (단일 출처, §4.5.1) --------------------------------
 
@@ -157,7 +162,7 @@ class NoticeFeatures:
 
     business_type: Optional[str]  # normalize_business_type(category) — 정규화 업무구분
     category: Optional[str]  # 원본 project.category(소문자) — focus_categories 소스
-    license_codes: frozenset[str]  # eligibility_raw.license_limits 에서 추출한 면허 코드
+    license_names: frozenset[str]  # license_limits 면허 표시명(코드 접미 제거, 전문분야 구분)
     region_codes: frozenset[str]  # 지역제한이 명시된 공고의 지역만
     budget: Optional[float]  # budget_estimate(또는 max/min 폴백), 양수만
 
@@ -392,7 +397,7 @@ def aggregate_suggestions(
             FIELD_BUSINESS_TYPE, [feature.business_type for feature in features], total
         ),
         _multi_value_suggestion(
-            FIELD_LICENSE_CODES, [feature.license_codes for feature in features], total
+            FIELD_LICENSE_CODES, [feature.license_names for feature in features], total
         ),
         _multi_value_suggestion(FIELD_REGION_CODES, region_sets, total),
     ]
@@ -417,32 +422,18 @@ def aggregate_suggestions(
 # --- I/O 경계 (얇은 조회 → 순수 특성) ----------------------------------------
 
 
-def _extract_license_codes(eligibility_raw: object) -> frozenset[str]:
-    """공고 자격 원문의 ``license_limits`` 에서 면허 코드를 추출한다.
+def _extract_license_names(eligibility_raw: object) -> frozenset[str]:
+    """공고 자격 원문의 ``license_limits`` 에서 면허 **표시명**을 추출한다.
 
-    설계 §2: ``eligibility_raw.license_limits`` 의 ``lcnsLmtNm``(면허명/코드)·
-    ``permsnIndstrytyList``(허용 업종) 원문을 classifier 의
-    ``extract_license_tokens`` 로 정규 면허 코드로 변환한다. 필드 키는
-    ``eligibility_labeling`` 의 선언 상수를 단일 출처로 재사용한다(§4.6).
+    설계 §2: ``eligibility_raw.license_limits`` 의 ``lcnsLmtNm``(면허명/코드)에서
+    코드 접미("/1253")를 뗀 표시명을 후보로 낸다. canonical 코드가 아니라
+    표시명인 이유는 모듈 docstring 참조(ENG001/HYDRO001 collapse 회피 + 프로필
+    저장 값 공간 정합). ``license_eligibility.license_limit_names`` 의
+    corpus-anchored 파서를 재사용한다(복붙 금지, §4.6).
     """
     if not isinstance(eligibility_raw, dict):
         return frozenset()
-    rows = eligibility_raw.get(LICENSE_LIMITS_KEY)
-    if not isinstance(rows, list):
-        return frozenset()
-
-    codes: set[str] = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        for field in LICENSE_LIMIT_SOURCE_FIELDS:
-            raw_value = row.get(field)
-            if raw_value is None:
-                continue
-            text = str(raw_value).strip()
-            if text:
-                codes |= extract_license_tokens(text)
-    return frozenset(codes)
+    return frozenset(license_limit_names(eligibility_raw))
 
 
 def _project_budget(project: Project) -> Optional[float]:
@@ -465,7 +456,7 @@ def project_to_features(project: Project) -> NoticeFeatures:
     return NoticeFeatures(
         business_type=normalize_business_type(project.category),
         category=category,
-        license_codes=_extract_license_codes(project.eligibility_raw),
+        license_names=_extract_license_names(project.eligibility_raw),
         region_codes=region_codes,
         budget=_project_budget(project),
     )
@@ -473,16 +464,12 @@ def project_to_features(project: Project) -> NoticeFeatures:
 
 def _keyword_filter(seed: OnboardingSeed) -> Optional[object]:
     """seed 키워드를 title/description/requirements OR ilike 절로 만든다."""
+    text_columns = (Project.title, Project.description, Project.requirements)
     clauses = []
-    text_columns: tuple[Callable[[], object], ...] = (
-        lambda: Project.title,
-        lambda: Project.description,
-        lambda: Project.requirements,
-    )
     for keyword in seed.keywords:
         like = f"%{keyword}%"
         for column in text_columns:
-            clauses.append(column().ilike(like))
+            clauses.append(column.ilike(like))
     if not clauses:
         return None
     return or_(*clauses)

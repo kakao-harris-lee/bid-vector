@@ -96,6 +96,7 @@ __all__ = [
     "normalize_license_key",
     "profile_license_keys",
     "parse_license_limit_groups",
+    "license_limit_names",
     "assess_license_eligibility",
 ]
 
@@ -368,6 +369,32 @@ def parse_license_limit_groups(eligibility_raw: dict | None) -> list[LicenseGrou
     (AND)으로 취급된다. 그룹 순서는 처음 등장 순서를 유지한다. IO 접근 없음.
     """
     return _parse_rows(eligibility_raw)[0]
+
+
+def license_limit_names(eligibility_raw: dict | None) -> tuple[str, ...]:
+    """``license_limits`` 의 면허명(코드 접미 제거)을 등장순·중복 제거로 돌려준다.
+
+    표시/프로필 저장용 소비자(예: 온보딩 후보 역추천)를 위한 얇은 표면. 그룹
+    의미론(OR/AND)과 무관하게 요건 면허명만 평탄화해 낸다. 코드 접미("/1253")
+    제거·표시명 산출은 :func:`parse_license_limit_groups` 의 corpus-anchored
+    파서를 재사용하므로 단일 출처다(복붙 없음).
+
+    **왜 canonical 코드가 아니라 면허명인가**: ``taxonomy`` 의 ENG001 별칭은
+    포괄 substring 이라 서로 다른 전문분야를 한 코드로 collapse 시키고
+    (``엔지니어링사업(해양)``·``(전기설비)`` → ENG001), HYDRO001 도 해양조사
+    하위 종목을 collapse 한다. 면허명(표시명)은 이 전문분야 구분을 보존하며,
+    ``CompanyProfile.license_codes`` 가 실제로 저장하는 값 공간(한글 면허명)과
+    ``assess_license_eligibility`` 의 원문 정규화 키 비교 경로에 정합한다.
+    IO 접근 없음.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for group in parse_license_limit_groups(eligibility_raw):
+        for requirement in group.requirements:
+            if requirement.name and requirement.name not in seen:
+                seen.add(requirement.name)
+                names.append(requirement.name)
+    return tuple(names)
 
 
 # --- 판정 (순수) -------------------------------------------------------------
