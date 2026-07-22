@@ -12,6 +12,7 @@ from app.api import (
     dashboard,
     decision_samples,
     ml,
+    onboarding,
     operations,
     operator,
     predictions,
@@ -28,6 +29,7 @@ router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 router.include_router(backtests.router, prefix="/backtests", tags=["Backtests"])
 router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 router.include_router(operator.router, prefix="/operator", tags=["Operator"])
+router.include_router(onboarding.router, prefix="/operator", tags=["Onboarding"])
 router.include_router(projects.router, prefix="/projects", tags=["Projects"])
 router.include_router(bids.router, prefix="/bids", tags=["Bids"])
 router.include_router(predictions.router, prefix="/predictions", tags=["AI Predictions"])
