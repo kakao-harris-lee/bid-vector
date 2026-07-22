@@ -224,11 +224,52 @@ def derive_group(
 
 
 def base_amount(project: Project, historical: HistoricalData) -> float | None:
-    return (
-        amount_float(historical.base_amount)
-        or amount_float(project.budget_amount)
-        or amount_float(project.estimated_price)
-    )
+    """Raw pricing-base fallback: stored 기초금액, else the project budget field.
+
+    Callers pick the estimate-aware base via ``resolve_pricing_base``; this stays
+    the fallback tail used when neither a clean stored base nor a recovered
+    estimate is available. ``Project``'s only base/budget field is ``budget_estimate``
+    (추정가격). The old fallback referenced ``project.budget_amount`` AND
+    ``project.estimated_price`` — NEITHER exists on ``Project`` (estimated_price lives
+    on ``PaperBidSettlement``), so both raised ``AttributeError`` the moment
+    ``historical.base_amount`` was falsy. That crash stayed latent because
+    ``base_amount`` is truthy for almost every row, short-circuiting the fallback.
+    """
+    return amount_float(historical.base_amount) or amount_float(project.budget_estimate)
+
+
+# Provenance labels for the base value fed into error measurement.
+BASE_SOURCE_STORED = "base_amount"
+BASE_SOURCE_ESTIMATED = "base_amount_estimated"
+BASE_SOURCE_PROJECT = "project_budget"
+BASE_SOURCE_NONE = "none"
+
+
+def resolve_pricing_base(
+    project: Project, historical: HistoricalData, basis: str
+) -> tuple[float | None, str]:
+    """Choose the pricing base used for error measurement + its provenance source.
+
+    A non-clean stored ``base_amount`` (derived 예정가-역산/VAT or suspect) is
+    contaminated, so prefer the recovered ``base_amount_estimated`` (복수예비가격
+    midpoint, a real 기초금액 추정) when positive — this measures error on a
+    기초금액-basis instead of a 예정가-basis. Clean rows keep the stored base; rows
+    with neither a usable stored base nor an estimate fall back to project budget
+    fields. Pure: no I/O, so the choice is unit-testable as a value table.
+
+    ``base_amount_estimated`` is an 개찰-time reserve recovery of the 기초금액 that
+    was polluted in storage — the same information the notice publishes at
+    announcement, NOT future leakage, so it does not affect the ``as_of`` history
+    boundary applied elsewhere.
+    """
+    estimated = amount_float(getattr(historical, "base_amount_estimated", None))
+    if basis != BASIS_CLEAN and estimated and estimated > 0:
+        return estimated, BASE_SOURCE_ESTIMATED
+    stored = amount_float(historical.base_amount)
+    if stored and stored > 0:
+        return stored, BASE_SOURCE_STORED
+    budget = base_amount(project, historical)
+    return (budget, BASE_SOURCE_PROJECT) if budget else (None, BASE_SOURCE_NONE)
 
 
 def resolve_base_basis(historical: HistoricalData, result: TenderResult) -> str:
@@ -335,7 +376,8 @@ def select_latest_targets(
         if result.project_id in seen_project_ids:
             continue
         seen_project_ids.add(result.project_id)
-        budget = base_amount(project, historical)
+        basis = resolve_base_basis(historical, result)
+        budget, _base_source = resolve_pricing_base(project, historical, basis)
         actual_amount = amount_float(result.winning_amount)
         if not budget or budget <= 0 or not actual_amount or actual_amount <= 0:
             continue
@@ -433,7 +475,8 @@ def select_targets_by_notice(
         result = results_by_project.get(historical.project_id)
         if project is None or result is None:
             continue
-        budget = base_amount(project, historical)
+        basis = resolve_base_basis(historical, result)
+        budget, _base_source = resolve_pricing_base(project, historical, basis)
         actual_amount = amount_float(result.winning_amount)
         if not budget or budget <= 0 or not actual_amount or actual_amount <= 0:
             continue
@@ -513,7 +556,13 @@ def evaluate_target(
     result = target.result
     project = target.project
     historical = target.historical
-    budget = base_amount(project, historical)
+    basis = resolve_base_basis(historical, result)
+    stored_base = amount_float(historical.base_amount)
+    estimated_base = amount_float(getattr(historical, "base_amount_estimated", None))
+    # For non-clean rows the stored base_amount is 예정가-역산/VAT contaminated, so
+    # resolve_pricing_base swaps in the recovered 기초금액 estimate — this measures
+    # error on a 기초금액-basis instead of the polluted 예정가-basis.
+    budget, base_source = resolve_pricing_base(project, historical, basis)
     actual_amount = amount_float(result.winning_amount)
     if not budget or not actual_amount:
         raise ValueError(f"Target {historical.notice_number} has no usable budget or winning amount.")
@@ -605,7 +654,13 @@ def evaluate_target(
     return {
         "group": target.group,
         "group_source": target.group_source,
-        "basis": resolve_base_basis(historical, result),
+        "basis": basis,
+        "base_source": base_source,
+        "base_provenance": {
+            "source": base_source,
+            "stored_base_amount": round(stored_base, 2) if stored_base else None,
+            "base_amount_estimated": round(estimated_base, 2) if estimated_base else None,
+        },
         "notice_number": historical.notice_number or project.notice_number,
         "project_id": historical.project_id,
         "title": project.title or getattr(historical, "title", None),
@@ -780,6 +835,7 @@ def report_short_target(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "group": row.get("group"),
         "basis": row.get("basis"),
+        "base_source": row.get("base_source"),
         "amount_bucket": row.get("amount_bucket"),
         "procurement_rate_band": row.get("procurement_rate_band"),
         "data_quality_flags": row.get("data_quality_flags") or [],
