@@ -16,6 +16,7 @@ from app.models.models import CompanyProfile, OperatorStrategy, Project
 from app.services.onboarding.suggestions import (
     BUDGET_ROUNDING_UNIT,
     CONFIDENCE_BANDS,
+    FIELD_ASSOCIATION_MEMBERSHIPS,
     FIELD_BUSINESS_TYPE,
     FIELD_FOCUS_CATEGORIES,
     FIELD_FOCUS_REGIONS,
@@ -23,6 +24,7 @@ from app.services.onboarding.suggestions import (
     FIELD_MAX_BUDGET,
     FIELD_MIN_BUDGET,
     FIELD_REGION_CODES,
+    FIELD_TECH_FIELDS,
     MIN_SUPPORTING_NOTICES,
     NEEDS_CONFIRMATION,
     SOURCE_INTERNAL_NOTICES,
@@ -42,6 +44,8 @@ def _feature(
     license_names=(),
     region_codes=(),
     budget=None,
+    tech_fields=(),
+    association_memberships=(),
 ):
     return NoticeFeatures(
         business_type=business_type,
@@ -49,6 +53,8 @@ def _feature(
         license_names=frozenset(license_names),
         region_codes=frozenset(region_codes),
         budget=budget,
+        tech_fields=frozenset(tech_fields),
+        association_memberships=frozenset(association_memberships),
     )
 
 
@@ -200,7 +206,133 @@ def test_all_candidates_need_confirmation_and_bounded_confidence():
         assert item.source == SOURCE_INTERNAL_NOTICES
 
 
+# --- 순수 집계: cohort 후보(기술부문/협회 가입) ------------------------------
+
+
+def test_tech_fields_candidate_respects_min_support():
+    """요구 기술부문(canonical)이 최소 지지 이상이면 tech_fields 후보로 나온다."""
+    features = [
+        _feature(tech_fields=("해양엔지니어링",)),
+        _feature(tech_fields=("해양엔지니어링",)),
+        _feature(tech_fields=("수로조사",)),  # 1건뿐 → 제외
+    ]
+    bundle = aggregate_suggestions(features, seed=_SEED)
+
+    suggestion = _by_field(bundle.profile, FIELD_TECH_FIELDS)
+    assert suggestion is not None
+    assert suggestion.value == ["해양엔지니어링"]
+    assert "수로조사" not in suggestion.value
+    assert suggestion.source == SOURCE_INTERNAL_NOTICES
+    assert suggestion.needs_confirmation is True
+    assert suggestion.matched_notice_count == 2
+    # 근거 건수가 reason 에 남는다(§2 provenance).
+    assert "해양엔지니어링(2건)" in suggestion.reason
+
+
+def test_association_membership_candidate_from_frequent_requirement():
+    """협회 가입 요건이 자주 명시되면 그 협회 canonical 이 후보로 나온다."""
+    features = [
+        _feature(association_memberships=("엔지니어링협회",)),
+        _feature(association_memberships=("엔지니어링협회",)),
+        _feature(),  # 요건 없음 → 신호 없음(중립)
+    ]
+    bundle = aggregate_suggestions(features, seed=_SEED)
+
+    suggestion = _by_field(bundle.profile, FIELD_ASSOCIATION_MEMBERSHIPS)
+    assert suggestion is not None
+    assert suggestion.value == ["엔지니어링협회"]
+    assert suggestion.matched_notice_count == 2
+    assert "엔지니어링협회(2건)" in suggestion.reason
+
+
+def test_engineering_business_term_does_not_surface_as_association_candidate():
+    """FLAG_ENGINEERING_BUSINESS 용어(사업 신고)는 협회 후보로 surface 되지 않는다.
+
+    회귀 가드(리뷰 지적): association_memberships 는 협회 **가입**(FLAG_ASSOCIATION,
+    엔지니어링협회)만 제안하고 엔지니어링사업자/활동주체(엔지니어링산업 진흥법상
+    사업 신고, FLAG_ENGINEERING_BUSINESS)는 협회 가입이 아니라 제외한다. 자격
+    원문에 engineering_business 용어가 MIN_SUPPORTING_NOTICES 이상 있어도 협회
+    후보가 나오면 안 된다 — 이 의도적 필터가 미래에 느슨해지지 않도록 고정한다.
+    필터가 사는 실제 경로(project_to_features → aggregate_suggestions)를 태운다.
+    """
+    projects = [
+        Project(
+            title="해양 기술용역 사업",
+            description="",
+            requirements="",
+            budget_estimate=100_000_000.0,
+            category="technical-service",
+            eligibility_raw={
+                "flags": {},
+                "license_limits": [{"lcnsLmtNm": "엔지니어링사업자"}],
+            },
+        )
+        for _ in range(MIN_SUPPORTING_NOTICES)
+    ]
+    features = [project_to_features(project) for project in projects]
+
+    # 특성 레벨: engineering_business 용어는 association 신호를 세우지 않는다(중립).
+    for feature in features:
+        assert feature.association_memberships == frozenset()
+
+    bundle = aggregate_suggestions(features, seed=_SEED)
+
+    # 후보 레벨: MIN_SUPPORTING_NOTICES 만큼 있어도 협회 후보로 승격되지 않는다.
+    assert _by_field(bundle.profile, FIELD_ASSOCIATION_MEMBERSHIPS) is None
+
+
+def test_cohort_signals_absent_yield_no_candidates():
+    """자격/cohort 데이터가 없는 매칭 공고는 cohort 후보를 내지 않는다(빈, 중립)."""
+    features = [
+        _feature(business_type="construction"),
+        _feature(business_type="construction"),
+    ]
+    bundle = aggregate_suggestions(features, seed=_SEED)
+
+    assert _by_field(bundle.profile, FIELD_TECH_FIELDS) is None
+    assert _by_field(bundle.profile, FIELD_ASSOCIATION_MEMBERSHIPS) is None
+
+
 # --- 특성 추출(project_to_features) ------------------------------------------
+
+
+def test_project_to_features_extracts_cohort_signals_from_eligibility_raw():
+    """eligibility_raw.license_limits 에서 기술부문/협회 가입 신호를 룰로 추출한다."""
+    project = Project(
+        title="해양 항만 기술용역",
+        description="",
+        requirements="",
+        budget_estimate=100_000_000.0,
+        category="technical-service",
+        eligibility_raw={
+            "flags": {},
+            "license_limits": [
+                {"lcnsLmtNm": "엔지니어링사업(해양)"},
+                {"lcnsLmtNm": "한국엔지니어링협회 회원"},
+            ],
+        },
+    )
+    features = project_to_features(project)
+
+    # 해양 면허 → 기술부문 canonical(해양엔지니어링), 협회 원문 → 협회 canonical.
+    assert "해양엔지니어링" in features.tech_fields
+    assert "엔지니어링협회" in features.association_memberships
+
+
+def test_project_to_features_no_eligibility_yields_empty_cohort_signals():
+    """자격 원문이 없으면 cohort 신호는 빈 집합(중립) — 아무 것도 배제/제안하지 않는다."""
+    project = Project(
+        title="항만 준설 공사",
+        description="",
+        requirements="",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        eligibility_raw=None,
+    )
+    features = project_to_features(project)
+
+    assert features.tech_fields == frozenset()
+    assert features.association_memberships == frozenset()
 
 
 def test_project_to_features_extracts_license_names_from_eligibility_raw():
@@ -365,6 +497,42 @@ def test_endpoint_returns_candidates(client, test_db):
     # 면허 후보는 2건 지지된 "토목공사업"(표시명) 만(1건짜리 "항만및해안" 제외).
     license_item = _endpoint_field(payload["profile"], FIELD_LICENSE_CODES)
     assert license_item["value"] == ["토목공사업"]
+
+
+def test_endpoint_returns_cohort_candidates(client, test_db):
+    """자격 원문에 기술부문/협회 가입이 자주 요구되면 cohort 후보가 나온다."""
+    cohort_eligibility = {
+        "flags": {},
+        "license_limits": [
+            {"lcnsLmtNm": "엔지니어링사업(해양)"},
+            {"lcnsLmtNm": "한국엔지니어링협회 회원사"},
+        ],
+    }
+    _make_notice(
+        test_db,
+        title="항만 해양 기술용역 1",
+        category="technical-service",
+        eligibility_raw=cohort_eligibility,
+    )
+    _make_notice(
+        test_db,
+        title="항만 해양 기술용역 2",
+        category="technical-service",
+        eligibility_raw=cohort_eligibility,
+    )
+
+    response = client.get(
+        "/api/v1/operator/onboarding-suggestions", params={"keywords": "항만"}
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    tech = _endpoint_field(payload["profile"], FIELD_TECH_FIELDS)
+    assert tech["value"] == ["해양엔지니어링"]
+    assert tech["needs_confirmation"] is True
+    association = _endpoint_field(payload["profile"], FIELD_ASSOCIATION_MEMBERSHIPS)
+    assert association["value"] == ["엔지니어링협회"]
+    assert association["needs_confirmation"] is True
 
 
 def test_endpoint_no_match_returns_empty_with_diagnostic(client, test_db):

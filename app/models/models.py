@@ -157,6 +157,12 @@ class CompanyProfile(Base):
     awarded_contract_limit = Column(
         Float, default=0.0, nullable=False, server_default="0"
     )
+    # cohort 정체성(협회 가입/기술부문). ``license_codes``/``region_codes`` 와 동일한
+    # 콤마 구분 Text 다중값 패턴(join/split_multi_value_text 로 처리). 첫 실수요 고객
+    # (해양엔지니어링협회)의 핵심 cohort 속성이며 이 단계는 캡처만 한다 —
+    # eligibility 게이팅/추천 반영은 후속. 빈 문자열은 "미기재"로 중립.
+    association_memberships = Column(Text, default="", server_default="")
+    tech_fields = Column(Text, default="", server_default="")
     total_awards = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

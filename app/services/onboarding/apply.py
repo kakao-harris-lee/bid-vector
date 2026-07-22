@@ -48,6 +48,7 @@ from app.models.models import User
 from app.services.classification import taxonomy
 from app.services.classification.text import normalize_business_type
 from app.services.onboarding.suggestions import (
+    FIELD_ASSOCIATION_MEMBERSHIPS,
     FIELD_BUSINESS_TYPE,
     FIELD_FOCUS_CATEGORIES,
     FIELD_FOCUS_REGIONS,
@@ -55,6 +56,7 @@ from app.services.onboarding.suggestions import (
     FIELD_MAX_BUDGET,
     FIELD_MIN_BUDGET,
     FIELD_REGION_CODES,
+    FIELD_TECH_FIELDS,
 )
 
 # 확정 가능한 값 형태. GET ``OnboardingFieldSuggestion.value`` 와 동일 union 을 재사용해
@@ -103,6 +105,15 @@ APPLYABLE_FIELDS: dict[str, ApplyFieldSpec] = {
     ),
     FIELD_REGION_CODES: ApplyFieldSpec(
         FIELD_REGION_CODES, FieldTarget.PROFILE, "region_codes", FieldKind.STRING_LIST
+    ),
+    FIELD_TECH_FIELDS: ApplyFieldSpec(
+        FIELD_TECH_FIELDS, FieldTarget.PROFILE, "tech_fields", FieldKind.STRING_LIST
+    ),
+    FIELD_ASSOCIATION_MEMBERSHIPS: ApplyFieldSpec(
+        FIELD_ASSOCIATION_MEMBERSHIPS,
+        FieldTarget.PROFILE,
+        "association_memberships",
+        FieldKind.STRING_LIST,
     ),
     FIELD_FOCUS_CATEGORIES: ApplyFieldSpec(
         FIELD_FOCUS_CATEGORIES,

@@ -50,6 +50,12 @@ from app.services.classification.text import (
     extract_project_regions,
     normalize_business_type,
 )
+from app.services.eligibility_labeling import (
+    ASSOCIATION_QUALIFICATION_TERMS,
+    FLAG_ASSOCIATION,
+    LABEL_SOURCE_FIELDS,
+    extract_eligibility_labels,
+)
 from app.services.license_eligibility import license_limit_names
 
 # --- 후보 소스/필드 이름 (단일 출처, §4.5.1) --------------------------------
@@ -63,10 +69,23 @@ SOURCE_INTERNAL_NOTICES = "internal_notices"
 FIELD_BUSINESS_TYPE = "business_type"
 FIELD_LICENSE_CODES = "license_codes"
 FIELD_REGION_CODES = "region_codes"
+# cohort 정체성 후보(CompanyProfile.tech_fields / association_memberships 컬럼명과 일치).
+FIELD_TECH_FIELDS = "tech_fields"
+FIELD_ASSOCIATION_MEMBERSHIPS = "association_memberships"
 FIELD_FOCUS_CATEGORIES = "focus_categories"
 FIELD_FOCUS_REGIONS = "focus_regions"
 FIELD_MIN_BUDGET = "min_budget_estimate"
 FIELD_MAX_BUDGET = "max_budget_estimate"
+
+# 협회 가입 후보로 제안할 canonical 집합 — eligibility_labeling 의 선언 데이터를
+# 그대로 재사용한다(§4.6, 매직값 금지 §4.5.1). ``FLAG_ASSOCIATION`` (협회 가입)
+# 용어만 제안하고 엔지니어링사업자/활동주체(사업 신고, FLAG_ENGINEERING_BUSINESS)는
+# 협회 가입이 아니므로 제외한다 — 필드 의미(association_memberships)에 정합.
+_ASSOCIATION_MEMBERSHIP_CANONICALS: frozenset[str] = frozenset(
+    term.canonical
+    for term in ASSOCIATION_QUALIFICATION_TERMS
+    if term.flag == FLAG_ASSOCIATION
+)
 
 # 후보는 확정이 아니므로 항상 사용자 확인이 필요하다(설계 §2, 정직 명세 §2).
 NEEDS_CONFIRMATION = True
@@ -165,6 +184,10 @@ class NoticeFeatures:
     license_names: frozenset[str]  # license_limits 면허 표시명(코드 접미 제거, 전문분야 구분)
     region_codes: frozenset[str]  # 지역제한이 명시된 공고의 지역만
     budget: Optional[float]  # budget_estimate(또는 max/min 폴백), 양수만
+    # cohort 신호(eligibility_labeling 룰 추출). 자격 데이터가 없으면 빈 집합 =
+    # 중립(§ unknown/empty 중립). 기본값을 빈 집합으로 둬 기존 생성부는 불변.
+    tech_fields: frozenset[str] = frozenset()  # 요구 기술부문 canonical(TECH_FIELD_TERMS)
+    association_memberships: frozenset[str] = frozenset()  # 요구 협회 가입 canonical
 
 
 @dataclass(frozen=True)
@@ -399,6 +422,14 @@ def aggregate_suggestions(
         _multi_value_suggestion(
             FIELD_LICENSE_CODES, [feature.license_names for feature in features], total
         ),
+        _multi_value_suggestion(
+            FIELD_TECH_FIELDS, [feature.tech_fields for feature in features], total
+        ),
+        _multi_value_suggestion(
+            FIELD_ASSOCIATION_MEMBERSHIPS,
+            [feature.association_memberships for feature in features],
+            total,
+        ),
         _multi_value_suggestion(FIELD_REGION_CODES, region_sets, total),
     ]
 
@@ -436,6 +467,31 @@ def _extract_license_names(eligibility_raw: object) -> frozenset[str]:
     return frozenset(license_limit_names(eligibility_raw))
 
 
+def _extract_cohort_signals(
+    eligibility_raw: object,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """공고 자격 원문에서 (기술부문, 협회 가입) cohort 신호를 추출한다(순수).
+
+    ``eligibility_labeling.extract_eligibility_labels`` 의 순수 룰 해석기를 그대로
+    재사용해(§4.6, 복붙 금지) ``license_limits`` 매칭에서만 신호를 세운다. tech_fields
+    는 해석기가 이미 license_limits 소스로만 채우고, association 은 참가자격 소스
+    (``LABEL_SOURCE_FIELDS``) 매칭 중 협회 가입(``_ASSOCIATION_MEMBERSHIP_CANONICALS``)
+    canonical 만 취해 title 참고 매칭(오탐 축)을 배제한다. 자격 데이터가 없으면 두
+    집합 모두 빈다(§ unknown/empty 중립). IO/DB 접근 없음.
+    """
+    if not isinstance(eligibility_raw, dict):
+        return frozenset(), frozenset()
+    labels = extract_eligibility_labels(eligibility_raw)
+    tech_fields = frozenset(labels.tech_fields)
+    associations = frozenset(
+        match.term
+        for match in labels.matches
+        if match.source_field in LABEL_SOURCE_FIELDS
+        and match.term in _ASSOCIATION_MEMBERSHIP_CANONICALS
+    )
+    return tech_fields, associations
+
+
 def _project_budget(project: Project) -> Optional[float]:
     """공고의 대표 예산액(원). budget_estimate 우선, 없으면 max/min 폴백."""
     for value in (project.budget_estimate, project.budget_max, project.budget_min):
@@ -453,12 +509,17 @@ def project_to_features(project: Project) -> NoticeFeatures:
     project_regions, has_strict_limit = extract_project_regions(project)
     region_codes = frozenset(project_regions) if has_strict_limit else frozenset()
     category = (project.category or "").strip().lower() or None
+    tech_fields, association_memberships = _extract_cohort_signals(
+        project.eligibility_raw
+    )
     return NoticeFeatures(
         business_type=normalize_business_type(project.category),
         category=category,
         license_names=_extract_license_names(project.eligibility_raw),
         region_codes=region_codes,
         budget=_project_budget(project),
+        tech_fields=tech_fields,
+        association_memberships=association_memberships,
     )
 
 
@@ -540,6 +601,8 @@ __all__ = [
     "FIELD_BUSINESS_TYPE",
     "FIELD_LICENSE_CODES",
     "FIELD_REGION_CODES",
+    "FIELD_TECH_FIELDS",
+    "FIELD_ASSOCIATION_MEMBERSHIPS",
     "FIELD_FOCUS_CATEGORIES",
     "FIELD_FOCUS_REGIONS",
     "FIELD_MIN_BUDGET",

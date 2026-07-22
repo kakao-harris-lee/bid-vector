@@ -343,6 +343,37 @@ def test_endpoint_duplicate_field_last_wins_and_reports_ignored(client, test_db)
     assert profile["license_codes"] == ["토목공사업"]
 
 
+# --- 엔드포인트: cohort 필드(협회 가입/기술부문) 캡처 --------------------------
+
+
+def test_endpoint_applies_cohort_fields_round_trip(client, test_db):
+    """association_memberships/tech_fields 확정값이 프로필에 반영되고 GET 으로 조회된다."""
+    response = client.post(
+        _APPLY_URL,
+        json={
+            "decisions": [
+                {"field": "association_memberships", "value": ["엔지니어링협회"]},
+                {"field": "tech_fields", "value": ["해양엔지니어링", "수로조사"]},
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    applied = {item["field"]: item for item in payload["applied"]}
+    assert applied["association_memberships"]["target"] == "profile"
+    assert applied["association_memberships"]["value"] == ["엔지니어링협회"]
+    assert applied["tech_fields"]["target"] == "profile"
+    assert applied["tech_fields"]["value"] == ["해양엔지니어링", "수로조사"]
+
+    # round-trip: GET 프로필에 반영되고 다른 필드는 불변(부분 업데이트).
+    profile = client.get("/api/v1/operator/profile").json()
+    assert profile["association_memberships"] == ["엔지니어링협회"]
+    assert profile["tech_fields"] == ["해양엔지니어링", "수로조사"]
+    assert profile["license_codes"] == []
+    assert profile["region_codes"] == []
+
+
 # --- 엔드포인트: 검증 실패(422) ---------------------------------------------
 
 
