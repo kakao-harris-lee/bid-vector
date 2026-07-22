@@ -31,7 +31,8 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.time import kst_now  # noqa: E402
-from app.models.models import NoticeEligibilityLabel, Project  # noqa: E402
+from app.models.models import Project  # noqa: E402
+from app.services.eligibility_feedback import upsert_eligibility_label  # noqa: E402
 from app.services.eligibility_labeling import (  # noqa: E402
     LABELER_VERSION,
     SOURCE_RULE,
@@ -57,52 +58,17 @@ class GenerateStats:
     by_label: Counter = field(default_factory=Counter)
 
 
-# --- upsert (얇은 DB 경계, 멱등) ---------------------------------------------
-
-
-def upsert_label(
-    db: Session,
-    *,
-    project_id: int,
-    label: str,
-    source: str,
-    rationale: str,
-    labeler_version: str,
-) -> str:
-    """(project_id, source) 라벨을 insert/update 한다. ``inserted``|``updated`` 반환.
-
-    소스별 1라벨(유니크 제약)을 코드에서 upsert 로 지켜, 재실행 시 중복 없이
-    최신 판정·근거·규칙 버전으로 갱신한다. commit 은 호출부가 관리한다.
-    """
-    existing = (
-        db.query(NoticeEligibilityLabel)
-        .filter(
-            NoticeEligibilityLabel.project_id == project_id,
-            NoticeEligibilityLabel.source == source,
-        )
-        .one_or_none()
-    )
-    if existing is None:
-        db.add(
-            NoticeEligibilityLabel(
-                project_id=project_id,
-                label=label,
-                source=source,
-                rationale=rationale,
-                labeler_version=labeler_version,
-            )
-        )
-        return _OUTCOME_INSERTED
-    existing.label = label
-    existing.rationale = rationale
-    existing.labeler_version = labeler_version
-    return _OUTCOME_UPDATED
+# --- 라벨 생성 (upsert 핵심은 eligibility_feedback 서비스와 공유) --------------
 
 
 def generate_labels(
     db: Session, *, limit: int | None, stats: GenerateStats
 ) -> None:
-    """eligibility_raw 보유 공고를 순회해 rule 라벨을 upsert 한다(flush 만)."""
+    """eligibility_raw 보유 공고를 순회해 rule 라벨을 upsert 한다(flush 만).
+
+    upsert 는 엔드포인트(operator 피드백)와 공유하는 ``upsert_eligibility_label``
+    을 쓴다(복붙 금지). ``created`` 플래그를 inserted/updated 통계로 매핑한다.
+    """
     query = (
         db.query(Project.id, Project.title, Project.eligibility_raw)
         .filter(Project.eligibility_raw.isnot(None))
@@ -114,7 +80,7 @@ def generate_labels(
         stats.candidates += 1
         labels = extract_eligibility_labels(eligibility_raw, title=title)
         verdict = classify_eligibility(labels)
-        outcome = upsert_label(
+        _record, created = upsert_eligibility_label(
             db,
             project_id=project_id,
             label=verdict.label,
@@ -122,7 +88,7 @@ def generate_labels(
             rationale=verdict.rationale,
             labeler_version=LABELER_VERSION,
         )
-        stats.by_outcome[outcome] += 1
+        stats.by_outcome[_OUTCOME_INSERTED if created else _OUTCOME_UPDATED] += 1
         stats.by_label[verdict.label] += 1
     db.flush()
 

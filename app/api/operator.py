@@ -55,6 +55,11 @@ from app.schemas.schemas import (
     OperatorStrategyResponse,
     OperatorStrategyUpdate,
 )
+from app.schemas.eligibility_feedback import (
+    EligibilityFeedbackRequest,
+    EligibilityFeedbackResponse,
+)
+from app.services.eligibility_feedback import record_operator_label
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.notifications.manager import (
     OperatorNotificationService,
@@ -1117,3 +1122,41 @@ def mark_operator_notification_read(notification_id: int, db: Session = Depends(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
 
     return OperatorNotificationService().mark_as_read(db, notification)
+
+
+@router.post("/eligibility-feedback", response_model=EligibilityFeedbackResponse)
+def submit_eligibility_feedback(
+    request: EligibilityFeedbackRequest,
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """운영자 식별 피드백(적합/부적합/보류)을 operator 소스 라벨로 upsert 한다.
+
+    식별 피드백은 투찰 결정(BidDecisionRecord)과 별개 축으로, 어느 공고든
+    (eligibility_raw 유무 무관) 저장한다. precision/recall 은 리포트가 rule∩operator
+    교집합에서만 산출하므로 rule 라벨이 뒤늦게 backfill 되면 지표에 자동 편입된다.
+    """
+    operator = _resolve_operator_for_write(db, current_operator, operator_id)
+    project = (
+        db.query(Project).filter(Project.id == request.project_id).one_or_none()
+    )
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+
+    label = record_operator_label(
+        db, project=project, verdict=request.verdict, operator=operator
+    )
+    db.commit()
+    db.refresh(label)
+    return EligibilityFeedbackResponse(
+        project_id=int(label.project_id),
+        verdict=request.verdict,
+        label=str(label.label),
+        source=str(label.source),
+        rationale=label.rationale,
+        labeler_version=label.labeler_version,
+        operator_id=int(operator.id),
+    )

@@ -610,6 +610,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/eligibility-feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Eligibility Feedback
+         * @description 운영자 식별 피드백(적합/부적합/보류)을 operator 소스 라벨로 upsert 한다.
+         *
+         *     식별 피드백은 투찰 결정(BidDecisionRecord)과 별개 축으로, 어느 공고든
+         *     (eligibility_raw 유무 무관) 저장한다. precision/recall 은 리포트가 rule∩operator
+         *     교집합에서만 산출하므로 rule 라벨이 뒤늦게 backfill 되면 지표에 자동 편입된다.
+         */
+        post: operations["submit_eligibility_feedback_api_v1_operator_eligibility_feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/": {
         parameters: {
             query?: never;
@@ -5354,6 +5378,43 @@ export interface components {
             estimated_effort: number;
             /** Risks */
             risks: string[];
+        };
+        /**
+         * EligibilityFeedbackRequest
+         * @description 운영자 식별 피드백 요청 — 어느 공고에 어떤 판정을 남길지.
+         */
+        EligibilityFeedbackRequest: {
+            /**
+             * Project Id
+             * @description 식별 피드백 대상 프로젝트(공고) ID
+             */
+            project_id: number;
+            /**
+             * Verdict
+             * @description 운영자 식별 판정: 적합/부적합/보류
+             * @enum {string}
+             */
+            verdict: "적합" | "부적합" | "보류";
+        };
+        /**
+         * EligibilityFeedbackResponse
+         * @description 저장된 operator 소스 라벨 요약(operator 컨텍스트 포함).
+         */
+        EligibilityFeedbackResponse: {
+            /** Project Id */
+            project_id: number;
+            /** Verdict */
+            verdict: string;
+            /** Label */
+            label: string;
+            /** Source */
+            source: string;
+            /** Rationale */
+            rationale?: string | null;
+            /** Labeler Version */
+            labeler_version?: string | null;
+            /** Operator Id */
+            operator_id: number;
         };
         /** ForwardPaperBiddingRunRequest */
         ForwardPaperBiddingRunRequest: {
@@ -10282,6 +10343,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_eligibility_feedback_api_v1_operator_eligibility_feedback_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EligibilityFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EligibilityFeedbackResponse"];
                 };
             };
             /** @description Validation Error */

@@ -42,6 +42,12 @@ __all__ = [
     "SOURCE_OPERATOR",
     "LABEL_SOURCES",
     "LABELER_VERSION",
+    "VERDICT_FIT",
+    "VERDICT_UNFIT",
+    "VERDICT_HOLD",
+    "OPERATOR_VERDICT_TO_LABEL",
+    "OPERATOR_VERDICTS",
+    "OPERATOR_LABELER_VERSION",
     "QualificationTerm",
     "TechField",
     "ASSOCIATION_QUALIFICATION_TERMS",
@@ -77,6 +83,24 @@ LABEL_SOURCES = (SOURCE_RULE, SOURCE_LLM, SOURCE_OPERATOR)
 # rule-v2: TECH_FIELD_TERMS 에 해양 엔지니어링/기술사 면허 용어 추가(캘리브레이션,
 # #207 후속). 라벨 재생성 시 버전으로 갱신분을 추적한다.
 LABELER_VERSION = "rule-v2"
+
+# 운영자 식별 피드백 verdict(UI 한글) → 저장 라벨 매핑(§4.5.2 룩업 디스패치).
+# operator 소스 라벨의 어휘 단일 출처(매직값 금지 §4.5.1) — 스키마 검증과 저장
+# 서비스(eligibility_feedback)가 이 매핑을 공유한다. 적합→positive / 부적합→
+# negative / 보류→ambiguous 로 rule/llm 라벨과 같은 값 집합에 정렬된다.
+VERDICT_FIT = "적합"
+VERDICT_UNFIT = "부적합"
+VERDICT_HOLD = "보류"
+OPERATOR_VERDICT_TO_LABEL: dict[str, str] = {
+    VERDICT_FIT: LABEL_POSITIVE,
+    VERDICT_UNFIT: LABEL_NEGATIVE,
+    VERDICT_HOLD: LABEL_AMBIGUOUS,
+}
+# 허용 verdict 값 집합(스키마 검증의 단일 출처). 매핑 키에서 파생해 드리프트 방지.
+OPERATOR_VERDICTS: tuple[str, ...] = tuple(OPERATOR_VERDICT_TO_LABEL)
+
+# operator 라벨러 버전 — 운영자 피드백 캡처 경로 버전 추적(라벨 provenance).
+OPERATOR_LABELER_VERSION = "operator-v1"
 
 # eligibility_raw 구조 키(openapi.build_eligibility_raw 와 단일 출처).
 FLAGS_KEY = "flags"
