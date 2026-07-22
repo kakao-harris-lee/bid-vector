@@ -91,8 +91,6 @@ from app.services.opportunity_monitoring import (  # noqa: E402
 _RESPONSE_TYPE = "json"
 _PAGE_NO = 1
 _INQUIRY_DIV_NOTICE_NUMBER = "2"  # inqryDiv=2 => filter by bidNtceNo
-# OpenAPI header resultCodes that mean success ("03" = normal service, no data).
-_OK_RESULT_CODES = {"00", "03"}
 
 # argparse defaults (magic values declared here, never inline in a function).
 DEFAULT_DELAY_SECONDS = 1.0
@@ -242,18 +240,16 @@ def raise_for_result_code(payload: dict[str, Any]) -> None:
     those slipped through, they would parse to zero items and be miscounted as
     ``no_value``, resetting the consecutive-error counter so the abort guard
     never fires against a rate limit. Surfacing them as a per-notice error feeds
-    the guard. Mirrors the collector's notice-list / reserve-detail validation
-    (``collector.py``). An empty resultCode is treated as OK — some payload
-    shapes omit the header.
+    the guard. An empty resultCode is treated as OK — some payload shapes omit
+    the header.
+
+    Thin wrapper over the shared ``http_client.check_result_code`` (single source
+    for the ``00``/``03`` OK set, mirrored by the collector's notice-list /
+    reserve-detail validation). The ``BidPublicInfoService`` subject preserves
+    this script's original message verbatim; the raise-only return is kept for
+    callers that ignore the extracted code/message pair.
     """
-    header = openapi.openapi_header(payload)
-    result_code = str(header.get("resultCode") or "").strip()
-    if result_code and result_code not in _OK_RESULT_CODES:
-        result_message = str(header.get("resultMsg") or "").strip()
-        raise ValueError(
-            f"KONEPS BidPublicInfoService resultCode={result_code}: "
-            f"{result_message or 'unknown error'}"
-        )
+    http_client.check_result_code(payload, source="BidPublicInfoService")
 
 
 # --- IO seam: default real-API fetch -----------------------------------------

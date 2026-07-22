@@ -122,13 +122,9 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
                 f"{response.text[:300]} Tried service key variants: {key_variant}."
             )
         payload = http_client.load_openapi_json(response)
-        header = openapi.openapi_header(payload)
-        result_code = str(header.get("resultCode") or "").strip()
-        result_message = str(header.get("resultMsg") or "").strip()
-        if result_code and result_code not in {"00", "03"}:
-            raise ValueError(
-                f"KONEPS OpenAPI returned resultCode={result_code}: {result_message or 'unknown error'}"
-            )
+        result_code, result_message = http_client.check_result_code(
+            payload, source="OpenAPI returned"
+        )
 
         body = openapi.openapi_body(payload)
         if page_no == 1:

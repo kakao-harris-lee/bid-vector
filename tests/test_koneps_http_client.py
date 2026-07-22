@@ -147,3 +147,90 @@ def test_fetch_detail_html_payload_propagates_http_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="boom"):
         http_client.fetch_detail_html_payload("https://example.test/detail/1")
+
+
+# --- check_result_code: the consolidated resultCode envelope guard -------------
+# This helper replaced four copy-paste checks (collector list / reserve-detail,
+# collection notice-list, backfill script). The regression guard lives here on
+# the helper itself, not only on the backfill wrapper (which discards the tuple).
+
+
+def _result_payload(code, message=""):
+    return {"response": {"header": {"resultCode": code, "resultMsg": message}}}
+
+
+@pytest.mark.parametrize("code", ["00", "03", ""])
+def test_check_result_code_allows_ok_and_empty_codes(code):
+    # "00"/"03" are success; an empty/absent code passes (some payloads omit the
+    # header). The returned pair echoes the (stripped) header values.
+    assert http_client.check_result_code(
+        _result_payload(code, "ok"), source="OpenAPI returned"
+    ) == (code, "ok")
+
+
+@pytest.mark.parametrize("code", ["22", "30", "99"])
+def test_check_result_code_raises_on_error_code(code):
+    # Quota/throttle come back as HTTP 200 + non-OK resultCode -> must raise, and
+    # the message surfaces both the code and the resultMsg for diagnosis.
+    with pytest.raises(ValueError) as excinfo:
+        http_client.check_result_code(
+            _result_payload(code, "LIMITED_NUMBER"), source="OpenAPI returned"
+        )
+    assert f"resultCode={code}" in str(excinfo.value)
+    assert "LIMITED_NUMBER" in str(excinfo.value)
+
+
+def test_check_result_code_returns_stripped_pair():
+    # The (code, message) contract is what feeds collector/collection's
+    # ``state.last_result_code`` / ``last_result_message``: whitespace is stripped
+    # so a padded header does not corrupt the persisted state.
+    assert http_client.check_result_code(
+        _result_payload("  03 ", "  service normal  "), source="OpenAPI returned"
+    ) == ("03", "service normal")
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            "ScsbidInfoService returned",
+            "KONEPS ScsbidInfoService returned resultCode=22: quota exceeded",
+        ),
+        (
+            "OpenAPI returned",
+            "KONEPS OpenAPI returned resultCode=22: quota exceeded",
+        ),
+        (
+            "BidPublicInfoService",
+            "KONEPS BidPublicInfoService resultCode=22: quota exceeded",
+        ),
+    ],
+)
+def test_check_result_code_message_preserves_per_site_wording(source, expected):
+    # ``source`` carries each original call site's exact subject (note the
+    # collector/collection sites say "returned", the backfill script does not),
+    # so this consolidation preserves every per-site message verbatim.
+    with pytest.raises(ValueError) as excinfo:
+        http_client.check_result_code(
+            _result_payload("22", "quota exceeded"), source=source
+        )
+    assert str(excinfo.value) == expected
+
+
+def test_check_result_code_defaults_blank_message_to_unknown_error():
+    with pytest.raises(ValueError, match="resultCode=22: unknown error"):
+        http_client.check_result_code(
+            _result_payload("22", ""), source="OpenAPI returned"
+        )
+
+
+def test_check_result_code_message_excludes_service_key(monkeypatch):
+    # The error is built only from source/code/message -- never a service key.
+    # Plant a sentinel key in settings and assert it cannot leak into the raise.
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "SENTINEL-SECRET-KEY")
+    with pytest.raises(ValueError) as excinfo:
+        http_client.check_result_code(
+            _result_payload("22", "quota exceeded"), source="OpenAPI returned"
+        )
+    assert "SENTINEL-SECRET-KEY" not in str(excinfo.value)
+    assert "ServiceKey" not in str(excinfo.value)
