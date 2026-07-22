@@ -79,6 +79,19 @@ no_implicit_optional = true
 strict_equality = true
 disable_error_code = ["import-untyped"]
 
+# Phase 2c — app.services.koneps.field_contract (KONEPS 필드 계약 선언 + 순수 검증기:
+# 신규 수집 필드를 소비 전에 실 응답으로 assert 하는 게이트의 순수 코어). 무거운 deps 를
+# 끌지 않도록 app.domain.money.Basis(순수 strict 아일랜드)만 재사용하는 자립 순수 모듈이라
+# error-code 완화 없이 strict 로 올린다.
+[[tool.mypy.overrides]]
+module = ["app.services.koneps.field_contract"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------
