@@ -18,13 +18,18 @@ from app.models.models import User
 from app.schemas.onboarding import (
     OnboardingApplyRequest,
     OnboardingApplyResponse,
+    OnboardingSuggestionHistoryResponse,
     OnboardingSuggestionsResponse,
 )
 from app.services.onboarding import (
+    DEFAULT_HISTORY_LIMIT,
+    MAX_HISTORY_LIMIT,
     ApplyDecision,
+    DecisionStatus,
     OnboardingApplyError,
     OnboardingSeed,
     apply_onboarding_decisions,
+    list_onboarding_history,
     suggest_onboarding_fields,
 )
 
@@ -65,6 +70,57 @@ def get_onboarding_suggestions(
         "diagnostics": bundle.diagnostics,
         "profile": [item.to_dict() for item in bundle.profile],
         "strategy": [item.to_dict() for item in bundle.strategy],
+        "current_operator_id": int(target.id),
+        "current_operator_username": str(target.username or ""),
+    }
+
+
+@router.get(
+    "/onboarding-suggestions/history",
+    response_model=OnboardingSuggestionHistoryResponse,
+)
+def get_onboarding_suggestions_history(
+    field: str | None = Query(
+        default=None, description="필드명으로 필터(정확 일치, 선택)"
+    ),
+    status_filter: DecisionStatus | None = Query(
+        default=None,
+        alias="status",
+        description="결정 상태 필터(accepted/modified/rejected/pending, 선택)",
+    ),
+    limit: int = Query(
+        default=DEFAULT_HISTORY_LIMIT,
+        ge=1,
+        le=MAX_HISTORY_LIMIT,
+        description="페이지 크기(1~200, 선언 상한)",
+    ),
+    offset: int = Query(default=0, ge=0, description="페이지 오프셋"),
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """현재 operator 의 온보딩 결정 감사 이력을 최신순으로 조회한다(읽기 전용).
+
+    읽기 스코프 해석은 다른 operator 읽기 엔드포인트와 동일한 ``resolve_read_operator``
+    (canonical fallback / 403 / 404)를 재사용해 per-operator/synthetic 격리를 공유한다 —
+    응답에는 그 operator 의 ``user_id`` 행만 담긴다. ``status`` 는 Pydantic enum
+    (``DecisionStatus``)이 허용값 밖을 422 로 거른다(선언 허용값). 이 엔드포인트는
+    감사 로그만 읽고 아무 것도 쓰지 않는다.
+    """
+    target = resolve_read_operator(db, current_operator, operator_id)
+    page = list_onboarding_history(
+        db,
+        operator=target,
+        field=field,
+        status=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "items": [record.to_dict() for record in page.records],
+        "total": page.total,
+        "limit": limit,
+        "offset": offset,
         "current_operator_id": int(target.id),
         "current_operator_username": str(target.username or ""),
     }

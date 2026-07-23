@@ -14,6 +14,13 @@ from app.services.onboarding.apply import (
     OnboardingApplyError,
     apply_onboarding_decisions,
 )
+from app.services.onboarding.history import (
+    DEFAULT_HISTORY_LIMIT,
+    MAX_HISTORY_LIMIT,
+    AuditHistoryPage,
+    AuditRecord,
+    list_onboarding_history,
+)
 from app.services.onboarding.suggestions import (
     FieldSuggestion,
     NoticeFeatures,
@@ -31,6 +38,11 @@ __all__ = [
     "DecisionStatus",
     "OnboardingApplyError",
     "apply_onboarding_decisions",
+    "DEFAULT_HISTORY_LIMIT",
+    "MAX_HISTORY_LIMIT",
+    "AuditHistoryPage",
+    "AuditRecord",
+    "list_onboarding_history",
     "FieldSuggestion",
     "NoticeFeatures",
     "OnboardingSeed",

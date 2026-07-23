@@ -13,6 +13,7 @@ region_codes/focus_categories/focus_regions), 실수(min/max_budget_estimate)로
 from __future__ import annotations
 
 import enum
+from datetime import datetime
 from typing import List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -147,3 +148,43 @@ class OnboardingApplyResponse(BaseModel):
     )
     current_operator_id: int = Field(description="반영이 스코프된 운영자 id")
     current_operator_username: str = Field(description="반영이 스코프된 운영자 username")
+
+
+class OnboardingSuggestionHistoryItem(BaseModel):
+    """감사 이력 한 행(읽기 전용).
+
+    apply 가 남긴 append-only 결정 로그의 조회 표현이다. ``value`` 는 저장된 JSON
+    텍스트를 원형(문자열/숫자/문자열 리스트)으로 복원한 값이며, ``status`` 는 apply 와
+    동일한 :class:`DecisionStatus` 단일 출처 값이다(허용값 드리프트 방지). 감사 행은
+    불변이라 ``created_at`` 만 노출한다(UTC 저장 — 스키마에서 타임존을 재포맷하지 않음).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(description="감사 행 id")
+    field: str = Field(description="결정한 대상 필드명(프로필/전략 컬럼)")
+    value: Union[str, float, List[str]] = Field(
+        description="사용자 결정 원형값(필드 종류별 형태)"
+    )
+    status: DecisionStatus = Field(
+        description="결정 상태(accepted/modified/rejected/pending)"
+    )
+    source: Optional[str] = Field(default=None, description="후보 출처(provenance, 있으면)")
+    confidence: Optional[float] = Field(
+        default=None, description="후보 신뢰도(provenance, 있으면)"
+    )
+    reason: Optional[str] = Field(default=None, description="도출 근거(있으면)")
+    created_at: datetime = Field(description="기록 시각(UTC 저장)")
+
+
+class OnboardingSuggestionHistoryResponse(BaseModel):
+    """온보딩 감사 이력 페이지 — 최신순 레코드 + 페이지네이션 메타 + operator envelope."""
+
+    items: List[OnboardingSuggestionHistoryItem] = Field(
+        default_factory=list, description="감사 레코드 목록(created_at DESC, 최신순)"
+    )
+    total: int = Field(ge=0, description="필터 적용 후 전체 레코드 수(페이지네이션용)")
+    limit: int = Field(ge=1, description="적용된 페이지 크기")
+    offset: int = Field(ge=0, description="적용된 페이지 오프셋")
+    current_operator_id: int = Field(description="응답이 스코프된 운영자 id")
+    current_operator_username: str = Field(description="응답이 스코프된 운영자 username")
