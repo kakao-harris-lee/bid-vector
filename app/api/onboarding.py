@@ -1,11 +1,20 @@
-"""반자동 온보딩 후보 조회 라우터(읽기 전용).
+"""반자동 온보딩 라우터.
 
 operator 라우터(``app/api/operator.py``)가 이미 크므로(§4.5.4) 온보딩 경계를 별
 모듈로 분리하고 ``/operator`` prefix 아래 등록한다. 라우터는 얇게 유지하고
-(§4/§4.5.5) 도메인 로직은 ``services.onboarding`` 에 위임한다. 인증은 기존 operator
-읽기 엔드포인트와 동일한 의존성(``get_current_operator_optional`` +
-``resolve_read_operator``)을 사용해 보안 정책(canonical fallback / 403 / 404)을
-공유한다. 이 엔드포인트는 공용 공고만 읽고 operator 데이터는 쓰지 않는다.
+(§4/§4.5.5) 도메인 로직은 ``services.onboarding`` 에 위임한다. 세 엔드포인트를 둔다:
+
+- ``GET  /onboarding-suggestions`` — 내부 공고에서 회사 프로필/전략 필드 후보를
+  역추천한다(읽기 전용, persist 없음).
+- ``POST /onboarding-suggestions/apply`` — 사용자가 확정한 필드만 현재 operator 의
+  프로필/전략에 부분 반영하고 모든 결정을 감사 로그에 append 한다(operator-scoped write).
+- ``GET  /onboarding-suggestions/history`` — 그 감사 로그(``onboarding_suggestions``)를
+  최신순으로 조회한다(operator-scoped read).
+
+읽기 엔드포인트는 ``resolve_read_operator``(canonical fallback / 403 / 404), 쓰기는
+``resolve_write_operator``(self-only / 403)를 재사용해 per-operator/synthetic 격리를
+다른 operator 엔드포인트와 동일하게 공유한다 — 각 응답/기록은 해석된 operator 의
+``user_id`` 스코프로만 한정된다.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,13 +27,18 @@ from app.models.models import User
 from app.schemas.onboarding import (
     OnboardingApplyRequest,
     OnboardingApplyResponse,
+    OnboardingSuggestionHistoryResponse,
     OnboardingSuggestionsResponse,
 )
 from app.services.onboarding import (
+    DEFAULT_HISTORY_LIMIT,
+    MAX_HISTORY_LIMIT,
     ApplyDecision,
+    DecisionStatus,
     OnboardingApplyError,
     OnboardingSeed,
     apply_onboarding_decisions,
+    list_onboarding_history,
     suggest_onboarding_fields,
 )
 
@@ -65,6 +79,57 @@ def get_onboarding_suggestions(
         "diagnostics": bundle.diagnostics,
         "profile": [item.to_dict() for item in bundle.profile],
         "strategy": [item.to_dict() for item in bundle.strategy],
+        "current_operator_id": int(target.id),
+        "current_operator_username": str(target.username or ""),
+    }
+
+
+@router.get(
+    "/onboarding-suggestions/history",
+    response_model=OnboardingSuggestionHistoryResponse,
+)
+def get_onboarding_suggestions_history(
+    field: str | None = Query(
+        default=None, description="필드명으로 필터(정확 일치, 선택)"
+    ),
+    status_filter: DecisionStatus | None = Query(
+        default=None,
+        alias="status",
+        description="결정 상태 필터(accepted/modified/rejected/pending, 선택)",
+    ),
+    limit: int = Query(
+        default=DEFAULT_HISTORY_LIMIT,
+        ge=1,
+        le=MAX_HISTORY_LIMIT,
+        description="페이지 크기(1~200, 선언 상한)",
+    ),
+    offset: int = Query(default=0, ge=0, description="페이지 오프셋"),
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """현재 operator 의 온보딩 결정 감사 이력을 최신순으로 조회한다(읽기 전용).
+
+    읽기 스코프 해석은 다른 operator 읽기 엔드포인트와 동일한 ``resolve_read_operator``
+    (canonical fallback / 403 / 404)를 재사용해 per-operator/synthetic 격리를 공유한다 —
+    응답에는 그 operator 의 ``user_id`` 행만 담긴다. ``status`` 는 Pydantic enum
+    (``DecisionStatus``)이 허용값 밖을 422 로 거른다(선언 허용값). 이 엔드포인트는
+    감사 로그만 읽고 아무 것도 쓰지 않는다.
+    """
+    target = resolve_read_operator(db, current_operator, operator_id)
+    page = list_onboarding_history(
+        db,
+        operator=target,
+        field=field,
+        status=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "items": [record.to_dict() for record in page.records],
+        "total": page.total,
+        "limit": limit,
+        "offset": offset,
         "current_operator_id": int(target.id),
         "current_operator_username": str(target.username or ""),
     }
