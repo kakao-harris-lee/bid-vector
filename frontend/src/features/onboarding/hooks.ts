@@ -3,7 +3,7 @@ import {
   applyOnboardingSuggestions,
   fetchOnboardingSuggestions,
   queryKeys,
-  type OnboardingApplyRequest,
+  type OnboardingApplyPayload,
   type OnboardingApplyResponse,
   type OnboardingSuggestionsQuery,
   type OnboardingSuggestionsResponse
@@ -44,7 +44,7 @@ export function useOnboardingSuggestions(
  */
 export function useApplyOnboardingMutation(session: AuthSession | null) {
   const queryClient = useQueryClient();
-  return useMutation<OnboardingApplyResponse, Error, OnboardingApplyRequest>({
+  return useMutation<OnboardingApplyResponse, Error, OnboardingApplyPayload>({
     mutationFn: (payload) => applyOnboardingSuggestions(payload, session?.token),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["profile"] });
