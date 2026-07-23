@@ -74,6 +74,17 @@ class PredictionWorkflowService:
         legal_floor_bid_rate = resolve_notice_legal_floor_bid_rate(
             project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
         )
+        # SCOPE BOUNDARY (title-alignment PR): the 3-path predictor-input unification
+        # (build_prediction_text on opportunity/backtest/smoke) intentionally does NOT
+        # cover this path. This is the /api/v1/predictions/price endpoint where
+        # ``PricePredictionRequest.description`` is a REQUIRED contract field — the
+        # CLIENT is authoritative for the analyzed text, so we respect the supplied
+        # ``request.description`` rather than overriding it with the project fields.
+        # (No internal/frontend caller constructs this request dropping the title;
+        # the title-drop asymmetry lived only in the monitor path, now fixed.)
+        # Aligning this to build_prediction_text(project) would silently ignore a
+        # required client input — an API-contract change owned by backend-builder
+        # (make description optional + project fallback), not this PR.
         prediction = self.price_prediction_port.predict_price(
             budget=resolved_bid_base or request.budget_estimate,
             category=request.category,
