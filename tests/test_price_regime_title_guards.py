@@ -152,6 +152,64 @@ def test_genuine_conflict_preserved():
 
 
 # --------------------------------------------------------------------------- #
+# 2b. Coverage-gap locks (ml-reviewer, non-blocking): pin behavior that already
+#     holds so future edits cannot silently drift it.
+# --------------------------------------------------------------------------- #
+
+
+def test_goods_food_special_case_gated_by_two_stage_cue():
+    """The goods 급식/농산물 special case (line ~399: forces deep_discount, clears
+    floor_bound) is gated on has_two_stage. With the phase-noise guard, a bare "2단계"
+    급식/농산물 notice that lacks a 규격/가격/동시 cue no longer trips has_two_stage, so
+    the special case does NOT fire — the label follows the (competitive) band. The
+    positive counterpart with a 규격·가격 cue still fires the special case."""
+    # negative: bare "2단계" + 급식/농산물, competitive band, NO spec/price cue →
+    # special case does NOT force deep_discount; floor_bound follows the band.
+    negative = _flags(
+        "학교 급식 농산물 구매 2단계 입찰", category="goods", rate_band="goods_price_competitive"
+    )
+    assert negative == {
+        "floor_bound": True,
+        "near_100": False,
+        "deep_discount": False,
+        "conflicting": False,
+        "signals": ["price_competitive"],
+    }
+    assert _two_stage(negative) is False
+
+    # positive: SAME 급식/농산물 goods notice WITH a 규격·가격 cue → has_two_stage=True →
+    # special case fires → deep_discount label (floor_bound cleared).
+    positive = _flags(
+        "규격·가격 2단계 급식 농산물 구매", category="goods", rate_band="goods_price_competitive"
+    )
+    assert positive == {
+        "floor_bound": False,
+        "near_100": False,
+        "deep_discount": True,
+        "conflicting": False,
+        "signals": ["deep_discount", "price_competitive", "two_stage_or_separated"],
+    }
+    assert _two_stage(positive) is True
+
+
+def test_negotiated_quote_plus_strong_cue_errs_toward_review():
+    """When 수의견적 (near_100 context) AND a strong price cue (적격심사/가격입찰/pq)
+    genuinely co-occur, the strong cue is never suppressed → floor_bound stays True
+    alongside near_100 → conflicting=True → ambiguous/review. The guard deliberately
+    errs toward MORE review (safe side) on a real dual signal, never fewer."""
+    flags = _flags(
+        "청소 용역 수의견적 제출 적격심사 대상", category="service", rate_band=None
+    )
+    assert flags == {
+        "floor_bound": True,
+        "near_100": True,
+        "deep_discount": False,
+        "conflicting": True,
+        "signals": ["direct_negotiated", "price_competitive"],
+    }
+
+
+# --------------------------------------------------------------------------- #
 # 3. price invariance: the guards are descriptive-only and must not move the
 #    recommended price. A phase-noise notice and a genuine two-stage notice with
 #    the same base amount/history produce identical price fields; only the regime
