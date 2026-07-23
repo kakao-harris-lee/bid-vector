@@ -179,19 +179,23 @@ export const DECISION_STATUS_META: Record<DecisionStatus, DecisionStatusMeta> = 
  * 감사 이력/전송 상태 메타(생성 `OnboardingDecisionStatus` 4값). UI 결정 상태와 겹치는
  * accepted/rejected/pending 표시는 `DECISION_STATUS_META` 를 재사용하고(§4.6 복붙 금지),
  * wire 전용 `modified`(수정 후 확정)만 더한다. 감사 행에 `pending` 은 실리지 않지만
- * (절대 미전송, §2), 상태 필터 select 는 생성 union 을 그대로 노출하므로 4값을 모두 둔다.
+ * (절대 미전송, §2) 방어적 표시 룩업을 위해 META 에는 4값을 모두 둔다. 상태 필터에
+ * 노출하는 값은 `AUDIT_STATUS_ORDER`(pending 제외)로 별도 선언한다.
  */
 export const AUDIT_STATUS_META: Record<OnboardingDecisionStatus, DecisionStatusMeta> = {
   ...DECISION_STATUS_META,
   modified: { label: "수정 반영", tone: "info" }
 };
 
-/** 상태 필터 select 노출 순서(선언적, §4.5-1) — 반영 결과부터 미확정까지. */
+/**
+ * 상태 필터 select 노출 순서(선언적, §4.5-1). 감사 행에 실제로 실리는 상태만 둔다 —
+ * `pending` 은 절대 전송되지 않아(§2) 어떤 감사 행에도 없으므로 필터에서 제외한다
+ * (죽은 필터 옵션 방지). 방어적 표시용 META(`AUDIT_STATUS_META`)에는 남겨 둔다.
+ */
 export const AUDIT_STATUS_ORDER: readonly OnboardingDecisionStatus[] = [
   "accepted",
   "modified",
-  "rejected",
-  "pending"
+  "rejected"
 ];
 
 /**
