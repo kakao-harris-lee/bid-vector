@@ -747,9 +747,12 @@ def test_high_rate_service_trigger_or_isolation(_pin_high_rate_settings, case_id
 @pytest.mark.parametrize(
     "category, text, rate_band, expected",
     [
+        # title-semantic guard: bare "2단계" needs a spec/price cue (규격/가격/동시) to
+        # count; here there is none, so two_stage_or_separated no longer fires. The
+        # deep_discount label is unaffected (the goods_deep_discount band drives it).
         ("goods", "2단계 급식 농산물 구매", "goods_deep_discount", {
             "floor_bound": False, "near_100": False, "deep_discount": True,
-            "conflicting": False, "signals": ["deep_discount", "two_stage_or_separated"]}),
+            "conflicting": False, "signals": ["deep_discount"]}),
         ("service", "폐기물 처리용역", "service_price_competitive", {
             "floor_bound": True, "near_100": False, "deep_discount": False,
             "conflicting": False, "signals": ["price_competitive"]}),
@@ -759,20 +762,24 @@ def test_high_rate_service_trigger_or_isolation(_pin_high_rate_settings, case_id
         ("service", "수의시담 용역", "service_direct_negotiated", {
             "floor_bound": False, "near_100": True, "deep_discount": False,
             "conflicting": False, "signals": ["direct_negotiated"]}),
-        # conflicting: near_100 (협상) AND floor_bound (폐기물) simultaneously
+        # conflicting: near_100 (협상) AND floor_bound (폐기물) simultaneously. The bare
+        # "2단계" here lacks a spec/price co-occurrence cue, so two_stage no longer
+        # fires — but the conflict (협상 band-competitive) is genuine and preserved.
         ("service", "협상 폐기물 2단계", "service_price_competitive", {
             "floor_bound": True, "near_100": True, "deep_discount": False,
-            "conflicting": True, "signals": ["negotiated", "price_competitive", "two_stage_or_separated"]}),
+            "conflicting": True, "signals": ["negotiated", "price_competitive"]}),
         ("service", "oo 청소용역", None, {
             "floor_bound": False, "near_100": False, "deep_discount": False,
             "conflicting": False, "signals": []}),
         ("goods", "규격·가격 동시입찰 구매", "goods_price_competitive", {
             "floor_bound": True, "near_100": False, "deep_discount": False,
             "conflicting": False, "signals": ["price_competitive", "two_stage_or_separated"]}),
-        # text-derived signals even when rate_band is None (제안 => negotiated, 소액수의 견적 => price_competitive)
+        # title-semantic guard: 제안서 평가 is a negotiation context (near_100), so the
+        # bare "소액수의 견적" quote no longer raises a competing floor_bound → the false
+        # near_100 ∧ floor_bound conflict is suppressed and the notice reads near_100.
         ("service", "제안서 평가 소액수의 견적", None, {
-            "floor_bound": True, "near_100": True, "deep_discount": False,
-            "conflicting": True, "signals": ["negotiated", "price_competitive"]}),
+            "floor_bound": False, "near_100": True, "deep_discount": False,
+            "conflicting": False, "signals": ["negotiated"]}),
     ],
 )
 def test_detect_price_regime_signals(category, text, rate_band, expected):
@@ -809,4 +816,5 @@ def test_price_regime_features_signal_list_order_is_sorted():
     features = _build_price_regime_features(
         {"procurement_rate_band": "service_price_competitive"}, context=context
     )
-    assert features["regime_signals"] == ["negotiated", "price_competitive", "two_stage_or_separated"]
+    # (bare "2단계" without a spec/price cue no longer emits two_stage_or_separated)
+    assert features["regime_signals"] == ["negotiated", "price_competitive"]
