@@ -16,7 +16,9 @@ import { PreviewStep } from "./PreviewStep";
  *
  * 1단계(사업자번호·국세청 상태확인)는 국세청 미구현이라 후속으로 미룬다. 진입점은
  * "기본 후보"(키워드 seed)다. 상태 전이는 STEP 룩업(§4.5-2)으로 흐르고, 확정하지
- * 않은 후보는 절대 전송하지 않는다(§2 정직 명세, apply=accepted-only).
+ * 않은(pending) 후보는 절대 전송하지 않는다(§2 정직 명세). 확정(accepted)·수정
+ * (modified)·거부(rejected) 결정은 감사에 전송하되, 프로필/전략 반영은 백엔드가
+ * accepted/modified 만 강제한다(rejected는 감사 전용).
  */
 export function OnboardingWizard() {
   const { session } = useShellContext();
