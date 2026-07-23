@@ -144,3 +144,34 @@ def resolve_notice_legal_floor_bid_rate(
     if request_legal_floor_bid_rate is not None:
         return request_legal_floor_bid_rate
     return _rate_to_fraction(getattr(project, "award_floor_rate", None))
+
+
+def build_prediction_text(project: Project) -> str:
+    """Assemble the single predictor-input text blob from a notice's fields.
+
+    WHY THIS EXISTS — SINGLE SOURCE FOR PREDICT INPUT
+    -------------------------------------------------
+    ``Project`` stores ``title`` / ``description`` / ``requirements`` in SEPARATE
+    columns, and the predictor reads regulatory mechanism keywords out of this text
+    (``resolve_procurement_rate_band`` → price band, ``_detect_price_regime_signals``
+    → regime label). The regulatory cues that drive those signals — 2단계(규격·가격
+    동시), 가격입찰/적격심사, 협상/제안, 수의계약/(수의) — very often live in the
+    **title**, not the body.
+
+    The live/dominant predict path (opportunity_analysis → monitor/telegram) used to
+    assemble ``f"{description} {requirements}"`` and DROP the title, while the
+    validated backtest (paper_bidding_backtest) and smoke paths already fed
+    title+description+requirements. That asymmetry meant production ran a DIFFERENT
+    input than the pipeline validated by the holdout backtest — the live path missed
+    the title's regulatory signals and under-detected price-competitive / negotiated
+    regimes. This helper makes all three predict paths assemble the SAME text so the
+    live path matches the validated input (CLAUDE.md §4.6 single source).
+
+    ``filter(None, ...)`` drops empty/None fields (a title-less or body-less notice
+    is joined from whatever fields are present), matching the backtest/smoke join
+    semantics exactly so their outputs stay byte-identical after this refactor.
+
+    This changes ONLY the predictor's INPUT TEXT. It does not touch the price
+    guardrail, legal floor, or band constants (RED LINE unchanged).
+    """
+    return " ".join(filter(None, [project.title, project.description, project.requirements]))

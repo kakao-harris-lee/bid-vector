@@ -40,6 +40,7 @@ from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.bid_base import (
+    build_prediction_text,
     resolve_notice_bid_base,
     resolve_notice_legal_floor_inputs,
 )
@@ -917,11 +918,10 @@ class PaperBiddingBacktestService:
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
-            description=" ".join(
-                part
-                for part in [project.title, project.description, project.requirements]
-                if part
-            ),
+            # Shared predictor-input assembler (title+description+requirements) —
+            # byte-identical to the previous inline join; unified so the live path
+            # (opportunity_analysis) now feeds the SAME text this backtest validates.
+            description=build_prediction_text(project),
             historical_records=history,
             agency_name=project.issuing_agency or project.demand_agency,
             feedback_calibration=None,
