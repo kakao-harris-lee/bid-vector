@@ -1,5 +1,5 @@
 import type { BadgeTone } from "@/shared/components/ui";
-import type { OnboardingApplyField } from "@/shared/api";
+import type { OnboardingApplyField, OnboardingDecisionStatus } from "@/shared/api";
 
 /**
  * 온보딩 wizard 의 선언적 구성(§4.5-1/2/3).
@@ -172,3 +172,34 @@ export const DECISION_STATUS_META: Record<DecisionStatus, DecisionStatusMeta> = 
   accepted: { label: "확정", tone: "healthy" },
   rejected: { label: "거부", tone: "muted" }
 };
+
+// --- 감사 이력 상태(wire DecisionStatus) ------------------------------------
+
+/**
+ * 감사 이력/전송 상태 메타(생성 `OnboardingDecisionStatus` 4값). UI 결정 상태와 겹치는
+ * accepted/rejected/pending 표시는 `DECISION_STATUS_META` 를 재사용하고(§4.6 복붙 금지),
+ * wire 전용 `modified`(수정 후 확정)만 더한다. 감사 행에 `pending` 은 실리지 않지만
+ * (절대 미전송, §2), 상태 필터 select 는 생성 union 을 그대로 노출하므로 4값을 모두 둔다.
+ */
+export const AUDIT_STATUS_META: Record<OnboardingDecisionStatus, DecisionStatusMeta> = {
+  ...DECISION_STATUS_META,
+  modified: { label: "수정 반영", tone: "info" }
+};
+
+/** 상태 필터 select 노출 순서(선언적, §4.5-1) — 반영 결과부터 미확정까지. */
+export const AUDIT_STATUS_ORDER: readonly OnboardingDecisionStatus[] = [
+  "accepted",
+  "modified",
+  "rejected",
+  "pending"
+];
+
+/**
+ * 감사 상태 표시 메타 룩업. 미지 상태는 raw 라벨 + muted 로 노출한다(조용한 오표시
+ * 금지, `fieldMeta`/`sourceLabel` 방어 패턴과 동일).
+ */
+export function auditStatusMeta(status: string): DecisionStatusMeta {
+  return (
+    AUDIT_STATUS_META[status as OnboardingDecisionStatus] ?? { label: status, tone: "muted" }
+  );
+}

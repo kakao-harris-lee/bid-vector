@@ -46,6 +46,7 @@ export const ROUTE_LABELS: Record<RouteKey, { path: string; label: string; icon:
 
 export const PROFILE_ROUTE_PATH = "/dashboard/profile";
 export const ONBOARDING_ROUTE_PATH = "/dashboard/onboarding";
+export const ONBOARDING_HISTORY_ROUTE_PATH = "/dashboard/onboarding/history";
 export const STRATEGY_ROUTE_PATH = "/dashboard/strategy";
 export const PROJECTS_ROUTE_PATH = "/dashboard/projects";
 export const GUIDE_ROUTE_PATH = "/dashboard/guide";
@@ -88,6 +89,7 @@ export function bottomNavKeyForPath(pathname: string): RouteKey | null {
 
 function pageTitleForPath(pathname: string): string {
   if (pathname.startsWith(GUIDE_ROUTE_PATH)) return "이용 가이드";
+  if (pathname.startsWith(ONBOARDING_HISTORY_ROUTE_PATH)) return "온보딩 감사 이력";
   if (pathname.startsWith(ONBOARDING_ROUTE_PATH)) return "사업자 온보딩";
   if (pathname.startsWith(PROFILE_ROUTE_PATH)) return "업체 정보";
   if (pathname.startsWith(STRATEGY_ROUTE_PATH)) return "전략 편집";

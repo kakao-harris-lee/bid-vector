@@ -20,6 +20,9 @@ const CompanyInfoEditor = lazy(() =>
 const OnboardingWizard = lazy(() =>
   import("@/features/onboarding").then((mod) => ({ default: mod.OnboardingWizard }))
 );
+const OnboardingHistoryScreen = lazy(() =>
+  import("@/features/onboarding").then((mod) => ({ default: mod.OnboardingHistoryScreen }))
+);
 const ProjectsScreen = lazy(() =>
   import("@/features/projects").then((mod) => ({ default: mod.ProjectsScreen }))
 );
@@ -71,6 +74,7 @@ export function UserRouteTree() {
         <Route path="strategy" element={<Lazy><StrategyEditor /></Lazy>} />
         <Route path="profile" element={<Lazy><CompanyInfoEditor /></Lazy>} />
         <Route path="onboarding" element={<Lazy><OnboardingWizard /></Lazy>} />
+        <Route path="onboarding/history" element={<Lazy><OnboardingHistoryScreen /></Lazy>} />
         <Route path="projects" element={<Lazy><ProjectsScreen /></Lazy>} />
         <Route path="projects/:id" element={<Lazy><ProjectDetailScreen /></Lazy>} />
         <Route
