@@ -1,6 +1,7 @@
 import type {
-  OnboardingApplyRequest,
+  OnboardingApplyDecisionPayload,
   OnboardingFieldSuggestion,
+  OnboardingSentStatus,
   OnboardingSuggestionValue
 } from "@/shared/api";
 import { isApplyField, type DecisionStatus } from "./constants";
@@ -25,21 +26,61 @@ export function effectiveDecision(
 }
 
 /**
- * apply 로 전송할 확정 결정 목록을 만든다. **accepted 후보만** 포함한다 —
- * pending/rejected 는 절대 전송하지 않는다(자동 반영 금지, §2 정직 명세).
+ * 두 후보값이 같은지(값이 편집됐는지) 판정하는 순수 함수(§4.7-4, I/O 없음).
+ * 값 종류는 문자열/숫자/문자열 리스트라, 배열은 길이 + 원소를 순서까지 deep-equal
+ * 로 비교한다(원소나 순서가 바뀌면 편집으로 본다 → 감사에 modified 로 정직 기록).
+ */
+export function sameSuggestionValue(
+  a: OnboardingSuggestionValue,
+  b: OnboardingSuggestionValue
+): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    return a.length === b.length && a.every((item, index) => item === b[index]);
+  }
+  return a === b;
+}
+
+/**
+ * UI 결정을 전송(감사) 상태로 매핑하는 순수 함수(§4.7-4). `pending`(미확정)은 절대
+ * 전송하지 않으므로(정직 명세 §2) `null` 을 돌려준다. accepted 는 값이 원 추천값과
+ * 다르면 `modified`, 같으면 `accepted` 로 세분한다 — SuggestionCard 에 새 UI 상태를
+ * 심지 않고, 전송 시점에 `suggestion.value` 와 deep-equal 비교로 도출한다.
+ */
+export function sentStatusFor(
+  decision: DecisionState,
+  suggestion: OnboardingFieldSuggestion
+): OnboardingSentStatus | null {
+  switch (decision.status) {
+    case "rejected":
+      return "rejected";
+    case "accepted":
+      return sameSuggestionValue(decision.value, suggestion.value) ? "accepted" : "modified";
+    default:
+      return null; // pending — 절대 전송하지 않음
+  }
+}
+
+/**
+ * apply 로 전송할 결정 목록을 만든다. accepted/modified/rejected 를 모두 전송하되
+ * **pending 은 절대 전송하지 않는다**(자동 반영 금지, §2 정직 명세). rejected 는
+ * 감사만 되고(백엔드가 반영 상태를 강제) 프로필/전략을 바꾸지 않으므로, 프론트는
+ * 결정 상태를 정직하게 보고만 한다.
  */
 export function buildApplyDecisions(
   suggestions: readonly OnboardingFieldSuggestion[],
   overrides: DecisionMap
-): OnboardingApplyRequest["decisions"] {
-  const decisions: NonNullable<OnboardingApplyRequest["decisions"]> = [];
+): OnboardingApplyDecisionPayload[] {
+  const decisions: OnboardingApplyDecisionPayload[] = [];
   for (const suggestion of suggestions) {
     const decision = effectiveDecision(suggestion, overrides);
-    // accepted 이고, apply 화이트리스트에 있는 필드만 전송(미지 필드는 방어적으로 skip).
-    // isApplyField 가 `suggestion.field` 를 OnboardingApplyField 로 좁혀 cast 가 불필요하다.
-    if (decision.status === "accepted" && isApplyField(suggestion.field)) {
-      decisions.push({ field: suggestion.field, value: decision.value });
-    }
+    const status = sentStatusFor(decision, suggestion);
+    // pending(status===null)은 전송 제외. apply 화이트리스트에 없는 필드는 거부
+    // 결정이라도 방어적으로 skip(미지 필드 오염 방지). isApplyField 가
+    // `suggestion.field` 를 OnboardingApplyField 로 좁혀 cast 가 불필요하다.
+    if (status === null || !isApplyField(suggestion.field)) continue;
+    // 전송값은 canonical raw(decision.value) — 표시 라벨로 치환하지 않는다.
+    decisions.push({ field: suggestion.field, value: decision.value, status });
   }
   return decisions;
 }

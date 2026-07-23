@@ -223,7 +223,7 @@ describe("OnboardingWizard", () => {
     expect(applyButton).toBeDisabled();
   });
 
-  it("수락한 후보만 apply로 전송하고(거부/미확정 제외) 성공 시 반영/무시 결과를 보여준다", async () => {
+  it("수락·거부 결정을 apply로 전송하고(미확정만 제외) 성공 시 반영/무시 결과를 보여준다", async () => {
     const fetchMock = installFetchMock();
     renderWizard();
     const user = await submitSeed();
@@ -236,16 +236,20 @@ describe("OnboardingWizard", () => {
     await user.click(within(businessCard).getByRole("button", { name: "수락" }));
     await user.click(within(licenseCard).getByRole("button", { name: "거부" }));
 
-    // 수락은 1건만
+    // 반영 버튼은 수락 수(1건)만 센다 — 거부는 감사에만 실려 함께 전송된다.
     const applyButton = screen.getByRole("button", { name: /수락한 1건 반영/ });
     expect(applyButton).toBeEnabled();
     await user.click(applyButton);
 
     await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
     const [, init] = applyCalls(fetchMock)[0]!;
-    // 전송값은 canonical raw(표시 매핑이 payload를 오염시키지 않는다)
+    // 수락은 status=accepted, 거부는 status=rejected 로 감사에 함께 전송(미확정은 제외).
+    // 전송값은 canonical raw(표시 매핑이 payload를 오염시키지 않는다).
     expect(JSON.parse(String(init?.body))).toEqual({
-      decisions: [{ field: "business_type", value: "construction" }]
+      decisions: [
+        { field: "business_type", value: "construction", status: "accepted" },
+        { field: "license_codes", value: ["항만공사업"], status: "rejected" }
+      ]
     });
     expect((init?.headers as Record<string, string>).Authorization).toBe(
       "Bearer token-onboarding"
@@ -257,7 +261,7 @@ describe("OnboardingWizard", () => {
     expect(screen.getByText("공사")).toBeInTheDocument();
   });
 
-  it("수정한 값으로 수락하면 편집값이 apply payload에 담긴다", async () => {
+  it("수정한 값으로 수락하면 편집값이 status=modified 로 apply payload에 담긴다", async () => {
     const fetchMock = installFetchMock();
     renderWizard();
     const user = await submitSeed();
@@ -274,8 +278,9 @@ describe("OnboardingWizard", () => {
 
     await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
     const [, init] = applyCalls(fetchMock)[0]!;
+    // 원 추천값(construction)과 다른 편집값이라 status=modified 로 도출된다.
     expect(JSON.parse(String(init?.body))).toEqual({
-      decisions: [{ field: "business_type", value: "전문건설" }]
+      decisions: [{ field: "business_type", value: "전문건설", status: "modified" }]
     });
   });
 
@@ -345,11 +350,12 @@ describe("OnboardingWizard", () => {
 
     await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
     const [, init] = applyCalls(fetchMock)[0]!;
-    // 다중값(문자열 리스트) 그대로 apply payload 에 담긴다(APPLY_FIELDS 화이트리스트 통과)
+    // 다중값(문자열 리스트) 그대로 apply payload 에 담긴다(APPLY_FIELDS 화이트리스트 통과).
+    // 편집 없이 수락했으므로 원 추천값과 deep-equal → status=accepted.
     expect(JSON.parse(String(init?.body))).toEqual({
       decisions: [
-        { field: "tech_fields", value: ["수로측량업"] },
-        { field: "association_memberships", value: ["한국수로측량협회"] }
+        { field: "tech_fields", value: ["수로측량업"], status: "accepted" },
+        { field: "association_memberships", value: ["한국수로측량협회"], status: "accepted" }
       ]
     });
   });
