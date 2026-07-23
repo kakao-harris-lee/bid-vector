@@ -366,19 +366,96 @@ def _build_price_regime_features(
     }
 
 
+# --------------------------------------------------------------------------- #
+# Price-regime signal keyword tables (declarative; interpreted by
+# ``_detect_price_regime_signals``). Split by class so the title-semantic guards
+# can treat each differently: explicit two-stage markers and strong price-
+# competition cues always fire, while bare "2단계" and bare 견적/견적제출 are
+# gated to suppress construction phase-noise and 수의 quote-submission false
+# positives. These affect ONLY descriptive regime metadata (label / signals /
+# review_required), never the recommended price — the price-moving band lives in
+# ``resolve_procurement_rate_band`` and runs upstream of this metadata pass.
+# --------------------------------------------------------------------------- #
+_TWO_STAGE_EXPLICIT_MARKERS = (
+    "규격·가격",
+    "규격 가격",
+    "규격가격",
+    "가격분리",
+    "가격 분리",
+    "동시입찰",
+    "동시 평가",
+)
+# Bare "2단계" only counts as 규격·가격 2단계 입찰 when a spec/price-separation cue
+# co-occurs (otherwise it is construction phase-2 노이즈: "○○ 2단계 증설공사").
+_TWO_STAGE_BARE_COOCCURRENCE_CUES = ("규격", "가격", "동시")
+_NEGOTIATION_CUES = ("협상에 의한 계약", "협상", "제안서 평가", "제안")
+_DIRECT_NEGOTIATED_CUES = ("수의시담", "수의 시담", "수의계약", "수의 계약", "(수의)", "[수의]")
+# No-space form ONLY. "소액수의 견적"(소액수의 negotiated quote whose goods band settles
+# at the competitive rate) contains "수의 견적" WITH a space, so the space variant would
+# spuriously mark it as near_100 and collide with a competitive band → false conflict.
+# "수의견적"(no space) cannot appear inside "소액수의 견적", so it is collision-free.
+_NEGOTIATED_QUOTE_CUES = ("수의견적",)
+_PRICE_COMPETITION_STRONG_CUES = ("가격입찰", "적격심사", "pq")
+_PRICE_COMPETITION_QUOTE_CUES = ("소액수의 견적", "견적 제출", "견적제출")
+_NEGOTIATED_RATE_BANDS = frozenset({"service_direct_negotiated", "service_high_negotiated"})
+
+
+def _has_bare_two_stage(text: str) -> bool:
+    """True when "2단계" appears not immediately preceded by a digit.
+
+    The digit-boundary guard rejects substring matches inside a larger number
+    such as "12단계"/"22단계" (which are not 2단계 규격·가격 입찰).
+    """
+    start = 0
+    while True:
+        pos = text.find("2단계", start)
+        if pos < 0:
+            return False
+        if pos == 0 or not text[pos - 1].isdigit():
+            return True
+        start = pos + 1
+
+
+def _has_two_stage_cue(text: str) -> bool:
+    """True when the notice text carries a genuine 2단계(규격·가격 분리) bidding cue.
+
+    Explicit 규격·가격/가격분리/동시입찰 markers always count. Bare "2단계" counts
+    only when it clears the digit-boundary guard (not "12단계") AND a spec/price-
+    separation cue (규격/가격/동시) co-occurs — otherwise it is construction
+    phase-2 노이즈 (e.g. "태봉근린공원(2단계) 통신공사"). When the explicit markers
+    are present a co-occurrence cue is already implied, so bare "2단계" is nearly
+    inert by design.
+    """
+    if _contains_any(text, _TWO_STAGE_EXPLICIT_MARKERS):
+        return True
+    return _has_bare_two_stage(text) and _contains_any(
+        text, _TWO_STAGE_BARE_COOCCURRENCE_CUES
+    )
+
+
 def _detect_price_regime_signals(*, category: str, text: str, rate_band: Any) -> dict[str, Any]:
     """Return broad mechanism signals used by the price-regime classifier."""
     signals: set[str] = set()
-    has_two_stage = _contains_any(
-        text,
-        ("2단계", "규격·가격", "규격 가격", "규격가격", "가격분리", "가격 분리", "동시입찰", "동시 평가"),
+    has_two_stage = _has_two_stage_cue(text)
+    has_negotiation = _contains_any(text, _NEGOTIATION_CUES)
+    # 수의견적(no space) is a 수의(negotiated) quote context. For non-goods it reads as
+    # 수의계약형(near-100), so fold it into the direct-negotiated cues (drives near_100
+    # + direct_negotiated signal). Goods 소액수의 견적 is intentionally excluded — the
+    # goods band settles it at the competitive rate (GOODS_PRICE_COMPETITIVE_KEYWORDS),
+    # so its floor_bound regime stays consistent with the price.
+    has_direct = _contains_any(text, _DIRECT_NEGOTIATED_CUES) or (
+        category != "goods" and _contains_any(text, _NEGOTIATED_QUOTE_CUES)
     )
-    has_price_competition = _contains_any(
-        text,
-        ("가격입찰", "적격심사", "pq", "소액수의 견적", "견적 제출", "견적제출"),
+    # A bare 견적/견적제출 inside a 수의/negotiated context is 'submit a quote', not
+    # competitive price bidding — suppress it so it does not raise a false
+    # near_100 ∧ floor_bound conflict (→ ambiguous/review). Genuine 가격입찰/적격심사/pq
+    # always fire (strong cues), and can still produce a real conflict.
+    negotiated_context = (
+        has_direct or has_negotiation or rate_band in _NEGOTIATED_RATE_BANDS
     )
-    has_negotiation = _contains_any(text, ("협상에 의한 계약", "협상", "제안서 평가", "제안"))
-    has_direct = _contains_any(text, ("수의시담", "수의 시담", "수의계약", "수의 계약", "(수의)", "[수의]"))
+    has_price_competition = _contains_any(text, _PRICE_COMPETITION_STRONG_CUES) or (
+        _contains_any(text, _PRICE_COMPETITION_QUOTE_CUES) and not negotiated_context
+    )
     has_deep_discount = bool(rate_band == "goods_deep_discount")
 
     if rate_band in {"service_price_competitive", "goods_price_competitive"} or has_price_competition:
