@@ -12,6 +12,9 @@ export const companyInfoFormSchema = z
     business_type: z.string().min(1, "업무 구분을 선택하세요."),
     license_codes: chips,
     region_codes: chips,
+    // cohort 정체성(기술부문·협회 가입) — license/region 과 동일한 chips 형태.
+    tech_fields: chips,
+    association_memberships: chips,
     annual_revenue: nonNegative,
     construction_capacity_amount: nonNegative,
     awarded_contract_limit: nonNegative,

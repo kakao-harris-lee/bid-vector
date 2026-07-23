@@ -45,6 +45,8 @@ const fullProfile: OperatorProfileResponse = {
   business_type: "정보통신",
   license_codes: ["정보통신공사업", "전기공사업", "소프트웨어사업자", "엔지니어링"],
   region_codes: ["서울", "경기", "부산"],
+  tech_fields: [],
+  association_memberships: [],
   annual_revenue: 5_000_000_000,
   capacity_score: 0.7,
   construction_capacity_amount: 12_000_000_000,

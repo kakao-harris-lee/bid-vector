@@ -23,6 +23,8 @@ const baseProfile: OperatorProfileResponse = {
   business_type: "공사",
   license_codes: ["전기공사업"],
   region_codes: ["서울"],
+  tech_fields: ["수로측량업"],
+  association_memberships: ["한국해양조사협회"],
   annual_revenue: 5_000_000_000,
   capacity_score: 0.6,
   construction_capacity_amount: 0,
@@ -241,6 +243,66 @@ describe("CompanyInfoEditor", () => {
       ).toBeInTheDocument();
     });
     expect((screen.getByLabelText("업무 구분") as HTMLSelectElement).value).toBe("공사");
+  });
+
+  it("cohort 필드(기술부문·협회 가입)를 GET 값으로 로드해 제거 가능한 칩으로 표시한다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "기술부문에서 수로측량업 제거" })
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "협회 가입에서 한국해양조사협회 제거" })
+    ).toBeInTheDocument();
+  });
+
+  it("기술부문·협회 가입 칩을 추가하면 profile PUT body에 canonical raw 값으로 포함된다", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    await screen.findByRole("heading", { name: "업체 정보", level: 2 });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "보유 면허에서 전기공사업 제거" })
+      ).toBeInTheDocument();
+    });
+
+    // 값 그대로(표시 라벨↔payload 분리 없음)가 저장돼야 한다.
+    await userEvent.type(screen.getByLabelText("기술부문"), "항만설계{Enter}");
+    await userEvent.type(screen.getByLabelText("협회 가입"), "한국항만협회{Enter}");
+
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => {
+      expect(
+        findCall(
+          fetchMock,
+          (url, init) => url.endsWith("/api/v1/operator/profile") && init?.method === "PUT"
+        )
+      ).toBeDefined();
+    });
+
+    const profileCall = findCall(
+      fetchMock,
+      (url, init) => url.endsWith("/api/v1/operator/profile") && init?.method === "PUT"
+    );
+    const profileBody = parseBody(profileCall?.[1] as RequestInit);
+
+    // GET 로드값 + 새로 입력한 값이 raw 문자열 배열로 합쳐져 전송된다.
+    expect(profileBody).toHaveProperty("tech_fields", ["수로측량업", "항만설계"]);
+    expect(profileBody).toHaveProperty("association_memberships", [
+      "한국해양조사협회",
+      "한국항만협회"
+    ]);
   });
 
   it("공사 면허 추천 칩 클릭 시 보유 면허에 매칭 가능한 토큰이 추가된다", async () => {

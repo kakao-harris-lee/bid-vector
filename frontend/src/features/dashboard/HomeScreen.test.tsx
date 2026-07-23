@@ -78,6 +78,8 @@ const configuredProfile: OperatorProfileResponse = {
   business_type: "정보통신",
   license_codes: ["정보통신공사업", "전기공사업"],
   region_codes: ["서울", "경기"],
+  tech_fields: [],
+  association_memberships: [],
   annual_revenue: 3_000_000_000,
   capacity_score: 0.65,
   construction_capacity_amount: 8_000_000_000,
