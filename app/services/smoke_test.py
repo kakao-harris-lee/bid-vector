@@ -539,7 +539,10 @@ class KonepsTelegramSmokeTestService:
             from app.ai.business_group import resolve_business_group
             from app.models.models import Project
             from app.services.backtest_cutoff import BacktestCutoffService
-            from app.services.bid_base import resolve_notice_legal_floor_inputs
+            from app.services.bid_base import (
+                build_prediction_text,
+                resolve_notice_legal_floor_inputs,
+            )
 
             project = db.query(Project).filter(Project.id == project_info["id"]).one()
             if not project.budget_estimate or project.budget_estimate <= 0:
@@ -547,7 +550,9 @@ class KonepsTelegramSmokeTestService:
                 result.data["project_id"] = int(project.id)
                 result.skip_reason = "no usable budget"
                 return self._finalize_phase(result)
-            desc = " ".join(p for p in [project.title, project.description or "", project.requirements or ""] if p)
+            # Shared predictor-input assembler (title+description+requirements) —
+            # byte-identical to the previous inline join; unified across predict paths.
+            desc = build_prediction_text(project)
             bg = resolve_business_group(project.business_type_code)
             cs = self._backtest_cutoff_service or BacktestCutoffService()
             cutoff = cs.resolve_data_cutoff_at(project, tender_result=None, hours_before_deadline=0)

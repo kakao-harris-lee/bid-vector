@@ -32,6 +32,7 @@ from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorSt
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.bid_base import (
+    build_prediction_text,
     resolve_notice_bid_base,
     resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
@@ -516,7 +517,11 @@ class OpportunityAnalysisService:
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
-            description=f"{project.description or ''} {project.requirements or ''}".strip(),
+            # Predictor input = title+description+requirements via the shared
+            # assembler so the live path feeds the SAME text the backtest/smoke/
+            # holdout paths validate. The title carries regulatory mechanism cues
+            # (2단계/가격입찰/협상/수의) the price-band and regime detection need.
+            description=build_prediction_text(project),
             historical_records=self._load_price_history(db, project),
             agency_name=request.agency_name,
             feedback_calibration=feedback_calibration,
