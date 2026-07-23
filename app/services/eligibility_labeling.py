@@ -55,6 +55,8 @@ __all__ = [
     "TECH_FIELD_TERMS",
     "match_association_terms",
     "required_association_memberships",
+    "match_tech_field_terms",
+    "required_tech_fields",
     "EligibilityMatch",
     "EligibilityLabels",
     "EligibilityVerdict",
@@ -518,3 +520,45 @@ def required_association_memberships(
         if match.source_field in LABEL_SOURCE_FIELDS
         and match.term in ASSOCIATION_MEMBERSHIP_CANONICALS
     )
+
+
+# --- 기술부문 매칭 (classifier 기술부문 축 공용, 순수) -----------------------
+
+
+def match_tech_field_terms(text: str | None) -> frozenset[str]:
+    """자유 텍스트에서 기술부문 canonical 표준명을 매칭한다(순수 · ``match_association_terms`` 미러).
+
+    프로필 ``tech_fields`` (온보딩 #235 가 ``labels.tech_fields`` 표준명으로 저장한
+    값, 또는 운영자가 입력한 표면 변형)를 공고 요건 추출(``required_tech_fields``)이
+    내는 것과 **동일한 표준명 어휘**로 정규화해 code↔name 혼선(#231)에 의한 과차단을
+    막는다. 매칭 토큰은 각 ``TechField`` 의 **표준명 + 별칭** 이다 — 표준명이 자기
+    별칭 목록에 없는 항목("해양기술사")도 자기 자신으로 round-trip 하도록 표준명을
+    토큰에 포함한다(요건 측이 낼 수 있는 모든 표준명을 프로필 측이 인식). ``_normalize``
+    (공백 제거+소문자) 후 substring 매칭이라 "항만 및 해안"·"엔지니어링사업(항만" 같은
+    표면 변형이 canonical("항만및해안")로 수렴한다. IO/DB 접근 없음.
+    """
+    if not text or not text.strip():
+        return frozenset()
+    normalized = _normalize(text)
+    return frozenset(
+        tech_field.name
+        for tech_field in TECH_FIELD_TERMS
+        if any(
+            _normalize(token) in normalized
+            for token in (tech_field.name, *tech_field.aliases)
+        )
+    )
+
+
+def required_tech_fields(eligibility_raw: dict | None) -> frozenset[str]:
+    """공고 참가자격이 요구하는 기술부문 canonical 표준명 집합을 추출한다(순수 · ``required_association_memberships`` 미러).
+
+    ``extract_eligibility_labels`` 의 룰 해석기를 재사용하며(복붙 금지, §4.6),
+    해석기가 ``license_limits`` 소스 매칭에서만 세운 ``tech_fields``(표준명)를 그대로
+    돌려준다. ``title`` 매칭은 기관명/과업명 오탐 축이라 해석기에 애초에 넘기지 않아
+    제외된다(#207 교훈). 자격 데이터가 없거나 기술부문 요건이 없으면 빈 집합을
+    돌려준다. IO/DB 접근 없음.
+    """
+    if not isinstance(eligibility_raw, dict):
+        return frozenset()
+    return frozenset(extract_eligibility_labels(eligibility_raw).tech_fields)

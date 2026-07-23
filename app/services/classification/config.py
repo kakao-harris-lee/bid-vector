@@ -38,6 +38,12 @@ SEMANTIC_BASE_SCORE = 0.05
 # 교훈). match 는 license 축과 대칭인 소폭 가점.
 ASSOCIATION_NEUTRAL_SCORE = 0.0
 ASSOCIATION_MATCH_SCORE = 0.05
+# 기술부문(cohort) 축 — 협회 축과 동일 구조·동일값. 공고가 특정 기술부문
+# (항만/해양/수로 = TECH_FIELD_TERMS)을 참가자격에 명시하면 미보유 operator 를
+# 게이트한다. 요건 없는 공고는 반드시 완전 중립이어야 하므로 neutral 은 **0.0**
+# (baseline 불변). match 는 협회/license 축과 대칭인 소폭 가점.
+TECH_FIELD_NEUTRAL_SCORE = 0.0
+TECH_FIELD_MATCH_SCORE = 0.05
 
 # --- Mismatch penalties (negative contributions) -----------------------------
 BUSINESS_TYPE_MISMATCH_PENALTY = 0.3
@@ -50,6 +56,9 @@ SEMANTIC_VERY_LOW_PENALTY = 0.3
 # 협회 요건이 명시된 공고에서 미가입 operator 를 거르는 hard 게이트 penalty
 # (license 축과 동일 강도). 요건 없는 공고는 이 penalty 를 절대 부과하지 않는다.
 ASSOCIATION_MISMATCH_PENALTY = 0.35
+# 기술부문 요건이 명시된 공고에서 미보유 operator 를 거르는 hard 게이트 penalty
+# (협회/license 축과 동일 강도). 요건 없는 공고엔 절대 부과하지 않는다.
+TECH_FIELD_MISMATCH_PENALTY = 0.35
 
 # --- Structural ratios & bonuses ---------------------------------------------
 # Shared borderline acceptance ratio for the 시공능력평가액/연매출 budget branches:
