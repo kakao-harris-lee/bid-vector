@@ -655,6 +655,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/onboarding-suggestions/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Onboarding Suggestions History
+         * @description 현재 operator 의 온보딩 결정 감사 이력을 최신순으로 조회한다(읽기 전용).
+         *
+         *     읽기 스코프 해석은 다른 operator 읽기 엔드포인트와 동일한 ``resolve_read_operator``
+         *     (canonical fallback / 403 / 404)를 재사용해 per-operator/synthetic 격리를 공유한다 —
+         *     응답에는 그 operator 의 ``user_id`` 행만 담긴다. ``status`` 는 Pydantic enum
+         *     (``DecisionStatus``)이 허용값 밖을 422 로 거른다(선언 허용값). 이 엔드포인트는
+         *     감사 로그만 읽고 아무 것도 쓰지 않는다.
+         */
+        get: operations["get_onboarding_suggestions_history_api_v1_operator_onboarding_suggestions_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operator/onboarding-suggestions/apply": {
         parameters: {
             query?: never;
@@ -5337,6 +5363,17 @@ export interface components {
              */
             samples?: components["schemas"]["DecisionSampleItem"][];
         };
+        /**
+         * DecisionStatus
+         * @description 온보딩 후보에 대한 운영자 결정 상태(설계 §3).
+         *
+         *     감사 로그(``onboarding_suggestions.status``)와 요청 스키마
+         *     (``OnboardingApplyDecision.status``)가 공유하는 허용값 단일 출처다(매직값 금지
+         *     §4.5.1). 반영 대상은 :data:`REFLECTED_STATUSES` 로만 선언한다 — status 별 분기를
+         *     코드에 흩뿌리지 않는다.
+         * @enum {string}
+         */
+        DecisionStatus: "accepted" | "modified" | "rejected" | "pending";
         /** DecisionStrategyAdjustmentItem */
         DecisionStrategyAdjustmentItem: {
             /**
@@ -5790,8 +5827,14 @@ export interface components {
         };
         /**
          * OnboardingApplyDecision
-         * @description 사용자가 검토·확정한 단일 필드 결정. 서버는 이 값을 **그대로 신뢰**하되
-         *     타입/화이트리스트만 검증한다(설계 §3, 정직 명세 §2 — 서버가 후보를 재계산하지 않음).
+         * @description 사용자가 검토한 단일 필드 결정. 서버는 이 값을 **그대로 신뢰**하되 반영 대상
+         *     (accepted/modified)만 타입/화이트리스트를 검증한다(설계 §3, 정직 명세 §2 — 서버가
+         *     후보를 재계산하지 않음).
+         *
+         *     ``status`` 는 선택이며 기본이 ``accepted`` 라 status 를 보내지 않는 현재 프론트
+         *     ({field,value})가 하위호환으로 수락 결정으로 처리된다. ``source``/``confidence``/
+         *     ``reason`` 은 GET 후보에서 온 감사 메타(있으면 감사에 기록, 없으면 null)로,
+         *     반영 로직에는 영향을 주지 않는다.
          */
         OnboardingApplyDecision: {
             /** @description 반영할 확정 필드명(GET 후보와 동일 집합) */
@@ -5801,6 +5844,26 @@ export interface components {
              * @description 확정값(필드 종류별 형태: 문자열/숫자/문자열 리스트)
              */
             value: string | number | string[];
+            /**
+             * @description 결정 상태(accepted/rejected/modified/pending). 미전달 시 accepted(하위호환)
+             * @default accepted
+             */
+            status: components["schemas"]["DecisionStatus"];
+            /**
+             * Source
+             * @description 후보 출처(GET 후보 provenance, 감사용). 감사 컬럼 String(50)과 정합
+             */
+            source?: string | null;
+            /**
+             * Confidence
+             * @description 후보 신뢰도(GET 후보 provenance, 감사용)
+             */
+            confidence?: number | null;
+            /**
+             * Reason
+             * @description 도출 근거(GET 후보 provenance, 감사용)
+             */
+            reason?: string | null;
         };
         /**
          * OnboardingApplyField
@@ -5823,7 +5886,7 @@ export interface components {
         };
         /**
          * OnboardingApplyResponse
-         * @description apply 결과 — 반영/무시 요약 + operator envelope(기존 operator 응답 컨벤션).
+         * @description apply 결과 — 반영/무시 요약 + 감사 기록 수 + operator envelope.
          */
         OnboardingApplyResponse: {
             /**
@@ -5836,6 +5899,12 @@ export interface components {
              * @description 무시된 필드 + 사유
              */
             ignored?: components["schemas"]["OnboardingIgnoredField"][];
+            /**
+             * Recorded
+             * @description 감사(onboarding_suggestions)에 기록된 결정 수
+             * @default 0
+             */
+            recorded: number;
             /**
              * Current Operator Id
              * @description 반영이 스코프된 운영자 id
@@ -5903,6 +5972,91 @@ export interface components {
              * @description 무시 사유(한국어)
              */
             reason: string;
+        };
+        /**
+         * OnboardingSuggestionHistoryItem
+         * @description 감사 이력 한 행(읽기 전용).
+         *
+         *     apply 가 남긴 append-only 결정 로그의 조회 표현이다. ``value`` 는 저장된 JSON
+         *     텍스트를 원형(문자열/숫자/문자열 리스트)으로 복원한 값이며, ``status`` 는 apply 와
+         *     동일한 :class:`DecisionStatus` 단일 출처 값이다(허용값 드리프트 방지). 감사 행은
+         *     불변이라 ``created_at`` 만 노출한다(UTC 저장 — 스키마에서 타임존을 재포맷하지 않음).
+         */
+        OnboardingSuggestionHistoryItem: {
+            /**
+             * Id
+             * @description 감사 행 id
+             */
+            id: number;
+            /**
+             * Field
+             * @description 결정한 대상 필드명(프로필/전략 컬럼)
+             */
+            field: string;
+            /**
+             * Value
+             * @description 사용자 결정 원형값(필드 종류별 형태)
+             */
+            value: string | number | string[];
+            /** @description 결정 상태(accepted/modified/rejected/pending) */
+            status: components["schemas"]["DecisionStatus"];
+            /**
+             * Source
+             * @description 후보 출처(provenance, 있으면)
+             */
+            source?: string | null;
+            /**
+             * Confidence
+             * @description 후보 신뢰도(provenance, 있으면)
+             */
+            confidence?: number | null;
+            /**
+             * Reason
+             * @description 도출 근거(있으면)
+             */
+            reason?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             * @description 기록 시각(UTC 저장)
+             */
+            created_at: string;
+        };
+        /**
+         * OnboardingSuggestionHistoryResponse
+         * @description 온보딩 감사 이력 페이지 — 최신순 레코드 + 페이지네이션 메타 + operator envelope.
+         */
+        OnboardingSuggestionHistoryResponse: {
+            /**
+             * Items
+             * @description 감사 레코드 목록(created_at DESC, 최신순)
+             */
+            items?: components["schemas"]["OnboardingSuggestionHistoryItem"][];
+            /**
+             * Total
+             * @description 필터 적용 후 전체 레코드 수(페이지네이션용)
+             */
+            total: number;
+            /**
+             * Limit
+             * @description 적용된 페이지 크기
+             */
+            limit: number;
+            /**
+             * Offset
+             * @description 적용된 페이지 오프셋
+             */
+            offset: number;
+            /**
+             * Current Operator Id
+             * @description 응답이 스코프된 운영자 id
+             */
+            current_operator_id: number;
+            /**
+             * Current Operator Username
+             * @description 응답이 스코프된 운영자 username
+             */
+            current_operator_username: string;
         };
         /**
          * OnboardingSuggestionsResponse
@@ -10649,6 +10803,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OnboardingSuggestionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_onboarding_suggestions_history_api_v1_operator_onboarding_suggestions_history_get: {
+        parameters: {
+            query?: {
+                /** @description 필드명으로 필터(정확 일치, 선택) */
+                field?: string | null;
+                /** @description 결정 상태 필터(accepted/modified/rejected/pending, 선택) */
+                status?: components["schemas"]["DecisionStatus"] | null;
+                /** @description 페이지 크기(1~200, 선언 상한) */
+                limit?: number;
+                /** @description 페이지 오프셋 */
+                offset?: number;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingSuggestionHistoryResponse"];
                 };
             };
             /** @description Validation Error */
