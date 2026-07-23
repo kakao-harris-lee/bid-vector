@@ -22,6 +22,7 @@ import {
 import { companyInfoFormSchema, type CompanyInfoFormValues } from "./schema";
 import {
   BUSINESS_TYPE_OPTIONS,
+  COHORT_CHIP_FIELDS,
   LICENSE_CHIPS,
   RECORD_ONLY_LICENSE_CHIPS,
   REGION_CHIPS,
@@ -65,6 +66,8 @@ const defaultValues: CompanyInfoFormValues = {
   business_type: BUSINESS_TYPE_OPTIONS[0].value,
   license_codes: [],
   region_codes: [],
+  tech_fields: [],
+  association_memberships: [],
   annual_revenue: 0,
   construction_capacity_amount: 0,
   awarded_contract_limit: 0,
@@ -143,6 +146,8 @@ export function CompanyInfoEditor() {
         business_type: values.business_type,
         license_codes: values.license_codes,
         region_codes: values.region_codes,
+        tech_fields: values.tech_fields,
+        association_memberships: values.association_memberships,
         annual_revenue: values.annual_revenue,
         capacity_score: values.capacity_score,
         construction_capacity_amount: values.construction_capacity_amount,
@@ -453,6 +458,32 @@ function BasicsCard({ form, errors }: CardProps) {
             </div>
           )}
         />
+
+        <Controller
+          control={form.control}
+          name="tech_fields"
+          render={({ field }) => (
+            <ChipInput
+              label={COHORT_CHIP_FIELDS.tech_fields.label}
+              value={field.value}
+              onChange={field.onChange}
+              placeholder={COHORT_CHIP_FIELDS.tech_fields.placeholder}
+            />
+          )}
+        />
+
+        <Controller
+          control={form.control}
+          name="association_memberships"
+          render={({ field }) => (
+            <ChipInput
+              label={COHORT_CHIP_FIELDS.association_memberships.label}
+              value={field.value}
+              onChange={field.onChange}
+              placeholder={COHORT_CHIP_FIELDS.association_memberships.placeholder}
+            />
+          )}
+        />
       </CardContent>
     </Card>
   );
@@ -732,6 +763,8 @@ function toFormValues(
     business_type: profile.business_type || BUSINESS_TYPE_OPTIONS[0].value,
     license_codes: profile.license_codes ?? [],
     region_codes: profile.region_codes ?? [],
+    tech_fields: profile.tech_fields ?? [],
+    association_memberships: profile.association_memberships ?? [],
     annual_revenue: profile.annual_revenue,
     construction_capacity_amount: profile.construction_capacity_amount,
     awarded_contract_limit: profile.awarded_contract_limit,

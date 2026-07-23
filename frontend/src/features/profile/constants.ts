@@ -110,6 +110,26 @@ export const REGION_CHIPS: readonly string[] = [
   "제주"
 ];
 
+/**
+ * Cohort 정체성 chip 필드(기술부문·협회 가입)의 라벨·플레이스홀더 단일 출처(§4.5-1).
+ *
+ * license_codes/region_codes 와 동일한 다중값 chips 로 편집하며, 저장값은 canonical
+ * raw 문자열이다 — 값이 이미 한국어 정본 명칭이라 표시 라벨과 payload 를 분리하지
+ * 않는다(§8 ko 단일 번들). classifier 는 이 값을 eligibility 게이트로 소비한다
+ * (협회 #237 `_association_gate` / 기술부문 #238 `_tech_field_gate`,
+ * `app/services/classifier.py`). 키는 백엔드 `OperatorProfileUpdate` 필드명과 동일.
+ */
+export const COHORT_CHIP_FIELDS = {
+  tech_fields: {
+    label: "기술부문",
+    placeholder: "수로측량업, 항만 ..."
+  },
+  association_memberships: {
+    label: "협회 가입",
+    placeholder: "소속·가입 협회명"
+  }
+} as const;
+
 export interface BusinessTypeOption {
   /** Canonical-ish label stored verbatim into `business_type`. */
   value: string;

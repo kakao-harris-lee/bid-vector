@@ -9,6 +9,10 @@ export interface OperatorProfileResponse {
   business_type: string;
   license_codes: string[];
   region_codes: string[];
+  // cohort 정체성(기술부문/협회 가입) — license_codes/region_codes 와 동일한
+  // 다중값 문자열. classifier eligibility 게이트(#237 협회·#238 기술부문)가 소비.
+  tech_fields: string[];
+  association_memberships: string[];
   annual_revenue: number;
   capacity_score: number;
   construction_capacity_amount: number;
@@ -21,6 +25,9 @@ export interface OperatorProfileUpdatePayload {
   business_type?: string;
   license_codes?: string[];
   region_codes?: string[];
+  // None(미전송)이면 불변, 넘어오면 갱신 — 백엔드 OperatorProfileUpdate 와 정합.
+  tech_fields?: string[];
+  association_memberships?: string[];
   annual_revenue?: number;
   capacity_score?: number;
   construction_capacity_amount?: number;

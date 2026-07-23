@@ -327,6 +327,8 @@ const baseProfile: OperatorProfileResponse = {
   business_type: "정보통신",
   license_codes: ["SW"],
   region_codes: ["SEOUL"],
+  tech_fields: [],
+  association_memberships: [],
   annual_revenue: 1_000_000_000,
   capacity_score: 0.8,
   construction_capacity_amount: 500_000_000,
