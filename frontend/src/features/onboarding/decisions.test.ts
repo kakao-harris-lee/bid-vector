@@ -78,6 +78,9 @@ describe("sentStatusFor", () => {
 });
 
 describe("buildApplyDecisions", () => {
+  // suggestion() 팩토리 provenance — 전송 시 감사용으로 그대로 전달된다(§B).
+  const prov = { source: "internal_notices", confidence: 0.5, reason: "테스트 후보" };
+
   it("accepted/modified/rejected 를 모두 전송하고 pending 만 제외한다", () => {
     const suggestions = [
       suggestion("business_type", "construction"), // accepted(unchanged)
@@ -92,10 +95,11 @@ describe("buildApplyDecisions", () => {
       // focus_categories 는 override 없음 → pending
     };
 
+    // provenance(source/confidence/reason)는 반영·거부 관계없이 감사용으로 함께 전달.
     expect(buildApplyDecisions(suggestions, overrides)).toEqual([
-      { field: "business_type", value: "construction", status: "accepted" },
-      { field: "license_codes", value: ["항만공사업", "준설"], status: "modified" },
-      { field: "region_codes", value: ["11"], status: "rejected" }
+      { field: "business_type", value: "construction", status: "accepted", ...prov },
+      { field: "license_codes", value: ["항만공사업", "준설"], status: "modified", ...prov },
+      { field: "region_codes", value: ["11"], status: "rejected", ...prov }
     ]);
   });
 
@@ -106,8 +110,54 @@ describe("buildApplyDecisions", () => {
     };
     // service→용역, goods→물품 같은 표시 매핑이 payload 를 오염시키지 않는다.
     expect(buildApplyDecisions(suggestions, overrides)).toEqual([
-      { field: "focus_categories", value: ["service", "goods"], status: "accepted" }
+      { field: "focus_categories", value: ["service", "goods"], status: "accepted", ...prov }
     ]);
+  });
+
+  it("후보의 provenance(source/confidence/reason)를 감사용으로 전달한다", () => {
+    const rich: OnboardingFieldSuggestion = {
+      field: "business_type",
+      value: "construction",
+      source: "internal_notices",
+      confidence: 0.82,
+      needs_confirmation: true,
+      reason: "매칭 공고 9건이 공사",
+      matched_notice_count: 9
+    };
+    const overrides: DecisionMap = {
+      business_type: { status: "accepted", value: "construction" }
+    };
+    expect(buildApplyDecisions([rich], overrides)).toEqual([
+      {
+        field: "business_type",
+        value: "construction",
+        status: "accepted",
+        source: "internal_notices",
+        confidence: 0.82,
+        reason: "매칭 공고 9건이 공사"
+      }
+    ]);
+  });
+
+  it("provenance 가 없는(undefined) 후보는 해당 감사 필드를 생략한다", () => {
+    // source/confidence/reason 이 빠진 후보(방어적 케이스) — payload 에서 생략되어야 한다.
+    const bare = {
+      field: "business_type",
+      value: "construction",
+      needs_confirmation: true,
+      matched_notice_count: 0
+    } as unknown as OnboardingFieldSuggestion;
+    const overrides: DecisionMap = {
+      business_type: { status: "accepted", value: "construction" }
+    };
+    const result = buildApplyDecisions([bare], overrides);
+    expect(result).toEqual([
+      { field: "business_type", value: "construction", status: "accepted" }
+    ]);
+    // 키 자체가 없어야 한다(null 로 실려 감사 컬럼을 오염시키지 않음).
+    expect(result[0]).not.toHaveProperty("source");
+    expect(result[0]).not.toHaveProperty("confidence");
+    expect(result[0]).not.toHaveProperty("reason");
   });
 
   it("화이트리스트에 없는 필드는 rejected 여도 방어적으로 skip 한다", () => {

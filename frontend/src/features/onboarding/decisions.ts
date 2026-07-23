@@ -80,9 +80,34 @@ export function buildApplyDecisions(
     // `suggestion.field` 를 OnboardingApplyField 로 좁혀 cast 가 불필요하다.
     if (status === null || !isApplyField(suggestion.field)) continue;
     // 전송값은 canonical raw(decision.value) — 표시 라벨로 치환하지 않는다.
-    decisions.push({ field: suggestion.field, value: decision.value, status });
+    // GET 후보의 provenance(source/confidence/reason)를 감사용으로 전달한다(#236 감사
+    // 테이블이 저장). 후보에 실제로 있는 필드만 싣고, 없으면(undefined) 생략한다 —
+    // 반영 로직에는 영향이 없고 감사 컬럼만 채운다.
+    decisions.push({
+      field: suggestion.field,
+      value: decision.value,
+      status,
+      ...pickProvenance(suggestion)
+    });
   }
   return decisions;
+}
+
+/**
+ * GET 후보에서 감사용 provenance 만 추려낸다(§4.7-4 순수 함수). `undefined` 인 필드는
+ * payload 에서 생략해(빈 값 오염 방지), 후보가 실제로 가진 provenance 만 전달한다.
+ */
+function pickProvenance(
+  suggestion: OnboardingFieldSuggestion
+): Pick<OnboardingApplyDecisionPayload, "source" | "confidence" | "reason"> {
+  const provenance: Pick<
+    OnboardingApplyDecisionPayload,
+    "source" | "confidence" | "reason"
+  > = {};
+  if (suggestion.source !== undefined) provenance.source = suggestion.source;
+  if (suggestion.confidence !== undefined) provenance.confidence = suggestion.confidence;
+  if (suggestion.reason !== undefined) provenance.reason = suggestion.reason;
+  return provenance;
 }
 
 /** accepted 후보 수(확정 반영 버튼 활성 조건). */
