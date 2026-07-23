@@ -50,6 +50,19 @@ export const queryKeys = {
           maxBudget: maxBudget ?? null
         },
         { operatorId }
+      ] as const,
+    history: (
+      field: string | null,
+      status: string | null,
+      limit: number,
+      offset: number,
+      operatorId: OperatorScope = null
+    ) =>
+      [
+        "onboarding",
+        "history",
+        { field: field ?? null, status: status ?? null, limit, offset },
+        { operatorId }
       ] as const
   },
   strategy: {

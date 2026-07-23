@@ -1,14 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   applyOnboardingSuggestions,
+  fetchOnboardingHistory,
   fetchOnboardingSuggestions,
   queryKeys,
   type OnboardingApplyPayload,
   type OnboardingApplyResponse,
+  type OnboardingHistoryQuery,
+  type OnboardingSuggestionHistoryResponse,
   type OnboardingSuggestionsQuery,
   type OnboardingSuggestionsResponse
 } from "@/shared/api";
 import type { AuthSession } from "@/app/layout/AuthGate";
+
+const HISTORY_PAGE_SIZE = 20;
 
 /**
  * 온보딩 후보 조회(react-query). seed 가 확정(제출)되기 전에는 `enabled=false` 로
@@ -50,5 +55,27 @@ export function useApplyOnboardingMutation(session: AuthSession | null) {
       queryClient.invalidateQueries({ queryKey: ["profile"] });
       queryClient.invalidateQueries({ queryKey: ["strategy"] });
     }
+  });
+}
+
+/**
+ * 온보딩 결정 감사 이력 조회(react-query). 세션 토큰이 있으면 자동 조회하며,
+ * `useOnboardingSuggestions` 와 동일한 패턴을 미러한다. 페이지 전환 시 이전 페이지를
+ * placeholder 로 유지해 깜빡임을 줄인다(`useProjectsQuery` 패턴).
+ */
+export function useOnboardingHistory(
+  session: AuthSession | null,
+  query: OnboardingHistoryQuery
+) {
+  return useQuery<OnboardingSuggestionHistoryResponse>({
+    queryKey: queryKeys.onboarding.history(
+      query.field ?? null,
+      query.status ?? null,
+      query.limit ?? HISTORY_PAGE_SIZE,
+      query.offset ?? 0
+    ),
+    queryFn: () => fetchOnboardingHistory(query, session?.token),
+    enabled: Boolean(session?.token),
+    placeholderData: (previous) => previous
   });
 }

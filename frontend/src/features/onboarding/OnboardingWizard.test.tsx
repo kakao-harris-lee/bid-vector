@@ -101,6 +101,8 @@ const cohortSuggestions: OnboardingSuggestionsResponse = {
 const applyResponse: OnboardingApplyResponse = {
   applied: [{ field: "business_type", target: "profile", value: "construction" }],
   ignored: [{ field: "license_codes", reason: "확정하지 않음" }],
+  // 감사에 기록된 결정 수(#243 이후 필수 필드) — 수락 1 + 거부 1.
+  recorded: 2,
   current_operator_id: 1,
   current_operator_username: "operator"
 };
@@ -244,11 +246,26 @@ describe("OnboardingWizard", () => {
     await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
     const [, init] = applyCalls(fetchMock)[0]!;
     // 수락은 status=accepted, 거부는 status=rejected 로 감사에 함께 전송(미확정은 제외).
-    // 전송값은 canonical raw(표시 매핑이 payload를 오염시키지 않는다).
+    // 전송값은 canonical raw(표시 매핑이 payload를 오염시키지 않는다). GET 후보의
+    // provenance(source/confidence/reason)도 감사용으로 함께 전달된다(§B).
     expect(JSON.parse(String(init?.body))).toEqual({
       decisions: [
-        { field: "business_type", value: "construction", status: "accepted" },
-        { field: "license_codes", value: ["항만공사업"], status: "rejected" }
+        {
+          field: "business_type",
+          value: "construction",
+          status: "accepted",
+          source: "internal_notices",
+          confidence: 0.8,
+          reason: "매칭 공고 12건 중 9건이 공사 카테고리"
+        },
+        {
+          field: "license_codes",
+          value: ["항만공사업"],
+          status: "rejected",
+          source: "internal_notices",
+          confidence: 0.6,
+          reason: "6건에서 면허 제한"
+        }
       ]
     });
     expect((init?.headers as Record<string, string>).Authorization).toBe(
@@ -279,8 +296,18 @@ describe("OnboardingWizard", () => {
     await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
     const [, init] = applyCalls(fetchMock)[0]!;
     // 원 추천값(construction)과 다른 편집값이라 status=modified 로 도출된다.
+    // 값은 편집값이지만 provenance 는 원 후보 것을 감사용으로 유지한다(§B).
     expect(JSON.parse(String(init?.body))).toEqual({
-      decisions: [{ field: "business_type", value: "전문건설", status: "modified" }]
+      decisions: [
+        {
+          field: "business_type",
+          value: "전문건설",
+          status: "modified",
+          source: "internal_notices",
+          confidence: 0.8,
+          reason: "매칭 공고 12건 중 9건이 공사 카테고리"
+        }
+      ]
     });
   });
 
@@ -351,11 +378,25 @@ describe("OnboardingWizard", () => {
     await waitFor(() => expect(applyCalls(fetchMock)).toHaveLength(1));
     const [, init] = applyCalls(fetchMock)[0]!;
     // 다중값(문자열 리스트) 그대로 apply payload 에 담긴다(APPLY_FIELDS 화이트리스트 통과).
-    // 편집 없이 수락했으므로 원 추천값과 deep-equal → status=accepted.
+    // 편집 없이 수락했으므로 원 추천값과 deep-equal → status=accepted. provenance 전달(§B).
     expect(JSON.parse(String(init?.body))).toEqual({
       decisions: [
-        { field: "tech_fields", value: ["수로측량업"], status: "accepted" },
-        { field: "association_memberships", value: ["한국수로측량협회"], status: "accepted" }
+        {
+          field: "tech_fields",
+          value: ["수로측량업"],
+          status: "accepted",
+          source: "internal_notices",
+          confidence: 0.6,
+          reason: "매칭 공고 7건에서 기술부문 추정"
+        },
+        {
+          field: "association_memberships",
+          value: ["한국수로측량협회"],
+          status: "accepted",
+          source: "internal_notices",
+          confidence: 0.5,
+          reason: "매칭 공고 4건에서 협회 제한"
+        }
       ]
     });
   });

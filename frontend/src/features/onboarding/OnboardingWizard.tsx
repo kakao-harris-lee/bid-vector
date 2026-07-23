@@ -1,5 +1,9 @@
 import { useState, type ReactElement } from "react";
+import { useNavigate } from "react-router-dom";
+import { History } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
+import { ONBOARDING_HISTORY_ROUTE_PATH } from "@/app/layout/Shell";
+import { Button } from "@/shared/components/ui";
 import type { OnboardingApplyResponse, OnboardingSuggestionsQuery } from "@/shared/api";
 import type { OnboardingSeedFormValues } from "./schema";
 import { STEP_META, type StepKey } from "./constants";
@@ -22,6 +26,7 @@ import { PreviewStep } from "./PreviewStep";
  */
 export function OnboardingWizard() {
   const { session } = useShellContext();
+  const navigate = useNavigate();
   const [step, setStep] = useState<StepKey>("seed");
   const [seed, setSeed] = useState<OnboardingSuggestionsQuery | null>(null);
   const [overrides, setOverrides] = useState<DecisionMap>({});
@@ -103,9 +108,22 @@ export function OnboardingWizard() {
 
   return (
     <section className="flex flex-col gap-4" aria-label="온보딩 마법사">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold">사업자 온보딩</h1>
-        <p className="text-sm text-[var(--color-muted)]">{STEP_META[effectiveStep].description}</p>
+      <header className="flex items-start justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-lg font-semibold">사업자 온보딩</h1>
+          <p className="text-sm text-[var(--color-muted)]">
+            {STEP_META[effectiveStep].description}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
+          onClick={() => navigate(ONBOARDING_HISTORY_ROUTE_PATH)}
+        >
+          <History size={15} aria-hidden="true" /> 감사 이력
+        </Button>
       </header>
       <WizardProgress current={effectiveStep} />
       {stepViews[effectiveStep]()}
