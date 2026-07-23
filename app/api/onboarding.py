@@ -1,11 +1,20 @@
-"""반자동 온보딩 후보 조회 라우터(읽기 전용).
+"""반자동 온보딩 라우터.
 
 operator 라우터(``app/api/operator.py``)가 이미 크므로(§4.5.4) 온보딩 경계를 별
 모듈로 분리하고 ``/operator`` prefix 아래 등록한다. 라우터는 얇게 유지하고
-(§4/§4.5.5) 도메인 로직은 ``services.onboarding`` 에 위임한다. 인증은 기존 operator
-읽기 엔드포인트와 동일한 의존성(``get_current_operator_optional`` +
-``resolve_read_operator``)을 사용해 보안 정책(canonical fallback / 403 / 404)을
-공유한다. 이 엔드포인트는 공용 공고만 읽고 operator 데이터는 쓰지 않는다.
+(§4/§4.5.5) 도메인 로직은 ``services.onboarding`` 에 위임한다. 세 엔드포인트를 둔다:
+
+- ``GET  /onboarding-suggestions`` — 내부 공고에서 회사 프로필/전략 필드 후보를
+  역추천한다(읽기 전용, persist 없음).
+- ``POST /onboarding-suggestions/apply`` — 사용자가 확정한 필드만 현재 operator 의
+  프로필/전략에 부분 반영하고 모든 결정을 감사 로그에 append 한다(operator-scoped write).
+- ``GET  /onboarding-suggestions/history`` — 그 감사 로그(``onboarding_suggestions``)를
+  최신순으로 조회한다(operator-scoped read).
+
+읽기 엔드포인트는 ``resolve_read_operator``(canonical fallback / 403 / 404), 쓰기는
+``resolve_write_operator``(self-only / 403)를 재사용해 per-operator/synthetic 격리를
+다른 operator 엔드포인트와 동일하게 공유한다 — 각 응답/기록은 해석된 operator 의
+``user_id`` 스코프로만 한정된다.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status

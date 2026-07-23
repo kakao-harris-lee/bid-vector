@@ -337,3 +337,49 @@ def test_endpoint_history_per_operator_isolation(client, test_db):
     payload_b = client.get(_HISTORY_URL, headers=headers_b).json()
     assert payload_b["total"] == 1
     assert payload_b["items"][0]["field"] == "focus_regions"
+
+
+def test_endpoint_history_cross_operator_forbidden(client, test_db):
+    """비특권 operator B 가 ?operator_id=<A> 로 조회하면 403(빈 200 아님, A 행 미노출).
+
+    resolve_read_operator 를 우회해 operator_id 를 뒤로 흘리는 회귀를 막는 deny-path
+    가드다 — 비특권 계정은 다른 operator 의 감사 이력을 절대 읽지 못한다(apply 의
+    cross-operator write 403 과 대칭).
+    """
+    operator_a = _make_operator(test_db, username="operator-a")
+    _make_operator(test_db, username="operator-b")  # 비특권(로그인 대상)
+    _add_row(test_db, operator_a, field="business_type", value="construction")
+
+    headers_b = _login(client, "operator-b")
+    response = client.get(
+        _HISTORY_URL, params={"operator_id": operator_a.id}, headers=headers_b
+    )
+    assert response.status_code == 403
+    # A 의 행이 body 로 새지 않는다(빈 200 도 아님).
+    assert "items" not in response.json()
+
+
+def test_endpoint_history_privileged_cross_read_synthetic(client, test_db):
+    """특권 canonical operator 는 ?operator_id=<synthetic> 로 그 synthetic 이력을 읽는다.
+
+    단일 운영자가 synthetic-* 회사를 대리 관리하는 의도된 cross-read(허용 경로).
+    응답 행과 envelope 이 대상 synthetic 스코프여야 한다.
+    """
+    _make_operator(test_db, username="operator")  # canonical = 특권(로그인 대상)
+    synthetic = _make_operator(test_db, username="synthetic-sw-small-seoul")
+    _add_row(test_db, synthetic, field="focus_regions", value=["부산"])
+    _add_row(test_db, synthetic, field="business_type", value="construction")
+
+    headers = _login(client, "operator")
+    response = client.get(
+        _HISTORY_URL, params={"operator_id": synthetic.id}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["current_operator_id"] == synthetic.id
+    assert payload["current_operator_username"] == "synthetic-sw-small-seoul"
+    assert {item["field"] for item in payload["items"]} == {
+        "focus_regions",
+        "business_type",
+    }
