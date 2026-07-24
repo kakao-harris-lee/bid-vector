@@ -38,3 +38,31 @@ export const onboardingSeedSchema = z
   });
 
 export type OnboardingSeedFormValues = z.infer<typeof onboardingSeedSchema>;
+
+/**
+ * 사업자번호 확인 폼 스키마(설계 §UI 1단계, #248 계약).
+ * - 사업자번호: 하이픈 허용 입력이지만 숫자만 추려 정확히 10자리여야 한다(백엔드 정규화 계약).
+ * - 개업일자/대표자명: 선택. 둘 다 있으면 백엔드가 진위확인, 아니면 상태조회로 분기한다.
+ *
+ * 원문 번호는 여기서 검증만 하고, 전송/표시는 컴포넌트가 마스킹 응답으로만 처리한다(§2).
+ */
+export const businessVerificationSchema = z.object({
+  business_number: z
+    .string()
+    .min(1, "사업자번호를 입력하세요.")
+    .refine(
+      (raw) => raw.replace(/\D/g, "").length === 10,
+      "사업자번호는 숫자 10자리입니다."
+    ),
+  start_date: z
+    .string()
+    .max(20)
+    .optional()
+    .refine(
+      (value) => !value || /^\d{4}-?\d{2}-?\d{2}$/.test(value.trim()),
+      "개업일자는 YYYY-MM-DD 또는 YYYYMMDD 형식입니다."
+    ),
+  representative_name: z.string().max(50).optional()
+});
+
+export type BusinessVerificationFormValues = z.infer<typeof businessVerificationSchema>;

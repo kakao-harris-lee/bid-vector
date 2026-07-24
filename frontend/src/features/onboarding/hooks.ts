@@ -4,6 +4,9 @@ import {
   fetchOnboardingHistory,
   fetchOnboardingSuggestions,
   queryKeys,
+  verifyBusinessNumber,
+  type BusinessVerificationRequest,
+  type BusinessVerificationResponse,
   type OnboardingApplyPayload,
   type OnboardingApplyResponse,
   type OnboardingHistoryQuery,
@@ -14,6 +17,18 @@ import {
 import type { AuthSession } from "@/app/layout/AuthGate";
 
 const HISTORY_PAGE_SIZE = 20;
+
+/**
+ * 사업자번호 상태조회/진위확인(mutation, #248). `useSendBidReportEmailMutation` 하우스
+ * 스타일을 미러한다 — **queryKey 없음**이라 사용자가 입력한 원문 번호는 캐시/쿼리키에
+ * 남지 않고, 변수(payload)는 mutation 수명 동안에만 존재한다(§2 정직 명세). 응답은
+ * masked 번호만 담으므로 표시는 응답값으로만 한다(원문 재노출 금지).
+ */
+export function useVerifyBusinessNumberMutation(session: AuthSession | null) {
+  return useMutation<BusinessVerificationResponse, Error, BusinessVerificationRequest>({
+    mutationFn: (payload) => verifyBusinessNumber(payload, session?.token)
+  });
+}
 
 /**
  * 온보딩 후보 조회(react-query). seed 가 확정(제출)되기 전에는 `enabled=false` 로
