@@ -184,8 +184,14 @@ def test_nts_status_text_fallback_when_code_missing():
 # --- NTS adapter: authenticity mapping ----------------------------------------
 
 
-def test_nts_validate_match_maps_verified():
-    payload = {"data": [{"b_no": RAW_NUMBER, "valid": "01", "valid_msg": ""}]}
+def test_nts_validate_match_maps_verified_and_drops_free_text():
+    # valid_msg 는 비정형 free-text — odcloud 가 원문 사업자번호를 에코할 여지가 있어
+    # masked payload 에 담지 않는다(구조화 코드만 보존). 여기서 raw 번호를 심어 확인한다.
+    payload = {
+        "data": [
+            {"b_no": RAW_NUMBER, "valid": "01", "valid_msg": f"확인 {RAW_NUMBER}"}
+        ]
+    }
     fake_post, calls = _recording_http_post(_FakeResponse(payload))
     result = _nts_adapter(fake_post).check_authenticity(
         RAW_NUMBER, start_date="20200101", representative_name="홍길동"
@@ -197,6 +203,9 @@ def test_nts_validate_match_maps_verified():
     assert business == {"b_no": RAW_NUMBER, "start_dt": "20200101", "p_nm": "홍길동"}
     assert "b_no" not in result.masked_payload
     assert result.masked_payload["b_no_masked"] == MASKED_NUMBER
+    # valid_msg 는 드롭되어 원문 번호가 payload 어디에도 남지 않는다.
+    assert "valid_msg" not in result.masked_payload
+    assert RAW_NUMBER not in json.dumps(result.masked_payload, ensure_ascii=False)
 
 
 def test_nts_validate_mismatch_maps_mismatch():
@@ -303,6 +312,70 @@ def test_endpoint_no_key_returns_unknown_and_persists_masked(client, test_db, mo
     assert profile.business_registration_number_hash == hash_business_number(
         RAW_NUMBER, nts_mod.settings.BUSINESS_NUMBER_HASH_PEPPER
     )
+
+
+def test_endpoint_keyed_path_does_not_leak_raw_number(client, test_db, monkeypatch):
+    """키 구성된 KEYED 경로를 실제 팩토리/NTS 어댑터/_default_http_post 로 태우되,
+    requests.post 만 가짜 odcloud 응답으로 대체한다. 응답 data 에 원문 b_no(10자리)를
+    일부러 심어, 엔드포인트 응답과 영속화 어디에도 원문이 새지 않음을 end-to-end 로 증명한다.
+    """
+    monkeypatch.setattr(
+        nts_mod.settings, "NTS_BUSINESS_VERIFICATION_SERVICE_KEY", "FAKE-KEY"
+    )
+    # 원문 10자리를 여러 필드(정형 b_no + 비정형 valid_msg)에 심는다 — 새면 안 된다.
+    leaky_payload = {
+        "data": [
+            {
+                "b_no": RAW_NUMBER,
+                "b_stt": "계속사업자",
+                "b_stt_cd": "01",
+                "tax_type": "부가가치세 일반과세자",
+                "valid_msg": f"확인 {RAW_NUMBER}",
+            }
+        ]
+    }
+
+    def fake_requests_post(url, *args, **kwargs):
+        return _FakeResponse(leaky_payload)
+
+    monkeypatch.setattr(nts_mod.requests, "post", fake_requests_post)
+
+    response = client.post(ENDPOINT, json={"business_number": "123-45-67890"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "verified"
+    assert body["masked_number"] == MASKED_NUMBER
+    assert body["verified_at"] is not None
+    # (a) 응답 본문에 원문 번호/뒤 5자리 없음.
+    assert RAW_NUMBER not in response.text
+    assert "67890" not in response.text
+
+    # (b) 영속화된 프로필: 해시 + masked 만, 원문은 어떤 컬럼에도 없음.
+    operator = ensure_operator_account(test_db)
+    profile = (
+        test_db.query(CompanyProfile)
+        .filter(CompanyProfile.user_id == operator.id)
+        .first()
+    )
+    assert profile is not None
+    assert profile.business_verification_status == "verified"
+    assert profile.business_verified_at is not None
+    assert profile.business_registration_number_hash == hash_business_number(
+        RAW_NUMBER, nts_mod.settings.BUSINESS_NUMBER_HASH_PEPPER
+    )
+    # 해시/payload 어떤 컬럼에도 원문 10자리가 없다(해시는 일방향 HMAC — 원문 미복원).
+    for value in (
+        profile.business_registration_number_hash,
+        profile.business_verification_payload,
+    ):
+        assert RAW_NUMBER not in (value or "")
+    # payload 는 masked 만 담고 원문 뒤 5자리도 없다(hex 해시엔 우연 조각이 낄 수 있어 제외).
+    assert "67890" not in (profile.business_verification_payload or "")
+    payload = json.loads(profile.business_verification_payload)
+    assert payload["b_no_masked"] == MASKED_NUMBER
+    assert "b_no" not in payload
+    assert "valid_msg" not in payload
 
 
 def test_endpoint_rejects_invalid_number(client):

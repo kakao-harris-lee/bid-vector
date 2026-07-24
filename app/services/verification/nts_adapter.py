@@ -42,8 +42,11 @@ VALIDATE_ENDPOINT = "validate"
 
 # 응답에서 보존하는(masked payload 로 올리는) 상태 키 — b_no 는 여기 담지 않고 별도로
 # 마스킹해 넣는다(원문 미노출). 그 외 서비스키/원문은 절대 담지 않는다.
+# NOTE: ``valid_msg`` 같은 비정형(free-text) 필드는 담지 않는다 — odcloud 가 오류 메시지에
+# 원문 사업자번호를 에코할 여지가 있어 raw-number-never-persisted 불변식을 깰 수 있다.
+# 구조화된 코드/상태 키(valid/b_stt/b_stt_cd/tax_type)만 보존한다.
 _STATUS_KEEP_KEYS = ("b_stt", "b_stt_cd", "tax_type", "tax_type_cd", "end_dt", "utcc_yn")
-_VALIDATE_KEEP_KEYS = ("valid", "valid_msg", "b_stt", "b_stt_cd", "tax_type")
+_VALIDATE_KEEP_KEYS = ("valid", "b_stt", "b_stt_cd", "tax_type")
 
 
 def _default_http_post(
