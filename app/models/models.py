@@ -164,6 +164,21 @@ class CompanyProfile(Base):
     association_memberships = Column(Text, default="", server_default="")
     tech_fields = Column(Text, default="", server_default="")
     total_awards = Column(Integer, default=0)
+    # 국세청 사업자등록번호 검증(상태조회/진위확인) 결과 캡처. 원문 사업자번호는
+    # 절대 저장하지 않는다(CLAUDE.md §8, 설계 §비기능) — pepper HMAC-SHA256 해시만
+    # 저장한다. 해시는 정규화(숫자만)된 번호로 계산하며 중복/검색 조회용으로 index.
+    # ``mask_business_number`` 로 만든 masked 번호만 표시/응답에 쓴다(원문 미노출).
+    business_registration_number_hash = Column(String(64), nullable=True, index=True)
+    # 검증 상태. 허용값 단일 출처는 services.verification.status.BusinessVerificationStatus
+    # (unverified/verified/inactive/mismatch/unknown). onboarding_suggestions.status 와
+    # 같은 패턴 — 컬럼은 plain String, enum 은 서비스 계층에 둔다(모델↔서비스 순환 회피).
+    business_verification_status = Column(
+        String(20), default="unverified", nullable=False, server_default="unverified"
+    )
+    # masked/normalized 상태 payload(JSON 문자열). 원문 사업자번호(b_no)는 마스킹해
+    # 담고 b_stt/b_stt_cd/tax_type/valid 등 상태 필드만 보존한다 — 원문·서비스키 미포함.
+    business_verification_payload = Column(Text, nullable=True)
+    business_verified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

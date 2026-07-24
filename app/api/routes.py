@@ -10,6 +10,7 @@ from app.api import (
     bid_report_email,
     bid_summary,
     bids,
+    business_verification,
     dashboard,
     decision_samples,
     ml,
@@ -31,6 +32,9 @@ router.include_router(backtests.router, prefix="/backtests", tags=["Backtests"])
 router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 router.include_router(operator.router, prefix="/operator", tags=["Operator"])
 router.include_router(onboarding.router, prefix="/operator", tags=["Onboarding"])
+router.include_router(
+    business_verification.router, prefix="/operator", tags=["Business Verification"]
+)
 router.include_router(projects.router, prefix="/projects", tags=["Projects"])
 router.include_router(bids.router, prefix="/bids", tags=["Bids"])
 router.include_router(predictions.router, prefix="/predictions", tags=["AI Predictions"])
