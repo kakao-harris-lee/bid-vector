@@ -211,7 +211,7 @@ Exit gate G-2:
 - **후속 ① 완료 (#197→#198→#200, 2026-07-17)**: 공사 법정 낙찰하한율 개정(2026-01-30 국가계약 +2%p)을 시행일·추정가격 구간 인지 선언 테이블로 반영(#197), 백테스트·스모크·홀드아웃 predict 경로에 era-correct wiring(#198), 공사 시나리오를 era-correct 법정 하한 앵커로 캘리브레이션(#200 — clean 표본 n=2,051 percentile, 공사 추천 오차 3.33%→0.305% 실증). 부수로 `HistoricalData.base_amount` 출처 분류(basis) 태깅 backfill 65,137행 + 홀드아웃 오염 가드(#199).
 - **실투찰 검증 파이프라인 완비 (2026-07-18, #201/#202/#203)**: "미확정(낙찰하한율 필요)" 원인 3종 진단 — (a) 등록 투찰가가 실제 제출가와 원 단위 불일치 → 실제 제출가+공고 하한율(88%)로 재등록, 재발 방지로 최종 예측가 원 단위 정수 보장+등록 정수 강제(#203); (b) 낙찰하한율 미수집 → 공고 수집 시 `sucsfbidLwltRate`를 `Project.award_floor_rate`로 자동 저장 + `verify_one` 폴백(운영자 미입력 시 공고값, `floor_rate_source` 감사 필드)(#201); (c) 기존 공고 backfill 스크립트(#202) — open+마감 미도래 대상, 일일 쿼터 분할(1차 1,202건 적재, 잔여는 매일 아침 자동 재개). 두 실투찰은 **적격+낙찰가능** 판정 확정, 낙찰자 공표 시 beat 자동 텔레그램으로 경쟁력 비교까지 발송.
 - **낙찰/패찰 영속화 (#208)**: 실투찰의 낙찰/패찰 여부를 과거 입찰 기록으로 남긴다(운영자 요구 — 몇 위였는지보다 낙찰인가 아닌가). `BidDecisionRecord.award_outcome`(`"won"`/`"lost"`, NULL=미확정)에 낙찰자 공표 후 **운영자 상호 vs 낙찰자 상호 정규화 매칭**으로만 기록(법인 접두·접미 제거, 금액 단독 판정 금지 — 동일 개찰 동일 투찰가 복수사, §2 정직). 발송 이전 기록으로 텔레그램 실패에도 잔존·멱등이며, 통지 시점에 판정 못한(상호 미설정·낙찰자 상호 피드 랙) 레코드는 outcome 회복 패스가 재통지 없이 뒤늦게 채운다.
-- **잔여 후속(우선순위 순)**: ① 두 공고 낙찰자 확정 수집 후 #195 발주처 밴드 가설 재검증·재캘리브레이션(홀드아웃 비교 포함) — 파이프라인 준비 완료, 공표 대기만 남음. ② LLM 활용은 하이브리드 방침 확정 — 수치 예측은 통계/ML 유지(tabular 회귀 대비 열세·비결정성·감사불가), LLM은 공고문 자격조건 feature 추출·레짐 분류·특약 리스크 요약에 한정(아래 "해야 할 일"의 공고 식별 항목과 정합). ③ 개찰 참가업체별 순위/투찰금액 수집(현재 낙찰자 1건만 수집 — 실투찰 순위 사후분석용).
+- **잔여 후속(우선순위 순)**: ① 두 공고 낙찰자 확정 수집 후 #195 발주처 밴드 가설 재검증·재캘리브레이션(홀드아웃 비교 포함) — 파이프라인 준비 완료, 공표 대기만 남음. ② LLM 하이브리드는 **재검토 후 defer 확정(2026-07-24)** — 수치 예측은 통계/ML 유지(tabular 회귀 대비 열세·비결정성·감사불가). 원래 스코프 3개 중 ⓐ 공고문 자격조건 feature 추출·ⓑ 레짐 분류는 **결정적·감사가능 구현으로 이미 대체됨**(자격=구조화 `eligibility_raw.license_limits`+룰 해석기 #206~#213/#237/#238, 레짐=키워드 룰 `_detect_price_regime_signals` #239/#240) — 이 경로에 LLM 투입은 하드 게이트/가격 감사성에 환각·비결정 회귀라 **스코프에서 제외**. ⓒ 특약 리스크 요약(자문 전용·비스코어링)만 조건부 후속으로 남기되, 착수 시 수치예측·하드게이트·probability_score 미투입·LLM생성 명시·사람검토·prompt/response 감사로깅 전제, G-3 실수요 확인 후. 현재 seam(`app/ai/llm_interfaces.py`·`ExecutorDocumentAnalysisPort`)은 deferred 유지. ③ 개찰 참가업체별 순위/투찰금액 수집(현재 낙찰자 1건만 수집 — 실투찰 순위 사후분석용).
 
 범위:
 
@@ -456,10 +456,8 @@ G-2 exit 승인(2026-07-17)으로 이전 1~6번(G-2 증적 축적·blocking gap�
 1. 실투찰 재검증(대기): 실투찰 2건(`R26BK01627948`, `R26BK01628093`)의 낙찰자 확정이 수집되면 #195 발주처 밴드 가설을 재검증·재캘리브레이션한다(홀드아웃 비교 포함). 수집·적격 판정·자동 텔레그램 파이프라인은 준비 완료.
 2. 엔지니어링협회 실증 코어: cohort 정의, 협회 조건 공고의 구조화 feature 추출(자격 조건 vs 기관명/과업명 라벨 분리), positive/negative 실증 데이터셋 구축(Phase 3 "해야 할 일" 상단 항목들).
 3. 사업자 온보딩·전달 채널: 사업자번호 기반 반자동 온보딩, 투찰 보고서 메일 전달, 알림 품질 조정.
-4. LLM 하이브리드 착수: 공고문 자격조건 feature 추출·레짐 분류·특약 리스크 요약에 한정해 적용(수치 예측은 통계/ML 유지).
-5. 추천 품질 세그먼트 후속: `procurement_rate_band`보다 세밀한 `price_regime_features`를 만들고,
-   `floor_bound`/`near_100`/`deep_discount`/`ambiguous` 레짐별 calibration, recommended selector 분리,
-   legal floor/예정가격 분모 품질 검사, 기관 group holdout과 최신 N건 rolling holdout을 구현한다.
+4. LLM 하이브리드: **재검토 후 defer 확정(2026-07-24)**. 원 스코프 중 자격조건 feature 추출·레짐 분류는 결정적 구현(#206~#213/#237/#238·#239/#240)으로 대체되어 스코프에서 제외 — LLM 투입은 하드 게이트/가격 감사성에 회귀. 특약 리스크 요약(자문 전용)만 조건부 후속(수치·게이트 미투입·사람검토·감사로깅·G-3 실수요 확인 전제). seam(`llm_interfaces`)은 deferred 유지. 상세는 위 "잔여 후속 ②".
+5. 추천 품질 세그먼트 후속: **핵심 대부분 완료(#239/#240)** — `price_regime_features`(`_build_price_regime_features`), `floor_bound`/`near_100`/`deep_discount`/`ambiguous` 레짐 라벨, recommended selector 분리(`_select_recommended_candidate`), 최신 N건 rolling holdout(`backtest_latest_award_holdouts.py`) 구현·배포. 잔여=기관 group holdout·legal floor/예정가격 분모 품질 검사 세분화(후속).
 6. 개찰 데이터 폭 확장: 참가업체별 순위/투찰금액 수집(실투찰 순위 사후분석용), 기존 공고 낙찰하한율 backfill 잔여분 완료(일일 쿼터 분할 자동 재개 중).
 7. API/OpenAPI 타입 정합: API schema 변경 시 `npm --prefix frontend run sync-types`와 `check:sync-types`를 실행해 generated frontend type drift를 막는다.
 8. 운영 관찰 유지: celerybeat 항구성(self-heal #161, ~07-29 재발 창), 스모크 streak 회복(~07-22), 일일 KONEPS 쿼터 예산(대량 backfill은 `--limit` 분할 — 2026-07-18 쿼터 소진으로 당일 수집 파이프라인이 함께 멎은 교훈).
