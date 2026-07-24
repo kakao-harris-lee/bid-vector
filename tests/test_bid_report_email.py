@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+from app.core.security import get_password_hash
 from app.core.single_user import ensure_operator_account
-from app.models.models import Analytics, BidDecisionRecord, Project
+from app.models.models import Analytics, BidDecisionRecord, Project, User
 from app.schemas.bid_form_draft import BID_FORM_DRAFT_NOTICE
 from app.schemas.bid_summary import DIRECT_SUBMISSION_NOTICE
 from app.services.notifications.email import (
@@ -222,6 +223,47 @@ def test_send_bid_report_dry_run_does_not_call_smtplib(monkeypatch):
     assert called["count"] == 0  # smtplib.SMTP 미호출
 
 
+def test_send_bid_report_production_default_still_no_send(monkeypatch):
+    """PRODUCTION + 기본 이메일 플래그에서도 절대 송신하지 않음을 핀한다.
+
+    conftest 가 ENVIRONMENT=test 로 설정하면 ``_should_send_live`` 가 test 를
+    바로 short-circuit 하므로, 위의 dry-run 테스트만으로는 "운영 환경에서 기본값이면
+    송신 안 함"을 증명하지 못한다. 여기서는 ENVIRONMENT 를 production 으로 바꾸되
+    EMAIL_DELIVERY_ENABLED=False / EMAIL_DRY_RUN=True 기본을 유지하고, smtplib.SMTP 를
+    폭발 더블로 패치해 호출 0 + dry_run 결과를 단언한다(향후 게이팅 회귀 방지).
+    monkeypatch 로 ENVIRONMENT 는 테스트 후 자동 복원된다.
+    """
+    import app.services.notifications.email as email_module
+    from app.core.config import settings
+
+    # 운영 환경으로 전환하되 이메일 플래그는 안전 기본값 유지.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "EMAIL_DELIVERY_ENABLED", False)
+    monkeypatch.setattr(settings, "EMAIL_DRY_RUN", True)
+
+    called = {"count": 0}
+
+    class _ExplodingSMTP:  # noqa: D401 - test double
+        def __init__(self, *args, **kwargs):
+            called["count"] += 1
+            raise AssertionError("운영 기본값에서는 SMTP 연결을 열면 안 된다")
+
+    monkeypatch.setattr(email_module.smtplib, "SMTP", _ExplodingSMTP)
+
+    service = EmailNotificationService()
+    result = service.send_bid_report(
+        summary=_sample_summary(),
+        draft=_sample_draft(),
+        recipient="chihunlee@gmail.com",
+    )
+
+    assert result.dry_run is True
+    assert result.sent is False
+    assert result.delivery_status == STATUS_DRY_RUN
+    assert result.masked_recipient == "c***@gmail.com"
+    assert called["count"] == 0  # 운영 기본값에서도 smtplib.SMTP 미호출
+
+
 def test_send_bid_report_skips_when_no_recipient():
     service = EmailNotificationService()
     result = service.send_bid_report(
@@ -310,6 +352,66 @@ def test_report_email_endpoint_404_for_unknown_record(client, test_db):
     ensure_operator_account(test_db)
 
     response = client.post(REPORT_EMAIL_PATH.format(record_id=999_999))
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Bid decision record not found"
+
+
+def test_report_email_endpoint_404_for_cross_operator_record(client, test_db):
+    """A record owned by a synthetic operator must not be emailable cross-operator.
+
+    Mirrors ``test_bid_summary_returns_404_for_cross_operator_record`` /
+    the bid_form_draft equivalent: the default POST path resolves to the canonical
+    singleton operator, and the summary/draft aggregation scopes its lookup with
+    ``operator_id == target.id``. Pins the single-operator scope as a regression —
+    a synthetic-owned record whose id EXISTS must still 404 on the default path.
+    """
+    canonical = ensure_operator_account(test_db)
+
+    synthetic = User(
+        username="synthetic-sw-small-seoul",
+        email="synthetic-sw-small-seoul@example.com",
+        full_name="Synthetic SW Small Seoul",
+        company="Synthetic Co",
+        hashed_password=get_password_hash("password123"),
+        is_active=True,
+    )
+    test_db.add(synthetic)
+    test_db.commit()
+    test_db.refresh(synthetic)
+    assert synthetic.id != canonical.id
+
+    project = Project(
+        title="다른 운영자 소유 공고",
+        description="cross-operator",
+        requirements="",
+        budget_estimate=80_000_000.0,
+        category="software",
+        deadline=datetime.now(UTC) + timedelta(hours=8),
+    )
+    test_db.add(project)
+    test_db.commit()
+    test_db.refresh(project)
+
+    foreign_record = BidDecisionRecord(
+        project_id=project.id,
+        operator_id=synthetic.id,
+        pursue_bid=True,
+        action="bid_now",
+        decision_status="planned",
+        recommended_amount=72_000_000.0,
+        probability_score=0.6,
+        matched_score=0.7,
+        priority_score=0.7,
+        reasoning="synthetic seed",
+    )
+    test_db.add(foreign_record)
+    test_db.commit()
+    test_db.refresh(foreign_record)
+
+    # The record id EXISTS, but belongs to the synthetic operator — the default
+    # (canonical) POST path must not be able to email it.
+    response = client.post(REPORT_EMAIL_PATH.format(record_id=foreign_record.id))
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Bid decision record not found"

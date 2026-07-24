@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from email.message import EmailMessage
 import html
+import json
 import logging
 import smtplib
 from typing import Any, Optional
@@ -424,8 +425,6 @@ class EmailNotificationService:
     ) -> None:
         """전달 시도를 Analytics 에 기록한다(마스킹된 수신자만, 베스트에포트)."""
         try:
-            import json
-
             event = Analytics(
                 user_id=operator_id,
                 event_type=_ANALYTICS_EVENT_TYPE,
