@@ -615,6 +615,22 @@ class Settings(BaseSettings):
     KONEPS_OPENAPI_REQUEST_DELAY_SECONDS: float = 0.2  # inter-page throttle for BidPublicInfoService pagination
     KONEPS_HEADLESS: bool = True
     KONEPS_TIMEOUT_MS: int = 30000
+
+    # 국세청 사업자등록정보 검증(상태조회/진위확인) — 공공데이터포털(odcloud)
+    # 키가 비어 있으면 외부 호출을 절대 하지 않고 graceful 하게 status='unknown' 을
+    # 반환한다(운영자가 SMTP 처럼 나중에 키를 붙이는 opt-in 경로). 시크릿(서비스키)은
+    # 로그/응답/텔레메트리에 남기지 않는다(§8).
+    NTS_BUSINESS_VERIFICATION_SERVICE_KEY: str = ""
+    NTS_BUSINESS_VERIFICATION_BASE_URL: str = (
+        "https://api.odcloud.kr/api/nts-businessman/v1"
+    )
+    NTS_BUSINESS_VERIFICATION_TIMEOUT_SECONDS: int = 10
+    # 사업자번호 해시용 pepper(HMAC-SHA256 key). 원문 번호는 저장하지 않고 이 pepper 로
+    # 계산한 HMAC 해시만 저장한다. 빈 값도 유효한(길이 0) HMAC 키라 결정적이며 중복
+    # 조회에 문제 없다. 다만 유효 사업자번호 공간이 작아(~10^8) pepper 가 비면 무차별
+    # 대입 저항이 약하다 — 운영에서는 실제 pepper 설정을 권장한다(문서화된 known-limitation,
+    # 다른 시크릿과 결합하지 않는 단일 출처 값).
+    BUSINESS_NUMBER_HASH_PEPPER: str = ""
     KONEPS_USER_AGENT: str = "bid-vector-bot/0.1"
     KONEPS_REQUEST_DELAY_MS: int = 750
     KONEPS_SEARCH_WAIT_MS: int = 4000
