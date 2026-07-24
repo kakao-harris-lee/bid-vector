@@ -10,7 +10,7 @@ import type { OnboardingApplyField, OnboardingDecisionStatus } from "@/shared/ap
 
 // --- wizard 단계 ------------------------------------------------------------
 
-export type StepKey = "seed" | "review" | "result" | "preview";
+export type StepKey = "business" | "seed" | "review" | "result" | "preview";
 
 export interface StepMeta {
   key: StepKey;
@@ -20,35 +20,94 @@ export interface StepMeta {
   description: string;
 }
 
-/** 설계 §UI 2~5단계에 대응(1단계 사업자번호는 국세청 미구현이라 후속). */
-export const STEP_ORDER: readonly StepKey[] = ["seed", "review", "result", "preview"];
+/** 설계 §UI 1~5단계에 대응(1단계=사업자번호 상태확인, #248 dry/graceful). */
+export const STEP_ORDER: readonly StepKey[] = [
+  "business",
+  "seed",
+  "review",
+  "result",
+  "preview"
+];
 
 export const STEP_META: Record<StepKey, StepMeta> = {
+  business: {
+    key: "business",
+    order: 1,
+    title: "사업자번호 확인",
+    description:
+      "사업자번호로 상태를 먼저 확인합니다. 번호만으로 면허·지역·금액을 확정하지 않습니다."
+  },
   seed: {
     key: "seed",
-    order: 1,
+    order: 2,
     title: "기본 후보 입력",
     description: "관심 키워드로 내부 공고에서 프로필·전략 후보를 역추천합니다."
   },
   review: {
     key: "review",
-    order: 2,
+    order: 3,
     title: "후보 검토",
     description: "추천 후보는 확정이 아닙니다. 각 후보를 수락·수정하거나 거부하세요."
   },
   result: {
     key: "result",
-    order: 3,
+    order: 4,
     title: "확정 반영",
     description: "수락한 값만 회사 정보·감시 전략에 반영했습니다."
   },
   preview: {
     key: "preview",
-    order: 4,
+    order: 5,
     title: "공고 미리보기",
     description: "확정한 조건으로 현재 열린 공고 중 추천 후보를 확인합니다."
   }
 };
+
+// --- 사업자번호 검증 상태 표시(§4.5-1/2, 설계 §비기능 warning gate) --------------
+
+/**
+ * 사업자번호 검증 상태 — 백엔드 `BusinessVerificationResponse.status`(#248)의 값 집합.
+ * 생성 스키마는 `status: string` 이라 표시/톤 매핑을 위한 도메인 union 을 별도 선언한다
+ * (요청/응답 타입은 생성 스키마 재노출, 이 union 은 표시 전용 선언).
+ */
+export type BusinessVerificationStatus =
+  | "unverified"
+  | "verified"
+  | "inactive"
+  | "mismatch"
+  | "unknown";
+
+/**
+ * 상태 표시 종류 — 진행 게이트를 코드 분기가 아니라 데이터로 선언한다.
+ * - `warning`(inactive/mismatch): 진행 전 명확한 경고(설계 §비기능).
+ * - `unknown`: 검증 미구성/확인 불가 — 진행은 막지 않는 정직 고지(graceful no-key).
+ * - `success`(verified): 정상 확인. `neutral`(unverified): 초기 중립.
+ */
+export type BusinessStatusKind = "neutral" | "success" | "warning" | "unknown";
+
+export interface BusinessStatusMeta {
+  tone: BadgeTone;
+  kind: BusinessStatusKind;
+}
+
+/** 상태 → 톤/종류 단일 출처(§4.5-1). i18n 라벨은 `business_verification.status.*`. */
+export const BUSINESS_STATUS_META: Record<BusinessVerificationStatus, BusinessStatusMeta> = {
+  unverified: { tone: "muted", kind: "neutral" },
+  verified: { tone: "healthy", kind: "success" },
+  inactive: { tone: "critical", kind: "warning" },
+  mismatch: { tone: "critical", kind: "warning" },
+  unknown: { tone: "muted", kind: "unknown" }
+};
+
+/**
+ * 미지 상태는 muted·unknown 으로 폴백한다(조용한 오표시 금지, `auditStatusMeta` 패턴과 동일).
+ * 백엔드가 새 상태를 추가해도 확정값처럼 보이지 않고 확인 불가로만 노출된다.
+ */
+export function businessStatusMeta(status: string): BusinessStatusMeta {
+  return (
+    BUSINESS_STATUS_META[status as BusinessVerificationStatus] ?? { tone: "muted", kind: "unknown" }
+  );
+}
 
 // --- 후보 필드 메타 ---------------------------------------------------------
 

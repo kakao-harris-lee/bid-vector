@@ -197,5 +197,36 @@
     "drawer_label": "알림 서랍",
     "empty": "새 알림이 없습니다.",
     "mark_read": "읽음 처리"
+  },
+  "business_verification": {
+    "step_title": "사업자번호 확인",
+    "step_description": "사업자번호로 상태를 먼저 확인합니다. 번호만으로 면허·지역·금액을 확정하지 않습니다.",
+    "label_business_number": "사업자등록번호 (필수)",
+    "label_start_date": "개업일자 (선택)",
+    "label_representative_name": "대표자명 (선택)",
+    "placeholder_business_number": "숫자 10자리 — 예: 123-45-67890",
+    "placeholder_start_date": "YYYY-MM-DD 또는 YYYYMMDD",
+    "placeholder_representative_name": "예: 홍길동",
+    "input_hint": "입력한 번호는 저장·표시되지 않고, 확인 결과는 마스킹된 번호로만 표시됩니다.",
+    "hint_validate": "개업일자와 대표자명을 함께 입력하면 진위확인, 아니면 상태조회를 수행합니다.",
+    "button_verify": "상태 확인",
+    "button_verify_loading": "확인 중…",
+    "button_proceed": "계속",
+    "button_skip": "건너뛰기 (사업자번호 없이 시작)",
+    "result_region_label": "사업자번호 확인 결과",
+    "result_status_label": "상태",
+    "result_masked_label": "확인된 번호",
+    "result_verified_at_label": "확인 시각",
+    "status": {
+      "unverified": "미확인",
+      "verified": "정상 확인",
+      "inactive": "폐업·휴업",
+      "mismatch": "진위 불일치",
+      "unknown": "확인 불가"
+    },
+    "success_note": "사업자 상태가 정상으로 확인되었습니다.",
+    "warning_title": "추천 진행 전 확인이 필요합니다.",
+    "warning_body": "폐업·휴업 또는 진위 불일치 상태입니다. 사업자 정보를 다시 확인한 뒤 진행하세요.",
+    "unknown_note": "검증 미구성 또는 확인 불가 상태입니다. 진행은 가능하지만 사업자 상태는 확인되지 않았습니다."
   }
 }

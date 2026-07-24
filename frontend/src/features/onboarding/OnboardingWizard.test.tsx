@@ -173,6 +173,8 @@ function renderWizard() {
 
 async function submitSeed() {
   const user = userEvent.setup();
+  // 새 1단계(사업자번호 확인)는 필수가 아니므로 건너뛰고 seed 로 진입한다.
+  await user.click(screen.getByRole("button", { name: /건너뛰기/ }));
   const keywordInput = screen.getByLabelText("관심 키워드 (필수)");
   await user.type(keywordInput, "항만{Enter}");
   await user.click(screen.getByRole("button", { name: /후보 찾기/ }));
@@ -192,6 +194,17 @@ beforeEach(() => {
 });
 
 describe("OnboardingWizard", () => {
+  it("wizard는 사업자번호 확인(1단계)에서 시작하고, 건너뛰기로 seed 단계로 진입한다", async () => {
+    installFetchMock();
+    renderWizard();
+    const user = userEvent.setup();
+    // 1단계(사업자번호 확인): 상태 확인 버튼이 먼저 보이고 seed 폼은 아직 없다.
+    expect(screen.getByRole("button", { name: /상태 확인/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("관심 키워드 (필수)")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /건너뛰기/ }));
+    expect(screen.getByLabelText("관심 키워드 (필수)")).toBeInTheDocument();
+  });
+
   it("seed 제출 후 후보를 렌더하고 provenance(신뢰도·근거·사유)를 노출한다", async () => {
     installFetchMock();
     renderWizard();

@@ -706,6 +706,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/business-verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Operator Business Number
+         * @description 사업자번호 상태조회/진위확인 후 결과를 현재 operator 프로필에 반영한다.
+         *
+         *     ``start_date`` + ``representative_name`` 이 모두 오면 진위확인, 아니면 상태조회다.
+         *     서비스키가 없으면 외부 호출 없이 status='unknown'(HTTP 200)으로 끝난다. 응답은
+         *     masked 번호/상태만 담고 원문 번호·서비스키를 포함하지 않는다(§8).
+         */
+        post: operations["verify_operator_business_number_api_v1_operator_business_verification_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/": {
         parameters: {
             query?: never;
@@ -3485,6 +3509,64 @@ export interface components {
             bid_amount?: number | null;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * BusinessVerificationRequest
+         * @description 검증 요청. ``start_date`` + ``representative_name`` 이 모두 있으면 진위확인,
+         *     아니면 상태조회로 처리된다(서비스가 분기).
+         */
+        BusinessVerificationRequest: {
+            /**
+             * Business Number
+             * @description 사업자등록번호(하이픈 허용). 숫자 10자리만 유효 — 원문은 저장/응답되지 않음
+             */
+            business_number: string;
+            /**
+             * Start Date
+             * @description 개업일자(진위확인용, 선택). YYYYMMDD 또는 YYYY-MM-DD → 8자리로 정규화
+             */
+            start_date?: string | null;
+            /**
+             * Representative Name
+             * @description 대표자명(진위확인용, 선택). start_date 와 함께 있어야 진위확인 수행
+             */
+            representative_name?: string | null;
+        };
+        /**
+         * BusinessVerificationResponse
+         * @description 검증 응답 — 원문 번호/서비스키 없이 masked 번호와 상태만 노출한다.
+         */
+        BusinessVerificationResponse: {
+            /**
+             * Status
+             * @description 검증 상태(unverified/verified/inactive/mismatch/unknown)
+             */
+            status: string;
+            /**
+             * Masked Number
+             * @description 마스킹된 사업자번호(예: 123-45-*****). 원문은 반환되지 않음
+             */
+            masked_number: string;
+            /**
+             * Verified At
+             * @description 외부 조회가 실제로 수행된 시각(키 미구성/미조회면 null)
+             */
+            verified_at?: string | null;
+            /**
+             * Detail
+             * @description 운영자용 정직 고지(예: unknown 사유 = '검증 미구성')
+             */
+            detail?: string | null;
+            /**
+             * Current Operator Id
+             * @description 반영이 스코프된 운영자 id
+             */
+            current_operator_id: number;
+            /**
+             * Current Operator Username
+             * @description 반영이 스코프된 운영자 username
+             */
+            current_operator_username: string;
         };
         /** ClassificationRequest */
         ClassificationRequest: {
@@ -10961,6 +11043,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OnboardingApplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_operator_business_number_api_v1_operator_business_verification_post: {
+        parameters: {
+            query?: {
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BusinessVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BusinessVerificationResponse"];
                 };
             };
             /** @description Validation Error */

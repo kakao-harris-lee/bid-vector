@@ -10,24 +10,26 @@ import { STEP_META, type StepKey } from "./constants";
 import { buildApplyDecisions, type DecisionMap, type DecisionState } from "./decisions";
 import { useApplyOnboardingMutation, useOnboardingSuggestions } from "./hooks";
 import { WizardProgress } from "./WizardProgress";
+import { BusinessStep } from "./BusinessStep";
 import { SeedStep } from "./SeedStep";
 import { ReviewStep } from "./ReviewStep";
 import { ResultStep } from "./ResultStep";
 import { PreviewStep } from "./PreviewStep";
 
 /**
- * 사업자번호 기반 반자동 온보딩 wizard(설계 §UI 2~5단계).
+ * 사업자번호 기반 반자동 온보딩 wizard(설계 §UI 1~5단계).
  *
- * 1단계(사업자번호·국세청 상태확인)는 국세청 미구현이라 후속으로 미룬다. 진입점은
- * "기본 후보"(키워드 seed)다. 상태 전이는 STEP 룩업(§4.5-2)으로 흐르고, 확정하지
- * 않은(pending) 후보는 절대 전송하지 않는다(§2 정직 명세). 확정(accepted)·수정
- * (modified)·거부(rejected) 결정은 감사에 전송하되, 프로필/전략 반영은 백엔드가
- * accepted/modified 만 강제한다(rejected는 감사 전용).
+ * 진입점은 1단계 "사업자번호 확인"(#248, dry/graceful — 서비스키 없으면 unknown 이라도
+ * 진행 가능)이다. 사업자번호만으로 프로필을 자동 확정하지 않고 상태만 확인한 뒤 seed 로
+ * 넘어간다(설계 §32). 상태 전이는 STEP 룩업(§4.5-2)으로 흐르고, 확정하지 않은(pending)
+ * 후보는 절대 전송하지 않는다(§2 정직 명세). 확정(accepted)·수정(modified)·거부
+ * (rejected) 결정은 감사에 전송하되, 프로필/전략 반영은 백엔드가 accepted/modified 만
+ * 강제한다(rejected는 감사 전용).
  */
 export function OnboardingWizard() {
   const { session } = useShellContext();
   const navigate = useNavigate();
-  const [step, setStep] = useState<StepKey>("seed");
+  const [step, setStep] = useState<StepKey>("business");
   const [seed, setSeed] = useState<OnboardingSuggestionsQuery | null>(null);
   const [overrides, setOverrides] = useState<DecisionMap>({});
   const [applyResult, setApplyResult] = useState<OnboardingApplyResponse | null>(null);
@@ -85,6 +87,13 @@ export function OnboardingWizard() {
     : undefined;
 
   const stepViews: Record<StepKey, () => ReactElement> = {
+    business: () => (
+      <BusinessStep
+        session={session}
+        onProceed={() => setStep("seed")}
+        onSkip={() => setStep("seed")}
+      />
+    ),
     seed: () => <SeedStep defaultValues={seedDefaults} onSubmit={handleSeedSubmit} />,
     review: () => (
       <ReviewStep
