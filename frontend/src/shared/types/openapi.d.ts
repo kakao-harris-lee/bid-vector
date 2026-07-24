@@ -1918,6 +1918,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/bid-decisions/{decision_record_id}/report-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Bid Report Email
+         * @description 투찰 보고서를 운영자 이메일로 전달한다(기본 DRY-RUN — 렌더링/로깅만).
+         *
+         *     기존 요약(``BidSummaryService``)+초안(``BidFormDraftService``)을 재사용해 메일을
+         *     렌더링하고 전달 시도를 Analytics 에 기록한다. 실제 SMTP 송신은 하지 않으며(라이브
+         *     송신은 설정으로만 켜지는 향후 opt-in), 수신자는 마스킹되어 노출된다. 404 when the
+         *     record id is unknown(또는 다른 운영자 소유) / linked project is missing.
+         */
+        post: operations["send_bid_report_email_api_v1_operations_bid_decisions__decision_record_id__report_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/decision-samples": {
         parameters: {
             query?: never;
@@ -3119,6 +3144,65 @@ export interface components {
              * @default 이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다. 이 산출물은 KONEPS 를 호출하거나 자동으로 투찰서를 제출하지 않으며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
              */
             direct_submission_notice: string;
+        };
+        /**
+         * BidReportEmailDeliveryResponse
+         * @description 투찰 보고서 메일 전달 결과 — 원문 수신자/본문 시크릿을 노출하지 않는다.
+         */
+        BidReportEmailDeliveryResponse: {
+            /**
+             * Project Id
+             * @description 공고(프로젝트) ID(요약에서 도출).
+             */
+            project_id?: number | null;
+            /**
+             * Decision Record Id
+             * @description 대상 BidDecisionRecord ID.
+             */
+            decision_record_id: number;
+            /**
+             * Dry Run
+             * @description DRY-RUN 여부. 기본 True(외부 송신 없음 — 렌더링/로깅만). 라이브 송신은 설정으로만 켤 수 있는 향후 opt-in.
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Delivery Status
+             * @description 전달 상태 — 'dry_run_rendered'(렌더링 완료·미송신) / 'skipped_no_recipient'(수신자 없음) / 'failed'(베스트에포트 실패) / 'sent'(라이브 송신, 기본 비활성) 중 하나.
+             */
+            delivery_status: string;
+            /**
+             * Masked Recipient
+             * @description 마스킹된 수신자 이메일. 원문은 어떤 응답/로그에도 노출하지 않는다.
+             */
+            masked_recipient: string;
+            /**
+             * Subject
+             * @description 렌더링된 메일 제목.
+             */
+            subject: string;
+            /**
+             * Has Draft Attachment
+             * @description 투찰서 초안 CSV 첨부 포함 여부.
+             */
+            has_draft_attachment: boolean;
+            /**
+             * Notice
+             * @description 자동 제출이 아니며 추천가는 보장 낙찰가가 아니라는 정직 고지.
+             * @default 이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 하며, 추천 투찰가는 보장된 낙찰가가 아닙니다.
+             */
+            notice: string;
+        };
+        /**
+         * BidReportEmailSendRequest
+         * @description 투찰 보고서 메일 전달 요청(모두 선택). 본문 없이 POST 해도 된다.
+         */
+        BidReportEmailSendRequest: {
+            /**
+             * Recipient
+             * @description 수신자 이메일 override(선택). 미지정 시 운영자 계정 이메일을 사용한다. 지정하더라도 응답/로그에는 항상 마스킹되어 노출되며, DRY-RUN 이므로 실제 송신은 일어나지 않는다.
+             */
+            recipient?: string | null;
         };
         /** BidResponse */
         BidResponse: {
@@ -13025,6 +13109,41 @@ export interface operations {
                     "application/json": components["schemas"]["BidFormDraftResponse"];
                     "text/csv": unknown;
                     "text/plain": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_bid_report_email_api_v1_operations_bid_decisions__decision_record_id__report_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                decision_record_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BidReportEmailSendRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BidReportEmailDeliveryResponse"];
                 };
             };
             /** @description Validation Error */

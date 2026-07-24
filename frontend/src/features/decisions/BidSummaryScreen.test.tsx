@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test-utils";
+import { toastApi } from "@/shared/components/ui";
+import type { BidReportEmailDeliveryResponse } from "@/shared/api";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type { BidSummaryResponse } from "@/shared/types/bidSummary";
 import type { BidFormDraftResponse } from "@/shared/types/bidFormDraft";
@@ -138,6 +140,18 @@ const bidFormDraft: BidFormDraftResponse = {
     "이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다."
 };
 
+const dryRunEmail: BidReportEmailDeliveryResponse = {
+  project_id: 11,
+  decision_record_id: 101,
+  dry_run: true,
+  delivery_status: "dry_run_rendered",
+  masked_recipient: "op***@example.com",
+  subject: "[투찰 요약] 테스트 공항 시설 공고",
+  has_draft_attachment: true,
+  notice:
+    "이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 하며, 추천 투찰가는 보장된 낙찰가가 아닙니다."
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -158,10 +172,46 @@ function textResponse(body: string, status = 200): Promise<Response> {
   } as unknown as Response);
 }
 
+/**
+ * fetch mock that serves the summary/draft screen and delegates the
+ * report-email POST to `reportEmail`. Mirrors the inline mocks above but keeps
+ * the many email-toast cases from copy-pasting the same 3 branches.
+ */
+function emailReportFetch(reportEmail: () => Promise<Response>) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+    if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+      return jsonResponse(bidSummary);
+    }
+    if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+      return jsonResponse(bidFormDraft);
+    }
+    if (
+      url.endsWith("/api/v1/operations/bid-decisions/101/report-email") &&
+      init?.method === "POST"
+    ) {
+      return reportEmail();
+    }
+    return jsonResponse({}, 404);
+  });
+}
+
+/** Wait for the 메일로 보내기 button to enable, then click it. */
+async function clickSendEmail() {
+  const emailBtn = await screen.findByRole("button", { name: "메일로 보내기" });
+  await waitFor(() => expect(emailBtn).not.toBeDisabled());
+  fireEvent.click(emailBtn);
+  return emailBtn;
+}
+
 beforeEach(() => {
   window.localStorage.setItem("bid-vector-dashboard-token", "token-summary");
   window.history.pushState({}, "", "/dashboard/decisions/101/summary");
   vi.restoreAllMocks();
+  // Toast state is module-global and only auto-clears after 4s, so reset it
+  // between tests to keep the honesty toast assertions isolated.
+  toastApi.clearAll();
 });
 
 describe("BidSummaryScreen", () => {
@@ -330,6 +380,141 @@ describe("BidSummaryScreen", () => {
     );
   });
 
+  it("메일로 보내기 버튼은 report-email 엔드포인트를 POST 호출하고 dry-run 결과를 정직하게(미발송) 토스트한다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+        return jsonResponse(bidSummary);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
+      if (
+        url.endsWith("/api/v1/operations/bid-decisions/101/report-email") &&
+        init?.method === "POST"
+      ) {
+        return jsonResponse(dryRunEmail);
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const emailBtn = await screen.findByRole("button", { name: "메일로 보내기" });
+    // 요약이 로드돼 버튼이 활성화될 때까지 대기.
+    await waitFor(() => expect(emailBtn).not.toBeDisabled());
+    fireEvent.click(emailBtn);
+
+    // 올바른 decisionRecordId(101) 로 POST 호출.
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).endsWith(
+              "/api/v1/operations/bid-decisions/101/report-email"
+            ) && (init as RequestInit | undefined)?.method === "POST"
+        )
+      ).toBe(true);
+    });
+
+    // dry-run 토스트 — 미발송을 명시하고 마스킹 수신자/제목을 노출.
+    expect(
+      await screen.findByText("메일 미리보기 생성됨(dry-run)")
+    ).toBeInTheDocument();
+    expect(screen.getByText(/실제 메일은 발송되지 않았습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/op\*\*\*@example\.com/)).toBeInTheDocument();
+    // 정직 §2 — dry-run 을 실제 송신으로 표시하지 않는다.
+    expect(screen.queryByText("메일을 보냈습니다.")).toBeNull();
+  });
+
+  it("delivery_status=sent 이라도 dry_run=true 이면 미발송(미리보기) 토스트로 강등한다 (정직 §2)", async () => {
+    // 백엔드 계약상 일어나선 안 되는 조합이지만, resolveEmailStatusKey 의
+    // 방어적 강등을 핀으로 고정한다 — sent 문구가 절대 새어나오면 안 된다.
+    const sentButDryRun: BidReportEmailDeliveryResponse = {
+      ...dryRunEmail,
+      delivery_status: "sent",
+      dry_run: true
+    };
+    vi.stubGlobal("fetch", emailReportFetch(() => jsonResponse(sentButDryRun)));
+
+    renderApp();
+    await clickSendEmail();
+
+    // 경고(미리보기) 토스트 — warning 은 role="alert" 로 렌더된다.
+    const toastTitle = await screen.findByText("메일 미리보기 생성됨(dry-run)");
+    expect(toastTitle.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.getByText(/실제 메일은 발송되지 않았습니다/)).toBeInTheDocument();
+    expect(screen.queryByText("메일을 보냈습니다.")).toBeNull();
+  });
+
+  it("delivery_status=sent 이고 dry_run=false 이면 '메일을 보냈습니다' 성공 토스트를 표시한다", async () => {
+    const sent: BidReportEmailDeliveryResponse = {
+      ...dryRunEmail,
+      delivery_status: "sent",
+      dry_run: false
+    };
+    vi.stubGlobal("fetch", emailReportFetch(() => jsonResponse(sent)));
+
+    renderApp();
+    await clickSendEmail();
+
+    // 성공 토스트 — success 는 role="status" 로 렌더된다.
+    const toastTitle = await screen.findByText("메일을 보냈습니다.");
+    expect(toastTitle.closest('[role="status"]')).not.toBeNull();
+    // 라이브 송신이므로 미리보기 문구는 없어야 한다.
+    expect(screen.queryByText("메일 미리보기 생성됨(dry-run)")).toBeNull();
+  });
+
+  it("skipped_no_recipient 응답은 경고 토스트로 표시하고 성공 문구를 쓰지 않는다", async () => {
+    const skipped: BidReportEmailDeliveryResponse = {
+      ...dryRunEmail,
+      delivery_status: "skipped_no_recipient",
+      masked_recipient: ""
+    };
+    vi.stubGlobal("fetch", emailReportFetch(() => jsonResponse(skipped)));
+
+    renderApp();
+    await clickSendEmail();
+
+    const toastTitle = await screen.findByText(
+      "수신자 이메일이 없어 메일 전달을 건너뛰었습니다."
+    );
+    expect(toastTitle.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText("메일을 보냈습니다.")).toBeNull();
+  });
+
+  it("failed 응답은 위험 토스트로 표시하고 성공 문구를 쓰지 않는다", async () => {
+    const failed: BidReportEmailDeliveryResponse = {
+      ...dryRunEmail,
+      delivery_status: "failed",
+      dry_run: false
+    };
+    vi.stubGlobal("fetch", emailReportFetch(() => jsonResponse(failed)));
+
+    renderApp();
+    await clickSendEmail();
+
+    const toastTitle = await screen.findByText("메일 전달에 실패했습니다.");
+    expect(toastTitle.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText("메일을 보냈습니다.")).toBeNull();
+  });
+
+  it("엔드포인트가 실패(500)하면 위험(danger) 에러 토스트를 표시한다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      emailReportFetch(() => jsonResponse({ detail: "boom" }, 500))
+    );
+
+    renderApp();
+    await clickSendEmail();
+
+    const toastTitle = await screen.findByText("메일 전달 요청 실패");
+    expect(toastTitle.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText("메일을 보냈습니다.")).toBeNull();
+  });
+
   it("로딩 중에는 로딩 문구를, 404 응답에는 에러 alert을 렌더한다", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -351,6 +536,9 @@ describe("BidSummaryScreen", () => {
         "투찰 요약을 불러오지 못했습니다."
       );
     });
+
+    // 요약 데이터가 없으면 메일로 보내기 버튼은 비활성(형제 액션과 동일).
+    expect(screen.getByRole("button", { name: "메일로 보내기" })).toBeDisabled();
   });
 
   it("prediction·field_stat 가 null 이면 graceful empty 문구를 렌더한다", async () => {
