@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test-utils";
+import type { BidReportEmailDeliveryResponse } from "@/shared/api";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type { BidSummaryResponse } from "@/shared/types/bidSummary";
 import type { BidFormDraftResponse } from "@/shared/types/bidFormDraft";
@@ -136,6 +137,18 @@ const bidFormDraft: BidFormDraftResponse = {
   ],
   direct_submission_notice:
     "이 투찰서 초안은 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다."
+};
+
+const dryRunEmail: BidReportEmailDeliveryResponse = {
+  project_id: 11,
+  decision_record_id: 101,
+  dry_run: true,
+  delivery_status: "dry_run_rendered",
+  masked_recipient: "op***@example.com",
+  subject: "[투찰 요약] 테스트 공항 시설 공고",
+  has_draft_attachment: true,
+  notice:
+    "이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 하며, 추천 투찰가는 보장된 낙찰가가 아닙니다."
 };
 
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
@@ -330,6 +343,55 @@ describe("BidSummaryScreen", () => {
     );
   });
 
+  it("메일로 보내기 버튼은 report-email 엔드포인트를 POST 호출하고 dry-run 결과를 정직하게(미발송) 토스트한다", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+        return jsonResponse(bidSummary);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
+      if (
+        url.endsWith("/api/v1/operations/bid-decisions/101/report-email") &&
+        init?.method === "POST"
+      ) {
+        return jsonResponse(dryRunEmail);
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const emailBtn = await screen.findByRole("button", { name: "메일로 보내기" });
+    // 요약이 로드돼 버튼이 활성화될 때까지 대기.
+    await waitFor(() => expect(emailBtn).not.toBeDisabled());
+    fireEvent.click(emailBtn);
+
+    // 올바른 decisionRecordId(101) 로 POST 호출.
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).endsWith(
+              "/api/v1/operations/bid-decisions/101/report-email"
+            ) && (init as RequestInit | undefined)?.method === "POST"
+        )
+      ).toBe(true);
+    });
+
+    // dry-run 토스트 — 미발송을 명시하고 마스킹 수신자/제목을 노출.
+    expect(
+      await screen.findByText("메일 미리보기 생성됨(dry-run)")
+    ).toBeInTheDocument();
+    expect(screen.getByText(/실제 메일은 발송되지 않았습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/op\*\*\*@example\.com/)).toBeInTheDocument();
+    // 정직 §2 — dry-run 을 실제 송신으로 표시하지 않는다.
+    expect(screen.queryByText("메일을 보냈습니다.")).toBeNull();
+  });
+
   it("로딩 중에는 로딩 문구를, 404 응답에는 에러 alert을 렌더한다", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -351,6 +413,9 @@ describe("BidSummaryScreen", () => {
         "투찰 요약을 불러오지 못했습니다."
       );
     });
+
+    // 요약 데이터가 없으면 메일로 보내기 버튼은 비활성(형제 액션과 동일).
+    expect(screen.getByRole("button", { name: "메일로 보내기" })).toBeDisabled();
   });
 
   it("prediction·field_stat 가 null 이면 graceful empty 문구를 렌더한다", async () => {

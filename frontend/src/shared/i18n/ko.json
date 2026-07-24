@@ -122,6 +122,18 @@
     "deadline_label": "마감",
     "direct_submission_title": "직접 제출 안내"
   },
+  "bid_report_email": {
+    "button": "메일로 보내기",
+    "dry_run_title": "메일 미리보기 생성됨(dry-run)",
+    "dry_run_description": "실제 메일은 발송되지 않았습니다(미리보기).",
+    "sent_title": "메일을 보냈습니다.",
+    "skipped_title": "수신자 이메일이 없어 메일 전달을 건너뛰었습니다.",
+    "failed_title": "메일 전달에 실패했습니다.",
+    "error_title": "메일 전달 요청 실패",
+    "error_description": "잠시 후 다시 시도해 주세요.",
+    "recipient_label": "수신자",
+    "subject_label": "제목"
+  },
   "bid_form_draft": {
     "title": "투찰서 초안 (나라장터 입력 항목)",
     "subtitle": "아래 항목을 나라장터(KONEPS) 투찰서 화면에 그대로 입력하세요. 자동 제출은 하지 않습니다.",
