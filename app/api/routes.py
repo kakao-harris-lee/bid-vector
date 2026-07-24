@@ -7,6 +7,7 @@ from app.api import (
     auth,
     backtests,
     bid_form_draft,
+    bid_report_email,
     bid_summary,
     bids,
     dashboard,
@@ -40,6 +41,9 @@ router.include_router(operations.router, prefix="/operations", tags=["Operations
 router.include_router(bid_summary.router, prefix="/operations", tags=["Bid Summary"])
 router.include_router(
     bid_form_draft.router, prefix="/operations", tags=["Bid Form Draft"]
+)
+router.include_router(
+    bid_report_email.router, prefix="/operations", tags=["Bid Report Email"]
 )
 router.include_router(
     decision_samples.router, prefix="/operations", tags=["Decision Samples"]

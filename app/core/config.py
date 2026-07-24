@@ -636,6 +636,21 @@ class Settings(BaseSettings):
     TELEGRAM_POLLING_SCHEDULE_ENABLED: bool = False
     TELEGRAM_POLLING_INTERVAL_SECONDS: int = 30
 
+    # Email delivery (투찰 보고서 메일 전달)
+    # 안전 기본값 = DRY-RUN: 렌더링/로깅만 하고 SMTP 연결·외부 송신을 절대 하지 않는다.
+    # 라이브 송신은 향후 opt-in — EMAIL_DELIVERY_ENABLED=True + EMAIL_DRY_RUN=False 로
+    # 명시적으로 켜야만 smtplib 경로가 실행된다(기본은 OFF, 이 저장소에서 미검증).
+    EMAIL_DELIVERY_ENABLED: bool = False
+    EMAIL_DRY_RUN: bool = True
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    # 시크릿 — 절대 로그/응답/텔레메트리에 남기지 않는다.
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_TLS: bool = True
+    EMAIL_SEND_TIMEOUT_SECONDS: int = 15
+
     # Opportunity analysis — strength / risk cutoffs
     # Thresholds that gate the operator-facing 강점(strength) and 리스크(risk)
     # phrases in OpportunityAnalysisService._build_strengths / _build_risk_flags.
