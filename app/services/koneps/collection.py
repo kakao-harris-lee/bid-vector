@@ -149,7 +149,13 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
         for raw_item in raw_items:
             if contract_observer is not None:
                 # 관찰 전용: raw item 을 그대로 검증기에 통과시켜 집계만 한다(변경/드롭 없음).
-                contract_observer.observe(raw_item, operation=operation)
+                # 관찰기 예외는 절대 상류로 전파하지 않는다 — 진단기 결함이 라이브 수집을
+                # 죽여 그 run 의 parsed_items 를 전량 유실시키면 안 된다(관찰 전용 계약).
+                # 삼키되 internal_errors 로 세어 run 요약/metadata 로 관측만 남긴다.
+                try:
+                    contract_observer.observe(raw_item, operation=operation)
+                except Exception:  # noqa: BLE001 - 관찰기 결함이 수집을 죽이면 안 됨
+                    contract_observer.record_internal_error()
             parsed_item = openapi.build_openapi_notice_item(
                 raw_item,
                 request=request,

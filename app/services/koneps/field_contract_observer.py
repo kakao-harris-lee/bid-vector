@@ -41,6 +41,10 @@ class FieldContractObservation:
     items_checked: int = 0
     errors: int = 0
     warns: int = 0
+    # 관찰기 자체가 던진 예외 건수(진단기 자기 오류). 호출부가 예외를 삼킨 뒤
+    # record_internal_error 로 센다 — 관찰기 결함이 라이브 수집을 죽이지 않으면서도
+    # 관측은 되도록(0 이면 정상). 계약 위반과 별개 축이라 errors/warns 와 분리한다.
+    internal_errors: int = 0
     violations: Counter[str] = field(default_factory=Counter)
     unknown: Counter[str] = field(default_factory=Counter)
     benign_suppressed: Counter[str] = field(default_factory=Counter)
@@ -60,10 +64,14 @@ class FieldContractObservation:
         for name in unknown_fields(item):
             self.unknown[name] += 1
 
+    def record_internal_error(self) -> None:
+        """관찰기 예외(observe 실패)를 센다. 호출부가 예외를 삼킨 뒤 호출한다."""
+        self.internal_errors += 1
+
     @property
     def has_findings(self) -> bool:
-        """억제되지 않은 위반이나 미지 필드가 하나라도 있으면 True(요약 로그 트리거)."""
-        return bool(self.violations or self.unknown)
+        """위반·미지 필드·관찰기 예외가 하나라도 있으면 True(요약 로그 트리거)."""
+        return bool(self.violations or self.unknown or self.internal_errors)
 
     def summary(self) -> dict[str, Any]:
         """run 집계를 수집 metadata 에 실을 순수 dict 로 렌더한다(시크릿 없음)."""
@@ -71,6 +79,7 @@ class FieldContractObservation:
             "items_checked": self.items_checked,
             "errors": self.errors,
             "warns": self.warns,
+            "internal_errors": self.internal_errors,
             "violations": dict(self.violations),
             "unknown_fields": dict(self.unknown),
             "benign_suppressed": dict(self.benign_suppressed),
@@ -81,6 +90,7 @@ class FieldContractObservation:
         return (
             "[field-contract] 라이브 관찰(수집 불변): "
             f"items={self.items_checked} errors={self.errors} warns={self.warns} "
+            f"internal_errors={self.internal_errors} "
             f"violations={dict(self.violations)} "
             f"unknown_fields={dict(self.unknown)} "
             f"benign_suppressed={dict(self.benign_suppressed)}"

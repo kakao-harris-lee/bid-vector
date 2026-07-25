@@ -116,6 +116,18 @@ def test_summary_and_summary_line_render():
     assert "brandNewField" in line
 
 
+def test_record_internal_error_counts_and_surfaces():
+    # 관찰기 예외는 계약 위반(errors/warns)과 별개 축으로 세고 요약에 노출된다.
+    obs = FieldContractObservation()
+    obs.record_internal_error()
+    obs.record_internal_error()
+    assert obs.internal_errors == 2
+    assert obs.errors == 0 and obs.warns == 0
+    assert obs.has_findings is True  # 관찰기 오류만으로도 요약 로그 트리거
+    assert obs.summary()["internal_errors"] == 2
+    assert "internal_errors=2" in obs.summary_line()
+
+
 # ---------------------------------------------------------------------------
 # 라이브 수집 배선 (수집 불변)
 # ---------------------------------------------------------------------------
@@ -222,3 +234,39 @@ def test_toggle_off_skips_observation(monkeypatch):
 
     # OFF 면 관찰기를 만들지 않으므로 metadata 관찰이 None(무비용 통과).
     assert result["metadata"]["field_contract_observation"] is None
+
+
+def _clean_item(n: int = 2) -> dict[str, Any]:
+    return {
+        "bidNtceNo": f"2025010100000{n}",
+        "bidNtceNm": "정상 공고",
+        "bidNtceOrd": "000",
+        "bssAmt": "90000000",
+    }
+
+
+def test_wiring_observer_exception_is_swallowed_and_counted(monkeypatch):
+    """관찰기가 매 item 예외를 던져도 수집은 정상(items 전량 보존) + internal_errors 집계.
+
+    향후 validator 추가로 observe 가 던지더라도 라이브 수집이 관찰기 때문에 죽지 않음을
+    고정한다. observe 를 예외로 모킹하면 hot-loop 의 try/except 가 삼키고
+    record_internal_error 로 세야 한다.
+    """
+    _setup(monkeypatch)
+    monkeypatch.setattr(settings, "KONEPS_FIELD_CONTRACT_LIVE_CHECK", True)
+    payload = _payload([_violating_item(), _clean_item()])
+
+    with patch.object(
+        FieldContractObservation, "observe", side_effect=RuntimeError("boom")
+    ):
+        result = _run_collect(payload)
+
+    # 관찰기 예외가 삼켜져 수집은 그대로 — 두 공고 전량 보존(전량 유실 방지).
+    assert len(result["items"]) == 2
+    observation = result["metadata"]["field_contract_observation"]
+    assert observation is not None
+    # item 마다 observe 가 던졌으니 internal_errors == item 수. 계약 위반 카운터는 0.
+    assert observation["internal_errors"] == 2
+    assert observation["errors"] == 0
+    assert observation["warns"] == 0
+    assert observation["violations"] == {}
