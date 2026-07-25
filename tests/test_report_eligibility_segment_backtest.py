@@ -256,10 +256,12 @@ def test_build_report_carries_measured_counts_not_hardcoded():
         total_rule_labels=3958,
         skipped_no_award=10,
         skipped_unmapped=2,
+        skipped_predict_error=3,
         coverage_open_total=5436,
         coverage_open_with_raw=745,
     )
     assert report.evaluated_count == 3
+    assert report.skipped_predict_error == 3
     assert report.total_rule_labels == 3958
     # clean-only: positive 오염 1건 제외
     assert report.excluded_by_axis[seg.AXIS_RULE_LABEL] == 1
@@ -274,13 +276,17 @@ def test_render_report_includes_caveats_and_measured_coverage():
         thresholds=(0.003,),
         include_contaminated=False,
         total_rule_labels=3958,
-        skipped_no_award=0,
+        skipped_no_award=7,
         skipped_unmapped=0,
+        skipped_predict_error=4,
         coverage_open_total=5436,
         coverage_open_with_raw=745,
     )
     text = seg.render_report(report)
     assert seg.CAVEAT_HEADER in text
+    # drop 사유가 버킷별로 정직하게 렌더된다(예측 실패는 no_award 와 분리)
+    assert "no_award=7" in text
+    assert "predict_error=4" in text
     # 커버리지는 실측 수치로 렌더(745/5436 = 13.7%)
     assert "745/5436" in text
     assert "13.7%" in text
@@ -300,6 +306,7 @@ def test_render_report_zero_coverage_edge_case():
         total_rule_labels=0,
         skipped_no_award=0,
         skipped_unmapped=0,
+        skipped_predict_error=0,
         coverage_open_total=0,
         coverage_open_with_raw=0,
     )
@@ -318,6 +325,7 @@ def test_render_report_operator_labels_absent_positive_still_reported():
         total_rule_labels=1,
         skipped_no_award=0,
         skipped_unmapped=0,
+        skipped_predict_error=0,
         coverage_open_total=100,
         coverage_open_with_raw=13,
     )
@@ -332,3 +340,85 @@ def test_ambiguous_segment_supported():
         rows, axis=seg.AXIS_RULE_LABEL, thresholds=(0.003,), include_contaminated=False
     )
     assert summaries[LABEL_AMBIGUOUS].sample_count == 1
+
+
+# --- evaluate_candidates (예측 실패 drop 사유 분리 · soft cap) ----------------
+
+
+def _ok_evaluated():
+    return {
+        "notice_number": "n",
+        "project_id": 1,
+        "category": "service",
+        "group": "service",
+        "basis": BASIS_CLEAN,
+        "recommended": {"absolute_amount_error_pct": 0.001, "rate_error_bp": 5.0},
+    }
+
+
+def test_evaluate_candidates_predict_failure_counts_as_predict_error_not_no_award():
+    """예측 실패 1건은 predict_error 로만 집계되고 성공 행은 SegmentRow 로 남는다.
+
+    Nit ①: award 없음(호출 이전 단계)과 섞이지 않아야 drop 사유가 정직하다.
+    """
+    ok_target, bad_target = object(), object()
+    candidates = [
+        (2, LABEL_POSITIVE, ok_target, "p_ok"),
+        (1, LABEL_POSITIVE, bad_target, "p_bad"),
+    ]
+
+    def evaluate_fn(target):
+        if target is bad_target:
+            raise RuntimeError("predict boom")
+        return _ok_evaluated()
+
+    rows, predict_errors = seg.evaluate_candidates(
+        candidates,
+        max_per_segment=0,
+        evaluate_fn=evaluate_fn,
+        classify_fn=lambda _project: LABEL_POSITIVE,
+    )
+    assert predict_errors == 1
+    assert len(rows) == 1
+    assert rows[0].rule_label == LABEL_POSITIVE
+    assert rows[0].absolute_amount_error_pct == 0.001
+
+
+def test_evaluate_candidates_soft_cap_returns_slot_on_failure():
+    """실패 시 캡 슬롯을 되돌려, cap=1 이어도 실패 뒤 성공 후보가 평가된다(soft cap)."""
+    bad_target, ok_target = object(), object()
+    candidates = [
+        (2, LABEL_NEGATIVE, bad_target, "p_bad"),
+        (1, LABEL_NEGATIVE, ok_target, "p_ok"),
+    ]
+
+    def evaluate_fn(target):
+        if target is bad_target:
+            raise ValueError("boom")
+        return _ok_evaluated()
+
+    rows, predict_errors = seg.evaluate_candidates(
+        candidates,
+        max_per_segment=1,
+        evaluate_fn=evaluate_fn,
+        classify_fn=lambda _project: LABEL_NEGATIVE,
+    )
+    assert predict_errors == 1
+    assert len(rows) == 1  # 실패가 슬롯을 반환해 성공 후보가 캡을 통과
+
+
+def test_evaluate_candidates_hard_boundary_respects_cap_on_success():
+    """성공만 있으면 cap 이 정상적으로 초과를 막는다(soft cap 은 실패에만 적용)."""
+    candidates = [
+        (3, LABEL_NEGATIVE, object(), "a"),
+        (2, LABEL_NEGATIVE, object(), "b"),
+        (1, LABEL_NEGATIVE, object(), "c"),
+    ]
+    rows, predict_errors = seg.evaluate_candidates(
+        candidates,
+        max_per_segment=2,
+        evaluate_fn=lambda _target: _ok_evaluated(),
+        classify_fn=lambda _project: LABEL_NEGATIVE,
+    )
+    assert predict_errors == 0
+    assert len(rows) == 2

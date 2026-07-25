@@ -40,7 +40,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from sqlalchemy import or_
 
@@ -148,6 +148,7 @@ class SegmentReport:
     total_rule_labels: int
     skipped_no_award: int
     skipped_unmapped: int
+    skipped_predict_error: int
     coverage_open_total: int
     coverage_open_with_raw: int
 
@@ -182,6 +183,45 @@ def build_segment_row(
         absolute_amount_error_pct=recommended.get("absolute_amount_error_pct"),
         rate_error_bp=recommended.get("rate_error_bp"),
     )
+
+
+def evaluate_candidates(
+    candidates: Iterable[tuple[Any, str, Any, Any]],
+    *,
+    max_per_segment: int,
+    evaluate_fn: Callable[[Any], dict[str, Any]],
+    classify_fn: Callable[[Any], str],
+) -> tuple[list[SegmentRow], int]:
+    """캡을 적용해 후보를 평가, (SegmentRow 목록, 예측 실패 수)를 낸다(I/O 주입 · 테스트 가능).
+
+    후보는 ``(event_at, rule_label, target, project)`` 튜플이다. ``evaluate_fn`` (홀드아웃
+    ``evaluate_target`` 주입)이 예외를 던지면 그 행은 **predict_error 로만** 집계한다 —
+    award 없음/미매핑/zero-budget 은 이 함수 호출 이전 단계에서 이미 걸러지므로 여기
+    카운터는 오직 예측 실패만 센다(drop 사유 정직성). 실패 시 ``per_segment`` 슬롯을
+    되돌리므로 세그먼트가 ``max_per_segment`` 를 예측 실패 수만큼 초과 평가할 수 있다
+    (의도된 soft cap — 리포트라 무해). I/O 는 주입된 콜러블에만 있어 순수 단위 테스트가 된다.
+    """
+    per_segment: Counter[str] = Counter()
+    rows: list[SegmentRow] = []
+    skipped_predict_error = 0
+    for _event_at, rule_label, target, project in candidates:
+        if max_per_segment and per_segment[rule_label] >= max_per_segment:
+            continue
+        per_segment[rule_label] += 1
+        try:
+            evaluated = evaluate_fn(target)
+        except Exception:  # noqa: BLE001 - report resilience: 예측 실패만 별도 집계
+            per_segment[rule_label] -= 1  # soft cap: 실패 슬롯 반환
+            skipped_predict_error += 1
+            continue
+        rows.append(
+            build_segment_row(
+                evaluated,
+                rule_label=rule_label,
+                classify_label=classify_fn(project),
+            )
+        )
+    return rows, skipped_predict_error
 
 
 def filter_aggregatable(
@@ -283,6 +323,7 @@ def build_report(
     total_rule_labels: int,
     skipped_no_award: int,
     skipped_unmapped: int,
+    skipped_predict_error: int,
     coverage_open_total: int,
     coverage_open_with_raw: int,
 ) -> SegmentReport:
@@ -312,6 +353,7 @@ def build_report(
         total_rule_labels=total_rule_labels,
         skipped_no_award=skipped_no_award,
         skipped_unmapped=skipped_unmapped,
+        skipped_predict_error=skipped_predict_error,
         coverage_open_total=coverage_open_total,
         coverage_open_with_raw=coverage_open_with_raw,
     )
@@ -388,8 +430,9 @@ def _coverage_lines(report: SegmentReport) -> list[str]:
     return [
         f"{_LOG_PREFIX} 실측 표본/커버리지 (하드코딩 아님):",
         f"    rule 라벨 총 {report.total_rule_labels} · 평가된 개찰건 "
-        f"{report.evaluated_count} (award/그룹 미매핑 제외 "
-        f"no_award={report.skipped_no_award} unmapped={report.skipped_unmapped})",
+        f"{report.evaluated_count} (제외 사유별: "
+        f"no_award={report.skipped_no_award} unmapped={report.skipped_unmapped} "
+        f"predict_error={report.skipped_predict_error})",
         f"    positive settled 평가 n={positive_total} · positive 카테고리 분포: {cats}",
         f"    eligibility_raw 커버리지(open 공고): {with_raw}/{total} = {pct:.1f}%",
     ]
@@ -536,31 +579,22 @@ def load_rows(
 
     # 세그먼트당 최신순 상한 — leakage-free(과거 개찰) 최신 표본 우선.
     candidates.sort(key=lambda item: (item[0], item[2].result.id or 0), reverse=True)
-    per_segment: Counter[str] = Counter()
-    rows: list[SegmentRow] = []
-    for _event_at, rule_label, target, project in candidates:
-        if max_per_segment and per_segment[rule_label] >= max_per_segment:
-            continue
-        per_segment[rule_label] += 1
-        try:
-            evaluated = holdouts.evaluate_target(
-                db,
-                service=service,
-                target=target,
-                history_limit=history_limit,
-                thresholds=thresholds,
-            )
-        except Exception:  # noqa: BLE001 - report resilience: skip unpredictable rows
-            per_segment[rule_label] -= 1
-            skipped_no_award += 1
-            continue
-        rows.append(
-            build_segment_row(
-                evaluated,
-                rule_label=rule_label,
-                classify_label=_classify_label_for(project),
-            )
+
+    def _evaluate(target: Any) -> dict[str, Any]:
+        return holdouts.evaluate_target(
+            db,
+            service=service,
+            target=target,
+            history_limit=history_limit,
+            thresholds=thresholds,
         )
+
+    rows, skipped_predict_error = evaluate_candidates(
+        candidates,
+        max_per_segment=max_per_segment,
+        evaluate_fn=_evaluate,
+        classify_fn=_classify_label_for,
+    )
 
     coverage_open_total = db.query(Project).filter(Project.status == _OPEN_STATUS).count()
     coverage_open_with_raw = (
@@ -574,6 +608,7 @@ def load_rows(
         "total_rule_labels": len(label_rows),
         "skipped_no_award": skipped_no_award,
         "skipped_unmapped": skipped_unmapped,
+        "skipped_predict_error": skipped_predict_error,
         "coverage_open_total": coverage_open_total,
         "coverage_open_with_raw": coverage_open_with_raw,
     }
@@ -659,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
         total_rule_labels=loaded["total_rule_labels"],
         skipped_no_award=loaded["skipped_no_award"],
         skipped_unmapped=loaded["skipped_unmapped"],
+        skipped_predict_error=loaded["skipped_predict_error"],
         coverage_open_total=loaded["coverage_open_total"],
         coverage_open_with_raw=loaded["coverage_open_with_raw"],
     )
