@@ -28,6 +28,25 @@ LICENSE_ONLY_RAW = {
 # 협회 어휘가 flags 에만 있는 공고 — flags 는 판정 소스가 아니라 요건 없음(중립).
 FLAGS_ONLY_RAW = {"flags": {"note": "엔지니어링협회 관련 공고"}}
 
+# 협회 요건이 한 그룹, 다른 그룹은 협회 무관 면허만인 다중 lmtGrpNo 공고.
+# 그룹 간 OR + 협회 무제약 그룹(다른 자격 경로) → 미가입이어도 과차단 금지(DEFER).
+# 이 형태가 #254(tech_field 평면-AND 과차단)와 동형인 협회 축 잠재 회귀를 재현한다.
+ASSOC_OR_LICENSE_GROUPS_RAW = {
+    "license_limits": [
+        {"lcnsLmtNm": "한국엔지니어링협회 가입 업체", "lmtGrpNo": "1"},
+        {"lcnsLmtNm": "해양엔지니어링/1001", "lmtGrpNo": "2"},
+    ]
+}
+
+# 두 그룹 모두 협회 가입을 요구(그룹 내 AND·그룹 간 OR, 무제약 그룹 없음).
+# 미가입 → 어느 그룹도 충족 못 함 → block(UNSATISFIED)이 다중 그룹에서도 유지된다.
+BOTH_GROUPS_ASSOC_RAW = {
+    "license_limits": [
+        {"lcnsLmtNm": "한국엔지니어링협회 가입 업체", "lmtGrpNo": "1"},
+        {"lcnsLmtNm": "엔지니어링협회 회원사", "lmtGrpNo": "2"},
+    ]
+}
+
 
 def _profile(association_memberships: str = "") -> CompanyProfile:
     return CompanyProfile(
@@ -128,6 +147,56 @@ def test_requirement_with_unrelated_membership_fails():
 
     assert result.passed is False
     assert result.penalty == config.ASSOCIATION_MISMATCH_PENALTY
+
+
+# --- 그룹 인지(lmtGrpNo OR/AND) 값 테이블 — #254 동형 회귀 선제 차단 ------------
+
+
+def test_unconstrained_group_defers_non_member_instead_of_blocking():
+    """협회 무제약 그룹(다른 자격 경로)이 있으면 미가입이어도 과차단하지 않고 중립.
+
+    이것이 이관의 핵심 완화: 과거 평면-AND 는 협회 요건을 전체 AND 로 봐 다른 그룹의
+    비-협회 자격 경로를 무시하고 미가입 operator 를 차단했다(#254 tech_field 와 동형).
+    그룹-OR/DEFER 로 정렬하면 그 경로가 성립할 수 있어 협회 축은 defer 한다.
+    """
+    result = assess_association(_project(ASSOC_OR_LICENSE_GROUPS_RAW), _profile(""))
+
+    assert result.passed is True
+    assert result.score == config.ASSOCIATION_NEUTRAL_SCORE == 0.0
+    assert result.penalty == 0.0
+    assert any("다른 그룹" in reason for reason in result.reasons)
+
+
+def test_member_satisfies_via_one_group_when_multiple_groups():
+    """다중 그룹 공고에서 어느 한 그룹의 요구 협회를 보유하면 통과(그룹 간 OR)."""
+    result = assess_association(
+        _project(ASSOC_OR_LICENSE_GROUPS_RAW), _profile("한국엔지니어링협회")
+    )
+
+    assert result.passed is True
+    assert result.score == config.ASSOCIATION_MATCH_SCORE
+    assert result.penalty == 0.0
+
+
+def test_all_groups_association_constrained_still_blocks_non_member():
+    """모든 그룹이 협회를 요구(무제약 경로 없음)하면 미가입은 다중 그룹에서도 차단."""
+    result = assess_association(_project(BOTH_GROUPS_ASSOC_RAW), _profile(""))
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert result.penalty == config.ASSOCIATION_MISMATCH_PENALTY
+    assert any("엔지니어링협회" in reason for reason in result.reasons)
+
+
+def test_all_groups_association_constrained_passes_member():
+    """모든 그룹이 협회를 요구해도 가입 operator 는 각 그룹을 충족해 통과."""
+    result = assess_association(
+        _project(BOTH_GROUPS_ASSOC_RAW), _profile("한국엔지니어링협회")
+    )
+
+    assert result.passed is True
+    assert result.score == config.ASSOCIATION_MATCH_SCORE
+    assert result.penalty == 0.0
 
 
 # --- classifier 특성화: 협회 요건 없는 공고 baseline 불변 (CRITICAL 회귀 가드) ---
