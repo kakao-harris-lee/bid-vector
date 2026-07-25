@@ -56,17 +56,26 @@ function smokeFailureCategoryLabel(name: string): string {
   return SMOKE_FAILURE_CATEGORY_LABELS[name] ?? name;
 }
 
+// 표본 상태 → 라벨. 미지/미보고 상태는 "미실행"로 폴백.
+const SAMPLE_STATUS_LABELS: Record<string, string> = {
+  sufficient: "충분",
+  insufficient_sample: "표본 부족"
+};
+
 function sampleStatusLabel(status?: string | null): string {
-  if (status === "sufficient") return "충분";
-  if (status === "insufficient_sample") return "표본 부족";
-  return "미실행";
+  return SAMPLE_STATUS_LABELS[status ?? ""] ?? "미실행";
 }
 
+// run 상태 → 배지 톤. 미지 상태는 muted 로 폴백.
+const RUN_STATUS_TONES: Record<string, "healthy" | "watch" | "critical" | "info" | "muted"> = {
+  completed: "healthy",
+  failed: "critical",
+  running: "watch",
+  queued: "watch"
+};
+
 function runStatusTone(status?: string | null): "healthy" | "watch" | "critical" | "info" | "muted" {
-  if (status === "completed") return "healthy";
-  if (status === "failed") return "critical";
-  if (status === "running" || status === "queued") return "watch";
-  return "muted";
+  return RUN_STATUS_TONES[status ?? ""] ?? "muted";
 }
 
 // phase 통과율 → 톤. 데이터가 없으면(평가 0건) muted로 정직하게 표기.
@@ -453,22 +462,28 @@ function EvidenceDomainRow({
   );
 }
 
+// G-2 증적 상태 → 배지 톤. 미지 상태는 info(중립 고지)로 폴백.
+const G2_STATUS_TONES: Record<string, "healthy" | "watch" | "critical" | "info" | "muted"> = {
+  ready: "healthy",
+  insufficient: "watch",
+  mixed_scope: "critical",
+  missing: "muted"
+};
+
 function g2StatusTone(status?: string | null): "healthy" | "watch" | "critical" | "info" | "muted" {
-  if (status === "ready") return "healthy";
-  if (status === "insufficient") return "watch";
-  if (status === "mixed_scope") return "critical";
-  if (status === "missing") return "muted";
-  return "info";
+  return G2_STATUS_TONES[status ?? ""] ?? "info";
 }
 
+// G-2 증적 상태 → 한국어 라벨. 미지 상태는 원문 그대로 노출(조용한 오표시 금지).
+const G2_STATUS_LABELS: Record<G2EvidenceStatus, string> = {
+  ready: "증적 충분",
+  insufficient: "증적 부족",
+  mixed_scope: "범위 혼합",
+  missing: "증적 없음"
+};
+
 function g2StatusLabel(status?: string | null): string {
-  const labels: Record<G2EvidenceStatus, string> = {
-    ready: "증적 충분",
-    insufficient: "증적 부족",
-    mixed_scope: "범위 혼합",
-    missing: "증적 없음"
-  };
-  if (status && status in labels) return labels[status as G2EvidenceStatus];
+  if (status && status in G2_STATUS_LABELS) return G2_STATUS_LABELS[status as G2EvidenceStatus];
   return status ?? "missing";
 }
 

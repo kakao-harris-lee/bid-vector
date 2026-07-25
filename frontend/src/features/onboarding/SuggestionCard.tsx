@@ -5,9 +5,10 @@ import { cn, formatPercent } from "@/shared/lib";
 import type { OnboardingFieldSuggestion, OnboardingSuggestionValue } from "@/shared/api";
 import {
   DECISION_STATUS_META,
+  DECISION_STATUSES,
   fieldMeta,
   sourceLabel,
-  type DecisionStatus
+  type DecisionButtonStatus
 } from "./constants";
 import type { DecisionState } from "./decisions";
 import { SuggestionValueDisplay, SuggestionValueEditor } from "./SuggestionValueEditor";
@@ -16,14 +17,14 @@ import { SuggestionValueDisplay, SuggestionValueEditor } from "./SuggestionValue
  * 상태별 컨테이너 스타일 — 색만이 아니라 테두리 모양(점선/실선)으로도 구분한다(접근성).
  * pending 은 점선 + 틴트로 "확정 아님(draft)"을 시각적으로 분리한다(§2 정직 명세).
  */
-const CARD_TONE_CLASS: Record<DecisionStatus, string> = {
+const CARD_TONE_CLASS: Record<DecisionButtonStatus, string> = {
   pending:
     "border-dashed border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_92%)]",
   accepted: "border-solid border-[var(--color-success)] bg-[var(--color-card)]",
   rejected: "border-solid border-[var(--color-border)] bg-[var(--color-card)] opacity-70"
 };
 
-const STATUS_ICON: Record<DecisionStatus, typeof Search> = {
+const STATUS_ICON: Record<DecisionButtonStatus, typeof Search> = {
   pending: Search,
   accepted: CheckCircle2,
   rejected: X
@@ -48,13 +49,13 @@ export function SuggestionCard({ suggestion, decision, onDecision }: SuggestionC
   };
   const cancelEdit = () => setEditing(false);
   const applyEdit = () => {
-    onDecision(suggestion.field, { status: "accepted", value: draftValue });
+    onDecision(suggestion.field, { status: DECISION_STATUSES.accepted, value: draftValue });
     setEditing(false);
   };
   const accept = () =>
-    onDecision(suggestion.field, { status: "accepted", value: decision.value });
+    onDecision(suggestion.field, { status: DECISION_STATUSES.accepted, value: decision.value });
   const reject = () =>
-    onDecision(suggestion.field, { status: "rejected", value: decision.value });
+    onDecision(suggestion.field, { status: DECISION_STATUSES.rejected, value: decision.value });
 
   return (
     <li
@@ -109,8 +110,8 @@ export function SuggestionCard({ suggestion, decision, onDecision }: SuggestionC
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            variant={decision.status === "accepted" ? "primary" : "outline"}
-            aria-pressed={decision.status === "accepted"}
+            variant={decision.status === DECISION_STATUSES.accepted ? "primary" : "outline"}
+            aria-pressed={decision.status === DECISION_STATUSES.accepted}
             onClick={accept}
           >
             수락
@@ -120,8 +121,8 @@ export function SuggestionCard({ suggestion, decision, onDecision }: SuggestionC
           </Button>
           <Button
             size="sm"
-            variant={decision.status === "rejected" ? "secondary" : "ghost"}
-            aria-pressed={decision.status === "rejected"}
+            variant={decision.status === DECISION_STATUSES.rejected ? "secondary" : "ghost"}
+            aria-pressed={decision.status === DECISION_STATUSES.rejected}
             onClick={reject}
           >
             거부

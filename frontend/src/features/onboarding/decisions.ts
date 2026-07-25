@@ -4,11 +4,11 @@ import type {
   OnboardingSentStatus,
   OnboardingSuggestionValue
 } from "@/shared/api";
-import { isApplyField, type DecisionStatus } from "./constants";
+import { isApplyField, type DecisionButtonStatus } from "./constants";
 
 /** 후보별 사용자 결정(상태 + 편집된 값). I/O 없는 순수 상태(§4.7-4). */
 export interface DecisionState {
-  status: DecisionStatus;
+  status: DecisionButtonStatus;
   value: OnboardingSuggestionValue;
 }
 

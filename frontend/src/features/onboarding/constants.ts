@@ -214,8 +214,24 @@ export function isApplyField(field: string): field is OnboardingApplyField {
 
 // --- 후보 결정 상태 ---------------------------------------------------------
 
-/** 후보별 사용자 결정. `pending`= 미확정(초기), `accepted`= 수락, `rejected`= 거부. */
-export type DecisionStatus = "pending" | "accepted" | "rejected";
+/**
+ * 후보별 사용자 결정 상태 값 단일 출처(§4.5-1). SuggestionCard 의 버튼 핸들러가
+ * raw 리터럴("accepted"/"rejected") 대신 이 상수를 참조해, 상태 문자열이 한 곳에서만
+ * 선언되도록 한다. `pending`= 미확정(초기), `accepted`= 수락, `rejected`= 거부.
+ */
+export const DECISION_STATUSES = {
+  pending: "pending",
+  accepted: "accepted",
+  rejected: "rejected"
+} as const;
+
+/**
+ * 후보별 사용자 결정(UI 버튼 상태, 3값). 전송/감사 상태(wire)는 생성 스키마
+ * `OnboardingDecisionStatus`(4값, `modified` 포함)를 쓰며, 이 타입은 SuggestionCard
+ * 버튼이 세팅하는 UI 상태만 나타낸다 — 같은 이름으로 뭉뚱그리지 않는다(드리프트 오독 방지).
+ * `accepted` 는 전송 시점에 값 편집 여부로 `accepted`/`modified` 로 세분된다(`sentStatusFor`).
+ */
+export type DecisionButtonStatus = (typeof DECISION_STATUSES)[keyof typeof DECISION_STATUSES];
 
 export interface DecisionStatusMeta {
   label: string;
@@ -226,7 +242,7 @@ export interface DecisionStatusMeta {
  * 후보 상태 표시(색이 아니라 라벨로도 구분 — 접근성).
  * `pending`= 추천 후보(미확정)를 확정값처럼 보이지 않게(§2 정직 명세).
  */
-export const DECISION_STATUS_META: Record<DecisionStatus, DecisionStatusMeta> = {
+export const DECISION_STATUS_META: Record<DecisionButtonStatus, DecisionStatusMeta> = {
   pending: { label: "추천 후보 · 확인 필요", tone: "watch" },
   accepted: { label: "확정", tone: "healthy" },
   rejected: { label: "거부", tone: "muted" }
