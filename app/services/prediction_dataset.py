@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.ai.business_group import resolve_business_group
 from app.core.time import utc_now
 from app.domain.rate_normalization import to_bid_rate_fraction
+from app.domain.reliable_base import get_reliable_base
 from app.models.models import (
     HistoricalData,
     PaperBid,
@@ -426,6 +427,24 @@ class PredictionDatasetService:
                 return category_group, "category"
         return None, None
 
+    def _reliable_base_amount(self, record: HistoricalData) -> float:
+        """basis-aware 기초금액 — #199 오염 태그를 보고 신뢰 base를 고른다(순수 접근자 재사용).
+
+        raw ``base_amount`` 를 그대로 읽으면 개찰 후 settled 스냅샷의 예정가-basis 오염
+        (``win ÷ winning_rate`` 역산, #199 실측 settled 66.2%)을 학습·데이터셋 조립이
+        그대로 소비한다. ``get_reliable_base`` (bid_base 가격 경로와 동일한 프리미티브,
+        #225)로 record별 신뢰 base를 고른다: clean/basis-미상 행은 ``base_amount`` 그대로
+        (회귀 0), 명시적 non-clean 행만 복수예비가격 midpoint 복구 추정치
+        (``base_amount_estimated``)로 대체한다. 양수 base가 없으면 0.0(기존 폴백 의미 보존).
+        """
+        reliable = get_reliable_base(
+            base_amount=record.base_amount,
+            basis=record.base_amount_basis,
+            base_amount_estimated=record.base_amount_estimated,
+        )
+        value = reliable.value
+        return float(value) if value is not None and value > 0 else 0.0
+
     def _serialize_series_point(
         self,
         record: HistoricalData,
@@ -460,7 +479,7 @@ class PredictionDatasetService:
             if project is not None
             else None,
             "agency_name": record.agency_name,
-            "base_amount": float(record.base_amount or 0.0),
+            "base_amount": self._reliable_base_amount(record),
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": bid_rate,
             "bid_rate_source": bid_rate_source,
@@ -499,7 +518,7 @@ class PredictionDatasetService:
             if tender_rate is not None:
                 return tender_rate, "tender_result_winning_rate"
             winning_amount = float(tender_result.winning_amount or 0.0)
-            base_amount = float(record.base_amount or 0.0)
+            base_amount = self._reliable_base_amount(record)
             if winning_amount > 0 and base_amount > 0:
                 derived_rate = winning_amount / base_amount
                 if self.VALID_BID_RATE_MIN <= derived_rate <= self.VALID_BID_RATE_MAX:
@@ -507,7 +526,7 @@ class PredictionDatasetService:
 
         if allow_predicted_price_fallback:
             predicted_price = float(record.predicted_price or 0.0)
-            base_amount = float(record.base_amount or 0.0)
+            base_amount = self._reliable_base_amount(record)
             if predicted_price > 0 and base_amount > 0:
                 bid_rate = predicted_price / base_amount
                 if self.VALID_BID_RATE_MIN <= bid_rate <= self.VALID_BID_RATE_MAX:
