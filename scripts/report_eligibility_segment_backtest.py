@@ -42,12 +42,11 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Callable, Iterable
 
-from sqlalchemy import or_
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.core.constants import OPEN_PROJECT_STATUS as _OPEN_STATUS  # noqa: E402
 from app.models.models import (  # noqa: E402
     NoticeEligibilityLabel,
     Project,
@@ -62,6 +61,7 @@ from app.services.eligibility_labeling import (  # noqa: E402
     classify_eligibility,
     extract_eligibility_labels,
 )
+from app.services.query_predicates import settled_any_signal  # noqa: E402
 
 # --- 매직값은 여기 선언(§4.5.1) ---------------------------------------------
 
@@ -84,7 +84,8 @@ DEFAULT_HISTORY_LIMIT = 1000
 # 세그먼트당 최신 개찰건 상한(0=무제한). negative 는 수천 건이라 예측 시간이 크므로
 # 최신순(leakage-free) 표본을 세그먼트별로 제한한다. positive 는 소수라 전량 포함된다.
 DEFAULT_MAX_PER_SEGMENT = 200
-_OPEN_STATUS = "open"
+# _OPEN_STATUS 는 app/core/constants.py 의 OPEN_PROJECT_STATUS 단일 출처를 소비한다
+# ("open" only, re_notice 제외). 위 import 참조.
 
 # 정직 명세(§2) 고정 caveat — 표본 수/커버리지 수치는 실행 시 실측해 별도 라인으로
 # 출력하고(하드코딩 금지), 이 상수는 해석/경계만 고정한다.
@@ -529,7 +530,7 @@ def load_rows(
             db.query(TenderResult)
             .filter(
                 TenderResult.project_id.in_(project_ids),
-                or_(TenderResult.winning_amount > 0, TenderResult.winning_rate > 0),
+                settled_any_signal(),
             )
             .order_by(
                 TenderResult.project_id.asc(),

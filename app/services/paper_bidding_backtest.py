@@ -45,6 +45,7 @@ from app.services.bid_base import (
     resolve_notice_bid_base,
 )
 from app.services.classifier import NoticeClassifierService
+from app.services.query_predicates import open_projects, settled_with_amount
 
 logger = logging.getLogger(__name__)
 
@@ -664,8 +665,7 @@ class PaperBiddingBacktestService:
                 (PaperBidRun.mode == "forward_paper") | (PaperBidRun.mode.is_(None)),
                 exists().where(
                     (TenderResult.project_id == PaperBid.project_id)
-                    & (TenderResult.winning_amount.isnot(None))
-                    & (TenderResult.winning_amount > 0)
+                    & settled_with_amount()
                 ),
             )
         )
@@ -702,8 +702,7 @@ class PaperBiddingBacktestService:
             db.query(TenderResult)
             .filter(
                 TenderResult.project_id == int(project_id),
-                TenderResult.winning_amount.isnot(None),
-                TenderResult.winning_amount > 0,
+                settled_with_amount(),
             )
             .all()
         )
@@ -777,8 +776,7 @@ class PaperBiddingBacktestService:
             .options(selectinload(TenderResult.project))
             .filter(
                 TenderResult.project_id.isnot(None),
-                TenderResult.winning_amount.isnot(None),
-                TenderResult.winning_amount > 0,
+                settled_with_amount(),
             )
         )
         if category_filter:
@@ -819,7 +817,7 @@ class PaperBiddingBacktestService:
         limit: int,
         data_cutoff_at: datetime,
     ) -> list[Project]:
-        query = db.query(Project).filter(Project.status.in_(["open", "re_notice"]))
+        query = db.query(Project).filter(open_projects())
         if category:
             query = query.filter(Project.category == category)
         query = query.filter(

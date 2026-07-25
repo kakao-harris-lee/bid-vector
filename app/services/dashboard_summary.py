@@ -27,6 +27,7 @@ from app.models.models import (
 )
 from app.schemas.schemas import _extract_decision_reasons
 from app.services.award_verification import AWARD_OUTCOME_WON, determine_award_outcome
+from app.services.query_predicates import settled_with_amount
 
 _OPPORTUNITY_STATUSES = {"planned", "reviewing", "submitted", "skipped"}
 _ACTIVE_OPPORTUNITY_STATUSES = ACTIVE_DECISION_STATUSES
@@ -191,8 +192,7 @@ def _load_latest_result_map(
         db.query(TenderResult)
         .filter(
             TenderResult.project_id.in_(project_id_list),
-            TenderResult.winning_amount.isnot(None),
-            TenderResult.winning_amount > 0,
+            settled_with_amount(),
         )
         .order_by(
             TenderResult.project_id.asc(),
@@ -542,8 +542,7 @@ def _load_latest_result_rows(db: Session, *, limit: int) -> list[TenderResult]:
         db.query(TenderResult)
         .filter(
             TenderResult.project_id.isnot(None),
-            TenderResult.winning_amount.isnot(None),
-            TenderResult.winning_amount > 0,
+            settled_with_amount(),
         )
         .order_by(
             TenderResult.announced_at.desc().nullslast(),

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
 from app.models.models import PricePrediction, TenderResult, User
+from app.services.query_predicates import settled_with_amount
 
 
 class PredictionReportingService:
@@ -146,8 +147,7 @@ class PredictionReportingService:
             db.query(TenderResult)
             .filter(
                 TenderResult.project_id.in_(project_ids),
-                TenderResult.winning_amount.isnot(None),
-                TenderResult.winning_amount > 0,
+                settled_with_amount(),
             )
             .order_by(TenderResult.project_id.asc(), TenderResult.announced_at.desc(), TenderResult.created_at.desc(), TenderResult.id.desc())
             .all()

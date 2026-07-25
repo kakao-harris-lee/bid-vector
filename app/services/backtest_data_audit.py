@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, HistoricalData, PricePrediction, Project, TenderResult
+from app.services.query_predicates import open_projects, settled_with_amount
 
 
 class BacktestDataAuditService:
@@ -58,7 +59,7 @@ class BacktestDataAuditService:
             "table_counts": {
                 "projects_total": self._count(db.query(Project.id)),
                 "projects_active_open_or_re_notice": self._count(
-                    db.query(Project.id).filter(Project.status.in_(["open", "re_notice"]))
+                    db.query(Project.id).filter(open_projects())
                 ),
                 "historical_total": self._count(db.query(HistoricalData.id)),
                 "historical_with_bid_rate": self._count(db.query(HistoricalData.id).filter(HistoricalData.bid_rate > 0)),
@@ -129,8 +130,7 @@ class BacktestDataAuditService:
     def _usable_result_filters(self) -> list[Any]:
         return [
             TenderResult.project_id.isnot(None),
-            TenderResult.winning_amount.isnot(None),
-            TenderResult.winning_amount > 0,
+            settled_with_amount(),
         ]
 
     def _result_window_filters(self, *, start_at: datetime | None, end_at: datetime | None) -> list[Any]:

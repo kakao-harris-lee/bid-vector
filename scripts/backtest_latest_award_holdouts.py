@@ -13,7 +13,6 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +37,7 @@ from app.services.bid_base import (
     resolve_notice_legal_floor_inputs,
 )
 from app.services.prediction_dataset import PredictionDatasetService
+from app.services.query_predicates import settled_any_signal
 
 DEFAULT_GROUPS = ("construction", "service", "goods")
 DEFAULT_THRESHOLDS = (0.001, 0.003, 0.005, 0.01)
@@ -375,7 +375,7 @@ def select_latest_targets(
         .options(joinedload(TenderResult.project))
         .filter(
             TenderResult.project_id.isnot(None),
-            or_(TenderResult.winning_amount > 0, TenderResult.winning_rate > 0),
+            settled_any_signal(),
         )
         .order_by(
             TenderResult.announced_at.desc().nullslast(),
@@ -479,7 +479,7 @@ def select_targets_by_notice(
             db.query(TenderResult)
             .filter(
                 TenderResult.project_id.in_(project_ids),
-                or_(TenderResult.winning_amount > 0, TenderResult.winning_rate > 0),
+                settled_any_signal(),
             )
             .order_by(TenderResult.project_id.asc(), TenderResult.created_at.desc().nullslast(), TenderResult.id.desc())
             .all()
