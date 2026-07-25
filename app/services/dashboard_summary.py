@@ -26,12 +26,16 @@ from app.models.models import (
     User,
 )
 from app.schemas.schemas import _extract_decision_reasons
+from app.services.award_verification import AWARD_OUTCOME_WON, determine_award_outcome
 
 _OPPORTUNITY_STATUSES = {"planned", "reviewing", "submitted", "skipped"}
 _ACTIVE_OPPORTUNITY_STATUSES = ACTIVE_DECISION_STATUSES
 _BID_STATUSES = {"submitted", "reviewed", "accepted", "rejected"}
 _PAPER_ACTION_STATUS = {"bid_now": "planned", "review": "reviewing", "skip": "skipped"}
 _DEFAULT_PAPER_OPPORTUNITY_ACTIONS = {"bid_now", "review"}
+# Terminal 개찰 상태에서만 상호 불일치를 확정 패찰(lost)로 라벨한다. 그 외에는
+# 운영자가 실제 투찰했더라도 미확정(unknown)으로 남겨 라벨 오염을 막는다.
+_TERMINAL_RESULT_STATUSES = {"awarded", "closed"}
 
 
 # ---------------------------------------------------------------------------
@@ -311,22 +315,35 @@ def _serialize_bid(bid: Bid, *, decision: BidDecisionRecord | None) -> dict:
 def _resolve_award_outcome(
     result: TenderResult, *, operator: User, bid: Bid | None
 ) -> str:
+    """Judge won/lost/unknown, reusing the canonical 상호 판정(정본).
+
+    The 상호 비교는 ``award_verification.determine_award_outcome`` 에 위임한다
+    (정규화 후 정확매치, 금액 미사용). 과거의 substring 매칭은 폐기했다 — 부분
+    문자열 포함은 "몬딱솔류션" ⊃ "션" 처럼 무관한 상호를 오판(won)시켜 피드백
+    라벨을 오염시켰다. 정본과 동일 규칙을 쓰면 대시보드와 실투찰 트랙이 "우리가
+    이겼나"에 대해 절대 어긋나지 않는다.
+
+    운영자 참여 게이트는 유지한다: 운영자가 실제 투찰(``bid``)했고 개찰이
+    종료(terminal status)된 경우에만 상호 불일치를 확정 패찰(lost)로 라벨하고,
+    투찰하지 않은 공고는 unknown 으로 남긴다.
+    """
+    # 운영자가 명시적으로 낙찰 확정한 투찰(accepted)은 상호 근거와 무관하게 won.
     if bid is not None and _normalize_bid_status(bid.status) == "accepted":
         return "won"
 
-    winning_company = (result.winning_company or "").strip().lower()
-    operator_company = (operator.company or "").strip().lower()
-    if (
-        winning_company
-        and operator_company
-        and (winning_company in operator_company or operator_company in winning_company)
-    ):
+    name_outcome = determine_award_outcome(
+        winning_company=result.winning_company,
+        winning_amount=result.winning_amount,
+        operator_company_name=operator.company,
+        submitted_bid_amount=bid.bid_amount if bid is not None else None,
+    )
+    if name_outcome == AWARD_OUTCOME_WON:
         return "won"
 
-    if bid is not None and str(result.result_status or "").lower() in {
-        "awarded",
-        "closed",
-    }:
+    if (
+        bid is not None
+        and str(result.result_status or "").lower() in _TERMINAL_RESULT_STATUSES
+    ):
         return "lost"
     return "unknown"
 
