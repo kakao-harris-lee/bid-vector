@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import joinedload
 
@@ -20,6 +20,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.ai.business_group import resolve_business_group
+from app.ai.holdout_grouping import (
+    AGENCY_UNKNOWN_KEY,
+    DEFAULT_MIN_AGENCY_SAMPLES,
+    normalize_agency_key,
+    resolve_agency_group,
+)
+from app.ai.holdout_quality import assess_row_quality
+from app.ai.holdout_reporting import (
+    build_agency_axis_report,
+    build_quality_flag_report,
+)
 from app.ai.price_prediction import predict_price
 from app.ai.predictors.historical import resolve_procurement_rate_band
 from app.core.database import SessionLocal
@@ -44,6 +55,16 @@ DEFAULT_GROUPS = ("construction", "service", "goods")
 DEFAULT_THRESHOLDS = (0.001, 0.003, 0.005, 0.01)
 SERVICE_LIKE_CATEGORIES = {"technical-service", "general-service", "software"}
 
+# 대상 선택 축(split axis). 예측 입력(business_group)은 어느 축이든 그대로 유지되고,
+# 이 값은 "무엇을 기준으로 최신 N건을 고를지"만 바꾼다.
+GROUP_BY_BUSINESS_GROUP = "business_group"
+GROUP_BY_AGENCY = "agency"
+GROUP_BY_CHOICES = (GROUP_BY_BUSINESS_GROUP, GROUP_BY_AGENCY)
+
+# 기관 축 실행의 고정 리포트 경로(로드맵 6번: 개선 전후를 같은 경로로 비교).
+# ``--out`` 이 없을 때만 쓰인다.
+AGENCY_AXIS_FIXED_OUT = "models/reports/latest-award-holdout-agency.json"
+
 
 @dataclass(frozen=True)
 class HoldoutTarget:
@@ -56,6 +77,11 @@ class HoldoutTarget:
     historical: HistoricalData
     event_at: datetime
     available_at: datetime
+    # 기관 축 분할/리포트 전용 필드. ``group`` 과 달리 예측 입력에는 쓰이지 않는다.
+    # 기본값은 ``_unknown`` — 기관 정보 없이 조립된 타깃이 조용히 사라지지 않고
+    # 명시적 미상 버킷으로 모인다(:func:`build_target` 은 항상 실제 값을 채운다).
+    agency_group: str = AGENCY_UNKNOWN_KEY
+    agency_display: str = AGENCY_UNKNOWN_KEY
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -69,6 +95,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--groups",
         default=",".join(DEFAULT_GROUPS),
         help="Comma-separated business groups to evaluate. Default: construction,service,goods.",
+    )
+    parser.add_argument(
+        "--group-by",
+        choices=GROUP_BY_CHOICES,
+        default=GROUP_BY_BUSINESS_GROUP,
+        help=(
+            "Split axis used to select the latest targets. 'business_group' keeps the "
+            "existing 공사/용역/물품 split; 'agency' selects the latest targets per "
+            "발주기관(없으면 수요기관). The agency breakdown is always reported."
+        ),
+    )
+    parser.add_argument(
+        "--min-agency-samples",
+        type=int,
+        default=DEFAULT_MIN_AGENCY_SAMPLES,
+        help=(
+            "Minimum targets an agency needs to keep its own report bucket. Agencies "
+            "below it are folded into the explicit '_etc' bucket (never silently "
+            "dropped — the folded agency/target counts are reported)."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-agency-history",
+        action="store_true",
+        help=(
+            "True group holdout: also drop the target agency's own rows from the "
+            "prediction history, measuring generalization to an unseen agency. "
+            "Default off (the existing time-based holdout is unchanged)."
+        ),
     )
     parser.add_argument(
         "--history-limit",
@@ -86,7 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--targets-per-group",
         type=int,
         default=1,
-        help="Number of latest awarded targets selected per group when --notice-numbers is omitted.",
+        help=(
+            "Number of latest awarded targets selected per split bucket (business "
+            "group or agency, see --group-by) when --notice-numbers is omitted."
+        ),
     )
     parser.add_argument(
         "--max-targets",
@@ -131,7 +189,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out",
         default="",
-        help="Optional JSON output path. Defaults to models/reports/latest-award-holdout-<timestamp>.json.",
+        help=(
+            "Optional JSON output path. Defaults to "
+            "models/reports/latest-award-holdout-<timestamp>.json, or the fixed "
+            f"{AGENCY_AXIS_FIXED_OUT} when --group-by agency (before/after runs "
+            "compare on one path)."
+        ),
     )
     parser.add_argument(
         "--include-contaminated",
@@ -357,6 +420,36 @@ def amount_bucket(amount: float | None) -> str:
     return "1b+"
 
 
+def selection_key(target: HoldoutTarget, group_by: str) -> str:
+    """Split-axis bucket key for target selection (NOT a prediction input)."""
+    return target.agency_group if group_by == GROUP_BY_AGENCY else target.group
+
+
+def build_target(
+    *,
+    group: str,
+    group_source: str,
+    result: TenderResult,
+    project: Project,
+    historical: HistoricalData,
+    event_at: datetime,
+    available_at: datetime,
+) -> HoldoutTarget:
+    """Assemble a target, deriving the agency axis from the notice's agencies."""
+    agency = resolve_agency_group(project.issuing_agency, project.demand_agency)
+    return HoldoutTarget(
+        group=group,
+        group_source=group_source,
+        result=result,
+        project=project,
+        historical=historical,
+        event_at=event_at,
+        available_at=available_at,
+        agency_group=agency.key,
+        agency_display=agency.display,
+    )
+
+
 def select_latest_targets(
     db,
     *,
@@ -367,6 +460,7 @@ def select_latest_targets(
     candidate_limit: int,
     targets_per_group: int,
     max_targets: int,
+    group_by: str = GROUP_BY_BUSINESS_GROUP,
 ) -> list[HoldoutTarget]:
     group_set = set(groups)
     group_target_limit = max(1, int(targets_per_group or 1))
@@ -416,7 +510,7 @@ def select_latest_targets(
             continue
 
         candidates.append(
-            HoldoutTarget(
+            build_target(
                 group=group,
                 group_source=group_source,
                 result=result,
@@ -428,17 +522,19 @@ def select_latest_targets(
         )
 
     candidates.sort(key=lambda item: (item.event_at, item.available_at, item.result.id or 0), reverse=True)
-    selected: dict[str, list[HoldoutTarget]] = {group: [] for group in groups}
+    # Bucket order == report/selection order (dict preserves insertion). Pre-seeding
+    # the business-group buckets keeps the historical --groups ordering byte-identical;
+    # the agency axis has no fixed universe, so its buckets order by first appearance
+    # (= most recent award first, since candidates are already sorted desc).
+    selected: dict[str, list[HoldoutTarget]] = (
+        {group: [] for group in groups} if group_by == GROUP_BY_BUSINESS_GROUP else {}
+    )
     for candidate in candidates:
-        group_targets = selected.setdefault(candidate.group, [])
+        group_targets = selected.setdefault(selection_key(candidate, group_by), [])
         if len(group_targets) < group_target_limit:
             group_targets.append(candidate)
 
-    ordered_targets = [
-        target
-        for group in groups
-        for target in selected.get(group, [])
-    ]
+    ordered_targets = [target for bucket in selected.values() for target in bucket]
     if max_targets and max_targets > 0:
         return ordered_targets[:max_targets]
     return ordered_targets
@@ -515,7 +611,7 @@ def select_targets_by_notice(
             continue
 
         targets.append(
-            HoldoutTarget(
+            build_target(
                 group=group,
                 group_source=group_source,
                 result=result,
@@ -575,6 +671,7 @@ def evaluate_target(
     target: HoldoutTarget,
     history_limit: int,
     thresholds: tuple[float, ...],
+    exclude_agency_history: bool = False,
 ) -> dict[str, Any]:
     result = target.result
     project = target.project
@@ -590,17 +687,12 @@ def evaluate_target(
     if not budget or not actual_amount:
         raise ValueError(f"Target {historical.notice_number} has no usable budget or winning amount.")
 
-    actual_rate = (
-        normalize_rate(result.winning_rate)
-        or normalize_rate(historical.bid_rate)
-        or (actual_amount / budget)
-    )
+    # 소스가 보고한 낙찰률과 금액-역산 낙찰률을 분리해 둔다. 보고값이 없어 역산으로
+    # 대체된 행은 분모 정합/법정 하한 검사의 근거가 없으므로(basis 가 달라짐)
+    # 품질 판정기가 그 상태를 알아야 오탐하지 않는다.
+    reported_rate = normalize_rate(result.winning_rate) or normalize_rate(historical.bid_rate)
+    actual_rate = reported_rate or (actual_amount / budget)
     amount_derived_rate = actual_amount / budget
-    data_quality_flags = resolve_data_quality_flags(
-        group=target.group,
-        actual_rate=actual_rate,
-        amount_derived_rate=amount_derived_rate,
-    )
     # The target's award row is unavailable at inference time. Use the stricter of
     # source event and persisted availability to avoid leaking rows with mixed TZs.
     as_of = min(target.event_at, target.available_at) - timedelta(seconds=1)
@@ -618,6 +710,8 @@ def evaluate_target(
         if point.get("notice_number") != historical.notice_number
         and point.get("project_id") != historical.project_id
     ]
+    if exclude_agency_history:
+        filtered_history = drop_agency_history(filtered_history, target.agency_group)
     # Predictor input = title+description+requirements via the shared assembler, the
     # SAME text the live path feeds. The prior self-assembly dropped requirements and
     # joined with "\n"; unifying it removes the holdout-vs-live input asymmetry.
@@ -632,6 +726,20 @@ def evaluate_target(
     # era-correct 하게 적용하도록 한다(2026-01-30 신율 소급 없음). estimation_amount는
     # 추정가격(budget_estimate)이라 pricing base(budget=기초금액)와 별개다.
     estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
+    published_floor_rate = resolve_notice_legal_floor_bid_rate(project)
+    # 분모/법정하한 품질 판정은 순수 모듈에 위임한다(읽기 전용 — 아래 predict_price
+    # 입력에는 전혀 관여하지 않는다).
+    quality = assess_row_quality(
+        group=target.group,
+        category=category,
+        basis=basis,
+        reported_rate=reported_rate,
+        effective_rate=actual_rate,
+        amount_derived_rate=amount_derived_rate,
+        published_floor_rate=published_floor_rate,
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
+    )
     prediction = predict_price(
         budget=budget,
         category=category,
@@ -644,7 +752,7 @@ def evaluate_target(
         # (개찰 후 정보 아님)이라 leakage-safe 하며, guardrail_core 가 max() 로만
         # 폴드해 floor 를 올리기만 한다. 라이브가 강제하는 하한을 홀드아웃 정확도
         # 측정에도 태워, 재캘리브레이션 판단이 실 파이프라인과 같은 입력을 쓰게 한다.
-        legal_floor_bid_rate=resolve_notice_legal_floor_bid_rate(project),
+        legal_floor_bid_rate=published_floor_rate,
         estimation_amount=estimation_amount,
         reference_date=reference_date,
     )
@@ -678,6 +786,9 @@ def evaluate_target(
     return {
         "group": target.group,
         "group_source": target.group_source,
+        "agency_group": target.agency_group,
+        "agency_display": target.agency_display,
+        "agency_history_excluded": bool(exclude_agency_history),
         "basis": basis,
         "base_source": base_source,
         "base_provenance": {
@@ -701,9 +812,13 @@ def evaluate_target(
         "actual": {
             "winning_amount": round(actual_amount, 2),
             "winning_rate": round(actual_rate, 6),
+            "reported_winning_rate": (
+                round(reported_rate, 6) if reported_rate is not None else None
+            ),
             "amount_derived_rate": round(amount_derived_rate, 6),
         },
-        "data_quality_flags": data_quality_flags,
+        "data_quality_flags": list(quality.flags),
+        "data_quality_details": quality.as_details(),
         "prediction_metadata": {
             "predictor_name": prediction.get("predictor_name"),
             "predictor_family": prediction.get("predictor_family"),
@@ -787,33 +902,47 @@ def aggregate_by_key(
     }
 
 
-def aggregate_by_flag(rows: list[dict[str, Any]], thresholds: tuple[float, ...]) -> dict[str, Any]:
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        flags = row.get("data_quality_flags") or ["clean"]
-        for flag in flags:
-            buckets.setdefault(str(flag), []).append(row)
-    return {
-        bucket_key: aggregate(bucket_rows, thresholds)
-        for bucket_key, bucket_rows in sorted(
-            buckets.items(),
-            key=lambda item: (-len(item[1]), item[0]),
-        )
-    }
+def bind_aggregate(thresholds: tuple[float, ...]) -> Callable[[list[dict[str, Any]]], dict[str, Any]]:
+    """Bind the report's single-source ``aggregate`` for injection into section builders.
+
+    ``app.ai.holdout_reporting`` owns the agency/flag section SHAPE but must not own
+    the metric definitions — it receives this closure so both surfaces report the
+    exact same sample_count / mean error / threshold counts (§4.7.3).
+    """
+    return lambda rows: aggregate(rows, thresholds)
 
 
-def resolve_data_quality_flags(*, group: str, actual_rate: float, amount_derived_rate: float) -> list[str]:
-    """Flag rows where the stored amount/rate relation looks unsuitable for price backtests."""
-    flags: list[str] = []
-    if actual_rate < 0.75:
-        flags.append("low_actual_rate")
-    if str(group or "").lower() == "construction" and actual_rate < 0.85:
-        flags.append("construction_low_rate_review")
-    if amount_derived_rate <= 0:
-        flags.append("missing_amount_derived_rate")
-    elif abs(actual_rate - amount_derived_rate) > 0.02:
-        flags.append("amount_rate_mismatch")
-    return flags
+def drop_agency_history(
+    history: list[dict[str, Any]], agency_key: str
+) -> list[dict[str, Any]]:
+    """Remove the target agency's own rows from the prediction history (group holdout).
+
+    Turns the time-based holdout into a true 기관 group holdout: the predictor never
+    sees ANY past award from the same 발주기관, so the measured error reflects
+    generalization to an unseen agency rather than agency-level memorization
+    (로드맵 11번 고카디널리티 과적합 방지). Rows whose agency is unknown are kept —
+    they cannot be proven to belong to the target agency, and dropping them would
+    silently shrink the training window.
+    """
+    if not agency_key:
+        return list(history)
+    return [
+        point
+        for point in history
+        if normalize_agency_key(point.get("agency_name")) != agency_key
+    ]
+
+
+def default_output_path(group_by: str, generated_at: datetime) -> str:
+    """Report path used when ``--out`` is omitted.
+
+    The agency axis writes to a FIXED path so a before/after comparison of the same
+    change runs the same command twice and diffs one file (로드맵 6번). The business
+    group axis keeps its historical timestamped path (existing runbooks pin it).
+    """
+    if group_by == GROUP_BY_AGENCY:
+        return AGENCY_AXIS_FIXED_OUT
+    return f"models/reports/latest-award-holdout-{generated_at.strftime('%Y%m%d-%H%M%S')}.json"
 
 
 def worst_targets(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
@@ -858,6 +987,8 @@ def report_short_target(row: dict[str, Any]) -> dict[str, Any]:
     actual = row.get("actual") or {}
     return {
         "group": row.get("group"),
+        "agency_group": row.get("agency_group"),
+        "agency_display": row.get("agency_display"),
         "basis": row.get("basis"),
         "base_source": row.get("base_source"),
         "amount_bucket": row.get("amount_bucket"),
@@ -882,10 +1013,7 @@ def main() -> int:
     groups = parse_csv(args.groups) or DEFAULT_GROUPS
     thresholds = parse_thresholds(args.thresholds)
     generated_at = datetime.now(UTC)
-    output_path = Path(
-        args.out
-        or f"models/reports/latest-award-holdout-{generated_at.strftime('%Y%m%d-%H%M%S')}.json"
-    )
+    output_path = Path(args.out or default_output_path(args.group_by, generated_at))
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     service = PredictionDatasetService()
@@ -912,6 +1040,7 @@ def main() -> int:
                 candidate_limit=args.candidate_limit,
                 targets_per_group=args.targets_per_group,
                 max_targets=args.max_targets,
+                group_by=args.group_by,
             )
         rows = [
             evaluate_target(
@@ -920,6 +1049,7 @@ def main() -> int:
                 target=target,
                 history_limit=args.history_limit,
                 thresholds=thresholds,
+                exclude_agency_history=args.exclude_agency_history,
             )
             for target in targets
         ]
@@ -942,11 +1072,30 @@ def main() -> int:
         for basis in ALL_BASES
     }
 
+    aggregate_fn = bind_aggregate(thresholds)
+    agency_axis = build_agency_axis_report(
+        aggregation_rows,
+        aggregate_fn=aggregate_fn,
+        min_samples=args.min_agency_samples,
+        worst_limit=args.worst_limit,
+    )
+    quality_report = build_quality_flag_report(
+        aggregation_rows, aggregate_fn=aggregate_fn
+    )
+    summary["agency_axis"] = agency_axis["summary"]
+    summary["quality_flag_counts"] = quality_report["flag_counts"]
+    # 플래그 제외 전/후 오차 비교(로드맵 12번 clean/flag 분리 리포트). 겹치지 않는
+    # 3분할이라 all == flag_free + flagged 로 검산 가능하다.
+    summary["quality_flag_partition"] = quality_report["partition"]
+
     report = {
         "generated_at": generated_at.isoformat(),
-        "method": "latest_awarded_notices_per_business_group_holdout",
+        "method": f"latest_awarded_notices_per_{args.group_by}_holdout",
         "settings": {
             "groups": list(groups),
+            "group_by": args.group_by,
+            "min_agency_samples": args.min_agency_samples,
+            "exclude_agency_history": args.exclude_agency_history,
             "history_limit": args.history_limit,
             "candidate_limit": args.candidate_limit,
             "targets_per_group": args.targets_per_group,
@@ -958,22 +1107,30 @@ def main() -> int:
             "utc_now": display_dt(now),
         },
         "selection_notes": [
-            "Select the latest awarded TenderResult targets per business group using announced/opened event time.",
+            f"Select the latest awarded TenderResult targets per {args.group_by} using announced/opened event time.",
             "Target project and notice are excluded from prediction history.",
             "Training cutoff is one second before the stricter of source event time and result availability time.",
             "Only explicit settled bid-rate evidence is used for historical records.",
             "Summary/breakdown/worst aggregates exclude non-clean base_amount targets "
             "(derived 예정가 역산/VAT or suspect) by default; see summary.basis_counts and "
             "breakdowns.by_basis. Use --include-contaminated to fold them in.",
+            "Agencies below --min-agency-samples are folded into the explicit '_etc' "
+            "bucket (never silently dropped); see summary.agency_axis for the folded counts.",
+            "below_legal_floor / amount_rate_mismatch are only evaluated when the source "
+            "reported a winning_rate — the amount-derived rate is 기초금액-basis and would "
+            "false-positive against the 예정가-basis legal floor.",
         ],
         "summary": summary,
         "breakdowns": {
             "by_group": aggregate_by_key(aggregation_rows, key="group", thresholds=thresholds),
+            "by_agency": agency_axis["by_agency"],
             "by_amount_bucket": aggregate_by_key(aggregation_rows, key="amount_bucket", thresholds=thresholds),
             "by_procurement_rate_band": aggregate_by_key(aggregation_rows, key="procurement_rate_band", thresholds=thresholds),
-            "by_data_quality_flag": aggregate_by_flag(aggregation_rows, thresholds),
+            "by_data_quality_flag": quality_report["by_flag"],
             "by_basis": aggregate_by_key(rows, key="basis", thresholds=thresholds),
         },
+        "agency_displays": agency_axis["agency_displays"],
+        "worst_agency_groups": agency_axis["worst_agencies"],
         "worst_recommended_targets": worst_targets(aggregation_rows, limit=args.worst_limit),
         "targets": rows,
     }
@@ -986,6 +1143,7 @@ def main() -> int:
                 "out": str(output_path),
                 "summary": report["summary"],
                 "breakdowns": report["breakdowns"],
+                "worst_agency_groups": report["worst_agency_groups"],
                 "worst_recommended_targets": report["worst_recommended_targets"],
                 "printed_target_count": min(len(rows), max(0, int(args.print_target_limit or 0))),
                 "target_count": len(rows),
