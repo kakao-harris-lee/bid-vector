@@ -47,6 +47,7 @@ ignore_errors = true
 # Phase 1a — first strict islands. Exact names win over the app.* wildcard above,
 # so ONLY these modules are strictly checked; the rest stays grandfathered.
 # Phase 1b adds app.domain.reliable_base (basis-aware 기초금액 선택 — #199 태그 소비자).
+# Phase 1c adds app.domain.rate_normalization (투찰율 percent↔fraction 스케일 규칙 단일 출처).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -54,6 +55,7 @@ module = [
     "app.domain.money",
     "app.domain.basis_conversion",
     "app.domain.reliable_base",
+    "app.domain.rate_normalization",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
