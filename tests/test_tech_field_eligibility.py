@@ -68,6 +68,34 @@ SINGLE_GROUP_AND_RAW = {
         {"lcnsLmtNm": "엔지니어링사업(항만, 해안)/3579", "lmtGrpNo": "1"},
     ]
 }
+# lcnsLmtNm 은 비-tech(토목), permsnIndstrytyList 만 해양 기술부문 어휘를 담음.
+# 면허 게이트는 permsnIndstrytyList 를 판정에 쓰지 않으므로(lcnsLmtNm 만) 이 축도
+# 게이트와 정렬해 요건 없음(중립)으로 본다. 과거 평면 경로는 이를 요건으로 잡아
+# 미보유 시 BLOCK 했다 — 소스 정렬로 완화되는 divergence 를 고정한다.
+PERMSN_ONLY_TECH_RAW = {
+    "license_limits": [
+        {
+            "lcnsLmtNm": "토목공사업/1001",
+            "permsnIndstrytyList": "엔지니어링사업(해양)",
+            "lmtGrpNo": "1",
+        }
+    ]
+}
+# lmtGrpNo 결측 행들 → parse_license_limit_groups 가 UNGROUPED 단일 그룹으로 폴딩.
+# 단일 그룹 내 AND 라 둘 다 있어야 통과(그룹핑 위임의 결측 폴딩 회귀 가드).
+MISSING_GRP_NO_RAW = {
+    "license_limits": [
+        {"lcnsLmtNm": "엔지니어링사업(해양)/3599"},
+        {"lcnsLmtNm": "기술사사무소(해양)/7383"},
+    ]
+}
+# 두 그룹 모두 비-tech 면허(기술부문 무매핑) → constrained 없음 → 중립 PASS.
+ALL_NON_TECH_GROUPS_RAW = {
+    "license_limits": [
+        {"lcnsLmtNm": "토목공사업/1001", "lmtGrpNo": "1"},
+        {"lcnsLmtNm": "건축공사업/1002", "lmtGrpNo": "2"},
+    ]
+}
 
 
 def _profile(tech_fields: str = "") -> CompanyProfile:
@@ -257,6 +285,38 @@ def test_unconstrained_group_passes_with_score_when_constrained_held():
 
     assert result.passed is True
     assert result.score == config.TECH_FIELD_MATCH_SCORE
+    assert result.penalty == 0.0
+
+
+def test_permsn_indstryty_only_requirement_is_neutral_gate_aligned():
+    """요건이 permsnIndstrytyList 로만 표현되면 게이트 정렬로 중립(요건 소스=lcnsLmtNm).
+
+    면허 게이트(parse_license_limit_groups)는 permsnIndstrytyList 를 판정에 쓰지
+    않으므로 이 축도 lcnsLmtNm 만 요건 소스로 본다. 과거 평면 경로는 이를 요건으로
+    잡아 미보유 시 BLOCK 했다 — 소스 정렬로 완화되는 방향을 고정하는 특성화.
+    """
+    result = assess_tech_field(_project(PERMSN_ONLY_TECH_RAW), _profile(""))
+
+    assert result.passed is True
+    assert result.score == config.TECH_FIELD_NEUTRAL_SCORE == 0.0
+    assert result.penalty == 0.0
+
+
+def test_missing_lmt_grp_no_folds_to_single_and_group():
+    """lmtGrpNo 결측 행들은 UNGROUPED 단일 그룹(AND)으로 폴딩 — 하나만 보유 시 BLOCK."""
+    result = assess_tech_field(_project(MISSING_GRP_NO_RAW), _profile("해양엔지니어링"))
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert result.penalty == config.TECH_FIELD_MISMATCH_PENALTY
+
+
+def test_all_non_tech_groups_are_neutral():
+    """모든 그룹이 비-tech 면허(기술부문 무매핑)면 요건 없음(중립 PASS)."""
+    result = assess_tech_field(_project(ALL_NON_TECH_GROUPS_RAW), _profile(""))
+
+    assert result.passed is True
+    assert result.score == config.TECH_FIELD_NEUTRAL_SCORE
     assert result.penalty == 0.0
 
 
