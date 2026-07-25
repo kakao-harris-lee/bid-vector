@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
+from app.domain.aggregates import average, error_rate
 from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, TenderResult, User
 
 # Maximum number of ids bound into a single ``project_id.in_(...)`` clause.
@@ -378,15 +379,11 @@ class PredictionFeedbackService:
 
     def _compute_error_rate(self, candidate_amount: float | None, winning_amount: float) -> float | None:
         """Return the absolute percentage error versus the final winning amount."""
-        if candidate_amount is None or winning_amount <= 0:
-            return None
-        return abs(candidate_amount - winning_amount) / winning_amount
+        return error_rate(candidate_amount, winning_amount)
 
     def _average(self, values: list[float]) -> float | None:
         """Return a rounded average for summary metrics."""
-        if not values:
-            return None
-        return round(sum(values) / len(values), 4)
+        return average(values, digits=4)
 
     def _round_optional(self, value: float | None, *, digits: int = 2) -> float | None:
         """Round floats while preserving nulls."""

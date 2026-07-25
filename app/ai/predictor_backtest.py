@@ -8,6 +8,7 @@ from typing import Any
 from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
 from app.ai.predictors.historical import read_record_value
 from app.core.config import settings
+from app.domain.aggregates import average
 
 
 def build_predictor_backtest_report(
@@ -196,9 +197,7 @@ def _resolve_prediction_bid_rate(prediction: dict[str, Any], *, budget: float) -
 
 def _average(values: list[float]) -> float | None:
     """Return a rounded average while preserving empty sets."""
-    if not values:
-        return None
-    return round(sum(values) / len(values), 6)
+    return average(values, digits=6)
 
 
 def _top_reasons(reasons: list[str], *, limit: int = 3) -> list[str]:

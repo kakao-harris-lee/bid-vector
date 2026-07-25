@@ -25,6 +25,7 @@ from app.core.single_user import (
     split_multi_value_text,
 )
 from app.core.time import ensure_utc, utc_now
+from app.domain.aggregates import average, error_rate
 from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import (
     CompanyProfile,
@@ -1086,9 +1087,8 @@ class PaperBiddingBacktestService:
         paper_bid_amount = float(item["paper_bid_amount"] or 0.0)
         paper_bid_rate = self._normalize_rate(float(item["paper_bid_rate"] or 0.0))
         amount_delta = paper_bid_amount - winning_amount
-        absolute_error_rate = (
-            abs(amount_delta) / winning_amount if winning_amount > 0 else 0.0
-        )
+        # error_rate 는 winning_amount <= 0 이면 None → 기존 else 0.0 폴백을 or 0.0 로 흡수.
+        absolute_error_rate = error_rate(paper_bid_amount, winning_amount) or 0.0
         bid_rate_delta = paper_bid_rate - winning_rate
         absolute_bid_rate_error = abs(bid_rate_delta)
         price_close = absolute_bid_rate_error <= 0.003
@@ -1851,6 +1851,4 @@ class PaperBiddingBacktestService:
         return to_bid_rate_fraction(float(value or 0.0))
 
     def _average(self, values: list[float]) -> float | None:
-        if not values:
-            return None
-        return round(sum(values) / len(values), 6)
+        return average(values, digits=6)

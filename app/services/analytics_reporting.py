@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
+from app.domain.aggregates import average
 from app.models.models import (
     Analytics,
     CrawlJob,
@@ -1772,9 +1773,7 @@ class AnalyticsReportingService:
 
     def _average(self, values: list[int | float]) -> float | None:
         """Return a rounded average while preserving empty sets."""
-        if not values:
-            return None
-        return round(sum(float(value) for value in values) / len(values), 4)
+        return average(values, digits=4)
 
     def _rate(self, numerator: int, denominator: int) -> float:
         """Return a dashboard-friendly ratio."""

@@ -24,6 +24,7 @@ from app.ai.price_prediction import predict_price
 from app.ai.predictors.historical import resolve_procurement_rate_band
 from app.core.database import SessionLocal
 from app.core.time import utc_now
+from app.domain.aggregates import error_rate
 from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
 from app.models.models import HistoricalData, Project, TenderResult
 from app.services.base_amount_basis import (
@@ -561,7 +562,8 @@ def scenario_metrics(
         "rate": round(rate, 6),
         "amount_error": round(amount_error, 2),
         "absolute_amount_error": round(abs(amount_error), 2),
-        "absolute_amount_error_pct": round(abs(amount_error) / actual_amount, 6),
+        # actual_amount > 0 는 호출부(evaluate_target)에서 이미 보장 → error_rate None 분기 도달 불가.
+        "absolute_amount_error_pct": round(error_rate(price, actual_amount) or 0.0, 6),
         "rate_error_bp": round((rate - actual_rate) * 10000, 2),
     }
 

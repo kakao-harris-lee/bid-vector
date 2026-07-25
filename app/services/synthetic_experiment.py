@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.time import utc_now
+from app.domain.aggregates import average
 from app.models.models import (
     SyntheticExperiment,
     SyntheticExperimentResult,
@@ -261,7 +262,7 @@ def _aggregate_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         for entry in items
         if entry.get("absolute_bid_rate_error") is not None
     ]
-    avg_error = round(sum(errors) / len(errors), 6) if errors else None
+    avg_error = average(errors, digits=6)
     # Price-only "close" rate. ``win_rate`` is kept (unchanged) for existing
     # consumers; ``est_price_close_rate`` is the SAME value under an honest name
     # ("가격 근접 추정율", NOT an actual award).

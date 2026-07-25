@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.time import ensure_utc
+from app.domain.aggregates import average
 from app.models.models import User
 from app.services.prediction_feedback import PredictionFeedbackService
 
@@ -273,6 +274,4 @@ class AccuracyIntegrationService:
 
     @staticmethod
     def _average(values: list[float]) -> float | None:
-        if not values:
-            return None
-        return round(sum(values) / len(values), 4)
+        return average(values, digits=4)
