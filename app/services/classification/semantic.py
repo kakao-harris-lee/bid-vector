@@ -153,21 +153,10 @@ def describe_company_capability(profile: CompanyProfile) -> str:
     annual_revenue = float(profile.annual_revenue or 0.0)
     awards = int(profile.total_awards or 0)
 
-    if annual_revenue >= 1_000_000_000:
-        revenue_band = "대형 프로젝트 대응 가능"
-    elif annual_revenue >= 300_000_000:
-        revenue_band = "중대형 프로젝트 대응 가능"
-    elif annual_revenue > 0:
-        revenue_band = "중형 프로젝트 대응 가능"
-    else:
-        revenue_band = "매출 정보 부족"
-
-    if awards >= 5:
-        award_band = "낙찰 실적 다수"
-    elif awards >= 2:
-        award_band = "낙찰 실적 보유"
-    else:
-        award_band = "낙찰 실적 제한적"
+    revenue_band = next(
+        label for predicate, label in config.REVENUE_CAPABILITY_BANDS if predicate(annual_revenue)
+    )
+    award_band = resolve_band(awards, config.AWARD_CAPABILITY_BANDS)
 
     return f"업체역량 {available_capability:.2f} {revenue_band} {award_band}"
 

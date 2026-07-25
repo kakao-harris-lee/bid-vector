@@ -26,6 +26,10 @@ from app.services.paper_bidding_backtest import (
     OperatorNotFoundError,
     PaperBiddingBacktestService,
 )
+from app.services.paper_bidding_settlement import (
+    SettlementStatusContext,
+    derive_settlement_status,
+)
 
 router = APIRouter()
 
@@ -112,45 +116,25 @@ def _build_settlement_overview(run: PaperBidRun) -> dict[str, Any]:
                 oldest_waiting_deadline_at = deadline_at
 
     unsettled_count = paper_bid_count - settled_count
-    if paper_bid_count == 0:
-        status_key = "no_paper_bids"
-        label = "검증 없음"
-        detail = "페이퍼 투찰 항목이 없습니다."
-        next_confirmable_at = None
-    elif unsettled_count == 0:
-        status_key = "settled"
-        label = "정산 완료"
-        detail = f"{settled_count}건 모두 최종 결과로 정산되었습니다."
-        next_confirmable_at = latest_settled_at
-    elif ready_to_settle_count > 0:
-        status_key = "ready_to_settle"
-        label = "정산 가능"
-        detail = (
-            f"{ready_to_settle_count}건은 최종 결과가 입수되어 승패 판정이 가능합니다."
+    settlement_status = derive_settlement_status(
+        SettlementStatusContext(
+            paper_bid_count=paper_bid_count,
+            settled_count=settled_count,
+            unsettled_count=unsettled_count,
+            ready_to_settle_count=ready_to_settle_count,
+            waiting_result_count=waiting_result_count,
+            before_deadline_count=before_deadline_count,
+            latest_settled_at=latest_settled_at,
+            next_ready_result_at=next_ready_result_at,
+            oldest_waiting_deadline_at=oldest_waiting_deadline_at,
+            next_deadline_at=next_deadline_at,
         )
-        next_confirmable_at = next_ready_result_at
-    elif waiting_result_count > 0:
-        status_key = "waiting_result"
-        label = "결과 대기"
-        detail = (
-            f"마감이 지난 {waiting_result_count}건은 최종 결과가 수집되면 정산됩니다."
-        )
-        next_confirmable_at = oldest_waiting_deadline_at
-    elif before_deadline_count > 0:
-        status_key = "before_deadline"
-        label = "마감 전"
-        detail = f"{before_deadline_count}건은 아직 마감 전입니다. 마감 후 결과가 수집되면 승패가 확정됩니다."
-        next_confirmable_at = next_deadline_at
-    else:
-        status_key = "deadline_missing"
-        label = "마감 미정"
-        detail = "마감일이 없어 정산 예상 시점을 계산할 수 없습니다."
-        next_confirmable_at = None
+    )
 
     return {
-        "status": status_key,
-        "label": label,
-        "detail": detail,
+        "status": settlement_status.status_key,
+        "label": settlement_status.label,
+        "detail": settlement_status.detail,
         "settlement_basis": "TenderResult.winning_amount > 0 matched by project_id",
         "paper_bid_count": paper_bid_count,
         "settled_count": settled_count,
@@ -159,7 +143,7 @@ def _build_settlement_overview(run: PaperBidRun) -> dict[str, Any]:
         "waiting_result_count": waiting_result_count,
         "before_deadline_count": before_deadline_count,
         "missing_deadline_count": missing_deadline_count,
-        "next_confirmable_at": next_confirmable_at,
+        "next_confirmable_at": settlement_status.next_confirmable_at,
         "next_deadline_at": next_deadline_at,
         "oldest_waiting_deadline_at": oldest_waiting_deadline_at,
         "latest_settled_at": latest_settled_at,

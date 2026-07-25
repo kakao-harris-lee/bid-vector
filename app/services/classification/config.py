@@ -6,6 +6,8 @@ live here as declarative data (CLAUDE.md §"Declarative Configurations"). The
 surface, and the per-axis modules import them directly.
 """
 
+from typing import Callable
+
 # --- Axis scores (positive contributions) ------------------------------------
 MATCH_THRESHOLD = 0.65
 EXACT_BUSINESS_TYPE_SCORE = 0.35
@@ -106,4 +108,24 @@ PROJECT_SCOPE_BANDS = (
     (0.65, "중대형 프로젝트"),
     (0.5, "중형 프로젝트"),
     (float("-inf"), "기본 프로젝트"),
+)
+# company-capability bands for the semantic scope text (describe_company_capability).
+# The revenue ladder mixes comparators — ``>= 1e9`` / ``>= 3e8`` / ``> 0`` — so it
+# stays a first-match PREDICATE table to preserve the ``> 0`` (positive-but-small)
+# boundary exactly; folding the ``> 0`` rung into a ``>=`` threshold would
+# misclassify a zero/absent revenue as "중형". The last always-true rung is the
+# "매출 정보 부족" fallback.
+REVENUE_CAPABILITY_BANDS: tuple[tuple[Callable[[float], bool], str], ...] = (
+    (lambda revenue: revenue >= 1_000_000_000, "대형 프로젝트 대응 가능"),
+    (lambda revenue: revenue >= 300_000_000, "중대형 프로젝트 대응 가능"),
+    (lambda revenue: revenue > 0, "중형 프로젝트 대응 가능"),
+    (lambda revenue: True, "매출 정보 부족"),
+)
+# award-history ladder (clean descending ``>=``) → resolve_band reproduces the
+# ``>= 5`` / ``>= 2`` / else cascade; the ``float("-inf")`` rung is the
+# "낙찰 실적 제한적" fallback.
+AWARD_CAPABILITY_BANDS = (
+    (5, "낙찰 실적 다수"),
+    (2, "낙찰 실적 보유"),
+    (float("-inf"), "낙찰 실적 제한적"),
 )

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import ast
 import json
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session, selectinload
@@ -46,6 +47,69 @@ def parse_analytics_event_data(raw: str | None) -> dict[str, Any]:
         except (ValueError, SyntaxError, TypeError):
             return {}
     return decoded if isinstance(decoded, dict) else {}
+
+
+@dataclass(frozen=True)
+class _HistoryAdjustmentCounts:
+    """Experiment-history counts consumed by the priority-adjustment rules."""
+
+    success_count: int
+    negative_count: int
+    pending_count: int
+    applied_count: int
+
+
+@dataclass(frozen=True)
+class _HistoryAdjustmentRule:
+    """One first-match priority rule: a predicate plus its declarative outcome."""
+
+    predicate: Callable[[_HistoryAdjustmentCounts], bool]
+    status: str
+    priority_delta: float
+    reason: str
+
+
+# Ordered, first-match priority machine for experiment history. The rungs map
+# 1:1 (in order) to the original if/elif cascade — the final always-true rung is
+# the neutral fallback — so the status/delta/reason stay declarative data.
+_HISTORY_ADJUSTMENT_RULES: tuple[_HistoryAdjustmentRule, ...] = (
+    _HistoryAdjustmentRule(
+        predicate=lambda c: c.applied_count > 0 and c.success_count > 0,
+        status="promoted",
+        priority_delta=14.0,
+        reason="성공 후 운영 전략에 적용된 실험 이력이 있어 후속 실험 우선순위를 높였습니다.",
+    ),
+    _HistoryAdjustmentRule(
+        predicate=lambda c: c.negative_count >= 2 and c.success_count == 0,
+        status="deprioritized",
+        priority_delta=-55.0,
+        reason="반복 실패 또는 롤백 이력이 있어 같은 유형의 실험을 뒤로 미뤘습니다.",
+    ),
+    _HistoryAdjustmentRule(
+        predicate=lambda c: c.negative_count > c.success_count,
+        status="deprioritized",
+        priority_delta=-35.0,
+        reason="실패/롤백 이력이 성공 이력보다 많아 우선순위를 낮췄습니다.",
+    ),
+    _HistoryAdjustmentRule(
+        predicate=lambda c: c.pending_count >= 2 and c.success_count == 0,
+        status="deprioritized",
+        priority_delta=-20.0,
+        reason="보류 또는 표본 부족 이력이 반복되어 추가 추천 강도를 낮췄습니다.",
+    ),
+    _HistoryAdjustmentRule(
+        predicate=lambda c: c.success_count > 0,
+        status="promoted",
+        priority_delta=8.0,
+        reason="성공한 실험 이력이 있어 같은 계열의 후속 실험 신뢰도를 높였습니다.",
+    ),
+    _HistoryAdjustmentRule(
+        predicate=lambda c: True,
+        status="neutral",
+        priority_delta=0.0,
+        reason="이력상 우선순위를 조정할 충분한 신호가 없습니다.",
+    ),
+)
 
 
 class DecisionAnalyticsService:
@@ -1053,30 +1117,16 @@ class DecisionAnalyticsService:
         pending_count = int(history_summary.get("pending_count") or 0)
         applied_count = int(history_summary.get("applied_count") or 0)
         negative_count = rollback_count + failed_count
-        if applied_count > 0 and success_count > 0:
-            status = "promoted"
-            priority_delta = 14.0
-            reason = "성공 후 운영 전략에 적용된 실험 이력이 있어 후속 실험 우선순위를 높였습니다."
-        elif negative_count >= 2 and success_count == 0:
-            status = "deprioritized"
-            priority_delta = -55.0
-            reason = "반복 실패 또는 롤백 이력이 있어 같은 유형의 실험을 뒤로 미뤘습니다."
-        elif negative_count > success_count:
-            status = "deprioritized"
-            priority_delta = -35.0
-            reason = "실패/롤백 이력이 성공 이력보다 많아 우선순위를 낮췄습니다."
-        elif pending_count >= 2 and success_count == 0:
-            status = "deprioritized"
-            priority_delta = -20.0
-            reason = "보류 또는 표본 부족 이력이 반복되어 추가 추천 강도를 낮췄습니다."
-        elif success_count > 0:
-            status = "promoted"
-            priority_delta = 8.0
-            reason = "성공한 실험 이력이 있어 같은 계열의 후속 실험 신뢰도를 높였습니다."
-        else:
-            status = "neutral"
-            priority_delta = 0.0
-            reason = "이력상 우선순위를 조정할 충분한 신호가 없습니다."
+        counts = _HistoryAdjustmentCounts(
+            success_count=success_count,
+            negative_count=negative_count,
+            pending_count=pending_count,
+            applied_count=applied_count,
+        )
+        rule = next(rule for rule in _HISTORY_ADJUSTMENT_RULES if rule.predicate(counts))
+        status = rule.status
+        priority_delta = rule.priority_delta
+        reason = rule.reason
 
         return {
             "status": status,
