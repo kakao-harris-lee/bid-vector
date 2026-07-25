@@ -1112,3 +1112,275 @@ def test_run_backfill_throttles_between_all_calls(test_db):
         "flags": {"indstrytyLmtYn": "Y"},
         "license_limits": [{"lcnsLmtNm": "토목공사업"}],
     }
+
+
+# --- Floor-only mode (orphan sweep, opt-in) -----------------------------------
+
+
+def test_mode_writes_eligibility_predicate():
+    """Default mode writes eligibility; floor-only mode never does (pure predicate)."""
+    assert backfill.mode_writes_eligibility(backfill.DEFAULT_MODE) is True
+    assert backfill.mode_writes_eligibility(backfill.FLOOR_ONLY_MODE) is False
+
+
+def test_parser_floor_only_defaults_off():
+    """--floor-only is opt-in; absent it stays False (default backfill unchanged)."""
+    assert backfill.build_parser().parse_args([]).floor_only is False
+    assert backfill.build_parser().parse_args(["--floor-only"]).floor_only is True
+
+
+@pytest.fixture
+def orphan_floor_targets(test_db):
+    """Floor-NULL-but-eligibility-set orphans plus rows the floor-only key excludes.
+
+    These are the rows no default run can ever reach: saving eligibility_raw drops
+    them from the default (eligibility IS NULL) key while their floor is still NULL.
+    """
+    now = utc_now()
+    test_db.add_all(
+        [
+            # orphan: floor NULL, eligibility set, open, future (later)
+            Project(
+                id=1,
+                notice_number="R0001",
+                category="service",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw={"flags": {"indstrytyLmtYn": "N"}},
+                deadline=now + timedelta(days=5),
+            ),
+            # orphan: floor NULL, eligibility set, open, future (sooner -> first)
+            Project(
+                id=2,
+                notice_number="R0002",
+                category="construction",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw={"flags": {"indstrytyLmtYn": "Y"}},
+                deadline=now + timedelta(days=1),
+            ),
+            # excluded (floor-only): floor already set -> not floor-NULL
+            Project(
+                id=3,
+                notice_number="R0003",
+                category="service",
+                status="open",
+                award_floor_rate=0.88,
+                eligibility_raw={"flags": {"indstrytyLmtYn": "N"}},
+                deadline=now + timedelta(days=2),
+            ),
+            # excluded (floor-only): eligibility NULL -> this is the DEFAULT target
+            Project(
+                id=4,
+                notice_number="R0004",
+                category="service",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw=None,
+                deadline=now + timedelta(days=2),
+            ),
+            # excluded: not open
+            Project(
+                id=5,
+                notice_number="R0005",
+                category="service",
+                status="closed",
+                award_floor_rate=None,
+                eligibility_raw={"flags": {}},
+                deadline=now + timedelta(days=2),
+            ),
+        ]
+    )
+    test_db.commit()
+    return test_db
+
+
+def test_floor_only_selects_only_floor_null_eligibility_set_orphans(orphan_floor_targets):
+    """Floor-only key = floor NULL AND eligibility NOT NULL (open, in window)."""
+    targets = backfill.load_targets(
+        orphan_floor_targets, mode=backfill.FLOOR_ONLY_MODE
+    )
+    ids = [t[0] for t in targets]
+    # ids 2, 1 qualify, deadline asc; the eligibility-NULL and floor-set rows drop.
+    assert ids == [2, 1]
+    assert 3 not in ids  # floor already set
+    assert 4 not in ids  # eligibility NULL (a default-mode target, not floor-only)
+    assert 5 not in ids  # closed
+
+
+def test_default_mode_never_reaches_the_floor_only_orphans(orphan_floor_targets):
+    """The gap the PR closes: the default key can only see the eligibility-NULL row.
+
+    Ids 1 and 2 carry eligibility already, so the default (eligibility IS NULL)
+    sweep can never fill their floor — only --floor-only reaches them.
+    """
+    ids = [t[0] for t in backfill.load_targets(orphan_floor_targets)]
+    assert ids == [4]
+
+
+def test_floor_only_reuses_operator_tiering(test_db):
+    """Floor-only reuses the operator-candidate-first tiering (same sweep)."""
+    now = utc_now()
+    elig = {"flags": {"indstrytyLmtYn": "N"}}
+    test_db.add_all(
+        [
+            # off-scope, most imminent -> tier 2 despite the earliest deadline
+            Project(
+                id=1,
+                notice_number="R0001",
+                title="○○청사 신축공사",
+                description="공고기관: ○○시청",
+                requirements="철근콘크리트 구조",
+                category="construction",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw=elig,
+                deadline=now + timedelta(days=1),
+            ),
+            # operator candidate (marine gate), later deadline -> tier 1
+            Project(
+                id=2,
+                notice_number="R0002",
+                title="○○항 준설공사",
+                description="공고기관: ○○지방해양수산청",
+                requirements="항만 준설 및 사석 투하",
+                category="construction",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw=elig,
+                deadline=now + timedelta(days=5),
+            ),
+        ]
+    )
+    test_db.commit()
+    _seed_strategy(test_db)  # required_keywords="항만,방파제"
+
+    selection = backfill.select_targets(test_db, mode=backfill.FLOOR_ONLY_MODE)
+    # tier 1 (id 2, marine) before tier 2 (id 1) despite id 1's earlier deadline.
+    assert [t[0] for t in selection.targets] == [2, 1]
+    assert selection.operator_priority is True
+    assert (selection.tier1_count, selection.tier2_count) == (1, 1)
+
+
+def test_floor_only_fills_floor_without_sub_call_or_eligibility_write(
+    orphan_floor_targets,
+):
+    """Core regression: floor-only writes only the floor.
+
+    Both target notices carry a Y flag — in the DEFAULT mode that would trigger a
+    license-limit sub-call — but floor-only must ignore the flag, make no sub-call,
+    and never overwrite the existing eligibility_raw (the daily quota is protected).
+    """
+    targets = backfill.load_targets(
+        orphan_floor_targets, mode=backfill.FLOOR_ONLY_MODE
+    )  # ids 2, 1
+    fetch = _FakeFetch(
+        {
+            "R0002": _payload(
+                [{"bidNtceOrd": "3", "sucsfbidLwltRate": "87", "indstrytyLmtYn": "Y"}]
+            ),
+            "R0001": _payload(
+                [{"bidNtceOrd": "1", "sucsfbidLwltRate": "88", "indstrytyLmtYn": "Y"}]
+            ),
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch()
+
+    stats = backfill.run_backfill(
+        orphan_floor_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        chunk_size=1,
+        mode=backfill.FLOOR_ONLY_MODE,
+    )
+
+    assert stats.updated == 2
+    assert stats.no_value == 0
+    assert stats.eligibility_saved == 0  # floor-only never writes eligibility
+    assert stats.license_limit_calls == 0
+    assert license_limit.calls == []  # NO sub-call despite the Y flag
+    rows = {r.id: r for r in orphan_floor_targets.query(Project).all()}
+    assert rows[2].award_floor_rate == pytest.approx(0.87)
+    assert rows[1].award_floor_rate == pytest.approx(0.88)
+    # existing eligibility preserved verbatim, never overwritten
+    assert rows[2].eligibility_raw == {"flags": {"indstrytyLmtYn": "Y"}}
+    assert rows[1].eligibility_raw == {"flags": {"indstrytyLmtYn": "N"}}
+
+
+def test_floor_only_no_value_leaves_floor_null_and_reselects(orphan_floor_targets):
+    """Known limitation: a no_value row keeps floor NULL and is re-selected next run."""
+    targets = backfill.load_targets(
+        orphan_floor_targets, mode=backfill.FLOOR_ONLY_MODE
+    )  # ids 2, 1
+    fetch = _FakeFetch(
+        {
+            "R0002": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "n/a"}]),
+            "R0001": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "88"}]),
+        }
+    )
+    license_limit = _FakeLicenseLimitFetch()
+
+    stats = backfill.run_backfill(
+        orphan_floor_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        delay=0,
+        mode=backfill.FLOOR_ONLY_MODE,
+    )
+
+    assert stats.no_value == 1
+    assert stats.updated == 1
+    assert license_limit.calls == []
+    rows = {r.id: r for r in orphan_floor_targets.query(Project).all()}
+    assert rows[2].award_floor_rate is None  # no_value stays NULL
+    assert rows[1].award_floor_rate == pytest.approx(0.88)
+    # the no_value row still qualifies (floor NULL + eligibility set); id 1 dropped.
+    remaining = [
+        t[0]
+        for t in backfill.load_targets(
+            orphan_floor_targets, mode=backfill.FLOOR_ONLY_MODE
+        )
+    ]
+    assert remaining == [2]
+
+
+def test_floor_only_dry_run_counts_without_fetch(orphan_floor_targets):
+    """Floor-only --dry-run reports the orphan count and sample; makes no call."""
+    targets = backfill.load_targets(
+        orphan_floor_targets, mode=backfill.FLOOR_ONLY_MODE
+    )
+    fetch = _FakeFetch({})  # any call would KeyError
+    license_limit = _FakeLicenseLimitFetch()
+
+    stats = backfill.run_backfill(
+        orphan_floor_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=license_limit,
+        dry_run=True,
+        mode=backfill.FLOOR_ONLY_MODE,
+        sample_size=5,
+    )
+
+    assert fetch.calls == []
+    assert license_limit.calls == []
+    assert stats.target_count == 2
+    assert stats.sample == ["R0002", "R0001"]
+
+
+def test_main_floor_only_dry_run_targets_orphans(
+    orphan_floor_targets, monkeypatch, capsys
+):
+    """End-to-end CLI wiring: --floor-only --dry-run sweeps orphans, labels the mode."""
+    monkeypatch.setattr(backfill, "SessionLocal", lambda: orphan_floor_targets)
+
+    assert backfill.main(["--floor-only", "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert "DRY-RUN" in out
+    assert "[floor-only]" in out
+    assert "target=2" in out
+    assert "'R0002', 'R0001'" in out
