@@ -98,6 +98,21 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 2d — app.services.bid_base (예측 입력 조합 헬퍼: 공고에서 도출한 base/text/
+# published floor/tier 입력을 한 곳에서 묶는 DB 경계). budget_estimate(추정가격 ex-VAT)와
+# base_amount(기초금액 VAT 포함)가 float 레벨에서 자유 대입되던 것을 money.BaseAmount 로
+# 시그니처에 강제해 #162 류 basis 혼동을 정적으로 잡는다. sqlalchemy 2.0 은 py.typed 를
+# 실어 transport 가 이미 typed 라 error-code 완화가 필요 없다(순수 domain 아일랜드와 달리
+# DB 세션을 잡지만, 모델 접근은 대부분 getattr → Any 라 strict-green).
+[[tool.mypy.overrides]]
+module = ["app.services.bid_base"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------

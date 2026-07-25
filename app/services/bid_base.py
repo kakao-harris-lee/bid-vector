@@ -27,6 +27,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from app.core.time import to_kst
+from app.domain.money import BaseAmount
 from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
 from app.models.models import HistoricalData, Project
 from app.services.award_verification import _rate_to_fraction
@@ -34,7 +35,7 @@ from app.services.award_verification import _rate_to_fraction
 logger = logging.getLogger(__name__)
 
 
-def resolve_notice_bid_base(db: Session, project: Project) -> float:
+def resolve_notice_bid_base(db: Session, project: Project) -> BaseAmount:
     """Return the notice's 기초금액/사업금액 (bid base), falling back to 추정가격.
 
     Bids are placed against 사업금액/기초금액 (배정예산; 과세 공고면 VAT 포함), not
@@ -55,6 +56,12 @@ def resolve_notice_bid_base(db: Session, project: Project) -> float:
     the 예측 base against 예정가-basis pollution. This closes the #199 consumer gap;
     its live impact is ~0 today because open notices carry no post-settlement
     pollution (measured — see scripts/measure_reliable_base_impact.py).
+
+    Returns a :data:`~app.domain.money.BaseAmount` (기초금액-basis): the bid base the
+    적격심사 rate multiplies. The 추정가격 fallback is coerced to this basis because it
+    only fires on 면세 공고 where ``base_amount == budget_estimate`` (no-op) — the
+    NewType makes callers unable to feed this where a 예정가/추정가격 value is expected
+    (#162). Runtime-identical: ``BaseAmount`` erases to ``float`` (NewType).
     """
     project_id = getattr(project, "id", None)
     if project_id is not None:
@@ -68,26 +75,33 @@ def resolve_notice_bid_base(db: Session, project: Project) -> float:
             .first()
         )
         if record is not None:
+            # Model attrs cross the typed boundary via getattr (→ Any): the
+            # old-style ``Column`` declarations type as ``Column[float]`` on the
+            # instance, so this is the same DB-read idiom already used for
+            # ``project`` fields below. Runtime-identical (getattr == attr access).
+            base_amount = getattr(record, "base_amount", None)
+            basis = getattr(record, "base_amount_basis", None)
+            base_amount_estimated = getattr(record, "base_amount_estimated", None)
             reliable = get_reliable_base(
-                base_amount=record.base_amount,
-                basis=record.base_amount_basis,
-                base_amount_estimated=record.base_amount_estimated,
+                base_amount=base_amount,
+                basis=basis,
+                base_amount_estimated=base_amount_estimated,
             )
             if reliable.source is ReliableBaseSource.RESERVE_ESTIMATE:
                 logger.debug(
                     "resolve_notice_bid_base: project=%s non-clean basis=%s → "
                     "reserve estimate %s (raw base_amount %s rejected)",
                     project_id,
-                    record.base_amount_basis,
+                    basis,
                     reliable.value,
-                    record.base_amount,
+                    base_amount,
                 )
             if reliable.value is not None and reliable.value > 0:
-                return float(reliable.value)
+                return BaseAmount(float(reliable.value))
     try:
-        return float(getattr(project, "budget_estimate", 0.0) or 0.0)
+        return BaseAmount(float(getattr(project, "budget_estimate", 0.0) or 0.0))
     except (TypeError, ValueError):
-        return 0.0
+        return BaseAmount(0.0)
 
 
 def resolve_notice_legal_floor_inputs(
@@ -175,7 +189,14 @@ def build_prediction_text(project: Project) -> str:
     This changes ONLY the predictor's INPUT TEXT. It does not touch the price
     guardrail, legal floor, or band constants (RED LINE unchanged).
     """
-    return " ".join(filter(None, [project.title, project.description, project.requirements]))
+    # getattr (→ Any) crosses the old-style ``Column`` boundary — same idiom the
+    # rest of this module uses for model reads; runtime-identical to attr access.
+    fields = [
+        getattr(project, "title", None),
+        getattr(project, "description", None),
+        getattr(project, "requirements", None),
+    ]
+    return " ".join(filter(None, fields))
 
 
 @dataclass(frozen=True)
@@ -198,7 +219,7 @@ class NoticePredictionInputs:
       (구간=추정가격, 기준일=공고 시점, leakage-safe — the notice's own date).
     """
 
-    bid_base: float
+    bid_base: BaseAmount
     text: str
     legal_floor_bid_rate: float | None
     estimation_amount: float | None
