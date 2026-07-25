@@ -28,12 +28,14 @@ from sqlalchemy.orm import Session
 
 from app.ai.bid_target import BidTargetSignals
 from app.core.time import utc_now
+from app.domain.rate_normalization import PERCENT_SCALE_THRESHOLD
 from app.models.models import Project, TenderResult
 from app.services.prediction_dataset import PredictionDatasetService
 
-# Mirror PredictionDatasetService._normalize_bid_rate_value exactly. Rates above
-# this threshold are percentage-scale and divided by 100 before the range gate.
-_PERCENTAGE_SCALE_THRESHOLD = 1.5
+# Mirror PredictionDatasetService._normalize_bid_rate_value exactly. The
+# percentage-scale threshold (rates above it are /100'd before the range gate) is
+# single-sourced in app.domain.rate_normalization; the SQL CASE below references
+# that constant since it cannot call the Python normalizer.
 _VALID_BID_RATE_MIN = PredictionDatasetService.VALID_BID_RATE_MIN
 _VALID_BID_RATE_MAX = PredictionDatasetService.VALID_BID_RATE_MAX
 
@@ -54,7 +56,7 @@ def resolve_bid_target_signals(
     # prediction dataset normalizer.
     normalized_rate = case(
         (
-            TenderResult.winning_rate > _PERCENTAGE_SCALE_THRESHOLD,
+            TenderResult.winning_rate > PERCENT_SCALE_THRESHOLD,
             TenderResult.winning_rate / 100.0,
         ),
         else_=TenderResult.winning_rate,

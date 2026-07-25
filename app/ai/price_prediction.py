@@ -29,6 +29,7 @@ from app.ai.predictors.registry import (
     normalize_predictor_registry,
 )
 from app.core.config import settings
+from app.domain.rate_normalization import to_bid_rate_fraction
 
 
 @dataclass(frozen=True)
@@ -1164,8 +1165,7 @@ def _normalize_optional_bid_rate(value: Any) -> float | None:
         return None
     if numeric <= 0:
         return None
-    if numeric > 1.5:
-        numeric = numeric / 100.0
+    numeric = to_bid_rate_fraction(numeric)
     if numeric <= 0:
         return None
     return round(float(numeric), 6)

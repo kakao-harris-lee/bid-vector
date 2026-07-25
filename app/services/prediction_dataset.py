@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.ai.business_group import resolve_business_group
 from app.core.time import utc_now
+from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import (
     HistoricalData,
     PaperBid,
@@ -537,8 +538,7 @@ class PredictionDatasetService:
             return None
         if numeric <= 0:
             return None
-        if numeric > 1.5:
-            numeric = numeric / 100.0
+        numeric = to_bid_rate_fraction(numeric)
         if not (self.VALID_BID_RATE_MIN <= numeric <= self.VALID_BID_RATE_MAX):
             return None
         return round(float(numeric), 6)

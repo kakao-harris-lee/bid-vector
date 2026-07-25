@@ -17,6 +17,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from app.domain.rate_normalization import to_bid_rate_fraction
+
 # Basis verdicts. ``CLEAN`` is the ONLY value a feedback/calibration loop may
 # trust as a real 기초금액 (see HistoricalData column notes + config warnings).
 BASIS_CLEAN = "clean"
@@ -38,9 +40,8 @@ _VAT_TOLERANCE = 0.01  # |base × 1.1 − round(base × 1.1)| < 0.01
 _VAT_MULTIPLIER = 1.1
 # ``TenderResult.winning_rate`` is stored on mixed scales (scsbid persists a
 # fraction e.g. 0.875; HTML parsing a percentage e.g. 87.5 — see
-# app/services/bid_target_signals.py). Values above this threshold are
-# percentage-scale and divided by 100 before use.
-_PERCENTAGE_SCALE_THRESHOLD = 1.5
+# app/services/bid_target_signals.py). The percentage-scale threshold and the
+# >threshold → /100 rule are single-sourced in app.domain.rate_normalization.
 
 # 복수예비가격: KONEPS always publishes 15 reserve prices straddling 기초금액 by
 # roughly ±2~3%, so their midpoint recovers the base for a polluted row.
@@ -74,9 +75,7 @@ def normalize_winning_rate(value: Any) -> float | None:
     rate = _safe_float(value)
     if rate is None or rate <= 0:
         return None
-    if rate > _PERCENTAGE_SCALE_THRESHOLD:
-        rate = rate / 100.0
-    return rate
+    return to_bid_rate_fraction(rate)
 
 
 @dataclass(frozen=True)
