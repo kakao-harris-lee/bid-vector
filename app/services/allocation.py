@@ -1,9 +1,11 @@
 """Single-user bid pursuit decision service."""
 
 import json
+import operator
 
 from sqlalchemy.orm import Session
 
+from app.core.bands import resolve_band
 from app.core.config import settings
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.time import utc_now
@@ -34,6 +36,17 @@ class BidDecisionService:
     COMPETITIVENESS_WEIGHT = 0.08
     BUDGET_CAPTURE_WEIGHT = 0.06
     EXPECTED_MARGIN_WEIGHT = 0.09
+    # Deadline-urgency ladder (ascending ``<=`` hours). resolve_band walks the
+    # rungs with ``operator.le`` reproducing the ``<=6`` / ``<=24`` / ``<=72``
+    # cascade; the ``float("inf")`` rung is the always-match "far out" fallback.
+    # ``URGENCY_SCORE_UNKNOWN`` is the separate no-deadline score.
+    URGENCY_SCORE_UNKNOWN = 0.3
+    URGENCY_SCORE_BANDS = (
+        (6, 1.0),
+        (24, 0.8),
+        (72, 0.55),
+        (float("inf"), 0.25),
+    )
     ACTIVE_DECISION_STATUSES = _ACTIVE_DECISION_STATUSES
     SUBMITTED_SYNC_NOTE = "실제 투찰이 등록되어 제출 상태로 동기화했습니다."
     FALLBACK_SUBMITTED_REASONING = "사전 결정 기록 없이 직접 투찰이 등록되어 제출 이력을 생성했습니다."
@@ -476,14 +489,12 @@ class BidDecisionService:
     def _compute_urgency_score(self, deadline_hours_remaining: int | None) -> float:
         """Convert remaining hours into an urgency score."""
         if deadline_hours_remaining is None:
-            return 0.3
-        if deadline_hours_remaining <= 6:
-            return 1.0
-        if deadline_hours_remaining <= 24:
-            return 0.8
-        if deadline_hours_remaining <= 72:
-            return 0.55
-        return 0.25
+            return self.URGENCY_SCORE_UNKNOWN
+        return resolve_band(
+            deadline_hours_remaining,
+            self.URGENCY_SCORE_BANDS,
+            compare=operator.le,
+        )
 
     def _compute_load_penalty(
         self,
