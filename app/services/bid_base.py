@@ -21,6 +21,7 @@ predictor 에 넘기는 ``budget`` 도 base_amount 여야 이중과세 없이 �
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy.orm import Session
@@ -175,3 +176,59 @@ def build_prediction_text(project: Project) -> str:
     guardrail, legal floor, or band constants (RED LINE unchanged).
     """
     return " ".join(filter(None, [project.title, project.description, project.requirements]))
+
+
+@dataclass(frozen=True)
+class NoticePredictionInputs:
+    """The notice-derived predictor inputs the LIVE path feeds, bundled as one unit.
+
+    Every predict path — live (opportunity_analysis), API (prediction_workflow),
+    backtest, smoke, holdout — must feed the SAME preprocessing, or an accuracy
+    measurement diverges from the pipeline that actually places bids. Bundling the
+    four notice-derived inputs into one frozen record makes PARTIAL adoption
+    structurally hard: a caller cannot silently drop the published floor while
+    keeping the base/text, because they all arrive together from one call.
+
+    - ``bid_base``: 기초금액/사업금액 the 적격심사 rate applies to (``resolve_notice_bid_base``).
+    - ``text``: title+description+requirements predictor input (``build_prediction_text``).
+    - ``legal_floor_bid_rate``: the notice's OWN published 낙찰하한율 (award_floor_rate,
+      #201), folded into the guardrail floor with ``max()`` only downstream — it can
+      only RAISE the floor (RED LINE). ``None`` when nothing is published/requested.
+    - ``estimation_amount`` / ``reference_date``: construction legal 낙찰하한 tier inputs
+      (구간=추정가격, 기준일=공고 시점, leakage-safe — the notice's own date).
+    """
+
+    bid_base: float
+    text: str
+    legal_floor_bid_rate: float | None
+    estimation_amount: float | None
+    reference_date: date | None
+
+
+def prepare_prediction_inputs(
+    db: Session,
+    project: Project,
+    *,
+    request_legal_floor_bid_rate: float | None = None,
+) -> NoticePredictionInputs:
+    """Assemble the notice-derived predictor inputs in ONE place (single source).
+
+    This is a pure composition of the four notice-scoped helpers already used by the
+    live path — no new pricing logic. Every validation path routes through it so the
+    published floor (previously dropped by backtest/smoke/holdout), the 기초금액 base
+    (smoke passed 추정가격 directly), and the title-carrying text all match live.
+
+    ``request_legal_floor_bid_rate`` lets an API caller override the published 하한
+    (respected by ``resolve_notice_legal_floor_bid_rate``); validation paths pass
+    ``None`` so the notice's own published 하한 is used.
+    """
+    estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
+    return NoticePredictionInputs(
+        bid_base=resolve_notice_bid_base(db, project),
+        text=build_prediction_text(project),
+        legal_floor_bid_rate=resolve_notice_legal_floor_bid_rate(
+            project, request_legal_floor_bid_rate=request_legal_floor_bid_rate
+        ),
+        estimation_amount=estimation_amount,
+        reference_date=reference_date,
+    )

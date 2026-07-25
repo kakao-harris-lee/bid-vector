@@ -25,13 +25,18 @@ from app.ai.price_prediction import predict_price
 from app.ai.predictors.historical import resolve_procurement_rate_band
 from app.core.database import SessionLocal
 from app.core.time import utc_now
+from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
 from app.models.models import HistoricalData, Project, TenderResult
 from app.services.base_amount_basis import (
     ALL_BASES,
     BASIS_CLEAN,
     classify_base_basis,
 )
-from app.services.bid_base import resolve_notice_legal_floor_inputs
+from app.services.bid_base import (
+    build_prediction_text,
+    resolve_notice_legal_floor_bid_rate,
+    resolve_notice_legal_floor_inputs,
+)
 from app.services.prediction_dataset import PredictionDatasetService
 
 DEFAULT_GROUPS = ("construction", "service", "goods")
@@ -244,30 +249,46 @@ BASE_SOURCE_ESTIMATED = "base_amount_estimated"
 BASE_SOURCE_PROJECT = "project_budget"
 BASE_SOURCE_NONE = "none"
 
+# Map the shared primitive's provenance verdict onto this report's source labels.
+# CLEAN_BASE and BASE_FALLBACK both return the stored ``base_amount`` (clean, or
+# non-clean/unknown with no recovered estimate), so both surface as "base_amount".
+_RELIABLE_SOURCE_LABELS = {
+    ReliableBaseSource.CLEAN_BASE: BASE_SOURCE_STORED,
+    ReliableBaseSource.RESERVE_ESTIMATE: BASE_SOURCE_ESTIMATED,
+    ReliableBaseSource.BASE_FALLBACK: BASE_SOURCE_STORED,
+}
+
 
 def resolve_pricing_base(
     project: Project, historical: HistoricalData, basis: str
 ) -> tuple[float | None, str]:
     """Choose the pricing base used for error measurement + its provenance source.
 
-    A non-clean stored ``base_amount`` (derived 예정가-역산/VAT or suspect) is
-    contaminated, so prefer the recovered ``base_amount_estimated`` (복수예비가격
-    midpoint, a real 기초금액 추정) when positive — this measures error on a
-    기초금액-basis instead of a 예정가-basis. Clean rows keep the stored base; rows
-    with neither a usable stored base nor an estimate fall back to project budget
-    fields. Pure: no I/O, so the choice is unit-testable as a value table.
+    The basis RULE — a non-clean stored ``base_amount`` (derived 예정가-역산/VAT or
+    suspect) is contaminated, so prefer the recovered ``base_amount_estimated``
+    (복수예비가격 midpoint, a real 기초금액 추정) — is delegated to the shared
+    ``get_reliable_base`` primitive (``app/domain/reliable_base.py``), the SAME rule
+    the live-path ``resolve_notice_bid_base`` consumes. This holdout keeps a thin
+    row-specific wrapper (not the DB-query live helper) because it must measure error
+    against THIS target's award row and report the base's provenance, but the
+    interpretation of the basis tag is now single-sourced (no reimplemented branch).
 
     ``base_amount_estimated`` is an 개찰-time reserve recovery of the 기초금액 that
     was polluted in storage — the same information the notice publishes at
     announcement, NOT future leakage, so it does not affect the ``as_of`` history
-    boundary applied elsewhere.
+    boundary applied elsewhere. Clean rows keep the stored base; rows with neither a
+    usable stored base nor an estimate fall back to project budget fields. Pure: no
+    I/O, so the choice stays unit-testable as a value table.
     """
-    estimated = amount_float(getattr(historical, "base_amount_estimated", None))
-    if basis != BASIS_CLEAN and estimated and estimated > 0:
-        return estimated, BASE_SOURCE_ESTIMATED
-    stored = amount_float(historical.base_amount)
-    if stored and stored > 0:
-        return stored, BASE_SOURCE_STORED
+    reliable = get_reliable_base(
+        base_amount=amount_float(historical.base_amount),
+        basis=basis,
+        base_amount_estimated=amount_float(
+            getattr(historical, "base_amount_estimated", None)
+        ),
+    )
+    if reliable.value is not None and reliable.value > 0:
+        return float(reliable.value), _RELIABLE_SOURCE_LABELS[reliable.source]
     budget = base_amount(project, historical)
     return (budget, BASE_SOURCE_PROJECT) if budget else (None, BASE_SOURCE_NONE)
 
@@ -595,14 +616,10 @@ def evaluate_target(
         if point.get("notice_number") != historical.notice_number
         and point.get("project_id") != historical.project_id
     ]
-    description = "\n".join(
-        part
-        for part in (
-            project.title or getattr(historical, "title", "") or "",
-            project.description or getattr(historical, "description", "") or "",
-        )
-        if part
-    )
+    # Predictor input = title+description+requirements via the shared assembler, the
+    # SAME text the live path feeds. The prior self-assembly dropped requirements and
+    # joined with "\n"; unifying it removes the holdout-vs-live input asymmetry.
+    description = build_prediction_text(project)
     category = (
         normalize_category(service, project.category)
         or normalize_category(service, historical.category)
@@ -621,6 +638,11 @@ def evaluate_target(
         agency_name=project.issuing_agency or project.demand_agency,
         business_type_code=project.business_type_code,
         business_group=target.group,
+        # 공고 자신의 published 낙찰하한율(award_floor_rate, #201). 공고 시점 공개값
+        # (개찰 후 정보 아님)이라 leakage-safe 하며, guardrail_core 가 max() 로만
+        # 폴드해 floor 를 올리기만 한다. 라이브가 강제하는 하한을 홀드아웃 정확도
+        # 측정에도 태워, 재캘리브레이션 판단이 실 파이프라인과 같은 입력을 쓰게 한다.
+        legal_floor_bid_rate=resolve_notice_legal_floor_bid_rate(project),
         estimation_amount=estimation_amount,
         reference_date=reference_date,
     )

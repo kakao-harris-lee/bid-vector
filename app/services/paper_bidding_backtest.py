@@ -41,9 +41,8 @@ from app.schemas.schemas import BidDecisionRequest
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.bid_base import (
-    build_prediction_text,
+    prepare_prediction_inputs,
     resolve_notice_bid_base,
-    resolve_notice_legal_floor_inputs,
 )
 from app.services.classifier import NoticeClassifierService
 
@@ -885,14 +884,15 @@ class PaperBiddingBacktestService:
         if budget <= 0:
             raise ValueError(f"Project {project.id} has no usable budget")
 
-        # 투찰가는 추정가격(ex-VAT)이 아니라 기초금액/사업금액(배정예산; 과세 공고면
-        # VAT 포함) 기준으로 산정한다. 과거 낙찰률(bid_rate/winning_rate)이 base
-        # 기준으로 정규화돼 있으므로 predictor budget 도 base 여야 과세 공고에서
-        # ~10% 낮게 산정돼 낙찰하한 미만으로 systematically 탈락하는 왜곡이 사라진다.
-        # (candidate 는 Project+TenderResult 에서 만들어져 HistoricalData 레코드가
-        # 이 지점에 없으므로 live 경로와 동일한 helper 로 base 를 해석한다.) 보고용
-        # budget_estimate 필드와 전략 예산밴드 필터는 그대로 est(``budget``)를 쓴다.
-        bid_base = resolve_notice_bid_base(db, project)
+        # 예측 전처리를 라이브 경로와 동일한 단일 조합 헬퍼로 해석한다: 기초금액 base
+        # (과거 낙찰률이 base 기준으로 정규화돼 있어 과세 공고 systematically 탈락 왜곡
+        # 방지), title 포함 text, 그리고 이전까지 백테스트가 빠뜨렸던 공고 published
+        # 낙찰하한(award_floor_rate, #201) 을 함께 받아 라이브가 강제하는 floor 를
+        # 정확도 측정에도 태운다. (candidate 는 Project+TenderResult 에서 만들어져
+        # HistoricalData 가 이 지점에 없으므로 base 가 0 이면 est(``budget``) 폴백.)
+        # 보고용 budget_estimate 필드와 전략 예산밴드 필터는 그대로 est(``budget``)를 쓴다.
+        inputs = prepare_prediction_inputs(db, project)
+        bid_base = inputs.bid_base
         if bid_base <= 0:
             bid_base = budget
 
@@ -912,24 +912,20 @@ class PaperBiddingBacktestService:
         )
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
-        # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 백테스트가
-        # 과거 공고를 평가할 때 그 공고 자신의 날짜를 기준일로 넘겨, 2026-01-30 신율을
-        # 소급하지 않고 "그 시점"의 구/신율을 era-correct 하게 적용한다(시간 누수 차단).
-        estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
-            # Shared predictor-input assembler (title+description+requirements) —
-            # byte-identical to the previous inline join; unified so the live path
-            # (opportunity_analysis) now feeds the SAME text this backtest validates.
-            description=build_prediction_text(project),
+            description=inputs.text,
             historical_records=history,
             agency_name=project.issuing_agency or project.demand_agency,
             feedback_calibration=None,
             business_type_code=business_type_code,
             business_group=business_group,
-            estimation_amount=estimation_amount,
-            reference_date=reference_date,
+            # 공고 자신의 published 낙찰하한율(era-correct — 공고 시점 공개, 개찰 후
+            # 정보 아님). guardrail_core 가 max() 로만 폴드하므로 floor 를 올리기만 한다.
+            legal_floor_bid_rate=inputs.legal_floor_bid_rate,
+            estimation_amount=inputs.estimation_amount,
+            reference_date=inputs.reference_date,
         )
         return CandidatePredictionContext(
             budget=budget,

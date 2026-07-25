@@ -992,6 +992,77 @@ def test_candidate_item_uses_injected_prediction_port(test_db):
     assert item["predictor_name"] == "fake"
 
 
+def test_candidate_prediction_feeds_published_award_floor(test_db):
+    """REGRESSION: the backtest predict path now feeds the notice's OWN published
+    낙찰하한율 (award_floor_rate, #201) into the predictor — the floor the LIVE path
+    enforces was previously dropped here, so accuracy was measured on a different
+    (floor-less) input than the pipeline that places bids. era-correct: award_floor_rate
+    is published at announcement, not future information."""
+    target = _project(
+        title="Floor wiring tender",
+        category="construction",
+        budget=100_000_000,
+        deadline=_dt(2025, 3, 10),
+        created_at=_dt(2025, 2, 1),
+    )
+    target.description = "floor wiring description"
+    target.requirements = "floor wiring requirements"
+    target.award_floor_rate = 0.88  # published as a fraction
+    test_db.add(target)
+    test_db.flush()
+
+    port = CapturingPredictionPort()
+    PaperBiddingBacktestService(price_prediction_port=port)._build_candidate_item(
+        test_db,
+        project=target,
+        tender_result=None,
+        data_cutoff_at=_dt(2025, 3, 9),
+        scenario="base",
+        strategy_version="floor-test",
+        cutoff_hours_before_deadline=0,
+        history_limit=80,
+        profile=None,
+    )
+
+    assert port.calls
+    # The published 하한 reaches the predictor (max()-only fold downstream).
+    assert port.calls[0]["legal_floor_bid_rate"] == pytest.approx(0.88)
+    # The unified text assembler carries title + description + requirements.
+    description = port.calls[0]["description"]
+    assert "Floor wiring tender" in description
+    assert "floor wiring requirements" in description
+
+
+def test_candidate_prediction_no_award_floor_passes_none(test_db):
+    """A notice with no published 하한 passes legal_floor_bid_rate=None, so the
+    configured category floor is preserved downstream (no spurious clamp)."""
+    target = _project(
+        title="No floor tender",
+        category="construction",
+        budget=100_000_000,
+        deadline=_dt(2025, 3, 10),
+        created_at=_dt(2025, 2, 1),
+    )
+    test_db.add(target)
+    test_db.flush()
+
+    port = CapturingPredictionPort()
+    PaperBiddingBacktestService(price_prediction_port=port)._build_candidate_item(
+        test_db,
+        project=target,
+        tender_result=None,
+        data_cutoff_at=_dt(2025, 3, 9),
+        scenario="base",
+        strategy_version="floor-test",
+        cutoff_hours_before_deadline=0,
+        history_limit=80,
+        profile=None,
+    )
+
+    assert port.calls
+    assert port.calls[0]["legal_floor_bid_rate"] is None
+
+
 def test_candidate_prediction_ignores_target_own_reserve_prices(test_db):
     """REGRESSION (leakage): the prediction/candidate path must NOT read the
     target project's own settled reserve_prices / 예정가격.

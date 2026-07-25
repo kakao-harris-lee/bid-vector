@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from app.models.models import HistoricalData, Project, TenderResult
 from app.services.base_amount_basis import (
@@ -12,6 +15,7 @@ from app.services.base_amount_basis import (
     BASIS_SUSPECT_FRACTIONAL,
     classify_base_basis,
 )
+from app.services.prediction_dataset import PredictionDatasetService
 
 # Load the script module by path (scripts/ is not an importable package).
 _SPEC = importlib.util.spec_from_file_location(
@@ -204,3 +208,159 @@ def test_partition_include_contaminated_folds_all_in():
     # contaminated high-error rows drag the mean up and stay out of the threshold
     assert summary["recommended"]["mean_absolute_amount_error_pct"] > 0.001
     assert summary["recommended"]["within_counts"]["0.3%"] == 1
+
+
+def test_resolve_pricing_base_delegates_to_shared_primitive_null_basis():
+    """The basis rule is now single-sourced via get_reliable_base. In the holdout,
+    ``basis`` always comes from classify_base_basis (never None), so delegation is
+    value-identical; pin that an unknown/NULL basis with an estimate still returns the
+    STORED base (matching get_reliable_base's BASE_FALLBACK, not a spurious estimate swap)."""
+    project = Project(budget_estimate=25_000_000.0)
+    historical = HistoricalData(base_amount=43_996_200.0, base_amount_estimated=50_000_000.0)
+    # basis=None is NOT one of the concrete verdicts classify_base_basis emits, but the
+    # shared primitive must keep the stored base (only an EXPLICIT non-clean basis swaps).
+    value, source = holdouts.resolve_pricing_base(project, historical, None)  # type: ignore[arg-type]
+    assert value == 43_996_200.0
+    assert source == holdouts.BASE_SOURCE_STORED
+
+
+def test_evaluate_target_feeds_published_floor_and_unified_text(test_db, monkeypatch):
+    """REGRESSION: the holdout predict path now feeds the notice's published 낙찰하한율
+    (award_floor_rate, #201) AND the title+description+requirements text
+    (build_prediction_text) — the same preprocessing the live path uses. Previously it
+    dropped the floor and assembled title+description only (requirements missing, "\\n"
+    join), so accuracy was measured on a different input than the bidding pipeline.
+    era-correct: award_floor_rate is published at announcement, not future info."""
+    project = Project(
+        title="항만 준설공사 2단계(규격·가격 동시)",
+        description="본문 설명",
+        requirements="자격 요건 원문",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        award_floor_rate=0.88,
+        notice_number="HOLD-1",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    test_db.add(project)
+    test_db.flush()
+    historical = HistoricalData(
+        project_id=project.id,
+        category="construction",
+        base_amount=100_000_000.0,  # clean integer → measured on the stored base
+        bid_rate=0.9,
+        notice_number="HOLD-1",
+    )
+    test_db.add(historical)
+    test_db.flush()
+    result = TenderResult(
+        project_id=project.id,
+        winning_amount=90_000_000.0,
+        winning_rate=0.9,
+    )
+    test_db.add(result)
+    test_db.flush()
+
+    event_at = datetime(2026, 2, 1, tzinfo=UTC)
+    target = holdouts.HoldoutTarget(
+        group="construction",
+        group_source="business_type_code",
+        result=result,
+        project=project,
+        historical=historical,
+        event_at=event_at,
+        available_at=event_at,
+    )
+
+    captured: dict = {}
+
+    def _fake_predict(**kwargs):
+        captured.update(kwargs)
+        return {
+            "predicted_price": 88_000_000.0,
+            "predicted_bid_rate": 0.88,
+            "bid_rate_candidates": [],
+            "procurement_rate_band": None,
+        }
+
+    monkeypatch.setattr(holdouts, "predict_price", _fake_predict)
+
+    holdouts.evaluate_target(
+        test_db,
+        service=PredictionDatasetService(),
+        target=target,
+        history_limit=10,
+        thresholds=(0.003,),
+    )
+
+    # The published 하한 now reaches the predictor (max()-only fold downstream).
+    assert captured["legal_floor_bid_rate"] == pytest.approx(0.88)
+    # The unified assembler carries title + description + requirements (was missing
+    # requirements before), matching the live/backtest/smoke predictor input.
+    description = captured["description"]
+    assert "항만 준설공사 2단계(규격·가격 동시)" in description
+    assert "자격 요건 원문" in description
+
+
+def test_evaluate_target_no_award_floor_passes_none(test_db, monkeypatch):
+    """A holdout target whose notice has no published 하한 passes
+    legal_floor_bid_rate=None, so the configured floor is preserved (no spurious clamp)."""
+    project = Project(
+        title="하한 없는 공고",
+        description="본문",
+        requirements="요건",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        award_floor_rate=None,
+        notice_number="HOLD-2",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    test_db.add(project)
+    test_db.flush()
+    historical = HistoricalData(
+        project_id=project.id,
+        category="construction",
+        base_amount=100_000_000.0,
+        bid_rate=0.9,
+        notice_number="HOLD-2",
+    )
+    test_db.add(historical)
+    test_db.flush()
+    result = TenderResult(
+        project_id=project.id, winning_amount=90_000_000.0, winning_rate=0.9
+    )
+    test_db.add(result)
+    test_db.flush()
+
+    event_at = datetime(2026, 2, 1, tzinfo=UTC)
+    target = holdouts.HoldoutTarget(
+        group="construction",
+        group_source="business_type_code",
+        result=result,
+        project=project,
+        historical=historical,
+        event_at=event_at,
+        available_at=event_at,
+    )
+
+    captured: dict = {}
+
+    def _fake_predict(**kwargs):
+        captured.update(kwargs)
+        return {
+            "predicted_price": 88_000_000.0,
+            "predicted_bid_rate": 0.88,
+            "bid_rate_candidates": [],
+            "procurement_rate_band": None,
+        }
+
+    monkeypatch.setattr(holdouts, "predict_price", _fake_predict)
+
+    holdouts.evaluate_target(
+        test_db,
+        service=PredictionDatasetService(),
+        target=target,
+        history_limit=10,
+        thresholds=(0.003,),
+    )
+
+    assert captured["legal_floor_bid_rate"] is None

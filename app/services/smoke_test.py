@@ -539,10 +539,7 @@ class KonepsTelegramSmokeTestService:
             from app.ai.business_group import resolve_business_group
             from app.models.models import Project
             from app.services.backtest_cutoff import BacktestCutoffService
-            from app.services.bid_base import (
-                build_prediction_text,
-                resolve_notice_legal_floor_inputs,
-            )
+            from app.services.bid_base import prepare_prediction_inputs
 
             project = db.query(Project).filter(Project.id == project_info["id"]).one()
             if not project.budget_estimate or project.budget_estimate <= 0:
@@ -550,9 +547,12 @@ class KonepsTelegramSmokeTestService:
                 result.data["project_id"] = int(project.id)
                 result.skip_reason = "no usable budget"
                 return self._finalize_phase(result)
-            # Shared predictor-input assembler (title+description+requirements) —
-            # byte-identical to the previous inline join; unified across predict paths.
-            desc = build_prediction_text(project)
+            # 예측 전처리를 production live 경로와 동일한 단일 조합 헬퍼로 해석한다:
+            # 기초금액 base(이전엔 추정가격 budget_estimate 를 직접 넘겨 과세 공고에서
+            # 라이브와 다른 base 로 검증했다), title 포함 text, 공고 published 낙찰하한
+            # (era-correct — 공고 시점 공개), 공사 tier 입력(구간·시행일 인지, 소급 없음).
+            # tier/floor 는 [0.7, 1.0] 안이라 아래 rate 범위 검증을 깨지 않는다.
+            inputs = prepare_prediction_inputs(db, project)
             bg = resolve_business_group(project.business_type_code)
             cs = self._backtest_cutoff_service or BacktestCutoffService()
             cutoff = cs.resolve_data_cutoff_at(project, tender_result=None, hours_before_deadline=0)
@@ -562,24 +562,18 @@ class KonepsTelegramSmokeTestService:
                 cutoff_at=cutoff, exclude_project_id=int(project.id),
                 limit=80, explicit_bid_rate_only=True,
             )
-            # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 스모크가
-            # 실 공고에 대해 production live 경로와 동일한 era-correct guardrail 을
-            # 태우도록 공고 자신의 날짜를 넘긴다(소급 없음). tier floor 는 [0.7, 1.0]
-            # 안이라 아래 rate 범위 검증을 깨지 않는다.
-            estimation_amount, reference_date = resolve_notice_legal_floor_inputs(
-                project
-            )
             pred = self.price_prediction_port.predict_price(
-                budget=float(project.budget_estimate),
+                budget=inputs.bid_base,
                 category=project.category or "other",
-                description=desc,
+                description=inputs.text,
                 historical_records=history,
                 agency_name=project.issuing_agency or project.demand_agency,
                 feedback_calibration=None,
                 business_type_code=project.business_type_code,
                 business_group=bg,
-                estimation_amount=estimation_amount,
-                reference_date=reference_date,
+                legal_floor_bid_rate=inputs.legal_floor_bid_rate,
+                estimation_amount=inputs.estimation_amount,
+                reference_date=inputs.reference_date,
             )
             rate = float(pred.get("predicted_bid_rate") or 0)
             result.data["predicted_bid_rate"] = rate
