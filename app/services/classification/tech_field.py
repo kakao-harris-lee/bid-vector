@@ -41,6 +41,11 @@ from app.core.single_user import split_multi_value_text
 from app.models.models import CompanyProfile, Project
 from app.services.classification import config
 from app.services.classification.assessment import RuleAssessment
+from app.services.classification.group_or import (
+    GroupOrVerdict,
+    UnconstrainedGroupPolicy,
+    evaluate_group_or,
+)
 from app.services.eligibility_labeling import match_tech_field_terms
 from app.services.license_eligibility import parse_license_limit_groups
 
@@ -85,7 +90,9 @@ def _format_groups(groups: list[frozenset[str]]) -> str:
 def assess_tech_field(project: Project, profile: CompanyProfile) -> RuleAssessment:
     """공고가 명시한 기술부문 요건을 프로필 보유 현황과 대조한다(그룹 인지, ``assess_association`` 미러).
 
-    면허 게이트와 동일한 lmtGrpNo 그룹 의미론(그룹 간 OR·그룹 내 AND)을 따른다.
+    면허 게이트와 **동일한 그룹-OR 커널**(:func:`app.services.classification.group_or.
+    evaluate_group_or`, DEFER 정책)로 lmtGrpNo 그룹 의미론(그룹 간 OR·그룹 내 AND)을
+    평가한다. 판정 fold 를 게이트와 공유해 두 축이 어긋나지 않도록 한다(#254 회귀).
 
     - 기술부문 요구 그룹 없음(대다수 공고) → 중립 PASS, score
       ``TECH_FIELD_NEUTRAL_SCORE`` (=0.0). penalty·blocking 을 만들지 않는다.
@@ -98,21 +105,20 @@ def assess_tech_field(project: Project, profile: CompanyProfile) -> RuleAssessme
     단일 그룹 공고는 "그룹 내 AND"가 기존 평면 AND 와 같아 동작이 완전 불변이다.
     """
     groups = _tech_fields_by_group(project.eligibility_raw)
-    constrained = [group for group in groups if group]
-
-    if not constrained:
-        return RuleAssessment(
-            score=config.TECH_FIELD_NEUTRAL_SCORE,
-            passed=True,
-            reasons=[
-                "공고에 기술부문 요건이 명시되지 않아 기술부문 조건은 중립 처리했습니다."
-            ],
-        )
-
     held = _held_tech_fields(profile)
-    satisfied = [group for group in constrained if group <= held]
-    if satisfied:
-        matched = sorted({term for group in satisfied for term in group})
+    outcome = evaluate_group_or(
+        groups, held, unconstrained_policy=UnconstrainedGroupPolicy.DEFER
+    )
+
+    if outcome.verdict is GroupOrVerdict.SATISFIED:
+        matched = sorted(
+            {
+                term
+                for group, is_satisfied in zip(groups, outcome.satisfied)
+                if is_satisfied
+                for term in group
+            }
+        )
         return RuleAssessment(
             score=config.TECH_FIELD_MATCH_SCORE,
             passed=True,
@@ -121,9 +127,25 @@ def assess_tech_field(project: Project, profile: CompanyProfile) -> RuleAssessme
             ],
         )
 
-    # 기술부문을 요구하지 않는 그룹(무제약 = 다른 자격 경로)이 하나라도 있으면, 그
-    # 경로가 성립할 수 있으므로 과차단하지 않고 중립으로 defer 한다.
-    if len(constrained) < len(groups):
+    if outcome.verdict is GroupOrVerdict.UNSATISFIED:
+        constrained = [
+            group
+            for group, is_constrained in zip(groups, outcome.constrained)
+            if is_constrained
+        ]
+        return RuleAssessment(
+            score=0.0,
+            passed=False,
+            penalty=config.TECH_FIELD_MISMATCH_PENALTY,
+            reasons=[
+                "공고가 요구하는 기술부문을 어느 그룹으로도 충족하지 못했습니다"
+                f"(그룹별 요구, 하나만 전부 보유하면 됨: {_format_groups(constrained)})."
+            ],
+        )
+
+    if outcome.verdict is GroupOrVerdict.DEFER:
+        # 기술부문을 요구하지 않는 그룹(무제약 = 다른 자격 경로)이 하나라도 있으면, 그
+        # 경로가 성립할 수 있으므로 과차단하지 않고 중립으로 defer 한다.
         return RuleAssessment(
             score=config.TECH_FIELD_NEUTRAL_SCORE,
             passed=True,
@@ -133,12 +155,11 @@ def assess_tech_field(project: Project, profile: CompanyProfile) -> RuleAssessme
             ],
         )
 
+    # GroupOrVerdict.NO_CONSTRAINT — 제약 그룹이 하나도 없다(기술부문 요건 없음).
     return RuleAssessment(
-        score=0.0,
-        passed=False,
-        penalty=config.TECH_FIELD_MISMATCH_PENALTY,
+        score=config.TECH_FIELD_NEUTRAL_SCORE,
+        passed=True,
         reasons=[
-            "공고가 요구하는 기술부문을 어느 그룹으로도 충족하지 못했습니다"
-            f"(그룹별 요구, 하나만 전부 보유하면 됨: {_format_groups(constrained)})."
+            "공고에 기술부문 요건이 명시되지 않아 기술부문 조건은 중립 처리했습니다."
         ],
     )
