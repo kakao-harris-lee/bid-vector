@@ -365,6 +365,35 @@ def test_build_agency_axis_report_worst_case_ranking_marks_residual():
     assert worst[1]["agency_display"] == "울주군"
 
 
+def test_build_agency_axis_report_tie_break_is_ascending_key():
+    """동점일 때 tie-break 는 주석대로 키 오름차순이다(reverse 로 뒤집히지 않는다)."""
+    rows = [
+        _agency_row("b", "B기관", 0.10),
+        _agency_row("b", "B기관", 0.10),
+        _agency_row("a", "A기관", 0.10),
+        _agency_row("a", "A기관", 0.10),
+    ]
+    report = build_agency_axis_report(
+        rows, aggregate_fn=_fake_aggregate, min_samples=2, worst_limit=5
+    )
+    assert [item["agency"] for item in report["worst_agencies"]] == ["a", "b"]
+
+
+def test_build_agency_axis_report_missing_metric_sorts_last():
+    """지표를 못 낸 버킷은 오차가 아무리 큰 버킷보다도 뒤로 간다."""
+    rows = [
+        {"agency_group": "a", "agency_display": "A기관", "err": 0.50},
+        {"agency_group": "a", "agency_display": "A기관", "err": 0.50},
+        # err 키가 없어 _fake_aggregate 가 None 을 낸다.
+        {"agency_group": "z", "agency_display": "Z기관"},
+        {"agency_group": "z", "agency_display": "Z기관"},
+    ]
+    report = build_agency_axis_report(
+        rows, aggregate_fn=_fake_aggregate, min_samples=2, worst_limit=5
+    )
+    assert [item["agency"] for item in report["worst_agencies"]] == ["a", "z"]
+
+
 def test_build_agency_axis_report_handles_empty_rows():
     report = build_agency_axis_report([], aggregate_fn=_fake_aggregate)
     assert report["by_agency"] == {}
@@ -401,15 +430,65 @@ def test_build_quality_flag_report_counts_and_partition():
     assert partition["all"]["recommended"]["mean_absolute_amount_error_pct"] > 0.09
 
 
+def test_quality_flag_report_surfaces_contamination_from_evaluated_scope():
+    """집계 스코프가 clean-only 라도 basis 오염 건수가 리포트에서 보여야 한다.
+
+    회귀 가드: 오염 플래그를 집계 스코프에서만 세면 구조적으로 항상 0이 되어
+    "오염 0건"으로 오독된다(#199 기준 실제 오염 비율은 ~66%).
+    """
+    clean_row = {"data_quality_flags": [], "basis": BASIS_CLEAN, "err": 0.001}
+    contaminated = [
+        {
+            "data_quality_flags": [FLAG_BASE_BASIS_CONTAMINATED],
+            "basis": BASIS_DERIVED_YEGA,
+            "err": 0.30,
+        },
+        {
+            "data_quality_flags": [FLAG_BASE_BASIS_CONTAMINATED],
+            "basis": BASIS_DERIVED_YEGA,
+            "err": 0.40,
+        },
+    ]
+    report = build_quality_flag_report(
+        [clean_row],  # 집계 스코프 = clean 선필터 결과
+        aggregate_fn=_fake_aggregate,
+        evaluated_rows=[clean_row, *contaminated],
+    )
+
+    # 집계 스코프에서는 오염이 0 (설계대로 — 오차 지표를 오염 표본이 흔들지 않는다).
+    assert report["flag_counts"].get(FLAG_BASE_BASIS_CONTAMINATED, 0) == 0
+    # 전체 평가 행 기준으로는 실제 오염 건수가 드러난다.
+    assert report["evaluated_flag_counts"][FLAG_BASE_BASIS_CONTAMINATED] == 2
+
+    scope = report["scope"]
+    assert scope["aggregated_count"] == 1
+    assert scope["evaluated_count"] == 3
+    assert scope["excluded_from_aggregation"] == 2
+    # 오차 지표 자체는 여전히 clean 스코프 기준이다.
+    assert report["partition"]["all"]["target_count"] == 1
+
+
+def test_quality_flag_report_defaults_evaluated_scope_to_rows():
+    rows = [{"data_quality_flags": [], "err": 0.001}]
+    report = build_quality_flag_report(rows, aggregate_fn=_fake_aggregate)
+    assert report["scope"]["excluded_from_aggregation"] == 0
+    assert report["evaluated_flag_counts"] == report["flag_counts"]
+
+
 # ── 스크립트 배선(순수 헬퍼) ─────────────────────────────────────────────────
-def _target(issuing: str | None = None, demand: str | None = None, group: str = "service"):
+def _target(
+    issuing: str | None = None,
+    demand: str | None = None,
+    group: str = "service",
+    stored_agency_name: str | None = None,
+):
     moment = datetime(2026, 7, 1, tzinfo=UTC)
     return holdouts.build_target(
         group=group,
         group_source="test",
         result=TenderResult(),
         project=Project(issuing_agency=issuing, demand_agency=demand),
-        historical=HistoricalData(),
+        historical=HistoricalData(agency_name=stored_agency_name),
         event_at=moment,
         available_at=moment,
     )
@@ -434,13 +513,61 @@ def test_drop_agency_history_removes_only_the_target_agency():
         {"agency_name": "(주)해림종합건설", "bid_rate": 0.89},
         {"agency_name": None, "bid_rate": 0.90},
     ]
-    kept = holdouts.drop_agency_history(history, "울산광역시울주군")
+    kept = holdouts.drop_agency_history(history, {"울산광역시울주군"})
     assert [point["bid_rate"] for point in kept] == [0.89, 0.90]
 
 
 def test_drop_agency_history_noop_without_agency_key():
     history = [{"agency_name": "울산광역시 울주군"}]
-    assert holdouts.drop_agency_history(history, "") == history
+    assert holdouts.drop_agency_history(history, set()) == history
+    assert holdouts.drop_agency_history(history, {""}) == history
+
+
+def test_agency_match_keys_cover_issuing_demand_and_stored_name():
+    """발주≠수요 공고는 세 이름이 모두 제외 키에 들어간다."""
+    target = _target(
+        issuing="조달청",
+        demand="울산광역시 울주군",
+        stored_agency_name="울주군 건설과",
+    )
+    assert target.agency_group == "조달청"  # 분할 키는 발주기관 우선(불변)
+    assert target.agency_match_keys == {"조달청", "울산광역시울주군", "울주군건설과"}
+
+
+def test_exclude_agency_history_catches_demand_agency_stored_rows():
+    """회귀 가드(누수): 타깃의 과거 낙찰이 수요기관명으로 적재돼 있어도 제외된다.
+
+    `HistoricalData.agency_name` 은 수집 시 `opening_demand_agency or demand_agency
+    or issuing_agency` 순으로 적재되는데(persistence), 분할 키는 발주기관 우선이다.
+    발주≠수요 공고에서 단일 키로 필터하면 같은 기관 이력이 다른 이름으로 통과해
+    "unseen agency" 수치가 낙관적으로 오염된다.
+    """
+    target = _target(issuing="조달청", demand="울산광역시 울주군")
+    history = [
+        # 타깃 기관의 과거 낙찰이 수요기관명으로 적재된 행 — 반드시 제외돼야 한다.
+        {"agency_name": "울산광역시 울주군", "bid_rate": 0.88},
+        # 발주기관명으로 적재된 행도 제외.
+        {"agency_name": "조달청", "bid_rate": 0.885},
+        # 무관한 기관은 유지.
+        {"agency_name": "부산항만공사", "bid_rate": 0.89},
+    ]
+    kept = holdouts.drop_agency_history(history, target.agency_match_keys)
+    assert [point["agency_name"] for point in kept] == ["부산항만공사"]
+
+    # 분할 키(발주기관) 하나만 썼다면 수요기관명 행이 살아남았을 것이다 — 누수 재현.
+    leaky = holdouts.drop_agency_history(history, {target.agency_group})
+    assert "울산광역시 울주군" in [point["agency_name"] for point in leaky]
+
+
+def test_exclude_agency_history_catches_opening_demand_agency_stored_rows():
+    """opening 수요기관으로 적재된 타깃 자신의 이름도 제외 키에 포함된다."""
+    target = _target(
+        issuing="조달청",
+        demand="울산광역시 울주군",
+        stored_agency_name="울주군 상하수도사업소",
+    )
+    history = [{"agency_name": "울주군 상하수도사업소", "bid_rate": 0.88}]
+    assert holdouts.drop_agency_history(history, target.agency_match_keys) == []
 
 
 def test_default_output_path_is_fixed_for_agency_axis():

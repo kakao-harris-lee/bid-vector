@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
+from collections.abc import Collection
 from typing import Any, Callable
 
 from sqlalchemy.orm import joinedload
@@ -25,6 +26,7 @@ from app.ai.holdout_grouping import (
     DEFAULT_MIN_AGENCY_SAMPLES,
     normalize_agency_key,
     resolve_agency_group,
+    resolve_agency_match_keys,
 )
 from app.ai.holdout_quality import assess_row_quality
 from app.ai.holdout_reporting import (
@@ -82,6 +84,9 @@ class HoldoutTarget:
     # 명시적 미상 버킷으로 모인다(:func:`build_target` 은 항상 실제 값을 채운다).
     agency_group: str = AGENCY_UNKNOWN_KEY
     agency_display: str = AGENCY_UNKNOWN_KEY
+    # 이력 제외(--exclude-agency-history)용 동일-기관 키 집합. 분할 키 하나가 아니라
+    # 집합인 이유는 ``resolve_agency_match_keys`` docstring 참조(적재 규칙 비대칭).
+    agency_match_keys: frozenset[str] = frozenset()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -435,7 +440,12 @@ def build_target(
     event_at: datetime,
     available_at: datetime,
 ) -> HoldoutTarget:
-    """Assemble a target, deriving the agency axis from the notice's agencies."""
+    """Assemble a target, deriving the agency axis from the notice's agencies.
+
+    분할 키(``agency_group``)는 발주기관 우선 단일 값이지만, 이력 제외 키는 발주·수요에
+    더해 이 공고의 ``historical.agency_name`` 까지 묶은 **집합**이다 — 이력 행의
+    ``agency_name`` 은 수요기관 우선으로 적재돼 분할 키와 갈릴 수 있기 때문이다.
+    """
     agency = resolve_agency_group(project.issuing_agency, project.demand_agency)
     return HoldoutTarget(
         group=group,
@@ -447,6 +457,11 @@ def build_target(
         available_at=available_at,
         agency_group=agency.key,
         agency_display=agency.display,
+        agency_match_keys=resolve_agency_match_keys(
+            project.issuing_agency,
+            project.demand_agency,
+            getattr(historical, "agency_name", None),
+        ),
     )
 
 
@@ -711,7 +726,7 @@ def evaluate_target(
         and point.get("project_id") != historical.project_id
     ]
     if exclude_agency_history:
-        filtered_history = drop_agency_history(filtered_history, target.agency_group)
+        filtered_history = drop_agency_history(filtered_history, target.agency_match_keys)
     # Predictor input = title+description+requirements via the shared assembler, the
     # SAME text the live path feeds. The prior self-assembly dropped requirements and
     # joined with "\n"; unifying it removes the holdout-vs-live input asymmetry.
@@ -913,23 +928,41 @@ def bind_aggregate(thresholds: tuple[float, ...]) -> Callable[[list[dict[str, An
 
 
 def drop_agency_history(
-    history: list[dict[str, Any]], agency_key: str
+    history: list[dict[str, Any]], agency_keys: Collection[str]
 ) -> list[dict[str, Any]]:
     """Remove the target agency's own rows from the prediction history (group holdout).
 
     Turns the time-based holdout into a true 기관 group holdout: the predictor never
-    sees ANY past award from the same 발주기관, so the measured error reflects
-    generalization to an unseen agency rather than agency-level memorization
-    (로드맵 11번 고카디널리티 과적합 방지). Rows whose agency is unknown are kept —
-    they cannot be proven to belong to the target agency, and dropping them would
-    silently shrink the training window.
+    sees a past award attributed to ANY of the target notice's agency names, so the
+    measured error reflects generalization to an unseen agency rather than
+    agency-level memorization (로드맵 11번 고카디널리티 과적합 방지).
+
+    WHY A KEY SET, NOT ONE KEY
+    --------------------------
+    History rows are filtered on ``HistoricalData.agency_name``, which collection
+    persists as ``opening_demand_agency or demand_agency or issuing_agency``
+    (``app/services/koneps/persistence.py``) — 수요기관 우선. The report's split key
+    is 발주기관 우선. For a 발주≠수요 notice (조달청 경유 등) those disagree, so a
+    single-key compare would let the target agency's own past awards through under
+    the other name — silent leakage that makes "unseen agency" numbers optimistic.
+    :func:`resolve_agency_match_keys` therefore builds the set from the notice's
+    발주·수요 agencies AND its own stored ``agency_name``.
+
+    RESIDUAL LIMIT (honest scope): a history row stored under an ``opening_demand_agency``
+    that matches NONE of the target's three names still slips through. Closing that
+    would require the history series to carry the row's own issuing/demand agencies,
+    which lives in the shared live-path serializer — out of scope here.
+
+    Rows whose agency is unknown are kept — they cannot be proven to belong to the
+    target agency, and dropping them would silently shrink the training window.
     """
-    if not agency_key:
+    keys = {key for key in agency_keys if key}
+    if not keys:
         return list(history)
     return [
         point
         for point in history
-        if normalize_agency_key(point.get("agency_name")) != agency_key
+        if normalize_agency_key(point.get("agency_name")) not in keys
     ]
 
 
@@ -1079,11 +1112,16 @@ def main() -> int:
         min_samples=args.min_agency_samples,
         worst_limit=args.worst_limit,
     )
+    # 오차 지표는 clean-only 집계 스코프를 유지하되, 건수는 전체 평가 행도 함께
+    # 넘겨 basis 오염이 "0건"으로 오독되지 않게 한다(집계 스코프는 clean 선필터라
+    # base_basis_contaminated 가 구조적으로 항상 0).
     quality_report = build_quality_flag_report(
-        aggregation_rows, aggregate_fn=aggregate_fn
+        aggregation_rows, aggregate_fn=aggregate_fn, evaluated_rows=rows
     )
     summary["agency_axis"] = agency_axis["summary"]
     summary["quality_flag_counts"] = quality_report["flag_counts"]
+    summary["evaluated_quality_flag_counts"] = quality_report["evaluated_flag_counts"]
+    summary["quality_flag_scope"] = quality_report["scope"]
     # 플래그 제외 전/후 오차 비교(로드맵 12번 clean/flag 분리 리포트). 겹치지 않는
     # 3분할이라 all == flag_free + flagged 로 검산 가능하다.
     summary["quality_flag_partition"] = quality_report["partition"]
@@ -1119,6 +1157,12 @@ def main() -> int:
             "below_legal_floor / amount_rate_mismatch are only evaluated when the source "
             "reported a winning_rate — the amount-derived rate is 기초금액-basis and would "
             "false-positive against the 예정가-basis legal floor.",
+            "summary.quality_flag_counts is scoped to the (clean-only) aggregation set, so "
+            "base_basis_contaminated is 0 there by construction; read "
+            "summary.evaluated_quality_flag_counts for all evaluated targets.",
+            "--exclude-agency-history drops history rows matching ANY of the target's "
+            "발주/수요/stored agency names, because HistoricalData.agency_name is persisted "
+            "수요기관-first while the report's split key is 발주기관-first.",
         ],
         "summary": summary,
         "breakdowns": {

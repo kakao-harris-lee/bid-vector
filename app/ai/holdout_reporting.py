@@ -30,8 +30,9 @@ AGENCY_KEY_FIELD = "agency_group"
 AGENCY_DISPLAY_FIELD = "agency_display"
 QUALITY_FLAGS_FIELD = "data_quality_flags"
 
-# worst-case 정렬에서 지표가 없는 버킷을 맨 뒤로 보내는 sentinel.
-_MISSING_ERROR_SORT_KEY = -1.0
+# worst-case 정렬에서 지표가 없는 버킷을 맨 뒤로 보내는 sentinel. 정렬 키는 오차를
+# 부호 반전해 쓰므로(-inf → +inf) 실제 오차값이 아무리 커도 이 버킷보다 앞선다.
+_MISSING_ERROR_SORT_KEY = float("-inf")
 
 
 def _order_buckets(
@@ -80,14 +81,15 @@ def build_agency_axis_report(
     by_agency = {key: aggregate_fn(bucket_rows) for key, bucket_rows in ordered.items()}
 
     scored = [(key, summary, _recommended_error(summary)) for key, summary in by_agency.items()]
-    # 오차 내림차순, 지표 없는 버킷은 sentinel 로 맨 뒤. 동점은 키 오름차순으로 고정.
+    # 오차 내림차순(worst 우선), 지표 없는 버킷은 sentinel 로 맨 뒤, 동점은 키 오름차순.
+    # 오차만 부호를 뒤집어 오름차순 정렬한다 — ``reverse=True`` 를 쓰면 튜플 전체가
+    # 뒤집혀 tie-break 까지 내림차순이 되므로 쓰지 않는다.
     ranked = sorted(
         scored,
         key=lambda item: (
-            item[2] if item[2] is not None else _MISSING_ERROR_SORT_KEY,
+            -(item[2] if item[2] is not None else _MISSING_ERROR_SORT_KEY),
             item[0],
         ),
-        reverse=True,
     )
     worst_agencies = [
         {
@@ -116,15 +118,10 @@ def build_agency_axis_report(
     }
 
 
-def build_quality_flag_report(
-    rows: Sequence[dict[str, Any]], *, aggregate_fn: AggregateFn
-) -> dict[str, Any]:
-    """품질 플래그별 집계 + 플래그 제외 전/후 오차 비교 섹션을 만든다.
-
-    ``by_flag`` 는 한 행이 여러 플래그를 가지면 각 플래그 버킷에 중복 계상된다
-    (플래그별 "이 문제를 가진 표본의 성적"을 보는 뷰). 겹치지 않는 분할이 필요한
-    비교는 ``partition`` 쪽(all / flag_free / flagged)을 쓴다.
-    """
+def _flag_buckets(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """(플래그별 버킷, 플래그 있는 행, 플래그 없는 행)."""
     buckets: dict[str, list[dict[str, Any]]] = {}
     flagged: list[dict[str, Any]] = []
     flag_free: list[dict[str, Any]] = []
@@ -137,10 +134,52 @@ def build_quality_flag_report(
             flags = [CLEAN_FLAG_LABEL]
         for flag in flags:
             buckets.setdefault(flag, []).append(row)
+    return buckets, flagged, flag_free
+
+
+def build_quality_flag_report(
+    rows: Sequence[dict[str, Any]],
+    *,
+    aggregate_fn: AggregateFn,
+    evaluated_rows: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """품질 플래그별 집계 + 플래그 제외 전/후 오차 비교 섹션을 만든다.
+
+    Args:
+        rows: **집계 스코프** 행. 호출부는 basis-clean 으로 선필터한 행을 넘긴다
+            (오차 지표가 오염 표본에 흔들리지 않게 하는 기존 설계).
+        evaluated_rows: 선필터 **전** 전체 평가 행. 생략하면 ``rows`` 와 같다고 본다.
+
+    왜 두 스코프를 다 받는가 — 집계 스코프는 clean-only 라서 거기서 센
+    ``base_basis_contaminated`` 는 **구조적으로 항상 0**이다. 그 숫자만 리포트에
+    실으면 "오염 0건"으로 오독되지만 실제 저장 데이터의 오염 비율은 ~66%다(#199).
+    그래서 오차 지표는 설계대로 집계 스코프를 유지하되, 건수는 전체 평가 행 기준
+    ``evaluated_flag_counts`` 를 함께 싣고 ``scope`` 에 제외 건수를 명시한다.
+
+    ``by_flag`` 는 한 행이 여러 플래그를 가지면 각 플래그 버킷에 중복 계상된다
+    (플래그별 "이 문제를 가진 표본의 성적"을 보는 뷰). 겹치지 않는 분할이 필요한
+    비교는 ``partition`` 쪽(all / flag_free / flagged)을 쓴다.
+    """
+    evaluated = list(rows) if evaluated_rows is None else list(evaluated_rows)
+    buckets, flagged, flag_free = _flag_buckets(rows)
+    evaluated_buckets, _, _ = _flag_buckets(evaluated)
 
     ordered = _order_buckets(buckets)
     return {
+        "scope": {
+            "aggregated_count": len(rows),
+            "evaluated_count": len(evaluated),
+            "excluded_from_aggregation": len(evaluated) - len(rows),
+            "note": (
+                "flag_counts/by_flag/partition are computed on the AGGREGATION scope "
+                "(clean-only by default), so base_basis_contaminated is 0 there by "
+                "construction. See evaluated_flag_counts for all evaluated targets."
+            ),
+        },
         "flag_counts": {key: len(bucket) for key, bucket in ordered.items()},
+        "evaluated_flag_counts": {
+            key: len(bucket) for key, bucket in _order_buckets(evaluated_buckets).items()
+        },
         "by_flag": {key: aggregate_fn(bucket) for key, bucket in ordered.items()},
         "partition": {
             "all": aggregate_fn(list(rows)),

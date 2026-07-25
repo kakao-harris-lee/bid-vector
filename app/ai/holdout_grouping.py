@@ -92,6 +92,25 @@ def resolve_agency_group(
     return AgencyGroup(key=AGENCY_UNKNOWN_KEY, display=AGENCY_UNKNOWN_KEY)
 
 
+def resolve_agency_match_keys(*values: Any) -> frozenset[str]:
+    """기관 동일성 판정용 정규화 키 **집합**(빈 값 제외).
+
+    왜 단일 키가 아니라 집합인가 — ``HistoricalData.agency_name`` 은 수집 시점에
+    ``opening_demand_agency or demand_agency or issuing_agency`` 순서로 **하나만**
+    적재된다(``app/services/koneps/persistence.py``). 반면 그룹 분할 키
+    (:func:`resolve_agency_group`)는 발주기관 우선이다. 발주≠수요 공고(조달청 경유
+    등 흔함)에서는 그 둘이 갈리므로, 단일 키로 과거 이력을 필터하면 같은 기관의
+    낙찰이 다른 이름으로 저장돼 필터를 통과한다 = 누수.
+
+    그래서 타깃의 발주기관·수요기관에 더해 타깃 자신의 ``agency_name``(그 공고에
+    실제 적재된 값 = opening 수요기관까지 반영된 값)을 모두 키로 만들어 집합으로
+    비교한다.
+    """
+    return frozenset(
+        key for key in (normalize_agency_key(value) for value in values) if key
+    )
+
+
 @dataclass(frozen=True)
 class AgencyBucketing:
     """소표본 합산 결과 + 합산 규모(리포트 투명성용)."""

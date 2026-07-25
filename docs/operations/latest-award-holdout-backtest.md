@@ -79,6 +79,17 @@ feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략
 **진짜 group holdout**이 된다. 시간 축 홀드아웃만으로는 잡히지 않는 기관 단위 암기를
 측정하는 용도이며, 기본값은 꺼짐(기존 측정과 비교 가능성 유지)이다.
 
+제외 판정은 **키 하나가 아니라 집합**으로 한다. `HistoricalData.agency_name`은 수집 시
+`opening_demand_agency or demand_agency or issuing_agency` 순으로 적재되는데(수요기관 우선)
+리포트 분할 키는 발주기관 우선이라 발주≠수요 공고(조달청 경유 등)에서 둘이 갈린다. 단일
+키로 필터하면 타깃 기관의 과거 낙찰이 다른 이름으로 저장돼 필터를 통과 = 누수이므로,
+타깃의 발주기관·수요기관·그리고 그 공고 자신의 `agency_name`을 모두 키로 묶어 비교한다.
+
+남는 한계(정직 표기): 어떤 히스토리 행이 타깃의 세 이름 중 **어느 것과도 다른**
+`opening_demand_agency`로 저장돼 있으면 여전히 통과한다. 이를 막으려면 히스토리 시리즈가
+각 행의 발주/수요 기관을 함께 실어야 하는데 그 직렬화는 라이브 예측 경로와 공유라 이
+스코프에서 건드리지 않았다.
+
 ```bash
 .venv/bin/python scripts/backtest_latest_award_holdouts.py \
   --group-by agency --exclude-agency-history \
@@ -154,8 +165,18 @@ feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략
 
 clean/flag 분리 비교는 `summary.quality_flag_partition`을 본다. `all` / `flag_free` /
 `flagged` 3분할이라 `flag_free + flagged == all`로 검산할 수 있고, 플래그 표본을 뺐을 때
-오차가 얼마나 내려가는지 한 블록에서 확인된다. 플래그별 건수는
-`summary.quality_flag_counts`에 있다.
+오차가 얼마나 내려가는지 한 블록에서 확인된다.
+
+**건수는 두 스코프를 구분해서 읽는다.**
+
+| 키 | 스코프 | 주의 |
+|----|--------|------|
+| `summary.quality_flag_counts` | 집계 스코프(기본 clean-only) | 여기서 `base_basis_contaminated`는 **구조적으로 항상 0**이다. 오염이 없다는 뜻이 아니라 오염 행이 이미 집계에서 빠졌다는 뜻이다 |
+| `summary.evaluated_quality_flag_counts` | 평가된 전체 타깃 | 실제 basis 오염 건수는 여기서 본다(#199 기준 저장 데이터 오염 비율 ~66%) |
+| `summary.quality_flag_scope` | 두 스코프의 건수와 제외 건수 | `excluded_from_aggregation`으로 차이를 검산한다 |
+
+오차 지표(`by_flag`, `partition`)는 설계대로 집계 스코프 기준을 유지한다 — 오염 표본이
+오차 평균을 흔들지 않게 하려는 기존 규칙이다.
 
 ## 2026-07-02 기준선
 
