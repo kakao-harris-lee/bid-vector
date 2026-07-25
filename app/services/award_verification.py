@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.time import kst_now
+from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import HistoricalData, Project, TenderResult
 
 # Verdict codes (also asserted by tests).
@@ -159,7 +160,7 @@ def _rate_to_fraction(value: Any) -> float | None:
     numeric = _coerce_float(value)
     if numeric is None or numeric <= 0:
         return None
-    return numeric / 100.0 if numeric > 1.5 else numeric
+    return to_bid_rate_fraction(numeric)
 
 
 def _find_project(db: Session, base_notice: str) -> Project | None:

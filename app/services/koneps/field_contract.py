@@ -7,9 +7,10 @@
 순수 검증기(§4.7)만 유지한다. IO/DB 없음 — 응답 item dict를 받아 계약 위반 목록을 돌려준다.
 
 이 모듈은 mypy strict 아일랜드다(과설계 금지: 전역 Money 래퍼가 아니라, 버그가 실제로
-났던 좁은 도메인만). 무거운 의존을 끌지 않도록 ``app.domain.money.Basis``(순수 strict
-아일랜드)만 재사용하고, 값 정규화는 얇은 로컬 순수 함수로 둔다(``parsing`` 모듈의 mutable
-표면과 결합하지 않는다 — 정규화 계약은 아래 ``_as_fraction`` 주석에 명시).
+났던 좁은 도메인만). 무거운 의존을 끌지 않도록 순수 strict 아일랜드만 재사용한다:
+``app.domain.money.Basis`` + ``app.domain.rate_normalization.to_bid_rate_fraction``
+(percent↔fraction 스케일 규칙 단일 출처). ``parsing`` 모듈의 mutable 표면에는 결합하지
+않는다 — 값 coercion은 얇은 로컬 순수 함수(``_as_fraction``)로 유지하고 스케일 판별만 위임한다.
 
 온-디맨드 실배치 검증(실 KONEPS 응답 N건으로 assert)은
 ``scripts/verify_koneps_field_contract.py`` 가 이 순수 검증기를 소비한다.
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from app.domain.money import Basis
+from app.domain.rate_normalization import to_bid_rate_fraction
 
 
 class OperationFamily(str, Enum):
@@ -303,9 +305,9 @@ KNOWN_FIELDS: frozenset[str] = frozenset(
 def _as_fraction(value: object) -> float | None:
     """율 값을 분수로 정규화한다(백분율이면 /100). 파싱 불가면 None.
 
-    ``parsing.normalize_bid_rate_value`` 의 계약을 의도적으로 미러한다(백분율>1.5 -> /100,
-    6자리 반올림, 0 이하 -> None). 그 mutable 모듈에 결합하지 않고 이 strict 아일랜드를
-    자립시키기 위해 얇게 재선언한다.
+    스케일 판별(백분율>1.5 -> /100)은 ``app.domain.rate_normalization`` 단일 출처에
+    위임하고, 이 strict 아일랜드는 입력 coercion(bool 거부·콤마·`%` strip·0 이하 -> None·
+    6자리 반올림)만 담당한다. ``parsing`` mutable 표면에는 결합하지 않는다.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -323,9 +325,7 @@ def _as_fraction(value: object) -> float | None:
         return None
     if numeric <= 0:
         return None
-    if numeric > 1.5:
-        numeric = numeric / 100.0
-    return round(numeric, 6)
+    return round(to_bid_rate_fraction(numeric), 6)
 
 
 def _as_amount(value: object) -> float | None:

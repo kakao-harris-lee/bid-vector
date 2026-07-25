@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.time import ensure_utc
+from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import Project
 
 
@@ -172,9 +173,7 @@ def normalize_bid_rate_value(value: Any) -> float | None:
                 return None
     if numeric <= 0:
         return None
-    if numeric > 1.5:
-        numeric = numeric / 100.0
-    return round(float(numeric), 6)
+    return round(float(to_bid_rate_fraction(numeric)), 6)
 
 
 def coerce_int_value(value: Any) -> int | None:
