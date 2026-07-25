@@ -83,12 +83,18 @@ class FieldContract:
 
 @dataclass(frozen=True)
 class ContractViolation:
-    """순수 검증기가 반환하는 단일 위반. IO 없음 — 값만 담는다."""
+    """순수 검증기가 반환하는 단일 위반. IO 없음 — 값만 담는다.
+
+    ``resolved_key`` 는 base-basis 트랩처럼 "어느 raw 키에서 해석됐는가"가 위반의 성격을
+    가르는 경우에만 채워지는 구조적 메타데이터다(그 외 None). 소비자가 detail 문자열을
+    파싱하지 않고 known-benign 여부(``is_known_benign``)를 데이터로 분류하게 한다.
+    """
 
     field: str
     kind: ViolationKind
     severity: Severity
     detail: str
+    resolved_key: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +164,36 @@ _KEY_BASIS: dict[str, Basis] = {
     "asignBdgtAmt": Basis.BUDGET_ESTIMATE,
     "bdgtAmt": Basis.BUDGET_ESTIMATE,
 }
+
+
+# ---------------------------------------------------------------------------
+# 알려진 양성(known-benign) 위반 시그니처 (선언 데이터 — 코드 분기 금지, §4.5.3)
+# ---------------------------------------------------------------------------
+# 계약 의미론은 **불변**이다: asignBdgtAmt(배정예산액)는 여전히 BUDGET_ESTIMATE basis 이고
+# validate_base_basis 는 기초금액 키 부재 시 여전히 BASE_BASIS_YEGA_ONLY WARN 을 낸다.
+# 다만 대다수 service 공고는 기초금액 키(bssAmt*) 없이 배정예산(asignBdgtAmt)만 싣고,
+# 이 배정예산은 실무상 기초금액에 근사해 현 실투찰이 정상 작동함이 확인됐다(#228). 그래서
+# 이 WARN 은 매 수집 배치마다 전 service 공고에서 발화해 요약을 도배한다. 라이브 관찰기가
+# 이 시그니처를 **별도 버킷(benign_suppressed)** 으로 분리하도록 데이터로만 표시한다 —
+# 재분류가 아니라 요약 집계의 노이즈 억제다. presmptPrce/presmptAmt(예정가) 에서 해석된
+# 진짜 #220 오염은 이 집합에 없으므로 계속 실 위반으로 표면화된다.
+KNOWN_BENIGN_SIGNATURES: frozenset[tuple[ViolationKind, str]] = frozenset(
+    {
+        (ViolationKind.BASE_BASIS_YEGA_ONLY, "asignBdgtAmt"),
+    }
+)
+
+
+def is_known_benign(violation: ContractViolation) -> bool:
+    """위반이 선언된 known-benign 시그니처(``(kind, resolved_key)``)에 해당하는지 판정한다.
+
+    순수 — ``resolved_key`` 가 채워진 위반(base-basis 트랩)만 대상이고, 그 외에는 항상
+    False 다. 요약 억제는 데이터(``KNOWN_BENIGN_SIGNATURES``)로만 결정되며 계약 의미는
+    바꾸지 않는다.
+    """
+    if violation.resolved_key is None:
+        return False
+    return (violation.kind, violation.resolved_key) in KNOWN_BENIGN_SIGNATURES
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +515,7 @@ def validate_base_basis(
                     f"기초금액 키({', '.join(_TRUE_BASE_KEYS)}) 가 있는데도 예정가/예산이 "
                     f"우선 선택됨(#220 base==예정가 오염 precedence)."
                 ),
+                resolved_key=resolved_key,
             )
         ]
     return [
@@ -490,6 +527,7 @@ def validate_base_basis(
                 f"base_amount 가 {resolved_key}({basis_label}) 에서 해석됨 — 기초금액 키 "
                 f"부재로 base 가 예정가/예산 값이 됨. 소비 시 예정가 오염 인지 필요(#220)."
             ),
+            resolved_key=resolved_key,
         )
     ]
 
