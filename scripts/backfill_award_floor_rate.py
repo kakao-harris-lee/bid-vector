@@ -76,6 +76,7 @@ if str(REPO_ROOT) not in sys.path:
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
+from app.core.constants import OPEN_PROJECT_STATUS  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.single_user import get_operator_strategy  # noqa: E402
 from app.core.time import kst_now, utc_now  # noqa: E402
@@ -445,7 +446,7 @@ def _target_query(
     query = (
         db.query(*columns)
         .filter(Project.eligibility_raw.is_(None))
-        .filter(Project.status == "open")
+        .filter(Project.status == OPEN_PROJECT_STATUS)
         .filter(Project.deadline >= cutoff)
         .order_by(Project.deadline.asc(), Project.id.asc())
     )

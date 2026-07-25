@@ -18,6 +18,7 @@ from app.models.models import (
     PaperBidSettlement,
     TenderResult,
 )
+from app.services.query_predicates import settled_any_signal
 from app.utils.sequence_coercion import (
     coerce_integer_list,
     coerce_numeric_list,
@@ -583,7 +584,7 @@ class PredictionDatasetService:
             and_(
                 TenderResult.project_id == HistoricalData.project_id,
                 TenderResult.project_id.isnot(None),
-                or_(TenderResult.winning_rate > 0, TenderResult.winning_amount > 0),
+                settled_any_signal(),
             )
         )
         return or_(HistoricalData.bid_rate > 0, usable_result_exists)

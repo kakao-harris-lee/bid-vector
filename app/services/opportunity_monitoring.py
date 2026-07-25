@@ -12,6 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.constants import ACTIVE_PROJECT_STATUSES as _ACTIVE_PROJECT_STATUSES
 from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.core.single_user import (
@@ -58,7 +59,10 @@ class StrategyCandidateEvaluation:
 class StrategyMonitoringService:
     """Evaluate open procurement notices against the operator's watch strategy."""
 
-    ACTIVE_PROJECT_STATUSES = ("open", "re_notice")
+    # Sourced from the single constant in app/core/constants.py; kept as a class
+    # attribute so the existing self.ACTIVE_PROJECT_STATUSES reference (and any
+    # external one) stays intact. Value is unchanged: {"open", "re_notice"}.
+    ACTIVE_PROJECT_STATUSES = _ACTIVE_PROJECT_STATUSES
     DEFAULT_LIMIT = 10
     DEFAULT_MAX_ACTIVE_BIDS = 3
     DEFAULT_SAME_CATEGORY_ONLY = True

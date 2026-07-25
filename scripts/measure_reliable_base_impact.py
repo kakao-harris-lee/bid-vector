@@ -30,12 +30,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from sqlalchemy import func
 
+from app.core.constants import OPEN_PROJECT_STATUS as _OPEN_STATUS
 from app.core.database import SessionLocal
 from app.core.time import kst_now
 from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
 from app.models.models import HistoricalData, Project
 
-_OPEN_STATUS = "open"
+# _OPEN_STATUS 는 app/core/constants.py 의 OPEN_PROJECT_STATUS 단일 출처를 소비한다
+# ("open" only, re_notice 제외).
 
 
 def _latest_positive_base_rows(db):

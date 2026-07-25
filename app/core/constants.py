@@ -23,3 +23,35 @@ from __future__ import annotations
 # as {"planned", "running"} used in app/services/decision_experiments.py — do
 # not merge the two; "running" is not a bid-decision status.
 ACTIVE_DECISION_STATUSES: frozenset[str] = frozenset({"planned", "reviewing"})
+
+# The base *open* Project status ONLY. This is deliberately NARROWER than
+# ACTIVE_PROJECT_STATUSES below — it EXCLUDES "re_notice".
+#
+# Several read-only reporting / backtest scripts scan only freshly-open notices
+# with ``Project.status == OPEN_PROJECT_STATUS``:
+#   - scripts/report_license_eligibility.py
+#   - scripts/report_license_gate_impact.py
+#   - scripts/report_no_candidate_cause.py
+#   - scripts/report_eligibility_segment_backtest.py
+#   - scripts/measure_reliable_base_impact.py   (Python-level bucketing)
+#   - scripts/backfill_award_floor_rate.py
+#
+# Kept SEPARATE from the wider set on purpose: the scripts and the services
+# filter on DIFFERENT row sets. This is the single source for the singular
+# literal; it does NOT unify the two scopes (see ACTIVE_PROJECT_STATUSES note).
+OPEN_PROJECT_STATUS: str = "open"
+
+# Project statuses that represent a currently *open / biddable* procurement
+# notice: the base open notice PLUS a re-noticed one.
+#
+# This set is shared by:
+#   - app/services/query_predicates.open_projects()
+#     (consumed by backtest_data_audit.py + paper_bidding_backtest.py)
+#   - app/services/opportunity_monitoring.StrategyMonitoringService
+#     (ACTIVE_PROJECT_STATUSES class attribute)
+#
+# NOTE: This is WIDER than OPEN_PROJECT_STATUS above (it adds "re_notice") and is
+# a different concept from ACTIVE_DECISION_STATUSES (which tracks the
+# bid-decision lifecycle, not the procurement-notice status). Do not conflate the
+# three.
+ACTIVE_PROJECT_STATUSES: frozenset[str] = frozenset({"open", "re_notice"})
