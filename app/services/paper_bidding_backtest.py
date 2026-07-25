@@ -25,6 +25,7 @@ from app.core.single_user import (
     split_multi_value_text,
 )
 from app.core.time import ensure_utc, utc_now
+from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import (
     CompanyProfile,
     HistoricalData,
@@ -1851,10 +1852,9 @@ class PaperBiddingBacktestService:
         return ensure_operator_profile_for(db, operator)
 
     def _normalize_rate(self, value: float) -> float:
-        rate = float(value or 0.0)
-        if rate > 2.0:
-            rate = rate / 100.0
-        return rate
+        # 스케일 판별을 단일 출처(app.domain.rate_normalization)로 통일한다. 종전 이곳만
+        # 임계치가 2.0이라 (1.5, 2.0] 밴드의 율을 다른 6개 구현과 다르게 해석했다.
+        return to_bid_rate_fraction(float(value or 0.0))
 
     def _average(self, values: list[float]) -> float | None:
         if not values:
