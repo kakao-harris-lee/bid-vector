@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, kst_now, to_kst, utc_now
+from app.domain.aggregates import average
 from app.models.models import (
     Analytics,
     BidDecisionRecord,
@@ -1854,9 +1855,7 @@ class DecisionAnalyticsService:
 
     def _average(self, values: list[float]) -> float | None:
         """Return a rounded average for summary metrics."""
-        if not values:
-            return None
-        return round(sum(values) / len(values), 4)
+        return average(values, digits=4)
 
     def _rate(self, numerator: int, denominator: int) -> float | None:
         """Return a safe rounded ratio for funnel conversion metrics."""

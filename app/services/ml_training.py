@@ -17,6 +17,7 @@ from app.ai.predictors.historical import HistoricalStatisticalPredictor
 from app.ai.predictors.lstm import build_lstm_prediction_payload, infer_lstm_sequence_signal, load_lstm_artifact
 from app.core.config import settings
 from app.core.time import utc_now
+from app.domain.aggregates import average
 from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
 from app.services.prediction_dataset import PredictionDatasetService
 
@@ -1121,9 +1122,7 @@ class PricePredictionTrainingService:
 
     def _average(self, values: list[float]) -> float | None:
         """Return a rounded average while preserving empty sets."""
-        if not values:
-            return None
-        return round(sum(values) / len(values), 6)
+        return average(values, digits=6)
 
     def _safe_ratio(self, numerator: int | float, denominator: int | float) -> float:
         """Return a zero-safe ratio."""

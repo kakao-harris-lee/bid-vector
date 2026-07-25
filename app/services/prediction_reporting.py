@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
+from app.domain.aggregates import average, error_rate
 from app.models.models import PricePrediction, TenderResult, User
 from app.services.query_predicates import settled_with_amount
 
@@ -170,7 +171,10 @@ class PredictionReportingService:
         tender_result = tender_results_by_project.get(int(prediction.project_id))
         if tender_result is None or float(tender_result.winning_amount or 0.0) <= 0:
             return None
-        return abs(float(prediction.predicted_price or 0.0) - float(tender_result.winning_amount)) / float(tender_result.winning_amount)
+        return error_rate(
+            float(prediction.predicted_price or 0.0),
+            float(tender_result.winning_amount),
+        )
 
     def _empty_predictor_group(self, *, predictor_name: str, predictor_family: str) -> dict[str, Any]:
         """Return accumulator state for one predictor."""
@@ -316,9 +320,7 @@ class PredictionReportingService:
 
     def _average(self, values: list[float]) -> float | None:
         """Return a rounded average while preserving empty sets."""
-        if not values:
-            return None
-        return round(sum(float(value) for value in values) / len(values), 4)
+        return average(values, digits=4)
 
     def _rate(self, numerator: int, denominator: int) -> float:
         """Return a stable ratio rounded for dashboard display."""

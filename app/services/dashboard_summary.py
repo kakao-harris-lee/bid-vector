@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.constants import ACTIVE_DECISION_STATUSES
 from app.core.time import ensure_utc
+from app.domain.aggregates import error_rate
 from app.models.models import (
     Bid,
     BidDecisionRecord,
@@ -115,9 +116,7 @@ def _compute_delta(
 def _compute_error_rate(
     candidate_amount: float | None, winning_amount: float
 ) -> float | None:
-    if candidate_amount is None or winning_amount <= 0:
-        return None
-    return abs(candidate_amount - winning_amount) / winning_amount
+    return error_rate(candidate_amount, winning_amount)
 
 
 # ---------------------------------------------------------------------------
