@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
+from app.services.base_amount_basis import BASIS_CLEAN, BASIS_DERIVED_YEGA
 from app.services.prediction_dataset import PredictionDatasetService
 
 
@@ -265,3 +266,126 @@ def test_training_dataset_business_group_prefers_project_business_type_code(test
     assert point["business_group"] == "construction"
     assert point["business_group_source"] == "business_type_code"
     assert point["business_type_code"] == "0411"
+
+
+def test_dataset_base_amount_preserves_clean_and_unclassified_rows(test_db):
+    """clean·basis 미분류(NULL) 행은 emitted base_amount가 raw 그대로여야 한다(회귀 0).
+
+    basis-aware 접근(get_reliable_base, #225)이 학습·데이터셋 조립에 배선돼도, clean
+    태그와 미분류(NULL) 태그 행은 저장된 base_amount를 바이트 동일하게 낸다. clean 행은
+    ``base_amount_estimated`` 가 존재해도 이를 무시하고 base_amount를 신뢰한다.
+    """
+    now = utc_now()
+    project = Project(
+        title="Basis clean/unclassified",
+        description="-",
+        requirements="-",
+        budget_estimate=100_000_000.0,
+        category="service",
+    )
+    test_db.add(project)
+    test_db.flush()
+    test_db.add_all(
+        [
+            HistoricalData(
+                project_id=project.id,
+                notice_number="CLEAN-ROW",
+                agency_name="조달청",
+                category="service",
+                base_amount=100_000_000.0,
+                base_amount_basis=BASIS_CLEAN,
+                # clean 행이면 복구 추정치가 있어도 base_amount를 신뢰 → 무시돼야 한다.
+                base_amount_estimated=90_000_000.0,
+                predicted_price=90_000_000.0,
+                bid_rate=0.9,
+                opened_at=now - timedelta(days=2),
+            ),
+            HistoricalData(
+                project_id=project.id,
+                notice_number="UNCLASSIFIED-ROW",
+                agency_name="조달청",
+                category="service",
+                base_amount=120_000_000.0,
+                base_amount_basis=None,
+                base_amount_estimated=None,
+                predicted_price=110_000_000.0,
+                bid_rate=0.91,
+                opened_at=now - timedelta(days=1),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    dataset = PredictionDatasetService().build_training_dataset(
+        test_db,
+        category="service",
+        limit=10,
+        explicit_bid_rate_only=True,
+    )
+
+    by_notice = {point["notice_number"]: point for point in dataset["series"]}
+    assert by_notice["CLEAN-ROW"]["base_amount"] == 100_000_000.0
+    assert by_notice["UNCLASSIFIED-ROW"]["base_amount"] == 120_000_000.0
+
+
+def test_dataset_base_amount_recovers_reliable_base_for_derived_yega_row(test_db):
+    """non-clean(derived-yega) 행은 emitted base_amount·파생 bid_rate가 복구 추정치를 쓴다.
+
+    #199 오염(``win ÷ winning_rate`` 역산 = 예정가-basis)이 태깅된 행은 저장된
+    base_amount(예정가)가 아니라 복수예비가격 midpoint 복구 추정치
+    (``base_amount_estimated``)를 학습 base로 써야 한다. winning_rate가 없어 파생 rate가
+    winning_amount ÷ base로 계산되는 경로도 복구 base를 분모로 삼는지 함께 고정한다.
+    """
+    now = utc_now()
+    project = Project(
+        title="Basis derived-yega recovery",
+        description="-",
+        requirements="-",
+        budget_estimate=100_000_000.0,
+        category="service",
+    )
+    test_db.add(project)
+    test_db.flush()
+    test_db.add_all(
+        [
+            HistoricalData(
+                project_id=project.id,
+                notice_number="POLLUTED-ROW",
+                agency_name="조달청",
+                category="service",
+                # 예정가-basis 오염값(신뢰 불가) — 절대 학습 base로 쓰이면 안 된다.
+                base_amount=100_000_000.0,
+                base_amount_basis=BASIS_DERIVED_YEGA,
+                # 복수예비가격 midpoint로 복구한 실제 기초금액.
+                base_amount_estimated=88_000_000.0,
+                predicted_price=0.0,
+                bid_rate=0.0,
+                opened_at=now - timedelta(days=1),
+            ),
+            TenderResult(
+                project_id=project.id,
+                winning_company="낙찰사",
+                winning_amount=80_000_000.0,
+                # winning_rate 미상 → winning_amount ÷ base 파생 경로 강제.
+                winning_rate=0.0,
+                result_status="낙찰",
+                announced_at=now - timedelta(hours=12),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    dataset = PredictionDatasetService().build_training_dataset(
+        test_db,
+        category="service",
+        limit=10,
+    )
+
+    assert dataset["summary"]["sample_count"] == 1
+    point = dataset["series"][0]
+    assert point["notice_number"] == "POLLUTED-ROW"
+    # emitted base = 복구 추정치(88M), 오염 예정가(100M)가 아니다.
+    assert point["base_amount"] == 88_000_000.0
+    # 파생 bid_rate 분모도 복구 base(80M ÷ 88M), 오염 base(80M ÷ 100M=0.8)가 아니다.
+    assert point["bid_rate_source"] == "tender_result_winning_amount"
+    assert point["bid_rate"] == round(80_000_000.0 / 88_000_000.0, 6)
