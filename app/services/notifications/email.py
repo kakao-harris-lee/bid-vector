@@ -26,6 +26,7 @@ import html
 import json
 import logging
 import smtplib
+import ssl
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -299,7 +300,7 @@ class EmailNotificationService:
         project_id: Optional[int],
         record_id: Optional[int],
     ) -> EmailDeliveryResult:
-        """SMTP(STARTTLS) 라이브 송신 — 설정으로만 켜지는 향후 opt-in(베스트에포트)."""
+        """SMTP 라이브 송신(STARTTLS 587 / 암시적 SSL 465) — 설정으로만 켜지는 향후 opt-in(베스트에포트)."""
         if not settings.SMTP_HOST or not settings.SMTP_FROM:
             logger.warning(
                 "투찰 보고서 메일 라이브 송신 미구성 (record %s) — SMTP_HOST/SMTP_FROM 필요",
@@ -318,16 +319,27 @@ class EmailNotificationService:
             )
         try:
             message = self._build_mime(rendered, recipient=recipient)
-            with smtplib.SMTP(
-                settings.SMTP_HOST,
-                settings.SMTP_PORT,
-                timeout=settings.EMAIL_SEND_TIMEOUT_SECONDS,
-            ) as client:
-                if settings.SMTP_USE_TLS:
-                    client.starttls()
-                if settings.SMTP_USERNAME:
-                    client.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-                client.send_message(message)
+            # 서버 인증서·호스트명 검증(보안 기본값) — 검증을 끄지 않는다.
+            context = ssl.create_default_context()
+            if settings.SMTP_USE_SSL:
+                # 암시적 SSL(465) — 첫 바이트부터 TLS. starttls() 를 호출하지 않는다.
+                with smtplib.SMTP_SSL(
+                    settings.SMTP_HOST,
+                    settings.SMTP_PORT,
+                    timeout=settings.EMAIL_SEND_TIMEOUT_SECONDS,
+                    context=context,
+                ) as client:
+                    self._authenticate_and_send(client, message)
+            else:
+                # STARTTLS(587) 또는 평문 — 평문 연결 후 조건부 TLS 승격.
+                with smtplib.SMTP(
+                    settings.SMTP_HOST,
+                    settings.SMTP_PORT,
+                    timeout=settings.EMAIL_SEND_TIMEOUT_SECONDS,
+                ) as client:
+                    if settings.SMTP_USE_TLS:
+                        client.starttls(context=context)
+                    self._authenticate_and_send(client, message)
         except Exception as exc:  # 베스트에포트: 송신 실패가 흐름을 막지 않는다.
             logger.warning(
                 "투찰 보고서 메일 라이브 송신 실패 (record %s, recipient %s): %s",
@@ -363,6 +375,17 @@ class EmailNotificationService:
             project_id=project_id,
             decision_record_id=record_id,
         )
+
+    @staticmethod
+    def _authenticate_and_send(client: smtplib.SMTP, message: EmailMessage) -> None:
+        """인증(사용자명 설정 시) 후 메시지를 송신한다 — SSL/STARTTLS 공통 경로.
+
+        ``smtplib.SMTP_SSL`` 은 ``smtplib.SMTP`` 의 서브클래스라 두 분기가 이 헬퍼를
+        공유한다(login+send_message 중복 제거).
+        """
+        if settings.SMTP_USERNAME:
+            client.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+        client.send_message(message)
 
     def _build_mime(self, rendered: RenderedEmail, *, recipient: str) -> EmailMessage:
         """RenderedEmail 을 MIME 메시지로 조립한다(라이브 송신 경로 전용)."""

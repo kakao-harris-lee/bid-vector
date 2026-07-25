@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
@@ -27,6 +28,7 @@ from app.services.notifications.email import (
     STATUS_DRY_RUN,
     STATUS_FAILED,
     STATUS_NO_RECIPIENT,
+    STATUS_SENT,
     EmailNotificationService,
 )
 
@@ -292,6 +294,136 @@ def test_send_bid_report_best_effort_on_render_failure(monkeypatch):
     assert result.delivery_status == STATUS_FAILED
     assert result.sent is False
     assert result.masked_recipient == "c***@gmail.com"  # 실패해도 마스킹 유지
+
+
+# --- live send: implicit SSL (465) vs STARTTLS (587) --------------------------
+
+
+def _arm_live_settings(monkeypatch, *, use_ssl: bool, use_tls: bool, port: int) -> None:
+    """라이브 송신 경로를 열도록 settings 를 무장한다(운영 환경 + 게이트 ON).
+
+    conftest 의 ``ENVIRONMENT=test`` 를 production 으로 바꾸고 전달 게이트를 켜야
+    ``_should_send_live`` 가 True 가 되어 ``_deliver_live`` 에 도달한다. monkeypatch 라
+    테스트 종료 시 모든 값이 자동 복원된다(전역 오염 없음).
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "EMAIL_DELIVERY_ENABLED", True)
+    monkeypatch.setattr(settings, "EMAIL_DRY_RUN", False)
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.gmail.com")
+    monkeypatch.setattr(settings, "SMTP_PORT", port)
+    monkeypatch.setattr(settings, "SMTP_FROM", "sender@example.com")
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "sender@example.com")
+    monkeypatch.setattr(settings, "SMTP_PASSWORD", "app-password")
+    monkeypatch.setattr(settings, "SMTP_USE_SSL", use_ssl)
+    monkeypatch.setattr(settings, "SMTP_USE_TLS", use_tls)
+    monkeypatch.setattr(settings, "EMAIL_SEND_TIMEOUT_SECONDS", 15)
+
+
+def _cm_client(name: str):
+    """with-문(컨텍스트 매니저)을 지원하는 SMTP 클라이언트 목."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock(name=name)
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+    return client
+
+
+def test_deliver_live_ssl_mode_uses_smtp_ssl_no_starttls(monkeypatch):
+    """465 암시적 SSL: smtplib.SMTP_SSL(host, 465, timeout, context=SSLContext) 사용.
+
+    구현 SSL(465)에서는 첫 바이트부터 TLS 라 starttls() 를 호출하면 안 되고, 평문
+    smtplib.SMTP 를 열어도 안 된다. 인증(login)+송신(send_message)은 수행한다.
+    """
+    from unittest.mock import MagicMock
+
+    import app.services.notifications.email as email_module
+
+    _arm_live_settings(monkeypatch, use_ssl=True, use_tls=True, port=465)
+
+    client = _cm_client("ssl_client")
+    ssl_ctor = MagicMock(name="SMTP_SSL", return_value=client)
+    plain_ctor = MagicMock(name="SMTP")
+    monkeypatch.setattr(email_module.smtplib, "SMTP_SSL", ssl_ctor)
+    monkeypatch.setattr(email_module.smtplib, "SMTP", plain_ctor)
+
+    service = EmailNotificationService()
+    result = service.send_bid_report(
+        summary=_sample_summary(),
+        draft=_sample_draft(),
+        recipient="chihunlee@gmail.com",
+    )
+
+    # SMTP_SSL 이 host/port 465/timeout/context(ssl.SSLContext) 로 1회 호출.
+    ssl_ctor.assert_called_once()
+    args, kwargs = ssl_ctor.call_args
+    assert args[0] == "smtp.gmail.com"
+    assert args[1] == 465
+    assert kwargs["timeout"] == 15
+    assert isinstance(kwargs["context"], ssl.SSLContext)
+
+    # 평문 SMTP 미사용 + starttls 미호출(암시적 SSL 이라 STARTTLS 금지).
+    plain_ctor.assert_not_called()
+    client.starttls.assert_not_called()
+
+    # 인증 + 송신 수행.
+    client.login.assert_called_once_with("sender@example.com", "app-password")
+    client.send_message.assert_called_once()
+
+    # 결과: 라이브 송신 성공.
+    assert result.sent is True
+    assert result.dry_run is False
+    assert result.delivery_status == STATUS_SENT
+    assert result.masked_recipient == "c***@gmail.com"
+
+
+def test_deliver_live_starttls_mode_uses_smtp_and_starttls(monkeypatch):
+    """587 STARTTLS 회귀: smtplib.SMTP(host, 587, timeout) + starttls(context) 후 송신.
+
+    SSL 이 아닌 경로에서는 평문 SMTP 를 열고 SMTP_USE_TLS 일 때 starttls 로 승격한다.
+    SMTP_SSL 은 호출되지 않는다.
+    """
+    from unittest.mock import MagicMock
+
+    import app.services.notifications.email as email_module
+
+    _arm_live_settings(monkeypatch, use_ssl=False, use_tls=True, port=587)
+
+    client = _cm_client("starttls_client")
+    plain_ctor = MagicMock(name="SMTP", return_value=client)
+    ssl_ctor = MagicMock(name="SMTP_SSL")
+    monkeypatch.setattr(email_module.smtplib, "SMTP", plain_ctor)
+    monkeypatch.setattr(email_module.smtplib, "SMTP_SSL", ssl_ctor)
+
+    service = EmailNotificationService()
+    result = service.send_bid_report(
+        summary=_sample_summary(),
+        draft=_sample_draft(),
+        recipient="chihunlee@gmail.com",
+    )
+
+    # 평문 SMTP 가 host/port 587/timeout 로 1회 호출, SMTP_SSL 미사용.
+    plain_ctor.assert_called_once()
+    args, kwargs = plain_ctor.call_args
+    assert args[0] == "smtp.gmail.com"
+    assert args[1] == 587
+    assert kwargs["timeout"] == 15
+    ssl_ctor.assert_not_called()
+
+    # STARTTLS 승격 — context(ssl.SSLContext) 인자로 호출.
+    client.starttls.assert_called_once()
+    starttls_kwargs = client.starttls.call_args.kwargs
+    assert isinstance(starttls_kwargs["context"], ssl.SSLContext)
+
+    # 인증 + 송신 수행.
+    client.login.assert_called_once_with("sender@example.com", "app-password")
+    client.send_message.assert_called_once()
+
+    assert result.sent is True
+    assert result.dry_run is False
+    assert result.delivery_status == STATUS_SENT
 
 
 # --- API endpoint -------------------------------------------------------------
