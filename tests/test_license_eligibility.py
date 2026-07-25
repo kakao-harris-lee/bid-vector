@@ -110,6 +110,28 @@ def test_parse_ignores_malformed_rows():
     assert groups == []
 
 
+def test_required_keys_subset_equals_missing_empty():
+    """required_keys() ⊆ profile_keys 가 group.missing() 이 빈 것과 동치다(커널 projection 계약).
+
+    그룹-OR 커널은 그룹내 AND 를 "합집합 요구 키 ⊆ 보유 키" 부분집합으로 판정한다.
+    이는 요구별 is_held_by 를 모두 AND 한 것(= missing 이 빔)과 같아야 커널 위임이
+    면허 게이트 판정을 바꾸지 않는다(합집합 collapse 안전성 회귀 가드).
+    """
+    groups = parse_license_limit_groups(LIVE_WASTE_LIMITS)
+    profile_keys = profile_license_keys(MARINE_PROFILE)
+    for group in groups:
+        assert (group.required_keys() <= profile_keys) == (
+            not group.missing(profile_keys)
+        )
+
+    # 그룹1(중간처리업)을 실제 보유하면 부분집합 성립 = missing 빔.
+    holds = profile_license_keys("건설폐기물 중간처리업")
+    assert groups[0].required_keys() <= holds
+    assert groups[0].missing(holds) == ()
+    # 미보유면 부분집합 불성립 = missing 존재.
+    assert not (groups[0].required_keys() <= profile_license_keys(""))
+
+
 # --- verdict 값 테이블 --------------------------------------------------------
 
 
