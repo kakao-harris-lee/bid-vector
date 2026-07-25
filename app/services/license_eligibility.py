@@ -76,6 +76,10 @@ import re
 from dataclasses import dataclass
 
 from app.core.single_user import split_multi_value_text
+from app.services.classification.group_or import (
+    UnconstrainedGroupPolicy,
+    evaluate_group_or,
+)
 from app.services.classification.text import extract_license_tokens
 from app.services.eligibility_labeling import LICENSE_LIMITS_KEY
 
@@ -202,6 +206,20 @@ class LicenseGroup:
             if requirement.name not in names:
                 names.append(requirement.name)
         return tuple(names)
+
+    def required_keys(self) -> frozenset[str]:
+        """그룹의 모든 요구 면허 비교 키를 하나로 합친다(그룹 내 AND projection).
+
+        그룹-OR 커널(:func:`app.services.classification.group_or.evaluate_group_or`)에
+        넘길 projection 이다. ``required_keys() <= profile_keys`` 부분집합 판정은
+        요구별 :meth:`LicenseRequirement.is_held_by` 를 모두 AND 한 것(=이 그룹의
+        :meth:`missing` 이 비어 있음)과 **동치**다: 요건 키가 항상 non-empty 이므로
+        합집합 부분집합이 요구별 부분집합의 전칭과 같다.
+        """
+        keys: set[str] = set()
+        for requirement in self.requirements:
+            keys |= requirement.keys
+        return frozenset(keys)
 
 
 @dataclass(frozen=True)
@@ -456,12 +474,21 @@ def assess_license_eligibility(
         # 보유 면허 미기재는 "미보유"가 아니라 데이터 공백이다.
         return _unknown(_NO_PROFILE_EVIDENCE, required_any, unparsable_rows)
 
+    # 그룹-OR / 그룹내-AND fold 는 tech_field 축과 공유하는 커널에 위임한다(#254 재발
+    # 구조 차단). 면허 그룹은 요건 키가 항상 있어 무제약이 될 수 없으므로 SATISFY 정책
+    # 은 실행되지 않지만, 빈 요건을 vacuous 충족으로 보는 현행 동작과 일치하는 라벨이다.
+    outcome = evaluate_group_or(
+        [group.required_keys() for group in groups],
+        profile_keys,
+        unconstrained_policy=UnconstrainedGroupPolicy.SATISFY,
+    )
+
     matched_groups: list[str] = []
     missing_by_group: dict[str, tuple[str, ...]] = {}
     evidence: list[str] = []
-    for group in groups:
-        missing = group.missing(profile_keys)
-        if missing:
+    for group, is_satisfied in zip(groups, outcome.satisfied):
+        if not is_satisfied:
+            missing = group.missing(profile_keys)
             missing_by_group[group.group_no] = missing
             evidence.append(
                 f"그룹 {group.group_no} 미충족 — 요구: {', '.join(group.names())}"
