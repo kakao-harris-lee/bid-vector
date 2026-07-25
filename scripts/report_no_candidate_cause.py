@@ -401,8 +401,8 @@ def _coverage_lines(report: CauseReport) -> list[str]:
         f"{_LOG_PREFIX} 실측 대상/커버리지 (하드코딩 아님):",
         f"    스캔한 open·미마감 공고 {report.scanned} / open·미마감 총 {total}",
         f"    eligibility_raw 커버리지(open·미마감): {with_raw}/{total} = {pct:.1f}%",
-        f"    positive 세그먼트 대상 n={positive_n} (자격 데이터 보유·협회/엔지니어링/"
-        f"기술부문 요건 명시분)",
+        f"    positive 세그먼트 대상 n={positive_n} (스캔분 기준 · 자격 데이터 보유·"
+        f"협회/엔지니어링/기술부문 요건 명시분)",
     ]
 
 

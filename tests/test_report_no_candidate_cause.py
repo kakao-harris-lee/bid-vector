@@ -250,6 +250,37 @@ def test_evaluate_project_maps_injected_signals():
     assert row.blocking_axes == ("license", nc.SEMANTIC_AXIS)
 
 
+class _FakeClassifier:
+    """classify()가 semantic 축을 포함한 blocking_axes를 내는 가짜(실경로 미호출)."""
+
+    def __init__(self, blocking_axes):
+        self._blocking_axes = list(blocking_axes)
+
+    def classify(self, _project, _profile):
+        return {"score_breakdown": {"blocking_axes": list(self._blocking_axes)}}
+
+
+def test_build_blocking_axes_fn_strips_semantic_axis():
+    """실경로 콜러블이 blocking_axes에서 semantic 축을 제거하고, semantic을 통과
+    중립값으로 고정(모델 미로드)하는지 회귀 가드 — fake classifier 주입."""
+    fake = _FakeClassifier(["license", nc.SEMANTIC_AXIS, "budget"])
+    fn = nc._build_blocking_axes_fn(fake, profile=object())
+    # 중립화 대입이 인스턴스 속성으로 설정됨(임베딩 진입점 미호출).
+    assert fake._compute_semantic_similarity("a", "b") == (
+        nc._NEUTRAL_SEMANTIC_SIMILARITY,
+        nc._NEUTRAL_SEMANTIC_SOURCE,
+    )
+    axes = fn(_FakeProject("n", "t", "service"))
+    assert nc.SEMANTIC_AXIS not in axes
+    assert axes == ("license", "budget")
+
+
+def test_build_blocking_axes_fn_empty_when_no_blocking():
+    """blocking 없으면 빈 튜플 — 결정적 매칭(candidate 상한)."""
+    fn = nc._build_blocking_axes_fn(_FakeClassifier([]), profile=object())
+    assert fn(_FakeProject("n", "t", "service")) == ()
+
+
 def test_clip_title_truncates_long_and_keeps_short():
     assert nc._clip_title(None) is None
     assert nc._clip_title("  short  ") == "short"
