@@ -62,8 +62,9 @@ class NotificationFatigueGate:
         limits: NotificationFatigueLimits | None = None,
         now_provider: Callable[[], datetime] = utc_now,
     ) -> None:
-        # ``limits=None`` re-reads settings per evaluation so an operator's
-        # ``.env`` change takes effect on the next alert, not the next deploy.
+        # ``limits=None`` reads the settings singleton per evaluation; a
+        # ``.env`` change still needs ``docker compose up -d`` recreation to
+        # reach the process (settings load once at import).
         self._limits = limits
         self._now_provider = now_provider
 
