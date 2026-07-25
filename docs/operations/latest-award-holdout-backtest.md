@@ -54,6 +54,57 @@ JSON에 저장하고, 표준출력은 요약만 보려면 `--print-target-limit 
   --worst-limit 15
 ```
 
+### 기관(발주처/수요기관) group holdout
+
+`--group-by agency`는 최신 타깃을 업무구분이 아니라 **기관별로** 뽑는다. 고카디널리티
+feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략하면 고정 경로
+`models/reports/latest-award-holdout-agency.json`에 저장되므로 개선 전후를 같은 명령으로
+비교하고 한 파일만 diff 하면 된다.
+
+```bash
+.venv/bin/python scripts/backtest_latest_award_holdouts.py \
+  --group-by agency \
+  --targets-per-group 3 \
+  --min-agency-samples 3 \
+  --candidate-limit 50000 \
+  --history-limit 1000 \
+  --print-target-limit 0
+```
+
+`--min-agency-samples` 미만인 기관은 리포트에서 `_etc` 버킷으로 **합산**된다(침묵 제외가
+아니다 — 합산된 기관 수/표본 수는 `summary.agency_axis`에 남는다). 기관명이 없는 공고는
+`_unknown` 버킷으로 따로 모인다.
+
+`--exclude-agency-history`를 함께 주면 타깃 기관의 과거 낙찰까지 예측 히스토리에서 빼는
+**진짜 group holdout**이 된다. 시간 축 홀드아웃만으로는 잡히지 않는 기관 단위 암기를
+측정하는 용도이며, 기본값은 꺼짐(기존 측정과 비교 가능성 유지)이다.
+
+제외 판정은 **키 하나가 아니라 집합**으로 한다. `HistoricalData.agency_name`은 수집 시
+`opening_demand_agency or demand_agency or issuing_agency` 순으로 적재되는데(수요기관 우선)
+리포트 분할 키는 발주기관 우선이라 발주≠수요 공고(조달청 경유 등)에서 둘이 갈린다. 단일
+키로 필터하면 타깃 기관의 과거 낙찰이 다른 이름으로 저장돼 필터를 통과 = 누수이므로,
+타깃의 발주기관·수요기관·그리고 그 공고 자신의 `agency_name`을 모두 키로 묶어 비교한다.
+
+남는 한계(정직 표기): 어떤 히스토리 행이 타깃의 세 이름 중 **어느 것과도 다른**
+`opening_demand_agency`로 저장돼 있으면 여전히 통과한다. 이를 막으려면 히스토리 시리즈가
+각 행의 발주/수요 기관을 함께 실어야 하는데 그 직렬화는 라이브 예측 경로와 공유라 이
+스코프에서 건드리지 않았다.
+
+```bash
+.venv/bin/python scripts/backtest_latest_award_holdouts.py \
+  --group-by agency --exclude-agency-history \
+  --out models/reports/latest-award-holdout-agency-unseen.json
+```
+
+기관 축 리포트 블록:
+
+| 블록 | 의미 |
+|------|------|
+| `summary.agency_axis` | 최소 표본 수, 서로 다른 기관 수, `_etc`로 합산된 기관/표본 수, `_unknown` 표본 수 |
+| `breakdowns.by_agency` | 기관(버킷)별 요약 |
+| `agency_displays` | 정규화 키 → 사람이 읽는 기관명 |
+| `worst_agency_groups` | 추천 평균 절대오차율이 큰 기관 순. `is_residual`이 `true`면 단일 기관이 아니라 `_etc`/`_unknown` 잔여 버킷이다 |
+
 ## 누수 방지 규칙
 
 - 타깃 공고의 `notice_number`와 `project_id`는 historical input에서 제거한다.
@@ -89,6 +140,43 @@ JSON에 저장하고, 표준출력은 요약만 보려면 `--print-target-limit 
 | `breakdowns.by_procurement_rate_band` | 조달 세그먼트 밴드별 요약 |
 | `breakdowns.by_data_quality_flag` | 금액/율 불일치, 저율 이상치 등 데이터 품질 플래그별 요약 |
 | `worst_recommended_targets` | 추천값 기준 오차가 큰 공고 목록 |
+
+## 분모/법정하한 품질 플래그
+
+오차 지표는 분모가 맞을 때만 의미가 있으므로, 각 타깃에 대해 아래 판정을 함께 남긴다
+(`targets[].data_quality_flags` / `targets[].data_quality_details`).
+
+| 플래그 | 판정 |
+|--------|------|
+| `amount_rate_mismatch` | 보고 낙찰률과 `winning_amount / base_amount`의 **상대** 불일치가 1%를 넘음 |
+| `below_legal_floor` | 보고 낙찰률이 법정 낙찰하한을 5bp 넘게 하회 |
+| `base_basis_contaminated` | `base_amount`가 clean이 아님(예정가 역산/VAT 파생/미상, #199) |
+| `missing_reported_rate` | 소스가 낙찰률을 보고하지 않아 분모 정합/하한 판정 근거가 없음 |
+| `missing_amount_derived_rate` | 금액 역산 낙찰률을 만들 수 없음 |
+| `low_actual_rate` / `construction_low_rate_review` | 가격 백테스트 표본으로 쓰기 어려운 저율 구간 |
+
+법정 하한은 공고 자신이 게시한 `award_floor_rate`를 우선 쓰고, 없으면 era-correct 공사
+적격심사 tier(#197, 공고 기준일로 구/신율 선택 — 소급 없음)로 해석한다. 어떤 값이 쓰였는지는
+`data_quality_details.legal_floor_source`에 남는다.
+
+**하한 판정은 보고 낙찰률이 있을 때만 수행한다.** 법정 하한율은 예정가격 기준인데 금액 역산
+낙찰률은 기초금액 기준(#162)이라 사정률만큼 구조적으로 낮게 나오므로, 역산율로 하한을 재면
+정상 낙찰이 대량 오탐된다.
+
+clean/flag 분리 비교는 `summary.quality_flag_partition`을 본다. `all` / `flag_free` /
+`flagged` 3분할이라 `flag_free + flagged == all`로 검산할 수 있고, 플래그 표본을 뺐을 때
+오차가 얼마나 내려가는지 한 블록에서 확인된다.
+
+**건수는 두 스코프를 구분해서 읽는다.**
+
+| 키 | 스코프 | 주의 |
+|----|--------|------|
+| `summary.quality_flag_counts` | 집계 스코프(기본 clean-only) | 여기서 `base_basis_contaminated`는 **구조적으로 항상 0**이다. 오염이 없다는 뜻이 아니라 오염 행이 이미 집계에서 빠졌다는 뜻이다 |
+| `summary.evaluated_quality_flag_counts` | 평가된 전체 타깃 | 실제 basis 오염 건수는 여기서 본다(#199 기준 저장 데이터 오염 비율 ~66%) |
+| `summary.quality_flag_scope` | 두 스코프의 건수와 제외 건수 | `excluded_from_aggregation`으로 차이를 검산한다 |
+
+오차 지표(`by_flag`, `partition`)는 설계대로 집계 스코프 기준을 유지한다 — 오염 표본이
+오차 평균을 흔들지 않게 하려는 기존 규칙이다.
 
 ## 2026-07-02 기준선
 
