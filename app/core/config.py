@@ -664,7 +664,10 @@ class Settings(BaseSettings):
     # 시크릿 — 절대 로그/응답/텔레메트리에 남기지 않는다.
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = ""
+    # STARTTLS(587) — 평문 연결 후 TLS 승격. 암시적 SSL(465, SMTP_USE_SSL)과 구분.
     SMTP_USE_TLS: bool = True
+    # True → 암시적 SSL(465, smtplib.SMTP_SSL). SMTP_USE_TLS(STARTTLS/587)와 상호배타 — SSL이 우선.
+    SMTP_USE_SSL: bool = False
     EMAIL_SEND_TIMEOUT_SECONDS: int = 15
 
     # Opportunity analysis — strength / risk cutoffs
