@@ -178,6 +178,53 @@ def test_base_basis_only_checks_notice_list_family():
     assert fc.validate_base_basis(item, OperationFamily.RESERVE_DETAIL) == []
 
 
+# --- resolved_key 구조적 메타 + known-benign 분류 (#228) ----------------------
+
+
+def test_base_yega_only_populates_resolved_key():
+    # WARN 위반은 어느 키에서 해석됐는지(resolved_key)를 구조적으로 담는다.
+    item = {"asignBdgtAmt": "100000000"}
+    violations = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)
+    assert violations[0].kind is ViolationKind.BASE_BASIS_YEGA_ONLY
+    assert violations[0].resolved_key == "asignBdgtAmt"
+
+
+def test_base_precedence_populates_resolved_key():
+    item = {"asignBdgtAmt": "100000000", "bssAmt": "90000000"}
+    violations = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)
+    assert violations[0].kind is ViolationKind.BASE_BASIS_PRECEDENCE
+    assert violations[0].resolved_key == "asignBdgtAmt"
+
+
+def test_asign_budget_yega_only_is_known_benign():
+    # #228: 배정예산(asignBdgtAmt)만 있는 service 공고 base WARN 은 known-benign(억제).
+    item = {"asignBdgtAmt": "100000000"}
+    violation = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)[0]
+    assert fc.is_known_benign(violation) is True
+
+
+def test_presmpt_yega_only_is_not_benign():
+    # 예정가(presmptPrce)에서 해석된 진짜 #220 오염은 억제 대상이 아니다.
+    item = {"presmptPrce": "100000000"}
+    violation = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)[0]
+    assert violation.resolved_key == "presmptPrce"
+    assert fc.is_known_benign(violation) is False
+
+
+def test_precedence_on_asign_budget_is_not_benign():
+    # precedence(기초금액 키가 있는데도 배정예산이 먼저 선택됨)은 실 오류라 억제 금지.
+    item = {"asignBdgtAmt": "100000000", "bssAmt": "90000000"}
+    violation = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)[0]
+    assert fc.is_known_benign(violation) is False
+
+
+def test_non_base_violation_has_no_resolved_key_and_not_benign():
+    # 범위/식별자 위반은 resolved_key 가 없고 known-benign 도 아니다.
+    violation = fc.validate_ranges({"sucsfbidRate": 88000000})[0]
+    assert violation.resolved_key is None
+    assert fc.is_known_benign(violation) is False
+
+
 # --- base 해석 순서 드리프트 가드 (프로덕션 충실성) --------------------------
 
 

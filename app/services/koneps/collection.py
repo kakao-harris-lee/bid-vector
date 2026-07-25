@@ -26,6 +26,7 @@ The collector keeps a thin ``_normalize_request`` delegator for external callers
 are referenced only from ``collect_notices``.
 """
 
+import logging
 import math
 from datetime import timedelta
 from time import sleep
@@ -35,6 +36,9 @@ from app.core.config import settings
 from app.core.time import kst_now, utc_now
 from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
 from app.services.koneps import http_client, openapi, parsing
+from app.services.koneps.field_contract_observer import FieldContractObservation
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_request(request: CrawlRequest) -> CrawlRequest:
@@ -106,6 +110,13 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
     result_message = ""
     key_variant = ""
     pages_fetched = 0
+    # 관찰 전용 계약 관찰기(#227 배선): 토글 ON 일 때만 생성해 raw item 을 순수 검증기에
+    # 흘려보내며 위반·미지 필드를 run 단위로 센다. OFF 면 None → 무비용. 수집 동작 불변.
+    contract_observer = (
+        FieldContractObservation()
+        if settings.KONEPS_FIELD_CONTRACT_LIVE_CHECK
+        else None
+    )
 
     page_no = 1
     while True:
@@ -136,6 +147,15 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             break
 
         for raw_item in raw_items:
+            if contract_observer is not None:
+                # 관찰 전용: raw item 을 그대로 검증기에 통과시켜 집계만 한다(변경/드롭 없음).
+                # 관찰기 예외는 절대 상류로 전파하지 않는다 — 진단기 결함이 라이브 수집을
+                # 죽여 그 run 의 parsed_items 를 전량 유실시키면 안 된다(관찰 전용 계약).
+                # 삼키되 internal_errors 로 세어 run 요약/metadata 로 관측만 남긴다.
+                try:
+                    contract_observer.observe(raw_item, operation=operation)
+                except Exception:  # noqa: BLE001 - 관찰기 결함이 수집을 죽이면 안 됨
+                    contract_observer.record_internal_error()
             parsed_item = openapi.build_openapi_notice_item(
                 raw_item,
                 request=request,
@@ -168,6 +188,14 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             sleep(settings.KONEPS_OPENAPI_REQUEST_DELAY_SECONDS)
         page_no += 1
 
+    # run 단위 계약 관찰 요약: per-item 이 아니라 run 당 한 줄만 로그(폭주 방지). 위반·미지
+    # 필드가 있을 때만 WARN 을 남기고, 집계는 metadata 에 실어 소비자가 읽게 한다.
+    contract_observation = None
+    if contract_observer is not None:
+        if contract_observer.has_findings:
+            logger.warning(contract_observer.summary_line())
+        contract_observation = contract_observer.summary()
+
     return {
         "items": parsed_items,
         "metadata": {
@@ -184,6 +212,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             "openapi_num_of_rows": per_page,
             "query_date": date_token,
             "query_type": "registration_datetime",
+            "field_contract_observation": contract_observation,
         },
     }
 

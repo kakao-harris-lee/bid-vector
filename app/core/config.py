@@ -613,6 +613,11 @@ class Settings(BaseSettings):
     KONEPS_OPENAPI_COLLECTION_PAGE_SIZE: int = 100  # BidPublicInfoService 호출당 페이지 크기
     KONEPS_OPENAPI_TIMEOUT_SECONDS: int = 20
     KONEPS_OPENAPI_REQUEST_DELAY_SECONDS: float = 0.2  # inter-page throttle for BidPublicInfoService pagination
+    # field_contract 순수 검증기를 라이브 수집 루프에 **관찰 전용**으로 배선하는 토글
+    # (#227 검증기 프로덕션 소비자 0 갭 해소). ON 이어도 수집 동작은 불변 — 위반·미지 필드를
+    # run 단위로 세어 요약 로그 1줄 + metadata 만 남기고 행을 드롭/실패시키지 않는다. soft 라
+    # 기본 ON. OFF 면 관찰기를 아예 만들지 않아 무비용 통과한다.
+    KONEPS_FIELD_CONTRACT_LIVE_CHECK: bool = True
     KONEPS_HEADLESS: bool = True
     KONEPS_TIMEOUT_MS: int = 30000
 
