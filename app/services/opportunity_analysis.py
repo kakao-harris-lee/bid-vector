@@ -32,10 +32,8 @@ from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorSt
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
 from app.services.bid_base import (
-    build_prediction_text,
+    prepare_prediction_inputs,
     resolve_notice_bid_base,
-    resolve_notice_legal_floor_bid_rate,
-    resolve_notice_legal_floor_inputs,
 )
 from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.classifier import (
@@ -500,20 +498,16 @@ class OpportunityAnalysisService:
         )
         business_type_code = getattr(project, "business_type_code", None)
         business_group = resolve_business_group(business_type_code)
-        # 투찰가는 추정가격이 아니라 기초금액/사업금액(배정예산) 기준으로 산정한다.
-        # 과세 공고에서 추정가격을 넘기면 ~10% 낮게 산정되어 낙찰하한 미만으로 낙될
-        # 위험이 있으므로 base_amount 를 해석해 넘긴다.
-        bid_base = resolve_notice_bid_base(db, project)
-        # 공사 법정 낙찰하한 tier 입력(구간=추정가격, 기준일=공고 시점). 소급 없이 그
-        # 공고 시점의 구/신율을 적용한다.
-        estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
-        # 공고 자신의 published 낙찰하한율(award_floor_rate, #201)을 guardrail floor 에
-        # 반영한다(prediction_workflow 와 동일 규칙). 클라이언트 override 우선, 없으면
-        # 공고 published 하한 폴백. guardrail_core 가 max() 로만 폴드하므로 floor 를
-        # 올리기만 한다(red line).
-        legal_floor_bid_rate = resolve_notice_legal_floor_bid_rate(
-            project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
+        # 예측 전처리(기초금액 base / title 포함 text / published 낙찰하한 / 공사 tier
+        # 입력)는 모든 검증 경로가 이 라이브 경로와 동일해야 하므로 단일 조합 헬퍼로
+        # 묶어 해석한다. 개별 필드를 흩어 호출하면 검증 경로가 published floor 등을
+        # 조용히 빠뜨릴 수 있어(감사 실측) 부분 채택이 불가능하도록 한 묶음으로 받는다.
+        inputs = prepare_prediction_inputs(
+            db, project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
         )
+        bid_base = inputs.bid_base
+        estimation_amount = inputs.estimation_amount
+        reference_date = inputs.reference_date
         prediction = self.price_prediction_port.predict_price(
             budget=bid_base,
             category=project.category or "other",
@@ -521,13 +515,15 @@ class OpportunityAnalysisService:
             # assembler so the live path feeds the SAME text the backtest/smoke/
             # holdout paths validate. The title carries regulatory mechanism cues
             # (2단계/가격입찰/협상/수의) the price-band and regime detection need.
-            description=build_prediction_text(project),
+            description=inputs.text,
             historical_records=self._load_price_history(db, project),
             agency_name=request.agency_name,
             feedback_calibration=feedback_calibration,
             business_type_code=business_type_code,
             business_group=business_group,
-            legal_floor_bid_rate=legal_floor_bid_rate,
+            # 공고 자신의 published 낙찰하한율(award_floor_rate, #201). guardrail_core
+            # 가 max() 로만 폴드하므로 floor 를 올리기만 한다(red line).
+            legal_floor_bid_rate=inputs.legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
         )

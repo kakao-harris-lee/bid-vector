@@ -24,11 +24,7 @@ from app.schemas.schemas import (
     DocumentAnalysisRequest,
     PricePredictionRequest,
 )
-from app.services.bid_base import (
-    resolve_notice_bid_base,
-    resolve_notice_legal_floor_bid_rate,
-    resolve_notice_legal_floor_inputs,
-)
+from app.services.bid_base import prepare_prediction_inputs
 from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
@@ -60,31 +56,27 @@ class PredictionWorkflowService:
             agency_name=request.agency_name,
         )
 
-        # 투찰가는 추정가격(ex-VAT)이 아니라 기초금액/사업금액(배정예산) 기준으로
-        # 산정한다. 프로젝트의 최신 HistoricalData.base_amount 를 해석하되, 이를
-        # 얻지 못하면(0/falsy) 요청에 실린 명시적 budget_estimate 로 폴백한다.
-        resolved_bid_base = resolve_notice_bid_base(db, project)
-        # 공사 법정 낙찰하한 tier(구간·시행일 인지) 입력. 추정가격은 기초금액과 별개로
-        # 구간 판정에 쓰이고, 기준일은 공고 시점 하한(구/신율)을 소급 없이 고른다.
-        estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
-        # 공고 자신의 published 낙찰하한율(award_floor_rate, #201)을 guardrail floor 에
-        # 반영한다. 클라이언트가 명시한 legal_floor_bid_rate 가 있으면 그것을 우선하고,
-        # 없으면 공고의 published 하한으로 폴백한다. guardrail_core 는 이 값을 configured
-        # floor 와 max() 로만 폴드하므로 floor 를 올리기만 하고 내리지 않는다(red line).
-        legal_floor_bid_rate = resolve_notice_legal_floor_bid_rate(
-            project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
+        # 예측 전처리(기초금액 base / published 낙찰하한 / 공사 tier 입력)를 라이브
+        # 경로와 동일한 단일 조합 헬퍼로 해석한다. base 는 프로젝트 최신
+        # HistoricalData.base_amount 를 해석하되 없으면(0/falsy) 요청의 명시적
+        # budget_estimate 로 폴백한다. published 낙찰하한(award_floor_rate, #201)은
+        # 클라이언트 override 우선, 없으면 공고 published 하한 폴백이며 guardrail_core
+        # 가 max() 로만 폴드하므로 floor 를 올리기만 한다(red line).
+        inputs = prepare_prediction_inputs(
+            db, project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
         )
-        # SCOPE BOUNDARY (title-alignment PR): the 3-path predictor-input unification
-        # (build_prediction_text on opportunity/backtest/smoke) intentionally does NOT
-        # cover this path. This is the /api/v1/predictions/price endpoint where
-        # ``PricePredictionRequest.description`` is a REQUIRED contract field — the
-        # CLIENT is authoritative for the analyzed text, so we respect the supplied
-        # ``request.description`` rather than overriding it with the project fields.
-        # (No internal/frontend caller constructs this request dropping the title;
-        # the title-drop asymmetry lived only in the monitor path, now fixed.)
-        # Aligning this to build_prediction_text(project) would silently ignore a
-        # required client input — an API-contract change owned by backend-builder
-        # (make description optional + project fallback), not this PR.
+        resolved_bid_base = inputs.bid_base
+        estimation_amount = inputs.estimation_amount
+        reference_date = inputs.reference_date
+        # SCOPE BOUNDARY: this path DELIBERATELY does not use ``inputs.text``. This is
+        # the /api/v1/predictions/price endpoint where ``PricePredictionRequest.description``
+        # is a REQUIRED contract field — the CLIENT is authoritative for the analyzed
+        # text, so we respect the supplied ``request.description`` rather than
+        # overriding it with the project fields. (No internal/frontend caller
+        # constructs this request dropping the title; the title-drop asymmetry lived
+        # only in the monitor path, now fixed.) Aligning this to ``inputs.text`` would
+        # silently ignore a required client input — an API-contract change owned by
+        # backend-builder (make description optional + project fallback), not this PR.
         prediction = self.price_prediction_port.predict_price(
             budget=resolved_bid_base or request.budget_estimate,
             category=request.category,
@@ -92,7 +84,7 @@ class PredictionWorkflowService:
             historical_records=self._load_price_history(db, category=request.category or project.category),
             agency_name=request.agency_name,
             feedback_calibration=feedback_calibration,
-            legal_floor_bid_rate=legal_floor_bid_rate,
+            legal_floor_bid_rate=inputs.legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
         )

@@ -13,6 +13,7 @@ import pytest
 from app.models.models import HistoricalData, Project
 from app.schemas.schemas import PricePredictionRequest
 from app.services.bid_base import (
+    prepare_prediction_inputs,
     resolve_notice_bid_base,
     resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
@@ -504,3 +505,84 @@ def test_predict_price_request_legal_floor_overrides_published_award(test_db):
 
     assert prediction["legal_floor_bid_rate"] == pytest.approx(0.90)
     assert prediction["floor_bid_rate"] == pytest.approx(0.90)
+
+
+# --------------------------------------------------------------------------- #
+# prepare_prediction_inputs — the single combination helper every predict path
+# routes through. It bundles the four notice-derived inputs so a caller cannot
+# partially adopt the preprocessing (e.g. keep the base/text but drop the
+# published floor, as the backtest/smoke/holdout paths previously did).
+# --------------------------------------------------------------------------- #
+
+
+def test_prepare_prediction_inputs_bundles_base_text_floor_tier(test_db):
+    """The bundle carries 기초금액 base, title+desc+requirements text, the published
+    낙찰하한, and the construction tier inputs — exactly the live-path preprocessing."""
+    project = Project(
+        title="한강 준설 2단계(규격·가격 동시)",
+        description="본문 설명",
+        requirements="자격 요건",
+        budget_estimate=_BUDGET_ESTIMATE,
+        category="construction",
+        award_floor_rate=0.88,
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    test_db.add(project)
+    test_db.flush()
+    _add_base_row(test_db, project, _VAT_BASE_AMOUNT)
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(test_db, project)
+
+    # base = 기초금액 (base_amount), not 추정가격
+    assert inputs.bid_base == pytest.approx(_VAT_BASE_AMOUNT)
+    # text = the shared assembler output (title + description + requirements)
+    assert inputs.text == "한강 준설 2단계(규격·가격 동시) 본문 설명 자격 요건"
+    # published floor folded in (normalized fraction)
+    assert inputs.legal_floor_bid_rate == pytest.approx(0.88)
+    # construction tier inputs: estimation = 추정가격, reference = 공고 KST day
+    assert inputs.estimation_amount == pytest.approx(_BUDGET_ESTIMATE)
+    assert inputs.reference_date == date(2026, 2, 1)
+
+
+def test_prepare_prediction_inputs_matches_individual_helpers(test_db):
+    """Composition contract: the bundle equals calling each helper directly, so the
+    live paths that delegate to it stay byte-identical (diff 0)."""
+    project = _make_project(test_db)
+    project.award_floor_rate = 0.9
+    _add_base_row(test_db, project, _VAT_BASE_AMOUNT)
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(test_db, project)
+
+    assert inputs.bid_base == resolve_notice_bid_base(test_db, project)
+    est, ref = resolve_notice_legal_floor_inputs(project)
+    assert inputs.estimation_amount == est
+    assert inputs.reference_date == ref
+    assert inputs.legal_floor_bid_rate == resolve_notice_legal_floor_bid_rate(project)
+
+
+def test_prepare_prediction_inputs_respects_request_floor_override(test_db):
+    """An explicit request override flows through the bundle (client wins over
+    the notice's published 하한), matching resolve_notice_legal_floor_bid_rate."""
+    project = _make_project(test_db)
+    project.award_floor_rate = 0.88
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(
+        test_db, project, request_legal_floor_bid_rate=0.91
+    )
+
+    assert inputs.legal_floor_bid_rate == pytest.approx(0.91)
+
+
+def test_prepare_prediction_inputs_falls_back_to_budget_estimate(test_db):
+    """No collected 기초금액 row → base falls back to 추정가격; no published 하한 →
+    legal floor is None (config floor preserved downstream)."""
+    project = _make_project(test_db)  # no HistoricalData base row, no award_floor_rate
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(test_db, project)
+
+    assert inputs.bid_base == pytest.approx(_BUDGET_ESTIMATE)
+    assert inputs.legal_floor_bid_rate is None

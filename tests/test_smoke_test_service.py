@@ -138,6 +138,49 @@ def test_smoke_predict_price_phase_uses_injected_prediction_port(test_db):
     assert port.calls[0]["business_type_code"] == "0621"
 
 
+def test_smoke_predict_price_phase_uses_bid_base_and_published_floor(test_db):
+    """REGRESSION: the smoke self-test now feeds the SAME preprocessing production
+    uses — 기초금액 base (was 추정가격 budget_estimate passed directly) and the notice's
+    published 낙찰하한율 (award_floor_rate, #201, previously dropped). Otherwise the
+    smoke validates a floor-less, ex-VAT input the bidding pipeline never runs."""
+    from app.models.models import HistoricalData, Project
+    from app.services.smoke_test import KonepsTelegramSmokeTestService
+
+    project = Project(
+        title="과세 공고 스모크",
+        description="적격심사 투찰",
+        requirements="면허 요건",
+        budget_estimate=100_000_000.0,  # 추정가격 (ex-VAT)
+        category="construction",
+        award_floor_rate=0.88,
+    )
+    test_db.add(project)
+    test_db.flush()
+    # 기초금액 (VAT-inclusive base) = 추정가격 × 1.1, collected on a HistoricalData row.
+    test_db.add(
+        HistoricalData(
+            project_id=project.id,
+            category="construction",
+            base_amount=110_000_000.0,
+            bid_rate=0.0,  # not a training sample; carries the base only
+        )
+    )
+    test_db.commit()
+
+    port = CapturingPredictionPort()
+    service = KonepsTelegramSmokeTestService(price_prediction_port=port)
+    result = service._phase_predict_price(test_db, {"id": project.id})
+
+    assert result.passed is True
+    call = port.calls[0]
+    # budget = 기초금액 (110M), NOT the ex-VAT 추정가격 (100M).
+    assert call["budget"] == pytest.approx(110_000_000.0)
+    # The published 낙찰하한 now reaches the predictor (was dropped before).
+    assert call["legal_floor_bid_rate"] == pytest.approx(0.88)
+    # Unified assembler carries title + description + requirements.
+    assert "면허 요건" in call["description"]
+
+
 def test_smoke_predict_price_phase_passes_era_correct_floor_inputs(test_db):
     """The smoke self-test drives the SAME era-correct construction 낙찰하한 tier as
     production (#197 후속): it passes the notice's 추정가격 + its OWN KST 공고일 so the
@@ -206,8 +249,17 @@ def test_predict_price_phase_band_rejects_above_ceiling(monkeypatch, rate, expec
         def filter(self, *a, **k):
             return self
 
+        def order_by(self, *a, **k):
+            return self
+
         def one(self):
             return _StubProject()
+
+        def first(self):
+            # No HistoricalData base row → resolve_notice_bid_base (now shared with
+            # the live path) falls back to 추정가격 (budget_estimate), the base these
+            # stub tests already assume.
+            return None
 
     class _StubDB:
         def query(self, *a, **k):
@@ -929,8 +981,17 @@ def test_predict_price_phase_uses_injected_cutoff_service(monkeypatch):
         def filter(self, *a, **k):
             return self
 
+        def order_by(self, *a, **k):
+            return self
+
         def one(self):
             return _StubProject()
+
+        def first(self):
+            # No HistoricalData base row → resolve_notice_bid_base (now shared with
+            # the live path) falls back to 추정가격 (budget_estimate), the base these
+            # stub tests already assume.
+            return None
 
     class _StubDB:
         def query(self, *a, **k):
