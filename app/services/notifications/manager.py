@@ -7,6 +7,7 @@ import re
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.constants import TELEGRAM_DELIVERY_EVENT_TYPE
 from app.core.single_user import DEFAULT_OPERATOR_USERNAME
 from app.core.time import utc_now
 from app.models.models import (
@@ -17,6 +18,10 @@ from app.models.models import (
     OperatorNotificationChannel,
     Project,
     User,
+)
+from app.services.notifications.fatigue_gate import (
+    NotificationFatigueGate,
+    record_fatigue_suppression,
 )
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.realtime import realtime_event_manager
@@ -97,8 +102,9 @@ class OperatorNotificationService:
     DECISION_TYPE = "recommendation"
     BID_SUBMISSION_TYPE = "bid_update"
 
-    def __init__(self) -> None:
+    def __init__(self, *, fatigue_gate: NotificationFatigueGate | None = None) -> None:
         self.telegram = TelegramNotificationService()
+        self.fatigue_gate = fatigue_gate or NotificationFatigueGate()
 
     def create_bid_decision_notification(
         self,
@@ -129,16 +135,13 @@ class OperatorNotificationService:
         )
 
         if self.should_deliver_bid_decision_to_telegram(decision_record):
-            self._deliver_telegram_message(
+            self._deliver_bid_decision_to_telegram(
                 db,
                 operator_id=operator_id,
+                project_id=int(project.id),
                 notification_id=int(notification.id),
-                source="bid_decision",
                 message=message,
-                reply_markup=self.telegram.build_bid_decision_reply_markup(
-                    decision_record.id,
-                    operator_id=operator_id,
-                ),
+                decision_record=decision_record,
             )
         realtime_event_manager.publish_event(
             "bid_decision.notification",
@@ -187,6 +190,7 @@ class OperatorNotificationService:
             db,
             operator_id=operator_id,
             notification_id=int(notification.id),
+            project_id=int(project.id),
             source="bid_submission",
             message=message,
         )
@@ -213,6 +217,49 @@ class OperatorNotificationService:
             and decision_record.decision_status == "planned"
             and decision_record.priority_score >= settings.TELEGRAM_DECISION_PRIORITY_THRESHOLD
             and decision_record.probability_score >= settings.TELEGRAM_DECISION_PROBABILITY_THRESHOLD
+        )
+
+    def _deliver_bid_decision_to_telegram(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        project_id: int,
+        notification_id: int,
+        message: str,
+        decision_record: BidDecisionRecord,
+    ) -> None:
+        """Apply the fatigue budget to an alert the value gate already approved.
+
+        The web notification is created either way — suppression only withholds
+        the Telegram push, and leaves an audit row explaining why.
+        """
+        fatigue_decision = self.fatigue_gate.evaluate(
+            db,
+            operator_id=operator_id,
+            project_id=project_id,
+        )
+        if not fatigue_decision.allowed:
+            record_fatigue_suppression(
+                db,
+                operator_id=operator_id,
+                notification_id=notification_id,
+                project_id=project_id,
+                source="bid_decision",
+                decision=fatigue_decision,
+            )
+            return
+        self._deliver_telegram_message(
+            db,
+            operator_id=operator_id,
+            notification_id=notification_id,
+            project_id=project_id,
+            source="bid_decision",
+            message=message,
+            reply_markup=self.telegram.build_bid_decision_reply_markup(
+                decision_record.id,
+                operator_id=operator_id,
+            ),
         )
 
     def _require_bid_decision_owner(
@@ -260,6 +307,7 @@ class OperatorNotificationService:
         notification_id: int,
         source: str,
         message: str,
+        project_id: int | None = None,
         reply_markup: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
         """Best-effort Telegram delivery so the web flow still succeeds on failures."""
@@ -270,6 +318,7 @@ class OperatorNotificationService:
                 db,
                 operator_id=operator_id,
                 notification_id=notification_id,
+                project_id=project_id,
                 source=source,
                 delivery=blocked_delivery,
             )
@@ -288,6 +337,7 @@ class OperatorNotificationService:
                 db,
                 operator_id=operator_id,
                 notification_id=notification_id,
+                project_id=project_id,
                 source=source,
                 delivery=delivery,
             )
@@ -307,6 +357,7 @@ class OperatorNotificationService:
             db,
             operator_id=operator_id,
             notification_id=notification_id,
+            project_id=project_id,
             source=source,
             delivery=delivery,
         )
@@ -488,15 +539,21 @@ class OperatorNotificationService:
         notification_id: int,
         source: str,
         delivery: dict[str, object],
+        project_id: int | None = None,
     ) -> None:
-        """Persist Telegram delivery telemetry for operations dashboard reporting."""
+        """Persist Telegram delivery telemetry for operations dashboard reporting.
+
+        ``project_id`` is what lets the fatigue gate recognise a repeat alert for
+        the same notice; rows written before it existed simply never match.
+        """
         event = Analytics(
             user_id=operator_id,
-            event_type="telegram.delivery",
+            event_type=TELEGRAM_DELIVERY_EVENT_TYPE,
             event_data=json.dumps(
                 {
                     "operator_id": int(operator_id),
                     "notification_id": int(notification_id),
+                    "project_id": None if project_id is None else int(project_id),
                     "source": source,
                     "sent": bool(delivery.get("sent")),
                     "status": str(delivery.get("status") or "unknown"),

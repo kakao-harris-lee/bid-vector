@@ -5,7 +5,10 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.constants import ACTIVE_DECISION_STATUSES
+from app.core.constants import (
+    ACTIVE_DECISION_STATUSES,
+    INTERNAL_TELEMETRY_EVENT_TYPES as SHARED_INTERNAL_TELEMETRY_EVENT_TYPES,
+)
 from app.core.database import get_db
 from app.core.security import (
     CANONICAL_OPERATOR_USERNAME,
@@ -77,7 +80,9 @@ from app.services.prediction_feedback import PredictionFeedbackService
 from app.tasks.jobs import enqueue_operator_strategy_monitor, get_operator_strategy_monitor_task_status
 
 router = APIRouter()
-INTERNAL_OPERATOR_EVENT_TYPES = {"telegram.delivery", "telegram.strategy.pending_edit"}
+# Single source in app/core/constants.py; kept as a module-level alias so the
+# existing filter call site and its name remain stable.
+INTERNAL_OPERATOR_EVENT_TYPES = SHARED_INTERNAL_TELEMETRY_EVENT_TYPES
 
 
 # Read-scoped operator resolution is shared across analytics/operator/decision
