@@ -16,7 +16,14 @@ second license-limit sub-call (``getBidPblancListInfoLicenseLimit``) to pull the
   면허제한 rows (``lcnsLmtNm``/``permsnIndstrytyList`` 등) from the sub-call. The
   source for later 라벨 추출 (PR-B); persisting only, no runtime consumer today.
 
-Targeting rule: ``eligibility_raw IS NULL AND status='open' AND deadline >= now``.
+Targeting rule (default): ``eligibility_raw IS NULL AND status='open' AND deadline
+>= now``. ``--floor-only`` switches the target to the orphan set ``award_floor_rate
+IS NULL AND eligibility_raw IS NOT NULL`` — rows a default run can never reach,
+because saving eligibility_raw (even a flags-only dict) drops the row from the
+default resume key while its floor is still NULL. That opt-in mode makes exactly
+one targeted query per notice, fills only the floor, and **never** makes the
+license-limit sub-call or overwrites eligibility_raw, so it cannot spend the daily
+license-limit quota the default (07:17 cron) backfill depends on.
 Targets are ordered **operator candidates first**: tier 1 = notices that pass the
 operator's cheap watch-rule gate (the same filters the strategy monitor uses, no
 ML), tier 2 = everything else, each tier deadline-ascending. Tier 2 is still
@@ -58,6 +65,8 @@ Usage (runs inside the api container):
     docker exec bid_vector_api python scripts/backfill_award_floor_rate.py
     docker exec bid_vector_api python scripts/backfill_award_floor_rate.py \
         --include-past-days 3 --delay 1.5 --limit 500
+    docker exec bid_vector_api python scripts/backfill_award_floor_rate.py \
+        --floor-only --dry-run
 """
 from __future__ import annotations
 
@@ -114,6 +123,46 @@ DEFAULT_SAMPLE_SIZE = 10
 OPERATOR_PRIORITY_SCAN_MULTIPLIER = 20
 OPERATOR_PRIORITY_SCAN_FLOOR = 2_000
 OPERATOR_PRIORITY_SCAN_CEILING = 20_000
+
+# Target modes (declarative filter selection, §4.5.2). Each mode declares the
+# floor/eligibility predicates that pick its pending set, so target selection
+# dispatches on a table entry instead of a branch tree. The resume key differs by
+# what the run fills:
+#   default    — eligibility_raw IS NULL: this script is eligibility_raw's single
+#                writer, so a run fills both award_floor_rate AND eligibility_raw
+#                and each row drops out once its eligibility raw lands.
+#   floor_only — award_floor_rate IS NULL AND eligibility_raw IS NOT NULL: the
+#                orphan set no default run can ever reach. A default run saves
+#                eligibility_raw (even a flags-only dict) and thereby drops the
+#                row from the default resume key while its floor is still NULL, so
+#                those rows are stranded forever under the default key. This mode
+#                fills ONLY the floor: it never fetches the license-limit sub-call
+#                (protecting the daily quota that feeds the eligibility backfill)
+#                and never overwrites the existing eligibility_raw.
+DEFAULT_MODE = "default"
+FLOOR_ONLY_MODE = "floor_only"
+
+# Per-mode SQLAlchemy predicates for the pending set. Data, not a branch: a new
+# mode is one entry, and the query/selection layer just applies the list.
+_MODE_FILTERS: dict[str, Callable[[], list[Any]]] = {
+    DEFAULT_MODE: lambda: [Project.eligibility_raw.is_(None)],
+    FLOOR_ONLY_MODE: lambda: [
+        Project.award_floor_rate.is_(None),
+        Project.eligibility_raw.isnot(None),
+    ],
+}
+
+
+def mode_writes_eligibility(mode: str) -> bool:
+    """Whether a run in this mode fetches license limits + writes eligibility_raw.
+
+    Floor-only runs target rows that already carry eligibility_raw, so they must
+    not re-fetch the license-limit sub-call (protects the daily license-limit
+    quota that the 07:17 eligibility cron depends on) and must not overwrite the
+    existing raw. A pure predicate so the run loop reads it off the mode string.
+    """
+    return mode != FLOOR_ONLY_MODE
+
 
 # Row shape returned to the run loop: (id, notice_number, category, floor rate).
 TargetRow = tuple[int, str, str | None, float | None]
@@ -439,14 +488,22 @@ def _target_query(
     cutoff: datetime,
     *,
     columns: tuple[Any, ...],
+    mode: str = DEFAULT_MODE,
     limit: int | None = None,
     offset: int | None = None,
 ):
-    """Base target query: eligibility NULL, open, deadline in window, imminent first."""
+    """Base target query: mode's floor/eligibility filter, open, deadline in window.
+
+    The mode's declared predicates (``_MODE_FILTERS``) select the pending set —
+    eligibility NULL for the default backfill, or floor-NULL-but-eligibility-set
+    for the floor-only orphan sweep — then the shared open/window/order clauses
+    apply so both modes share one imminent-first scan.
+    """
+    query = db.query(*columns)
+    for predicate in _MODE_FILTERS[mode]():
+        query = query.filter(predicate)
     query = (
-        db.query(*columns)
-        .filter(Project.eligibility_raw.is_(None))
-        .filter(Project.status == OPEN_PROJECT_STATUS)
+        query.filter(Project.status == OPEN_PROJECT_STATUS)
         .filter(Project.deadline >= cutoff)
         .order_by(Project.deadline.asc(), Project.id.asc())
     )
@@ -477,26 +534,32 @@ def select_targets(
     limit: int | None = None,
     now: datetime | None = None,
     operator_priority: bool = True,
+    mode: str = DEFAULT_MODE,
 ) -> TargetSelection:
     """Return the ordered target set for one run, with its tier breakdown.
 
-    Filter: ``eligibility_raw IS NULL AND status='open' AND deadline >= cutoff``
-    where ``cutoff = now - include_past_days``; the current ``award_floor_rate``
-    rides along so the run loop can honour the "write floor only when currently
-    NULL" guard without a second query.
+    Filter: the ``mode``'s predicate ``AND status='open' AND deadline >= cutoff``
+    where ``cutoff = now - include_past_days`` — the default mode keys on
+    ``eligibility_raw IS NULL``, the floor-only mode on ``award_floor_rate IS NULL
+    AND eligibility_raw IS NOT NULL``. The current ``award_floor_rate`` rides
+    along so the run loop can honour the "write floor only when currently NULL"
+    guard without a second query.
 
     Order: with ``operator_priority`` (default) the set is tier 1 (passes the
     operator's watch-rule gate) then tier 2 (the rest), ``deadline`` ascending
     inside each tier — a capped or interrupted run then spends its quota on
     notices the operator could actually bid on instead of burning it on soon-to-
     expire, out-of-scope notices. Without a usable strategy gate, or with
-    ``operator_priority=False``, the order is plain ``deadline`` ascending.
+    ``operator_priority=False``, the order is plain ``deadline`` ascending. The
+    tiering is mode-agnostic — floor-only reuses the same operator-first sweep.
     """
     cutoff = (now or utc_now()) - timedelta(days=max(0, include_past_days))
     strategy = _resolve_watch_strategy(db) if operator_priority else None
 
     if strategy is None:
-        rows = _target_query(db, cutoff, columns=_TARGET_COLUMNS, limit=limit).all()
+        rows = _target_query(
+            db, cutoff, columns=_TARGET_COLUMNS, mode=mode, limit=limit
+        ).all()
         targets = [_as_target_row(row) for row in rows]
         return TargetSelection(
             targets=targets,
@@ -507,7 +570,7 @@ def select_targets(
 
     scan_cap = operator_priority_scan_cap(limit)
     scanned = _target_query(
-        db, cutoff, columns=_TARGET_COLUMNS + _GATE_COLUMNS, limit=scan_cap
+        db, cutoff, columns=_TARGET_COLUMNS + _GATE_COLUMNS, mode=mode, limit=scan_cap
     ).all()
     tier1, tier2 = partition_by_tier(
         scanned,
@@ -521,7 +584,12 @@ def select_targets(
         ordered.extend(
             _as_target_row(row)
             for row in _target_query(
-                db, cutoff, columns=_TARGET_COLUMNS, limit=None, offset=scan_cap
+                db,
+                cutoff,
+                columns=_TARGET_COLUMNS,
+                mode=mode,
+                limit=None,
+                offset=scan_cap,
             ).all()
         )
 
@@ -543,6 +611,7 @@ def load_targets(
     limit: int | None = None,
     now: datetime | None = None,
     operator_priority: bool = True,
+    mode: str = DEFAULT_MODE,
 ) -> list[TargetRow]:
     """Ordered ``(id, notice_number, category, award_floor_rate)`` targets.
 
@@ -555,6 +624,7 @@ def load_targets(
         limit=limit,
         now=now,
         operator_priority=operator_priority,
+        mode=mode,
     ).targets
 
 
@@ -573,6 +643,7 @@ def run_backfill(
     max_consecutive_errors: int = DEFAULT_MAX_CONSECUTIVE_ERRORS,
     progress_every: int = DEFAULT_PROGRESS_EVERY,
     sample_size: int = DEFAULT_SAMPLE_SIZE,
+    mode: str = DEFAULT_MODE,
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
 ) -> BackfillStats:
@@ -580,14 +651,23 @@ def run_backfill(
 
     Serial, throttled, resumable. On ``dry_run`` neither fetch is called: only
     the target count and a small notice-number sample are reported. Otherwise
-    each notice is targeted-queried once (floor + eligibility flags) and, when it
-    flags an 업종제한 (``indstrytyLmtYn == "Y"``), a second license-limit sub-call
-    pulls the 자격 상세; the ``delay``-second throttle applies between **all** API
-    calls. The floor rate is written **only when the row's current floor is
-    NULL**; ``eligibility_raw`` is the synthesized ``{"flags", "license_limits"}``
-    dict. Both columns are staged into one per-notice UPDATE, committed every
-    ``chunk_size`` written rows. A fetch failure (either call) leaves the row's
-    eligibility NULL for the next run.
+    each notice is targeted-queried once (floor + eligibility flags) and, in the
+    **default** mode, when it flags an 업종제한 (``indstrytyLmtYn == "Y"``), a
+    second license-limit sub-call pulls the 자격 상세; the ``delay``-second
+    throttle applies between **all** API calls. The floor rate is written **only
+    when the row's current floor is NULL**; ``eligibility_raw`` is the synthesized
+    ``{"flags", "license_limits"}`` dict. Both columns are staged into one
+    per-notice UPDATE, committed every ``chunk_size`` written rows. A fetch
+    failure (either call) leaves the row's eligibility NULL for the next run.
+
+    In the **floor-only** mode (``mode == FLOOR_ONLY_MODE``) every target already
+    carries ``eligibility_raw``, so the run makes exactly one targeted query per
+    notice, writes only the floor, and never fetches the license-limit sub-call
+    (protecting the daily quota) nor overwrites the existing eligibility. Known
+    limitation: a ``no_value`` row (targeted query carried no ``sucsfbidLwltRate``)
+    keeps ``award_floor_rate`` NULL and, because its eligibility stays set, is
+    re-selected by the floor-only key on the next run — a durable "already
+    checked, no floor available" marker is a migration (out of scope here).
     """
     started = time.monotonic()
     stats = BackfillStats(dry_run=dry_run, target_count=len(targets))
@@ -597,6 +677,7 @@ def run_backfill(
         stats.elapsed_seconds = time.monotonic() - started
         return stats
 
+    writes_eligibility = mode_writes_eligibility(mode)
     consecutive_errors = 0
     pending = 0
     api_calls_made = 0
@@ -662,44 +743,51 @@ def run_backfill(
                 update_values[Project.award_floor_rate] = rate
                 stats.updated += 1
 
-        flags = openapi.extract_eligibility_flags(item) if item else None
-        # Keep the 차수 as the raw zero-padded string ("000") — int-coercing it
-        # makes the sub-call silently return totalCount=0 (live-measured
-        # 2026-07-19: ord=0 → 0 rows, ord="000" → real rows).
-        bid_notice_ord = (
-            str(item.get("bidNtceOrd") or "").strip() if item else None
-        )
-
-        # 2. License-limit sub-call, only for 업종제한 notices (required param
-        #    bidNtceOrd known). A sub-call failure is a per-notice error: the
-        #    floor still lands, but eligibility stays NULL so the row retries.
-        license_limit_items: list[dict[str, Any]] = []
-        sub_call_failed = False
-        if _needs_license_limit(flags, bid_notice_ord):
-            try:
-                throttle()
-                sub_payload = fetch_license_limit(normalized, bid_notice_ord)
-                raise_for_result_code(sub_payload)
-            except Exception as exc:  # noqa: BLE001 - record and continue
-                # Mark failed so eligibility is not written (row stays NULL for
-                # retry); record_error flips stats.aborted when the guard trips
-                # and the ``if stats.aborted: break`` below stops the run after
-                # the floor for this row still lands.
-                record_error(normalized, exc)
-                sub_call_failed = True
-            else:
-                stats.license_limit_calls += 1
-                license_limit_items = openapi.openapi_item_list(
-                    openapi.openapi_body(sub_payload)
-                )
-
-        if not sub_call_failed:
-            eligibility = openapi.build_eligibility_raw(flags, license_limit_items)
-            if eligibility:
-                update_values[Project.eligibility_raw] = eligibility
-                stats.eligibility_saved += 1
-            # A fully successful notice clears the consecutive-error streak.
+        if not writes_eligibility:
+            # Floor-only mode: the row already carries eligibility_raw, so no
+            # license-limit sub-call is made (protects the daily quota) and the
+            # existing eligibility is never overwritten. The single targeted query
+            # succeeded, so the consecutive-error streak clears.
             consecutive_errors = 0
+        else:
+            flags = openapi.extract_eligibility_flags(item) if item else None
+            # Keep the 차수 as the raw zero-padded string ("000") — int-coercing it
+            # makes the sub-call silently return totalCount=0 (live-measured
+            # 2026-07-19: ord=0 → 0 rows, ord="000" → real rows).
+            bid_notice_ord = (
+                str(item.get("bidNtceOrd") or "").strip() if item else None
+            )
+
+            # 2. License-limit sub-call, only for 업종제한 notices (required param
+            #    bidNtceOrd known). A sub-call failure is a per-notice error: the
+            #    floor still lands, but eligibility stays NULL so the row retries.
+            license_limit_items: list[dict[str, Any]] = []
+            sub_call_failed = False
+            if _needs_license_limit(flags, bid_notice_ord):
+                try:
+                    throttle()
+                    sub_payload = fetch_license_limit(normalized, bid_notice_ord)
+                    raise_for_result_code(sub_payload)
+                except Exception as exc:  # noqa: BLE001 - record and continue
+                    # Mark failed so eligibility is not written (row stays NULL for
+                    # retry); record_error flips stats.aborted when the guard trips
+                    # and the ``if stats.aborted: break`` below stops the run after
+                    # the floor for this row still lands.
+                    record_error(normalized, exc)
+                    sub_call_failed = True
+                else:
+                    stats.license_limit_calls += 1
+                    license_limit_items = openapi.openapi_item_list(
+                        openapi.openapi_body(sub_payload)
+                    )
+
+            if not sub_call_failed:
+                eligibility = openapi.build_eligibility_raw(flags, license_limit_items)
+                if eligibility:
+                    update_values[Project.eligibility_raw] = eligibility
+                    stats.eligibility_saved += 1
+                # A fully successful notice clears the consecutive-error streak.
+                consecutive_errors = 0
 
         if update_values:
             db.query(Project).filter(Project.id == project_id).update(
@@ -813,11 +901,24 @@ def build_parser() -> argparse.ArgumentParser:
             "plain deadline order (legacy behaviour)."
         ),
     )
+    parser.add_argument(
+        "--floor-only",
+        action="store_true",
+        help=(
+            "Sweep only the floor-NULL-but-eligibility-set orphan rows "
+            "(award_floor_rate IS NULL AND eligibility_raw IS NOT NULL): one "
+            "targeted query per notice, fills the floor only, never a "
+            "license-limit sub-call, never touches eligibility_raw. Off by "
+            "default (the default backfill's behaviour is unchanged)."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    mode = FLOOR_ONLY_MODE if args.floor_only else DEFAULT_MODE
 
     db = SessionLocal()
     try:
@@ -826,6 +927,7 @@ def main(argv: list[str] | None = None) -> int:
             include_past_days=args.include_past_days,
             limit=args.limit,
             operator_priority=not args.no_operator_priority,
+            mode=mode,
         )
         targets = selection.targets
         fetch: FetchFn | None = None
@@ -849,6 +951,7 @@ def main(argv: list[str] | None = None) -> int:
             max_consecutive_errors=max(1, args.max_consecutive_errors),
             progress_every=max(0, args.progress_every),
             sample_size=max(0, args.sample_size),
+            mode=mode,
         )
         stats.tier1_selected = selection.tier1_count
         stats.tier2_selected = selection.tier2_count
@@ -859,8 +962,9 @@ def main(argv: list[str] | None = None) -> int:
         db.close()
 
     summary = stats.as_dict()
-    mode = "DRY-RUN (no API, no write)" if args.dry_run else "APPLIED"
-    print(f"[floor-backfill] {_kst_stamp()} {mode}")
+    run_label = "DRY-RUN (no API, no write)" if args.dry_run else "APPLIED"
+    mode_label = " [floor-only]" if mode == FLOOR_ONLY_MODE else ""
+    print(f"[floor-backfill] {_kst_stamp()} {run_label}{mode_label}")
     print(f"[floor-backfill] {_priority_line(selection)}")
     print(
         f"[floor-backfill] target={summary['target_count']} "
