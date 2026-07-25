@@ -55,3 +55,30 @@ OPEN_PROJECT_STATUS: str = "open"
 # bid-decision lifecycle, not the procurement-notice status). Do not conflate the
 # three.
 ACTIVE_PROJECT_STATUSES: frozenset[str] = frozenset({"open", "re_notice"})
+
+# Telegram delivery telemetry event types written to the ``analytics`` table.
+#
+# ``TELEGRAM_DELIVERY_EVENT_TYPE`` records every delivery attempt that reached
+# the send boundary (sent / blocked / dry-run). ``TELEGRAM_DELIVERY_SUPPRESSED_
+# EVENT_TYPE`` is deliberately a SEPARATE type: a fatigue suppression is not a
+# failed delivery, so it must not enter the delivery success-rate denominator in
+# app/services/analytics_reporting.py.
+TELEGRAM_DELIVERY_EVENT_TYPE: str = "telegram.delivery"
+TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE: str = "telegram.delivery.suppressed"
+
+# Internal telemetry event types that operator-facing event *counts* exclude.
+#
+# This set is shared by:
+#   - app/api/analytics.py  (INTERNAL_TELEMETRY_EVENT_TYPES)
+#   - app/api/operator.py   (INTERNAL_OPERATOR_EVENT_TYPES)
+#
+# Both used to declare the same literal set independently; new internal event
+# types are added here so neither counter silently starts reporting telemetry as
+# operator activity.
+INTERNAL_TELEMETRY_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        TELEGRAM_DELIVERY_EVENT_TYPE,
+        TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE,
+        "telegram.strategy.pending_edit",
+    }
+)

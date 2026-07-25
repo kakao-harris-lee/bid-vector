@@ -42,3 +42,14 @@ def to_kst(value: datetime) -> datetime:
     the Korean calendar day). Internal storage/arithmetic stays UTC.
     """
     return ensure_utc(value).astimezone(KST)
+
+
+def kst_day_bounds_utc(value: datetime) -> tuple[datetime, datetime]:
+    """Return the ``[start, end)`` UTC bounds of the KST day containing ``value``.
+
+    The Korean calendar day is the operator-facing frame for "today" (daily
+    caps, cohorts), but rows are stored in UTC — so the boundary is computed in
+    KST and handed back in UTC for direct use in query filters.
+    """
+    start_kst = to_kst(value).replace(hour=0, minute=0, second=0, microsecond=0)
+    return ensure_utc(start_kst), ensure_utc(start_kst + timedelta(days=1))

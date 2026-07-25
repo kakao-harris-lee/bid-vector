@@ -651,6 +651,12 @@ class Settings(BaseSettings):
     TELEGRAM_SEND_TIMEOUT_SECONDS: int = 10
     TELEGRAM_DECISION_PRIORITY_THRESHOLD: float = 0.78
     TELEGRAM_DECISION_PROBABILITY_THRESHOLD: float = 0.8
+    # 알림 피로도(fatigue) 게이트 — 가치 threshold 를 통과한 뒤 적용되는 2차 게이트.
+    # 두 키 모두 안전 기본값 = 0 = 비활성이라 기존 라이브 동작을 바꾸지 않는다(opt-in).
+    # 운영자별 KST 하루 실제 발송(sent=true) 건수 상한. 0 = 무제한.
+    TELEGRAM_DECISION_DAILY_CAP: int = 0
+    # 같은 (운영자, 공고) 조합의 재알림을 억제하는 시간(시간 단위). 0 = 비활성.
+    TELEGRAM_DECISION_RENOTIFY_COOLDOWN_HOURS: float = 0.0
     TELEGRAM_WEBHOOK_SECRET: str = ""
     TELEGRAM_POLLING_LIMIT: int = 20
     TELEGRAM_POLLING_TIMEOUT_SECONDS: int = 0

@@ -100,6 +100,19 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 2e — app.services.notifications.fatigue (텔레그램 결정 알림 피로도 게이트의 순수
+# 코어: 일일 상한·재알림 쿨다운 판정). limits/signals/now 를 인자로만 받고 DB·시계·settings
+# 를 직접 부르지 않는 자립 순수 모듈이라 error-code 완화 없이 strict 로 올린다. I/O 절반
+# (fatigue_gate) 은 SQLAlchemy 세션을 잡으므로 아일랜드에 넣지 않는다.
+[[tool.mypy.overrides]]
+module = ["app.services.notifications.fatigue"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # Phase 2d — app.services.bid_base (예측 입력 조합 헬퍼: 공고에서 도출한 base/text/
 # published floor/tier 입력을 한 곳에서 묶는 DB 경계). budget_estimate(추정가격 ex-VAT)와
 # base_amount(기초금액 VAT 포함)가 float 레벨에서 자유 대입되던 것을 money.BaseAmount 로
