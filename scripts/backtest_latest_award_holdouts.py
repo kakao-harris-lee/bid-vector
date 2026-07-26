@@ -53,6 +53,7 @@ from app.services.bid_base import (
 )
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.query_predicates import settled_any_signal
+from app.utils.sequence_coercion import coerce_numeric_list
 
 DEFAULT_GROUPS = ("construction", "service", "goods")
 DEFAULT_THRESHOLDS = (0.001, 0.003, 0.005, 0.01)
@@ -743,6 +744,9 @@ def evaluate_target(
     # 추정가격(budget_estimate)이라 pricing base(budget=기초금액)와 별개다.
     estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
     published_floor_rate = resolve_notice_legal_floor_bid_rate(project)
+    # 복수예비가격은 예정가를 독립적으로 재구성할 수 있는 유일한 저장 증거다. 품질
+    # 판정기는 I/O 없이 돌아야 하므로 여기서 개수만 뽑아 주입한다(§4.7.3).
+    reserve_price_count = len(coerce_numeric_list(historical.reserve_prices))
     # 분모/법정하한 품질 판정은 순수 모듈에 위임한다(읽기 전용 — 아래 predict_price
     # 입력에는 전혀 관여하지 않는다).
     quality = assess_row_quality(
@@ -758,6 +762,9 @@ def evaluate_target(
         # 하한 모델 적용 범위 판별 입력. 분할 키와 같은 원천(발주기관 우선, 부재 시
         # 수요기관)을 써서 리포트의 기관 표기와 판정 근거가 어긋나지 않게 한다.
         agency_name=target.agency_display,
+        # 독립 예정가 증거의 유무. 예비가가 없으면 보고 낙찰률이 금액비 파생인지
+        # 가릴 수 없어 하한 판정을 생략한다(순수 판정기는 개수만 받는다).
+        reserve_price_count=reserve_price_count,
     )
     prediction = predict_price(
         budget=budget,
@@ -1122,8 +1129,9 @@ def main() -> int:
     quality_report = build_quality_flag_report(
         aggregation_rows, aggregate_fn=aggregate_fn, evaluated_rows=rows
     )
-    # 하한 판정이 적용 범위 밖(비국가기관/판별 불가)이라 생략된 규모. 이 건수가
-    # 없으면 "하회 0건"이 데이터 청결로 오독된다(침묵 스킵 금지).
+    # 하한 판정이 생략된 규모(적용 범위 밖=비국가기관/판별 불가/별도 규정, 그리고
+    # 보고율 basis 미검증). 이 건수가 없으면 "하회 0건"이 데이터 청결로 오독된다
+    # (침묵 스킵 금지).
     floor_applicability = build_floor_applicability_report(
         aggregation_rows, evaluated_rows=rows
     )
@@ -1168,15 +1176,28 @@ def main() -> int:
             "reported a winning_rate — the amount-derived rate is 기초금액-basis and would "
             "false-positive against the 예정가-basis legal floor.",
             "below_legal_floor is skipped when the floor model does not apply to the "
-            "issuing agency (산학협력단/협동조합 등 non-state = not_applicable) or the "
-            "agency type cannot be told from its name (대학교 등 = uncertain); see "
-            "summary.floor_applicability_counts and targets[].data_quality_details."
-            "floor_applicability. A published award_floor_rate outside the plausible "
-            "band is not used either (published_floor_implausible; live data holds "
-            "1.00000 rows) and falls back to the era tier.",
+            "issuing agency (산학협력단/협동조합 등 non-state = not_applicable), the "
+            "agency type cannot be told from its name (대학교 등 = uncertain), or the "
+            "agency follows a separate 행정규칙 instead of 국가계약 적격심사 (산림청 "
+            "계열 = separate_regime); see summary.floor_applicability_counts and "
+            "targets[].data_quality_details.floor_applicability. A published "
+            "award_floor_rate outside the plausible band is not used either "
+            "(published_floor_implausible; live data holds 1.00000 rows) and falls "
+            "back to the era tier.",
+            "separate_regime records ONLY that the 국가계약 era tier does not apply. No "
+            "substitute floor rate is asserted — the 산림청 산림사업 적격심사 세부기준 "
+            "text is unverified, so its tiers are not encoded anywhere.",
+            "below_legal_floor is also skipped when the reported winning_rate is not "
+            "independent evidence: if it matches winning_amount/base_amount within "
+            "data_quality_details.rate_basis_independence_tolerance and fewer than "
+            "the documented minimum (5) 복수예비가격 were collected, the reported rate "
+            "may just be that amount ratio and would "
+            "read 사정률(~0.98) below the 예정가-basis floor. See "
+            "summary.rate_basis_unverified_count and data_quality_details."
+            "rate_basis_unverified / reserve_price_count.",
             "Known limit: shallow undercuts (0.9~2.7%p, 지방계약/공공기관/수의견적 등 "
-            "다른 하한 체계 가능성) are NOT resolved by this gate and still surface as "
-            "below_legal_floor — the data alone cannot tell which tier applied.",
+            "다른 하한 체계 가능성) outside those gates are NOT resolved and still "
+            "surface as below_legal_floor — the data alone cannot tell which tier applied.",
             "summary.quality_flag_counts is scoped to the (clean-only) aggregation set, so "
             "base_basis_contaminated is 0 there by construction; read "
             "summary.evaluated_quality_flag_counts for all evaluated targets.",

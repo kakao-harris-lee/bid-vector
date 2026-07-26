@@ -15,12 +15,28 @@
 이 모듈은 그 두 축을 **선언 데이터**로 처리하는 순수 판별기다(§4.5.3 / §4.7.4).
 패턴 추가 = 코드 분기가 아니라 :data:`_AGENCY_PATTERNS` 한 줄.
 
+산림사업 별도 규정(2026-07-26 추가)
+-----------------------------------
+위 게이트 적용 후 남은 하회 중 6건이 전부 산림청 계열(국유림관리소·지방산림청·
+국립산림품종관리센터)이었다. 복수예비가격 15개로 예정가를 재구성해도 낙찰률이
+0.872~0.896 으로 신율 tier(0.89745) 아래에 남고, 하단 2건은 구율 tier(0.87745) 바로
+위에 몰려 있다. 산림사업은 국가계약 예규가 아니라 **산림청 산림사업 적격심사
+세부기준**(별도 행정규칙)을 따르는 것으로 보이므로, 국가계약 era-tier 를 그대로 대는
+것 자체가 범주 오류다.
+
+다만 그 행정규칙의 정확한 하한율과 개정 시점은 **원문 미확인**이다. 그래서
+``separate_regime`` 은 "국가계약 era-tier 비적용"이라는 사실만 기록하고 **대체 하한율을
+단정하지 않는다**(정직 명세 §2 — 없는 근거로 다른 숫자를 주장하지 않는다). 판별 축이
+기관명이라 같은 기관의 일반 공사·용역까지 함께 생략된다 — 이 상태는 "하회 아님"이
+아니라 **판정 보류**다.
+
 정직 명세(§2)와의 관계
 ----------------------
-판별 결과는 tri-state 다. 이름만으로 국공립/사립을 가를 수 없는 부류(대학교 등)를
+판별 결과는 4-상태다. 이름만으로 국공립/사립을 가를 수 없는 부류(대학교 등)를
 ``applicable`` 로 단정하면 오탐이 남고, ``not_applicable`` 로 단정하면 "비국가기관이
 확인됐다"는 없는 근거를 주장하게 된다. 그래서 ``uncertain`` 을 별도 상태로 두고,
-판정만 생략하되 **그 사실을 리포트에 남긴다**(침묵 스킵 금지).
+판정만 생략하되 **그 사실을 리포트에 남긴다**(침묵 스킵 금지). 산림청 계열도 같은
+이유로 ``not_applicable`` 과 섞지 않는다 — 국가기관이 맞고, 다른 규정을 따를 뿐이다.
 
 경계
 ----
@@ -40,16 +56,21 @@ from typing import Any
 
 from app.ai.predictors.historical import normalize_agency_name
 
-# ── tri-state 라벨 ────────────────────────────────────────────────────────────
+# ── 적용 범위 라벨 ────────────────────────────────────────────────────────────
 FLOOR_APPLICABLE = "applicable"
 FLOOR_NOT_APPLICABLE = "not_applicable"
 FLOOR_APPLICABILITY_UNCERTAIN = "uncertain"
+# 국가기관이지만 국가계약 적격심사가 아니라 별도 행정규칙(산림청 산림사업 적격심사
+# 세부기준 등)을 따르는 발주. ``not_applicable`` 과 **섞지 않는다** — 저쪽은 "비국가
+# 기관"이라는 다른 사실이고, 여기서 대체 하한율을 주장하지도 않는다(모듈 docstring).
+FLOOR_SEPARATE_REGIME = "separate_regime"
 
 # 리포트가 0 건까지 포함해 고정 순서로 세기 위한 전체 라벨 집합.
 ALL_FLOOR_APPLICABILITIES: tuple[str, ...] = (
     FLOOR_APPLICABLE,
     FLOOR_NOT_APPLICABLE,
     FLOOR_APPLICABILITY_UNCERTAIN,
+    FLOOR_SEPARATE_REGIME,
 )
 
 # ── 패턴 매칭 모드(디스패치 맵) ───────────────────────────────────────────────
@@ -99,6 +120,20 @@ _AGENCY_PATTERNS: tuple[_AgencyPattern, ...] = (
     _AgencyPattern("수협", FLOOR_NOT_APPLICABLE, MATCH_ENDSWITH),
     _AgencyPattern("축협", FLOOR_NOT_APPLICABLE, MATCH_ENDSWITH),
     _AgencyPattern("신협", FLOOR_NOT_APPLICABLE, MATCH_ENDSWITH),
+    # ── 국가기관이지만 별도 행정규칙 체계(산림사업 적격심사) ──
+    # 라이브 실측 6건이 전부 이 계열이고, 예정가를 재구성해도 국가계약 신율 아래에
+    # 남는다(모듈 docstring). 소속기관은 "산림청 ○○지방산림청 ○○국유림관리소",
+    # "산림청 국립산림품종관리센터" 처럼 본청명을 접두로 달고 나오므로 ``contains``
+    # 한 줄이 계열 전체를 덮는다.
+    #
+    # ``contains`` 인데도 substring 충돌이 없다는 근거: 라이브 기관명 2,799 개를 훑어
+    # "산림청"을 포함한 이름은 전부 산림청 소속기관이었다. 비국가기관인 산림**조합**
+    # (강릉시산림조합·산림조합중앙회 등 60여 개)은 이 토큰을 포함하지 않아 기본값
+    # ``applicable`` 로 남는다.
+    _AgencyPattern("산림청", FLOOR_SEPARATE_REGIME),
+    # 본청명 없이 적재된 표기를 위한 보강(라이브 표본에는 없지만 수집 소스에 따라
+    # 수요기관만 남는 경우가 있다). "지방산림청"은 위 토큰에 이미 포함된다.
+    _AgencyPattern("국유림관리소", FLOOR_SEPARATE_REGIME),
     # ── 이름만으로 국공립/사립을 가를 수 없는 부류 ──
     # "대학"은 "대학교"/"전문대학"을 함께 덮는다. 국립대학도 법인이라 국가계약 tier
     # 적용 여부를 이름으로 단정할 수 없으므로 판정을 생략만 한다.
@@ -117,7 +152,7 @@ PUBLISHED_FLOOR_MIN_PLAUSIBLE = 0.30
 
 
 def resolve_floor_applicability(agency_name: Any) -> str:
-    """발주기관명으로 법정 낙찰하한 모델의 적용 범위를 판별한다(tri-state).
+    """발주기관명으로 법정 낙찰하한 모델의 적용 범위를 판별한다(4-상태).
 
     이름이 비었으면 기본값 ``applicable`` — 기관을 모른다고 판정을 넓게 생략하면
     실제 이상치까지 조용히 사라진다(미상 표본은 이미 ``_unknown`` 버킷으로 별도
@@ -148,5 +183,9 @@ def is_published_floor_plausible(rate: float | None) -> bool:
 
 
 def is_floor_judgeable(applicability: str) -> bool:
-    """이 적용 범위 판정에서 하한 하회 판정을 수행해도 되는가."""
+    """이 적용 범위 판정에서 하한 하회 판정을 수행해도 되는가.
+
+    ``applicable`` 하나만 통과한다 — 비국가기관·판별 불가·별도 규정은 모두 **국가계약
+    era-tier 로 재는 것 자체가 성립하지 않는** 경우라 판정을 생략한다.
+    """
     return applicability == FLOOR_APPLICABLE
