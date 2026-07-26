@@ -1,15 +1,8 @@
 import { useEffect, useMemo } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
-import {
-  ChipInput,
-  LabeledStat,
-  NumberField,
-  ReadOnlyContextNotice,
-  ThresholdControl
-} from "@/shared/components";
-import { formatPercent } from "@/shared/lib";
+import { Button, toastApi } from "@/shared/components/ui";
+import { ReadOnlyContextNotice } from "@/shared/components";
 import { useShellContext } from "@/app/dashboardContext";
 import { ApiError } from "@/shared/api";
 import { logoutSession } from "@/app/layout/AuthGate";
@@ -18,6 +11,13 @@ import { CandidatesPreview } from "./CandidatesPreview";
 import { RecentRuns } from "./RecentRuns";
 import { useStrategyQuery, useUpdateStrategyMutation } from "./hooks";
 import { strategyFormSchema, type StrategyFormValues } from "./schema";
+import {
+  StrategyBudgetSection,
+  StrategyDecisionGuide,
+  StrategyNotificationSection,
+  StrategyTargetSection,
+  StrategyThresholdSection
+} from "./components";
 
 const defaultValues: StrategyFormValues = {
   focus_categories: [],
@@ -126,215 +126,10 @@ export function StrategyEditor() {
         ) : null}
         <StrategyDecisionGuide values={strategyValues} />
         <fieldset disabled={readOnly} className="contents">
-        <Card>
-          <CardHeader>
-            <CardTitle>대상</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Controller
-              control={form.control}
-              name="focus_categories"
-              render={({ field }) => (
-                <ChipInput
-                  label="중점 카테고리"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="용역, 물품 ..."
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="focus_regions"
-              render={({ field }) => (
-                <ChipInput
-                  label="중점 지역"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="서울, 경기 ..."
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="exclude_regions"
-              render={({ field }) => (
-                <ChipInput
-                  label="제외 지역"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="제외할 지역"
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="required_keywords"
-              render={({ field }) => (
-                <ChipInput
-                  label="필수 키워드"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="포함되어야 할 단어"
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="exclude_keywords"
-              render={({ field }) => (
-                <ChipInput
-                  label="제외 키워드"
-                  value={field.value}
-                  onChange={field.onChange}
-                  placeholder="제외할 단어"
-                />
-              )}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>예산 범위</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <NumberField
-              label="최소 예산 (원)"
-              register={form.register("min_budget_estimate", { valueAsNumber: true })}
-              error={errors.min_budget_estimate?.message}
-              step={1_000_000}
-            />
-            <NumberField
-              label="최대 예산 (원, 0=무제한)"
-              register={form.register("max_budget_estimate", { valueAsNumber: true })}
-              error={errors.max_budget_estimate?.message}
-              step={1_000_000}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>임계값</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Controller
-              control={form.control}
-              name="minimum_match_score"
-              render={({ field }) => (
-                <ThresholdControl
-                  label="최소 매칭 점수"
-                  value={field.value}
-                  onChange={field.onChange}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  format={formatPercent}
-                  error={errors.minimum_match_score?.message}
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="minimum_probability_score"
-              render={({ field }) => (
-                <ThresholdControl
-                  label="최소 가격 적합도"
-                  value={field.value}
-                  onChange={field.onChange}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  format={formatPercent}
-                  error={errors.minimum_probability_score?.message}
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="bid_now_threshold"
-              render={({ field }) => (
-                <ThresholdControl
-                  label="즉시 투찰 임계값"
-                  value={field.value}
-                  onChange={field.onChange}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  format={formatPercent}
-                  description="이 값 이상이면 'bid_now'로 분류"
-                  error={errors.bid_now_threshold?.message}
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="review_threshold"
-              render={({ field }) => (
-                <ThresholdControl
-                  label="검토 임계값"
-                  value={field.value}
-                  onChange={field.onChange}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  format={formatPercent}
-                  description="즉시 투찰 임계값보다 크면 안 됩니다."
-                  error={errors.review_threshold?.message}
-                />
-              )}
-            />
-            <Controller
-              control={form.control}
-              name="auto_workload_penalty_multiplier"
-              render={({ field }) => (
-                <ThresholdControl
-                  label="자동 워크로드 패널티 배수"
-                  value={field.value}
-                  onChange={field.onChange}
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  description="활성 입찰 수에 따른 우선순위 감점 배수 (0~2)."
-                  error={errors.auto_workload_penalty_multiplier?.message}
-                />
-              )}
-            />
-            <NumberField
-              label="최대 추천 후보 수"
-              register={form.register("max_recommended_candidates", { valueAsNumber: true })}
-              error={errors.max_recommended_candidates?.message}
-              min={1}
-              max={100}
-              step={1}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>알림</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            <Controller
-              control={form.control}
-              name="notify_only_high_priority"
-              render={({ field }) => (
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={field.value}
-                    onChange={(event) => field.onChange(event.target.checked)}
-                    className="h-4 w-4 accent-[var(--color-primary)]"
-                  />
-                  <span>높은 우선순위 후보에만 알림 보내기</span>
-                </label>
-              )}
-            />
-          </CardContent>
-        </Card>
-
+          <StrategyTargetSection control={form.control} />
+          <StrategyBudgetSection register={form.register} errors={errors} />
+          <StrategyThresholdSection control={form.control} register={form.register} errors={errors} />
+          <StrategyNotificationSection control={form.control} />
         </fieldset>
         {readOnly ? null : (
           <div className="flex items-center justify-end gap-2">
@@ -359,78 +154,6 @@ export function StrategyEditor() {
       </aside>
     </div>
   );
-}
-
-function StrategyDecisionGuide({ values }: { values: StrategyFormValues }) {
-  const targetingCount =
-    (values.focus_categories?.length ?? 0) +
-    (values.focus_regions?.length ?? 0) +
-    (values.required_keywords?.length ?? 0) +
-    (values.exclude_regions?.length ?? 0) +
-    (values.exclude_keywords?.length ?? 0);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>추천 판단 기준</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3 text-xs">
-        <p className="text-[var(--color-muted)]">
-          추천 후보는 대상 조건, 예산 범위, 공고 적합도, 가격 적합도(추정), 워크로드
-          패널티를 통과한 공고만 남기는 방식으로 좁힙니다.
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <LabeledStat
-            variant="guide"
-            label="대상 조건"
-            value={`${targetingCount.toLocaleString("ko-KR")}개`}
-            detail="중점·제외 지역과 키워드가 후보 폭을 조절합니다."
-          />
-          <LabeledStat
-            variant="guide"
-            label="예산 범위"
-            value={`${formatBudget(values.min_budget_estimate)} ~ ${formatBudget(
-              values.max_budget_estimate,
-              "무제한"
-            )}`}
-            detail="공고 추정가격이 이 범위를 벗어나면 우선순위가 낮아집니다."
-          />
-          <LabeledStat
-            variant="guide"
-            label="점수 문턱"
-            value={`공고 적합도 ${formatPercent(values.minimum_match_score)} 이상`}
-            detail={`가격 적합도(추정) ${formatPercent(
-              values.minimum_probability_score
-            )} 이상`}
-          />
-          <LabeledStat
-            variant="guide"
-            label="액션 분기"
-            value={`투찰 ${formatPercent(values.bid_now_threshold)} / 검토 ${formatPercent(
-              values.review_threshold
-            )}`}
-            detail="검토 임계값 미만은 보류 후보로 분류됩니다."
-          />
-        </div>
-        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-secondary)] p-3">
-          <div className="mb-1 flex items-center gap-2">
-            <Badge tone="info">확인 흐름</Badge>
-            <span className="font-medium text-[var(--color-fg)]">투찰 전 요약 확인</span>
-          </div>
-          <p className="text-[var(--color-muted)]">
-            가격 적합도(추정)는 P(낙찰)이 아니라 추천가가 예측 적정대에 들어가는지
-            보는 내부 신호입니다. 실제 투찰 전에는 투찰 요약에서 추천가, 예측 가격대,
-            하한율 참고값, 분야 통계, 강점과 리스크를 함께 확인하세요.
-          </p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function formatBudget(value: number, zeroLabel = "0원"): string {
-  if (value === 0) return zeroLabel;
-  return `${value.toLocaleString("ko-KR")}원`;
 }
 
 function toFormValues(strategy: NonNullable<ReturnType<typeof useStrategyQuery>["data"]>): StrategyFormValues {
