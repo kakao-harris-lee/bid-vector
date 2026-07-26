@@ -28,6 +28,7 @@ from app.core.single_user import (
     ensure_operator_strategy_for,
 )
 from app.core.time import ensure_utc, utc_now
+from app.domain.aggregates import average
 from app.models.models import Bid, BidDecisionRecord, CompanyProfile, OperatorStrategy, Project, User
 from app.schemas.schemas import BidDecisionRequest, OpportunityAnalysisRequest
 from app.services.allocation import BidDecisionService
@@ -888,7 +889,10 @@ class OpportunityAnalysisService:
         payload = dict(request_data or {})
         bids = db.query(Bid).filter(Bid.user_id == operator_id).all()
         if bids:
-            payload.setdefault("average_bid", round(sum(float(bid.bid_amount or 0.0) for bid in bids) / len(bids), 2))
+            payload.setdefault(
+                "average_bid",
+                average((float(bid.bid_amount or 0.0) for bid in bids), digits=2),
+            )
             accepted_count = sum(1 for bid in bids if bid.status == "accepted")
             payload.setdefault("win_rate", round(accepted_count / len(bids), 4))
             payload.setdefault("bid_count", len(bids))
