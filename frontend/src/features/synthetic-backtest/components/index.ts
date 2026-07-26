@@ -6,3 +6,5 @@ export { SeedPanel } from "./SeedPanel";
 export { ComparisonTable, type SortKey } from "./ComparisonTable";
 export { WinRateBarChart } from "./WinRateBarChart";
 export { ArchetypeDrilldown } from "./ArchetypeDrilldown";
+export { CustomOperatorMetaSection } from "./CustomOperatorMetaSection";
+export { CustomOperatorStrategySection } from "./CustomOperatorStrategySection";
