@@ -115,9 +115,9 @@ import pytest
             125,
         ),
         (
-            "app.api.operator",
+            "app.api.operator_dashboard",
             None,
-            "get_operator_dashboard",
+            "get_operator_dashboard_impl",
             125,
         ),
         (
