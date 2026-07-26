@@ -16,6 +16,7 @@ from app.ai.floor_applicability import (
     FLOOR_APPLICABILITY_UNCERTAIN,
     FLOOR_APPLICABLE,
     FLOOR_NOT_APPLICABLE,
+    FLOOR_SEPARATE_REGIME,
     PUBLISHED_FLOOR_MAX_PLAUSIBLE,
     PUBLISHED_FLOOR_MIN_PLAUSIBLE,
     is_published_floor_plausible,
@@ -23,9 +24,12 @@ from app.ai.floor_applicability import (
 )
 from app.ai.holdout_quality import (
     FLAG_BELOW_LEGAL_FLOOR,
+    FLAG_LOW_ACTUAL_RATE,
     FLOOR_SOURCE_ERA_TIER,
     FLOOR_SOURCE_NONE,
     FLOOR_SOURCE_PUBLISHED,
+    MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE,
+    RATE_BASIS_INDEPENDENCE_TOLERANCE,
     assess_row_quality,
 )
 from app.ai.holdout_reporting import build_floor_applicability_report
@@ -53,8 +57,15 @@ from app.services.base_amount_basis import BASIS_CLEAN
         ("명지전문대학", FLOOR_APPLICABILITY_UNCERTAIN),
         ("경북보건대학교", FLOOR_APPLICABILITY_UNCERTAIN),
         ("계원예술대학교", FLOOR_APPLICABILITY_UNCERTAIN),
+        # 산림사업 별도 행정규칙 계열 — 라이브 실측 6건이 이 표기들에 걸린다.
+        ("산림청 서부지방산림청 영암국유림관리소", FLOOR_SEPARATE_REGIME),
+        ("산림청 북부지방산림청 홍천국유림관리소", FLOOR_SEPARATE_REGIME),
+        ("산림청 국립산림품종관리센터", FLOOR_SEPARATE_REGIME),
+        ("산림청 산림항공본부 익산산림항공관리소", FLOOR_SEPARATE_REGIME),
+        ("남부지방산림청", FLOOR_SEPARATE_REGIME),
+        ("영암국유림관리소", FLOOR_SEPARATE_REGIME),
+        ("산림청", FLOOR_SEPARATE_REGIME),
         # 국가·지자체 기관은 기본값 유지(기존 판정 그대로).
-        ("산림청 북부지방산림청 홍천국유림관리소", FLOOR_APPLICABLE),
         ("한국농어촌공사 충북지역본부 청주지사", FLOOR_APPLICABLE),
         ("울산광역시 울주군", FLOOR_APPLICABLE),
         ("조달청", FLOOR_APPLICABLE),
@@ -89,6 +100,21 @@ def test_short_cooperative_abbreviations_do_not_match_mid_name(agency):
     assert resolve_floor_applicability(agency) == FLOOR_APPLICABLE
 
 
+@pytest.mark.parametrize(
+    "agency",
+    [
+        "강릉시산림조합",
+        "산림조합중앙회",
+        "산림조합중앙회 진주시산림조합",
+        "경상북도 산림환경연구원 북부지원",
+        "한국산림복지진흥원",
+    ],
+)
+def test_forestry_cooperatives_are_not_separate_regime(agency):
+    """회귀 가드: 산림**조합**·산림 유관기관은 산림청 계열이 아니다(토큰 미포함)."""
+    assert resolve_floor_applicability(agency) == FLOOR_APPLICABLE
+
+
 def test_whitespace_variants_resolve_to_the_same_verdict():
     for variant in ("인제대학교 산학협력단", "인제대학교산학협력단", " 인제대학교  산학협력단 "):
         assert resolve_floor_applicability(variant) == FLOOR_NOT_APPLICABLE
@@ -115,7 +141,12 @@ def test_is_published_floor_plausible_boundaries(rate, expected):
 
 # ── 하회 판정 배선 ───────────────────────────────────────────────────────────
 def _assess(**overrides):
-    """라이브 오탐 재현 기본값: 신율 시행 후 공사, era-tier 0.89745 를 하회하는 낙찰률."""
+    """라이브 오탐 재현 기본값: 신율 시행 후 공사, era-tier 0.89745 를 하회하는 낙찰률.
+
+    기본값은 복수예비가격 15개(=예정가를 독립 재구성할 수 있는 행)를 가정한다. 그래야
+    보고율이 금액비와 같아도 rate-basis 게이트에 걸리지 않아, 이 블록의 케이스들이
+    **적용 범위 축만** 검증한다.
+    """
     kwargs = {
         "group": "construction",
         "category": "construction",
@@ -127,6 +158,7 @@ def _assess(**overrides):
         "estimation_amount": 500_000_000.0,
         "reference_date": date(2026, 2, 1),
         "agency_name": None,
+        "reserve_price_count": 15,
     }
     kwargs.update(overrides)
     return assess_row_quality(**kwargs)
@@ -134,7 +166,7 @@ def _assess(**overrides):
 
 def test_state_agency_keeps_existing_below_floor_verdict():
     """회귀 가드: 국가기관은 기존 판정을 그대로 유지한다(게이트가 전부를 끄지 않는다)."""
-    assessment = _assess(agency_name="산림청 북부지방산림청 홍천국유림관리소")
+    assessment = _assess(agency_name="한국농어촌공사 충북지역본부 청주지사")
     assert FLAG_BELOW_LEGAL_FLOOR in assessment.flags
     assert assessment.floor_applicability == FLOOR_APPLICABLE
     assert assessment.legal_floor_source == FLOOR_SOURCE_ERA_TIER
@@ -167,6 +199,32 @@ def test_uncertain_agency_skips_below_floor_and_records_the_reason():
     assessment = _assess(agency_name="울산대학교", reported_rate=0.79857)
     assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
     assert assessment.floor_applicability == FLOOR_APPLICABILITY_UNCERTAIN
+
+
+# ── 산림사업 별도 규정 ────────────────────────────────────────────────────────
+def test_forestry_agency_skips_below_floor_but_keeps_the_resolved_floor():
+    """예정가를 재구성해도 신율 아래 남는 산림청 계열(라이브 실측 6건)."""
+    assessment = _assess(
+        agency_name="산림청 서부지방산림청 영암국유림관리소",
+        reported_rate=0.87246,
+        effective_rate=0.87246,
+        amount_derived_rate=0.87246,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
+    assert assessment.floor_applicability == FLOOR_SEPARATE_REGIME
+    assert assessment.floor_undercut is None
+    # 해석값·출처는 그대로 남는다(#274 추적성 패턴) — 판정만 생략했다.
+    assert assessment.legal_floor_rate == pytest.approx(0.89745)
+    assert assessment.legal_floor_source == FLOOR_SOURCE_ERA_TIER
+    assert assessment.as_details()["floor_applicability"] == FLOOR_SEPARATE_REGIME
+
+
+def test_separate_regime_is_a_distinct_label_from_not_applicable():
+    """산림청은 국가기관이 맞다 — 비국가기관과 같은 버킷으로 접지 않는다."""
+    assert FLOOR_SEPARATE_REGIME != FLOOR_NOT_APPLICABLE
+    assert FLOOR_SEPARATE_REGIME in ALL_FLOOR_APPLICABILITIES
+    assert resolve_floor_applicability("영암국유림관리소") == FLOOR_SEPARATE_REGIME
+    assert resolve_floor_applicability("청천농업협동조합") == FLOOR_NOT_APPLICABLE
 
 
 def test_implausible_published_floor_falls_back_to_era_tier():
@@ -222,12 +280,162 @@ def test_below_plausible_published_floor_still_flags():
     assert assessment.floor_undercut == pytest.approx(0.18, abs=1e-9)
 
 
+# ── 보고 낙찰률 basis 독립성 게이트 ───────────────────────────────────────────
+_STATE_AGENCY = "울산광역시 울주군"
+
+
+def test_amount_derived_reported_rate_without_reserves_skips_below_floor():
+    """A군 재현(라이브 13건): 보고율이 금액비와 사실상 같고 예비가도 없으면 생략."""
+    derived = 0.88123
+    reported = derived * (1 + 1e-5)  # 실측 상대오차 상한
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=derived,
+        reserve_price_count=0,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
+    assert assessment.rate_basis_unverified is True
+    assert assessment.floor_undercut is None
+    # 적용 범위 자체는 그대로다 — 생략 사유가 다른 축이라는 게 드러나야 한다.
+    assert assessment.floor_applicability == FLOOR_APPLICABLE
+    details = assessment.as_details()
+    assert details["rate_basis_unverified"] is True
+    assert details["reserve_price_count"] == 0
+    assert details["rate_basis_independence_tolerance"] == RATE_BASIS_INDEPENDENCE_TOLERANCE
+
+
+def test_exactly_equal_rates_without_reserves_skip_below_floor():
+    """실측 6건은 상대오차가 정확히 0.0 이었다(금액비를 그대로 되돌려준 행)."""
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=0.88,
+        effective_rate=0.88,
+        amount_derived_rate=0.88,
+        reserve_price_count=0,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
+    assert assessment.rate_basis_unverified is True
+
+
+def test_independent_reported_rate_still_flags_below_floor():
+    """회귀 가드: 독립 실측(상대오차 ≥1.4e-3)이면 진짜 하회는 계속 잡힌다."""
+    derived = 0.70
+    reported = derived * (1 + 1.4e-3)  # 독립 확인된 행들의 실측 최소 상대오차
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=derived,
+        reserve_price_count=0,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR in assessment.flags
+    assert assessment.rate_basis_unverified is False
+    assert assessment.floor_undercut is not None
+
+
+def test_reserve_prices_keep_the_verdict_even_when_rates_agree():
+    """사정률≈1 인 정상 케이스 보존: 예비가로 예정가를 독립 재구성할 수 있으면 판정 유지."""
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=0.70,
+        effective_rate=0.70,
+        amount_derived_rate=0.70,
+        reserve_price_count=15,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR in assessment.flags
+    assert assessment.rate_basis_unverified is False
+    assert assessment.as_details()["reserve_price_count"] == 15
+
+
+@pytest.mark.parametrize(
+    "reserve_count,expected_flagged",
+    [
+        (MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE - 1, False),
+        (MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE, True),  # 경계 포함
+    ],
+)
+def test_reserve_price_count_boundary(reserve_count, expected_flagged):
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=0.70,
+        effective_rate=0.70,
+        amount_derived_rate=0.70,
+        reserve_price_count=reserve_count,
+    )
+    assert (FLAG_BELOW_LEGAL_FLOOR in assessment.flags) is expected_flagged
+
+
+@pytest.mark.parametrize(
+    "offset,expected_flagged",
+    [
+        (RATE_BASIS_INDEPENDENCE_TOLERANCE - 1e-6, False),  # 경계 미만 = 파생 의심
+        (RATE_BASIS_INDEPENDENCE_TOLERANCE + 1e-6, True),  # 경계 이상 = 독립 실측
+    ],
+)
+def test_rate_basis_independence_tolerance_boundary(offset, expected_flagged):
+    derived = 0.70
+    reported = derived * (1 + offset)
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=derived,
+        reserve_price_count=0,
+    )
+    assert (FLAG_BELOW_LEGAL_FLOOR in assessment.flags) is expected_flagged
+    assert assessment.rate_basis_unverified is not expected_flagged
+
+
+def test_rate_basis_unverified_only_marks_rows_whose_verdict_it_skipped():
+    """건수가 '이 게이트 때문에 생략된 판정'을 뜻하도록, 다른 사유로 생략된 행은 제외."""
+    # 적용 범위 밖(비국가기관)이라 애초에 하한 비교를 하지 않는 행.
+    non_state = _assess(
+        agency_name="인제대학교 산학협력단",
+        reported_rate=0.70,
+        amount_derived_rate=0.70,
+        reserve_price_count=0,
+    )
+    assert non_state.rate_basis_unverified is False
+    # 하한 자체가 해석되지 않은 행(용역 + 게시값 없음).
+    unresolved = _assess(
+        group="service",
+        category="service",
+        agency_name=_STATE_AGENCY,
+        reported_rate=0.70,
+        amount_derived_rate=0.70,
+        reserve_price_count=0,
+    )
+    assert unresolved.legal_floor_rate is None
+    assert unresolved.rate_basis_unverified is False
+
+
+def test_rate_basis_gate_does_not_touch_other_quality_flags():
+    """게이트는 하한 판정만 막는다 — 분모 불일치 등 다른 축은 그대로 판정된다."""
+    assessment = _assess(
+        agency_name=_STATE_AGENCY,
+        reported_rate=0.60,
+        effective_rate=0.60,
+        amount_derived_rate=0.60,
+        reserve_price_count=0,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
+    assert FLAG_LOW_ACTUAL_RATE in assessment.flags
+
+
 # ── 리포트 노출(침묵 스킵 금지) ───────────────────────────────────────────────
-def _row(applicability: str, *, implausible: bool = False) -> dict:
+def _row(
+    applicability: str,
+    *,
+    implausible: bool = False,
+    rate_basis_unverified: bool = False,
+) -> dict:
     return {
         "data_quality_details": {
             "floor_applicability": applicability,
             "published_floor_implausible": implausible,
+            "rate_basis_unverified": rate_basis_unverified,
         }
     }
 
@@ -237,6 +445,7 @@ def test_floor_applicability_report_counts_both_scopes():
     evaluated = [
         *aggregated,
         _row(FLOOR_APPLICABILITY_UNCERTAIN),
+        _row(FLOOR_SEPARATE_REGIME),
         _row(FLOOR_NOT_APPLICABLE, implausible=True),
     ]
     report = build_floor_applicability_report(aggregated, evaluated_rows=evaluated)
@@ -245,14 +454,26 @@ def test_floor_applicability_report_counts_both_scopes():
         FLOOR_APPLICABLE: 1,
         FLOOR_NOT_APPLICABLE: 1,
         FLOOR_APPLICABILITY_UNCERTAIN: 0,
+        FLOOR_SEPARATE_REGIME: 0,
     }
     assert report["evaluated_floor_applicability_counts"] == {
         FLOOR_APPLICABLE: 1,
         FLOOR_NOT_APPLICABLE: 2,
         FLOOR_APPLICABILITY_UNCERTAIN: 1,
+        FLOOR_SEPARATE_REGIME: 1,
     }
     assert report["published_floor_implausible_count"] == 0
     assert report["evaluated_published_floor_implausible_count"] == 1
+
+
+def test_floor_applicability_report_counts_rate_basis_skips():
+    """rate-basis 생략도 침묵하지 않는다(두 스코프 모두)."""
+    aggregated = [_row(FLOOR_APPLICABLE, rate_basis_unverified=True)]
+    evaluated = [*aggregated, _row(FLOOR_APPLICABLE, rate_basis_unverified=True)]
+    report = build_floor_applicability_report(aggregated, evaluated_rows=evaluated)
+
+    assert report["rate_basis_unverified_count"] == 1
+    assert report["evaluated_rate_basis_unverified_count"] == 2
 
 
 def test_floor_applicability_report_keeps_zero_labels_and_defaults_scope():

@@ -33,6 +33,7 @@ QUALITY_FLAGS_FIELD = "data_quality_flags"
 QUALITY_DETAILS_FIELD = "data_quality_details"
 FLOOR_APPLICABILITY_FIELD = "floor_applicability"
 PUBLISHED_FLOOR_IMPLAUSIBLE_FIELD = "published_floor_implausible"
+RATE_BASIS_UNVERIFIED_FIELD = "rate_basis_unverified"
 
 # worst-case 정렬에서 지표가 없는 버킷을 맨 뒤로 보내는 sentinel. 정렬 키는 오차를
 # 부호 반전해 쓰므로(-inf → +inf) 실제 오차값이 아무리 커도 이 버킷보다 앞선다.
@@ -132,13 +133,10 @@ def _floor_applicability_counts(rows: Sequence[dict[str, Any]]) -> dict[str, int
     return counts
 
 
-def _implausible_floor_count(rows: Sequence[dict[str, Any]]) -> int:
+def _detail_flag_count(rows: Sequence[dict[str, Any]], field: str) -> int:
+    """상세 dict 의 boolean 필드가 켜진 행 수(하한 판정 생략 사유별 규모)."""
     return sum(
-        1
-        for row in rows
-        if bool(
-            (row.get(QUALITY_DETAILS_FIELD) or {}).get(PUBLISHED_FLOOR_IMPLAUSIBLE_FIELD)
-        )
+        1 for row in rows if bool((row.get(QUALITY_DETAILS_FIELD) or {}).get(field))
     )
 
 
@@ -147,20 +145,29 @@ def build_floor_applicability_report(
     *,
     evaluated_rows: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """법정 하한 판정의 **적용 범위 스킵 규모**를 리포트에 드러낸다.
+    """법정 하한 판정의 **스킵 규모**를 리포트에 드러낸다.
 
-    ``below_legal_floor`` 판정은 비국가기관(``not_applicable``)과 이름만으로 가릴 수
-    없는 기관(``uncertain``)에서 생략되는데, 그 생략이 리포트에 안 보이면 "하회 0건"이
-    데이터가 깨끗하다는 뜻으로 오독된다. 건수를 두 스코프(집계/전체 평가)로 나눠
-    싣는 것은 품질 플래그 건수와 같은 규칙이다.
+    ``below_legal_floor`` 판정은 비국가기관(``not_applicable``)·이름만으로 가릴 수 없는
+    기관(``uncertain``)·별도 행정규칙 체계(``separate_regime``)에서 생략되고, 보고
+    낙찰률이 금액비 파생으로 보일 때도(``rate_basis_unverified``) 생략된다. 그 생략이
+    리포트에 안 보이면 "하회 0건"이 데이터가 깨끗하다는 뜻으로 오독된다. 건수를 두
+    스코프(집계/전체 평가)로 나눠 싣는 것은 품질 플래그 건수와 같은 규칙이다.
     """
     evaluated = list(rows) if evaluated_rows is None else list(evaluated_rows)
     return {
         "floor_applicability_counts": _floor_applicability_counts(rows),
         "evaluated_floor_applicability_counts": _floor_applicability_counts(evaluated),
-        "published_floor_implausible_count": _implausible_floor_count(rows),
-        "evaluated_published_floor_implausible_count": _implausible_floor_count(
-            evaluated
+        "published_floor_implausible_count": _detail_flag_count(
+            rows, PUBLISHED_FLOOR_IMPLAUSIBLE_FIELD
+        ),
+        "evaluated_published_floor_implausible_count": _detail_flag_count(
+            evaluated, PUBLISHED_FLOOR_IMPLAUSIBLE_FIELD
+        ),
+        "rate_basis_unverified_count": _detail_flag_count(
+            rows, RATE_BASIS_UNVERIFIED_FIELD
+        ),
+        "evaluated_rate_basis_unverified_count": _detail_flag_count(
+            evaluated, RATE_BASIS_UNVERIFIED_FIELD
         ),
     }
 

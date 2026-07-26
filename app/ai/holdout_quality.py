@@ -25,6 +25,12 @@
 ``amount_derived_rate`` 는 **기초금액 기준**(#162)이라 사정률(<1)만큼 낮게 나오므로,
 하한 하회 판정에 그 값을 쓰면 정상 낙찰이 대량 오탐된다. 따라서 하한 비교는 소스가
 보고한 ``winning_rate`` 가 있을 때만 수행하고, 없으면 **판정을 생략**한다(플래그 없음).
+
+보고값이 **있어도** 그것이 독립적인 예정가-basis 실측이 아니라 우리가 가진 금액비의
+파생값이면 같은 오탐이 그대로 재현된다(라이브 실측 13건). 그래서 보고율이 금액-역산율과
+사실상 일치하고 독립 예정가 증거(복수예비가격)도 없으면 하한 판정을 생략하고 그 사실을
+``rate_basis_unverified`` 로 남긴다(:func:`_is_rate_basis_unverified`).
+
 이 모듈은 예측·guardrail 을 전혀 건드리지 않는 분석 전용 판정기다.
 
 순수 함수(I/O 0).
@@ -70,6 +76,15 @@ RATE_MISMATCH_RELATIVE_TOLERANCE = 0.01
 # 법정 하한 하회 판정의 절대 허용오차(=5bp). 하한율 표기 반올림과 원 단위 절사로
 # 생기는 미세 하회를 오탐하지 않기 위한 여유다.
 LEGAL_FLOOR_UNDERCUT_TOLERANCE = 0.0005
+# 보고 낙찰률이 **독립 실측인지 금액비 파생인지**를 가르는 상대오차 경계.
+# 라이브 실측(2026-07-26 기관 축 홀드아웃)에서 두 군집이 이 값을 사이에 두고 깨끗이
+# 갈렸다: 파생 의심군 13건의 상대오차는 ≤1e-5(6건은 정확히 0.0), 독립 예정가-basis 로
+# 확인된 행들의 **최소** 상대오차는 1.4e-3. 그 사이 값은 관측되지 않았다.
+RATE_BASIS_INDEPENDENCE_TOLERANCE = 1e-3
+# 독립 예정가 증거로 인정하는 복수예비가격 최소 개수. KONEPS 복수예비가격은 15개가
+# 정상이지만 부분 적재 행도 예정가 재구성이 가능하므로 보수적으로 5개를 경계로 둔다.
+# 이 증거가 있으면 보고율이 금액비와 일치해도(사정률≈1 인 정상 케이스) 판정을 유지한다.
+MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE = 5
 # 가격 백테스트 대상으로 쓰기 어려운 저율 구간(기존 홀드아웃 판정을 그대로 승계).
 LOW_ACTUAL_RATE_THRESHOLD = 0.75
 CONSTRUCTION_LOW_RATE_THRESHOLD = 0.85
@@ -92,7 +107,8 @@ class _QualityContext:
     amount_derived_rate: float  # winning_amount / pricing base(기초금액 기준)
     legal_floor_rate: float | None
     rate_mismatch_ratio: float | None
-    floor_applicability: str  # applicable / not_applicable / uncertain
+    floor_applicability: str  # applicable / not_applicable / uncertain / separate_regime
+    reserve_price_count: int  # 수집된 복수예비가격 개수(독립 예정가 증거의 유무)
 
 
 def _is_low_actual_rate(ctx: _QualityContext) -> bool:
@@ -122,21 +138,56 @@ def _is_amount_rate_mismatch(ctx: _QualityContext) -> bool:
     )
 
 
-def _is_below_legal_floor(ctx: _QualityContext) -> bool:
-    """보고 낙찰률이 해석된 법정 하한을 (허용오차 밖으로) 하회하는가.
+def _is_floor_comparable(ctx: _QualityContext) -> bool:
+    """하한 비교의 **전제**(적용 범위·보고율·해석된 하한)가 모두 충족됐는가.
 
-    ``reported_rate`` 가 없으면 판정하지 않는다 — 기초금액 기준 역산율로 예정가 기준
+    하한 모델이 그 공고에 적용되지 않거나(비국가기관), 적용 여부를 이름으로 가릴 수
+    없거나(대학교 등), 다른 행정규칙 체계이면(산림청 계열) 판정하지 않는다. 해석된
+    하한값 자체는 리포트에 남고 ``floor_applicability`` 로 생략 사유가 드러난다.
+
+    ``reported_rate`` 가 없어도 판정하지 않는다 — 기초금액 기준 역산율로 예정가 기준
     하한을 재면 사정률만큼 구조적으로 낮아 정상 낙찰이 오탐된다(모듈 docstring).
-
-    하한 모델이 그 공고에 적용되지 않거나(비국가기관) 적용 여부를 이름으로 가릴 수
-    없으면(대학교 등) 역시 판정하지 않는다 — 해석된 하한값 자체는 리포트에 남고
-    ``floor_applicability`` 로 생략 사유가 드러난다.
     """
-    if not is_floor_judgeable(ctx.floor_applicability):
+    return (
+        is_floor_judgeable(ctx.floor_applicability)
+        and ctx.reported_rate is not None
+        and ctx.legal_floor_rate is not None
+    )
+
+
+def _is_rate_basis_unverified(ctx: _QualityContext) -> bool:
+    """보고 낙찰률이 금액비 파생으로 보이고 독립 예정가 증거도 없는가.
+
+    보고율이 ``winning_amount / base_amount`` 와 상대오차 경계 밖으로 갈리면 그 값은
+    우리가 가진 금액비로 만들 수 없는 정보(=예정가-basis 실측)를 담고 있다는 뜻이다.
+    반대로 사실상 일치하면 소스가 금액비를 되돌려준 것일 수 있고, 그 값을 예정가-basis
+    하한에 대면 사정률만큼 구조적으로 낮게 나온다.
+
+    복수예비가격이 충분히 있으면 예정가를 독립적으로 재구성할 수 있으므로, 일치해도
+    (사정률≈1 인 정상 케이스) 판정을 유지한다.
+    """
+    if ctx.reserve_price_count >= MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE:
         return False
-    if ctx.reported_rate is None or ctx.legal_floor_rate is None:
+    if ctx.rate_mismatch_ratio is None:
         return False
-    return ctx.reported_rate < ctx.legal_floor_rate - LEGAL_FLOOR_UNDERCUT_TOLERANCE
+    return ctx.rate_mismatch_ratio < RATE_BASIS_INDEPENDENCE_TOLERANCE
+
+
+def _is_floor_verdict_rate_basis_blocked(ctx: _QualityContext) -> bool:
+    """다른 전제는 다 충족했는데 rate basis 미검증이라 하한 판정을 생략하는가."""
+    return _is_floor_comparable(ctx) and _is_rate_basis_unverified(ctx)
+
+
+def _is_below_legal_floor(ctx: _QualityContext) -> bool:
+    """보고 낙찰률이 해석된 법정 하한을 (허용오차 밖으로) 하회하는가."""
+    if not _is_floor_comparable(ctx) or _is_rate_basis_unverified(ctx):
+        return False
+    reported, floor = ctx.reported_rate, ctx.legal_floor_rate
+    return (
+        reported is not None
+        and floor is not None
+        and reported < floor - LEGAL_FLOOR_UNDERCUT_TOLERANCE
+    )
 
 
 def _is_base_basis_contaminated(ctx: _QualityContext) -> bool:
@@ -225,6 +276,9 @@ class QualityAssessment:
     floor_undercut: float | None  # 하한 − 보고율(하회 시에만 양수), 아니면 None
     floor_applicability: str = FLOOR_APPLICABLE
     published_floor_implausible: bool = False
+    # 하한 비교의 다른 전제는 충족했지만 보고율이 금액비 파생으로 보여 생략한 경우.
+    rate_basis_unverified: bool = False
+    reserve_price_count: int = 0
 
     def as_details(self) -> dict[str, Any]:
         """리포트 JSON 에 실을 판정 근거(플래그가 왜 붙었는지 추적 가능하게)."""
@@ -239,6 +293,11 @@ class QualityAssessment:
             # (침묵 스킵 금지 — 건수는 summary.floor_applicability_counts).
             "floor_applicability": self.floor_applicability,
             "published_floor_implausible": self.published_floor_implausible,
+            # 보고율이 독립 실측이 아니라 금액비 파생으로 보여 하한 판정을 생략했는지와
+            # 그 판단 근거(예비가 개수·경계). 건수는 summary.rate_basis_unverified_count.
+            "rate_basis_unverified": self.rate_basis_unverified,
+            "rate_basis_independence_tolerance": RATE_BASIS_INDEPENDENCE_TOLERANCE,
+            "reserve_price_count": self.reserve_price_count,
         }
 
 
@@ -254,6 +313,7 @@ def assess_row_quality(
     estimation_amount: float | None = None,
     reference_date: date | datetime | None = None,
     agency_name: Any = None,
+    reserve_price_count: int = 0,
 ) -> QualityAssessment:
     """홀드아웃 한 행의 품질 플래그를 판정한다(순수).
 
@@ -269,6 +329,8 @@ def assess_row_quality(
         reference_date: 공고 기준일. 구/신율(시행일) 판정 입력 — 소급 방지.
         agency_name: 발주기관 표시명(부재 시 수요기관). 하한 모델 적용 범위 판별
             입력이며, 생략하면 ``applicable`` 로 보아 기존 판정을 유지한다.
+        reserve_price_count: 그 공고에 수집된 복수예비가격 개수(호출부가 주입 — §4.7.3).
+            독립 예정가 증거의 유무로만 쓰이며, 생략하면 0(증거 없음)으로 본다.
     """
     floor_applicability = resolve_floor_applicability(agency_name)
     floor = resolve_legal_floor_rate(
@@ -294,6 +356,7 @@ def assess_row_quality(
         legal_floor_rate=legal_floor_rate,
         rate_mismatch_ratio=rate_mismatch_ratio,
         floor_applicability=floor_applicability,
+        reserve_price_count=max(0, int(reserve_price_count or 0)),
     )
     flags = tuple(flag for flag, predicate in _QUALITY_RULES if predicate(ctx))
     floor_undercut = (
@@ -313,4 +376,6 @@ def assess_row_quality(
         floor_undercut=floor_undercut,
         floor_applicability=floor_applicability,
         published_floor_implausible=floor.published_floor_implausible,
+        rate_basis_unverified=_is_floor_verdict_rate_basis_blocked(ctx),
+        reserve_price_count=ctx.reserve_price_count,
     )

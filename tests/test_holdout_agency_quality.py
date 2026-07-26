@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from app.ai.holdout_quality import (
     FLOOR_SOURCE_NONE,
     FLOOR_SOURCE_PUBLISHED,
     LEGAL_FLOOR_UNDERCUT_TOLERANCE,
+    RATE_BASIS_INDEPENDENCE_TOLERANCE,
     RATE_MISMATCH_RELATIVE_TOLERANCE,
     assess_row_quality,
 )
@@ -143,6 +145,13 @@ def test_bucket_small_agencies_min_samples_floor_is_one():
 
 # ── 품질 플래그 ───────────────────────────────────────────────────────────────
 def _assess(**overrides):
+    """기본값은 복수예비가격 15개(예정가 독립 재구성 가능) 행이다.
+
+    이 블록의 케이스들은 보고율과 금액-역산율을 일부러 같게 두고 **하한/분모 판정
+    자체**를 검증한다. 예비가 증거가 없으면 rate-basis 게이트가 하한 판정을 먼저
+    생략해 버려(``tests/test_floor_applicability.py`` 가 그 축을 따로 검증) 여기서
+    보려는 축이 가려진다.
+    """
     kwargs = {
         "group": "service",
         "category": "service",
@@ -153,6 +162,7 @@ def _assess(**overrides):
         "published_floor_rate": None,
         "estimation_amount": None,
         "reference_date": None,
+        "reserve_price_count": 15,
     }
     kwargs.update(overrides)
     return assess_row_quality(**kwargs)
@@ -302,6 +312,10 @@ def test_as_details_carries_tolerances_for_audit():
     assert details["legal_floor_rate"] == 0.88
     assert details["legal_floor_source"] == FLOOR_SOURCE_PUBLISHED
     assert details["floor_undercut_tolerance"] == LEGAL_FLOOR_UNDERCUT_TOLERANCE
+    # rate-basis 게이트의 판단 근거도 행 단위로 추적 가능해야 한다.
+    assert details["rate_basis_independence_tolerance"] == RATE_BASIS_INDEPENDENCE_TOLERANCE
+    assert details["reserve_price_count"] == 15
+    assert details["rate_basis_unverified"] is False
 
 
 # ── 리포트 섹션 빌더 ──────────────────────────────────────────────────────────
@@ -581,9 +595,19 @@ def test_default_output_path_is_fixed_for_agency_axis():
 
 
 def _seed_award(
-    test_db, *, category: str, agency: str, announced_at: datetime, base_amount: float
+    test_db,
+    *,
+    category: str,
+    agency: str,
+    announced_at: datetime,
+    base_amount: float,
+    reserve_prices: list[float] | None = None,
 ) -> str:
-    """Persist one settled notice and return its notice number."""
+    """Persist one settled notice and return its notice number.
+
+    ``reserve_prices`` 는 복수예비가격 Text(JSON) 컬럼에 그대로 적재된다 — 하한 판정의
+    rate-basis 게이트가 그 개수를 보기 때문에 배선 테스트에서 필요하다.
+    """
     notice_number = f"SEL-{agency}-{announced_at:%Y%m%d}"
     project = Project(
         title=f"{agency} {category} 공고",
@@ -607,6 +631,9 @@ def _seed_award(
                 predicted_price=base_amount * 0.88,
                 bid_rate=0.88,
                 opened_at=announced_at,
+                reserve_prices=(
+                    json.dumps(reserve_prices) if reserve_prices is not None else None
+                ),
             ),
             TenderResult(
                 project_id=project.id,
@@ -688,11 +715,36 @@ def test_agency_axis_selection_caps_one_per_agency(test_db):
     assert {target.group for target in selected} == {"construction", "service"}
 
 
+def _evaluate_all(test_db) -> dict[str, dict]:
+    """agency 축으로 뽑은 타깃을 전부 평가해 기관 표시명 → 행으로 돌려준다."""
+    return {
+        row["agency_display"]: row
+        for row in (
+            holdouts.evaluate_target(
+                test_db,
+                service=PredictionDatasetService(),
+                target=target,
+                history_limit=10,
+                thresholds=(0.01,),
+            )
+            for target in _select(test_db, group_by=holdouts.GROUP_BY_AGENCY)
+        )
+    }
+
+
+# 기초금액 5억을 ±2% 로 감싸는 복수예비가격 15개(실제 적재 형태와 같은 JSON 리스트).
+_RESERVE_PRICES_15 = [
+    490_000_000.0 + step * 1_000_000.0 for step in range(15)
+]
+
+
 def test_evaluate_target_feeds_agency_name_into_floor_applicability(test_db, monkeypatch):
     """배선 가드: 하한 적용 범위 판별이 리포트 분할과 같은 기관 원천을 받는다.
 
-    같은 낙찰률(0.88 < era-tier 0.89745)이라도 산학협력단 공고는 하한 모델 적용
-    대상이 아니라 판정이 생략되고, 국가기관 공고는 기존대로 플래그가 붙는다.
+    같은 낙찰률(0.88 < era-tier 0.89745)이라도 산학협력단은 하한 모델 적용 대상이
+    아니고(``not_applicable``), 산림청 계열은 별도 행정규칙 체계라(``separate_regime``)
+    판정이 생략된다. 예비가로 예정가를 독립 재구성할 수 있는 국가기관 공고는 기존대로
+    플래그가 붙는다.
     """
     monkeypatch.setattr(
         holdouts,
@@ -707,26 +759,69 @@ def test_evaluate_target_feeds_agency_name_into_floor_applicability(test_db, mon
             announced_at=datetime(2026, 5, announced_day, tzinfo=UTC),
             base_amount=500_000_000.0,
         )
+    _seed_award(
+        test_db,
+        category="construction",
+        agency="울산광역시 울주군",
+        announced_at=datetime(2026, 5, 3, tzinfo=UTC),
+        base_amount=500_000_000.0,
+        reserve_prices=_RESERVE_PRICES_15,
+    )
 
-    rows = [
-        holdouts.evaluate_target(
-            test_db,
-            service=PredictionDatasetService(),
-            target=target,
-            history_limit=10,
-            thresholds=(0.01,),
-        )
-        for target in _select(test_db, group_by=holdouts.GROUP_BY_AGENCY)
-    ]
+    rows = _evaluate_all(test_db)
     verdicts = {
-        row["agency_display"]: (
+        display: (
             row["data_quality_details"]["floor_applicability"],
             FLAG_BELOW_LEGAL_FLOOR in row["data_quality_flags"],
         )
-        for row in rows
+        for display, row in rows.items()
     }
     assert verdicts["인제대학교 산학협력단"] == ("not_applicable", False)
-    assert verdicts["산림청 홍천국유림관리소"] == ("applicable", True)
+    assert verdicts["산림청 홍천국유림관리소"] == ("separate_regime", False)
+    assert verdicts["울산광역시 울주군"] == ("applicable", True)
+
+
+def test_evaluate_target_feeds_reserve_price_count_into_rate_basis_gate(
+    test_db, monkeypatch
+):
+    """배선 가드: 복수예비가격 개수가 HistoricalData 에서 품질 판정기까지 흐른다.
+
+    두 공고의 보고 낙찰률은 모두 ``winning_amount / base_amount`` 와 정확히 같다.
+    예비가가 없는 쪽은 그 값이 독립 예정가-basis 실측이라는 근거가 없어 하한 판정이
+    생략되고(라이브 A군 13건), 예비가 15개가 있는 쪽은 기존대로 판정된다.
+    """
+    monkeypatch.setattr(
+        holdouts,
+        "predict_price",
+        lambda **kwargs: {"predicted_price": 400_000_000.0, "predicted_bid_rate": 0.88},
+    )
+    _seed_award(
+        test_db,
+        category="construction",
+        agency="울산광역시 울주군",
+        announced_at=datetime(2026, 5, 1, tzinfo=UTC),
+        base_amount=500_000_000.0,
+    )
+    _seed_award(
+        test_db,
+        category="construction",
+        agency="부산광역시 기장군",
+        announced_at=datetime(2026, 5, 2, tzinfo=UTC),
+        base_amount=500_000_000.0,
+        reserve_prices=_RESERVE_PRICES_15,
+    )
+
+    rows = _evaluate_all(test_db)
+    without_reserves = rows["울산광역시 울주군"]["data_quality_details"]
+    with_reserves = rows["부산광역시 기장군"]["data_quality_details"]
+
+    assert without_reserves["reserve_price_count"] == 0
+    assert without_reserves["rate_basis_unverified"] is True
+    assert FLAG_BELOW_LEGAL_FLOOR not in rows["울산광역시 울주군"]["data_quality_flags"]
+
+    assert with_reserves["reserve_price_count"] == len(_RESERVE_PRICES_15)
+    assert with_reserves["rate_basis_unverified"] is False
+    assert FLAG_BELOW_LEGAL_FLOOR in rows["부산광역시 기장군"]["data_quality_flags"]
 
 
 def test_group_by_agency_selection_caps_per_agency():
