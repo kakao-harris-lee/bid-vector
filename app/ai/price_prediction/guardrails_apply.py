@@ -53,23 +53,12 @@ def _apply_prediction_guardrails(
     ) or budget <= 0:
         return guarded_prediction
 
-    guarded_candidates, floor_applied_labels, ceiling_applied_labels = (
-        _guard_bid_rate_candidates(prediction, budget=budget, context=guardrail_context)
+    floor_applied_labels, ceiling_applied_labels = _clamp_prediction_to_band(
+        guarded_prediction,
+        prediction,
+        budget=budget,
+        context=guardrail_context,
     )
-    if guarded_candidates:
-        _apply_guarded_candidate_prediction(
-            guarded_prediction,
-            guarded_candidates,
-        )
-    else:
-        floor_applied_labels, ceiling_applied_labels = (
-            _apply_base_prediction_guardrails(
-                guarded_prediction,
-                prediction,
-                budget=budget,
-                context=guardrail_context,
-            )
-        )
 
     if guardrail_context.construction_scenario_anchor is not None:
         _annotate_construction_scenario_anchor(guarded_prediction, guardrail_context)
@@ -84,6 +73,33 @@ def _apply_prediction_guardrails(
         ceiling_labels=ceiling_applied_labels,
     )
     return guarded_prediction
+
+
+def _clamp_prediction_to_band(
+    guarded_prediction: Dict[str, Any],
+    prediction: Dict[str, Any],
+    *,
+    budget: float,
+    context: GuardrailContext,
+) -> tuple[list[str], list[str]]:
+    """후보(있으면)나 base 예측을 밴드로 clamp하고 floor/ceiling 적용 라벨을 돌려준다.
+
+    원 분기(후보 우선, 없으면 base)의 순서·경계를 그대로 유지한다. 후보 경로는
+    _guard_bid_rate_candidates가 산출한 라벨을, base 경로는 _apply_base_prediction_guardrails
+    반환 라벨을 그대로 넘긴다 — clamp 산식은 어느 쪽도 변경하지 않는다.
+    """
+    guarded_candidates, floor_applied_labels, ceiling_applied_labels = (
+        _guard_bid_rate_candidates(prediction, budget=budget, context=context)
+    )
+    if guarded_candidates:
+        _apply_guarded_candidate_prediction(guarded_prediction, guarded_candidates)
+        return floor_applied_labels, ceiling_applied_labels
+    return _apply_base_prediction_guardrails(
+        guarded_prediction,
+        prediction,
+        budget=budget,
+        context=context,
+    )
 
 
 def _annotate_construction_scenario_anchor(

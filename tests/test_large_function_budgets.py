@@ -40,7 +40,7 @@ import pytest
             "app.ai.price_prediction",
             None,
             "_apply_prediction_guardrails",
-            110,
+            55,
         ),
         (
             "app.tasks.jobs",
@@ -58,7 +58,7 @@ import pytest
             "app.services.ml_release",
             "MLReleasePromotionService",
             "preflight_release_rollout",
-            140,
+            60,
         ),
         (
             "app.services.opportunity_monitoring",
