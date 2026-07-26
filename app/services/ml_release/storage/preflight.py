@@ -1,46 +1,21 @@
-"""Object-storage adapter for release artifacts (``file://`` and optional S3).
+"""Preflight validation for release object storage (file:// and optional S3).
 
-``RemoteObjectStorageClient`` is moved verbatim from the original module."""
+``_ObjectStoragePreflightMixin`` owns ``preflight`` and its file/S3 helpers:
+target readiness, boto3 client construction, bucket-access probing, write/
+delete probes and ``ClientError`` normalization. Every method body is moved
+verbatim from the original ``storage.py`` module."""
 
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import time
-from pathlib import Path
 from typing import Any
-from urllib import parse
 
 from app.core.time import utc_now
+from app.services.ml_release.storage.base import _ObjectStorageBase
 
 
-class RemoteObjectStorageClient:
-    """Small object-storage adapter for file:// and optional S3 release storage."""
-
-    def __init__(self, base_url: str | None) -> None:
-        self.base_url = str(base_url or "").strip()
-        self.parsed = parse.urlparse(self.base_url)
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.base_url)
-
-    def describe(self) -> dict[str, Any]:
-        """Return non-secret connection metadata for release diagnostics."""
-        scheme = self.parsed.scheme.lower()
-        provider = "file" if scheme in {"", "file"} else scheme
-        description: dict[str, Any] = {
-            "enabled": self.enabled,
-            "provider": provider if self.enabled else None,
-            "base_url": self._redacted_base_url() if self.enabled else "",
-        }
-        if provider == "s3":
-            description["bucket"] = self.parsed.netloc
-            description["prefix"] = self.parsed.path.strip("/")
-        elif provider == "file" and self.enabled:
-            description["path"] = str(self._local_base_path())
-        return description
+class _ObjectStoragePreflightMixin(_ObjectStorageBase):
+    """Validate object-storage configuration and optional write permission."""
 
     def preflight(
         self,
@@ -98,33 +73,6 @@ class RemoteObjectStorageClient:
                 )
             )
         return self._finalize_preflight(description, checks)
-
-    def put_file(self, source_path: str | Path, *, object_name: str) -> dict[str, Any]:
-        """Upload one local file under the configured object prefix."""
-        if not self.enabled:
-            return {"enabled": False, "uri": None, "object_name": object_name}
-
-        source = Path(source_path).resolve()
-        if not source.is_file():
-            raise ValueError(f"Object storage upload source must be a file: {source}")
-
-        scheme = self.parsed.scheme.lower()
-        if scheme in {"", "file"}:
-            destination = self._local_destination(object_name)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-            return {
-                "enabled": True,
-                "provider": "file",
-                "object_name": object_name,
-                "uri": destination.as_uri(),
-                "bytes": destination.stat().st_size,
-            }
-        if scheme == "s3":
-            return self._put_s3(source, object_name=object_name)
-        raise ValueError(
-            f"Unsupported ML_RELEASE_OBJECT_STORAGE_URL scheme: {scheme or 'path'}"
-        )
 
     def _preflight_file_storage(
         self,
@@ -517,99 +465,3 @@ class RemoteObjectStorageClient:
             http_status_code=status_code,
             **extra,
         )
-
-    def _local_base_path(self) -> Path:
-        """Resolve the configured file object-storage base path."""
-        if self.parsed.scheme == "file":
-            return Path(parse.unquote(self.parsed.path)).resolve()
-        return Path(self.base_url).resolve()
-
-    def _local_destination(self, object_name: str) -> Path:
-        """Resolve a local object-storage destination."""
-        return (self._local_base_path() / object_name).resolve()
-
-    def _put_s3(self, source: Path, *, object_name: str) -> dict[str, Any]:
-        """Upload one object to S3 when boto3 is available at runtime."""
-        try:
-            import boto3  # type: ignore[import-not-found]
-        except ImportError as exc:  # pragma: no cover - depends on deployment extras
-            raise RuntimeError(
-                "boto3 is required when ML_RELEASE_OBJECT_STORAGE_URL uses s3://"
-            ) from exc
-
-        bucket = self.parsed.netloc
-        key = self._s3_key(object_name)
-        boto3.client("s3").upload_file(str(source), bucket, key)
-        return {
-            "enabled": True,
-            "provider": "s3",
-            "object_name": object_name,
-            "uri": f"s3://{bucket}/{key}",
-            "bytes": source.stat().st_size,
-        }
-
-    def _s3_key(self, object_name: str) -> str:
-        """Build the S3 object key under the configured prefix."""
-        prefix = self.parsed.path.strip("/")
-        return f"{prefix}/{object_name}".strip("/")
-
-    def _redacted_base_url(self) -> str:
-        """Hide URL credentials before returning diagnostics."""
-        if not self.base_url:
-            return ""
-        if not self.parsed.netloc or not (self.parsed.username or self.parsed.password):
-            return self.base_url
-        hostname = self.parsed.hostname or ""
-        if self.parsed.port:
-            hostname = f"{hostname}:{self.parsed.port}"
-        return parse.urlunparse(
-            (
-                self.parsed.scheme,
-                hostname,
-                self.parsed.path,
-                self.parsed.params,
-                self.parsed.query,
-                self.parsed.fragment,
-            )
-        )
-
-    def _default_preflight_object_name(self) -> str:
-        """Return a short-lived object name for rollout write probes."""
-        return f"preflight/ml-release-{int(time.time())}-{os.getpid()}.json"
-
-    def _check(
-        self,
-        name: str,
-        passed: bool,
-        status: str,
-        detail: str,
-        **extra: Any,
-    ) -> dict[str, Any]:
-        """Build one object-storage preflight check."""
-        return {
-            "name": name,
-            "passed": bool(passed),
-            "status": status,
-            "detail": detail,
-            **extra,
-        }
-
-    def _finalize_preflight(
-        self,
-        description: dict[str, Any],
-        checks: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Build a compact object-storage preflight result."""
-        passed = all(bool(check.get("passed")) for check in checks)
-        return {
-            **description,
-            "status": "passed" if passed else "failed",
-            "passed": passed,
-            "checks": checks,
-            "failure_reasons": [
-                str(check.get("detail"))
-                for check in checks
-                if not bool(check.get("passed")) and check.get("detail")
-            ],
-        }
-
