@@ -95,7 +95,7 @@ class _MLReleaseBase:
         self.repo_root = (
             Path(repo_root)
             if repo_root is not None
-            else Path(__file__).resolve().parents[2]
+            else Path(__file__).resolve().parents[3]
         )
         self.repo_root = self.repo_root.resolve()
 

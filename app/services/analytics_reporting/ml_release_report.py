@@ -78,7 +78,7 @@ class _MLReleaseReportMixin:
         raw_path = Path(settings.ML_RELEASE_MANIFEST_DIR)
         if raw_path.is_absolute():
             return raw_path
-        return Path(__file__).resolve().parents[2] / raw_path
+        return Path(__file__).resolve().parents[3] / raw_path
 
     def _manifest_recency_key(self, summary: dict[str, Any]) -> tuple[float, str]:
         """Sort manifests by validation timestamp, falling back to the release tag."""
