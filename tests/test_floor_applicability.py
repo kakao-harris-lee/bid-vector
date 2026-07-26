@@ -17,15 +17,18 @@ from app.ai.floor_applicability import (
     FLOOR_APPLICABLE,
     FLOOR_NOT_APPLICABLE,
     FLOOR_SEPARATE_REGIME,
+    FORESTRY_REGIME_FLOOR_RATE,
     PUBLISHED_FLOOR_MAX_PLAUSIBLE,
     PUBLISHED_FLOOR_MIN_PLAUSIBLE,
     is_published_floor_plausible,
     resolve_floor_applicability,
 )
 from app.ai.holdout_quality import (
+    FLAG_AMOUNT_RATE_MISMATCH,
     FLAG_BELOW_LEGAL_FLOOR,
     FLAG_LOW_ACTUAL_RATE,
     FLOOR_SOURCE_ERA_TIER,
+    FLOOR_SOURCE_FORESTRY,
     FLOOR_SOURCE_NONE,
     FLOOR_SOURCE_PUBLISHED,
     MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE,
@@ -201,22 +204,122 @@ def test_uncertain_agency_skips_below_floor_and_records_the_reason():
     assert assessment.floor_applicability == FLOOR_APPLICABILITY_UNCERTAIN
 
 
-# ── 산림사업 별도 규정 ────────────────────────────────────────────────────────
-def test_forestry_agency_skips_below_floor_but_keeps_the_resolved_floor():
-    """예정가를 재구성해도 신율 아래 남는 산림청 계열(라이브 실측 6건)."""
+# ── 산림사업 별도 규정(하한 87.745%) ─────────────────────────────────────────
+# 라이브 실측 6건이 걸린 계열의 대표 표기.
+_FORESTRY_AGENCY = "산림청 서부지방산림청 영암국유림관리소"
+
+
+def test_forestry_floor_rate_matches_the_verified_bid_notice_text():
+    """원문 확정 가드: 산림사업 하한은 국가계약 +2%p 개정을 추종하지 않는다.
+
+    근거는 산림사업 입찰설명서 원문(공고 R26BK01490237, 입찰 2026-04-27~05-06 —
+    개정 시행일 **이후**)의 "예정가격의 87.745% 이상"과 산림청예규 제728호다. 예규가
+    개정되면 이 상수와 이 테스트를 함께 갱신한다.
+    """
+    assert FORESTRY_REGIME_FLOOR_RATE == pytest.approx(0.87745)
+    # 국가계약 신율(0.89745)을 그대로 대면 적법 낙찰이 하회로 잡히던 원인.
+    assert FORESTRY_REGIME_FLOOR_RATE < 0.89745
+
+
+def test_forestry_agency_is_judged_against_the_forestry_floor():
+    """검출 능력 복원: 산림사업 하한을 진짜 하회하면 다시 잡힌다.
+
+    헬퍼 기본 예비가 15개라 rate-basis 게이트는 열려 있고, 판정 축은 하한값 하나뿐이다.
+    """
+    reported = 0.87246
     assessment = _assess(
-        agency_name="산림청 서부지방산림청 영암국유림관리소",
-        reported_rate=0.87246,
-        effective_rate=0.87246,
-        amount_derived_rate=0.87246,
+        agency_name=_FORESTRY_AGENCY,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=reported,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR in assessment.flags
+    assert assessment.floor_applicability == FLOOR_SEPARATE_REGIME
+    assert assessment.legal_floor_rate == pytest.approx(FORESTRY_REGIME_FLOOR_RATE)
+    assert assessment.legal_floor_source == FLOOR_SOURCE_FORESTRY
+    assert assessment.floor_undercut == pytest.approx(
+        FORESTRY_REGIME_FLOOR_RATE - reported, abs=1e-9
+    )
+    details = assessment.as_details()
+    assert details["floor_applicability"] == FLOOR_SEPARATE_REGIME
+    assert details["legal_floor_source"] == FLOOR_SOURCE_FORESTRY
+
+
+def test_forestry_live_lowest_award_is_lawful_under_the_forestry_floor():
+    """라이브 미러: 실측 하단 0.87766 은 산림사업 하한 바로 위 = 하회 아님.
+
+    보고율은 예정가-basis 독립 실측(금액-역산율과 독립성 경계 밖으로 갈린다)이라
+    예비가 없이도 판정이 수행된다 — 전건 적법이 재현돼야 한다.
+    """
+    reported = 0.87766
+    derived = reported / (1 + 5 * RATE_BASIS_INDEPENDENCE_TOLERANCE)
+    assessment = _assess(
+        agency_name=_FORESTRY_AGENCY,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=derived,
+        reserve_price_count=0,
+    )
+    assert reported > FORESTRY_REGIME_FLOOR_RATE
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
+    assert assessment.rate_basis_unverified is False
+    assert assessment.floor_undercut is None
+    assert assessment.legal_floor_source == FLOOR_SOURCE_FORESTRY
+    # 독립성 경계와 분모 불일치 허용오차 사이라 다른 축 플래그도 붙지 않는다.
+    assert FLAG_AMOUNT_RATE_MISMATCH not in assessment.flags
+
+
+def test_forestry_rate_basis_gate_still_precedes_the_forestry_floor():
+    """게이트 순서 가드: 보고율이 금액비 파생이면 산림사업 하한으로도 판정하지 않는다."""
+    reported = 0.87246
+    assessment = _assess(
+        agency_name=_FORESTRY_AGENCY,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=reported,
+        reserve_price_count=0,
     )
     assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
-    assert assessment.floor_applicability == FLOOR_SEPARATE_REGIME
+    assert assessment.rate_basis_unverified is True
     assert assessment.floor_undercut is None
-    # 해석값·출처는 그대로 남는다(#274 추적성 패턴) — 판정만 생략했다.
-    assert assessment.legal_floor_rate == pytest.approx(0.89745)
-    assert assessment.legal_floor_source == FLOOR_SOURCE_ERA_TIER
-    assert assessment.as_details()["floor_applicability"] == FLOOR_SEPARATE_REGIME
+    # 해석된 하한·출처는 생략된 행에도 남는다(#274 추적성 패턴).
+    assert assessment.legal_floor_rate == pytest.approx(FORESTRY_REGIME_FLOOR_RATE)
+    assert assessment.as_details()["legal_floor_source"] == FLOOR_SOURCE_FORESTRY
+
+
+def test_plausible_published_floor_beats_the_forestry_constant():
+    """공고가 게시한 하한이 개연 범위 안이면 산림사업 상수보다 우선한다(우선순위 1)."""
+    published = 0.88
+    reported = 0.87246
+    assessment = _assess(
+        agency_name=_FORESTRY_AGENCY,
+        published_floor_rate=published,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=reported,
+    )
+    assert assessment.legal_floor_source == FLOOR_SOURCE_PUBLISHED
+    assert assessment.legal_floor_rate == pytest.approx(published)
+    assert assessment.legal_floor_rate != pytest.approx(FORESTRY_REGIME_FLOOR_RATE)
+    assert FLAG_BELOW_LEGAL_FLOOR in assessment.flags
+    assert assessment.floor_undercut == pytest.approx(published - reported, abs=1e-9)
+
+
+def test_implausible_published_floor_falls_back_to_forestry_not_era_tier():
+    """게시값이 이상값이어도 산림청 계열의 폴백은 era-tier 가 아니라 산림사업 하한이다."""
+    reported = 0.88
+    assessment = _assess(
+        agency_name=_FORESTRY_AGENCY,
+        published_floor_rate=1.0,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=reported,
+    )
+    assert assessment.published_floor_implausible is True
+    assert assessment.legal_floor_source == FLOOR_SOURCE_FORESTRY
+    assert assessment.legal_floor_rate == pytest.approx(FORESTRY_REGIME_FLOOR_RATE)
+    # 0.88 은 산림사업 하한 위 — era-tier(0.89745)를 잘못 소환했다면 하회로 잡혔을 값.
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
 
 
 def test_separate_regime_is_a_distinct_label_from_not_applicable():
