@@ -74,14 +74,16 @@ def test_synthetic_mark_functions_use_aware_utc(test_db, monkeypatch):
     from app.services import synthetic_experiment as se
 
     produced = []
-    real_utc_now = se.utc_now
+    # ``mark_*`` reads ``utc_now`` from the run-lifecycle submodule after the
+    # synthetic_experiment package decomposition; patch it at that canonical seam.
+    real_utc_now = se.service_lifecycle.utc_now
 
     def spy():
         value = real_utc_now()
         produced.append(value)
         return value
 
-    monkeypatch.setattr(se, "utc_now", spy)
+    monkeypatch.setattr(se.service_lifecycle, "utc_now", spy)
 
     experiment = SyntheticExperiment(
         name="tz-guard", params_json="{}", operator_slugs_json="[]"
