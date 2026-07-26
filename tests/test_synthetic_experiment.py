@@ -980,7 +980,9 @@ def test_run_experiment_backtest_uses_injected_session_factory(monkeypatch):
             received["db"] = db
             return {"ok": True}
 
-    monkeypatch.setattr(se, "SyntheticBacktestService", _FakeBacktestService)
+    # ``run_experiment_backtest`` lives in the ``runner`` submodule after the
+    # synthetic_experiment package decomposition; patch the backtest service there.
+    monkeypatch.setattr(se.runner, "SyntheticBacktestService", _FakeBacktestService)
 
     # ``run_id`` absent -> no lifecycle persistence, so the fake session only
     # needs to satisfy the backtest call and the finally-block close.

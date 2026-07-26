@@ -1,0 +1,157 @@
+"""Synthetic experiment persistence and run-lifecycle orchestration.
+
+Owns the "가상 회사 낙찰 실험실" (Experiment Lab) domain: saving experiment
+definitions, triggering asynchronous runs, and persisting per-operator results.
+ML/predictor logic is untouched here -- the underlying backtest engine is invoked
+only through :class:`SyntheticBacktestService`, whose ``win_rate_on_settled`` is a
+price-only estimate (NOT actual award) and is passed through unchanged.
+
+This package was decomposed from a single module; the import surface
+(``from app.services.synthetic_experiment import ...``) is preserved verbatim via
+the re-exports below.
+"""
+
+from __future__ import annotations
+
+from .breakdown import (
+    _ReportAccumulator,
+    _aggregate_group,
+    _budget_band_key,
+    _empty_breakdown,
+    _is_price_only_win,
+    _latest_result_time,
+    compute_breakdown,
+)
+from .constants import (
+    BUDGET_BAND_BOUNDARIES,
+    BUDGET_BAND_TOP_KEY,
+    EXPORT_CSV_COLUMNS,
+    REPORT_STATUS_DATA_MIXED,
+    REPORT_STATUS_READY,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    SAMPLE_GAP_DIMENSION_ORDER,
+    SAMPLE_GAP_WARNING_LEGACY_SUMMARY,
+    SAMPLE_GAP_WARNING_MIXED_DATA,
+    SAMPLE_STATUS_INSUFFICIENT,
+    SAMPLE_STATUS_SUFFICIENT,
+    SYNTHETIC_EXPERIMENT_PRESETS,
+    SYNTHETIC_OPERATOR_SAMPLE_TARGET,
+    SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
+    SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
+    SYNTHETIC_SETTLE_ACTIONS,
+    _COMPARE_DELTA_KEYS,
+    _COMPARE_METRIC_KEYS,
+    _ELIGIBILITY_UNKNOWN_VERDICT,
+    _ELIGIBLE_FAVORABLE_VERDICT,
+    _G1_PRESET_WINDOW,
+    _WIN_VERDICTS,
+)
+from .runner import run_experiment_backtest
+from .sample_gap import (
+    _SampleGapAccumulator,
+    _candidate_params_for_action,
+    _dedupe_sample_gap_warnings,
+    _first_present,
+    _normalize_settle_actions,
+    _normalized_experiment_params,
+    _safe_optional_int,
+    _safe_positive_int,
+    _sample_gap_action,
+    _sample_gap_candidate_description,
+    _sample_gap_candidate_name,
+    _sample_gap_candidate_warning_context,
+    _sample_gap_cli_command,
+    _sample_gap_core_params,
+    _sample_gap_matches_fixed_preset,
+    _sample_gap_operator_slugs_match,
+    _sample_gap_params_match,
+    _sample_gap_run_context,
+    _sample_gap_run_warnings,
+    _sample_gap_source_context,
+)
+from .sample_report import (
+    _add_group_row,
+    _build_sample_report_rows,
+    _is_non_synthetic_result,
+    _metric_win_count,
+    _report_rows,
+    _sample_report_lacking_groups,
+    _sample_report_status,
+    build_sample_report,
+)
+from .sample_status import aggregate_sample_status, sample_status_for_settled_count
+from .serialization import _json_dumps, _json_loads, _parse_dt
+from .service import SyntheticExperimentService
+
+__all__ = [
+    "BUDGET_BAND_BOUNDARIES",
+    "BUDGET_BAND_TOP_KEY",
+    "EXPORT_CSV_COLUMNS",
+    "REPORT_STATUS_DATA_MIXED",
+    "REPORT_STATUS_READY",
+    "RUN_STATUS_COMPLETED",
+    "RUN_STATUS_FAILED",
+    "RUN_STATUS_QUEUED",
+    "RUN_STATUS_RUNNING",
+    "SAMPLE_GAP_DIMENSION_ORDER",
+    "SAMPLE_GAP_WARNING_LEGACY_SUMMARY",
+    "SAMPLE_GAP_WARNING_MIXED_DATA",
+    "SAMPLE_STATUS_INSUFFICIENT",
+    "SAMPLE_STATUS_SUFFICIENT",
+    "SYNTHETIC_EXPERIMENT_PRESETS",
+    "SYNTHETIC_OPERATOR_SAMPLE_TARGET",
+    "SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET",
+    "SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET",
+    "SYNTHETIC_SETTLE_ACTIONS",
+    "SyntheticExperimentService",
+    "aggregate_sample_status",
+    "build_sample_report",
+    "compute_breakdown",
+    "run_experiment_backtest",
+    "sample_status_for_settled_count",
+    "_COMPARE_DELTA_KEYS",
+    "_COMPARE_METRIC_KEYS",
+    "_ELIGIBILITY_UNKNOWN_VERDICT",
+    "_ELIGIBLE_FAVORABLE_VERDICT",
+    "_G1_PRESET_WINDOW",
+    "_ReportAccumulator",
+    "_SampleGapAccumulator",
+    "_WIN_VERDICTS",
+    "_add_group_row",
+    "_aggregate_group",
+    "_budget_band_key",
+    "_build_sample_report_rows",
+    "_candidate_params_for_action",
+    "_dedupe_sample_gap_warnings",
+    "_empty_breakdown",
+    "_first_present",
+    "_is_non_synthetic_result",
+    "_is_price_only_win",
+    "_json_dumps",
+    "_json_loads",
+    "_latest_result_time",
+    "_metric_win_count",
+    "_normalize_settle_actions",
+    "_normalized_experiment_params",
+    "_parse_dt",
+    "_report_rows",
+    "_safe_optional_int",
+    "_safe_positive_int",
+    "_sample_gap_action",
+    "_sample_gap_candidate_description",
+    "_sample_gap_candidate_name",
+    "_sample_gap_candidate_warning_context",
+    "_sample_gap_cli_command",
+    "_sample_gap_core_params",
+    "_sample_gap_matches_fixed_preset",
+    "_sample_gap_operator_slugs_match",
+    "_sample_gap_params_match",
+    "_sample_gap_run_context",
+    "_sample_gap_run_warnings",
+    "_sample_gap_source_context",
+    "_sample_report_lacking_groups",
+    "_sample_report_status",
+]
