@@ -247,7 +247,10 @@ def test_estimate_probability_score_falls_back_to_heuristic(monkeypatch):
 
 def test_estimate_probability_score_uses_calibration_when_present(monkeypatch):
     """보정 아티팩트가 있으면 보정값을 산출한다."""
-    import app.services.paper_bidding_backtest as backtest_mod
+    # ``_estimate_probability_score`` moved to the ``scoring`` submodule when
+    # ``paper_bidding_backtest`` was decomposed into a package; patch the symbol
+    # where it is now resolved (assertion unchanged).
+    import app.services.paper_bidding_backtest.scoring as backtest_mod
 
     def fake_apply(features, **kwargs):
         return 0.91
