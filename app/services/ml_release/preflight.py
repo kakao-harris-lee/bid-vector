@@ -63,6 +63,29 @@ class _PreflightMixin(_MLReleaseBase):
             probe_write=probe_write,
         )
         checks.extend(storage_preflight.get("checks", []))
+        return self._build_preflight_result(
+            checks=checks,
+            manifest_summary=manifest_summary,
+            storage_preflight=storage_preflight,
+            signature_required=signature_required,
+            probe_write=probe_write,
+        )
+
+    @staticmethod
+    def _build_preflight_result(
+        *,
+        checks: list[dict[str, Any]],
+        manifest_summary: dict[str, Any],
+        storage_preflight: dict[str, Any],
+        signature_required: bool,
+        probe_write: bool,
+    ) -> dict[str, Any]:
+        """Assemble the preflight result payload from the accumulated checks/summaries.
+
+        ``passed`` is the AND of every check; ``failure_reasons`` mirrors the failing
+        checks' details. Field set and pass/fail semantics are unchanged from the inline
+        return it replaces.
+        """
         passed = all(bool(check.get("passed")) for check in checks)
         return {
             "status": "passed" if passed else "failed",

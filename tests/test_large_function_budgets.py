@@ -58,7 +58,7 @@ import pytest
             "app.services.ml_release",
             "MLReleasePromotionService",
             "preflight_release_rollout",
-            140,
+            60,
         ),
         (
             "app.services.opportunity_monitoring",
