@@ -11,6 +11,29 @@ from app.models.models import HistoricalData, Project, TenderResult
 from app.services.ml_training import PricePredictionTrainingService
 
 
+def test_default_repo_root_resolves_to_repository_root():
+    """A no-arg service must resolve ``repo_root`` to the real repo root.
+
+    ``PricePredictionTrainingService()`` (repo_root=None) derives its root from
+    ``Path(__file__).resolve().parents[N]`` inside the ``ml_training`` package. When
+    the module was decomposed into a package the file moved one directory deeper, so
+    ``N`` had to change (parents[2] -> parents[3]). The production Celery task
+    ``app.tasks.jobs.train_price_predictor`` default-constructs the service and writes
+    artifacts under ``repo_root / "models"``, so a wrong index silently writes to the
+    wrong tree. This test pins the invariant with an INDEPENDENTLY derived expectation
+    (the parent of the ``app`` package), so if a future move changes the file depth,
+    THIS test breaks instead of production.
+    """
+    import app
+    from pathlib import Path
+
+    expected_repo_root = Path(app.__file__).resolve().parents[1]
+    resolved = PricePredictionTrainingService().repo_root
+
+    assert resolved == expected_repo_root
+    assert (resolved / "app" / "services" / "ml_training" / "service.py").is_file()
+
+
 def test_price_predictor_training_writes_quality_comparison_and_gate_reports(
     test_db,
     tmp_path,
