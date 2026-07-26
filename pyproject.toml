@@ -128,6 +128,49 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 3a — pure classification / settlement kernels. Like the Phase 1 domain
+# block above, these import only stdlib (dataclasses / enum / datetime / json) or
+# an existing strict island, so they get the strict flags with NO error-code
+# relaxation. Each is a self-contained pure module (no DB / IO / network):
+#   * app.services.classification.assessment — 단일 축 판정 결과 계약(RuleAssessment
+#     dataclass). 모든 rule-based 축 모듈이 공유하는 값 타입.
+#   * app.services.classification.group_or — lmtGrpNo 그룹-OR / 그룹내-AND 자격 평가
+#     커널(집합 대수만 수행, #254 축 정합의 단일 출처).
+#   * app.services.classification.config — 선언적 스코어링 상수·밴드 테이블(§4.5
+#     매직값 중앙화). 함수 없는 데이터 모듈이라 어노테이션 없이 strict-green.
+#   * app.services.paper_bidding_settlement — 정산 상태 first-match 룰 테이블 FSM
+#     (라우터에서 분리한 순수 판정기).
+#   * app.services.base_amount_basis — base_amount provenance 분류기(#199 태그 생산
+#     순수 코어). 유일한 앱 import 는 app.domain.rate_normalization(strict 아일랜드).
+[[tool.mypy.overrides]]
+module = [
+    "app.services.classification.assessment",
+    "app.services.classification.group_or",
+    "app.services.classification.config",
+    "app.services.paper_bidding_settlement",
+    "app.services.base_amount_basis",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
+# Phase 3b — app.services.query_predicates (공유 읽기-쿼리 술어 빌더: 서비스·스크립트에
+# 흩어져 있던 필터 조건을 ``ColumnElement[bool]`` 헬퍼로 단일화한 순수 SQLAlchemy 모듈).
+# bid_base(Phase 2d)와 동일하게 sqlalchemy 2.0 은 py.typed 를 실어 transport 가 이미
+# typed 라 ``import-untyped`` 완화가 필요 없다. 모델 컬럼 접근은 typed InstrumentedAttribute
+# 라 ``in_``/``and_``/``or_`` 가 ``ColumnElement[bool]`` 로 좁혀져 warn_return_any 도 통과.
+[[tool.mypy.overrides]]
+module = ["app.services.query_predicates"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------
