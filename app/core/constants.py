@@ -78,8 +78,8 @@ TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE: str = "telegram.delivery.suppressed"
 # Internal telemetry event types that operator-facing event *counts* exclude.
 #
 # This set is shared by:
-#   - app/api/analytics.py  (INTERNAL_TELEMETRY_EVENT_TYPES)
-#   - app/api/operator.py   (INTERNAL_OPERATOR_EVENT_TYPES)
+#   - app/api/analytics.py           (INTERNAL_TELEMETRY_EVENT_TYPES)
+#   - app/api/operator_dashboard.py  (INTERNAL_OPERATOR_EVENT_TYPES)
 #
 # Both used to declare the same literal set independently; new internal event
 # types are added here so neither counter silently starts reporting telemetry as
