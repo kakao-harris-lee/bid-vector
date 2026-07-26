@@ -15,9 +15,13 @@
 **confound 를 분리**해(clean-base·reserve-estimate = 정직한 기초금액) 정직한
 신호만 집계한다. 문서: ``docs/design/stored-bidrate-basis-alignment.md``.
 
-계측은 프로덕션 라벨 로직을 그대로 재사용한다(드리프트 방지): path-1 정규화는
-``PredictionDatasetService._normalize_bid_rate_value`` 를, base 선택은
-``get_reliable_base`` 를 호출한다. 유효범위 게이트는 서비스의 클래스 상수를 쓴다.
+계측은 정규화·base 선택 프리미티브(``PredictionDatasetService._normalize_bid_rate_value``
+· ``get_reliable_base``)와 유효범위 게이트 상수를 프로덕션과 동일하게 재사용한다(드리프트
+방지). 다만 우선순위 dispatch·result 선택은 **단순화 미러**다: (a) tier-4
+``predicted_price`` 폴백(``explicit_bid_rate_only=False`` 에서만 작동)을 생략해 'none'
+카운트가 프로덕션 실제 미라벨보다 과다 계상되고(지배 라벨 결론 불변), (b) result 선택이
+project당 id-desc라 다중-결과 프로젝트에서 ``_is_better_result``(usable-first→최신
+announced)와 갈릴 수 있다.
 
 DB read-only(write/commit 없음). 외부 API 호출 없음. 시각은 KST.
 
@@ -78,7 +82,11 @@ def _gate(value: float | None) -> float | None:
 
 
 def _best_tender_result_by_project(db) -> dict[int, TenderResult]:
-    """project 별 대표 settled TenderResult (최신 id 우선 — 지배 라벨 소스와 일치)."""
+    """project 별 대표 settled TenderResult (id-desc, 첫 등장=최신 id).
+
+    프로덕션 ``_is_better_result``(usable-first→최신 announced→id)를 id-desc로 단순화한
+    미러라, 다중-결과 프로젝트에서 선택이 갈릴 수 있다(§7 caveat).
+    """
     results = (
         db.query(TenderResult)
         .filter(TenderResult.project_id.isnot(None))
@@ -116,7 +124,9 @@ def _summarize(name: str, pairs: list[_Pair]) -> None:
     sajung = [p.path3_base / p.path1_yega for p in pairs]  # 예정가/기초금액
     mean_diff = statistics.fmean(diffs)
     mean_sajung = statistics.fmean(sajung)
-    over_bid_pct = (1.0 / mean_sajung - 1.0) * 100.0  # 예정가-rate × 기초금액 초과율
+    # 예정가-rate × 기초금액 초과율. 집계는 1/mean(사정률)−1 (mean(1/사정률) 아님);
+    # 1/x 볼록성(Jensen)으로 참 평균 초과율을 소폭 과소평가 = 보수적.
+    over_bid_pct = (1.0 / mean_sajung - 1.0) * 100.0
     pct = _percentiles(diffs, (5, 50, 95))
     print(
         f"  {name:36s} N={len(pairs):6d} "
@@ -189,9 +199,14 @@ def main() -> None:
                 winning_amount = float(tender_result.winning_amount or 0.0)
                 if winning_amount > 0:
                     path3 = _gate(winning_amount / base)
+            # HistoricalData.bid_rate: scsbid.py가 조건부 계산(실 기초금액 있으면
+            # 낙찰가/기초금액, 없으면 success_rate=낙찰가/예정가 폴백). 지배 표본은 실
+            # 기초금액 부재로 예정가-relative로 실현(§3 실측 — 아래 라벨은 그 실현값).
             hd_rate = _gate(float(record.bid_rate or 0.0))
 
-            # first-priority 라벨 소스 (프로덕션 _resolve_bid_rate 우선순위 미러)
+            # first-priority 라벨 소스 (프로덕션 _resolve_bid_rate 우선순위 미러).
+            # 주의: tier-4 predicted_price/base 폴백(explicit_bid_rate_only=False에서만)은
+            # 생략 — 'none'은 그만큼 프로덕션 실제 미라벨보다 과다 계상(지배 라벨 결론 불변).
             if hd_rate is not None:
                 priority_source["historical_data (예정가)"] += 1
             elif path1 is not None:

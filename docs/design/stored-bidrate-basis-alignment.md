@@ -22,8 +22,11 @@
 
 #199/#225가 base 피처와 **경로 3**(파생-rate 폴백)을 기초금액-basis로 맞췄지만,
 **경로 1의 `winning_rate`(=낙찰가/예정가)는 여전히 예정가-relative**다. 그리고 실제로는
-경로 1보다 앞선 `HistoricalData.bid_rate`가 라벨의 절대다수를 차지하는데, 이 값은
-경험적으로 `winning_rate`와 사실상 동일(예정가-relative)하다(§3 실측).
+경로 1보다 앞선 `HistoricalData.bid_rate`가 라벨의 절대다수를 차지한다. 이 값은 단일
+고정 basis가 아니라 `app/services/koneps/scsbid.py`가 **조건부로 계산**한다: 실 기초금액
+(reserve detail의 `base_amount`)이 있으면 `winning_amount / base_amount`(기초금액-relative),
+없으면 `success_rate`(낙찰가/예정가)로 폴백. 다만 지배 표본은 실 기초금액이 대부분 부재해
+**예정가-relative로 실현**된다(§3 실측: `winning_rate`와 |평균차| 0.0006).
 
 `winning_amount ÷ winning_rate = 예정가`라는 관계는 `app/services/base_amount_basis.py`
 (`BASIS_DERIVED_YEGA = "win ÷ winning_rate 역산 = 예정가-basis"`)와
@@ -109,7 +112,9 @@ confound 버킷은 예상대로 0(측정 artifact). 정직한 기초금액 base 
 
 - **방향:** 예정가-relative 라벨 × 기초금액 base → 사정률<1인 만큼 **초과추천**(추천가가
   실현 낙찰가보다 위). 적격심사 밀집 게임에서 위로 뜨는 추천은 낙찰가보다 높아 밀린다.
-- **크기:** 전체 평균 +0.35%, 공사 +0.66%. mean 편향이며 median은 0.
+- **크기:** 전체 평균 +0.35%, 공사 +0.66%. mean 편향이며 median은 0. (초과추천은
+  `1/mean(사정률)−1` 로 집계한다 — `mean(1/사정률)` 이 아니라 1/x 볼록성(Jensen)으로 참
+  평균 초과율을 소폭 과소평가하는 **보수적** 추정이다.)
 - **관측 불가성:** 예정가는 투찰 마감 후 복수예비가격에서 추첨되므로 투찰 시점엔
   **개별 사정률을 알 수 없다**. 따라서 이론적으로 정당한 보정은 개별값이 아니라
   **E[사정률](카테고리/발주처별 기대 사정률) 상수 보정**뿐이다. 이는 #195가 발주처
@@ -185,10 +190,15 @@ docker compose exec -T api python scripts/measure_stored_bidrate_basis.py
 docker compose exec -T api python scripts/measure_stored_bidrate_basis.py --by-category
 ```
 
-DB read-only(write/commit 없음), 외부 호출 없음. 프로덕션 라벨 로직
-(`PredictionDatasetService._normalize_bid_rate_value`, `get_reliable_base`)을 그대로
-재사용해 드리프트를 방지한다. confound(base-fallback) 버킷을 분리 집계하고 정직한
-기초금액 base 행에서만 비대칭을 읽는다.
+DB read-only(write/commit 없음), 외부 호출 없음. 정규화·base 선택 **프리미티브**
+(`PredictionDatasetService._normalize_bid_rate_value`, `get_reliable_base`)와 유효범위
+게이트 상수는 프로덕션과 동일하게 재사용해 드리프트를 막는다. 다만 **우선순위
+dispatch·result 선택은 단순화 미러**다: (a) tier-4 `predicted_price` 폴백
+(`explicit_bid_rate_only=False`에서만 작동)을 생략해 §3 'none' 카운트가 프로덕션 실제
+미라벨보다 과다 계상된다(지배 라벨 결론은 불변), (b) result 선택이 project당 id-desc라
+다중-결과 프로젝트에서 프로덕션 `_is_better_result`(usable-first→최신 announced)와 갈릴
+수 있다. confound(base-fallback) 버킷을 분리 집계하고 정직한 기초금액 base 행에서만
+비대칭을 읽는다.
 
 ## 8. 비목표 / red line
 
