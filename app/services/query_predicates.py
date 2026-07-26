@@ -47,7 +47,11 @@ def settled_with_amount() -> ColumnElement[bool]:
 
     The STRICT settlement definition: ``winning_amount IS NOT NULL AND
     winning_amount > 0``. Settlement math, dashboards and accuracy reporting all
-    require a concrete winning amount, so this is the predicate they share.
+    require a concrete winning amount, so this is the predicate they share. It
+    deliberately DROPS a rate-only settled row (``winning_rate > 0`` with
+    ``winning_amount == 0``) that :func:`settled_any_signal` keeps — see that
+    function for the live write path that can produce one and why the two stay
+    separate.
 
     Consumers (each keeps its own ``project_id`` scoping and just reuses this
     ``winning_amount`` clause):
@@ -70,13 +74,30 @@ def settled_any_signal() -> ColumnElement[bool]:
     dataset / holdout construction, which accept a rate-only label when a
     concrete amount is missing.
 
-    Measured delta vs :func:`settled_with_amount` on the production DB
-    (2026-07-25): ``winning_rate > 0 AND NOT winning_amount > 0`` = **0 rows**
-    (76,728 total). The two definitions therefore select the same rows today, but
-    they are kept as SEPARATE named predicates because they encode different
-    intent and could diverge again if a winning_rate-without-amount collection
-    gap recurs (the historical scsbid fallback scenario). Unifying them is left
-    as a follow-up, not done here — this PR only preserves behaviour.
+    WHY THIS IS KEPT SEPARATE from :func:`settled_with_amount` (investigated
+    2026-07-26): a settled ``TenderResult`` can carry ``winning_rate > 0`` while
+    ``winning_amount == 0``. This is a LIVE, not historical, write path:
+
+    - ``koneps/scsbid.py._build_scsbid_item`` derives ``winning_amount =
+      coerce_amount(sucsfbidAmt)`` (which returns ``None`` when ``sucsfbidAmt``
+      is absent) and ``winning_rate = normalize_bid_rate_value(sucsfbidRate)``
+      INDEPENDENTLY; ``koneps/html_parsing.parse_opening_detail`` does the same
+      for the browser crawl (``낙찰금액`` vs ``낙찰률`` fields).
+    - ``koneps/persistence.resolve_tender_result`` then stores
+      ``winning_amount = item_metadata.get("winning_amount") or 0.0`` (coercing
+      the missing amount to ``0.0``) while keeping the rate, and
+      ``_persist_tender_result_for_item`` gates only on ``opening_status`` /
+      ``winning_*`` being present (scsbid always sets ``opening_status="낙찰"``),
+      so the row is created even with the amount missing.
+
+    A KONEPS settled row reporting a rate but no amount therefore lands as
+    ``winning_rate > 0 AND winning_amount == 0`` — a row STRICT drops and LOOSE
+    keeps. Re-measured divergence on the production DB is still **0 rows** (of
+    76,730; 2026-07-26) because live settled feeds currently carry both fields,
+    but the outcome is DATA-dependent on KONEPS, not guaranteed by code. The two
+    predicates are deliberately NOT unified: dataset / holdout construction must
+    keep the rate-only settled signal that settlement math and dashboards must
+    reject.
 
     Consumers:
 
