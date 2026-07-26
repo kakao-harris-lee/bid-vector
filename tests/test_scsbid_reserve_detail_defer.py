@@ -816,6 +816,124 @@ def test_backfill_last_chunk_does_not_chain(test_db, monkeypatch):
     assert continuations == []  # nothing left to chain
 
 
+def test_backfill_missing_service_key_surfaces_errors_without_fetch(
+    test_db, monkeypatch
+):
+    """No ``KONEPS_OPENAPI_SERVICE_KEY`` -> surface every notice as an error
+    without any HTTP fetch and WITHOUT chaining a continuation (the remainder
+    would fail identically; the next 6h collect re-defers once a key exists).
+
+    Pins the branch whose ``service_key`` resolution the config-prologue
+    extraction relocates into ``_plan_reserve_detail_backfill``.
+    """
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 5)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    def _must_not_fetch(self, raw_item, *, category, service_key):
+        raise AssertionError("must not fetch without a service key")
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _must_not_fetch
+    )
+
+    continuations: list[dict] = []
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail,
+        "apply_async",
+        lambda *, kwargs, queue: continuations.append(kwargs),
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[
+            {"notice_number": "K-1", "category": "construction"},
+            {"notice_number": "K-2", "category": "construction"},
+        ]
+    )
+
+    assert out == {
+        "requested": 2,
+        "processed": 0,
+        "fetched": 0,
+        "skipped_existing": 0,
+        "errors": 2,
+        "error": "missing_service_key",
+        "remaining": 0,
+        "continued": False,
+    }
+    assert continuations == []  # no continuation chained without a key
+
+
+def test_backfill_soft_time_limit_commits_progress_without_chaining(
+    test_db, monkeypatch
+):
+    """``SoftTimeLimitExceeded`` mid-chunk: commit the work done so far, return a
+    graceful soft-limit summary, and do NOT enqueue a continuation even though a
+    remainder exists (the next 6h collect self-heals) -- so a time-limited run
+    never orphans the serial chain. Pins the soft-limit early-return branch.
+    """
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from app.tasks import jobs
+
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 2)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr(test_db, "close", lambda: None)
+
+    for nn in ("S-0", "S-1", "S-2"):
+        test_db.add(
+            HistoricalData(notice_number=nn, reserve_prices="[]", selected_numbers="[]")
+        )
+    test_db.commit()
+
+    def _fetch(self, raw_item, *, category, service_key):
+        if raw_item["bidNtceNo"] == "S-0":
+            return {"reserve_prices": [123], "selected_numbers": []}
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _fetch
+    )
+
+    continuations: list[dict] = []
+    monkeypatch.setattr(
+        jobs.backfill_scsbid_reserve_detail,
+        "apply_async",
+        lambda *, kwargs, queue: continuations.append(kwargs),
+    )
+
+    out = jobs.backfill_scsbid_reserve_detail.run(
+        notices=[
+            {"notice_number": nn, "category": "construction"}
+            for nn in ("S-0", "S-1", "S-2")
+        ]
+    )
+
+    # Chunk_size=2 -> {S-0, S-1} processed, S-2 is the remainder. The soft limit
+    # hits on S-1; S-0's fetch is committed and the run chains nothing.
+    assert out["soft_time_limit_exceeded"] is True
+    assert out["continued"] is False
+    assert out["fetched"] == 1
+    assert out["remaining"] == 1
+    assert continuations == []  # non-empty remainder, but no orphaning continuation
+
+    # The already-fetched reserve was committed before the soft limit aborted.
+    test_db.expire_all()
+    stored = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "S-0")
+        .one()
+    )
+    assert json.loads(stored.reserve_prices) == [123]
+
+
 # ---------------------------------------------------------------------------
 # 6. backfill stamps reserve_detail_checked_at on a not_settled fetch.
 #
