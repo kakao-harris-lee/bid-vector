@@ -149,7 +149,7 @@ feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략
 | 플래그 | 판정 |
 |--------|------|
 | `amount_rate_mismatch` | 보고 낙찰률과 `winning_amount / base_amount`의 **상대** 불일치가 1%를 넘음 |
-| `below_legal_floor` | 보고 낙찰률이 법정 낙찰하한을 5bp 넘게 하회 |
+| `below_legal_floor` | 보고 낙찰률이 법정 낙찰하한을 5bp 넘게 하회. **하한 모델이 그 공고에 적용될 때만** 판정한다(아래 적용 범위) |
 | `base_basis_contaminated` | `base_amount`가 clean이 아님(예정가 역산/VAT 파생/미상, #199) |
 | `missing_reported_rate` | 소스가 낙찰률을 보고하지 않아 분모 정합/하한 판정 근거가 없음 |
 | `missing_amount_derived_rate` | 금액 역산 낙찰률을 만들 수 없음 |
@@ -162,6 +162,48 @@ feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략
 **하한 판정은 보고 낙찰률이 있을 때만 수행한다.** 법정 하한율은 예정가격 기준인데 금액 역산
 낙찰률은 기초금액 기준(#162)이라 사정률만큼 구조적으로 낮게 나오므로, 역산율로 하한을 재면
 정상 낙찰이 대량 오탐된다.
+
+### 하한 모델 적용 범위 (`floor_applicability`)
+
+라이브 기준선(기관 축 2,798건, 2026-07-26)에서 `below_legal_floor` 49건을 뜯어보니 상당수가
+**위법 낙찰이 아니라 적용 범위 밖 공고에 국가계약 era-tier를 일괄 적용해 생긴 오탐**이었다.
+산학협력단·농업협동조합 같은 비국가기관은 국가계약법 적격심사 낙찰하한율 적용 대상이 아닌데
+0.89745가 그대로 적용돼 9.9~46%p 하회로 잡혔다.
+
+그래서 발주기관(부재 시 수요기관) 표기명으로 적용 범위를 tri-state 판별하고, 결과를
+`targets[].data_quality_details.floor_applicability`에 남긴다.
+
+| 값 | 의미 | 하한 하회 판정 |
+|----|------|----------------|
+| `applicable` | 기본값(국가·지자체 기관 등) | 기존대로 수행 |
+| `not_applicable` | 명백한 비국가기관(산학협력단, 협동조합/농협·수협·축협·신협, 학교법인) | 생략 |
+| `uncertain` | 이름만으로 국공립/사립을 가를 수 없는 부류(대학교·전문대학) | 생략 |
+
+판별 규칙은 코드 분기가 아니라 `app/ai/floor_applicability.py`의 `_AGENCY_PATTERNS` 선언
+테이블이다. **패턴 추가 = 테이블 한 줄**이며, 위에서부터 첫 매칭이 이기므로 `not_applicable`
+항목이 `uncertain`보다 앞에 온다("○○대학교 산학협력단"은 비국가기관으로 확정). 짧은 약칭
+(`농협`/`수협`)은 무관한 기관명 안에 substring으로 걸리므로(`농업용수협의체`) 기관명 말미에서만
+매칭한다.
+
+공고 게시 하한율(`published_award_floor_rate`)도 **개연 범위** 안일 때만 판정에 쓴다. 라이브에
+`1.00000`으로 적재된 값이 있는데(예정가 전액 이상 투찰 = 하한의 의미가 아님) 그대로 쓰면 정상
+낙찰이 하회로 잡힌다. 범위 밖이면 era-tier로 폴백하고 `published_floor_implausible`을 남긴다.
+경계 상수는 같은 모듈의 `PUBLISHED_FLOOR_MIN_PLAUSIBLE`(0.30) / `PUBLISHED_FLOOR_MAX_PLAUSIBLE`
+(0.995)이며, 하한을 0.5로 올리지 않는 이유는 라이브에 실제 게시값 `0.47995`가 있기 때문이다.
+
+스킵 규모는 침묵하지 않고 요약에 싣는다.
+
+| 키 | 의미 |
+|----|------|
+| `summary.floor_applicability_counts` | 집계 스코프(기본 clean-only)의 tri-state 건수 |
+| `summary.evaluated_floor_applicability_counts` | 평가된 전체 타깃 기준 tri-state 건수 |
+| `summary.published_floor_implausible_count` / `evaluated_published_floor_implausible_count` | 게시 하한율이 개연 범위 밖이라 쓰지 않은 건수 |
+
+**남는 한계(정직 표기):** 0.9~2.7%p의 얕은 하회(농어촌공사 지사·산림청 국유림관리소 등, 낙찰률
+0.870~0.888 밀집)는 이 게이트로 해소되지 않는다. 지방계약·공공기관·수의견적 등 **다른 하한
+체계**가 적용됐을 가능성이 있지만 저장된 데이터만으로 어느 티어였는지 단정할 수 없어, 그대로
+`below_legal_floor`로 남긴다. 이 판별은 분석 전용이며 라이브 예측 guardrail(게시 하한을 `max()`로만
+접어 올리는 경로)에는 관여하지 않는다.
 
 clean/flag 분리 비교는 `summary.quality_flag_partition`을 본다. `all` / `flag_free` /
 `flagged` 3분할이라 `flag_free + flagged == all`로 검산할 수 있고, 플래그 표본을 뺐을 때
