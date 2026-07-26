@@ -255,6 +255,46 @@ def test_paper_bidding_backtest_persists_run_bids_and_settlements(test_db):
     assert settlement.would_have_won_final == "unknown"
 
 
+def test_historical_backtest_marks_run_failed_and_reraises_on_error(
+    test_db, monkeypatch
+):
+    """Run-level failure path: an exception raised *after* the run row is created
+    fails the persisted run (``_fail_run``) and re-raises unchanged.
+
+    Characterization guard for the prepare/execute extraction: ``_create_run``
+    runs in the prepare phase (a create-time failure must propagate *without*
+    ``_fail_run``), while the award-processing failure is caught by the execute
+    phase's ``except`` and marks the run ``failed`` before re-raising.
+    """
+    from app.core.single_user import ensure_operator_account
+
+    ensure_operator_account(test_db)
+    service = PaperBiddingBacktestService()
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("award processing exploded")
+
+    monkeypatch.setattr(service, "_process_historical_awards", _explode)
+
+    with pytest.raises(RuntimeError, match="award processing exploded"):
+        service.run_historical_backtest(
+            test_db,
+            operator_id=None,
+            category="construction",
+            start_at=_dt(2025, 3, 1),
+            end_at=_dt(2025, 3, 31),
+            limit=5,
+            persist=True,
+        )
+
+    # The run was created in the prepare phase, then marked failed by the execute
+    # phase's except branch (status/error_message/completed_at all recorded).
+    run = test_db.query(PaperBidRun).one()
+    assert run.status == "failed"
+    assert run.error_message == "award processing exploded"
+    assert run.completed_at is not None
+
+
 def test_backtests_api_runs_persisted_historical_backtest_and_returns_detail(
     client, test_db
 ):

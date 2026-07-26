@@ -28,7 +28,7 @@ import pytest
             "app.services.paper_bidding_backtest",
             "PaperBiddingBacktestService",
             "run_historical_backtest",
-            130,
+            60,
         ),
         (
             "app.services.paper_bidding_backtest",
@@ -46,7 +46,13 @@ import pytest
             "app.tasks.jobs",
             "backfill_scsbid_reserve_detail",
             "run",
-            135,
+            15,
+        ),
+        (
+            "app.tasks.reserve_detail_backfill",
+            None,
+            "run_scsbid_reserve_detail_backfill_job",
+            80,
         ),
         (
             "app.services.ml_release",
