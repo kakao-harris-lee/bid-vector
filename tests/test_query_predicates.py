@@ -109,3 +109,54 @@ def test_settled_predicates_use_the_same_result_model():
     # inline clause for either helper without touching its own project_id join.
     for clause in (settled_with_amount(), settled_any_signal()):
         assert TenderResult.__tablename__ in _sql(clause)
+
+
+# --- rate-only divergence (STRICT drops, LOOSE keeps) ------------------------
+
+
+def test_rate_only_row_is_the_strict_loose_divergence(test_db):
+    """A settled row with ``winning_rate > 0`` but ``winning_amount == 0`` is the
+    exact row the two predicates disagree on — the reason they are kept separate.
+
+    Regression guard for the "do NOT unify" decision (2026-07-26): the KONEPS
+    scsbid / browser paths can persist a rate-only settled row (missing
+    ``sucsfbidAmt`` / ``낙찰금액``), which LOOSE (dataset / holdout) must keep and
+    STRICT (settlement / dashboards) must reject. Collapsing the two predicates
+    would silently drop that signal, so this pins the divergence executable.
+    """
+    rate_only = Project(title="rate-only", category="service", budget_estimate=1000.0)
+    with_amount = Project(title="with-amount", category="service", budget_estimate=1000.0)
+    test_db.add_all([rate_only, with_amount])
+    test_db.flush()
+    test_db.add_all(
+        [
+            # the divergent row: rate present, amount coerced to 0.0 on persist
+            TenderResult(
+                project_id=rate_only.id,
+                winning_company="w",
+                winning_amount=0.0,
+                winning_rate=0.88,
+            ),
+            # control: a concrete amount — both predicates keep it
+            TenderResult(
+                project_id=with_amount.id,
+                winning_company="w",
+                winning_amount=880.0,
+                winning_rate=0.88,
+            ),
+        ]
+    )
+    test_db.commit()
+
+    strict_ids = {
+        r.project_id for r in test_db.query(TenderResult).filter(settled_with_amount()).all()
+    }
+    loose_ids = {
+        r.project_id for r in test_db.query(TenderResult).filter(settled_any_signal()).all()
+    }
+
+    assert rate_only.id in loose_ids  # rate-only KEPT by LOOSE
+    assert rate_only.id not in strict_ids  # rate-only DROPPED by STRICT
+    assert with_amount.id in strict_ids and with_amount.id in loose_ids  # both keep amount
+    # The rate-only row is exactly the set the two predicates disagree on.
+    assert loose_ids - strict_ids == {rate_only.id}
