@@ -1,23 +1,33 @@
-"""Background jobs."""
+"""Background jobs.
+
+Celery task registry. Each ``@celery_app.task`` entry is defined here so its
+registration name is unchanged; heavier task bodies and pure helpers live in
+sibling ``app/tasks/`` modules (§4.5 size decomposition) and are delegated to
+from thin shells. The deferred-backfill enqueue helpers and ``_enqueue_ml_task``
+stay in THIS module because tests patch them here
+(``jobs._enqueue_ml_task`` / ``jobs._enqueue_deferred_embedding_backfill``) and
+rely on them resolving each other within this module namespace.
+"""
 
 import logging
 from typing import Any
 from uuid import uuid4
 
-from celery.exceptions import SoftTimeLimitExceeded
-
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.models import CrawlJob, User
+from app.models.models import User
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
-from app.services.koneps.collector import KonepsCollectorService
+from app.services.decision_experiments import DecisionExperimentService
 from app.services.ml_training import PricePredictionTrainingService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from app.services.project_similarity import ProjectSimilarityService
-from app.services.decision_experiments import DecisionExperimentService
+from app.tasks.backtest_jobs import (
+    run_historical_backtest_job,
+    run_synthetic_operator_backtest_job,
+)
 from app.tasks.celery_app import (
     BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME,
     COLLECT_G2_EVIDENCE_TASK_NAME,
@@ -38,8 +48,40 @@ from app.tasks.celery_app import (
     SYNTHETIC_BACKTEST_RUN_TASK_NAME,
     celery_app,
 )
+from app.tasks.collection_jobs import run_koneps_collection_job
+from app.tasks.evidence_jobs import (
+    _write_g2_daily_evidence_draft,
+    run_collect_g2_evidence_job,
+    run_g2_candidate_recheck_job,
+)
+from app.tasks.reserve_detail_backfill import (
+    _normalize_deferred_reserve_notices,
+    run_scsbid_reserve_detail_backfill_job,
+)
+from app.tasks.task_status import (
+    get_decision_experiment_reevaluation_task_status,
+    get_koneps_notice_collection_task_status,
+    get_operator_strategy_monitor_task_status,
+    get_price_predictor_training_task_status,
+    get_project_embedding_rebuild_task_status,
+    get_synthetic_backtest_task_status,
+)
 
 logger = logging.getLogger(__name__)
+
+# Names imported above for re-export only (the task-status poll helpers) — kept
+# importable from ``app.tasks.jobs`` so existing ``from app.tasks.jobs import
+# get_...`` call sites keep working after the §4.5 decomposition. Listing them in
+# ``__all__`` marks them as used for linters. ``_write_g2_daily_evidence_draft``
+# and the job/helper functions are used internally by the shells below.
+__all__ = [
+    "get_decision_experiment_reevaluation_task_status",
+    "get_koneps_notice_collection_task_status",
+    "get_operator_strategy_monitor_task_status",
+    "get_price_predictor_training_task_status",
+    "get_project_embedding_rebuild_task_status",
+    "get_synthetic_backtest_task_status",
+]
 
 
 class _QueuedOnlyTaskHandle:
@@ -64,116 +106,16 @@ def collect_koneps_notices(
 ) -> dict:
     """Collect KONEPS notices and persist crawl history inside a background task.
 
-    Idempotency: with ``task_acks_late=True`` a task that is SIGKILLed by the
-    hard time limit is redelivered with the *same* Celery task id but no
-    ``crawl_job_id`` (beat dispatch). Stamping ``celery_task_id`` on the row and
-    reusing it on redelivery prevents an orphan ``running`` crawl-job from being
-    created on every redelivery.
+    Thin shell: the body lives in ``app.tasks.collection_jobs`` and the deferred
+    backfill enqueue helpers (patched via this module in tests) are injected.
     """
-    request = CrawlRequest(**(request_payload or {}))
-    service = KonepsCollectorService()
-    db = SessionLocal()
-    crawl_job: CrawlJob | None = None
-    task_id = getattr(getattr(self, "request", None), "id", None)
-
-    try:
-        if crawl_job_id is not None:
-            crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
-
-        # Redelivery path: no explicit crawl_job_id but a row already exists for
-        # this task id -- reuse it instead of spawning an orphan.
-        if crawl_job is None and task_id:
-            crawl_job = (
-                db.query(CrawlJob)
-                .filter(CrawlJob.celery_task_id == str(task_id))
-                .order_by(CrawlJob.id.desc())
-                .first()
-            )
-
-        if crawl_job is None:
-            # First delivery: stamp the task id in the INSERT so the row is
-            # recoverable immediately (no orphan window) and the realtime event
-            # is published once, already stamped. create_crawl_job commits.
-            crawl_job = service.create_crawl_job(
-                db, request, celery_task_id=task_id
-            )
-        else:
-            # Reuse path (explicit crawl_job_id or redelivery match): reset the
-            # row to running and ensure the task id is recorded.
-            crawl_job.source = request.source
-            crawl_job.target_date = request.target_date
-            crawl_job.status = "running"
-            crawl_job.result_count = 0
-            crawl_job.error_message = None
-            crawl_job.completed_at = None
-            # Only stamp when empty: a manual re-queue / async retry may reuse an
-            # existing row under a new task id; overwriting would let a later
-            # redelivery-match grab the wrong row.
-            if task_id and not crawl_job.celery_task_id:
-                crawl_job.celery_task_id = str(task_id)
-            db.add(crawl_job)
-            db.commit()
-            db.refresh(crawl_job)
-
-        # Defer embeddings AND the per-notice scsbid reserve-detail HTTP fetch
-        # only on this time-limited Celery path; synchronous callers do both
-        # inline (see persist_crawl_results / collect_notices docstrings). The
-        # inline reserve-detail fetch (one throttled HTTP call per non-settled
-        # award, thousands per sweep) is what blew past the hard time limit and
-        # spun a 0-row redelivery loop; deferring it to a bounded backfill keeps
-        # the collection task short.
-        is_scsbid = service._is_scsbid_openapi_source(request.source)
-        defer_embeddings = is_scsbid
-        defer_reserve_detail = (
-            bool(settings.KONEPS_SCSBID_RESERVE_DETAIL_DEFER) and is_scsbid
-        )
-        result = service.collect_notices(
-            request, db=db, defer_reserve_detail=defer_reserve_detail
-        )
-        crawl_job = service.persist_crawl_results(
-            db, crawl_job, request, result, defer_embeddings=defer_embeddings
-        )
-        result.setdefault("metadata", {})["crawl_job_id"] = crawl_job.id
-
-        deferred_ids = result.get("metadata", {}).get("deferred_embedding_project_ids")
-        if deferred_ids:
-            _enqueue_deferred_embedding_backfill(list(deferred_ids))
-
-        deferred_reserve = result.get("metadata", {}).get(
-            "deferred_reserve_detail_notices"
-        )
-        if deferred_reserve:
-            _enqueue_deferred_reserve_detail_backfill(list(deferred_reserve))
-
-        return result
-    except SoftTimeLimitExceeded as exc:
-        # Stop the redelivery loop: mark this run failed and ack the message so
-        # the same payload is not re-run forever past the soft limit.
-        if crawl_job is not None:
-            service.mark_crawl_job_failed(
-                db, crawl_job, f"soft time limit exceeded: {exc}"
-            )
-        logger.warning(
-            "collect_koneps_notices hit soft time limit (task_id=%s source=%s)",
-            task_id,
-            request.source,
-        )
-        return {
-            "job_status": "failed",
-            "source": request.source,
-            "collected_count": 0,
-            "items": [],
-            "metadata": {
-                "crawl_job_id": int(crawl_job.id) if crawl_job is not None else None,
-                "error": "soft_time_limit_exceeded",
-            },
-        }
-    except Exception as exc:
-        if crawl_job is not None:
-            service.mark_crawl_job_failed(db, crawl_job, str(exc))
-        raise
-    finally:
-        db.close()
+    return run_koneps_collection_job(
+        self,
+        request_payload=request_payload,
+        crawl_job_id=crawl_job_id,
+        enqueue_deferred_embedding_backfill=_enqueue_deferred_embedding_backfill,
+        enqueue_deferred_reserve_detail_backfill=_enqueue_deferred_reserve_detail_backfill,
+    )
 
 
 @celery_app.task(name="jobs.send_telegram_notification")
@@ -300,33 +242,6 @@ def enqueue_project_embedding_backfill(project_ids: list[int]) -> int:
     return _enqueue_deferred_embedding_backfill(project_ids)
 
 
-def _normalize_deferred_reserve_notices(
-    notices: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    """De-duplicate and clean the deferred reserve-detail notice payloads.
-
-    Each entry needs a non-empty ``notice_number``; ``category`` is optional and
-    only selects the reserve-detail operation. Order-preserving dedupe on the
-    (notice_number, category) pair keeps the backfill from re-fetching the same
-    notice twice within one chunk set.
-    """
-    cleaned: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for entry in notices or []:
-        if not isinstance(entry, dict):
-            continue
-        notice_number = str(entry.get("notice_number") or "").strip()
-        if not notice_number:
-            continue
-        category = str(entry.get("category") or "").strip()
-        key = (notice_number, category)
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append({"notice_number": notice_number, "category": category})
-    return cleaned
-
-
 def _enqueue_deferred_reserve_detail_backfill(notices: list[dict[str, Any]]) -> int:
     """Queue ONE serial-chain root task for the deferred reserve-detail notices.
 
@@ -371,279 +286,11 @@ def _enqueue_deferred_reserve_detail_backfill(notices: list[dict[str, Any]]) -> 
 def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     """Fetch deferred scsbid reserve-detail rows and persist them per notice.
 
-    Async companion to the deferral added in ``collect_koneps_notices``: the
-    time-limited collection task no longer issues a per-notice reserve-detail HTTP
-    call inline (which spun a 0-row redelivery loop past the hard time limit); it
-    surfaces the not-yet-settled notices and enqueues bounded chunks here instead.
-
-    For each ``{"notice_number", "category"}``:
-
-    * Idempotency — if the notice's ``HistoricalData.reserve_prices`` is already a
-      non-empty settled value it is skipped (a reserve price is immutable, so a
-      re-run after a partial crash never re-pays the HTTP cost).
-    * Otherwise the reserve detail is fetched (one throttled HTTP call) and the
-      resulting ``reserve_prices`` / ``selected_numbers`` are written onto the
-      matching ``HistoricalData`` row as JSON.
-
-    Serial self-chaining (rate-limit throttle): ScsbidInfoService rate-limits
-    concurrent reserve-detail calls (HTTP 429), so the enqueue helper hands this
-    task the *entire* deferred notice list and the task processes only the first
-    ``KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE`` notices, then enqueues a
-    *single* continuation task for the remainder. This keeps the API hit strictly
-    one-chunk-at-a-time instead of N chunks bursting in parallel across ops workers.
-    Assumption: a chunk (<=chunk_size notices) finishes well within the 6h sweep
-    interval, so a chain never overlaps the next sweep; if a chain is dropped the
-    next 6h collect recomputes the deferred list, so the work self-heals.
-
-    Partial-progress preservation: progress is committed in small batches so a
-    SIGKILL / soft-time-limit mid-chunk still keeps what was already fetched. On
-    ``SoftTimeLimitExceeded`` the work done so far is committed and a graceful
-    summary is returned (no continuation enqueue — the remainder is recomputed and
-    re-deferred by the next 6h collect, so it self-heals). A single notice failing
-    (HTTP or parse) is caught per-notice and counted, never aborting the chunk.
+    Thin shell: body in ``app.tasks.reserve_detail_backfill``; the serial
+    self-chain continuation enqueue (which references this task) is injected.
     """
-    all_cleaned = _normalize_deferred_reserve_notices(notices)
-    chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
-    cleaned = all_cleaned[:chunk_size]
-    rest = all_cleaned[chunk_size:]
-    service = KonepsCollectorService()
-    service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
-    # Backfill-specific inter-call throttle, kept separate from the collection
-    # page-pagination delay: the reserve-detail endpoint is rate-limited harder
-    # (HTTP 429 persisted even at collection's ~serial pace), so the backfill runs
-    # at its own, slacker pace without slowing collection. 0 disables the sleep.
-    delay_seconds = max(
-        0.0,
-        float(settings.KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS or 0.0),
-    )
-    commit_every = 25
-
-    requested = len(cleaned)
-
-    db = SessionLocal()
-    try:
-        if not service_key:
-            # No key -> nothing fetchable; surface as errors without HTTP. Do NOT
-            # chain a continuation (the remainder would fail the same way); the
-            # next 6h collect re-defers everything once a key is configured.
-            return _missing_reserve_detail_service_key_result(
-                requested=requested,
-                remaining=len(rest),
-            )
-
-        stats = _process_scsbid_reserve_detail_chunk(
-            db,
-            service=service,
-            cleaned=cleaned,
-            service_key=service_key,
-            delay_seconds=delay_seconds,
-            commit_every=commit_every,
-            requested=requested,
-            remaining=len(rest),
-        )
-        if stats.get("soft_time_limit_exceeded"):
-            return _reserve_detail_backfill_result(
-                requested=requested,
-                remaining=len(rest),
-                continued=False,
-                stats=stats,
-            )
-
-        db.commit()
-        _log_reserve_detail_backfill_errors(requested=requested, stats=stats)
-        continued = _enqueue_reserve_detail_continuation(rest)
-        return _reserve_detail_backfill_result(
-            requested=requested,
-            remaining=len(rest),
-            continued=continued,
-            stats=stats,
-        )
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-def _missing_reserve_detail_service_key_result(
-    *,
-    requested: int,
-    remaining: int,
-) -> dict[str, Any]:
-    return {
-        "requested": requested,
-        "processed": 0,
-        "fetched": 0,
-        "skipped_existing": 0,
-        "errors": requested,
-        "error": "missing_service_key",
-        "remaining": remaining,
-        "continued": False,
-    }
-
-
-def _process_scsbid_reserve_detail_chunk(
-    db,
-    *,
-    service: KonepsCollectorService,
-    cleaned: list[dict[str, Any]],
-    service_key: str,
-    delay_seconds: float,
-    commit_every: int,
-    requested: int,
-    remaining: int,
-) -> dict[str, Any]:
-    from time import sleep
-
-    from app.core.time import utc_now
-    from app.models.models import HistoricalData
-
-    stats: dict[str, Any] = {
-        "fetched": 0,
-        "skipped_existing": 0,
-        "not_settled": 0,
-        "errors": 0,
-        "error_types": {},
-        "error_samples": [],
-        "processed_since_commit": 0,
-    }
-    for index, entry in enumerate(cleaned):
-        notice_number = entry["notice_number"]
-        category = entry["category"] or None
-        try:
-            record = _load_reserve_detail_record(db, HistoricalData, notice_number)
-            if record is not None and service._has_persisted_reserve_prices(record):
-                stats["skipped_existing"] += 1
-                continue
-            if index > 0 and delay_seconds > 0:
-                sleep(delay_seconds)
-            detail = service._fetch_scsbid_reserve_detail(
-                {"bidNtceNo": notice_number},
-                category=category,
-                service_key=service_key,
-            )
-            _persist_reserve_detail_result(
-                db,
-                HistoricalData,
-                record=record,
-                notice_number=notice_number,
-                detail=detail,
-                stats=stats,
-                utc_now=utc_now,
-            )
-            _commit_reserve_detail_progress(db, stats=stats, commit_every=commit_every)
-        except SoftTimeLimitExceeded:
-            return _reserve_detail_soft_limit_stats(
-                db,
-                stats=stats,
-                requested=requested,
-                remaining=remaining,
-            )
-        except Exception as exc:  # noqa: BLE001 — one notice must not abort the chunk
-            _record_reserve_detail_error(stats, exc)
-    stats.pop("processed_since_commit", None)
-    return stats
-
-
-def _load_reserve_detail_record(db, historical_model, notice_number: str):
-    return (
-        db.query(historical_model)
-        .filter(historical_model.notice_number == notice_number)
-        .order_by(historical_model.id.asc())
-        .first()
-    )
-
-
-def _persist_reserve_detail_result(
-    db,
-    historical_model,
-    *,
-    record,
-    notice_number: str,
-    detail: dict[str, Any],
-    stats: dict[str, Any],
-    utc_now,
-) -> None:
-    import json
-
-    reserve_prices = detail.get("reserve_prices") or []
-    selected_numbers = detail.get("selected_numbers") or []
-    if record is None:
-        record = historical_model(notice_number=notice_number)
-        db.add(record)
-    if not reserve_prices:
-        record.reserve_detail_checked_at = utc_now()
-        stats["not_settled"] += 1
-    else:
-        record.reserve_prices = json.dumps(reserve_prices, ensure_ascii=False)
-        record.selected_numbers = json.dumps(selected_numbers, ensure_ascii=False)
-        stats["fetched"] += 1
-    stats["processed_since_commit"] += 1
-
-
-def _commit_reserve_detail_progress(
-    db,
-    *,
-    stats: dict[str, Any],
-    commit_every: int,
-) -> None:
-    if int(stats["processed_since_commit"]) < commit_every:
-        return
-    db.commit()
-    stats["processed_since_commit"] = 0
-
-
-def _reserve_detail_soft_limit_stats(
-    db,
-    *,
-    stats: dict[str, Any],
-    requested: int,
-    remaining: int,
-) -> dict[str, Any]:
-    db.commit()
-    logger.warning(
-        "backfill_scsbid_reserve_detail hit soft time limit "
-        "(fetched=%s skipped=%s errors=%s of %s)",
-        stats["fetched"],
-        stats["skipped_existing"],
-        stats["errors"],
-        requested,
-    )
-    stats = dict(stats)
-    stats.pop("processed_since_commit", None)
-    stats["soft_time_limit_exceeded"] = True
-    stats["remaining"] = remaining
-    return stats
-
-
-def _record_reserve_detail_error(stats: dict[str, Any], exc: Exception) -> None:
-    stats["errors"] += 1
-    error_type_counts = stats["error_types"]
-    error_samples = stats["error_samples"]
-    exc_type = type(exc).__name__
-    error_type_counts[exc_type] = error_type_counts.get(exc_type, 0) + 1
-    label = f"{exc_type}: {exc}"[:200]
-    if label not in error_samples and len(error_samples) < 5:
-        error_samples.append(label)
-
-
-def _log_reserve_detail_backfill_errors(
-    *,
-    requested: int,
-    stats: dict[str, Any],
-) -> None:
-    if not stats["errors"]:
-        return
-    logger.warning(
-        "backfill_scsbid_reserve_detail chunk done requested=%s fetched=%s "
-        "skipped=%s not_settled=%s errors=%s error_types=%s samples=%s",
-        requested,
-        stats["fetched"],
-        stats["skipped_existing"],
-        stats["not_settled"],
-        stats["errors"],
-        stats["error_types"],
-        stats["error_samples"],
+    return run_scsbid_reserve_detail_backfill_job(
+        notices, enqueue_continuation=_enqueue_reserve_detail_continuation
     )
 
 
@@ -663,35 +310,6 @@ def _enqueue_reserve_detail_continuation(rest: list[dict[str, Any]]) -> bool:
             len(rest),
         )
         return False
-
-
-def _reserve_detail_backfill_result(
-    *,
-    requested: int,
-    remaining: int,
-    continued: bool,
-    stats: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "requested": requested,
-        "processed": stats["fetched"]
-        + stats["skipped_existing"]
-        + stats.get("not_settled", 0)
-        + stats["errors"],
-        "fetched": stats["fetched"],
-        "skipped_existing": stats["skipped_existing"],
-        "not_settled": stats.get("not_settled", 0),
-        "errors": stats["errors"],
-        "error_types": stats.get("error_types", {}),
-        "error_samples": stats.get("error_samples", []),
-        "remaining": remaining,
-        "continued": continued,
-        **(
-            {"soft_time_limit_exceeded": True}
-            if stats.get("soft_time_limit_exceeded")
-            else {}
-        ),
-    }
 
 
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)
@@ -757,57 +375,9 @@ def monitor_operator_strategy(
 def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> dict:
     """Run the per-synthetic-operator backtest in a background worker.
 
-    Mirrors the synchronous `/api/v1/synthetic/backtests/run` endpoint but
-    returns the comparison payload as the task result so the frontend can poll
-    `/api/v1/synthetic/backtests/tasks/{task_id}` for completion.
-
-    When the payload carries a ``run_id`` (Experiment Lab execution), the
-    run/result lifecycle is persisted via ``run_experiment_backtest``; the legacy
-    ad-hoc path (no ``run_id``) keeps its original behaviour unchanged.
+    Thin shell: body in ``app.tasks.backtest_jobs``.
     """
-    from datetime import datetime
-    from app.services.synthetic_backtest import SyntheticBacktestService
-
-    data = dict(payload or {})
-
-    if data.get("run_id") is not None:
-        from app.services.synthetic_experiment import run_experiment_backtest
-
-        return run_experiment_backtest(data)
-    start_at_raw = data.get("start_at")
-    end_at_raw = data.get("end_at")
-    start_at = datetime.fromisoformat(start_at_raw) if isinstance(start_at_raw, str) else None
-    end_at = datetime.fromisoformat(end_at_raw) if isinstance(end_at_raw, str) else None
-    settle_actions_raw = data.get("settle_actions")
-    if isinstance(settle_actions_raw, str):
-        settle_actions = tuple(s.strip() for s in settle_actions_raw.split(",") if s.strip())
-    elif isinstance(settle_actions_raw, (list, tuple)):
-        settle_actions = tuple(str(s).strip() for s in settle_actions_raw if str(s).strip())
-    else:
-        settle_actions = None
-    cutoff_hours_before_deadline = data.get("cutoff_hours_before_deadline")
-    history_limit = data.get("history_limit")
-
-    db = SessionLocal()
-    try:
-        return SyntheticBacktestService().run_for_all(
-            db,
-            start_at=start_at,
-            end_at=end_at,
-            category=data.get("category"),
-            limit=int(data.get("limit") or 100),
-            scenario=str(data.get("scenario") or "base"),
-            slugs=data.get("slugs"),
-            cutoff_hours_before_deadline=(
-                int(cutoff_hours_before_deadline)
-                if cutoff_hours_before_deadline is not None
-                else None
-            ),
-            history_limit=int(history_limit) if history_limit is not None else None,
-            settle_actions=settle_actions,
-        )
-    finally:
-        db.close()
+    return run_synthetic_operator_backtest_job(payload)
 
 
 @celery_app.task(name=PAPER_BIDDING_FORWARD_TASK_NAME)
@@ -876,40 +446,11 @@ def notify_award_results(limit: int = 50) -> dict:
 
 @celery_app.task(name=HISTORICAL_BACKTEST_TASK_NAME)
 def run_historical_backtest(request_payload: dict[str, Any] | None = None) -> dict:
-    """Replay awarded TenderResults as paper_bid + settlement comparison."""
-    from datetime import datetime, timedelta, timezone
-    from app.core.config import settings as runtime_settings
-    from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+    """Replay awarded TenderResults as paper_bid + settlement comparison.
 
-    payload = dict(request_payload or {})
-    db = SessionLocal()
-    try:
-        lookback = max(1, int(payload.pop("lookback_days", runtime_settings.HISTORICAL_BACKTEST_LOOKBACK_DAYS)))
-        end_at = datetime.now(timezone.utc)
-        start_at = end_at - timedelta(days=lookback)
-        settle_actions_raw = payload.pop("settle_actions", None)
-        if isinstance(settle_actions_raw, str):
-            settle_actions = tuple(s.strip() for s in settle_actions_raw.split(",") if s.strip())
-        elif isinstance(settle_actions_raw, (list, tuple)):
-            settle_actions = tuple(settle_actions_raw)
-        else:
-            settle_actions = ("bid_now", "review")
-        return PaperBiddingBacktestService().run_historical_backtest(
-            db,
-            category=payload.get("category") or None,
-            start_at=start_at,
-            end_at=end_at,
-            limit=int(payload.get("limit") or 100),
-            scenario=str(payload.get("scenario") or "base"),
-            strategy_version=str(payload.get("strategy_version") or "scheduled-historical-backtest"),
-            model_version=str(payload.get("model_version") or "current"),
-            cutoff_hours_before_deadline=int(payload.get("cutoff_hours_before_deadline") or 2),
-            history_limit=int(payload.get("history_limit") or 80),
-            settle_actions=settle_actions,
-            persist=bool(payload.get("persist", True)),
-        )
-    finally:
-        db.close()
+    Thin shell: body in ``app.tasks.backtest_jobs``.
+    """
+    return run_historical_backtest_job(request_payload)
 
 
 @celery_app.task(name=ENRICH_BUSINESS_TYPE_TASK_NAME)
@@ -967,303 +508,34 @@ def run_koneps_telegram_smoke_test() -> dict:
 def run_g2_candidate_recheck() -> dict:
     """Daily read-only G-2 candidate re-check across synthetic operators.
 
-    Re-runs the read-only ``preview_candidates`` for every active synthetic
-    operator (``username LIKE 'synthetic-%'``) to measure when niche biddable
-    inventory recovers and candidates reappear. This is an *observation* tool for
-    G-2 live evidence — it deliberately calls ``preview_candidates`` (read-only),
-    never ``execute_monitoring``, and writes nothing to operator data
-    (``operator_strategy_runs`` / ``bid_decision_records`` / notifications). The
-    only permitted write is a single ``g2_candidate_recheck`` analytics evidence
-    event carrying the per-operator + aggregate summary.
-
-    Each operator is swept inside its own ``try/except`` so one failure cannot
-    abort the whole sweep; failures are recorded per operator and the task
-    continues.
+    Thin shell: body in ``app.tasks.evidence_jobs``; the ``SessionLocal`` seam
+    (patched via this module in tests) stays here.
     """
-    import json
-
-    from app.core.single_user import ensure_operator_account
-    from app.models.models import Analytics
-
     db = SessionLocal()
     try:
-        operator = ensure_operator_account(db)
-        operators = (
-            db.query(User)
-            .filter(User.username.like("synthetic-%"), User.is_active.is_(True))
-            .order_by(User.id.asc())
-            .all()
-        )
-
-        service = StrategyMonitoringService()
-        per_operator: list[dict[str, Any]] = []
-        total_candidates = 0
-        operators_with_candidates = 0
-        error_count = 0
-
-        for op in operators:
-            try:
-                preview = service.preview_candidates(
-                    db,
-                    limit=10,
-                    high_priority_only=False,
-                    operator=op,
-                )
-                evaluated = int(preview.get("evaluated_project_count", 0) or 0)
-                returned = int(preview.get("returned_candidate_count", 0) or 0)
-                total_candidates += returned
-                if returned > 0:
-                    operators_with_candidates += 1
-                per_operator.append(
-                    {
-                        "operator_id": int(op.id),
-                        "username": str(op.username or ""),
-                        "evaluated_project_count": evaluated,
-                        "returned_candidate_count": returned,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
-                error_count += 1
-                logger.exception(
-                    "g2_candidate_recheck failed for operator_id=%s username=%s",
-                    getattr(op, "id", None),
-                    getattr(op, "username", None),
-                )
-                per_operator.append(
-                    {
-                        "operator_id": int(op.id),
-                        "username": str(op.username or ""),
-                        "error": type(exc).__name__,
-                    }
-                )
-
-        summary = {
-            "operator_count": len(operators),
-            "total_candidates": total_candidates,
-            "operators_with_candidates": operators_with_candidates,
-            "error_count": error_count,
-            "per_operator": per_operator,
-        }
-
-        # The only permitted write: one analytics evidence event for the sweep.
-        analytics = Analytics(
-            user_id=operator.id,
-            event_type="g2_candidate_recheck",
-            event_data=json.dumps(summary, ensure_ascii=False),
-        )
-        db.add(analytics)
-        db.commit()
-
-        logger.info(
-            "g2_candidate_recheck completed operators=%s total_candidates=%s "
-            "operators_with_candidates=%s errors=%s",
-            summary["operator_count"],
-            total_candidates,
-            operators_with_candidates,
-            error_count,
-        )
-        return summary
+        return run_g2_candidate_recheck_job(db)
     finally:
         db.close()
-
-
-def _write_g2_daily_evidence_draft(*, target_summaries: list[dict[str, Any]]) -> None:
-    """Write today's ledger-based G-2 ``manifest-draft.json`` for the targets.
-
-    Best-effort and idempotent: the KST-day directory is overwritten on re-run so
-    ``scripts/build_g2_exit_review.py`` can accumulate ``counted_days``. Writes
-    ONLY this local JSON file — no operator data, no execution, no external
-    calls. Skipped in ``ENVIRONMENT=test`` to keep the repo working tree clean.
-    Callers wrap this in ``try/except`` so a write failure never aborts the sweep.
-    """
-    import json
-    from pathlib import Path
-
-    from app.core.time import kst_now
-    from app.services.g2_evidence_draft import build_daily_evidence_draft
-
-    if settings.ENVIRONMENT == "test":
-        return
-    target_ids = settings.g2_evidence_target_operator_ids
-    if not target_ids:
-        return
-
-    run_date_kst = kst_now().date().isoformat()
-    draft = build_daily_evidence_draft(
-        operator_summaries=target_summaries,
-        target_operator_ids=target_ids,
-        run_date_kst=run_date_kst,
-        required_days=max(1, int(settings.G2_EVIDENCE_REQUIRED_DAYS)),
-    )
-    repo_root = Path(__file__).resolve().parents[2]
-    draft_dir = repo_root / settings.G2_EVIDENCE_DAILY_DRAFT_DIR / run_date_kst
-    draft_dir.mkdir(parents=True, exist_ok=True)
-    (draft_dir / "manifest-draft.json").write_text(
-        json.dumps(draft, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    logger.info(
-        "collect_g2_evidence wrote daily draft date=%s status=%s targets=%s path=%s",
-        run_date_kst,
-        draft["daily_status"][0]["status"],
-        len(target_ids),
-        draft_dir / "manifest-draft.json",
-    )
 
 
 @celery_app.task(name=COLLECT_G2_EVIDENCE_TASK_NAME)
 def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
     """Daily read-only snapshot of the per-operator G-2 evidence ledger.
 
-    Iterates every active operator — BOTH the canonical operator
-    (``ensure_operator_account``) AND every synthetic operator
-    (``username LIKE 'synthetic-%'``) — and builds the read-only G-2 evidence
-    summary via ``AnalyticsReportingService.build_g2_evidence_summary`` for each.
-    It records a SINGLE ``collect_g2_evidence`` analytics evidence event carrying
-    a compact per-operator + aggregate roll-up so ``counted_days`` can accumulate
-    toward the G-2 exit review.
-
-    When ``G2_EVIDENCE_WRITE_DAILY_DRAFT`` is on it ALSO writes one
-    ledger-based ``manifest-draft.json`` per KST day for the configured target
-    operators (``G2_EVIDENCE_TARGET_OPERATOR_IDS``) so ``build_g2_exit_review``
-    accumulates ``counted_days`` automatically. That draft is the ONLY extra
-    write.
-
-    This is a pure *observation* tool: it reads existing data only and writes
-    nothing to operator data (``operator_strategy_runs`` / ``bid_decision_records``
-    / notifications), never runs the heavy strategy monitor, and never calls
-    external services or sends Telegram. The only permitted writes are the single
-    analytics evidence event and the daily manifest-draft.json file.
-
-    Each operator is summarized inside its own ``try/except`` so one failure
-    cannot abort the whole sweep; failures are recorded per operator and the task
-    continues.
+    Thin shell: body in ``app.tasks.evidence_jobs``. The ``SessionLocal`` seam and
+    ``_write_g2_daily_evidence_draft`` are patched via this module in tests, so the
+    db lifecycle stays here and the draft writer is injected by name (the injected
+    reference is resolved from this module's globals at call time, honouring the
+    monkeypatch).
     """
-    import json
-
-    from app.core.single_user import ensure_operator_account
-    from app.models.models import Analytics
-    from app.services.analytics_reporting import AnalyticsReportingService
-
     db = SessionLocal()
     try:
-        operator = ensure_operator_account(db)
-        # Canonical operator first, then active synthetic operators (deterministic).
-        synthetic_operators = (
-            db.query(User)
-            .filter(User.username.like("synthetic-%"), User.is_active.is_(True))
-            .order_by(User.id.asc())
-            .all()
+        return run_collect_g2_evidence_job(
+            db,
+            window_days=window_days,
+            recent_limit=recent_limit,
+            write_daily_draft=_write_g2_daily_evidence_draft,
         )
-        operators = [operator, *synthetic_operators]
-
-        service = AnalyticsReportingService()
-        section_keys = (
-            "smoke",
-            "strategy_monitor",
-            "decision_experiments",
-            "synthetic_experiments",
-            "notifications",
-        )
-        per_operator: list[dict[str, Any]] = []
-        # Full per-target ledger summaries (with blocking_gaps list) feeding the
-        # daily manifest-draft.json; a subset of the swept operators.
-        target_id_set = set(settings.g2_evidence_target_operator_ids)
-        target_summaries: list[dict[str, Any]] = []
-        ready_count = 0
-        error_count = 0
-
-        for op in operators:
-            try:
-                summary = service.build_g2_evidence_summary(
-                    db,
-                    window_days=window_days,
-                    recent_limit=recent_limit,
-                    operator=op,
-                )
-                evidence_status = str(summary.get("evidence_status") or "")
-                if evidence_status == "ready":
-                    ready_count += 1
-                sections = {
-                    key: str((summary.get(key) or {}).get("status") or "")
-                    for key in section_keys
-                }
-                compact = {
-                    "operator_id": int(op.id),
-                    "username": str(op.username or ""),
-                    "evidence_status": evidence_status,
-                    "blocking_gaps_count": len(summary.get("blocking_gaps") or []),
-                    "sections": sections,
-                }
-                per_operator.append(compact)
-                if int(op.id) in target_id_set:
-                    target_summaries.append(
-                        {
-                            "operator_id": int(op.id),
-                            "username": str(op.username or ""),
-                            "evidence_status": evidence_status,
-                            "sections": sections,
-                            "blocking_gaps": list(summary.get("blocking_gaps") or []),
-                        }
-                    )
-            except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
-                error_count += 1
-                logger.exception(
-                    "collect_g2_evidence failed for operator_id=%s username=%s",
-                    getattr(op, "id", None),
-                    getattr(op, "username", None),
-                )
-                per_operator.append(
-                    {
-                        "operator_id": int(op.id),
-                        "username": str(op.username or ""),
-                        "error": type(exc).__name__,
-                    }
-                )
-                if int(op.id) in target_id_set:
-                    target_summaries.append(
-                        {
-                            "operator_id": int(op.id),
-                            "username": str(op.username or ""),
-                            "error": type(exc).__name__,
-                        }
-                    )
-
-        summary_payload = {
-            "generated_window_days": window_days,
-            "recent_limit": recent_limit,
-            "operator_count": len(operators),
-            "ready_count": ready_count,
-            "error_count": error_count,
-            "per_operator": per_operator,
-        }
-
-        # The only permitted write: one analytics evidence event for the snapshot.
-        analytics = Analytics(
-            user_id=operator.id,
-            event_type="collect_g2_evidence",
-            event_data=json.dumps(summary_payload, ensure_ascii=False, default=str),
-        )
-        db.add(analytics)
-        db.commit()
-
-        # Additional permitted write: the daily ledger-based manifest draft so
-        # counted_days accumulates. Never let a draft-write failure abort the
-        # sweep or the analytics event already committed above.
-        if settings.G2_EVIDENCE_WRITE_DAILY_DRAFT:
-            try:
-                _write_g2_daily_evidence_draft(target_summaries=target_summaries)
-            except Exception:  # noqa: BLE001 — draft write must not abort the sweep
-                logger.exception("collect_g2_evidence daily draft write failed")
-
-        logger.info(
-            "collect_g2_evidence completed operators=%s ready=%s errors=%s window_days=%s",
-            summary_payload["operator_count"],
-            ready_count,
-            error_count,
-            window_days,
-        )
-        return summary_payload
     finally:
         db.close()
 
@@ -1352,19 +624,6 @@ def enqueue_synthetic_operator_backtest(*, payload: dict[str, Any]):
     )
 
 
-def get_synthetic_backtest_task_status(task_id: str) -> dict[str, Any]:
-    """Read and normalize the current state of a queued synthetic backtest task."""
-    return _build_generic_task_status(
-        task_id,
-        task_name=SYNTHETIC_BACKTEST_RUN_TASK_NAME,
-        queue=settings.CELERY_OPS_QUEUE,
-        pending_detail="Synthetic backtest is queued.",
-        started_detail="Synthetic backtest is running per operator.",
-        success_detail="Synthetic backtest completed.",
-        failure_detail="Synthetic backtest failed.",
-    )
-
-
 def enqueue_operator_strategy_monitor(
     *,
     request: OperatorStrategyMonitorRequest,
@@ -1397,209 +656,3 @@ def enqueue_koneps_notice_collection(
         },
         queue=settings.CELERY_OPS_QUEUE,
     )
-
-
-def get_koneps_notice_collection_task_status(task_id: str) -> dict[str, Any]:
-    """Read and normalize the current state of a KONEPS crawl task."""
-    async_result = celery_app.AsyncResult(task_id)
-    raw_status = str(getattr(async_result, "state", getattr(async_result, "status", "PENDING")) or "PENDING").upper()
-    ready = bool(async_result.ready()) if hasattr(async_result, "ready") else raw_status in {"SUCCESS", "FAILURE", "REVOKED"}
-    successful = bool(async_result.successful()) if hasattr(async_result, "successful") else raw_status == "SUCCESS"
-    result = getattr(async_result, "result", None)
-    normalized_status = _normalize_celery_status(raw_status)
-
-    detail = {
-        "PENDING": "Task is queued or unknown to the current result backend.",
-        "STARTED": "Task is currently collecting KONEPS notices.",
-        "SUCCESS": "Task completed successfully.",
-        "FAILURE": "Task failed while collecting KONEPS notices.",
-        "RETRY": "Task is retrying after a temporary failure.",
-        "REVOKED": "Task was cancelled before completion.",
-    }.get(raw_status, "Task status is available.")
-
-    crawl_job_id: int | None = None
-    if isinstance(result, dict):
-        metadata = result.get("metadata", {})
-        if isinstance(metadata, dict) and isinstance(metadata.get("crawl_job_id"), int):
-            crawl_job_id = metadata["crawl_job_id"]
-
-    payload: dict[str, Any] = {
-        "task_id": task_id,
-        "task_name": COLLECT_KONEPS_NOTICES_TASK_NAME,
-        "status": normalized_status,
-        "raw_status": raw_status,
-        "ready": ready,
-        "successful": successful,
-        "detail": detail,
-        "crawl_job_id": crawl_job_id,
-        "error": None,
-        "result": result if successful and isinstance(result, dict) else None,
-    }
-
-    if raw_status == "FAILURE" and result is not None:
-        payload["error"] = str(result)
-
-    return payload
-
-
-def get_operator_strategy_monitor_task_status(task_id: str) -> dict[str, Any]:
-    """Read and normalize the current state of an operator strategy monitoring task."""
-    async_result = celery_app.AsyncResult(task_id)
-    raw_status = str(getattr(async_result, "state", getattr(async_result, "status", "PENDING")) or "PENDING").upper()
-    ready = bool(async_result.ready()) if hasattr(async_result, "ready") else raw_status in {"SUCCESS", "FAILURE", "REVOKED"}
-    successful = bool(async_result.successful()) if hasattr(async_result, "successful") else raw_status == "SUCCESS"
-    result = getattr(async_result, "result", None)
-    normalized_status = _normalize_celery_status(raw_status)
-
-    detail = {
-        "PENDING": "Task is queued or unknown to the current result backend.",
-        "STARTED": "Task is currently executing the operator strategy monitor.",
-        "SUCCESS": "Task completed successfully.",
-        "FAILURE": "Task failed while executing the operator strategy monitor.",
-        "RETRY": "Task is retrying after a temporary failure.",
-        "REVOKED": "Task was cancelled before completion.",
-    }.get(raw_status, "Task status is available.")
-
-    monitor_run_id: int | None = None
-    operator_id: int | None = None
-    if isinstance(result, dict) and isinstance(result.get("monitor_run_id"), int):
-        monitor_run_id = int(result["monitor_run_id"])
-        result.setdefault("task_id", task_id)
-    if isinstance(result, dict) and isinstance(result.get("operator_id"), int):
-        operator_id = int(result["operator_id"])
-
-    payload: dict[str, Any] = {
-        "task_id": task_id,
-        "monitor_run_id": monitor_run_id,
-        "operator_id": operator_id,
-        "task_name": OPERATOR_STRATEGY_MONITOR_TASK_NAME,
-        "status": normalized_status,
-        "raw_status": raw_status,
-        "ready": ready,
-        "successful": successful,
-        "detail": detail,
-        "error": None,
-        "result": result if successful and isinstance(result, dict) else None,
-    }
-
-    if raw_status == "FAILURE" and result is not None:
-        payload["error"] = str(result)
-
-    return payload
-
-
-def get_project_embedding_rebuild_task_status(task_id: str) -> dict[str, Any]:
-    """Read and normalize the current state of an embedding rebuild task."""
-    async_result = celery_app.AsyncResult(task_id)
-    raw_status = str(getattr(async_result, "state", getattr(async_result, "status", "PENDING")) or "PENDING").upper()
-    ready = bool(async_result.ready()) if hasattr(async_result, "ready") else raw_status in {"SUCCESS", "FAILURE", "REVOKED"}
-    successful = bool(async_result.successful()) if hasattr(async_result, "successful") else raw_status == "SUCCESS"
-    result = getattr(async_result, "result", None)
-    normalized_status = _normalize_celery_status(raw_status)
-
-    detail = {
-        "PENDING": "Task is queued or unknown to the current result backend.",
-        "STARTED": "Task is currently rebuilding project embeddings.",
-        "SUCCESS": "Task completed successfully.",
-        "FAILURE": "Task failed while rebuilding project embeddings.",
-        "RETRY": "Task is retrying after a temporary failure.",
-        "REVOKED": "Task was cancelled before completion.",
-    }.get(raw_status, "Task status is available.")
-
-    payload: dict[str, Any] = {
-        "task_id": task_id,
-        "task_name": PROJECT_EMBEDDING_REBUILD_TASK_NAME,
-        "status": normalized_status,
-        "raw_status": raw_status,
-        "ready": ready,
-        "successful": successful,
-        "detail": detail,
-        "error": None,
-        "result": result if successful and isinstance(result, dict) else None,
-    }
-
-    if raw_status == "FAILURE" and result is not None:
-        payload["error"] = str(result)
-
-    return payload
-
-
-def get_price_predictor_training_task_status(task_id: str) -> dict[str, Any]:
-    """Read and normalize the current state of a queued price-predictor training task."""
-    return _build_generic_task_status(
-        task_id,
-        task_name=PRICE_PREDICTOR_TRAINING_TASK_NAME,
-        queue=settings.CELERY_ML_TRAINING_QUEUE,
-        pending_detail="Task is queued or unknown to the current result backend.",
-        started_detail="Task is currently training price predictor artifacts.",
-        success_detail="Task completed successfully.",
-        failure_detail="Task failed while training price predictor artifacts.",
-    )
-
-
-def get_decision_experiment_reevaluation_task_status(task_id: str) -> dict[str, Any]:
-    """Read and normalize the current state of a queued decision-experiment re-evaluation task."""
-    return _build_generic_task_status(
-        task_id,
-        task_name=DECISION_EXPERIMENT_REEVALUATION_TASK_NAME,
-        queue=settings.CELERY_ML_REEVALUATION_QUEUE,
-        pending_detail="Task is queued or unknown to the current result backend.",
-        started_detail="Task is currently re-evaluating the decision experiment.",
-        success_detail="Task completed successfully.",
-        failure_detail="Task failed while re-evaluating the decision experiment.",
-    )
-
-
-def _build_generic_task_status(
-    task_id: str,
-    *,
-    task_name: str,
-    queue: str,
-    pending_detail: str,
-    started_detail: str,
-    success_detail: str,
-    failure_detail: str,
-) -> dict[str, Any]:
-    """Read a Celery task status into a stable poll response."""
-    async_result = celery_app.AsyncResult(task_id)
-    raw_status = str(getattr(async_result, "state", getattr(async_result, "status", "PENDING")) or "PENDING").upper()
-    ready = bool(async_result.ready()) if hasattr(async_result, "ready") else raw_status in {"SUCCESS", "FAILURE", "REVOKED"}
-    successful = bool(async_result.successful()) if hasattr(async_result, "successful") else raw_status == "SUCCESS"
-    result = getattr(async_result, "result", None)
-    detail = {
-        "PENDING": pending_detail,
-        "STARTED": started_detail,
-        "SUCCESS": success_detail,
-        "FAILURE": failure_detail,
-        "RETRY": "Task is retrying after a temporary failure.",
-        "REVOKED": "Task was cancelled before completion.",
-    }.get(raw_status, "Task status is available.")
-
-    payload: dict[str, Any] = {
-        "task_id": task_id,
-        "task_name": task_name,
-        "queue": queue,
-        "status": _normalize_celery_status(raw_status),
-        "raw_status": raw_status,
-        "ready": ready,
-        "successful": successful,
-        "detail": detail,
-        "error": None,
-        "result": result if successful and isinstance(result, dict) else None,
-    }
-    if raw_status == "FAILURE" and result is not None:
-        payload["error"] = str(result)
-    return payload
-
-
-def _normalize_celery_status(raw_status: str) -> str:
-    """Map raw Celery states to a stable API contract."""
-    return {
-        "PENDING": "queued",
-        "RECEIVED": "queued",
-        "STARTED": "running",
-        "RETRY": "running",
-        "SUCCESS": "completed",
-        "FAILURE": "failed",
-        "REVOKED": "cancelled",
-    }.get(raw_status, "queued")
