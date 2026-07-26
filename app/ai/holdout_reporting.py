@@ -134,7 +134,7 @@ def _floor_applicability_counts(rows: Sequence[dict[str, Any]]) -> dict[str, int
 
 
 def _detail_flag_count(rows: Sequence[dict[str, Any]], field: str) -> int:
-    """상세 dict 의 boolean 필드가 켜진 행 수(하한 판정 생략 사유별 규모)."""
+    """상세 dict 의 boolean 필드가 켜진 행 수(생략 사유·소스 폴백 등 신호별 규모)."""
     return sum(
         1 for row in rows if bool((row.get(QUALITY_DETAILS_FIELD) or {}).get(field))
     )

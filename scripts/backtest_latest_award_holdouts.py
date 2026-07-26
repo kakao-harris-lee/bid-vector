@@ -1189,8 +1189,9 @@ def main() -> int:
             "text is unverified, so its tiers are not encoded anywhere.",
             "below_legal_floor is also skipped when the reported winning_rate is not "
             "independent evidence: if it matches winning_amount/base_amount within "
-            "data_quality_details.rate_basis_independence_tolerance and no 복수예비가격 "
-            "were collected, the reported rate may just be that amount ratio and would "
+            "data_quality_details.rate_basis_independence_tolerance and fewer than "
+            "the documented minimum (5) 복수예비가격 were collected, the reported rate "
+            "may just be that amount ratio and would "
             "read 사정률(~0.98) below the 예정가-basis floor. See "
             "summary.rate_basis_unverified_count and data_quality_details."
             "rate_basis_unverified / reserve_price_count.",
