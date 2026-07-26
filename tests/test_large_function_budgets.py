@@ -40,7 +40,7 @@ import pytest
             "app.ai.price_prediction",
             None,
             "_apply_prediction_guardrails",
-            110,
+            55,
         ),
         (
             "app.tasks.jobs",
