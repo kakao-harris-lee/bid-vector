@@ -11,6 +11,7 @@ patches ``app.core.time.utc_now`` keeps working.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -20,6 +21,52 @@ from app.core.database import SessionLocal
 from app.services.koneps.collector import KonepsCollectorService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ReserveDetailBackfillPlan:
+    """Resolved config for one reserve-detail backfill run (no I/O yet).
+
+    Built by ``_plan_reserve_detail_backfill``: normalize/dedupe the notices,
+    split off the first chunk (``cleaned``) from the ``rest`` self-chained later,
+    and resolve the settings-driven knobs (service key, per-call throttle, commit
+    cadence). ``KonepsCollectorService()`` is a side-effect-free constructor, so
+    building the plan opens no session and issues no HTTP.
+    """
+
+    cleaned: list[dict[str, str]]
+    rest: list[dict[str, str]]
+    service: KonepsCollectorService
+    service_key: str
+    delay_seconds: float
+    commit_every: int
+    requested: int
+
+
+def _plan_reserve_detail_backfill(
+    notices: list[dict[str, Any]],
+) -> _ReserveDetailBackfillPlan:
+    all_cleaned = _normalize_deferred_reserve_notices(notices)
+    chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
+    cleaned = all_cleaned[:chunk_size]
+    rest = all_cleaned[chunk_size:]
+    # Backfill-specific inter-call throttle, kept separate from the collection
+    # page-pagination delay: the reserve-detail endpoint is rate-limited harder
+    # (HTTP 429 persisted even at collection's ~serial pace), so the backfill runs
+    # at its own, slacker pace without slowing collection. 0 disables the sleep.
+    delay_seconds = max(
+        0.0,
+        float(settings.KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS or 0.0),
+    )
+    return _ReserveDetailBackfillPlan(
+        cleaned=cleaned,
+        rest=rest,
+        service=KonepsCollectorService(),
+        service_key=str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip(),
+        delay_seconds=delay_seconds,
+        commit_every=25,
+        requested=len(cleaned),
+    )
 
 
 def run_scsbid_reserve_detail_backfill_job(
@@ -51,59 +98,44 @@ def run_scsbid_reserve_detail_backfill_job(
     summary is returned (no continuation — the next 6h collect self-heals). A
     single notice failing is caught per-notice and counted.
     """
-    all_cleaned = _normalize_deferred_reserve_notices(notices)
-    chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
-    cleaned = all_cleaned[:chunk_size]
-    rest = all_cleaned[chunk_size:]
-    service = KonepsCollectorService()
-    service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
-    # Backfill-specific inter-call throttle, kept separate from the collection
-    # page-pagination delay: the reserve-detail endpoint is rate-limited harder
-    # (HTTP 429 persisted even at collection's ~serial pace), so the backfill runs
-    # at its own, slacker pace without slowing collection. 0 disables the sleep.
-    delay_seconds = max(
-        0.0,
-        float(settings.KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS or 0.0),
-    )
-    commit_every = 25
-
-    requested = len(cleaned)
+    plan = _plan_reserve_detail_backfill(notices)
+    remaining = len(plan.rest)
 
     db = SessionLocal()
     try:
-        if not service_key:
+        if not plan.service_key:
             # No key -> nothing fetchable; surface as errors without HTTP. Do NOT
             # chain a continuation (the remainder would fail the same way); the
             # next 6h collect re-defers everything once a key is configured.
             return _missing_reserve_detail_service_key_result(
-                requested=requested,
-                remaining=len(rest),
+                requested=plan.requested,
+                remaining=remaining,
             )
 
         stats = _process_scsbid_reserve_detail_chunk(
             db,
-            service=service,
-            cleaned=cleaned,
-            service_key=service_key,
-            delay_seconds=delay_seconds,
-            commit_every=commit_every,
-            requested=requested,
-            remaining=len(rest),
+            service=plan.service,
+            cleaned=plan.cleaned,
+            service_key=plan.service_key,
+            delay_seconds=plan.delay_seconds,
+            commit_every=plan.commit_every,
+            requested=plan.requested,
+            remaining=remaining,
         )
         if stats.get("soft_time_limit_exceeded"):
             return _reserve_detail_backfill_result(
-                requested=requested,
-                remaining=len(rest),
+                requested=plan.requested,
+                remaining=remaining,
                 continued=False,
                 stats=stats,
             )
 
         db.commit()
-        _log_reserve_detail_backfill_errors(requested=requested, stats=stats)
-        continued = enqueue_continuation(rest)
+        _log_reserve_detail_backfill_errors(requested=plan.requested, stats=stats)
+        continued = enqueue_continuation(plan.rest)
         return _reserve_detail_backfill_result(
-            requested=requested,
-            remaining=len(rest),
+            requested=plan.requested,
+            remaining=remaining,
             continued=continued,
             stats=stats,
         )
