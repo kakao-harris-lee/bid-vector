@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +19,30 @@ from app.models.models import (
     SyntheticExperimentResult,
     SyntheticExperimentRun,
 )
-from app.services.analytics_reporting import _resolve_g2_evidence_status
+from app.services.analytics_reporting import (
+    AnalyticsReportingService,
+    _resolve_g2_evidence_status,
+)
+
+
+def test_ml_manifest_dir_resolves_relative_to_repository_root(monkeypatch):
+    """A relative manifest dir must resolve against the repository root.
+
+    ``_ml_manifest_dir`` joins a relative ``ML_RELEASE_MANIFEST_DIR`` onto a
+    ``parents``-derived base. Package decomposition that changes this module's
+    directory depth silently shifts that base (the #284/#286 regression pointed it
+    at ``/app/app`` so the manifest dir went missing). Deriving the expected root
+    independently from the ``app`` package pins the arithmetic: if the file depth
+    changes again, this assertion catches it.
+    """
+    import app
+
+    monkeypatch.setattr(settings, "ML_RELEASE_MANIFEST_DIR", "models/manifests")
+    expected_repo_root = Path(app.__file__).resolve().parents[1]
+
+    manifest_dir = AnalyticsReportingService()._ml_manifest_dir()
+
+    assert manifest_dir == expected_repo_root / "models" / "manifests"
 
 
 def _bootstrap_operator(client):

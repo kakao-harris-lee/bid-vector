@@ -949,3 +949,20 @@ def test_preflight_rollout_group_calibration_check_passes_when_sufficient(
         c for c in result["checks"] if c["name"] == "group_calibration_sample_count"
     )
     assert calib_check["passed"] is True
+
+
+def test_default_repo_root_points_at_repository_root():
+    """The parameterless service must resolve ``repo_root`` to the repository root.
+
+    ``repo_root`` is derived by counting ``parents`` from this module's file, so
+    any package decomposition that changes ``base.py``'s directory depth silently
+    shifts the target (#284/#286 moved it into ``app/services/ml_release/`` and the
+    byte-identical ``parents[2]`` started resolving to ``/app/app``). Deriving the
+    expectation independently from the ``app`` package pins the arithmetic: if the
+    file depth changes again, this assertion catches it.
+    """
+    import app
+
+    expected_repo_root = Path(app.__file__).resolve().parents[1]
+
+    assert MLReleasePromotionService().repo_root == expected_repo_root
