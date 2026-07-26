@@ -8,3 +8,7 @@ export { WinRateBarChart } from "./WinRateBarChart";
 export { ArchetypeDrilldown } from "./ArchetypeDrilldown";
 export { CustomOperatorMetaSection } from "./CustomOperatorMetaSection";
 export { CustomOperatorStrategySection } from "./CustomOperatorStrategySection";
+export { RunCompareCsvButton } from "./RunCompareCsvButton";
+export { RunCompareHeaders } from "./RunCompareHeaders";
+export { RunCompareTable } from "./RunCompareTable";
+export { RunCompareOnlyLists } from "./RunCompareOnlyLists";
