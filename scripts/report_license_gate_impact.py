@@ -39,7 +39,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.core.constants import OPEN_PROJECT_STATUS  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.single_user import (  # noqa: E402
     get_operator_profile,
@@ -60,13 +59,14 @@ from app.services.opportunity_monitoring import (  # noqa: E402
     has_watch_rules,
     matches_strategy_watch_rules,
 )
+from app.services.query_predicates import open_projects  # noqa: E402
 
 # 리포트 기본값 (매직값은 여기 선언, 함수 안 리터럴 금지 — §4.5.1).
 DEFAULT_LIMIT: int | None = None
 DEFAULT_SAMPLES = 30
 
-# 대상 공고 상태 — 열린(미마감) 공고만 본다. OPEN_PROJECT_STATUS 는
-# app/core/constants.py 단일 출처를 소비한다("open" only, re_notice 제외).
+# 대상 공고 상태 — 열린(미마감) 입찰 가능 공고. open_projects() 는
+# ACTIVE_PROJECT_STATUSES({open, re_notice}) 를 소비한다(재공고 포함).
 
 # 샘플 출력에서 공고명을 자르는 길이(가독성).
 TITLE_CLIP_CHARS = 40
@@ -242,7 +242,7 @@ def load_projects(db, *, limit: int | None = None) -> list[Project]:
     """
     query = (
         db.query(Project)
-        .filter(Project.status == OPEN_PROJECT_STATUS)
+        .filter(open_projects())
         .filter(Project.deadline >= utc_now())
         .order_by(Project.id.desc())
     )

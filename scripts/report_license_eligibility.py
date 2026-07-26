@@ -38,7 +38,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.core.constants import OPEN_PROJECT_STATUS  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.single_user import get_operator_profile  # noqa: E402
 from app.core.time import kst_now, utc_now  # noqa: E402
@@ -51,14 +50,15 @@ from app.services.license_eligibility import (  # noqa: E402
     VERDICT_VALUES,
     assess_license_eligibility,
 )
+from app.services.query_predicates import open_projects  # noqa: E402
 
 # 리포트 기본값 (매직값은 여기 선언, 함수 안 리터럴 금지 — §4.5.1).
 DEFAULT_LIMIT: int | None = None
 DEFAULT_SAMPLES = 15
 DEFAULT_TOP_REQUIRED = 15
 
-# 대상 공고 상태 — 열린(미마감) 공고만 본다. OPEN_PROJECT_STATUS 는
-# app/core/constants.py 단일 출처를 소비한다("open" only, re_notice 제외).
+# 대상 공고 상태 — 열린(미마감) 입찰 가능 공고. open_projects() 는
+# ACTIVE_PROJECT_STATUSES({open, re_notice}) 를 소비한다(재공고 포함).
 
 # 샘플 출력에서 공고명을 자르는 길이(가독성).
 TITLE_CLIP_CHARS = 40
@@ -232,7 +232,7 @@ def load_rows(db, *, limit: int | None = None) -> list[ReportRow]:
     """열린(미마감) 공고를 최신 id 순으로 투영해 돌려준다(read-only)."""
     query = (
         db.query(Project.notice_number, Project.title, Project.eligibility_raw)
-        .filter(Project.status == OPEN_PROJECT_STATUS)
+        .filter(open_projects())
         .filter(Project.deadline >= utc_now())
         .order_by(Project.id.desc())
     )

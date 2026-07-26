@@ -16,8 +16,9 @@ second license-limit sub-call (``getBidPblancListInfoLicenseLimit``) to pull the
   면허제한 rows (``lcnsLmtNm``/``permsnIndstrytyList`` 등) from the sub-call. The
   source for later 라벨 추출 (PR-B); persisting only, no runtime consumer today.
 
-Targeting rule (default): ``eligibility_raw IS NULL AND status='open' AND deadline
->= now``. ``--floor-only`` switches the target to the orphan set ``award_floor_rate
+Targeting rule (default): ``eligibility_raw IS NULL AND status IN {open,
+re_notice} AND deadline >= now`` — re-noticed opportunities are biddable, so they
+are backfilled alongside first-round open notices. ``--floor-only`` switches the target to the orphan set ``award_floor_rate
 IS NULL AND eligibility_raw IS NOT NULL`` — rows a default run can never reach,
 because saving eligibility_raw (even a flags-only dict) drops the row from the
 default resume key while its floor is still NULL. That opt-in mode makes exactly
@@ -85,7 +86,6 @@ if str(REPO_ROOT) not in sys.path:
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
-from app.core.constants import OPEN_PROJECT_STATUS  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.single_user import get_operator_strategy  # noqa: E402
 from app.core.time import kst_now, utc_now  # noqa: E402
@@ -95,6 +95,7 @@ from app.services.opportunity_monitoring import (  # noqa: E402
     has_watch_rules,
     matches_strategy_watch_rules,
 )
+from app.services.query_predicates import open_projects  # noqa: E402
 
 # BidPublicInfoService protocol constants for a single-notice targeted query.
 # (Tunable knobs — window/limit/delay/rows — are argparse defaults below.)
@@ -492,7 +493,7 @@ def _target_query(
     limit: int | None = None,
     offset: int | None = None,
 ):
-    """Base target query: mode's floor/eligibility filter, open, deadline in window.
+    """Base target query: mode's floor/eligibility filter, biddable, deadline in window.
 
     The mode's declared predicates (``_MODE_FILTERS``) select the pending set —
     eligibility NULL for the default backfill, or floor-NULL-but-eligibility-set
@@ -503,7 +504,7 @@ def _target_query(
     for predicate in _MODE_FILTERS[mode]():
         query = query.filter(predicate)
     query = (
-        query.filter(Project.status == OPEN_PROJECT_STATUS)
+        query.filter(open_projects())
         .filter(Project.deadline >= cutoff)
         .order_by(Project.deadline.asc(), Project.id.asc())
     )
@@ -538,7 +539,7 @@ def select_targets(
 ) -> TargetSelection:
     """Return the ordered target set for one run, with its tier breakdown.
 
-    Filter: the ``mode``'s predicate ``AND status='open' AND deadline >= cutoff``
+    Filter: the ``mode``'s predicate ``AND status IN {open, re_notice} AND deadline >= cutoff``
     where ``cutoff = now - include_past_days`` — the default mode keys on
     ``eligibility_raw IS NULL``, the floor-only mode on ``award_floor_rate IS NULL
     AND eligibility_raw IS NOT NULL``. The current ``award_floor_rate`` rides

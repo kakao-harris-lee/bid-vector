@@ -285,6 +285,44 @@ def test_load_targets_keys_on_eligibility_null_not_floor(test_db):
     assert 11 not in ids  # eligibility already saved -> skipped
 
 
+def test_load_targets_includes_re_notice(test_db):
+    """Re-noticed opportunities are biddable, so the backfill must target them too.
+
+    Regression guard for the open_projects() switch: the old ``status == "open"``
+    literal silently dropped ``re_notice`` rows even though they are open for
+    bidding and their predictions need the award floor just like a first-round
+    notice. Both statuses must now appear in the target set.
+    """
+    now = utc_now()
+    test_db.add_all(
+        [
+            Project(
+                id=20,
+                notice_number="R0020",
+                category="service",
+                status="open",
+                award_floor_rate=None,
+                eligibility_raw=None,
+                deadline=now + timedelta(days=1),
+            ),
+            Project(
+                id=21,
+                notice_number="R0021",
+                category="service",
+                status="re_notice",
+                award_floor_rate=None,
+                eligibility_raw=None,
+                deadline=now + timedelta(days=2),
+            ),
+        ]
+    )
+    test_db.commit()
+
+    ids = [t[0] for t in backfill.load_targets(test_db)]
+    assert 20 in ids  # first-round open notice
+    assert 21 in ids  # re-noticed opportunity — previously dropped by == "open"
+
+
 # --- Operator-candidate-first tiering -----------------------------------------
 
 

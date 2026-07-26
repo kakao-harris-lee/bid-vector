@@ -23,13 +23,21 @@ def open_projects() -> ColumnElement[bool]:
     """Projects in a currently *open / biddable* status.
 
     Matches :data:`app.core.constants.ACTIVE_PROJECT_STATUSES`
-    (``{"open", "re_notice"}``). Consumers:
+    (``{"open", "re_notice"}``) — the single "notices I can bid on now" scope. A
+    ``re_notice`` is a re-issued, still-biddable opportunity, so it is included
+    everywhere this predicate is used. Consumers:
 
     - ``app/services/backtest_data_audit.py`` (active-project table count)
     - ``app/services/paper_bidding_backtest.py`` (open-project scan)
+    - ``scripts/report_license_eligibility.py`` / ``report_license_gate_impact.py``
+    - ``scripts/report_no_candidate_cause.py`` (open-live scan + counters)
+    - ``scripts/report_eligibility_segment_backtest.py`` (coverage denominator)
+    - ``scripts/backfill_award_floor_rate.py`` (deadline-window target set)
 
-    NOTE: this is WIDER than the singular ``OPEN_PROJECT_STATUS`` used by the
-    read-only reporting scripts — do not substitute one for the other.
+    ``scripts/measure_reliable_base_impact.py`` deliberately does NOT use this
+    predicate: its P2 diagnostic buckets by the literal ``"open"`` status
+    (:data:`app.core.constants.OPEN_PROJECT_STATUS`) to keep the contamination
+    measurement on that exact status question, not the wider biddable set.
     """
     return Project.status.in_(ACTIVE_PROJECT_STATUSES)
 
