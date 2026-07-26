@@ -688,6 +688,47 @@ def test_agency_axis_selection_caps_one_per_agency(test_db):
     assert {target.group for target in selected} == {"construction", "service"}
 
 
+def test_evaluate_target_feeds_agency_name_into_floor_applicability(test_db, monkeypatch):
+    """배선 가드: 하한 적용 범위 판별이 리포트 분할과 같은 기관 원천을 받는다.
+
+    같은 낙찰률(0.88 < era-tier 0.89745)이라도 산학협력단 공고는 하한 모델 적용
+    대상이 아니라 판정이 생략되고, 국가기관 공고는 기존대로 플래그가 붙는다.
+    """
+    monkeypatch.setattr(
+        holdouts,
+        "predict_price",
+        lambda **kwargs: {"predicted_price": 400_000_000.0, "predicted_bid_rate": 0.88},
+    )
+    for agency, announced_day in (("인제대학교 산학협력단", 1), ("산림청 홍천국유림관리소", 2)):
+        _seed_award(
+            test_db,
+            category="construction",
+            agency=agency,
+            announced_at=datetime(2026, 5, announced_day, tzinfo=UTC),
+            base_amount=500_000_000.0,
+        )
+
+    rows = [
+        holdouts.evaluate_target(
+            test_db,
+            service=PredictionDatasetService(),
+            target=target,
+            history_limit=10,
+            thresholds=(0.01,),
+        )
+        for target in _select(test_db, group_by=holdouts.GROUP_BY_AGENCY)
+    ]
+    verdicts = {
+        row["agency_display"]: (
+            row["data_quality_details"]["floor_applicability"],
+            FLAG_BELOW_LEGAL_FLOOR in row["data_quality_flags"],
+        )
+        for row in rows
+    }
+    assert verdicts["인제대학교 산학협력단"] == ("not_applicable", False)
+    assert verdicts["산림청 홍천국유림관리소"] == ("applicable", True)
+
+
 def test_group_by_agency_selection_caps_per_agency():
     """agency 축에서는 기관마다 targets_per_group 만큼만 남는다(업종 축과 무관)."""
     parser = holdouts.build_parser()

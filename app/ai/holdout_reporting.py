@@ -20,6 +20,7 @@ from app.ai.holdout_grouping import (
     RESERVED_AGENCY_KEYS,
     bucket_small_agencies,
 )
+from app.ai.floor_applicability import ALL_FLOOR_APPLICABILITIES, FLOOR_APPLICABLE
 from app.ai.holdout_quality import CLEAN_FLAG_LABEL
 
 # 평가된 행 목록을 요약 dict 로 접는 집계 함수의 계약(주입 지점).
@@ -29,6 +30,9 @@ AggregateFn = Callable[[list[dict[str, Any]]], dict[str, Any]]
 AGENCY_KEY_FIELD = "agency_group"
 AGENCY_DISPLAY_FIELD = "agency_display"
 QUALITY_FLAGS_FIELD = "data_quality_flags"
+QUALITY_DETAILS_FIELD = "data_quality_details"
+FLOOR_APPLICABILITY_FIELD = "floor_applicability"
+PUBLISHED_FLOOR_IMPLAUSIBLE_FIELD = "published_floor_implausible"
 
 # worst-case 정렬에서 지표가 없는 버킷을 맨 뒤로 보내는 sentinel. 정렬 키는 오차를
 # 부호 반전해 쓰므로(-inf → +inf) 실제 오차값이 아무리 커도 이 버킷보다 앞선다.
@@ -115,6 +119,49 @@ def build_agency_axis_report(
         "agency_displays": displays,
         "by_agency": by_agency,
         "worst_agencies": worst_agencies,
+    }
+
+
+def _floor_applicability_counts(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """tri-state 별 건수(0 건 라벨도 고정 순서로 남긴다)."""
+    counts = {label: 0 for label in ALL_FLOOR_APPLICABILITIES}
+    for row in rows:
+        details = row.get(QUALITY_DETAILS_FIELD) or {}
+        label = str(details.get(FLOOR_APPLICABILITY_FIELD) or FLOOR_APPLICABLE)
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _implausible_floor_count(rows: Sequence[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if bool(
+            (row.get(QUALITY_DETAILS_FIELD) or {}).get(PUBLISHED_FLOOR_IMPLAUSIBLE_FIELD)
+        )
+    )
+
+
+def build_floor_applicability_report(
+    rows: Sequence[dict[str, Any]],
+    *,
+    evaluated_rows: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """법정 하한 판정의 **적용 범위 스킵 규모**를 리포트에 드러낸다.
+
+    ``below_legal_floor`` 판정은 비국가기관(``not_applicable``)과 이름만으로 가릴 수
+    없는 기관(``uncertain``)에서 생략되는데, 그 생략이 리포트에 안 보이면 "하회 0건"이
+    데이터가 깨끗하다는 뜻으로 오독된다. 건수를 두 스코프(집계/전체 평가)로 나눠
+    싣는 것은 품질 플래그 건수와 같은 규칙이다.
+    """
+    evaluated = list(rows) if evaluated_rows is None else list(evaluated_rows)
+    return {
+        "floor_applicability_counts": _floor_applicability_counts(rows),
+        "evaluated_floor_applicability_counts": _floor_applicability_counts(evaluated),
+        "published_floor_implausible_count": _implausible_floor_count(rows),
+        "evaluated_published_floor_implausible_count": _implausible_floor_count(
+            evaluated
+        ),
     }
 
 

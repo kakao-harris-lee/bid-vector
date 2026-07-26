@@ -13,6 +13,9 @@
 2. 낙찰률이 era-correct 법정 낙찰하한(공고 자신의 published 하한 우선)을 하회
 3. ``base_amount`` basis 오염 태그(clean 여부)
 
+2번은 **하한 모델이 그 공고에 적용되는 경우에만** 수행한다. 적용 범위 판별(발주기관
+유형 + 게시 하한율 개연성)은 :mod:`app.ai.floor_applicability` 선언 테이블에 위임한다.
+
 판정 규칙은 코드 분기가 아니라 ``_QUALITY_RULES`` 선언 테이블이고 해석기는 그것을
 순회만 한다(§4.5.2/§4.5.3). 허용오차·임계값은 전부 모듈 상수로 선언한다(매직값 금지).
 
@@ -35,6 +38,12 @@ from datetime import date, datetime
 from typing import Any
 
 from app.ai.construction_scenario import is_construction_era_floor_resolved
+from app.ai.floor_applicability import (
+    FLOOR_APPLICABLE,
+    is_floor_judgeable,
+    is_published_floor_plausible,
+    resolve_floor_applicability,
+)
 from app.ai.predictors.legal_floor_spec import (
     resolve_construction_qualification_floor,
 )
@@ -83,6 +92,7 @@ class _QualityContext:
     amount_derived_rate: float  # winning_amount / pricing base(기초금액 기준)
     legal_floor_rate: float | None
     rate_mismatch_ratio: float | None
+    floor_applicability: str  # applicable / not_applicable / uncertain
 
 
 def _is_low_actual_rate(ctx: _QualityContext) -> bool:
@@ -117,7 +127,13 @@ def _is_below_legal_floor(ctx: _QualityContext) -> bool:
 
     ``reported_rate`` 가 없으면 판정하지 않는다 — 기초금액 기준 역산율로 예정가 기준
     하한을 재면 사정률만큼 구조적으로 낮아 정상 낙찰이 오탐된다(모듈 docstring).
+
+    하한 모델이 그 공고에 적용되지 않거나(비국가기관) 적용 여부를 이름으로 가릴 수
+    없으면(대학교 등) 역시 판정하지 않는다 — 해석된 하한값 자체는 리포트에 남고
+    ``floor_applicability`` 로 생략 사유가 드러난다.
     """
+    if not is_floor_judgeable(ctx.floor_applicability):
+        return False
     if ctx.reported_rate is None or ctx.legal_floor_rate is None:
         return False
     return ctx.reported_rate < ctx.legal_floor_rate - LEGAL_FLOOR_UNDERCUT_TOLERANCE
@@ -142,30 +158,60 @@ _QUALITY_RULES: tuple[tuple[str, Callable[[_QualityContext], bool]], ...] = (
 ALL_QUALITY_FLAGS: tuple[str, ...] = tuple(flag for flag, _ in _QUALITY_RULES)
 
 
+@dataclass(frozen=True)
+class LegalFloorResolution:
+    """해석된 법정 낙찰하한율 + 출처 + 게시값 신뢰 여부."""
+
+    rate: float | None
+    source: str
+    published_floor_implausible: bool
+
+
 def resolve_legal_floor_rate(
     *,
     published_floor_rate: float | None,
     category: str | None,
     estimation_amount: float | None,
     reference_date: date | datetime | None,
-) -> tuple[float | None, str]:
+) -> LegalFloorResolution:
     """공고에 적용되는 법정 낙찰하한율과 그 출처를 해석한다(선언 우선순위).
 
     1. 공고 자신이 게시한 낙찰하한율(``Project.award_floor_rate``, #201) — 공고 시점
-       공개값이라 leakage-safe 하고 가장 구체적이다.
+       공개값이라 leakage-safe 하고 가장 구체적이다. 단 **개연 범위 안일 때만** 쓴다
+       (:mod:`app.ai.floor_applicability` 선언 상수). 라이브에 ``1.00000`` 으로
+       적재된 값이 있어 그대로 쓰면 정상 낙찰이 하회로 오탐된다.
     2. era-correct 공사 적격심사 tier(#197 선언 테이블). 공고 자신의 기준일로
        해석하므로 과거 공고에 신율이 소급되지 않는다.
 
-    둘 다 해석 불가면 ``(None, "unresolved")`` — 하한 하회 검사는 생략된다.
-    두 값 모두 **예정가격 기준**이며, 이 함수는 표 해석만 하고 basis 변환은 하지 않는다.
+    둘 다 해석 불가면 ``rate=None`` / ``source="unresolved"`` — 하한 하회 검사는
+    생략된다. 두 값 모두 **예정가격 기준**이며, 이 함수는 표 해석만 하고 basis 변환은
+    하지 않는다.
+
+    이 판정은 **분석 전용**이다. 라이브 예측이 같은 게시값을 guardrail 하한으로
+    쓰는 경로(``predict_price(legal_floor_bid_rate=...)``)는 건드리지 않는다.
     """
+    implausible = False
     if published_floor_rate is not None and float(published_floor_rate) > 0:
-        return float(published_floor_rate), FLOOR_SOURCE_PUBLISHED
+        if is_published_floor_plausible(float(published_floor_rate)):
+            return LegalFloorResolution(
+                rate=float(published_floor_rate),
+                source=FLOOR_SOURCE_PUBLISHED,
+                published_floor_implausible=False,
+            )
+        implausible = True
     if is_construction_era_floor_resolved(category, estimation_amount, reference_date):
         tier = resolve_construction_qualification_floor(estimation_amount, reference_date)
         if tier is not None:
-            return float(tier), FLOOR_SOURCE_ERA_TIER
-    return None, FLOOR_SOURCE_NONE
+            return LegalFloorResolution(
+                rate=float(tier),
+                source=FLOOR_SOURCE_ERA_TIER,
+                published_floor_implausible=implausible,
+            )
+    return LegalFloorResolution(
+        rate=None,
+        source=FLOOR_SOURCE_NONE,
+        published_floor_implausible=implausible,
+    )
 
 
 @dataclass(frozen=True)
@@ -177,6 +223,8 @@ class QualityAssessment:
     legal_floor_source: str
     rate_mismatch_ratio: float | None
     floor_undercut: float | None  # 하한 − 보고율(하회 시에만 양수), 아니면 None
+    floor_applicability: str = FLOOR_APPLICABLE
+    published_floor_implausible: bool = False
 
     def as_details(self) -> dict[str, Any]:
         """리포트 JSON 에 실을 판정 근거(플래그가 왜 붙었는지 추적 가능하게)."""
@@ -187,6 +235,10 @@ class QualityAssessment:
             "rate_mismatch_tolerance": RATE_MISMATCH_RELATIVE_TOLERANCE,
             "floor_undercut": self.floor_undercut,
             "floor_undercut_tolerance": LEGAL_FLOOR_UNDERCUT_TOLERANCE,
+            # 하한 하회 판정을 왜 했는지/왜 생략했는지가 행 단위로 추적돼야 한다
+            # (침묵 스킵 금지 — 건수는 summary.floor_applicability_counts).
+            "floor_applicability": self.floor_applicability,
+            "published_floor_implausible": self.published_floor_implausible,
         }
 
 
@@ -201,6 +253,7 @@ def assess_row_quality(
     published_floor_rate: float | None = None,
     estimation_amount: float | None = None,
     reference_date: date | datetime | None = None,
+    agency_name: Any = None,
 ) -> QualityAssessment:
     """홀드아웃 한 행의 품질 플래그를 판정한다(순수).
 
@@ -211,16 +264,20 @@ def assess_row_quality(
         reported_rate: 소스가 보고한 낙찰률(분수). 없으면 ``None``.
         effective_rate: 리포트가 실제 오차 계산에 쓴 낙찰률.
         amount_derived_rate: ``winning_amount / pricing base``(기초금액 기준).
-        published_floor_rate: 공고 게시 낙찰하한율(분수) — 있으면 최우선.
+        published_floor_rate: 공고 게시 낙찰하한율(분수) — 개연 범위 안이면 최우선.
         estimation_amount: 추정가격. 공사 tier 구간 판정 입력.
         reference_date: 공고 기준일. 구/신율(시행일) 판정 입력 — 소급 방지.
+        agency_name: 발주기관 표시명(부재 시 수요기관). 하한 모델 적용 범위 판별
+            입력이며, 생략하면 ``applicable`` 로 보아 기존 판정을 유지한다.
     """
-    legal_floor_rate, legal_floor_source = resolve_legal_floor_rate(
+    floor_applicability = resolve_floor_applicability(agency_name)
+    floor = resolve_legal_floor_rate(
         published_floor_rate=published_floor_rate,
         category=category,
         estimation_amount=estimation_amount,
         reference_date=reference_date,
     )
+    legal_floor_rate, legal_floor_source = floor.rate, floor.source
     # 상대 불일치는 집계 단일 출처(app.domain.aggregates.error_rate)에 위임한다 —
     # 분모는 금액-역산율(측정 가능한 값), 분자는 보고율과의 차이.
     rate_mismatch_ratio = (
@@ -236,6 +293,7 @@ def assess_row_quality(
         amount_derived_rate=float(amount_derived_rate),
         legal_floor_rate=legal_floor_rate,
         rate_mismatch_ratio=rate_mismatch_ratio,
+        floor_applicability=floor_applicability,
     )
     flags = tuple(flag for flag, predicate in _QUALITY_RULES if predicate(ctx))
     floor_undercut = (
@@ -253,4 +311,6 @@ def assess_row_quality(
             round(rate_mismatch_ratio, 6) if rate_mismatch_ratio is not None else None
         ),
         floor_undercut=floor_undercut,
+        floor_applicability=floor_applicability,
+        published_floor_implausible=floor.published_floor_implausible,
     )

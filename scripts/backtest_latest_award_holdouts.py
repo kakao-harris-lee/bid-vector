@@ -31,6 +31,7 @@ from app.ai.holdout_grouping import (
 from app.ai.holdout_quality import assess_row_quality
 from app.ai.holdout_reporting import (
     build_agency_axis_report,
+    build_floor_applicability_report,
     build_quality_flag_report,
 )
 from app.ai.price_prediction import predict_price
@@ -754,6 +755,9 @@ def evaluate_target(
         published_floor_rate=published_floor_rate,
         estimation_amount=estimation_amount,
         reference_date=reference_date,
+        # 하한 모델 적용 범위 판별 입력. 분할 키와 같은 원천(발주기관 우선, 부재 시
+        # 수요기관)을 써서 리포트의 기관 표기와 판정 근거가 어긋나지 않게 한다.
+        agency_name=target.agency_display,
     )
     prediction = predict_price(
         budget=budget,
@@ -1118,7 +1122,13 @@ def main() -> int:
     quality_report = build_quality_flag_report(
         aggregation_rows, aggregate_fn=aggregate_fn, evaluated_rows=rows
     )
+    # 하한 판정이 적용 범위 밖(비국가기관/판별 불가)이라 생략된 규모. 이 건수가
+    # 없으면 "하회 0건"이 데이터 청결로 오독된다(침묵 스킵 금지).
+    floor_applicability = build_floor_applicability_report(
+        aggregation_rows, evaluated_rows=rows
+    )
     summary["agency_axis"] = agency_axis["summary"]
+    summary.update(floor_applicability)
     summary["quality_flag_counts"] = quality_report["flag_counts"]
     summary["evaluated_quality_flag_counts"] = quality_report["evaluated_flag_counts"]
     summary["quality_flag_scope"] = quality_report["scope"]
@@ -1157,6 +1167,16 @@ def main() -> int:
             "below_legal_floor / amount_rate_mismatch are only evaluated when the source "
             "reported a winning_rate — the amount-derived rate is 기초금액-basis and would "
             "false-positive against the 예정가-basis legal floor.",
+            "below_legal_floor is skipped when the floor model does not apply to the "
+            "issuing agency (산학협력단/협동조합 등 non-state = not_applicable) or the "
+            "agency type cannot be told from its name (대학교 등 = uncertain); see "
+            "summary.floor_applicability_counts and targets[].data_quality_details."
+            "floor_applicability. A published award_floor_rate outside the plausible "
+            "band is not used either (published_floor_implausible; live data holds "
+            "1.00000 rows) and falls back to the era tier.",
+            "Known limit: shallow undercuts (0.9~2.7%p, 지방계약/공공기관/수의견적 등 "
+            "다른 하한 체계 가능성) are NOT resolved by this gate and still surface as "
+            "below_legal_floor — the data alone cannot tell which tier applied.",
             "summary.quality_flag_counts is scoped to the (clean-only) aggregation set, so "
             "base_basis_contaminated is 0 there by construction; read "
             "summary.evaluated_quality_flag_counts for all evaluated targets.",
