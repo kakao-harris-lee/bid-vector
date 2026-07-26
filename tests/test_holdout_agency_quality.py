@@ -741,10 +741,11 @@ _RESERVE_PRICES_15 = [
 def test_evaluate_target_feeds_agency_name_into_floor_applicability(test_db, monkeypatch):
     """배선 가드: 하한 적용 범위 판별이 리포트 분할과 같은 기관 원천을 받는다.
 
-    같은 낙찰률(0.88 < era-tier 0.89745)이라도 산학협력단은 하한 모델 적용 대상이
-    아니고(``not_applicable``), 산림청 계열은 별도 행정규칙 체계라(``separate_regime``)
-    판정이 생략된다. 예비가로 예정가를 독립 재구성할 수 있는 국가기관 공고는 기존대로
-    플래그가 붙는다.
+    같은 낙찰률(0.88 < era-tier 0.89745)이라도 산학협력단은 하한 모델 적용 대상이 아니라
+    (``not_applicable``) 판정이 생략된다. 산림청 계열은 ``separate_regime`` 라벨이 그대로
+    흐르는지만 여기서 확인한다 — 이 행은 예비가가 없어 하한 비교 전에 rate-basis 게이트에서
+    생략되고, 산림사업 하한(0.87745) 자체의 판정은 ``test_floor_applicability`` 가 덮는다.
+    예비가로 예정가를 독립 재구성할 수 있는 국가기관 공고는 기존대로 플래그가 붙는다.
     """
     monkeypatch.setattr(
         holdouts,

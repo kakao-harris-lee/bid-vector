@@ -45,6 +45,18 @@ from app.ai.predictors.legal_floor_spec import (
 SCENARIO_STANCES: tuple[str, ...] = ("aggressive", "recommended", "safe")
 
 
+CONSTRUCTION_CATEGORY_KEY = "construction"
+
+
+def is_construction_category(category: str | None) -> bool:
+    """정규화 카테고리가 공사인가 — 공사 전용 하한 게이트의 공통 전제.
+
+    era-tier(#197)와 산림사업 하한이 둘 다 **공사 적격심사** 하한이라 같은 전제를 쓴다.
+    호출부가 정규화를 각자 재구현하면 표기 변형에서 갈리므로 이 술어로 단일 출처화한다.
+    """
+    return normalize_category_key(category) == CONSTRUCTION_CATEGORY_KEY
+
+
 def is_construction_era_floor_resolved(
     category: str | None,
     estimation_amount: float | None,
@@ -55,7 +67,7 @@ def is_construction_era_floor_resolved(
     tier 미해석(추정가격/기준일 불명, 100억+ 종심제, 비공사)이면 False — 호출부는
     기존 동작을 그대로 유지한다(앵커 미적용, 최소 놀람).
     """
-    if normalize_category_key(category) != "construction":
+    if not is_construction_category(category):
         return False
     return (
         resolve_construction_qualification_floor(estimation_amount, reference_date)

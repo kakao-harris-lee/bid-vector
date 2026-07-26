@@ -148,8 +148,9 @@ def build_floor_applicability_report(
     """법정 하한 판정의 **스킵 규모**를 리포트에 드러낸다.
 
     ``below_legal_floor`` 판정은 비국가기관(``not_applicable``)·이름만으로 가릴 수 없는
-    기관(``uncertain``)·별도 행정규칙 체계(``separate_regime``)에서 생략되고, 보고
-    낙찰률이 금액비 파생으로 보일 때도(``rate_basis_unverified``) 생략된다. 그 생략이
+    기관(``uncertain``)에서 생략되고, 보고 낙찰률이 금액비 파생으로 보일 때도
+    (``rate_basis_unverified``) 생략된다(``separate_regime`` 은 산림사업 하한으로 판정을
+    **수행**하므로 스킵 사유가 아니지만 상태별 건수로는 계속 노출한다). 그 생략이
     리포트에 안 보이면 "하회 0건"이 데이터가 깨끗하다는 뜻으로 오독된다. 건수를 두
     스코프(집계/전체 평가)로 나눠 싣는 것은 품질 플래그 건수와 같은 규칙이다.
     """

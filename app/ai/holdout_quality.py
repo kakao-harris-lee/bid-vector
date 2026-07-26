@@ -43,9 +43,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from app.ai.construction_scenario import is_construction_era_floor_resolved
+from app.ai.construction_scenario import (
+    is_construction_category,
+    is_construction_era_floor_resolved,
+)
 from app.ai.floor_applicability import (
     FLOOR_APPLICABLE,
+    FLOOR_SEPARATE_REGIME,
+    FORESTRY_REGIME_FLOOR_RATE,
     is_floor_judgeable,
     is_published_floor_plausible,
     resolve_floor_applicability,
@@ -93,6 +98,9 @@ CONSTRUCTION_GROUP = "construction"
 # ── 법정 하한 출처 라벨 ───────────────────────────────────────────────────────
 FLOOR_SOURCE_PUBLISHED = "published_award_floor_rate"
 FLOOR_SOURCE_ERA_TIER = "construction_era_tier"
+# 산림사업(separate_regime) — 산림청예규 제728호 체계의 하한(원문 대조 2026-07-26,
+# 선언은 app.ai.floor_applicability.FORESTRY_REGIME_FLOOR_RATE).
+FLOOR_SOURCE_FORESTRY = "forestry_regime_spec"
 FLOOR_SOURCE_NONE = "unresolved"
 
 
@@ -142,8 +150,10 @@ def _is_floor_comparable(ctx: _QualityContext) -> bool:
     """하한 비교의 **전제**(적용 범위·보고율·해석된 하한)가 모두 충족됐는가.
 
     하한 모델이 그 공고에 적용되지 않거나(비국가기관), 적용 여부를 이름으로 가릴 수
-    없거나(대학교 등), 다른 행정규칙 체계이면(산림청 계열) 판정하지 않는다. 해석된
-    하한값 자체는 리포트에 남고 ``floor_applicability`` 로 생략 사유가 드러난다.
+    없으면(대학교 등) 판정하지 않는다. 산림청 계열(``separate_regime``)은 2026-07-26
+    원문 확정 이후 산림사업 하한으로 **판정을 수행**한다(하한 해석은
+    :func:`resolve_legal_floor_rate` 가 출처를 갈아끼운다). 해석된 하한값 자체는
+    리포트에 남고 ``floor_applicability`` 로 판정 경로/생략 사유가 드러난다.
 
     ``reported_rate`` 가 없어도 판정하지 않는다 — 기초금액 기준 역산율로 예정가 기준
     하한을 재면 사정률만큼 구조적으로 낮아 정상 낙찰이 오탐된다(모듈 docstring).
@@ -224,6 +234,7 @@ def resolve_legal_floor_rate(
     category: str | None,
     estimation_amount: float | None,
     reference_date: date | datetime | None,
+    floor_applicability: str = FLOOR_APPLICABLE,
 ) -> LegalFloorResolution:
     """공고에 적용되는 법정 낙찰하한율과 그 출처를 해석한다(선언 우선순위).
 
@@ -231,11 +242,17 @@ def resolve_legal_floor_rate(
        공개값이라 leakage-safe 하고 가장 구체적이다. 단 **개연 범위 안일 때만** 쓴다
        (:mod:`app.ai.floor_applicability` 선언 상수). 라이브에 ``1.00000`` 으로
        적재된 값이 있어 그대로 쓰면 정상 낙찰이 하회로 오탐된다.
-    2. era-correct 공사 적격심사 tier(#197 선언 테이블). 공고 자신의 기준일로
+    2. ``separate_regime``(산림청 계열)의 **공사** 공고면 산림사업 하한
+       :data:`FORESTRY_REGIME_FLOOR_RATE`(예규 728호, 원문 대조 2026-07-26) — 국가계약
+       era-tier 는 이 공고들에 범주 오류라 적용하지 않는다. 공사 게이트를 era-tier 와
+       똑같이 두는 이유는 확인된 원문·라이브 표본이 전부 공사(산림토목)이기 때문이다.
+       산림청이 발주한 용역/물품은 어느 하한인지 근거가 없어 미해석으로 남긴다 —
+       공사 하한을 대면 더 낮은 용역 하한에서 적법한 낙찰이 하회로 오탐된다.
+    3. era-correct 공사 적격심사 tier(#197 선언 테이블). 공고 자신의 기준일로
        해석하므로 과거 공고에 신율이 소급되지 않는다.
 
-    둘 다 해석 불가면 ``rate=None`` / ``source="unresolved"`` — 하한 하회 검사는
-    생략된다. 두 값 모두 **예정가격 기준**이며, 이 함수는 표 해석만 하고 basis 변환은
+    해석 불가면 ``rate=None`` / ``source="unresolved"`` — 하한 하회 검사는
+    생략된다. 모든 값은 **예정가격 기준**이며, 이 함수는 표 해석만 하고 basis 변환은
     하지 않는다.
 
     이 판정은 **분석 전용**이다. 라이브 예측이 같은 게시값을 guardrail 하한으로
@@ -250,6 +267,14 @@ def resolve_legal_floor_rate(
                 published_floor_implausible=False,
             )
         implausible = True
+    if floor_applicability == FLOOR_SEPARATE_REGIME and is_construction_category(
+        category
+    ):
+        return LegalFloorResolution(
+            rate=FORESTRY_REGIME_FLOOR_RATE,
+            source=FLOOR_SOURCE_FORESTRY,
+            published_floor_implausible=implausible,
+        )
     if is_construction_era_floor_resolved(category, estimation_amount, reference_date):
         tier = resolve_construction_qualification_floor(estimation_amount, reference_date)
         if tier is not None:
@@ -338,6 +363,7 @@ def assess_row_quality(
         category=category,
         estimation_amount=estimation_amount,
         reference_date=reference_date,
+        floor_applicability=floor_applicability,
     )
     legal_floor_rate, legal_floor_source = floor.rate, floor.source
     # 상대 불일치는 집계 단일 출처(app.domain.aggregates.error_rate)에 위임한다 —
