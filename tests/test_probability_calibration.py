@@ -596,9 +596,15 @@ def test_opportunity_analysis_applies_calibration_and_keeps_non_matched_clamp(
     """opportunity_analysis: 보정값 적용하되 non-matched 시 0.49 클램프 유지."""
     import app.services.opportunity_analysis as oa_mod
 
+    # ``apply_probability_calibration`` is resolved inside
+    # ``_apply_calibrated_or_heuristic_probability``, which moved to the
+    # ``scoring`` submodule when ``opportunity_analysis`` was decomposed into a
+    # package; patch the symbol where it is now resolved (assertions unchanged).
+    import app.services.opportunity_analysis.scoring as oa_scoring_mod
+
     # 보정 곡선이 0.92를 반환하도록 monkeypatch
     monkeypatch.setattr(
-        oa_mod, "apply_probability_calibration", lambda features, **kw: 0.92
+        oa_scoring_mod, "apply_probability_calibration", lambda features, **kw: 0.92
     )
 
     service = oa_mod.OpportunityAnalysisService()

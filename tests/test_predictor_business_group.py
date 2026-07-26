@@ -72,6 +72,11 @@ def test_predict_price_accepts_business_type_kwargs():
 def test_opportunity_analysis_passes_business_type(test_db, monkeypatch):
     """OpportunityAnalysisService가 Project.business_type_code를 predict_price로 전달."""
     from app.services import opportunity_analysis as oa_module
+    # The port factories are called by ``_OpportunityAnalysisBase.__init__`` and
+    # resolved in its namespace, which moved to the ``base`` submodule when
+    # ``opportunity_analysis`` was decomposed into a package; patch them where they
+    # are now resolved (assertions unchanged).
+    from app.services.opportunity_analysis import base as oa_base_module
 
     price_port = CapturingPricePredictionPort()
 
@@ -87,8 +92,8 @@ def test_opportunity_analysis_passes_business_type(test_db, monkeypatch):
     test_db.add(project)
     test_db.flush()
 
-    monkeypatch.setattr(oa_module, "build_price_prediction_port", lambda: price_port)
-    monkeypatch.setattr(oa_module, "build_bid_recommendation_port", lambda: StaticBidRecommendationPort())
+    monkeypatch.setattr(oa_base_module, "build_price_prediction_port", lambda: price_port)
+    monkeypatch.setattr(oa_base_module, "build_bid_recommendation_port", lambda: StaticBidRecommendationPort())
     service = oa_module.OpportunityAnalysisService()
     # analyze_project is the entry method; build a minimal request
     request = OpportunityAnalysisRequest(project_id=project.id, legal_floor_bid_rate=87.995)
