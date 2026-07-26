@@ -44,10 +44,13 @@ def test_open_project_status_is_open_only():
 
 
 def test_open_project_status_is_strictly_narrower_than_active_set():
-    # The scripts filter on the singular "open"; the services filter on the wider
-    # {"open", "re_notice"}. The de-duplication must keep these as DIFFERENT
-    # scopes ("looks-like-a-duplicate-but-is-not" trap): OPEN_PROJECT_STATUS is a
-    # strict subset of ACTIVE_PROJECT_STATUSES and never equal to it.
+    # OPEN_PROJECT_STATUS survives for ONE consumer only —
+    # scripts/measure_reliable_base_impact.py, whose P2 diagnostic buckets by the
+    # literal "open" status on purpose. Every "biddable now" query (services and
+    # the reporting / backfill scripts) uses the wider {"open", "re_notice"} set.
+    # These stay DIFFERENT scopes ("looks-like-a-duplicate-but-is-not" trap):
+    # OPEN_PROJECT_STATUS is a strict subset of ACTIVE_PROJECT_STATUSES, never
+    # equal to it.
     assert OPEN_PROJECT_STATUS in ACTIVE_PROJECT_STATUSES
     assert "re_notice" not in {OPEN_PROJECT_STATUS}
     assert ACTIVE_PROJECT_STATUSES != frozenset({OPEN_PROJECT_STATUS})

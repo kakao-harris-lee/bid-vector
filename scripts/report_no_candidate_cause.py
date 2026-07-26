@@ -59,7 +59,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.core.constants import OPEN_PROJECT_STATUS as _OPEN_STATUS  # noqa: E402
 from app.services.eligibility_labeling import (  # noqa: E402
     LABEL_AMBIGUOUS,
     LABEL_NEGATIVE,
@@ -71,12 +70,13 @@ from app.services.license_eligibility import (  # noqa: E402
     VERDICT_INELIGIBLE,
     VERDICT_VALUES,
 )
+from app.services.query_predicates import open_projects  # noqa: E402
 
 # --- 매직값은 여기 선언(§4.5.1) ---------------------------------------------
 
 _LOG_PREFIX = "[no-candidate-cause]"
-# _OPEN_STATUS 는 app/core/constants.py 의 OPEN_PROJECT_STATUS 단일 출처를 소비한다
-# ("open" only, re_notice 제외). 위 import 참조.
+# 열린 공고 판정은 open_projects() 로 위임한다 — ACTIVE_PROJECT_STATUSES({open,
+# re_notice}) 를 소비하므로 재공고(재입찰 가능)도 포함된다. 위 import 참조.
 _NO_CATEGORY = "(none)"
 _UNLABELED = "(unlabeled)"
 _ALL_SEGMENTS = "(all)"
@@ -526,13 +526,13 @@ def load_rows(db, *, limit: int | None) -> dict[str, Any]:
     strategy = get_operator_strategy(db)
     open_live_total = (
         db.query(Project)
-        .filter(Project.status == _OPEN_STATUS, Project.deadline >= utc_now())
+        .filter(open_projects(), Project.deadline >= utc_now())
         .count()
     )
     open_live_with_raw = (
         db.query(Project)
         .filter(
-            Project.status == _OPEN_STATUS,
+            open_projects(),
             Project.deadline >= utc_now(),
             Project.eligibility_raw.isnot(None),
         )
@@ -552,7 +552,7 @@ def load_rows(db, *, limit: int | None) -> dict[str, Any]:
 
     query = (
         db.query(Project)
-        .filter(Project.status == _OPEN_STATUS, Project.deadline >= utc_now())
+        .filter(open_projects(), Project.deadline >= utc_now())
         .order_by(Project.id.desc())
     )
     if limit:
