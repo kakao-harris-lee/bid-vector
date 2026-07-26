@@ -1,0 +1,120 @@
+"""Historical record summarization into weighted bid-rate statistics."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+
+from app.ai.predictors.historical.reserve import build_reserve_pattern_context
+from app.ai.predictors.historical.statistics import (
+    normalize_agency_name,
+    rate_share_at_or_above,
+    read_record_value,
+    resolve_record_weight,
+    weighted_median,
+    weighted_quantile,
+    weighted_std,
+)
+from app.utils.sequence_coercion import (
+    coerce_integer_list,
+    coerce_numeric_list,
+)
+
+
+def summarize_historical_records(historical_records: tuple[object, ...], *, agency_name: str | None = None) -> dict[str, Any]:
+    """Extract usable bid-rate samples from historical records."""
+    bid_rates: list[float] = []
+    weights: list[float] = []
+    agency_match_sample_size = 0
+    reserve_span_rates: list[float] = []
+    estimated_price_rates: list[float] = []
+    bid_to_estimated_price_rates: list[float] = []
+    selected_numbers: list[int] = []
+    normalized_target_agency = normalize_agency_name(agency_name)
+
+    for record in historical_records:
+        raw_bid_rate = read_record_value(record, "bid_rate")
+        bid_rate = float(raw_bid_rate or 0.0)
+        if bid_rate <= 0:
+            predicted_price = float(read_record_value(record, "predicted_price") or 0.0)
+            base_amount = float(read_record_value(record, "base_amount") or 0.0)
+            if predicted_price > 0 and base_amount > 0:
+                bid_rate = predicted_price / base_amount
+
+        if 0.5 <= bid_rate <= 1.5:
+            bid_rates.append(bid_rate)
+            weight, matched_agency = resolve_record_weight(record, normalized_target_agency)
+            weights.append(weight)
+            if matched_agency:
+                agency_match_sample_size += 1
+
+        reserve_prices = coerce_numeric_list(read_record_value(record, "reserve_prices"))
+        base_amount = float(read_record_value(record, "base_amount") or 0.0)
+        if len(reserve_prices) >= 2 and base_amount > 0:
+            reserve_span_rates.append((max(reserve_prices) - min(reserve_prices)) / base_amount)
+            picked_prices = [
+                reserve_prices[number - 1]
+                for number in coerce_integer_list(read_record_value(record, "selected_numbers"))
+                if 1 <= number <= len(reserve_prices)
+            ]
+            if len(picked_prices) >= 2:
+                estimated_price_rate = float(np.mean(picked_prices)) / base_amount
+                if 0.8 <= estimated_price_rate <= 1.2:
+                    estimated_price_rates.append(estimated_price_rate)
+                    if 0.5 <= bid_rate <= 1.5:
+                        bid_to_estimated_price_rates.append(bid_rate / estimated_price_rate)
+
+        selected_numbers.extend(coerce_integer_list(read_record_value(record, "selected_numbers")))
+
+    if not bid_rates:
+        return {
+            "sample_size": 0,
+            "mean_bid_rate": 0.0,
+            "median_bid_rate": 0.0,
+            "recent_median_bid_rate": 0.0,
+            "competitive_quantile_bid_rate": 0.0,
+            "std_bid_rate": 0.0,
+            "agency_match_sample_size": 0,
+            "reserve_price_context": None,
+        }
+
+    weighted_mean_value = float(np.average(bid_rates, weights=weights)) if weights else float(np.mean(bid_rates))
+    weighted_median_value = weighted_median(bid_rates, weights) if weights else float(np.median(bid_rates))
+    weighted_std_value = weighted_std(bid_rates, weights, weighted_mean_value) if len(bid_rates) > 1 else 0.0
+    recent_window_size = min(10, len(bid_rates))
+    recent_median_value = weighted_median(
+        bid_rates[:recent_window_size],
+        weights[:recent_window_size],
+    )
+    recent_tail_window_size = min(20, len(bid_rates))
+    recent_tail_rates = bid_rates[:recent_tail_window_size]
+    recent_tail_weights = weights[:recent_tail_window_size]
+    competitive_quantile_value = weighted_quantile(bid_rates, weights, 0.45)
+    upper_quantile_value = weighted_quantile(bid_rates, weights, 0.75)
+    recent_upper_quantile_value = weighted_quantile(recent_tail_rates, recent_tail_weights, 0.75)
+
+    return {
+        "sample_size": len(bid_rates),
+        "mean_bid_rate": weighted_mean_value,
+        "median_bid_rate": weighted_median_value,
+        "recent_median_bid_rate": recent_median_value,
+        "recent_sample_size": recent_tail_window_size,
+        "competitive_quantile_bid_rate": competitive_quantile_value,
+        "upper_quantile_bid_rate": upper_quantile_value,
+        "recent_upper_quantile_bid_rate": recent_upper_quantile_value,
+        "rate_ge_0_93_share": rate_share_at_or_above(bid_rates, 0.93),
+        "rate_ge_0_95_share": rate_share_at_or_above(bid_rates, 0.95),
+        "rate_ge_0_98_share": rate_share_at_or_above(bid_rates, 0.98),
+        "recent_rate_ge_0_93_share": rate_share_at_or_above(recent_tail_rates, 0.93),
+        "recent_rate_ge_0_95_share": rate_share_at_or_above(recent_tail_rates, 0.95),
+        "recent_rate_ge_0_98_share": rate_share_at_or_above(recent_tail_rates, 0.98),
+        "std_bid_rate": weighted_std_value,
+        "agency_match_sample_size": agency_match_sample_size,
+        "reserve_price_context": build_reserve_pattern_context(
+            reserve_span_rates=reserve_span_rates,
+            estimated_price_rates=estimated_price_rates,
+            bid_to_estimated_price_rates=bid_to_estimated_price_rates,
+            selected_numbers=selected_numbers,
+        ),
+    }
