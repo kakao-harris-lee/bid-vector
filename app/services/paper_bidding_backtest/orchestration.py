@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Sequence
 
@@ -28,6 +29,31 @@ logger = logging.getLogger(__name__)
 # stay byte-identical while ``_PaperBiddingBase.DEFAULT_SCENARIO`` remains the
 # single source of truth.
 DEFAULT_SCENARIO = _PaperBiddingBase.DEFAULT_SCENARIO
+
+
+@dataclass(frozen=True)
+class _PreparedHistoricalRun:
+    """Resolved + normalized inputs for one historical-backtest run.
+
+    Built by ``_prepare_historical_run`` (operator/strategy/profile resolution,
+    award-category scoping, scenario/limit normalization, request payload, and
+    the persisted ``PaperBidRun``) so ``run_historical_backtest`` reads as a
+    ``prepare -> execute`` pipeline. ``_create_run`` runs in the prepare phase —
+    outside the execute ``try/except`` — exactly as before, so a create-time
+    failure still propagates without ``_fail_run`` being called.
+    """
+
+    run: PaperBidRun | None
+    request_payload: dict[str, Any]
+    operator_id: int
+    strategy: OperatorStrategy
+    profile: CompanyProfile | None
+    resolved_award_categories: tuple[str, ...]
+    normalized_settle_actions: tuple[str, ...]
+    normalized_scenario: str
+    start_at: datetime | None
+    end_at: datetime | None
+    safe_limit: int
 
 
 class _BacktestRunMixin(_PaperBiddingBase):
@@ -61,18 +87,89 @@ class _BacktestRunMixin(_PaperBiddingBase):
         (e.g. recently-backfilled goods) is starved out of any bounded ``limit``
         window dominated by service/construction awards.
         """
+        prepared = self._prepare_historical_run(
+            db,
+            operator_id=operator_id,
+            category=category,
+            start_at=start_at,
+            end_at=end_at,
+            limit=limit,
+            scenario=scenario,
+            strategy_version=strategy_version,
+            model_version=model_version,
+            cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+            history_limit=history_limit,
+            settle_actions=settle_actions,
+            persist=persist,
+            award_categories=award_categories,
+        )
+        return self._execute_historical_run(
+            db,
+            prepared,
+            category=category,
+            strategy_version=strategy_version,
+            model_version=model_version,
+            cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+            history_limit=history_limit,
+            persist=persist,
+        )
+
+    def _resolve_award_categories(
+        self,
+        strategy: OperatorStrategy,
+        *,
+        award_categories: Sequence[str] | None,
+        category: str | None,
+    ) -> tuple[str, ...]:
+        """Scope the replay award pool to project categories.
+
+        Explicit ``award_categories`` win. Otherwise, when no explicit
+        ``category`` filter is given, default to the operator strategy's focus
+        categories so a focus-category operator draws its window from its OWN
+        categories (a minority category is not starved out of a bounded ``limit``
+        window). An explicit ``category`` with no ``award_categories`` yields
+        ``()`` — no extra category scoping.
+        """
+        if award_categories:
+            return tuple(
+                str(value).strip() for value in award_categories if str(value).strip()
+            )
+        if not category:
+            return tuple(
+                split_multi_value_text(getattr(strategy, "focus_categories", None))
+            )
+        return ()
+
+    def _prepare_historical_run(
+        self,
+        db: Session,
+        *,
+        operator_id: int | None,
+        category: str | None,
+        start_at: datetime | None,
+        end_at: datetime | None,
+        limit: int,
+        scenario: str,
+        strategy_version: str,
+        model_version: str,
+        cutoff_hours_before_deadline: int,
+        history_limit: int,
+        settle_actions: Sequence[str] | None,
+        persist: bool,
+        award_categories: Sequence[str] | None,
+    ) -> _PreparedHistoricalRun:
+        """Resolve/normalize inputs and open the ``PaperBidRun`` for the replay.
+
+        Runs before the execute ``try/except`` (identical ordering to the inline
+        prologue), so a resolution or ``_create_run`` failure propagates without
+        ``_fail_run``.
+        """
         operator = self._resolve_operator(db, operator_id=operator_id)
         strategy = self._resolve_operator_strategy(db, operator=operator)
         profile = self._resolve_operator_profile(db, operator=operator)
-        resolved_award_categories: tuple[str, ...] = ()
-        if award_categories:
-            resolved_award_categories = tuple(
-                str(value).strip() for value in award_categories if str(value).strip()
-            )
-        elif not category:
-            resolved_award_categories = tuple(
-                split_multi_value_text(getattr(strategy, "focus_categories", None))
-            )
+        resolved_award_categories = self._resolve_award_categories(
+            strategy, award_categories=award_categories, category=category
+        )
         normalized_settle_actions = self._normalize_actions(
             settle_actions or self.DEFAULT_SETTLE_ACTIONS
         )
@@ -111,7 +208,37 @@ class _BacktestRunMixin(_PaperBiddingBase):
             cutoff_hours_before_deadline=cutoff_hours_before_deadline,
             mode="historical_backtest",
         )
+        return _PreparedHistoricalRun(
+            run=run,
+            request_payload=request_payload,
+            operator_id=int(operator.id),
+            strategy=strategy,
+            profile=profile,
+            resolved_award_categories=resolved_award_categories,
+            normalized_settle_actions=normalized_settle_actions,
+            normalized_scenario=normalized_scenario,
+            start_at=start_at,
+            end_at=end_at,
+            safe_limit=safe_limit,
+        )
 
+    def _execute_historical_run(
+        self,
+        db: Session,
+        prepared: _PreparedHistoricalRun,
+        *,
+        category: str | None,
+        strategy_version: str,
+        model_version: str,
+        cutoff_hours_before_deadline: int,
+        history_limit: int,
+        persist: bool,
+    ) -> dict[str, Any]:
+        """Replay + settle awards for a prepared run; fail the run on any error.
+
+        The ``try/except`` here is the moved-verbatim run body: on any exception
+        ``_fail_run`` marks the persisted run failed and the error re-raises.
+        """
         candidate_items: list[dict[str, Any]] = []
         settlement_items: list[dict[str, Any]] = []
         action_counts: Counter[str] = Counter()
@@ -120,24 +247,24 @@ class _BacktestRunMixin(_PaperBiddingBase):
             awards = self._load_eligible_awards(
                 db,
                 category=category,
-                start_at=start_at,
-                end_at=end_at,
-                limit=safe_limit,
-                categories=resolved_award_categories or None,
+                start_at=prepared.start_at,
+                end_at=prepared.end_at,
+                limit=prepared.safe_limit,
+                categories=prepared.resolved_award_categories or None,
             )
             skipped_by_strategy = self._process_historical_awards(
                 db,
                 awards=awards,
-                strategy=strategy,
-                profile=profile,
-                run=run,
-                operator_id=int(operator.id),
-                scenario=normalized_scenario,
+                strategy=prepared.strategy,
+                profile=prepared.profile,
+                run=prepared.run,
+                operator_id=prepared.operator_id,
+                scenario=prepared.normalized_scenario,
                 strategy_version=strategy_version,
                 model_version=model_version,
                 cutoff_hours_before_deadline=cutoff_hours_before_deadline,
                 history_limit=history_limit,
-                settle_actions=normalized_settle_actions,
+                settle_actions=prepared.normalized_settle_actions,
                 persist=persist,
                 candidate_items=candidate_items,
                 settlement_items=settlement_items,
@@ -145,17 +272,19 @@ class _BacktestRunMixin(_PaperBiddingBase):
             )
             return self._complete_historical_backtest(
                 db,
-                run=run,
+                run=prepared.run,
                 persist=persist,
-                request_payload=request_payload,
+                request_payload=prepared.request_payload,
                 candidate_items=candidate_items,
                 settlement_items=settlement_items,
                 skipped_by_strategy=skipped_by_strategy,
                 action_counts=action_counts,
-                settle_actions=normalized_settle_actions,
+                settle_actions=prepared.normalized_settle_actions,
             )
         except Exception as exc:
-            self._fail_run(db, run=run, persist=persist, error_message=str(exc))
+            self._fail_run(
+                db, run=prepared.run, persist=persist, error_message=str(exc)
+            )
             raise
 
     def _process_historical_awards(

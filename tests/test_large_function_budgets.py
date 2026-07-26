@@ -28,7 +28,7 @@ import pytest
             "app.services.paper_bidding_backtest",
             "PaperBiddingBacktestService",
             "run_historical_backtest",
-            130,
+            60,
         ),
         (
             "app.services.paper_bidding_backtest",
