@@ -43,7 +43,10 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from app.ai.construction_scenario import is_construction_era_floor_resolved
+from app.ai.construction_scenario import (
+    is_construction_category,
+    is_construction_era_floor_resolved,
+)
 from app.ai.floor_applicability import (
     FLOOR_APPLICABLE,
     FLOOR_SEPARATE_REGIME,
@@ -239,9 +242,12 @@ def resolve_legal_floor_rate(
        공개값이라 leakage-safe 하고 가장 구체적이다. 단 **개연 범위 안일 때만** 쓴다
        (:mod:`app.ai.floor_applicability` 선언 상수). 라이브에 ``1.00000`` 으로
        적재된 값이 있어 그대로 쓰면 정상 낙찰이 하회로 오탐된다.
-    2. ``separate_regime``(산림청 계열)이면 산림사업 하한
+    2. ``separate_regime``(산림청 계열)의 **공사** 공고면 산림사업 하한
        :data:`FORESTRY_REGIME_FLOOR_RATE`(예규 728호, 원문 대조 2026-07-26) — 국가계약
-       era-tier 는 이 공고들에 범주 오류라 적용하지 않는다.
+       era-tier 는 이 공고들에 범주 오류라 적용하지 않는다. 공사 게이트를 era-tier 와
+       똑같이 두는 이유는 확인된 원문·라이브 표본이 전부 공사(산림토목)이기 때문이다.
+       산림청이 발주한 용역/물품은 어느 하한인지 근거가 없어 미해석으로 남긴다 —
+       공사 하한을 대면 더 낮은 용역 하한에서 적법한 낙찰이 하회로 오탐된다.
     3. era-correct 공사 적격심사 tier(#197 선언 테이블). 공고 자신의 기준일로
        해석하므로 과거 공고에 신율이 소급되지 않는다.
 
@@ -261,7 +267,9 @@ def resolve_legal_floor_rate(
                 published_floor_implausible=False,
             )
         implausible = True
-    if floor_applicability == FLOOR_SEPARATE_REGIME:
+    if floor_applicability == FLOOR_SEPARATE_REGIME and is_construction_category(
+        category
+    ):
         return LegalFloorResolution(
             rate=FORESTRY_REGIME_FLOOR_RATE,
             source=FLOOR_SOURCE_FORESTRY,

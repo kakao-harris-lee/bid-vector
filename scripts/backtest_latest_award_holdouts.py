@@ -1183,10 +1183,12 @@ def main() -> int:
             "award_floor_rate outside the plausible band is not used either "
             "(published_floor_implausible; live data holds 1.00000 rows) and falls "
             "back to the floor of the applicable regime (국가계약 era tier, or the "
-            "산림사업 floor for 산림청 계열).",
-            "separate_regime (산림청 계열) IS judged, against the 산림사업 floor "
-            "87.745% instead of the 국가계약 era tier "
-            "(data_quality_details.legal_floor_source = forestry_regime_spec). Basis "
+            "산림사업 floor for 산림청 계열 공사).",
+            "separate_regime (산림청 계열) IS judged on CONSTRUCTION notices, against "
+            "the 산림사업 floor 87.745% instead of the 국가계약 era tier "
+            "(data_quality_details.legal_floor_source = forestry_regime_spec). Non-"
+            "construction 산림청 notices keep the floor unresolved: the 용역 적심 floor "
+            "is lower, so lending them the 공사 floor would false-positive. Basis "
             "(verified 2026-07-26): a 산림사업 입찰설명서 (notice R26BK01490237, bidding "
             "2026-04-27~05-06 — after the +2%p 국가계약 revision took effect) states "
             "예정가격의 87.745% 이상 for 적격심사 and cites 산림청 산림사업 적격심사 "

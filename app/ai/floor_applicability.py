@@ -28,12 +28,17 @@
 R26BK01490237, 입찰 2026-04-27~05-06 — 국가계약 +2%p 개정일 **이후**)이 "예정가격
 이하로서 예정가격의 87.745% 이상 … 적격심사"를 명시하고, 근거 규정을 「산림청
 산림사업 적격심사 세부기준」(산림청예규 제728호, 2025-12-01)으로 특정한다. 즉
-산림사업은 국가계약 +2%p 개정을 추종하지 않았고, ``separate_regime`` 은 이제
-:data:`FORESTRY_REGIME_FLOOR_RATE` 로 **판정을 수행**한다(판정 보류 해제). 라이브
+산림사업은 국가계약 +2%p 개정을 추종하지 않았고, ``separate_regime`` 의 **공사** 공고는
+이제 :data:`FORESTRY_REGIME_FLOOR_RATE` 로 **판정을 수행**한다(판정 보류 해제). 라이브
 정합: 2026-07 산림청 계열 낙찰 6건의 보고율 0.87766~0.89576 이 전부 이 하한 위였고
-하단 2건이 바로 위에 군집했다. 남는 한계는 예규 별표의 추정가격 구간별 차등 여부
-미확인(실측 표본은 전부 3.3억 이하 소규모) — 차등이 확인되면 이 선언을 구간표로
-승격한다.
+하단 2건이 바로 위에 군집했다.
+
+적용 축을 **공사로 한정**하는 이유: 확인된 원문도(산림토목) 라이브 표본 6건도 전부 공사
+적격심사 하한이고, 산림청이 발주한 용역/물품이 어느 하한을 따르는지는 근거가 없다. 용역
+적격심사 하한은 공사보다 낮아 이 값을 그대로 대면 적법 낙찰이 하회로 오탐되므로, 비공사
+``separate_regime`` 은 하한을 해석하지 않고 판정을 생략한다(era-tier 게이트와 같은 축).
+남는 한계는 예규 별표의 추정가격 구간별 차등 여부 미확인(실측 표본은 전부 3.3억 이하
+소규모) — 차등이 확인되면 이 선언을 구간표로 승격한다.
 
 정직 명세(§2)와의 관계
 ----------------------
@@ -67,7 +72,9 @@ FLOOR_NOT_APPLICABLE = "not_applicable"
 FLOOR_APPLICABILITY_UNCERTAIN = "uncertain"
 # 국가기관이지만 국가계약 적격심사가 아니라 별도 행정규칙(산림청 산림사업 적격심사
 # 세부기준 등)을 따르는 발주. ``not_applicable`` 과 **섞지 않는다** — 저쪽은 "비국가
-# 기관"이라는 다른 사실이고, 여기서 대체 하한율을 주장하지도 않는다(모듈 docstring).
+# 기관"이라는 다른 사실이다. 이 라벨의 **공사** 공고는 :data:`FORESTRY_REGIME_FLOOR_RATE`
+# (원문 확정 2026-07-26)로 판정하고, 용역/물품은 근거가 없어 하한을 해석하지 않는다
+# (모듈 docstring).
 FLOOR_SEPARATE_REGIME = "separate_regime"
 
 # 리포트가 0 건까지 포함해 고정 순서로 세기 위한 전체 라벨 집합.
@@ -198,9 +205,13 @@ def is_published_floor_plausible(rate: float | None) -> bool:
 def is_floor_judgeable(applicability: str) -> bool:
     """이 적용 범위 판정에서 하한 하회 판정을 수행해도 되는가.
 
-    ``applicable`` 은 국가계약 하한(게시값/era-tier)으로, ``separate_regime`` 은
-    산림사업 하한(:data:`FORESTRY_REGIME_FLOOR_RATE`, 2026-07-26 원문 확정)으로
-    판정한다. 비국가기관(``not_applicable``)·판별 불가(``uncertain``)는 어떤 하한으로
-    재야 하는지 근거가 없어 판정을 생략한다.
+    ``applicable`` 은 국가계약 하한(게시값/era-tier)으로, ``separate_regime`` 은 공사일 때
+    산림사업 하한(:data:`FORESTRY_REGIME_FLOOR_RATE`, 2026-07-26 원문 확정)으로 판정한다.
+    비국가기관(``not_applicable``)·판별 불가(``uncertain``)는 어떤 하한으로 재야 하는지
+    근거가 없어 판정을 생략한다.
+
+    이 술어는 **기관 축만** 본다. 카테고리 축(공사 여부)은 하한 해석
+    (``holdout_quality.resolve_legal_floor_rate``)이 걸러내며, 비공사
+    ``separate_regime`` 은 거기서 하한 미해석으로 남아 결국 판정되지 않는다.
     """
     return applicability in (FLOOR_APPLICABLE, FLOOR_SEPARATE_REGIME)

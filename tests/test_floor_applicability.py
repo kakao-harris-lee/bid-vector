@@ -245,6 +245,46 @@ def test_forestry_agency_is_judged_against_the_forestry_floor():
     assert details["legal_floor_source"] == FLOOR_SOURCE_FORESTRY
 
 
+def test_forestry_service_notice_keeps_the_floor_unresolved():
+    """오탐 가드: 산림사업 하한은 **공사** 적격심사 값이라 용역 공고에 대지 않는다.
+
+    용역 적심 하한은 공사보다 낮아, 0.86 같은 적법 낙찰에 0.87745 를 대면 하회로
+    오탐된다. 근거가 확인된 축(원문·라이브 표본 전부 공사) 밖이므로 미해석으로 남긴다.
+    """
+    reported = 0.86
+    assessment = _assess(
+        agency_name=_FORESTRY_AGENCY,
+        group="service",
+        category="service",
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=reported,
+    )
+    assert FLAG_BELOW_LEGAL_FLOOR not in assessment.flags
+    assert assessment.legal_floor_rate is None
+    assert assessment.legal_floor_source == FLOOR_SOURCE_NONE
+    assert assessment.floor_undercut is None
+    # 기관 축 라벨 자체는 그대로 남는다 — 생략 사유가 카테고리 축이라는 게 드러나야 한다.
+    assert assessment.floor_applicability == FLOOR_SEPARATE_REGIME
+    # 하한 비교를 애초에 하지 않았으므로 rate-basis 생략 건수에도 잡히지 않는다.
+    assert assessment.rate_basis_unverified is False
+
+
+@pytest.mark.parametrize("category", ["construction", "공사"])
+def test_forestry_floor_reuses_the_shared_category_normalization(category):
+    """공사 게이트는 era-tier 와 같은 정규화를 쓴다 — 한글 표기에서 갈리면 안 된다."""
+    reported = 0.87246
+    assessment = _assess(
+        agency_name=_FORESTRY_AGENCY,
+        category=category,
+        reported_rate=reported,
+        effective_rate=reported,
+        amount_derived_rate=reported,
+    )
+    assert assessment.legal_floor_source == FLOOR_SOURCE_FORESTRY
+    assert FLAG_BELOW_LEGAL_FLOOR in assessment.flags
+
+
 def test_forestry_live_lowest_award_is_lawful_under_the_forestry_floor():
     """라이브 미러: 실측 하단 0.87766 은 산림사업 하한 바로 위 = 하회 아님.
 
