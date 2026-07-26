@@ -54,7 +54,6 @@ __all__ = [
     "ASSOCIATION_MEMBERSHIP_CANONICALS",
     "TECH_FIELD_TERMS",
     "match_association_terms",
-    "required_association_memberships",
     "match_tech_field_terms",
     "required_tech_fields",
     "EligibilityMatch",
@@ -500,28 +499,6 @@ def match_association_terms(text: str | None) -> frozenset[str]:
     )
 
 
-def required_association_memberships(
-    eligibility_raw: dict | None,
-) -> frozenset[str]:
-    """공고 참가자격이 요구하는 협회 가입 canonical 집합을 추출한다(순수).
-
-    ``extract_eligibility_labels`` 의 룰 해석기를 재사용하며(복붙 금지, §4.6),
-    license_limits 소스(``LABEL_SOURCE_FIELDS``) 매칭 중 협회 가입 canonical
-    (``ASSOCIATION_MEMBERSHIP_CANONICALS``)만 취한다. ``title`` 매칭은 기관명/과업명
-    오탐 축이라 애초에 넘기지 않아 제외된다(#207 교훈). 자격 데이터가 없거나 협회
-    요건이 없으면 빈 집합을 돌려준다. IO/DB 접근 없음.
-    """
-    if not isinstance(eligibility_raw, dict):
-        return frozenset()
-    labels = extract_eligibility_labels(eligibility_raw)
-    return frozenset(
-        match.term
-        for match in labels.matches
-        if match.source_field in LABEL_SOURCE_FIELDS
-        and match.term in ASSOCIATION_MEMBERSHIP_CANONICALS
-    )
-
-
 # --- 기술부문 매칭 (classifier 기술부문 축 공용, 순수) -----------------------
 
 
@@ -551,7 +528,7 @@ def match_tech_field_terms(text: str | None) -> frozenset[str]:
 
 
 def required_tech_fields(eligibility_raw: dict | None) -> frozenset[str]:
-    """공고 참가자격이 요구하는 기술부문 canonical 표준명 집합을 추출한다(순수 · ``required_association_memberships`` 미러).
+    """공고 참가자격이 요구하는 기술부문 canonical 표준명 집합을 추출한다(순수).
 
     ``extract_eligibility_labels`` 의 룰 해석기를 재사용하며(복붙 금지, §4.6),
     해석기가 ``license_limits`` 소스 매칭에서만 세운 ``tech_fields``(표준명)를 그대로
