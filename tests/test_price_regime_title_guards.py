@@ -12,6 +12,10 @@ title cues produced false positives once the title reached this shared path:
   3. bare 견적/견적제출 inside a 수의(negotiated) context ("수의견적 제출") wrongly
      raising a price-competition signal → false near_100 ∧ floor_bound conflict.
 
+A fourth guard (section 4) covers the same false-positive family on the 수의/
+direct_negotiated cue itself, but scoped to 공사: a construction 수의 견적제출 is
+priced off the 적격심사 낙찰하한율, not off a near-100 negotiation.
+
 The guards live entirely in the DESCRIPTIVE metadata layer (regime label / signals
 / review_required), which is attached AFTER the price is finalized and has no
 pricing consumer — so they must never move the recommended price. These tests lock
@@ -21,15 +25,22 @@ both the label semantics and that price invariance.
 import pytest
 
 from app.ai.price_prediction import (
+    _CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL,
+    _build_price_regime_features,
     _detect_price_regime_signals,
+    _has_resolved_award_floor,
     _has_two_stage_cue,
     predict_price,
 )
+from app.ai.predictors import PricePredictionContext
 
 
-def _flags(text, *, category="service", rate_band=None):
+def _flags(text, *, category="service", rate_band=None, award_floor_resolved=False):
     return _detect_price_regime_signals(
-        category=category, text=text.lower(), rate_band=rate_band
+        category=category,
+        text=text.lower(),
+        rate_band=rate_band,
+        award_floor_resolved=award_floor_resolved,
     )
 
 
@@ -101,8 +112,12 @@ def test_negotiated_quote_suppresses_false_conflict_via_direct_context():
 
 
 def test_negotiated_quote_keyword_marks_direct_context():
-    """A 수의견적(no space) title reads as a 수의 quote → near_100, quote suppressed."""
-    flags = _flags("보행로 정비공사 수의견적 제출 공고", category="construction", rate_band=None)
+    """A 수의견적(no space) title reads as a 수의 quote → near_100, quote suppressed.
+
+    Scoped to a 용역 notice: for 공사 the same cue is re-routed by the section-4
+    guard (공사 수의 견적은 적격심사 하한 경쟁이라 near_100 이 아니다).
+    """
+    flags = _flags("사무실 청소 용역 수의견적 제출 공고", category="service", rate_band=None)
     assert flags["near_100"] is True
     assert flags["floor_bound"] is False
     assert flags["conflicting"] is False
@@ -268,3 +283,152 @@ def test_negotiated_quote_label_flip_keeps_guardrail_floor():
     floor = pred.get("floor_bid_rate")
     if floor is not None:
         assert rate >= floor - 1e-9
+
+
+# --------------------------------------------------------------------------- #
+# 4. 공사 수의 견적 guard: in 공사, a 수의 cue on its own is NOT a near-100 pricing
+#    mechanism — 공사 소액수의 견적제출 prices off the 적격심사 낙찰하한율 ("하한 이상
+#    최저가"). Audit (2026-07-27 holdout clean): all 470 construction near_100 rows
+#    fired on the lone direct_negotiated signal, yet only 9.1% were awarded at
+#    >=0.97 while 76.8% landed within +100bp of the award floor (median 0.90).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "category, text, award_floor_resolved, expected_near_100, expected_floor_bound, expected_guard",
+    [
+        # 공사 + 수의 단서 단독 + 해석된 낙찰하한 → floor_bound 로 재라우팅
+        ("construction", "보행로 정비공사 수의견적 제출 공고", True, False, True, True),
+        ("construction", "○○ 배수로 정비공사 수의계약 안내", True, False, True, True),
+        # 하한 근거가 없으면 floor_bound 로 올리지 않는다 → 기존 fallback(ambiguous)
+        ("construction", "보행로 정비공사 수의견적 제출 공고", False, False, False, True),
+        # 공사라도 협상 단서가 함께면 near_100 증거가 수의 단독이 아니다 → 기존 유지
+        ("construction", "○○ 정비공사 수의계약 협상에 의한 계약", True, True, False, False),
+        # 용역/물품 수의시담은 near_100 정의가 유효 → 불변
+        ("service", "사무실 청소 용역 수의견적 제출", True, True, False, False),
+        ("service", "수의시담 실시설계 용역", True, True, False, False),
+        ("goods", "제설자재 구매 수의계약 안내", True, True, False, False),
+        # 수의 단서가 없는 공사 공고는 가드와 무관
+        ("construction", "정수장 증설공사", True, False, False, False),
+    ],
+)
+def test_construction_negotiated_quote_guard_value_table(
+    category, text, award_floor_resolved, expected_near_100, expected_floor_bound, expected_guard
+):
+    flags = _flags(text, category=category, award_floor_resolved=award_floor_resolved)
+    assert flags["near_100"] is expected_near_100
+    assert flags["floor_bound"] is expected_floor_bound
+    assert flags["conflicting"] is False
+    assert (
+        _CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL in flags["signals"]
+    ) is expected_guard
+    # the 수의 fact itself stays on the record whenever the cue is present
+    if expected_guard:
+        assert "direct_negotiated" in flags["signals"]
+
+
+def test_construction_negotiated_quote_with_strong_price_cue_is_floor_bound_not_conflict():
+    """공사 수의견적 + 적격심사: the strong cue and the guard AGREE (both floor-bound),
+    so this is no longer the false near_100 ∧ floor_bound conflict it produces for a
+    용역 notice (see ``test_negotiated_quote_plus_strong_cue_errs_toward_review``)."""
+    flags = _flags(
+        "보행로 정비공사 수의견적 제출 적격심사 대상",
+        category="construction",
+        award_floor_resolved=True,
+    )
+    assert flags == {
+        "floor_bound": True,
+        "near_100": False,
+        "deep_discount": False,
+        "conflicting": False,
+        "signals": [
+            _CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL,
+            "direct_negotiated",
+            "price_competitive",
+        ],
+    }
+
+
+def _features(description, prediction):
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        category="construction",
+        description=description,
+        historical_records=(),
+        business_group="construction",
+    )
+    return _build_price_regime_features(prediction, context=context)
+
+
+def test_construction_negotiated_quote_label_follows_resolved_award_floor():
+    """End-to-end label routing: with a resolved 낙찰하한 the guarded row reads
+    floor_bound; without one it falls through to the ambiguous fallback (review)."""
+    described = _features(
+        "보행로 정비공사 수의견적 제출 공고",
+        {"procurement_rate_band": None, "floor_bid_rate": 0.89745},
+    )
+    assert described["price_regime_label"] == "floor_bound"
+    assert described["review_required"] is False
+    # audit trail: guard reason + the 수의 contract method both survive
+    assert _CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL in described["regime_signals"]
+    assert described["contract_method"] == "direct_negotiated"
+    assert described["award_method"] == "price_competition"
+
+    floorless = _features("보행로 정비공사 수의견적 제출 공고", {"procurement_rate_band": None})
+    assert floorless["price_regime_label"] == "ambiguous"
+    assert floorless["price_regime_confidence"] == 0.45
+    assert floorless["review_required"] is True
+    assert _CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL in floorless["regime_signals"]
+
+
+@pytest.mark.parametrize(
+    "prediction, expected",
+    [
+        ({"legal_floor_bid_rate": 0.89745, "floor_bid_rate": 0.89745}, True),
+        ({"legal_floor_bid_rate": None, "floor_bid_rate": 0.88}, True),
+        ({"legal_floor_bid_rate": 0.87995}, True),
+        ({"legal_floor_bid_rate": None, "floor_bid_rate": None}, False),
+        ({}, False),
+    ],
+)
+def test_has_resolved_award_floor_value_table(prediction, expected):
+    assert _has_resolved_award_floor(prediction) is expected
+
+
+def test_construction_guard_does_not_move_price(monkeypatch):
+    """PRICE INVARIANCE (the #240 obligation): disabling the guard changes ONLY the
+    regime metadata keys — every other field of the prediction, including every
+    price/rate/candidate field, is byte-identical."""
+    from app.ai.price_prediction import price_regime
+
+    kwargs = dict(
+        budget=100_000_000.0,
+        category="construction",
+        description="보행로 정비공사 수의견적 제출 공고",
+        historical_records=_HISTORY,
+        legal_floor_bid_rate=89.745,
+    )
+    guarded = predict_price(**kwargs)
+
+    monkeypatch.setattr(
+        price_regime, "_is_construction_negotiated_quote_only", lambda **_: False
+    )
+    unguarded = predict_price(**kwargs)
+
+    regime_keys = {
+        "price_regime_features",
+        "price_regime_label",
+        "price_regime_confidence",
+        "review_required",
+        "recommended_candidate_label",
+        "recommended_selector_reason",
+    }
+    assert guarded.keys() == unguarded.keys()
+    for key in guarded.keys() - regime_keys:
+        assert guarded[key] == unguarded[key], key
+
+    # the guard did fire (otherwise this test would prove nothing)
+    assert unguarded["price_regime_label"] == "near_100"
+    assert guarded["price_regime_label"] == "floor_bound"
+    # and the recommended price still respects the guardrail floor (미하회 없음)
+    assert guarded["predicted_bid_rate"] >= guarded["floor_bid_rate"] - 1e-9

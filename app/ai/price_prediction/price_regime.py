@@ -9,9 +9,11 @@ review_required), never the recommended price — the price-moving band lives in
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.ai.construction_scenario import is_construction_category
 from app.ai.predictors import PricePredictionContext
 from app.ai.predictors.historical import (
     normalize_category_key,
@@ -79,7 +81,12 @@ def _build_price_regime_features(
         prediction.get("procurement_rate_band")
         or resolve_procurement_rate_band(category=context.category, description=context.description)
     )
-    signal_flags = _detect_price_regime_signals(category=category, text=text, rate_band=rate_band)
+    signal_flags = _detect_price_regime_signals(
+        category=category,
+        text=text,
+        rate_band=rate_band,
+        award_floor_resolved=_has_resolved_award_floor(prediction),
+    )
 
     matched_rule = next(
         (rule for rule in _PRICE_REGIME_RULES if signal_flags[rule.signal_flag]),
@@ -150,6 +157,28 @@ _PRICE_COMPETITION_STRONG_CUES = ("가격입찰", "적격심사", "pq")
 _PRICE_COMPETITION_QUOTE_CUES = ("소액수의 견적", "견적 제출", "견적제출")
 _NEGOTIATED_RATE_BANDS = frozenset({"service_direct_negotiated", "service_high_negotiated"})
 
+# 공사 수의 견적 가드 — 공사에서 수의 단서 단독은 near_100 가격 메커니즘이 아니다.
+#
+# 규정 사실: 공사 소액수의 견적제출은 예정가격 결정에 **적격심사 낙찰하한율**(추정가격
+# 10억 미만 89.745%)을 그대로 준용하는 "하한 이상 최저가" 경쟁이다. near_100 이 뜻하는
+# 협상·수의시담·위탁/운영형(95~100%) 가격 행동과 다르다. 용역/물품 수의시담에는 near_100
+# 정의가 유효하므로 가드는 공사에만 적용한다.
+#
+# 근거(2026-07-27 라벨 감사, 홀드아웃 clean flag-free 표본): 공사 near_100 470건 **전량**이
+# 이 direct_negotiated 단서 단독으로 발화했는데, 실낙찰률 ≥0.97 은 9.1% 뿐이고 76.8% 가
+# 낙찰하한 +100bp 이내(중앙값 0.9030)로 밀착했다 — 당시 floor_bound 코호트(64.2%)보다도
+# 더 하한 밀착이다. 근거·재적용 수치는 docs/operations/procurement-segment-improvement-notes.md.
+#
+# 발동 조건은 near_100 증거가 수의 단서 **하나뿐**일 때로 좁힌다(협상 단서나 negotiated
+# 밴드가 함께 있으면 기존 near_100 을 유지). #240 의 title-semantic 가드들과 같은 층
+# (서술 메타데이터)에서만 동작하며 추천 가격에는 관여하지 않는다.
+_CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL = "construction_direct_negotiated_not_near_100"
+# 재라우팅 전제("법정 하한이 해석되는 행"): guardrail 이 이미 해석해 prediction 에 남긴
+# 낙찰하한 근거 필드. 공사에서 이 하한은 적격심사 낙찰하한(공고별 법정 하한 #221 또는
+# era-correct tier #197)이므로 "그 위 최저가 경쟁" = floor_bound 와 정합한다. 근거가 없으면
+# floor_bound 로 올리지 않고 기존 fallback(ambiguous·review) 규칙에 맡긴다.
+_AWARD_FLOOR_EVIDENCE_KEYS = ("legal_floor_bid_rate", "floor_bid_rate")
+
 
 def _has_bare_two_stage(text: str) -> bool:
     """True when "2단계" appears not immediately preceded by a digit.
@@ -184,7 +213,42 @@ def _has_two_stage_cue(text: str) -> bool:
     )
 
 
-def _detect_price_regime_signals(*, category: str, text: str, rate_band: Any) -> dict[str, Any]:
+def _has_resolved_award_floor(prediction: Mapping[str, Any]) -> bool:
+    """공고에 해석된 낙찰하한이 남아 있는가 — 공사 수의 견적 재라우팅의 전제.
+
+    guardrail 단계가 이미 계산해 payload 에 남긴 값만 읽는다(재계산·재해석 없음).
+    """
+    return any(prediction.get(key) is not None for key in _AWARD_FLOOR_EVIDENCE_KEYS)
+
+
+def _is_construction_negotiated_quote_only(
+    *,
+    category: str,
+    has_direct: bool,
+    has_negotiation: bool,
+    rate_band: Any,
+) -> bool:
+    """공사이면서 near_100 증거가 수의(direct) 단서 하나뿐인가 — 가드 발동 조건.
+
+    협상 단서나 negotiated 밴드가 함께 있으면 증거가 수의 단독이 아니므로 발동하지
+    않는다(기존 near_100 유지). 카테고리 판정은 공사 전용 하한 게이트와 같은 단일 출처
+    술어(:func:`is_construction_category`)를 재사용한다.
+    """
+    return (
+        is_construction_category(category)
+        and has_direct
+        and not has_negotiation
+        and rate_band not in _NEGOTIATED_RATE_BANDS
+    )
+
+
+def _detect_price_regime_signals(
+    *,
+    category: str,
+    text: str,
+    rate_band: Any,
+    award_floor_resolved: bool = False,
+) -> dict[str, Any]:
     """Return broad mechanism signals used by the price-regime classifier."""
     signals: set[str] = set()
     has_two_stage = _has_two_stage_cue(text)
@@ -223,6 +287,18 @@ def _detect_price_regime_signals(*, category: str, text: str, rate_band: Any) ->
     floor_bound = bool(rate_band in {"service_price_competitive", "goods_price_competitive"} or has_price_competition)
     near_100 = bool(rate_band in {"service_high_negotiated", "service_direct_negotiated"} or has_negotiation or has_direct)
     deep_discount = bool(has_deep_discount)
+    # 공사 수의 견적 가드: near_100 을 내리고, 낙찰하한이 해석된 행이면 그 하한 위 최저가
+    # 경쟁(floor_bound)으로 정합시킨다. 하한 근거가 없으면 아무 규칙도 세우지 않아 기존
+    # fallback(ambiguous·review) 로 흐른다. 라우팅 규칙표(_PRICE_REGIME_RULES)는 불변이다.
+    if near_100 and _is_construction_negotiated_quote_only(
+        category=category,
+        has_direct=has_direct,
+        has_negotiation=has_negotiation,
+        rate_band=rate_band,
+    ):
+        near_100 = False
+        floor_bound = floor_bound or award_floor_resolved
+        signals.add(_CONSTRUCTION_NEGOTIATED_QUOTE_GUARD_SIGNAL)
     conflicting = (near_100 and floor_bound) or (deep_discount and near_100)
     if category == "goods" and has_two_stage and _contains_any(text, ("급식", "농산물")):
         deep_discount = True
