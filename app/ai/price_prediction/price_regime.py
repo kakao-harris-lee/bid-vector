@@ -166,7 +166,7 @@ _NEGOTIATED_RATE_BANDS = frozenset({"service_direct_negotiated", "service_high_n
 #
 # 근거(2026-07-27 라벨 감사, 홀드아웃 clean flag-free 표본): 공사 near_100 470건 **전량**이
 # 이 direct_negotiated 단서 단독으로 발화했는데, 실낙찰률 ≥0.97 은 9.1% 뿐이고 76.8% 가
-# 낙찰하한 +100bp 이내(중앙값 0.9030)로 밀착했다 — 당시 floor_bound 코호트(64.2%)보다도
+# 낙찰하한 +100bp 이내(중앙값 0.90)로 밀착했다 — 당시 floor_bound 코호트(64.2%)보다도
 # 더 하한 밀착이다. 근거·재적용 수치는 docs/operations/procurement-segment-improvement-notes.md.
 #
 # 발동 조건은 near_100 증거가 수의 단서 **하나뿐**일 때로 좁힌다(협상 단서나 negotiated
