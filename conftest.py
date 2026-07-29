@@ -74,9 +74,10 @@ def test_db():
 def reset_preview_cache():
     """Clear the process-local strategy preview cache around every test.
 
-    The cache lives in module state keyed by operator id, while each test gets a
-    freshly created database that reuses those ids — without this reset a payload
-    computed in one test could be served to the next.
+    The cache lives in module state keyed by (operator_id, limit,
+    high_priority_only), while each test gets a freshly created database that
+    reuses those operator ids — without this reset a payload computed in one test
+    could be served to the next.
     """
     from app.services.opportunity_monitoring.preview_cache import preview_cache
 

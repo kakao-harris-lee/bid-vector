@@ -36,6 +36,7 @@ from app.services.notifications.telegram_strategy_fields import (
     FieldSpec,
 )
 from app.services.notifications.telegram_strategy_render import TelegramStrategyReply
+from app.services.opportunity_monitoring.preview_cache import preview_cache
 
 __all__ = [
     "FIELD_SPECS",
@@ -185,8 +186,7 @@ class TelegramStrategyCommandProcessor:
             return self._build_help(error)
 
         self._apply_updates(strategy, parsed_updates)
-        db.commit()
-        db.refresh(strategy)
+        self._persist_strategy_edit(db, strategy)
         return f"{self._build_strategy_status(db, include_help=False)}\n\n전략이 업데이트되었습니다."
 
     def _handle_clear(self, db: Session, args: list[str]) -> str:
@@ -210,9 +210,19 @@ class TelegramStrategyCommandProcessor:
             return self._build_help("초기화할 전략 항목이 없습니다.")
 
         self._apply_updates(strategy, {field: fields.default_value_for(field) for field in fields_to_clear})
+        self._persist_strategy_edit(db, strategy)
+        return f"{self._build_strategy_status(db, include_help=False)}\n\n전략 항목을 초기화했습니다."
+
+    def _persist_strategy_edit(self, db: Session, strategy) -> None:
+        """Commit a strategy edit and drop that operator's cached candidate preview.
+
+        Telegram edits write the same row as the web PUT, so they need the same
+        invalidation: the preview is cached per operator for a short window and a
+        stale entry would keep showing candidates from the pre-edit watch rules.
+        """
         db.commit()
         db.refresh(strategy)
-        return f"{self._build_strategy_status(db, include_help=False)}\n\n전략 항목을 초기화했습니다."
+        preview_cache.invalidate(int(strategy.user_id))
 
     def _handle_step_value(self, db: Session, chat_key: str, raw_value: str) -> TelegramStrategyReply:
         """Validate a step-flow value and ask for final confirmation."""
@@ -271,8 +281,7 @@ class TelegramStrategyCommandProcessor:
             )
 
         self._apply_updates(strategy, pending.updates)
-        db.commit()
-        db.refresh(strategy)
+        self._persist_strategy_edit(db, strategy)
         self._clear_pending_edit(db, chat_key)
         return TelegramStrategyReply(
             f"{self._build_strategy_status(db, include_help=False)}\n\n전략이 업데이트되었습니다.",

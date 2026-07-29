@@ -21,9 +21,11 @@ a CPU-stampede damper, not a coherence mechanism. Correctness never depends on a
 hit; a miss simply recomputes. Freshness after an operator edits the strategy is
 handled explicitly by :meth:`PreviewResultCache.invalidate`.
 
-Callers receive their own deep copy of the payload, because the API layer
-mutates the preview response (it adds operator-context fields), and a waiter may
-be handed a payload another request computed.
+No caller ever shares a dict with the cache: the entry holds a deep copy of the
+computed payload, and every cache hit / shared in-flight result is a deep copy of
+that entry. The caller that ran ``compute`` keeps the original object it produced.
+This matters because the API layer mutates the preview response (it adds
+operator-context fields) and a waiter is handed a payload another request built.
 """
 
 from __future__ import annotations
@@ -87,28 +89,33 @@ class PreviewResultCache:
         with the TTL disabled — which is the whole point of the guard: a reload
         must not start a second scan. Exceptions from ``compute`` propagate to
         every waiter's own retry and are never cached.
+
+        ``entered_at`` is sampled once, on entry, and serves both to recognize a
+        shared in-flight result and as the staleness basis for storing. Sampling
+        the staleness basis later (when this caller actually starts computing)
+        would let a queued waiter publish a scan built from data it captured
+        *before* an invalidation that landed while it was waiting.
         """
         cached = self._read_fresh(key, ttl_seconds=ttl_seconds, now=now)
         if cached is not None:
             return cached
 
         compute_lock = self._compute_lock(key)
-        waited_from = now()
+        entered_at = now()
         entered_without_waiting = compute_lock.acquire(blocking=False)
         if not entered_without_waiting:
             compute_lock.acquire()
         try:
             if not entered_without_waiting:
-                shared = self._read_stored_since(key, waited_from)
+                shared = self._read_stored_since(key, entered_at)
                 if shared is not None:
                     return shared
             cached = self._read_fresh(key, ttl_seconds=ttl_seconds, now=now)
             if cached is not None:
                 return cached
 
-            started_at = now()
             payload = compute()
-            self._store(key, payload, started_at=started_at, ttl_seconds=ttl_seconds, now=now)
+            self._store(key, payload, entered_at=entered_at, ttl_seconds=ttl_seconds, now=now)
             return payload
         finally:
             compute_lock.release()
@@ -163,17 +170,17 @@ class PreviewResultCache:
                 return None
             return deepcopy(entry.payload)
 
-    def _read_stored_since(self, key: PreviewCacheKey, waited_from: float) -> dict | None:
+    def _read_stored_since(self, key: PreviewCacheKey, entered_at: float) -> dict | None:
         """Return the payload produced by the computation this caller waited on.
 
         Only used by a caller that actually blocked on the per-key lock: an
-        entry stored at or after the moment it started waiting can only have
-        come from the computation it was waiting for, so it is shared regardless
-        of the TTL.
+        entry stored at or after the moment it entered can only have come from
+        the computation it was waiting for, so it is shared regardless of the
+        TTL.
         """
         with self._state_lock:
             entry = self._entries.get(key)
-            if entry is None or entry.stored_at < waited_from:
+            if entry is None or entry.stored_at < entered_at:
                 return None
             return deepcopy(entry.payload)
 
@@ -182,13 +189,19 @@ class PreviewResultCache:
         key: PreviewCacheKey,
         payload: dict,
         *,
-        started_at: float,
+        entered_at: float,
         ttl_seconds: float,
         now: Callable[[], float],
     ) -> None:
-        """Store a copy of ``payload`` unless the operator was invalidated mid-flight."""
+        """Store a copy of ``payload`` unless the operator was invalidated mid-flight.
+
+        ``entered_at`` is when the caller entered ``get_or_compute``, not when it
+        started computing: a waiter captures the data its ``compute`` closure
+        reads before queueing, so an invalidation after that instant makes the
+        result stale even though the computation itself ran later.
+        """
         with self._state_lock:
-            if self._invalidated_at.get(key.operator_id, _NEVER) >= started_at:
+            if self._invalidated_at.get(key.operator_id, _NEVER) >= entered_at:
                 return
             stored_at = now()
             self._entries[key] = _CacheEntry(payload=deepcopy(payload), stored_at=stored_at)

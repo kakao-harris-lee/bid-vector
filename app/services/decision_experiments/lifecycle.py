@@ -30,6 +30,7 @@ from app.services.decision_experiments.verdict_machine import (
     _UPDATE_STATUS_EFFECTS,
     _LifecycleContext,
 )
+from app.services.opportunity_monitoring.preview_cache import preview_cache
 
 
 class _LifecycleMixin(_DecisionExperimentBase):
@@ -289,6 +290,9 @@ class _LifecycleMixin(_DecisionExperimentBase):
             db.commit()
             db.refresh(run)
             db.refresh(strategy)
+            # Applied thresholds change which candidates the preview surfaces, so
+            # the operator's short-lived cached preview must not survive the write.
+            preview_cache.invalidate(int(target_operator.id))
 
         strategy_thresholds = self._current_strategy_thresholds(strategy)
         return {
@@ -348,6 +352,9 @@ class _LifecycleMixin(_DecisionExperimentBase):
             db.commit()
             db.refresh(run)
             db.refresh(strategy)
+            # Workload/category tuning reorders the preview's candidates, so the
+            # operator's short-lived cached preview must not survive the write.
+            preview_cache.invalidate(int(target_operator.id))
 
         strategy_tuning = self._current_strategy_tuning(strategy)
         return {

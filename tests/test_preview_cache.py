@@ -15,7 +15,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.config import settings
-from app.models.models import Project
+from app.core.single_user import ensure_operator_account, ensure_operator_strategy
+from app.models.models import DecisionExperimentRun, Project
+from app.schemas.schemas import (
+    DecisionExperimentStrategyApplyRequest,
+    DecisionExperimentThresholdApplyRequest,
+)
+from app.services.decision_experiments import DecisionExperimentService
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.opportunity_monitoring.preview_cache import (
     PreviewCacheKey,
@@ -259,6 +265,85 @@ def test_invalidation_during_flight_is_not_stored():
     assert fresh.calls == 1
 
 
+class _EntrySignallingClock(_FakeClock):
+    """Fake clock that reports when a named thread reads it.
+
+    ``get_or_compute`` samples the clock once on entry, so watching that read
+    gives the test a deterministic handshake for "the waiter is now inside the
+    call" without sleeping.
+    """
+
+    def __init__(self, watched_thread: str, entered: threading.Event, start: float = 1000.0) -> None:
+        super().__init__(start)
+        self._watched_thread = watched_thread
+        self._entered = entered
+
+    def __call__(self) -> float:
+        value = super().__call__()
+        if threading.current_thread().name == self._watched_thread:
+            self._entered.set()
+        return value
+
+
+def test_waiter_result_from_a_pre_invalidation_closure_is_not_stored():
+    """A waiter that entered before a strategy edit must not store its stale scan.
+
+    The waiter captured its compute closure (strategy rows read before the edit)
+    when it entered, then blocked behind the leader's scan. If the invalidation
+    guard were keyed on when the waiter *starts computing* — after the edit — its
+    pre-edit result would look fresh and mask the edit for the whole TTL. The
+    guard is keyed on call entry instead, so only the waiter's own caller sees it.
+    """
+    cache = PreviewResultCache()
+    waiter_entered = threading.Event()
+    clock = _EntrySignallingClock("preview-waiter", waiter_entered)
+    leader_computing = threading.Event()
+    leader_may_finish = threading.Event()
+    outcomes: dict[str, dict] = {}
+
+    def leader_compute() -> dict:
+        leader_computing.set()
+        leader_may_finish.wait(timeout=5)
+        return {"generation": "leader-pre-edit"}
+
+    def waiter_compute() -> dict:
+        # The waiter's closure was captured before the edit, so it rescans with
+        # the old strategy — exactly what must not be published to later readers.
+        return {"generation": "waiter-pre-edit"}
+
+    def run_leader() -> None:
+        outcomes["leader"] = cache.get_or_compute(KEY, leader_compute, ttl_seconds=60.0, now=clock)
+
+    def run_waiter() -> None:
+        outcomes["waiter"] = cache.get_or_compute(KEY, waiter_compute, ttl_seconds=60.0, now=clock)
+
+    leader = threading.Thread(target=run_leader, name="preview-leader")
+    waiter = threading.Thread(target=run_waiter, name="preview-waiter")
+    leader.start()
+    assert leader_computing.wait(timeout=5)
+    waiter.start()
+    assert waiter_entered.wait(timeout=5)  # waiter is inside the call, blocked on the leader
+
+    # The strategy PUT lands while the leader scans and the waiter queues, then
+    # time moves on before either computation stores its result.
+    cache.invalidate(KEY.operator_id, now=clock)
+    clock.advance(1.0)
+    leader_may_finish.set()
+    leader.join(timeout=10)
+    waiter.join(timeout=10)
+    assert not leader.is_alive() and not waiter.is_alive()
+
+    assert outcomes["leader"] == {"generation": "leader-pre-edit"}
+    assert outcomes["waiter"] == {"generation": "waiter-pre-edit"}
+    assert cache.entry_count() == 0  # neither pre-edit scan was published
+
+    post_edit = _CountingCompute({"generation": "post-edit"})
+    assert cache.get_or_compute(KEY, post_edit, ttl_seconds=60.0, now=clock) == {
+        "generation": "post-edit"
+    }
+    assert post_edit.calls == 1
+
+
 def test_caller_mutation_does_not_poison_the_cache():
     """Callers own their payload — the API layer adds context fields to it."""
     cache = PreviewResultCache()
@@ -428,3 +513,121 @@ def test_preview_cache_ttl_setting_is_declared():
     """The TTL is a declared setting (§4.5.1), not a literal inside the service."""
     assert settings.OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS >= 0
     assert isinstance(preview_cache, PreviewResultCache)
+
+
+# ---------------------------------------------------------------------------
+# Every live strategy write must invalidate — not just the web PUT
+# ---------------------------------------------------------------------------
+
+
+def _seed_preview_entry(operator_id: int) -> None:
+    """Put one preview payload in the process-local cache for ``operator_id``."""
+    preview_cache.get_or_compute(
+        PreviewCacheKey(operator_id=operator_id, limit=10, high_priority_only=False),
+        _CountingCompute({"candidates": [], "operator_id": operator_id}),
+        60.0,
+    )
+    assert preview_cache.entry_count() == 1
+
+
+def test_telegram_strategy_set_invalidates_preview(test_db):
+    """``/strategy_set`` writes the same strategy row as the web PUT, so it must invalidate."""
+    from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
+
+    processor = TelegramStrategyCommandProcessor()
+    strategy = ensure_operator_strategy(test_db)
+    _seed_preview_entry(int(strategy.user_id))
+
+    reply = processor._handle_set(test_db, ["categories=software"])
+
+    assert "전략이 업데이트되었습니다" in reply
+    assert preview_cache.entry_count() == 0
+
+
+def test_telegram_strategy_clear_invalidates_preview(test_db):
+    """``/strategy_clear`` resets watch rules through the same commit path."""
+    from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
+
+    processor = TelegramStrategyCommandProcessor()
+    strategy = ensure_operator_strategy(test_db)
+    _seed_preview_entry(int(strategy.user_id))
+
+    reply = processor._handle_clear(test_db, ["categories"])
+
+    assert "전략 항목을 초기화했습니다" in reply
+    assert preview_cache.entry_count() == 0
+
+
+def _seed_successful_experiment_run(test_db, *, operator, experiment_key: str):
+    run = DecisionExperimentRun(
+        operator_id=operator.id,
+        experiment_key=experiment_key,
+        recommendation_key=f"rec-{experiment_key}",
+        status="completed",
+        outcome="success",
+        title="threshold tuning",
+    )
+    test_db.add(run)
+    test_db.commit()
+    test_db.refresh(run)
+    return run
+
+
+def test_experiment_threshold_apply_invalidates_preview(test_db):
+    """Applying an experiment's threshold adjustment persists strategy thresholds."""
+    operator = ensure_operator_account(test_db)
+    ensure_operator_strategy(test_db)
+    run = _seed_successful_experiment_run(
+        test_db, operator=operator, experiment_key="exp-review-threshold-tighten"
+    )
+    _seed_preview_entry(int(operator.id))
+
+    result = DecisionExperimentService().apply_threshold_adjustments(
+        test_db,
+        run_id=int(run.id),
+        request=DecisionExperimentThresholdApplyRequest(dry_run=False),
+        operator=operator,
+    )
+
+    assert result["applied"] is True
+    assert preview_cache.entry_count() == 0
+
+
+def test_experiment_threshold_dry_run_keeps_preview(test_db):
+    """A dry run writes nothing, so it must not churn the cache either."""
+    operator = ensure_operator_account(test_db)
+    ensure_operator_strategy(test_db)
+    run = _seed_successful_experiment_run(
+        test_db, operator=operator, experiment_key="exp-review-threshold-tighten"
+    )
+    _seed_preview_entry(int(operator.id))
+
+    result = DecisionExperimentService().apply_threshold_adjustments(
+        test_db,
+        run_id=int(run.id),
+        request=DecisionExperimentThresholdApplyRequest(dry_run=True),
+        operator=operator,
+    )
+
+    assert result["applied"] is False
+    assert preview_cache.entry_count() == 1
+
+
+def test_experiment_strategy_apply_invalidates_preview(test_db):
+    """Workload/category tuning is a strategy write on the same row — invalidate too."""
+    operator = ensure_operator_account(test_db)
+    ensure_operator_strategy(test_db)
+    run = _seed_successful_experiment_run(
+        test_db, operator=operator, experiment_key="exp-workload-auto-calibration"
+    )
+    _seed_preview_entry(int(operator.id))
+
+    result = DecisionExperimentService().apply_strategy_adjustments(
+        test_db,
+        run_id=int(run.id),
+        request=DecisionExperimentStrategyApplyRequest(dry_run=False),
+        operator=operator,
+    )
+
+    assert result["applied"] is True
+    assert preview_cache.entry_count() == 0
