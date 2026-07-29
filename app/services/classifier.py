@@ -9,6 +9,8 @@ surface — ``NoticeClassifierService``, ``RuleAssessment`` and the module-level
 the tests) — and delegates to that package. Behaviour is unchanged.
 """
 
+import threading
+
 from app.core.config import settings
 from app.models.models import CompanyProfile, Project
 from app.services.classification import association as association_axis
@@ -90,6 +92,9 @@ class NoticeClassifierService:
     _embedding_model = None
     _embedding_model_name: str | None = None
     _embedding_model_failed = False
+    # Serializes the (slow) model load so the startup warm-up thread and a
+    # concurrent request cannot each build their own copy.
+    _embedding_model_lock = threading.Lock()
 
     def classify(self, project: Project, profile: CompanyProfile | None) -> dict:
         """Score project fit using business type, region, and budget rules."""
@@ -212,27 +217,53 @@ class NoticeClassifierService:
         return text_utils.tokenize_semantic_text(text)
 
     @classmethod
+    def get_embedding_model(cls):
+        """Public accessor for the shared cached embedding model.
+
+        Same object and cache as ``_get_embedding_model``; exposed so callers
+        outside classification (startup warm-up) do not reach into a private
+        name. Returns ``None`` when the model cannot be loaded.
+        """
+        return cls._get_embedding_model()
+
+    @classmethod
+    def _cached_embedding_model(cls, model_name: str):
+        """Return ``(hit, model)`` for the class-level cache of ``model_name``."""
+        if cls._embedding_model is not None and cls._embedding_model_name == model_name:
+            return True, cls._embedding_model
+        if cls._embedding_model_failed and cls._embedding_model_name == model_name:
+            return True, None
+        return False, None
+
+    @classmethod
     def _get_embedding_model(cls):
         """Load and cache the sentence-transformers model when available."""
         model_name = settings.CLASSIFIER_EMBEDDING_MODEL
-        if cls._embedding_model is not None and cls._embedding_model_name == model_name:
-            return cls._embedding_model
-        if cls._embedding_model_failed and cls._embedding_model_name == model_name:
-            return None
+        hit, model = cls._cached_embedding_model(model_name)
+        if hit:
+            return model
 
-        try:
-            from sentence_transformers import SentenceTransformer
+        # The load takes ~25s, so callers arriving during the startup warm-up (or
+        # during another request's load) must wait for that one load instead of
+        # starting a second copy of the model. Fast path above stays lock-free.
+        with cls._embedding_model_lock:
+            hit, model = cls._cached_embedding_model(model_name)
+            if hit:
+                return model
 
-            cls._embedding_model = SentenceTransformer(
-                model_name,
-                cache_folder=settings.MODEL_CACHE_DIR,
-                local_files_only=settings.CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY,
-            )
-            cls._embedding_model_name = model_name
-            cls._embedding_model_failed = False
-            return cls._embedding_model
-        except Exception:
-            cls._embedding_model = None
-            cls._embedding_model_name = model_name
-            cls._embedding_model_failed = True
-            return None
+            try:
+                from sentence_transformers import SentenceTransformer
+
+                cls._embedding_model = SentenceTransformer(
+                    model_name,
+                    cache_folder=settings.MODEL_CACHE_DIR,
+                    local_files_only=settings.CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY,
+                )
+                cls._embedding_model_name = model_name
+                cls._embedding_model_failed = False
+                return cls._embedding_model
+            except Exception:
+                cls._embedding_model = None
+                cls._embedding_model_name = model_name
+                cls._embedding_model_failed = True
+                return None
