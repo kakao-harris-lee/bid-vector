@@ -12,7 +12,6 @@ request after an api restart. These tests pin the three contracts that matter:
 It also pins the loader's single-load guarantee: the warm-up thread and a
 concurrent request must share one model, never build two copies of it.
 """
-import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -212,17 +211,16 @@ def test_concurrent_callers_load_the_embedding_model_only_once(
     entered_constructor = threading.Event()
     release_constructor = threading.Event()
 
-    class SlowSentenceTransformer:
-        def __init__(self, model_name, **kwargs):
-            constructions.append(model_name)
-            entered_constructor.set()
-            release_constructor.wait(timeout=5)
+    def slow_build(model_name):
+        """Stand in for the ~25s SentenceTransformer construction."""
+        constructions.append(model_name)
+        entered_constructor.set()
+        release_constructor.wait(timeout=5)
+        return SimpleNamespace(name=model_name)
 
-    monkeypatch.setitem(
-        sys.modules,
-        "sentence_transformers",
-        SimpleNamespace(SentenceTransformer=SlowSentenceTransformer),
-    )
+    # Patch only the construction delegator, not the sentence_transformers module
+    # (§4.7: keep the monkeypatch surface to one delegator).
+    monkeypatch.setattr(service, "_build_embedding_model", slow_build)
 
     results = []
 

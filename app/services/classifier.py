@@ -236,6 +236,22 @@ class NoticeClassifierService:
         return False, None
 
     @classmethod
+    def _build_embedding_model(cls, model_name: str):
+        """Construct the sentence-transformers model (single construction seam).
+
+        Kept as its own delegator so tests can substitute the slow (or absent)
+        construction by patching this one method instead of the whole
+        third-party module (§4.7: narrow the monkeypatch surface).
+        """
+        from sentence_transformers import SentenceTransformer
+
+        return SentenceTransformer(
+            model_name,
+            cache_folder=settings.MODEL_CACHE_DIR,
+            local_files_only=settings.CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY,
+        )
+
+    @classmethod
     def _get_embedding_model(cls):
         """Load and cache the sentence-transformers model when available."""
         model_name = settings.CLASSIFIER_EMBEDDING_MODEL
@@ -252,13 +268,7 @@ class NoticeClassifierService:
                 return model
 
             try:
-                from sentence_transformers import SentenceTransformer
-
-                cls._embedding_model = SentenceTransformer(
-                    model_name,
-                    cache_folder=settings.MODEL_CACHE_DIR,
-                    local_files_only=settings.CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY,
-                )
+                cls._embedding_model = cls._build_embedding_model(model_name)
                 cls._embedding_model_name = model_name
                 cls._embedding_model_failed = False
                 return cls._embedding_model
