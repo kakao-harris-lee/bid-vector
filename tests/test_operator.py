@@ -781,10 +781,10 @@ def _seed_imminent_nonmatching_then_late_matching(test_db, *, imminent_count, la
 
     The imminent slice uses a category outside the operator's watch focus so it
     fails the cheap watch filter, while the later-deadline slice matches the
-    operator's focus_categories/regions/keywords. This isolates the documented
-    ``scan_limit``-before-filter trade-off: a deadline-asc bounded scan that
-    stops before the matching slice starves the scheduled run, whereas the
-    full (manual) scan still reaches the matches.
+    operator's focus_categories/regions/keywords. This isolates the
+    ``scan_limit`` contract: because the bound is an analysis budget applied
+    *after* the cheap filters, a bounded (preview/scheduled) run walks past the
+    non-matching imminent slice and still reaches the later matches.
     """
     nonmatching = []
     for index in range(imminent_count):
@@ -820,14 +820,83 @@ def _seed_imminent_nonmatching_then_late_matching(test_db, *, imminent_count, la
     return nonmatching, matching
 
 
-def test_operator_strategy_monitor_scheduled_scan_can_starve_late_matches(client, test_db, monkeypatch):
-    """Documented trade-off: scan_limit applied before watch filters can starve later matches.
+def _late_match_analysis(self, db, project, **kwargs):
+    """Fake analysis for the later-deadline matching slice — passes every threshold.
 
-    When the deadline-imminent slice is entirely non-matching and the matches
-    sit on later deadlines beyond ``scan_limit``, the scheduled (bounded) run
-    yields no candidates, while the manual full-scan run still finds them. This
-    pins the intentional behavior so a future change cannot silently turn the
-    bounded scan into a full scan (or vice versa) without updating this test.
+    Only notices that survive the cheap watch filter ever reach analysis, so any
+    analyzed candidate surfaces as a result with this stub.
+    """
+    del self, db, project, kwargs
+    return {
+        "matched_score": 0.84,
+        "probability_score": 0.89,
+        "recommended_amount": 126000000.0,
+        "deadline_hours_remaining": 48,
+        "current_active_bids": 0,
+        "max_active_bids": 3,
+        "current_workload_score": 0.0,
+        "analysis_summary": "지연 마감 매칭 후보",
+        "decision": {
+            "pursue_bid": True,
+            "action": "bid_now",
+            "priority_score": 0.91,
+            "recommended_amount": 126000000.0,
+            "probability_score": 0.89,
+            "reasoning": "매칭 후보",
+        },
+    }
+
+
+def test_operator_strategy_preview_analysis_budget_reaches_late_matches(client, test_db, monkeypatch):
+    """Preview ``scan_limit`` bounds ML analyses, not the row scan, so cheap-filter misses cannot starve it.
+
+    Regression for the "평가 0건" preview bug: when the deadline-imminent slice
+    is entirely non-matching, a bound applied to the *row scan* returns zero
+    candidates no matter how many matches exist further out. The bound is an
+    analysis budget instead, so the cheap watch filter walks past the
+    non-matching slice and the later matching notices are analyzed within it.
+    """
+    _configure_software_operator(client)
+
+    imminent_count = 30
+    late_count = 5
+    _, matching = _seed_imminent_nonmatching_then_late_matching(
+        test_db, imminent_count=imminent_count, late_count=late_count
+    )
+    matching_ids = {project.id for project in matching}
+
+    # Pin the preview budget so it lands inside the non-matching imminent slice:
+    # under row-scan semantics the window stopped before reaching any match.
+    monkeypatch.setattr(StrategyMonitoringService, "PREVIEW_SCAN_MULTIPLIER", 1)
+    monkeypatch.setattr(StrategyMonitoringService, "PREVIEW_SCAN_FLOOR", 1)
+    monkeypatch.setattr(StrategyMonitoringService, "PREVIEW_SCAN_CEILING", imminent_count)
+
+    analyze_calls = {"count": 0}
+
+    def counting_matching_analyze(self, db, project, **kwargs):
+        analyze_calls["count"] += 1
+        return _late_match_analysis(self, db, project, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", counting_matching_analyze)
+
+    payload = StrategyMonitoringService().preview_candidates(test_db, limit=late_count)
+
+    assert payload["evaluated_project_count"] == late_count
+    assert payload["returned_candidate_count"] == late_count
+    assert {candidate["project_id"] for candidate in payload["candidates"]} == matching_ids
+    # The budget still caps the expensive work: the non-matching rows are dropped
+    # by the cheap filter and never analyzed.
+    assert analyze_calls["count"] == late_count
+
+
+def test_operator_strategy_monitor_scheduled_scan_budget_reaches_late_matches(client, test_db, monkeypatch):
+    """Contract: ``scan_limit`` bounds expensive analyses, not the row scan.
+
+    A cheap-filter miss cannot starve later matches — when the deadline-imminent
+    slice is entirely non-matching, the scheduled (bounded) run still walks past
+    it and analyzes the later matching notices, exactly like the manual run. The
+    budget is still honored: the non-matching rows cost no analysis, so the
+    analysis-call count stays within ``scan_limit``.
     """
     from app.schemas.schemas import OperatorStrategyMonitorRequest
 
@@ -857,41 +926,28 @@ def test_operator_strategy_monitor_scheduled_scan_can_starve_late_matches(client
 
     imminent_count = 30
     late_count = 5
-    _seed_imminent_nonmatching_then_late_matching(
+    _, matching = _seed_imminent_nonmatching_then_late_matching(
         test_db, imminent_count=imminent_count, late_count=late_count
     )
+    matching_ids = {project.id for project in matching}
 
-    # Bound the scheduled scan to exactly the non-matching imminent slice, so the
-    # deadline-asc scan never reaches the later matching notices.
-    monkeypatch.setattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", imminent_count)
+    # Analysis budget = the size of the non-matching imminent slice. Under the
+    # old row-scan semantics this window stopped before any match; as a budget it
+    # is never spent on those rows at all.
+    scheduled_budget = imminent_count
+    monkeypatch.setattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", scheduled_budget)
     monkeypatch.setattr(StrategyMonitoringService, "SCHEDULE_SCAN_MULTIPLIER", 1)
     monkeypatch.setattr(StrategyMonitoringService, "SCHEDULE_SCAN_FLOOR", 1)
 
-    def matching_analyze(self, db, project, **kwargs):
-        # Only the matching late slice ever reaches analysis (non-matching rows
-        # are dropped by the cheap watch filter first). Return a passing score so
-        # any analyzed candidate would surface as a result.
-        del db, kwargs
-        return {
-            "matched_score": 0.84,
-            "probability_score": 0.89,
-            "recommended_amount": 126000000.0,
-            "deadline_hours_remaining": 48,
-            "current_active_bids": 0,
-            "max_active_bids": 3,
-            "current_workload_score": 0.0,
-            "analysis_summary": "지연 마감 매칭 후보",
-            "decision": {
-                "pursue_bid": True,
-                "action": "bid_now",
-                "priority_score": 0.91,
-                "recommended_amount": 126000000.0,
-                "probability_score": 0.89,
-                "reasoning": "매칭 후보",
-            },
-        }
+    analyzed_project_ids = set()
 
-    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", matching_analyze)
+    def recording_matching_analyze(self, db, project, **kwargs):
+        # Only the matching late slice ever reaches analysis (non-matching rows
+        # are dropped by the cheap watch filter first).
+        analyzed_project_ids.add(project.id)
+        return _late_match_analysis(self, db, project, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", recording_matching_analyze)
 
     service = StrategyMonitoringService()
 
@@ -901,12 +957,18 @@ def test_operator_strategy_monitor_scheduled_scan_can_starve_late_matches(client
         trigger_source=StrategyMonitoringService.SCHEDULED_TRIGGER_SOURCE,
     )
 
-    # Bounded scan only saw the non-matching imminent slice → starved.
-    assert scheduled_response["evaluated_project_count"] == 0
-    assert scheduled_response["persisted_candidate_count"] == 0
-    assert scheduled_response["results"] == []
+    # The bounded run walks past the non-matching imminent slice and reaches the
+    # later matches.
+    assert scheduled_response["evaluated_project_count"] == late_count
+    assert scheduled_response["persisted_candidate_count"] == late_count
+    assert len(scheduled_response["results"]) == late_count
+    # ...while honoring the budget: ``evaluated_project_count`` is exactly the
+    # number of analyses the collection pass spent, and the non-matching rows
+    # cost none of it (they never reach analysis at all).
+    assert scheduled_response["evaluated_project_count"] <= scheduled_budget
+    assert analyzed_project_ids == matching_ids
 
-    # Contrast: the manual full scan (scan_limit=None) reaches the late matches.
+    # The manual (unbounded) run reaches the same matches.
     manual_response = service.execute_monitoring(
         test_db,
         request=OperatorStrategyMonitorRequest(limit=10, high_priority_only=False),
@@ -914,8 +976,8 @@ def test_operator_strategy_monitor_scheduled_scan_can_starve_late_matches(client
     )
 
     assert manual_response["evaluated_project_count"] == late_count
-    assert manual_response["persisted_candidate_count"] == late_count
     assert len(manual_response["results"]) == late_count
+    assert analyzed_project_ids == matching_ids
 
 
 def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(client, test_db, monkeypatch):

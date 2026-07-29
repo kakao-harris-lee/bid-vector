@@ -35,6 +35,13 @@ from app.services.opportunity_monitoring.base import (
 # record keeps the exact logger name callers (and tests) capture on.
 logger = logging.getLogger("app.services.opportunity_monitoring")
 
+# Row batch size for the open-notice scan. The cheap watch filters must see every
+# still-biddable notice (bounding the row scan starves later matches), so rows
+# are streamed in batches instead of materialized all at once. The scan loop is
+# read-only by contract: a write/commit inside it would invalidate the streamed
+# cursor on PostgreSQL.
+OPEN_NOTICE_SCAN_CHUNK_SIZE = 500
+
 
 class _CandidateCollectionMixin(_MonitoringBase):
     """Load actionable notices and narrow them to watch-rule + license-eligible candidates."""
@@ -58,22 +65,29 @@ class _CandidateCollectionMixin(_MonitoringBase):
         Only notices that are still biddable are considered: projects whose
         deadline has already passed are excluded (NULL deadlines are kept).
 
-        When ``scan_limit`` is provided the query loads only the ``scan_limit``
-        most deadline-imminent *future* notices (``deadline asc``) before
-        applying the cheap watch filters and the expensive per-candidate
-        analysis. This bounds the work for the interactive preview
-        (``_preview_scan_limit``) and the periodic schedule
-        (``_schedule_scan_limit``) so neither can scan the full open-notice
-        table. When ``scan_limit`` is ``None`` (manual sync/async runs) every
-        still-biddable active project is considered.
+        ``scan_limit`` is an *analysis budget*, not a row bound: every
+        still-biddable notice is walked through the cheap watch filters and the
+        license gate (string matching only), and the walk stops once the
+        expensive per-candidate analysis has run ``scan_limit`` times. This keeps
+        the interactive preview (``_preview_scan_limit``) and the periodic
+        schedule (``_schedule_scan_limit``) bounded in the cost that actually
+        matters (price prediction + pgvector similarity), while a non-matching
+        deadline-imminent slice can no longer starve later matches — bounding the
+        row scan instead made the preview report 0 evaluated / 0 candidates on
+        live data. Candidates are still reached in ``deadline asc`` order, so the
+        budget is spent on the most imminent matches first. Rows are streamed in
+        ``OPEN_NOTICE_SCAN_CHUNK_SIZE`` batches so the wider walk never
+        materializes the whole open-notice table at once. When ``scan_limit`` is
+        ``None`` (manual sync/async runs) every still-biddable active project is
+        analyzed.
         """
         if not self._has_configured_watch_rules(strategy):
             return [], 0
 
         # Live bid-eligibility filter: only evaluate notices that are still
         # biddable. Projects whose deadline has already passed cannot be bid on,
-        # so evaluating them wastes ML analysis and (combined with the bounded
-        # ``deadline asc`` scan) can crowd out genuinely imminent future notices.
+        # so evaluating them wastes ML analysis and (combined with the
+        # ``deadline asc`` order) can crowd out genuinely imminent future notices.
         # NULL deadlines are intentionally INCLUDED so that missing deadline
         # metadata never silently hides a candidate from the operator. This is a
         # real-time eligibility narrowing only -- it is unrelated to predictor
@@ -84,9 +98,8 @@ class _CandidateCollectionMixin(_MonitoringBase):
             .filter(or_(Project.deadline.is_(None), Project.deadline > utc_now()))
             .order_by(Project.deadline.asc(), Project.id.asc())
         )
-        if scan_limit is not None:
-            query = query.limit(max(1, int(scan_limit)))
-        open_projects = query.all()
+        open_projects = query.yield_per(OPEN_NOTICE_SCAN_CHUNK_SIZE)
+        analysis_budget = max(1, int(scan_limit)) if scan_limit is not None else None
         # Held-license context for the license-eligibility gate. Resolved once
         # per scan (never per candidate) and only when the gate is enabled — so a
         # disabled gate adds no DB query and no behavior change (see
@@ -107,6 +120,14 @@ class _CandidateCollectionMixin(_MonitoringBase):
             # no ML analysis runs, mirroring the strategy-filter miss above.
             if self._license_gate_excludes(project, license_gate_codes):
                 continue
+
+            # Analysis budget: bounded runs (preview / schedule) stop here once
+            # the expensive per-candidate analysis has run ``scan_limit`` times.
+            # Checked AFTER the cheap filters so the budget is spent only on
+            # watch-passing candidates — a non-matching imminent slice consumes
+            # none of it.
+            if analysis_budget is not None and evaluated_project_count >= analysis_budget:
+                break
 
             evaluated_project_count += 1
             analysis = self._analyze_project(
@@ -197,21 +218,29 @@ class _CandidateCollectionMixin(_MonitoringBase):
         return True
 
     def _preview_scan_limit(self, resolved_limit: int) -> int:
-        """Bound preview work so a UI read cannot scan the full production table."""
+        """Bound preview work: how many expensive analyses one UI read may run.
+
+        The returned value is the analysis budget consumed in
+        ``_collect_candidate_evaluations`` (not a row bound), so a UI read stays
+        cheap in ML work while the cheap watch filters still see every open
+        notice. Scaled from the requested limit so enough candidates survive the
+        post-analysis score thresholds to fill the preview.
+        """
         scaled_limit = int(resolved_limit or self.DEFAULT_LIMIT) * self.PREVIEW_SCAN_MULTIPLIER
         return min(max(scaled_limit, self.PREVIEW_SCAN_FLOOR), self.PREVIEW_SCAN_CEILING)
 
     def _schedule_scan_limit(self, resolved_limit: int) -> int:
-        """Bound the periodic schedule scan to the most deadline-imminent notices.
+        """Bound how many expensive analyses one periodic monitor run may perform.
 
         The configured ``OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT`` is the
         primary bound, clamped into ``[SCHEDULE_SCAN_FLOOR, SCHEDULE_SCAN_CEILING]``.
         It is additionally floored to ``resolved_limit x SCHEDULE_SCAN_MULTIPLIER``
         so an unusually small per-run limit cannot starve the candidate pool that
-        survives the watch filters. ``scan_limit`` is applied *before* the cheap
-        watch filters in ``_collect_candidate_evaluations``, so the multiplier
-        keeps enough headroom for the filter pass rate while still capping the
-        number of expensive per-candidate analyses.
+        survives the watch filters. The value is spent in
+        ``_collect_candidate_evaluations`` *after* the cheap watch filters, so it
+        caps the per-candidate ML analyses (the cost that made the periodic task
+        exceed the consumer timeout) while the multiplier keeps headroom for
+        candidates that analysis then drops on the score thresholds.
         """
         configured = int(getattr(settings, "OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT", 0) or 0)
         multiplier_floor = int(resolved_limit or self.DEFAULT_LIMIT) * self.SCHEDULE_SCAN_MULTIPLIER
