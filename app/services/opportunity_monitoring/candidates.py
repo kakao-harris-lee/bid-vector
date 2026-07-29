@@ -1,7 +1,8 @@
-"""Candidate collection: scan bounds, watch-rule pass, and the license gate.
+"""Candidate collection: analysis budget, watch-rule pass, and the license gate.
 
-``_collect_candidate_evaluations`` and its helpers, moved verbatim from the
-original ``opportunity_monitoring`` module.
+``_collect_candidate_evaluations`` and its helpers, split out of the original
+``opportunity_monitoring`` module; the pre-filter row bound has since become a
+post-filter analysis budget.
 """
 
 from __future__ import annotations
@@ -34,13 +35,6 @@ from app.services.opportunity_monitoring.base import (
 # opportunity_monitoring", not the submodule) so the license-gate exclusion
 # record keeps the exact logger name callers (and tests) capture on.
 logger = logging.getLogger("app.services.opportunity_monitoring")
-
-# Row batch size for the open-notice scan. The cheap watch filters must see every
-# still-biddable notice (bounding the row scan starves later matches), so rows
-# are streamed in batches instead of materialized all at once. The scan loop is
-# read-only by contract: a write/commit inside it would invalidate the streamed
-# cursor on PostgreSQL.
-OPEN_NOTICE_SCAN_CHUNK_SIZE = 500
 
 
 class _CandidateCollectionMixin(_MonitoringBase):
@@ -75,9 +69,10 @@ class _CandidateCollectionMixin(_MonitoringBase):
         deadline-imminent slice can no longer starve later matches — bounding the
         row scan instead made the preview report 0 evaluated / 0 candidates on
         live data. Candidates are still reached in ``deadline asc`` order, so the
-        budget is spent on the most imminent matches first. Rows are streamed in
-        ``OPEN_NOTICE_SCAN_CHUNK_SIZE`` batches so the wider walk never
-        materializes the whole open-notice table at once. When ``scan_limit`` is
+        budget is spent on the most imminent dated matches first (NULL deadlines
+        are pinned last). Rows are streamed in
+        ``OPERATOR_STRATEGY_MONITOR_SCAN_CHUNK_SIZE`` batches so the wider walk
+        never materializes the whole open-notice table at once. When ``scan_limit`` is
         ``None`` (manual sync/async runs) every still-biddable active project is
         analyzed.
         """
@@ -88,17 +83,22 @@ class _CandidateCollectionMixin(_MonitoringBase):
         # biddable. Projects whose deadline has already passed cannot be bid on,
         # so evaluating them wastes ML analysis and (combined with the
         # ``deadline asc`` order) can crowd out genuinely imminent future notices.
-        # NULL deadlines are intentionally INCLUDED so that missing deadline
-        # metadata never silently hides a candidate from the operator. This is a
-        # real-time eligibility narrowing only -- it is unrelated to predictor
-        # guardrails or the backtest cutoff path and introduces no leakage.
+        # NULL deadlines are intentionally INCLUDED and pinned LAST explicitly
+        # (PostgreSQL and SQLite disagree on default NULL placement): missing
+        # deadline metadata never hides a candidate from the unbounded manual
+        # paths, while bounded runs spend their analysis budget on dated imminent
+        # notices first. This is a real-time eligibility narrowing only -- it is
+        # unrelated to predictor guardrails or the backtest cutoff path and
+        # introduces no leakage.
         query = (
             db.query(Project)
             .filter(Project.status.in_(self.ACTIVE_PROJECT_STATUSES))
             .filter(or_(Project.deadline.is_(None), Project.deadline > utc_now()))
-            .order_by(Project.deadline.asc(), Project.id.asc())
+            .order_by(Project.deadline.asc().nullslast(), Project.id.asc())
         )
-        open_projects = query.yield_per(OPEN_NOTICE_SCAN_CHUNK_SIZE)
+        # The scan loop is read-only by contract: a commit/rollback inside it
+        # would invalidate the streamed PostgreSQL cursor (a bare flush does not).
+        open_projects = query.yield_per(settings.OPERATOR_STRATEGY_MONITOR_SCAN_CHUNK_SIZE)
         analysis_budget = max(1, int(scan_limit)) if scan_limit is not None else None
         # Held-license context for the license-eligibility gate. Resolved once
         # per scan (never per candidate) and only when the gate is enabled — so a

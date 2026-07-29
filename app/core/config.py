@@ -107,6 +107,11 @@ class Settings(BaseSettings):
     # their own bounding (PREVIEW_SCAN_*) / unbounded behavior; this setting only
     # bounds the periodic schedule. Clamped to [floor, ceiling] in code.
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT: int = 150
+    # Row batch size for the streamed open-notice scan in
+    # _collect_candidate_evaluations. The cheap watch filters must see every
+    # still-biddable notice (a row bound starves later matches), so rows are
+    # streamed in batches of this size instead of materialized all at once.
+    OPERATOR_STRATEGY_MONITOR_SCAN_CHUNK_SIZE: int = 500
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440
