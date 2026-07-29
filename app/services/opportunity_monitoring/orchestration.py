@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.single_user import (
     ensure_operator_account,
     ensure_operator_profile,
@@ -20,6 +21,10 @@ from app.schemas.schemas import BidDecisionSaveRequest, OperatorStrategyMonitorR
 from app.services.opportunity_monitoring.base import (
     StrategyCandidateEvaluation,
     _MonitoringBase,
+)
+from app.services.opportunity_monitoring.preview_cache import (
+    PreviewCacheKey,
+    preview_cache,
 )
 
 
@@ -41,6 +46,12 @@ class _OrchestrationMixin(_MonitoringBase):
         context). When ``operator`` is ``None`` the canonical singleton helpers
         are used to preserve backward-compatible behavior for callers that have
         not migrated to the new context.
+
+        The scan itself goes through ``preview_cache`` (single-flight + short
+        TTL): a reload or re-click while a scan is running shares that scan
+        instead of starting a duplicate, and a repeat read inside the TTL is
+        served from the stored payload. The returned shape is unchanged, and a
+        strategy edit invalidates the operator's entries.
         """
         if operator is None:
             operator = ensure_operator_account(db)
@@ -55,6 +66,33 @@ class _OrchestrationMixin(_MonitoringBase):
             limit=limit,
             high_priority_only=high_priority_only,
         )
+        cache_key = PreviewCacheKey(
+            operator_id=int(operator.id),
+            limit=int(resolved_limit),
+            high_priority_only=bool(resolved_high_priority_only),
+        )
+        return preview_cache.get_or_compute(
+            cache_key,
+            lambda: self._build_preview_payload(
+                db,
+                strategy=strategy,
+                operator=operator,
+                resolved_limit=resolved_limit,
+                resolved_high_priority_only=resolved_high_priority_only,
+            ),
+            float(settings.OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS),
+        )
+
+    def _build_preview_payload(
+        self,
+        db: Session,
+        *,
+        strategy: OperatorStrategy,
+        operator: User,
+        resolved_limit: int,
+        resolved_high_priority_only: bool,
+    ) -> dict:
+        """Run the preview scan and serialize it (the cached unit of work)."""
         evaluations, evaluated_project_count = self._collect_candidate_evaluations(
             db,
             strategy=strategy,

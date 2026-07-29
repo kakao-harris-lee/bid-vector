@@ -171,6 +171,19 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 3c — app.services.opportunity_monitoring.preview_cache (전략 후보 미리보기의
+# single-flight + 단기 TTL 캐시). threading/time/copy/dataclasses 만 쓰는 자립 모듈이라
+# error-code 완화 없이 strict 로 올린다. 시계(``now``)는 인자로 주입받아 순수 계약을 유지
+# 한다(§4.7 주입).
+[[tool.mypy.overrides]]
+module = ["app.services.opportunity_monitoring.preview_cache"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------

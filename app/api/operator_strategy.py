@@ -22,6 +22,7 @@ from app.schemas.schemas import (
     OperatorStrategyUpdate,
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
+from app.services.opportunity_monitoring.preview_cache import preview_cache
 from app.services.operator_strategy_tuning import (
     clamp_auto_workload_penalty_multiplier,
     dump_category_priority_overrides,
@@ -218,6 +219,9 @@ def update_operator_strategy_impl(
 
     db.commit()
     db.refresh(strategy)
+    # The candidate preview is cached per operator for a short window; the edit
+    # screen shows that preview, so a save must not be masked by a stale entry.
+    preview_cache.invalidate(int(operator.id))
 
     return _build_operator_strategy_response(
         operator=operator,
