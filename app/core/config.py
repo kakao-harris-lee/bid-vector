@@ -96,16 +96,22 @@ class Settings(BaseSettings):
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_SAME_CATEGORY_ONLY: bool = True
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_SIMILAR_LIMIT: int = 3
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_MIN_SIMILARITY: float = 0.15
-    # Scheduled strategy monitor scan bound — the scheduled (non-interactive)
-    # monitor only loads and ML-analyses the N most deadline-imminent active
-    # notices instead of the entire open-notice table. Without this bound a
-    # broad-license operator passes the cheap watch filters on most rows, so the
-    # expensive per-candidate analysis (price prediction + pgvector similarity)
-    # runs hundreds of times and the scheduled task hangs for >12 minutes,
-    # tripping the consumer timeout. The interactive preview/manual paths keep
-    # their own bounding (PREVIEW_SCAN_*) / full-scan behavior; this setting only
+    # Scheduled strategy monitor analysis budget — the scheduled (non-interactive)
+    # monitor ML-analyses at most N candidates per run, taken in deadline-asc
+    # order. Without this bound a broad-license operator passes the cheap watch
+    # filters on most rows, so the expensive per-candidate analysis (price
+    # prediction + pgvector similarity) runs hundreds of times and the scheduled
+    # task hangs for >12 minutes, tripping the consumer timeout. The cheap watch
+    # filters still scan every open notice, so a non-matching imminent slice
+    # cannot starve later matches. The interactive preview/manual paths keep
+    # their own bounding (PREVIEW_SCAN_*) / unbounded behavior; this setting only
     # bounds the periodic schedule. Clamped to [floor, ceiling] in code.
     OPERATOR_STRATEGY_MONITOR_SCHEDULE_SCAN_LIMIT: int = 150
+    # Row batch size for the streamed open-notice scan in
+    # _collect_candidate_evaluations. The cheap watch filters must see every
+    # still-biddable notice (a row bound starves later matches), so rows are
+    # streamed in batches of this size instead of materialized all at once.
+    OPERATOR_STRATEGY_MONITOR_SCAN_CHUNK_SIZE: int = 500
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440

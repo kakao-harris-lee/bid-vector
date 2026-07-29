@@ -163,10 +163,9 @@ class _FakeQuery:
     def order_by(self, *args, **kwargs):
         return self
 
-    def limit(self, *args, **kwargs):
-        return self
-
-    def all(self):
+    def yield_per(self, *args, **kwargs):
+        # The open-notice scan streams rows in batches (no row bound): the
+        # collection loop only iterates the result.
         return list(self._projects)
 
 
