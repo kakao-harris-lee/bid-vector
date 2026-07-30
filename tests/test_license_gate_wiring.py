@@ -237,7 +237,7 @@ def test_collect_unchanged_when_gate_disabled(monkeypatch):
 
     evaluations = _collect(service, _FakeDB([ineligible, unknown]), _FakeOperator())
 
-    assert {ev.project.id for ev in evaluations} == {1, 2}
+    assert {ev.project_id for ev in evaluations} == {1, 2}
 
 
 def test_collect_drops_ineligible_when_gate_enabled(monkeypatch):
@@ -261,4 +261,4 @@ def test_collect_drops_ineligible_when_gate_enabled(monkeypatch):
 
     evaluations = _collect(service, _FakeDB([ineligible, unknown]), _FakeOperator())
 
-    assert {ev.project.id for ev in evaluations} == {2}
+    assert {ev.project_id for ev in evaluations} == {2}

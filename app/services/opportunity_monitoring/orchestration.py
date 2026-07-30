@@ -105,7 +105,7 @@ class _OrchestrationMixin(_MonitoringBase):
             min_similarity=self.DEFAULT_MIN_SIMILARITY,
             scan_limit=self._preview_scan_limit(resolved_limit),
         )
-        candidates = [self._serialize_candidate(evaluation) for evaluation in evaluations[:resolved_limit]]
+        candidates = [evaluation.candidate for evaluation in evaluations[:resolved_limit]]
 
         return {
             "operator_id": operator.id,
@@ -278,7 +278,12 @@ class _OrchestrationMixin(_MonitoringBase):
         high_priority_only: bool,
         previous_candidate_project_ids: set[int],
     ) -> dict | None:
-        project = evaluation.project
+        # 슬림 evaluation 은 ORM 참조를 갖지 않는다(설계 §5 PR-A-1): 선택된
+        # top-N(≤ resolved_limit 행)만 PK 로 재조회한다. 스캔과 같은
+        # 세션/트랜잭션이므로 행 내용은 동일하다.
+        project = db.get(Project, evaluation.project_id)
+        if project is None:  # pragma: no cover - 동일 트랜잭션에서 행 소실 불가
+            return None
         refreshed_analysis = self._analyze_project(
             db,
             project,
@@ -315,6 +320,7 @@ class _OrchestrationMixin(_MonitoringBase):
         )
         return self._serialize_monitor_result(
             evaluation=evaluation,
+            project=project,
             decision_record=decision_record,
             notification=notification,
             refreshed_analysis=refreshed_analysis,
@@ -389,14 +395,15 @@ class _OrchestrationMixin(_MonitoringBase):
         self,
         *,
         evaluation: StrategyCandidateEvaluation,
+        project: Project,
         decision_record,
         notification,
         refreshed_analysis: dict,
         is_new_candidate: bool,
     ) -> dict:
         return {
-            "project_id": evaluation.project.id,
-            "title": evaluation.project.title,
+            "project_id": project.id,
+            "title": project.title,
             "decision_record_id": int(decision_record.id),
             "notification_id": int(notification.id) if notification is not None else None,
             "action": str(decision_record.action),

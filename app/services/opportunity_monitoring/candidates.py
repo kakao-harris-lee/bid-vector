@@ -149,22 +149,17 @@ class _CandidateCollectionMixin(_MonitoringBase):
                 continue
 
             evaluations.append(
-                StrategyCandidateEvaluation(
+                self._build_candidate_evaluation(
                     project=project,
                     analysis=analysis,
                     strategy_reasons=filter_result.reasons,
                 )
             )
 
-        evaluations.sort(
-            key=lambda evaluation: (
-                -float(evaluation.analysis.get("decision", {}).get("priority_score", 0.0) or 0.0),
-                -float(evaluation.analysis.get("probability_score", 0.0) or 0.0),
-                -float(evaluation.analysis.get("matched_score", 0.0) or 0.0),
-                -float(evaluation.project.budget_estimate or 0.0),
-                int(evaluation.project.id),
-            )
-        )
+        # 정렬·top-N 선택 로직 불변: 이전 sort(key=...) 람다와 바이트 동일한
+        # 키 튜플을 분석 시점에 미리 계산해 둔 것뿐이다
+        # (_build_candidate_evaluation).
+        evaluations.sort(key=lambda evaluation: evaluation.sort_key)
         return evaluations, evaluated_project_count
 
     def _resolve_license_gate_profile_codes(
@@ -296,20 +291,49 @@ class _CandidateCollectionMixin(_MonitoringBase):
             operator=operator,
         )
 
-    def _serialize_candidate(self, evaluation: StrategyCandidateEvaluation) -> dict:
-        """Convert an evaluated strategy candidate into the preview API shape."""
-        decision = evaluation.analysis["decision"]
+    def _build_candidate_evaluation(
+        self,
+        *,
+        project: Project,
+        analysis: dict,
+        strategy_reasons: list[str],
+    ) -> StrategyCandidateEvaluation:
+        """통과한 후보를 즉시 직렬화한다 (설계 §5 PR-A-1).
+
+        반환되는 evaluation 은 순수 값(candidate dict + sort_key)만 들고 있어
+        스캔 루프가 분석 예산(≤250)만큼의 ORM Project 행/전체 analysis dict 를
+        정렬 시점까지 보유하지 않는다. sort_key 는 기존 루프 종료 후
+        sort(key=...) 람다와 동일한 튜플이다.
+        """
+        return StrategyCandidateEvaluation(
+            project_id=int(project.id),
+            candidate=self._serialize_candidate(project, analysis, strategy_reasons),
+            sort_key=(
+                -float(analysis.get("decision", {}).get("priority_score", 0.0) or 0.0),
+                -float(analysis.get("probability_score", 0.0) or 0.0),
+                -float(analysis.get("matched_score", 0.0) or 0.0),
+                -float(project.budget_estimate or 0.0),
+                int(project.id),
+            ),
+            strategy_reasons=strategy_reasons,
+        )
+
+    def _serialize_candidate(
+        self, project: Project, analysis: dict, strategy_reasons: list[str]
+    ) -> dict:
+        """Convert an analyzed strategy candidate into the preview API shape."""
+        decision = analysis["decision"]
         return {
-            "project_id": evaluation.project.id,
-            "title": evaluation.project.title,
-            "category": evaluation.project.category,
-            "budget_estimate": float(evaluation.project.budget_estimate or 0.0),
-            "deadline": evaluation.project.deadline,
-            "matched_score": float(evaluation.analysis["matched_score"]),
-            "probability_score": float(evaluation.analysis["probability_score"]),
+            "project_id": project.id,
+            "title": project.title,
+            "category": project.category,
+            "budget_estimate": float(project.budget_estimate or 0.0),
+            "deadline": project.deadline,
+            "matched_score": float(analysis["matched_score"]),
+            "probability_score": float(analysis["probability_score"]),
             "priority_score": float(decision["priority_score"]),
             "action": str(decision["action"]),
-            "recommended_amount": float(evaluation.analysis["recommended_amount"]),
-            "analysis_summary": str(evaluation.analysis["analysis_summary"]),
-            "strategy_reasons": evaluation.strategy_reasons,
+            "recommended_amount": float(analysis["recommended_amount"]),
+            "analysis_summary": str(analysis["analysis_summary"]),
+            "strategy_reasons": strategy_reasons,
         }

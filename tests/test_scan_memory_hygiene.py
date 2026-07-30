@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from app.core.single_user import ensure_operator_account, ensure_operator_strategy
 from app.models.models import Project
 from app.schemas.schemas import OperatorStrategyMonitorRequest
 from app.services.opportunity_monitoring import StrategyMonitoringService
@@ -174,3 +175,37 @@ def test_monitor_scan_output_is_pinned(client, test_db, monkeypatch):
     assert response["notification_count"] == sum(
         1 for item in results if item["notification_created"]
     )
+
+
+def test_evaluations_are_slim_and_hold_no_orm_or_analysis_refs(client, test_db, monkeypatch):
+    """수집된 evaluation 은 ORM Project/전체 analysis dict 를 보관하지 않는다 (§5 PR-A-1)."""
+    _configure_software_operator(client)
+    _seed_characterization_projects(test_db)
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
+
+    service = StrategyMonitoringService()
+    operator = ensure_operator_account(test_db)
+    strategy = ensure_operator_strategy(test_db)
+    evaluations, evaluated_count = service._collect_candidate_evaluations(
+        test_db,
+        strategy=strategy,
+        operator=operator,
+        high_priority_only=False,
+        max_active_bids=3,
+        current_workload_score=None,
+        same_category_only=True,
+        similar_limit=3,
+        min_similarity=0.15,
+    )
+
+    assert evaluated_count == 4
+    assert len(evaluations) == 4
+    for evaluation in evaluations:
+        assert not hasattr(evaluation, "project")   # ORM 참조 해제
+        assert not hasattr(evaluation, "analysis")  # 분석 dict 참조 해제
+        assert isinstance(evaluation.project_id, int)
+        assert isinstance(evaluation.candidate, dict)
+        assert set(evaluation.candidate.keys()) == _CANDIDATE_KEYS
+        assert isinstance(evaluation.sort_key, tuple)
+    # 정렬은 미리 계산된 sort_key 만으로 결정된다
+    assert [e.sort_key for e in evaluations] == sorted(e.sort_key for e in evaluations)
