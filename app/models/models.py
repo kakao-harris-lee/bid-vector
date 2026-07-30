@@ -769,3 +769,36 @@ class OnboardingSuggestion(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     user = relationship("User")
+
+
+class OperatorPreviewSnapshot(Base):
+    """운영자 전략 preview 의 마지막 계산 결과 스냅샷 (키: operator x high_priority_only).
+
+    설계 2026-07-30 §6.1: GET /operator/strategy/candidates 는 요청 경로 인라인
+    ML 스캔 대신 이 행을 순수 읽기한다. **limit 은 키 차원이 아니다** — 상한
+    예산(PREVIEW_SCAN_CEILING)으로 1회 계산해 top-100 을 ``payload_json`` 에
+    저장하고 요청 limit(≤100)은 서빙 시 슬라이스한다. ``status`` 3값
+    (idle/running/failed)이 DB 단일비행 가드의 원천이고, ``task_id`` 는
+    crawl_jobs.celery_task_id 패턴(소유 task 추적 + 재전달 멱등)이다.
+    ``computed_at`` 은 마지막 **성공** 계산 시각(stale 판정 기준),
+    ``last_error`` 는 마지막 실패 사유(성공 시 null 로 초기화).
+    """
+    __tablename__ = "operator_preview_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "operator_id", "high_priority_only",
+            name="uq_operator_preview_snapshots_key",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    operator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    high_priority_only = Column(Boolean, nullable=False, default=False)
+    status = Column(String(50), default="idle", index=True)  # idle / running / failed
+    task_id = Column(String(155), nullable=True, index=True)
+    payload_json = Column(JSON(none_as_null=True), nullable=True)
+    computed_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    operator = relationship("User")

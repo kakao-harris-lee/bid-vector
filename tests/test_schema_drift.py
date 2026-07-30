@@ -63,6 +63,7 @@ MIGRATION_OWNED_TABLES = {
     "smoke_test_runs",
     "operator_notification_channels",
     "onboarding_suggestions",
+    "operator_preview_snapshots",
 }
 
 # Columns added to a pre-existing table by an alembic migration.
