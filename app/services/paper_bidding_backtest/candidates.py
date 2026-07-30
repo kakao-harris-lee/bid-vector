@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Sequence
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
 from app.models.models import CompanyProfile, Project, TenderResult
+from app.schemas.paper_bidding_items import PaperBiddingCandidateItem
 from app.schemas.schemas import BidDecisionRequest
 from app.services.bid_base import prepare_prediction_inputs
 from app.services.query_predicates import open_projects, settled_with_amount
@@ -136,7 +137,7 @@ class _CandidateMixin(_PaperBiddingBase):
         cutoff_hours_before_deadline: int,
         history_limit: int,
         profile: CompanyProfile | None = None,
-    ) -> dict[str, Any]:
+    ) -> PaperBiddingCandidateItem:
         prediction_context = self._build_candidate_prediction_context(
             db,
             project=project,
@@ -297,50 +298,48 @@ class _CandidateMixin(_PaperBiddingBase):
         prediction_context: CandidatePredictionContext,
         decision_context: CandidateDecisionContext,
         strategy_version: str,
-    ) -> dict[str, Any]:
+    ) -> PaperBiddingCandidateItem:
         budget = prediction_context.budget
         prediction = prediction_context.prediction
         selected_scenario = decision_context.selected_scenario
         decision = decision_context.decision
-        return {
-            "project_id": int(project.id),
-            "project_title": project.title,
-            "notice_number": project.notice_number,
-            "category": project.category,
-            "issuing_agency": project.issuing_agency,
-            "data_cutoff_at": prediction_context.data_cutoff_at.isoformat(),
-            "deadline": project.deadline.isoformat() if project.deadline else None,
-            "budget_estimate": round(budget, 2),
-            "scenario": str(selected_scenario["label"]),
-            "action": decision_context.action,
-            "decision_status": self._decision_status_for_action(decision_context.action),
-            "paper_bid_amount": decision_context.paper_bid_amount,
-            "paper_bid_rate": round(decision_context.paper_bid_rate, 6),
-            "priority_score": float(decision["priority_score"]),
-            "probability_score": decision_context.probability_score,
-            "matched_score": decision_context.matched_score,
-            "predicted_price": float(prediction.get("predicted_price", 0.0) or 0.0),
-            "predicted_bid_rate": self._normalize_rate(
+        return PaperBiddingCandidateItem(
+            project_id=int(project.id),
+            project_title=project.title,
+            notice_number=project.notice_number,
+            category=project.category,
+            issuing_agency=project.issuing_agency,
+            data_cutoff_at=prediction_context.data_cutoff_at.isoformat(),
+            deadline=project.deadline.isoformat() if project.deadline else None,
+            budget_estimate=round(budget, 2),
+            scenario=str(selected_scenario["label"]),
+            action=decision_context.action,
+            decision_status=self._decision_status_for_action(decision_context.action),
+            paper_bid_amount=decision_context.paper_bid_amount,
+            paper_bid_rate=round(decision_context.paper_bid_rate, 6),
+            priority_score=float(decision["priority_score"]),
+            probability_score=decision_context.probability_score,
+            matched_score=decision_context.matched_score,
+            predicted_price=float(prediction.get("predicted_price", 0.0) or 0.0),
+            predicted_bid_rate=self._normalize_rate(
                 float(prediction.get("predicted_bid_rate", 0.0) or 0.0)
             ),
-            "price_range_min": float(prediction.get("price_range_min", 0.0) or 0.0),
-            "price_range_max": float(prediction.get("price_range_max", 0.0) or 0.0),
-            "confidence_score": float(prediction.get("confidence_score", 0.0) or 0.0),
-            "predictor_name": str(
+            price_range_min=float(prediction.get("price_range_min", 0.0) or 0.0),
+            price_range_max=float(prediction.get("price_range_max", 0.0) or 0.0),
+            confidence_score=float(prediction.get("confidence_score", 0.0) or 0.0),
+            predictor_name=str(
                 prediction.get("predictor_name") or "historical_statistical"
             ),
-            "predictor_family": str(
-                prediction.get("predictor_family") or "statistical"
-            ),
-            "model_version": str(prediction.get("model_version") or "current"),
-            "strategy_version": strategy_version,
-            "historical_sample_size": len(prediction_context.history),
-            "history_ids": [
+            predictor_family=str(prediction.get("predictor_family") or "statistical"),
+            model_version=str(prediction.get("model_version") or "current"),
+            strategy_version=strategy_version,
+            historical_sample_size=len(prediction_context.history),
+            history_ids=[
                 int(record["historical_data_id"])
                 for record in prediction_context.history
                 if record.get("historical_data_id") is not None
             ],
-            "input_snapshot_hash": self._build_input_hash(
+            input_snapshot_hash=self._build_input_hash(
                 project=project,
                 data_cutoff_at=prediction_context.data_cutoff_at,
                 scenario=str(selected_scenario["label"]),
@@ -348,11 +347,11 @@ class _CandidateMixin(_PaperBiddingBase):
                 paper_bid_amount=decision_context.paper_bid_amount,
                 strategy_version=strategy_version,
             ),
-            "matched_score_source": decision_context.match_source,
-            "match_reasons": decision_context.match_reasons,
-            "reasoning": self._compose_reasoning(
+            matched_score_source=decision_context.match_source,
+            match_reasons=decision_context.match_reasons,
+            reasoning=self._compose_reasoning(
                 decision_reasoning=str(decision["reasoning"]),
                 match_reasons=decision_context.match_reasons,
                 match_source=decision_context.match_source,
             ),
-        }
+        )

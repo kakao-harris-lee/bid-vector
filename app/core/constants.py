@@ -65,6 +65,21 @@ OPEN_PROJECT_STATUS: str = "open"
 # the two.
 ACTIVE_PROJECT_STATUSES: frozenset[str] = frozenset({"open", "re_notice"})
 
+# ``PaperBidRun.mode`` 값 — 하나의 run 이 과거 개찰 재현(historical replay)인지
+# 진행 중 공고의 forward paper 생성인지 구분한다. 두 모드는 요청 스냅샷 키 집합과
+# 데이터 컷오프 정책이 다르므로, 저장된 payload 를 되읽는 쪽이 모드로 분기한다.
+#
+# 공유 소비처:
+#   - app/services/paper_bidding_backtest/orchestration.py  (_create_run mode 인자)
+#   - app/services/paper_bidding_backtest/persistence.py    (data_cutoff_policy 분기)
+#   - app/services/paper_bidding_run_payload.py             (복원 모델 룩업)
+#   - app/services/paper_bidding_backtest/forward_settlement.py (미정산 대상 스캔)
+HISTORICAL_BACKTEST_RUN_MODE: str = "historical_backtest"
+FORWARD_PAPER_RUN_MODE: str = "forward_paper"
+PAPER_BID_RUN_MODES: frozenset[str] = frozenset(
+    {HISTORICAL_BACKTEST_RUN_MODE, FORWARD_PAPER_RUN_MODE}
+)
+
 # Telegram delivery telemetry event types written to the ``analytics`` table.
 #
 # ``TELEGRAM_DELIVERY_EVENT_TYPE`` records every delivery attempt that reached

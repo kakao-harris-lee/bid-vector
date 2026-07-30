@@ -19,6 +19,21 @@ from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.classifier import NoticeClassifierService
 
+# --- 정산 오차 허용폭 (§4.5-1: 함수 안 리터럴 금지) ------------------------------
+# 낙찰률 오차(절대값, base 기준 fraction)의 근접/경쟁 판정 임계. settlement.py 의
+# ``price_close``/``price_competitive`` 와 summary.py 의 within_* 버킷이 같은 값을
+# 따로 적어 두면 한쪽만 바뀌어 갈라지므로 여기가 단일 출처다.
+PRICE_CLOSE_RATE_TOLERANCE = 0.003
+PRICE_COMPETITIVE_RATE_TOLERANCE = 0.01
+TIGHT_RATE_TOLERANCE = 0.001
+
+# 요약의 within_* 카운트 = (필드명, 허용폭) 선언표. 버킷 추가는 이 표에 한 줄이다.
+RATE_ERROR_BUCKETS: tuple[tuple[str, float], ...] = (
+    ("within_0_1pct_count", TIGHT_RATE_TOLERANCE),
+    ("within_0_3pct_count", PRICE_CLOSE_RATE_TOLERANCE),
+    ("within_1pct_count", PRICE_COMPETITIVE_RATE_TOLERANCE),
+)
+
 
 @dataclass(frozen=True)
 class CandidatePredictionContext:
