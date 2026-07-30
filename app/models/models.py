@@ -794,11 +794,11 @@ class OperatorPreviewSnapshot(Base):
     id = Column(Integer, primary_key=True)
     operator_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     high_priority_only = Column(Boolean, nullable=False, default=False)
-    status = Column(String(50), default="idle", index=True)  # idle / running / failed
+    status = Column(String(50), default="idle", nullable=False, index=True)  # idle / running / failed
     task_id = Column(String(155), nullable=True, index=True)
     payload_json = Column(JSON(none_as_null=True), nullable=True)
     computed_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     operator = relationship("User")
