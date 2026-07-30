@@ -653,6 +653,11 @@ def build_celery_runtime_config() -> dict[str, object]:
     if hard_time_limit is not None:
         config["task_time_limit"] = hard_time_limit
 
+    if settings.CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB > 0:
+        config["worker_max_memory_per_child"] = int(
+            settings.CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB
+        )
+
     if eager_mode:
         config.update(
             task_acks_late=False,

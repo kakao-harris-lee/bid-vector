@@ -38,6 +38,7 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
     monkeypatch.setattr(settings, "CELERY_WORKER_MAX_TASKS_PER_CHILD", 64)
     monkeypatch.setattr(settings, "CELERY_TASK_TIME_LIMIT_SECONDS", 600)
     monkeypatch.setattr(settings, "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS", 590)
+    monkeypatch.setattr(settings, "CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB", 1048576)
 
     config = build_celery_runtime_config()
 
@@ -54,6 +55,16 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
     assert config["worker_max_tasks_per_child"] == 64
     assert config["task_time_limit"] == 600
     assert config["task_soft_time_limit"] == 590
+    assert config["worker_max_memory_per_child"] == 1048576
+
+
+def test_worker_max_memory_per_child_zero_disables_the_limit(monkeypatch):
+    """0 이하는 celery 기본(무제한) — conf 키 자체를 넣지 않는다."""
+    monkeypatch.setattr(settings, "CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB", 0)
+
+    config = build_celery_runtime_config()
+
+    assert "worker_max_memory_per_child" not in config
 
 
 def test_strategy_scheduler_only_runs_inprocess_for_memory_broker(monkeypatch):

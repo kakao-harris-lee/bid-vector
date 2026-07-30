@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     CELERY_WORKER_CONCURRENCY: int = 2
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
     CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 100
+    # Celery worker 자식 프로세스 RSS 상한(KB, celery 네이티브
+    # worker_max_memory_per_child). 초과한 자식은 현재 task 를 마친 뒤
+    # 재생성된다 — 스캔 이주로 워커가 지게 된 glibc 아레나 비대·torch 잔류를
+    # 주기적으로 리셋한다(설계 2026-07-30 §6.4). 3145728KB = 3GiB.
+    # 0 이하 = 미설정(celery 기본: 무제한).
+    CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB: int = 3145728
     CELERY_TASK_TIME_LIMIT_SECONDS: int = 1800
     CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: int = 1500
     # Max project ids per deferred-embedding backfill task. Bounds each
