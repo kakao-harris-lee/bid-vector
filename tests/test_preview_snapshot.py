@@ -556,6 +556,38 @@ def test_experiment_threshold_dry_run_does_not_dispatch(test_db, enqueue_stub):
     assert enqueue_stub.calls == []
 
 
+def test_experiment_strategy_apply_dispatches_recompute(test_db, enqueue_stub):
+    """workload/category 튜닝 적용도 같은 행을 쓰는 전략 쓰기 — 재계산 디스패치
+    (lifecycle.apply_strategy_adjustments 경로, 구 preview_cache.invalidate 대체)."""
+    from app.models.models import DecisionExperimentRun
+    from app.schemas.schemas import DecisionExperimentStrategyApplyRequest
+    from app.services.decision_experiments import DecisionExperimentService
+    from app.core.single_user import ensure_operator_strategy
+
+    operator = ensure_operator_account(test_db)
+    ensure_operator_strategy(test_db)
+    run = DecisionExperimentRun(
+        operator_id=operator.id,
+        experiment_key="exp-workload-auto-calibration",
+        recommendation_key="rec-exp-workload-auto-calibration",
+        status="completed",
+        outcome="success",
+        title="workload tuning",
+    )
+    test_db.add(run)
+    test_db.commit()
+
+    result = DecisionExperimentService().apply_strategy_adjustments(
+        test_db,
+        run_id=int(run.id),
+        request=DecisionExperimentStrategyApplyRequest(dry_run=False),
+        operator=operator,
+    )
+
+    assert result["applied"] is True
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
 def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypatch):
     """(eager) 저장 → 재계산 → 다음 GET 은 새 규칙 반영 — 구
     test_preview_candidates_recomputes_after_strategy_update 의 승계."""
