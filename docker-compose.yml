@@ -91,6 +91,11 @@ services:
       CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       PYTHONPATH: /app
+      # 스레드/아레나 선언적 튜닝 (설계 2026-07-30 §5 PR-A-4, S1): 스레드풀 x
+      # torch/BLAS 가 glibc malloc 아레나를 스레드마다 비대화시키는 것을 상한.
+      # 값 변경 반영은 restart 가 아니라 `docker compose up -d <service>` 재생성(§0).
+      MALLOC_ARENA_MAX: "2"
+      OMP_NUM_THREADS: "1"
     ports:
       - "${API_PORT:-3000}:${API_PORT:-3000}"
     shm_size: "1gb"
@@ -150,6 +155,11 @@ services:
       CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       PYTHONPATH: /app
+      # 스레드/아레나 선언적 튜닝 (설계 2026-07-30 §5 PR-A-4, S1): 스레드풀 x
+      # torch/BLAS 가 glibc malloc 아레나를 스레드마다 비대화시키는 것을 상한.
+      # 값 변경 반영은 restart 가 아니라 `docker compose up -d <service>` 재생성(§0).
+      MALLOC_ARENA_MAX: "2"
+      OMP_NUM_THREADS: "1"
     shm_size: "1gb"
     volumes:
       - .:/app
@@ -185,6 +195,11 @@ services:
       CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       PYTHONPATH: /app
+      # 스레드/아레나 선언적 튜닝 (설계 2026-07-30 §5 PR-A-4, S1): 스레드풀 x
+      # torch/BLAS 가 glibc malloc 아레나를 스레드마다 비대화시키는 것을 상한.
+      # 값 변경 반영은 restart 가 아니라 `docker compose up -d <service>` 재생성(§0).
+      MALLOC_ARENA_MAX: "2"
+      OMP_NUM_THREADS: "1"
     shm_size: "1gb"
     volumes:
       - .:/app
@@ -219,6 +234,11 @@ services:
       MODEL_CACHE_DIR: /app/models
       CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
       PYTHONPATH: /app
+      # 스레드/아레나 선언적 튜닝 (설계 2026-07-30 §5 PR-A-4, S1): 스레드풀 x
+      # torch/BLAS 가 glibc malloc 아레나를 스레드마다 비대화시키는 것을 상한.
+      # 값 변경 반영은 restart 가 아니라 `docker compose up -d <service>` 재생성(§0).
+      MALLOC_ARENA_MAX: "2"
+      OMP_NUM_THREADS: "1"
     shm_size: "1gb"
     volumes:
       - .:/app
