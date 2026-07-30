@@ -94,6 +94,10 @@ services:
     ports:
       - "${API_PORT:-3000}:${API_PORT:-3000}"
     shm_size: "1gb"
+    # Inline-ML memory spikes must stay container-scoped: on 2026-07-29 the API grew
+    # to 8.4GiB anon-rss and triggered a host-global OOM (collateral kills of host
+    # daemons). Observed healthy peak is ~4GiB, so 8g caps runaway growth only.
+    mem_limit: 8g
     volumes:
       - .:/app
     healthcheck:
@@ -108,7 +112,13 @@ services:
       start_period: 15s
     # Apply DB migrations before serving so schema is the single source of truth
     # (alembic). See app/main.py lifespan note and tests/test_schema_drift.py.
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-3000} --reload"
+    # No --reload: its reloader parent outlives an OOM-killed app child while still
+    # holding the listen socket, so every request hangs with no auto-restart
+    # (2026-07-29 incident, 17h outage). A crash now takes the container down
+    # (uvicorn -> sh -> init exit) and restart: unless-stopped self-heals. Code
+    # deploys therefore require `docker compose restart api` after checkout
+    # (see CLAUDE.md §0).
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-3000}"
 
   worker:
     build:
