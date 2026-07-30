@@ -229,7 +229,7 @@ python scripts/production_smoke_test.py \
 
 ### 4.2 Strategy monitor
 
-먼저 read-only 후보 미리보기로 후보 없음과 전략 과필터링을 분리한다.
+먼저 read-only 후보 미리보기로 후보 없음과 전략 과필터링을 분리한다. 이 응답은 마지막 스캔 **스냅샷**이다 — `snapshot_status`가 `running`이거나 `computed_at`이 `null`이면 아직 계산 중이므로 잠시 후 재조회한다(즉시 갱신은 `POST /api/v1/operator/strategy/candidates/refresh`, 202).
 
 ```bash
 curl "$BASE_URL/api/v1/operator/strategy/candidates?operator_id=$OP_ID&limit=20&high_priority_only=true" \
@@ -237,7 +237,7 @@ curl "$BASE_URL/api/v1/operator/strategy/candidates?operator_id=$OP_ID&limit=20&
   > "$EVIDENCE_DIR/$OP_ID/strategy-candidates.json"
 ```
 
-승인 후 DB write/앱 알림 생성이 필요한 날에만 monitor를 실행한다.
+승인 후 DB write/앱 알림 생성이 필요한 날에만 monitor를 실행한다. `POST /strategy/monitor`는 **동기 실행이 아니라 202 kickoff**다 — 아래 응답에는 `task_id`/`monitor_run_id`/`poll_url`만 들어 있고 평가 결과는 없다.
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/operator/strategy/monitor?operator_id=$OP_ID" \
@@ -251,10 +251,23 @@ curl -X POST "$BASE_URL/api/v1/operator/strategy/monitor?operator_id=$OP_ID" \
     "similar_limit": 3,
     "min_similarity": 0.15
   }' \
-  > "$EVIDENCE_DIR/$OP_ID/strategy-monitor.json"
+  > "$EVIDENCE_DIR/$OP_ID/strategy-monitor-kickoff.json"
 ```
 
-실행 후 상세 저장:
+kickoff의 `poll_url`을 `status`가 `completed`(또는 `failed`)가 될 때까지 폴링하고, 그 **결과**를 증적으로 저장한다.
+
+```bash
+export MONITOR_TASK_ID="$(python -c 'import json,sys; print(json.load(sys.stdin)["task_id"])' \
+  < "$EVIDENCE_DIR/$OP_ID/strategy-monitor-kickoff.json")"
+until curl -s "$BASE_URL/api/v1/operator/strategy/monitor/tasks/$MONITOR_TASK_ID?operator_id=$OP_ID" \
+      -H "Authorization: Bearer $TOKEN" \
+      > "$EVIDENCE_DIR/$OP_ID/strategy-monitor.json" \
+   && grep -q '"ready": *true' "$EVIDENCE_DIR/$OP_ID/strategy-monitor.json"; do
+  sleep 10
+done
+```
+
+실행 후 상세 저장(`monitor_run_id`는 kickoff 응답에 있다):
 
 ```bash
 export MONITOR_RUN_ID="<monitor_run_id>"
@@ -263,7 +276,7 @@ curl "$BASE_URL/api/v1/operator/strategy/monitor/runs/$MONITOR_RUN_ID?operator_i
   > "$EVIDENCE_DIR/$OP_ID/strategy-monitor-$MONITOR_RUN_ID.json"
 ```
 
-G-2 evidence로 인정하려면 `operator_id/current_operator_id == OP_ID`, `status=completed`, `evaluated_project_count`가 기록되어야 한다. `selected_candidate_count=0`은 실패가 아니라 "후보 없음"으로 분류하되, `strategy-candidates.json`과 strategy 필터를 함께 남긴다.
+G-2 evidence로 인정하려면 폴링 결과(`strategy-monitor.json`)에 `operator_id/current_operator_id == OP_ID`, `status=completed`, `result.evaluated_project_count`가 기록되어야 한다. kickoff 파일(`strategy-monitor-kickoff.json`)만으로는 판정할 수 없다 — 거기엔 `status=queued`만 있다. 운영자 트리거 실행의 `trigger_source`는 `manual_async`다(구 동기 경로의 `manual_sync` 아님). `selected_candidate_count=0`은 실패가 아니라 "후보 없음"으로 분류하되, `strategy-candidates.json`과 strategy 필터를 함께 남긴다.
 
 ### 4.3 Decision experiment
 

@@ -10,8 +10,9 @@
 - [PUT /profile](#put-apiv1operatorprofile) — 운영자 계정+적합도 프로필 갱신
 - [GET /strategy](#get-apiv1operatorstrategy) — 감시 전략 조회
 - [PUT /strategy](#put-apiv1operatorstrategy) — 감시 전략 갱신
-- [GET /strategy/candidates](#get-apiv1operatorstrategycandidates) — 전략 매칭 후보 미리보기
-- [POST /strategy/monitor](#post-apiv1operatorstrategymonitor) — 전략 동기 실행(판단·알림 영속화)
+- [GET /strategy/candidates](#get-apiv1operatorstrategycandidates) — 전략 매칭 후보 미리보기(스냅샷 읽기)
+- [POST /strategy/candidates/refresh](#post-apiv1operatorstrategycandidatesrefresh) — 미리보기 스냅샷 재계산 큐잉(202)
+- [POST /strategy/monitor](#post-apiv1operatorstrategymonitor) — 전략 실행 큐잉(202, 판단·알림 영속화)
 - [GET /strategy/monitor/runs](#get-apiv1operatorstrategymonitorruns) — 모니터링 실행 이력
 - [GET /strategy/monitor/runs/{run_id}](#get-apiv1operatorstrategymonitorrunsrun_id) — 실행 상세
 - [POST /strategy/monitor/async](#post-apiv1operatorstrategymonitorasync) — 전략 비동기 실행(큐잉)
@@ -252,6 +253,7 @@ curl -X PUT http://localhost:3000/api/v1/operator/strategy \
 
 - 인증: 불필요(단일 운영자).
 - 도메인: 후보마다 매칭/확률/우선순위 점수, 추천 액션·투찰가, 선정 사유(`strategy_reasons`)를 제공. `high_priority_only=true`면 고우선순위만.
+- 실행 모델: 이 엔드포인트는 요청 경로에서 ML 스캔을 실행하지 않는다. 마지막 계산 결과를 담은 **스냅샷 행을 순수 읽기**하고 `limit`으로 슬라이스할 뿐이다. 스냅샷이 없거나(최초) 낡았으면(`OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS` 초과, 또는 스냅샷 계산 이후 전략이 수정됨) 재계산 task를 단일비행 가드 하에 자동 큐잉하고 **기존 스냅샷을 즉시 반환**한다. 최초 호출은 빈 `candidates` + `snapshot_status="running"`이므로 클라이언트는 `computed_at`/`snapshot_status`를 보고 폴링한다. 직전 재계산이 실패한 스냅샷은 짧은 쿨다운(`OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS`) 동안 자동 재큐잉하지 않는다 — 즉시 재시도는 `POST /strategy/candidates/refresh`.
 
 **파라미터**
 
@@ -301,9 +303,20 @@ curl "http://localhost:3000/api/v1/operator/strategy/candidates?limit=20&high_pr
       "analysis_summary": "확률 보통, 검토 권장",
       "strategy_reasons": ["keyword match: 포장"]
     }
-  ]
+  ],
+  "computed_at": "2026-07-30T02:11:04.512000Z",
+  "snapshot_status": "idle",
+  "stale": false
 }
 ```
+
+스냅샷 메타 필드:
+
+| 필드 | 타입 | 의미 |
+|---|---|---|
+| computed_at | string\|null | 마지막 **성공** 계산 시각. 아직 계산된 적 없으면 `null` |
+| snapshot_status | `idle`\|`running`\|`failed` | 스냅샷 행 상태. `running`이면 재계산이 진행 중, `failed`면 마지막 재계산이 실패 |
+| stale | boolean | 반환된 후보가 낡았는가(시간 초과 또는 계산 이후 전략 수정). `true`면 재계산이 이미 큐잉된 상태다 |
 
 **에러**
 
@@ -313,12 +326,57 @@ curl "http://localhost:3000/api/v1/operator/strategy/candidates?limit=20&high_pr
 
 ---
 
+## POST /api/v1/operator/strategy/candidates/refresh
+
+미리보기 스냅샷 재계산을 **명시적으로** 큐에 넣고 즉시 `202`로 반환한다. 결과는 별도 task-status 없이 `GET /strategy/candidates`를 재조회해 `snapshot_status`/`computed_at`으로 확인한다. 사용자가 "새로고침"을 눌렀을 때, 또는 자동 재큐잉이 실패 쿨다운으로 억제된 상태에서 즉시 재시도할 때 사용한다.
+
+- 인증: 선택. target operator 규칙은 `GET /strategy/candidates`와 동일하다.
+- 도메인: 단일비행 — 이미 재계산이 실행 중이면 새 task를 만들지 않고 그 task를 재사용한다(새로고침 연타가 스캔을 중복 실행하지 못한다). 자동 큐잉과 달리 실패 쿨다운을 우회한다.
+
+**파라미터**
+
+| 위치 | 이름 | 타입 | 필수 | 설명 |
+|---|---|---|---|---|
+| query | high_priority_only | boolean\|null | 아니오 | 재계산할 스냅샷 키. 생략 시 전략 기본값 |
+| query | operator_id | integer\|null | 아니오 | target 운영자 id. 생략 시 토큰 소유자, 토큰이 없으면 canonical `operator` |
+
+**요청 예시**
+```bash
+curl -X POST "http://localhost:3000/api/v1/operator/strategy/candidates/refresh?high_priority_only=false" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+**응답 202**
+```json
+{
+  "task_id": "9f2a7c31-4b8e-4c21-9d55-6a0f1e2b3c4d",
+  "operator_id": 11,
+  "current_operator_id": 11,
+  "current_operator_username": "synthetic-aggressive",
+  "high_priority_only": false,
+  "snapshot_status": "running",
+  "detail": "미리보기 재계산을 큐에 등록했습니다.",
+  "poll_url": "/api/v1/operator/strategy/candidates"
+}
+```
+
+**에러**
+
+| 코드 | 의미 |
+|---|---|
+| 401 | Bearer 토큰이 제공됐으나 유효하지 않음 |
+| 403 | 무인증 또는 non-privileged 호출자가 다른 운영자 `operator_id`를 target으로 지정 |
+| 404 | privileged 호출자가 지정한 `operator_id`가 존재하지 않음 |
+
+---
+
 ## POST /api/v1/operator/strategy/monitor
 
-저장된 target 운영자 전략을 즉시(동기) 실행해 매칭 후보를 평가하고, 각 후보의 입찰 판단(`BidDecisionRecord`)을 target 운영자에 영속화하며 운영자 알림을 생성한다. "지금 한 번 돌려" 동작에 사용. **부수효과가 있으므로** 미리보기(`/strategy/candidates`)와 구분된다.
+저장된 target 운영자 전략 실행을 **큐에 넣고 `202`로 즉시 반환**한다. 실행은 워커에서 매칭 후보를 평가하고, 각 후보의 입찰 판단(`BidDecisionRecord`)을 target 운영자에 영속화하며 운영자 알림을 생성한다. "지금 한 번 돌려" 동작에 사용. **부수효과가 있으므로** 미리보기(`/strategy/candidates`)와 구분된다.
 
 - 인증: 선택. 토큰 없음 + `operator_id` 생략은 canonical 운영자로 실행한다. 토큰 없음 + canonical이 아닌 `operator_id`는 `403`; 토큰이 있어도 non-privileged 사용자의 cross-operator target은 `403`.
-- 도메인: 응답은 이전 실행 대비 신규/연속/탈락 후보를 diff로 집계. `same_category_only`/`similar_limit`/`min_similarity`는 pgvector 유사 사례 검색 파라미터. 각 결과는 영속화된 `decision_record_id`와 (생성됐다면) `notification_id`를 포함.
+- 실행 모델: **동기 실행이 아니다.** 요청 경로 인라인 ML을 없애기 위해 이 경로는 `POST /strategy/monitor/async`와 같은 구현에 위임한다 — 응답은 async envelope이고, 최종 결과는 `poll_url`(`GET /strategy/monitor/tasks/{task_id}`) 폴링 또는 `GET /strategy/monitor/runs`로 읽는다. 운영자 트리거 실행의 `trigger_source`는 `manual_async`다.
+- 도메인: 완료된 실행 결과는 이전 실행 대비 신규/연속/탈락 후보를 diff로 집계한다. `same_category_only`/`similar_limit`/`min_similarity`는 pgvector 유사 사례 검색 파라미터. 각 결과는 영속화된 `decision_record_id`와 (생성됐다면) `notification_id`를 포함한다. 결과 페이로드 전체 형태는 [GET /strategy/monitor/tasks/{task_id}](#get-apiv1operatorstrategymonitortaskstask_id)의 `result` 참고.
 
 **파라미터**
 
@@ -348,48 +406,22 @@ curl -X POST "http://localhost:3000/api/v1/operator/strategy/monitor?operator_id
   }'
 ```
 
-**응답 200**
+**응답 202**
 ```json
 {
-  "monitor_run_id": 57,
-  "task_id": null,
-  "trigger_source": "operator.sync",
-  "previous_run_id": 56,
+  "task_id": "b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b",
+  "monitor_run_id": 58,
   "operator_id": 11,
   "current_operator_id": 11,
   "current_operator_username": "synthetic-aggressive",
-  "evaluated_project_count": 134,
-  "selected_candidate_count": 5,
-  "persisted_candidate_count": 5,
-  "notification_count": 2,
-  "new_candidate_count": 2,
-  "continuing_candidate_count": 3,
-  "dropped_candidate_count": 1,
-  "high_priority_only": false,
-  "limit_applied": 20,
-  "new_candidate_project_ids": [9012, 9020],
-  "continuing_candidate_project_ids": [8801, 8802, 8803],
-  "dropped_candidate_project_ids": [8790],
-  "results": [
-    {
-      "project_id": 9012,
-      "title": "○○시 도로포장 보수공사",
-      "decision_record_id": 312,
-      "notification_id": 451,
-      "action": "bid_now",
-      "decision_status": "planned",
-      "priority_score": 0.78,
-      "probability_score": 0.67,
-      "matched_score": 0.81,
-      "recommended_amount": 742000000.0,
-      "analysis_summary": "면허/지역 적합, 유사 낙찰 사례 다수",
-      "is_new_candidate": true,
-      "notification_created": true,
-      "strategy_reasons": ["focus_category match", "region match"]
-    }
-  ]
+  "task_name": "jobs.monitor_operator_strategy",
+  "status": "queued",
+  "detail": "작업이 큐에 등록되었습니다.",
+  "poll_url": "/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b"
 }
 ```
+
+실행 결과(평가 건수·후보 diff·`decision_record_id` 등)는 이 응답에 없다. `poll_url`을 폴링해 `status="completed"`가 된 뒤 `result`에서 읽거나, `GET /strategy/monitor/runs/{monitor_run_id}`로 조회한다.
 
 **에러**
 
@@ -567,9 +599,9 @@ curl "http://localhost:3000/api/v1/operator/strategy/monitor/runs/57?operator_id
 
 ## POST /api/v1/operator/strategy/monitor/async
 
-전략 모니터링을 비동기로 큐에 넣고, 진행 상황을 폴링할 수 있는 task id와 poll URL을 즉시 반환한다. 후보가 많아 동기 실행이 오래 걸릴 때 또는 UI 블로킹을 피할 때 사용한다.
+전략 모니터링을 비동기로 큐에 넣고, 진행 상황을 폴링할 수 있는 task id와 poll URL을 즉시 반환한다. `POST /strategy/monitor`가 이 구현에 위임하므로 두 경로의 응답은 같다 — 이쪽은 큐잉 의도가 경로에 드러나는 명시적 별칭이다.
 
-- 인증: 선택. target operator 규칙은 동기 `POST /strategy/monitor`와 동일하다.
+- 인증: 선택. target operator 규칙은 `POST /strategy/monitor`와 동일하다.
 - 도메인: 먼저 `queued` 상태의 monitor_run을 만들고 Celery 작업을 enqueue한다. memory broker 환경에서는 eager 실행되어 즉시 완료될 수 있다. 요청 본문은 `POST /strategy/monitor`와 동일.
 
 **파라미터**
@@ -592,7 +624,7 @@ curl -X POST "http://localhost:3000/api/v1/operator/strategy/monitor/async?opera
   "operator_id": 11,
   "current_operator_id": 11,
   "current_operator_username": "synthetic-aggressive",
-  "task_name": "operator.strategy.monitor",
+  "task_name": "jobs.monitor_operator_strategy",
   "status": "queued",
   "detail": "작업이 큐에 등록되었습니다.",
   "poll_url": "/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d-47a8-9b01-2c3d4e5f6a7b"
@@ -614,7 +646,7 @@ curl -X POST "http://localhost:3000/api/v1/operator/strategy/monitor/async?opera
 
 비동기 모니터링 작업의 현재 상태와 (완료 시) 최종 결과를 조회한다. `async` 호출로 받은 `poll_url`을 주기적으로 폴링해 완료를 확인할 때 사용한다.
 
-- 인증: 선택. target operator 규칙은 동기 `POST /strategy/monitor`와 동일하다.
+- 인증: 선택. target operator 규칙은 `POST /strategy/monitor`와 동일하다.
 - 도메인: `ready`/`successful`로 완료·성공 여부를 판별하고, 성공 시 `result`에 `OperatorStrategyMonitorResponse`가 채워진다. `task_id`가 다른 operator 소유이면 `404`로 숨긴다. 실패 시 `error`에 사유.
 
 **파라미터**
@@ -638,7 +670,7 @@ curl "http://localhost:3000/api/v1/operator/strategy/monitor/tasks/b3f1c2a4-5e6d
   "operator_id": 11,
   "current_operator_id": 11,
   "current_operator_username": "synthetic-aggressive",
-  "task_name": "operator.strategy.monitor",
+  "task_name": "jobs.monitor_operator_strategy",
   "status": "completed",
   "raw_status": "SUCCESS",
   "ready": true,
