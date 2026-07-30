@@ -26,6 +26,7 @@ from app.schemas.schemas import (
     SyntheticExperimentSampleGapPlanResponse,
     SyntheticExperimentSampleGapRunCandidateResponse,
 )
+from app.schemas.task_payloads import SyntheticOperatorBacktestTaskRequest
 from app.services.synthetic_backtest import SyntheticBacktestService
 from app.services.synthetic_custom_operator import (
     CustomOperatorError,
@@ -326,17 +327,19 @@ def run_synthetic_backtest_async_endpoint(
             detail="No synthetic operators seeded. Seed via POST /operators/seed first.",
         )
 
-    payload = {
-        "start_at": request.start_at.isoformat() if request.start_at else None,
-        "end_at": request.end_at.isoformat() if request.end_at else None,
-        "category": request.category,
-        "limit": request.limit,
-        "scenario": request.scenario,
-        "slugs": request.slugs,
-        "cutoff_hours_before_deadline": request.cutoff_hours_before_deadline,
-        "history_limit": request.history_limit,
-        "settle_actions": request.settle_actions,
-    }
+    # Serialize through the task DTO the worker validates on receipt, so the
+    # send/receive field contract cannot drift into a silently-dropped key.
+    payload = SyntheticOperatorBacktestTaskRequest(
+        start_at=request.start_at,
+        end_at=request.end_at,
+        category=request.category,
+        limit=request.limit,
+        scenario=request.scenario,
+        slugs=request.slugs,
+        cutoff_hours_before_deadline=request.cutoff_hours_before_deadline,
+        history_limit=request.history_limit,
+        settle_actions=request.settle_actions,
+    ).model_dump(mode="json")
     async_result = enqueue_synthetic_operator_backtest(payload=payload)
     status_payload = get_synthetic_backtest_task_status(async_result.id)
     return {

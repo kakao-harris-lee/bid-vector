@@ -19,6 +19,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import task_session
+from app.schemas.task_payloads import (
+    ScsbidReserveDetailBackfillRequest,
+    ScsbidReserveDetailNotice,
+)
 from app.services.koneps.collector import KonepsCollectorService
 
 logger = logging.getLogger(__name__)
@@ -28,15 +32,15 @@ logger = logging.getLogger(__name__)
 class _ReserveDetailBackfillPlan:
     """Resolved config for one reserve-detail backfill run (no I/O yet).
 
-    Built by ``_plan_reserve_detail_backfill``: normalize/dedupe the notices,
+    Built by ``_plan_reserve_detail_backfill``: dedupe the validated notices,
     split off the first chunk (``cleaned``) from the ``rest`` self-chained later,
     and resolve the settings-driven knobs (service key, per-call throttle, commit
     cadence). ``KonepsCollectorService()`` is a side-effect-free constructor, so
     building the plan opens no session and issues no HTTP.
     """
 
-    cleaned: list[dict[str, str]]
-    rest: list[dict[str, str]]
+    cleaned: list[ScsbidReserveDetailNotice]
+    rest: list[ScsbidReserveDetailNotice]
     service: KonepsCollectorService
     service_key: str
     delay_seconds: float
@@ -45,9 +49,9 @@ class _ReserveDetailBackfillPlan:
 
 
 def _plan_reserve_detail_backfill(
-    notices: list[dict[str, Any]],
+    request: ScsbidReserveDetailBackfillRequest,
 ) -> _ReserveDetailBackfillPlan:
-    all_cleaned = _normalize_deferred_reserve_notices(notices)
+    all_cleaned = request.deduped()
     chunk_size = max(1, int(settings.KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE))
     cleaned = all_cleaned[:chunk_size]
     rest = all_cleaned[chunk_size:]
@@ -71,19 +75,20 @@ def _plan_reserve_detail_backfill(
 
 
 def run_scsbid_reserve_detail_backfill_job(
-    notices: list[dict[str, Any]],
+    request: ScsbidReserveDetailBackfillRequest,
     *,
-    enqueue_continuation: Callable[[list[dict[str, Any]]], bool],
+    enqueue_continuation: Callable[[ScsbidReserveDetailBackfillRequest], bool],
     session_factory: Callable[[], Session] | None = None,
 ) -> dict:
     """Fetch deferred scsbid reserve-detail rows and persist them per notice.
 
-    Body of the ``backfill_scsbid_reserve_detail`` Celery task (the ``@task``
-    entry stays in ``app.tasks.jobs`` so its registration name is unchanged). The
-    serial self-chain continuation enqueue references the task object and is
-    injected as ``enqueue_continuation`` so this module stays task-free.
+    Body of the ``backfill_scsbid_reserve_detail`` Celery task. That ``@task`` entry
+    stays in ``app.tasks.jobs`` (registration name unchanged) and validates the
+    broker payload into ``request`` before calling here. The serial self-chain
+    continuation enqueue references the task object and is injected as
+    ``enqueue_continuation`` so this module stays task-free.
 
-    For each ``{"notice_number", "category"}``:
+    For each validated ``ScsbidReserveDetailNotice``:
 
     * Idempotency — if the notice's ``HistoricalData.reserve_prices`` is already a
       non-empty settled value it is skipped (a reserve price is immutable, so a
@@ -100,7 +105,7 @@ def run_scsbid_reserve_detail_backfill_job(
     summary is returned (no continuation — the next 6h collect self-heals). A
     single notice failing is caught per-notice and counted.
     """
-    plan = _plan_reserve_detail_backfill(notices)
+    plan = _plan_reserve_detail_backfill(request)
     remaining = len(plan.rest)
 
     with task_session(session_factory) as db:
@@ -134,7 +139,9 @@ def run_scsbid_reserve_detail_backfill_job(
 
             db.commit()
             _log_reserve_detail_backfill_errors(requested=plan.requested, stats=stats)
-            continued = enqueue_continuation(plan.rest)
+            continued = enqueue_continuation(
+                ScsbidReserveDetailBackfillRequest(notices=plan.rest)
+            )
             return _reserve_detail_backfill_result(
                 requested=plan.requested,
                 remaining=remaining,
@@ -149,28 +156,33 @@ def run_scsbid_reserve_detail_backfill_job(
 def _normalize_deferred_reserve_notices(
     notices: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
-    """De-duplicate and clean the deferred reserve-detail notice payloads.
+    """Clean + dedupe the crawl-side deferred notices into the task wire shape.
 
-    Each entry needs a non-empty ``notice_number``; ``category`` is optional and
-    only selects the reserve-detail operation. Order-preserving dedupe on the
-    (notice_number, category) pair keeps the backfill from re-fetching the same
-    notice twice within one chunk set.
+    Enqueue-side normalizer (``jobs._enqueue_deferred_reserve_detail_backfill``).
+    Lenient by design: the crawl metadata is best-effort, so an unusable entry is
+    dropped instead of failing an otherwise successful crawl. Each entry needs a
+    non-empty ``notice_number``; ``category`` is optional and only selects the
+    reserve-detail operation.
+
+    Strip/dedupe itself is the DTO's (``ScsbidReserveDetailBackfillRequest``), so
+    the enqueued payload is exactly the shape the receiving task validates and the
+    order-preserving (notice_number, category) dedupe has a single implementation.
     """
-    cleaned: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    usable: list[dict[str, str]] = []
     for entry in notices or []:
         if not isinstance(entry, dict):
             continue
         notice_number = str(entry.get("notice_number") or "").strip()
         if not notice_number:
             continue
-        category = str(entry.get("category") or "").strip()
-        key = (notice_number, category)
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append({"notice_number": notice_number, "category": category})
-    return cleaned
+        usable.append(
+            {
+                "notice_number": notice_number,
+                "category": str(entry.get("category") or "").strip(),
+            }
+        )
+    request = ScsbidReserveDetailBackfillRequest.model_validate({"notices": usable})
+    return [notice.model_dump(mode="json") for notice in request.deduped()]
 
 
 def _missing_reserve_detail_service_key_result(
@@ -194,7 +206,7 @@ def _process_scsbid_reserve_detail_chunk(
     db,
     *,
     service: "KonepsCollectorService",
-    cleaned: list[dict[str, Any]],
+    cleaned: list[ScsbidReserveDetailNotice],
     service_key: str,
     delay_seconds: float,
     commit_every: int,
@@ -216,8 +228,8 @@ def _process_scsbid_reserve_detail_chunk(
         "processed_since_commit": 0,
     }
     for index, entry in enumerate(cleaned):
-        notice_number = entry["notice_number"]
-        category = entry["category"] or None
+        notice_number = entry.notice_number
+        category = entry.category or None
         try:
             record = _load_reserve_detail_record(db, HistoricalData, notice_number)
             if record is not None and service._has_persisted_reserve_prices(record):

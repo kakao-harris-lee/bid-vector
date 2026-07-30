@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.database import task_session
 from app.models.models import User
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
+from app.schemas.task_payloads import CrawlTaskRequest, ForwardPaperBiddingTaskRequest, HistoricalBacktestTaskRequest, PricePredictionTrainingTaskRequest, ScsbidReserveDetailBackfillRequest, SyntheticOperatorBacktestTaskRequest, TelegramNotificationTaskRequest
 from app.services.decision_experiments import DecisionExperimentService
 from app.services.ml_training import PricePredictionTrainingService
 from app.services.notifications.telegram import TelegramNotificationService
@@ -106,12 +107,13 @@ def collect_koneps_notices(
 ) -> dict:
     """Collect KONEPS notices and persist crawl history inside a background task.
 
-    Thin shell: the body lives in ``app.tasks.collection_jobs`` and the deferred
-    backfill enqueue helpers (patched via this module in tests) are injected.
+    Thin shell: the payload is promoted to ``CrawlTaskRequest`` (the sender dumps the
+    same field set), the body lives in ``app.tasks.collection_jobs`` and the deferred
+    backfill enqueue helpers (patched here in tests) are injected.
     """
     return run_koneps_collection_job(
         self,
-        request_payload=request_payload,
+        request=CrawlTaskRequest.model_validate(request_payload or {}),
         crawl_job_id=crawl_job_id,
         enqueue_deferred_embedding_backfill=_enqueue_deferred_embedding_backfill,
         enqueue_deferred_reserve_detail_backfill=_enqueue_deferred_reserve_detail_backfill,
@@ -126,13 +128,16 @@ def send_telegram_notification(
     chat_id: str | None = None,
     reply_markup: dict | None = None,
 ) -> dict:
-    """Send a Telegram notification through the Bot API."""
+    """Send a Telegram notification through the Bot API (payload validated first)."""
+    request = TelegramNotificationTaskRequest.model_validate(
+        {"title": title, "message": message, "url": url, "chat_id": chat_id, "reply_markup": reply_markup}
+    )
     service = TelegramNotificationService()
-    if title is not None and message is not None:
-        payload = service.build_message(title, message, url)
-    else:
-        payload = message or ""
-    return service.send_message(payload, reply_markup=reply_markup, chat_id=chat_id)
+    return service.send_message(
+        request.build_text(service.build_message),
+        reply_markup=request.bot_api_reply_markup(),
+        chat_id=request.chat_id,
+    )
 
 
 @celery_app.task(name="jobs.poll_telegram_updates")
@@ -281,20 +286,23 @@ def _enqueue_deferred_reserve_detail_backfill(notices: list[dict[str, Any]]) -> 
 def backfill_scsbid_reserve_detail(self, notices: list[dict[str, Any]]) -> dict:
     """Fetch deferred scsbid reserve-detail rows and persist them per notice.
 
-    Thin shell: body in ``app.tasks.reserve_detail_backfill``; the serial
-    self-chain continuation enqueue (which references this task) is injected.
+    Thin shell: the notices are promoted to a validated DTO here, the body lives in
+    ``app.tasks.reserve_detail_backfill``, and the serial self-chain continuation
+    (which references this task) is injected.
     """
+    request = ScsbidReserveDetailBackfillRequest.model_validate({"notices": notices or []})
     return run_scsbid_reserve_detail_backfill_job(
-        notices, enqueue_continuation=_enqueue_reserve_detail_continuation
+        request, enqueue_continuation=_enqueue_reserve_detail_continuation
     )
 
 
-def _enqueue_reserve_detail_continuation(rest: list[dict[str, Any]]) -> bool:
-    if not rest:
+def _enqueue_reserve_detail_continuation(rest: ScsbidReserveDetailBackfillRequest) -> bool:
+    if not rest.notices:
         return False
     try:
+        # The DTO field name IS the task kwarg, so send/receive stay symmetric.
         backfill_scsbid_reserve_detail.apply_async(
-            kwargs={"notices": rest},
+            kwargs=rest.model_dump(mode="json"),
             queue=settings.CELERY_OPS_QUEUE,
         )
         return True
@@ -302,7 +310,7 @@ def _enqueue_reserve_detail_continuation(rest: list[dict[str, Any]]) -> bool:
         logger.exception(
             "backfill_scsbid_reserve_detail continuation enqueue failed "
             "for %d remaining notice(s)",
-            len(rest),
+            len(rest.notices),
         )
         return False
 
@@ -310,8 +318,12 @@ def _enqueue_reserve_detail_continuation(rest: list[dict[str, Any]]) -> bool:
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)
 def train_price_predictor(request_payload: dict[str, Any] | None = None) -> dict:
     """Run price-predictor training in the dedicated ML training queue."""
+    # Validated with the model the API sender dumps. The ML service keeps its dict
+    # contract (ml-builder owned), so it gets back only the keys the sender set — its
+    # own option defaults stay authoritative.
+    request = PricePredictionTrainingTaskRequest.model_validate(request_payload or {})
     with task_session() as db:
-        return PricePredictionTrainingService().train_price_predictor(db, request_payload=request_payload)
+        return PricePredictionTrainingService().train_price_predictor(db, request_payload=request.model_dump(mode="json", exclude_unset=True))
 
 
 @celery_app.task(name=DECISION_EXPERIMENT_REEVALUATION_TASK_NAME)
@@ -362,25 +374,21 @@ def monitor_operator_strategy(
 def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> dict:
     """Run the per-synthetic-operator backtest in a background worker.
 
-    Thin shell: body in ``app.tasks.backtest_jobs``.
+    Thin shell: payload validated here, body in ``app.tasks.backtest_jobs``.
     """
-    return run_synthetic_operator_backtest_job(payload)
+    return run_synthetic_operator_backtest_job(
+        SyntheticOperatorBacktestTaskRequest.model_validate(payload or {})
+    )
 
 
 @celery_app.task(name=PAPER_BIDDING_FORWARD_TASK_NAME)
 def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> dict:
     """Generate forward paper bids for currently open/re-notice projects."""
-    payload = dict(request_payload or {})
+    # DTO fields are the service kwargs 1:1 (same spread as paper_bidding_scheduler).
+    request = ForwardPaperBiddingTaskRequest.model_validate(request_payload or {})
     with task_session() as db:
         return PaperBiddingBacktestService().run_forward_paper_bidding(
-            db,
-            category=payload.get("category"),
-            limit=int(payload.get("limit") or 100),
-            scenario=str(payload.get("scenario") or "base"),
-            strategy_version=str(payload.get("strategy_version") or "scheduled-forward-paper"),
-            model_version=str(payload.get("model_version") or "current"),
-            history_limit=int(payload.get("history_limit") or 80),
-            persist=bool(payload.get("persist", True)),
+            db, **request.model_dump()
         )
 
 
@@ -426,9 +434,11 @@ def notify_award_results(limit: int = 50) -> dict:
 def run_historical_backtest(request_payload: dict[str, Any] | None = None) -> dict:
     """Replay awarded TenderResults as paper_bid + settlement comparison.
 
-    Thin shell: body in ``app.tasks.backtest_jobs``.
+    Thin shell: payload validated here, body in ``app.tasks.backtest_jobs``.
     """
-    return run_historical_backtest_job(request_payload)
+    return run_historical_backtest_job(
+        HistoricalBacktestTaskRequest.model_validate(request_payload or {})
+    )
 
 
 @celery_app.task(name=ENRICH_BUSINESS_TYPE_TASK_NAME)

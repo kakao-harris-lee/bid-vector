@@ -27,13 +27,17 @@ logger = logging.getLogger(__name__)
 def run_koneps_collection_job(
     self,
     *,
-    request_payload: dict[str, Any] | None,
+    request: CrawlRequest,
     crawl_job_id: int | None,
     enqueue_deferred_embedding_backfill: Callable[[list[int]], int],
     enqueue_deferred_reserve_detail_backfill: Callable[[list[dict[str, Any]]], int],
     session_factory: Callable[[], Session] | None = None,
 ) -> dict:
     """Collect KONEPS notices and persist crawl history inside a background task.
+
+    The ``@task`` shell promotes the broker payload to ``CrawlTaskRequest`` before
+    calling this body, so the crawl parameters arrive validated (never a raw
+    ``dict``).
 
     ``session_factory`` is the session seam (defaults to the app ``SessionLocal``
     via ``task_session``), so callers/tests can inject their own session.
@@ -44,7 +48,6 @@ def run_koneps_collection_job(
     reusing it on redelivery prevents an orphan ``running`` crawl-job from being
     created on every redelivery.
     """
-    request = CrawlRequest(**(request_payload or {}))
     service = KonepsCollectorService()
     with task_session(session_factory) as db:
         crawl_job: CrawlJob | None = None
