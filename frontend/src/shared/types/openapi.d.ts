@@ -386,6 +386,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/strategy/candidates/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Operator Strategy Candidates
+         * @description Queue a strategy-candidate snapshot recompute; poll via GET /strategy/candidates.
+         */
+        post: operations["refresh_operator_strategy_candidates_api_v1_operator_strategy_candidates_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operator/strategy/monitor": {
         parameters: {
             query?: never;
@@ -397,7 +417,11 @@ export interface paths {
         put?: never;
         /**
          * Run Operator Strategy Monitor
-         * @description Execute the stored strategy, persist bid decisions, and create operator notifications.
+         * @description Queue the stored-strategy monitor and return the async task envelope (202).
+         *
+         *     설계 2026-07-30 §6.2: 요청 경로 인라인 ML 폐쇄 — 구현을 기존 async 쌍
+         *     (/strategy/monitor/async + /strategy/monitor/tasks/{id})에 위임한다. 경로는
+         *     유지되고 응답이 async envelope 으로 바뀐다(프론트 sync 호출부 없음 확인).
          */
         post: operations["run_operator_strategy_monitor_api_v1_operator_strategy_monitor_post"];
         delete?: never;
@@ -6872,6 +6896,32 @@ export interface components {
             /** Strategy Reasons */
             strategy_reasons?: string[];
         };
+        /**
+         * OperatorStrategyCandidatesRefreshResponse
+         * @description 명시 재계산 202 응답 (설계 §6.2). 폴링은 별도 task-status 없이
+         *     GET /operator/strategy/candidates 재조회(snapshot_status·computed_at 관찰).
+         */
+        OperatorStrategyCandidatesRefreshResponse: {
+            /** Task Id */
+            task_id?: string | null;
+            /** Operator Id */
+            operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
+            /** High Priority Only */
+            high_priority_only: boolean;
+            /**
+             * Snapshot Status
+             * @enum {string}
+             */
+            snapshot_status: "idle" | "running" | "failed";
+            /** Detail */
+            detail: string;
+            /** Poll Url */
+            poll_url: string;
+        };
         /** OperatorStrategyCandidatesResponse */
         OperatorStrategyCandidatesResponse: {
             /** Operator Id */
@@ -6888,6 +6938,19 @@ export interface components {
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
+            /** Computed At */
+            computed_at?: string | null;
+            /**
+             * Snapshot Status
+             * @default idle
+             * @enum {string}
+             */
+            snapshot_status: "idle" | "running" | "failed";
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /** OperatorStrategyMonitorRequest */
         OperatorStrategyMonitorRequest: {
@@ -10559,6 +10622,38 @@ export interface operations {
             };
         };
     };
+    refresh_operator_strategy_candidates_api_v1_operator_strategy_candidates_refresh_post: {
+        parameters: {
+            query?: {
+                high_priority_only?: boolean | null;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorStrategyCandidatesRefreshResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_operator_strategy_monitor_api_v1_operator_strategy_monitor_post: {
         parameters: {
             query?: {
@@ -10575,12 +10670,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OperatorStrategyMonitorResponse"];
+                    "application/json": components["schemas"]["OperatorStrategyMonitorTaskResponse"];
                 };
             };
             /** @description Validation Error */
