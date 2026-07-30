@@ -13,7 +13,7 @@
 
 ### Volume Mount 함정
 
-`docker-compose.yml` 서비스는 `./:/app` 바인드 마운트를 사용합니다. 컨테이너가 실행하는 코드는 호스트 working tree의 현재 브랜치입니다. PR이 main에 머지되어도 호스트가 feature 브랜치에 있으면 컨테이너는 feature 브랜치 코드를 계속 실행합니다.
+`docker-compose.yml` 서비스는 `./:/app` 바인드 마운트를 사용합니다. 컨테이너가 실행하는 코드는 호스트 working tree의 현재 브랜치입니다. PR이 main에 머지되어도 호스트가 feature 브랜치에 있으면 컨테이너는 feature 브랜치 코드를 계속 실행합니다. api는 hot-reload 없이 구동되므로(OOM 자가복구를 위해 `--reload` 제거) 코드 반영에는 api 재시작이 필수입니다.
 
 머지 후 운영 반영 순서:
 
@@ -21,6 +21,7 @@
 git branch --show-current
 git checkout main
 git pull --rebase origin main
+docker compose restart api
 docker compose --profile tasks restart worker beat
 docker compose run --rm frontend-build
 ```
