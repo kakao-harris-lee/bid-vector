@@ -595,13 +595,6 @@ class Settings(BaseSettings):
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
     CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: bool = True
-    # Load the classifier embedding model in a background thread at api startup.
-    # The loader is lazy, so without this the first request that needs inline ML
-    # after every restart/deploy (candidate preview on /dashboard/strategy) pays
-    # the ~25s cold load on the request path; slow enough that operators reload
-    # and stack duplicate work. Warming at startup moves that one-off cost off
-    # the request path. Never blocks startup or /health (see model_warmup).
-    EMBEDDING_MODEL_WARMUP_ON_STARTUP: bool = True
     CLASSIFIER_SEMANTIC_MATCH_THRESHOLD: float = 0.35
     # Semantic band edges expressed RELATIVE to CLASSIFIER_SEMANTIC_MATCH_THRESHOLD
     # (same tuning family). ``strong`` = threshold + margin (매우 높음),
