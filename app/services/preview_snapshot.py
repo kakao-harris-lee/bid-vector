@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.single_user import ensure_operator_strategy_for
 from app.core.time import ensure_utc, utc_now
-from app.models.models import OperatorPreviewSnapshot, User
+from app.models.models import OperatorPreviewSnapshot, OperatorStrategy, User
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.stale_task_reconciler import stale_threshold_seconds
 
@@ -38,6 +38,13 @@ SNAPSHOT_STATUS_FAILED = "failed"
 #: 아님). 100 을 preview_candidates 에 넘기면 스캔 예산은
 #: _preview_scan_limit(100)=min(1200, PREVIEW_SCAN_CEILING)=250 으로 고정된다.
 SNAPSHOT_CANDIDATE_LIMIT = 100
+#: payload_json 안에 스캔 시작 시점의 ``OperatorStrategy.updated_at`` 을 남기는
+#: 키. 스냅샷 산출은 전략의 함수이므로 "어떤 전략으로 계산된 결과인가"를 행이
+#: 스스로 알아야 한다 — 시간 기반 stale 판정만으로는 스캔 중 저장된 전략 편집이
+#: STALE_SECONDS 동안 반영되지 않는다(구 preview_cache 가 명시적으로 다루던
+#: "편집 전에 시작돼 편집에 눈먼 스캔" 케이스). 마이그레이션 없이 기존
+#: payload_json 안에 담는다.
+PAYLOAD_STRATEGY_UPDATED_AT_KEY = "strategy_updated_at"
 
 
 class PreviewSnapshotService:
@@ -202,7 +209,7 @@ class PreviewSnapshotService:
         row = self.get_row(
             db, operator_id=int(operator.id), high_priority_only=resolved_high_priority_only
         )
-        if row is None or self._needs_recompute(row):
+        if row is None or self._needs_recompute(row, strategy=strategy):
             self.dispatch_recompute(
                 db,
                 operator_id=int(operator.id),
@@ -214,6 +221,7 @@ class PreviewSnapshotService:
         return self._build_response(
             row,
             operator=operator,
+            strategy=strategy,
             resolved_limit=resolved_limit,
             resolved_high_priority_only=resolved_high_priority_only,
         )
@@ -223,6 +231,7 @@ class PreviewSnapshotService:
         row: OperatorPreviewSnapshot | None,
         *,
         operator: User,
+        strategy: OperatorStrategy,
         resolved_limit: int,
         resolved_high_priority_only: bool,
     ) -> dict:
@@ -244,7 +253,9 @@ class PreviewSnapshotService:
             "snapshot_status": str(row.status or SNAPSHOT_STATUS_IDLE)
             if row is not None
             else SNAPSHOT_STATUS_RUNNING,
-            "stale": self._computed_age_exceeds(row) if row is not None else False,
+            "stale": self._snapshot_is_stale(row, strategy=strategy)
+            if row is not None
+            else False,
         }
 
     # --- task 라이프사이클 (synthetic experiment run 패턴, DB-first) ---------
@@ -274,13 +285,23 @@ class PreviewSnapshotService:
             operator = db.query(User).filter(User.id == int(operator_id)).first()
             if operator is None:
                 raise ValueError(f"Operator {int(operator_id)} not found")
+            # 스캔 **시작 전** 전략 시각을 잡아둔다: 스캔 도중 저장된 편집은 이
+            # 결과에 반영되지 않았을 수 있으므로 스탬프는 반드시 보수적(=옛
+            # 시각)이어야 한다. 그래야 다음 GET 이 드리프트를 보고 재계산한다.
+            strategy_updated_at = self._current_strategy_updated_at(db, operator=operator)
             payload = self._monitoring.preview_candidates(
                 db,
                 limit=SNAPSHOT_CANDIDATE_LIMIT,
                 high_priority_only=bool(high_priority_only),
                 operator=operator,
             )
-            self.mark_completed(db, row_id=row_id, payload=self._json_safe_payload(payload))
+            self.mark_completed(
+                db,
+                row_id=row_id,
+                payload=self._json_safe_payload(
+                    payload, strategy_updated_at=strategy_updated_at
+                ),
+            )
         except Exception as exc:
             db.rollback()
             self.mark_failed(db, row_id=row_id, error=str(exc))
@@ -321,8 +342,12 @@ class PreviewSnapshotService:
                 return
             row.status = SNAPSHOT_STATUS_FAILED
             row.last_error = str(error)
+            # 실패 쿨다운의 기준 시각(§_failure_cooldown_active) — 주입된 now 로
+            # 명시 스탬프해 onupdate 기본값에 의존하지 않는다(§4.7).
+            row.updated_at = self._now()
             db.commit()
         except Exception:  # noqa: BLE001 - 원인 예외를 가리지 않는다
+            logger.exception("preview snapshot mark_failed failed row_id=%s", row_id)
             db.rollback()
 
     # --- 직렬화/키 해석 ------------------------------------------------------
@@ -337,12 +362,15 @@ class PreviewSnapshotService:
         )
         return bool(resolved)
 
-    def _json_safe_payload(self, payload: dict) -> dict:
+    def _json_safe_payload(
+        self, payload: dict, *, strategy_updated_at: datetime | None
+    ) -> dict:
         """payload_json(JSON 컬럼)에 넣을 수 있게 후보 deadline 을 ISO 문자열화.
 
         후보 dict 에서 datetime 은 deadline 뿐이다(_serialize_candidate). 서빙 시
         OperatorStrategyCandidateItem(pydantic)이 datetime 으로 복원하므로 응답
-        형태는 불변이다(구현 계획 이탈 노트 1).
+        형태는 불변이다(구현 계획 이탈 노트 1). 여기에 스캔 시작 시점의 전략
+        시각을 메타로 덧붙인다 — 응답 필드가 아니라 stale 판정 입력이다.
         """
         candidates = [
             {
@@ -353,15 +381,83 @@ class PreviewSnapshotService:
             }
             for candidate in payload.get("candidates") or []
         ]
-        return {**payload, "candidates": candidates}
+        return {
+            **payload,
+            "candidates": candidates,
+            PAYLOAD_STRATEGY_UPDATED_AT_KEY: ensure_utc(strategy_updated_at).isoformat()
+            if strategy_updated_at is not None
+            else None,
+        }
+
+    # --- stale/재계산 판정 ---------------------------------------------------
+
+    def _current_strategy_updated_at(self, db: Session, *, operator: User) -> datetime | None:
+        """운영자 전략의 현재 갱신 시각 (없으면 None = 드리프트 판정 안 함)."""
+        strategy = ensure_operator_strategy_for(db, operator)
+        return getattr(strategy, "updated_at", None)
+
+    def _stamped_strategy_updated_at(
+        self, row: OperatorPreviewSnapshot
+    ) -> datetime | None:
+        """스냅샷이 어떤 전략 시각으로 계산됐는지 (스탬프 없음/파손 = None)."""
+        raw = (row.payload_json or {}).get(PAYLOAD_STRATEGY_UPDATED_AT_KEY)
+        if not raw:
+            return None
+        try:
+            return ensure_utc(datetime.fromisoformat(str(raw)))
+        except ValueError:  # pragma: no cover - 우리가 쓴 ISO 문자열만 들어온다
+            return None
+
+    def _strategy_changed_since_scan(
+        self, row: OperatorPreviewSnapshot, *, strategy: OperatorStrategy | None
+    ) -> bool:
+        """현재 전략이 스냅샷 스탬프보다 새로운가 (= 스캔이 편집에 눈멀었다).
+
+        스탬프가 없는 행(이 스탬프 도입 전 계산분)은 한 번 재계산해 스스로
+        정합화한다 — 재계산 후에는 스탬프가 같아지므로 churn 이 남지 않는다.
+        전략 시각을 알 수 없으면(None) 드리프트를 주장하지 않는다.
+        """
+        current = getattr(strategy, "updated_at", None) if strategy is not None else None
+        if current is None:
+            return False
+        stamped = self._stamped_strategy_updated_at(row)
+        return stamped is None or ensure_utc(current) > stamped
 
     def _computed_age_exceeds(self, row: OperatorPreviewSnapshot) -> bool:
-        """마지막 성공 계산이 stale 기준을 넘겼는가 (응답 stale 플래그의 원천)."""
+        """마지막 성공 계산이 stale 기준을 넘겼는가."""
         if row.computed_at is None:
             return False
         age = self._now() - ensure_utc(row.computed_at)
         return age > timedelta(seconds=int(settings.OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS))
 
-    def _needs_recompute(self, row: OperatorPreviewSnapshot) -> bool:
+    def _snapshot_is_stale(
+        self, row: OperatorPreviewSnapshot, *, strategy: OperatorStrategy | None
+    ) -> bool:
+        """저장된 계산 결과가 낡았는가 (시간 경과 또는 전략 편집) — 응답 stale."""
+        if row.computed_at is None:
+            return False  # 계산된 적 없는 행은 "낡음" 이 아니라 "부트스트랩" 이다
+        return self._computed_age_exceeds(row) or self._strategy_changed_since_scan(
+            row, strategy=strategy
+        )
+
+    def _failure_cooldown_active(self, row: OperatorPreviewSnapshot) -> bool:
+        """직전 재계산이 실패했고 쿨다운 중인가 (자동 디스패치만 억제).
+
+        재계산이 빠르게 실패하는 동안 클라이언트 폴링이 GET 당 스캔 1건씩을 ops
+        큐에 쌓는 것을 막는다. 명시 갱신(POST /candidates/refresh)과 전략 쓰기
+        트리거는 dispatch_recompute 를 직접 호출하므로 이 억제를 우회한다.
+        """
+        if str(row.status or "") != SNAPSHOT_STATUS_FAILED or row.updated_at is None:
+            return False
+        cooldown = timedelta(
+            seconds=int(settings.OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS)
+        )
+        return self._now() - ensure_utc(row.updated_at) < cooldown
+
+    def _needs_recompute(
+        self, row: OperatorPreviewSnapshot, *, strategy: OperatorStrategy | None = None
+    ) -> bool:
         """성공 계산이 없거나(최초/실패) stale 이면 재계산 대상이다."""
-        return row.computed_at is None or self._computed_age_exceeds(row)
+        if self._failure_cooldown_active(row):
+            return False
+        return row.computed_at is None or self._snapshot_is_stale(row, strategy=strategy)

@@ -94,6 +94,31 @@ def _canned_analyze(self, db, project, **kwargs):
     }
 
 
+def _mark_completed_as_scan_would(service, test_db, *, row_id: int, operator, payload: dict):
+    """run_recompute 와 같은 형태로 스냅샷을 마감한다(전략 provenance 스탬프 포함).
+
+    payload_json 은 "어떤 전략으로 계산됐는가"를 함께 들고 다닌다 — 스탬프 없는
+    payload 는 provenance 미상이라 재계산 대상이다. 테스트가 payload 를 직접
+    구성할 때도 그 계약을 지킨다.
+    """
+    service.mark_completed(
+        test_db,
+        row_id=int(row_id),
+        payload=service._json_safe_payload(
+            payload,
+            strategy_updated_at=service._current_strategy_updated_at(
+                test_db, operator=operator
+            ),
+        ),
+    )
+
+
+def _reset_snapshots(test_db):
+    """setup 전략 PUT 이 남긴 스냅샷 행/디스패치 흔적을 지운다."""
+    test_db.query(OperatorPreviewSnapshot).delete()
+    test_db.commit()
+
+
 def _snapshot_row(test_db, operator_id: int, high_priority_only: bool = False):
     return (
         test_db.query(OperatorPreviewSnapshot)
@@ -385,9 +410,11 @@ def test_get_candidates_slices_stored_top100_by_requested_limit(client, test_db,
         }
         for index in range(1, 4)
     ]
-    service.mark_completed(
+    _mark_completed_as_scan_would(
+        service,
         test_db,
         row_id=int(row.id),
+        operator=operator,
         payload={
             "operator_id": int(operator.id),
             "evaluated_project_count": 42,
@@ -619,6 +646,178 @@ def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypat
 
 
 # ---------------------------------------------------------------------------
+# in-flight 스캔 중 전략 쓰기 (구 preview_cache 의 "편집에 눈먼 스캔" 처리 승계)
+# ---------------------------------------------------------------------------
+
+
+def test_strategy_write_during_running_scan_is_recomputed_on_next_get(
+    client, test_db, enqueue_stub, monkeypatch
+):
+    """스캔 실행 중 저장된 전략은 유실되지 않는다 — 다음 GET 이 재계산한다.
+
+    편집 전에 시작된 스캔은 편집에 눈먼 결과를 저장하고 computed_at 을 now 로
+    스탬프한다. 시간 기반 stale 판정만으로는 그 편집이 STALE_SECONDS 동안
+    반영되지 않는다(구 preview_cache 는 이 케이스를 명시적으로 다뤘다).
+    스냅샷은 스캔 시작 시점의 전략 updated_at 을 함께 스탬프하고, GET 은 현재
+    전략이 그보다 새로우면 stale 로 보고 재계산을 디스패치한다.
+    """
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+
+    def edit_strategy_mid_scan(self, db, **kwargs):
+        # 스캔이 running 인 동안(=이미 눈먼 시점) 운영자가 전략을 저장한다.
+        # 이 쓰기의 디스패치는 단일비행에 막혀 그대로 유실된다.
+        response = client.put(
+            "/api/v1/operator/strategy", json={"exclude_keywords": ["데이터"]}
+        )
+        assert response.status_code == 200
+        return {
+            "operator_id": int(operator.id),
+            "evaluated_project_count": 0,
+            "returned_candidate_count": 0,
+            "high_priority_only": False,
+            "candidates": [],
+        }
+
+    monkeypatch.setattr(
+        StrategyMonitoringService, "preview_candidates", edit_strategy_mid_scan
+    )
+    PreviewSnapshotService().run_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False, task_id="t-race"
+    )
+    row = _snapshot_row(test_db, int(operator.id))
+    assert row.status == SNAPSHOT_STATUS_IDLE
+    assert row.computed_at is not None  # 시간 기반으로는 신선하다
+    enqueue_stub.calls.clear()
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+    )
+
+    payload = response.json()
+    assert payload["stale"] is True  # 전략이 스탬프보다 새롭다
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+def test_fresh_snapshot_after_strategy_write_is_not_stale(client, test_db, enqueue_stub):
+    """전략 스탬프가 현재 전략과 같으면 stale 이 아니다 — 재계산 churn 방지."""
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    service.run_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False, task_id="t-1"
+    )
+    enqueue_stub.calls.clear()
+
+    first = client.get(
+        "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+    )
+    second = client.get(
+        "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+    )
+
+    assert first.json()["stale"] is False
+    assert second.json()["stale"] is False
+    assert enqueue_stub.calls == []
+
+
+# ---------------------------------------------------------------------------
+# 실패 쿨다운 — 실패한 스냅샷은 GET 마다 스캔을 큐잉하지 않는다 (§7 폴링 대비)
+# ---------------------------------------------------------------------------
+
+
+class _FailingEnqueueRecorder(_EnqueueRecorder):
+    """즉시 실패하는 워커 대역 — enqueue 직후 행을 failed 로 마감한다."""
+
+    def __init__(self, db) -> None:
+        super().__init__()
+        self._db = db
+
+    def __call__(self, *, operator_id: int, high_priority_only: bool):
+        result = super().__call__(
+            operator_id=operator_id, high_priority_only=high_priority_only
+        )
+        service = PreviewSnapshotService()
+        row = service.get_row(
+            self._db, operator_id=int(operator_id), high_priority_only=bool(high_priority_only)
+        )
+        service.mark_failed(self._db, row_id=int(row.id), error="worker exploded")
+        return result
+
+
+@pytest.fixture
+def failing_enqueue_stub(monkeypatch, test_db) -> _FailingEnqueueRecorder:
+    from app.tasks import jobs
+
+    recorder = _FailingEnqueueRecorder(test_db)
+    monkeypatch.setattr(jobs, "enqueue_preview_snapshot_recompute", recorder)
+    return recorder
+
+
+def test_failing_recompute_is_not_redispatched_within_cooldown(
+    client, test_db, failing_enqueue_stub
+):
+    """빠르게 실패하는 재계산은 GET 당 1 스캔을 큐에 쌓지 않는다 (쿨다운)."""
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    _reset_snapshots(test_db)
+    failing_enqueue_stub.calls.clear()
+
+    payloads = [
+        client.get(
+            "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+        ).json()
+        for _ in range(3)
+    ]
+
+    assert payloads[-1]["snapshot_status"] == SNAPSHOT_STATUS_FAILED
+    assert failing_enqueue_stub.calls == [(int(operator.id), False)]
+
+
+def test_explicit_refresh_bypasses_failure_cooldown(client, test_db, failing_enqueue_stub):
+    """명시 갱신(POST /candidates/refresh)은 쿨다운을 우회해 재시도한다."""
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    _reset_snapshots(test_db)
+    failing_enqueue_stub.calls.clear()
+    client.get("/api/v1/operator/strategy/candidates", params={"high_priority_only": False})
+
+    response = client.post("/api/v1/operator/strategy/candidates/refresh")
+
+    assert response.status_code == 202
+    assert failing_enqueue_stub.calls == [
+        (int(operator.id), False),
+        (int(operator.id), False),
+    ]
+
+
+def test_failed_snapshot_is_redispatched_after_cooldown(client, test_db, failing_enqueue_stub):
+    """쿨다운이 지나면 자동 디스패치가 재개된다."""
+    from app.core.config import settings
+
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    _reset_snapshots(test_db)
+    failing_enqueue_stub.calls.clear()
+    client.get("/api/v1/operator/strategy/candidates", params={"high_priority_only": False})
+    row = _snapshot_row(test_db, int(operator.id))
+    cooled_at = utc_now() - timedelta(
+        seconds=int(settings.OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS) + 60
+    )
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.id == row.id
+    ).update({"updated_at": cooled_at}, synchronize_session=False)
+    test_db.commit()
+
+    client.get("/api/v1/operator/strategy/candidates", params={"high_priority_only": False})
+
+    assert failing_enqueue_stub.calls == [
+        (int(operator.id), False),
+        (int(operator.id), False),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # POST /candidates/refresh (202) + sync monitor 위임 (§6.2)
 # ---------------------------------------------------------------------------
 
@@ -651,6 +850,27 @@ def test_candidates_refresh_single_flight_reuses_running_task(client, test_db, e
     assert first.status_code == 202 and second.status_code == 202
     assert len(enqueue_stub.calls) == 1  # 단일비행: 두 번째는 디스패치 없음
     assert second.json()["task_id"] == first.json()["task_id"]
+    assert second.json()["detail"] == "이미 실행 중인 재계산을 재사용합니다."
+
+
+def test_candidates_refresh_reports_enqueue_failure_without_running_message(
+    client, test_db, monkeypatch
+):
+    """enqueue 예외로 failed 마감된 응답에 '이미 실행 중' 문구가 붙지 않는다."""
+    from app.tasks import jobs
+
+    def boom(*, operator_id: int, high_priority_only: bool):
+        raise RuntimeError("broker down")
+
+    _configure_software_operator(client)
+    monkeypatch.setattr(jobs, "enqueue_preview_snapshot_recompute", boom)
+
+    response = client.post("/api/v1/operator/strategy/candidates/refresh")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["snapshot_status"] == SNAPSHOT_STATUS_FAILED
+    assert "이미 실행 중" not in payload["detail"]
 
 
 def test_sync_monitor_route_returns_202_async_envelope(client, test_db, monkeypatch):

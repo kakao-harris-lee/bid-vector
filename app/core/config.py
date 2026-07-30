@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     # 스냅샷을 즉시 서빙하면서 재계산 task 를 단일비행 가드 하에 자동 디스패치
     # 한다(설계 2026-07-30 §6.2). 명시 갱신은 POST /candidates/refresh.
     OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS: int = 1800
+    # preview 스냅샷 재계산 실패 쿨다운(초). status=failed 행은 이 시간 안에는
+    # GET 자동 디스패치를 하지 않는다 — 재계산이 빠르게 실패하는 동안 클라이언트
+    # 폴링(설계 §7)이 GET 당 스캔 1건씩을 큐에 쌓는 것을 막는다(#315 스탬피드의
+    # 큐 측 재현 방지). 명시 갱신(POST /candidates/refresh)은 쿨다운을 우회한다.
+    OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS: int = 60
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440
