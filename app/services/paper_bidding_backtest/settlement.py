@@ -7,24 +7,42 @@ definition.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from app.ai.price_prediction import _resolve_floor_bid_rate
 from app.domain.aggregates import error_rate
 from app.models.models import HistoricalData, TenderResult
+from app.schemas.paper_bidding_items import (
+    PaperBiddingSettlementInput,
+    PaperBiddingSettlementItem,
+    WouldHaveWonFinal,
+)
 from app.services.bid_base import resolve_notice_bid_base
-from app.services.paper_bidding_backtest.base import _PaperBiddingBase
+from app.services.paper_bidding_backtest.base import (
+    PRICE_CLOSE_RATE_TOLERANCE,
+    PRICE_COMPETITIVE_RATE_TOLERANCE,
+    _PaperBiddingBase,
+)
+
+# JSON Text 컬럼(``reserve_prices``/``selected_numbers``)을 리스트로 해석하는 어댑터.
+# ``json.loads`` 직접 호출 대신 pydantic 경로만 쓴다(원소 타입 강제는 호출부가
+# 관용적으로 하므로 여기서는 "리스트인가"만 검증한다).
+_JSON_LIST_ADAPTER: TypeAdapter[list[Any]] = TypeAdapter(list)
 
 
 class _SettlementMixin(_PaperBiddingBase):
     """Score a paper bid against the realized award and the 낙찰하한가 gate."""
 
     def _build_settlement_item(
-        self, db: Session, *, item: dict[str, Any], tender_result: TenderResult
-    ) -> dict[str, Any]:
+        self,
+        db: Session,
+        *,
+        item: PaperBiddingSettlementInput,
+        tender_result: TenderResult,
+    ) -> PaperBiddingSettlementItem:
         winning_amount = float(tender_result.winning_amount or 0.0)
         winning_rate = self._normalize_rate(float(tender_result.winning_rate or 0.0))
         if winning_rate <= 0:
@@ -39,15 +57,15 @@ class _SettlementMixin(_PaperBiddingBase):
             if bid_base > 0:
                 winning_rate = self._normalize_rate(winning_amount / bid_base)
 
-        paper_bid_amount = float(item["paper_bid_amount"] or 0.0)
-        paper_bid_rate = self._normalize_rate(float(item["paper_bid_rate"] or 0.0))
+        paper_bid_amount = float(item.paper_bid_amount or 0.0)
+        paper_bid_rate = self._normalize_rate(float(item.paper_bid_rate or 0.0))
         amount_delta = paper_bid_amount - winning_amount
         # error_rate 는 winning_amount <= 0 이면 None → 기존 else 0.0 폴백을 or 0.0 로 흡수.
         absolute_error_rate = error_rate(paper_bid_amount, winning_amount) or 0.0
         bid_rate_delta = paper_bid_rate - winning_rate
         absolute_bid_rate_error = abs(bid_rate_delta)
-        price_close = absolute_bid_rate_error <= 0.003
-        price_competitive = absolute_bid_rate_error <= 0.01
+        price_close = absolute_bid_rate_error <= PRICE_CLOSE_RATE_TOLERANCE
+        price_competitive = absolute_bid_rate_error <= PRICE_COMPETITIVE_RATE_TOLERANCE
         would_have_won_price_only = (
             "plausible"
             if price_close
@@ -61,8 +79,8 @@ class _SettlementMixin(_PaperBiddingBase):
         # leak -- they are part of the tender *result*, not the prediction input.
         estimated_price, floor_price = self._resolve_settlement_floor(
             db,
-            project_id=item.get("project_id"),
-            category=item.get("category"),
+            project_id=item.project_id,
+            category=item.category,
         )
         would_have_won_final, eligibility_reason = self._score_eligibility_gate(
             our_amount=paper_bid_amount,
@@ -71,45 +89,44 @@ class _SettlementMixin(_PaperBiddingBase):
             floor_price=floor_price,
         )
 
-        return {
-            "project_id": item["project_id"],
-            # Breakdown keys (Phase 2 Experiment Lab). Additive only -- existing
-            # consumers ignore unknown keys. ``category``/``budget_estimate`` come
-            # straight from the candidate item so the settlement can be grouped by
-            # category and budget band downstream without re-querying the project.
-            "category": item.get("category"),
-            "budget_estimate": float(item.get("budget_estimate") or 0.0),
+        return PaperBiddingSettlementItem(
+            project_id=item.project_id,
+            # Breakdown keys (Phase 2 Experiment Lab). ``category``/``budget_estimate``
+            # come straight from the candidate item so the settlement can be grouped
+            # by category and budget band downstream without re-querying the project.
+            category=item.category,
+            budget_estimate=float(item.budget_estimate or 0.0),
             # Award announcement time (안내일/개찰일) -- used downstream to surface
             # per-category data freshness so thin/stale categories are visible.
-            "result_time": self._result_time(tender_result).isoformat(),
-            "tender_result_id": int(tender_result.id),
-            "result_status": str(tender_result.result_status or "awarded"),
-            "winning_company": tender_result.winning_company,
-            "winning_amount": round(winning_amount, 2),
-            "winning_rate": round(winning_rate, 6),
-            "amount_delta": round(amount_delta, 2),
-            "absolute_error_rate": round(absolute_error_rate, 6),
-            "bid_rate_delta": round(bid_rate_delta, 6),
-            "absolute_bid_rate_error": round(absolute_bid_rate_error, 6),
-            "price_close": price_close,
-            "price_competitive": price_competitive,
-            "would_have_won_price_only": would_have_won_price_only,
-            "would_have_won_final": would_have_won_final,
-            "estimated_price": (
+            result_time=self._result_time(tender_result).isoformat(),
+            tender_result_id=int(tender_result.id),
+            result_status=str(tender_result.result_status or "awarded"),
+            winning_company=tender_result.winning_company,
+            winning_amount=round(winning_amount, 2),
+            winning_rate=round(winning_rate, 6),
+            amount_delta=round(amount_delta, 2),
+            absolute_error_rate=round(absolute_error_rate, 6),
+            bid_rate_delta=round(bid_rate_delta, 6),
+            absolute_bid_rate_error=round(absolute_bid_rate_error, 6),
+            price_close=price_close,
+            price_competitive=price_competitive,
+            would_have_won_price_only=would_have_won_price_only,
+            would_have_won_final=would_have_won_final,
+            estimated_price=(
                 round(estimated_price, 2) if estimated_price is not None else None
             ),
-            "minimum_bid_price": (
+            minimum_bid_price=(
                 round(floor_price, 2) if floor_price is not None else None
             ),
-            "settlement_reason": eligibility_reason,
-        }
+            settlement_reason=eligibility_reason,
+        )
 
     def _resolve_settlement_bid_base(
         self,
         db: Session,
         *,
         tender_result: TenderResult,
-        item: dict[str, Any],
+        item: PaperBiddingSettlementInput,
     ) -> float:
         """Resolve the base (기초금액/사업금액) to normalize a missing winning_rate against.
 
@@ -124,10 +141,7 @@ class _SettlementMixin(_PaperBiddingBase):
             base = resolve_notice_bid_base(db, project)
             if base > 0:
                 return base
-        try:
-            return float(item.get("budget_estimate") or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
+        return float(item.budget_estimate or 0.0)
 
     def _score_eligibility_gate(
         self,
@@ -136,7 +150,7 @@ class _SettlementMixin(_PaperBiddingBase):
         winning_amount: float,
         estimated_price: float | None,
         floor_price: float | None,
-    ) -> tuple[str, str]:
+    ) -> tuple[WouldHaveWonFinal, str]:
         """Classify a paper bid against the 낙찰하한가 eligibility gate.
 
         Returns ``(would_have_won_final, settlement_reason)``. ``settlement_reason``
@@ -185,7 +199,7 @@ class _SettlementMixin(_PaperBiddingBase):
         self,
         db: Session,
         *,
-        project_id: Any,
+        project_id: int,
         category: str | None,
     ) -> tuple[float | None, float | None]:
         """Resolve ``(estimated_price, floor_price)`` for a settled project.
@@ -207,10 +221,10 @@ class _SettlementMixin(_PaperBiddingBase):
         category floor is the hard lower bound of any group floor, so scoring with
         the category floor never disqualifies a bid the predictor's (possibly
         higher group) floor would have allowed -- it errs on the safe side.
-        """
-        if project_id is None:
-            return (None, None)
 
+        ``project_id`` 는 :class:`PaperBiddingSettlementInput` 이 필수 ``int`` 로
+        보장하므로 종전의 ``None`` 가드는 사라졌다(계약이 대신 막는다).
+        """
         record = (
             db.query(HistoricalData)
             .filter(HistoricalData.project_id == int(project_id))
@@ -295,9 +309,7 @@ class _SettlementMixin(_PaperBiddingBase):
         if not text:
             return []
         try:
-            parsed = json.loads(text)
-        except (TypeError, ValueError):
+            return _JSON_LIST_ADAPTER.validate_json(text)
+        except ValidationError:
+            # 깨진 JSON 이거나 리스트가 아닌 값(스칼라/오브젝트) -> 표본 없음.
             return []
-        if isinstance(parsed, list):
-            return parsed
-        return []

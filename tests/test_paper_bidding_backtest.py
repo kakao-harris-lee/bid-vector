@@ -18,6 +18,8 @@ from app.models.models import (
     TenderResult,
     User,
 )
+from app.schemas.paper_bidding_audit import BacktestDataAuditCategoryRow
+from app.schemas.paper_bidding_items import PaperBiddingSettlementInput
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.backtest_data_audit import BacktestDataAuditService
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
@@ -123,14 +125,14 @@ def test_backtest_data_audit_counts_usable_awards_and_pending_snapshots(test_db)
         test_db, categories=["construction"]
     )
 
-    assert report["window_counts"]["usable_award_count"] == 1
-    assert report["window_counts"]["pending_or_opening_snapshot_count"] == 1
-    assert report["category_breakdown"] == [
-        {
-            "category": "construction",
-            "usable_award_count": 1,
-            "distinct_project_count": 1,
-        }
+    assert report.window_counts.usable_award_count == 1
+    assert report.window_counts.pending_or_opening_snapshot_count == 1
+    assert report.category_breakdown == [
+        BacktestDataAuditCategoryRow(
+            category="construction",
+            usable_award_count=1,
+            distinct_project_count=1,
+        )
     ]
 
 
@@ -363,6 +365,86 @@ def test_backtests_api_runs_persisted_historical_backtest_and_returns_detail(
     assert settlement_overview["status"] == "settled"
     assert settlement_overview["settled_count"] == 1
     assert settlement_overview["unsettled_count"] == 0
+
+
+def test_backtests_api_tolerates_legacy_and_corrupt_run_payloads(client, test_db):
+    """DTO 승격 회귀 가드: 과거/손상된 run payload 하나가 목록·상세를 500 으로 만들면 안 된다.
+
+    ``result_payload``/``request_payload`` 를 ``model_validate_json`` 으로 되읽게 바뀐
+    뒤, (1) 지금 지표에 없는 키가 섞인 과거 요약, (2) 깨진 JSON 이 모두 degrade 경로로
+    처리되는지 고정한다. 요약은 항상 객체 모양을 유지하고(소비처의 ``summary.<field>``
+    접근이 깨지지 않게), 해석 못한 요청 스냅샷은 ``null``(부재)로 남는다.
+    """
+    headers, operator_id = _bootstrap_and_auth(client, username="legacy-payload-api")
+    legacy = PaperBidRun(
+        operator_id=operator_id,
+        strategy_version="legacy",
+        model_version="legacy",
+        status="completed",
+        mode="historical_backtest",
+        scenario="base",
+        data_cutoff_policy="deadline_minus_2h",
+        started_at=_dt(2025, 1, 1),
+        request_payload='{"limit": 5, "legacy_only_flag": true}',
+        result_payload='{"settled_count": 3, "legacy_win_count": 9}',
+    )
+    corrupt = PaperBidRun(
+        operator_id=operator_id,
+        strategy_version="corrupt",
+        model_version="corrupt",
+        status="completed",
+        mode="forward_paper",
+        scenario="base",
+        data_cutoff_policy="execution_time",
+        started_at=_dt(2025, 1, 2),
+        request_payload="{not json",
+        result_payload="{not json",
+    )
+    test_db.add_all([legacy, corrupt])
+    test_db.commit()
+
+    listed = client.get("/api/v1/backtests/paper-bidding/runs", headers=headers)
+    assert listed.status_code == 200
+    summaries = {item["id"]: item["summary"] for item in listed.json()["items"]}
+    assert summaries[legacy.id]["settled_count"] == 3
+    assert "legacy_win_count" not in summaries[legacy.id]
+    # 손상된 payload 는 빈(0) 요약으로 degrade 하고 평균 오차는 부재를 유지한다.
+    assert summaries[corrupt.id]["settled_count"] == 0
+    assert summaries[corrupt.id]["average_absolute_bid_rate_error"] is None
+
+    legacy_detail = client.get(
+        f"/api/v1/backtests/paper-bidding/runs/{legacy.id}", headers=headers
+    )
+    assert legacy_detail.status_code == 200
+    legacy_request = legacy_detail.json()["request"]
+    assert legacy_request["limit"] == 5
+    # 기록되지 않은 필드는 null 로 남는다 — 기본값으로 채워 "이 run 은 persist=false 로
+    # 돌았다"고 오독하게 만들지 않는다.
+    assert legacy_request["persist"] is None
+    assert legacy_request["scenario"] is None
+    assert legacy_request["settle_actions"] is None
+    assert "legacy_only_flag" not in legacy_request
+
+    corrupt_detail = client.get(
+        f"/api/v1/backtests/paper-bidding/runs/{corrupt.id}", headers=headers
+    )
+    assert corrupt_detail.status_code == 200
+    assert corrupt_detail.json()["request"] is None
+
+
+def test_backtests_api_summary_without_runs_returns_empty_summary_object(
+    client, test_db
+):
+    """실행이 없어도 ``latest_summary`` 는 객체 모양을 유지한다(종전 ``{}`` 대신 0 요약)."""
+    headers, _ = _bootstrap_and_auth(client, username="no-run-summary-api")
+
+    response = client.get("/api/v1/backtests/paper-bidding/summary", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["latest_run"] is None
+    assert payload["latest_summary"]["settled_count"] == 0
+    assert payload["latest_summary"]["average_absolute_bid_rate_error"] is None
 
 
 def test_backtests_api_forward_run_creates_unsettled_paper_bids(client, test_db):
@@ -821,13 +903,13 @@ def _settlement_for(
     )
     test_db.add(result)
     test_db.flush()
-    item = {
-        "project_id": target.id,
-        "category": "construction",
-        "budget_estimate": 100_000_000,
-        "paper_bid_amount": paper_bid_amount,
-        "paper_bid_rate": paper_bid_rate,
-    }
+    item = PaperBiddingSettlementInput(
+        project_id=target.id,
+        category="construction",
+        budget_estimate=100_000_000,
+        paper_bid_amount=paper_bid_amount,
+        paper_bid_rate=paper_bid_rate,
+    )
     return PaperBiddingBacktestService()._build_settlement_item(
         test_db, item=item, tender_result=result
     )
@@ -841,9 +923,9 @@ def test_settlement_gate_eligible_favorable_above_floor_below_winning(test_db):
         paper_bid_rate=0.88,
         winning_amount=88_100_000,
     )
-    assert settlement["would_have_won_final"] == "eligible_favorable"
-    assert settlement["estimated_price"] == 100_000_000
-    assert settlement["minimum_bid_price"] == 87_000_000
+    assert settlement.would_have_won_final == "eligible_favorable"
+    assert settlement.estimated_price == 100_000_000
+    assert settlement.minimum_bid_price == 87_000_000
 
 
 def test_settlement_gate_disqualified_below_floor_even_when_price_close(test_db):
@@ -855,9 +937,9 @@ def test_settlement_gate_disqualified_below_floor_even_when_price_close(test_db)
         paper_bid_rate=0.869,
         winning_amount=87_000_000,  # winning_rate 0.87, ours 0.869 -> 0.1%p apart
     )
-    assert settlement["price_close"] is True  # within 0.3%p -- price proximity holds
-    assert settlement["would_have_won_final"] == "disqualified"
-    assert settlement["minimum_bid_price"] == 87_000_000
+    assert settlement.price_close is True  # within 0.3%p -- price proximity holds
+    assert settlement.would_have_won_final == "disqualified"
+    assert settlement.minimum_bid_price == 87_000_000
 
 
 def test_settlement_gate_eligible_but_outbid_above_winning(test_db):
@@ -868,7 +950,7 @@ def test_settlement_gate_eligible_but_outbid_above_winning(test_db):
         paper_bid_rate=0.90,
         winning_amount=88_000_000,
     )
-    assert settlement["would_have_won_final"] == "eligible_but_outbid"
+    assert settlement.would_have_won_final == "eligible_but_outbid"
 
 
 def test_settlement_gate_unknown_when_no_estimate_data(test_db):
@@ -887,19 +969,19 @@ def test_settlement_gate_unknown_when_no_estimate_data(test_db):
     )
     test_db.add(result)
     test_db.flush()
-    item = {
-        "project_id": target.id,
-        "category": "construction",
-        "budget_estimate": 100_000_000,
-        "paper_bid_amount": 88_000_000,
-        "paper_bid_rate": 0.88,
-    }
+    item = PaperBiddingSettlementInput(
+        project_id=target.id,
+        category="construction",
+        budget_estimate=100_000_000,
+        paper_bid_amount=88_000_000,
+        paper_bid_rate=0.88,
+    )
     settlement = PaperBiddingBacktestService()._build_settlement_item(
         test_db, item=item, tender_result=result
     )
-    assert settlement["would_have_won_final"] == "unknown"
-    assert settlement["estimated_price"] is None
-    assert settlement["minimum_bid_price"] is None
+    assert settlement.would_have_won_final == "unknown"
+    assert settlement.estimated_price is None
+    assert settlement.minimum_bid_price is None
 
 
 def test_settlement_gate_persists_estimated_and_floor_columns(test_db):
@@ -1028,8 +1110,8 @@ def test_candidate_item_uses_injected_prediction_port(test_db):
     assert port.calls[0]["category"] == "software"
     assert "port injected description" in port.calls[0]["description"]
     assert port.calls[0]["business_type_code"] == "0621"
-    assert item["predicted_bid_rate"] == 0.88
-    assert item["predictor_name"] == "fake"
+    assert item.predicted_bid_rate == 0.88
+    assert item.predictor_name == "fake"
 
 
 def test_candidate_prediction_feeds_published_award_floor(test_db):
@@ -1157,7 +1239,43 @@ def test_candidate_prediction_ignores_target_own_reserve_prices(test_db):
         "historical_sample_size",
         "action",
     ):
-        assert baseline_item[key] == leaky_item[key], f"leakage via {key!r}"
+        assert getattr(baseline_item, key) == getattr(
+            leaky_item, key
+        ), f"leakage via {key!r}"
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_floats", "expected_ints"),
+    [
+        (None, [], []),
+        ("", [], []),
+        ("   ", [], []),
+        (
+            "[99000000, 100000000]",
+            [99_000_000.0, 100_000_000.0],
+            [99_000_000, 100_000_000],
+        ),
+        ([1, 2], [1.0, 2.0], [1, 2]),
+        ((1, 2), [1.0, 2.0], [1, 2]),
+        ('["3", 4]', [3.0, 4.0], [3, 4]),
+        ("[1, null, 2]", [1.0, 2.0], [1, 2]),
+        ("not json", [], []),
+        ("123", [], []),
+        ('{"a": 1}', [], []),
+    ],
+)
+def test_reserve_json_columns_coerce_without_raw_json_calls(
+    raw_value, expected_floats, expected_ints
+):
+    """``reserve_prices``/``selected_numbers`` Text 컬럼 해석 계약.
+
+    ``json.loads`` 직접 호출을 pydantic ``TypeAdapter`` 로 바꾼 뒤에도 관용 범위가
+    동일해야 한다: 리스트가 아니거나 깨진 JSON 은 "표본 없음"(``[]``)이고, 원소 단위
+    변환 실패는 그 원소만 버린다(예정가 유도가 한 행 때문에 죽지 않는다).
+    """
+    service = PaperBiddingBacktestService()
+    assert service._coerce_float_list(raw_value) == expected_floats
+    assert service._coerce_int_list(raw_value) == expected_ints
 
 
 def test_derive_estimated_price_falls_back_to_predicted_price(test_db):
@@ -1196,18 +1314,18 @@ def test_derive_estimated_price_falls_back_to_predicted_price(test_db):
     )
     test_db.add(result)
     test_db.flush()
-    item = {
-        "project_id": target.id,
-        "category": "construction",
-        "budget_estimate": 100_000_000,
-        "paper_bid_amount": 90_000_000,  # >= floor (85.26M), > winning 88M
-        "paper_bid_rate": 0.90,
-    }
+    item = PaperBiddingSettlementInput(
+        project_id=target.id,
+        category="construction",
+        budget_estimate=100_000_000,
+        paper_bid_amount=90_000_000,  # >= floor (85.26M), > winning 88M
+        paper_bid_rate=0.90,
+    )
     settlement = service._build_settlement_item(
         test_db, item=item, tender_result=result
     )
-    assert settlement["estimated_price"] == 98_000_000
-    assert settlement["would_have_won_final"] == "eligible_but_outbid"
+    assert settlement.estimated_price == 98_000_000
+    assert settlement.would_have_won_final == "eligible_but_outbid"
 
 
 def test_settlement_gate_unknown_for_category_without_floor_rate(test_db):
@@ -1238,20 +1356,20 @@ def test_settlement_gate_unknown_for_category_without_floor_rate(test_db):
     assert estimated_price == 100_000_000
     assert floor_price is None
 
-    item = {
-        "project_id": target.id,
-        "category": "other",
-        "budget_estimate": 100_000_000,
-        "paper_bid_amount": 88_000_000,
-        "paper_bid_rate": 0.88,
-    }
+    item = PaperBiddingSettlementInput(
+        project_id=target.id,
+        category="other",
+        budget_estimate=100_000_000,
+        paper_bid_amount=88_000_000,
+        paper_bid_rate=0.88,
+    )
     settlement = service._build_settlement_item(
         test_db, item=item, tender_result=result
     )
     # Internal consistency: estimated_price non-NULL, minimum_bid_price NULL, gate unknown.
-    assert settlement["estimated_price"] == 100_000_000
-    assert settlement["minimum_bid_price"] is None
-    assert settlement["would_have_won_final"] == "unknown"
+    assert settlement.estimated_price == 100_000_000
+    assert settlement.minimum_bid_price is None
+    assert settlement.would_have_won_final == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -1334,25 +1452,27 @@ def test_paper_bid_anchored_on_base_amount_not_disqualified(test_db):
         profile=None,
     )
     settlement = service._build_settlement_item(
-        test_db, item=item, tender_result=result
+        test_db,
+        item=PaperBiddingSettlementInput.from_candidate(item),
+        tender_result=result,
     )
 
-    rate = item["paper_bid_rate"]
+    rate = item.paper_bid_rate
     assert rate > 0
     # The paper bid is anchored on the 과세 base, ~10% higher than rate × 추정가격.
-    assert item["paper_bid_amount"] == pytest.approx(rate * base_amount, rel=1e-3)
-    assert item["paper_bid_amount"] > rate * budget_estimate * 1.05
+    assert item.paper_bid_amount == pytest.approx(rate * base_amount, rel=1e-3)
+    assert item.paper_bid_amount > rate * budget_estimate * 1.05
     # Reported budget_estimate stays the ex-VAT estimate (not the base).
-    assert item["budget_estimate"] == pytest.approx(budget_estimate)
+    assert item.budget_estimate == pytest.approx(budget_estimate)
     # Floor is base-relative (construction 0.87).
-    assert settlement["minimum_bid_price"] == pytest.approx(base_amount * 0.87)
+    assert settlement.minimum_bid_price == pytest.approx(base_amount * 0.87)
     # The buggy ex-VAT bid WOULD have fallen below the floor (systematic
     # disqualification)...
-    assert rate * budget_estimate < settlement["minimum_bid_price"]
+    assert rate * budget_estimate < settlement.minimum_bid_price
     # ...but the base-anchored bid clears it and is NOT disqualified.
-    assert item["paper_bid_amount"] >= settlement["minimum_bid_price"]
-    assert settlement["would_have_won_final"] != "disqualified"
-    assert settlement["would_have_won_final"] in {
+    assert item.paper_bid_amount >= settlement.minimum_bid_price
+    assert settlement.would_have_won_final != "disqualified"
+    assert settlement.would_have_won_final in {
         "eligible_favorable",
         "eligible_but_outbid",
     }
@@ -1383,21 +1503,21 @@ def test_settlement_winning_rate_fallback_divides_by_base(test_db):
     test_db.add(result)
     test_db.flush()
 
-    item = {
-        "project_id": target.id,
-        "category": "construction",
-        "budget_estimate": budget_estimate,  # reported est (ex-VAT)
-        "paper_bid_amount": 96_800_000,
-        "paper_bid_rate": 0.88,
-    }
+    item = PaperBiddingSettlementInput(
+        project_id=target.id,
+        category="construction",
+        budget_estimate=budget_estimate,  # reported est (ex-VAT)
+        paper_bid_amount=96_800_000,
+        paper_bid_rate=0.88,
+    )
     settlement = PaperBiddingBacktestService()._build_settlement_item(
         test_db, item=item, tender_result=result
     )
 
     # winning_rate = 97M / 110M (base), NOT 97M / 100M (추정가격).
-    assert settlement["winning_rate"] == pytest.approx(
+    assert settlement.winning_rate == pytest.approx(
         97_000_000 / base_amount, abs=1e-5
     )
-    assert settlement["winning_rate"] != pytest.approx(
+    assert settlement.winning_rate != pytest.approx(
         97_000_000 / budget_estimate, abs=1e-5
     )

@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import exists
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.constants import FORWARD_PAPER_RUN_MODE
 from app.core.time import ensure_utc, utc_now
 from app.models.models import (
     PaperBid,
@@ -17,6 +18,11 @@ from app.models.models import (
     Project,
     TenderResult,
 )
+from app.schemas.paper_bidding_items import (
+    PaperBiddingSettlementInput,
+    PaperBiddingSettlementItem,
+)
+from app.schemas.paper_bidding_runs import ForwardSettlementRunResult
 from app.services.query_predicates import settled_with_amount
 from app.services.paper_bidding_backtest.base import _PaperBiddingBase
 
@@ -48,6 +54,9 @@ class _ForwardSettlementMixin(_PaperBiddingBase):
         considered; otherwise every operator's unsettled forward paper bid is
         eligible. ``persist=False`` computes settlements without writing them
         (used by tests).
+
+        반환은 celery task(``settle_forward_paper_bids``) 결과로 그대로 쓰이므로 JSON
+        직렬화된 dict 다. 내부 체인은 :class:`ForwardSettlementRunResult` DTO 로 흐른다.
         """
         safe_limit = max(1, int(limit or 1))
         now = utc_now()
@@ -59,7 +68,7 @@ class _ForwardSettlementMixin(_PaperBiddingBase):
         settled_count = 0
         skipped_count = 0
         scanned_count = 0
-        settlement_items: list[dict[str, Any]] = []
+        settlement_items: list[PaperBiddingSettlementItem] = []
 
         for paper_bid in candidates:
             scanned_count += 1
@@ -101,16 +110,16 @@ class _ForwardSettlementMixin(_PaperBiddingBase):
             action_counts=Counter(),
         )
 
-        return {
-            "operator_id": int(operator_id) if operator_id is not None else None,
-            "scanned_count": scanned_count,
-            "settled_count": settled_count,
-            "skipped_count": skipped_count,
-            "limit": safe_limit,
-            "persist": persist,
-            "summary": summary,
-            "settlements": settlement_items,
-        }
+        return ForwardSettlementRunResult(
+            operator_id=int(operator_id) if operator_id is not None else None,
+            scanned_count=scanned_count,
+            settled_count=settled_count,
+            skipped_count=skipped_count,
+            limit=safe_limit,
+            persist=persist,
+            summary=summary,
+            settlements=settlement_items,
+        ).model_dump(mode="json")
 
     def _load_unsettled_forward_paper_bids(
         self,
@@ -147,7 +156,8 @@ class _ForwardSettlementMixin(_PaperBiddingBase):
             .filter(
                 PaperBidSettlement.id.is_(None),
                 Project.deadline.isnot(None),
-                (PaperBidRun.mode == "forward_paper") | (PaperBidRun.mode.is_(None)),
+                (PaperBidRun.mode == FORWARD_PAPER_RUN_MODE)
+                | (PaperBidRun.mode.is_(None)),
                 exists().where(
                     (TenderResult.project_id == PaperBid.project_id)
                     & settled_with_amount()
@@ -198,21 +208,24 @@ class _ForwardSettlementMixin(_PaperBiddingBase):
             key=lambda result: (self._result_time(result), int(result.id or 0)),
         )
 
-    def _paper_bid_to_settlement_input(self, paper_bid: PaperBid) -> dict[str, Any]:
-        """Adapt a persisted :class:`PaperBid` to the candidate dict shape.
+    def _paper_bid_to_settlement_input(
+        self, paper_bid: PaperBid
+    ) -> PaperBiddingSettlementInput:
+        """Adapt a persisted :class:`PaperBid` to the settlement input port.
 
-        :meth:`_build_settlement_item` only reads ``project_id``, ``category``,
-        ``budget_estimate``, ``paper_bid_amount`` and ``paper_bid_rate`` from the
-        item, so this thin adapter avoids re-implementing any settlement math. The
-        budget estimate comes from the linked project (falling back to 0.0 so the
-        existing guards in ``_build_settlement_item`` apply unchanged).
+        :meth:`_build_settlement_item` only reads the five fields of
+        :class:`PaperBiddingSettlementInput`, so this thin adapter avoids
+        re-implementing any settlement math. The budget estimate comes from the
+        linked project (falling back to 0.0 so the existing guards in
+        ``_build_settlement_item`` apply unchanged). The historical-replay
+        counterpart is ``PaperBiddingSettlementInput.from_candidate``.
         """
         project = paper_bid.project
         budget = self._resolve_project_budget(project) if project is not None else 0.0
-        return {
-            "project_id": int(paper_bid.project_id),
-            "category": getattr(project, "category", None) if project else None,
-            "budget_estimate": float(budget or 0.0),
-            "paper_bid_amount": float(paper_bid.paper_bid_amount or 0.0),
-            "paper_bid_rate": float(paper_bid.paper_bid_rate or 0.0),
-        }
+        return PaperBiddingSettlementInput(
+            project_id=int(paper_bid.project_id),
+            category=getattr(project, "category", None) if project else None,
+            budget_estimate=float(budget or 0.0),
+            paper_bid_amount=float(paper_bid.paper_bid_amount or 0.0),
+            paper_bid_rate=float(paper_bid.paper_bid_rate or 0.0),
+        )

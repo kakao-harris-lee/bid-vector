@@ -26,9 +26,15 @@ __all__ = ["FrozenStrictModel", "StrictModel"]
 
 
 class StrictModel(BaseModel):
-    """extra 필드 거부 — 신규 DTO 의 기본 베이스."""
+    """extra 필드 거부 — 신규 DTO 의 기본 베이스.
 
-    model_config = ConfigDict(extra="forbid")
+    ``protected_namespaces=()`` 는 이 도메인의 필드 이름이 pydantic 의 예약 접두사
+    ``model_`` 와 겹치기 때문이다(``model_version`` — 예측 모델 버전은 도메인 용어라
+    개명하지 않는다). 기본값이면 그런 필드를 가진 DTO 마다 UserWarning 이 쌓여 진짜
+    경고를 묻어 버린다. 예약 접두사 정책은 여기 한 곳에서만 정한다(단일 출처).
+    """
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
 
 class FrozenStrictModel(StrictModel):

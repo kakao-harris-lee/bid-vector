@@ -10,6 +10,14 @@ from sqlalchemy.orm import Session
 
 from app.core.time import ensure_utc, utc_now
 from app.models.models import Bid, BidDecisionRecord, HistoricalData, PricePrediction, Project, TenderResult
+from app.schemas.paper_bidding import BacktestDataAuditResponse
+from app.schemas.paper_bidding_audit import (
+    BacktestDataAuditCategoryRow,
+    BacktestDataAuditDateRange,
+    BacktestDataAuditFilters,
+    BacktestDataAuditTableCounts,
+    BacktestDataAuditWindowCounts,
+)
 from app.services.query_predicates import open_projects, settled_with_amount
 
 
@@ -23,7 +31,7 @@ class BacktestDataAuditService:
         categories: Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
-    ) -> dict[str, Any]:
+    ) -> BacktestDataAuditResponse:
         """Return table counts and usable award coverage for a backtest window."""
         normalized_categories = self._normalize_categories(categories)
         start_at = ensure_utc(start_at) if start_at is not None else None
@@ -49,54 +57,58 @@ class BacktestDataAuditService:
             )
         )
 
-        return {
-            "generated_at": utc_now().isoformat(),
-            "filters": {
-                "categories": normalized_categories,
-                "start_at": start_at.isoformat() if start_at else None,
-                "end_at": end_at.isoformat() if end_at else None,
-            },
-            "table_counts": {
-                "projects_total": self._count(db.query(Project.id)),
-                "projects_active_open_or_re_notice": self._count(
-                    db.query(Project.id).filter(open_projects())
-                ),
-                "historical_total": self._count(db.query(HistoricalData.id)),
-                "historical_with_bid_rate": self._count(db.query(HistoricalData.id).filter(HistoricalData.bid_rate > 0)),
-                "historical_with_project_id": self._count(
-                    db.query(HistoricalData.id).filter(HistoricalData.project_id.isnot(None))
-                ),
-                "tender_results_total": self._count(db.query(TenderResult.id)),
-                "tender_results_usable_awards": self._count(
-                    db.query(TenderResult.id).filter(*self._usable_result_filters())
-                ),
-                "price_predictions_total": self._count(db.query(PricePrediction.id)),
-                "bid_decisions_total": self._count(db.query(BidDecisionRecord.id)),
-                "bid_decisions_submitted": self._count(
-                    db.query(BidDecisionRecord.id).filter(BidDecisionRecord.decision_status == "submitted")
-                ),
-                "bids_total": self._count(db.query(Bid.id)),
-            },
-            "window_counts": {
-                "usable_award_count": usable_result_query.count(),
-                "pending_or_opening_snapshot_count": pending_snapshot_query.count(),
-                "distinct_project_count": usable_result_query.with_entities(func.count(func.distinct(TenderResult.project_id))).scalar() or 0,
-            },
-            "date_range": {
-                "award_announced_min": self._iso_or_none(
+        return BacktestDataAuditResponse(
+            generated_at=utc_now().isoformat(),
+            filters=BacktestDataAuditFilters(
+                categories=normalized_categories,
+                start_at=start_at.isoformat() if start_at else None,
+                end_at=end_at.isoformat() if end_at else None,
+            ),
+            table_counts=self._build_table_counts(db),
+            window_counts=BacktestDataAuditWindowCounts(
+                usable_award_count=usable_result_query.count(),
+                pending_or_opening_snapshot_count=pending_snapshot_query.count(),
+                distinct_project_count=usable_result_query.with_entities(func.count(func.distinct(TenderResult.project_id))).scalar() or 0,
+            ),
+            date_range=BacktestDataAuditDateRange(
+                award_announced_min=self._iso_or_none(
                     usable_result_query.with_entities(func.min(TenderResult.announced_at)).scalar()
                 ),
-                "award_announced_max": self._iso_or_none(
+                award_announced_max=self._iso_or_none(
                     usable_result_query.with_entities(func.max(TenderResult.announced_at)).scalar()
                 ),
-            },
-            "category_breakdown": self._build_category_breakdown(
+            ),
+            category_breakdown=self._build_category_breakdown(
                 db,
                 usable_result_filters=usable_result_filters,
                 result_window_filters=result_window_filters,
                 category_filters=category_filters,
             ),
-        }
+        )
+
+    def _build_table_counts(self, db: Session) -> BacktestDataAuditTableCounts:
+        """백테스트가 의존하는 테이블별 전체 행 수(창 필터 없음)."""
+        return BacktestDataAuditTableCounts(
+            projects_total=self._count(db.query(Project.id)),
+            projects_active_open_or_re_notice=self._count(
+                db.query(Project.id).filter(open_projects())
+            ),
+            historical_total=self._count(db.query(HistoricalData.id)),
+            historical_with_bid_rate=self._count(db.query(HistoricalData.id).filter(HistoricalData.bid_rate > 0)),
+            historical_with_project_id=self._count(
+                db.query(HistoricalData.id).filter(HistoricalData.project_id.isnot(None))
+            ),
+            tender_results_total=self._count(db.query(TenderResult.id)),
+            tender_results_usable_awards=self._count(
+                db.query(TenderResult.id).filter(*self._usable_result_filters())
+            ),
+            price_predictions_total=self._count(db.query(PricePrediction.id)),
+            bid_decisions_total=self._count(db.query(BidDecisionRecord.id)),
+            bid_decisions_submitted=self._count(
+                db.query(BidDecisionRecord.id).filter(BidDecisionRecord.decision_status == "submitted")
+            ),
+            bids_total=self._count(db.query(Bid.id)),
+        )
 
     def _build_category_breakdown(
         self,
@@ -105,7 +117,7 @@ class BacktestDataAuditService:
         usable_result_filters: list[Any],
         result_window_filters: list[Any],
         category_filters: list[Any],
-    ) -> list[dict[str, Any]]:
+    ) -> list[BacktestDataAuditCategoryRow]:
         rows = (
             db.query(
                 Project.category,
@@ -119,11 +131,11 @@ class BacktestDataAuditService:
             .all()
         )
         return [
-            {
-                "category": category or "unknown",
-                "usable_award_count": int(usable_count or 0),
-                "distinct_project_count": int(project_count or 0),
-            }
+            BacktestDataAuditCategoryRow(
+                category=category or "unknown",
+                usable_award_count=int(usable_count or 0),
+                distinct_project_count=int(project_count or 0),
+            )
             for category, usable_count, project_count in rows
         ]
 

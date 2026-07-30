@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,8 +13,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.core.database import SessionLocal
+from app.schemas._base import StrictModel
+from app.schemas.paper_bidding_audit import BacktestDataAuditWindowCounts
 from app.services.backtest_data_audit import BacktestDataAuditService
 from scripts._common import parse_datetime
+
+
+class BacktestDataAuditRunReport(StrictModel):
+    """CLI 표준출력 한 줄(리포트 파일 경로 + 창 카운트)."""
+
+    status: str
+    out: str
+    window_counts: BacktestDataAuditWindowCounts
 
 
 def parse_categories(values: list[str] | None) -> list[str]:
@@ -58,8 +67,14 @@ def main() -> int:
     finally:
         db.close()
 
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
-    print(json.dumps({"status": "completed", "out": str(output_path), "window_counts": report["window_counts"]}, ensure_ascii=False))
+    output_path.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    print(
+        BacktestDataAuditRunReport(
+            status="completed",
+            out=str(output_path),
+            window_counts=report.window_counts,
+        ).model_dump_json()
+    )
     return 0
 
 

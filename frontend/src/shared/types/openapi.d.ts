@@ -2569,7 +2569,9 @@ export interface components {
             /** Event Type */
             event_type: string;
             /** Event Data */
-            event_data: Record<string, never>;
+            event_data: {
+                [key: string]: unknown;
+            };
         };
         /** AnalyticsSummaryResponse */
         AnalyticsSummaryResponse: {
@@ -2599,20 +2601,90 @@ export interface components {
             /** Detail */
             detail: string;
         };
+        /**
+         * BacktestDataAuditCategoryRow
+         * @description 카테고리별 사용 가능 개찰 표본 분포 한 행.
+         */
+        BacktestDataAuditCategoryRow: {
+            /** Category */
+            category: string;
+            /** Usable Award Count */
+            usable_award_count: number;
+            /** Distinct Project Count */
+            distinct_project_count: number;
+        };
+        /**
+         * BacktestDataAuditDateRange
+         * @description 창 안 개찰 공고의 안내일 최소/최대(isoformat, 표본 없으면 None).
+         */
+        BacktestDataAuditDateRange: {
+            /** Award Announced Min */
+            award_announced_min?: string | null;
+            /** Award Announced Max */
+            award_announced_max?: string | null;
+        };
+        /**
+         * BacktestDataAuditFilters
+         * @description 리포트를 만든 조회 조건(그대로 되돌려 준다).
+         */
+        BacktestDataAuditFilters: {
+            /** Categories */
+            categories?: string[];
+            /** Start At */
+            start_at?: string | null;
+            /** End At */
+            end_at?: string | null;
+        };
         /** BacktestDataAuditResponse */
         BacktestDataAuditResponse: {
             /** Generated At */
             generated_at: string;
-            /** Filters */
-            filters?: Record<string, never>;
-            /** Table Counts */
-            table_counts?: Record<string, never>;
-            /** Window Counts */
-            window_counts?: Record<string, never>;
-            /** Date Range */
-            date_range?: Record<string, never>;
+            filters: components["schemas"]["BacktestDataAuditFilters"];
+            table_counts: components["schemas"]["BacktestDataAuditTableCounts"];
+            window_counts: components["schemas"]["BacktestDataAuditWindowCounts"];
+            date_range: components["schemas"]["BacktestDataAuditDateRange"];
             /** Category Breakdown */
-            category_breakdown?: Record<string, never>[];
+            category_breakdown?: components["schemas"]["BacktestDataAuditCategoryRow"][];
+        };
+        /**
+         * BacktestDataAuditTableCounts
+         * @description 백테스트가 의존하는 테이블별 전체 행 수.
+         */
+        BacktestDataAuditTableCounts: {
+            /** Projects Total */
+            projects_total: number;
+            /** Projects Active Open Or Re Notice */
+            projects_active_open_or_re_notice: number;
+            /** Historical Total */
+            historical_total: number;
+            /** Historical With Bid Rate */
+            historical_with_bid_rate: number;
+            /** Historical With Project Id */
+            historical_with_project_id: number;
+            /** Tender Results Total */
+            tender_results_total: number;
+            /** Tender Results Usable Awards */
+            tender_results_usable_awards: number;
+            /** Price Predictions Total */
+            price_predictions_total: number;
+            /** Bid Decisions Total */
+            bid_decisions_total: number;
+            /** Bid Decisions Submitted */
+            bid_decisions_submitted: number;
+            /** Bids Total */
+            bids_total: number;
+        };
+        /**
+         * BacktestDataAuditWindowCounts
+         * @description 요청 창(카테고리·기간) 안에서 실제로 쓸 수 있는 개찰 표본 수.
+         */
+        BacktestDataAuditWindowCounts: {
+            /** Usable Award Count */
+            usable_award_count: number;
+            /** Pending Or Opening Snapshot Count */
+            pending_or_opening_snapshot_count: number;
+            /** Distinct Project Count */
+            distinct_project_count: number;
         };
         /** BidCreate */
         BidCreate: {
@@ -3587,9 +3659,13 @@ export interface components {
             /** Reasons */
             reasons: string[];
             /** Criteria */
-            criteria?: Record<string, never>;
+            criteria?: {
+                [key: string]: unknown;
+            };
             /** Score Breakdown */
-            score_breakdown?: Record<string, never>;
+            score_breakdown?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlFailureItem */
         CrawlFailureItem: {
@@ -3636,7 +3712,9 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
             /** Metadata */
-            metadata?: Record<string, never>;
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlOperationsSummary */
         CrawlOperationsSummary: {
@@ -3739,7 +3817,9 @@ export interface components {
             /** Items */
             items: components["schemas"]["CrawlNoticeItem"][];
             /** Metadata */
-            metadata?: Record<string, never>;
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlTaskResponse */
         CrawlTaskResponse: {
@@ -4366,7 +4446,9 @@ export interface components {
             /** Reason */
             reason: string;
             /** Payload */
-            payload?: Record<string, never>;
+            payload?: {
+                [key: string]: unknown;
+            };
             /**
              * Dry Run Supported
              * @default false
@@ -4500,7 +4582,9 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             /**
              * Baseline Days
              * @default 14
@@ -5218,7 +5302,9 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
         };
         /** DecisionRecommendationHistoryAdjustment */
         DecisionRecommendationHistoryAdjustment: {
@@ -5260,7 +5346,9 @@ export interface components {
             /** Suggested Adjustment */
             suggested_adjustment?: string | null;
             /** Supporting Metrics */
-            supporting_metrics?: Record<string, never>;
+            supporting_metrics?: {
+                [key: string]: unknown;
+            };
             /**
              * Priority Score
              * @default 0
@@ -5268,7 +5356,9 @@ export interface components {
             priority_score: number;
             history_adjustment: components["schemas"]["DecisionRecommendationHistoryAdjustment"];
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             experiment_plan?: components["schemas"]["DecisionRecommendationExperiment"] | null;
         };
         /** DecisionRecommendationResponse */
@@ -5308,7 +5398,9 @@ export interface components {
             headline: string;
             comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
             /** Experiment History */
-            experiment_history?: Record<string, never>;
+            experiment_history?: {
+                [key: string]: unknown;
+            };
             recommended_next_experiment?: components["schemas"]["DecisionRecommendationExperiment"] | null;
             /** Experiments */
             experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
@@ -5701,6 +5793,55 @@ export interface components {
              */
             persist: boolean;
         };
+        /**
+         * ForwardPaperBiddingRunRequestSnapshot
+         * @description forward paper run 의 정규화된 요청 스냅샷.
+         *
+         *     historical 과 키 집합이 다르다(정산 창/컷오프가 없고 실행 시각이 컷오프다).
+         *     두 모양을 한 모델로 합치면 없는 키가 ``null`` 로 산출에 끼어들어 경계 계약이
+         *     바뀌므로 분리해 둔다.
+         *
+         *     ``data_cutoff_at`` 은 **필수**다. 생산자가 항상 실행 시각을 채우고, 같은 키가
+         *     historical 모델에서는 ``extra="forbid"`` 로 거부되므로 두 모양의 배타성이 "우연히
+         *     겹치는 키가 없어서"가 아니라 **구조적으로** 성립한다(공유 키만 있는 payload 는
+         *     forward 로 검증될 수 없다).
+         */
+        ForwardPaperBiddingRunRequestSnapshot: {
+            /** Category */
+            category?: string | null;
+            /**
+             * Limit
+             * @default 0
+             */
+            limit: number;
+            /**
+             * Scenario
+             * @default
+             */
+            scenario: string;
+            /**
+             * Strategy Version
+             * @default
+             */
+            strategy_version: string;
+            /**
+             * Model Version
+             * @default
+             */
+            model_version: string;
+            /**
+             * History Limit
+             * @default 0
+             */
+            history_limit: number;
+            /**
+             * Persist
+             * @default false
+             */
+            persist: boolean;
+            /** Data Cutoff At */
+            data_cutoff_at: string;
+        };
         /** G2EvidenceSummaryResponse */
         G2EvidenceSummaryResponse: {
             /** Operator Id */
@@ -5717,15 +5858,25 @@ export interface components {
              */
             evidence_status: "ready" | "insufficient" | "mixed_scope" | "missing";
             /** Smoke */
-            smoke?: Record<string, never>;
+            smoke?: {
+                [key: string]: unknown;
+            };
             /** Strategy Monitor */
-            strategy_monitor?: Record<string, never>;
+            strategy_monitor?: {
+                [key: string]: unknown;
+            };
             /** Decision Experiments */
-            decision_experiments?: Record<string, never>;
+            decision_experiments?: {
+                [key: string]: unknown;
+            };
             /** Synthetic Experiments */
-            synthetic_experiments?: Record<string, never>;
+            synthetic_experiments?: {
+                [key: string]: unknown;
+            };
             /** Notifications */
-            notifications?: Record<string, never>;
+            notifications?: {
+                [key: string]: unknown;
+            };
             /** Blocking Gaps */
             blocking_gaps?: string[];
             /** Supporting Gaps */
@@ -5735,6 +5886,62 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HistoricalBacktestRunRequestSnapshot
+         * @description historical replay run 의 정규화된 요청 스냅샷 (생산 경로).
+         *
+         *     시각은 ``datetime`` 이 아니라 isoformat 문자열이다 — 종전 산출(``.isoformat()``,
+         *     ``+00:00``)을 유지하기 위함이다. 생산자는 항상 모든 필드를 채우며 그 사실은
+         *     characterization 골든(정확한 12키 payload)이 고정한다. 과거 payload 복원은 이
+         *     모델이 아니라 ``Persisted*`` 변종이 담당한다(미기록 필드는 ``null`` 로 보존).
+         */
+        HistoricalBacktestRunRequestSnapshot: {
+            /** Category */
+            category?: string | null;
+            /** Award Categories */
+            award_categories?: string[];
+            /** Start At */
+            start_at?: string | null;
+            /** End At */
+            end_at?: string | null;
+            /**
+             * Limit
+             * @default 0
+             */
+            limit: number;
+            /**
+             * Scenario
+             * @default
+             */
+            scenario: string;
+            /**
+             * Strategy Version
+             * @default
+             */
+            strategy_version: string;
+            /**
+             * Model Version
+             * @default
+             */
+            model_version: string;
+            /**
+             * Cutoff Hours Before Deadline
+             * @default 0
+             */
+            cutoff_hours_before_deadline: number;
+            /**
+             * History Limit
+             * @default 0
+             */
+            history_limit: number;
+            /** Settle Actions */
+            settle_actions?: string[];
+            /**
+             * Persist
+             * @default false
+             */
+            persist: boolean;
         };
         /** LegacyAdminActionResponse */
         LegacyAdminActionResponse: {
@@ -5908,7 +6115,9 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Result */
-            result?: Record<string, never> | null;
+            result?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** NotificationOperationsSummary */
         NotificationOperationsSummary: {
@@ -7156,7 +7365,9 @@ export interface components {
             /** Dropped Candidate Count */
             dropped_candidate_count: number;
             /** Request Payload */
-            request_payload?: Record<string, never>;
+            request_payload?: {
+                [key: string]: unknown;
+            };
             result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
             /** New Candidates */
             new_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
@@ -7295,7 +7506,9 @@ export interface components {
              */
             min_similarity: number;
             /** User Historical Data */
-            user_historical_data?: Record<string, never> | null;
+            user_historical_data?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** OpportunityAnalysisResponse */
         OpportunityAnalysisResponse: {
@@ -7361,6 +7574,135 @@ export interface components {
             /** Competitiveness Score */
             competitiveness_score: number;
         };
+        /**
+         * PaperBiddingCandidateItem
+         * @description 한 공고에 대한 페이퍼 투찰 후보 1건.
+         *
+         *     필드 순서는 종전 ``_build_candidate_payload`` dict 리터럴 순서를 그대로 따른다
+         *     (``model_dump`` 산출 키 순서 유지).
+         */
+        PaperBiddingCandidateItem: {
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string | null;
+            /** Notice Number */
+            notice_number: string | null;
+            /** Category */
+            category: string | null;
+            /** Issuing Agency */
+            issuing_agency: string | null;
+            /** Data Cutoff At */
+            data_cutoff_at: string;
+            /** Deadline */
+            deadline: string | null;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Scenario */
+            scenario: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "bid_now" | "review" | "skip";
+            /**
+             * Decision Status
+             * @enum {string}
+             */
+            decision_status: "planned" | "reviewing" | "skipped";
+            /** Paper Bid Amount */
+            paper_bid_amount: number;
+            /** Paper Bid Rate */
+            paper_bid_rate: number;
+            /** Priority Score */
+            priority_score: number;
+            /** Probability Score */
+            probability_score: number;
+            /** Matched Score */
+            matched_score: number;
+            /** Predicted Price */
+            predicted_price: number;
+            /** Predicted Bid Rate */
+            predicted_bid_rate: number;
+            /** Price Range Min */
+            price_range_min: number;
+            /** Price Range Max */
+            price_range_max: number;
+            /** Confidence Score */
+            confidence_score: number;
+            /** Predictor Name */
+            predictor_name: string;
+            /** Predictor Family */
+            predictor_family: string;
+            /** Model Version */
+            model_version: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Historical Sample Size */
+            historical_sample_size: number;
+            /** History Ids */
+            history_ids: number[];
+            /** Input Snapshot Hash */
+            input_snapshot_hash: string;
+            /** Matched Score Source */
+            matched_score_source: string;
+            /** Match Reasons */
+            match_reasons: string[];
+            /** Reasoning */
+            reasoning: string;
+        };
+        /**
+         * PaperBiddingPaperBidRecord
+         * @description 영속화된 ``PaperBid`` 한 행의 읽기 표현.
+         *
+         *     산출 DTO(:class:`PaperBiddingCandidateItem`)와 키 집합이 다르다: 여기에는 행
+         *     식별자(``id``/``run_id``)와 ``created_at`` 이 있고, 후보 시점 스코어 일부는 없다.
+         *     컬럼이 전부 nullable 이므로 문자열 필드는 ``str | None`` 이다.
+         */
+        PaperBiddingPaperBidRecord: {
+            /** Id */
+            id: number;
+            /** Run Id */
+            run_id: number;
+            /** Project Id */
+            project_id: number;
+            /** Project Title */
+            project_title: string | null;
+            /** Notice Number */
+            notice_number: string | null;
+            /** Category */
+            category: string | null;
+            /** Action */
+            action: string | null;
+            /** Decision Status */
+            decision_status: string | null;
+            /** Data Cutoff At */
+            data_cutoff_at: string | null;
+            /** Paper Bid Amount */
+            paper_bid_amount: number;
+            /** Paper Bid Rate */
+            paper_bid_rate: number;
+            /** Scenario */
+            scenario: string | null;
+            /** Priority Score */
+            priority_score: number;
+            /** Probability Score */
+            probability_score: number;
+            /** Matched Score */
+            matched_score: number;
+            /** Predicted Price */
+            predicted_price: number;
+            /** Predicted Bid Rate */
+            predicted_bid_rate: number;
+            /** Confidence Score */
+            confidence_score: number;
+            /** Predictor Name */
+            predictor_name: string | null;
+            /** Input Snapshot Hash */
+            input_snapshot_hash: string | null;
+            /** Created At */
+            created_at: string | null;
+        };
         /** PaperBiddingRunDetailResponse */
         PaperBiddingRunDetailResponse: {
             /** Id */
@@ -7395,29 +7737,34 @@ export interface components {
             paper_bid_count: number;
             /** Settled Count */
             settled_count: number;
-            /** Settlement Overview */
-            settlement_overview?: Record<string, never>;
-            /** Summary */
-            summary?: Record<string, never>;
+            settlement_overview: components["schemas"]["PaperBiddingSettlementOverview"];
+            summary: components["schemas"]["PaperBiddingRunSummary"];
             /** Request */
-            request?: Record<string, never>;
+            request?: components["schemas"]["PersistedHistoricalBacktestRunRequestSnapshot"] | components["schemas"]["PersistedForwardPaperBiddingRunRequestSnapshot"] | null;
             /** Paper Bids */
-            paper_bids?: Record<string, never>[];
+            paper_bids?: components["schemas"]["PaperBiddingPaperBidRecord"][];
             /** Settlements */
-            settlements?: Record<string, never>[];
+            settlements?: components["schemas"]["PaperBiddingSettlementRecord"][];
         };
-        /** PaperBiddingRunExecutionResponse */
+        /**
+         * PaperBiddingRunExecutionResponse
+         * @description historical/forward run 1회의 산출.
+         *
+         *     서비스(``PaperBiddingBacktestService``)가 만드는 **내부 DTO 이자** API 응답
+         *     모델이다. 같은 계약을 두 곳에 적어 두면 한쪽만 바뀌어 갈라지므로 단일 출처를
+         *     유지한다(§4.5-6). 서비스 공개 메서드는 celery task 결과로도 쓰이므로 이 DTO 를
+         *     ``model_dump(mode="json")`` 으로 직렬화해 반환한다.
+         */
         PaperBiddingRunExecutionResponse: {
             /** Run Id */
             run_id?: number | null;
             /** Request */
-            request?: Record<string, never>;
-            /** Summary */
-            summary?: Record<string, never>;
+            request: components["schemas"]["HistoricalBacktestRunRequestSnapshot"] | components["schemas"]["ForwardPaperBiddingRunRequestSnapshot"];
+            summary: components["schemas"]["PaperBiddingRunSummary"];
             /** Items */
-            items?: Record<string, never>[];
+            items?: components["schemas"]["PaperBiddingCandidateItem"][];
             /** Settlements */
-            settlements?: Record<string, never>[];
+            settlements?: components["schemas"]["PaperBiddingSettlementItem"][];
         };
         /** PaperBiddingRunListItem */
         PaperBiddingRunListItem: {
@@ -7453,10 +7800,8 @@ export interface components {
             paper_bid_count: number;
             /** Settled Count */
             settled_count: number;
-            /** Settlement Overview */
-            settlement_overview?: Record<string, never>;
-            /** Summary */
-            summary?: Record<string, never>;
+            settlement_overview: components["schemas"]["PaperBiddingSettlementOverview"];
+            summary: components["schemas"]["PaperBiddingRunSummary"];
         };
         /** PaperBiddingRunListResponse */
         PaperBiddingRunListResponse: {
@@ -7516,6 +7861,250 @@ export interface components {
              */
             persist: boolean;
         };
+        /**
+         * PaperBiddingRunSummary
+         * @description run 1회의 후보/정산 롤업.
+         *
+         *     모든 필드에 기본값이 있는 유일한 산출 DTO다. 이 모델은 ``PaperBidRun.result_payload``
+         *     로 영속화되고 과거 실행이 남긴 payload 도 되읽어야 하는데(지표가 시간에 따라
+         *     추가됐다), 키가 하나 없다고 대시보드가 죽으면 안 되기 때문이다. 생산 경로의
+         *     누락은 기본값에 가려지지 않도록 ``model_fields_set`` 계약 테스트로 잡는다.
+         *
+         *     평균 오차는 정산 표본이 없으면 ``None`` 이다(0.0 으로 적으면 "오차 0" 으로
+         *     읽히므로 정직 명세상 부재를 유지한다).
+         */
+        PaperBiddingRunSummary: {
+            /**
+             * Candidate Count
+             * @default 0
+             */
+            candidate_count: number;
+            /**
+             * Paper Bid Count
+             * @default 0
+             */
+            paper_bid_count: number;
+            /**
+             * Review Count
+             * @default 0
+             */
+            review_count: number;
+            /**
+             * Skip Count
+             * @default 0
+             */
+            skip_count: number;
+            /**
+             * Skipped By Strategy Count
+             * @default 0
+             */
+            skipped_by_strategy_count: number;
+            /**
+             * Skipped Invalid Count
+             * @default 0
+             */
+            skipped_invalid_count: number;
+            /**
+             * Settled Count
+             * @default 0
+             */
+            settled_count: number;
+            /** Action Counts */
+            action_counts?: {
+                [key: string]: number;
+            };
+            /** Average Absolute Bid Rate Error */
+            average_absolute_bid_rate_error?: number | null;
+            /** Average Absolute Amount Error Rate */
+            average_absolute_amount_error_rate?: number | null;
+            /**
+             * Within 0 1Pct Count
+             * @default 0
+             */
+            within_0_1pct_count: number;
+            /**
+             * Within 0 3Pct Count
+             * @default 0
+             */
+            within_0_3pct_count: number;
+            /**
+             * Within 1Pct Count
+             * @default 0
+             */
+            within_1pct_count: number;
+            /**
+             * Price Close Count
+             * @default 0
+             */
+            price_close_count: number;
+            /**
+             * Price Competitive Count
+             * @default 0
+             */
+            price_competitive_count: number;
+            /**
+             * Would Have Won Price Only Count
+             * @default 0
+             */
+            would_have_won_price_only_count: number;
+            /**
+             * Would Have Won Final Eligible Favorable Count
+             * @default 0
+             */
+            would_have_won_final_eligible_favorable_count: number;
+            /**
+             * Would Have Won Final Eligible But Outbid Count
+             * @default 0
+             */
+            would_have_won_final_eligible_but_outbid_count: number;
+            /**
+             * Would Have Won Final Disqualified Count
+             * @default 0
+             */
+            would_have_won_final_disqualified_count: number;
+            /**
+             * Would Have Won Final Unknown Count
+             * @default 0
+             */
+            would_have_won_final_unknown_count: number;
+        };
+        /**
+         * PaperBiddingSettlementItem
+         * @description 페이퍼 투찰 1건을 실낙찰과 낙찰하한 게이트에 대조한 정산 결과.
+         *
+         *     필드 순서는 종전 ``_build_settlement_item`` dict 리터럴 순서를 따른다.
+         */
+        PaperBiddingSettlementItem: {
+            /** Project Id */
+            project_id: number;
+            /** Category */
+            category: string | null;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Result Time */
+            result_time: string;
+            /** Tender Result Id */
+            tender_result_id: number;
+            /** Result Status */
+            result_status: string;
+            /** Winning Company */
+            winning_company: string | null;
+            /** Winning Amount */
+            winning_amount: number;
+            /** Winning Rate */
+            winning_rate: number;
+            /** Amount Delta */
+            amount_delta: number;
+            /** Absolute Error Rate */
+            absolute_error_rate: number;
+            /** Bid Rate Delta */
+            bid_rate_delta: number;
+            /** Absolute Bid Rate Error */
+            absolute_bid_rate_error: number;
+            /** Price Close */
+            price_close: boolean;
+            /** Price Competitive */
+            price_competitive: boolean;
+            /**
+             * Would Have Won Price Only
+             * @enum {string}
+             */
+            would_have_won_price_only: "plausible" | "competitive" | "unlikely";
+            /**
+             * Would Have Won Final
+             * @enum {string}
+             */
+            would_have_won_final: "unknown" | "disqualified" | "eligible_favorable" | "eligible_but_outbid";
+            /** Estimated Price */
+            estimated_price: number | null;
+            /** Minimum Bid Price */
+            minimum_bid_price: number | null;
+            /** Settlement Reason */
+            settlement_reason: string;
+        };
+        /**
+         * PaperBiddingSettlementOverview
+         * @description 한 run 의 페이퍼 투찰이 최종 결과로 정산 가능한지 요약.
+         */
+        PaperBiddingSettlementOverview: {
+            /** Status */
+            status: string;
+            /** Label */
+            label: string;
+            /** Detail */
+            detail: string;
+            /**
+             * Settlement Basis
+             * @default TenderResult.winning_amount > 0 matched by project_id
+             */
+            settlement_basis: string;
+            /** Paper Bid Count */
+            paper_bid_count: number;
+            /** Settled Count */
+            settled_count: number;
+            /** Unsettled Count */
+            unsettled_count: number;
+            /** Ready To Settle Count */
+            ready_to_settle_count: number;
+            /** Waiting Result Count */
+            waiting_result_count: number;
+            /** Before Deadline Count */
+            before_deadline_count: number;
+            /** Missing Deadline Count */
+            missing_deadline_count: number;
+            /** Next Confirmable At */
+            next_confirmable_at: string | null;
+            /** Next Deadline At */
+            next_deadline_at: string | null;
+            /** Oldest Waiting Deadline At */
+            oldest_waiting_deadline_at: string | null;
+            /** Latest Settled At */
+            latest_settled_at: string | null;
+        };
+        /**
+         * PaperBiddingSettlementRecord
+         * @description 영속화된 ``PaperBidSettlement`` 한 행의 읽기 표현.
+         *
+         *     판정 필드는 ``Literal`` 이 아니라 ``str | None`` 이다 — 어휘가 바뀌기 전 시절의
+         *     행을 읽어도 목록 API 가 죽지 않아야 한다. 새로 만드는 정산 산출은
+         *     :class:`PaperBiddingSettlementItem` 에서 ``Literal`` 로 고정된다.
+         */
+        PaperBiddingSettlementRecord: {
+            /** Id */
+            id: number;
+            /** Paper Bid Id */
+            paper_bid_id: number;
+            /** Tender Result Id */
+            tender_result_id: number | null;
+            /** Result Status */
+            result_status: string | null;
+            /** Winning Company */
+            winning_company: string | null;
+            /** Winning Amount */
+            winning_amount: number;
+            /** Winning Rate */
+            winning_rate: number;
+            /** Amount Delta */
+            amount_delta: number;
+            /** Absolute Error Rate */
+            absolute_error_rate: number;
+            /** Bid Rate Delta */
+            bid_rate_delta: number;
+            /** Absolute Bid Rate Error */
+            absolute_bid_rate_error: number;
+            /** Price Close */
+            price_close: boolean;
+            /** Price Competitive */
+            price_competitive: boolean;
+            /** Would Have Won Price Only */
+            would_have_won_price_only: string | null;
+            /** Would Have Won Final */
+            would_have_won_final: string | null;
+            /** Settlement Reason */
+            settlement_reason: string | null;
+            /** Settled At */
+            settled_at: string | null;
+        };
         /** PaperBiddingSummaryResponse */
         PaperBiddingSummaryResponse: {
             /** Operator Id */
@@ -7525,8 +8114,68 @@ export interface components {
             run_count: number;
             /** Completed Count */
             completed_count: number;
-            /** Latest Summary */
-            latest_summary?: Record<string, never>;
+            latest_summary?: components["schemas"]["PaperBiddingRunSummary"];
+        };
+        /**
+         * PersistedForwardPaperBiddingRunRequestSnapshot
+         * @description 저장된 forward ``request_payload`` 복원용.
+         *
+         *     :class:`PersistedHistoricalBacktestRunRequestSnapshot` 과 같은 이유로 모든 필드가
+         *     ``X | None = None`` 이다(생산 모델에서 필수인 ``data_cutoff_at`` 도 과거 payload 에
+         *     없을 수 있으므로 복원 경로에서는 옵셔널).
+         */
+        PersistedForwardPaperBiddingRunRequestSnapshot: {
+            /** Category */
+            category?: string | null;
+            /** Limit */
+            limit?: number | null;
+            /** Scenario */
+            scenario?: string | null;
+            /** Strategy Version */
+            strategy_version?: string | null;
+            /** Model Version */
+            model_version?: string | null;
+            /** History Limit */
+            history_limit?: number | null;
+            /** Persist */
+            persist?: boolean | null;
+            /** Data Cutoff At */
+            data_cutoff_at?: string | null;
+        };
+        /**
+         * PersistedHistoricalBacktestRunRequestSnapshot
+         * @description 저장된 historical ``request_payload`` 복원용.
+         *
+         *     모든 필드가 ``X | None = None`` 이다. 생산 모델의 기본값(``limit=0``,
+         *     ``persist=False``, ``scenario=""``)을 그대로 쓰면 ``{"limit": 5}`` 만 남은 과거
+         *     payload 를 읽었을 때 **기록되지 않은 값이 기록된 값처럼 날조**된다("이 run 은
+         *     persist=false 로 돌았다"는 오독). 미기록은 ``null`` 로 보존하는 것이 정직하다.
+         */
+        PersistedHistoricalBacktestRunRequestSnapshot: {
+            /** Category */
+            category?: string | null;
+            /** Award Categories */
+            award_categories?: string[] | null;
+            /** Start At */
+            start_at?: string | null;
+            /** End At */
+            end_at?: string | null;
+            /** Limit */
+            limit?: number | null;
+            /** Scenario */
+            scenario?: string | null;
+            /** Strategy Version */
+            strategy_version?: string | null;
+            /** Model Version */
+            model_version?: string | null;
+            /** Cutoff Hours Before Deadline */
+            cutoff_hours_before_deadline?: number | null;
+            /** History Limit */
+            history_limit?: number | null;
+            /** Settle Actions */
+            settle_actions?: string[] | null;
+            /** Persist */
+            persist?: boolean | null;
         };
         /** PredictionFeedbackItem */
         PredictionFeedbackItem: {
@@ -7819,7 +8468,9 @@ export interface components {
             /** Backtest Average Absolute Error Rate */
             backtest_average_absolute_error_rate?: number | null;
             /** Backtest Report */
-            backtest_report?: Record<string, never> | null;
+            backtest_report?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Training Window Size
              * @default 0
@@ -7999,7 +8650,9 @@ export interface components {
             /** Amount Bucket */
             amount_bucket?: string | null;
             /** Agency Recent Rate Profile */
-            agency_recent_rate_profile?: Record<string, never>;
+            agency_recent_rate_profile?: {
+                [key: string]: unknown;
+            };
             /** Data Quality Flags */
             data_quality_flags?: string[];
             /** Procurement Rate Band */
@@ -8413,7 +9066,9 @@ export interface components {
             /** Skip Reason */
             skip_reason?: string | null;
             /** Evidence */
-            evidence?: Record<string, never>;
+            evidence?: {
+                [key: string]: unknown;
+            };
         };
         /** SmokeTestLatestRun */
         SmokeTestLatestRun: {
@@ -8915,7 +9570,9 @@ export interface components {
             /** Experiment Id */
             experiment_id: number;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SyntheticExperimentCompareSide
@@ -9034,7 +9691,9 @@ export interface components {
             /** Operator Slug */
             operator_slug: string;
             /** Metrics */
-            metrics?: Record<string, never>;
+            metrics?: {
+                [key: string]: unknown;
+            };
             /** Settlement Sample */
             settlement_sample?: unknown | null;
             breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
@@ -9065,7 +9724,9 @@ export interface components {
          */
         SyntheticExperimentRunCreateRequest: {
             /** Source Sample Gap Candidate */
-            source_sample_gap_candidate?: Record<string, never> | null;
+            source_sample_gap_candidate?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SyntheticExperimentRunResponse
@@ -9087,7 +9748,9 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at?: string | null;
             /** Results */
@@ -9113,7 +9776,9 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at?: string | null;
         };
@@ -9170,7 +9835,9 @@ export interface components {
              */
             dry_run_default: boolean;
             /** Source Context */
-            source_context?: Record<string, never>;
+            source_context?: {
+                [key: string]: unknown;
+            };
             preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             experiment_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
@@ -9194,7 +9861,9 @@ export interface components {
             /** Path */
             path: string;
             /** Body */
-            body?: Record<string, never>;
+            body?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * SyntheticExperimentSampleGapItem
@@ -9287,7 +9956,9 @@ export interface components {
             /** Preset Name */
             preset_name?: string | null;
             /** Params */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: unknown;
+            };
             /** Actions */
             actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
         };
@@ -9371,7 +10042,9 @@ export interface components {
             /** Settle Actions */
             settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
             /** Params */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: unknown;
+            };
             /** Operator Slugs */
             operator_slugs?: string[];
             /**
@@ -13096,7 +13769,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
