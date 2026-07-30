@@ -176,6 +176,9 @@ class _FakeDB:
     def query(self, *args, **kwargs):
         return _FakeQuery(self._projects)
 
+    def expunge(self, obj):
+        """스캔 루프 세션 위생은 인메모리 fake 에선 no-op."""
+
 
 def _passing_analysis() -> dict:
     """Canned analysis that clears the monitor thresholds."""

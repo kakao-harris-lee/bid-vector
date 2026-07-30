@@ -36,8 +36,13 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
         request: OpportunityAnalysisRequest,
         *,
         operator: User | None = None,
+        read_only: bool = False,
     ) -> dict:
-        """Build a multi-angle bid opportunity analysis for one project."""
+        """Build a multi-angle bid opportunity analysis for one project.
+
+        ``read_only=True``(스캔 경로 전용)는 유사공고 검색의 임베딩 영속화를
+        건너뛴다. 기본값 False 로 기존 호출자 동작 불변.
+        """
         operator, profile, strategy = self._resolve_operator_context(db, operator)
 
         analysis_inputs = self._build_analysis_inputs(
@@ -46,6 +51,7 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
             request=request,
             profile=profile,
             operator_id=operator.id,
+            read_only=read_only,
         )
         classification = analysis_inputs.classification
         similar_projects = analysis_inputs.similar_projects
@@ -162,6 +168,7 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
         request: OpportunityAnalysisRequest,
         profile: CompanyProfile,
         operator_id: int,
+        read_only: bool = False,
     ) -> _AnalysisInputs:
         classification = self.classifier.classify(project=project, profile=profile)
         similar_projects = self.similarity_service.find_similar_projects(
@@ -170,6 +177,7 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
             limit=request.similar_limit,
             min_similarity=request.min_similarity,
             same_category_only=request.same_category_only,
+            read_only=read_only,
         )
         return _AnalysisInputs(
             classification=classification,

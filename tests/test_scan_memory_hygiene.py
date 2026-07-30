@@ -15,6 +15,7 @@ from app.core.single_user import ensure_operator_account, ensure_operator_strate
 from app.models.models import Project
 from app.schemas.schemas import OperatorStrategyMonitorRequest
 from app.services.opportunity_monitoring import StrategyMonitoringService
+from app.services.project_similarity import ProjectSimilarityService
 
 
 def _configure_software_operator(client):
@@ -209,3 +210,93 @@ def test_evaluations_are_slim_and_hold_no_orm_or_analysis_refs(client, test_db, 
         assert isinstance(evaluation.sort_key, tuple)
     # 정렬은 미리 계산된 sort_key 만으로 결정된다
     assert [e.sort_key for e in evaluations] == sorted(e.sort_key for e in evaluations)
+
+
+def _make_similarity_project(test_db, *, title: str, category: str = "software") -> Project:
+    project = Project(
+        title=title,
+        description=f"{title} 설명",
+        requirements="",
+        budget_estimate=50_000_000.0,
+        category=category,
+    )
+    test_db.add(project)
+    test_db.flush()
+    return project
+
+
+def test_resolve_embedding_without_persist_matches_refresh_output(test_db):
+    """read-only 해석은 refresh 가 반환했을 (vector, model) 과 동일하다 (산출 불변)."""
+    service = ProjectSimilarityService()
+    project = _make_similarity_project(test_db, title="임베딩 동등성 대상 공고")
+    test_db.commit()
+
+    read_only_vector, read_only_model = service.resolve_embedding_without_persist(project)
+    refreshed_vector, refreshed_model = service.refresh_project_embedding(test_db, project)
+
+    assert read_only_vector == refreshed_vector
+    assert read_only_model == refreshed_model
+
+
+def test_find_similar_projects_read_only_writes_nothing(test_db):
+    """read_only=True: 세션 쓰기 0 + 검색 산출(점수·정렬)은 write 경로와 동일."""
+    service = ProjectSimilarityService()
+    target = _make_similarity_project(test_db, title="타깃 AI 데이터 공고")
+    for index in range(3):
+        _make_similarity_project(test_db, title=f"이웃 AI 데이터 공고 {index}")
+    test_db.commit()
+    payload_before = target.embedding_payload
+    semantic_before = target.semantic_text
+
+    read_only_response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.0, same_category_only=True, read_only=True
+    )
+
+    # S4 제거: 스캔이 Project 행을 dirty/new 로 만들지 않는다
+    assert [obj for obj in test_db.dirty if isinstance(obj, Project)] == []
+    assert [obj for obj in test_db.new if isinstance(obj, Project)] == []
+    assert target.embedding_payload == payload_before  # 영속화 없음
+    assert target.semantic_text == semantic_before
+
+    write_response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.0, same_category_only=True
+    )
+
+    # 산출 불변: 점수·정렬 기여 값은 write 경로와 동일
+    # (fallback 전용 embedding_model 필드는 비교 제외 — 설계 이탈 노트 4)
+    assert [
+        (item["project_id"], item["similarity_score"])
+        for item in read_only_response["results"]
+    ] == [
+        (item["project_id"], item["similarity_score"])
+        for item in write_response["results"]
+    ]
+    assert read_only_response["search_mode"] == write_response["search_mode"] == "python_fallback"
+    assert read_only_response["target_embedding_model"] == write_response["target_embedding_model"]
+
+
+def test_preview_scan_leaves_session_clean_and_releases_rows(client, test_db):
+    """실분석 preview 스캔 후: Project dirty/new 없음 + 분석 완료 행 expunge."""
+    _configure_software_operator(client)
+    project = _make_similarity_project(
+        test_db, title="서울 AI 데이터 통합 플랫폼 구축"
+    )
+    project.description = "서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축"
+    project.requirements = "SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함"
+    project.budget_estimate = 130_000_000.0
+    project.status = "open"
+    project.deadline = datetime.now(UTC) + timedelta(hours=12)
+    test_db.commit()
+    test_db.refresh(project)
+    project_id = project.id
+
+    payload = StrategyMonitoringService().preview_candidates(
+        test_db, limit=10, high_priority_only=False
+    )
+
+    assert {c["project_id"] for c in payload["candidates"]} == {project_id}
+    # read-only 스캔: 세션에 쓰기 잔류물 없음 (S4)
+    assert [obj for obj in test_db.dirty if isinstance(obj, Project)] == []
+    assert [obj for obj in test_db.new if isinstance(obj, Project)] == []
+    # 세션 위생: 분석 완료 행은 identity map 에서 해제됨 (expunge)
+    assert project not in test_db

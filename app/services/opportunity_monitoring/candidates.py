@@ -141,20 +141,28 @@ class _CandidateCollectionMixin(_MonitoringBase):
                 min_similarity=min_similarity,
             )
 
-            if float(analysis["matched_score"]) < float(strategy.minimum_match_score or 0.0):
-                continue
-            if float(analysis["probability_score"]) < float(strategy.minimum_probability_score or 0.0):
-                continue
-            if high_priority_only and not self._is_high_priority_candidate(analysis):
-                continue
+            try:
+                if float(analysis["matched_score"]) < float(strategy.minimum_match_score or 0.0):
+                    continue
+                if float(analysis["probability_score"]) < float(strategy.minimum_probability_score or 0.0):
+                    continue
+                if high_priority_only and not self._is_high_priority_candidate(analysis):
+                    continue
 
-            evaluations.append(
-                self._build_candidate_evaluation(
-                    project=project,
-                    analysis=analysis,
-                    strategy_reasons=filter_result.reasons,
+                evaluations.append(
+                    self._build_candidate_evaluation(
+                        project=project,
+                        analysis=analysis,
+                        strategy_reasons=filter_result.reasons,
+                    )
                 )
-            )
+            finally:
+                # 세션 위생 (설계 §5 PR-A-2): 분석을 마친 행은 candidate dict 로
+                # 값이 전부 복사됐으므로 identity map 에서 즉시 해제한다.
+                # read-only 분석이 행을 clean 으로 보장하므로 버려지는 pending
+                # write 는 없다. (스펙의 "청크 경계" 위생을 행 단위로 더 촘촘히
+                # 수행 — 산출 동일. 미분석 행은 clean+약참조라 이미 수거 가능.)
+                db.expunge(project)
 
         # 정렬·top-N 선택 로직 불변: 이전 sort(key=...) 람다와 바이트 동일한
         # 키 튜플을 분석 시점에 미리 계산해 둔 것뿐이다
@@ -289,6 +297,7 @@ class _CandidateCollectionMixin(_MonitoringBase):
                 min_similarity=min_similarity,
             ),
             operator=operator,
+            read_only=True,
         )
 
     def _build_candidate_evaluation(

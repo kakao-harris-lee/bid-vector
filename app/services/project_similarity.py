@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
@@ -90,6 +90,22 @@ class ProjectSimilarityService:
         project.embedding_updated_at = utc_now()
         project.embedding = embedding if self._can_persist_pgvector(db) else None
         db.add(project)
+        return embedding, model_name
+
+    def resolve_embedding_without_persist(self, project: Project) -> tuple[list[float], str]:
+        """``refresh_project_embedding`` 이 반환했을 (vector, model) 을 세션 쓰기 없이 돌려준다.
+
+        분기 구조는 refresh 와 동일하다: semantic_text 가 저장본과 같고 payload
+        캐시가 있으면 캐시 벡터, 아니면 인메모리 재계산. ORM 행에 아무것도
+        대입하지 않고 ``db.add`` 도 없으므로 read-only 스캔이 Project 행을
+        dirty/고정할 수 없다 (설계 2026-07-30 §5 PR-A-2 / S4). 스캔 중 임베딩
+        freshness 는 수집/backfill 파이프라인 소관이다.
+        """
+        semantic_text = self.build_semantic_text(project)
+        cached_vector = self._load_embedding(project)
+        if semantic_text == (project.semantic_text or "").strip() and cached_vector:
+            return cached_vector, project.embedding_model or FALLBACK_EMBEDDING_MODEL
+        embedding, model_name = self._embed_text(semantic_text)
         return embedding, model_name
 
     def refresh_project_embeddings(self, db: Session, projects: Iterable[Project]) -> None:
@@ -177,6 +193,7 @@ class ProjectSimilarityService:
         limit: int = 5,
         min_similarity: float = 0.0,
         same_category_only: bool = True,
+        read_only: bool = False,
     ) -> dict[str, Any]:
         """Find projects closest to the target project's embedding.
 
@@ -186,8 +203,17 @@ class ProjectSimilarityService:
         :meth:`rebuild_project_embeddings`) rather than this read path. Only the
         Python fallback (tests/in-memory, no pgvector) loads every candidate and
         refreshes in-memory embeddings, since it has no stored index to query.
+
+        ``read_only=True`` (스캔 경로 전용) 은 target/candidate 임베딩을
+        :meth:`resolve_embedding_without_persist` 로 해석해 세션에 아무것도
+        쓰지 않는다 — 산출(점수·정렬)은 write 경로와 동일하고, 임베딩
+        freshness 는 수집/backfill 파이프라인 소관이다 (설계 §5 PR-A-2 / S4).
+        기본값 ``False`` 로 기존 호출자 동작은 불변이다.
         """
-        target_embedding, target_model = self.refresh_project_embedding(db, project)
+        if read_only:
+            target_embedding, target_model = self.resolve_embedding_without_persist(project)
+        else:
+            target_embedding, target_model = self.refresh_project_embedding(db, project)
 
         if self._can_query_pgvector(db):
             results = self._search_with_postgres(
@@ -207,13 +233,21 @@ class ProjectSimilarityService:
                 )
 
             candidates = candidate_query.all()
-            self.refresh_project_embeddings(db, candidates)
+            if read_only:
+                def _resolve_candidate_embedding(candidate: Project) -> list[float]:
+                    return self.resolve_embedding_without_persist(candidate)[0]
+
+                embedding_resolver = _resolve_candidate_embedding
+            else:
+                self.refresh_project_embeddings(db, candidates)
+                embedding_resolver = self._load_embedding
 
             results = self._search_with_python(
                 candidates,
                 query_embedding=target_embedding,
                 limit=limit,
                 min_similarity=min_similarity,
+                embedding_resolver=embedding_resolver,
             )
             search_mode = "python_fallback"
 
@@ -287,12 +321,20 @@ class ProjectSimilarityService:
         query_embedding: list[float],
         limit: int,
         min_similarity: float,
+        embedding_resolver: Callable[[Project], list[float]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Fallback similarity search using stored embedding payloads."""
+        """Fallback similarity search using stored embedding payloads.
+
+        ``embedding_resolver`` 은 candidate → embedding 벡터 조회를 갈아끼우는
+        seam 이다. 기본값(``None``)은 저장본을 읽는 :meth:`_load_embedding` 이며,
+        read-only 스캔은 세션 쓰기 없이 재해석하는 resolver 를 주입한다 —
+        어느 쪽이든 같은 (정규화된) 벡터를 돌려주므로 산출은 동일하다.
+        """
+        resolver = embedding_resolver or self._load_embedding
         matches: list[dict[str, Any]] = []
 
         for candidate in candidates:
-            candidate_embedding = self._load_embedding(candidate)
+            candidate_embedding = resolver(candidate)
             if not candidate_embedding:
                 continue
 
