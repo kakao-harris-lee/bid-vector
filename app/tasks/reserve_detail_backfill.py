@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import task_session
 from app.services.koneps.collector import KonepsCollectorService
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ def run_scsbid_reserve_detail_backfill_job(
     notices: list[dict[str, Any]],
     *,
     enqueue_continuation: Callable[[list[dict[str, Any]]], bool],
+    session_factory: Callable[[], Session] | None = None,
 ) -> dict:
     """Fetch deferred scsbid reserve-detail rows and persist them per notice.
 
@@ -101,49 +103,47 @@ def run_scsbid_reserve_detail_backfill_job(
     plan = _plan_reserve_detail_backfill(notices)
     remaining = len(plan.rest)
 
-    db = SessionLocal()
-    try:
-        if not plan.service_key:
-            # No key -> nothing fetchable; surface as errors without HTTP. Do NOT
-            # chain a continuation (the remainder would fail the same way); the
-            # next 6h collect re-defers everything once a key is configured.
-            return _missing_reserve_detail_service_key_result(
+    with task_session(session_factory) as db:
+        try:
+            if not plan.service_key:
+                # No key -> nothing fetchable; surface as errors without HTTP. Do NOT
+                # chain a continuation (the remainder would fail the same way); the
+                # next 6h collect re-defers everything once a key is configured.
+                return _missing_reserve_detail_service_key_result(
+                    requested=plan.requested,
+                    remaining=remaining,
+                )
+
+            stats = _process_scsbid_reserve_detail_chunk(
+                db,
+                service=plan.service,
+                cleaned=plan.cleaned,
+                service_key=plan.service_key,
+                delay_seconds=plan.delay_seconds,
+                commit_every=plan.commit_every,
                 requested=plan.requested,
                 remaining=remaining,
             )
+            if stats.get("soft_time_limit_exceeded"):
+                return _reserve_detail_backfill_result(
+                    requested=plan.requested,
+                    remaining=remaining,
+                    continued=False,
+                    stats=stats,
+                )
 
-        stats = _process_scsbid_reserve_detail_chunk(
-            db,
-            service=plan.service,
-            cleaned=plan.cleaned,
-            service_key=plan.service_key,
-            delay_seconds=plan.delay_seconds,
-            commit_every=plan.commit_every,
-            requested=plan.requested,
-            remaining=remaining,
-        )
-        if stats.get("soft_time_limit_exceeded"):
+            db.commit()
+            _log_reserve_detail_backfill_errors(requested=plan.requested, stats=stats)
+            continued = enqueue_continuation(plan.rest)
             return _reserve_detail_backfill_result(
                 requested=plan.requested,
                 remaining=remaining,
-                continued=False,
+                continued=continued,
                 stats=stats,
             )
-
-        db.commit()
-        _log_reserve_detail_backfill_errors(requested=plan.requested, stats=stats)
-        continued = enqueue_continuation(plan.rest)
-        return _reserve_detail_backfill_result(
-            requested=plan.requested,
-            remaining=remaining,
-            continued=continued,
-            stats=stats,
-        )
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+        except Exception:
+            db.rollback()
+            raise
 
 
 def _normalize_deferred_reserve_notices(

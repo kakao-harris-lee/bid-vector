@@ -106,7 +106,7 @@ def test_run_historical_backtest_delegates(monkeypatch):
 
 def test_collect_g2_evidence_delegates_with_db_and_injected_draft_writer(monkeypatch):
     dummy = _DummyDB()
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: dummy)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: dummy)
     captured: dict = {}
 
     def _spy(db, *, window_days, recent_limit, write_daily_draft):
@@ -135,7 +135,7 @@ def test_collect_g2_evidence_delegates_with_db_and_injected_draft_writer(monkeyp
 
 def test_run_g2_candidate_recheck_delegates_with_db(monkeypatch):
     dummy = _DummyDB()
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: dummy)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: dummy)
     captured: dict = {}
 
     def _spy(db):

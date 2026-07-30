@@ -158,7 +158,7 @@ def test_monitor_task_finalizes_run_failed_on_exception(test_db, monkeypatch):
 
     _bootstrap(test_db)
 
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     def boom(self, *args, **kwargs):

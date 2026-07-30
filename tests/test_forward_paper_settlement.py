@@ -406,7 +406,7 @@ def test_settle_forward_paper_bids_task_runs_under_memory_broker(test_db, monkey
 
     import app.tasks.jobs as jobs
 
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     result = jobs.settle_forward_paper_bids.apply_async(
