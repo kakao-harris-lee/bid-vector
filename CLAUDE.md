@@ -26,7 +26,7 @@ docker compose --profile tasks restart worker beat
 docker compose run --rm frontend-build
 ```
 
-requirements, Dockerfile, 이미지 타깃 변경이 있으면 `docker compose --profile tasks up -d --build`를 사용합니다.
+requirements, Dockerfile, 이미지 타깃 변경이 있으면 `docker compose --profile tasks up -d --build`를 사용합니다. docker-compose.yml의 서비스 정의(command·mem_limit·환경값)가 바뀐 경우 `restart`로는 반영되지 않으므로 해당 서비스를 `docker compose up -d <service>`로 재생성합니다(§4.5.1의 env 함정과 동일).
 
 ## 1. 프로젝트 요약
 

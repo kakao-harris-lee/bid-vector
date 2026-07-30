@@ -114,9 +114,10 @@ services:
     # (alembic). See app/main.py lifespan note and tests/test_schema_drift.py.
     # No --reload: its reloader parent outlives an OOM-killed app child while still
     # holding the listen socket, so every request hangs with no auto-restart
-    # (2026-07-29 incident, 17h outage). A crash now exits PID 1 and
-    # restart: unless-stopped self-heals. Code deploys therefore require
-    # `docker compose restart api` after checkout (see CLAUDE.md §0).
+    # (2026-07-29 incident, 17h outage). A crash now takes the container down
+    # (uvicorn -> sh -> init exit) and restart: unless-stopped self-heals. Code
+    # deploys therefore require `docker compose restart api` after checkout
+    # (see CLAUDE.md §0).
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-3000}"
 
   worker:
