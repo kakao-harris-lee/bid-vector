@@ -45,6 +45,20 @@ NON_TERMINAL_STATUSES = ("running", "queued", "pending", "started")
 RECONCILED_MARKER = "[reconciled]"
 
 
+def stale_threshold_seconds() -> int:
+    """비종단 task 행을 고아로 판정하는 나이(초): hard limit + grace, 60s floor.
+
+    reconciler 와 preview 스냅샷의 단일비행 회수(stale-running reclaim)가 같은
+    임계를 공유한다(설계 §6.2 — "running 이 stale-task-reconciler 임계 초과면
+    회수"). 단일 출처(§4.5).
+    """
+    hard_limit = max(0, int(settings.CELERY_TASK_TIME_LIMIT_SECONDS))
+    grace = max(0, int(settings.STALE_TASK_RECONCILER_GRACE_SECONDS))
+    # Always require at least a minute so a misconfigured 0 hard-limit cannot
+    # reconcile rows that were created seconds ago.
+    return max(60, hard_limit + grace)
+
+
 class StaleTaskReconcilerService:
     """Finalize orphaned non-terminal strategy-run / crawl-job rows as failed."""
 
@@ -83,11 +97,7 @@ class StaleTaskReconcilerService:
 
     def _stale_threshold_seconds(self) -> int:
         """Resolve how old a non-terminal row must be before it is reconciled."""
-        hard_limit = max(0, int(settings.CELERY_TASK_TIME_LIMIT_SECONDS))
-        grace = max(0, int(settings.STALE_TASK_RECONCILER_GRACE_SECONDS))
-        # Always require at least a minute so a misconfigured 0 hard-limit cannot
-        # reconcile rows that were created seconds ago.
-        return max(60, hard_limit + grace)
+        return stale_threshold_seconds()
 
     def _reconcile_strategy_runs(
         self,

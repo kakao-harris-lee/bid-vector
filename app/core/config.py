@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     # 0 disables reuse but keeps the single-flight guard (one scan per key at a
     # time), which is the part that stops the stampede.
     OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS: int = 60
+    # preview 스냅샷 stale 기준(초). computed_at 이 이보다 오래되면 GET 이 기존
+    # 스냅샷을 즉시 서빙하면서 재계산 task 를 단일비행 가드 하에 자동 디스패치
+    # 한다(설계 2026-07-30 §6.2). 명시 갱신은 POST /candidates/refresh.
+    OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS: int = 1800
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440
