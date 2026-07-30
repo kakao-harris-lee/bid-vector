@@ -73,6 +73,11 @@ class OperatorStrategyCandidatesResponse(BaseModel):
     candidates: List[OperatorStrategyCandidateItem] = Field(default_factory=list)
     current_operator_id: int
     current_operator_username: str
+    # 스냅샷 메타 (설계 2026-07-30 §6.2). 기존 필드는 전부 유지 — PR-C 전까지
+    # 현행 프론트가 그대로 동작해야 하는 하위호환 superset (HARD 제약).
+    computed_at: Optional[datetime] = None
+    snapshot_status: Literal["idle", "running", "failed"] = "idle"
+    stale: bool = False
 
 
 class OperatorStrategyMonitorRequest(BaseModel):

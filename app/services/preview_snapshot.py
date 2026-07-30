@@ -179,6 +179,74 @@ class PreviewSnapshotService:
                 dispatched += 1
         return dispatched
 
+    # --- 서빙 (API GET — 순수 읽기) ------------------------------------------
+
+    def serve(
+        self,
+        db: Session,
+        *,
+        operator: User,
+        limit: int | None,
+        high_priority_only: bool | None,
+    ) -> dict:
+        """스냅샷 순수 읽기 + 부재/stale 시 단일비행 자동 디스패치 (설계 §6.2).
+
+        이 메서드는 어떤 경우에도 ML 스캔을 실행하지 않는다: 부재(최초)는 빈
+        후보 + status=running, stale 은 기존 payload 즉시 서빙 — 재계산은 task
+        디스패치로만 트리거된다.
+        """
+        strategy = ensure_operator_strategy_for(db, operator)
+        resolved_limit, resolved_high_priority_only = self._monitoring._resolve_runtime_options(
+            strategy, limit=limit, high_priority_only=high_priority_only
+        )
+        row = self.get_row(
+            db, operator_id=int(operator.id), high_priority_only=resolved_high_priority_only
+        )
+        if row is None or self._needs_recompute(row):
+            self.dispatch_recompute(
+                db,
+                operator_id=int(operator.id),
+                high_priority_only=resolved_high_priority_only,
+            )
+            row = self.get_row(
+                db, operator_id=int(operator.id), high_priority_only=resolved_high_priority_only
+            )
+        return self._build_response(
+            row,
+            operator=operator,
+            resolved_limit=resolved_limit,
+            resolved_high_priority_only=resolved_high_priority_only,
+        )
+
+    def _build_response(
+        self,
+        row: OperatorPreviewSnapshot | None,
+        *,
+        operator: User,
+        resolved_limit: int,
+        resolved_high_priority_only: bool,
+    ) -> dict:
+        """저장 top-100 을 요청 limit 으로 슬라이스해 레거시 응답 형태 + 메타를 만든다.
+
+        레거시 필드(operator_id/evaluated_project_count/returned_candidate_count/
+        high_priority_only/candidates)는 이름·형태 그대로다 — PR-C 전까지 현행
+        프론트가 그대로 동작해야 하는 하위호환 superset 계약(HARD).
+        """
+        stored = dict(row.payload_json or {}) if row is not None else {}
+        candidates = list(stored.get("candidates") or [])[: max(1, int(resolved_limit))]
+        return {
+            "operator_id": int(operator.id),
+            "evaluated_project_count": int(stored.get("evaluated_project_count") or 0),
+            "returned_candidate_count": len(candidates),
+            "high_priority_only": bool(resolved_high_priority_only),
+            "candidates": candidates,
+            "computed_at": row.computed_at if row is not None else None,
+            "snapshot_status": str(row.status or SNAPSHOT_STATUS_IDLE)
+            if row is not None
+            else SNAPSHOT_STATUS_RUNNING,
+            "stale": self._computed_age_exceeds(row) if row is not None else False,
+        }
+
     # --- task 라이프사이클 (synthetic experiment run 패턴, DB-first) ---------
 
     def run_recompute(

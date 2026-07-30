@@ -484,31 +484,6 @@ def test_preview_candidates_repeat_read_skips_the_expensive_scan(client, test_db
     assert second.json()["current_operator_id"] == first.json()["current_operator_id"]
 
 
-def test_preview_candidates_recomputes_after_strategy_update(client, test_db, monkeypatch):
-    """Saving the strategy invalidates the preview so the next read is fresh."""
-    _configure_software_operator(client)
-    _seed_matching_project(test_db)
-    calls = _count_collect_calls(monkeypatch)
-
-    client.get(
-        "/api/v1/operator/strategy/candidates",
-        params={"high_priority_only": False, "limit": 10},
-    )
-    update = client.put(
-        "/api/v1/operator/strategy",
-        json={"exclude_keywords": ["데이터"]},
-    )
-    after = client.get(
-        "/api/v1/operator/strategy/candidates",
-        params={"high_priority_only": False, "limit": 10},
-    )
-
-    assert update.status_code == 200
-    assert calls["count"] == 2
-    # The edit now excludes the seeded notice, which a stale cache would hide.
-    assert after.json()["candidates"] == []
-
-
 def test_preview_cache_ttl_setting_is_declared():
     """The TTL is a declared setting (§4.5.1), not a literal inside the service."""
     assert settings.OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS >= 0

@@ -23,6 +23,7 @@ from app.schemas.schemas import (
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.opportunity_monitoring.preview_cache import preview_cache
+from app.services.preview_snapshot import PreviewSnapshotService
 from app.services.operator_strategy_tuning import (
     clamp_auto_workload_penalty_multiplier,
     dump_category_priority_overrides,
@@ -249,11 +250,12 @@ def list_strategy_candidates_impl(
     limit: int | None,
     high_priority_only: bool | None,
 ) -> dict:
-    payload = StrategyMonitoringService().preview_candidates(
+    """스냅샷 순수 읽기 (설계 2026-07-30 §6.2) — 요청 경로 인라인 ML 스캔 없음."""
+    payload = PreviewSnapshotService().serve(
         db,
+        operator=target,
         limit=limit,
         high_priority_only=high_priority_only,
-        operator=target,
     )
     payload.update(_operator_context_fields(target))
     return payload

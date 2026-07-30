@@ -291,3 +291,160 @@ def test_recompute_task_reuses_unique_row_idempotently(client, test_db, monkeypa
     assert len(rows) == 1
     assert rows[0].status == SNAPSHOT_STATUS_IDLE
     assert rows[0].computed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# GET /strategy/candidates — 순수 읽기 + 자동 디스패치 (§6.2)
+# ---------------------------------------------------------------------------
+
+_LEGACY_RESPONSE_FIELDS = {
+    "operator_id", "evaluated_project_count", "returned_candidate_count",
+    "high_priority_only", "candidates", "current_operator_id", "current_operator_username",
+}
+
+
+def test_get_candidates_bootstraps_empty_running_when_snapshot_missing(
+    client, test_db, enqueue_stub
+):
+    """부재(최초) 시: 빈 후보 + snapshot_status=running + 단일비행 디스패치 (§6.2)."""
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates",
+        params={"high_priority_only": False, "limit": 10},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    # 하위호환 superset (HARD): 기존 필드는 전부 그대로 존재한다
+    assert _LEGACY_RESPONSE_FIELDS <= set(payload.keys())
+    assert payload["candidates"] == []
+    assert payload["evaluated_project_count"] == 0
+    assert payload["returned_candidate_count"] == 0
+    assert payload["snapshot_status"] == "running"
+    assert payload["computed_at"] is None
+    assert payload["stale"] is False
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+    # 재조회는 running 스킵 — 디스패치가 늘지 않는다 (스탬피드 방지)
+    client.get("/api/v1/operator/strategy/candidates", params={"high_priority_only": False})
+    assert len(enqueue_stub.calls) == 1
+
+
+def test_get_candidates_first_read_computes_inline_in_eager_mode(client, test_db, monkeypatch):
+    """eager(테스트) 모드: 첫 GET 이 스냅샷을 인라인 계산해 반환하고, 재조회는
+    스캔 없이 스냅샷을 서빙한다 — 구 repeat-read 스탬피드 테스트의 승계."""
+    _configure_software_operator(client)
+    project = _seed_matching_project(test_db)
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
+    calls = {"count": 0}
+    original = StrategyMonitoringService._collect_candidate_evaluations
+
+    def counting(self, db, **kwargs):
+        calls["count"] += 1
+        return original(self, db, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_collect_candidate_evaluations", counting)
+
+    first = client.get(
+        "/api/v1/operator/strategy/candidates",
+        params={"high_priority_only": False, "limit": 10},
+    )
+    second = client.get(
+        "/api/v1/operator/strategy/candidates",
+        params={"high_priority_only": False, "limit": 10},
+    )
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert calls["count"] == 1  # 스캔은 task 1회뿐
+    assert {c["project_id"] for c in first.json()["candidates"]} == {project.id}
+    assert first.json()["candidates"] == second.json()["candidates"]
+    assert second.json()["snapshot_status"] == "idle"
+    assert second.json()["computed_at"] is not None
+    assert second.json()["stale"] is False
+
+
+def test_get_candidates_slices_stored_top100_by_requested_limit(client, test_db, enqueue_stub):
+    """저장 top-100 을 요청 limit 으로 슬라이스 — limit 은 키 차원이 아니다 (§6.1)."""
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    row = service._get_or_create_row(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    stored_candidates = [
+        {
+            "project_id": index, "title": f"공고 {index}", "category": "software",
+            "budget_estimate": 1.0, "deadline": None, "matched_score": 0.7,
+            "probability_score": 0.8, "priority_score": 0.9, "action": "review",
+            "recommended_amount": 1.0, "analysis_summary": "s", "strategy_reasons": ["r"],
+        }
+        for index in range(1, 4)
+    ]
+    service.mark_completed(
+        test_db,
+        row_id=int(row.id),
+        payload={
+            "operator_id": int(operator.id),
+            "evaluated_project_count": 42,
+            "returned_candidate_count": 3,
+            "high_priority_only": False,
+            "candidates": stored_candidates,
+        },
+    )
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates",
+        params={"high_priority_only": False, "limit": 2},
+    )
+
+    payload = response.json()
+    assert [c["project_id"] for c in payload["candidates"]] == [1, 2]
+    assert payload["returned_candidate_count"] == 2
+    assert payload["evaluated_project_count"] == 42
+    assert enqueue_stub.calls == []  # 신선한 스냅샷은 디스패치하지 않는다
+
+
+def test_get_candidates_serves_stale_snapshot_and_redispatches(client, test_db, enqueue_stub):
+    """stale(>OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS) 시: 기존 payload 즉시 서빙
+    + stale=true + 재계산 자동 디스패치 (§6.2)."""
+    from app.core.config import settings
+
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    row = service._get_or_create_row(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    service.mark_completed(
+        test_db,
+        row_id=int(row.id),
+        payload={
+            "operator_id": int(operator.id), "evaluated_project_count": 1,
+            "returned_candidate_count": 1, "high_priority_only": False,
+            "candidates": [{
+                "project_id": 7, "title": "오래된 후보", "category": "software",
+                "budget_estimate": 1.0, "deadline": None, "matched_score": 0.7,
+                "probability_score": 0.8, "priority_score": 0.9, "action": "review",
+                "recommended_amount": 1.0, "analysis_summary": "s", "strategy_reasons": ["r"],
+            }],
+        },
+    )
+    stale_at = utc_now() - timedelta(
+        seconds=int(settings.OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS) + 60
+    )
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.id == row.id
+    ).update({"computed_at": stale_at}, synchronize_session=False)
+    test_db.commit()
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates",
+        params={"high_priority_only": False, "limit": 10},
+    )
+
+    payload = response.json()
+    assert [c["project_id"] for c in payload["candidates"]] == [7]  # stale 즉시 서빙
+    assert payload["stale"] is True
+    assert payload["snapshot_status"] == "running"  # 재계산 클레임됨
+    assert enqueue_stub.calls == [(int(operator.id), False)]
