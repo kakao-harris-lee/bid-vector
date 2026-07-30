@@ -1,0 +1,940 @@
+{
+  "files": {
+    "app/ai/bid_recommendation.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/ai/bid_target.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/ai/document_analyzer.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/ai/floor_applicability.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/ai/guardrail_core.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 6
+    },
+    "app/ai/holdout_grouping.py": {
+      "dict_boundary_functions": 5
+    },
+    "app/ai/holdout_quality.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 2
+    },
+    "app/ai/holdout_reporting.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 8
+    },
+    "app/ai/predictor_backtest.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 9
+    },
+    "app/ai/predictors/base.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/ai/predictors/ensemble.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/ai/predictors/historical/__init__.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/ai/predictors/historical/base_rate.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/ai/predictors/historical/calibration.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/ai/predictors/historical/reserve.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/ai/predictors/historical/statistics.py": {
+      "dict_boundary_functions": 4
+    },
+    "app/ai/predictors/historical/summary.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/ai/predictors/legal_floor_spec.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/ai/predictors/lstm.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 13
+    },
+    "app/ai/price_prediction/feedback.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/ai/price_prediction/guardrails_apply.py": {
+      "dict_boundary_functions": 11
+    },
+    "app/ai/price_prediction/guardrails_context.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/ai/price_prediction/insights.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/ai/price_prediction/orchestration.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/ai/price_prediction/price_regime.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 10
+    },
+    "app/ai/service_adapters.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/ai/service_interfaces.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/api/analytics.py": {
+      "file_loc_band": 21,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/api/auth.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/api/backtests.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/api/bids.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/api/decision_samples.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/api/operations.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/api/operator_accounts.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/api/operator_common.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/api/operator_dashboard.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 8
+    },
+    "app/api/operator_profile.py": {
+      "functions_over_soft_limit": 1
+    },
+    "app/api/operator_strategy.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 4
+    },
+    "app/api/projects.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/api/synthetic.py": {
+      "file_loc_band": 25
+    },
+    "app/core/config.py": {
+      "file_loc_band": 33
+    },
+    "app/core/security.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 4
+    },
+    "app/models/models.py": {
+      "file_loc_band": 31
+    },
+    "app/schemas/opportunity.py": {
+      "json_direct_calls": 2
+    },
+    "app/schemas/schemas.py": {
+      "file_loc_band": 21
+    },
+    "app/services/accuracy_integration.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 5
+    },
+    "app/services/allocation.py": {
+      "functions_over_soft_limit": 3,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 23,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 5
+    },
+    "app/services/allocation_core.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/analytics_reporting/base.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 5
+    },
+    "app/services/analytics_reporting/crawl.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/analytics_reporting/dashboard.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/services/analytics_reporting/g2_evidence.py": {
+      "functions_over_soft_limit": 5,
+      "dict_boundary_functions": 6
+    },
+    "app/services/analytics_reporting/g2_run_evidence.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/services/analytics_reporting/ml_release_report.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/services/analytics_reporting/notification.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/services/analytics_reporting/smoke.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 14
+    },
+    "app/services/analytics_reporting/strategy.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/analytics_reporting/synthetic.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 5
+    },
+    "app/services/analytics_reporting/task_runtime.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/services/award_notifications.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/services/award_verification.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 11
+    },
+    "app/services/backtest_cutoff.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 2
+    },
+    "app/services/backtest_data_audit.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/base_amount_basis.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 5
+    },
+    "app/services/bid_base.py": {
+      "functions_over_soft_limit": 1
+    },
+    "app/services/bid_form_draft.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/bid_summary.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 10
+    },
+    "app/services/business_type_enrichment.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/services/category_classifier.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/classification/association.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/classification/budget.py": {
+      "functions_over_soft_limit": 1
+    },
+    "app/services/classification/region.py": {
+      "functions_over_soft_limit": 1
+    },
+    "app/services/classification/semantic.py": {
+      "functions_over_soft_limit": 1,
+      "env_test_sniff": 1
+    },
+    "app/services/classification/tech_field.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/classifier.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/dashboard_summary/collectors.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/services/dashboard_summary/metric_cards.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/dashboard_summary/normalizers.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/services/dashboard_summary/payload.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/dashboard_summary/queries.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/services/dashboard_summary/serializers.py": {
+      "dict_boundary_functions": 4
+    },
+    "app/services/decision_analytics/base.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/services/decision_analytics/events.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/decision_analytics/experiment_history.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 13
+    },
+    "app/services/decision_analytics/feedback_labels.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/decision_analytics/funnel.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 7
+    },
+    "app/services/decision_analytics/insights.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/decision_analytics/operations_kpi.py": {
+      "functions_over_soft_limit": 3,
+      "dict_boundary_functions": 7
+    },
+    "app/services/decision_analytics/recommendations.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/services/decision_experiments/application.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 14
+    },
+    "app/services/decision_experiments/base.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 6
+    },
+    "app/services/decision_experiments/evaluation.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/services/decision_experiments/lifecycle.py": {
+      "functions_over_soft_limit": 3,
+      "dict_boundary_functions": 7
+    },
+    "app/services/decision_experiments/serialization.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 8
+    },
+    "app/services/decision_samples.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/eligibility_labeling.py": {
+      "file_loc_band": 22,
+      "dict_boundary_functions": 6
+    },
+    "app/services/g2_evidence_draft.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 10
+    },
+    "app/services/inprocess_scheduler.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/services/koneps/browser_crawl.py": {
+      "functions_over_soft_limit": 3,
+      "dict_boundary_functions": 13
+    },
+    "app/services/koneps/collection.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/services/koneps/collector.py": {
+      "functions_over_soft_limit": 4,
+      "functions_over_hard_limit": 3,
+      "file_loc_band": 39,
+      "dict_boundary_functions": 16
+    },
+    "app/services/koneps/field_contract.py": {
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 25,
+      "dict_boundary_functions": 9
+    },
+    "app/services/koneps/field_contract_observer.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/koneps/html_parsing.py": {
+      "functions_over_soft_limit": 5,
+      "file_loc_band": 23,
+      "dict_boundary_functions": 7
+    },
+    "app/services/koneps/http_client.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/services/koneps/live_failure.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/koneps/matching.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 5
+    },
+    "app/services/koneps/openapi.py": {
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 21,
+      "dict_boundary_functions": 12
+    },
+    "app/services/koneps/parsing.py": {
+      "dict_boundary_functions": 12
+    },
+    "app/services/koneps/persistence.py": {
+      "functions_over_soft_limit": 4,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 34,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 16
+    },
+    "app/services/koneps/scsbid.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/license_eligibility.py": {
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 21,
+      "dict_boundary_functions": 5
+    },
+    "app/services/ml_release/base.py": {
+      "dict_boundary_functions": 7
+    },
+    "app/services/ml_release/gate.py": {
+      "functions_over_soft_limit": 3,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 9
+    },
+    "app/services/ml_release/manifest.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 9,
+      "env_test_sniff": 1
+    },
+    "app/services/ml_release/preflight.py": {
+      "functions_over_soft_limit": 2,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/services/ml_release/rollout.py": {
+      "functions_over_soft_limit": 3,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/services/ml_release/signing.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/ml_release/storage/base.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/services/ml_release/storage/preflight.py": {
+      "functions_over_soft_limit": 6,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 7
+    },
+    "app/services/ml_release/storage/transfer.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/ml_training/artifacts.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 4
+    },
+    "app/services/ml_training/calibration.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 4
+    },
+    "app/services/ml_training/comparison.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/services/ml_training/dataset_quality.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/services/ml_training/helpers.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 9
+    },
+    "app/services/ml_training/orchestration.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 9
+    },
+    "app/services/model_warmup.py": {
+      "dict_boundary_functions": 1,
+      "env_test_sniff": 1
+    },
+    "app/services/notifications/email.py": {
+      "functions_over_soft_limit": 2,
+      "file_loc_band": 21,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 4,
+      "env_test_sniff": 1
+    },
+    "app/services/notifications/fatigue.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/notifications/fatigue_gate.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 3
+    },
+    "app/services/notifications/manager.py": {
+      "functions_over_soft_limit": 3,
+      "file_loc_band": 25,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 7,
+      "env_test_sniff": 1
+    },
+    "app/services/notifications/telegram.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 7,
+      "env_test_sniff": 4
+    },
+    "app/services/notifications/telegram_strategy.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 10
+    },
+    "app/services/notifications/telegram_strategy_fields.py": {
+      "dict_boundary_functions": 12
+    },
+    "app/services/notifications/telegram_strategy_render.py": {
+      "dict_boundary_functions": 7
+    },
+    "app/services/notifications/update_processor.py": {
+      "functions_over_soft_limit": 4,
+      "dict_boundary_functions": 7
+    },
+    "app/services/onboarding/apply.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/services/onboarding/history.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/onboarding/suggestions.py": {
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 25,
+      "dict_boundary_functions": 5
+    },
+    "app/services/opening_result_collection.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 4
+    },
+    "app/services/operator_strategy_tuning.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 7
+    },
+    "app/services/opportunity_analysis/flags.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/services/opportunity_analysis/market.py": {
+      "dict_boundary_functions": 3
+    },
+    "app/services/opportunity_analysis/orchestration.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/services/opportunity_analysis/prediction_wiring.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/services/opportunity_analysis/scoring.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 6
+    },
+    "app/services/opportunity_monitoring/candidates.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/services/opportunity_monitoring/filters.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/opportunity_monitoring/orchestration.py": {
+      "functions_over_soft_limit": 3,
+      "dict_boundary_functions": 9
+    },
+    "app/services/opportunity_monitoring/preview_cache.py": {
+      "dict_boundary_functions": 4
+    },
+    "app/services/opportunity_monitoring/runs.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/services/opportunity_monitoring/serialization.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 8
+    },
+    "app/services/paper_bidding_backtest/candidates.py": {
+      "functions_over_soft_limit": 4,
+      "dict_boundary_functions": 2
+    },
+    "app/services/paper_bidding_backtest/forward_settlement.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 2
+    },
+    "app/services/paper_bidding_backtest/orchestration.py": {
+      "functions_over_soft_limit": 6,
+      "file_loc_band": 24,
+      "dict_boundary_functions": 7
+    },
+    "app/services/paper_bidding_backtest/persistence.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 4
+    },
+    "app/services/paper_bidding_backtest/scoring.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 3
+    },
+    "app/services/paper_bidding_backtest/settlement.py": {
+      "functions_over_soft_limit": 3,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/services/paper_bidding_backtest/summary.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/paper_bidding_scheduler.py": {
+      "dict_boundary_functions": 4
+    },
+    "app/services/prediction_dataset.py": {
+      "functions_over_soft_limit": 4,
+      "functions_over_hard_limit": 2,
+      "file_loc_band": 26,
+      "dict_boundary_functions": 5
+    },
+    "app/services/prediction_feedback.py": {
+      "functions_over_soft_limit": 2,
+      "dict_boundary_functions": 3
+    },
+    "app/services/prediction_reporting.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 9
+    },
+    "app/services/prediction_schema.py": {
+      "functions_over_soft_limit": 1
+    },
+    "app/services/prediction_workflow.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 4
+    },
+    "app/services/project_similarity.py": {
+      "functions_over_soft_limit": 2,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 7,
+      "env_test_sniff": 1
+    },
+    "app/services/real_bid_track.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/realtime.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 13
+    },
+    "app/services/realtime_auth.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/smoke_test.py": {
+      "functions_over_soft_limit": 5,
+      "file_loc_band": 27,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 5
+    },
+    "app/services/stale_task_reconciler.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/services/strategy_scheduler.py": {
+      "dict_boundary_functions": 1
+    },
+    "app/services/synthetic_backtest.py": {
+      "functions_over_soft_limit": 3,
+      "dict_boundary_functions": 7
+    },
+    "app/services/synthetic_custom_operator.py": {
+      "functions_over_soft_limit": 2,
+      "file_loc_band": 22,
+      "dict_boundary_functions": 9
+    },
+    "app/services/synthetic_experiment/breakdown.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/services/synthetic_experiment/runner.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/synthetic_experiment/sample_gap.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 18
+    },
+    "app/services/synthetic_experiment/sample_report.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 7
+    },
+    "app/services/synthetic_experiment/sample_status.py": {
+      "dict_boundary_functions": 2
+    },
+    "app/services/synthetic_experiment/serialization.py": {
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 3
+    },
+    "app/services/synthetic_experiment/service_crud.py": {
+      "dict_boundary_functions": 4
+    },
+    "app/services/synthetic_experiment/service_lifecycle.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/services/synthetic_experiment/service_sample_gap.py": {
+      "functions_over_soft_limit": 3,
+      "functions_over_hard_limit": 2,
+      "dict_boundary_functions": 5
+    },
+    "app/services/synthetic_experiment/service_sample_gap_candidate.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 6
+    },
+    "app/services/synthetic_experiment/service_serialization.py": {
+      "dict_boundary_functions": 7
+    },
+    "app/services/verification/nts_adapter.py": {
+      "dict_boundary_functions": 4
+    },
+    "app/services/verification/service.py": {
+      "json_direct_calls": 1
+    },
+    "app/tasks/backtest_jobs.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 2
+    },
+    "app/tasks/celery_app.py": {
+      "functions_over_soft_limit": 3,
+      "file_loc_band": 27,
+      "dict_boundary_functions": 16
+    },
+    "app/tasks/collection_jobs.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "dict_boundary_functions": 1
+    },
+    "app/tasks/evidence_jobs.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "json_direct_calls": 3,
+      "dict_boundary_functions": 3,
+      "env_test_sniff": 1
+    },
+    "app/tasks/jobs.py": {
+      "file_loc_band": 27,
+      "dict_boundary_functions": 24,
+      "unvalidated_dict_tasks": 7
+    },
+    "app/tasks/reserve_detail_backfill.py": {
+      "functions_over_soft_limit": 2,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 11
+    },
+    "app/tasks/task_status.py": {
+      "dict_boundary_functions": 7
+    },
+    "app/utils/sequence_coercion.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 3
+    },
+    "scripts/backfill_award_floor_rate.py": {
+      "functions_over_soft_limit": 5,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 40,
+      "dict_boundary_functions": 14
+    },
+    "scripts/backfill_base_amount_basis.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 1
+    },
+    "scripts/backfill_business_type.py": {
+      "json_direct_calls": 2
+    },
+    "scripts/backfill_g2_daily_drafts.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 4
+    },
+    "scripts/backfill_scsbid_awards.py": {
+      "functions_over_soft_limit": 2,
+      "json_direct_calls": 2
+    },
+    "scripts/backtest_data_audit.py": {
+      "json_direct_calls": 2
+    },
+    "scripts/backtest_latest_award_holdouts.py": {
+      "functions_over_soft_limit": 5,
+      "functions_over_hard_limit": 3,
+      "file_loc_band": 51,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 12
+    },
+    "scripts/backtest_paper_bidding.py": {
+      "json_direct_calls": 2
+    },
+    "scripts/backtest_price_predictors.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 1
+    },
+    "scripts/backtest_synthetic_operators.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 21,
+      "json_direct_calls": 4,
+      "dict_boundary_functions": 6
+    },
+    "scripts/build_g2_exit_review.py": {
+      "functions_over_soft_limit": 1,
+      "json_direct_calls": 3,
+      "dict_boundary_functions": 19
+    },
+    "scripts/check_g2_exit_readiness.py": {
+      "functions_over_soft_limit": 3,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 43,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 35
+    },
+    "scripts/collect_g2_evidence.py": {
+      "functions_over_soft_limit": 6,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 50,
+      "json_direct_calls": 4,
+      "dict_boundary_functions": 32
+    },
+    "scripts/g2_blocking_gap_register.py": {
+      "json_direct_calls": 4,
+      "dict_boundary_functions": 12
+    },
+    "scripts/measure_reliable_base_impact.py": {
+      "functions_over_soft_limit": 1
+    },
+    "scripts/measure_stored_bidrate_basis.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1
+    },
+    "scripts/production_smoke_test.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 22,
+      "json_direct_calls": 3,
+      "dict_boundary_functions": 20
+    },
+    "scripts/promote_ml_release.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 2,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 2
+    },
+    "scripts/report_eligibility_segment_backtest.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 29,
+      "dict_boundary_functions": 4
+    },
+    "scripts/report_no_candidate_cause.py": {
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 26,
+      "dict_boundary_functions": 6
+    },
+    "scripts/run_g2_fastlane_evidence.py": {
+      "functions_over_soft_limit": 3,
+      "file_loc_band": 25,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 9
+    },
+    "scripts/run_g2_synthetic_evidence.py": {
+      "functions_over_soft_limit": 2,
+      "functions_over_hard_limit": 1,
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 3
+    },
+    "scripts/seed_marine_gate.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 2
+    },
+    "scripts/seed_synthetic_operators.py": {
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 23,
+      "json_direct_calls": 5,
+      "dict_boundary_functions": 3
+    },
+    "scripts/sync_openapi_types.py": {
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 2
+    },
+    "scripts/verify_award_eligibility.py": {
+      "dict_boundary_functions": 6
+    },
+    "scripts/verify_g2_notification_targets.py": {
+      "functions_over_soft_limit": 1,
+      "functions_over_hard_limit": 1,
+      "file_loc_band": 26,
+      "json_direct_calls": 2,
+      "dict_boundary_functions": 18
+    },
+    "scripts/verify_koneps_field_contract.py": {
+      "dict_boundary_functions": 5
+    }
+  }
+}
