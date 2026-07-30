@@ -709,7 +709,7 @@ def test_collect_candidate_evaluations_excludes_expired_deadlines(client, test_d
 
     evaluations, evaluated_count = _collect_evaluations_for_operator(test_db)
 
-    surfaced_ids = {evaluation.project.id for evaluation in evaluations}
+    surfaced_ids = {evaluation.project_id for evaluation in evaluations}
     assert future.id in surfaced_ids
     assert expired.id not in surfaced_ids
     # evaluated_project_count now counts only biddable matches.
@@ -732,7 +732,7 @@ def test_collect_candidate_evaluations_includes_null_deadline(client, test_db, m
 
     evaluations, evaluated_count = _collect_evaluations_for_operator(test_db)
 
-    surfaced_ids = {evaluation.project.id for evaluation in evaluations}
+    surfaced_ids = {evaluation.project_id for evaluation in evaluations}
     assert null_deadline.id in surfaced_ids
     assert evaluated_count == 1
 
@@ -772,7 +772,7 @@ def test_collect_candidate_evaluations_orders_most_imminent_future_first(client,
 
     assert scanned_order == [soonest.id]
     assert evaluated_count == 1
-    assert [evaluation.project.id for evaluation in evaluations] == [soonest.id]
+    assert [evaluation.project_id for evaluation in evaluations] == [soonest.id]
     assert expired.id not in scanned_order
 
 

@@ -211,3 +211,37 @@ def test_recent_window_cache_keys_separate_operators(test_db):
     assert other is None
     assert (operator.id, 365) in service._recent_window_cache
     assert (operator.id + 9999, 365) in service._recent_window_cache
+
+
+def test_recent_window_project_load_is_column_limited(test_db):
+    """윈도우 로더의 tender_results SELECT 가 Project 중량 컬럼을 싣지 않는다.
+
+    설계 2026-07-30 §5 PR-A-3 (S2): joinedload(TenderResult.project) 전 컬럼
+    로드는 embedding_payload(~8-9KB text)·semantic_text 를 365일 윈도우 전체만큼
+    실어 나른다. 다운스트림이 읽는 Project 컬럼은 title/category 뿐이므로
+    필요 컬럼 한정으로 제한하되, 반환값·계산 로직은 불변이어야 한다.
+    """
+    operator = ensure_operator_account(test_db)
+    _seed_calibration_window(test_db, operator_id=operator.id, count=4)
+
+    service = PredictionFeedbackService()
+    engine = test_db.get_bind()
+    captured: list[str] = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        if "tender_results" in statement and statement.lstrip().upper().startswith("SELECT"):
+            captured.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _capture)
+    try:
+        window = service._get_recent_window(test_db, operator_id=operator.id, days=365)
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture)
+
+    assert window.tender_results  # 윈도우 자체는 정상 로드
+    joined_sql = "\n".join(captured)
+    assert "embedding_payload" not in joined_sql
+    assert "semantic_text" not in joined_sql
+    # 다운스트림이 실제로 읽는 컬럼은 즉시 로드 상태 그대로다 (추가 SELECT 없이)
+    assert all(result.project.title for result in window.tender_results)
+    assert all(result.project.category for result in window.tender_results)

@@ -176,6 +176,9 @@ class _FakeDB:
     def query(self, *args, **kwargs):
         return _FakeQuery(self._projects)
 
+    def expunge(self, obj):
+        """스캔 루프 세션 위생은 인메모리 fake 에선 no-op."""
+
 
 def _passing_analysis() -> dict:
     """Canned analysis that clears the monitor thresholds."""
@@ -237,7 +240,7 @@ def test_collect_unchanged_when_gate_disabled(monkeypatch):
 
     evaluations = _collect(service, _FakeDB([ineligible, unknown]), _FakeOperator())
 
-    assert {ev.project.id for ev in evaluations} == {1, 2}
+    assert {ev.project_id for ev in evaluations} == {1, 2}
 
 
 def test_collect_drops_ineligible_when_gate_enabled(monkeypatch):
@@ -261,4 +264,4 @@ def test_collect_drops_ineligible_when_gate_enabled(monkeypatch):
 
     evaluations = _collect(service, _FakeDB([ineligible, unknown]), _FakeOperator())
 
-    assert {ev.project.id for ev in evaluations} == {2}
+    assert {ev.project_id for ev in evaluations} == {2}

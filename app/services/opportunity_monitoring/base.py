@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.core.constants import ACTIVE_PROJECT_STATUSES as _ACTIVE_PROJECT_STATUSES
 from app.core.database import SessionLocal
-from app.models.models import Project
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.opportunity_analysis import OpportunityAnalysisService
@@ -33,10 +32,17 @@ class StrategyFilterResult:
 
 @dataclass
 class StrategyCandidateEvaluation:
-    """A strategy-filtered project paired with its analysis payload."""
+    """A strategy-filtered candidate, serialized at analysis time (slim).
 
-    project: Project
-    analysis: dict
+    스캔 메모리 위생(설계 2026-07-30 §5 PR-A-1): 분석 직후 ``candidate``
+    (preview 직렬화 dict)와 ``sort_key`` 만 보관하고 ORM ``Project`` / 전체
+    analysis dict 참조는 즉시 해제한다. monitor 경로는 선택된 top-N 만
+    ``project_id`` 로 재조회한다 (orchestration._process_monitor_evaluation).
+    """
+
+    project_id: int
+    candidate: dict
+    sort_key: tuple
     strategy_reasons: list[str]
 
 

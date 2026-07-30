@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.domain.aggregates import average, error_rate
-from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, TenderResult, User
+from app.models.models import BidDecisionRecord, HistoricalData, PricePrediction, Project, TenderResult, User
 
 # Maximum number of ids bound into a single ``project_id.in_(...)`` clause.
 # PostgreSQL caps a statement at 65,535 bind parameters; the default 365-day
@@ -227,13 +227,24 @@ class PredictionFeedbackService:
     def _load_recent_tender_results(self, db: Session, *, date_from: datetime) -> list[TenderResult]:
         """Return recent linked tender results ordered newest first.
 
-        ``TenderResult.project`` is eager-loaded so downstream category access
+        ``TenderResult.project`` is eager-loaded (column-limited to
+        title/category) so downstream category access
         (``result.project.category``) does not trigger a per-row lazy SELECT
         (the previous N+1 over the full window).
         """
         results = (
             db.query(TenderResult)
-            .options(joinedload(TenderResult.project))
+            .options(
+                # 피드백/캘리브레이션이 읽는 Project 컬럼은 title/category 뿐이다
+                # (build_feedback 직렬화 + 카테고리 인메모리 필터). 전 컬럼
+                # joinedload 는 embedding_payload(~8-9KB)·semantic_text 같은
+                # 중량 컬럼을 365일 윈도우 전체만큼 상주시키므로 필요 컬럼
+                # 한정으로 제한한다 (설계 2026-07-30 §5 PR-A-3 / S2). 반환값과
+                # 계산 로직은 불변 — 미로드 컬럼은 접근 시 lazy-load 로 동작 동일.
+                joinedload(TenderResult.project).load_only(
+                    Project.title, Project.category
+                )
+            )
             .filter(
                 TenderResult.project_id.isnot(None),
                 or_(

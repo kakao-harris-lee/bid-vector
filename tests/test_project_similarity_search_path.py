@@ -111,7 +111,9 @@ def test_python_fallback_still_loads_and_refreshes_candidates(test_db, monkeypat
 
     searched_candidates: list[list[int]] = []
 
-    def _fake_python(candidates, *, query_embedding, limit, min_similarity):
+    def _fake_python(candidates, *, query_embedding, limit, min_similarity, embedding_resolver=None):
+        # 기본(비-read_only) 경로: 저장본을 읽는 _load_embedding resolver 가 주입된다.
+        assert embedding_resolver == service._load_embedding
         searched_candidates.append([c.id for c in candidates])
         return [
             {"project_id": cand_a.id, "title": cand_a.title, "similarity_score": 0.5}
