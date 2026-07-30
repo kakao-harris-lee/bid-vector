@@ -114,6 +114,71 @@ class PreviewSnapshotService:
         db.commit()
         return bool(claimed)
 
+    # --- 디스패치 (API·전략 쓰기 트리거) --------------------------------------
+
+    def dispatch_recompute(
+        self, db: Session, *, operator_id: int, high_priority_only: bool
+    ) -> OperatorPreviewSnapshot | None:
+        """단일비행 가드 하에 재계산 task 를 디스패치한다.
+
+        반환: 클레임에 성공해 디스패치한 행(재조회본). 이미 running 이라
+        스킵했으면 None. enqueue 실패는 요청을 죽이지 않고 행을 failed 로
+        마감한다(다음 GET 이 재디스패치).
+        """
+        row = self._get_or_create_row(
+            db, operator_id=operator_id, high_priority_only=high_priority_only
+        )
+        if row is None:  # pragma: no cover - 생성 경합 직후 소실 불가
+            return None
+        if not self._claim(db, row):
+            return None
+        try:
+            # 순환 import 회피 + 테스트 monkeypatch 표면(§4.7): 호출 시점에
+            # app.tasks.jobs 모듈 속성으로 해석한다.
+            from app.tasks import jobs
+
+            async_result = jobs.enqueue_preview_snapshot_recompute(
+                operator_id=int(operator_id), high_priority_only=bool(high_priority_only)
+            )
+        except Exception as exc:  # noqa: BLE001 - enqueue 실패가 GET 을 죽여선 안 된다
+            logger.exception(
+                "preview snapshot enqueue failed operator_id=%s high_priority_only=%s",
+                operator_id, high_priority_only,
+            )
+            self.mark_failed(db, row_id=int(row.id), error=f"enqueue failed: {exc}")
+            return None
+        # eager(테스트) 모드에선 위 enqueue 가 task 를 인라인 완주시키므로 상태를
+        # 덮지 않도록 task_id 만 표적 UPDATE 한다.
+        db.query(OperatorPreviewSnapshot).filter(
+            OperatorPreviewSnapshot.id == int(row.id)
+        ).update({"task_id": str(async_result.id)}, synchronize_session=False)
+        db.commit()
+        return self.get_row(db, operator_id=operator_id, high_priority_only=high_priority_only)
+
+    def dispatch_for_strategy_write(self, db: Session, *, operator_id: int) -> int:
+        """전략 쓰기 후 재계산 트리거 (설계 §6.3, 구 preview_cache.invalidate 대체).
+
+        기존 스냅샷 행이 있는 키만 디스패치한다 — 사용된 적 없는 키 변형의
+        불필요한 스캔 방지. 행이 하나도 없으면 기본 키(high_priority_only=False)
+        만. 반환: 디스패치 수(running 스킵 제외).
+        """
+        rows = (
+            db.query(OperatorPreviewSnapshot)
+            .filter(OperatorPreviewSnapshot.operator_id == int(operator_id))
+            .all()
+        )
+        keys = sorted({bool(row.high_priority_only) for row in rows}) or [False]
+        dispatched = 0
+        for key in keys:
+            if (
+                self.dispatch_recompute(
+                    db, operator_id=int(operator_id), high_priority_only=key
+                )
+                is not None
+            ):
+                dispatched += 1
+        return dispatched
+
     # --- task 라이프사이클 (synthetic experiment run 패턴, DB-first) ---------
 
     def run_recompute(

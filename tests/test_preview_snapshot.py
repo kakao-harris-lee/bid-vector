@@ -9,6 +9,7 @@ OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS 기반 stale 판정 + 자동 재계산 �
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.preview_snapshot import (
     SNAPSHOT_STATUS_FAILED,
     SNAPSHOT_STATUS_IDLE,
+    SNAPSHOT_STATUS_RUNNING,
     PreviewSnapshotService,
 )
 
@@ -184,3 +186,108 @@ def test_claim_reclaims_stale_running_row(test_db):
     test_db.commit()
 
     assert service._claim(test_db, row) is True
+
+
+# ---------------------------------------------------------------------------
+# 디스패치 (API·전략 쓰기 트리거) + ops 큐 라우팅 + task 멱등
+# ---------------------------------------------------------------------------
+
+
+class _EnqueueRecorder:
+    """jobs.enqueue_preview_snapshot_recompute 대역 — 실행 없이 디스패치만 기록."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, bool]] = []
+
+    def __call__(self, *, operator_id: int, high_priority_only: bool):
+        self.calls.append((int(operator_id), bool(high_priority_only)))
+        return SimpleNamespace(id=f"stub-task-{len(self.calls)}")
+
+
+@pytest.fixture
+def enqueue_stub(monkeypatch) -> _EnqueueRecorder:
+    from app.tasks import jobs
+
+    recorder = _EnqueueRecorder()
+    monkeypatch.setattr(jobs, "enqueue_preview_snapshot_recompute", recorder)
+    return recorder
+
+
+def test_recompute_task_is_routed_to_ops_queue():
+    """워커 컨테이너(이미 monitor·g2 recheck 로 동일 스캔 실행 중)로 라우팅 (§6.3)."""
+    from app.core.config import settings
+    from app.tasks.celery_app import PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME, build_task_routes
+
+    assert PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME == "jobs.recompute_preview_snapshot"
+    assert build_task_routes()[PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME]["queue"] == settings.CELERY_OPS_QUEUE
+
+
+def test_dispatch_recompute_is_single_flight(test_db, enqueue_stub):
+    """running 중 재디스패치는 스킵 — 구 preview_cache 스탬피드 방지의 승계."""
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+
+    first = service.dispatch_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    second = service.dispatch_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+
+    assert first is not None
+    assert first.status == SNAPSHOT_STATUS_RUNNING
+    assert first.task_id == "stub-task-1"
+    assert second is None
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+def test_dispatch_for_strategy_write_targets_existing_keys_only(test_db, enqueue_stub):
+    """기존 스냅샷 행이 있는 키만 재계산 — 미사용 키 변형 스캔 방지 (§6.3)."""
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    for key in (False, True):
+        service._get_or_create_row(
+            test_db, operator_id=int(operator.id), high_priority_only=key
+        )
+
+    dispatched = service.dispatch_for_strategy_write(test_db, operator_id=int(operator.id))
+
+    assert dispatched == 2
+    assert sorted(enqueue_stub.calls) == [(int(operator.id), False), (int(operator.id), True)]
+
+
+def test_dispatch_for_strategy_write_defaults_to_false_key_when_no_rows(test_db, enqueue_stub):
+    operator = ensure_operator_account(test_db)
+
+    dispatched = PreviewSnapshotService().dispatch_for_strategy_write(
+        test_db, operator_id=int(operator.id)
+    )
+
+    assert dispatched == 1
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+def test_recompute_task_reuses_unique_row_idempotently(client, test_db, monkeypatch):
+    """같은 키 재실행(재전달 상당)은 두 번째 행을 만들지 않는다 (celery_task_id 멱등)."""
+    from app.tasks import jobs
+
+    _configure_software_operator(client)
+    _seed_matching_project(test_db)
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
+    operator = ensure_operator_account(test_db)
+
+    jobs.recompute_preview_snapshot.apply_async(
+        kwargs={"operator_id": int(operator.id), "high_priority_only": False}
+    )
+    jobs.recompute_preview_snapshot.apply_async(
+        kwargs={"operator_id": int(operator.id), "high_priority_only": False}
+    )
+
+    rows = (
+        test_db.query(OperatorPreviewSnapshot)
+        .filter(OperatorPreviewSnapshot.operator_id == int(operator.id))
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].status == SNAPSHOT_STATUS_IDLE
+    assert rows[0].computed_at is not None

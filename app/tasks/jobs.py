@@ -23,6 +23,7 @@ from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.update_processor import TelegramSyncService
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+from app.services.preview_snapshot import PreviewSnapshotService
 from app.services.project_similarity import ProjectSimilarityService
 from app.tasks.backtest_jobs import (
     run_historical_backtest_job,
@@ -40,6 +41,7 @@ from app.tasks.celery_app import (
     NOTIFY_AWARD_RESULTS_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
+    PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME,
     PRICE_PREDICTOR_TRAINING_TASK_NAME,
     PROJECT_EMBEDDING_REBUILD_TASK_NAME,
     RECLASSIFY_CATEGORIES_TASK_NAME,
@@ -560,12 +562,39 @@ def reconcile_stale_task_runs() -> dict:
         result = StaleTaskReconcilerService().reconcile(db)
         if result.get("total_finalized"):
             logger.info(
-                "reconcile_stale_task_runs finalized strategy_runs=%s crawl_jobs=%s (threshold=%ss)",
+                "reconcile_stale_task_runs finalized strategy_runs=%s crawl_jobs=%s preview_snapshots=%s (threshold=%ss)",
                 result.get("strategy_runs_finalized"),
                 result.get("crawl_jobs_finalized"),
+                result.get("preview_snapshots_finalized"),
                 result.get("threshold_seconds"),
             )
         return result
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, name=PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME)
+def recompute_preview_snapshot(self, operator_id: int, high_priority_only: bool = False) -> dict:
+    """운영자 preview 스냅샷 1키를 재계산·영속화한다 (설계 2026-07-30 §6.3).
+
+    body 는 자체 SessionLocal + DB-first 라이프사이클(mark_running/completed/
+    failed — synthetic experiment run 패턴). celery_task_id 멱등(crawl_jobs
+    패턴): UNIQUE(operator_id, high_priority_only) 행에 task id 를 스탬프하고
+    acks_late 재전달은 같은 행을 재사용한다(고아 행 불가). 고아 running 은
+    stale-task-reconciler 가 회수한다.
+    """
+    task_id = getattr(getattr(self, "request", None), "id", None)
+    db = SessionLocal()
+    try:
+        return PreviewSnapshotService().run_recompute(
+            db,
+            operator_id=int(operator_id),
+            high_priority_only=bool(high_priority_only),
+            task_id=str(task_id) if task_id else None,
+        )
     except Exception:
         db.rollback()
         raise
@@ -653,6 +682,17 @@ def enqueue_koneps_notice_collection(
         kwargs={
             "request_payload": request.model_dump(mode="json"),
             "crawl_job_id": crawl_job_id,
+        },
+        queue=settings.CELERY_OPS_QUEUE,
+    )
+
+
+def enqueue_preview_snapshot_recompute(*, operator_id: int, high_priority_only: bool):
+    """Queue a preview-snapshot recompute task and return the async task handle."""
+    return recompute_preview_snapshot.apply_async(
+        kwargs={
+            "operator_id": int(operator_id),
+            "high_priority_only": bool(high_priority_only),
         },
         queue=settings.CELERY_OPS_QUEUE,
     )

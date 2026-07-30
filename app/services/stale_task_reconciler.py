@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.time import utc_now
-from app.models.models import CrawlJob, OperatorStrategyRun
+from app.models.models import CrawlJob, OperatorPreviewSnapshot, OperatorStrategyRun
 
 #: Non-terminal statuses that a periodic janitor may finalize once stale.
 NON_TERMINAL_STATUSES = ("running", "queued", "pending", "started")
@@ -81,8 +81,11 @@ class StaleTaskReconcilerService:
         crawl_finalized = self._reconcile_crawl_jobs(
             db, cutoff=cutoff, batch_limit=batch_limit, reason=reason
         )
+        snapshot_finalized = self._reconcile_preview_snapshots(
+            db, cutoff=cutoff, batch_limit=batch_limit, reason=reason
+        )
 
-        if strategy_finalized or crawl_finalized:
+        if strategy_finalized or crawl_finalized or snapshot_finalized:
             db.commit()
         else:
             # Nothing changed; keep the session clean for the caller.
@@ -92,7 +95,8 @@ class StaleTaskReconcilerService:
             "threshold_seconds": threshold_seconds,
             "strategy_runs_finalized": strategy_finalized,
             "crawl_jobs_finalized": crawl_finalized,
-            "total_finalized": strategy_finalized + crawl_finalized,
+            "preview_snapshots_finalized": snapshot_finalized,
+            "total_finalized": strategy_finalized + crawl_finalized + snapshot_finalized,
         }
 
     def _stale_threshold_seconds(self) -> int:
@@ -159,6 +163,36 @@ class StaleTaskReconcilerService:
             row.status = "failed"
             row.error_message = self._compose_reason(row.error_message, reason)
             row.completed_at = utc_now()
+            finalized += 1
+        return finalized
+
+    def _reconcile_preview_snapshots(
+        self,
+        db: Session,
+        *,
+        cutoff,
+        batch_limit: int,
+        reason: str,
+    ) -> int:
+        """running 고아 preview 스냅샷 행을 failed 로 마감한다. Returns the count.
+
+        키당 UNIQUE 행이라 삭제는 없다(payload 는 보존 — 다음 GET 이 stale 로
+        서빙하며 재디스패치). ``updated_at`` 이 유일한 age 신호다:
+        클레임/mark_running 이 매번 갱신하므로 cutoff 보다 오래된 running 은
+        실제 실행 중일 수 없다.
+        """
+        rows = (
+            db.query(OperatorPreviewSnapshot)
+            .filter(OperatorPreviewSnapshot.status.in_(NON_TERMINAL_STATUSES))
+            .filter(OperatorPreviewSnapshot.updated_at <= cutoff)
+            .order_by(OperatorPreviewSnapshot.id.asc())
+            .limit(batch_limit)
+            .all()
+        )
+        finalized = 0
+        for row in rows:
+            row.status = "failed"
+            row.last_error = self._compose_reason(row.last_error, reason)
             finalized += 1
         return finalized
 
