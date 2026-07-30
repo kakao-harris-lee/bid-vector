@@ -616,3 +616,63 @@ def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypat
     assert update.status_code == 200
     assert calls["count"] == 2  # 최초 1 + 전략 저장 트리거 1 (GET 재조회는 0)
     assert after.json()["candidates"] == []  # 새 규칙이 시드 공고를 배제
+
+
+# ---------------------------------------------------------------------------
+# POST /candidates/refresh (202) + sync monitor 위임 (§6.2)
+# ---------------------------------------------------------------------------
+
+
+def test_candidates_refresh_returns_202_envelope(client, test_db, enqueue_stub):
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+
+    response = client.post(
+        "/api/v1/operator/strategy/candidates/refresh",
+        params={"high_priority_only": False},
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["task_id"] == "stub-task-1"
+    assert payload["operator_id"] == int(operator.id)
+    assert payload["high_priority_only"] is False
+    assert payload["snapshot_status"] == "running"
+    assert payload["poll_url"] == "/api/v1/operator/strategy/candidates"
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+def test_candidates_refresh_single_flight_reuses_running_task(client, test_db, enqueue_stub):
+    _configure_software_operator(client)
+
+    first = client.post("/api/v1/operator/strategy/candidates/refresh")
+    second = client.post("/api/v1/operator/strategy/candidates/refresh")
+
+    assert first.status_code == 202 and second.status_code == 202
+    assert len(enqueue_stub.calls) == 1  # 단일비행: 두 번째는 디스패치 없음
+    assert second.json()["task_id"] == first.json()["task_id"]
+
+
+def test_sync_monitor_route_returns_202_async_envelope(client, test_db, monkeypatch):
+    """(eager) POST /monitor 는 202 async envelope 을 반환하고 결과는 poll_url 로 읽는다."""
+    _configure_software_operator(client)
+    project = _seed_matching_project(test_db)
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
+
+    kickoff = client.post(
+        "/api/v1/operator/strategy/monitor",
+        json={"high_priority_only": False, "limit": 5},
+    )
+
+    assert kickoff.status_code == 202
+    envelope = kickoff.json()
+    assert envelope["task_name"] == "jobs.monitor_operator_strategy"
+    assert envelope["poll_url"].endswith(envelope["task_id"])
+
+    status_payload = client.get(envelope["poll_url"]).json()
+    assert status_payload["status"] == "completed"
+    assert status_payload["result"]["results"][0]["project_id"] == project.id
+    assert (
+        status_payload["result"]["trigger_source"]
+        == StrategyMonitoringService.ASYNC_TRIGGER_SOURCE
+    )

@@ -260,13 +260,38 @@ def list_strategy_candidates_impl(
     return payload
 
 
-def run_strategy_monitor_impl(request, target: User, db: Session):
-    return StrategyMonitoringService().execute_monitoring(
-        db,
-        request=request,
-        trigger_source=StrategyMonitoringService.SYNC_TRIGGER_SOURCE,
-        operator=target,
+def refresh_strategy_candidates_impl(
+    target: User,
+    db: Session,
+    high_priority_only: bool | None,
+) -> dict:
+    """명시 재계산 디스패치 (202, 설계 §6.2). 단일비행: 이미 running 이면 그
+    task 를 재사용한다 — 새로고침 연타가 스캔을 중복 실행하지 못한다."""
+    service = PreviewSnapshotService()
+    resolved_high_priority_only = service.resolve_high_priority_key(
+        db, operator=target, high_priority_only=high_priority_only
     )
+    row = service.dispatch_recompute(
+        db, operator_id=int(target.id), high_priority_only=resolved_high_priority_only
+    )
+    already_running = row is None
+    if row is None:
+        row = service.get_row(
+            db, operator_id=int(target.id), high_priority_only=resolved_high_priority_only
+        )
+    return {
+        "task_id": row.task_id if row is not None else None,
+        "operator_id": int(target.id),
+        **_operator_context_fields(target),
+        "high_priority_only": bool(resolved_high_priority_only),
+        "snapshot_status": str(row.status) if row is not None else "failed",
+        "detail": (
+            "이미 실행 중인 재계산을 재사용합니다."
+            if already_running
+            else "미리보기 재계산을 큐에 등록했습니다."
+        ),
+        "poll_url": "/api/v1/operator/strategy/candidates",
+    }
 
 
 def list_monitor_runs_impl(

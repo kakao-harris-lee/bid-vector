@@ -429,7 +429,7 @@ def test_operator_strategy_monitor_persists_decisions_and_notifications(client, 
 
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fake_analyze)
 
-    response = client.post(
+    kickoff = client.post(
         "/api/v1/operator/strategy/monitor",
         json={
             "high_priority_only": False,
@@ -437,10 +437,10 @@ def test_operator_strategy_monitor_persists_decisions_and_notifications(client, 
         },
     )
 
-    assert response.status_code == 200
-    payload = response.json()
+    assert kickoff.status_code == 202
+    payload = client.get(kickoff.json()["poll_url"]).json()["result"]
     assert payload["monitor_run_id"] >= 1
-    assert payload["trigger_source"] == StrategyMonitoringService.SYNC_TRIGGER_SOURCE
+    assert payload["trigger_source"] == StrategyMonitoringService.ASYNC_TRIGGER_SOURCE
     assert payload["previous_run_id"] is None
     assert payload["selected_candidate_count"] == 2
     assert payload["persisted_candidate_count"] == 2
@@ -455,7 +455,7 @@ def test_operator_strategy_monitor_persists_decisions_and_notifications(client, 
     assert test_db.query(Notification).count() == 2
     run = test_db.query(OperatorStrategyRun).one()
     assert run.status == "completed"
-    assert run.trigger_source == StrategyMonitoringService.SYNC_TRIGGER_SOURCE
+    assert run.trigger_source == StrategyMonitoringService.ASYNC_TRIGGER_SOURCE
     assert run.persisted_candidate_count == 2
 
 
@@ -1080,33 +1080,35 @@ def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(cl
 
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fake_analyze)
 
-    first = client.post(
+    first_kickoff = client.post(
         "/api/v1/operator/strategy/monitor",
         json={
             "high_priority_only": True,
             "limit": 10,
         },
     )
-    second = client.post(
+    assert first_kickoff.status_code == 202
+    first = client.get(first_kickoff.json()["poll_url"]).json()["result"]
+    second_kickoff = client.post(
         "/api/v1/operator/strategy/monitor",
         json={
             "high_priority_only": True,
             "limit": 10,
         },
     )
+    assert second_kickoff.status_code == 202
+    second = client.get(second_kickoff.json()["poll_url"]).json()["result"]
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["notification_count"] == 1
-    assert first.json()["new_candidate_count"] == 1
-    assert first.json()["persisted_candidate_count"] == 1
-    assert second.json()["notification_count"] == 0
-    assert second.json()["new_candidate_count"] == 0
-    assert second.json()["continuing_candidate_count"] == 1
-    assert second.json()["persisted_candidate_count"] == 1
-    assert second.json()["results"][0]["is_new_candidate"] is False
-    assert second.json()["results"][0]["notification_created"] is False
-    assert second.json()["results"][0]["notification_id"] is None
+    assert first["notification_count"] == 1
+    assert first["new_candidate_count"] == 1
+    assert first["persisted_candidate_count"] == 1
+    assert second["notification_count"] == 0
+    assert second["new_candidate_count"] == 0
+    assert second["continuing_candidate_count"] == 1
+    assert second["persisted_candidate_count"] == 1
+    assert second["results"][0]["is_new_candidate"] is False
+    assert second["results"][0]["notification_created"] is False
+    assert second["results"][0]["notification_id"] is None
     assert test_db.query(BidDecisionRecord).count() == 1
     assert test_db.query(Notification).count() == 1
 
@@ -1266,7 +1268,7 @@ def test_operator_strategy_monitor_runs_endpoint_returns_recent_history(client, 
         "/api/v1/operator/strategy/monitor",
         json={"high_priority_only": False, "limit": 5},
     )
-    assert run_response.status_code == 200
+    assert run_response.status_code == 202
 
     history_response = client.get("/api/v1/operator/strategy/monitor/runs", params={"limit": 10})
     assert history_response.status_code == 200
@@ -1274,7 +1276,7 @@ def test_operator_strategy_monitor_runs_endpoint_returns_recent_history(client, 
     assert payload["result_count"] == 1
     assert payload["runs"][0]["id"] == run_response.json()["monitor_run_id"]
     assert payload["runs"][0]["status"] == "completed"
-    assert payload["runs"][0]["trigger_source"] == StrategyMonitoringService.SYNC_TRIGGER_SOURCE
+    assert payload["runs"][0]["trigger_source"] == StrategyMonitoringService.ASYNC_TRIGGER_SOURCE
     assert payload["runs"][0]["persisted_candidate_count"] == 1
 
 
@@ -1412,24 +1414,25 @@ def test_operator_strategy_monitor_run_detail_exposes_diff_and_only_new_alerts(c
 
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fake_analyze)
 
-    first_run = client.post(
+    first_kickoff = client.post(
         "/api/v1/operator/strategy/monitor",
         json={"high_priority_only": False, "limit": 5},
     )
-    assert first_run.status_code == 200
-    assert first_run.json()["notification_count"] == 2
+    assert first_kickoff.status_code == 202
+    first_run = client.get(first_kickoff.json()["poll_url"]).json()["result"]
+    assert first_run["notification_count"] == 2
 
     alpha_project.status = "closed"
     test_db.commit()
     active_run["index"] = 1
 
-    second_run = client.post(
+    second_kickoff = client.post(
         "/api/v1/operator/strategy/monitor",
         json={"high_priority_only": False, "limit": 5},
     )
-    assert second_run.status_code == 200
-    second_payload = second_run.json()
-    assert second_payload["previous_run_id"] == first_run.json()["monitor_run_id"]
+    assert second_kickoff.status_code == 202
+    second_payload = client.get(second_kickoff.json()["poll_url"]).json()["result"]
+    assert second_payload["previous_run_id"] == first_run["monitor_run_id"]
     assert second_payload["new_candidate_count"] == 1
     assert second_payload["continuing_candidate_count"] == 1
     assert second_payload["dropped_candidate_count"] == 1
@@ -1440,7 +1443,7 @@ def test_operator_strategy_monitor_run_detail_exposes_diff_and_only_new_alerts(c
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["id"] == second_payload["monitor_run_id"]
-    assert detail["previous_run_id"] == first_run.json()["monitor_run_id"]
+    assert detail["previous_run_id"] == first_run["monitor_run_id"]
     assert detail["new_candidate_count"] == 1
     assert detail["continuing_candidate_count"] == 1
     assert detail["dropped_candidate_count"] == 1

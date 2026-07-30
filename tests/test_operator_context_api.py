@@ -994,15 +994,19 @@ def test_strategy_monitor_sync_uses_target_operator_context(client, test_db, mon
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", fake_analyze)
 
     headers = _login(client, "operator")
-    response = client.post(
+    kickoff = client.post(
         "/api/v1/operator/strategy/monitor",
         params={"operator_id": synthetic.id},
         json={"high_priority_only": False, "limit": 5},
         headers=headers,
     )
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
+    assert kickoff.status_code == 202, kickoff.text
+    payload = client.get(
+        kickoff.json()["poll_url"],
+        params={"operator_id": synthetic.id},
+        headers=headers,
+    ).json()["result"]
     assert payload["operator_id"] == synthetic.id
     assert payload["current_operator_id"] == synthetic.id
     assert payload["current_operator_username"] == synthetic.username

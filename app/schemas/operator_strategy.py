@@ -80,6 +80,20 @@ class OperatorStrategyCandidatesResponse(BaseModel):
     stale: bool = False
 
 
+class OperatorStrategyCandidatesRefreshResponse(BaseModel):
+    """명시 재계산 202 응답 (설계 §6.2). 폴링은 별도 task-status 없이
+    GET /operator/strategy/candidates 재조회(snapshot_status·computed_at 관찰)."""
+
+    task_id: Optional[str] = None
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
+    high_priority_only: bool
+    snapshot_status: Literal["idle", "running", "failed"]
+    detail: str
+    poll_url: str
+
+
 class OperatorStrategyMonitorRequest(BaseModel):
     limit: Optional[int] = Field(default=None, ge=1, le=100)
     high_priority_only: Optional[bool] = None
