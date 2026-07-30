@@ -3,16 +3,24 @@
 Extracted verbatim from ``app.tasks.jobs`` (§4.5 size decomposition). The
 ``@task`` entries ``run_synthetic_operator_backtest`` / ``run_historical_backtest``
 stay in ``app.tasks.jobs`` (registration names unchanged) as thin shells that
-delegate here. These bodies own their own ``db`` lifecycle (no ``jobs.SessionLocal``
-monkeypatch seam is used for them).
+delegate here. These bodies own their own ``db`` lifecycle via the shared
+``task_session`` seam and accept an injectable ``session_factory`` (same axis as
+the in-process schedulers), so no module-global monkeypatch is needed to drive
+them against a test session.
 """
 
-from typing import Any
+from typing import Any, Callable
 
-from app.core.database import SessionLocal
+from sqlalchemy.orm import Session
+
+from app.core.database import task_session
 
 
-def run_synthetic_operator_backtest_job(payload: dict[str, Any] | None = None) -> dict:
+def run_synthetic_operator_backtest_job(
+    payload: dict[str, Any] | None = None,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> dict:
     """Run the per-synthetic-operator backtest in a background worker.
 
     Mirrors the synchronous `/api/v1/synthetic/backtests/run` endpoint but
@@ -46,8 +54,7 @@ def run_synthetic_operator_backtest_job(payload: dict[str, Any] | None = None) -
     cutoff_hours_before_deadline = data.get("cutoff_hours_before_deadline")
     history_limit = data.get("history_limit")
 
-    db = SessionLocal()
-    try:
+    with task_session(session_factory) as db:
         return SyntheticBacktestService().run_for_all(
             db,
             start_at=start_at,
@@ -64,19 +71,20 @@ def run_synthetic_operator_backtest_job(payload: dict[str, Any] | None = None) -
             history_limit=int(history_limit) if history_limit is not None else None,
             settle_actions=settle_actions,
         )
-    finally:
-        db.close()
 
 
-def run_historical_backtest_job(request_payload: dict[str, Any] | None = None) -> dict:
+def run_historical_backtest_job(
+    request_payload: dict[str, Any] | None = None,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> dict:
     """Replay awarded TenderResults as paper_bid + settlement comparison."""
     from datetime import datetime, timedelta, timezone
     from app.core.config import settings as runtime_settings
     from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 
     payload = dict(request_payload or {})
-    db = SessionLocal()
-    try:
+    with task_session(session_factory) as db:
         lookback = max(1, int(payload.pop("lookback_days", runtime_settings.HISTORICAL_BACKTEST_LOOKBACK_DAYS)))
         end_at = datetime.now(timezone.utc)
         start_at = end_at - timedelta(days=lookback)
@@ -101,5 +109,3 @@ def run_historical_backtest_job(request_payload: dict[str, Any] | None = None) -
             settle_actions=settle_actions,
             persist=bool(payload.get("persist", True)),
         )
-    finally:
-        db.close()

@@ -226,8 +226,6 @@ def test_notify_scopes_to_canonical_operator(test_db):
 # Celery task wrapper
 # --------------------------------------------------------------------------- #
 def _patch_session(monkeypatch, test_db):
-    import app.tasks.jobs as jobs_mod
-
     class _NoCloseSession:
         def __init__(self, db):
             self._db = db
@@ -238,7 +236,7 @@ def _patch_session(monkeypatch, test_db):
         def close(self):
             pass
 
-    monkeypatch.setattr(jobs_mod, "SessionLocal", lambda: _NoCloseSession(test_db))
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: _NoCloseSession(test_db))
 
 
 # --------------------------------------------------------------------------- #

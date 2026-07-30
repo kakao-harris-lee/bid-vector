@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import task_session
 from app.models.models import User
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
 from app.services.decision_experiments import DecisionExperimentService
@@ -138,11 +138,8 @@ def send_telegram_notification(
 @celery_app.task(name="jobs.poll_telegram_updates")
 def poll_telegram_updates(limit: int | None = None, timeout_seconds: int | None = None) -> dict:
     """Poll Telegram updates and process them using the shared sync service."""
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return TelegramSyncService().sync_updates(db, limit=limit, timeout_seconds=timeout_seconds)
-    finally:
-        db.close()
 
 
 @celery_app.task(name=PROJECT_EMBEDDING_REBUILD_TASK_NAME)
@@ -160,24 +157,22 @@ def rebuild_project_embeddings(
     (used by the deferred-embedding backfill enqueued after scsbid crawl
     persistence); paging is bypassed in that mode.
     """
-    db = SessionLocal()
-    try:
-        result = ProjectSimilarityService().rebuild_project_embeddings(
-            db,
-            limit=limit,
-            offset=offset,
-            category=category,
-            project_status=project_status,
-            force=force,
-            project_ids=project_ids,
-        )
-        db.commit()
-        return result
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    with task_session() as db:
+        try:
+            result = ProjectSimilarityService().rebuild_project_embeddings(
+                db,
+                limit=limit,
+                offset=offset,
+                category=category,
+                project_status=project_status,
+                force=force,
+                project_ids=project_ids,
+            )
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
 
 
 def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> int:
@@ -315,18 +310,14 @@ def _enqueue_reserve_detail_continuation(rest: list[dict[str, Any]]) -> bool:
 @celery_app.task(name=PRICE_PREDICTOR_TRAINING_TASK_NAME)
 def train_price_predictor(request_payload: dict[str, Any] | None = None) -> dict:
     """Run price-predictor training in the dedicated ML training queue."""
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return PricePredictionTrainingService().train_price_predictor(db, request_payload=request_payload)
-    finally:
-        db.close()
 
 
 @celery_app.task(name=DECISION_EXPERIMENT_REEVALUATION_TASK_NAME)
 def reevaluate_decision_experiment(experiment_run_id: int, operator_id: int | None = None) -> dict:
     """Re-evaluate a decision experiment outside the API request path."""
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         operator = None
         if operator_id is not None:
             operator = db.query(User).filter(User.id == int(operator_id)).first()
@@ -337,8 +328,6 @@ def reevaluate_decision_experiment(experiment_run_id: int, operator_id: int | No
             run_id=int(experiment_run_id),
             operator=operator,
         )
-    finally:
-        db.close()
 
 
 @celery_app.task(name=OPERATOR_STRATEGY_MONITOR_TASK_NAME)
@@ -350,25 +339,23 @@ def monitor_operator_strategy(
 ) -> dict:
     """Execute the stored operator strategy and persist bid decisions in a background task."""
     request = OperatorStrategyMonitorRequest(**(request_payload or {}))
-    db = SessionLocal()
-    try:
-        operator = None
-        if operator_id is not None:
-            operator = db.query(User).filter(User.id == int(operator_id)).first()
-            if operator is None:
-                raise ValueError(f"Operator {int(operator_id)} not found")
-        return StrategyMonitoringService().execute_monitoring(
-            db,
-            request=request,
-            trigger_source=trigger_source,
-            existing_run_id=monitor_run_id,
-            operator=operator,
-        )
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    with task_session() as db:
+        try:
+            operator = None
+            if operator_id is not None:
+                operator = db.query(User).filter(User.id == int(operator_id)).first()
+                if operator is None:
+                    raise ValueError(f"Operator {int(operator_id)} not found")
+            return StrategyMonitoringService().execute_monitoring(
+                db,
+                request=request,
+                trigger_source=trigger_source,
+                existing_run_id=monitor_run_id,
+                operator=operator,
+            )
+        except Exception:
+            db.rollback()
+            raise
 
 
 @celery_app.task(name=SYNTHETIC_BACKTEST_RUN_TASK_NAME)
@@ -384,8 +371,7 @@ def run_synthetic_operator_backtest(payload: dict[str, Any] | None = None) -> di
 def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> dict:
     """Generate forward paper bids for currently open/re-notice projects."""
     payload = dict(request_payload or {})
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return PaperBiddingBacktestService().run_forward_paper_bidding(
             db,
             category=payload.get("category"),
@@ -396,8 +382,6 @@ def run_forward_paper_bidding(request_payload: dict[str, Any] | None = None) -> 
             history_limit=int(payload.get("history_limit") or 80),
             persist=bool(payload.get("persist", True)),
         )
-    finally:
-        db.close()
 
 
 @celery_app.task(name=FORWARD_SETTLEMENT_TASK_NAME)
@@ -407,16 +391,13 @@ def settle_forward_paper_bids(
     persist: bool = True,
 ) -> dict:
     """Settle forward paper bids whose deadline has passed and result is available."""
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return PaperBiddingBacktestService().run_forward_settlement(
             db,
             operator_id=int(operator_id) if operator_id is not None else None,
             limit=int(limit or 200),
             persist=bool(persist),
         )
-    finally:
-        db.close()
 
 
 @celery_app.task(name=NOTIFY_AWARD_RESULTS_TASK_NAME)
@@ -429,8 +410,7 @@ def notify_award_results(limit: int = 50) -> dict:
     from app.services.award_notifications import AwardResultNotificationService
     from app.services.opening_result_collection import OpeningResultCollectionService
 
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         # 개찰 1위(잠정) 수집을 먼저 시도한다. 외부 호출이 실패해도 낙찰결과 알림
         # 흐름을 막지 않도록 예외를 격리한다(시크릿은 로그에 남기지 않음).
         try:
@@ -440,8 +420,6 @@ def notify_award_results(limit: int = 50) -> dict:
         return AwardResultNotificationService().collect_and_notify(
             db, limit=int(limit or 50)
         )
-    finally:
-        db.close()
 
 
 @celery_app.task(name=HISTORICAL_BACKTEST_TASK_NAME)
@@ -462,11 +440,8 @@ def enrich_pending_business_types(limit: int | None = None) -> dict:
     effective_limit = int(limit if limit is not None else settings.BUSINESS_TYPE_ENRICHMENT_BATCH_LIMIT)
     effective_limit = max(1, effective_limit)
 
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return BusinessTypeEnrichmentService().enrich_pending(db, limit=effective_limit)
-    finally:
-        db.close()
 
 
 @celery_app.task(name=RECLASSIFY_CATEGORIES_TASK_NAME)
@@ -478,11 +453,8 @@ def reclassify_pending_categories(limit: int | None = None) -> dict:
     effective_limit = int(limit if limit is not None else settings.CATEGORY_RECLASSIFY_BATCH_LIMIT)
     effective_limit = max(1, effective_limit)
 
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return CategoryClassifierService().reclassify_pending(db, limit=effective_limit)
-    finally:
-        db.close()
 
 
 @celery_app.task(name=SMOKE_TEST_TASK_NAME)
@@ -491,8 +463,7 @@ def run_koneps_telegram_smoke_test() -> dict:
     from dataclasses import asdict
     from app.services.smoke_test import KonepsTelegramSmokeTestService
 
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         service = KonepsTelegramSmokeTestService()
         report = service.run(db)
         try:
@@ -500,44 +471,36 @@ def run_koneps_telegram_smoke_test() -> dict:
         except Exception:  # noqa: BLE001 — persistence must not mask the smoke result
             logger.exception("failed to persist smoke test run")
         return asdict(report)
-    finally:
-        db.close()
 
 
 @celery_app.task(name=G2_CANDIDATE_RECHECK_TASK_NAME)
 def run_g2_candidate_recheck() -> dict:
     """Daily read-only G-2 candidate re-check across synthetic operators.
 
-    Thin shell: body in ``app.tasks.evidence_jobs``; the ``SessionLocal`` seam
-    (patched via this module in tests) stays here.
+    Thin shell: body in ``app.tasks.evidence_jobs``; the session lifecycle stays
+    here via the shared ``task_session`` seam.
     """
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return run_g2_candidate_recheck_job(db)
-    finally:
-        db.close()
 
 
 @celery_app.task(name=COLLECT_G2_EVIDENCE_TASK_NAME)
 def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
     """Daily read-only snapshot of the per-operator G-2 evidence ledger.
 
-    Thin shell: body in ``app.tasks.evidence_jobs``. The ``SessionLocal`` seam and
-    ``_write_g2_daily_evidence_draft`` are patched via this module in tests, so the
-    db lifecycle stays here and the draft writer is injected by name (the injected
+    Thin shell: body in ``app.tasks.evidence_jobs``. The db lifecycle stays here
+    via the shared ``task_session`` seam, and ``_write_g2_daily_evidence_draft``
+    (patched via this module in tests) is injected by name — the injected
     reference is resolved from this module's globals at call time, honouring the
-    monkeypatch).
+    monkeypatch.
     """
-    db = SessionLocal()
-    try:
+    with task_session() as db:
         return run_collect_g2_evidence_job(
             db,
             window_days=window_days,
             recent_limit=recent_limit,
             write_daily_draft=_write_g2_daily_evidence_draft,
         )
-    finally:
-        db.close()
 
 
 @celery_app.task(name=RECONCILE_STALE_TASK_RUNS_TASK_NAME)
@@ -555,22 +518,20 @@ def reconcile_stale_task_runs() -> dict:
     """
     from app.services.stale_task_reconciler import StaleTaskReconcilerService
 
-    db = SessionLocal()
-    try:
-        result = StaleTaskReconcilerService().reconcile(db)
-        if result.get("total_finalized"):
-            logger.info(
-                "reconcile_stale_task_runs finalized strategy_runs=%s crawl_jobs=%s (threshold=%ss)",
-                result.get("strategy_runs_finalized"),
-                result.get("crawl_jobs_finalized"),
-                result.get("threshold_seconds"),
-            )
-        return result
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    with task_session() as db:
+        try:
+            result = StaleTaskReconcilerService().reconcile(db)
+            if result.get("total_finalized"):
+                logger.info(
+                    "reconcile_stale_task_runs finalized strategy_runs=%s crawl_jobs=%s (threshold=%ss)",
+                    result.get("strategy_runs_finalized"),
+                    result.get("crawl_jobs_finalized"),
+                    result.get("threshold_seconds"),
+                )
+            return result
+        except Exception:
+            db.rollback()
+            raise
 
 
 def enqueue_project_embedding_rebuild(

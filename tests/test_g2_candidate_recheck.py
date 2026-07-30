@@ -93,8 +93,7 @@ def _seed_synthetic_operator(test_db, *, slug: str, is_active: bool = True) -> U
 
 
 def _patch_session(monkeypatch, test_db):
-    """Make the task's ``SessionLocal()`` return the test session (kept open)."""
-    import app.tasks.jobs as jobs_mod
+    """Make the task session factory return the test session (kept open)."""
 
     class _NoCloseSession:
         def __init__(self, db):
@@ -106,7 +105,7 @@ def _patch_session(monkeypatch, test_db):
         def close(self):  # task always closes in finally; keep the fixture alive
             pass
 
-    monkeypatch.setattr(jobs_mod, "SessionLocal", lambda: _NoCloseSession(test_db))
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: _NoCloseSession(test_db))
 
 
 def test_g2_recheck_previews_each_operator_and_logs_one_event(test_db, monkeypatch):

@@ -266,14 +266,13 @@ def _seed_target_operator(test_db, *, operator_id: int, slug: str) -> User:
 
 def test_beat_writes_daily_draft_to_configured_dir(tmp_path, test_db, monkeypatch):
     """With the flag on and not in test-env, the task writes one draft file."""
-    import app.tasks.jobs as jobs_mod
     from app.core.config import settings
     from app.core.single_user import ensure_operator_account
     from app.core.time import kst_now
     from app.services.analytics_reporting import AnalyticsReportingService
     from app.tasks.jobs import collect_g2_evidence
 
-    monkeypatch.setattr(jobs_mod, "SessionLocal", lambda: _NoCloseSession(test_db))
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: _NoCloseSession(test_db))
 
     ensure_operator_account(test_db)
     for operator_id, slug in zip(TARGET_IDS, ("alpha", "bravo", "charlie")):
@@ -320,13 +319,12 @@ def test_beat_writes_daily_draft_to_configured_dir(tmp_path, test_db, monkeypatc
 
 def test_beat_skips_draft_write_in_test_environment(tmp_path, test_db, monkeypatch):
     """ENVIRONMENT=test must not pollute the working tree with a draft file."""
-    import app.tasks.jobs as jobs_mod
     from app.core.config import settings
     from app.core.single_user import ensure_operator_account
     from app.services.analytics_reporting import AnalyticsReportingService
     from app.tasks.jobs import collect_g2_evidence
 
-    monkeypatch.setattr(jobs_mod, "SessionLocal", lambda: _NoCloseSession(test_db))
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: _NoCloseSession(test_db))
     ensure_operator_account(test_db)
     _seed_target_operator(test_db, operator_id=19, slug="alpha")
 
@@ -364,7 +362,7 @@ def test_draft_write_failure_does_not_abort_sweep(tmp_path, test_db, monkeypatch
     from app.services.analytics_reporting import AnalyticsReportingService
     from app.tasks.jobs import collect_g2_evidence
 
-    monkeypatch.setattr(jobs_mod, "SessionLocal", lambda: _NoCloseSession(test_db))
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: _NoCloseSession(test_db))
     ensure_operator_account(test_db)
     _seed_target_operator(test_db, operator_id=19, slug="alpha")
 
