@@ -5,7 +5,15 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.config import settings
 from app.models.models import OperatorStrategyRun
-from app.models.models import Analytics, Bid, BidDecisionRecord, Notification, Project, User
+from app.models.models import (
+    Analytics,
+    Bid,
+    BidDecisionRecord,
+    Notification,
+    OperatorPreviewSnapshot,
+    Project,
+    User,
+)
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.strategy_scheduler import OperatorStrategyScheduler
@@ -201,6 +209,10 @@ def test_operator_strategy_candidates_filter_and_rank_projects(client, test_db):
     test_db.add_all([matching_project, excluded_keyword_project, low_budget_project, wrong_category_project])
     test_db.commit()
     test_db.refresh(matching_project)
+    # 전략 PUT 은 이제 스냅샷 재계산을 디스패치한다(§6.3): project 시드 전에 빈
+    # 스냅샷을 선계산하므로, GET 이 시드 공고를 실제로 계산하도록 스냅샷을 비운다.
+    test_db.query(OperatorPreviewSnapshot).delete()
+    test_db.commit()
 
     response = client.get(
         "/api/v1/operator/strategy/candidates",
@@ -282,6 +294,10 @@ def test_operator_strategy_candidates_include_re_notice_but_skip_cancelled_and_f
         deadline=datetime.now(UTC) + timedelta(hours=18),
     )
     test_db.add_all([open_project, re_notice_project, failed_project, cancelled_project])
+    test_db.commit()
+    # 전략 PUT 은 이제 스냅샷 재계산을 디스패치한다(§6.3): project 시드 전에 빈
+    # 스냅샷을 선계산하므로, GET 이 시드 공고를 실제로 계산하도록 스냅샷을 비운다.
+    test_db.query(OperatorPreviewSnapshot).delete()
     test_db.commit()
 
     response = client.get(

@@ -30,7 +30,7 @@ from app.services.decision_experiments.verdict_machine import (
     _UPDATE_STATUS_EFFECTS,
     _LifecycleContext,
 )
-from app.services.opportunity_monitoring.preview_cache import preview_cache
+from app.services.preview_snapshot import PreviewSnapshotService
 
 
 class _LifecycleMixin(_DecisionExperimentBase):
@@ -290,9 +290,11 @@ class _LifecycleMixin(_DecisionExperimentBase):
             db.commit()
             db.refresh(run)
             db.refresh(strategy)
-            # Applied thresholds change which candidates the preview surfaces, so
-            # the operator's short-lived cached preview must not survive the write.
-            preview_cache.invalidate(int(target_operator.id))
+            # 적용된 임계/튜닝은 preview 후보를 바꾼다: 사용 중인 스냅샷 키를
+            # 재계산 디스패치한다 (설계 §6.3 — 구 preview_cache.invalidate 대체).
+            PreviewSnapshotService().dispatch_for_strategy_write(
+                db, operator_id=int(target_operator.id)
+            )
 
         strategy_thresholds = self._current_strategy_thresholds(strategy)
         return {
@@ -352,9 +354,11 @@ class _LifecycleMixin(_DecisionExperimentBase):
             db.commit()
             db.refresh(run)
             db.refresh(strategy)
-            # Workload/category tuning reorders the preview's candidates, so the
-            # operator's short-lived cached preview must not survive the write.
-            preview_cache.invalidate(int(target_operator.id))
+            # 적용된 임계/튜닝은 preview 후보를 바꾼다: 사용 중인 스냅샷 키를
+            # 재계산 디스패치한다 (설계 §6.3 — 구 preview_cache.invalidate 대체).
+            PreviewSnapshotService().dispatch_for_strategy_write(
+                db, operator_id=int(target_operator.id)
+            )
 
         strategy_tuning = self._current_strategy_tuning(strategy)
         return {

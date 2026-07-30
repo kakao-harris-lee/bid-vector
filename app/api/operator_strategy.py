@@ -22,7 +22,6 @@ from app.schemas.schemas import (
     OperatorStrategyUpdate,
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
-from app.services.opportunity_monitoring.preview_cache import preview_cache
 from app.services.preview_snapshot import PreviewSnapshotService
 from app.services.operator_strategy_tuning import (
     clamp_auto_workload_penalty_multiplier,
@@ -220,9 +219,9 @@ def update_operator_strategy_impl(
 
     db.commit()
     db.refresh(strategy)
-    # The candidate preview is cached per operator for a short window; the edit
-    # screen shows that preview, so a save must not be masked by a stale entry.
-    preview_cache.invalidate(int(operator.id))
+    # 전략 저장은 preview 산출을 바꾼다: 사용 중인 스냅샷 키를 단일비행 가드
+    # 하에 재계산 디스패치한다 (설계 §6.3 — 구 preview_cache.invalidate 대체).
+    PreviewSnapshotService().dispatch_for_strategy_write(db, operator_id=int(operator.id))
 
     return _build_operator_strategy_response(
         operator=operator,

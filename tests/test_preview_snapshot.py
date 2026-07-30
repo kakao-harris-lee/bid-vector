@@ -345,6 +345,10 @@ def test_get_candidates_first_read_computes_inline_in_eager_mode(client, test_db
         return original(self, db, **kwargs)
 
     monkeypatch.setattr(StrategyMonitoringService, "_collect_candidate_evaluations", counting)
+    # _configure 의 전략 PUT 은 이제 재계산을 디스패치한다(§6.3): project 시드 전에
+    # 빈 스냅샷을 선계산했으므로, 첫 GET 이 시드 공고를 실제로 계산하도록 비운다.
+    test_db.query(OperatorPreviewSnapshot).delete()
+    test_db.commit()
 
     first = client.get(
         "/api/v1/operator/strategy/candidates",
@@ -392,6 +396,7 @@ def test_get_candidates_slices_stored_top100_by_requested_limit(client, test_db,
             "candidates": stored_candidates,
         },
     )
+    enqueue_stub.calls.clear()  # _configure 의 전략 PUT 이 남긴 setup 디스패치 제거
 
     response = client.get(
         "/api/v1/operator/strategy/candidates",
@@ -437,6 +442,7 @@ def test_get_candidates_serves_stale_snapshot_and_redispatches(client, test_db, 
         OperatorPreviewSnapshot.id == row.id
     ).update({"computed_at": stale_at}, synchronize_session=False)
     test_db.commit()
+    enqueue_stub.calls.clear()  # _configure 의 전략 PUT 이 남긴 setup 디스패치 제거
 
     response = client.get(
         "/api/v1/operator/strategy/candidates",
@@ -448,3 +454,133 @@ def test_get_candidates_serves_stale_snapshot_and_redispatches(client, test_db, 
     assert payload["stale"] is True
     assert payload["snapshot_status"] == "running"  # 재계산 클레임됨
     assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+# ---------------------------------------------------------------------------
+# 모든 전략 쓰기는 재계산을 디스패치한다 (구 preview_cache.invalidate 5경로 대체)
+# ---------------------------------------------------------------------------
+
+
+def test_strategy_put_dispatches_recompute_for_existing_keys(client, test_db, enqueue_stub):
+    """웹 PUT: 기존 스냅샷 키(양쪽)만 재계산 디스패치 (§6.3)."""
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    for key in (False, True):
+        service._get_or_create_row(
+            test_db, operator_id=int(operator.id), high_priority_only=key
+        )
+    # _configure 의 전략 PUT 이 False 키를 running 으로 남긴다(단일비행). 이 테스트는
+    # "양쪽 기존 키가 idle 일 때 PUT 이 둘 다 재계산 디스패치" 를 검증하므로 idle 리셋.
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.operator_id == int(operator.id)
+    ).update({"status": SNAPSHOT_STATUS_IDLE}, synchronize_session=False)
+    test_db.commit()
+    enqueue_stub.calls.clear()
+
+    update = client.put("/api/v1/operator/strategy", json={"exclude_keywords": ["데이터"]})
+
+    assert update.status_code == 200
+    assert sorted(enqueue_stub.calls) == [(int(operator.id), False), (int(operator.id), True)]
+
+
+def test_telegram_strategy_edit_dispatches_recompute(test_db, enqueue_stub):
+    """텔레그램 set/clear/버튼은 _persist_strategy_edit 단일 seam 을 지난다."""
+    from app.core.single_user import ensure_operator_strategy
+    from app.services.notifications.telegram_strategy import TelegramStrategyCommandProcessor
+
+    strategy = ensure_operator_strategy(test_db)
+    reply = TelegramStrategyCommandProcessor()._handle_set(test_db, ["categories=software"])
+
+    assert "전략이 업데이트되었습니다" in reply
+    assert enqueue_stub.calls == [(int(strategy.user_id), False)]
+
+
+def test_experiment_threshold_apply_dispatches_recompute(test_db, enqueue_stub):
+    from app.models.models import DecisionExperimentRun
+    from app.schemas.schemas import DecisionExperimentThresholdApplyRequest
+    from app.services.decision_experiments import DecisionExperimentService
+    from app.core.single_user import ensure_operator_strategy
+
+    operator = ensure_operator_account(test_db)
+    ensure_operator_strategy(test_db)
+    run = DecisionExperimentRun(
+        operator_id=operator.id,
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="rec-exp-review-threshold-tighten",
+        status="completed",
+        outcome="success",
+        title="threshold tuning",
+    )
+    test_db.add(run)
+    test_db.commit()
+
+    result = DecisionExperimentService().apply_threshold_adjustments(
+        test_db,
+        run_id=int(run.id),
+        request=DecisionExperimentThresholdApplyRequest(dry_run=False),
+        operator=operator,
+    )
+
+    assert result["applied"] is True
+    assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+def test_experiment_threshold_dry_run_does_not_dispatch(test_db, enqueue_stub):
+    from app.models.models import DecisionExperimentRun
+    from app.schemas.schemas import DecisionExperimentThresholdApplyRequest
+    from app.services.decision_experiments import DecisionExperimentService
+    from app.core.single_user import ensure_operator_strategy
+
+    operator = ensure_operator_account(test_db)
+    ensure_operator_strategy(test_db)
+    run = DecisionExperimentRun(
+        operator_id=operator.id,
+        experiment_key="exp-review-threshold-tighten",
+        recommendation_key="rec-exp-review-threshold-tighten",
+        status="completed",
+        outcome="success",
+        title="threshold tuning",
+    )
+    test_db.add(run)
+    test_db.commit()
+
+    result = DecisionExperimentService().apply_threshold_adjustments(
+        test_db,
+        run_id=int(run.id),
+        request=DecisionExperimentThresholdApplyRequest(dry_run=True),
+        operator=operator,
+    )
+
+    assert result["applied"] is False
+    assert enqueue_stub.calls == []
+
+
+def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypatch):
+    """(eager) 저장 → 재계산 → 다음 GET 은 새 규칙 반영 — 구
+    test_preview_candidates_recomputes_after_strategy_update 의 승계."""
+    _configure_software_operator(client)
+    _seed_matching_project(test_db)
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
+    calls = {"count": 0}
+    original = StrategyMonitoringService._collect_candidate_evaluations
+
+    def counting(self, db, **kwargs):
+        calls["count"] += 1
+        return original(self, db, **kwargs)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_collect_candidate_evaluations", counting)
+    # _configure 의 전략 PUT 이 (project 시드 전에) 빈 스냅샷을 선계산했다. 첫 GET 이
+    # 실제로 계산하고 이후 PUT 트리거가 재계산하도록 setup 잔여 스냅샷을 비운다.
+    test_db.query(OperatorPreviewSnapshot).delete()
+    test_db.commit()
+
+    client.get("/api/v1/operator/strategy/candidates", params={"high_priority_only": False})
+    update = client.put("/api/v1/operator/strategy", json={"exclude_keywords": ["데이터"]})
+    after = client.get(
+        "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+    )
+
+    assert update.status_code == 200
+    assert calls["count"] == 2  # 최초 1 + 전략 저장 트리거 1 (GET 재조회는 0)
+    assert after.json()["candidates"] == []  # 새 규칙이 시드 공고를 배제

@@ -19,7 +19,7 @@ from app.services.project_similarity import ProjectSimilarityService
 
 
 def _configure_software_operator(client):
-    """싱글턴 운영자 프로필 + software 감시 전략 구성 (test_preview_cache 패턴)."""
+    """싱글턴 운영자 프로필 + software 감시 전략 구성 (test_preview_snapshot 패턴)."""
     client.put(
         "/api/v1/operator/profile",
         json={

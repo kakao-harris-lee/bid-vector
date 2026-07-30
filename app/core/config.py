@@ -112,15 +112,6 @@ class Settings(BaseSettings):
     # still-biddable notice (a row bound starves later matches), so rows are
     # streamed in batches of this size instead of materialized all at once.
     OPERATOR_STRATEGY_MONITOR_SCAN_CHUNK_SIZE: int = 500
-    # Strategy preview (candidate list) short-TTL reuse window. The preview runs
-    # inline ML analysis for tens of seconds, and a reload/re-click abandons the
-    # response without stopping the server work, so duplicates pile up and starve
-    # each other. Within this window a repeat read returns the stored payload
-    # instead of rescanning. Kept short because the preview sits on the strategy
-    # edit screen; a strategy save invalidates the operator's entries immediately.
-    # 0 disables reuse but keeps the single-flight guard (one scan per key at a
-    # time), which is the part that stops the stampede.
-    OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS: int = 60
     # preview 스냅샷 stale 기준(초). computed_at 이 이보다 오래되면 GET 이 기존
     # 스냅샷을 즉시 서빙하면서 재계산 task 를 단일비행 가드 하에 자동 디스패치
     # 한다(설계 2026-07-30 §6.2). 명시 갱신은 POST /candidates/refresh.
