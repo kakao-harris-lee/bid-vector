@@ -7,11 +7,17 @@ import hmac
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.ai.predictors.ensemble import load_ensemble_artifact
 from app.ai.predictors.lstm import load_lstm_artifact
 from app.core.config import settings
 from app.core.time import utc_now
 from app.services.ml_release.base import MLReleasePromotionRequest, _MLReleaseBase
+from app.services.ml_release.contracts import (
+    MLReleaseJsonDocument,
+    is_json_decode_error,
+)
 
 
 class _ManifestLifecycleMixin(_MLReleaseBase):
@@ -109,6 +115,12 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
 
         manifest_path = self._manifest_path_for_tag(release_tag)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        # 이 write 는 의도적으로 ``json.dumps`` 를 유지한다. 저장 바이트 표현이 계약이고
+        # (배포된 manifest 파일과 원격 사본이 같은 문서여야 한다), pydantic 직렬화는
+        # 지수 표기 부동소수를 다르게 적는다(``1e-06`` -> ``1e-6``, ``3.2e-05`` ->
+        # ``0.000032``). gate metrics/thresholds 에 그런 값이 들어올 수 있으므로 여기서
+        # 직렬화기를 갈아치우면 같은 manifest 가 호스트/버전마다 다른 바이트로 남는다.
+        # 읽기 경로만 계약 모델로 승격했다(``load_release_manifest``).
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -124,23 +136,31 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
     def load_release_manifest(
         self, manifest_ref: str | Path
     ) -> tuple[dict[str, Any], Path]:
-        """Load one persisted release manifest by path or release tag."""
+        """Load one persisted release manifest by path or release tag.
+
+        The decoded mapping is returned **verbatim** (see
+        :class:`~app.services.ml_release.contracts.MLReleaseJsonDocument`): the
+        signature is verified by re-serializing exactly these keys and values, so
+        nothing may be dropped, reordered into a different key set, or defaulted.
+        """
         manifest_path = self._resolve_manifest_path(manifest_ref)
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_text = manifest_path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
             raise ValueError(
                 f"Release manifest was not found: {manifest_path}"
             ) from exc
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Release manifest is not valid JSON: {manifest_path}"
-            ) from exc
-
-        if not isinstance(manifest, dict):
+        try:
+            manifest = MLReleaseJsonDocument.model_validate_json(manifest_text).root
+        except ValidationError as exc:
+            if is_json_decode_error(exc):
+                raise ValueError(
+                    f"Release manifest is not valid JSON: {manifest_path}"
+                ) from exc
             raise ValueError(
                 f"Release manifest must decode to a JSON object: {manifest_path}"
-            )
+            ) from exc
+
         self.verify_release_manifest(manifest, manifest_path=manifest_path)
         return manifest, manifest_path
 

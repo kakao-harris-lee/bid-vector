@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from app.ai.predictors.artifact_contracts import (
+    ArtifactScalar,
+    PersistedEnsembleArtifact,
+    read_persisted_artifact,
+)
 from app.ai.predictors.base import (
     BasePricePredictor,
     PredictionResult,
@@ -26,6 +30,9 @@ from app.ai.predictors.historical import (
 from app.ai.predictors.lstm import extract_bid_rate_series, infer_lstm_sequence_signal, load_lstm_artifact
 from app.ai.predictors.rate_band_spec import band_explanation_clause
 from app.core.config import settings
+
+# 아티팩트 로딩 실패 문구의 주어(단일 출처 — 기존 오류 메시지를 그대로 유지한다).
+_ENSEMBLE_ARTIFACT_LABEL = "Ensemble model artifact"
 
 _DEFAULT_COMPONENT_WEIGHTS = {
     "historical": 0.52,
@@ -101,28 +108,27 @@ class EnsembleBidRatePredictor(BasePricePredictor):
 
 
 def load_ensemble_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, Any]:
-    """Load one persisted ensemble artifact from JSON or reuse an embedded dictionary."""
-    if isinstance(model_source, dict):
-        raw_artifact = dict(model_source)
-    else:
-        path = Path(model_source)
-        try:
-            raw_artifact = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise ValueError(f"Ensemble model artifact was not found: {path}") from exc
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Ensemble model artifact is not valid JSON: {path}") from exc
+    """Load one persisted ensemble artifact from JSON or reuse an embedded dictionary.
+
+    The persisted JSON is promoted into the declared
+    :class:`~app.ai.predictors.artifact_contracts.PersistedEnsembleArtifact`
+    contract first; the normalized mapping below (and every coercion expression
+    that builds it) is unchanged, so inference output is identical.
+    """
+    raw_artifact = read_persisted_artifact(
+        model_source, model=PersistedEnsembleArtifact, label=_ENSEMBLE_ARTIFACT_LABEL
+    )
 
     return {
-        "artifact_version": str(raw_artifact.get("artifact_version") or "1"),
-        "model_version": str(raw_artifact.get("model_version") or "v2.0-ensemble"),
-        "sequence_length": max(3, int(raw_artifact.get("sequence_length") or 8)),
-        "momentum_window": max(3, int(raw_artifact.get("momentum_window") or 6)),
-        "scenario_spread_multiplier": max(float(raw_artifact.get("scenario_spread_multiplier") or 1.0), 0.2),
-        "confidence_bias": float(raw_artifact.get("confidence_bias") or 0.0),
-        "component_weights": _normalize_component_weights(raw_artifact.get("component_weights")),
-        "lstm_artifact": raw_artifact.get("lstm_artifact"),
-        "lstm_artifact_path": str(raw_artifact.get("lstm_artifact_path") or "").strip() or None,
+        "artifact_version": str(raw_artifact.artifact_version or "1"),
+        "model_version": str(raw_artifact.model_version or "v2.0-ensemble"),
+        "sequence_length": max(3, int(raw_artifact.sequence_length or 8)),
+        "momentum_window": max(3, int(raw_artifact.momentum_window or 6)),
+        "scenario_spread_multiplier": max(float(raw_artifact.scenario_spread_multiplier or 1.0), 0.2),
+        "confidence_bias": float(raw_artifact.confidence_bias or 0.0),
+        "component_weights": _normalize_component_weights(raw_artifact.component_weights),
+        "lstm_artifact": raw_artifact.lstm_artifact,
+        "lstm_artifact_path": str(raw_artifact.lstm_artifact_path or "").strip() or None,
     }
 
 
@@ -365,9 +371,16 @@ def _build_ensemble_explanation(
     return explanation
 
 
-def _normalize_component_weights(raw_weights: Any) -> dict[str, float]:
-    """Normalize optional component weights into a stable sum-to-one mapping."""
-    if not isinstance(raw_weights, dict):
+def _normalize_component_weights(
+    raw_weights: dict[str, ArtifactScalar] | None,
+) -> dict[str, float]:
+    """Normalize optional component weights into a stable sum-to-one mapping.
+
+    ``None`` covers both "absent" and "present but not a mapping" — the artifact
+    contract folds the latter into absence, so the previous
+    ``isinstance(raw_weights, dict)`` branch has the same meaning here.
+    """
+    if raw_weights is None:
         normalized = dict(_DEFAULT_COMPONENT_WEIGHTS)
     else:
         normalized = {

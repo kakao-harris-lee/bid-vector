@@ -7,9 +7,17 @@ and have the prediction core observe the patched value via late binding.
 
 from __future__ import annotations
 
-import json
+import logging
 from pathlib import Path
 from typing import Any
+
+from app.ai.predictors.artifact_contracts import (
+    CalibrationValue,
+    PersistedArtifactCalibrationBlocks,
+    PersistedArtifactSummaryDocument,
+)
+
+logger = logging.getLogger(__name__)
 
 
 # Renormalized confidence/matched weights for the *calibration* raw signal.
@@ -42,36 +50,58 @@ def calibration_raw_signal(confidence_score: float, matched_score: float) -> flo
     return max(0.0, min(1.0, raw))
 
 
-def load_probability_calibration() -> dict[str, dict[str, Any]]:
+def load_active_artifact_calibration_blocks() -> PersistedArtifactCalibrationBlocks:
+    """Read the ``summary`` calibration blocks from the active ensemble artifact.
+
+    Single decode path for both calibration readers (group + probability) so the
+    two cannot drift apart: one file read, one contract, one degrade policy.
+
+    Best-effort by design: an unset path, a missing file, a corrupt file or a
+    payload that violates the contract all degrade to **empty blocks**, and the
+    callers fall back to the legacy statistics/heuristic with no crash (offline or
+    freshly provisioned environments included). The broad ``except Exception`` is
+    deliberate — this runs on the inference path and optional calibration must
+    never take a prediction down; the previous implementation had the same policy.
+    Corruption is no longer silent (``logger.warning``), and the artifact payload
+    itself is never logged.
+    """
+    from app.core.config import settings
+
+    manifest_path_raw = (settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
+    if not manifest_path_raw:
+        return PersistedArtifactCalibrationBlocks()
+    candidate = Path(manifest_path_raw)
+    if not candidate.is_file():
+        return PersistedArtifactCalibrationBlocks()
+    try:
+        document = PersistedArtifactSummaryDocument.model_validate_json(
+            candidate.read_text()
+        )
+    except Exception as exc:
+        logger.warning(
+            "predictor 아티팩트 calibration summary 해석 실패 — 보정 없이 "
+            "legacy 통계로 degrade (path=%s, reason=%s)",
+            candidate,
+            type(exc).__name__,
+        )
+        return PersistedArtifactCalibrationBlocks()
+    return document.summary
+
+
+def load_probability_calibration() -> dict[str, dict[str, CalibrationValue]]:
     """Read summary.probability_calibration from the active ensemble artifact.
 
     Mirrors :func:`load_group_calibration`: best-effort, any IO/JSON failure or
     missing block returns an empty dict so callers fall back to the legacy
     heuristic probability with no crash (offline / fresh environments included).
     """
-    from app.core.config import settings
-
-    manifest_path_raw = (settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
-    if not manifest_path_raw:
-        return {}
-    candidate = Path(manifest_path_raw)
-    if not candidate.is_file():
-        return {}
-    try:
-        payload = json.loads(candidate.read_text())
-    except Exception:
-        return {}
-    summary = payload.get("summary") if isinstance(payload, dict) else None
-    if not isinstance(summary, dict):
-        return {}
-    calibration = summary.get("probability_calibration")
-    return calibration if isinstance(calibration, dict) else {}
+    return load_active_artifact_calibration_blocks().probability_calibration
 
 
 def apply_probability_calibration(
     features: dict[str, Any],
     *,
-    calibration: dict[str, dict[str, Any]] | None = None,
+    calibration: dict[str, dict[str, CalibrationValue]] | None = None,
 ) -> float | None:
     """Map inference-time signals onto a calibrated P(낙찰) via the active curve.
 

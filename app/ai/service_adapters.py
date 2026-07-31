@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping as MappingABC
+import logging
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping
+
+from pydantic import ValidationError
 
 from app.ai.bid_recommendation import get_bid_recommendation
 from app.ai.document_analyzer import analyze_document
 from app.ai.llm_interfaces import LLMRequest, RequestExecutor, TokenBudget
+from app.ai.llm_output_contracts import LLMDocumentAnalysisOutput
 from app.ai.price_prediction import predict_price
 from app.ai.service_interfaces import (
     BidRecommendationPort,
     DocumentAnalysisPort,
     PricePredictionPort,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FunctionPricePredictionPort(PricePredictionPort):
@@ -105,35 +109,37 @@ class ExecutorDocumentAnalysisPort(DocumentAnalysisPort):
         return _normalize_document_analysis_payload(payload)
 
 
-def _load_document_analysis_payload(text: str) -> MappingABC[str, Any]:
+def _load_document_analysis_payload(text: str) -> LLMDocumentAnalysisOutput:
+    """Validate one LLM response body against the document-analysis contract.
+
+    An unparseable body or a non-object top level degrades to the empty contract
+    (the previous ``{}`` behavior), but no longer silently: the operator gets a
+    warning telling them the LLM path produced nothing usable. The response text
+    is deliberately NOT logged — it can carry the analyzed document itself.
+    Per-field type tolerance lives in the contract, so one bad field no longer
+    discards the rest of the response.
+    """
     try:
-        payload = json.loads(text)
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, MappingABC):
-        return {}
-    return payload
+        return LLMDocumentAnalysisOutput.model_validate_json(text)
+    except (TypeError, ValidationError) as exc:
+        logger.warning(
+            "문서 분석 LLM 출력 해석 실패 — 빈 분석 결과로 degrade (reason=%s)",
+            type(exc).__name__,
+        )
+        return LLMDocumentAnalysisOutput()
 
 
-def _normalize_document_analysis_payload(payload: MappingABC[str, Any]) -> dict[str, Any]:
+def _normalize_document_analysis_payload(
+    payload: LLMDocumentAnalysisOutput,
+) -> dict[str, Any]:
+    """Render the validated contract into the ``DocumentAnalysisPort`` payload.
+
+    Field order and value types match the previous inline dict exactly, so the
+    port's response shape is unchanged.
+    """
     return {
-        "key_requirements": _coerce_list(payload.get("key_requirements")),
-        "complexity_score": _coerce_float(payload.get("complexity_score")),
-        "estimated_effort": _coerce_float(payload.get("estimated_effort")),
-        "risks": _coerce_list(payload.get("risks")),
+        "key_requirements": list(payload.key_requirements),
+        "complexity_score": payload.complexity_score,
+        "estimated_effort": payload.estimated_effort,
+        "risks": list(payload.risks),
     }
-
-
-def _coerce_list(value: Any) -> list[Any]:
-    if not isinstance(value, list):
-        return []
-    return list(value)
-
-
-def _coerce_float(value: Any) -> float:
-    if value is None or isinstance(value, bool):
-        return 0.0
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0

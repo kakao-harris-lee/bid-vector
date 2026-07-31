@@ -159,6 +159,14 @@ class ArtifactBuilderMixin:
 
         Best-effort: if the artifact doesn't exist or isn't JSON, log and return —
         this is a runtime feature enhancement, not a training prerequisite.
+
+        JSON 직접 호출을 여기서는 의도적으로 유지한다: 이 헬퍼는 **임의의 키를 가진 기존
+        아티팩트를 읽어 그대로 다시 쓴다**. 아티팩트의 sha256 은 서명된 release manifest 에
+        기록되므로 저장 바이트가 계약이고, 타입 모델을 경유하면 (a) 선언되지 않은 키의 순서가
+        선언 필드 뒤로 밀리고 (b) pydantic 이 지수 표기 부동소수를 다르게 적는다
+        (``1e-06`` -> ``1e-6``). 읽기만 모델로 바꿔도 쓰기용 원문 dict 가 다시 필요하므로
+        json 호출은 줄지 않는다. 읽기 계약이 필요한 소비 경로(예측·preflight)는
+        ``app.ai.predictors.artifact_contracts`` 를 쓴다.
         """
         path = Path(ensemble_artifact_path)
         if not group_calibration or not path.is_file():

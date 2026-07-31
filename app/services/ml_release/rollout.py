@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
+from pydantic import JsonValue, ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.services.ml_release.base import _MLReleaseBase
+from app.services.ml_release.contracts import (
+    MLReleaseJsonValueDocument,
+    json_document_error_detail,
+)
 from app.services.ml_release.storage import RemoteObjectStorageClient
 
 
@@ -356,7 +360,7 @@ class _RolloutMixin(_MLReleaseBase):
         try:
             with request.urlopen(request_object, timeout=timeout_seconds) as response:
                 body = response.read().decode("utf-8", errors="replace")
-                parsed_body = json.loads(body) if body.strip() else None
+                parsed_body = self._parse_remote_trigger_body(body, url=target_url)
                 return {
                     "url": target_url,
                     "status_code": int(response.getcode()),
@@ -367,6 +371,28 @@ class _RolloutMixin(_MLReleaseBase):
             error_body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"Remote embedding rebuild failed with HTTP {exc.code} at {target_url}: {error_body}"
+            ) from exc
+
+    @staticmethod
+    def _parse_remote_trigger_body(body: str, *, url: str) -> JsonValue:
+        """Decode the remote rebuild response body, preserving it verbatim.
+
+        Reached **after** the remote rebuild has already been triggered, which sets
+        the failure policy: a decodable body is echoed back as ``response`` exactly
+        as before — including a JSON value that is not an object — because raising
+        here would destroy the only record that the rebuild was kicked off. Only a
+        body that cannot be decoded at all is rejected, and then with the URL
+        attached instead of a bare ``JSONDecodeError``. An empty body stays ``None``
+        (the endpoint may legitimately answer with no content).
+        """
+        if not body.strip():
+            return None
+        try:
+            return MLReleaseJsonValueDocument.model_validate_json(body).root
+        except ValidationError as exc:
+            raise RuntimeError(
+                "Remote embedding rebuild returned a body that is not valid JSON "
+                f"at {url}: {json_document_error_detail(exc)}"
             ) from exc
 
     def _resolve_rebuild_settings(

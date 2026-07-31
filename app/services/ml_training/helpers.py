@@ -115,6 +115,10 @@ class HelpersMixin:
         return cleaned or None
 
     def _dump_json(self, payload: dict[str, Any]) -> str:
+        # 학습 리포트/아티팩트 쓰기 경로는 ``json.dumps`` 를 유지한다: payload 는 학습이
+        # 조립한 자유형식 dict 이고 ``default=str`` 폴백(Decimal·datetime)에 의존한다.
+        # 산출 파일의 sha256 은 서명된 release manifest 에 기록되므로 저장 바이트가 계약이며,
+        # pydantic 직렬화는 지수 표기 부동소수를 다르게 적는다(``1e-06`` -> ``1e-6``).
         return json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n"
 
     def _to_portable_path(self, path: Path) -> str:
