@@ -17,6 +17,7 @@ import type {
   OperatorStrategyUpdatePayload
 } from "@/shared/types/strategy";
 import type { AuthSession } from "@/app/layout/AuthGate";
+import { SNAPSHOT_POLL_INTERVAL_MS, snapshotPollInterval } from "./snapshotState";
 
 /**
  * Strategy detail query — `null` operatorId hits the token-owner branch (no
@@ -34,11 +35,22 @@ export function useStrategyQuery(
   });
 }
 
+/**
+ * 후보 스냅샷 조회 + terminal 게이트 폴링 (설계 2026-07-30 §7).
+ *
+ * PR-B 이후 이 GET 은 스냅샷 순수 읽기이고 재계산은 ops 큐 task 다. 그래서 폴링
+ * 조건은 **응답 메타(서버 status)뿐**이다 — 로컬 "폴링 중" 플래그를 두지 않는다.
+ * 이 카드의 키는 `["strategy", "candidates", ...]` 이므로 전략 저장·realtime
+ * `strategy.monitor.*`·온보딩 apply 의 `["strategy"]` 전면 invalidate 가 쿼리를
+ * 리셋하지만, 리셋 후에도 판정 근거가 같은 서버 응답이라 동작이 결정적이다.
+ */
 export function useStrategyCandidatesQuery(
   session: AuthSession | null,
   params: StrategyCandidatesQuery = {},
-  operatorId: number | null = null
+  operatorId: number | null = null,
+  options: { pollIntervalMs?: number } = {}
 ) {
+  const pollIntervalMs = options.pollIntervalMs ?? SNAPSHOT_POLL_INTERVAL_MS;
   return useQuery({
     queryKey: queryKeys.strategy.candidates(
       params.limit,
@@ -46,7 +58,18 @@ export function useStrategyCandidatesQuery(
       operatorId
     ),
     queryFn: () => fetchStrategyCandidates(params, session?.token, operatorId),
-    enabled: Boolean(session?.token)
+    enabled: Boolean(session?.token),
+    refetchInterval: (query) =>
+      snapshotPollInterval(
+        query.state.data,
+        query.state.status === "error",
+        pollIntervalMs
+      ),
+    // 숨은 탭에서는 인터벌을 쉬게 하되(react-query 네이티브) 복귀 시 자동
+    // 재개된다. `document.visibilityState` 직접 게이트는 전역
+    // `refetchOnWindowFocus: false` 와 맞물려 복귀 후 폴링이 고착될 수 있어 쓰지
+    // 않는다.
+    refetchIntervalInBackground: false
   });
 }
 
