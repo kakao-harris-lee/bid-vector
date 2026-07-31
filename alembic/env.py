@@ -11,8 +11,12 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# `disable_existing_loggers=False`: the default (True) disables every logger that
+# already exists when this env runs. In-process alembic callers (tests, scripts)
+# then lose all app logging for the rest of the process -- an order-dependent trap
+# where caplog-based tests silently receive zero records.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Project-side imports come after alembic's `config` is in hand so the import
 # itself is cheap and consistent between offline/online paths.

@@ -35,11 +35,12 @@ _PAYLOAD_LOGGER_NAME = "app.services.paper_bidding_run_payload"
 def _captured_warnings() -> Iterator[list[str]]:
     """degrade 로그를 해당 로거에 직접 붙어 수집한다.
 
-    ``caplog`` 를 쓰지 않는 이유: alembic 을 ``Config("alembic.ini")`` 로 돌리는 다른
-    테스트가 ``fileConfig(disable_existing_loggers=True)`` 로 전역 로깅을 재설정해
-    기존 로거를 ``disabled`` 로 만들어 버린다(같은 함정을
-    ``tests/test_business_verification.py`` 도 기록해 두었다). 그래서 이 계약은 전역
-    로깅 상태와 무관하게 검증한다.
+    ``caplog`` 를 쓰지 않는 이유: 과거에 alembic 을 ``Config("alembic.ini")`` 로 돌리는
+    다른 테스트가 ``fileConfig`` 로 전역 로깅을 재설정해 기존 로거를 ``disabled`` 로
+    만들었다(순서 의존 실패). 그 원인은 ``alembic/env.py`` +
+    ``tests/support/alembic_config.py`` 에서 제거되고
+    ``tests/test_alembic_logging_isolation.py`` 가 회귀를 막지만, 이 계약 자체는 전역
+    로깅 상태와 무관하게 검증하는 편이 안전하므로 로거에 직접 붙는다.
     """
     messages: list[str] = []
 
