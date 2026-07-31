@@ -38,6 +38,10 @@ from app.services.notifications.manager import (
     mask_notification_route_key,
     mask_notification_target,
 )
+from app.services.notifications.telegram_delivery_plan import (
+    CHANNEL_SOURCE_LEGACY_SETTINGS,
+    TelegramDeliveryPlan,
+)
 
 
 def _serialize_operator_account(
@@ -92,20 +96,18 @@ def _serialize_notification_channel(
 
 
 def _notification_channel_item_from_plan(
-    plan: dict[str, object],
+    plan: TelegramDeliveryPlan,
 ) -> OperatorNotificationChannelItem:
-    channel_id = plan.get("channel_id")
+    """Expose the resolved legacy-settings route as a synthetic channel row."""
     return OperatorNotificationChannelItem(
-        channel_id=int(channel_id) if channel_id is not None else None,
-        operator_id=int(plan["operator_id"]),
-        channel_type=str(plan.get("channel_type") or ""),
-        route_key=str(plan.get("route_key") or ""),
-        target_label=(
-            str(plan["target_label"]) if plan.get("target_label") is not None else None
-        ),
-        is_active=bool(plan.get("channel_active")),
-        dry_run_only=bool(plan.get("dry_run_only")),
-        source=str(plan.get("channel_source") or ""),
+        channel_id=plan.channel_id,
+        operator_id=plan.operator_id,
+        channel_type=plan.channel_type,
+        route_key=plan.route_key,
+        target_label=plan.target_label,
+        is_active=plan.channel_active,
+        dry_run_only=plan.dry_run_only,
+        source=plan.channel_source,
     )
 
 
@@ -175,7 +177,7 @@ def list_operator_notification_channels_impl(target: User, db: Session) -> Opera
         plan = OperatorNotificationService().build_telegram_delivery_plan(
             db, operator_id=int(target.id)
         )
-        if plan.get("channel_source") == "legacy_settings":
+        if plan.channel_source == CHANNEL_SOURCE_LEGACY_SETTINGS:
             channels.append(_notification_channel_item_from_plan(plan))
 
     return OperatorNotificationChannelListResponse(

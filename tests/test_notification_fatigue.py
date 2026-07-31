@@ -1,6 +1,7 @@
 """Tests for the Telegram decision-alert fatigue gate (일일 상한 · 재알림 쿨다운)."""
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -22,6 +23,7 @@ from app.models.models import (
     Project,
     User,
 )
+from app.schemas.analytics_events import TelegramDeliverySuppressedEvent
 from app.services.notifications.fatigue import (
     FATIGUE_ALLOWED,
     FATIGUE_SUPPRESSED_DAILY_CAP,
@@ -175,6 +177,36 @@ def test_suppression_payload_carries_the_numbers_that_justified_it():
     assert payload["reason"] == FATIGUE_SUPPRESSED_DAILY_CAP
     assert payload["daily_sent_count"] == 2
     assert payload["daily_cap"] == 2
+
+
+def test_suppression_event_model_matches_the_pure_core_projection():
+    """저장 계약과 순수 코어의 감사 projection 이 갈라지지 않는지 고정한다.
+
+    ``record_fatigue_suppression`` 은 이제 dict 대신
+    :class:`TelegramDeliverySuppressedEvent` 를 만든다. ``FatigueDecision`` 에 필드가
+    늘 때 한쪽만 바뀌면 저장 레코드가 조용히 판정 근거를 잃으므로, 두 표현이 같은
+    키/값을 담는다는 것을 여기서 묶어 둔다.
+    """
+    decision = _evaluate(NotificationFatigueLimits(daily_cap=2), daily_sent_count=2)
+
+    event = TelegramDeliverySuppressedEvent(
+        operator_id=1,
+        notification_id=2,
+        project_id=3,
+        source="bid_decision",
+        sent=False,
+        status=decision.reason,
+        allowed=decision.allowed,
+        reason=decision.reason,
+        detail=decision.detail,
+        daily_sent_count=decision.daily_sent_count,
+        daily_cap=decision.daily_cap,
+        hours_since_project_send=decision.hours_since_project_send,
+        renotify_cooldown_hours=decision.renotify_cooldown_hours,
+    )
+    projection = decision.as_event_payload()
+
+    assert {key: event.model_dump()[key] for key in projection} == projection
 
 
 # --- KST day boundary ------------------------------------------------------
@@ -401,6 +433,153 @@ def test_gate_ignores_legacy_rows_without_a_notice_id(test_db):
     decision = gate.evaluate(test_db, operator_id=operator.id, project_id=4242)
 
     assert decision.allowed is True
+
+
+# --- 저장된 payload 를 되읽는 경계 (타입화 후 산출 불변 + degrade) -------------------
+
+
+def _seed_raw_delivery_row(
+    test_db, *, operator_id: int, timestamp: datetime, raw: str
+) -> Analytics:
+    """Write a delivery row with a hand-crafted (legacy or corrupted) payload string."""
+    event = Analytics(
+        user_id=operator_id,
+        event_type=TELEGRAM_DELIVERY_EVENT_TYPE,
+        event_data=raw,
+        timestamp=timestamp,
+    )
+    test_db.add(event)
+    test_db.commit()
+    return event
+
+
+def test_gate_now_reads_legacy_python_repr_rows(test_db):
+    """``str(dict)`` 행을 읽는 능력은 **보존이 아니라 신규 획득**이다.
+
+    구 게이트는 ``json.loads`` 만 했으므로 legacy repr 행은 ``{}`` 로 떨어져 ``sent`` 가
+    falsy → 카운트에서 빠졌다. 이제 공통 디코더(``parse_analytics_event_data``)를 타면서
+    ``ast.literal_eval`` 폴백까지 얻는다. 변화 방향은 **카운트 증가 = 억제 강화**이고,
+    실데이터에는 이런 ``telegram.delivery`` 행이 없다(JSON 왕복 수정이 이 event_type
+    도입보다 앞선다 — git 이력 확인). 그래서 안전한 방향의 능력 획득으로 남긴다.
+    """
+    operator = _create_operator(test_db)
+    now = datetime(2026, 7, 25, 4, 0, tzinfo=UTC)
+    _seed_raw_delivery_row(
+        test_db,
+        operator_id=operator.id,
+        timestamp=now - timedelta(hours=1),
+        raw=str(
+            {
+                "operator_id": operator.id,
+                "notification_id": 1,
+                "project_id": 4242,
+                "source": "bid_decision",
+                "sent": True,
+                "status": "sent",
+            }
+        ),
+    )
+
+    gate = NotificationFatigueGate(
+        limits=NotificationFatigueLimits(daily_cap=1, renotify_cooldown_hours=24.0),
+        now_provider=lambda: now,
+    )
+    decision = gate.evaluate(test_db, operator_id=operator.id, project_id=4242)
+
+    assert decision.daily_sent_count == 1
+    assert decision.allowed is False
+    assert decision.reason == FATIGUE_SUPPRESSED_RENOTIFY_COOLDOWN
+
+
+def test_gate_tolerates_rows_carrying_keys_it_does_not_know(test_db):
+    """나중에 추가된 키가 있는 행 하나가 판정을 깨뜨리지 않는다."""
+    operator = _create_operator(test_db)
+    now = datetime(2026, 7, 25, 4, 0, tzinfo=UTC)
+    _seed_raw_delivery_row(
+        test_db,
+        operator_id=operator.id,
+        timestamp=now - timedelta(minutes=5),
+        raw=json.dumps(
+            {
+                "operator_id": operator.id,
+                "notification_id": 1,
+                "project_id": 4242,
+                "source": "bid_decision",
+                "sent": True,
+                "status": "sent",
+                "future_key": {"nested": 1},
+            }
+        ),
+    )
+
+    gate = NotificationFatigueGate(
+        limits=NotificationFatigueLimits(daily_cap=1),
+        now_provider=lambda: now,
+    )
+    decision = gate.evaluate(test_db, operator_id=operator.id, project_id=1)
+
+    assert decision.allowed is False
+
+
+def _seed_unreadable_rows(test_db, *, operator_id: int, now: datetime) -> None:
+    """Seed one non-JSON row and one schema-violating row (both unrestorable)."""
+    _seed_raw_delivery_row(
+        test_db,
+        operator_id=operator_id,
+        timestamp=now - timedelta(minutes=5),
+        raw="{not json at all",
+    )
+    _seed_raw_delivery_row(
+        test_db,
+        operator_id=operator_id,
+        timestamp=now - timedelta(minutes=4),
+        raw=json.dumps({"source": "bid_decision", "sent": True, "project_id": "abc"}),
+    )
+
+
+def test_gate_counts_unreadable_rows_toward_the_daily_cap(test_db, caplog):
+    """fail-closed: 해석 불가 행을 '전달 없음'으로 낙관하지 않는다.
+
+    이 게이트는 알림 폭주 방지 장치다. payload 를 복원할 수 없는 행은 보수적으로(=억제
+    방향) 일일 카운트에 포함한다. 스키마 위반 행을 세는 것은 구코드와 같은 방향이고
+    (구코드도 ``sent`` 만 보고 셌다), 비 JSON 행까지 세는 것은 같은 원칙의 확장이다.
+    """
+    operator = _create_operator(test_db)
+    now = datetime(2026, 7, 25, 4, 0, tzinfo=UTC)
+    _seed_unreadable_rows(test_db, operator_id=operator.id, now=now)
+
+    gate = NotificationFatigueGate(
+        limits=NotificationFatigueLimits(daily_cap=2),
+        now_provider=lambda: now,
+    )
+    with caplog.at_level(logging.WARNING):
+        decision = gate.evaluate(test_db, operator_id=operator.id, project_id=1)
+
+    assert decision.daily_sent_count == 2
+    assert decision.allowed is False
+    assert decision.reason == FATIGUE_SUPPRESSED_DAILY_CAP
+    # degrade 는 조용해서는 안 된다(계약 위반 행은 경고로 남는다).
+    assert "analytics event_data 해석 실패" in caplog.text
+
+
+def test_unreadable_rows_never_match_the_renotify_cooldown(test_db):
+    """카운트에는 넣되 **공고 매칭에서는 제외**한다.
+
+    해석 불가 행은 어떤 공고를 알렸는지 말해주지 못한다. 공고 id 를 추측해 매칭하면
+    엉뚱한 공고의 알림을 억제하므로, 쿨다운 판정에서는 빠진다(일일 상한만 지킨다).
+    """
+    operator = _create_operator(test_db)
+    now = datetime(2026, 7, 25, 4, 0, tzinfo=UTC)
+    _seed_unreadable_rows(test_db, operator_id=operator.id, now=now)
+
+    gate = NotificationFatigueGate(
+        limits=NotificationFatigueLimits(renotify_cooldown_hours=24.0),
+        now_provider=lambda: now,
+    )
+    decision = gate.evaluate(test_db, operator_id=operator.id, project_id=4242)
+
+    assert decision.allowed is True
+    assert decision.hours_since_project_send is None
 
 
 def test_gate_is_inert_when_both_limits_are_disabled(test_db):

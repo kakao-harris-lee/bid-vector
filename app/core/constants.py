@@ -150,6 +150,16 @@ PAPER_BID_RUN_MODES: frozenset[str] = frozenset(
 TELEGRAM_DELIVERY_EVENT_TYPE: str = "telegram.delivery"
 TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE: str = "telegram.delivery.suppressed"
 
+# 나머지 ``analytics.event_data`` 생산자의 event_type. 각 타입의 payload 계약은
+# app/schemas/analytics_events.py 가 선언하고, 그 레지스트리가 event_type → 복원 모델을
+# 매핑한다. 같은 문자열을 생산자/소비자에 따로 적어 두면 한쪽만 바뀌어도 조용히 어긋나
+# 집계가 0건이 되므로 여기서 단일 출처를 유지한다.
+TELEGRAM_STRATEGY_PENDING_EDIT_EVENT_TYPE: str = "telegram.strategy.pending_edit"
+BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE: str = "email.bid_report.delivery"
+# 프론트가 열린 텔레메트리 엔드포인트(``POST /analytics/event``)로 올리는 이벤트.
+PROJECT_VIEW_EVENT_TYPE: str = "project_view"
+RECOMMENDATION_FEEDBACK_EVENT_TYPE: str = "recommendation_feedback"
+
 # Internal telemetry event types that operator-facing event *counts* exclude.
 #
 # This set is shared by:
@@ -163,6 +173,6 @@ INTERNAL_TELEMETRY_EVENT_TYPES: frozenset[str] = frozenset(
     {
         TELEGRAM_DELIVERY_EVENT_TYPE,
         TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE,
-        "telegram.strategy.pending_edit",
+        TELEGRAM_STRATEGY_PENDING_EDIT_EVENT_TYPE,
     }
 )

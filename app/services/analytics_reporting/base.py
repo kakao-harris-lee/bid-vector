@@ -90,16 +90,6 @@ class _AnalyticsReportingBase:
             return "watch"
         return "healthy"
 
-    def _load_event_payload(self, raw_payload: Any) -> dict[str, Any]:
-        """Parse analytics event payloads stored as JSON text."""
-        if isinstance(raw_payload, dict):
-            return raw_payload
-        try:
-            payload = json.loads(str(raw_payload or "{}"))
-        except json.JSONDecodeError:
-            return {"detail": str(raw_payload or "")}
-        return payload if isinstance(payload, dict) else {}
-
     def _load_json_object(self, raw_payload: Any) -> dict[str, Any]:
         """Parse a JSON object payload, returning an empty dict for invalid data."""
         if isinstance(raw_payload, dict):

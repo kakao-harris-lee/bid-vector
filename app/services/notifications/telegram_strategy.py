@@ -1,6 +1,6 @@
 """Telegram command helpers for operator strategy edits.
 
-Command orchestration and pending-edit persistence live here. The declarative
+Command orchestration lives here. The declarative
 field routing table (``FIELD_SPECS``), the leaf string parsers, and the outbound
 message rendering were split into sibling modules and are re-exported below so
 the public import contract (tests import ``FIELD_SPECS`` / ``FIELD_SPEC_BY_ALIAS``
@@ -9,22 +9,20 @@ the public import contract (tests import ``FIELD_SPECS`` / ``FIELD_SPEC_BY_ALIAS
 - ``telegram_strategy_fields``: ``FieldSpec`` table + parse/apply/validate helpers
 - ``telegram_strategy_parsing``: stateless token/number/bool/list parsers
 - ``telegram_strategy_render``: status text, help, and inline-keyboard markup
+- ``telegram_strategy_pending``: pending-edit ``analytics`` row load/record boundary
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import re
 from typing import Any, ClassVar
 
 from sqlalchemy.orm import Session
 
-from app.core.single_user import (
-    ensure_operator_account,
-    ensure_operator_strategy,
-)
-from app.models.models import Analytics
+from app.core.single_user import ensure_operator_strategy
+from app.schemas import analytics_events as event_models
+from app.services.notifications import telegram_strategy_pending as pending_store
 from app.services.notifications import telegram_strategy_fields as fields
 from app.services.notifications import telegram_strategy_parsing as parsing
 from app.services.notifications import telegram_strategy_render as render
@@ -66,8 +64,9 @@ class TelegramStrategyCommandProcessor:
     CALLBACK_PREFIX = "strategy-edit"
     APPLY_CALLBACK = "apply"
     CANCEL_CALLBACK = "cancel"
-    PENDING_EVENT_TYPE = "telegram.strategy.pending_edit"
-    PENDING_EVENT_FETCH_LIMIT = 100
+    # 영속 계약은 telegram_strategy_pending 이 소유한다(클래스 표면만 유지).
+    PENDING_EVENT_TYPE = pending_store.PENDING_EVENT_TYPE
+    PENDING_EVENT_FETCH_LIMIT = pending_store.PENDING_EVENT_FETCH_LIMIT
     PENDING_EDITS: ClassVar[dict[str, PendingStrategyEdit]] = {}
 
     EDIT_FIELDS = fields.EDIT_FIELDS
@@ -433,41 +432,31 @@ class TelegramStrategyCommandProcessor:
 
     def _get_pending_edit(self, db: Session, chat_key: str) -> PendingStrategyEdit | None:
         """Load the latest pending edit state, preferring DB state across API workers."""
-        events = (
-            db.query(Analytics)
-            .filter(Analytics.event_type == self.PENDING_EVENT_TYPE)
-            .order_by(Analytics.timestamp.desc(), Analytics.id.desc())
-            .limit(self.PENDING_EVENT_FETCH_LIMIT)
-            .all()
+        payload = pending_store.load_latest_pending_edit(db, chat_key=chat_key)
+        if payload is None:
+            return self.PENDING_EDITS.get(chat_key)
+        if not payload.active:
+            self.PENDING_EDITS.pop(chat_key, None)
+            return None
+        pending = PendingStrategyEdit(
+            field_key=str(payload.field_key or ""),
+            stage=str(payload.stage or ""),
+            updates=payload.updates,
         )
-        for event in events:
-            payload = self._load_pending_payload(event.event_data)
-            if payload.get("chat_id") != chat_key:
-                continue
-            if not payload.get("active"):
-                self.PENDING_EDITS.pop(chat_key, None)
-                return None
-            pending = PendingStrategyEdit(
-                field_key=str(payload.get("field_key") or ""),
-                stage=str(payload.get("stage") or ""),
-                updates=payload.get("updates") if isinstance(payload.get("updates"), dict) else None,
-            )
-            self.PENDING_EDITS[chat_key] = pending
-            return pending
-        return self.PENDING_EDITS.get(chat_key)
+        self.PENDING_EDITS[chat_key] = pending
+        return pending
 
     def _store_pending_edit(self, db: Session, chat_key: str, pending: PendingStrategyEdit) -> None:
         """Persist a staged edit so webhook updates can be handled by any API worker."""
         self.PENDING_EDITS[chat_key] = pending
-        self._record_pending_edit_event(
+        pending_store.record_pending_edit(
             db,
-            {
-                "chat_id": chat_key,
-                "active": True,
-                "field_key": pending.field_key,
-                "stage": pending.stage,
-                "updates": pending.updates or {},
-            },
+            event_models.TelegramStrategyPendingEditActivated(
+                chat_id=chat_key,
+                field_key=pending.field_key,
+                stage=pending.stage,
+                updates=pending.updates or {},
+            ),
         )
 
     def _clear_pending_edit(self, db: Session, chat_key: str) -> None:
@@ -476,24 +465,6 @@ class TelegramStrategyCommandProcessor:
         latest = self._get_pending_edit(db, chat_key)
         if had_pending or latest is not None:
             self.PENDING_EDITS.pop(chat_key, None)
-            self._record_pending_edit_event(db, {"chat_id": chat_key, "active": False})
-
-    def _record_pending_edit_event(self, db: Session, payload: dict[str, Any]) -> None:
-        """Append internal pending-edit telemetry without exposing it as user analytics."""
-        operator = ensure_operator_account(db)
-        db.add(
-            Analytics(
-                user_id=operator.id,
-                event_type=self.PENDING_EVENT_TYPE,
-                event_data=json.dumps(payload, ensure_ascii=False),
+            pending_store.record_pending_edit(
+                db, event_models.TelegramStrategyPendingEditCleared(chat_id=chat_key)
             )
-        )
-        db.commit()
-
-    def _load_pending_payload(self, event_data: str | None) -> dict[str, Any]:
-        """Safely parse pending edit event payloads."""
-        try:
-            payload = json.loads(event_data or "{}")
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}

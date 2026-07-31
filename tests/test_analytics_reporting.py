@@ -1469,3 +1469,74 @@ def test_operations_dashboard_g1_preset_uses_latest_run_across_duplicate_names(
     assert "Canonical G-1 synthetic validation" in synthetic["detail"]
     assert synthetic["completed_preset_count"] == 1
     assert synthetic["sufficient_preset_count"] == 1
+
+
+def test_notification_summary_keeps_unreadable_delivery_rows_in_the_denominator(
+    client, test_db, monkeypatch
+):
+    """배달 레코드 타입화 후에도 집계 산출이 불변임을 고정한다.
+
+    저장된 payload 는 이제 선언된 계약으로 복원되지만, 해석 불가 행도 **배달 시도는
+    있었던 행**이라 성공률 분모에서 사라지면 안 된다(운영 리포트는 빈 모델로 degrade
+    하고, 키 없는 payload 를 종전과 같이 ``unknown`` 으로 센다). 피로도 게이트가 같은
+    행을 무시하는 것과 의도적으로 다른 정책이다.
+    """
+    operator = _bootstrap_operator(client)
+    operator_id = operator["id"]
+    now = datetime.now(UTC)
+
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "12345")
+
+    test_db.add_all([
+        Analytics(
+            user_id=operator_id,
+            event_type="telegram.delivery",
+            event_data=json.dumps({
+                "notification_id": 1,
+                "source": "bid_decision",
+                "sent": True,
+                "status": "sent",
+                "detail": "Telegram delivery succeeded.",
+            }),
+            timestamp=now - timedelta(hours=3),
+        ),
+        Analytics(
+            user_id=operator_id,
+            event_type="telegram.delivery",
+            event_data="{not json at all",
+            timestamp=now - timedelta(hours=2),
+        ),
+        Analytics(
+            user_id=operator_id,
+            event_type="telegram.delivery",
+            # legacy Python repr 행도 계속 읽힌다(ast 폴백).
+            event_data=str({
+                "notification_id": 3,
+                "source": "bid_decision",
+                "sent": False,
+                "status": "pending_configuration",
+                "detail": "Telegram is not configured yet.",
+            }),
+            timestamp=now - timedelta(hours=1),
+        ),
+    ])
+    test_db.commit()
+
+    summary = AnalyticsReportingService()._build_notification_summary(
+        test_db,
+        operator_id=operator_id,
+        date_from=now - timedelta(days=1),
+        recent_limit=5,
+    )
+
+    assert summary["telegram_delivery_attempt_count"] == 3
+    assert summary["telegram_sent_count"] == 1
+    assert summary["telegram_pending_configuration_count"] == 1
+    assert summary["telegram_status_counts"] == {
+        "pending_configuration": 1,
+        "sent": 1,
+        "unknown": 1,
+    }
+    assert summary["telegram_success_rate"] == pytest.approx(1 / 3, abs=0.0001)
+    assert [item["notification_id"] for item in summary["recent_telegram_failures"]] == [3]

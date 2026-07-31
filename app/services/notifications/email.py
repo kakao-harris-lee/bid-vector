@@ -23,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from email.message import EmailMessage
 import html
-import json
 import logging
 import smtplib
 import ssl
@@ -32,10 +31,13 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.constants import BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE
 from app.core.time import utc_now
 from app.models.models import Analytics, User
+from app.schemas.analytics_events import BidReportEmailDeliveryEvent
 from app.schemas.bid_form_draft import BID_FORM_DRAFT_NOTICE
 from app.schemas.bid_summary import DIRECT_SUBMISSION_NOTICE
+from app.services.analytics_event_payload import dump_analytics_event
 from app.services.bid_form_draft import BidFormDraftService
 from app.services.bid_summary import BidSummaryService
 
@@ -54,7 +56,8 @@ STATUS_NO_RECIPIENT = "skipped_no_recipient"
 STATUS_SENT = "sent"
 STATUS_FAILED = "failed"
 
-_ANALYTICS_EVENT_TYPE = "email.bid_report.delivery"
+# event_type 문자열 단일 출처는 app/core/constants.py (payload 계약 레지스트리와 공유).
+_ANALYTICS_EVENT_TYPE = BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE
 
 
 @dataclass(frozen=True)
@@ -451,19 +454,18 @@ class EmailNotificationService:
             event = Analytics(
                 user_id=operator_id,
                 event_type=_ANALYTICS_EVENT_TYPE,
-                event_data=json.dumps(
-                    {
-                        "operator_id": operator_id,
-                        "project_id": result.project_id,
-                        "decision_record_id": result.decision_record_id,
-                        "dry_run": result.dry_run,
-                        "sent": result.sent,
-                        "delivery_status": result.delivery_status,
-                        "masked_recipient": result.masked_recipient,
-                        "has_draft_attachment": result.has_draft_attachment,
-                        "recorded_at": utc_now().isoformat(),
-                    },
-                    ensure_ascii=False,
+                event_data=dump_analytics_event(
+                    BidReportEmailDeliveryEvent(
+                        operator_id=operator_id,
+                        project_id=result.project_id,
+                        decision_record_id=result.decision_record_id,
+                        dry_run=result.dry_run,
+                        sent=result.sent,
+                        delivery_status=result.delivery_status,
+                        masked_recipient=result.masked_recipient,
+                        has_draft_attachment=result.has_draft_attachment,
+                        recorded_at=utc_now().isoformat(),
+                    )
                 ),
             )
             db.add(event)

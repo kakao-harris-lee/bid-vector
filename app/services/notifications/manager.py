@@ -1,9 +1,9 @@
 """Notification persistence helpers for the single-operator workflow."""
 
-import json
 import logging
 import re
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -19,11 +19,25 @@ from app.models.models import (
     Project,
     User,
 )
+from app.schemas.analytics_events import TelegramDeliveryEvent
+from app.services.analytics_event_payload import dump_analytics_event
 from app.services.notifications.fatigue_gate import (
     NotificationFatigueGate,
     record_fatigue_suppression,
 )
 from app.services.notifications.telegram import TelegramNotificationService
+from app.services.notifications.telegram_delivery_plan import (
+    DETAIL_TRANSPORT_CONTRACT_FAILURE,
+    TelegramChannelFacts,
+    TelegramDeliveryPlan,
+    TelegramRouteContext,
+    TelegramSendOutcome,
+    blocked_send_outcome,
+    build_telegram_delivery_event,
+    failed_send_outcome,
+    pending_configuration_outcome,
+    resolve_telegram_delivery_plan,
+)
 from app.services.realtime import realtime_event_manager
 
 logger = logging.getLogger(__name__)
@@ -309,164 +323,116 @@ class OperatorNotificationService:
         message: str,
         project_id: int | None = None,
         reply_markup: dict[str, object] | None = None,
-    ) -> dict[str, object] | None:
+    ) -> TelegramDeliveryEvent:
         """Best-effort Telegram delivery so the web flow still succeeds on failures."""
-        delivery_plan = self.build_telegram_delivery_plan(db, operator_id=operator_id)
-        if not bool(delivery_plan.get("route_send_allowed")):
-            blocked_delivery = self._build_blocked_telegram_delivery(delivery_plan)
-            self._record_telegram_delivery(
-                db,
-                operator_id=operator_id,
-                notification_id=notification_id,
-                project_id=project_id,
-                source=source,
-                delivery=blocked_delivery,
-            )
-            return blocked_delivery
-
-        if not self.telegram.is_configured():
-            delivery = self._with_telegram_channel_metadata(
-                {
-                    "sent": False,
-                    "status": "pending_configuration",
-                    "detail": "Telegram is not configured yet.",
-                },
-                delivery_plan,
-            )
-            self._record_telegram_delivery(
-                db,
-                operator_id=operator_id,
-                notification_id=notification_id,
-                project_id=project_id,
-                source=source,
-                delivery=delivery,
-            )
-            return delivery
-
-        try:
-            delivery = self.telegram.send_message(message, reply_markup=reply_markup)
-        except RuntimeError as exc:
-            logger.warning("Telegram delivery failed: %s", exc)
-            delivery = {
-                "sent": False,
-                "status": "failed",
-                "detail": str(exc),
-            }
-        delivery = self._with_telegram_channel_metadata(delivery, delivery_plan)
-        self._record_telegram_delivery(
+        plan = self.build_telegram_delivery_plan(db, operator_id=operator_id)
+        outcome = self._attempt_telegram_send(plan, message, reply_markup=reply_markup)
+        return self._record_telegram_delivery(
             db,
             operator_id=operator_id,
             notification_id=notification_id,
             project_id=project_id,
             source=source,
-            delivery=delivery,
+            plan=plan,
+            outcome=outcome,
         )
-        return delivery
+
+    def _attempt_telegram_send(
+        self,
+        plan: TelegramDeliveryPlan,
+        message: str,
+        *,
+        reply_markup: dict[str, object] | None = None,
+    ) -> TelegramSendOutcome:
+        """Send when the resolved route allows it, else report why it was withheld.
+
+        ``send_message`` still answers with an untyped dict (D2a transport
+        contract), so this is where that dict is promoted to a validated outcome
+        instead of being relayed into the audit record as-is. The promotion stays
+        INSIDE the best-effort boundary: a transport response that does not match
+        the outcome contract is recorded as a failed delivery, exactly like a
+        ``RuntimeError``, so the web notification flow still succeeds.
+        """
+        if not plan.route_send_allowed:
+            return blocked_send_outcome(plan)
+        if not self.telegram.is_configured():
+            return pending_configuration_outcome()
+        try:
+            sent = self.telegram.send_message(message, reply_markup=reply_markup)
+        except RuntimeError as exc:
+            logger.warning("Telegram delivery failed: %s", exc)
+            return failed_send_outcome(str(exc))
+        try:
+            return TelegramSendOutcome.model_validate(sent)
+        except ValidationError as exc:
+            # 검증 오류 원문은 입력값을 되풀이하므로 감사 detail 로 남기지 않는다.
+            logger.warning(
+                "Telegram transport response broke the delivery outcome contract "
+                "(errors=%d)",
+                exc.error_count(),
+            )
+            return failed_send_outcome(DETAIL_TRANSPORT_CONTRACT_FAILURE)
 
     def build_telegram_delivery_plan(
         self,
         db: Session,
         *,
         operator_id: int,
-    ) -> dict[str, object]:
-        """Resolve the per-operator Telegram route without exposing raw targets."""
+    ) -> TelegramDeliveryPlan:
+        """Resolve the per-operator Telegram route without exposing raw targets.
+
+        This is the I/O half only: it reads the operator and channel rows, masks
+        target-shaped values, and hands those facts to the pure resolver in
+        ``telegram_delivery_plan`` (§4.7-1/4).
+        """
         operator = db.query(User).filter(User.id == operator_id).first()
-        base: dict[str, object] = {
-            "operator_id": int(operator_id),
-            "channel_type": "telegram",
-            "channel_id": None,
-            "route_key": f"operator:{int(operator_id)}:telegram:unconfigured",
-            "target_label": None,
-            "channel_source": "missing_channel",
-            "channel_active": False,
-            "dry_run_only": True,
-            "route_send_allowed": False,
-            "telegram_configured": self.telegram.is_configured(),
-            "can_send": False,
-        }
-        if operator is None:
-            return {
-                **base,
-                "status": "blocked_missing_operator",
-                "detail": "Telegram delivery skipped because the notification owner does not exist.",
-            }
-
-        username = str(operator.username or "")
-        channel = self._select_telegram_channel(db, operator_id=int(operator_id))
-        if channel is not None:
-            raw_route_key = str(channel.route_key)
-            plan = {
-                **base,
-                "channel_id": int(channel.id),
-                "route_key": mask_notification_route_key(raw_route_key),
-                "target_label": mask_notification_target(channel.target_label),
-                "channel_source": "operator_notification_channels",
-                "channel_active": bool(channel.is_active),
-                "dry_run_only": bool(channel.dry_run_only),
-            }
-            if not bool(channel.is_active):
-                return {
-                    **plan,
-                    "status": "telegram_channel_inactive",
-                    "detail": "Telegram delivery skipped because the operator channel is inactive.",
-                }
-            if bool(channel.dry_run_only):
-                return {
-                    **plan,
-                    "status": "telegram_channel_dry_run",
-                    "detail": "Telegram delivery recorded as dry-run evidence for this operator channel.",
-                }
-            if username != DEFAULT_OPERATOR_USERNAME:
-                return {
-                    **plan,
-                    "status": "telegram_route_non_canonical",
-                    "detail": "Telegram delivery skipped because non-canonical operator routes require an explicit secret resolver.",
-                }
-            if raw_route_key != self.telegram.LEGACY_CONFIGURED_CHAT_ROUTE_KEY:
-                return {
-                    **plan,
-                    "status": "telegram_route_unresolved",
-                    "detail": "Telegram delivery skipped because the channel route key has no configured sender.",
-                }
-            return {
-                **plan,
-                "target_label": mask_notification_target(channel.target_label)
-                or self.telegram.get_configured_target_label(),
-                "route_send_allowed": True,
-                "can_send": self._can_actually_send_telegram(route_send_allowed=True),
-                "status": "ready",
-                "detail": "Telegram delivery route is active.",
-            }
-
-        if username == DEFAULT_OPERATOR_USERNAME:
-            return {
-                **base,
-                "route_key": self.telegram.LEGACY_CONFIGURED_CHAT_ROUTE_KEY,
-                "target_label": self.telegram.get_configured_target_label(),
-                "channel_source": "legacy_settings",
-                "channel_active": True,
-                "dry_run_only": False,
-                "route_send_allowed": True,
-                "can_send": self._can_actually_send_telegram(route_send_allowed=True),
-                "status": "ready",
-                "detail": "Telegram delivery route uses the legacy configured chat.",
-            }
-
-        status = (
-            "skipped_synthetic_operator"
-            if username.startswith("synthetic-")
-            else "skipped_non_canonical_operator"
+        username = str(getattr(operator, "username", "") or "")
+        context = TelegramRouteContext(
+            operator_id=int(operator_id),
+            operator_exists=operator is not None,
+            is_canonical_operator=username == DEFAULT_OPERATOR_USERNAME,
+            is_synthetic_operator=username.startswith("synthetic-"),
+            telegram_configured=self.telegram.is_configured(),
+            configured_route_key=self.telegram.LEGACY_CONFIGURED_CHAT_ROUTE_KEY,
+            configured_target_label=self.telegram.get_configured_target_label(),
+            can_send_when_allowed=self._can_actually_send_telegram(
+                route_send_allowed=True
+            ),
         )
-        return {
-            **base,
-            "status": status,
-            "detail": "Telegram delivery skipped because this operator has no active Telegram channel.",
-        }
+        channel_facts = (
+            None
+            if operator is None
+            else self._telegram_channel_facts(db, operator_id=int(operator_id))
+        )
+        return resolve_telegram_delivery_plan(context=context, channel=channel_facts)
+
+    def _telegram_channel_facts(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+    ) -> TelegramChannelFacts | None:
+        """Mask one operator channel row down to the facts the resolver needs."""
+        channel = self._select_telegram_channel(db, operator_id=operator_id)
+        if channel is None:
+            return None
+        raw_route_key = str(channel.route_key)
+        return TelegramChannelFacts(
+            channel_id=int(channel.id),
+            route_key=mask_notification_route_key(raw_route_key),
+            target_label=mask_notification_target(channel.target_label),
+            is_active=bool(channel.is_active),
+            dry_run_only=bool(channel.dry_run_only),
+            matches_configured_sender=(
+                raw_route_key == self.telegram.LEGACY_CONFIGURED_CHAT_ROUTE_KEY
+            ),
+        )
 
     def has_active_telegram_callback_route(self, db: Session, *, operator_id: int) -> bool:
         """Return whether bid-decision callbacks may mutate this operator's records."""
-        plan = self.build_telegram_delivery_plan(db, operator_id=operator_id)
-        return bool(plan.get("route_send_allowed"))
+        return self.build_telegram_delivery_plan(
+            db, operator_id=operator_id
+        ).route_send_allowed
 
     def _can_actually_send_telegram(self, *, route_send_allowed: bool) -> bool:
         """Return whether this process may perform a real Telegram send now."""
@@ -496,41 +462,6 @@ class OperatorNotificationService:
             .first()
         )
 
-    def _build_blocked_telegram_delivery(
-        self,
-        delivery_plan: dict[str, object],
-    ) -> dict[str, object]:
-        return self._with_telegram_channel_metadata(
-            {
-                "sent": False,
-                "status": str(delivery_plan.get("status") or "telegram_delivery_blocked"),
-                "detail": str(delivery_plan.get("detail") or "Telegram delivery was not sent."),
-            },
-            delivery_plan,
-        )
-
-    def _with_telegram_channel_metadata(
-        self,
-        delivery: dict[str, object],
-        delivery_plan: dict[str, object],
-    ) -> dict[str, object]:
-        enriched = dict(delivery)
-        enriched.update(
-            {
-                "channel_type": delivery_plan.get("channel_type"),
-                "channel_id": delivery_plan.get("channel_id"),
-                "route_key": delivery_plan.get("route_key"),
-                "target_label": delivery_plan.get("target_label"),
-                "channel_source": delivery_plan.get("channel_source"),
-                "channel_active": bool(delivery_plan.get("channel_active")),
-                "dry_run_only": bool(delivery_plan.get("dry_run_only")),
-                "route_send_allowed": bool(delivery_plan.get("route_send_allowed")),
-                "telegram_configured": bool(delivery_plan.get("telegram_configured")),
-                "can_send": bool(delivery_plan.get("can_send")),
-            }
-        )
-        return enriched
-
     def _record_telegram_delivery(
         self,
         db: Session,
@@ -538,43 +469,32 @@ class OperatorNotificationService:
         operator_id: int,
         notification_id: int,
         source: str,
-        delivery: dict[str, object],
+        plan: TelegramDeliveryPlan,
+        outcome: TelegramSendOutcome,
         project_id: int | None = None,
-    ) -> None:
+    ) -> TelegramDeliveryEvent:
         """Persist Telegram delivery telemetry for operations dashboard reporting.
 
-        ``project_id`` is what lets the fatigue gate recognise a repeat alert for
-        the same notice; rows written before it existed simply never match.
+        The stored payload is a declared contract
+        (:class:`~app.schemas.analytics_events.TelegramDeliveryEvent`) because the
+        fatigue gate reads it back as a *decision* input, not as free-form
+        telemetry.
         """
+        delivery_event = build_telegram_delivery_event(
+            plan=plan,
+            outcome=outcome,
+            notification_id=notification_id,
+            source=source,
+            project_id=project_id,
+        )
         event = Analytics(
             user_id=operator_id,
             event_type=TELEGRAM_DELIVERY_EVENT_TYPE,
-            event_data=json.dumps(
-                {
-                    "operator_id": int(operator_id),
-                    "notification_id": int(notification_id),
-                    "project_id": None if project_id is None else int(project_id),
-                    "source": source,
-                    "sent": bool(delivery.get("sent")),
-                    "status": str(delivery.get("status") or "unknown"),
-                    "detail": str(delivery.get("detail") or ""),
-                    "telegram_message_id": delivery.get("telegram_message_id"),
-                    "channel_type": delivery.get("channel_type"),
-                    "channel_id": delivery.get("channel_id"),
-                    "route_key": delivery.get("route_key"),
-                    "target_label": delivery.get("target_label"),
-                    "channel_source": delivery.get("channel_source"),
-                    "channel_active": bool(delivery.get("channel_active")),
-                    "dry_run_only": bool(delivery.get("dry_run_only")),
-                    "route_send_allowed": bool(delivery.get("route_send_allowed")),
-                    "telegram_configured": bool(delivery.get("telegram_configured")),
-                    "can_send": bool(delivery.get("can_send")),
-                },
-                ensure_ascii=False,
-            ),
+            event_data=dump_analytics_event(delivery_event),
         )
         db.add(event)
         db.commit()
+        return delivery_event
 
     def _upsert_notification(
         self,

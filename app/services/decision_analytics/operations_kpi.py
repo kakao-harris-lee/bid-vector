@@ -8,6 +8,10 @@ from typing import Any
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from app.core.constants import (
+    PROJECT_VIEW_EVENT_TYPE,
+    RECOMMENDATION_FEEDBACK_EVENT_TYPE,
+)
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
 from app.models.models import (
@@ -201,7 +205,7 @@ class _OperationsKpiMixin(_DecisionAnalyticsBase):
         view_events = self._load_events_in_range(
             db,
             operator_id=operator_id,
-            event_type="project_view",
+            event_type=PROJECT_VIEW_EVENT_TYPE,
             start_at=start_at,
         )
         earliest_view_by_project: dict[int, Any] = {}
@@ -280,7 +284,7 @@ class _OperationsKpiMixin(_DecisionAnalyticsBase):
         feedback_events = self._load_events_in_range(
             db,
             operator_id=operator_id,
-            event_type="recommendation_feedback",
+            event_type=RECOMMENDATION_FEEDBACK_EVENT_TYPE,
             start_at=start_at,
         )
         latest_by_decision = self._dedupe_latest_feedback_verdicts(feedback_events)
