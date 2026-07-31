@@ -2,7 +2,12 @@
 
 from app.core.config import Settings, settings
 from app.services.strategy_scheduler import OperatorStrategyScheduler
-from app.tasks.celery_app import build_celery_runtime_config
+from app.tasks.celery_app import (
+    Celery,
+    apply_task_result_repr_maxsize,
+    build_celery_runtime_config,
+    celery_app,
+)
 
 
 def test_settings_auto_promote_database_result_backend_for_external_broker():
@@ -65,6 +70,30 @@ def test_worker_max_memory_per_child_zero_disables_the_limit(monkeypatch):
     config = build_celery_runtime_config()
 
     assert "worker_max_memory_per_child" not in config
+
+
+def test_result_repr_maxsize_reaches_task_base(monkeypatch):
+    """설정한 result repr 상한이 celery Task base 에 반영돼야 한다.
+
+    celery.app.trace 는 성공 task 마다 saferepr(R, resultrepr_maxsize) 를 INFO 로
+    에코하므로, 이 상한을 낮추면 성공 로그의 반환값 볼륨이 줄어든다.
+    """
+    monkeypatch.setattr(settings, "CELERY_TASK_RESULT_REPR_MAXSIZE", 160)
+
+    apply_task_result_repr_maxsize(celery_app)
+
+    assert celery_app.Task.resultrepr_maxsize == 160
+
+
+def test_non_positive_result_repr_maxsize_keeps_celery_default(monkeypatch):
+    """0 이하는 celery 기본(1024) 을 그대로 둔다 — Task base 를 건드리지 않는다."""
+    probe = Celery("result-repr-probe")
+    celery_default = probe.Task.resultrepr_maxsize
+    monkeypatch.setattr(settings, "CELERY_TASK_RESULT_REPR_MAXSIZE", 0)
+
+    apply_task_result_repr_maxsize(probe)
+
+    assert probe.Task.resultrepr_maxsize == celery_default
 
 
 def test_strategy_scheduler_only_runs_inprocess_for_memory_broker(monkeypatch):
