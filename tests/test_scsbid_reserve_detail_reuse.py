@@ -12,8 +12,9 @@ behaviour added on ``perf/scsbid-scheduled-reserve-detail``:
 * the "already persisted" set is loaded with one query (no N+1),
 * an empty incoming reserve price never clobbers a stored non-empty one.
 
-All external HTTP is mocked via ``app.services.koneps.http_client.requests.get``;
-no real KONEPS calls are made under ``ENVIRONMENT=test``.
+All external HTTP is replaced by injecting the collector's ``http_get`` seam
+(``KonepsCollectorService(http_get=...)``); no real KONEPS calls are made under
+``ENVIRONMENT=test``.
 """
 
 from __future__ import annotations
@@ -70,9 +71,7 @@ def test_persisted_reserve_skips_reserve_detail_fetch(test_db, monkeypatch):
             _award_body([_award_item("HAS-RESERVE")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()), db=test_db
     )
@@ -105,9 +104,7 @@ def test_new_award_still_fetches_reserve_detail(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()), db=test_db
     )
@@ -150,9 +147,7 @@ def test_persisted_reserve_set_loaded_with_single_query(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()), db=test_db
     )
@@ -178,9 +173,7 @@ def test_reuse_disabled_falls_back_to_fetch(test_db, monkeypatch):
             _award_body([_award_item("HAS-RESERVE")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()), db=test_db
     )

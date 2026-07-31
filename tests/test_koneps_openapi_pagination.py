@@ -122,7 +122,7 @@ def test_three_pages_for_totalcount_250(monkeypatch):
 
     all_items = [_notice_item(i) for i in range(250)]
 
-    def _side_effect(url, params, service_key, operation):
+    def _side_effect(url, params, service_key, operation, http_get=None):
         page_no = params["pageNo"]
         start = (page_no - 1) * 100
         chunk = all_items[start : start + 100]
@@ -155,7 +155,7 @@ def test_early_exit_when_max_items_reached(monkeypatch):
 
     call_count = {"n": 0}
 
-    def _side_effect(url, params, service_key, operation):
+    def _side_effect(url, params, service_key, operation, http_get=None):
         page_no = params["pageNo"]
         call_count["n"] += 1
         start = (page_no - 1) * 100
@@ -216,7 +216,7 @@ def test_missing_totalcount_continues_on_full_page(monkeypatch):
     page1_items = [_notice_item(i) for i in range(100)]  # full page
     page2_items = [_notice_item(100 + i) for i in range(10)]  # short page
 
-    def _side_effect(url, params, service_key, operation):
+    def _side_effect(url, params, service_key, operation, http_get=None):
         page_no = params["pageNo"]
         items = page1_items if page_no == 1 else page2_items
         # Build a body WITHOUT a totalCount key (unreliable / missing).
@@ -258,7 +258,7 @@ def test_missing_totalcount_runaway_guard(monkeypatch):
 
     dup_items = [_notice_item(i) for i in range(100)]  # identical full page every call
 
-    def _side_effect(url, params, service_key, operation):
+    def _side_effect(url, params, service_key, operation, http_get=None):
         payload = {
             "response": {
                 "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},

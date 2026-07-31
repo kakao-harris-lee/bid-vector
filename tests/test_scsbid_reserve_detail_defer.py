@@ -88,9 +88,7 @@ def test_defer_true_skips_inline_fetch_and_surfaces_notices(test_db, monkeypatch
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -165,9 +163,7 @@ def test_age_gate_excludes_recently_opened_notice(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -211,9 +207,7 @@ def test_age_gate_defers_notice_with_unknown_opening(test_db, monkeypatch):
         item["rgstDt"] = ""
         return FakeOpenApiResponse(_award_body([item], total_count=1, num_of_rows=100))
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -256,9 +250,7 @@ def test_age_gate_disabled_when_threshold_zero(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -300,9 +292,7 @@ def test_defer_true_omits_already_settled_notice(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -332,9 +322,7 @@ def test_defer_false_still_fetches_inline(test_db, monkeypatch):
             _award_body([_award_item("NEW-AWARD")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -380,9 +368,7 @@ def test_malformed_reserve_detail_is_isolated_per_item(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -1260,9 +1246,7 @@ def test_recheck_gate_excludes_recently_checked_notice(test_db, monkeypatch):
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,
@@ -1312,9 +1296,7 @@ def test_recheck_gate_disabled_when_hours_zero(test_db, monkeypatch):
             _award_body([_award_item("CHECKED")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request()),
         db=test_db,

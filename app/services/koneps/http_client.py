@@ -1,10 +1,10 @@
 """HTTP fetch helpers for the KONEPS collector.
 
 These functions were extracted verbatim from ``KonepsCollectorService``
-(``collector.py``). The original methods carried zero instance state: the
-service class has no ``__init__`` and these three methods referenced neither
-instance attributes nor sibling ``self`` methods -- every input arrived as a
-parameter. They depend only on ``requests`` (a plain ``requests.get`` per call,
+(``collector.py``). The original methods carried zero instance state: these
+three methods referenced neither instance attributes nor sibling ``self``
+methods -- every input arrived as a parameter. They depend only on the injected
+HTTP GET seam (:data:`HttpGet`, defaulting to a plain ``requests.get`` per call
 with no shared ``Session`` / connection pooling), the module-level ``settings``
 (OpenAPI timeout config), and the already-extracted pure helpers in ``openapi``
 (service-key variants / query-string encoding) and ``html_parsing`` (detail
@@ -21,12 +21,50 @@ modules), not the other way around. The collector keeps a thin delegator method
 and ``scripts/backfill_business_type.py``) that invoke it as an instance method.
 """
 
-from typing import Any
+from typing import Any, Protocol
 
 import requests
 
 from app.core.config import settings
 from app.services.koneps import html_parsing, openapi
+
+# --- HTTP 획득 seam (§4.7-1/3) ----------------------------------------------------
+# KONEPS 로 나가는 GET 은 이 모듈에서만 일어난다. 그 획득 방식(transport)만 포트로 떼어
+# 주입 가능하게 하고, **rate/throttle/timeout/키 변형 재시도 의미는 계속 이 모듈이 소유**
+# 한다(주입은 "어떻게 가져오는가"만 바꾸며 "언제·몇 번·얼마나 기다려" 는 못 바꾼다).
+#
+# 미주입(기본) 경로는 :func:`_default_http_get` = 이 저장소에서 유일한 ``requests.get``
+# 호출 지점이다. 덕분에 테스트는 라이브러리 함수를 문자열 경로로 패치하는 대신 (a) 콜러블
+# 주입 또는 (b) 이 좁은 단일 표면 하나만 대체하면 된다.
+
+# OpenAPI 쿼리 파라미터 — 값은 스칼라(str/int)만 실린다(좁은 계약 명시).
+HttpGetParams = dict[str, str | int]
+
+
+class HttpGet(Protocol):
+    """HTTP GET 획득 포트. ``params=None`` 이면 URL 에 쿼리를 덧붙이지 않는다.
+
+    ``timeout`` 은 키워드 필수 — 이 모듈의 어떤 호출 지점도 타임아웃을 빼먹을 수 없다
+    (mypy 강제). 구현이 그 값을 실제로 지키는지는 포트가 보장하지 않는다.
+    """
+
+    def __call__(
+        self,
+        url: str,
+        *,
+        params: HttpGetParams | None,
+        timeout: int,
+    ) -> requests.Response: ...
+
+
+def _default_http_get(
+    url: str,
+    *,
+    params: HttpGetParams | None,
+    timeout: int,
+) -> requests.Response:
+    """기본 획득 구현 — 이 모듈(및 저장소)의 유일한 ``requests.get`` 호출 지점."""
+    return requests.get(url, params=params, timeout=timeout)
 
 
 def request_openapi_with_key_variants(
@@ -35,8 +73,10 @@ def request_openapi_with_key_variants(
     params: dict[str, Any],
     service_key: str,
     operation: str,
+    http_get: HttpGet | None = None,
 ) -> tuple[requests.Response, str]:
     """Call OpenAPI with raw and URL-encoded key forms used by data.go.kr."""
+    fetch: HttpGet = http_get or _default_http_get
     timeout = max(1, int(settings.KONEPS_OPENAPI_TIMEOUT_SECONDS))
     variants = openapi.openapi_service_key_variants(service_key)
     last_response: requests.Response | None = None
@@ -47,9 +87,9 @@ def request_openapi_with_key_variants(
                 params={**params, "ServiceKey": variant_value},
                 preencoded_keys={"ServiceKey"},
             )
-            response = requests.get(f"{url}?{query_string}", timeout=timeout)
+            response = fetch(f"{url}?{query_string}", params=None, timeout=timeout)
         else:
-            response = requests.get(
+            response = fetch(
                 url,
                 params={**params, "ServiceKey": variant_value},
                 timeout=timeout,
@@ -117,18 +157,22 @@ def check_result_code(payload: dict[str, Any], *, source: str) -> tuple[str, str
     return result_code, result_message
 
 
-def fetch_detail_html_payload(source_url: str) -> dict[str, str | None]:
+def fetch_detail_html_payload(
+    source_url: str, *, http_get: HttpGet | None = None
+) -> dict[str, str | None]:
     """Fetch + parse a single KONEPS detail page, returning the business-type fields.
 
-    Performs a simple HTTP GET on ``source_url``, parses the HTML with the
-    same ``html_parsing.parse_detail_html`` helper used during live
-    collection, and returns only the two business-type keys.
+    Performs a simple HTTP GET on ``source_url`` (via the injected seam, default
+    ``requests.get``), parses the HTML with the same
+    ``html_parsing.parse_detail_html`` helper used during live collection, and
+    returns only the two business-type keys.
 
     Best-effort: any exception raised by the HTTP call is propagated so
     callers (e.g. backfill scripts) can record per-row failures.
     """
+    fetch: HttpGet = http_get or _default_http_get
     timeout = max(1, int(getattr(settings, "KONEPS_OPENAPI_TIMEOUT_SECONDS", 30)))
-    response = requests.get(source_url, timeout=timeout)
+    response = fetch(source_url, params=None, timeout=timeout)
     response.raise_for_status()
     detail = html_parsing.parse_detail_html(response.text)
     return {

@@ -283,8 +283,7 @@ def _collect_openapi(monkeypatch) -> dict[str, Any]:
             openapi_body(rows, total_count=4, num_of_rows=2, page_no=page_no)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-    return collection.collect_openapi_items(_openapi_request())
+    return collection.collect_openapi_items(_openapi_request(), http_get=fake_get)
 
 
 def test_openapi_notice_collect_matches_golden(monkeypatch):
@@ -338,8 +337,7 @@ def _collect_scsbid(monkeypatch) -> dict[str, Any]:
             )
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     return service._collect_scsbid_openapi_items(
         service._normalize_request(_scsbid_request())
     )

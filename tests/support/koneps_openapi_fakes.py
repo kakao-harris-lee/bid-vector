@@ -5,8 +5,10 @@
 / ``test_scsbid_reserve_detail_reuse``). 같은 문제를 두 번째로 풀면 공용 헬퍼로
 추출한다는 규칙(§4.5-6)에 따라 여기로 단일화한다.
 
-``requests.get`` 을 이 fake 로 대체하면 ``ENVIRONMENT=test`` 에서 KONEPS 실호출이
-발생하지 않는다. HTTP 획득 방식(``http_client``)은 건드리지 않고 응답만 대체한다.
+이 fake 는 **응답 본문만** 제공한다. 획득 경로 대체는 ``http_get`` seam 주입
+(``KonepsCollectorService(http_get=...)`` / ``collect_openapi_items(http_get=...)``)
+으로 하며, 그러면 ``ENVIRONMENT=test`` 에서 KONEPS 실호출이 발생하지 않는다.
+rate/throttle/timeout 의미는 ``http_client`` 가 계속 소유한다(주입이 바꾸지 못한다).
 """
 
 from __future__ import annotations

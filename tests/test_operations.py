@@ -25,6 +25,7 @@ from app.schemas.schemas import (
 )
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
+from app.services.koneps import http_client
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
@@ -109,7 +110,10 @@ def test_openapi_crawl_collects_bid_public_info_and_persists_history(
         return FakeOpenApiResponse()
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
+    # Route-driven crawl: the collector is built inside the endpoint, so substitute
+    # the KONEPS module's single default transport (named attribute on our own
+    # module) instead of patching ``requests.get`` behind a string path.
+    monkeypatch.setattr(http_client, "_default_http_get", fake_get)
 
     response = client.post(
         "/api/v1/operations/crawl",
@@ -253,7 +257,10 @@ def test_scsbid_openapi_crawl_collects_awards_and_reserve_details(
         raise AssertionError(f"unexpected URL: {url}")
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
+    # Route-driven crawl: the collector is built inside the endpoint, so substitute
+    # the KONEPS module's single default transport (named attribute on our own
+    # module) instead of patching ``requests.get`` behind a string path.
+    monkeypatch.setattr(http_client, "_default_http_get", fake_get)
 
     response = client.post(
         "/api/v1/operations/crawl",

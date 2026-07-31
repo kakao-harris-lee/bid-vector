@@ -46,6 +46,35 @@ def has_persisted_reserve_prices(historical_record: HistoricalData) -> bool:
         return bool(str(stored).strip() not in {"", "[]"})
 
 
+def categories_for_request(request: CrawlRequest) -> list[str]:
+    """Resolve the ordered, de-duplicated category list for a scsbid sweep.
+
+    Priority: ``request.categories`` > ``[request.category]`` > legacy default
+    (empty category, which maps to the 용역 operation). The legacy single
+    category path is preserved when ``categories`` is absent.
+
+    Pure request-shaping (no IO/DB), so it sits next to the sibling resolvers
+    (``date_window`` / ``page_size`` / ``max_pages``) instead of the collector;
+    it has no external callers, so no delegator is kept.
+    """
+    if request.categories:
+        raw_categories = [str(value) for value in request.categories]
+    elif request.category:
+        raw_categories = [str(request.category)]
+    else:
+        raw_categories = [str(request.category or "")]
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for value in raw_categories:
+        normalized = value.strip().lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append(normalized)
+    return resolved or [""]
+
+
 def date_window(request: CrawlRequest) -> tuple[str, str]:
     """Resolve (inqryBgnDt, inqryEndDt) tokens for the scsbid date window.
 
@@ -69,6 +98,40 @@ def date_window(request: CrawlRequest) -> tuple[str, str]:
         begin = token
         end = token
     return f"{begin}0000", f"{end}2359"
+
+
+def award_page_params(
+    *, page_size: int, page_no: int, begin_token: str, end_token: str
+) -> dict[str, str | int]:
+    """ScsbidInfoService 낙찰 목록 한 페이지의 OpenAPI 쿼리 파라미터.
+
+    ``inqryDiv="1"`` 은 등록일시 구간 조회(목록)를 뜻하는 KONEPS 계약값이다. 이런
+    고정 파라미터는 fetch 흐름 안의 리터럴이 아니라 여기서 한 번 선언하고 흐름은
+    해석만 한다(§4.5-1). 키 순서가 곧 쿼리스트링 순서라 순서까지 계약이다.
+    """
+    return {
+        "type": "json",
+        "numOfRows": page_size,
+        "pageNo": page_no,
+        "inqryDiv": "1",
+        "inqryBgnDt": begin_token,
+        "inqryEndDt": end_token,
+    }
+
+
+def reserve_detail_params(notice_number: str) -> dict[str, str | int]:
+    """복수예비가격 상세(공고번호 단건) 조회의 OpenAPI 쿼리 파라미터.
+
+    ``inqryDiv="2"`` 는 공고번호 단건 조회다. 페이지 크기는 목록과 다른 상세 전용
+    설정(``KONEPS_SCSBID_DETAIL_PAGE_SIZE``)을 호출 시점에 읽는다.
+    """
+    return {
+        "type": "json",
+        "numOfRows": settings.KONEPS_SCSBID_DETAIL_PAGE_SIZE,
+        "pageNo": 1,
+        "inqryDiv": "2",
+        "bidNtceNo": notice_number,
+    }
 
 
 def page_size(request: CrawlRequest) -> int:

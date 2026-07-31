@@ -1,8 +1,11 @@
 """Forward-coverage tests for the scsbid award collector sweep.
 
 Covers multi-category, paginated, date-window collection. All external HTTP is
-mocked via ``app.services.koneps.http_client.requests.get`` (the existing scsbid
-test pattern); no real KONEPS calls are made under ``ENVIRONMENT=test``.
+replaced by injecting the collector's ``http_get`` seam
+(``KonepsCollectorService(http_get=...)``); the one API-driven test that cannot
+reach the service constructor substitutes the module's single default transport
+(``http_client._default_http_get``). No real KONEPS calls are made under
+``ENVIRONMENT=test``.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from app.core.time import KST
 from app.models.models import CrawlJob, Project, TenderResult
 from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
+from app.services.koneps import http_client
 from app.services.koneps.collector import KonepsCollectorService
 from tests.support.koneps_openapi_fakes import (
     FakeOpenApiResponse,
@@ -181,9 +185,7 @@ def test_scsbid_sweep_visits_each_category_operation(monkeypatch):
             return FakeOpenApiResponse(_empty_reserve_body())
         raise AssertionError(f"unexpected URL: {url}")
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     request = CrawlRequest(
         source="scsbid-openapi",
         categories=["construction", "service"],
@@ -222,9 +224,7 @@ def test_scsbid_sweep_paginates_until_total_count(monkeypatch):
             _award_body(items, total_count=4, num_of_rows=2, page_no=page_no)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     request = CrawlRequest(
         source="scsbid-openapi",
         categories=["construction"],
@@ -283,9 +283,7 @@ def test_scsbid_reserve_detail_skipped_when_disabled(monkeypatch):
             _award_body([_award_item("C-1")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     request = CrawlRequest(
         source="scsbid-openapi",
         categories=["construction"],
@@ -314,9 +312,7 @@ def test_scsbid_sweep_dedupes_notice_numbers_across_categories(monkeypatch):
             _award_body([_award_item("DUP-1")], total_count=1, num_of_rows=100)
         )
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     request = CrawlRequest(
         source="scsbid-openapi",
         categories=["construction", "service"],
@@ -366,7 +362,10 @@ def test_scsbid_award_attaches_to_existing_forward_project(
             )
         raise AssertionError(f"unexpected URL: {url}")
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
+    # The service is constructed inside the crawl route, so there is no constructor
+    # to inject: substitute the module's single default transport instead (a named
+    # attribute on our own module, not a library function behind a string path).
+    monkeypatch.setattr(http_client, "_default_http_get", fake_get)
 
     response = client.post(
         "/api/v1/operations/crawl",
@@ -405,9 +404,7 @@ def test_scsbid_legacy_single_day_single_category_regression(monkeypatch):
             return FakeOpenApiResponse(_empty_reserve_body())
         raise AssertionError(f"unexpected URL: {url}")
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
-    service = KonepsCollectorService()
+    service = KonepsCollectorService(http_get=fake_get)
     request = CrawlRequest(
         source="koneps-scsbid",
         category="construction",
