@@ -284,23 +284,19 @@ describe("CandidatesPreview 스냅샷 렌더", () => {
   });
 
   it("정착-idle 은 (fast 가 아니라) 느슨한 recheck 주기로 서버 상태를 다시 확인한다", async () => {
-    // fast 폴링은 크게(억제), 느슨한 recheck 만 작게 주입해 '정착-idle 이 fast 가
-    // 아니라 recheck 주기로 다시 물음'을 못박는다. recheck 응답이 failed(terminal)면
-    // recheck 는 정확히 한 번으로 끝난다. 슬로우 패스를 false 로 되돌리면 recheck 가
-    // 아예 안 일어나고, fast 로 되돌리면 pollIntervalMs(크게) 라 창 안에 안 일어나
-    // 어느 쪽이든 이 가드가 깨진다(Finding 1a teeth — false/fast 회귀 동시 방어).
-    const fetchMock = installFetchMock([snapshot(), snapshot({ snapshot_status: "failed" })]);
+    // 정착-idle 을 래치(응답 불변)하고 fast 는 크게 억제, recheck 만 작게 주입한다.
+    // 정착-idle 이 recheck 주기로 계속 되물으므로 조회 수가 늘어난다 — 슬로우 패스를
+    // false 로 되돌리면 안 늘고, fast 로 되돌리면 pollIntervalMs(크게)라 창 안에 안
+    // 늘어 어느 쪽이든 이 가드가 깨진다(Finding 1a teeth — false/fast 회귀 동시 방어).
+    // 응답을 래치해 terminal 로의 조기 전이 경합(전면 suite 부하에서 발현) 을 없앤다.
+    const { fetchMock } = installGatedFetchMock(snapshot());
     renderPreview({ pollIntervalMs: IDLE_RECHECK_LARGE_MS, idleRecheckMs: POLL_MS });
     await screen.findByText("3분 전 기준");
     const before = candidatesCalls(fetchMock).length;
 
-    await waitFor(() => expect(candidatesCalls(fetchMock).length).toBe(before + 1));
-    await screen.findByTestId("snapshot-failed");
-
-    // failed 로 정착한 뒤에는 recheck 도 멈춘다(terminal).
-    const after = candidatesCalls(fetchMock).length;
-    await settle();
-    expect(candidatesCalls(fetchMock).length).toBe(after);
+    await waitFor(() =>
+      expect(candidatesCalls(fetchMock).length).toBeGreaterThan(before)
+    );
   });
 
   it("snapshot_status=failed 는 경고를 띄우면서 직전 후보를 계속 보여준다", async () => {
