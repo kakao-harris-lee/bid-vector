@@ -17,6 +17,17 @@ import type { OperatorStrategyCandidatesResponse } from "@/shared/types/strategy
 export const SNAPSHOT_POLL_INTERVAL_MS = 3_000;
 
 /**
+ * 정착-idle 재확인 주기(ms). `snapshot_status === "idle"` + `computed_at != null`
+ * 은 "지금 최신"이지만, 백엔드의 stale→자동 재디스패치는 **GET 이 올 때만** 발화한다
+ * (설계 §6.2). 폴링을 완전히 멈추면(열린 전략 편집 탭) 스냅샷이 조용히
+ * `OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS`(1800s)를 넘겨 늙어도 운영자는 "갱신
+ * 필요"조차 못 본다 — §2 정직 명세 위반. 그래서 정착 상태에서도 이 느슨한 주기로
+ * 계속 되물어 서버 자동 디스패치를 재무장하고 배지를 새로 그린다. running/부트스트랩
+ * 의 fast 주기와 분리된 매직값이라 별도 상수로 선언한다(§4.5-1).
+ */
+export const SNAPSHOT_IDLE_RECHECK_INTERVAL_MS = 60_000;
+
+/**
  * 더 물어봐도 상태가 바뀌지 않는가(= 폴링 정지 조건).
  *
  * - `running`: 미정착 — 재계산이 진행 중이다.
@@ -39,17 +50,31 @@ export function isSnapshotSettled(
 /**
  * react-query `refetchInterval` 콜백의 순수 코어.
  *
- * 정착이면 멈춘다. 마지막 fetch 가 실패했으면(`errored`) 멈춘다 — 백엔드가 죽었을
- * 때 열린 탭이 영구 재시도하지 않게 한다. 전역 `retry: 1` 이 일시 장애를 이미 한
- * 번 흡수하고, 새로고침의 invalidate 가 성공하면 폴링은 자동 재개된다.
+ * - `errored`: false — 백엔드가 죽었을 때 열린 탭이 영구 재시도하지 않게 한다.
+ *   전역 `retry: 1` 이 일시 장애를 한 번 흡수하고, 새로고침 invalidate 가 성공하면
+ *   폴링은 자동 재개된다.
+ * - `failed`(정착): false — 실패 쿨다운(60s) 동안 자동 재디스패치가 없어 되물어도
+ *   같은 답이다. 복구는 명시 새로고침(POST /candidates/refresh)이 담당한다.
+ * - `running` / 부트스트랩(idle + `computed_at=null`): `intervalMs`(fast) — 재계산이
+ *   곧 정착하거나 다음 GET 이 자동 디스패치한다.
+ * - 정착-idle(idle + `computed_at!=null`): `idleRecheckMs`(slow) — 폴링을 완전히
+ *   멈추지 않고 느슨히 되물어 서버 stale 자동 디스패치를 재무장한다(위 상수 참조).
+ *
+ * `isSnapshotSettled` 는 렌더 게이트 소비자가 쓰는 의미 그대로 두고, 정착 안에서
+ * failed/정착-idle 을 가르는 분기는 여기에만 둔다.
  */
 export function snapshotPollInterval(
   data: OperatorStrategyCandidatesResponse | undefined,
   errored: boolean,
-  intervalMs: number = SNAPSHOT_POLL_INTERVAL_MS
+  intervalMs: number = SNAPSHOT_POLL_INTERVAL_MS,
+  idleRecheckMs: number = SNAPSHOT_IDLE_RECHECK_INTERVAL_MS
 ): number | false {
   if (errored) return false;
-  return isSnapshotSettled(data) ? false : intervalMs;
+  if (!data) return intervalMs;
+  if (data.snapshot_status === "failed") return false;
+  if (data.snapshot_status === "running") return intervalMs;
+  // idle: 부트스트랩(계산된 적 없음)은 fast, 정착-idle 은 느슨한 recheck.
+  return data.computed_at == null ? intervalMs : idleRecheckMs;
 }
 
 /**

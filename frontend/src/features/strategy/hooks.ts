@@ -20,7 +20,11 @@ import type {
   OperatorStrategyUpdatePayload
 } from "@/shared/types/strategy";
 import type { AuthSession } from "@/app/layout/AuthGate";
-import { SNAPSHOT_POLL_INTERVAL_MS, snapshotPollInterval } from "./snapshotState";
+import {
+  SNAPSHOT_IDLE_RECHECK_INTERVAL_MS,
+  SNAPSHOT_POLL_INTERVAL_MS,
+  snapshotPollInterval
+} from "./snapshotState";
 
 /**
  * Strategy detail query — `null` operatorId hits the token-owner branch (no
@@ -51,9 +55,10 @@ export function useStrategyCandidatesQuery(
   session: AuthSession | null,
   params: StrategyCandidatesQuery = {},
   operatorId: number | null = null,
-  options: { pollIntervalMs?: number } = {}
+  options: { pollIntervalMs?: number; idleRecheckMs?: number } = {}
 ) {
   const pollIntervalMs = options.pollIntervalMs ?? SNAPSHOT_POLL_INTERVAL_MS;
+  const idleRecheckMs = options.idleRecheckMs ?? SNAPSHOT_IDLE_RECHECK_INTERVAL_MS;
   return useQuery({
     queryKey: queryKeys.strategy.candidates(
       params.limit,
@@ -66,7 +71,8 @@ export function useStrategyCandidatesQuery(
       snapshotPollInterval(
         query.state.data,
         query.state.status === "error",
-        pollIntervalMs
+        pollIntervalMs,
+        idleRecheckMs
       ),
     // 숨은 탭에서는 인터벌을 쉬게 하되(react-query 네이티브) 복귀 시 자동
     // 재개된다. `document.visibilityState` 직접 게이트는 전역

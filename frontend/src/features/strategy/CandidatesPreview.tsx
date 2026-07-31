@@ -16,8 +16,10 @@ const MATCHED_LABEL = "매칭 후보";
 const ANALYZED_HINT = "스냅샷 계산 시 고정 분석 예산 기준 — 요청 개수와 무관합니다.";
 
 export interface CandidatesPreviewProps {
-  /** 폴링 주기(ms) 오버라이드. 테스트 가속용(ExperimentRunProgress 패턴). */
+  /** running/부트스트랩 fast 폴링 주기(ms) 오버라이드. 테스트 가속용. */
   pollIntervalMs?: number;
+  /** 정착-idle 느슨한 recheck 주기(ms) 오버라이드. 테스트 가속용. */
+  idleRecheckMs?: number;
 }
 
 /**
@@ -39,14 +41,14 @@ export interface CandidatesPreviewProps {
  * 4. `evaluated_project_count` 는 스냅샷의 고정 분석 예산(250) 산물이고 요청
  *    limit 과 무관하다 → 라벨·각주를 그렇게 붙인다.
  */
-export function CandidatesPreview({ pollIntervalMs }: CandidatesPreviewProps) {
+export function CandidatesPreview({ pollIntervalMs, idleRecheckMs }: CandidatesPreviewProps) {
   const { session } = useShellContext();
   const [highPriorityOnly, setHighPriorityOnly] = useState(false);
   const query = useStrategyCandidatesQuery(
     session,
     { limit: CANDIDATE_LIMIT, highPriorityOnly },
     null,
-    { pollIntervalMs }
+    { pollIntervalMs, idleRecheckMs }
   );
   const refresh = useRefreshStrategyCandidatesMutation(session);
   const snapshot = query.data;
