@@ -197,7 +197,7 @@ def test_claim_is_single_flight(test_db):
 
 
 def test_claim_reclaims_stale_running_row(test_db):
-    """reconciler 임계를 넘긴 running(SIGKILL 고아)은 회수 후 재클레임된다."""
+    """preview 회수창을 넘긴 running(SIGKILL 고아)은 회수 후 재클레임된다."""
     operator = ensure_operator_account(test_db)
     service = PreviewSnapshotService()
     row = service._get_or_create_row(
@@ -481,6 +481,74 @@ def test_get_candidates_serves_stale_snapshot_and_redispatches(client, test_db, 
     assert payload["stale"] is True
     assert payload["snapshot_status"] == "running"  # 재계산 클레임됨
     assert enqueue_stub.calls == [(int(operator.id), False)]
+
+
+# ---------------------------------------------------------------------------
+# running 고아 회수창 — preview 전용 회수창(reconciler 임계와 분리) (§6.2)
+# ---------------------------------------------------------------------------
+
+
+def test_get_dispatch_reclaims_running_orphan_past_preview_window(
+    client, test_db, enqueue_stub
+):
+    """자동 GET 디스패치는 preview 회수창(기본 300s)을 넘긴 running 고아를
+    회수·재클레임한다 — reconciler 임계(2100s)보다 훨씬 짧아, SIGKILL/재시작
+    고아로 미리보기가 빈 후보 + running 에 wedged 되는 것을 막는다."""
+    from app.core.config import settings
+
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    _reset_snapshots(test_db)
+    service.dispatch_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    # running 고아: preview 회수창 밖(그러나 reconciler 임계 안 → reconciler 은 못 깬다)
+    window = int(settings.OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS)
+    orphaned_at = utc_now() - timedelta(seconds=window + 60)
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.operator_id == int(operator.id)
+    ).update({"updated_at": orphaned_at}, synchronize_session=False)
+    test_db.commit()
+    enqueue_stub.calls.clear()
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["snapshot_status"] == SNAPSHOT_STATUS_RUNNING
+    assert enqueue_stub.calls == [(int(operator.id), False)]  # 고아 회수 재디스패치
+
+
+def test_get_dispatch_protects_running_row_within_preview_window(
+    client, test_db, enqueue_stub
+):
+    """preview 회수창 안쪽 running(갓 시작한 스캔)은 자동 GET 이 회수하지 않는다
+    — 단일비행 유지(중복 스캔 스탬피드 방지)."""
+    from app.core.config import settings
+
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    _reset_snapshots(test_db)
+    service.dispatch_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    window = int(settings.OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS)
+    fresh_at = utc_now() - timedelta(seconds=max(0, window - 60))
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.operator_id == int(operator.id)
+    ).update({"updated_at": fresh_at}, synchronize_session=False)
+    test_db.commit()
+    enqueue_stub.calls.clear()
+
+    response = client.get(
+        "/api/v1/operator/strategy/candidates", params={"high_priority_only": False}
+    )
+
+    assert response.status_code == 200
+    assert enqueue_stub.calls == []  # 회수 없음
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +919,65 @@ def test_candidates_refresh_single_flight_reuses_running_task(client, test_db, e
     assert len(enqueue_stub.calls) == 1  # 단일비행: 두 번째는 디스패치 없음
     assert second.json()["task_id"] == first.json()["task_id"]
     assert second.json()["detail"] == "이미 실행 중인 재계산을 재사용합니다."
+
+
+def test_explicit_refresh_reclaims_running_orphan_past_force_floor(
+    client, test_db, enqueue_stub
+):
+    """명시 갱신은 force floor(기본 60s)를 넘긴 running 고아를 회수한다 — 자동
+    회수창(300s)을 기다리지 않고 wedged 미리보기를 운영자가 즉시 복구."""
+    from app.core.config import settings
+
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    _reset_snapshots(test_db)
+    service.dispatch_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    # force floor 밖, 자동 회수창 안 (자동 GET 으론 못 깨는 고착 행)
+    floor = int(settings.OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS)
+    stuck_at = utc_now() - timedelta(seconds=floor + 30)
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.operator_id == int(operator.id)
+    ).update({"updated_at": stuck_at}, synchronize_session=False)
+    test_db.commit()
+    enqueue_stub.calls.clear()
+
+    response = client.post("/api/v1/operator/strategy/candidates/refresh")
+
+    assert response.status_code == 202
+    assert response.json()["snapshot_status"] == SNAPSHOT_STATUS_RUNNING
+    assert enqueue_stub.calls == [(int(operator.id), False)]  # force 회수 재디스패치
+
+
+def test_explicit_refresh_within_force_floor_stays_single_flight(
+    client, test_db, enqueue_stub
+):
+    """새로고침 연타: force floor 안쪽 running(갓 시작한 스캔)은 회수하지 않는다
+    — 중복 스캔 스탬피드 방지."""
+    from app.core.config import settings
+
+    _configure_software_operator(client)
+    operator = ensure_operator_account(test_db)
+    service = PreviewSnapshotService()
+    _reset_snapshots(test_db)
+    service.dispatch_recompute(
+        test_db, operator_id=int(operator.id), high_priority_only=False
+    )
+    floor = int(settings.OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS)
+    fresh_at = utc_now() - timedelta(seconds=max(0, floor - 30))
+    test_db.query(OperatorPreviewSnapshot).filter(
+        OperatorPreviewSnapshot.operator_id == int(operator.id)
+    ).update({"updated_at": fresh_at}, synchronize_session=False)
+    test_db.commit()
+    enqueue_stub.calls.clear()
+
+    response = client.post("/api/v1/operator/strategy/candidates/refresh")
+
+    assert response.status_code == 202
+    assert response.json()["snapshot_status"] == SNAPSHOT_STATUS_RUNNING
+    assert enqueue_stub.calls == []  # 단일비행: 재디스패치 없음
 
 
 def test_candidates_refresh_reports_enqueue_failure_without_running_message(

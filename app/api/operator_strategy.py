@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.operator_common import _operator_context_fields
+from app.core.config import settings
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
@@ -281,14 +282,21 @@ def refresh_strategy_candidates_impl(
     db: Session,
     high_priority_only: bool | None,
 ) -> dict:
-    """명시 재계산 디스패치 (202, 설계 §6.2). 단일비행: 이미 running 이면 그
-    task 를 재사용한다 — 새로고침 연타가 스캔을 중복 실행하지 못한다."""
+    """명시 재계산 디스패치 (202, 설계 §6.2). 단일비행: force floor 안쪽의 갓
+    시작한 running 은 그 task 를 재사용한다(새로고침 연타가 스캔을 중복 실행하지
+    못한다). 자동 GET 회수창(300s)보다 짧은 force floor 로 running 고아를 회수해
+    wedged 미리보기를 운영자가 즉시 복구할 수 있게 한다."""
     service = PreviewSnapshotService()
     resolved_high_priority_only = service.resolve_high_priority_key(
         db, operator=target, high_priority_only=high_priority_only
     )
     dispatched = service.dispatch_recompute(
-        db, operator_id=int(target.id), high_priority_only=resolved_high_priority_only
+        db,
+        operator_id=int(target.id),
+        high_priority_only=resolved_high_priority_only,
+        reclaim_after_seconds=int(
+            settings.OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS
+        ),
     )
     row = dispatched or service.get_row(
         db, operator_id=int(target.id), high_priority_only=resolved_high_priority_only

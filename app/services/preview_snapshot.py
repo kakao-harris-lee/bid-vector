@@ -4,8 +4,9 @@ GET /operator/strategy/candidates 는 더 이상 요청 경로에서 인라인 M
 않는다. 마지막 계산 결과(top-100 직렬화 후보 + 스캔 메타)를
 ``operator_preview_snapshots`` 행에 두고 서빙은 순수 읽기(요청 limit 슬라이스)만
 한다. 재계산은 ops 큐 task 로만 실행되며 행 ``status`` 가 DB 단일비행 가드다:
-running 이면 스킵, running 이 reconciler 임계(stale_threshold_seconds)를 넘긴
-고아면 회수 후 재클레임.
+running 이면 스킵, running 이 preview 회수창
+(OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS)을 넘긴 고아면 회수 후
+재클레임(명시 갱신은 더 짧은 force floor 로 회수).
 
 구 preview_cache(#315)의 행동 의도 승계: 스탬피드 방지 = DB 단일비행(프로세스
 경계를 넘어 동작 — 구현보다 강한 보장), 단기 TTL = stale 판정 + 자동 디스패치.
@@ -26,7 +27,6 @@ from app.core.single_user import ensure_operator_strategy_for
 from app.core.time import ensure_utc, utc_now
 from app.models.models import OperatorPreviewSnapshot, OperatorStrategy, User
 from app.services.opportunity_monitoring import StrategyMonitoringService
-from app.services.stale_task_reconciler import stale_threshold_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -95,15 +95,33 @@ class PreviewSnapshotService:
 
     # --- DB 단일비행 --------------------------------------------------------
 
-    def _claim(self, db: Session, row: OperatorPreviewSnapshot) -> bool:
+    def _claim(
+        self,
+        db: Session,
+        row: OperatorPreviewSnapshot,
+        *,
+        reclaim_after_seconds: int | None = None,
+    ) -> bool:
         """행을 running 으로 원자적으로 클레임한다 (설계 §6.2 단일비행 가드).
 
         UPDATE ... WHERE (status != running OR updated_at <= 회수컷오프) 의
         rowcount 판정이라 여러 프로세스가 동시에 디스패치해도 한쪽만 이긴다.
-        회수컷오프는 stale-task-reconciler 와 같은 임계 — 그보다 오래된 running
-        은 SIGKILL/재시작 고아라 실제 실행 중일 수 없다.
+
+        회수컷오프는 preview 전용 회수창
+        (``OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS``, 기본 300s)이다 —
+        preview 스캔은 분석 예산에 묶여 수십 초면 끝나므로 5분 넘게 running 인
+        행은 실제 실행 중인 스캔이 아니라 SIGKILL/재시작 고아다. reconciler 의
+        ``stale_threshold_seconds()``(=2100s, 30분 task 기준)는 여기선 너무 거칠어
+        분리했다 — reconciler 는 여전히 훨씬 오래된 행을 ``failed`` 로 넘기는
+        backstop 이다. ``reclaim_after_seconds`` 를 주면(명시 갱신의 force floor)
+        그보다 짧은 창으로 고착 행을 회수하되, 갓 시작한 스캔은 여전히 보호한다.
         """
-        reclaim_cutoff = self._now() - timedelta(seconds=stale_threshold_seconds())
+        window = (
+            int(reclaim_after_seconds)
+            if reclaim_after_seconds is not None
+            else int(settings.OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS)
+        )
+        reclaim_cutoff = self._now() - timedelta(seconds=window)
         claimed = (
             db.query(OperatorPreviewSnapshot)
             .filter(
@@ -124,20 +142,29 @@ class PreviewSnapshotService:
     # --- 디스패치 (API·전략 쓰기 트리거) --------------------------------------
 
     def dispatch_recompute(
-        self, db: Session, *, operator_id: int, high_priority_only: bool
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        high_priority_only: bool,
+        reclaim_after_seconds: int | None = None,
     ) -> OperatorPreviewSnapshot | None:
         """단일비행 가드 하에 재계산 task 를 디스패치한다.
 
-        반환: 클레임에 성공해 디스패치한 행(재조회본). 이미 running 이라
-        스킵했으면 None. enqueue 실패는 요청을 죽이지 않고 행을 failed 로
-        마감한다(다음 GET 이 재디스패치).
+        반환: 클레임에 성공해 디스패치한 행(재조회본). 이미 running(회수창 안)
+        이라 스킵했으면 None. ``reclaim_after_seconds`` 를 주면 running 고아를
+        그 창(명시 갱신의 force floor)으로 회수한다 — 생략하면 기본 회수창.
+        enqueue 실패는 요청을 죽이지 않고 행을 ``failed`` 로 마감한다: 그 뒤엔
+        실패 쿨다운(``OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS``)이
+        걸려 바로 다음 GET 은 재디스패치하지 않고, 쿨다운 경과 후 GET 또는
+        명시 갱신이 재시도한다.
         """
         row = self._get_or_create_row(
             db, operator_id=operator_id, high_priority_only=high_priority_only
         )
         if row is None:  # pragma: no cover - 생성 경합 직후 소실 불가
             return None
-        if not self._claim(db, row):
+        if not self._claim(db, row, reclaim_after_seconds=reclaim_after_seconds):
             return None
         try:
             # 순환 import 회피 + 테스트 monkeypatch 표면(§4.7): 호출 시점에

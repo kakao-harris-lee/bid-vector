@@ -125,8 +125,21 @@ class Settings(BaseSettings):
     # preview 스냅샷 재계산 실패 쿨다운(초). status=failed 행은 이 시간 안에는
     # GET 자동 디스패치를 하지 않는다 — 재계산이 빠르게 실패하는 동안 클라이언트
     # 폴링(설계 §7)이 GET 당 스캔 1건씩을 큐에 쌓는 것을 막는다(#315 스탬피드의
-    # 큐 측 재현 방지). 명시 갱신(POST /candidates/refresh)은 쿨다운을 우회한다.
+    # 큐 측 재현 방지). 명시 갱신(POST /candidates/refresh)은 이 쿨다운을 우회해
+    # 즉시 재시도한다.
     OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS: int = 60
+    # preview 스냅샷 running 회수창(초). GET 자동 디스패치가 running 행을 고아로
+    # 보고 재클레임하기까지의 나이 — reconciler 의 stale_threshold_seconds()
+    # (=hard limit+grace=2100s, 30분 task 기준)와 분리한다. preview 스캔은 분석
+    # 예산에 묶여 수십 초면 끝나므로 5분 넘게 running 인 행은 실제 실행 중이
+    # 아니라 SIGKILL/재시작 고아다(2100s 는 여기선 너무 거칠어 미리보기가 오래
+    # wedged 된다). reconciler 는 여전히 훨씬 오래된 행을 failed 로 넘기는
+    # backstop 으로 남는다.
+    OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS: int = 300
+    # 명시 갱신(POST /candidates/refresh) 전용 force floor(초). 자동 회수창보다
+    # 짧아, 고착된 미리보기를 운영자가 즉시 복구하되 새로고침 연타가 이 floor
+    # 안쪽의 갓 시작한 스캔을 중복 실행하지는 못하게 한다(단일비행 유지).
+    OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS: int = 60
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440
