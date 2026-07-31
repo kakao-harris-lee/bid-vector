@@ -184,6 +184,19 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 3d — app.schemas._base (신규 DTO 의 방어적 베이스: ``extra="forbid"`` 단일 출처).
+# pydantic 은 py.typed 를 실어 transport 가 이미 typed 이고, 이 모듈은 config-only 모델
+# 선언 둘뿐이라 error-code 완화 없이 strict 로 올린다. 신규 DTO 가 이 베이스를 상속하며
+# 늘어날 표면이라 처음부터 strict 아일랜드로 둔다(설계 래칫과 같은 방향의 래칫).
+[[tool.mypy.overrides]]
+module = ["app.schemas._base"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------

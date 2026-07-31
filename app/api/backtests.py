@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.constants import HISTORICAL_BACKTEST_RUN_MODE, PAPER_BID_RUN_MODES
 from app.core.database import get_db
 from app.core.security import get_current_operator_from_bearer
 from app.core.time import ensure_utc, utc_now
-from app.models.models import PaperBid, PaperBidRun, Project, User
+from app.models.models import PaperBid, PaperBidRun, PaperBidSettlement, Project, User
+from app.schemas.paper_bidding_items import PaperBiddingRunSummary
+from app.schemas.paper_bidding_runs import (
+    SETTLEMENT_BASIS,
+    PaperBiddingPaperBidRecord,
+    PaperBiddingSettlementOverview,
+    PaperBiddingSettlementRecord,
+)
 from app.schemas.schemas import (
     BacktestDataAuditResponse,
     ForwardPaperBiddingRunRequest,
     PaperBiddingRunDetailResponse,
     PaperBiddingRunExecutionResponse,
+    PaperBiddingRunListItem,
     PaperBiddingRunListResponse,
     PaperBiddingRunRequest,
     PaperBiddingSummaryResponse,
@@ -26,6 +34,10 @@ from app.services.paper_bidding_backtest import (
     OperatorNotFoundError,
     PaperBiddingBacktestService,
 )
+from app.services.paper_bidding_run_payload import (
+    load_run_request_snapshot,
+    load_run_summary,
+)
 from app.services.paper_bidding_settlement import (
     SettlementStatusContext,
     derive_settlement_status,
@@ -33,18 +45,11 @@ from app.services.paper_bidding_settlement import (
 
 router = APIRouter()
 
-
-def _parse_json_object(raw_value: str | None) -> dict[str, Any]:
-    if not raw_value:
-        return {}
-    try:
-        parsed = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+# 목록 필터가 받는 run mode — 단일 출처(app.core.constants)에서 패턴을 만든다.
+RUN_MODE_QUERY_PATTERN = f"^({'|'.join(sorted(PAPER_BID_RUN_MODES))})$"
 
 
-def _result_time(result) -> Any:
+def _result_time(result) -> datetime | None:
     return result.announced_at or result.created_at
 
 
@@ -58,7 +63,7 @@ def _positive_tender_results(project: Project | None) -> list:
     ]
 
 
-def _build_settlement_overview(run: PaperBidRun) -> dict[str, Any]:
+def _build_settlement_overview(run: PaperBidRun) -> PaperBiddingSettlementOverview:
     """Summarize whether paper bids can be settled against final tender results."""
     now = utc_now()
     paper_bids = list(run.paper_bids or [])
@@ -131,99 +136,101 @@ def _build_settlement_overview(run: PaperBidRun) -> dict[str, Any]:
         )
     )
 
-    return {
-        "status": settlement_status.status_key,
-        "label": settlement_status.label,
-        "detail": settlement_status.detail,
-        "settlement_basis": "TenderResult.winning_amount > 0 matched by project_id",
-        "paper_bid_count": paper_bid_count,
-        "settled_count": settled_count,
-        "unsettled_count": unsettled_count,
-        "ready_to_settle_count": ready_to_settle_count,
-        "waiting_result_count": waiting_result_count,
-        "before_deadline_count": before_deadline_count,
-        "missing_deadline_count": missing_deadline_count,
-        "next_confirmable_at": settlement_status.next_confirmable_at,
-        "next_deadline_at": next_deadline_at,
-        "oldest_waiting_deadline_at": oldest_waiting_deadline_at,
-        "latest_settled_at": latest_settled_at,
-    }
+    return PaperBiddingSettlementOverview(
+        status=settlement_status.status_key,
+        label=settlement_status.label,
+        detail=settlement_status.detail,
+        settlement_basis=SETTLEMENT_BASIS,
+        paper_bid_count=paper_bid_count,
+        settled_count=settled_count,
+        unsettled_count=unsettled_count,
+        ready_to_settle_count=ready_to_settle_count,
+        waiting_result_count=waiting_result_count,
+        before_deadline_count=before_deadline_count,
+        missing_deadline_count=missing_deadline_count,
+        next_confirmable_at=settlement_status.next_confirmable_at,
+        next_deadline_at=next_deadline_at,
+        oldest_waiting_deadline_at=oldest_waiting_deadline_at,
+        latest_settled_at=latest_settled_at,
+    )
 
 
-def _serialize_run(run: PaperBidRun) -> dict[str, Any]:
-    return {
-        "id": int(run.id),
-        "operator_id": int(run.operator_id),
-        "status": str(run.status or "unknown"),
-        "mode": str(run.mode or "historical_backtest"),
-        "scenario": str(run.scenario or "base"),
-        "category_filter": run.category_filter,
-        "strategy_version": str(run.strategy_version or "local"),
-        "model_version": str(run.model_version or "current"),
-        "target_start_at": run.target_start_at,
-        "target_end_at": run.target_end_at,
-        "data_cutoff_policy": str(run.data_cutoff_policy or ""),
-        "started_at": run.started_at,
-        "completed_at": run.completed_at,
-        "candidate_count": int(run.candidate_count or 0),
-        "paper_bid_count": int(run.paper_bid_count or 0),
-        "settled_count": int(run.settled_count or 0),
-        "settlement_overview": _build_settlement_overview(run),
-        "summary": _parse_json_object(run.result_payload),
-    }
+def _serialize_run(run: PaperBidRun) -> PaperBiddingRunListItem:
+    return PaperBiddingRunListItem(
+        id=int(run.id),
+        operator_id=int(run.operator_id),
+        status=str(run.status or "unknown"),
+        mode=str(run.mode or HISTORICAL_BACKTEST_RUN_MODE),
+        scenario=str(run.scenario or "base"),
+        category_filter=run.category_filter,
+        strategy_version=str(run.strategy_version or "local"),
+        model_version=str(run.model_version or "current"),
+        target_start_at=run.target_start_at,
+        target_end_at=run.target_end_at,
+        data_cutoff_policy=str(run.data_cutoff_policy or ""),
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        candidate_count=int(run.candidate_count or 0),
+        paper_bid_count=int(run.paper_bid_count or 0),
+        settled_count=int(run.settled_count or 0),
+        settlement_overview=_build_settlement_overview(run),
+        summary=load_run_summary(run.result_payload, run_id=int(run.id)),
+    )
 
 
-def _serialize_paper_bid(paper_bid) -> dict[str, Any]:
+def _serialize_paper_bid(paper_bid: PaperBid) -> PaperBiddingPaperBidRecord:
     project = paper_bid.project
-    return {
-        "id": int(paper_bid.id),
-        "run_id": int(paper_bid.run_id),
-        "project_id": int(paper_bid.project_id),
-        "project_title": project.title if project is not None else "",
-        "notice_number": paper_bid.notice_number,
-        "category": project.category if project is not None else None,
-        "action": paper_bid.action,
-        "decision_status": paper_bid.decision_status,
-        "data_cutoff_at": paper_bid.data_cutoff_at,
-        "paper_bid_amount": float(paper_bid.paper_bid_amount or 0.0),
-        "paper_bid_rate": float(paper_bid.paper_bid_rate or 0.0),
-        "scenario": paper_bid.scenario,
-        "priority_score": float(paper_bid.priority_score or 0.0),
-        "probability_score": float(paper_bid.probability_score or 0.0),
-        "matched_score": float(paper_bid.matched_score or 0.0),
-        "predicted_price": float(paper_bid.predicted_price or 0.0),
-        "predicted_bid_rate": float(paper_bid.predicted_bid_rate or 0.0),
-        "confidence_score": float(paper_bid.confidence_score or 0.0),
-        "predictor_name": paper_bid.predictor_name,
-        "input_snapshot_hash": paper_bid.input_snapshot_hash,
-        "created_at": paper_bid.created_at,
-    }
+    return PaperBiddingPaperBidRecord(
+        id=int(paper_bid.id),
+        run_id=int(paper_bid.run_id),
+        project_id=int(paper_bid.project_id),
+        project_title=project.title if project is not None else "",
+        notice_number=paper_bid.notice_number,
+        category=project.category if project is not None else None,
+        action=paper_bid.action,
+        decision_status=paper_bid.decision_status,
+        data_cutoff_at=paper_bid.data_cutoff_at,
+        paper_bid_amount=float(paper_bid.paper_bid_amount or 0.0),
+        paper_bid_rate=float(paper_bid.paper_bid_rate or 0.0),
+        scenario=paper_bid.scenario,
+        priority_score=float(paper_bid.priority_score or 0.0),
+        probability_score=float(paper_bid.probability_score or 0.0),
+        matched_score=float(paper_bid.matched_score or 0.0),
+        predicted_price=float(paper_bid.predicted_price or 0.0),
+        predicted_bid_rate=float(paper_bid.predicted_bid_rate or 0.0),
+        confidence_score=float(paper_bid.confidence_score or 0.0),
+        predictor_name=paper_bid.predictor_name,
+        input_snapshot_hash=paper_bid.input_snapshot_hash,
+        created_at=paper_bid.created_at,
+    )
 
 
-def _serialize_settlement(settlement) -> dict[str, Any]:
-    return {
-        "id": int(settlement.id),
-        "paper_bid_id": int(settlement.paper_bid_id),
-        "tender_result_id": (
+def _serialize_settlement(
+    settlement: PaperBidSettlement,
+) -> PaperBiddingSettlementRecord:
+    return PaperBiddingSettlementRecord(
+        id=int(settlement.id),
+        paper_bid_id=int(settlement.paper_bid_id),
+        tender_result_id=(
             int(settlement.tender_result_id)
             if settlement.tender_result_id is not None
             else None
         ),
-        "result_status": settlement.result_status,
-        "winning_company": settlement.winning_company,
-        "winning_amount": float(settlement.winning_amount or 0.0),
-        "winning_rate": float(settlement.winning_rate or 0.0),
-        "amount_delta": float(settlement.amount_delta or 0.0),
-        "absolute_error_rate": float(settlement.absolute_error_rate or 0.0),
-        "bid_rate_delta": float(settlement.bid_rate_delta or 0.0),
-        "absolute_bid_rate_error": float(settlement.absolute_bid_rate_error or 0.0),
-        "price_close": bool(settlement.price_close),
-        "price_competitive": bool(settlement.price_competitive),
-        "would_have_won_price_only": settlement.would_have_won_price_only,
-        "would_have_won_final": settlement.would_have_won_final,
-        "settlement_reason": settlement.settlement_reason,
-        "settled_at": settlement.settled_at,
-    }
+        result_status=settlement.result_status,
+        winning_company=settlement.winning_company,
+        winning_amount=float(settlement.winning_amount or 0.0),
+        winning_rate=float(settlement.winning_rate or 0.0),
+        amount_delta=float(settlement.amount_delta or 0.0),
+        absolute_error_rate=float(settlement.absolute_error_rate or 0.0),
+        bid_rate_delta=float(settlement.bid_rate_delta or 0.0),
+        absolute_bid_rate_error=float(settlement.absolute_bid_rate_error or 0.0),
+        price_close=bool(settlement.price_close),
+        price_competitive=bool(settlement.price_competitive),
+        would_have_won_price_only=settlement.would_have_won_price_only,
+        would_have_won_final=settlement.would_have_won_final,
+        settlement_reason=settlement.settlement_reason,
+        settled_at=settlement.settled_at,
+    )
 
 
 def _get_run_or_404(db: Session, *, operator: User, run_id: int) -> PaperBidRun:
@@ -314,9 +321,7 @@ def create_forward_paper_bidding_run(
 
 @router.get("/paper-bidding/runs", response_model=PaperBiddingRunListResponse)
 def list_paper_bidding_runs(
-    mode: str | None = Query(
-        default=None, pattern="^(historical_backtest|forward_paper)$"
-    ),
+    mode: str | None = Query(default=None, pattern=RUN_MODE_QUERY_PATTERN),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     operator: User = Depends(get_current_operator_from_bearer),
@@ -336,12 +341,12 @@ def list_paper_bidding_runs(
         .limit(limit)
         .all()
     )
-    return {
-        "operator_id": int(operator.id),
-        "returned_count": len(runs),
-        "limit": limit,
-        "items": [_serialize_run(run) for run in runs],
-    }
+    return PaperBiddingRunListResponse(
+        operator_id=int(operator.id),
+        returned_count=len(runs),
+        limit=limit,
+        items=[_serialize_run(run) for run in runs],
+    )
 
 
 @router.get("/paper-bidding/summary", response_model=PaperBiddingSummaryResponse)
@@ -373,15 +378,18 @@ def get_paper_bidding_summary(
         db.query(PaperBidRun).filter(PaperBidRun.operator_id == operator.id).count()
     )
     latest_payload = _serialize_run(latest_run) if latest_run is not None else None
-    return {
-        "operator_id": int(operator.id),
-        "latest_run": latest_payload,
-        "run_count": int(run_count or 0),
-        "completed_count": int(completed_count or 0),
-        "latest_summary": (
-            latest_payload["summary"] if latest_payload is not None else {}
+    return PaperBiddingSummaryResponse(
+        operator_id=int(operator.id),
+        latest_run=latest_payload,
+        run_count=int(run_count or 0),
+        completed_count=int(completed_count or 0),
+        # 실행이 없으면 빈(0) 요약 — 종전 ``{}`` 와 달리 항상 객체 모양을 유지한다.
+        latest_summary=(
+            latest_payload.summary
+            if latest_payload is not None
+            else PaperBiddingRunSummary()
         ),
-    }
+    )
 
 
 @router.get(
@@ -400,9 +408,11 @@ def get_paper_bidding_run_detail(
         for paper_bid in paper_bids
         if paper_bid.settlement is not None
     ]
-    return {
-        **_serialize_run(run),
-        "request": _parse_json_object(run.request_payload),
-        "paper_bids": [_serialize_paper_bid(paper_bid) for paper_bid in paper_bids],
-        "settlements": settlements,
-    }
+    return PaperBiddingRunDetailResponse.from_list_item(
+        _serialize_run(run),
+        request=load_run_request_snapshot(
+            mode=run.mode, raw_value=run.request_payload, run_id=int(run.id)
+        ),
+        paper_bids=[_serialize_paper_bid(paper_bid) for paper_bid in paper_bids],
+        settlements=settlements,
+    )

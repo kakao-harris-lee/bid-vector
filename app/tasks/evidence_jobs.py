@@ -2,9 +2,9 @@
 
 Extracted verbatim from ``app.tasks.jobs`` (§4.5 size decomposition). The
 ``@task`` entries ``run_g2_candidate_recheck`` / ``collect_g2_evidence`` stay in
-``app.tasks.jobs`` (registration names unchanged) as thin shells that own the
-``db = SessionLocal()`` lifecycle (the ``SessionLocal`` seam is patched via the
-``jobs`` module in tests) and delegate the read-only sweep here.
+``app.tasks.jobs`` (registration names unchanged) as thin shells that own the db
+lifecycle via the shared ``task_session`` seam
+(``app.core.database.task_session``) and delegate the read-only sweep here.
 
 ``_write_g2_daily_evidence_draft`` lives here but is re-exported from
 ``app.tasks.jobs`` and passed back in by the ``collect_g2_evidence`` shell as

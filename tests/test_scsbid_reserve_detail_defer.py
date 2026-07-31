@@ -428,7 +428,7 @@ def test_backfill_fetches_and_persists_reserve_prices(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     # Keep the test session open across the task body.
     monkeypatch.setattr(test_db, "close", lambda: None)
 
@@ -477,7 +477,7 @@ def test_backfill_skips_already_settled_notice(test_db, monkeypatch):
     from app.tasks import jobs
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     test_db.add(
@@ -519,7 +519,7 @@ def test_backfill_one_failure_does_not_abort_chunk(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     for nn in ("OK-1", "BOOM", "OK-2"):
@@ -582,7 +582,7 @@ def test_backfill_empty_reserve_counts_as_not_settled(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     test_db.add(
@@ -716,7 +716,7 @@ def test_backfill_processes_one_chunk_and_chains_remainder(test_db, monkeypatch)
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
     monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 2)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     for i in range(5):
@@ -782,7 +782,7 @@ def test_backfill_last_chunk_does_not_chain(test_db, monkeypatch):
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
     monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 5)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     test_db.add(
@@ -830,7 +830,7 @@ def test_backfill_missing_service_key_surfaces_errors_without_fetch(
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 5)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     def _must_not_fetch(self, raw_item, *, category, service_key):
@@ -884,7 +884,7 @@ def test_backfill_soft_time_limit_commits_progress_without_chaining(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
     monkeypatch.setattr(settings, "KONEPS_SCSBID_RESERVE_DETAIL_BACKFILL_CHUNK_SIZE", 2)
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     for nn in ("S-0", "S-1", "S-2"):
@@ -956,7 +956,7 @@ def test_backfill_stamps_checked_at_on_not_settled(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     test_db.add(
@@ -1022,7 +1022,7 @@ def test_backfill_creates_row_to_stamp_missing_notice(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     monkeypatch.setattr(
@@ -1057,7 +1057,7 @@ def test_backfill_does_not_stamp_on_fetched_reserve(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     test_db.add(
@@ -1101,7 +1101,7 @@ def test_backfill_does_not_stamp_on_fetch_error(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     test_db.add(
@@ -1148,7 +1148,7 @@ def test_backfill_uses_dedicated_delay_setting(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 0.0
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     # The task does ``from time import sleep`` locally, so patch time.sleep.
@@ -1191,7 +1191,7 @@ def test_backfill_sleeps_between_calls_when_delay_set(test_db, monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_RESERVE_DETAIL_REQUEST_DELAY_SECONDS", 1.5
     )
-    monkeypatch.setattr(jobs, "SessionLocal", lambda: test_db)
+    monkeypatch.setattr("app.core.database.SessionLocal", lambda: test_db)
     monkeypatch.setattr(test_db, "close", lambda: None)
 
     import time as _time_module

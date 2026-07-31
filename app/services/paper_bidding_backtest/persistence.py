@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.constants import HISTORICAL_BACKTEST_RUN_MODE
 from app.core.time import utc_now
 from app.models.models import (
     PaperBid,
@@ -15,7 +14,17 @@ from app.models.models import (
     PaperBidSettlement,
     TenderResult,
 )
+from app.schemas.paper_bidding_items import (
+    PaperBiddingCandidateItem,
+    PaperBiddingRunSummary,
+    PaperBiddingSettlementItem,
+)
+from app.schemas.paper_bidding_runs import PaperBiddingRunRequestSnapshot
 from app.services.paper_bidding_backtest.base import _PaperBiddingBase
+from app.services.paper_bidding_run_payload import (
+    dump_run_request_snapshot,
+    dump_run_summary,
+)
 
 
 class _PersistenceMixin(_PaperBiddingBase):
@@ -27,7 +36,7 @@ class _PersistenceMixin(_PaperBiddingBase):
         *,
         run: PaperBidRun | None,
         operator_id: int,
-        item: dict[str, Any],
+        item: PaperBiddingCandidateItem,
         persist: bool,
         model_version: str,
         strategy_version: str,
@@ -36,29 +45,29 @@ class _PersistenceMixin(_PaperBiddingBase):
             return None
         paper_bid = PaperBid(
             run_id=run.id,
-            project_id=item["project_id"],
+            project_id=item.project_id,
             operator_id=operator_id,
-            notice_number=item.get("notice_number"),
-            action=item["action"],
-            decision_status=item["decision_status"],
-            data_cutoff_at=datetime.fromisoformat(item["data_cutoff_at"]),
-            paper_bid_amount=item["paper_bid_amount"],
-            paper_bid_rate=item["paper_bid_rate"],
-            scenario=item["scenario"],
-            priority_score=item["priority_score"],
-            probability_score=item["probability_score"],
-            matched_score=item["matched_score"],
-            predicted_price=item["predicted_price"],
-            predicted_bid_rate=item["predicted_bid_rate"],
-            price_range_min=item["price_range_min"],
-            price_range_max=item["price_range_max"],
-            confidence_score=item["confidence_score"],
-            predictor_name=item["predictor_name"],
-            predictor_family=item["predictor_family"],
-            model_version=model_version or item["model_version"],
+            notice_number=item.notice_number,
+            action=item.action,
+            decision_status=item.decision_status,
+            data_cutoff_at=datetime.fromisoformat(item.data_cutoff_at),
+            paper_bid_amount=item.paper_bid_amount,
+            paper_bid_rate=item.paper_bid_rate,
+            scenario=item.scenario,
+            priority_score=item.priority_score,
+            probability_score=item.probability_score,
+            matched_score=item.matched_score,
+            predicted_price=item.predicted_price,
+            predicted_bid_rate=item.predicted_bid_rate,
+            price_range_min=item.price_range_min,
+            price_range_max=item.price_range_max,
+            confidence_score=item.confidence_score,
+            predictor_name=item.predictor_name,
+            predictor_family=item.predictor_family,
+            model_version=model_version or item.model_version,
             strategy_version=strategy_version,
-            input_snapshot_hash=item["input_snapshot_hash"],
-            reasoning=item["reasoning"],
+            input_snapshot_hash=item.input_snapshot_hash,
+            reasoning=item.reasoning,
         )
         db.add(paper_bid)
         db.flush()
@@ -70,7 +79,7 @@ class _PersistenceMixin(_PaperBiddingBase):
         *,
         paper_bid: PaperBid | None,
         tender_result: TenderResult,
-        settlement: dict[str, Any],
+        settlement: PaperBiddingSettlementItem,
         persist: bool,
     ) -> None:
         if not persist or paper_bid is None:
@@ -79,21 +88,21 @@ class _PersistenceMixin(_PaperBiddingBase):
             PaperBidSettlement(
                 paper_bid_id=paper_bid.id,
                 tender_result_id=tender_result.id,
-                result_status=settlement["result_status"],
-                winning_company=settlement.get("winning_company"),
-                winning_amount=settlement["winning_amount"],
-                winning_rate=settlement["winning_rate"],
-                amount_delta=settlement["amount_delta"],
-                absolute_error_rate=settlement["absolute_error_rate"],
-                bid_rate_delta=settlement["bid_rate_delta"],
-                absolute_bid_rate_error=settlement["absolute_bid_rate_error"],
-                price_close=settlement["price_close"],
-                price_competitive=settlement["price_competitive"],
-                would_have_won_price_only=settlement["would_have_won_price_only"],
-                would_have_won_final=settlement["would_have_won_final"],
-                estimated_price=settlement.get("estimated_price"),
-                minimum_bid_price=settlement.get("minimum_bid_price"),
-                settlement_reason=settlement["settlement_reason"],
+                result_status=settlement.result_status,
+                winning_company=settlement.winning_company,
+                winning_amount=settlement.winning_amount,
+                winning_rate=settlement.winning_rate,
+                amount_delta=settlement.amount_delta,
+                absolute_error_rate=settlement.absolute_error_rate,
+                bid_rate_delta=settlement.bid_rate_delta,
+                absolute_bid_rate_error=settlement.absolute_bid_rate_error,
+                price_close=settlement.price_close,
+                price_competitive=settlement.price_competitive,
+                would_have_won_price_only=settlement.would_have_won_price_only,
+                would_have_won_final=settlement.would_have_won_final,
+                estimated_price=settlement.estimated_price,
+                minimum_bid_price=settlement.minimum_bid_price,
+                settlement_reason=settlement.settlement_reason,
                 settled_at=utc_now(),
             )
         )
@@ -104,7 +113,7 @@ class _PersistenceMixin(_PaperBiddingBase):
         db: Session,
         *,
         operator_id: int,
-        request_payload: dict[str, Any],
+        request_payload: PaperBiddingRunRequestSnapshot,
         persist: bool,
         category: str | None,
         scenario: str,
@@ -129,13 +138,11 @@ class _PersistenceMixin(_PaperBiddingBase):
             target_end_at=end_at,
             data_cutoff_policy=(
                 f"deadline_minus_{max(0, int(cutoff_hours_before_deadline or 0))}h"
-                if mode == "historical_backtest"
+                if mode == HISTORICAL_BACKTEST_RUN_MODE
                 else "execution_time"
             ),
             started_at=utc_now(),
-            request_payload=json.dumps(
-                request_payload, ensure_ascii=False, default=str
-            ),
+            request_payload=dump_run_request_snapshot(request_payload),
         )
         db.add(run)
         db.flush()
@@ -147,7 +154,7 @@ class _PersistenceMixin(_PaperBiddingBase):
         *,
         run: PaperBidRun | None,
         persist: bool,
-        summary: dict[str, Any],
+        summary: PaperBiddingRunSummary,
         candidate_count: int,
         paper_bid_count: int,
         settled_count: int,
@@ -159,7 +166,7 @@ class _PersistenceMixin(_PaperBiddingBase):
         run.candidate_count = candidate_count
         run.paper_bid_count = paper_bid_count
         run.settled_count = settled_count
-        run.result_payload = json.dumps(summary, ensure_ascii=False, default=str)
+        run.result_payload = dump_run_summary(summary)
         db.add(run)
         db.commit()
         db.refresh(run)

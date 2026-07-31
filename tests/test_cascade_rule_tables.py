@@ -123,20 +123,20 @@ def _tender_result(*, winning_amount, announced_at=None, created_at=None):
 
 def test_settlement_overview_no_paper_bids():
     overview = _build_settlement_overview(_run([]))
-    assert overview["status"] == "no_paper_bids"
-    assert overview["label"] == "검증 없음"
-    assert overview["detail"] == "페이퍼 투찰 항목이 없습니다."
-    assert overview["next_confirmable_at"] is None
+    assert overview.status == "no_paper_bids"
+    assert overview.label == "검증 없음"
+    assert overview.detail == "페이퍼 투찰 항목이 없습니다."
+    assert overview.next_confirmable_at is None
 
 
 def test_settlement_overview_settled():
     settled_at = datetime(2026, 6, 1, 3, 0, tzinfo=UTC)
     pb = _paper_bid(settlement=SimpleNamespace(settled_at=settled_at))
     overview = _build_settlement_overview(_run([pb]))
-    assert overview["status"] == "settled"
-    assert overview["label"] == "정산 완료"
-    assert overview["detail"] == "1건 모두 최종 결과로 정산되었습니다."
-    assert overview["next_confirmable_at"] == settled_at
+    assert overview.status == "settled"
+    assert overview.label == "정산 완료"
+    assert overview.detail == "1건 모두 최종 결과로 정산되었습니다."
+    assert overview.next_confirmable_at == settled_at
 
 
 def test_settlement_overview_ready_to_settle():
@@ -144,10 +144,10 @@ def test_settlement_overview_ready_to_settle():
     project = _project(tender_results=[_tender_result(winning_amount=1000.0, announced_at=announced)])
     pb = _paper_bid(project=project)
     overview = _build_settlement_overview(_run([pb]))
-    assert overview["status"] == "ready_to_settle"
-    assert overview["label"] == "정산 가능"
-    assert overview["detail"] == "1건은 최종 결과가 입수되어 승패 판정이 가능합니다."
-    assert overview["next_confirmable_at"] == announced
+    assert overview.status == "ready_to_settle"
+    assert overview.label == "정산 가능"
+    assert overview.detail == "1건은 최종 결과가 입수되어 승패 판정이 가능합니다."
+    assert overview.next_confirmable_at == announced
 
 
 def test_settlement_overview_waiting_result():
@@ -155,10 +155,10 @@ def test_settlement_overview_waiting_result():
     project = _project(deadline=past_deadline, tender_results=[])
     pb = _paper_bid(project=project)
     overview = _build_settlement_overview(_run([pb]))
-    assert overview["status"] == "waiting_result"
-    assert overview["label"] == "결과 대기"
-    assert overview["detail"] == "마감이 지난 1건은 최종 결과가 수집되면 정산됩니다."
-    assert overview["next_confirmable_at"] == past_deadline
+    assert overview.status == "waiting_result"
+    assert overview.label == "결과 대기"
+    assert overview.detail == "마감이 지난 1건은 최종 결과가 수집되면 정산됩니다."
+    assert overview.next_confirmable_at == past_deadline
 
 
 def test_settlement_overview_before_deadline():
@@ -166,20 +166,20 @@ def test_settlement_overview_before_deadline():
     project = _project(deadline=future_deadline, tender_results=[])
     pb = _paper_bid(project=project)
     overview = _build_settlement_overview(_run([pb]))
-    assert overview["status"] == "before_deadline"
-    assert overview["label"] == "마감 전"
-    assert "1건은 아직 마감 전입니다" in overview["detail"]
-    assert overview["next_confirmable_at"] == future_deadline
+    assert overview.status == "before_deadline"
+    assert overview.label == "마감 전"
+    assert "1건은 아직 마감 전입니다" in overview.detail
+    assert overview.next_confirmable_at == future_deadline
 
 
 def test_settlement_overview_deadline_missing():
     project = _project(deadline=None, tender_results=[])
     pb = _paper_bid(project=project)
     overview = _build_settlement_overview(_run([pb]))
-    assert overview["status"] == "deadline_missing"
-    assert overview["label"] == "마감 미정"
-    assert overview["detail"] == "마감일이 없어 정산 예상 시점을 계산할 수 없습니다."
-    assert overview["next_confirmable_at"] is None
+    assert overview.status == "deadline_missing"
+    assert overview.label == "마감 미정"
+    assert overview.detail == "마감일이 없어 정산 예상 시점을 계산할 수 없습니다."
+    assert overview.next_confirmable_at is None
 
 
 # ---------------------------------------------------------------------------

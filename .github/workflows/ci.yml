@@ -33,7 +33,9 @@ jobs:
           pip install -r requirements/runtime.txt -r requirements/dev.txt
 
       - name: Ruff (lint)
-        run: ruff check app/
+        # 설계 래칫 스캐너는 자신이 검사하는 규율을 지켜야 하므로 lint 대상에 포함한다
+        # (scripts/ 전체는 아직 grandfathered — docs/operations/design-ratchet.md).
+        run: ruff check app/ scripts/design_ratchet.py scripts/_design_ratchet_scan.py
 
       - name: Mypy (type check — lenient legacy, strict islands)
         run: mypy app/

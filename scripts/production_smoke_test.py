@@ -483,6 +483,16 @@ def write_evidence(path: str, evidence: dict[str, Any]) -> None:
     print(f"[evidence] wrote {evidence_path}")
 
 
+def _add_monitor_poll_arguments(parser: argparse.ArgumentParser) -> None:
+    """202 async monitor 폴링 인자 (설계 §6.2: monitor kickoff 후 task-status 폴)."""
+    parser.add_argument("--monitor-poll-attempts", type=int, default=int(os.getenv("SMOKE_MONITOR_POLL_ATTEMPTS", "30")))
+    parser.add_argument(
+        "--monitor-poll-interval-seconds",
+        type=float,
+        default=float(os.getenv("SMOKE_MONITOR_POLL_INTERVAL_SECONDS", "2.0")),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run production smoke checks against a bid-vector API.")
     parser.add_argument("--base-url", default=os.getenv("SMOKE_BASE_URL") or os.getenv("BASE_URL") or "http://localhost:3000")
@@ -507,12 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execution-mode", choices=["mock", "live", "auto"], default=os.getenv("SMOKE_EXECUTION_MODE", "auto"))
     parser.add_argument("--max-items", type=int, default=int(os.getenv("SMOKE_MAX_ITEMS", "3")))
     parser.add_argument("--monitor-limit", type=int, default=int(os.getenv("SMOKE_MONITOR_LIMIT", "3")))
-    parser.add_argument("--monitor-poll-attempts", type=int, default=int(os.getenv("SMOKE_MONITOR_POLL_ATTEMPTS", "30")))
-    parser.add_argument(
-        "--monitor-poll-interval-seconds",
-        type=float,
-        default=float(os.getenv("SMOKE_MONITOR_POLL_INTERVAL_SECONDS", "2.0")),
-    )
+    _add_monitor_poll_arguments(parser)
     parser.add_argument(
         "--monitor-all-candidates",
         action="store_true",

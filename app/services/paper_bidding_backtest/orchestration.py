@@ -1,8 +1,13 @@
-"""Historical backtest and forward paper-bidding run orchestration."""
+"""Run 진입점(celery/JSON 경계) + historical replay(개찰 재현 + 즉시 정산) 구현.
+
+두 공개 진입점(``run_historical_backtest`` / ``run_forward_paper_bidding``)은 산출을
+JSON dict 로 직렬화하는 얇은 경계이고, historical 구현은 이 모듈에, forward 구현은
+``app/services/paper_bidding_backtest/forward_run.py`` 에 있다(§4.5-4 크기 한도에
+걸린 시점의 책임 분해).
+"""
 
 from __future__ import annotations
 
-import logging
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,24 +15,31 @@ from typing import Any, Sequence
 
 from sqlalchemy.orm import Session
 
+from app.core.constants import HISTORICAL_BACKTEST_RUN_MODE
 from app.core.single_user import split_multi_value_text
 from app.core.time import ensure_utc, utc_now
 from app.models.models import (
     CompanyProfile,
     OperatorStrategy,
     PaperBidRun,
-    Project,
     TenderResult,
+)
+from app.schemas.paper_bidding import PaperBiddingRunExecutionResponse
+from app.schemas.paper_bidding_items import (
+    PaperBiddingCandidateItem,
+    PaperBiddingSettlementInput,
+    PaperBiddingSettlementItem,
+)
+from app.schemas.paper_bidding_runs import (
+    ForwardPaperRunParams,
+    HistoricalBacktestRunRequestSnapshot,
 )
 from app.services.paper_bidding_backtest.base import _PaperBiddingBase
 
-logger = logging.getLogger(__name__)
-
-# ``run_historical_backtest`` / ``run_forward_paper_bidding`` default the
-# ``scenario`` keyword to the class default via a *bare* name (evaluated in this
-# module's namespace at def time). Alias it from the base class so the signatures
-# stay byte-identical while ``_PaperBiddingBase.DEFAULT_SCENARIO`` remains the
-# single source of truth.
+# ``run_historical_backtest`` defaults the ``scenario`` keyword to the class
+# default via a *bare* name (evaluated in this module's namespace at def time).
+# Alias it from the base class so the signature stays byte-identical while
+# ``_PaperBiddingBase.DEFAULT_SCENARIO`` remains the single source of truth.
 DEFAULT_SCENARIO = _PaperBiddingBase.DEFAULT_SCENARIO
 
 
@@ -44,7 +56,7 @@ class _PreparedHistoricalRun:
     """
 
     run: PaperBidRun | None
-    request_payload: dict[str, Any]
+    request_payload: HistoricalBacktestRunRequestSnapshot
     operator_id: int
     strategy: OperatorStrategy
     profile: CompanyProfile | None
@@ -86,6 +98,11 @@ class _BacktestRunMixin(_PaperBiddingBase):
         its window from its OWN categories — without this, a minority category
         (e.g. recently-backfilled goods) is starved out of any bounded ``limit``
         window dominated by service/construction awards.
+
+        반환은 **JSON 직렬화된 dict** 다: 이 메서드의 산출이 celery task 결과
+        (``app/tasks/jobs.py``)와 리포트 스크립트의 ``json.dumps`` 입력으로 그대로
+        쓰이므로 Pydantic 인스턴스를 흘리면 broker 직렬화가 깨진다. 내부 체인은
+        :class:`PaperBiddingRunExecutionResponse` DTO 로 흐른다.
         """
         prepared = self._prepare_historical_run(
             db,
@@ -112,7 +129,7 @@ class _BacktestRunMixin(_PaperBiddingBase):
             cutoff_hours_before_deadline=cutoff_hours_before_deadline,
             history_limit=history_limit,
             persist=persist,
-        )
+        ).model_dump(mode="json")
 
     def _resolve_award_categories(
         self,
@@ -180,20 +197,20 @@ class _BacktestRunMixin(_PaperBiddingBase):
         end_at = ensure_utc(end_at) if end_at is not None else None
         safe_limit = max(1, int(limit or 1))
 
-        request_payload = {
-            "category": category,
-            "award_categories": list(resolved_award_categories),
-            "start_at": start_at.isoformat() if start_at else None,
-            "end_at": end_at.isoformat() if end_at else None,
-            "limit": safe_limit,
-            "scenario": normalized_scenario,
-            "strategy_version": strategy_version,
-            "model_version": model_version,
-            "cutoff_hours_before_deadline": cutoff_hours_before_deadline,
-            "history_limit": history_limit,
-            "settle_actions": list(normalized_settle_actions),
-            "persist": persist,
-        }
+        request_payload = HistoricalBacktestRunRequestSnapshot(
+            category=category,
+            award_categories=list(resolved_award_categories),
+            start_at=start_at.isoformat() if start_at else None,
+            end_at=end_at.isoformat() if end_at else None,
+            limit=safe_limit,
+            scenario=normalized_scenario,
+            strategy_version=strategy_version,
+            model_version=model_version,
+            cutoff_hours_before_deadline=cutoff_hours_before_deadline,
+            history_limit=history_limit,
+            settle_actions=list(normalized_settle_actions),
+            persist=persist,
+        )
         run = self._create_run(
             db,
             operator_id=int(operator.id),
@@ -206,7 +223,7 @@ class _BacktestRunMixin(_PaperBiddingBase):
             start_at=start_at,
             end_at=end_at,
             cutoff_hours_before_deadline=cutoff_hours_before_deadline,
-            mode="historical_backtest",
+            mode=HISTORICAL_BACKTEST_RUN_MODE,
         )
         return _PreparedHistoricalRun(
             run=run,
@@ -233,14 +250,14 @@ class _BacktestRunMixin(_PaperBiddingBase):
         cutoff_hours_before_deadline: int,
         history_limit: int,
         persist: bool,
-    ) -> dict[str, Any]:
+    ) -> PaperBiddingRunExecutionResponse:
         """Replay + settle awards for a prepared run; fail the run on any error.
 
         The ``try/except`` here is the moved-verbatim run body: on any exception
         ``_fail_run`` marks the persisted run failed and the error re-raises.
         """
-        candidate_items: list[dict[str, Any]] = []
-        settlement_items: list[dict[str, Any]] = []
+        candidate_items: list[PaperBiddingCandidateItem] = []
+        settlement_items: list[PaperBiddingSettlementItem] = []
         action_counts: Counter[str] = Counter()
 
         try:
@@ -303,8 +320,8 @@ class _BacktestRunMixin(_PaperBiddingBase):
         history_limit: int,
         settle_actions: Sequence[str],
         persist: bool,
-        candidate_items: list[dict[str, Any]],
-        settlement_items: list[dict[str, Any]],
+        candidate_items: list[PaperBiddingCandidateItem],
+        settlement_items: list[PaperBiddingSettlementItem],
         action_counts: Counter[str],
     ) -> int:
         skipped_by_strategy = 0
@@ -327,7 +344,7 @@ class _BacktestRunMixin(_PaperBiddingBase):
                 history_limit=history_limit,
                 profile=profile,
             )
-            action_counts[item["action"]] += 1
+            action_counts[item.action] += 1
             candidate_items.append(item)
 
             paper_bid = self._persist_paper_bid(
@@ -339,12 +356,12 @@ class _BacktestRunMixin(_PaperBiddingBase):
                 model_version=model_version,
                 strategy_version=strategy_version,
             )
-            if item["action"] not in settle_actions:
+            if item.action not in settle_actions:
                 continue
 
             settlement = self._build_settlement_item(
                 db,
-                item=item,
+                item=PaperBiddingSettlementInput.from_candidate(item),
                 tender_result=tender_result,
             )
             settlement_items.append(settlement)
@@ -363,13 +380,13 @@ class _BacktestRunMixin(_PaperBiddingBase):
         *,
         run: PaperBidRun | None,
         persist: bool,
-        request_payload: dict[str, Any],
-        candidate_items: list[dict[str, Any]],
-        settlement_items: list[dict[str, Any]],
+        request_payload: HistoricalBacktestRunRequestSnapshot,
+        candidate_items: list[PaperBiddingCandidateItem],
+        settlement_items: list[PaperBiddingSettlementItem],
         skipped_by_strategy: int,
         action_counts: Counter[str],
         settle_actions: Sequence[str],
-    ) -> dict[str, Any]:
+    ) -> PaperBiddingRunExecutionResponse:
         summary = self._build_summary(
             candidate_items=candidate_items,
             settlement_items=settlement_items,
@@ -383,17 +400,17 @@ class _BacktestRunMixin(_PaperBiddingBase):
             summary=summary,
             candidate_count=len(candidate_items),
             paper_bid_count=sum(
-                1 for item in candidate_items if item["action"] in settle_actions
+                1 for item in candidate_items if item.action in settle_actions
             ),
             settled_count=len(settlement_items),
         )
-        return {
-            "run_id": int(run.id) if run is not None and run.id is not None else None,
-            "request": request_payload,
-            "summary": summary,
-            "items": candidate_items,
-            "settlements": settlement_items,
-        }
+        return PaperBiddingRunExecutionResponse(
+            run_id=int(run.id) if run is not None and run.id is not None else None,
+            request=request_payload,
+            summary=summary,
+            items=candidate_items,
+            settlements=settlement_items,
+        )
 
     def run_forward_paper_bidding(
         self,
@@ -408,170 +425,25 @@ class _BacktestRunMixin(_PaperBiddingBase):
         history_limit: int = 80,
         persist: bool = True,
     ) -> dict[str, Any]:
-        """Generate paper bids for currently open/re-notice projects without settlement."""
-        operator = self._resolve_operator(db, operator_id=operator_id)
-        strategy = self._resolve_operator_strategy(db, operator=operator)
-        profile = self._resolve_operator_profile(db, operator=operator)
-        normalized_scenario = (
-            str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
-        )
-        safe_limit = max(1, int(limit or 1))
-        data_cutoff_at = utc_now()
-        request_payload = {
-            "category": category,
-            "limit": safe_limit,
-            "scenario": normalized_scenario,
-            "strategy_version": strategy_version,
-            "model_version": model_version,
-            "history_limit": history_limit,
-            "persist": persist,
-            "data_cutoff_at": data_cutoff_at.isoformat(),
-        }
-        run = self._create_run(
-            db,
-            operator_id=int(operator.id),
-            request_payload=request_payload,
-            persist=persist,
+        """Generate paper bids for currently open/re-notice projects without settlement.
+
+        JSON 경계 진입점: 인자를 정규화해 :class:`ForwardPaperRunParams` 로 묶고 실행
+        시각을 주입한 뒤, 구현(``_ForwardRunMixin``)의 DTO 산출을 직렬화한다. 반환이
+        celery task 결과(``app/tasks/jobs.py``)로 그대로 쓰이므로 Pydantic 인스턴스를
+        흘리면 broker 직렬화가 깨진다.
+        """
+        params = ForwardPaperRunParams(
+            operator_id=operator_id,
             category=category,
-            scenario=normalized_scenario,
+            limit=max(1, int(limit or 1)),
+            scenario=(
+                str(scenario or self.DEFAULT_SCENARIO).strip() or self.DEFAULT_SCENARIO
+            ),
             strategy_version=strategy_version,
             model_version=model_version,
-            start_at=None,
-            end_at=None,
-            cutoff_hours_before_deadline=0,
-            mode="forward_paper",
-        )
-
-        candidate_items: list[dict[str, Any]] = []
-        action_counts: Counter[str] = Counter()
-
-        try:
-            projects = self._load_forward_projects(
-                db, category=category, limit=safe_limit, data_cutoff_at=data_cutoff_at
-            )
-            skipped_by_strategy, skipped_invalid = self._process_forward_projects(
-                db,
-                projects=projects,
-                strategy=strategy,
-                profile=profile,
-                run=run,
-                operator_id=int(operator.id),
-                data_cutoff_at=data_cutoff_at,
-                scenario=normalized_scenario,
-                strategy_version=strategy_version,
-                model_version=model_version,
-                history_limit=history_limit,
-                persist=persist,
-                candidate_items=candidate_items,
-                action_counts=action_counts,
-            )
-            return self._complete_forward_paper_run(
-                db,
-                run=run,
-                persist=persist,
-                request_payload=request_payload,
-                candidate_items=candidate_items,
-                skipped_by_strategy=skipped_by_strategy,
-                skipped_invalid=skipped_invalid,
-                action_counts=action_counts,
-            )
-        except Exception as exc:
-            self._fail_run(db, run=run, persist=persist, error_message=str(exc))
-            raise
-
-    def _process_forward_projects(
-        self,
-        db: Session,
-        *,
-        projects: Sequence[Project],
-        strategy: OperatorStrategy,
-        profile: CompanyProfile | None,
-        run: PaperBidRun | None,
-        operator_id: int,
-        data_cutoff_at: datetime,
-        scenario: str,
-        strategy_version: str,
-        model_version: str,
-        history_limit: int,
-        persist: bool,
-        candidate_items: list[dict[str, Any]],
-        action_counts: Counter[str],
-    ) -> tuple[int, int]:
-        skipped_by_strategy = 0
-        skipped_invalid = 0
-        for project in projects:
-            if not self._passes_strategy(project, strategy):
-                skipped_by_strategy += 1
-                continue
-            try:
-                item = self._build_candidate_item(
-                    db,
-                    project=project,
-                    tender_result=None,
-                    data_cutoff_at=data_cutoff_at,
-                    scenario=scenario,
-                    strategy_version=strategy_version,
-                    cutoff_hours_before_deadline=0,
-                    history_limit=history_limit,
-                    profile=profile,
-                )
-            except ValueError as project_exc:
-                # A single malformed project (e.g. 0 budget for ebiz4u-link
-                # imports) must not abort the whole run — skip + count it.
-                logger.warning(
-                    "forward_paper: skipping project %s due to %s",
-                    getattr(project, "id", "?"),
-                    project_exc,
-                )
-                skipped_invalid += 1
-                continue
-            action_counts[item["action"]] += 1
-            candidate_items.append(item)
-            self._persist_paper_bid(
-                db,
-                run=run,
-                operator_id=operator_id,
-                item=item,
-                persist=persist,
-                model_version=model_version,
-                strategy_version=strategy_version,
-            )
-        return skipped_by_strategy, skipped_invalid
-
-    def _complete_forward_paper_run(
-        self,
-        db: Session,
-        *,
-        run: PaperBidRun | None,
-        persist: bool,
-        request_payload: dict[str, Any],
-        candidate_items: list[dict[str, Any]],
-        skipped_by_strategy: int,
-        skipped_invalid: int,
-        action_counts: Counter[str],
-    ) -> dict[str, Any]:
-        summary = self._build_summary(
-            candidate_items=candidate_items,
-            settlement_items=[],
-            skipped_by_strategy=skipped_by_strategy,
-            action_counts=action_counts,
-            skipped_invalid=skipped_invalid,
-        )
-        self._complete_run(
-            db,
-            run=run,
+            history_limit=history_limit,
             persist=persist,
-            summary=summary,
-            candidate_count=len(candidate_items),
-            paper_bid_count=sum(
-                1 for item in candidate_items if item["action"] in {"bid_now", "review"}
-            ),
-            settled_count=0,
         )
-        return {
-            "run_id": int(run.id) if run is not None and run.id is not None else None,
-            "request": request_payload,
-            "summary": summary,
-            "items": candidate_items,
-            "settlements": [],
-        }
+        return self._run_forward_paper_bidding(
+            db, params=params, data_cutoff_at=utc_now()
+        ).model_dump(mode="json")

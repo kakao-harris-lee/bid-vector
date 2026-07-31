@@ -1,18 +1,34 @@
 """Backtest job bodies.
 
-Extracted verbatim from ``app.tasks.jobs`` (§4.5 size decomposition). The
-``@task`` entries ``run_synthetic_operator_backtest`` / ``run_historical_backtest``
-stay in ``app.tasks.jobs`` (registration names unchanged) as thin shells that
-delegate here. These bodies own their own ``db`` lifecycle (no ``jobs.SessionLocal``
-monkeypatch seam is used for them).
+Extracted from ``app.tasks.jobs`` (§4.5 size decomposition). The ``@task`` entries
+``run_synthetic_operator_backtest`` / ``run_historical_backtest`` stay in
+``app.tasks.jobs`` (registration names unchanged) as thin shells that **validate
+the broker payload** into the DTOs in ``app.schemas.task_payloads`` and delegate
+here. These bodies therefore receive a validated model, not a raw ``dict``: the
+hand-rolled coercers (``int(payload.get("limit") or 100)`` …) that used to live
+here are now the DTO's declared field constraints.
+
+These bodies own their ``db`` lifecycle via the shared ``task_session`` seam and
+accept an injectable ``session_factory`` (same axis as the in-process schedulers),
+so no module-global monkeypatch is needed to drive them against a test session.
 """
 
-from typing import Any
+from typing import Callable
 
-from app.core.database import SessionLocal
+from sqlalchemy.orm import Session
+
+from app.core.database import task_session
+from app.schemas.task_payloads import (
+    HistoricalBacktestTaskRequest,
+    SyntheticOperatorBacktestTaskRequest,
+)
 
 
-def run_synthetic_operator_backtest_job(payload: dict[str, Any] | None = None) -> dict:
+def run_synthetic_operator_backtest_job(
+    request: SyntheticOperatorBacktestTaskRequest,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> dict:
     """Run the per-synthetic-operator backtest in a background worker.
 
     Mirrors the synchronous `/api/v1/synthetic/backtests/run` endpoint but
@@ -21,85 +37,70 @@ def run_synthetic_operator_backtest_job(payload: dict[str, Any] | None = None) -
 
     When the payload carries a ``run_id`` (Experiment Lab execution), the
     run/result lifecycle is persisted via ``run_experiment_backtest``; the legacy
-    ad-hoc path (no ``run_id``) keeps its original behaviour unchanged.
+    ad-hoc path (no ``run_id``) keeps its original behaviour unchanged. That
+    runner still consumes a ``dict``, so it receives the validated model dumped
+    back to exactly the keys the sender set.
     """
-    from datetime import datetime
     from app.services.synthetic_backtest import SyntheticBacktestService
 
-    data = dict(payload or {})
-
-    if data.get("run_id") is not None:
+    if request.is_experiment_run:
         from app.services.synthetic_experiment import run_experiment_backtest
 
-        return run_experiment_backtest(data)
-    start_at_raw = data.get("start_at")
-    end_at_raw = data.get("end_at")
-    start_at = datetime.fromisoformat(start_at_raw) if isinstance(start_at_raw, str) else None
-    end_at = datetime.fromisoformat(end_at_raw) if isinstance(end_at_raw, str) else None
-    settle_actions_raw = data.get("settle_actions")
-    if isinstance(settle_actions_raw, str):
-        settle_actions = tuple(s.strip() for s in settle_actions_raw.split(",") if s.strip())
-    elif isinstance(settle_actions_raw, (list, tuple)):
-        settle_actions = tuple(str(s).strip() for s in settle_actions_raw if str(s).strip())
-    else:
-        settle_actions = None
-    cutoff_hours_before_deadline = data.get("cutoff_hours_before_deadline")
-    history_limit = data.get("history_limit")
+        # mode="json" 은 UTC 를 ``…Z`` 로 덤프하므로 러너의 ``_parse_dt``
+        # (``datetime.fromisoformat``)는 Python 3.11+ 가 필요하다(런타임 3.12).
+        return run_experiment_backtest(
+            request.model_dump(mode="json", exclude_unset=True)
+        )
 
-    db = SessionLocal()
-    try:
+    with task_session(session_factory) as db:
         return SyntheticBacktestService().run_for_all(
             db,
-            start_at=start_at,
-            end_at=end_at,
-            category=data.get("category"),
-            limit=int(data.get("limit") or 100),
-            scenario=str(data.get("scenario") or "base"),
-            slugs=data.get("slugs"),
-            cutoff_hours_before_deadline=(
-                int(cutoff_hours_before_deadline)
-                if cutoff_hours_before_deadline is not None
-                else None
-            ),
-            history_limit=int(history_limit) if history_limit is not None else None,
-            settle_actions=settle_actions,
+            start_at=request.start_at,
+            end_at=request.end_at,
+            category=request.category,
+            limit=request.limit,
+            scenario=request.scenario,
+            slugs=request.slugs,
+            cutoff_hours_before_deadline=request.resolved_cutoff_hours(),
+            history_limit=request.history_limit,
+            settle_actions=request.resolved_settle_actions(),
         )
-    finally:
-        db.close()
 
 
-def run_historical_backtest_job(request_payload: dict[str, Any] | None = None) -> dict:
-    """Replay awarded TenderResults as paper_bid + settlement comparison."""
+def run_historical_backtest_job(
+    request: HistoricalBacktestTaskRequest,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> dict:
+    """Replay awarded TenderResults as paper_bid + settlement comparison.
+
+    The replay window is derived from ``lookback_days`` (falling back to
+    ``HISTORICAL_BACKTEST_LOOKBACK_DAYS``), so the request carries no explicit
+    ``start_at``/``end_at``.
+    """
     from datetime import datetime, timedelta, timezone
     from app.core.config import settings as runtime_settings
     from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 
-    payload = dict(request_payload or {})
-    db = SessionLocal()
-    try:
-        lookback = max(1, int(payload.pop("lookback_days", runtime_settings.HISTORICAL_BACKTEST_LOOKBACK_DAYS)))
+    with task_session(session_factory) as db:
+        lookback = max(
+            1,
+            request.lookback_days
+            or runtime_settings.HISTORICAL_BACKTEST_LOOKBACK_DAYS,
+        )
         end_at = datetime.now(timezone.utc)
         start_at = end_at - timedelta(days=lookback)
-        settle_actions_raw = payload.pop("settle_actions", None)
-        if isinstance(settle_actions_raw, str):
-            settle_actions = tuple(s.strip() for s in settle_actions_raw.split(",") if s.strip())
-        elif isinstance(settle_actions_raw, (list, tuple)):
-            settle_actions = tuple(settle_actions_raw)
-        else:
-            settle_actions = ("bid_now", "review")
         return PaperBiddingBacktestService().run_historical_backtest(
             db,
-            category=payload.get("category") or None,
+            category=request.category or None,
             start_at=start_at,
             end_at=end_at,
-            limit=int(payload.get("limit") or 100),
-            scenario=str(payload.get("scenario") or "base"),
-            strategy_version=str(payload.get("strategy_version") or "scheduled-historical-backtest"),
-            model_version=str(payload.get("model_version") or "current"),
-            cutoff_hours_before_deadline=int(payload.get("cutoff_hours_before_deadline") or 2),
-            history_limit=int(payload.get("history_limit") or 80),
-            settle_actions=settle_actions,
-            persist=bool(payload.get("persist", True)),
+            limit=request.limit,
+            scenario=request.scenario,
+            strategy_version=request.strategy_version,
+            model_version=request.model_version,
+            cutoff_hours_before_deadline=request.cutoff_hours_before_deadline,
+            history_limit=request.history_limit,
+            settle_actions=tuple(request.settle_actions),
+            persist=request.persist,
         )
-    finally:
-        db.close()
