@@ -87,33 +87,51 @@
 |---|---|
 | 범위 | `app/` + `scripts/` + `frontend/` 전부 |
 | 중복의 정의 | 순수 헬퍼·메커니컬 유틸리티만. 도메인 로직·프레임워크 보일러플레이트는 대상 아님 |
-| 강제 수단 | 기존 design ratchet 에 지표 신설 + 문서 룰 |
+| 강제 수단 | 기존 design ratchet 에 지표 **2개** 신설(교차파일 · 동일파일) + 문서 룰 |
+| 동일파일 클론 | 면제하지 않는다. 5그룹 전수 확인 결과 전부 "상수·캐스트만 다른 동일 알고리즘"이라 파라미터화로 환원 가능 (§4.1) |
 | 통합 목적지 | 주제별 작은 모듈 허브 (단일 거대 모듈 아님) |
 | 프론트 게이트 | vitest 래칫 미러링 + CI 프론트 job 신설 |
 | 실행 순서 | 게이트 우선 · 5 PR |
 
-## 4. 측정 코어 — `duplicate_mechanical_helpers`
+## 4. 측정 코어 — `duplicate_mechanical_helpers` / `…_local`
 
-### 4.1 지표 정의
+### 4.1 지표 정의 — 두 축
+
+동일 파일 클론과 교차 파일 클론은 **처방이 다르므로** 지표를 나눈다. 기존 래칫이
+`functions_over_soft_limit` / `functions_over_hard_limit` 를 같은 축에서 두 지표로 나눈
+선례를 따른다.
 
 ```
 duplicate_mechanical_helpers[파일] =
   그 파일이 정의한 메커니컬 헬퍼 중,
-  다른 파일의 메커니컬 헬퍼와 구조 클론 그룹을 이루는 함수의 수
+  **다른 파일**의 메커니컬 헬퍼와 구조 클론 그룹을 이루는 함수의 수
+  → 처방: 허브로 이동
+
+duplicate_mechanical_helpers_local[파일] =
+  그 파일 **안에서만** 서로 구조 클론 그룹을 이루는 메커니컬 헬퍼의 수
+  → 처방: 파라미터화된 해석기 + 얇은 명명 래퍼
 ```
 
-**교차 파일 그룹만 센다.** 동일 파일 내 클론 5그룹
-(`_int_or_none`/`_float_or_none`, `is_openapi_source`/`is_scsbid_openapi_source`,
-`coerce_numeric_list`/`coerce_integer_list`,
-`_resolve_goods_procurement_rate_band`/`_resolve_service_procurement_rate_band`,
-`extract_eligibility_flags`/`_project_license_limit_item`) 은 제외한다.
+동일 파일 클론을 계수하는 근거는 실측이다. 현재 5그룹을 전수 확인한 결과 **어느 것도
+"환원 불가능한 의도적 대칭 API" 가 아니었다.** 5그룹 모두 같은 형태다 — *알고리즘은
+동일하고 선언된 상수 하나 또는 캐스트 함수 하나만 다르다.*
 
-이유: (a) 의도적 대칭 API 인 경우가 많아 강제 통합이 가독성을 해친다, (b) 이 작업이
-겨냥하는 문제는 "여기저기 산발적"이라는 교차 파일 현상이다, (c) 래칫이 파일 단위로
-귀속하므로 교차 파일이 자연스러운 단위다.
+| 그룹 | 다른 점 | 처방 |
+|---|---|---|
+| G01 `extract_eligibility_flags` / `_project_license_limit_item` | 키 집합 상수 (`ELIGIBILITY_RAW_KEYS` / `LICENSE_LIMIT_ITEM_KEYS`) | `project_declared_keys(raw_item, keys)` |
+| G06 `coerce_numeric_list` / `coerce_integer_list` | 캐스트 (`float` / `int`) | `_coerce_cast_list(raw_value, cast)` |
+| G18 `_int_or_none` / `_float_or_none` | 캐스트 (`int` / `float`) | `_cast_or_none(value, cast)` |
+| G21 `is_openapi_source` / `is_scsbid_openapi_source` | 별칭 집합 상수 | `_source_in(source, aliases)` |
+| G25 `_resolve_goods_…` / `_resolve_service_…_rate_band` | 룰 테이블 (`GOODS_BAND_RULES` / `SERVICE_BAND_RULES`) | `resolve_band(rules, …)` 직접 호출 |
 
-이는 기존 `env_test_sniff` 지표와 같은 성격의 **의도적 한정**이며, 총량 지표가 아니라
-"가장 흔한 형태의 증가를 막는 래칫"이다. 미탐 범위는 §8 에 명시한다.
+이는 CLAUDE.md §4.5-1·2·3 이 말하는 **"규칙은 데이터로, 코드는 해석기만"** 그 자체다.
+특히 G01 은 93 AST 노드로 가장 큰 동일파일 클론이고 이름과 docstring 이 서로 다른
+**진짜 복붙**이다. 동일파일을 면제하면 지표가 가장 잡아야 할 종류를 놓친다.
+
+**가독성 우려는 임계값이 자동으로 해소한다.** 공개 이름(`_int_or_none` ·
+`_float_or_none`)은 얇은 델리게이터로 남길 수 있고, 델리게이터는 10~12 AST 노드라
+`CLONE_MIN_AST_NODES`(20) 아래로 떨어져 계수되지 않는다. 이름의 가독성을 지키면서
+중복은 사라지며, **allowlist 항목이 0개** 필요하다.
 
 ### 4.2 판정 파이프라인
 
@@ -170,7 +188,10 @@ def scan_repo(root: Path) -> RatchetReport:
     ...
 ```
 
-`FileMetrics` 에 `duplicate_mechanical_helpers: int = 0` 을 추가한다. baseline JSON 은
+`FileMetrics` 에 `duplicate_mechanical_helpers: int = 0` 과
+`duplicate_mechanical_helpers_local: int = 0` 을 추가한다. 후자는 교차 파일 정보가
+필요 없으므로 `scan_source` 안에서 pass 1 에 계산할 수 있고, 전자만 pass 2 에서
+채운다. baseline JSON 은
 값이 0 인 지표를 생략하는 sparse 형식이므로 **기존 baseline 과 스키마 호환**이고
 `_is_corrupt_baseline` 경로를 타지 않는다. 그럼에도 PR1 에서 baseline 은 새 지표 값을
 기록하도록 재생성한다.
@@ -200,6 +221,14 @@ def scan_repo(root: Path) -> RatchetReport:
 - `CLONE_ALLOWLIST` 상수로 의도적 예외를 사유와 함께 선언 (기존 `JSON_CALL_ALLOWLIST`
   패턴 재사용)
 - **라벨링된 픽스처**로 predicate 를 양방향 고정 (§7.1)
+
+`CLONE_ALLOWLIST` 의 키는 **콘텐츠 해시가 아니라 멤버 신원**(정렬된
+`파일경로:함수명` 집합)으로 잡는다. 해시로 키를 잡으면 면제된 함수를 사소하게 고칠
+때마다 해시가 바뀌어 빌드가 깨진다. 멤버 신원으로 잡으면:
+
+- 본문을 고쳐도 여전히 클론이면 면제 유지 (멤버 불변)
+- 세 번째 복사본이 생기면 멤버 집합이 달라져 **면제가 적용되지 않고 위반**
+- 더 이상 클론이 아니게 되면 죽은 항목 검사(§7.3)가 실패시켜 제거를 강제
 
 ## 5. 통합 작업
 
@@ -236,7 +265,7 @@ frontend/src/shared/
 `from app.services... import` 를 하고 있으므로, **스크립트는 `app.utils.*` 를 직접
 import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 
-### 5.2 통합 매핑 (교차파일 20그룹)
+### 5.2 통합 매핑 (측정된 25그룹)
 
 | PR | 그룹 | 대상 | 목적지 |
 |---|---|---|---|
@@ -244,13 +273,16 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 | PR2 | G03·G14 | `_memberships_by_group`/`_tech_fields_by_group` · `_format_groups`×2 | `app/services/classification/_grouping.py` |
 | PR2 | G20 | `normalize_agency_name`×2 | `koneps/parsing.py` canonical → `predictors/historical/statistics.py` 가 import |
 | PR2 | G19 | `guidance_for`/`failure_guidance` | `smoke_failure_taxonomy.py` canonical → `scripts/production_smoke_test.py` 가 import |
+| PR2 | G01·G21 (동일파일) | `extract_eligibility_flags`/`_project_license_limit_item` · `is_openapi_source`/`is_scsbid_openapi_source` | `koneps/openapi.py` 안에서 파라미터화 (§4.1 처방) |
+| PR2 | G06·G18·G25 (동일파일) | `coerce_numeric_list`/`coerce_integer_list` · `_int_or_none`/`_float_or_none` · `_resolve_{goods,service}_procurement_rate_band` | 각 파일 안에서 파라미터화 + 얇은 명명 래퍼 유지 |
 | PR3 | G02·G10·G22 | `_read_json_object`×3 · `_write_json`×4 · `parse_json_or_text`×2 | `app/utils/jsonio.py` |
 | PR3 | G07 | `_optional_int`×2 | `app/utils/numeric.py` |
 | PR3 | G04·G09·G12 | `parse_thresholds`×2 · `parse_actions`×2 · `parse_csv`×2 | `scripts/_common/cliargs.py` |
 | PR3 | G11 | `_clip_title`×2 | `app/utils/textfmt.py` |
 | PR3 | G08·G05·G17·G23 | `_count_lines`×3 · `_ordered_segments`×2 · `_verdict_line`×2 · `*_label_for`×2 | `scripts/_common/report.py` |
 
-합계: PR2 6그룹 · PR3 12그룹 · 보류 2그룹 = **교차파일 20그룹 전부**를 다룬다.
+합계: PR2 11그룹(교차 6 + 동일 5) · PR3 12그룹 · 보류 2그룹 = **측정된 25그룹 전부**를
+다룬다 (교차파일 20 + 동일파일 5).
 
 `G23` (`_classify_label_for` / `_segment_label_for`) 은 이름이 다르므로 통합 전에 두
 함수의 **의미가 실제로 같은지** 확인한다. 다르면 allowlist 로 옮긴다.
@@ -263,7 +295,7 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 
 ### 5.3 통합하지 않고 보류하는 2건
 
-20그룹 전부가 통합이 옳은 것은 아니다. 다음 둘은 `CLONE_ALLOWLIST` 에 **사유와 함께
+교차파일 20그룹 전부가 통합이 옳은 것은 아니다. 다음 둘은 `CLONE_ALLOWLIST` 에 **사유와 함께
 등재**하고 코드를 건드리지 않는다.
 
 - **G13** — `app/services/award_verification.py:158 _rate_to_fraction` /
@@ -319,8 +351,11 @@ CI 에 프론트 job 을 신설한다: `tsc --noEmit` · `vitest run` · `vite b
 
 - 메커니컬 헬퍼(숫자 변환·JSON I/O·문자열 포맷·CLI 인자 파싱)는 **허브에만 정의**한다
 - 새 헬퍼를 쓰기 전에 **허브를 먼저 grep** 한다
-- 교차 파일 중복은 `duplicate_mechanical_helpers` 래칫이 **자동 차단**한다. 이 지표가
-  오르는 PR 은 CI 에서 실패한다
+- 교차 파일 중복은 `duplicate_mechanical_helpers` 가, 동일 파일 중복은
+  `duplicate_mechanical_helpers_local` 이 **자동 차단**한다. 두 지표 중 하나라도 오르는
+  PR 은 CI 에서 실패한다
+- 같은 알고리즘이 상수·캐스트만 달라 반복되면 **파라미터화된 해석기 + 얇은 명명 래퍼**로
+  쓴다. 이름의 가독성은 래퍼가 지키고, 알고리즘은 한 벌만 존재한다
 - 의도적 예외는 `CLONE_ALLOWLIST` 에 **사유와 함께** 등재한다 (주석으로 넘기지 않는다)
 
 ### 6.2 CLAUDE.md §4.5-6 보강 — 허브 주소표
@@ -358,13 +393,17 @@ CI 에 프론트 job 을 신설한다: `tsc --noEmit` · `vitest run` · `vite b
 - `_write_json` 류 교차파일 4벌
 - `_read_json_object` 류 교차파일 3벌
 - 이름만 다르고 구조가 같은 쌍 (`_coerce_float` / `amount_float`)
+- 동일 파일 내 상수만 다른 쌍 (`extract_eligibility_flags` /
+  `_project_license_limit_item` — `…_local` 지표)
+- 동일 파일 내 캐스트만 다른 쌍 (`_int_or_none` / `_float_or_none` — `…_local` 지표)
 
 **반드시 놓쳐야 할 것**
 
 - 데코레이터가 붙은 얼짜 FastAPI 라우터 (`app/api/operator.py` 패턴)
 - DB 세션에 접근하는 서비스 메서드
-- 동일 파일 내 대칭 API (`_int_or_none` / `_float_or_none`)
 - 상수 리터럴만 다른 쌍 (`round(x, 2)` vs `round(x, 3)`)
+- **파라미터화 후 남는 얇은 명명 델리게이터** (10~12 노드 — 임계값 아래). 이 케이스가
+  깨지면 §4.1 의 "이름은 지키고 중복만 없앤다" 처방이 성립하지 않는다
 - (TS) React 컴포넌트와 커스텀 훅
 
 기존 `compare_reports` 계약 테스트와 "저장소 스캔이 baseline 을 초과하지 않음" 통합
@@ -398,11 +437,15 @@ allowlist 가 stale 해지면서 면제 범위가 조용히 넓어진다.
 
 ### 7.4 성공 기준
 
-| 시점 | 파이썬 교차파일 클론 |
-|---|---|
-| 현재 | 20 그룹 / 45 함수 |
-| PR1 완료 | 동일 (baseline 동결 — 이 시점부터 증가 차단) |
-| PR3 완료 | **2 그룹 / 4 함수** (allowlist 등재한 G13 · G24 만 잔존) |
+| 시점 | 교차파일 (`duplicate_mechanical_helpers`) | 동일파일 (`…_local`) |
+|---|---|---|
+| 현재 | 20 그룹 / 45 함수 | 5 그룹 / 10 함수 |
+| PR1 완료 | 동일 (baseline 동결 — 이 시점부터 증가 차단) | 동일 |
+| PR2 완료 | 14 그룹 / 33 함수 | **0 그룹 / 0 함수** |
+| PR3 완료 | **2 그룹 / 4 함수** (allowlist 등재한 G13 · G24 만 잔존) | 0 그룹 / 0 함수 |
+
+동일파일 목표가 0 인 것은 §4.1 에서 5그룹 전수를 확인한 결과 전부 환원 가능하다고
+판정했기 때문이다. 파라미터화 후 남는 얇은 명명 래퍼는 임계값 아래라 계수되지 않는다.
 
 프론트 목표치는 PR4 스캐너 리포트가 확정한다. 현재 프론트 수치는 수동 grep 추정이므로
 목표로 박지 않는다.
@@ -411,7 +454,6 @@ allowlist 가 stale 해지면서 면제 범위가 조용히 넓어진다.
 
 이 설계가 **잡지 못하는 것**을 명시한다. 지표는 총량 측정이 아니라 증가 차단 래칫이다.
 
-- **동일 파일 내 클론** — 계수하지 않는다 (§4.1). 현재 5그룹이 여기 해당한다.
 - **의미적 유사(near-duplicate)** — 구조가 다르면서 같은 일을 하는 함수는 잡히지 않는다.
   구조 완전일치만 판정한다.
 - **부분 통합** — 4곳 중 1곳만 제거하면 지표가 줄지 않는다 (§4.4).
