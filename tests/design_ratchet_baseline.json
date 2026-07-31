@@ -114,9 +114,7 @@
       "dict_boundary_functions": 1
     },
     "app/api/backtests.py": {
-      "functions_over_soft_limit": 1,
-      "json_direct_calls": 1,
-      "dict_boundary_functions": 6
+      "functions_over_soft_limit": 1
     },
     "app/api/bids.py": {
       "dict_boundary_functions": 1
@@ -240,7 +238,7 @@
     },
     "app/services/backtest_data_audit.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 4
+      "dict_boundary_functions": 3
     },
     "app/services/base_amount_basis.py": {
       "json_direct_calls": 1,
@@ -617,21 +615,15 @@
       "dict_boundary_functions": 8
     },
     "app/services/paper_bidding_backtest/candidates.py": {
-      "functions_over_soft_limit": 4,
-      "dict_boundary_functions": 2
+      "functions_over_soft_limit": 4
     },
     "app/services/paper_bidding_backtest/forward_settlement.py": {
       "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 2
+      "dict_boundary_functions": 1
     },
     "app/services/paper_bidding_backtest/orchestration.py": {
-      "functions_over_soft_limit": 6,
-      "file_loc_band": 24,
-      "dict_boundary_functions": 7
-    },
-    "app/services/paper_bidding_backtest/persistence.py": {
-      "json_direct_calls": 2,
-      "dict_boundary_functions": 4
+      "functions_over_soft_limit": 4,
+      "dict_boundary_functions": 2
     },
     "app/services/paper_bidding_backtest/scoring.py": {
       "json_direct_calls": 1,
@@ -639,12 +631,7 @@
     },
     "app/services/paper_bidding_backtest/settlement.py": {
       "functions_over_soft_limit": 3,
-      "json_direct_calls": 1,
-      "dict_boundary_functions": 6
-    },
-    "app/services/paper_bidding_backtest/summary.py": {
-      "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 1
+      "dict_boundary_functions": 3
     },
     "app/services/paper_bidding_scheduler.py": {
       "dict_boundary_functions": 4
@@ -758,7 +745,6 @@
       "json_direct_calls": 1
     },
     "app/tasks/backtest_jobs.py": {
-      "functions_over_soft_limit": 1,
       "dict_boundary_functions": 2
     },
     "app/tasks/celery_app.py": {
@@ -779,14 +765,13 @@
       "env_test_sniff": 1
     },
     "app/tasks/jobs.py": {
-      "file_loc_band": 27,
-      "dict_boundary_functions": 24,
-      "unvalidated_dict_tasks": 7
+      "file_loc_band": 26,
+      "dict_boundary_functions": 23
     },
     "app/tasks/reserve_detail_backfill.py": {
       "functions_over_soft_limit": 2,
       "json_direct_calls": 2,
-      "dict_boundary_functions": 11
+      "dict_boundary_functions": 10
     },
     "app/tasks/task_status.py": {
       "dict_boundary_functions": 7
@@ -816,9 +801,6 @@
     },
     "scripts/backfill_scsbid_awards.py": {
       "functions_over_soft_limit": 2,
-      "json_direct_calls": 2
-    },
-    "scripts/backtest_data_audit.py": {
       "json_direct_calls": 2
     },
     "scripts/backtest_latest_award_holdouts.py": {
