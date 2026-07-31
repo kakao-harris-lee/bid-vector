@@ -277,3 +277,45 @@ describe("CandidatesPreview 명시 갱신", () => {
     expect(screen.getByRole("button", { name: "새로고침" })).toBeEnabled();
   });
 });
+
+describe("CandidatesPreview 폴링 결정성", () => {
+  it("['strategy'] 전면 invalidate 는 1회 재조회만 하고 폴링을 만들지 않는다", async () => {
+    // 전략 저장 / realtime strategy.monitor.* / 온보딩 apply 가 모두 이 전면
+    // invalidate 를 쏜다(설계 §7). 폴링 근거가 서버 status 뿐이므로, 정착 상태에서
+    // 리셋되어도 폴링이 켜지지 않는다.
+    const fetchMock = installFetchMock([snapshot()]);
+    const { queryClient } = renderPreview();
+    await screen.findByText("3분 전 기준");
+    const before = candidatesCalls(fetchMock).length;
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["strategy"] });
+    });
+
+    await waitFor(() => expect(candidatesCalls(fetchMock).length).toBe(before + 1));
+    await settle();
+    expect(candidatesCalls(fetchMock).length).toBe(before + 1);
+    expect(screen.queryByTestId("snapshot-progress")).toBeNull();
+  });
+
+  it("invalidate 뒤 서버가 running 을 보고하면 그때 폴링이 켜진다", async () => {
+    const fetchMock = installFetchMock([
+      snapshot(),
+      snapshot({ snapshot_status: "running" }),
+      snapshot({ computed_at: new Date().toISOString() })
+    ]);
+    const { queryClient } = renderPreview();
+    await screen.findByText("3분 전 기준");
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["strategy"] });
+    });
+
+    await screen.findByTestId("snapshot-progress");
+    expect(await screen.findByText("방금 기준")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("snapshot-progress")).toBeNull());
+    const settledCalls = candidatesCalls(fetchMock).length;
+    await settle();
+    expect(candidatesCalls(fetchMock).length).toBe(settledCalls);
+  });
+});
