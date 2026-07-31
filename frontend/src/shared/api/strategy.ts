@@ -1,6 +1,7 @@
 import { apiRequest } from "./client";
 import { ApiError } from "./session";
 import type {
+  OperatorStrategyCandidatesRefreshResponse,
   OperatorStrategyCandidatesResponse,
   OperatorStrategyResponse,
   OperatorStrategyRunListResponse,
@@ -79,6 +80,39 @@ export function fetchStrategyCandidates(
       { token }
     ),
     "후보 미리보기를 불러오지 못했습니다."
+  );
+}
+
+export interface StrategyCandidatesRefreshQuery {
+  highPriorityOnly?: boolean;
+}
+
+/**
+ * 미리보기 스냅샷 재계산 명시 디스패치(202).
+ *
+ * 별도 task-status 엔드포인트는 없다 — 응답 `poll_url` 이 후보 GET 자신을 가리키고
+ * 상태 관찰은 그 재조회로 한다(설계 §6.2). 그래서 호출부는 202 를 받은 뒤 후보
+ * 쿼리를 invalidate 해 폴링을 서버 status 에 인수한다.
+ */
+export function refreshStrategyCandidates(
+  params: StrategyCandidatesRefreshQuery = {},
+  token?: string | null,
+  operatorId?: number | null
+): Promise<OperatorStrategyCandidatesRefreshResponse> {
+  const search = new URLSearchParams();
+  if (typeof params.highPriorityOnly === "boolean") {
+    search.set("high_priority_only", String(params.highPriorityOnly));
+  }
+  const query = search.toString();
+  const path = query
+    ? `/api/v1/operator/strategy/candidates/refresh?${query}`
+    : "/api/v1/operator/strategy/candidates/refresh";
+  return wrap(
+    apiRequest<OperatorStrategyCandidatesRefreshResponse>(withOperator(path, operatorId), {
+      method: "POST",
+      token
+    }),
+    "미리보기 갱신 요청에 실패했습니다."
   );
 }
 

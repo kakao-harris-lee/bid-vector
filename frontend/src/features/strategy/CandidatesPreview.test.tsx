@@ -65,11 +65,27 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   } as Response);
 }
 
-/** 후보 GET 응답을 순서대로 돌려준다(마지막 값에서 고정). */
-function installFetchMock(payloads: OperatorStrategyCandidatesResponse[]) {
+/** 명시 갱신 202 응답 (백엔드 _CANDIDATES_REFRESH_DISPATCHED_DETAIL 그대로). */
+const REFRESH_ACCEPTED = {
+  task_id: "task-preview-1",
+  operator_id: 1,
+  current_operator_id: 1,
+  current_operator_username: "operator",
+  high_priority_only: false,
+  snapshot_status: "running" as const,
+  detail: "미리보기 재계산을 큐에 등록했습니다.",
+  poll_url: "/api/v1/operator/strategy/candidates"
+};
+
+/** 후보 GET 응답을 순서대로 돌려준다(마지막 값에서 고정) + 갱신 202. */
+function installFetchMock(
+  payloads: OperatorStrategyCandidatesResponse[],
+  refresh: unknown = REFRESH_ACCEPTED
+) {
   let index = 0;
   const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
+    if (url.includes("/strategy/candidates/refresh")) return jsonResponse(refresh, 202);
     if (url.includes("/strategy/candidates")) {
       const payload = payloads[Math.min(index, payloads.length - 1)]!;
       index += 1;
@@ -79,6 +95,14 @@ function installFetchMock(payloads: OperatorStrategyCandidatesResponse[]) {
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function refreshCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(
+    ([url, init]) =>
+      String(url).includes("/strategy/candidates/refresh") &&
+      (init as RequestInit | undefined)?.method === "POST"
+  );
 }
 
 function candidatesCalls(fetchMock: ReturnType<typeof vi.fn>) {
@@ -212,5 +236,44 @@ describe("CandidatesPreview 스냅샷 렌더", () => {
         )
       ).toBe(true)
     );
+  });
+});
+
+describe("CandidatesPreview 명시 갱신", () => {
+  it("새로고침은 POST /candidates/refresh 를 보내고 그 뒤 폴링으로 결과를 반영한다", async () => {
+    const fresh = snapshot({ computed_at: new Date().toISOString() });
+    const fetchMock = installFetchMock([
+      snapshot({ stale: true, computed_at: minutesAgo(40) }), // 최초: stale 이지만 정착
+      snapshot({ snapshot_status: "running", computed_at: minutesAgo(40) }), // 202 직후
+      fresh // 재계산 완료
+    ]);
+    renderPreview();
+    await screen.findByText("40분 전 기준 · 갱신 필요");
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: "새로고침" }));
+
+    await waitFor(() => expect(refreshCalls(fetchMock)).toHaveLength(1));
+    const [url, init] = refreshCalls(fetchMock)[0]!;
+    expect(String(url)).toBe(
+      "/api/v1/operator/strategy/candidates/refresh?high_priority_only=false"
+    );
+    expect(init?.method).toBe("POST");
+    expect((init?.headers as Record<string, string>).Authorization).toBe(
+      "Bearer token-candidates"
+    );
+    // 202 detail 을 그대로 보여준다(디스패치/스킵 사유가 서버 문구로 구분된다).
+    expect(await screen.findByText("미리보기 재계산을 큐에 등록했습니다.")).toBeInTheDocument();
+    // 폴링은 로컬 플래그가 아니라 서버가 돌려준 running 이 켠다.
+    await screen.findByTestId("snapshot-progress");
+    expect(await screen.findByText("방금 기준")).toBeInTheDocument();
+  });
+
+  it("갱신 중에도 새로고침 버튼은 활성 — 고착 running 회수 경로를 막지 않는다", async () => {
+    installFetchMock([snapshot({ snapshot_status: "running" })]);
+    renderPreview();
+
+    await screen.findByTestId("snapshot-progress");
+    expect(screen.getByRole("button", { name: "새로고침" })).toBeEnabled();
   });
 });

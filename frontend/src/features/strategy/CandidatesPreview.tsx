@@ -7,7 +7,7 @@ import {
   SnapshotStatusNotice
 } from "./components";
 import { hasComputedSnapshot } from "./snapshotState";
-import { useStrategyCandidatesQuery } from "./hooks";
+import { useRefreshStrategyCandidatesMutation, useStrategyCandidatesQuery } from "./hooks";
 
 const CANDIDATE_LIMIT = 5;
 const ANALYZED_LABEL = "분석 대상";
@@ -48,6 +48,7 @@ export function CandidatesPreview({ pollIntervalMs }: CandidatesPreviewProps) {
     null,
     { pollIntervalMs }
   );
+  const refresh = useRefreshStrategyCandidatesMutation(session);
   const snapshot = query.data;
 
   return (
@@ -60,10 +61,10 @@ export function CandidatesPreview({ pollIntervalMs }: CandidatesPreviewProps) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => query.refetch()}
-          disabled={query.isFetching}
+          onClick={() => refresh.mutate({ highPriorityOnly })}
+          disabled={refresh.isPending}
         >
-          새로고침
+          {refresh.isPending ? "요청 중" : "새로고침"}
         </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

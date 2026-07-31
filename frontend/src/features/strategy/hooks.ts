@@ -4,15 +4,18 @@ import {
   fetchStrategyCandidates,
   fetchStrategyRuns,
   queryKeys,
+  refreshStrategyCandidates,
   submitEligibilityFeedback,
   updateStrategy,
   type EligibilityFeedbackRequest,
   type EligibilityFeedbackResponse,
-  type StrategyCandidatesQuery
+  type StrategyCandidatesQuery,
+  type StrategyCandidatesRefreshQuery
 } from "@/shared/api";
 import { ApiError } from "@/shared/api/session";
 import { toastApi } from "@/shared/components/ui";
 import type {
+  OperatorStrategyCandidatesRefreshResponse,
   OperatorStrategyResponse,
   OperatorStrategyUpdatePayload
 } from "@/shared/types/strategy";
@@ -89,6 +92,37 @@ export function useUpdateStrategyMutation(session: AuthSession | null) {
       queryClient.setQueryData(queryKeys.strategy.detail(null), data);
       // Broadcast — every cached variant (including impersonation reads).
       queryClient.invalidateQueries({ queryKey: ["strategy"] });
+    }
+  });
+}
+
+/**
+ * 미리보기 스냅샷 재계산 명시 디스패치 (설계 §7 — 구 `query.refetch()` 대체).
+ *
+ * 202 는 "큐에 넣었다"이지 "끝났다"가 아니므로, 성공 응답의 `detail`(디스패치 /
+ * 이미 실행 중 재사용 / 큐잉 실패가 서버 문구로 구분된다)을 그대로 보여주고 후보
+ * 쿼리를 invalidate 한다. 그 뒤의 폴링은 다음 GET 이 돌려주는 `snapshot_status`
+ * 가 켠다 — 로컬 플래그를 두지 않는다. 401 침묵은 세션 만료 모달 소관
+ * (`useEligibilityFeedbackMutation` 패턴).
+ */
+export function useRefreshStrategyCandidatesMutation(session: AuthSession | null) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    OperatorStrategyCandidatesRefreshResponse,
+    Error,
+    StrategyCandidatesRefreshQuery
+  >({
+    mutationFn: (params) => refreshStrategyCandidates(params, session?.token),
+    onSuccess: (data) => {
+      toastApi.info({ title: "미리보기 갱신 요청", description: data.detail });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.strategy.candidatesAll() });
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 401) return;
+      toastApi.danger({
+        title: "미리보기 갱신 실패",
+        description: error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요."
+      });
     }
   });
 }
