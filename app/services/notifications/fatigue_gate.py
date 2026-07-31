@@ -9,13 +9,23 @@ Both answers come from the ``analytics`` rows the delivery path already writes
 (``telegram.delivery``), so no schema change is involved. Only deliveries with
 ``sent: true`` count — a dry-run or route-blocked attempt puts no message in
 front of the operator, so it must not consume the operator's alert budget.
+
+The payload is read back through its declared contract
+(:class:`~app.schemas.analytics_events.PersistedTelegramDeliveryEvent`) instead of
+``json.loads`` + ``.get()``. The three fields this gate branches on are the write
+path's contract, so a rename on either side must not silently degrade into "no
+deliveries today" (which would quietly disable the cap).
+
+This gate is **fail-closed**: it exists to stop alert floods, so an unusable
+delivery row errs toward suppression rather than toward sending one more message.
+See :meth:`NotificationFatigueGate._delivered_decision_events`.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -27,6 +37,14 @@ from app.core.constants import (
 )
 from app.core.time import ensure_utc, kst_day_bounds_utc, utc_now
 from app.models.models import Analytics
+from app.schemas.analytics_events import (
+    PersistedTelegramDeliveryEvent,
+    TelegramDeliverySuppressedEvent,
+)
+from app.services.analytics_event_payload import (
+    dump_analytics_event,
+    load_analytics_event_as,
+)
 from app.services.notifications.fatigue import (
     FatigueDecision,
     FatigueSignals,
@@ -42,15 +60,21 @@ logger = logging.getLogger(__name__)
 DECISION_DELIVERY_SOURCE = "bid_decision"
 
 
-def _load_event_payload(raw_payload: object) -> dict:
-    """Parse an analytics event payload, treating unusable data as empty."""
-    if isinstance(raw_payload, dict):
-        return raw_payload
-    try:
-        payload = json.loads(str(raw_payload or "{}"))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+@dataclass(frozen=True)
+class DeliveryBudgetRow:
+    """One delivery row that consumes the operator's alert budget.
+
+    ``payload`` is ``None`` when the stored ``event_data`` could not be restored.
+    Such a row still counts against the daily cap (fail-closed), but it cannot
+    take part in the per-notice cooldown match because the notice is unknown.
+    """
+
+    delivered_at: datetime
+    payload: PersistedTelegramDeliveryEvent | None = None
+
+    def matches_project(self, project_id: int) -> bool:
+        """Whether this row is a known delivery for ``project_id``."""
+        return self.payload is not None and self.payload.project_id == project_id
 
 
 class NotificationFatigueGate:
@@ -110,6 +134,7 @@ class NotificationFatigueGate:
         now: datetime,
         limits: NotificationFatigueLimits,
     ) -> int:
+        """Count today's (KST) budget-consuming rows, unreadable ones included."""
         if not limits.daily_cap_enabled:
             return 0
         day_start, day_end = kst_day_bounds_utc(now)
@@ -135,14 +160,14 @@ class NotificationFatigueGate:
             return None
         since = ensure_utc(now) - timedelta(hours=limits.renotify_cooldown_hours)
         timestamps = [
-            timestamp
-            for timestamp, payload in self._delivered_decision_events(
+            row.delivered_at
+            for row in self._delivered_decision_events(
                 db,
                 operator_id=operator_id,
                 since=since,
                 until=None,
             )
-            if self._payload_project_id(payload) == int(project_id)
+            if row.matches_project(int(project_id))
         ]
         return max(timestamps) if timestamps else None
 
@@ -153,8 +178,20 @@ class NotificationFatigueGate:
         operator_id: int,
         since: datetime,
         until: datetime | None,
-    ) -> list[tuple[datetime, dict]]:
-        """Return ``(timestamp, payload)`` for alerts that actually reached the operator."""
+    ) -> list[DeliveryBudgetRow]:
+        """Return the rows that consume this operator's alert budget.
+
+        The gate is **fail-closed** because it is a flood-prevention device: a row
+        whose payload cannot be restored is NOT assumed to be "nothing was
+        delivered". It is counted against the daily cap (the conservative,
+        suppressing direction), and only **excluded from the per-notice cooldown
+        match** — an unreadable row cannot tell us which notice it announced, and
+        guessing a notice id would suppress the wrong alert.
+
+        Readable rows keep the original filters: only ``sent: true`` decision
+        alerts consume the budget (a dry-run puts no message in front of the
+        operator, and a bid-submission receipt confirms the operator's own action).
+        """
         query = db.query(Analytics.timestamp, Analytics.event_data).filter(
             Analytics.user_id == int(operator_id),
             Analytics.event_type == TELEGRAM_DELIVERY_EVENT_TYPE,
@@ -162,27 +199,26 @@ class NotificationFatigueGate:
         )
         if until is not None:
             query = query.filter(Analytics.timestamp < until)
-        events: list[tuple[datetime, dict]] = []
+        rows: list[DeliveryBudgetRow] = []
         for timestamp, raw_payload in query.all():
             if timestamp is None:
                 continue
-            payload = _load_event_payload(raw_payload)
-            if not bool(payload.get("sent")):
+            payload = load_analytics_event_as(
+                raw_payload,
+                model=PersistedTelegramDeliveryEvent,
+                event_type=TELEGRAM_DELIVERY_EVENT_TYPE,
+            )
+            if payload is None:
+                rows.append(DeliveryBudgetRow(delivered_at=ensure_utc(timestamp)))
                 continue
-            if str(payload.get("source") or "") != DECISION_DELIVERY_SOURCE:
+            if not payload.sent:
                 continue
-            events.append((ensure_utc(timestamp), payload))
-        return events
-
-    def _payload_project_id(self, payload: dict) -> int | None:
-        """Read the notice id from a delivery payload, tolerating older rows."""
-        raw_project_id = payload.get("project_id")
-        if raw_project_id is None:
-            return None
-        try:
-            return int(raw_project_id)
-        except (TypeError, ValueError):
-            return None
+            if (payload.source or "") != DECISION_DELIVERY_SOURCE:
+                continue
+            rows.append(
+                DeliveryBudgetRow(delivered_at=ensure_utc(timestamp), payload=payload)
+            )
+        return rows
 
 
 def record_fatigue_suppression(
@@ -202,17 +238,22 @@ def record_fatigue_suppression(
     event = Analytics(
         user_id=operator_id,
         event_type=TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE,
-        event_data=json.dumps(
-            {
-                "operator_id": int(operator_id),
-                "notification_id": int(notification_id),
-                "project_id": None if project_id is None else int(project_id),
-                "source": source,
-                "sent": False,
-                "status": decision.reason,
-                **decision.as_event_payload(),
-            },
-            ensure_ascii=False,
+        event_data=dump_analytics_event(
+            TelegramDeliverySuppressedEvent(
+                operator_id=int(operator_id),
+                notification_id=int(notification_id),
+                project_id=None if project_id is None else int(project_id),
+                source=source,
+                sent=False,
+                status=decision.reason,
+                allowed=decision.allowed,
+                reason=decision.reason,
+                detail=decision.detail,
+                daily_sent_count=decision.daily_sent_count,
+                daily_cap=decision.daily_cap,
+                hours_since_project_send=decision.hours_since_project_send,
+                renotify_cooldown_hours=decision.renotify_cooldown_hours,
+            )
         ),
     )
     db.add(event)

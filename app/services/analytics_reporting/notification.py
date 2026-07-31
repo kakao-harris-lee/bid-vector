@@ -6,15 +6,37 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.constants import TELEGRAM_DELIVERY_EVENT_TYPE
 from app.models.models import (
     Analytics,
     Notification,
 )
+from app.schemas.analytics_events import PersistedTelegramDeliveryEvent
+from app.services.analytics_event_payload import load_analytics_event_as
 from app.services.notifications.telegram import TelegramNotificationService
 
 
 class _NotificationMixin:
     """Notification delivery summary and Telegram delivery cards."""
+
+    def _load_telegram_delivery(
+        self,
+        raw_event_data: str | None,
+    ) -> PersistedTelegramDeliveryEvent:
+        """저장된 배달 레코드를 선언된 계약으로 복원한다(해석 불가 → 빈 모델).
+
+        여기서는 ``None`` 이 아니라 **빈 모델**로 degrade 한다: 해석할 수 없는 행도 배달
+        시도가 있었던 행이므로 성공률의 분모에서 사라지면 안 된다(집계는 키가 없는
+        payload 를 이미 ``unknown`` 으로 센다).
+        """
+        return (
+            load_analytics_event_as(
+                raw_event_data,
+                model=PersistedTelegramDeliveryEvent,
+                event_type=TELEGRAM_DELIVERY_EVENT_TYPE,
+            )
+            or PersistedTelegramDeliveryEvent()
+        )
 
     def _build_notification_summary(
         self,
@@ -38,7 +60,7 @@ class _NotificationMixin:
             db.query(Analytics)
             .filter(
                 Analytics.user_id == operator_id,
-                Analytics.event_type == "telegram.delivery",
+                Analytics.event_type == TELEGRAM_DELIVERY_EVENT_TYPE,
                 Analytics.timestamp >= date_from,
             )
             .order_by(Analytics.timestamp.desc(), Analytics.id.desc())
@@ -48,7 +70,7 @@ class _NotificationMixin:
             {
                 "event_id": int(event.id),
                 "timestamp": event.timestamp,
-                **self._load_event_payload(event.event_data),
+                **self._load_telegram_delivery(event.event_data).model_dump(),
             }
             for event in telegram_events
         ]

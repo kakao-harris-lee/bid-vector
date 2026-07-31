@@ -225,6 +225,36 @@ no_implicit_optional = true
 strict_equality = true
 disable_error_code = ["import-untyped"]
 
+# Phase 4b — ``Analytics.event_data`` 계약 체인(방어적 DTO Phase 4.2): 직렬화/복원 단일
+# 경로(analytics_event_payload), Telegram 배달 경로 판정 코어(telegram_delivery_plan),
+# 그리고 피로도 게이트의 I/O 절반(fatigue_gate). 앞의 둘은 DB 를 만지지 않는 순수 모듈이고,
+# fatigue_gate 는 세션을 잡지만 ORM 속성을 **판정에 대입하지 않고** 복원 모델로만 읽어
+# ``Column[str]``-vs-``str`` 오탐이 발생하지 않는다(실측 0건). 셋 다 error-code 완화 없이
+# strict 로 올린다 — 다음 변경이 조용히 ``dict``/``Any`` 로 되돌아가는 것을 막는 정적 가드다.
+#
+# 제외한 것과 그 이유:
+#   * ``app.schemas.analytics_events`` — ``Persisted*`` 복원 모델이 생산 모델을 상속해
+#     필드를 ``X | None`` 으로 넓힌다(미기록을 ``null`` 로 보존하는 P1 패턴). 이 넓히기는
+#     의도된 계약이지만 mypy 에는 LSP 위반(``assignment``)이라, 올리려면 그 코드를 통째로
+#     완화해야 해서 아일랜드의 의미가 사라진다. ``app.schemas.paper_bidding_runs`` 를
+#     제외한 것과 같은 이유다.
+#   * ``notifications.manager`` / ``notifications.telegram_strategy_pending`` — ORM 행
+#     속성을 읽고 **대입**해 grandfather 블록이 존재하는 이유인 ``Column[str]``-vs-``str``
+#     오탐이 되살아난다. 모델을 ``Mapped[...]`` 로 옮기는 선행 작업 없이 넣으면
+#     ``arg-type``/``assignment`` 을 통째로 완화해야 한다(이 파일 상단 규칙).
+[[tool.mypy.overrides]]
+module = [
+    "app.services.analytics_event_payload",
+    "app.services.notifications.fatigue_gate",
+    "app.services.notifications.telegram_delivery_plan",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------

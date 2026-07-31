@@ -4635,30 +4635,30 @@ def test_non_canonical_telegram_delivery_plan_distinguishes_channel_states(
         "active": service.build_telegram_delivery_plan(test_db, operator_id=active.id),
     }
 
-    assert plans["missing"]["status"] == "skipped_synthetic_operator"
-    assert plans["missing"]["channel_source"] == "missing_channel"
-    assert plans["missing"]["channel_active"] is False
-    assert plans["missing"]["dry_run_only"] is True
+    assert plans["missing"].status == "skipped_synthetic_operator"
+    assert plans["missing"].channel_source == "missing_channel"
+    assert plans["missing"].channel_active is False
+    assert plans["missing"].dry_run_only is True
 
-    assert plans["inactive"]["status"] == "telegram_channel_inactive"
-    assert plans["inactive"]["channel_source"] == "operator_notification_channels"
-    assert plans["inactive"]["channel_active"] is False
-    assert plans["inactive"]["dry_run_only"] is False
+    assert plans["inactive"].status == "telegram_channel_inactive"
+    assert plans["inactive"].channel_source == "operator_notification_channels"
+    assert plans["inactive"].channel_active is False
+    assert plans["inactive"].dry_run_only is False
 
-    assert plans["dry_run"]["status"] == "telegram_channel_dry_run"
-    assert plans["dry_run"]["channel_active"] is True
-    assert plans["dry_run"]["dry_run_only"] is True
+    assert plans["dry_run"].status == "telegram_channel_dry_run"
+    assert plans["dry_run"].channel_active is True
+    assert plans["dry_run"].dry_run_only is True
 
-    assert plans["active"]["status"] == "telegram_route_non_canonical"
-    assert plans["active"]["route_key"] == "telegram:legacy-configured-chat"
-    assert plans["active"]["channel_active"] is True
-    assert plans["active"]["dry_run_only"] is False
+    assert plans["active"].status == "telegram_route_non_canonical"
+    assert plans["active"].route_key == "telegram:legacy-configured-chat"
+    assert plans["active"].channel_active is True
+    assert plans["active"].dry_run_only is False
 
     for plan in plans.values():
-        assert plan["target_label"] is None or "1594710346" not in plan["target_label"]
-        assert plan["route_send_allowed"] is False
-        assert plan["can_send"] is False
-        assert plan["telegram_configured"] is True
+        assert plan.target_label is None or "1594710346" not in plan.target_label
+        assert plan.route_send_allowed is False
+        assert plan.can_send is False
+        assert plan.telegram_configured is True
 
 
 def test_non_canonical_delivery_telemetry_masks_raw_route_targets(
@@ -4723,6 +4723,72 @@ def test_non_canonical_delivery_telemetry_masks_raw_route_targets(
     assert event_data["route_send_allowed"] is False
     assert event_data["can_send"] is False
     assert event_data["telegram_configured"] is True
+
+
+def test_delivery_survives_a_transport_response_that_breaks_the_outcome_contract(
+    test_db,
+    monkeypatch,
+):
+    """계약을 어긴 transport 응답도 흐름을 죽이지 않고 실패 배달로 기록된다.
+
+    ``send_message`` 는 여전히 무타입 dict 를 돌려주는 D2a 경계다. 그 dict 를
+    ``TelegramSendOutcome`` 으로 승격하는 지점이 best-effort 밖에 있으면 응답 하나가
+    웹 알림 생성까지 500 으로 만든다. 그래서 승격 실패는 ``RuntimeError`` 와 같은 등급으로
+    다뤄 감사 행을 남기고 흐름은 살린다(검증 오류 원문은 detail 에 넣지 않는다).
+    """
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "1594710346")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+    def broken_send(self, message: str, reply_markup=None, chat_id=None):
+        # 정상 응답 모양을 어긴다(message_id 가 정수가 아님).
+        return {
+            "sent": True,
+            "status": "sent",
+            "detail": "ok",
+            "telegram_message_id": "not-an-integer",
+        }
+
+    monkeypatch.setattr(TelegramNotificationService, "send_message", broken_send)
+
+    canonical = _create_operator_user(test_db, username="operator")
+    record = _seed_action_decision(
+        test_db,
+        operator_id=canonical.id,
+        action="bid_now",
+        decision_status="planned",
+    )
+    record.priority_score = 0.99
+    record.probability_score = 0.99
+    test_db.commit()
+    test_db.refresh(record)
+
+    notification = OperatorNotificationService().create_bid_decision_notification(
+        test_db,
+        operator_id=canonical.id,
+        project=record.project,
+        decision_record=record,
+    )
+
+    # 웹 알림 흐름은 살아남는다.
+    assert notification.id is not None
+    event = (
+        test_db.query(Analytics)
+        .filter(
+            Analytics.user_id == canonical.id,
+            Analytics.event_type == "telegram.delivery",
+        )
+        .one()
+    )
+    event_data = json.loads(event.event_data)
+    assert event_data["sent"] is False
+    assert event_data["status"] == "failed"
+    assert event_data["telegram_message_id"] is None
+    # 감사 detail 은 고정 문구다(검증 오류의 입력값 반복이 DB 로 새지 않는다).
+    assert event_data["detail"] == (
+        "Telegram transport response did not match the delivery outcome contract."
+    )
+    assert "not-an-integer" not in event.event_data
 
 
 def test_bid_decision_notification_rejects_mismatched_owner(test_db):

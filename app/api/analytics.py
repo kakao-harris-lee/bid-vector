@@ -1,5 +1,4 @@
 """Analytics routes"""
-import json
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -12,6 +11,7 @@ from app.core.security import get_current_operator_optional
 from app.core.single_user import ensure_operator_account, resolve_read_operator
 from app.core.time import utc_now
 from app.models.models import Analytics, Bid, BidDecisionRecord, Project, User
+from app.schemas.analytics_events import AnalyticsEventEnvelope
 from app.schemas.schemas import (
     AccuracyReportResponse,
     AnalyticsEventRequest,
@@ -37,6 +37,7 @@ from app.schemas.schemas import (
     RecommendationFeedbackLabelsResponse,
 )
 from app.services.accuracy_integration import AccuracyIntegrationService
+from app.services.analytics_event_payload import dump_analytics_event
 from app.services.analytics_reporting import AnalyticsReportingService
 from app.services.decision_analytics import DecisionAnalyticsService
 from app.services.decision_experiments import DecisionExperimentService
@@ -83,10 +84,14 @@ def _raise_decision_experiment_http_error(exc: ValueError) -> None:
 def log_event(event: AnalyticsEventRequest, db: Session = Depends(get_db)):
     """Log an analytics event for the singleton operator."""
     operator = ensure_operator_account(db)
+    # 열린 클라이언트 싱크 — envelope 는 올라온 키를 그대로 보존하고 직렬화 단일 경로만
+    # 태운다(내부 생산자의 타입 계약은 app/schemas/analytics_events.py).
     analytics = Analytics(
         user_id=operator.id,
         event_type=event.event_type,
-        event_data=json.dumps(event.event_data, ensure_ascii=False),
+        event_data=dump_analytics_event(
+            AnalyticsEventEnvelope.model_validate(event.event_data)
+        ),
     )
     db.add(analytics)
     db.commit()

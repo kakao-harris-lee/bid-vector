@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.constants import RECOMMENDATION_FEEDBACK_EVENT_TYPE
 from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import BidDecisionRecord, User
@@ -39,7 +40,7 @@ class _FeedbackLabelsMixin(_DecisionAnalyticsBase):
         feedback_events = self._load_events_in_range(
             db,
             operator_id=operator.id,
-            event_type="recommendation_feedback",
+            event_type=RECOMMENDATION_FEEDBACK_EVENT_TYPE,
             start_at=start_at,
         )
         latest_by_decision = self._dedupe_latest_feedback_verdicts(feedback_events)
