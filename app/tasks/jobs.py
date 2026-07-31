@@ -582,9 +582,14 @@ def recompute_preview_snapshot(self, operator_id: int, high_priority_only: bool 
 
     body 는 자체 SessionLocal + DB-first 라이프사이클(mark_running/completed/
     failed — synthetic experiment run 패턴). celery_task_id 멱등(crawl_jobs
-    패턴): UNIQUE(operator_id, high_priority_only) 행에 task id 를 스탬프하고
-    acks_late 재전달은 같은 행을 재사용한다(고아 행 불가). 고아 running 은
-    stale-task-reconciler 가 회수한다.
+    패턴): UNIQUE(operator_id, high_priority_only) 행에 task id 를 스탬프하므로
+    고아 행(중복 행) 자체가 생길 수 없다. 실행 도중 SIGKILL/재시작(예:
+    ``docker compose restart worker``)이 나면 — ``task_reject_on_worker_lost`` 를
+    켜지 않았으므로 task 는 재전달되지 않고 — 행은 running 인 채 남는다. 그
+    고아 running 은 preview 회수창
+    (``OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS``, 기본 300s)에서
+    다음 GET 자동 디스패치·명시 갱신이 회수·재클레임하고, 그마저 놓친 훨씬
+    오래된 행은 stale-task-reconciler 가 backstop 으로 failed 마감한다.
     """
     task_id = getattr(getattr(self, "request", None), "id", None)
     db = SessionLocal()

@@ -253,7 +253,7 @@ curl -X PUT http://localhost:3000/api/v1/operator/strategy \
 
 - 인증: 불필요(단일 운영자).
 - 도메인: 후보마다 매칭/확률/우선순위 점수, 추천 액션·투찰가, 선정 사유(`strategy_reasons`)를 제공. `high_priority_only=true`면 고우선순위만.
-- 실행 모델: 이 엔드포인트는 요청 경로에서 ML 스캔을 실행하지 않는다. 마지막 계산 결과를 담은 **스냅샷 행을 순수 읽기**하고 `limit`으로 슬라이스할 뿐이다. 스냅샷이 없거나(최초) 낡았으면(`OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS` 초과, 또는 스냅샷 계산 이후 전략이 수정됨) 재계산 task를 단일비행 가드 하에 자동 큐잉하고 **기존 스냅샷을 즉시 반환**한다. 최초 호출은 빈 `candidates` + `snapshot_status="running"`이므로 클라이언트는 `computed_at`/`snapshot_status`를 보고 폴링한다. 직전 재계산이 실패한 스냅샷은 짧은 쿨다운(`OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS`) 동안 자동 재큐잉하지 않는다 — 즉시 재시도는 `POST /strategy/candidates/refresh`.
+- 실행 모델: 이 엔드포인트는 요청 경로에서 ML 스캔을 실행하지 않는다. 마지막 계산 결과를 담은 **스냅샷 행을 순수 읽기**하고 `limit`으로 슬라이스할 뿐이다. 스냅샷이 없거나(최초) 낡았으면(`OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS` 초과, 또는 스냅샷 계산 이후 전략이 수정됨) 재계산 task를 단일비행 가드 하에 자동 큐잉하고 **기존 스냅샷을 즉시 반환**한다. 최초 호출은 빈 `candidates` + `snapshot_status="running"`이므로 클라이언트는 `computed_at`/`snapshot_status`를 보고 폴링한다. 재계산이 SIGKILL/재시작(예: `docker compose restart worker`)으로 `running`에 고착되면, 그 행의 `updated_at`이 회수창(`OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS`, 기본 300s)을 넘긴 뒤의 다음 GET이 이를 고아로 보고 자동 재큐잉한다(reconciler 임계 2100s와 분리 — 미리보기가 오래 wedged 되지 않게). 직전 재계산이 실패한 스냅샷은 짧은 쿨다운(`OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS`) 동안 자동 재큐잉하지 않는다 — 즉시 재시도는 `POST /strategy/candidates/refresh`.
 
 **파라미터**
 
@@ -328,10 +328,10 @@ curl "http://localhost:3000/api/v1/operator/strategy/candidates?limit=20&high_pr
 
 ## POST /api/v1/operator/strategy/candidates/refresh
 
-미리보기 스냅샷 재계산을 **명시적으로** 큐에 넣고 즉시 `202`로 반환한다. 결과는 별도 task-status 없이 `GET /strategy/candidates`를 재조회해 `snapshot_status`/`computed_at`으로 확인한다. 사용자가 "새로고침"을 눌렀을 때, 또는 자동 재큐잉이 실패 쿨다운으로 억제된 상태에서 즉시 재시도할 때 사용한다.
+미리보기 스냅샷 재계산을 **명시적으로** 큐에 넣고 즉시 `202`로 반환한다. 결과는 별도 task-status 없이 `GET /strategy/candidates`를 재조회해 `snapshot_status`/`computed_at`으로 확인한다. 사용자가 "새로고침"을 눌렀을 때, 자동 재큐잉이 실패 쿨다운으로 억제된 상태에서 즉시 재시도할 때, 또는 재계산이 SIGKILL/재시작으로 `running`에 고착된 미리보기를 복구할 때 사용한다.
 
 - 인증: 선택. target operator 규칙은 `GET /strategy/candidates`와 동일하다.
-- 도메인: 단일비행 — 이미 재계산이 실행 중이면 새 task를 만들지 않고 그 task를 재사용한다(새로고침 연타가 스캔을 중복 실행하지 못한다). 자동 큐잉과 달리 실패 쿨다운을 우회한다.
+- 도메인: 단일비행 — 이미 재계산이 실행 중이면 새 task를 만들지 않고 그 task를 재사용한다(새로고침 연타가 스캔을 중복 실행하지 못한다). 자동 큐잉과 달리 실패 쿨다운을 우회하고, 자동 회수창(기본 300s)보다 짧은 force floor(`OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS`, 기본 60s)를 넘긴 `running` 고아를 회수해 wedged 미리보기를 즉시 복구한다 — 단, force floor 안쪽의 갓 시작한 스캔은 그대로 재사용해 연타 스탬피드를 막는다.
 
 **파라미터**
 
