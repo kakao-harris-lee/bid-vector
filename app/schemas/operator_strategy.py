@@ -74,6 +74,25 @@ class OperatorStrategyCandidatesResponse(BaseModel):
     candidates: List[OperatorStrategyCandidateItem] = Field(default_factory=list)
     current_operator_id: int
     current_operator_username: str
+    # 스냅샷 메타 (설계 2026-07-30 §6.2). 기존 필드는 전부 유지 — PR-C 전까지
+    # 현행 프론트가 그대로 동작해야 하는 하위호환 superset (HARD 제약).
+    computed_at: Optional[datetime] = None
+    snapshot_status: Literal["idle", "running", "failed"] = "idle"
+    stale: bool = False
+
+
+class OperatorStrategyCandidatesRefreshResponse(BaseModel):
+    """명시 재계산 202 응답 (설계 §6.2). 폴링은 별도 task-status 없이
+    GET /operator/strategy/candidates 재조회(snapshot_status·computed_at 관찰)."""
+
+    task_id: Optional[str] = None
+    operator_id: int
+    current_operator_id: int
+    current_operator_username: str
+    high_priority_only: bool
+    snapshot_status: Literal["idle", "running", "failed"]
+    detail: str
+    poll_url: str
 
 
 class OperatorStrategyMonitorRequest(BaseModel):

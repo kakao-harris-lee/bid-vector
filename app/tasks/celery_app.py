@@ -108,6 +108,7 @@ COLLECT_G2_EVIDENCE_TASK_NAME = "jobs.collect_g2_evidence"
 TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 NOTIFY_AWARD_RESULTS_TASK_NAME = "jobs.notify_award_results"
+PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME = "jobs.recompute_preview_snapshot"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -128,6 +129,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         COLLECT_G2_EVIDENCE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         NOTIFY_AWARD_RESULTS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -649,6 +651,11 @@ def build_celery_runtime_config() -> dict[str, object]:
         config["task_soft_time_limit"] = soft_time_limit
     if hard_time_limit is not None:
         config["task_time_limit"] = hard_time_limit
+
+    if settings.CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB > 0:
+        config["worker_max_memory_per_child"] = int(
+            settings.CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB
+        )
 
     if eager_mode:
         config.update(

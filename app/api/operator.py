@@ -8,7 +8,7 @@ delegates its body to a per-domain impl module (``operator_profile``,
 ``operator_feedback``); shared helpers live in ``operator_common``.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.operator_accounts import (
@@ -32,8 +32,8 @@ from app.api.operator_strategy import (
     get_operator_strategy_impl,
     list_monitor_runs_impl,
     list_strategy_candidates_impl,
+    refresh_strategy_candidates_impl,
     run_monitor_async_impl,
-    run_strategy_monitor_impl,
     update_operator_strategy_impl,
 )
 from app.core.database import get_db
@@ -55,9 +55,9 @@ from app.schemas.schemas import (
     OperatorOverviewResponse,
     OperatorProfileResponse,
     OperatorProfileUpdate,
+    OperatorStrategyCandidatesRefreshResponse,
     OperatorStrategyCandidatesResponse,
     OperatorStrategyMonitorRequest,
-    OperatorStrategyMonitorResponse,
     OperatorStrategyMonitorTaskResponse,
     OperatorStrategyMonitorTaskStatusResponse,
     OperatorStrategyRunDetailResponse,
@@ -155,16 +155,41 @@ def list_operator_strategy_candidates(
     return list_strategy_candidates_impl(target, db, limit, high_priority_only)
 
 
-@router.post("/strategy/monitor", response_model=OperatorStrategyMonitorResponse)
+@router.post(
+    "/strategy/candidates/refresh",
+    response_model=OperatorStrategyCandidatesRefreshResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def refresh_operator_strategy_candidates(
+    high_priority_only: bool | None = Query(default=None),
+    operator_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    current_operator: User | None = Depends(get_current_operator_optional),
+):
+    """Queue a strategy-candidate snapshot recompute; poll via GET /strategy/candidates."""
+    target = _resolve_operator_for_read(db, current_operator, operator_id)
+    return refresh_strategy_candidates_impl(target, db, high_priority_only)
+
+
+@router.post(
+    "/strategy/monitor",
+    response_model=OperatorStrategyMonitorTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def run_operator_strategy_monitor(
     request: OperatorStrategyMonitorRequest,
     operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     current_operator: User | None = Depends(get_current_operator_optional),
 ):
-    """Execute the stored strategy, persist bid decisions, and create operator notifications."""
-    target = _resolve_operator_for_read(db, current_operator, operator_id)
-    return run_strategy_monitor_impl(request, target, db)
+    """Queue the stored-strategy monitor and return the async task envelope (202).
+
+    설계 2026-07-30 §6.2: 요청 경로 인라인 ML 폐쇄 — 구현을 기존 async 쌍
+    (/strategy/monitor/async + /strategy/monitor/tasks/{id})에 위임한다. 경로는
+    유지되고 응답이 async envelope 으로 바뀐다(프론트 sync 호출부 없음 확인).
+    """
+    operator = _resolve_operator_for_read(db, current_operator, operator_id)
+    return run_monitor_async_impl(request, operator, db)
 
 
 @router.get("/strategy/monitor/runs", response_model=OperatorStrategyRunListResponse)

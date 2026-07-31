@@ -140,7 +140,7 @@
     },
     "app/api/operator_strategy.py": {
       "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 4
+      "dict_boundary_functions": 5
     },
     "app/api/projects.py": {
       "functions_over_soft_limit": 1,
@@ -157,7 +157,7 @@
       "dict_boundary_functions": 4
     },
     "app/models/models.py": {
-      "file_loc_band": 31
+      "file_loc_band": 33
     },
     "app/schemas/opportunity.py": {
       "json_direct_calls": 2
@@ -503,10 +503,6 @@
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 9
     },
-    "app/services/model_warmup.py": {
-      "dict_boundary_functions": 1,
-      "env_test_sniff": 1
-    },
     "app/services/notifications/email.py": {
       "functions_over_soft_limit": 2,
       "file_loc_band": 21,
@@ -600,11 +596,8 @@
       "dict_boundary_functions": 1
     },
     "app/services/opportunity_monitoring/orchestration.py": {
-      "functions_over_soft_limit": 3,
+      "functions_over_soft_limit": 2,
       "dict_boundary_functions": 9
-    },
-    "app/services/opportunity_monitoring/preview_cache.py": {
-      "dict_boundary_functions": 4
     },
     "app/services/opportunity_monitoring/runs.py": {
       "functions_over_soft_limit": 1,
@@ -657,6 +650,10 @@
     "app/services/prediction_workflow.py": {
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 4
+    },
+    "app/services/preview_snapshot.py": {
+      "functions_over_soft_limit": 1,
+      "dict_boundary_functions": 5
     },
     "app/services/project_similarity.py": {
       "functions_over_soft_limit": 2,
@@ -749,7 +746,7 @@
     },
     "app/tasks/celery_app.py": {
       "functions_over_soft_limit": 3,
-      "file_loc_band": 27,
+      "file_loc_band": 28,
       "dict_boundary_functions": 16
     },
     "app/tasks/collection_jobs.py": {
@@ -765,8 +762,8 @@
       "env_test_sniff": 1
     },
     "app/tasks/jobs.py": {
-      "file_loc_band": 26,
-      "dict_boundary_functions": 23
+      "file_loc_band": 27,
+      "dict_boundary_functions": 24
     },
     "app/tasks/reserve_detail_backfill.py": {
       "functions_over_soft_limit": 2,
@@ -858,9 +855,9 @@
     "scripts/production_smoke_test.py": {
       "functions_over_soft_limit": 2,
       "functions_over_hard_limit": 1,
-      "file_loc_band": 22,
+      "file_loc_band": 24,
       "json_direct_calls": 3,
-      "dict_boundary_functions": 20
+      "dict_boundary_functions": 21
     },
     "scripts/promote_ml_release.py": {
       "functions_over_soft_limit": 2,

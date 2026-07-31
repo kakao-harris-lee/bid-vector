@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.operator_common import _operator_context_fields
+from app.core.config import settings
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
@@ -22,7 +23,11 @@ from app.schemas.schemas import (
     OperatorStrategyUpdate,
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
-from app.services.opportunity_monitoring.preview_cache import preview_cache
+from app.services.preview_snapshot import (
+    SNAPSHOT_STATUS_FAILED,
+    SNAPSHOT_STATUS_RUNNING,
+    PreviewSnapshotService,
+)
 from app.services.operator_strategy_tuning import (
     clamp_auto_workload_penalty_multiplier,
     dump_category_priority_overrides,
@@ -30,6 +35,18 @@ from app.services.operator_strategy_tuning import (
     get_strategy_category_priority_overrides,
 )
 from app.tasks.jobs import enqueue_operator_strategy_monitor, get_operator_strategy_monitor_task_status
+
+
+# POST /strategy/candidates/refresh 안내 문구. 디스패치가 스킵된 이유는 행
+# status 가 말해준다 — "claim 실패(=running)" 와 "enqueue 예외(=failed)" 를 한
+# 불리언으로 뭉뚱그리면 failed 응답에 "이미 실행 중" 이 붙는 모순이 생긴다(§4.5
+# 룩업 디스패치).
+_CANDIDATES_REFRESH_DISPATCHED_DETAIL = "미리보기 재계산을 큐에 등록했습니다."
+_CANDIDATES_REFRESH_SKIPPED_DETAIL_BY_STATUS = {
+    SNAPSHOT_STATUS_RUNNING: "이미 실행 중인 재계산을 재사용합니다.",
+    SNAPSHOT_STATUS_FAILED: "재계산을 큐에 등록하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+}
+_CANDIDATES_REFRESH_SKIPPED_DEFAULT_DETAIL = "재계산 요청을 처리하지 못했습니다."
 
 
 def _is_strategy_configured(
@@ -219,9 +236,9 @@ def update_operator_strategy_impl(
 
     db.commit()
     db.refresh(strategy)
-    # The candidate preview is cached per operator for a short window; the edit
-    # screen shows that preview, so a save must not be masked by a stale entry.
-    preview_cache.invalidate(int(operator.id))
+    # 전략 저장은 preview 산출을 바꾼다: 사용 중인 스냅샷 키를 단일비행 가드
+    # 하에 재계산 디스패치한다 (설계 §6.3 — 구 preview_cache.invalidate 대체).
+    PreviewSnapshotService().dispatch_for_strategy_write(db, operator_id=int(operator.id))
 
     return _build_operator_strategy_response(
         operator=operator,
@@ -249,23 +266,55 @@ def list_strategy_candidates_impl(
     limit: int | None,
     high_priority_only: bool | None,
 ) -> dict:
-    payload = StrategyMonitoringService().preview_candidates(
+    """스냅샷 순수 읽기 (설계 2026-07-30 §6.2) — 요청 경로 인라인 ML 스캔 없음."""
+    payload = PreviewSnapshotService().serve(
         db,
+        operator=target,
         limit=limit,
         high_priority_only=high_priority_only,
-        operator=target,
     )
     payload.update(_operator_context_fields(target))
     return payload
 
 
-def run_strategy_monitor_impl(request, target: User, db: Session):
-    return StrategyMonitoringService().execute_monitoring(
-        db,
-        request=request,
-        trigger_source=StrategyMonitoringService.SYNC_TRIGGER_SOURCE,
-        operator=target,
+def refresh_strategy_candidates_impl(
+    target: User,
+    db: Session,
+    high_priority_only: bool | None,
+) -> dict:
+    """명시 재계산 디스패치 (202, 설계 §6.2). 단일비행: force floor 안쪽의 갓
+    시작한 running 은 그 task 를 재사용한다(새로고침 연타가 스캔을 중복 실행하지
+    못한다). 자동 GET 회수창(300s)보다 짧은 force floor 로 running 고아를 회수해
+    wedged 미리보기를 운영자가 즉시 복구할 수 있게 한다."""
+    service = PreviewSnapshotService()
+    resolved_high_priority_only = service.resolve_high_priority_key(
+        db, operator=target, high_priority_only=high_priority_only
     )
+    dispatched = service.dispatch_recompute(
+        db,
+        operator_id=int(target.id),
+        high_priority_only=resolved_high_priority_only,
+        reclaim_after_seconds=int(
+            settings.OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS
+        ),
+    )
+    row = dispatched or service.get_row(
+        db, operator_id=int(target.id), high_priority_only=resolved_high_priority_only
+    )
+    snapshot_status = str(row.status) if row is not None else SNAPSHOT_STATUS_FAILED
+    return {
+        "task_id": row.task_id if row is not None else None,
+        "operator_id": int(target.id),
+        **_operator_context_fields(target),
+        "high_priority_only": bool(resolved_high_priority_only),
+        "snapshot_status": snapshot_status,
+        "detail": _CANDIDATES_REFRESH_DISPATCHED_DETAIL
+        if dispatched is not None
+        else _CANDIDATES_REFRESH_SKIPPED_DETAIL_BY_STATUS.get(
+            snapshot_status, _CANDIDATES_REFRESH_SKIPPED_DEFAULT_DETAIL
+        ),
+        "poll_url": "/api/v1/operator/strategy/candidates",
+    }
 
 
 def list_monitor_runs_impl(

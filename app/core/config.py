@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     CELERY_WORKER_CONCURRENCY: int = 2
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
     CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 100
+    # Celery worker 자식 프로세스 RSS 상한(KB, celery 네이티브
+    # worker_max_memory_per_child). 초과한 자식은 현재 task 를 마친 뒤
+    # 재생성된다 — 스캔 이주로 워커가 지게 된 glibc 아레나 비대·torch 잔류를
+    # 주기적으로 리셋한다(설계 2026-07-30 §6.4). 3145728KB = 3GiB.
+    # 0 이하 = 미설정(celery 기본: 무제한).
+    CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB: int = 3145728
     CELERY_TASK_TIME_LIMIT_SECONDS: int = 1800
     CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: int = 1500
     # Max project ids per deferred-embedding backfill task. Bounds each
@@ -112,15 +118,28 @@ class Settings(BaseSettings):
     # still-biddable notice (a row bound starves later matches), so rows are
     # streamed in batches of this size instead of materialized all at once.
     OPERATOR_STRATEGY_MONITOR_SCAN_CHUNK_SIZE: int = 500
-    # Strategy preview (candidate list) short-TTL reuse window. The preview runs
-    # inline ML analysis for tens of seconds, and a reload/re-click abandons the
-    # response without stopping the server work, so duplicates pile up and starve
-    # each other. Within this window a repeat read returns the stored payload
-    # instead of rescanning. Kept short because the preview sits on the strategy
-    # edit screen; a strategy save invalidates the operator's entries immediately.
-    # 0 disables reuse but keeps the single-flight guard (one scan per key at a
-    # time), which is the part that stops the stampede.
-    OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS: int = 60
+    # preview 스냅샷 stale 기준(초). computed_at 이 이보다 오래되면 GET 이 기존
+    # 스냅샷을 즉시 서빙하면서 재계산 task 를 단일비행 가드 하에 자동 디스패치
+    # 한다(설계 2026-07-30 §6.2). 명시 갱신은 POST /candidates/refresh.
+    OPERATOR_PREVIEW_SNAPSHOT_STALE_SECONDS: int = 1800
+    # preview 스냅샷 재계산 실패 쿨다운(초). status=failed 행은 이 시간 안에는
+    # GET 자동 디스패치를 하지 않는다 — 재계산이 빠르게 실패하는 동안 클라이언트
+    # 폴링(설계 §7)이 GET 당 스캔 1건씩을 큐에 쌓는 것을 막는다(#315 스탬피드의
+    # 큐 측 재현 방지). 명시 갱신(POST /candidates/refresh)은 이 쿨다운을 우회해
+    # 즉시 재시도한다.
+    OPERATOR_PREVIEW_SNAPSHOT_FAILURE_COOLDOWN_SECONDS: int = 60
+    # preview 스냅샷 running 회수창(초). GET 자동 디스패치가 running 행을 고아로
+    # 보고 재클레임하기까지의 나이 — reconciler 의 stale_threshold_seconds()
+    # (=hard limit+grace=2100s, 30분 task 기준)와 분리한다. preview 스캔은 분석
+    # 예산에 묶여 수십 초면 끝나므로 5분 넘게 running 인 행은 실제 실행 중이
+    # 아니라 SIGKILL/재시작 고아다(2100s 는 여기선 너무 거칠어 미리보기가 오래
+    # wedged 된다). reconciler 는 여전히 훨씬 오래된 행을 failed 로 넘기는
+    # backstop 으로 남는다.
+    OPERATOR_PREVIEW_SNAPSHOT_RUNNING_RECLAIM_SECONDS: int = 300
+    # 명시 갱신(POST /candidates/refresh) 전용 force floor(초). 자동 회수창보다
+    # 짧아, 고착된 미리보기를 운영자가 즉시 복구하되 새로고침 연타가 이 floor
+    # 안쪽의 갓 시작한 스캔을 중복 실행하지는 못하게 한다(단일비행 유지).
+    OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS: int = 60
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440
@@ -600,13 +619,6 @@ class Settings(BaseSettings):
         "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
     CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: bool = True
-    # Load the classifier embedding model in a background thread at api startup.
-    # The loader is lazy, so without this the first request that needs inline ML
-    # after every restart/deploy (candidate preview on /dashboard/strategy) pays
-    # the ~25s cold load on the request path; slow enough that operators reload
-    # and stack duplicate work. Warming at startup moves that one-off cost off
-    # the request path. Never blocks startup or /health (see model_warmup).
-    EMBEDDING_MODEL_WARMUP_ON_STARTUP: bool = True
     CLASSIFIER_SEMANTIC_MATCH_THRESHOLD: float = 0.35
     # Semantic band edges expressed RELATIVE to CLASSIFIER_SEMANTIC_MATCH_THRESHOLD
     # (same tuning family). ``strong`` = threshold + margin (매우 높음),

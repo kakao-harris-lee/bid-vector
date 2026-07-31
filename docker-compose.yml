@@ -161,6 +161,11 @@ services:
       MALLOC_ARENA_MAX: "2"
       OMP_NUM_THREADS: "1"
     shm_size: "1gb"
+    # 스캔 ML 이주지(설계 2026-07-30 §6.4): monitor·g2 recheck·preview 스냅샷
+    # 재계산이 임베딩 포함 스캔을 이 컨테이너에서 실행한다. 상주 ~4.8GiB 관측
+    # 대비 여유 10g — worker_max_memory_per_child(자식 3GiB)와 이중 가드.
+    # 값 변경 반영은 restart 가 아니라 `docker compose up -d worker` 재생성(§0).
+    mem_limit: 10g
     volumes:
       - .:/app
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_OPS_QUEUE:-bid_vector_ops},${CELERY_TASK_DEFAULT_QUEUE:-bid_vector}
@@ -201,6 +206,13 @@ services:
       MALLOC_ARENA_MAX: "2"
       OMP_NUM_THREADS: "1"
     shm_size: "1gb"
+    # ML backfill/재평가 큐 워커 메모리 상한 (설계 2026-07-30 §6.4). #317 의
+    # 컨테이너 스코프 격리 완성. 산술: worker_concurrency=2 x
+    # worker_max_memory_per_child(자식 3GiB) = 6GiB + 부모/오버헤드 → 8g 로 둬야
+    # 자식 리사이클러가 컨테이너 OOM 킬러보다 **먼저** 동작한다(6g 면 자식 2개가
+    # 상한까지 차는 순간 여유가 0이라 OOM 킬러가 이긴다).
+    # 반영은 `docker compose up -d ml-worker` 재생성(§0).
+    mem_limit: 8g
     volumes:
       - .:/app
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_ML_BACKFILL_QUEUE:-bid_vector_ml_backfill},${CELERY_ML_REEVALUATION_QUEUE:-bid_vector_ml_reevaluation}
@@ -240,6 +252,13 @@ services:
       MALLOC_ARENA_MAX: "2"
       OMP_NUM_THREADS: "1"
     shm_size: "1gb"
+    # ML 훈련 큐 워커 메모리 상한 (설계 2026-07-30 §6.4). #317 의
+    # 컨테이너 스코프 격리 완성. 산술: worker_concurrency=2 x
+    # worker_max_memory_per_child(자식 3GiB) = 6GiB + 부모/오버헤드 → 8g 로 둬야
+    # 자식 리사이클러가 컨테이너 OOM 킬러보다 **먼저** 동작한다(6g 면 자식 2개가
+    # 상한까지 차는 순간 여유가 0이라 OOM 킬러가 이긴다).
+    # 반영은 `docker compose up -d training-worker` 재생성(§0).
+    mem_limit: 8g
     volumes:
       - .:/app
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_ML_TRAINING_QUEUE:-bid_vector_ml_training}

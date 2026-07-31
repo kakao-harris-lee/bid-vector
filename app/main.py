@@ -18,7 +18,6 @@ from app.services.project_similarity import (
     ensure_project_metadata_schema,
     ensure_project_vector_schema,
 )
-from app.services.model_warmup import start_embedding_model_warmup
 from app.services.realtime import realtime_event_manager
 from app.services.paper_bidding_scheduler import paper_bidding_forward_scheduler
 from app.services.strategy_scheduler import strategy_scheduler
@@ -54,10 +53,6 @@ async def lifespan(app: FastAPI):
     await realtime_event_manager.start()
     await strategy_scheduler.start()
     await paper_bidding_forward_scheduler.start()
-    # Non-blocking: loads the embedding model in a daemon thread so the first
-    # inline-ML request after a restart does not pay the cold load (gated by
-    # settings.EMBEDDING_MODEL_WARMUP_ON_STARTUP, off under ENVIRONMENT=test).
-    start_embedding_model_warmup()
 
     yield
 

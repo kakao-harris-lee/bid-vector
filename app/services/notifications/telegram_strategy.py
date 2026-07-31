@@ -36,7 +36,7 @@ from app.services.notifications.telegram_strategy_fields import (
     FieldSpec,
 )
 from app.services.notifications.telegram_strategy_render import TelegramStrategyReply
-from app.services.opportunity_monitoring.preview_cache import preview_cache
+from app.services.preview_snapshot import PreviewSnapshotService
 
 __all__ = [
     "FIELD_SPECS",
@@ -214,15 +214,16 @@ class TelegramStrategyCommandProcessor:
         return f"{self._build_strategy_status(db, include_help=False)}\n\n전략 항목을 초기화했습니다."
 
     def _persist_strategy_edit(self, db: Session, strategy) -> None:
-        """Commit a strategy edit and drop that operator's cached candidate preview.
+        """전략 편집 커밋 + 해당 운영자의 스냅샷 재계산 디스패치.
 
-        Telegram edits write the same row as the web PUT, so they need the same
-        invalidation: the preview is cached per operator for a short window and a
-        stale entry would keep showing candidates from the pre-edit watch rules.
+        텔레그램 set/clear/버튼은 웹 PUT 과 같은 행을 쓰므로 같은 갱신 트리거가
+        필요하다(설계 §6.3): 기존 스냅샷 키만 단일비행 가드 하에 재계산한다.
         """
         db.commit()
         db.refresh(strategy)
-        preview_cache.invalidate(int(strategy.user_id))
+        PreviewSnapshotService().dispatch_for_strategy_write(
+            db, operator_id=int(strategy.user_id)
+        )
 
     def _handle_step_value(self, db: Session, chat_key: str, raw_value: str) -> TelegramStrategyReply:
         """Validate a step-flow value and ask for final confirmation."""

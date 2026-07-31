@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse, request
@@ -146,6 +147,38 @@ def require_keys(payload: dict[str, Any], keys: set[str], *, name: str) -> None:
     missing = keys - set(payload)
     if missing:
         raise SmokeFailure(f"{name} missing required key(s): {', '.join(sorted(missing))}")
+
+
+_MONITOR_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def poll_monitor_result(call, poll_url: str, *, attempts: int, interval_seconds: float) -> dict[str, Any]:
+    """202 async monitor 의 task-status 를 terminal 까지 폴링해 result 를 반환한다.
+
+    설계 §6.2: POST /strategy/monitor 가 인라인 실행에서 async 위임(202)으로
+    바뀌어, 스모크 write-check 는 kickoff 후 task-status 를 폴링해 완료 결과를
+    읽는다. eager(테스트) 환경은 첫 폴에서 이미 completed 다.
+    """
+    last: dict[str, Any] = {}
+    for attempt in range(max(1, attempts)):
+        last = call(poll_url)
+        status_value = str(last.get("status") or "")
+        if status_value in _MONITOR_TERMINAL_STATUSES:
+            if status_value != "completed":
+                raise SmokeFailure(
+                    f"strategy monitor task ended status={status_value}: "
+                    f"{last.get('error') or last.get('detail')}"
+                )
+            result = last.get("result")
+            if not isinstance(result, dict):
+                raise SmokeFailure("strategy monitor completed without a result payload")
+            return result
+        if attempt + 1 < max(1, attempts):
+            time.sleep(interval_seconds)
+    raise SmokeFailure(
+        f"strategy monitor task did not finish after {attempts} polls "
+        f"(last status={last.get('status')})"
+    )
 
 
 def card_status_summary(cards: list[dict[str, Any]]) -> dict[str, str]:
@@ -385,7 +418,16 @@ def smoke_write_checks(args: argparse.Namespace, evidence: dict[str, Any]) -> No
             "similar_limit": args.similar_limit,
             "min_similarity": args.min_similarity,
         }
-        payload = call("/api/v1/operator/strategy/monitor", method="POST", body=body)
+        # POST /strategy/monitor 는 이제 202 async envelope 을 반환한다(설계 §6.2:
+        # 요청 경로 인라인 ML 폐쇄). write-check 는 kickoff 후 결과를 폴링해 읽는다.
+        kickoff = call("/api/v1/operator/strategy/monitor", method="POST", body=body)
+        require_keys(kickoff, {"task_id", "monitor_run_id", "poll_url"}, name="strategy monitor kickoff")
+        payload = poll_monitor_result(
+            call,
+            kickoff["poll_url"],
+            attempts=args.monitor_poll_attempts,
+            interval_seconds=args.monitor_poll_interval_seconds,
+        )
         require_keys(payload, {"monitor_run_id", "persisted_candidate_count", "notification_count"}, name="strategy monitor")
         monitor_run_id = payload.get("monitor_run_id")
         detail = None
@@ -441,6 +483,16 @@ def write_evidence(path: str, evidence: dict[str, Any]) -> None:
     print(f"[evidence] wrote {evidence_path}")
 
 
+def _add_monitor_poll_arguments(parser: argparse.ArgumentParser) -> None:
+    """202 async monitor 폴링 인자 (설계 §6.2: monitor kickoff 후 task-status 폴)."""
+    parser.add_argument("--monitor-poll-attempts", type=int, default=int(os.getenv("SMOKE_MONITOR_POLL_ATTEMPTS", "30")))
+    parser.add_argument(
+        "--monitor-poll-interval-seconds",
+        type=float,
+        default=float(os.getenv("SMOKE_MONITOR_POLL_INTERVAL_SECONDS", "2.0")),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run production smoke checks against a bid-vector API.")
     parser.add_argument("--base-url", default=os.getenv("SMOKE_BASE_URL") or os.getenv("BASE_URL") or "http://localhost:3000")
@@ -465,6 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execution-mode", choices=["mock", "live", "auto"], default=os.getenv("SMOKE_EXECUTION_MODE", "auto"))
     parser.add_argument("--max-items", type=int, default=int(os.getenv("SMOKE_MAX_ITEMS", "3")))
     parser.add_argument("--monitor-limit", type=int, default=int(os.getenv("SMOKE_MONITOR_LIMIT", "3")))
+    _add_monitor_poll_arguments(parser)
     parser.add_argument(
         "--monitor-all-candidates",
         action="store_true",

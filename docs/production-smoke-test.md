@@ -75,7 +75,8 @@ python scripts/production_smoke_test.py \
 `--write` 실행 항목:
 
 - KONEPS OpenAPI crawl: `POST /api/v1/operations/crawl`
-- strategy monitor: `POST /api/v1/operator/strategy/monitor`
+- strategy monitor kickoff: `POST /api/v1/operator/strategy/monitor` — 동기 실행이 아니라 202 async envelope(`task_id`/`monitor_run_id`/`poll_url`)을 반환한다
+- strategy monitor 결과 폴링: kickoff의 `poll_url`(`GET /api/v1/operator/strategy/monitor/tasks/{task_id}`)을 terminal 상태까지 폴링해 `result`를 읽는다. `completed`가 아닌 terminal 상태는 실패로 처리한다. 폴링 횟수·간격은 `--monitor-poll-attempts`/`--monitor-poll-interval-seconds`로 조정한다
 - monitor run detail 확인
 
 기본값은 `source=koneps-openapi`, `category=general-service`, `execution_mode=auto`, `high_priority_only=true`이다.

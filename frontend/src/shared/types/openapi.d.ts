@@ -386,6 +386,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operator/strategy/candidates/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Operator Strategy Candidates
+         * @description Queue a strategy-candidate snapshot recompute; poll via GET /strategy/candidates.
+         */
+        post: operations["refresh_operator_strategy_candidates_api_v1_operator_strategy_candidates_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operator/strategy/monitor": {
         parameters: {
             query?: never;
@@ -397,7 +417,11 @@ export interface paths {
         put?: never;
         /**
          * Run Operator Strategy Monitor
-         * @description Execute the stored strategy, persist bid decisions, and create operator notifications.
+         * @description Queue the stored-strategy monitor and return the async task envelope (202).
+         *
+         *     설계 2026-07-30 §6.2: 요청 경로 인라인 ML 폐쇄 — 구현을 기존 async 쌍
+         *     (/strategy/monitor/async + /strategy/monitor/tasks/{id})에 위임한다. 경로는
+         *     유지되고 응답이 async envelope 으로 바뀐다(프론트 sync 호출부 없음 확인).
          */
         post: operations["run_operator_strategy_monitor_api_v1_operator_strategy_monitor_post"];
         delete?: never;
@@ -2569,9 +2593,7 @@ export interface components {
             /** Event Type */
             event_type: string;
             /** Event Data */
-            event_data: {
-                [key: string]: unknown;
-            };
+            event_data: Record<string, never>;
         };
         /** AnalyticsSummaryResponse */
         AnalyticsSummaryResponse: {
@@ -3659,13 +3681,9 @@ export interface components {
             /** Reasons */
             reasons: string[];
             /** Criteria */
-            criteria?: {
-                [key: string]: unknown;
-            };
+            criteria?: Record<string, never>;
             /** Score Breakdown */
-            score_breakdown?: {
-                [key: string]: unknown;
-            };
+            score_breakdown?: Record<string, never>;
         };
         /** CrawlFailureItem */
         CrawlFailureItem: {
@@ -3712,9 +3730,7 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
             /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
+            metadata?: Record<string, never>;
         };
         /** CrawlOperationsSummary */
         CrawlOperationsSummary: {
@@ -3817,9 +3833,7 @@ export interface components {
             /** Items */
             items: components["schemas"]["CrawlNoticeItem"][];
             /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
+            metadata?: Record<string, never>;
         };
         /** CrawlTaskResponse */
         CrawlTaskResponse: {
@@ -4446,9 +4460,7 @@ export interface components {
             /** Reason */
             reason: string;
             /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            };
+            payload?: Record<string, never>;
             /**
              * Dry Run Supported
              * @default false
@@ -4582,9 +4594,7 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
+            parameter_recommendation?: Record<string, never>;
             /**
              * Baseline Days
              * @default 14
@@ -5302,9 +5312,7 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
+            parameter_recommendation?: Record<string, never>;
         };
         /** DecisionRecommendationHistoryAdjustment */
         DecisionRecommendationHistoryAdjustment: {
@@ -5346,9 +5354,7 @@ export interface components {
             /** Suggested Adjustment */
             suggested_adjustment?: string | null;
             /** Supporting Metrics */
-            supporting_metrics?: {
-                [key: string]: unknown;
-            };
+            supporting_metrics?: Record<string, never>;
             /**
              * Priority Score
              * @default 0
@@ -5356,9 +5362,7 @@ export interface components {
             priority_score: number;
             history_adjustment: components["schemas"]["DecisionRecommendationHistoryAdjustment"];
             /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
+            parameter_recommendation?: Record<string, never>;
             experiment_plan?: components["schemas"]["DecisionRecommendationExperiment"] | null;
         };
         /** DecisionRecommendationResponse */
@@ -5398,9 +5402,7 @@ export interface components {
             headline: string;
             comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
             /** Experiment History */
-            experiment_history?: {
-                [key: string]: unknown;
-            };
+            experiment_history?: Record<string, never>;
             recommended_next_experiment?: components["schemas"]["DecisionRecommendationExperiment"] | null;
             /** Experiments */
             experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
@@ -5858,25 +5860,15 @@ export interface components {
              */
             evidence_status: "ready" | "insufficient" | "mixed_scope" | "missing";
             /** Smoke */
-            smoke?: {
-                [key: string]: unknown;
-            };
+            smoke?: Record<string, never>;
             /** Strategy Monitor */
-            strategy_monitor?: {
-                [key: string]: unknown;
-            };
+            strategy_monitor?: Record<string, never>;
             /** Decision Experiments */
-            decision_experiments?: {
-                [key: string]: unknown;
-            };
+            decision_experiments?: Record<string, never>;
             /** Synthetic Experiments */
-            synthetic_experiments?: {
-                [key: string]: unknown;
-            };
+            synthetic_experiments?: Record<string, never>;
             /** Notifications */
-            notifications?: {
-                [key: string]: unknown;
-            };
+            notifications?: Record<string, never>;
             /** Blocking Gaps */
             blocking_gaps?: string[];
             /** Supporting Gaps */
@@ -6115,9 +6107,7 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Result */
-            result?: {
-                [key: string]: unknown;
-            } | null;
+            result?: Record<string, never> | null;
         };
         /** NotificationOperationsSummary */
         NotificationOperationsSummary: {
@@ -7081,6 +7071,32 @@ export interface components {
             /** Strategy Reasons */
             strategy_reasons?: string[];
         };
+        /**
+         * OperatorStrategyCandidatesRefreshResponse
+         * @description 명시 재계산 202 응답 (설계 §6.2). 폴링은 별도 task-status 없이
+         *     GET /operator/strategy/candidates 재조회(snapshot_status·computed_at 관찰).
+         */
+        OperatorStrategyCandidatesRefreshResponse: {
+            /** Task Id */
+            task_id?: string | null;
+            /** Operator Id */
+            operator_id: number;
+            /** Current Operator Id */
+            current_operator_id: number;
+            /** Current Operator Username */
+            current_operator_username: string;
+            /** High Priority Only */
+            high_priority_only: boolean;
+            /**
+             * Snapshot Status
+             * @enum {string}
+             */
+            snapshot_status: "idle" | "running" | "failed";
+            /** Detail */
+            detail: string;
+            /** Poll Url */
+            poll_url: string;
+        };
         /** OperatorStrategyCandidatesResponse */
         OperatorStrategyCandidatesResponse: {
             /** Operator Id */
@@ -7097,6 +7113,19 @@ export interface components {
             current_operator_id: number;
             /** Current Operator Username */
             current_operator_username: string;
+            /** Computed At */
+            computed_at?: string | null;
+            /**
+             * Snapshot Status
+             * @default idle
+             * @enum {string}
+             */
+            snapshot_status: "idle" | "running" | "failed";
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /** OperatorStrategyMonitorRequest */
         OperatorStrategyMonitorRequest: {
@@ -7365,9 +7394,7 @@ export interface components {
             /** Dropped Candidate Count */
             dropped_candidate_count: number;
             /** Request Payload */
-            request_payload?: {
-                [key: string]: unknown;
-            };
+            request_payload?: Record<string, never>;
             result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
             /** New Candidates */
             new_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
@@ -7506,9 +7533,7 @@ export interface components {
              */
             min_similarity: number;
             /** User Historical Data */
-            user_historical_data?: {
-                [key: string]: unknown;
-            } | null;
+            user_historical_data?: Record<string, never> | null;
         };
         /** OpportunityAnalysisResponse */
         OpportunityAnalysisResponse: {
@@ -8468,9 +8493,7 @@ export interface components {
             /** Backtest Average Absolute Error Rate */
             backtest_average_absolute_error_rate?: number | null;
             /** Backtest Report */
-            backtest_report?: {
-                [key: string]: unknown;
-            } | null;
+            backtest_report?: Record<string, never> | null;
             /**
              * Training Window Size
              * @default 0
@@ -8650,9 +8673,7 @@ export interface components {
             /** Amount Bucket */
             amount_bucket?: string | null;
             /** Agency Recent Rate Profile */
-            agency_recent_rate_profile?: {
-                [key: string]: unknown;
-            };
+            agency_recent_rate_profile?: Record<string, never>;
             /** Data Quality Flags */
             data_quality_flags?: string[];
             /** Procurement Rate Band */
@@ -9066,9 +9087,7 @@ export interface components {
             /** Skip Reason */
             skip_reason?: string | null;
             /** Evidence */
-            evidence?: {
-                [key: string]: unknown;
-            };
+            evidence?: Record<string, never>;
         };
         /** SmokeTestLatestRun */
         SmokeTestLatestRun: {
@@ -9570,9 +9589,7 @@ export interface components {
             /** Experiment Id */
             experiment_id: number;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
         };
         /**
          * SyntheticExperimentCompareSide
@@ -9691,9 +9708,7 @@ export interface components {
             /** Operator Slug */
             operator_slug: string;
             /** Metrics */
-            metrics?: {
-                [key: string]: unknown;
-            };
+            metrics?: Record<string, never>;
             /** Settlement Sample */
             settlement_sample?: unknown | null;
             breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
@@ -9724,9 +9739,7 @@ export interface components {
          */
         SyntheticExperimentRunCreateRequest: {
             /** Source Sample Gap Candidate */
-            source_sample_gap_candidate?: {
-                [key: string]: unknown;
-            } | null;
+            source_sample_gap_candidate?: Record<string, never> | null;
         };
         /**
          * SyntheticExperimentRunResponse
@@ -9748,9 +9761,7 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
             /** Created At */
             created_at?: string | null;
             /** Results */
@@ -9776,9 +9787,7 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
             /** Created At */
             created_at?: string | null;
         };
@@ -9835,9 +9844,7 @@ export interface components {
              */
             dry_run_default: boolean;
             /** Source Context */
-            source_context?: {
-                [key: string]: unknown;
-            };
+            source_context?: Record<string, never>;
             preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             experiment_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
@@ -9861,9 +9868,7 @@ export interface components {
             /** Path */
             path: string;
             /** Body */
-            body?: {
-                [key: string]: unknown;
-            };
+            body?: Record<string, never>;
         };
         /**
          * SyntheticExperimentSampleGapItem
@@ -9956,9 +9961,7 @@ export interface components {
             /** Preset Name */
             preset_name?: string | null;
             /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
+            params?: Record<string, never>;
             /** Actions */
             actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
         };
@@ -10042,9 +10045,7 @@ export interface components {
             /** Settle Actions */
             settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
             /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
+            params?: Record<string, never>;
             /** Operator Slugs */
             operator_slugs?: string[];
             /**
@@ -11232,6 +11233,38 @@ export interface operations {
             };
         };
     };
+    refresh_operator_strategy_candidates_api_v1_operator_strategy_candidates_refresh_post: {
+        parameters: {
+            query?: {
+                high_priority_only?: boolean | null;
+                operator_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorStrategyCandidatesRefreshResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_operator_strategy_monitor_api_v1_operator_strategy_monitor_post: {
         parameters: {
             query?: {
@@ -11248,12 +11281,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OperatorStrategyMonitorResponse"];
+                    "application/json": components["schemas"]["OperatorStrategyMonitorTaskResponse"];
                 };
             };
             /** @description Validation Error */
@@ -13769,9 +13802,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": Record<string, never>;
             };
         };
         responses: {

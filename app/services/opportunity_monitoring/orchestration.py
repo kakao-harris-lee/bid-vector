@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.single_user import (
     ensure_operator_account,
     ensure_operator_profile,
@@ -21,10 +20,6 @@ from app.schemas.schemas import BidDecisionSaveRequest, OperatorStrategyMonitorR
 from app.services.opportunity_monitoring.base import (
     StrategyCandidateEvaluation,
     _MonitoringBase,
-)
-from app.services.opportunity_monitoring.preview_cache import (
-    PreviewCacheKey,
-    preview_cache,
 )
 
 
@@ -47,11 +42,11 @@ class _OrchestrationMixin(_MonitoringBase):
         are used to preserve backward-compatible behavior for callers that have
         not migrated to the new context.
 
-        The scan itself goes through ``preview_cache`` (single-flight + short
-        TTL): a reload or re-click while a scan is running shares that scan
-        instead of starting a duplicate, and a repeat read inside the TTL is
-        served from the stored payload. The returned shape is unchanged, and a
-        strategy edit invalidates the operator's entries.
+        이 메서드는 호출 즉시 스캔을 실행한다(캐시 없음). API 요청 경로에서 직접
+        호출하지 않는다 — 소비자는 스냅샷 재계산 task
+        (``jobs.recompute_preview_snapshot``)와 g2 recheck 워커
+        (``evidence_jobs``), 그리고 특성화 테스트다(설계 2026-07-30 §6.2:
+        preview 서빙은 ``PreviewSnapshotService.serve`` 의 순수 읽기).
         """
         if operator is None:
             operator = ensure_operator_account(db)
@@ -66,21 +61,12 @@ class _OrchestrationMixin(_MonitoringBase):
             limit=limit,
             high_priority_only=high_priority_only,
         )
-        cache_key = PreviewCacheKey(
-            operator_id=int(operator.id),
-            limit=int(resolved_limit),
-            high_priority_only=bool(resolved_high_priority_only),
-        )
-        return preview_cache.get_or_compute(
-            cache_key,
-            lambda: self._build_preview_payload(
-                db,
-                strategy=strategy,
-                operator=operator,
-                resolved_limit=resolved_limit,
-                resolved_high_priority_only=resolved_high_priority_only,
-            ),
-            float(settings.OPERATOR_STRATEGY_PREVIEW_CACHE_TTL_SECONDS),
+        return self._build_preview_payload(
+            db,
+            strategy=strategy,
+            operator=operator,
+            resolved_limit=resolved_limit,
+            resolved_high_priority_only=resolved_high_priority_only,
         )
 
     def _build_preview_payload(

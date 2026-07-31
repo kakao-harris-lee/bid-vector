@@ -79,6 +79,7 @@ from app.schemas.operator import (
 
 from app.schemas.operator_strategy import (
     OperatorStrategyCandidateItem,
+    OperatorStrategyCandidatesRefreshResponse,
     OperatorStrategyCandidatesResponse,
     OperatorStrategyMonitorRequest,
     OperatorStrategyMonitorResponse,
@@ -338,6 +339,7 @@ __all__ = [
     "OperatorProfileResponse",
     "OperatorProfileUpdate",
     "OperatorStrategyCandidateItem",
+    "OperatorStrategyCandidatesRefreshResponse",
     "OperatorStrategyCandidatesResponse",
     "OperatorStrategyMonitorRequest",
     "OperatorStrategyMonitorResponse",

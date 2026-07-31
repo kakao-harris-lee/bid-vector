@@ -92,8 +92,8 @@ class NoticeClassifierService:
     _embedding_model = None
     _embedding_model_name: str | None = None
     _embedding_model_failed = False
-    # Serializes the (slow) model load so the startup warm-up thread and a
-    # concurrent request cannot each build their own copy.
+    # Serializes the (slow) lazy model load so concurrent request-time callers
+    # cannot each build their own copy.
     _embedding_model_lock = threading.Lock()
 
     def classify(self, project: Project, profile: CompanyProfile | None) -> dict:
@@ -221,8 +221,8 @@ class NoticeClassifierService:
         """Public accessor for the shared cached embedding model.
 
         Same object and cache as ``_get_embedding_model``; exposed so callers
-        outside classification (startup warm-up) do not reach into a private
-        name. Returns ``None`` when the model cannot be loaded.
+        outside classification do not reach into a private name. Returns
+        ``None`` when the model cannot be loaded.
         """
         return cls._get_embedding_model()
 
@@ -259,9 +259,10 @@ class NoticeClassifierService:
         if hit:
             return model
 
-        # The load takes ~25s, so callers arriving during the startup warm-up (or
-        # during another request's load) must wait for that one load instead of
-        # starting a second copy of the model. Fast path above stays lock-free.
+        # The model is loaded lazily on first use and the load takes ~25s, so
+        # concurrent callers arriving during another caller's load must wait for
+        # that one load instead of each starting a second copy of the model.
+        # Fast path above stays lock-free.
         with cls._embedding_model_lock:
             hit, model = cls._cached_embedding_model(model_name)
             if hit:

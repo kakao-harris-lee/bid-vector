@@ -179,3 +179,27 @@ def test_reconciler_preserves_prior_error_context(test_db):
     refreshed = test_db.query(OperatorStrategyRun).filter_by(id=run_id).first()
     assert RECONCILED_MARKER in refreshed.error_message
     assert "partial progress note" in refreshed.error_message
+
+
+def test_reconciler_finalizes_stale_running_preview_snapshot(test_db):
+    """running 고아 스냅샷 행은 failed 로 마감된다 (설계 §6.3 테이블 등록)."""
+    from app.models.models import OperatorPreviewSnapshot
+
+    operator = _operator(test_db)
+    row = OperatorPreviewSnapshot(
+        operator_id=operator.id,
+        high_priority_only=False,
+        status="running",
+        updated_at=utc_now() - timedelta(seconds=_stale_age_seconds()),
+    )
+    test_db.add(row)
+    test_db.commit()
+    row_id = row.id
+
+    result = StaleTaskReconcilerService().reconcile(test_db)
+
+    assert result["preview_snapshots_finalized"] == 1
+    assert result["total_finalized"] == 1
+    refreshed = test_db.query(OperatorPreviewSnapshot).filter_by(id=row_id).first()
+    assert refreshed.status == "failed"
+    assert RECONCILED_MARKER in (refreshed.last_error or "")
