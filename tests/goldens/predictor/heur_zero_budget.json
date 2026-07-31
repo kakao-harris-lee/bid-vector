@@ -1,0 +1,38 @@
+{
+  "agency_match_sample_size": 0,
+  "bid_rate_candidates": [
+    {
+      "bid_rate": 0.0,
+      "confidence_weight": 0.22,
+      "label": "conservative",
+      "predicted_price": 0.0
+    },
+    {
+      "bid_rate": 0.0,
+      "confidence_weight": 0.56,
+      "label": "base",
+      "predicted_price": 0.0
+    },
+    {
+      "bid_rate": 0.0,
+      "confidence_weight": 0.22,
+      "label": "aggressive",
+      "predicted_price": 0.0
+    }
+  ],
+  "confidence_score": 0.7,
+  "explanation": "히스토리컬 데이터가 부족해 카테고리·설명 길이 기반 휴리스틱 시나리오를 사용했습니다.",
+  "feedback_calibration": null,
+  "floor_bid_rate": null,
+  "floor_price": null,
+  "guardrail_applied": false,
+  "guardrail_reason": null,
+  "historical_sample_size": 0,
+  "model_version": "v1.0",
+  "predicted_bid_rate": 0.0,
+  "predicted_price": 0.0,
+  "price_range_max": 0.0,
+  "price_range_min": 0.0,
+  "pricing_mode": "heuristic",
+  "reserve_price_context": null
+}

@@ -20,7 +20,11 @@ from math import sqrt
 from pathlib import Path
 from typing import Any
 
-from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.base import (
+    BasePricePredictor,
+    PredictionResult,
+    PricePredictionContext,
+)
 from app.ai.predictors.historical.base_rate import (
     apply_high_rate_distribution_adjustment,
     build_high_rate_adjustment_context,
@@ -75,6 +79,7 @@ __all__ = [
     "apply_procurement_candidate_band",
     "apply_procurement_rate_band",
     "band_explanation_clause",
+    "blend_cold_start_prior",
     "blend_reserve_prior",
     "build_heuristic_prediction",
     "build_high_rate_adjustment_context",
@@ -134,8 +139,15 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
     name = "historical_statistical"
     family = "statistical"
 
-    def predict(self, context: PricePredictionContext) -> dict[str, Any]:
-        """Predict a bid-rate scenario using the stable historical baseline."""
+    def predict(self, context: PricePredictionContext) -> PredictionResult:
+        """Predict a bid-rate scenario using the stable historical baseline.
+
+        The three payload builders below are unchanged — the goldens compare them
+        directly. This method is the single *promotion* point: whichever branch
+        produced the payload, it is validated into the typed contract exactly
+        once, so a missing/typo'd key fails here instead of silently defaulting
+        somewhere downstream.
+        """
         heuristic_prediction = build_heuristic_prediction(
             budget=context.budget,
             category=context.category,
@@ -145,37 +157,75 @@ class HistoricalStatisticalPredictor(BasePricePredictor):
             context.historical_records,
             agency_name=context.agency_name,
         )
-
-        if float(context.budget or 0.0) <= 0:
-            return heuristic_prediction
-
+        # Read before the branch: a pure lookup on the summary just built, so the
+        # original branch order/semantics are preserved.
         sample_size = int(historical_summary["sample_size"])
 
-        if sample_size <= 0:
-            calibration = load_group_calibration().get(context.business_group or "") or {}
-            prior_median = calibration.get("median_rate")
-            if prior_median is not None:
-                prior_median = float(prior_median)
-                heuristic_rate = float(heuristic_prediction.get("predicted_bid_rate") or prior_median)
-                blended_rate = round((heuristic_rate * 0.4) + (prior_median * 0.6), 4)
-                budget = float(context.budget or 0.0)
-                heuristic_prediction = {
-                    **heuristic_prediction,
-                    "predicted_bid_rate": blended_rate,
-                    "predicted_price": round(budget * blended_rate, 2),
-                    "price_range_min": round(budget * blended_rate * 0.8, 2),
-                    "price_range_max": round(budget * blended_rate * 1.2, 2),
-                }
-            return heuristic_prediction
+        if float(context.budget or 0.0) <= 0:
+            payload = heuristic_prediction
+        elif sample_size <= 0:
+            payload = blend_cold_start_prior(heuristic_prediction, context=context)
+        else:
+            payload = build_historical_prediction(
+                budget=float(context.budget or 0.0),
+                category=context.category,
+                description=context.description,
+                heuristic_prediction=heuristic_prediction,
+                historical_summary=historical_summary,
+                business_group=context.business_group,
+            )
+        return PredictionResult.model_validate(payload)
 
-        return build_historical_prediction(
-            budget=float(context.budget or 0.0),
-            category=context.category,
-            description=context.description,
-            heuristic_prediction=heuristic_prediction,
-            historical_summary=historical_summary,
-            business_group=context.business_group,
-        )
+
+# Cold-start (sample_size == 0) blend between the description heuristic and the
+# manifest group prior, plus the price-range spread around the blended rate.
+# Declared here rather than inline so the weights are tunable in one place
+# (§4.5-1); the operand order below is preserved exactly, so the arithmetic is
+# bit-for-bit the same as before the extraction.
+_COLD_START_HEURISTIC_WEIGHT = 0.4
+_COLD_START_PRIOR_WEIGHT = 0.6
+_COLD_START_PRICE_RANGE_MIN_MULTIPLIER = 0.8
+_COLD_START_PRICE_RANGE_MAX_MULTIPLIER = 1.2
+
+
+def blend_cold_start_prior(
+    heuristic_prediction: dict[str, Any],
+    *,
+    context: PricePredictionContext,
+) -> dict[str, Any]:
+    """Pull a no-history heuristic payload toward the manifest group prior.
+
+    Returns the payload untouched when the active manifest carries no
+    ``group_calibration`` median for the context's business group. ``predict``
+    only reaches this path when ``sample_size == 0`` and ``budget > 0``.
+
+    ``load_group_calibration`` is called through the module global on purpose —
+    that is the monkeypatch seam the golden / business-group tests rely on.
+    """
+    calibration = load_group_calibration().get(context.business_group or "") or {}
+    prior_median = calibration.get("median_rate")
+    if prior_median is None:
+        return heuristic_prediction
+
+    prior_median = float(prior_median)
+    heuristic_rate = float(heuristic_prediction.get("predicted_bid_rate") or prior_median)
+    blended_rate = round(
+        (heuristic_rate * _COLD_START_HEURISTIC_WEIGHT)
+        + (prior_median * _COLD_START_PRIOR_WEIGHT),
+        4,
+    )
+    budget = float(context.budget or 0.0)
+    return {
+        **heuristic_prediction,
+        "predicted_bid_rate": blended_rate,
+        "predicted_price": round(budget * blended_rate, 2),
+        "price_range_min": round(
+            budget * blended_rate * _COLD_START_PRICE_RANGE_MIN_MULTIPLIER, 2
+        ),
+        "price_range_max": round(
+            budget * blended_rate * _COLD_START_PRICE_RANGE_MAX_MULTIPLIER, 2
+        ),
+    }
 
 
 def build_heuristic_prediction(budget: float, category: str, description: str) -> dict[str, Any]:

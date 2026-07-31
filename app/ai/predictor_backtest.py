@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.base import (
+    BasePricePredictor,
+    PredictionResult,
+    PricePredictionContext,
+)
 from app.ai.predictors.historical import read_record_value
 from app.core.config import settings
 from app.domain.aggregates import average
@@ -185,11 +189,11 @@ def _resolve_budget(record: object, *, fallback: float) -> float:
     return budget if budget > 0 else float(fallback or 0.0)
 
 
-def _resolve_prediction_bid_rate(prediction: dict[str, Any], *, budget: float) -> float | None:
-    """Resolve the predicted bid rate from a normalized prediction payload."""
-    bid_rate = float(prediction.get("predicted_bid_rate") or 0.0)
+def _resolve_prediction_bid_rate(prediction: PredictionResult, *, budget: float) -> float | None:
+    """Resolve the predicted bid rate from a validated prediction result."""
+    bid_rate = float(prediction.predicted_bid_rate or 0.0)
     if bid_rate <= 0 and budget > 0:
-        bid_rate = float(prediction.get("predicted_price") or 0.0) / budget
+        bid_rate = float(prediction.predicted_price or 0.0) / budget
     if 0.0 < bid_rate < 2.0:
         return bid_rate
     return None

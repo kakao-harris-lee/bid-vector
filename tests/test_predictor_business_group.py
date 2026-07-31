@@ -230,7 +230,7 @@ def test_predictor_uses_group_calibration_prior(monkeypatch):
         business_group="service",
     )
     result = predictor.predict(context)
-    bid_rate = float(result.get("predicted_bid_rate") or 0)
+    bid_rate = float(result.predicted_bid_rate or 0)
     assert 0.83 <= bid_rate <= 0.93
 
 

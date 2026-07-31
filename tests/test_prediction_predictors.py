@@ -4,7 +4,11 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from app.ai.price_prediction import predict_price
-from app.ai.predictors.base import BasePricePredictor, PricePredictionContext
+from app.ai.predictors.base import (
+    BasePricePredictor,
+    PredictionResult,
+    PricePredictionContext,
+)
 from app.ai.predictors.registry import normalize_predictor_registry
 from app.core.config import settings
 from app.models.models import HistoricalData
@@ -114,24 +118,33 @@ class InjectedRegistryPredictor(BasePricePredictor):
     def __init__(self, *, should_fail: bool = False) -> None:
         self.should_fail = should_fail
 
-    def predict(self, context: PricePredictionContext) -> dict:
+    def predict(self, context: PricePredictionContext) -> PredictionResult:
         if self.should_fail:
             raise RuntimeError("injected failure")
-        return {
-            "predicted_price": context.budget * 0.91,
-            "price_range_min": context.budget * 0.90,
-            "price_range_max": context.budget * 0.92,
-            "confidence_score": 0.7,
-            "model_version": "injected-v1",
-            "pricing_mode": "historical_blend",
-            "historical_sample_size": context.historical_sample_size,
-            "agency_match_sample_size": 0,
-            "predicted_bid_rate": 0.91,
-            "bid_rate_candidates": [
+        # Built through the typed constructor, so this fake proves an injected
+        # predictor satisfies the SAME output contract as the real ones — the
+        # nullable-but-required fields must be stated, not omitted.
+        return PredictionResult(
+            predicted_price=context.budget * 0.91,
+            price_range_min=context.budget * 0.90,
+            price_range_max=context.budget * 0.92,
+            confidence_score=0.7,
+            model_version="injected-v1",
+            pricing_mode="historical_blend",
+            historical_sample_size=context.historical_sample_size,
+            agency_match_sample_size=0,
+            predicted_bid_rate=0.91,
+            bid_rate_candidates=[
                 {"label": "base", "bid_rate": 0.91, "predicted_price": context.budget * 0.91},
             ],
-            "explanation": "injected registry predictor",
-        }
+            reserve_price_context=None,
+            feedback_calibration=None,
+            guardrail_applied=False,
+            guardrail_reason=None,
+            floor_bid_rate=None,
+            floor_price=None,
+            explanation="injected registry predictor",
+        )
 
 
 def test_predict_price_accepts_injected_predictor_registry(monkeypatch):
@@ -193,19 +206,28 @@ class _RecordingHistoricalPredictor(BasePricePredictor):
         self._bid_rate = bid_rate
         self.calls = 0
 
-    def predict(self, context: PricePredictionContext) -> dict:
+    def predict(self, context: PricePredictionContext) -> PredictionResult:
         self.calls += 1
-        return {
-            "predicted_bid_rate": self._bid_rate,
-            "predicted_price": round(context.budget * self._bid_rate, 2),
-            "confidence_score": 0.6,
-            "model_version": "recording-historical",
-            "pricing_mode": "historical_blend",
-            "historical_sample_size": context.historical_sample_size,
-            "agency_match_sample_size": 0,
-            "bid_rate_candidates": [],
-            "explanation": "recording historical",
-        }
+        predicted_price = round(context.budget * self._bid_rate, 2)
+        return PredictionResult(
+            predicted_bid_rate=self._bid_rate,
+            predicted_price=predicted_price,
+            price_range_min=predicted_price,
+            price_range_max=predicted_price,
+            confidence_score=0.6,
+            model_version="recording-historical",
+            pricing_mode="historical_blend",
+            historical_sample_size=context.historical_sample_size,
+            agency_match_sample_size=0,
+            bid_rate_candidates=[],
+            reserve_price_context=None,
+            feedback_calibration=None,
+            guardrail_applied=False,
+            guardrail_reason=None,
+            floor_bid_rate=None,
+            floor_price=None,
+            explanation="recording historical",
+        )
 
 
 def test_build_ensemble_prediction_payload_consumes_injected_historical_predictor(monkeypatch):

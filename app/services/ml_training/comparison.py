@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.ai.predictors.base import PricePredictionContext
+from app.ai.predictors.base import PricePredictionContext, serialize_prediction_result
 from app.ai.predictors.ensemble import build_ensemble_prediction_payload, load_ensemble_artifact
 from app.ai.predictors.historical import HistoricalStatisticalPredictor
 from app.ai.predictors.lstm import build_lstm_prediction_payload, infer_lstm_sequence_signal, load_lstm_artifact
@@ -151,7 +151,10 @@ class ComparisonMixin:
             category=category,
             agency_name=agency_name,
             min_training_size=min_training_size,
-            predict=lambda context: predictor.predict(context),
+            # ``predict`` returns the typed PredictionResult; the shared evaluator
+            # below is still dict-based (the artifact predictors feed it raw payload
+            # builders), so demote at this adapter seam only.
+            predict=lambda context: serialize_prediction_result(predictor.predict(context)),
         )
 
     def _evaluate_lstm_predictor(

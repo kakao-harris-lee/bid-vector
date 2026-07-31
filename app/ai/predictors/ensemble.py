@@ -8,7 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from app.ai.predictors.base import BasePricePredictor, PredictorAvailability, PricePredictionContext
+from app.ai.predictors.base import (
+    BasePricePredictor,
+    PredictionResult,
+    PredictorAvailability,
+    PricePredictionContext,
+)
 from app.ai.predictors.historical import (
     HistoricalStatisticalPredictor,
     apply_high_rate_distribution_adjustment,
@@ -86,11 +91,13 @@ class EnsembleBidRatePredictor(BasePricePredictor):
             return PredictorAvailability(False, f"Configured ensemble model artifact is invalid: {exc}")
         return PredictorAvailability(True)
 
-    def predict(self, context: PricePredictionContext) -> dict[str, Any]:
+    def predict(self, context: PricePredictionContext) -> PredictionResult:
         """Predict a bid rate from a persisted ensemble model artifact."""
         model_path = str(settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
         artifact = load_ensemble_artifact(model_path)
-        return build_ensemble_prediction_payload(context, artifact=artifact)
+        return PredictionResult.model_validate(
+            build_ensemble_prediction_payload(context, artifact=artifact)
+        )
 
 
 def load_ensemble_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, Any]:
@@ -142,12 +149,13 @@ def build_ensemble_prediction_payload(
         context.historical_records,
         agency_name=context.agency_name,
     )
+    historical_rate = float(historical_prediction.predicted_bid_rate or 0.0)
     components = {
-        "historical": float(historical_prediction.get("predicted_bid_rate", 0.0) or 0.0),
+        "historical": historical_rate,
         "momentum": _estimate_momentum_rate(sequence_rates, window_size=int(artifact["momentum_window"])),
         "mean_reversion": _estimate_mean_reversion_rate(
             sequence_rates,
-            anchor=float(historical_prediction.get("predicted_bid_rate", 0.0) or 0.0),
+            anchor=historical_rate,
         ),
     }
     lstm_component = _load_optional_lstm_component(context, artifact=artifact)
