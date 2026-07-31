@@ -91,15 +91,17 @@ def test_upsert_project_persists_business_type(test_db):
     test_db.add(project)
     test_db.flush()
 
-    # Build the item dict the same way CrawlNoticeItem.model_dump(mode="json") would produce
-    item = {
-        "notice_number": "UPSERT-0411-1",
-        "title": "건축공사 upsert 검증",
-        "base_amount": 100_000_000.0,
-        "business_type": "공사",
-        "business_type_code": "0411",
-        "business_type_label": "건축공사",
-    }
+    # 수집 산출과 같은 계약(``KonepsCollectedItem``)으로 넘긴다.
+    from app.schemas.koneps_items import KonepsCollectedItem
+
+    item = KonepsCollectedItem(
+        notice_number="UPSERT-0411-1",
+        title="건축공사 upsert 검증",
+        base_amount=100_000_000.0,
+        business_type="공사",
+        business_type_code="0411",
+        business_type_label="건축공사",
+    )
 
     service._update_project_from_item(project, item=item, request=request)
     test_db.flush()

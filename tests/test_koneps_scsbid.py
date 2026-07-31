@@ -14,6 +14,7 @@ import pytest
 
 from app.core.config import settings
 from app.schemas.schemas import CrawlRequest
+from app.schemas.koneps_items import ScsbidReserveDetail
 from app.services.koneps import scsbid
 
 
@@ -123,12 +124,17 @@ def test_has_persisted_reserve_prices(stored, expected):
 # --------------------------------------------------------------------------- #
 # build_scsbid_award_item
 # --------------------------------------------------------------------------- #
+def _detail(**fields) -> ScsbidReserveDetail:
+    """복수예비가격 상세를 타입 있는 입력으로 승격한다(빌더 계약)."""
+    return ScsbidReserveDetail.model_validate(fields)
+
+
 def test_build_award_item_returns_none_without_notice_number():
     req = CrawlRequest(source="scsbid-openapi", category="용역")
     assert (
         scsbid.build_scsbid_award_item(
             {"bidNtceNo": ""},
-            detail={},
+            detail=_detail(),
             request=req,
             operation="getOpengResultListInfoServc",
         )
@@ -148,12 +154,12 @@ def test_build_award_item_shape_and_category_tagging():
         "bidwinnrNm": "한빛건설",
         "prtcptCnum": "12",
     }
-    detail = {
-        "base_amount": 120000000,
-        "planned_price": 121000000,
-        "reserve_prices": [119000000, 121000000],
-        "selected_numbers": [1, 3],
-    }
+    detail = _detail(
+        base_amount=120000000,
+        planned_price=121000000,
+        reserve_prices=[119000000, 121000000],
+        selected_numbers=[1, 3],
+    )
     item = scsbid.build_scsbid_award_item(
         raw_item,
         detail=detail,
@@ -162,29 +168,29 @@ def test_build_award_item_shape_and_category_tagging():
         category="공사",
     )
     assert item is not None
-    assert item["notice_number"] == "20260101-001"
-    assert item["title"] == "도로 보수 공사"
+    assert item.notice_number == "20260101-001"
+    assert item.title == "도로 보수 공사"
     # category tagging honours the swept category, not request.category.
-    assert item["business_type"] == "공사"
-    assert item["metadata"]["mode"] == "scsbid_openapi"
-    assert item["metadata"]["openapi_service"] == "ScsbidInfoService"
-    assert item["metadata"]["opening_status"] == "낙찰"
-    assert item["metadata"]["participant_count"] == 12
-    assert item["metadata"]["reserve_prices"] == [119000000, 121000000]
-    assert item["metadata"]["raw_openapi_item"] is raw_item
+    assert item.business_type == "공사"
+    assert item.metadata["mode"] == "scsbid_openapi"
+    assert item.metadata["openapi_service"] == "ScsbidInfoService"
+    assert item.metadata["opening_status"] == "낙찰"
+    assert item.metadata["participant_count"] == 12
+    assert item.metadata["reserve_prices"] == [119000000, 121000000]
+    assert item.metadata["raw_openapi_item"] is raw_item
 
 
 def test_build_award_item_falls_back_to_request_category_when_unspecified():
     req = CrawlRequest(source="scsbid-openapi", category="용역")
     item = scsbid.build_scsbid_award_item(
         {"bidNtceNo": "N-1", "sucsfbidAmt": "1000", "sucsfbidRate": "90"},
-        detail={},
+        detail=_detail(),
         request=req,
         operation="getOpengResultListInfoServc",
         category=None,
     )
     assert item is not None
-    assert item["business_type"] == "용역"
+    assert item.business_type == "용역"
 
 
 # --------------------------------------------------------------------------- #
@@ -202,18 +208,18 @@ def test_build_award_item_does_not_use_winning_over_rate_as_base_amount():
         "sucsfbidRate": "87.5",  # success_rate = 낙찰가/예정가 (NOT 낙찰가/기초금액)
     }
     # 실 기초금액(base_amount) 없이 예정가(planned_price)만 존재하는 reserve detail.
-    detail = {"planned_price": 121_000_000}
+    detail = _detail(planned_price=121_000_000)
     yega_reversal = 100_000_000.0 / 0.875  # = 예정가(114,285,714), 기초금액이 아님
     item = scsbid.build_scsbid_award_item(
         raw_item, detail=detail, request=req, operation="getOpengResultListInfoServc"
     )
     assert item is not None
     # base_amount는 예정가 역산값으로 오염되지 않는다 — 실 기초금액이 없으므로 미상(0.0).
-    assert item["base_amount"] == 0.0
-    assert item["base_amount"] != pytest.approx(yega_reversal)
+    assert item.base_amount == 0.0
+    assert item.base_amount != pytest.approx(yega_reversal)
     # 예정가는 detail 상세값을 그대로 노출한다(별도 필드; base 로 승격하지 않는다).
-    assert item["metadata"]["planned_price"] == 121_000_000
-    assert item["estimated_amount"] == pytest.approx(121_000_000.0)
+    assert item.metadata["planned_price"] == 121_000_000
+    assert item.estimated_amount == pytest.approx(121_000_000.0)
 
 
 def test_build_award_item_planned_price_recovered_from_rate_when_detail_empty():
@@ -225,14 +231,14 @@ def test_build_award_item_planned_price_recovered_from_rate_when_detail_empty():
         "sucsfbidRate": "88.0",
     }
     item = scsbid.build_scsbid_award_item(
-        raw_item, detail={}, request=req, operation="getOpengResultListInfoServc"
+        raw_item, detail=_detail(), request=req, operation="getOpengResultListInfoServc"
     )
     assert item is not None
     # 낙찰가/success_rate = 예정가 추정치 → planned_price/estimated_amount 로만 흐른다.
-    assert item["metadata"]["planned_price"] == pytest.approx(50_000_000.0 / 0.88)
-    assert item["estimated_amount"] == pytest.approx(50_000_000.0 / 0.88)
+    assert item.metadata["planned_price"] == pytest.approx(50_000_000.0 / 0.88)
+    assert item.estimated_amount == pytest.approx(50_000_000.0 / 0.88)
     # base_amount는 예정가로 오염되지 않고 미상(0.0)으로 남는다.
-    assert item["base_amount"] == 0.0
+    assert item.base_amount == 0.0
 
 
 def test_build_award_item_recovers_base_estimate_from_reserves():
@@ -249,14 +255,14 @@ def test_build_award_item_recovers_base_estimate_from_reserves():
     }
     item = scsbid.build_scsbid_award_item(
         raw_item,
-        detail={"reserve_prices": reserves},
+        detail=_detail(reserve_prices=reserves),
         request=req,
         operation="getOpengResultListInfoServc",
     )
     assert item is not None
     # 복구값은 base_amount_estimated(추정)로만 흐르고 원본 base_amount는 미상(0.0).
-    assert item["base_amount"] == 0.0
-    assert item["metadata"]["base_amount_estimated"] == pytest.approx(base, abs=1.0)
+    assert item.base_amount == 0.0
+    assert item.metadata["base_amount_estimated"] == pytest.approx(base, abs=1.0)
 
 
 def test_build_award_item_no_base_estimate_without_full_reserves():
@@ -264,27 +270,27 @@ def test_build_award_item_no_base_estimate_without_full_reserves():
     req = CrawlRequest(source="scsbid-openapi", category="용역")
     item = scsbid.build_scsbid_award_item(
         {"bidNtceNo": "N-9", "sucsfbidAmt": "1000", "sucsfbidRate": "90"},
-        detail={"reserve_prices": [999, 1001]},
+        detail=_detail(reserve_prices=[999, 1001]),
         request=req,
         operation="getOpengResultListInfoServc",
     )
     assert item is not None
-    assert item["base_amount"] == 0.0
-    assert item["metadata"]["base_amount_estimated"] is None
+    assert item.base_amount == 0.0
+    assert item.metadata["base_amount_estimated"] is None
 
 
 def test_build_award_item_prefers_real_base_amount_when_present():
     """진짜 기초금액이 있으면 그대로 쓰고 예정가와 구분된다(회귀 방지)."""
     req = CrawlRequest(source="scsbid-openapi", category="용역")
     raw_item = {"bidNtceNo": "N-3", "sucsfbidAmt": "100000000", "sucsfbidRate": "90"}
-    detail = {"base_amount": 120_000_000, "planned_price": 119_500_000}
+    detail = _detail(base_amount=120_000_000, planned_price=119_500_000)
     item = scsbid.build_scsbid_award_item(
         raw_item, detail=detail, request=req, operation="getOpengResultListInfoServc"
     )
     assert item is not None
-    assert item["base_amount"] == pytest.approx(120_000_000.0)
-    assert item["metadata"]["planned_price"] == 119_500_000
-    assert item["base_amount"] != item["metadata"]["planned_price"]
+    assert item.base_amount == pytest.approx(120_000_000.0)
+    assert item.metadata["planned_price"] == 119_500_000
+    assert item.base_amount != item.metadata["planned_price"]
 
 
 def test_scsbid_detail_page_size_default():

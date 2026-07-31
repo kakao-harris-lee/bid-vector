@@ -132,10 +132,10 @@ def run_backfill(
         metadata = response.get("metadata", {})
         stats.api_call_count += int(metadata.get("scsbid_api_call_count") or 0)
 
+        # 수집 산출은 ``KonepsCollectedItem`` DTO 다(방어적 DTO Phase 3) — dict 키가
+        # 아니라 모델 필드로 읽는다.
         notice_numbers = {
-            str(item.get("notice_number"))
-            for item in items
-            if item.get("notice_number")
+            str(item.notice_number) for item in items if item.notice_number
         }
         pre_existing = _existing_notice_numbers(db, notice_numbers)
 
@@ -150,7 +150,7 @@ def run_backfill(
                 persist_items = [
                     item
                     for item in items
-                    if str(item.get("notice_number")) in pre_existing
+                    if str(item.notice_number) in pre_existing
                 ]
             cat_stats.persisted_items = len(persist_items)
             persist_response = {**response, "items": persist_items}

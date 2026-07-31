@@ -6,6 +6,7 @@ These guard the behavior-preserving extraction from
 
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import html_parsing
+from tests.support.koneps_items import collected_item
 
 
 def _live_request() -> CrawlRequest:
@@ -101,8 +102,8 @@ def test_normalize_opening_result_row_maps_codes():
 
 def test_merge_opening_result_rows_enriches_items():
     items = [
-        {"notice_number": "20260507-001", "metadata": {"mode": "live"}},
-        {"notice_number": "99999999-999", "metadata": {}},
+        collected_item(notice_number="20260507-001", metadata={"mode": "live"}),
+        collected_item(notice_number="99999999-999", metadata={}),
     ]
     opening_rows = [
         {
@@ -118,11 +119,45 @@ def test_merge_opening_result_rows_enriches_items():
     merged_items, meta = html_parsing.merge_opening_result_rows(items, opening_rows)
     assert meta["opening_result_enriched_count"] == 1
     assert meta["opening_result_grid_id"] == html_parsing.OPENING_RESULT_GRID_ID
-    enriched = merged_items[0]["metadata"]
+    enriched = merged_items[0].metadata
     assert enriched["opening_status"] == "개찰완료"
     assert enriched["winning_company"] == "가나건설"
+    # 비어 있던 item 필드는 개찰행에서 채워진다(모델 필드 대입 경로 — dict 릴레이 시절의
+    # ``item["business_type"] = ...`` 를 대체한 두 줄이 실제로 반영되는지 고정).
+    assert merged_items[0].business_type == "공사"
+    assert merged_items[0].region == "서울"  # 수요기관에서 지역 추출
     # Unmatched item is left untouched.
-    assert merged_items[1]["metadata"] == {}
+    assert merged_items[1].metadata == {}
+    assert merged_items[1].business_type is None
+    assert merged_items[1].region is None
+
+
+def test_merge_opening_result_rows_does_not_overwrite_filled_item_fields():
+    """이미 값이 있는 business_type/region 은 개찰행이 덮지 않는다(가드 방향 고정)."""
+    items = [
+        collected_item(
+            notice_number="20260507-002",
+            business_type="일반용역",
+            region="부산",
+            metadata={},
+        )
+    ]
+    opening_rows = [
+        {
+            "notice_number": "20260507-002",
+            "status": "개찰완료",
+            "business_type": "공사",
+            "demand_agency": "서울특별시청",
+        }
+    ]
+
+    merged_items, meta = html_parsing.merge_opening_result_rows(items, opening_rows)
+
+    assert meta["opening_result_enriched_count"] == 1
+    assert merged_items[0].business_type == "일반용역"
+    assert merged_items[0].region == "부산"
+    # metadata 병합 자체는 그대로 일어난다.
+    assert merged_items[0].metadata["opening_status"] == "개찰완료"
 
 
 def test_parse_opening_detail_html_extracts_results():

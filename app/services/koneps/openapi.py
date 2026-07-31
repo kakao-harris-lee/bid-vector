@@ -2,13 +2,9 @@
 
 These functions and the source/category mapping constants were extracted
 verbatim from ``KonepsCollectorService`` (``collector.py``). They have no
-IO (``requests``), DB (``Session``), or HTML (``BeautifulSoup``)
-dependencies and do not use instance state, so they live here as
-module-level pure helpers and module-level constants to keep the
-collector class focused on orchestration.
-
-Behavior is intentionally identical to the original methods; this module
-is a pure relocation, not a rewrite. The OpenAPI IO clients
+IO (``requests``), DB (``Session``), or HTML (``BeautifulSoup``) dependencies
+and do not use instance state, so they live here as module-level pure helpers
+and constants to keep the collector focused on orchestration. The OpenAPI IO clients
 (``request_openapi_with_key_variants`` / ``load_openapi_json``) live in
 ``app.services.koneps.http_client`` and consume these pure helpers.
 """
@@ -19,6 +15,7 @@ from urllib.parse import quote_plus
 
 from app.core.config import settings
 from app.core.time import utc_now
+from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import parsing
 from app.services.koneps.field_contract import (
@@ -291,21 +288,17 @@ def openapi_date_token(target_date: str | None) -> str:
 
 
 def openapi_header(payload: dict[str, Any]) -> dict[str, Any]:
-    """Extract the normalized OpenAPI response header."""
-    response = (
-        payload.get("response") if isinstance(payload.get("response"), dict) else {}
-    )
-    header = response.get("header") if isinstance(response.get("header"), dict) else {}
-    return dict(header)
+    """Extract the normalized OpenAPI response header (비-dict/누락은 빈 dict)."""
+    response = payload.get("response")
+    header = response.get("header") if isinstance(response, dict) else None
+    return dict(header) if isinstance(header, dict) else {}
 
 
 def openapi_body(payload: dict[str, Any]) -> dict[str, Any]:
-    """Extract the normalized OpenAPI response body."""
-    response = (
-        payload.get("response") if isinstance(payload.get("response"), dict) else {}
-    )
-    body = response.get("body") if isinstance(response.get("body"), dict) else {}
-    return dict(body)
+    """Extract the normalized OpenAPI response body (비-dict/누락은 빈 dict)."""
+    response = payload.get("response")
+    body = response.get("body") if isinstance(response, dict) else None
+    return dict(body) if isinstance(body, dict) else {}
 
 
 def openapi_item_list(body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -421,8 +414,12 @@ def build_openapi_notice_item(
     *,
     request: CrawlRequest,
     operation: str,
-) -> dict[str, Any] | None:
-    """Convert one OpenAPI row into the existing crawl notice payload."""
+) -> KonepsCollectedItem | None:
+    """Promote one raw OpenAPI row into the typed collection item (승격 지점, Phase 3).
+
+    원시 응답의 관용 정규화는 여기서 끝내고 이후 persistence 까지 ``KonepsCollectedItem``
+    만 흐른다. 공고번호 없는 행은 ``None`` — 항목 단위로만 버린다(수집 best-effort).
+    """
     notice_number = str(
         raw_item.get("bidNtceNo")
         or raw_item.get("bidPbancNo")
@@ -473,22 +470,22 @@ def build_openapi_notice_item(
         raw_item.get("sucsfbidLwltRate")
     )
 
-    return {
-        "notice_number": notice_number,
-        "title": title,
-        "base_amount": float(base_amount or 0.0),
-        "estimated_amount": float(estimated_amount or base_amount or 0.0),
-        "award_floor_rate": award_floor_rate,
+    return KonepsCollectedItem(
+        notice_number=notice_number,
+        title=title,
+        base_amount=float(base_amount or 0.0),
+        estimated_amount=float(estimated_amount or base_amount or 0.0),
+        award_floor_rate=award_floor_rate,
         # eligibility_raw는 여기서 배출하지 않는다: 목록/표적조회 응답에 자격 상세가
         # 없고(실측 2026-07-19), 유일한 writer는 backfill 스크립트(표적조회 + license-
         # limit 서브콜)로 일원화한다. 수집 피드가 flags-only를 쓰면 IS NULL 재개
         # 시맨틱이 깨져 상세가 영영 안 채워진다.
-        "closing_at": closing_at,
-        "business_type": business_type or request.category,
-        "region": str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,
-        "license_codes": parsing.extract_license_codes(license_text),
-        "source_url": source_url,
-        "metadata": {
+        closing_at=closing_at,
+        business_type=business_type or request.category,
+        region=str(raw_item.get("prtcptLmtRgnNm") or "").strip() or None,
+        license_codes=parsing.extract_license_codes(license_text),
+        source_url=source_url,
+        metadata={
             "mode": "openapi",
             "openapi_service": "BidPublicInfoService",
             "openapi_operation": operation,
@@ -509,7 +506,7 @@ def build_openapi_notice_item(
             "reference_number": raw_item.get("refNo"),
             "raw_openapi_item": raw_item,
         },
-    }
+    )
 
 
 def first_openapi_amount(

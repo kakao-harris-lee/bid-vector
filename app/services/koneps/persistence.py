@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import utc_now
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
+from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.base_amount_basis import (
     classify_base_basis,
@@ -92,7 +93,7 @@ def notice_numbers_checked_recently(db: Session, within_hours: int) -> set[str]:
 def resolve_project_for_item(
     db: Session,
     *,
-    item: dict[str, Any],
+    item: KonepsCollectedItem,
     request: CrawlRequest,
     historical_record: HistoricalData,
     project_similarity: ProjectSimilarityService,
@@ -117,7 +118,7 @@ def resolve_project_for_item(
     is_new_project = project is None
     if project is None:
         project = Project(
-            title=item.get("title") or item.get("notice_number") or "KONEPS notice",
+            title=item.title or item.notice_number or "KONEPS notice",
             description="",
             requirements="",
             budget_estimate=0.0,
@@ -139,7 +140,7 @@ def resolve_project_for_item(
 def find_matching_project(
     db: Session,
     *,
-    item: dict[str, Any],
+    item: KonepsCollectedItem,
     request: CrawlRequest,
 ) -> Project | None:
     """Heuristically link a crawled notice to an existing project using explicit keys first.
@@ -189,17 +190,17 @@ def find_matching_project(
        full category load + source_url/title fuzzy matching to avoid any
        regression for that path.
     """
-    target_title = parsing.normalize_title(item.get("title"))
-    target_notice_number = parsing.normalize_notice_number(item.get("notice_number"))
-    target_source_url = matching.normalize_source_url(item.get("source_url"))
+    target_title = parsing.normalize_title(item.title)
+    target_notice_number = parsing.normalize_notice_number(item.notice_number)
+    target_source_url = matching.normalize_source_url(item.source_url)
     target_agencies = matching.extract_item_agency_keys(item)
     target_category = matching.resolve_project_category(item, request)
     target_budget = matching.resolve_budget_estimate(item)
-    target_deadline = parsing.coerce_datetime(item.get("closing_at"))
+    target_deadline = parsing.coerce_datetime(item.closing_at)
 
     if target_notice_number:
         # 1. Index fast path: match on the indexed notice_number column.
-        raw_notice = str(item.get("notice_number") or "").strip()
+        raw_notice = str(item.notice_number or "").strip()
         notice_variants = {
             variant for variant in (raw_notice, target_notice_number) if variant
         }
@@ -259,30 +260,28 @@ def find_matching_project(
 
 
 def update_project_from_item(
-    project: Project, *, item: dict[str, Any], request: CrawlRequest
+    project: Project, *, item: KonepsCollectedItem, request: CrawlRequest
 ) -> None:
     """Apply crawled notice details onto a project without discarding user-entered context."""
-    item_metadata = item.get("metadata", {})
+    facts = item.opening_facts()
     resolved_category = matching.resolve_project_category(item, request)
     budget_estimate = matching.resolve_budget_estimate(item)
     budget_values = [
         float(amount)
         for amount in (
-            item.get("base_amount"),
-            item.get("estimated_amount"),
+            item.base_amount,
+            item.estimated_amount,
             budget_estimate,
         )
         if amount not in (None, "", 0, 0.0)
     ]
-    description_lines = _project_description_lines(item, item_metadata)
-    requirement_lines = _project_requirement_lines(item, item_metadata)
+    description_lines = _project_description_lines(item, facts)
+    requirement_lines = _project_requirement_lines(item, facts)
 
-    if item.get("title") and parsing.should_replace_project_title(
-        project.title, item.get("title")
-    ):
-        project.title = str(item.get("title")).strip()
+    if item.title and parsing.should_replace_project_title(project.title, item.title):
+        project.title = str(item.title).strip()
     _update_project_notice_identity(project, item=item)
-    _update_project_agencies(project, item_metadata=item_metadata)
+    _update_project_agencies(project, facts=facts)
     project.description = parsing.merge_text_lines(
         project.description, description_lines
     )
@@ -294,7 +293,7 @@ def update_project_from_item(
     project.budget_min = min(budget_values) if budget_values else project.budget_min
     project.budget_max = max(budget_values) if budget_values else project.budget_max
 
-    closing_at = parsing.coerce_datetime(item.get("closing_at"))
+    closing_at = parsing.coerce_datetime(item.closing_at)
     if closing_at is not None:
         project.deadline = closing_at
 
@@ -302,87 +301,69 @@ def update_project_from_item(
     if resolved_status:
         project.status = resolved_status
 
-    if item.get("business_type_code") is not None:
-        project.business_type_code = item.get("business_type_code")
-    if item.get("business_type_label") is not None:
-        project.business_type_label = item.get("business_type_label")
+    if item.business_type_code is not None:
+        project.business_type_code = item.business_type_code
+    if item.business_type_label is not None:
+        project.business_type_label = item.business_type_label
 
     # 공고 낙찰하한율은 값이 있을 때만 갱신한다. scsbid/재수집 아이템이 이 필드를
     # 실어오지 않는 경우(None) 기존 값을 지우지 않도록 덮어쓰지 않는다.
-    if item.get("award_floor_rate") is not None:
-        project.award_floor_rate = item.get("award_floor_rate")
+    if item.award_floor_rate is not None:
+        project.award_floor_rate = item.award_floor_rate
 
     # 공고 참가자격 raw 필드도 비어있지 않은 dict일 때만 저장한다. scsbid/재수집
     # 아이템이 자격 원문을 싣지 않으면(None/빈 dict) 기존 값을 지우지 않는다
     # (award_floor_rate와 동일 가드). 이 컬럼은 PR-B 라벨 추출의 원천이며 현재
     # 소비자가 없다.
-    if item.get("eligibility_raw"):
-        project.eligibility_raw = item.get("eligibility_raw")
+    if item.eligibility_raw:
+        project.eligibility_raw = item.eligibility_raw
 
-    db_title = project.title or item.get("notice_number") or "KONEPS notice"
+    db_title = project.title or item.notice_number or "KONEPS notice"
     project.title = db_title.strip()
 
 
 def _project_description_lines(
-    item: dict[str, Any],
-    item_metadata: dict[str, Any],
+    item: KonepsCollectedItem,
+    facts: CrawlItemMetadataFacts,
 ) -> list[str | None]:
-    demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
-        "demand_agency"
-    )
+    demand_agency = facts.resolved_demand_agency()
     return [
-        (f"공고번호: {item.get('notice_number')}" if item.get("notice_number") else None),
-        (
-            f"공고기관: {item_metadata.get('issuing_agency')}"
-            if item_metadata.get("issuing_agency")
-            else None
-        ),
+        (f"공고번호: {item.notice_number}" if item.notice_number else None),
+        (f"공고기관: {facts.issuing_agency}" if facts.issuing_agency else None),
         f"수요기관: {demand_agency}" if demand_agency else None,
-        f"공고원문: {item.get('source_url')}" if item.get("source_url") else None,
-        (f"업무구분: {item.get('business_type')}" if item.get("business_type") else None),
-        (
-            f"개찰상태: {item_metadata.get('opening_status')}"
-            if item_metadata.get("opening_status")
-            else None
-        ),
+        f"공고원문: {item.source_url}" if item.source_url else None,
+        (f"업무구분: {item.business_type}" if item.business_type else None),
+        (f"개찰상태: {facts.opening_status}" if facts.opening_status else None),
     ]
 
 
 def _project_requirement_lines(
-    item: dict[str, Any],
-    item_metadata: dict[str, Any],
+    item: KonepsCollectedItem,
+    facts: CrawlItemMetadataFacts,
 ) -> list[str | None]:
     return [
-        f"지역요건: {item.get('region')}" if item.get("region") else None,
+        f"지역요건: {item.region}" if item.region else None,
         (
-            f"면허요건: {' '.join(item.get('license_codes') or [])}"
-            if item.get("license_codes")
+            f"면허요건: {' '.join(item.license_codes or [])}"
+            if item.license_codes
             else None
         ),
+        (f"기초금액: {float(item.base_amount):.0f}" if item.base_amount else None),
         (
-            f"기초금액: {float(item.get('base_amount')):.0f}"
-            if item.get("base_amount")
+            f"추정금액: {float(item.estimated_amount):.0f}"
+            if item.estimated_amount
             else None
         ),
-        (
-            f"추정금액: {float(item.get('estimated_amount')):.0f}"
-            if item.get("estimated_amount")
-            else None
-        ),
-        (
-            f"계약방법: {item_metadata.get('contract_method')}"
-            if item_metadata.get("contract_method")
-            else None
-        ),
+        (f"계약방법: {facts.contract_method}" if facts.contract_method else None),
     ]
 
 
 def _update_project_notice_identity(
     project: Project,
     *,
-    item: dict[str, Any],
+    item: KonepsCollectedItem,
 ) -> None:
-    notice_number = item.get("notice_number")
+    notice_number = item.notice_number
     normalized_notice_number = parsing.normalize_notice_number(notice_number)
     if normalized_notice_number and (
         not project.notice_number
@@ -390,7 +371,7 @@ def _update_project_notice_identity(
         == normalized_notice_number
     ):
         project.notice_number = normalized_notice_number
-    source_url = item.get("source_url")
+    source_url = item.source_url
     if source_url and (
         not project.source_url
         or matching.normalize_source_url(project.source_url)
@@ -402,18 +383,16 @@ def _update_project_notice_identity(
 def _update_project_agencies(
     project: Project,
     *,
-    item_metadata: dict[str, Any],
+    facts: CrawlItemMetadataFacts,
 ) -> None:
-    issuing_agency = item_metadata.get("issuing_agency")
+    issuing_agency = facts.issuing_agency
     if issuing_agency and (
         not project.issuing_agency
         or parsing.normalize_agency_name(project.issuing_agency)
         == parsing.normalize_agency_name(issuing_agency)
     ):
         project.issuing_agency = str(issuing_agency).strip()
-    demand_agency = item_metadata.get("opening_demand_agency") or item_metadata.get(
-        "demand_agency"
-    )
+    demand_agency = facts.resolved_demand_agency()
     if demand_agency and (
         not project.demand_agency
         or parsing.normalize_agency_name(project.demand_agency)
@@ -426,15 +405,19 @@ def resolve_tender_result(
     db: Session,
     *,
     project_id: int | None,
-    item_metadata: dict[str, Any],
+    facts: CrawlItemMetadataFacts,
     crawl_job_status: str,
 ) -> TenderResult:
-    """Upsert a tender result snapshot so repeated crawls do not duplicate the same award record."""
-    announced_at = parsing.coerce_datetime(item_metadata.get("opening_announced_at"))
-    winning_company = item_metadata.get("winning_company") or ""
-    winning_amount = item_metadata.get("winning_amount") or 0.0
-    winning_rate = item_metadata.get("winning_rate") or 0.0
-    result_status = item_metadata.get("opening_status") or crawl_job_status
+    """Upsert a tender result snapshot so repeated crawls do not duplicate the same award record.
+
+    ``facts`` 는 수집 item ``metadata`` 의 검증된 읽기 투영이다(원시 dict 릴레이 대체).
+    금액/시각의 관용 파싱은 여기서 기존과 동일하게 수행한다.
+    """
+    announced_at = parsing.coerce_datetime(facts.opening_announced_at)
+    winning_company = facts.winning_company or ""
+    winning_amount = facts.winning_amount or 0.0
+    winning_rate = facts.winning_rate or 0.0
+    result_status = facts.opening_status or crawl_job_status
 
     tender_result: TenderResult | None = None
     if project_id is not None:
@@ -552,8 +535,13 @@ def persist_crawl_results(
     ``False`` so projects are embedded inline -- otherwise their newly created
     projects would never be embedded (no inline, no enqueued backfill) and
     silently drop out of pgvector search/recommendation.
+
+    ``response`` 봉투는 celery/HTTP payload 형태를 유지하지만, 그 안의 ``items`` 는
+    여기서 ``KonepsCollectedItem`` 으로 **승격**된다(방어적 DTO Phase 3의 검증 지점):
+    수집 생산자는 이미 모델을 넘기므로 무비용 통과이고, 손으로 만든 dict payload
+    (백필 스크립트/외부 호출부)는 이 지점에서 필수 필드가 검증된다.
     """
-    items = response.get("items", [])
+    items = _promote_items(response.get("items", []))
     metadata = response.get("metadata", {})
 
     _apply_crawl_response_summary(
@@ -601,6 +589,22 @@ def persist_crawl_results(
     )
 
 
+def _promote_items(raw_items: Any) -> list[KonepsCollectedItem]:
+    """수집 payload 의 items 를 타입 있는 DTO 리스트로 승격한다.
+
+    이미 DTO 면 그대로 통과(재검증 없음)하고, dict 면 ``model_validate`` 로 구조 계약을
+    강제한다. 필수 필드(공고번호/제목/기초금액) 결손은 여기서 ``ValidationError`` 로
+    거부한다 — 영속화는 수집 루프와 달리 best-effort 가 아니고, 결손 item 을 통과시키면
+    ORM 대입 단계에서 조용히 기본값이 저장되기 때문이다.
+    """
+    return [
+        item
+        if isinstance(item, KonepsCollectedItem)
+        else KonepsCollectedItem.model_validate(item)
+        for item in raw_items or []
+    ]
+
+
 def _apply_crawl_response_summary(
     crawl_job: CrawlJob,
     *,
@@ -617,15 +621,15 @@ def _apply_crawl_response_summary(
 def _persist_crawl_item(
     db: Session,
     *,
-    item: dict[str, Any],
+    item: KonepsCollectedItem,
     request: CrawlRequest,
     project_similarity: ProjectSimilarityService,
     crawl_job_status: str,
     defer_embeddings: bool,
 ) -> tuple[Project | None, bool]:
-    item_metadata = item.get("metadata", {})
+    facts = item.opening_facts()
     historical_record = _resolve_historical_record(
-        db, notice_number=item.get("notice_number")
+        db, notice_number=item.notice_number
     )
     project, embedding_deferred = resolve_project_for_item(
         db,
@@ -640,14 +644,14 @@ def _persist_crawl_item(
     _update_historical_record_from_item(
         historical_record,
         item=item,
-        item_metadata=item_metadata,
         request=request,
+        facts=facts,
     )
     _persist_tender_result_for_item(
         db,
         project=project,
         historical_record=historical_record,
-        item_metadata=item_metadata,
+        facts=facts,
         crawl_job_status=crawl_job_status,
     )
     return project, embedding_deferred
@@ -656,7 +660,7 @@ def _persist_crawl_item(
 def _resolve_historical_record(
     db: Session,
     *,
-    notice_number: Any,
+    notice_number: str | None,
 ) -> HistoricalData:
     historical_record = (
         db.query(HistoricalData)
@@ -672,38 +676,38 @@ def _resolve_historical_record(
 def _update_historical_record_from_item(
     historical_record: HistoricalData,
     *,
-    item: dict[str, Any],
-    item_metadata: dict[str, Any],
+    item: KonepsCollectedItem,
     request: CrawlRequest,
+    facts: CrawlItemMetadataFacts | None = None,
 ) -> None:
-    historical_record.agency_name = (
-        item_metadata.get("opening_demand_agency")
-        or item_metadata.get("demand_agency")
-        or item_metadata.get("issuing_agency")
-        or ""
-    )
+    """Apply one collected item onto its ``HistoricalData`` row.
+
+    ``facts`` 는 재사용을 위한 주입 지점이다(persist 루프는 item 당 한 번만 투영해
+    넘긴다). 생략하면 ``item`` 에서 직접 투영한다.
+    """
+    resolved_facts = facts if facts is not None else item.opening_facts()
+    historical_record.agency_name = resolved_facts.resolved_agency_name()
     historical_record.category = matching.resolve_project_category(item, request)
     _update_historical_base_fields(
-        historical_record, item=item, item_metadata=item_metadata
+        historical_record, item=item, facts=resolved_facts
     )
     historical_record.bid_rate = (
         parsing.normalize_bid_rate_value(
-            item_metadata.get("bid_rate") or item_metadata.get("winning_rate")
+            resolved_facts.bid_rate or resolved_facts.winning_rate
         )
         or 0.0
     )
-    _update_historical_reserve_fields(historical_record, item_metadata=item_metadata)
+    _update_historical_reserve_fields(historical_record, facts=resolved_facts)
     historical_record.opened_at = parsing.coerce_datetime(
-        item_metadata.get("opening_announced_at")
-        or item_metadata.get("opening_scheduled_at")
+        resolved_facts.opening_announced_at or resolved_facts.opening_scheduled_at
     )
 
 
 def _update_historical_base_fields(
     historical_record: HistoricalData,
     *,
-    item: dict[str, Any],
-    item_metadata: dict[str, Any],
+    item: KonepsCollectedItem,
+    facts: CrawlItemMetadataFacts,
 ) -> None:
     """Persist base_amount / predicted_price with an anti-clobber guard + provenance tag.
 
@@ -722,25 +726,25 @@ def _update_historical_base_fields(
     ``base_amount`` is NEVER overwritten with an estimate/예정가 (정직 명세 §2 — 원본
     불변, 추정은 ``base_amount_estimated`` 로만).
     """
-    incoming_base = parsing.coerce_amount(item.get("base_amount"))
+    incoming_base = parsing.coerce_amount(item.base_amount)
     if incoming_base is not None and incoming_base > 0:
         historical_record.base_amount = float(incoming_base)
 
-    incoming_estimated = parsing.coerce_amount(item.get("estimated_amount"))
+    incoming_estimated = parsing.coerce_amount(item.estimated_amount)
     if incoming_estimated is not None and incoming_estimated > 0:
         historical_record.predicted_price = float(incoming_estimated)
     elif incoming_base is not None and incoming_base > 0:
         historical_record.predicted_price = float(incoming_base)
 
-    recovered = parsing.coerce_amount(item_metadata.get("base_amount_estimated"))
+    recovered = parsing.coerce_amount(facts.base_amount_estimated)
     if recovered is not None and recovered > 0:
         historical_record.base_amount_estimated = float(recovered)
 
     # Provenance: classify the FINAL stored base with the row's winning result so a
     # calibration/holdout loop filtering to ``base_amount_basis == 'clean'`` never
     # picks up a 예정가-역산 / VAT-파생 / 미상 base.
-    winning_amount = parsing.coerce_amount(item_metadata.get("winning_amount"))
-    winning_rate = normalize_winning_rate(item_metadata.get("winning_rate"))
+    winning_amount = parsing.coerce_amount(facts.winning_amount)
+    winning_rate = normalize_winning_rate(facts.winning_rate)
     historical_record.base_amount_basis = classify_base_basis(
         historical_record.base_amount, winning_amount, winning_rate
     )
@@ -750,9 +754,9 @@ def _update_historical_base_fields(
 def _update_historical_reserve_fields(
     historical_record: HistoricalData,
     *,
-    item_metadata: dict[str, Any],
+    facts: CrawlItemMetadataFacts,
 ) -> None:
-    incoming_reserve_prices = item_metadata.get("reserve_prices") or []
+    incoming_reserve_prices = facts.reserve_prices or []
     if incoming_reserve_prices or not scsbid.has_persisted_reserve_prices(
         historical_record
     ):
@@ -760,7 +764,7 @@ def _update_historical_reserve_fields(
             incoming_reserve_prices,
             ensure_ascii=False,
         )
-    incoming_selected_numbers = item_metadata.get("selected_numbers") or []
+    incoming_selected_numbers = facts.selected_numbers or []
     if incoming_selected_numbers or not scsbid.has_persisted_reserve_prices(
         historical_record
     ):
@@ -775,25 +779,15 @@ def _persist_tender_result_for_item(
     *,
     project: Project | None,
     historical_record: HistoricalData,
-    item_metadata: dict[str, Any],
+    facts: CrawlItemMetadataFacts,
     crawl_job_status: str,
 ) -> None:
-    has_tender_result = any(
-        item_metadata.get(key)
-        for key in (
-            "opening_status",
-            "winning_company",
-            "winning_amount",
-            "winning_rate",
-            "opening_announced_at",
-        )
-    )
-    if not has_tender_result:
+    if not facts.has_award_signal():
         return
     tender_result = resolve_tender_result(
         db,
         project_id=project.id if project is not None else historical_record.project_id,
-        item_metadata=item_metadata,
+        facts=facts,
         crawl_job_status=crawl_job_status,
     )
     if tender_result.project_id is None and historical_record.project_id is not None:

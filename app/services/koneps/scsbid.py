@@ -29,6 +29,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.time import kst_now
 from app.models.models import HistoricalData
+from app.schemas.koneps_items import KonepsCollectedItem, ScsbidReserveDetail
 from app.schemas.schemas import CrawlRequest
 from app.services.base_amount_basis import estimate_base_amount_from_reserves
 from app.services.koneps import openapi, parsing
@@ -93,12 +94,18 @@ def request_delay_seconds() -> float:
 def build_scsbid_award_item(
     raw_item: dict[str, Any],
     *,
-    detail: dict[str, Any],
+    detail: ScsbidReserveDetail,
     request: CrawlRequest,
     operation: str,
     category: str | None = None,
-) -> dict[str, Any] | None:
-    """Convert one ScsbidInfoService row into the existing crawl payload."""
+) -> KonepsCollectedItem | None:
+    """Promote one raw ScsbidInfoService 개찰/낙찰 row into the typed collection item.
+
+    승격 지점(방어적 DTO Phase 3): 원시 응답(``raw_item``)과 복수예비가격 상세
+    (``detail`` — 호출부가 ``ScsbidReserveDetail`` 로 이미 승격해 넘긴다)를 합쳐 타입
+    있는 item 을 만든다. 공고번호가 없는 행은 ``None`` 으로 되돌려 항목 단위로만
+    버린다(수집 best-effort).
+    """
     notice_number = str(raw_item.get("bidNtceNo") or "").strip()
     if not notice_number:
         return None
@@ -122,9 +129,9 @@ def build_scsbid_award_item(
     #     (``base_amount_estimated``)로만 노출한다(원본 base 는 오염값으로 채우지 않음).
     #   - 둘 다 불가하면 base 는 미상(0.0)으로 남기고, persistence 가드가 기존의 더 나은
     #     base 를 이 0.0 으로 덮지 않게 한다.
-    detail_base = parsing.coerce_amount(detail.get("base_amount"))
+    detail_base = parsing.coerce_amount(detail.base_amount)
     base_amount = detail_base if detail_base and detail_base > 0 else None
-    recovered_base = estimate_base_amount_from_reserves(detail.get("reserve_prices"))
+    recovered_base = estimate_base_amount_from_reserves(detail.reserve_prices)
     # 예정가: reserve detail 상세값 우선, 없으면 낙찰가/success_rate(=낙찰가/예정가) 역산
     # 추정 예정가. 예정가는 planned_price / estimated_amount 로만 흐르고 base 로 승격하지
     # 않는다.
@@ -133,7 +140,10 @@ def build_scsbid_award_item(
         if winning_amount is not None and success_rate
         else None
     )
-    planned_price = detail.get("planned_price") or planned_price_estimate
+    # 상세 예정가도 base 와 같은 관용 파싱을 거친다. KONEPS 원시 토큰은 문자열일 수
+    # 있고(``RawAmount``), 아래 ``planned_price > 0`` 비교가 문자열이면 TypeError 로
+    # sweep 을 죽인다 — 타입화가 드러낸 잠재 결함이다. float 입력에는 무연산이라 산출 불변.
+    planned_price = parsing.coerce_amount(detail.planned_price) or planned_price_estimate
     # 투찰률(bid_rate) = 낙찰가/기초금액. 실 기초금액이 있을 때만 역산하고, 없으면
     # success_rate(낙찰가/예정가)를 유지한다(기존 동작 — base 미상 시 회귀 없음).
     bid_rate = (
@@ -148,27 +158,27 @@ def build_scsbid_award_item(
     )
     demand_agency = str(raw_item.get("dminsttNm") or "").strip()
 
-    return {
-        "notice_number": notice_number,
-        "title": title,
+    return KonepsCollectedItem(
+        notice_number=notice_number,
+        title=title,
         # base 미상(실 기초금액 없음)이면 0.0 을 배출한다. persistence 가 이 0.0 으로
         # 기존 base 를 덮지 않도록 가드하므로, 예정가 오염값이 base 로 새어들지 않는다.
-        "base_amount": float(base_amount) if base_amount and base_amount > 0 else 0.0,
-        "estimated_amount": (
+        base_amount=float(base_amount) if base_amount and base_amount > 0 else 0.0,
+        estimated_amount=(
             float(planned_price) if planned_price and planned_price > 0 else 0.0
         ),
-        "award_floor_rate": parsing.normalize_bid_rate_value(
+        award_floor_rate=parsing.normalize_bid_rate_value(
             raw_item.get("sucsfbidLwltRate")
         ),
         # eligibility_raw는 배출하지 않는다: scsbid 개찰 응답에 자격 상세가 없고,
         # eligibility_raw의 유일한 writer는 backfill 스크립트로 일원화한다(openapi.py
         # build_openapi_notice_item 주석 참조).
-        "closing_at": parsing.coerce_datetime(opened_at),
-        "business_type": resolved_category or request.category,
-        "region": parsing.extract_region([demand_agency, title]),
-        "license_codes": [],
-        "source_url": None,
-        "metadata": {
+        closing_at=parsing.coerce_datetime(opened_at),
+        business_type=resolved_category or request.category,
+        region=parsing.extract_region([demand_agency, title]),
+        license_codes=[],
+        source_url=None,
+        metadata={
             "mode": "scsbid_openapi",
             "openapi_service": "ScsbidInfoService",
             "openapi_operation": operation,
@@ -187,8 +197,8 @@ def build_scsbid_award_item(
             "winning_rate": success_rate,
             "bid_rate": parsing.normalize_bid_rate_value(bid_rate),
             "final_success_date": raw_item.get("fnlSucsfDate"),
-            "reserve_prices": detail.get("reserve_prices") or [],
-            "selected_numbers": detail.get("selected_numbers") or [],
+            "reserve_prices": detail.reserve_prices or [],
+            "selected_numbers": detail.selected_numbers or [],
             # 예정가: 상세값 우선, 없으면 낙찰가/success_rate(=예정가) 역산 추정치.
             "planned_price": planned_price,
             # 복수예비가격 15개로 복구한 기초금액 추정치(원본 base 는 오염값으로 채우지
@@ -196,8 +206,8 @@ def build_scsbid_award_item(
             "base_amount_estimated": (
                 float(recovered_base) if recovered_base else None
             ),
-            "reserve_detail_error": detail.get("reserve_detail_error"),
+            "reserve_detail_error": detail.reserve_detail_error,
             "raw_openapi_item": raw_item,
-            "raw_reserve_detail_items": detail.get("raw_reserve_detail_items") or [],
+            "raw_reserve_detail_items": detail.raw_reserve_detail_items or [],
         },
-    }
+    )

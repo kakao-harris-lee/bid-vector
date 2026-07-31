@@ -15,6 +15,7 @@ import json
 import pytest
 
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
+from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.base_amount_basis import (
     BASIS_CLEAN,
@@ -31,16 +32,18 @@ def _request() -> CrawlRequest:
     )
 
 
-def _award_item(notice_number: str, **overrides) -> dict:
-    item = {
-        "title": overrides.get("title", f"개찰결과 {notice_number}"),
-        "notice_number": notice_number,
-        "base_amount": 100_000_000.0,
-        "estimated_amount": 96_000_000.0,
-        "source_url": f"http://ebid.example.com/detail/{notice_number}",
-        "metadata": overrides.get("metadata", {}),
-    }
-    return item
+def _award_item(notice_number: str, **overrides) -> KonepsCollectedItem:
+    """개찰 표본을 수집 item DTO 로 만든다(consumer 는 dict 가 아니라 DTO 를 받는다)."""
+    return KonepsCollectedItem(
+        title=overrides.get("title", f"개찰결과 {notice_number}"),
+        notice_number=notice_number,
+        base_amount=100_000_000.0,
+        estimated_amount=96_000_000.0,
+        source_url=f"http://ebid.example.com/detail/{notice_number}",
+        metadata=overrides.get("metadata", {}),
+        award_floor_rate=overrides.get("award_floor_rate"),
+        eligibility_raw=overrides.get("eligibility_raw"),
+    )
 
 
 def test_notice_numbers_with_persisted_reserve_filters_empty(test_db):
@@ -156,8 +159,7 @@ def test_update_project_persists_award_floor_rate(test_db):
     test_db.add(project)
     test_db.flush()
 
-    item = _award_item("R26BK01627948")
-    item["award_floor_rate"] = 0.88
+    item = _award_item("R26BK01627948", award_floor_rate=0.88)
     persistence.update_project_from_item(project, item=item, request=_request())
 
     assert project.award_floor_rate == 0.88
@@ -184,8 +186,7 @@ def test_update_project_keeps_award_floor_rate_when_item_missing(test_db):
     assert project.award_floor_rate == 0.88
 
     # Explicit None also must not overwrite.
-    item = _award_item("R26BK01627948")
-    item["award_floor_rate"] = None
+    item = _award_item("R26BK01627948", award_floor_rate=None)
     persistence.update_project_from_item(project, item=item, request=_request())
     assert project.award_floor_rate == 0.88
 
@@ -202,8 +203,10 @@ def test_update_project_persists_eligibility_raw(test_db):
     test_db.add(project)
     test_db.flush()
 
-    item = _award_item("R26BK01628300")
-    item["eligibility_raw"] = {"lcnsLmtNm": "토목공사업", "prtcptLmtRgnNm": "부산광역시"}
+    item = _award_item(
+        "R26BK01628300",
+        eligibility_raw={"lcnsLmtNm": "토목공사업", "prtcptLmtRgnNm": "부산광역시"},
+    )
     persistence.update_project_from_item(project, item=item, request=_request())
 
     assert project.eligibility_raw == {
@@ -234,14 +237,12 @@ def test_update_project_keeps_eligibility_raw_when_item_missing(test_db):
     assert project.eligibility_raw == stored
 
     # Explicit None -> keep.
-    none_item = _award_item("R26BK01628301")
-    none_item["eligibility_raw"] = None
+    none_item = _award_item("R26BK01628301", eligibility_raw=None)
     persistence.update_project_from_item(project, item=none_item, request=_request())
     assert project.eligibility_raw == stored
 
     # Empty dict (all raw fields blank) -> keep.
-    empty_item = _award_item("R26BK01628301")
-    empty_item["eligibility_raw"] = {}
+    empty_item = _award_item("R26BK01628301", eligibility_raw={})
     persistence.update_project_from_item(project, item=empty_item, request=_request())
     assert project.eligibility_raw == stored
 
@@ -252,8 +253,7 @@ def test_resolve_project_creation_persists_award_floor_rate(test_db):
     test_db.add(historical)
     test_db.flush()
 
-    item = _award_item("NEW-FLOOR")
-    item["award_floor_rate"] = 0.879
+    item = _award_item("NEW-FLOOR", award_floor_rate=0.879)
     project, _ = persistence.resolve_project_for_item(
         test_db,
         item=item,
@@ -287,17 +287,18 @@ def test_resolve_tender_result_upserts_without_duplicate(test_db):
         "opening_status": "개찰완료",
     }
 
+    facts = CrawlItemMetadataFacts.model_validate(metadata)
     first = persistence.resolve_tender_result(
         test_db,
         project_id=project.id,
-        item_metadata=metadata,
+        facts=facts,
         crawl_job_status="completed",
     )
     test_db.flush()
     second = persistence.resolve_tender_result(
         test_db,
         project_id=project.id,
-        item_metadata=metadata,
+        facts=facts,
         crawl_job_status="completed",
     )
     test_db.flush()
@@ -311,6 +312,66 @@ def test_resolve_tender_result_upserts_without_duplicate(test_db):
     assert rows == 1
     assert second.winning_company == "낙찰업체"
     assert float(second.winning_amount) == 95_000_000.0
+
+
+def test_persist_tender_result_backfills_project_id_from_historical_record(test_db):
+    """``project`` 가 없어도 HistoricalData 가 아는 project_id 로 TenderResult 를 잇는다.
+
+    이 백필 한 줄은 persist 정상 경로(``resolve_project_for_item`` 이 항상 Project 를
+    돌려준다)로는 타지 않아 골든에도 안 잡힌다. 그래서 경계 함수를 직접 구동해 고정한다 —
+    없으면 개찰 결과가 project 미연결(orphan)로 남아 정산/대시보드에서 사라진다.
+    """
+    project = Project(
+        title="개찰 연결 대상",
+        description="",
+        requirements="",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        notice_number="BACKFILL-1",
+    )
+    test_db.add(project)
+    test_db.flush()
+    historical = HistoricalData(notice_number="BACKFILL-1", project_id=project.id)
+    test_db.add(historical)
+    test_db.flush()
+
+    persistence._persist_tender_result_for_item(
+        test_db,
+        project=None,  # 매칭 실패/미생성 상황
+        historical_record=historical,
+        facts=CrawlItemMetadataFacts(
+            winning_company="낙찰사",
+            winning_amount=95_000_000.0,
+            opening_status="낙찰",
+        ),
+        crawl_job_status="completed",
+    )
+    test_db.flush()
+
+    tender_result = (
+        test_db.query(TenderResult)
+        .filter(TenderResult.project_id == project.id)
+        .one()
+    )
+    assert tender_result.winning_company == "낙찰사"
+
+
+def test_persist_tender_result_skips_when_no_award_signal(test_db):
+    """개찰/낙찰 흔적이 전혀 없으면 TenderResult 를 만들지 않는다(게이트 방향 고정)."""
+    historical = HistoricalData(notice_number="NO-SIGNAL")
+    test_db.add(historical)
+    test_db.flush()
+
+    persistence._persist_tender_result_for_item(
+        test_db,
+        project=None,
+        historical_record=historical,
+        facts=CrawlItemMetadataFacts(),
+        crawl_job_status="completed",
+    )
+    test_db.flush()
+
+    assert test_db.query(TenderResult).count() == 0
 
 
 def test_collector_delegators_forward_to_persistence(test_db):
@@ -470,12 +531,17 @@ def test_persist_crawl_results_publishes_fallback_event(test_db, monkeypatch):
 # 않게 가드하고, base_amount_basis 를 최종 base 기준으로 태깅한다.
 # --------------------------------------------------------------------------- #
 def _update_base(historical, *, base_amount, estimated_amount=0.0, metadata=None):
-    """Drive the private base-field updater with a scsbid-shaped item."""
-    item = {"base_amount": base_amount, "estimated_amount": estimated_amount}
+    """Drive the private base-field updater with a scsbid-shaped item DTO."""
+    item = KonepsCollectedItem(
+        notice_number=historical.notice_number,
+        title="base guard",
+        base_amount=base_amount,
+        estimated_amount=estimated_amount,
+        metadata=metadata or {},
+    )
     persistence._update_historical_record_from_item(
         historical,
         item=item,
-        item_metadata=metadata or {},
         request=_request(),
     )
 

@@ -382,18 +382,18 @@ def test_live_crawl_parses_html(monkeypatch):
 
     assert response["job_status"] == "completed"
     assert response["collected_count"] == 1
-    assert response["items"][0]["notice_number"] == "R26BK01510407"
-    assert response["items"][0]["title"] == "AI 소프트웨어 통합 구축"
-    assert response["items"][0]["base_amount"] == 125000000.0
-    assert response["items"][0]["region"] == "서울"
+    assert response["items"][0].notice_number == "R26BK01510407"
+    assert response["items"][0].title == "AI 소프트웨어 통합 구축"
+    assert response["items"][0].base_amount == 125000000.0
+    assert response["items"][0].region == "서울"
     assert (
-        response["items"][0]["source_url"]
+        response["items"][0].source_url
         == "http://ebid.example.com/detail/R26BK01510407"
     )
-    assert response["items"][0]["license_codes"] == ["SW001"]
-    assert response["items"][0]["metadata"]["detail_action_id"] == "detail-row-1"
-    assert response["items"][0]["metadata"]["detail_collected"] is True
-    assert response["items"][0]["metadata"]["mode"] == "live"
+    assert response["items"][0].license_codes == ["SW001"]
+    assert response["items"][0].metadata["detail_action_id"] == "detail-row-1"
+    assert response["items"][0].metadata["detail_collected"] is True
+    assert response["items"][0].metadata["mode"] == "live"
     assert response["metadata"]["resolved_mode"] == "live"
     assert response["metadata"]["page_count"] == 1
 
@@ -453,12 +453,12 @@ def test_live_crawl_falls_back_to_mock(monkeypatch):
 
     assert response["job_status"] == "fallback_mock"
     assert response["collected_count"] == 2
-    assert response["items"][0]["metadata"]["mode"] == "fallback_mock"
+    assert response["items"][0].metadata["mode"] == "fallback_mock"
     assert (
-        "browser not available" in response["items"][0]["metadata"]["fallback_reason"]
+        "browser not available" in response["items"][0].metadata["fallback_reason"]
     )
     assert (
-        response["items"][0]["metadata"]["fallback_failure_category"]
+        response["items"][0].metadata["fallback_failure_category"]
         == "browser_runtime"
     )
     assert response["metadata"]["resolved_mode"] == "fallback_mock"
@@ -709,8 +709,8 @@ def test_live_crawl_enriches_with_opening_results(monkeypatch):
 
     assert response["job_status"] == "completed"
     assert response["metadata"]["opening_result_enriched_count"] == 1
-    assert response["items"][0]["metadata"]["opening_status"] == "개찰완료"
-    assert response["items"][0]["metadata"]["reserve_prices"] == [
+    assert response["items"][0].metadata["opening_status"] == "개찰완료"
+    assert response["items"][0].metadata["reserve_prices"] == [
         101000000.0,
         102000000.0,
         103000000.0,
@@ -727,10 +727,10 @@ def test_live_crawl_enriches_with_opening_results(monkeypatch):
         114000000.0,
         115000000.0,
     ]
-    assert response["items"][0]["metadata"]["selected_numbers"] == [1, 4, 7, 12]
-    assert response["items"][0]["metadata"]["winning_company"] == "주식회사 테스트"
-    assert response["items"][0]["metadata"]["winning_amount"] == 119000000.0
-    assert response["items"][0]["metadata"]["winning_rate"] == 95.2
+    assert response["items"][0].metadata["selected_numbers"] == [1, 4, 7, 12]
+    assert response["items"][0].metadata["winning_company"] == "주식회사 테스트"
+    assert response["items"][0].metadata["winning_amount"] == 119000000.0
+    assert response["items"][0].metadata["winning_rate"] == 95.2
 
 
 def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):

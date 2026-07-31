@@ -13,7 +13,10 @@
 않는다 — 값 coercion은 얇은 로컬 순수 함수(``_as_fraction``)로 유지하고 스케일 판별만 위임한다.
 
 온-디맨드 실배치 검증(실 KONEPS 응답 N건으로 assert)은
-``scripts/verify_koneps_field_contract.py`` 가 이 순수 검증기를 소비한다.
+``scripts/verify_koneps_field_contract.py`` 가 이 순수 검증기를 소비한다. 역할 분리(방어적 DTO
+Phase 3): **구조 계약**(필드 존재·타입)은 ``app/schemas/koneps_items`` 의 Pydantic DTO 가 승격
+지점에서 ``ValidationError`` 로 **거부**하고, **의미 계약**(basis/스케일/제로패딩)은 이 모듈이
+**경고·집계로만** 남긴다(KONEPS 의미 드리프트는 통제 불가 — 관측기는 차단기가 되지 않는다).
 """
 
 from __future__ import annotations

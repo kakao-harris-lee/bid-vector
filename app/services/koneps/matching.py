@@ -25,6 +25,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 from app.core.time import utc_now
 from app.models.models import Project
+from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import parsing
 
@@ -97,13 +98,13 @@ def match_by_url_or_title(
     return best_candidate
 
 
-def resolve_project_category(item: dict[str, Any], request: CrawlRequest) -> str:
+def resolve_project_category(item: KonepsCollectedItem, request: CrawlRequest) -> str:
     """Resolve the internal project category for a crawled notice."""
     request_category = str(request.category or "").strip().lower()
     if request_category and request_category not in {"general", "기타", "other"}:
         return request_category
 
-    business_type = str(item.get("business_type") or "").strip().lower()
+    business_type = str(item.business_type or "").strip().lower()
     category_map = {
         "소프트웨어": "software",
         "software": "software",
@@ -120,25 +121,25 @@ def resolve_project_category(item: dict[str, Any], request: CrawlRequest) -> str
     return category_map.get(business_type, request_category or business_type or "other")
 
 
-def resolve_budget_estimate(item: dict[str, Any]) -> float:
+def resolve_budget_estimate(item: KonepsCollectedItem) -> float:
     """Prefer the most actionable estimate while falling back to the available base amount."""
-    for value in (item.get("estimated_amount"), item.get("base_amount")):
+    for value in (item.estimated_amount, item.base_amount):
         if value not in (None, "", 0, 0.0):
             return float(value)
     return 0.0
 
 
-def resolve_project_status(item: dict[str, Any]) -> str:
+def resolve_project_status(item: KonepsCollectedItem) -> str:
     """Map crawl timing and opening metadata to an internal project lifecycle state."""
-    item_metadata = item.get("metadata", {})
+    facts = item.opening_facts()
     status_text = " ".join(
         str(value or "")
         for value in (
-            item_metadata.get("opening_status"),
-            item_metadata.get("status"),
-            item_metadata.get("opening_bid_classification"),
-            item_metadata.get("opening_bid_progress_order"),
-            item.get("title"),
+            facts.opening_status,
+            facts.status,
+            facts.opening_bid_classification,
+            facts.opening_bid_progress_order,
+            item.title,
         )
     )
     normalized_status_text = parsing.normalize_status_text(status_text)
@@ -159,12 +160,11 @@ def resolve_project_status(item: dict[str, Any]) -> str:
     ):
         return "failed"
     if any(
-        item_metadata.get(key)
-        for key in (
-            "winning_company",
-            "winning_amount",
-            "winning_rate",
-            "opening_announced_at",
+        (
+            facts.winning_company,
+            facts.winning_amount,
+            facts.winning_rate,
+            facts.opening_announced_at,
         )
     ):
         return "awarded"
@@ -176,7 +176,7 @@ def resolve_project_status(item: dict[str, Any]) -> str:
     ):
         return "closed"
 
-    closing_at = parsing.coerce_datetime(item.get("closing_at"))
+    closing_at = parsing.coerce_datetime(item.closing_at)
     if closing_at is not None and closing_at <= utc_now():
         return "closed"
     return "open"
@@ -209,15 +209,15 @@ def normalize_source_url(value: Any) -> str:
     return normalized_url
 
 
-def extract_item_agency_keys(item: dict[str, Any]) -> set[str]:
-    """Extract normalized agency names from a crawled notice payload."""
-    item_metadata = item.get("metadata", {})
+def extract_item_agency_keys(item: KonepsCollectedItem) -> set[str]:
+    """Extract normalized agency names from a crawled notice item."""
+    facts = item.opening_facts()
     return {
         normalized
         for normalized in (
-            parsing.normalize_agency_name(item_metadata.get("issuing_agency")),
-            parsing.normalize_agency_name(item_metadata.get("opening_demand_agency")),
-            parsing.normalize_agency_name(item_metadata.get("demand_agency")),
+            parsing.normalize_agency_name(facts.issuing_agency),
+            parsing.normalize_agency_name(facts.opening_demand_agency),
+            parsing.normalize_agency_name(facts.demand_agency),
         )
         if normalized
     }

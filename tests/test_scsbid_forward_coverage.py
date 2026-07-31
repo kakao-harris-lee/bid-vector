@@ -15,8 +15,15 @@ from datetime import UTC, datetime
 from app.core.config import settings
 from app.core.time import KST
 from app.models.models import CrawlJob, Project, TenderResult
+from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
+from tests.support.koneps_openapi_fakes import (
+    FakeOpenApiResponse,
+    award_body as _award_body,
+    award_item as _award_item,
+    empty_reserve_body as _empty_reserve_body,
+)
 
 
 def _load_backfill_module():
@@ -53,7 +60,7 @@ def _patch_collector_for_backfill(monkeypatch, response):
 
     def _fake_persist(self, db, job, req, resp):
         captured["items"] = [
-            str(item.get("notice_number")) for item in resp.get("items", [])
+            str(item.notice_number) for item in resp.get("items", [])
         ]
         return job
 
@@ -64,20 +71,21 @@ def _patch_collector_for_backfill(monkeypatch, response):
 
 
 def _backfill_response():
+    # ``collect_notices`` 는 수집 DTO 를 싣는다(방어적 DTO Phase 3) — stub 도 같은 계약.
     return {
         "items": [
-            {
-                "notice_number": "R-EXIST",
-                "title": "기존 공고",
-                "base_amount": 100_000_000.0,
-                "metadata": {"winning_amount": 95_000_000, "opening_status": "낙찰"},
-            },
-            {
-                "notice_number": "R-NEW",
-                "title": "신규 공고",
-                "base_amount": 100_000_000.0,
-                "metadata": {"winning_amount": 80_000_000, "opening_status": "낙찰"},
-            },
+            KonepsCollectedItem(
+                notice_number="R-EXIST",
+                title="기존 공고",
+                base_amount=100_000_000.0,
+                metadata={"winning_amount": 95_000_000, "opening_status": "낙찰"},
+            ),
+            KonepsCollectedItem(
+                notice_number="R-NEW",
+                title="신규 공고",
+                base_amount=100_000_000.0,
+                metadata={"winning_amount": 80_000_000, "opening_status": "낙찰"},
+            ),
         ],
         "metadata": {"scsbid_api_call_count": 3},
         "collected_count": 2,
@@ -153,64 +161,6 @@ def test_backfill_persist_all_keeps_unmatched_awards(test_db, monkeypatch):
     assert stats.total_persisted_items == 2
 
 
-class FakeOpenApiResponse:
-    status_code = 200
-    text = "{}"
-
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
-def _award_body(items, *, total_count, num_of_rows, page_no=1):
-    return {
-        "response": {
-            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
-            "body": {
-                "items": {"item": items},
-                "numOfRows": str(num_of_rows),
-                "pageNo": str(page_no),
-                "totalCount": str(total_count),
-            },
-        }
-    }
-
-
-def _award_item(notice_number, *, title="테스트 낙찰", amount="88,000,000"):
-    return {
-        "bidNtceNo": notice_number,
-        "bidNtceOrd": "000",
-        "bidClsfcNo": "0",
-        "rbidNo": "0",
-        "bidNtceNm": title,
-        "prtcptCnum": "10",
-        "bidwinnrNm": "낙찰사",
-        "bidwinnrBizno": "1234567890",
-        "sucsfbidAmt": amount,
-        "sucsfbidRate": "88.0",
-        "rlOpengDt": "2026-05-13 11:00:00",
-        "dminsttNm": "서울특별시",
-        "rgstDt": "2026-05-13 12:00:00",
-        "fnlSucsfDate": "2026-05-13",
-    }
-
-
-def _empty_reserve_body():
-    return {
-        "response": {
-            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
-            "body": {
-                "items": {"item": []},
-                "numOfRows": "100",
-                "pageNo": "1",
-                "totalCount": "0",
-            },
-        }
-    }
-
-
 def test_scsbid_sweep_visits_each_category_operation(monkeypatch):
     """A multi-category request hits each category's award operation."""
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
@@ -247,7 +197,7 @@ def test_scsbid_sweep_visits_each_category_operation(monkeypatch):
     assert any("getScsbidListSttusCnstwk" in url for url in operations)
     assert any("getScsbidListSttusServc" in url for url in operations)
     assert result["metadata"]["scsbid_categories"] == ["construction", "service"]
-    notice_numbers = {item["notice_number"] for item in result["items"]}
+    notice_numbers = {item.notice_number for item in result["items"]}
     assert notice_numbers == {"C-1", "S-1"}
 
 
@@ -348,7 +298,7 @@ def test_scsbid_reserve_detail_skipped_when_disabled(monkeypatch):
 
     assert all("PreparPcDetail" not in url for url in seen_urls)
     assert result["metadata"]["reserve_detail_enabled"] is False
-    assert result["items"][0]["metadata"]["reserve_prices"] == []
+    assert result["items"][0].metadata["reserve_prices"] == []
 
 
 def test_scsbid_sweep_dedupes_notice_numbers_across_categories(monkeypatch):
@@ -377,7 +327,7 @@ def test_scsbid_sweep_dedupes_notice_numbers_across_categories(monkeypatch):
     )
     result = service._collect_scsbid_openapi_items(service._normalize_request(request))
 
-    notice_numbers = [item["notice_number"] for item in result["items"]]
+    notice_numbers = [item.notice_number for item in result["items"]]
     assert notice_numbers == ["DUP-1"]
 
 
@@ -469,6 +419,6 @@ def test_scsbid_legacy_single_day_single_category_regression(monkeypatch):
     assert result["metadata"]["openapi_operation"] == "getScsbidListSttusCnstwk"
     assert captured[0]["params"]["inqryBgnDt"] == "202605130000"
     assert captured[0]["params"]["inqryEndDt"] == "202605132359"
-    assert result["items"][0]["notice_number"] == "LEG-1"
+    assert result["items"][0].notice_number == "LEG-1"
     # Reserve detail still fetched by default in the legacy path.
     assert any("PreparPcDetail" in entry["url"] for entry in captured)

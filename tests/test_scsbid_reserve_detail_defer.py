@@ -43,82 +43,12 @@ from app.core.config import settings
 from app.models.models import HistoricalData
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
-
-
-class FakeOpenApiResponse:
-    status_code = 200
-    text = "{}"
-
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
-def _award_body(items, *, total_count, num_of_rows, page_no=1):
-    return {
-        "response": {
-            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
-            "body": {
-                "items": {"item": items},
-                "numOfRows": str(num_of_rows),
-                "pageNo": str(page_no),
-                "totalCount": str(total_count),
-            },
-        }
-    }
-
-
-def _award_item(notice_number, *, title="테스트 낙찰", amount="88,000,000"):
-    return {
-        "bidNtceNo": notice_number,
-        "bidNtceOrd": "000",
-        "bidClsfcNo": "0",
-        "rbidNo": "0",
-        "bidNtceNm": title,
-        "prtcptCnum": "10",
-        "bidwinnrNm": "낙찰사",
-        "bidwinnrBizno": "1234567890",
-        "sucsfbidAmt": amount,
-        "sucsfbidRate": "88.0",
-        "rlOpengDt": "2026-05-13 11:00:00",
-        "dminsttNm": "서울특별시",
-        "rgstDt": "2026-05-13 12:00:00",
-        "fnlSucsfDate": "2026-05-13",
-    }
-
-
-def _reserve_detail_body():
-    """A reserve-detail response carrying two reserve-price rows."""
-    return {
-        "response": {
-            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
-            "body": {
-                "items": {
-                    "item": [
-                        {
-                            "compnoRsrvtnPrceSno": "1",
-                            "bsisPlnprc": "101000000",
-                            "plnprc": "100000000",
-                            "bssamt": "100000000",
-                            "drwtYn": "Y",
-                        },
-                        {
-                            "compnoRsrvtnPrceSno": "2",
-                            "bsisPlnprc": "102000000",
-                            "plnprc": "100000000",
-                            "bssamt": "100000000",
-                            "drwtYn": "N",
-                        },
-                    ]
-                },
-                "numOfRows": "100",
-                "pageNo": "1",
-                "totalCount": "2",
-            },
-        }
-    }
+from tests.support.koneps_openapi_fakes import (
+    FakeOpenApiResponse,
+    award_body as _award_body,
+    award_item as _award_item,
+    reserve_detail_body as _reserve_detail_body,
+)
 
 
 def _scsbid_request():
@@ -178,8 +108,8 @@ def test_defer_true_skips_inline_fetch_and_surfaces_notices(test_db, monkeypatch
     assert result["metadata"]["reserve_detail_deferred_count"] == 2
     assert result["metadata"]["reserve_detail_collected_count"] == 0
     # Items still build (with empty reserve detail) so the award row persists.
-    assert {item["notice_number"] for item in result["items"]} == {"NEW-A", "NEW-B"}
-    assert result["items"][0]["metadata"]["reserve_prices"] == []
+    assert {item.notice_number for item in result["items"]} == {"NEW-A", "NEW-B"}
+    assert result["items"][0].metadata["reserve_prices"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +181,7 @@ def test_age_gate_excludes_recently_opened_notice(test_db, monkeypatch):
     assert result["metadata"]["reserve_detail_deferred_count"] == 1
     assert result["metadata"]["reserve_detail_backoff_skipped_count"] == 2
     # The award rows still build for all three (the gate only defers the fetch).
-    assert {item["notice_number"] for item in result["items"]} == {
+    assert {item.notice_number for item in result["items"]} == {
         "RECENT",
         "FUTURE",
         "AGED",
@@ -415,6 +345,60 @@ def test_defer_false_still_fetches_inline(test_db, monkeypatch):
     assert result["metadata"]["reserve_detail_collected_count"] == 1
     assert result["metadata"]["reserve_detail_deferred_count"] == 0
     assert result["metadata"]["deferred_reserve_detail_notices"] == []
+
+
+# ---------------------------------------------------------------------------
+# 2b. 상세 응답의 구조 결손도 item 단위로 격리된다(승격 지점이 try/except 안).
+# ---------------------------------------------------------------------------
+def test_malformed_reserve_detail_is_isolated_per_item(test_db, monkeypatch):
+    """``ScsbidReserveDetail`` 승격 실패가 sweep 전체를 죽이지 않는다.
+
+    승격이 격리 밖에 있으면 한 공고의 불량 상세 응답(스칼라 대신 dict, 리스트 대신 문자열
+    …)이 ``ValidationError`` 로 run 을 죽여 그 run 의 모든 낙찰 행을 유실시킨다. 승격을
+    조회 격리 안으로 옮겼으므로 해당 item 만 ``reserve_detail_error`` 로 표시되고 나머지
+    공고는 정상 수집된다.
+    """
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
+
+    def _fetch(self, raw_item, *, category, service_key):
+        if raw_item["bidNtceNo"] == "BROKEN":
+            # reserve_prices 가 리스트가 아니라 스칼라로 오는 구조 결손.
+            return {"reserve_prices": 101000000, "selected_numbers": []}
+        return {"reserve_prices": [101000000.0], "selected_numbers": [1]}
+
+    monkeypatch.setattr(
+        KonepsCollectorService, "_fetch_scsbid_reserve_detail", _fetch
+    )
+
+    def fake_get(url, params, timeout):
+        return FakeOpenApiResponse(
+            _award_body(
+                [_award_item("OK-1"), _award_item("BROKEN"), _award_item("OK-2")],
+                total_count=3,
+                num_of_rows=100,
+            )
+        )
+
+    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
+
+    service = KonepsCollectorService()
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(_scsbid_request()),
+        db=test_db,
+        defer_reserve_detail=False,
+    )
+
+    items = {item.notice_number: item for item in result["items"]}
+    # 세 공고 모두 살아남았다(run 이 죽지 않았다).
+    assert set(items) == {"OK-1", "BROKEN", "OK-2"}
+    # 불량 item 만 격리 표시 + 예비가격 공백.
+    assert items["BROKEN"].metadata["reserve_detail_error"]
+    assert items["BROKEN"].metadata["reserve_prices"] == []
+    # 정상 item 은 예비가격을 그대로 싣는다.
+    assert items["OK-1"].metadata["reserve_prices"] == [101000000.0]
+    assert result["metadata"]["reserve_detail_error_count"] == 1
+    assert result["metadata"]["reserve_detail_collected_count"] == 2
 
 
 # ---------------------------------------------------------------------------
