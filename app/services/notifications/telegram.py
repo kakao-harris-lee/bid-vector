@@ -4,10 +4,39 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from urllib import error as urlerror
-from urllib import request as urlrequest
 
 from app.core.config import settings
+from app.services.notifications.telegram_transport import (
+    TelegramApiRequest,
+    TelegramConfig,
+    TelegramTransport,
+    resolve_telegram_transport,
+)
+
+# 송신하지 않는 경로가 돌려주는 응답. 문구·status 는 운영/텔레메트리 계약이므로
+# 메서드 본문이 아니라 선언적 데이터로 둔다(§4.5-1/3). dict 상수는 반환 시 사본을
+# 준다 — 호출부가 응답에 필드를 덧붙여도 이 상수가 오염되지 않아야 한다.
+PENDING_CONFIGURATION_STATUS = "pending_configuration"
+# status 리터럴은 프론트·텔레메트리·기존 증적과의 호환을 위해 유지한다. 실제 사유는
+# "test 환경"보다 넓은 "미배달 transport" 이므로 상수명이 그것을 드러낸다.
+SKIPPED_NON_DELIVERING_STATUS = "skipped_test_environment"
+
+_PENDING_CONFIGURATION_RESULT: dict[str, object] = {
+    "sent": False,
+    "status": PENDING_CONFIGURATION_STATUS,
+    "detail": "Telegram is not configured yet.",
+}
+# 스킵 문구는 해석된 transport 의 환경에서 파생한다 — 프로세스 floor 로 막힌 경우
+# config 가 아니라 실제로 막은 환경 이름이 남는다.
+_SKIPPED_SEND_DETAIL = "Telegram delivery skipped in {environment} environment."
+_SKIPPED_CALLBACK_DETAIL = (
+    "Telegram callback acknowledgement skipped in {environment} environment."
+)
+_UNAVAILABLE_WEBHOOK_RESULT: dict[str, object] = {
+    "url": "",
+    "pending_update_count": 0,
+    "has_custom_certificate": False,
+}
 
 
 @dataclass(frozen=True)
@@ -26,12 +55,49 @@ class TelegramNotificationService:
     CALLBACK_PREFIX = "bid-decision"
     LEGACY_CONFIGURED_CHAT_ROUTE_KEY = "telegram:legacy-configured-chat"
 
+    def __init__(
+        self,
+        *,
+        config: TelegramConfig | None = None,
+        transport: TelegramTransport | None = None,
+    ) -> None:
+        """협력자 주입 seam(§4.7-3). 미주입 시 기존 동작과 동일하다.
+
+        기본값을 생성 시점에 굳히지 않고 호출마다 해석하는 이유: 기존 동작이
+        "호출 시점의 ``settings``" 였고, 이 서비스는 요청·태스크마다 새로 만들어
+        쓰이기도 하지만 폴링 워커처럼 오래 사는 인스턴스도 있다. 스냅샷을 생성
+        시점으로 옮기면 그 의미가 조용히 바뀐다.
+
+        ``config`` 만 주입하면 조합 지점이 프로세스 환경 floor 를 함께 적용한다
+        (자격증명만 주입해도 ``ENVIRONMENT=test`` 에서 송신이 새지 않는다).
+        ``transport`` 를 명시적으로 주입하면 그 floor 를 **우회**하며, 배달 정책
+        책임은 주입자에게 있다(문서화된 escape hatch — 테스트용 fake 경로).
+        """
+        self._injected_config = config
+        self._injected_transport = transport
+
+    def _resolve_config(self) -> TelegramConfig:
+        """주입된 설정 스냅샷, 없으면 현재 ``settings`` 스냅샷."""
+        if self._injected_config is not None:
+            return self._injected_config
+        return TelegramConfig.from_settings(settings)
+
+    def _resolve_transport(self, config: TelegramConfig) -> TelegramTransport:
+        """주입된 transport, 없으면 조합 지점이 고른 기본 transport."""
+        if self._injected_transport is not None:
+            return self._injected_transport
+        return resolve_telegram_transport(config)
+
+    def _is_configured(self, config: TelegramConfig) -> bool:
+        """이미 해석된 스냅샷으로 판정한다(공개 메서드가 재해석하지 않도록)."""
+        return bool(
+            self._has_real_setting(config.bot_token)
+            and self._has_real_setting(config.chat_id)
+        )
+
     def is_configured(self) -> bool:
         """Return whether Telegram settings are available."""
-        return bool(
-            self._has_real_setting(settings.TELEGRAM_BOT_TOKEN)
-            and self._has_real_setting(settings.TELEGRAM_CHAT_ID)
-        )
+        return self._is_configured(self._resolve_config())
 
     def send_message(
         self,
@@ -40,29 +106,31 @@ class TelegramNotificationService:
         chat_id: str | None = None,
     ) -> dict[str, object]:
         """Send a message to Telegram when configuration is available."""
-        if not self.is_configured():
-            return {
-                "sent": False,
-                "status": "pending_configuration",
-                "detail": "Telegram is not configured yet.",
-            }
+        config = self._resolve_config()
+        if not self._is_configured(config):
+            return dict(_PENDING_CONFIGURATION_RESULT)
 
-        if settings.ENVIRONMENT == "test":
+        transport = self._resolve_transport(config)
+        if not transport.delivers:
             return {
                 "sent": False,
-                "status": "skipped_test_environment",
-                "detail": "Telegram delivery skipped in test environment.",
+                "status": SKIPPED_NON_DELIVERING_STATUS,
+                "detail": _SKIPPED_SEND_DETAIL.format(
+                    environment=transport.environment
+                ),
             }
 
         payload = {
-            "chat_id": chat_id or settings.TELEGRAM_CHAT_ID,
+            "chat_id": chat_id or config.chat_id,
             "text": message,
             "disable_web_page_preview": False,
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
 
-        payload = self._post_json("sendMessage", payload)
+        payload = self._post_json(
+            "sendMessage", payload, config=config, transport=transport
+        )
 
         if not payload.get("ok"):
             description = payload.get("description") or payload
@@ -77,18 +145,18 @@ class TelegramNotificationService:
 
     def answer_callback_query(self, callback_query_id: str, text: str) -> dict[str, object]:
         """Acknowledge a Telegram callback query after processing an inline action."""
-        if not self.is_configured():
-            return {
-                "sent": False,
-                "status": "pending_configuration",
-                "detail": "Telegram is not configured yet.",
-            }
+        config = self._resolve_config()
+        if not self._is_configured(config):
+            return dict(_PENDING_CONFIGURATION_RESULT)
 
-        if settings.ENVIRONMENT == "test":
+        transport = self._resolve_transport(config)
+        if not transport.delivers:
             return {
                 "sent": False,
-                "status": "skipped_test_environment",
-                "detail": "Telegram callback acknowledgement skipped in test environment.",
+                "status": SKIPPED_NON_DELIVERING_STATUS,
+                "detail": _SKIPPED_CALLBACK_DETAIL.format(
+                    environment=transport.environment
+                ),
             }
 
         payload = self._post_json(
@@ -98,6 +166,8 @@ class TelegramNotificationService:
                 "text": text,
                 "show_alert": False,
             },
+            config=config,
+            transport=transport,
         )
         if not payload.get("ok"):
             description = payload.get("description") or payload
@@ -123,17 +193,25 @@ class TelegramNotificationService:
         timeout_seconds: int | None = None,
     ) -> list[dict]:
         """Fetch pending Telegram updates using long polling when configured."""
-        if not self.is_configured() or settings.ENVIRONMENT == "test":
+        config = self._resolve_config()
+        transport = self._resolve_transport(config)
+        if not self._is_configured(config) or not transport.delivers:
             return []
 
         payload: dict[str, object] = {
-            "timeout": timeout_seconds if timeout_seconds is not None else settings.TELEGRAM_POLLING_TIMEOUT_SECONDS,
-            "limit": limit if limit is not None else settings.TELEGRAM_POLLING_LIMIT,
+            "timeout": (
+                timeout_seconds
+                if timeout_seconds is not None
+                else config.polling_timeout_seconds
+            ),
+            "limit": limit if limit is not None else config.polling_limit,
         }
         if offset is not None:
             payload["offset"] = offset
 
-        response = self._post_json("getUpdates", payload)
+        response = self._post_json(
+            "getUpdates", payload, config=config, transport=transport
+        )
         if not response.get("ok"):
             description = response.get("description") or response
             raise RuntimeError(f"Telegram getUpdates failed: {description}")
@@ -141,17 +219,14 @@ class TelegramNotificationService:
 
     def get_webhook_info(self) -> dict[str, object]:
         """Fetch Telegram webhook status for diagnostics."""
-        if not self.is_configured() or settings.ENVIRONMENT == "test":
-            return {
-                "ok": False,
-                "result": {
-                    "url": "",
-                    "pending_update_count": 0,
-                    "has_custom_certificate": False,
-                },
-            }
+        config = self._resolve_config()
+        transport = self._resolve_transport(config)
+        if not self._is_configured(config) or not transport.delivers:
+            return {"ok": False, "result": dict(_UNAVAILABLE_WEBHOOK_RESULT)}
 
-        return self._post_json("getWebhookInfo", {})
+        return self._post_json(
+            "getWebhookInfo", {}, config=config, transport=transport
+        )
 
     def extract_chat_ids(self, updates: list[dict]) -> list[int]:
         """Extract unique chat ids from mixed Telegram update payloads."""
@@ -168,11 +243,11 @@ class TelegramNotificationService:
 
     def get_configured_chat_id(self) -> str:
         """Return the currently configured delivery chat id."""
-        return settings.TELEGRAM_CHAT_ID
+        return self._resolve_config().chat_id
 
     def get_configured_target_label(self) -> str:
         """Return a masked label for the configured delivery chat id."""
-        return self.mask_chat_id(settings.TELEGRAM_CHAT_ID)
+        return self.mask_chat_id(self._resolve_config().chat_id)
 
     def get_authorized_chat_id(self) -> str | None:
         """Return the configured delivery chat id only when it is a real value.
@@ -181,7 +256,7 @@ class TelegramNotificationService:
         strings are treated as "not configured" so inbound decision/strategy
         actions cannot be authorized against a non-real chat id.
         """
-        value = settings.TELEGRAM_CHAT_ID
+        value = self._resolve_config().chat_id
         if not self._has_real_setting(value):
             return None
         return str(value).strip()
@@ -207,33 +282,41 @@ class TelegramNotificationService:
             or lowered in {"changeme", "change-me", "change-me-now"}
         )
 
-    def _post_json(self, method_name: str, payload: dict[str, object]) -> dict[str, object]:
-        """POST JSON to the Telegram Bot API and parse the JSON response."""
-        request = urlrequest.Request(
-            self._build_api_url(method_name),
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+    def _post_json(
+        self,
+        method_name: str,
+        payload: dict[str, object],
+        *,
+        config: TelegramConfig | None = None,
+        transport: TelegramTransport | None = None,
+    ) -> dict[str, object]:
+        """POST JSON to the Telegram Bot API and parse the JSON response.
 
-        try:
-            with urlrequest.urlopen(request, timeout=settings.TELEGRAM_SEND_TIMEOUT_SECONDS) as response:
-                raw_body = response.read().decode("utf-8")
-        except urlerror.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Telegram API responded with HTTP {exc.code}: {error_body}") from exc
-        except urlerror.URLError as exc:
-            raise RuntimeError(f"Telegram API connection failed: {exc.reason}") from exc
+        HTTP/연결/URL 실패는 transport 가 ``RuntimeError`` 로 감싸 올려주고, 여기서는
+        JSON 직렬화/역직렬화만 책임진다.
+
+        ``config``/``transport`` 는 공개 메서드가 이미 해석한 협력자를 그대로 넘기는
+        통로다(공개 호출당 해석 1회). 생략하면 여기서 해석한다.
+        """
+        resolved_config = config if config is not None else self._resolve_config()
+        resolved_transport = (
+            transport
+            if transport is not None
+            else self._resolve_transport(resolved_config)
+        )
+        raw_body = resolved_transport.post(
+            TelegramApiRequest(
+                operation=method_name,
+                url=resolved_config.api_url(method_name),
+                body=json.dumps(payload).encode("utf-8"),
+                timeout_seconds=resolved_config.send_timeout_seconds,
+            )
+        )
 
         try:
             return json.loads(raw_body or "{}")
         except json.JSONDecodeError as exc:
             raise RuntimeError("Telegram API returned an invalid JSON response.") from exc
-
-    def _build_api_url(self, method_name: str) -> str:
-        """Build a Telegram Bot API URL for the configured bot token."""
-        base_url = settings.TELEGRAM_API_BASE_URL.rstrip("/")
-        return f"{base_url}/bot{settings.TELEGRAM_BOT_TOKEN}/{method_name}"
 
     def build_bid_decision_message(
         self,
