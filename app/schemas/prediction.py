@@ -2,6 +2,7 @@
 
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
+from app.core.constants import PriceScenario
 
 
 class MLTaskResponse(BaseModel):
@@ -50,7 +51,7 @@ class PricePredictionRequest(BaseModel):
 
 
 class PricePredictionScenario(BaseModel):
-    label: Literal["conservative", "base", "aggressive"]
+    label: PriceScenario
     bid_rate: float
     predicted_price: float
     confidence_weight: float = Field(ge=0.0, le=1.0)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.core.constants import PAPER_BID_ACTIONS
 from app.core.time import ensure_utc
 from app.domain.aggregates import error_rate
 
@@ -47,7 +48,7 @@ def _normalize_action(
     action_value: str | None, *, pursue_bid: bool | None = None
 ) -> str:
     normalized = str(action_value or "")
-    if normalized in {"bid_now", "review", "skip"}:
+    if normalized in PAPER_BID_ACTIONS:
         return normalized
     return "review" if pursue_bid else "skip"
 

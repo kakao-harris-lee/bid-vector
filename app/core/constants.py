@@ -1,12 +1,72 @@
 """Tier 0 shared domain constants.
 
-Single source of truth for small, cross-module domain value sets that were
-previously duplicated as literals across services and routers. Keeping the
-exact same string values here preserves runtime behavior; this module exists
-only to remove the duplication, not to change any semantics.
+Single source of truth for small, cross-module domain vocabularies that were
+previously duplicated as literals across services, routers and scripts. A
+vocabulary may be exported in two shapes: a ``Literal`` **type alias** for pydantic
+field annotations, and a **value set** (tuple/frozenset) for runtime membership
+tests, defaults and CLI ``choices``. Keeping the exact same string values here
+preserves runtime behavior; this module exists only to remove the duplication, not
+to change any semantics.
 """
 
 from __future__ import annotations
+
+from typing import Literal, get_args
+
+# The full action vocabulary the decision-gate ladder
+# (``app/services/allocation_core.py``) can produce for one notice: bid now,
+# review manually, or skip. The same three strings also form the ``settle_actions``
+# filter of the paper-bidding / synthetic backtests (which actions get settled).
+#
+# Declared ONCE as a ``Literal`` so it can be used directly as a pydantic field
+# annotation, plus a value tuple (declaration order preserved) for runtime
+# membership tests and CLI choices.
+#
+# Shared by (previously each re-declared the same inline Literal):
+#   - app/schemas/paper_bidding_items.py   (PaperBidAction re-export)
+#   - app/schemas/task_payloads.py         (settle_actions task payloads)
+#   - app/schemas/paper_bidding.py         (PaperBiddingRunRequest.settle_actions)
+#   - app/schemas/synthetic.py             (SyntheticExperimentParams.settle_actions)
+#   - app/schemas/{accuracy,dashboard,decision,operator,operator_strategy,
+#                  opportunity,telegram}.py  (action / initial_action fields)
+#   - app/api/synthetic.py                 (SyntheticBacktestRunRequest.settle_actions)
+#   - app/services/synthetic_experiment/sample_gap.py (legacy value normalization)
+#   - app/services/dashboard_summary/normalizers.py   (_normalize_action)
+#
+# NOTE: this is the *recommendation* vocabulary. Three neighbours look similar but
+# are NOT the same set — do not merge them:
+#   - the operator's submit-time vocabulary ``{"submit", "review", "skip"}``
+#     (``BidDecisionActionRequest.action`` in app/schemas/opportunity.py);
+#   - the 4-value ``decision_status`` vocabulary
+#     ``{"planned", "reviewing", "submitted", "skipped"}``, still declared inline in
+#     ~10 schema files (a separate single-source candidate);
+#   - ``PaperBidDecisionStatus`` in app/schemas/paper_bidding_items.py, which is the
+#     3-value set ``{"planned", "reviewing", "skipped"}`` that
+#     ``_decision_status_for_action`` can produce and therefore has NO "submitted".
+PaperBidAction = Literal["bid_now", "review", "skip"]
+PAPER_BID_ACTIONS: tuple[PaperBidAction, ...] = get_args(PaperBidAction)
+
+# Price-stance scenario vocabulary — how conservatively one bid amount is derived.
+# The predictors emit one entry per label (``PricePredictionScenario.label``) and a
+# paper-bidding / backtest run selects ONE of those labels by string match
+# (``app/services/paper_bidding_backtest/scoring.py::_select_scenario``), so the
+# request field and the predictor label MUST share one vocabulary — they were
+# previously declared independently in five places.
+#
+# Shared by:
+#   - app/schemas/prediction.py        (PricePredictionScenario.label)
+#   - app/schemas/paper_bidding.py     ({Forward,}PaperBiddingRunRequest.scenario)
+#   - app/schemas/task_payloads.py     (HistoricalBacktestTaskRequest.scenario)
+#   - app/tasks/celery_app.py          (beat schedule scenario validation)
+#   - app/services/paper_bidding_scheduler.py (in-process scheduler validation)
+#   - scripts/backtest_paper_bidding.py · scripts/backtest_synthetic_operators.py
+#     (argparse ``--scenario`` choices)
+#
+# NOTE: persisted run records (``PaperBidRun.scenario``) and stored experiment
+# params keep a plain ``str`` on purpose — they must be able to read back runs
+# recorded before this vocabulary was fixed.
+PriceScenario = Literal["conservative", "base", "aggressive"]
+PRICE_SCENARIOS: tuple[PriceScenario, ...] = get_args(PriceScenario)
 
 # Decision statuses that represent an *open / actionable* bid opportunity for
 # the single operator. A record in one of these statuses has been planned or is

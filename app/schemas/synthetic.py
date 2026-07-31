@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.constants import PaperBidAction
+
 
 class SyntheticExperimentParams(BaseModel):
     """Execution parameters for a synthetic experiment (persisted as JSON).
@@ -24,7 +26,7 @@ class SyntheticExperimentParams(BaseModel):
     scenario: str = "base"
     cutoff_hours: Optional[int] = Field(default=None, ge=0)
     history_limit: Optional[int] = Field(default=None, ge=1)
-    settle_actions: Union[bool, List[Literal["bid_now", "review", "skip"]]] = Field(
+    settle_actions: Union[bool, List[PaperBidAction]] = Field(
         default_factory=lambda: ["bid_now"]
     )
 
@@ -227,7 +229,7 @@ class SyntheticExperimentSampleGapRunReference(BaseModel):
     category: Optional[str] = None
     limit: Optional[int] = None
     scenario: str = "base"
-    settle_actions: Union[bool, List[Literal["bid_now", "review", "skip"]]] = Field(
+    settle_actions: Union[bool, List[PaperBidAction]] = Field(
         default_factory=lambda: ["bid_now"]
     )
     params: Dict[str, Any] = Field(default_factory=dict)

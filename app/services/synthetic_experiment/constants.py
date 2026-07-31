@@ -29,7 +29,8 @@ SAMPLE_GAP_DIMENSION_ORDER = {
     "business_type": 2,
     "budget_band": 3,
 }
-SYNTHETIC_SETTLE_ACTIONS = ("bid_now", "review", "skip")
+# 정산 액션 어휘는 ``app/core/constants.py`` 의 ``PAPER_BID_ACTIONS`` 가 단일 출처다
+# (§4.5-1). 여기서 다시 선언하지 않고 소비처(sample_gap.py)가 직접 import 한다.
 
 _G1_PRESET_WINDOW = {
     "start_at": "2025-01-01T00:00:00+00:00",

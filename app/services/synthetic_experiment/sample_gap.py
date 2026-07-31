@@ -11,13 +11,13 @@ import shlex
 from collections import Counter
 from typing import Any, Optional
 
+from app.core.constants import PAPER_BID_ACTIONS
 from app.models.models import SyntheticExperiment, SyntheticExperimentRun
 
 from .constants import (
     REPORT_STATUS_DATA_MIXED,
     SAMPLE_GAP_WARNING_MIXED_DATA,
     SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
-    SYNTHETIC_SETTLE_ACTIONS,
 )
 from .serialization import _json_loads
 
@@ -56,7 +56,7 @@ def _normalize_settle_actions(value: Any) -> list[str]:
     actions: list[str] = []
     for item in raw_actions:
         action = str(item).strip()
-        if action in SYNTHETIC_SETTLE_ACTIONS and action not in actions:
+        if action in PAPER_BID_ACTIONS and action not in actions:
             actions.append(action)
     return actions or ["bid_now"]
 

@@ -2,6 +2,7 @@
 
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
+from app.core.constants import PaperBidAction
 
 
 class TelegramNotificationRequest(BaseModel):
@@ -34,7 +35,7 @@ class TelegramActionResponse(BaseModel):
     status: str
     detail: str
     decision_record_id: Optional[int] = None
-    action: Optional[Literal["bid_now", "review", "skip"]] = None
+    action: Optional[PaperBidAction] = None
     decision_status: Optional[
         Literal["planned", "reviewing", "submitted", "skipped"]
     ] = None

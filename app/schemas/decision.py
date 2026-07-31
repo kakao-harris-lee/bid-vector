@@ -3,12 +3,18 @@
 from datetime import date, datetime
 from typing import Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
+from app.core.constants import PaperBidAction
+
+# 실험 판정 어휘 — 이 모듈 안에서 5번 중복 선언되어 있었다(§4.5-1). 값과 순서는 그대로다.
+DecisionExperimentOutcome = Literal[
+    "insufficient_data", "watch", "success", "rollback", "inconclusive"
+]
 
 
 class DecisionInsightsRecentItem(BaseModel):
     decision_record_id: int
     project_id: int
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     priority_score: float = Field(ge=0.0, le=1.0)
     expected_margin_score: float = Field(ge=0.0, le=1.0)
@@ -47,9 +53,9 @@ class DecisionFunnelRecentSubmissionItem(BaseModel):
     decision_record_id: int
     project_id: int
     project_title: str
-    initial_action: Literal["bid_now", "review", "skip"]
+    initial_action: PaperBidAction
     initial_decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
-    current_action: Literal["bid_now", "review", "skip"]
+    current_action: PaperBidAction
     current_decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     priority_score: float = Field(ge=0.0, le=1.0)
     recommended_amount: float
@@ -238,9 +244,7 @@ class DecisionExperimentEvaluation(BaseModel):
     baseline_guardrail_value: Optional[float] = None
     current_guardrail_value: Optional[float] = None
     guardrail_delta: Optional[float] = None
-    outcome: Literal[
-        "insufficient_data", "watch", "success", "rollback", "inconclusive"
-    ]
+    outcome: DecisionExperimentOutcome
     recommended_action: Literal["collect_more_data", "continue", "complete", "rollback"]
     summary: str
     current_summary: DecisionExperimentMetricSnapshot
@@ -254,9 +258,7 @@ class DecisionExperimentRunCreateRequest(DecisionRecommendationExperiment):
 
 class DecisionExperimentRunUpdateRequest(BaseModel):
     status: Optional[Literal["planned", "running", "completed", "rolled_back"]] = None
-    outcome: Optional[
-        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
-    ] = None
+    outcome: Optional[DecisionExperimentOutcome] = None
     replace_notes: Optional[str] = None
     append_note: Optional[str] = None
     ended_at: Optional[datetime] = None
@@ -292,9 +294,7 @@ class DecisionExperimentThresholdApplyResponse(BaseModel):
     recommendation_key: str
     applied: bool
     dry_run: bool
-    latest_outcome: Optional[
-        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
-    ] = None
+    latest_outcome: Optional[DecisionExperimentOutcome] = None
     threshold_updates: List[DecisionThresholdAdjustmentItem] = Field(
         default_factory=list
     )
@@ -334,9 +334,7 @@ class DecisionExperimentStrategyApplyResponse(BaseModel):
     recommendation_key: str
     applied: bool
     dry_run: bool
-    latest_outcome: Optional[
-        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
-    ] = None
+    latest_outcome: Optional[DecisionExperimentOutcome] = None
     strategy_updates: List[DecisionStrategyAdjustmentItem] = Field(default_factory=list)
     strategy_tuning: DecisionStrategyTuningSnapshot
     detail: str
@@ -367,9 +365,7 @@ class DecisionExperimentRunResponse(BaseModel):
     experiment_key: str
     recommendation_key: str
     status: Literal["planned", "running", "completed", "rolled_back", "failed"]
-    outcome: Optional[
-        Literal["insufficient_data", "watch", "success", "rollback", "inconclusive"]
-    ] = None
+    outcome: Optional[DecisionExperimentOutcome] = None
     priority_rank: int = Field(ge=1, le=20)
     title: str
     hypothesis: str

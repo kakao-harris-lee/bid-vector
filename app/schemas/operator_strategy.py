@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
+from app.core.constants import PaperBidAction
 from app.schemas._shared import _PROBABILITY_SCORE_DESCRIPTION
 
 
@@ -59,7 +60,7 @@ class OperatorStrategyCandidateItem(BaseModel):
         ge=0.0, le=1.0, description=_PROBABILITY_SCORE_DESCRIPTION
     )
     priority_score: float = Field(ge=0.0, le=1.0)
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     recommended_amount: float
     analysis_summary: str
     strategy_reasons: List[str] = Field(default_factory=list)
@@ -90,7 +91,7 @@ class OperatorStrategyMonitorResultItem(BaseModel):
     title: str
     decision_record_id: int
     notification_id: Optional[int] = None
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     priority_score: float = Field(ge=0.0, le=1.0)
     probability_score: float = Field(

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.constants import PaperBidAction
 from app.core.database import get_db
 from app.schemas.schemas import (
     CustomOperatorCloneRequest,
@@ -83,9 +84,7 @@ class SyntheticBacktestRunRequest(BaseModel):
     slugs: Optional[List[str]] = None
     cutoff_hours_before_deadline: Optional[int] = Field(default=None, ge=0, le=168)
     history_limit: Optional[int] = Field(default=None, ge=1, le=500)
-    settle_actions: List[Literal["bid_now", "review", "skip"]] = Field(
-        default_factory=lambda: ["bid_now"]
-    )
+    settle_actions: List[PaperBidAction] = Field(default_factory=lambda: ["bid_now"])
 
 
 class SyntheticBacktestSettlementItem(BaseModel):

@@ -30,7 +30,7 @@ Usage::
     python scripts/backtest_synthetic_operators.py \\
         --operators sw-small-seoul,sw-mid-metro,cn-mid-gyeonggi
 """
-
+# ruff: noqa: E402 - imports follow the sys.path bootstrap below.
 from __future__ import annotations
 
 import argparse
@@ -44,6 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.core.constants import PRICE_SCENARIOS
 from app.core.database import Base, SessionLocal, engine
 from app.models.models import CompanyProfile, OperatorStrategy, User
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
@@ -67,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=150, help="Maximum awarded projects to replay per operator.")
     parser.add_argument(
         "--scenario",
-        choices=["conservative", "base", "aggressive"],
+        choices=list(PRICE_SCENARIOS),
         default="base",
     )
     parser.add_argument("--history-limit", type=int, default=80)

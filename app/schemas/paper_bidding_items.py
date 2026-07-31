@@ -33,6 +33,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
+from app.core.constants import PaperBidAction
 from app.schemas._base import StrictModel
 
 __all__ = [
@@ -49,8 +50,10 @@ __all__ = [
 
 
 # --- 어휘 (§4.5-1: 값 집합은 선언적으로) -----------------------------------------
-# 결정 게이트 사다리(app/services/allocation_core.py)가 낼 수 있는 action 전체.
-PaperBidAction = Literal["bid_now", "review", "skip"]
+# 결정 게이트 사다리(app/services/allocation_core.py)가 낼 수 있는 action 전체
+# (``PaperBidAction``)는 ``app/core/constants.py`` 가 단일 출처이며 위에서 import 해
+# ``__all__`` 로 re-export 만 한다.
+
 # ``_decision_status_for_action`` 의 상(相) 전체.
 PaperBidDecisionStatus = Literal["planned", "reviewing", "skipped"]
 # 가격 근접 기반 추정 낙찰(실제 낙찰이 아니다).

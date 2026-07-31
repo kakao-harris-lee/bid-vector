@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from app.core.constants import PaperBidAction
 from app.schemas._shared import _PROBABILITY_SCORE_DESCRIPTION
 from app.schemas.crawl import ClassificationResponse
 from app.schemas.prediction import PricePredictionResponse
@@ -95,7 +96,7 @@ class BidDecisionScoreBreakdown(BaseModel):
 class BidDecisionResponse(BaseModel):
     project_id: int
     pursue_bid: bool
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     priority_score: float
     recommended_amount: float
     probability_score: float = Field(description=_PROBABILITY_SCORE_DESCRIPTION)
@@ -165,9 +166,9 @@ class BidDecisionRecordResponse(BaseModel):
     project_id: int
     operator_id: int
     pursue_bid: bool
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
-    initial_action: Literal["bid_now", "review", "skip"] = "skip"
+    initial_action: PaperBidAction = "skip"
     initial_decision_status: Literal[
         "planned", "reviewing", "submitted", "skipped"
     ] = "planned"

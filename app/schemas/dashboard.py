@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, Field
+from app.core.constants import PaperBidAction
 from app.schemas._shared import _PROBABILITY_SCORE_DESCRIPTION
 
 
@@ -45,7 +46,7 @@ class DashboardOpportunityItem(BaseModel):
     decision_record_id: Optional[int] = None
     paper_bid_id: Optional[int] = None
     project: DashboardProjectBrief
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     recommended_amount: float
     probability_score: float = Field(
