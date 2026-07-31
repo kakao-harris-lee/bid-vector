@@ -386,7 +386,7 @@
       "functions_over_soft_limit": 4,
       "functions_over_hard_limit": 3,
       "file_loc_band": 39,
-      "dict_boundary_functions": 16
+      "dict_boundary_functions": 13
     },
     "app/services/koneps/field_contract.py": {
       "functions_over_soft_limit": 1,
@@ -410,7 +410,7 @@
     },
     "app/services/koneps/matching.py": {
       "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 5
+      "dict_boundary_functions": 1
     },
     "app/services/koneps/openapi.py": {
       "functions_over_soft_limit": 1,
@@ -425,7 +425,7 @@
       "functions_over_hard_limit": 1,
       "file_loc_band": 34,
       "json_direct_calls": 2,
-      "dict_boundary_functions": 16
+      "dict_boundary_functions": 3
     },
     "app/services/koneps/scsbid.py": {
       "functions_over_soft_limit": 1,
@@ -526,8 +526,7 @@
     },
     "app/services/notifications/telegram.py": {
       "json_direct_calls": 2,
-      "dict_boundary_functions": 7,
-      "env_test_sniff": 4
+      "dict_boundary_functions": 7
     },
     "app/services/notifications/telegram_strategy.py": {
       "json_direct_calls": 2,
