@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB: int = 3145728
     CELERY_TASK_TIME_LIMIT_SECONDS: int = 1800
     CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: int = 1500
+    # 성공 task 로그의 반환값 에코 상한(chars). celery.app.trace 는 매 성공 task
+    # 마다 saferepr(R, resultrepr_maxsize) 를 INFO 로 남기며, celery Task 기본값은
+    # 1024 라 반환 payload(예: koneps 수집 task 의 items[] 목록)가 매 줄 최대
+    # ~1KB 로 로그를 채운다(실측: 60분 75줄, 중앙값 313·최대 1216). payload 는
+    # 이미 result backend 와 crawl_jobs 에 영속되므로 로그 에코는 중복이다 —
+    # 작은 dict 머리(job_status/source/collected_count 등)만 남도록 낮춘다.
+    # 0 이하 = celery 기본(1024) 유지.
+    CELERY_TASK_RESULT_REPR_MAXSIZE: int = 160
     # Max project ids per deferred-embedding backfill task. Bounds each
     # rebuild_project_embeddings run so a large catch-up sweep is split across
     # several tasks instead of one unbounded task that re-creates the time-limit

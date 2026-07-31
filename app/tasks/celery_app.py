@@ -672,6 +672,22 @@ def build_celery_runtime_config() -> dict[str, object]:
     return config
 
 
+def apply_task_result_repr_maxsize(app: Celery) -> None:
+    """Trim the task-success result echo on the app Task base.
+
+    ``celery.app.trace`` logs ``saferepr(R, resultrepr_maxsize)`` at INFO for
+    every succeeded task; the celery ``Task`` default of 1024 lets bulky return
+    payloads (e.g. the koneps 수집 task's ``items[]``) fill up to ~1KB per line.
+    The payload is already persisted to the result backend and ``crawl_jobs`` so
+    the echo is redundant. Setting the attribute on the app Task base makes every
+    registered task inherit the smaller cap. 0 이하 = celery 기본(1024) 유지.
+    """
+    maxsize = int(settings.CELERY_TASK_RESULT_REPR_MAXSIZE)
+    task_base = getattr(app, "Task", None)
+    if maxsize > 0 and task_base is not None:
+        task_base.resultrepr_maxsize = maxsize
+
+
 celery_app = Celery(
     "bid_vector",
     broker=settings.CELERY_BROKER_URL,
@@ -679,3 +695,4 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(**build_celery_runtime_config())
+apply_task_result_repr_maxsize(celery_app)
