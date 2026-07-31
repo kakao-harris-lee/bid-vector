@@ -37,7 +37,13 @@ const baseCandidates: OperatorStrategyCandidatesResponse = {
   evaluated_project_count: 12,
   returned_candidate_count: 3,
   high_priority_only: false,
-  candidates: []
+  candidates: [],
+  // PR-B 이후 GET 은 스냅샷 순수 읽기다. 계산된 스냅샷(idle + computed_at)이라야
+  // 카드가 통계·목록을 그리고 폴링을 멈춘다(부트스트랩=computed_at null 은
+  // 진행 UI 로 빠진다 — features/strategy/snapshotState.ts).
+  computed_at: "2026-07-30T02:00:00Z",
+  snapshot_status: "idle",
+  stale: false
 };
 
 const baseRuns: OperatorStrategyRunListResponse = {
