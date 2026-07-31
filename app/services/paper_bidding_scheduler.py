@@ -8,6 +8,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.constants import PRICE_SCENARIOS
 from app.core.database import SessionLocal
 from app.services.inprocess_scheduler import BaseInProcessScheduler
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
@@ -55,7 +56,7 @@ class PaperBiddingForwardScheduler(BaseInProcessScheduler):
             str(settings.PAPER_BIDDING_FORWARD_SCHEDULE_SCENARIO or "base").strip()
             or "base"
         )
-        if scenario not in {"conservative", "base", "aggressive"}:
+        if scenario not in PRICE_SCENARIOS:
             scenario = "base"
         return {
             "category": category,

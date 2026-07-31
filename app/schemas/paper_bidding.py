@@ -13,9 +13,10 @@
 """
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from app.core.constants import PaperBidAction, PriceScenario
 from app.schemas._base import StrictModel
 from app.schemas.paper_bidding_audit import (
     BacktestDataAuditCategoryRow,
@@ -54,21 +55,19 @@ class PaperBiddingRunRequest(BaseModel):
     start_at: Optional[datetime] = None
     end_at: Optional[datetime] = None
     limit: int = Field(default=100, ge=1, le=5000)
-    scenario: Literal["conservative", "base", "aggressive"] = "base"
+    scenario: PriceScenario = "base"
     strategy_version: str = "local-backtest"
     model_version: str = "current"
     cutoff_hours_before_deadline: int = Field(default=2, ge=0, le=168)
     history_limit: int = Field(default=80, ge=1, le=500)
-    settle_actions: List[Literal["bid_now", "review", "skip"]] = Field(
-        default_factory=lambda: ["bid_now"]
-    )
+    settle_actions: List[PaperBidAction] = Field(default_factory=lambda: ["bid_now"])
     persist: bool = False
 
 
 class ForwardPaperBiddingRunRequest(BaseModel):
     category: Optional[str] = None
     limit: int = Field(default=100, ge=1, le=500)
-    scenario: Literal["conservative", "base", "aggressive"] = "base"
+    scenario: PriceScenario = "base"
     strategy_version: str = "forward-paper"
     model_version: str = "current"
     history_limit: int = Field(default=80, ge=1, le=500)

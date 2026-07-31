@@ -20,10 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, List, Optional, Union
 
 from pydantic import Field, field_validator, model_validator
 
+from app.core.constants import PaperBidAction, PriceScenario
 from app.schemas._base import StrictModel
 from app.schemas.crawl import CrawlRequest
 from app.schemas.paper_bidding import ForwardPaperBiddingRunRequest
@@ -42,16 +43,15 @@ __all__ = [
     "TelegramNotificationTaskRequest",
 ]
 
-# 값 집합은 한 곳에만 선언한다(§4.5-1). 백테스트 시나리오/정산 액션은 HTTP 요청 모델
-# (``app/schemas/paper_bidding.py``)과 같은 도메인 값이므로 문자열을 흩뿌리지 않는다.
-BacktestScenario = Literal["conservative", "base", "aggressive"]
-SettleAction = Literal["bid_now", "review", "skip"]
+# 값 집합은 한 곳에만 선언한다(§4.5-1). 시나리오(``PriceScenario``)와 정산 액션
+# (``PaperBidAction``)은 HTTP 요청 모델(``app/schemas/paper_bidding.py``)과 같은 도메인
+# 값이므로 ``app/core/constants.py`` 의 단일 출처를 그대로 쓴다.
 
 # 발신 측이 실제로 쓰는 settle_actions 표현: 액션 리스트 · 콤마 문자열(beat 설정) ·
 # 레거시 bool(저장된 experiment params) · 미지정.
 SettleActionsInput = Union[bool, str, List[str], None]
 
-_HISTORICAL_DEFAULT_SETTLE_ACTIONS: tuple[SettleAction, ...] = ("bid_now", "review")
+_HISTORICAL_DEFAULT_SETTLE_ACTIONS: tuple[PaperBidAction, ...] = ("bid_now", "review")
 
 
 def _split_comma_separated(value: SettleActionsInput) -> SettleActionsInput:
@@ -201,7 +201,7 @@ class SyntheticOperatorBacktestTaskRequest(StrictModel):
     # 산출이 바뀌므로(=검증 실패로 실행 자체가 사라짐) ge 만 유지한다.
     history_limit: Optional[int] = Field(default=None, ge=1)
     # 레거시 발신 형태 보존: bool 은 "기본 액션 사용"을 뜻하고 리스트는 명시 선택이다.
-    settle_actions: Union[bool, List[SettleAction], None] = None
+    settle_actions: Union[bool, List[PaperBidAction], None] = None
     experiment_id: Optional[int] = None
     run_id: Optional[int] = None
     source_sample_gap_candidate: Optional[dict[str, Any]] = None
@@ -228,7 +228,7 @@ class SyntheticOperatorBacktestTaskRequest(StrictModel):
             return self.cutoff_hours_before_deadline
         return self.cutoff_hours
 
-    def resolved_settle_actions(self) -> Optional[tuple[SettleAction, ...]]:
+    def resolved_settle_actions(self) -> Optional[tuple[PaperBidAction, ...]]:
         """ad-hoc 경로 인자. bool/미지정은 액션 필터 없음(``None``)으로 흘린다."""
         if isinstance(self.settle_actions, list):
             return tuple(self.settle_actions)
@@ -255,12 +255,12 @@ class HistoricalBacktestTaskRequest(StrictModel):
 
     category: Optional[str] = None
     limit: int = Field(default=100, ge=1, le=5000)
-    scenario: BacktestScenario = "base"
+    scenario: PriceScenario = "base"
     strategy_version: str = "scheduled-historical-backtest"
     model_version: str = "current"
     cutoff_hours_before_deadline: int = Field(default=2, ge=0, le=168)
     history_limit: int = Field(default=80, ge=1, le=500)
-    settle_actions: List[SettleAction] = Field(
+    settle_actions: List[PaperBidAction] = Field(
         default_factory=lambda: list(_HISTORICAL_DEFAULT_SETTLE_ACTIONS)
     )
     persist: bool = True

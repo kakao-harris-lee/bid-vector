@@ -88,6 +88,7 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
             self.day_of_week = {int(day_of_week)} if day_of_week is not None else set()
 
 from app.core.config import settings
+from app.core.constants import PRICE_SCENARIOS
 
 OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
 PAPER_BIDDING_FORWARD_TASK_NAME = "jobs.run_forward_paper_bidding"
@@ -176,8 +177,7 @@ def build_paper_bidding_forward_beat_schedule() -> dict[str, dict[str, object]]:
 
     category = str(settings.PAPER_BIDDING_FORWARD_SCHEDULE_CATEGORY or "").strip() or None
     scenario = str(settings.PAPER_BIDDING_FORWARD_SCHEDULE_SCENARIO or "base").strip() or "base"
-    if scenario not in {"conservative", "base", "aggressive"}:
-        scenario = "base"
+    scenario = scenario if scenario in PRICE_SCENARIOS else "base"
 
     return {
         "paper_bidding_forward_periodic": {
@@ -256,8 +256,7 @@ def build_historical_backtest_beat_schedule() -> dict[str, dict[str, object]]:
 
     category = str(settings.HISTORICAL_BACKTEST_SCHEDULE_CATEGORY or "").strip() or None
     scenario = str(settings.HISTORICAL_BACKTEST_SCHEDULE_SCENARIO or "base").strip() or "base"
-    if scenario not in {"conservative", "base", "aggressive"}:
-        scenario = "base"
+    scenario = scenario if scenario in PRICE_SCENARIOS else "base"
 
     return {
         "historical_backtest_periodic": {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run a historical paper-bidding backtest and optional DB persistence."""
-
+# ruff: noqa: E402 - imports follow the sys.path bootstrap below.
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.core.constants import PRICE_SCENARIOS
 from app.core.database import Base, SessionLocal, engine
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from scripts._common import parse_datetime
@@ -29,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", help="Award window start date/datetime.")
     parser.add_argument("--end-date", help="Award window end date/datetime.")
     parser.add_argument("--limit", type=int, default=100, help="Maximum awarded projects to replay.")
-    parser.add_argument("--scenario", choices=["conservative", "base", "aggressive"], default="base")
+    parser.add_argument("--scenario", choices=list(PRICE_SCENARIOS), default="base")
     parser.add_argument("--history-limit", type=int, default=80)
     parser.add_argument("--cutoff-hours-before-deadline", type=int, default=2)
     parser.add_argument("--strategy-version", default="local-backtest")

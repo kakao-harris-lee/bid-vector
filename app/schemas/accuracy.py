@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
+from app.core.constants import PaperBidAction
 
 
 class PredictionFeedbackItem(BaseModel):
@@ -240,7 +241,7 @@ class RecommendationFeedbackLabelItem(BaseModel):
     project_title: str
     project_category: Optional[str] = None
     project_business_type_code: Optional[str] = None
-    action: Literal["bid_now", "review", "skip"]
+    action: PaperBidAction
     decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
     priority_score: float = Field(ge=0.0, le=1.0)
     verdict: Literal["useful", "not_useful"]
