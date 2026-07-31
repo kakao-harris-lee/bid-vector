@@ -8,7 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from app.ai.predictors.base import BasePricePredictor, PredictorAvailability, PricePredictionContext
+from app.ai.predictors.base import (
+    BasePricePredictor,
+    PredictionResult,
+    PredictorAvailability,
+    PricePredictionContext,
+)
 from app.ai.predictors.historical import (
     HistoricalStatisticalPredictor,
     clamp_bid_rate,
@@ -77,12 +82,14 @@ class LSTMBidRatePredictor(BasePricePredictor):
             return PredictorAvailability(False, f"Configured LSTM model artifact is invalid: {exc}")
         return PredictorAvailability(True)
 
-    def predict(self, context: PricePredictionContext) -> dict[str, Any]:
+    def predict(self, context: PricePredictionContext) -> PredictionResult:
         """Predict a bid rate from a persisted LSTM model artifact."""
         model_path = str(settings.PRICE_PREDICTION_LSTM_MODEL_PATH or "").strip()
         artifact = load_lstm_artifact(model_path)
         signal = infer_lstm_sequence_signal(context, artifact=artifact)
-        return build_lstm_prediction_payload(context, artifact=artifact, signal=signal)
+        return PredictionResult.model_validate(
+            build_lstm_prediction_payload(context, artifact=artifact, signal=signal)
+        )
 
 
 def load_lstm_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, Any]:
@@ -162,7 +169,7 @@ def infer_lstm_sequence_signal(
     window_size = min(len(sequence_rates), int(artifact["sequence_length"]))
     window = np.asarray(sequence_rates[-window_size:], dtype=float)
     raw_lstm_rate = _run_lstm_window(window, artifact=artifact)
-    historical_rate = float(historical_prediction.get("predicted_bid_rate", 0.0) or 0.0)
+    historical_rate = float(historical_prediction.predicted_bid_rate or 0.0)
     trend_rate = _estimate_trend_rate(sequence_rates)
     blended_rate = _blend_predicted_rate(
         artifact["blend_weights"],

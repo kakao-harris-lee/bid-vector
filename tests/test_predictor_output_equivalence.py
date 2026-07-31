@@ -37,6 +37,11 @@ from app.ai.predictors.historical import (
     build_heuristic_prediction,
     build_historical_prediction,
 )
+from app.ai.predictors.lstm import (
+    build_lstm_prediction_payload,
+    infer_lstm_sequence_signal,
+    load_lstm_artifact,
+)
 from app.ai.price_prediction import predict_price
 
 GOLDEN_DIR = Path(__file__).parent / "goldens" / "predictor"
@@ -419,6 +424,76 @@ ENSEMBLE_CASES: list[dict[str, Any]] = [
 ]
 
 
+# GAP D (P4.1): the two predictor payload shapes that had NO golden at all.
+#
+# ``build_heuristic_prediction`` and ``build_lstm_prediction_payload`` emit a
+# *narrower* key set than historical/ensemble — they carry no
+# ``competitive_target_bid_rate`` / ``procurement_rate_band`` /
+# ``high_rate_tail_adjustment``. That difference is precisely what the
+# PredictionResult DTO must preserve (key PRESENCE, not just values), so both
+# shapes are pinned before the typed-output refactor.
+def _heuristic_case(
+    case_id: str, *, budget: float, category: str, description: str
+) -> dict[str, Any]:
+    return {
+        "id": case_id,
+        "kind": "heuristic",
+        "budget": budget,
+        "category": category,
+        "description": description,
+    }
+
+
+HEURISTIC_CASES: list[dict[str, Any]] = [
+    _heuristic_case(
+        "heur_service_short_description", budget=100_000_000.0, category="service",
+        description="OO 청소용역",
+    ),
+    # >200 chars flips confidence_score to 0.9 and pushes the complexity factor up.
+    _heuristic_case(
+        "heur_software_long_description", budget=500_000_000.0, category="software",
+        description="시스템 구축 " * 40,
+    ),
+    # budget == 0 → every rate/price collapses to 0.0 (division guard path).
+    _heuristic_case(
+        "heur_zero_budget", budget=0.0, category="other", description="예산 미상 공고",
+    ),
+]
+
+
+def _lstm_case(
+    case_id: str,
+    *,
+    budget: float,
+    category: str,
+    description: str,
+    business_group: str | None,
+    rates: list[float],
+    agency_name: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": case_id,
+        "kind": "lstm",
+        "budget": budget,
+        "category": category,
+        "description": description,
+        "business_group": business_group,
+        "records": _rate_records(rates),
+        "artifact": _LSTM_ARTIFACT,
+        "agency_name": agency_name,
+    }
+
+
+LSTM_CASES: list[dict[str, Any]] = [
+    _lstm_case("lstm_construction_ascending", budget=800_000_000.0, category="construction",
+               description="OO 토목공사", business_group="construction", rates=_ASCENDING),
+    _lstm_case("lstm_service_flat", budget=100_000_000.0, category="service",
+               description="OO 청소용역", business_group="service", rates=_FLAT),
+    _lstm_case("lstm_goods_descending", budget=100_000_000.0, category="goods",
+               description="OO 물품 구매", business_group="goods", rates=_DESCENDING),
+]
+
+
 # GAP A: end-to-end predict_price cases where the category/group guardrail
 # ACTUALLY fires (guardrail_applied == True) — the anchor for the project #1
 # invariant ("a recommendation below the category 낙찰하한 is blocked"). The
@@ -436,6 +511,7 @@ def _predict_price_case(
     legal_floor_bid_rate: float | None = None,
     estimation_amount: float | None = None,
     reference_date: date | None = None,
+    feedback_calibration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": case_id,
@@ -449,6 +525,7 @@ def _predict_price_case(
         "legal_floor_bid_rate": legal_floor_bid_rate,
         "estimation_amount": estimation_amount,
         "reference_date": reference_date,
+        "feedback_calibration": feedback_calibration,
     }
 
 
@@ -493,6 +570,32 @@ PREDICT_PRICE_CASES: list[dict[str, Any]] = [
         business_group="construction",
         estimation_amount=500_000_000.0, reference_date=date(2026, 2, 1),
     ),
+    # GAP D (P4.1): the heuristic payload flowing through the FULL predict_price
+    # pipeline (feedback → guardrail → granularity → regime → predictor metadata).
+    # No historical records, so ``HistoricalStatisticalPredictor.predict`` returns the
+    # narrow heuristic payload — this is the only golden that pins which keys are
+    # ABSENT end-to-end (no competitive_target_bid_rate / procurement_rate_band /
+    # high_rate_tail_adjustment). Presence, not just value, is the DTO contract.
+    _predict_price_case(
+        "predict_heuristic_no_history",
+        budget=100_000_000.0, category="service",
+        description="이력 없는 신규 용역 공고", rates=[],
+        business_group="service",
+    ),
+    # GAP D (P4.1): the feedback-calibration stage actually applies (non-trivial
+    # adjustment rate), so ``feedback_calibration`` is a populated dict and
+    # ``model_version`` carries the +feedback suffix through the guardrail suffix fold.
+    _predict_price_case(
+        "predict_feedback_calibration_applied",
+        budget=100_000_000.0, category="service",
+        description="OO 청소용역", rates=[0.905 for _ in range(20)],
+        business_group="service",
+        feedback_calibration={
+            "sample_count": 12,
+            "applied_adjustment_rate": -0.015,
+            "raw_adjustment_rate": -0.02,
+        },
+    ),
 ]
 
 
@@ -511,6 +614,26 @@ def _run_historical(case: dict[str, Any]) -> dict[str, Any]:
         historical_summary=case["summary"],
         business_group=case["business_group"],
     )
+
+
+def _run_heuristic(case: dict[str, Any]) -> dict[str, Any]:
+    return build_heuristic_prediction(
+        budget=case["budget"], category=case["category"], description=case["description"]
+    )
+
+
+def _run_lstm(case: dict[str, Any]) -> dict[str, Any]:
+    artifact = load_lstm_artifact(case["artifact"])
+    context = PricePredictionContext(
+        budget=case["budget"],
+        category=case["category"],
+        description=case["description"],
+        historical_records=tuple(case["records"]),
+        agency_name=case.get("agency_name"),
+        business_group=case["business_group"],
+    )
+    signal = infer_lstm_sequence_signal(context, artifact=artifact)
+    return build_lstm_prediction_payload(context, artifact=artifact, signal=signal)
 
 
 def _run_ensemble(case: dict[str, Any]) -> dict[str, Any]:
@@ -537,6 +660,7 @@ def _run_predict_price(case: dict[str, Any]) -> dict[str, Any]:
         legal_floor_bid_rate=case.get("legal_floor_bid_rate"),
         estimation_amount=case.get("estimation_amount"),
         reference_date=case.get("reference_date"),
+        feedback_calibration=case.get("feedback_calibration"),
     )
     # backtest_report (auto selector only) is a large nested structure not present
     # under the historical preference; drop defensively so a config flip can't bloat
@@ -547,6 +671,8 @@ def _run_predict_price(case: dict[str, Any]) -> dict[str, Any]:
 
 _RUNNERS = {
     "historical": _run_historical,
+    "heuristic": _run_heuristic,
+    "lstm": _run_lstm,
     "ensemble": _run_ensemble,
     "predict_price": _run_predict_price,
 }
@@ -584,7 +710,9 @@ def _assert_golden(case: dict[str, Any]) -> None:
     )
 
 
-ALL_CASES = HISTORICAL_CASES + ENSEMBLE_CASES + PREDICT_PRICE_CASES
+ALL_CASES = (
+    HISTORICAL_CASES + HEURISTIC_CASES + LSTM_CASES + ENSEMBLE_CASES + PREDICT_PRICE_CASES
+)
 
 
 @pytest.mark.parametrize("case", ALL_CASES, ids=[c["id"] for c in ALL_CASES])
@@ -609,12 +737,20 @@ def test_golden_case_count_is_pinned():
     # Lock the coverage size so a future edit can't silently drop cases.
     assert len(HISTORICAL_CASES) == 20
     assert len(ENSEMBLE_CASES) == 12
+    # GAP D (P4.1): the two previously uncovered predictor payload SHAPES — the
+    # heuristic fallback and the standalone LSTM payload. Both emit a narrower key
+    # set than historical/ensemble, so they are the regression anchor for the
+    # PredictionResult key-presence contract.
+    assert len(HEURISTIC_CASES) == 3
+    assert len(LSTM_CASES) == 3
     # +1: predict_agency_band_assessment_marine locks the E[사정률] base-alignment path
     # (base 정합화 P0) — the first golden exercising the agency band THROUGH the guardrail.
     # +1: predict_construction_legal_floor_tier_new locks the 2026-01-30 construction
     # legal 낙찰하한 tier (구간·시행일 인지) raising the floor above the flat 0.87.
-    assert len(PREDICT_PRICE_CASES) == 4
-    assert len(ALL_CASES) == 36
+    # +2 (P4.1): predict_heuristic_no_history pins the narrow heuristic payload through
+    # the FULL pipeline, predict_feedback_calibration_applied pins the feedback stage.
+    assert len(PREDICT_PRICE_CASES) == 6
+    assert len(ALL_CASES) == 44
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +813,49 @@ def test_high_rate_tail_golden_actually_fires(case_id, reason):
     # the lift reached the recommended rate and the explanation notes it.
     assert result["predicted_bid_rate"] > adjustment["original_bid_rate"]
     assert "최근 고율 낙찰 분포를 반영해" in result["explanation"]
+
+
+# ---------------------------------------------------------------------------
+# GAP D anchor (P4.1): the heuristic and standalone-LSTM payloads are NARROWER
+# than the historical/ensemble one. Made legible beyond the raw golden JSON so a
+# typed-output refactor cannot silently start emitting these keys as ``null`` —
+# key PRESENCE is part of the predictor contract, not only key values.
+# ---------------------------------------------------------------------------
+_HISTORICAL_ONLY_KEYS = (
+    "competitive_target_bid_rate",
+    "procurement_rate_band",
+    "high_rate_tail_adjustment",
+)
+
+
+@pytest.mark.parametrize(
+    "case_id", [case["id"] for case in HEURISTIC_CASES + LSTM_CASES]
+)
+def test_narrow_payload_omits_historical_only_keys(case_id):
+    result = _run(_case_by_id(case_id))
+    for key in _HISTORICAL_ONLY_KEYS:
+        assert key not in result, f"{case_id} must not carry '{key}'"
+
+
+def test_predict_price_heuristic_path_keeps_narrow_key_set():
+    """The narrow heuristic payload survives the full pipeline without gaining nulls."""
+    result = _run(_case_by_id("predict_heuristic_no_history"))
+    assert result["pricing_mode"] == "heuristic"
+    assert result["historical_sample_size"] == 0
+    for key in _HISTORICAL_ONLY_KEYS:
+        assert key not in result, f"heuristic predict_price must not carry '{key}'"
+    # ...while every pipeline stage still stamped its own keys.
+    assert result["predictor_name"] == "historical_statistical"
+    assert "safe_floor_bid_rate" in result
+    assert "price_granularity_applied" in result
+    assert "price_regime_label" in result
+    assert result["training_window_size"] == 0
+
+
+def test_predict_price_feedback_calibration_actually_applies():
+    result = _run(_case_by_id("predict_feedback_calibration_applied"))
+    assert result["feedback_calibration"]["sample_count"] == 12
+    assert "+feedback" in result["model_version"]
 
 
 # ---------------------------------------------------------------------------

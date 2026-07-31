@@ -1,0 +1,38 @@
+{
+  "agency_match_sample_size": 0,
+  "bid_rate_candidates": [
+    {
+      "bid_rate": 0.9187,
+      "confidence_weight": 0.22,
+      "label": "conservative",
+      "predicted_price": 91873934.02
+    },
+    {
+      "bid_rate": 0.9315,
+      "confidence_weight": 0.56,
+      "label": "base",
+      "predicted_price": 93150594.01
+    },
+    {
+      "bid_rate": 0.9424,
+      "confidence_weight": 0.22,
+      "label": "aggressive",
+      "predicted_price": 94235755.01
+    }
+  ],
+  "confidence_score": 0.96,
+  "explanation": "최근 6건 시계열을 LSTM artifact v1로 추론하고 통계 baseline 0.9526 및 추세값 0.9459와 가중 결합해 기준 사정률 0.9315를 계산했습니다. 전체 학습 창은 16건입니다.",
+  "feedback_calibration": null,
+  "floor_bid_rate": null,
+  "floor_price": null,
+  "guardrail_applied": false,
+  "guardrail_reason": null,
+  "historical_sample_size": 16,
+  "model_version": "v2.0-lstm",
+  "predicted_bid_rate": 0.9315,
+  "predicted_price": 93150594.01,
+  "price_range_max": 94235755.01,
+  "price_range_min": 91873934.02,
+  "pricing_mode": "historical_blend",
+  "reserve_price_context": null
+}

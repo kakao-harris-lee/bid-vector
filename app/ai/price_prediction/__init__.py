@@ -58,6 +58,7 @@ from app.ai.price_prediction.guardrails_context import (
 from app.ai.price_prediction.insights import get_price_insights
 from app.ai.price_prediction.orchestration import (
     _PREDICTOR_KEY_ALIASES,
+    PredictorSelection,
     _attach_predictor_metadata,
     _merge_fallback_reason,
     _normalize_predictor_key,
@@ -100,6 +101,7 @@ from app.ai.price_prediction.price_regime import (
 __all__ = [
     "settings",
     "GuardrailContext",
+    "PredictorSelection",
     "_PREDICTOR_KEY_ALIASES",
     "_PRICE_REGIME_AMBIGUOUS_FALLBACK",
     "_PRICE_REGIME_RULES",
