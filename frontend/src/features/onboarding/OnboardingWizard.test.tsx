@@ -107,6 +107,42 @@ const applyResponse: OnboardingApplyResponse = {
   current_operator_username: "operator"
 };
 
+/** PR-B 이후 후보 GET 은 스냅샷 순수 읽기다 — 최초 진입은 계산 이력이 없다. */
+const bootstrapCandidates = {
+  operator_id: 1,
+  evaluated_project_count: 0,
+  returned_candidate_count: 0,
+  high_priority_only: false,
+  candidates: [],
+  computed_at: null,
+  snapshot_status: "running",
+  stale: false
+};
+
+const computedCandidates = {
+  ...bootstrapCandidates,
+  evaluated_project_count: 250,
+  returned_candidate_count: 1,
+  candidates: [
+    {
+      project_id: 501,
+      title: "부산항 준설 감리 용역",
+      category: "engineering_service",
+      budget_estimate: 480_000_000,
+      deadline: null,
+      matched_score: 0.72,
+      probability_score: 0.66,
+      priority_score: 0.81,
+      action: "review",
+      recommended_amount: 430_000_000,
+      analysis_summary: "요약",
+      strategy_reasons: []
+    }
+  ],
+  computed_at: "2026-07-30T02:00:00Z",
+  snapshot_status: "idle"
+};
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -119,6 +155,7 @@ interface MockOptions {
   suggestionsPayload?: OnboardingSuggestionsResponse;
   suggestionsStatus?: number;
   applyStatus?: number;
+  candidatesPayload?: unknown;
 }
 
 function installFetchMock(opts: MockOptions = {}) {
@@ -136,13 +173,7 @@ function installFetchMock(opts: MockOptions = {}) {
       return jsonResponse(suggestionsPayload, suggestionsStatus);
     }
     if (url.includes("/strategy/candidates")) {
-      return jsonResponse({
-        operator_id: 1,
-        evaluated_project_count: 0,
-        returned_candidate_count: 0,
-        high_priority_only: false,
-        candidates: []
-      });
+      return jsonResponse(opts.candidatesPayload ?? bootstrapCandidates);
     }
     return jsonResponse({}, 404);
   });
@@ -158,17 +189,20 @@ function renderWizard() {
     }
   });
   const context = { session } as unknown as ShellOutletContext;
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/dashboard/onboarding"]}>
-        <Routes>
-          <Route element={<Outlet context={context} />}>
-            <Route path="/dashboard/onboarding" element={<OnboardingWizard />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/dashboard/onboarding"]}>
+          <Routes>
+            <Route element={<Outlet context={context} />}>
+              <Route path="/dashboard/onboarding" element={<OnboardingWizard />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    ),
+    queryClient
+  };
 }
 
 async function submitSeed() {
@@ -412,5 +446,44 @@ describe("OnboardingWizard", () => {
         }
       ]
     });
+  });
+
+  it("최초 진입(스냅샷 부재)은 진행 UI + 경과 안내로 대기한다", async () => {
+    installFetchMock();
+    renderWizard();
+    const user = await submitSeed();
+
+    await screen.findByText("공사");
+    const businessCard = screen.getByRole("listitem", { name: "업무 구분 후보" });
+    await user.click(within(businessCard).getByRole("button", { name: "수락" }));
+    await user.click(screen.getByRole("button", { name: /수락한 1건 반영/ }));
+    await screen.findByText("반영된 필드 1건");
+    await user.click(screen.getByRole("button", { name: /공고 미리보기/ }));
+
+    // 계산된 적 없는 스냅샷 = 부트스트랩. 0건을 "후보 없음"으로 오도하지 않고
+    // 진행 UI 로 기다린다(설계 §7, 리스크 완화 §9).
+    expect(await screen.findByText("첫 계산 대기")).toBeInTheDocument();
+    const progress = await screen.findByTestId("snapshot-progress");
+    expect(progress).toHaveTextContent("다시 계산하고 있습니다");
+    expect(progress).toHaveTextContent("초 경과");
+    expect(progress).toHaveTextContent("최초 계산은 수십 초");
+    expect(screen.queryByText("현재 매칭되는 후보가 없습니다.")).toBeNull();
+  });
+
+  it("계산이 끝난 스냅샷은 미리보기 단계에서 목록으로 렌더된다", async () => {
+    installFetchMock({ candidatesPayload: computedCandidates });
+    renderWizard();
+    const user = await submitSeed();
+
+    await screen.findByText("공사");
+    const businessCard = screen.getByRole("listitem", { name: "업무 구분 후보" });
+    await user.click(within(businessCard).getByRole("button", { name: "수락" }));
+    await user.click(screen.getByRole("button", { name: /수락한 1건 반영/ }));
+    await screen.findByText("반영된 필드 1건");
+    await user.click(screen.getByRole("button", { name: /공고 미리보기/ }));
+
+    expect(await screen.findByText("부산항 준설 감리 용역")).toBeInTheDocument();
+    expect(screen.getByText("250건")).toBeInTheDocument();
+    expect(screen.queryByTestId("snapshot-progress")).toBeNull();
   });
 });
