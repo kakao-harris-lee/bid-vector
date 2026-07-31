@@ -2,14 +2,20 @@
 
 These cover ``app.services.koneps.http_client`` in isolation: the key-variant
 retry loop (401 -> next variant), JSON decoding error surfacing, and the single
-detail-page fetch/parse path. All HTTP is mocked via
-``app.services.koneps.http_client.requests.get`` -- no real KONEPS calls are
-made under ``ENVIRONMENT=test``.
+detail-page fetch/parse path.
+
+HTTP is replaced by **injecting the ``http_get`` seam** (``HttpGet`` port), not by
+monkeypatching ``requests.get`` through a string path -- so no real KONEPS calls
+are made under ``ENVIRONMENT=test`` and a module rename cannot silently disable
+the stub. The one exception is the default-transport test below, which pins that
+``_default_http_get`` maps onto ``requests.get`` with a timeout; it patches the
+``requests`` module object directly (no string path).
 """
 
 from __future__ import annotations
 
 import pytest
+import requests
 
 from app.core.config import settings
 from app.services.koneps import http_client
@@ -53,20 +59,21 @@ def test_request_openapi_retries_to_next_variant_on_401(monkeypatch):
             return _FakeResponse(status_code=401)
         return ok
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
     response, variant = http_client.request_openapi_with_key_variants(
         "https://example.test/api",
         params={"numOfRows": 10},
         service_key=raw_key,
         operation="testOperation",
+        http_get=fake_get,
     )
 
     assert response is ok
     assert variant == "url_encoded"
     assert len(calls) == 2
-    # The retried variant is pre-encoded, so it is sent as a query-string URL.
+    # The retried variant is pre-encoded, so it is sent as a query-string URL and
+    # carries no ``params`` (re-encoding it through requests would double-encode).
     assert calls[1]["url"].startswith("https://example.test/api?")
+    assert calls[1]["params"] is None
 
 
 def test_request_openapi_returns_last_response_when_all_401(monkeypatch):
@@ -77,18 +84,130 @@ def test_request_openapi_returns_last_response_when_all_401(monkeypatch):
     def fake_get(url, params=None, timeout=None):
         return _FakeResponse(status_code=401)
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
     response, variant = http_client.request_openapi_with_key_variants(
         "https://example.test/api",
         params={"numOfRows": 10},
         service_key="raw-key",
         operation="testOperation",
+        http_get=fake_get,
     )
 
     assert response.status_code == 401
     # The joined variant string lists each attempted variant name.
     assert "configured" in variant
+
+
+# --- HttpGet seam: injection, default fallback, error propagation --------------
+# The seam only replaces *how* a response is obtained. Timeout / key-variant retry
+# / throttle semantics stay owned by ``http_client``, so these tests pin both the
+# substitution and the invariants an injected transport must not be able to bend.
+
+
+def test_injected_seam_replaces_the_default_transport(monkeypatch):
+    """An injected callable is used and the default ``requests`` path is not entered."""
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "plain-key")
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_ENCODED_SERVICE_KEY", "")
+
+    def exploding_default(url, *, params, timeout):
+        raise AssertionError("default transport must not run when a seam is injected")
+
+    monkeypatch.setattr(http_client, "_default_http_get", exploding_default)
+
+    calls: list[dict] = []
+
+    def fake_get(url, *, params, timeout):
+        calls.append({"url": url, "params": params, "timeout": timeout})
+        return _FakeResponse(status_code=200, payload={"ok": True})
+
+    response, variant = http_client.request_openapi_with_key_variants(
+        "https://example.test/api",
+        params={"pageNo": 1},
+        service_key="plain-key",
+        operation="testOperation",
+        http_get=fake_get,
+    )
+
+    assert response.status_code == 200
+    assert variant == "configured"
+    # The service key is appended by ``http_client`` (not by the caller's params),
+    # and the timeout comes from settings -- an injected seam cannot skip it.
+    assert calls[0]["params"]["ServiceKey"] == "plain-key"
+    assert calls[0]["params"]["pageNo"] == 1
+    assert calls[0]["timeout"] == max(1, int(settings.KONEPS_OPENAPI_TIMEOUT_SECONDS))
+
+
+def test_seam_falls_back_to_default_transport_when_not_injected(monkeypatch):
+    """Without ``http_get`` the call routes through the single default transport."""
+    calls: list[dict] = []
+
+    def recording_default(url, *, params, timeout):
+        calls.append({"url": url, "params": params, "timeout": timeout})
+        return _FakeResponse(status_code=200, payload={"ok": True})
+
+    monkeypatch.setattr(http_client, "_default_http_get", recording_default)
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "plain-key")
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_ENCODED_SERVICE_KEY", "")
+
+    http_client.request_openapi_with_key_variants(
+        "https://example.test/api",
+        params={"pageNo": 1},
+        service_key="plain-key",
+        operation="testOperation",
+    )
+    http_client.fetch_detail_html_payload("https://example.test/detail/1")
+
+    assert [call["url"] for call in calls] == [
+        "https://example.test/api",
+        "https://example.test/detail/1",
+    ]
+    # The detail fetch carries no query params; both calls carry a timeout.
+    assert calls[1]["params"] is None
+    assert all(call["timeout"] >= 1 for call in calls)
+
+
+def test_default_transport_calls_requests_get_with_timeout(monkeypatch):
+    """``_default_http_get`` is the single ``requests.get`` site and always times out."""
+    captured: dict = {}
+
+    def fake_requests_get(url, params=None, timeout=None):
+        captured.update({"url": url, "params": params, "timeout": timeout})
+        return _FakeResponse(status_code=200)
+
+    # Patch the ``requests`` module object itself (not a dotted string path) --
+    # this is the only test that needs to reach the library boundary.
+    monkeypatch.setattr(requests, "get", fake_requests_get)
+
+    response = http_client._default_http_get(
+        "https://example.test/api", params={"pageNo": 2}, timeout=7
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "url": "https://example.test/api",
+        "params": {"pageNo": 2},
+        "timeout": 7,
+    }
+
+
+def test_seam_exception_propagates_to_caller():
+    """A transport failure is not swallowed: callers classify/retry it themselves."""
+
+    def failing_get(url, *, params, timeout):
+        raise requests.ConnectionError("connection reset")
+
+    with pytest.raises(requests.ConnectionError, match="connection reset"):
+        http_client.request_openapi_with_key_variants(
+            "https://example.test/api",
+            params={"pageNo": 1},
+            service_key="plain-key",
+            operation="testOperation",
+            http_get=failing_get,
+        )
+
+    with pytest.raises(requests.ConnectionError, match="connection reset"):
+        http_client.fetch_detail_html_payload(
+            "https://example.test/detail/1", http_get=failing_get
+        )
 
 
 def test_load_openapi_json_returns_dict_payload():
@@ -124,12 +243,13 @@ def test_fetch_detail_html_payload_parses_business_type(monkeypatch):
             "other": "ignored",
         }
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
     monkeypatch.setattr(
         "app.services.koneps.html_parsing.parse_detail_html", fake_parse
     )
 
-    result = http_client.fetch_detail_html_payload("https://example.test/detail/1")
+    result = http_client.fetch_detail_html_payload(
+        "https://example.test/detail/1", http_get=fake_get
+    )
 
     assert result == {
         "business_type_code": "1234",
@@ -139,14 +259,14 @@ def test_fetch_detail_html_payload_parses_business_type(monkeypatch):
     assert captured["html"] == "<html>detail</html>"
 
 
-def test_fetch_detail_html_payload_propagates_http_error(monkeypatch):
+def test_fetch_detail_html_payload_propagates_http_error():
     def fake_get(url, params=None, timeout=None):
         return _FakeResponse(status_code=500, raise_exc=RuntimeError("boom"))
 
-    monkeypatch.setattr("app.services.koneps.http_client.requests.get", fake_get)
-
     with pytest.raises(RuntimeError, match="boom"):
-        http_client.fetch_detail_html_payload("https://example.test/detail/1")
+        http_client.fetch_detail_html_payload(
+            "https://example.test/detail/1", http_get=fake_get
+        )
 
 
 # --- check_result_code: the consolidated resultCode envelope guard -------------

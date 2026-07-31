@@ -73,12 +73,18 @@ def normalize_request(request: CrawlRequest) -> CrawlRequest:
     )
 
 
-def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
+def collect_openapi_items(
+    request: CrawlRequest, *, http_get: http_client.HttpGet | None = None
+) -> dict[str, Any]:
     """Collect notice rows from the public KONEPS BidPublicInfoService OpenAPI.
 
     Paginates through all available pages (100 items per page) until either
     ``max_items`` unique notices are collected or the API returns no more items.
     ``totalCount`` from page 1 determines how many pages to fetch.
+
+    ``http_get`` is the HTTP 획득 seam(§4.7-3) handed down from the collector;
+    미주입이면 ``http_client`` 의 기본 ``requests`` 경로를 쓴다. Pagination/throttle
+    의미는 이 루프가 계속 소유한다(주입은 획득 방식만 바꾼다).
     """
     service_key = str(settings.KONEPS_OPENAPI_SERVICE_KEY or "").strip()
     if not service_key:
@@ -127,6 +133,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             params=params,
             service_key=service_key,
             operation=operation,
+            http_get=http_get,
         )
         if response.status_code >= 400:
             raise ValueError(

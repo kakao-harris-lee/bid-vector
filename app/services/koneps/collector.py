@@ -103,6 +103,10 @@ class KonepsCollectorService:
     # / ``_collect_opening_result_rows`` / ``_live_collection_error`` …) so tests
     # that monkeypatch those names on the service surface keep working.
 
+    def __init__(self, *, http_get: http_client.HttpGet | None = None) -> None:
+        """KONEPS HTTP 획득 seam 주입(§4.7-3) — 미주입이면 기본 ``requests`` 경로."""
+        self._http_get = http_get
+
     def collect_notices(
         self,
         request: CrawlRequest,
@@ -145,7 +149,9 @@ class KonepsCollectorService:
         openapi_source_handlers = (
             (
                 openapi.is_openapi_source,
-                lambda: collection.collect_openapi_items(normalized_request),
+                lambda: collection.collect_openapi_items(
+                    normalized_request, http_get=self._http_get
+                ),
             ),
             (
                 openapi.is_scsbid_openapi_source,
@@ -375,7 +381,7 @@ class KonepsCollectorService:
                 "KONEPS_OPENAPI_SERVICE_KEY is required for source=koneps-scsbid"
             )
 
-        categories = self._scsbid_categories_for_request(request)
+        categories = scsbid.categories_for_request(request)
         begin_token, end_token = self._scsbid_date_window(request)
         collect_reserve_detail = bool(request.collect_reserve_detail)
 
@@ -571,14 +577,12 @@ class KonepsCollectorService:
         ``last_result_*``. Error handling (the two ``raise ValueError`` paths) is
         identical to the original inline page loop.
         """
-        params = {
-            "type": "json",
-            "numOfRows": config.page_size,
-            "pageNo": page_no,
-            "inqryDiv": "1",
-            "inqryBgnDt": config.begin_token,
-            "inqryEndDt": config.end_token,
-        }
+        params = scsbid.award_page_params(
+            page_size=config.page_size,
+            page_no=page_no,
+            begin_token=config.begin_token,
+            end_token=config.end_token,
+        )
         if state.api_call_count > 0 and config.delay_seconds > 0:
             sleep(config.delay_seconds)
         response, state.key_variant = http_client.request_openapi_with_key_variants(
@@ -586,6 +590,7 @@ class KonepsCollectorService:
             params=params,
             service_key=config.service_key,
             operation=operation,
+            http_get=self._http_get,
         )
         state.api_call_count += 1
         if response.status_code >= 400:
@@ -750,30 +755,6 @@ class KonepsCollectorService:
         """
         return scsbid.has_persisted_reserve_prices(historical_record)
 
-    def _scsbid_categories_for_request(self, request: CrawlRequest) -> list[str]:
-        """Resolve the ordered, de-duplicated category list for a scsbid sweep.
-
-        Priority: ``request.categories`` > ``[request.category]`` > legacy default
-        (empty category, which maps to the 용역 operation). The legacy single
-        category path is preserved when ``categories`` is absent.
-        """
-        if request.categories:
-            raw_categories = [str(value) for value in request.categories]
-        elif request.category:
-            raw_categories = [str(request.category)]
-        else:
-            raw_categories = [str(request.category or "")]
-
-        resolved: list[str] = []
-        seen: set[str] = set()
-        for value in raw_categories:
-            normalized = value.strip().lower()
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            resolved.append(normalized)
-        return resolved or [""]
-
     def _scsbid_date_window(self, request: CrawlRequest) -> tuple[str, str]:
         """Thin delegator to ``scsbid.date_window``.
 
@@ -797,18 +778,13 @@ class KonepsCollectorService:
             return {}
 
         url = f"{settings.KONEPS_OPENAPI_SCSBID_INFO_URL.rstrip('/')}/{operation}"
-        params = {
-            "type": "json",
-            "numOfRows": settings.KONEPS_SCSBID_DETAIL_PAGE_SIZE,
-            "pageNo": 1,
-            "inqryDiv": "2",
-            "bidNtceNo": notice_number,
-        }
+        params = scsbid.reserve_detail_params(notice_number)
         response, key_variant = http_client.request_openapi_with_key_variants(
             url,
             params=params,
             service_key=service_key,
             operation=operation,
+            http_get=self._http_get,
         )
         if response.status_code >= 400:
             raise ValueError(
@@ -910,9 +886,12 @@ class KonepsCollectorService:
         Thin delegator to ``http_client.fetch_detail_html_payload``; kept as an
         instance method so external callers can use it as a bound callable
         (``business_type_enrichment``) or invoke it on a service instance
-        (``scripts/backfill_business_type.py``).
+        (``scripts/backfill_business_type.py``). The injected HTTP 획득 seam is
+        handed down so an injected collector never falls back to real ``requests``.
         """
-        return http_client.fetch_detail_html_payload(source_url)
+        return http_client.fetch_detail_html_payload(
+            source_url, http_get=self._http_get
+        )
 
     def _resolve_project_for_item(
         self,
