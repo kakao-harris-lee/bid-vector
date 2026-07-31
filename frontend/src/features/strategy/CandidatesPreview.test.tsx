@@ -188,6 +188,35 @@ beforeEach(() => {
 });
 
 describe("CandidatesPreview 스냅샷 렌더", () => {
+  it("첫 응답 전에는 '불러오는 중…' 로딩 표시로 빈 카드가 아니게 한다(Finding 3)", async () => {
+    // 응답을 붙잡아 pending 창을 관찰한다(ExperimentRunProgress 로딩 라벨 패턴).
+    let resolveFetch!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/strategy/candidates")) return pending;
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPreview();
+
+    expect(await screen.findByText("불러오는 중…")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFetch({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(snapshot())
+      } as Response);
+    });
+
+    expect(await screen.findByText("3분 전 기준")).toBeInTheDocument();
+    // 응답이 오면 로딩 표시는 사라진다.
+    expect(screen.queryByText("불러오는 중…")).toBeNull();
+  });
+
   it("저장된 스냅샷을 즉시 렌더하고 'N분 전 기준' 배지를 보여준다", async () => {
     const fetchMock = installFetchMock([snapshot()]);
     // 느슨한 recheck 를 크게 주입 — 정착-idle 이 이 창에서 추가 조회를 내지 않음을

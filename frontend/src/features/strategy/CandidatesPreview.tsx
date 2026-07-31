@@ -12,6 +12,9 @@ import { useRefreshStrategyCandidatesMutation, useStrategyCandidatesQuery } from
 const CANDIDATE_LIMIT = 5;
 const ANALYZED_LABEL = "분석 대상";
 const MATCHED_LABEL = "매칭 후보";
+/** 최초 응답 전 로딩 표시 — 스냅샷이 아직 없어 빈 카드가 되는 것을 막는다
+ *  (ExperimentRunProgress 의 `상태 조회 중…` 패턴). */
+const LOADING_LABEL = "불러오는 중…";
 /** evaluated_project_count 의 정직한 각주 — 요청 limit 의 산물이 아니다. */
 const ANALYZED_HINT = "스냅샷 계산 시 고정 분석 예산 기준 — 요청 개수와 무관합니다.";
 
@@ -79,6 +82,9 @@ export function CandidatesPreview({ pollIntervalMs, idleRecheckMs }: CandidatesP
           />
           <span>우선순위 높음만</span>
         </label>
+        {query.isLoading ? (
+          <p className="text-xs text-[var(--color-muted)]">{LOADING_LABEL}</p>
+        ) : null}
         {query.error ? (
           <p className="text-xs text-[var(--color-danger)]" role="alert">
             {query.error.message ?? "후보를 불러오지 못했습니다."}
