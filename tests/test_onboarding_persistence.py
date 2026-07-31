@@ -22,7 +22,6 @@ import json
 import app.core.config as app_config
 import pytest
 from alembic import command
-from alembic.config import Config
 from sqlalchemy import MetaData, Table, create_engine, inspect
 
 from app.core.database import Base
@@ -40,6 +39,7 @@ from app.services.onboarding.apply import (
     OnboardingApplyError,
     apply_onboarding_decisions,
 )
+from tests.support.alembic_config import make_alembic_config
 from tests.test_schema_drift import MIGRATION_ADDED_COLUMNS, MIGRATION_OWNED_TABLES
 
 _APPLY_URL = "/api/v1/operator/onboarding-suggestions/apply"
@@ -116,7 +116,8 @@ def test_migration_round_trip(tmp_path):
         assert _TABLE not in inspect(engine).get_table_names()
 
         app_config.settings.DATABASE_URL = url
-        cfg = Config("alembic.ini")
+        # 파일 없는 Config — ini 를 읽으면 env.py 가 전역 로깅을 재설정한다.
+        cfg = make_alembic_config()
         command.upgrade(cfg, "head")
 
         inspector = inspect(engine)

@@ -439,8 +439,9 @@ def test_migration_applies_and_rolls_back_on_populated_table(tmp_path, monkeypat
     downgrade → 컬럼 제거를 확인한다.
     """
     from alembic import command
-    from alembic.config import Config
+
     from app.core.config import settings as app_settings
+    from tests.support.alembic_config import make_alembic_config
 
     db_path = tmp_path / "verify_mig.db"
     url = f"sqlite:///{db_path}"
@@ -459,12 +460,10 @@ def test_migration_applies_and_rolls_back_on_populated_table(tmp_path, monkeypat
 
     # env.py 는 settings.DATABASE_URL 로 sqlalchemy.url 을 덮으므로 그것을 스크래치로 지정.
     monkeypatch.setattr(app_settings, "DATABASE_URL", url)
-    # ``Config("alembic.ini")`` 대신 파일 없는 Config 를 쓴다 — env.py 가 ini 의
-    # config_file_name 이 있으면 ``fileConfig(disable_existing_loggers=True)`` 로 전역
-    # 로깅을 재설정해 이후 caplog 기반 테스트를 오염시키기 때문이다. script_location 만
-    # 지정하면 마이그레이션 실행에 충분하다(로깅 설정은 건드리지 않는다).
-    cfg = Config()
-    cfg.set_main_option("script_location", "alembic")
+    # ``Config("alembic.ini")`` 대신 파일 없는 Config 를 쓴다 — ini 를 읽으면 env.py 가
+    # ``fileConfig`` 로 전역 로깅을 재설정하기 때문이다(공용 빌더/회귀 가드는
+    # ``tests/support/alembic_config.py``, ``tests/test_alembic_logging_isolation.py``).
+    cfg = make_alembic_config()
     command.stamp(cfg, "d8b3f0a1c9e2")
     command.upgrade(cfg, "a1f4c8e7b2d9")
 

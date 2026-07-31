@@ -48,12 +48,12 @@ import tempfile
 
 import pytest
 from alembic import command
-from alembic.config import Config
 from sqlalchemy import MetaData, Table, create_engine, inspect
 
 import app.core.config as app_config
 from app.core.database import Base
 from app.models import models  # noqa: F401  -- registers all tables on Base.metadata
+from tests.support.alembic_config import make_alembic_config
 
 # Tables created by an alembic migration (not part of the historical baseline).
 MIGRATION_OWNED_TABLES = {
@@ -149,7 +149,9 @@ def _build_migration_schema() -> dict[str, set[str]]:
         # alembic/env.py reads settings.DATABASE_URL at env-load time; point it at
         # the isolated sqlite DB for the duration of the upgrade.
         app_config.settings.DATABASE_URL = url
-        command.upgrade(Config("alembic.ini"), "head")
+        # File-less Config: reading alembic.ini would make env.py re-configure global
+        # logging (see tests/support/alembic_config.py).
+        command.upgrade(make_alembic_config(), "head")
 
         schema = _table_column_names(engine)
         engine.dispose()
