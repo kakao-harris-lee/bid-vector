@@ -37,7 +37,7 @@ bid-vector/
 ## Next Steps
 - [ ] Install dependencies
 - [ ] Configure MySQL database
-- [ ] Set up Redis cache
+- [x] ~~Set up Redis cache~~ — 미채택(SUPERSEDED): 스택에 Redis 없음. Celery 브로커는 RabbitMQ, 결과 백엔드는 PostgreSQL이다. 근거·역할 경계는 [docs/operations/celery-broker-and-result-backend.md](../docs/operations/celery-broker-and-result-backend.md) 참고.
 - [ ] Run development server
 - [ ] Implement WebSocket notifications
 - [ ] Add Celery for async tasks

@@ -190,6 +190,7 @@ G-2 운영 검증에서 자주 쓰는 엔드포인트:
 - [docs/production-smoke-test.md](docs/production-smoke-test.md): 운영 smoke test 절차
 - [docs/ml-image-separation.md](docs/ml-image-separation.md): ML 이미지/의존성 분리
 - [docs/ml-task-separation.md](docs/ml-task-separation.md): ML 작업 큐 분리
+- [docs/operations/celery-broker-and-result-backend.md](docs/operations/celery-broker-and-result-backend.md): Celery 브로커(RabbitMQ)·결과 백엔드(PostgreSQL) 역할 경계
 - [docs/operations/ml-release-business-group.md](docs/operations/ml-release-business-group.md): 업종 그룹 인식 ML release 절차
 
 ## 운영 원칙
