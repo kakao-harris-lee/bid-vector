@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.core.config import settings
 from app.services.ml_release.base import _MLReleaseBase
+from app.services.ml_release.contracts import (
+    MLReleaseJsonDocument,
+    is_json_decode_error,
+    json_document_error_detail,
+)
 from app.services.ml_release.storage import RemoteObjectStorageClient
 
 
@@ -118,7 +124,7 @@ class _PreflightMixin(_MLReleaseBase):
         manifest_path = self._resolve_manifest_path(manifest_ref)
         manifest_summary["path"] = str(manifest_path)
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_text = manifest_path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
             checks.append(
                 self._rollout_check(
@@ -130,18 +136,22 @@ class _PreflightMixin(_MLReleaseBase):
                 )
             )
             return None, manifest_path
-        except json.JSONDecodeError as exc:
-            checks.append(
-                self._rollout_check(
-                    "manifest_load",
-                    False,
-                    "invalid_json",
-                    f"Release manifest is not valid JSON: {manifest_path}",
-                    error=str(exc),
+        # 원문 매핑 그대로 복원한다 — 이 뒤에서 서명을 재계산해 비교하므로 키가 하나라도
+        # 추가/누락되면 검증이 깨진다(contracts.MLReleaseJsonDocument 참고).
+        try:
+            manifest = MLReleaseJsonDocument.model_validate_json(manifest_text).root
+        except ValidationError as exc:
+            if is_json_decode_error(exc):
+                checks.append(
+                    self._rollout_check(
+                        "manifest_load",
+                        False,
+                        "invalid_json",
+                        f"Release manifest is not valid JSON: {manifest_path}",
+                        error=json_document_error_detail(exc),
+                    )
                 )
-            )
-            return None, manifest_path
-        if not isinstance(manifest, dict):
+                return None, manifest_path
             checks.append(
                 self._rollout_check(
                     "manifest_load",

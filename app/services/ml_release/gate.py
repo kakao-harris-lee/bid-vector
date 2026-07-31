@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from pydantic import ValidationError
 
 from app.core.config import settings
 from app.services.ml_release.base import _MLReleaseBase
+from app.services.ml_release.contracts import (
+    MLReleaseJsonDocument,
+    is_json_decode_error,
+)
 
 
 class _PromotionGateMixin(_MLReleaseBase):
@@ -33,15 +38,17 @@ class _PromotionGateMixin(_MLReleaseBase):
             return None
         path = self._resolve_existing_path(raw_path, expect_directory=False)
         try:
-            report = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Predictor backtest report is not valid JSON: {path}"
-            ) from exc
-        if not isinstance(report, dict):
+            report = MLReleaseJsonDocument.model_validate_json(
+                path.read_text(encoding="utf-8")
+            ).root
+        except ValidationError as exc:
+            if is_json_decode_error(exc):
+                raise ValueError(
+                    f"Predictor backtest report is not valid JSON: {path}"
+                ) from exc
             raise ValueError(
                 f"Predictor backtest report must decode to a JSON object: {path}"
-            )
+            ) from exc
         report["report_path"] = self._to_portable_path(path)
         return report
 

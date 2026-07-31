@@ -7,10 +7,10 @@ verbatim from the original ``storage.py`` module."""
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from app.core.time import utc_now
+from app.services.ml_release.contracts import ReleaseStorageProbeObject
 from app.services.ml_release.storage.base import _ObjectStorageBase
 
 
@@ -120,9 +120,9 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(
-                json.dumps(
-                    {"probe": "ml-release-rollout", "created_at": utc_now().isoformat()}
-                ),
+                ReleaseStorageProbeObject(
+                    created_at=utc_now().isoformat()
+                ).model_dump_json(),
                 encoding="utf-8",
             )
             bytes_written = destination.stat().st_size
@@ -360,9 +360,9 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             client.put_object(
                 Bucket=bucket,
                 Key=key,
-                Body=json.dumps(
-                    {"probe": "ml-release-rollout", "created_at": utc_now().isoformat()}
-                ).encode("utf-8"),
+                Body=ReleaseStorageProbeObject(
+                    created_at=utc_now().isoformat()
+                ).model_dump_json().encode("utf-8"),
                 ContentType="application/json",
             )
             client.delete_object(Bucket=bucket, Key=key)

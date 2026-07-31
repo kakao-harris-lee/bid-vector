@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.core.config import settings
 from app.services.ml_release import MLReleasePromotionService
+from app.services.ml_release.contracts import (
+    MLReleaseJsonDocument,
+    is_json_decode_error,
+    json_document_error_detail,
+)
 
 
 class _MLReleaseReportMixin:
@@ -94,6 +100,21 @@ class _MLReleaseReportMixin:
                 timestamp = 0.0
         return timestamp, str(summary.get("release_tag") or summary.get("manifest_path") or "")
 
+    @staticmethod
+    def _unreadable_manifest_fields(detail: str) -> dict[str, str | bool]:
+        """Summary fields for a manifest that could not be read or decoded.
+
+        One helper for the three decode-failure branches (IO error, corrupt JSON,
+        non-object payload) so they cannot drift into reporting different gate
+        statuses for the same class of problem.
+        """
+        return {
+            "signature_status": "invalid",
+            "gate_status": "invalid",
+            "gate_passed": False,
+            "detail": detail,
+        }
+
     def _read_manifest_summary(self, path: Path) -> dict[str, Any]:
         """Read one release manifest into a compact operations summary."""
         summary: dict[str, Any] = {
@@ -111,23 +132,23 @@ class _MLReleaseReportMixin:
             "best_predictor_name": None,
             "detail": "",
         }
+        # 서명 재계산에 쓰이므로 원문 매핑을 그대로 복원한다
+        # (contracts.MLReleaseJsonDocument).
         try:
-            manifest = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            summary.update({
-                "signature_status": "invalid",
-                "gate_status": "invalid",
-                "gate_passed": False,
-                "detail": f"Manifest could not be read: {exc}",
-            })
+            manifest = MLReleaseJsonDocument.model_validate_json(
+                path.read_text(encoding="utf-8")
+            ).root
+        except OSError as exc:
+            summary.update(self._unreadable_manifest_fields(f"Manifest could not be read: {exc}"))
             return summary
-        if not isinstance(manifest, dict):
-            summary.update({
-                "signature_status": "invalid",
-                "gate_status": "invalid",
-                "gate_passed": False,
-                "detail": "Manifest JSON is not an object.",
-            })
+        except ValidationError as exc:
+            summary.update(
+                self._unreadable_manifest_fields(
+                    f"Manifest could not be read: {json_document_error_detail(exc)}"
+                    if is_json_decode_error(exc)
+                    else "Manifest JSON is not an object."
+                )
+            )
             return summary
 
         summary["release_tag"] = str(manifest.get("release_tag") or path.stem)

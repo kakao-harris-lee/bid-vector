@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from pydantic import JsonValue
 
+from app.ai.predictors.artifact_contracts import (
+    ArtifactScalar,
+    PersistedLSTMArtifact,
+    read_persisted_artifact,
+)
 from app.ai.predictors.base import (
     BasePricePredictor,
     PredictionResult,
@@ -21,6 +26,9 @@ from app.ai.predictors.historical import (
     summarize_historical_records,
 )
 from app.core.config import settings
+
+# 아티팩트 로딩 실패 문구의 주어(단일 출처 — 기존 오류 메시지를 그대로 유지한다).
+_LSTM_ARTIFACT_LABEL = "LSTM model artifact"
 
 _DEFAULT_LSTM_BLEND_WEIGHTS = {
     "lstm": 0.68,
@@ -93,50 +101,48 @@ class LSTMBidRatePredictor(BasePricePredictor):
 
 
 def load_lstm_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, Any]:
-    """Load one persisted LSTM artifact from JSON or reuse an embedded dictionary."""
-    if isinstance(model_source, dict):
-        raw_artifact = dict(model_source)
-    else:
-        path = Path(model_source)
-        try:
-            raw_artifact = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise ValueError(f"LSTM model artifact was not found: {path}") from exc
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"LSTM model artifact is not valid JSON: {path}") from exc
+    """Load one persisted LSTM artifact from JSON or reuse an embedded dictionary.
 
-    weights = raw_artifact.get("weights") if isinstance(raw_artifact.get("weights"), dict) else raw_artifact
+    The persisted JSON is promoted into the declared
+    :class:`~app.ai.predictors.artifact_contracts.PersistedLSTMArtifact` contract
+    first; the normalized mapping returned here (and every coercion expression
+    that builds it) is unchanged, so inference output is identical.
+    """
+    raw_artifact = read_persisted_artifact(
+        model_source, model=PersistedLSTMArtifact, label=_LSTM_ARTIFACT_LABEL
+    )
+    weights = raw_artifact.weight_block()
     gate_weights = {
-        "W_i": _coerce_matrix(weights.get("W_i"), name="W_i"),
-        "U_i": _coerce_matrix(weights.get("U_i"), name="U_i"),
-        "b_i": _coerce_vector(weights.get("b_i"), name="b_i"),
-        "W_f": _coerce_matrix(weights.get("W_f"), name="W_f"),
-        "U_f": _coerce_matrix(weights.get("U_f"), name="U_f"),
-        "b_f": _coerce_vector(weights.get("b_f"), name="b_f"),
-        "W_o": _coerce_matrix(weights.get("W_o"), name="W_o"),
-        "U_o": _coerce_matrix(weights.get("U_o"), name="U_o"),
-        "b_o": _coerce_vector(weights.get("b_o"), name="b_o"),
-        "W_c": _coerce_matrix(weights.get("W_c"), name="W_c"),
-        "U_c": _coerce_matrix(weights.get("U_c"), name="U_c"),
-        "b_c": _coerce_vector(weights.get("b_c"), name="b_c"),
-        "dense_W": _coerce_matrix(weights.get("dense_W") or weights.get("dense_weight"), name="dense_W"),
-        "dense_b": _coerce_vector(weights.get("dense_b") or weights.get("dense_bias"), name="dense_b"),
+        "W_i": _coerce_matrix(weights.W_i, name="W_i"),
+        "U_i": _coerce_matrix(weights.U_i, name="U_i"),
+        "b_i": _coerce_vector(weights.b_i, name="b_i"),
+        "W_f": _coerce_matrix(weights.W_f, name="W_f"),
+        "U_f": _coerce_matrix(weights.U_f, name="U_f"),
+        "b_f": _coerce_vector(weights.b_f, name="b_f"),
+        "W_o": _coerce_matrix(weights.W_o, name="W_o"),
+        "U_o": _coerce_matrix(weights.U_o, name="U_o"),
+        "b_o": _coerce_vector(weights.b_o, name="b_o"),
+        "W_c": _coerce_matrix(weights.W_c, name="W_c"),
+        "U_c": _coerce_matrix(weights.U_c, name="U_c"),
+        "b_c": _coerce_vector(weights.b_c, name="b_c"),
+        "dense_W": _coerce_matrix(weights.dense_W or weights.dense_weight, name="dense_W"),
+        "dense_b": _coerce_vector(weights.dense_b or weights.dense_bias, name="dense_b"),
     }
     hidden_size = int(gate_weights["b_i"].shape[0])
     _validate_lstm_shapes(gate_weights, hidden_size=hidden_size)
 
     return {
-        "artifact_version": str(raw_artifact.get("artifact_version") or "1"),
-        "model_version": str(raw_artifact.get("model_version") or "v2.0-lstm"),
-        "sequence_length": max(3, int(raw_artifact.get("sequence_length") or 8)),
-        "input_center": float(raw_artifact.get("input_center") or 0.9),
-        "input_scale": max(float(raw_artifact.get("input_scale") or 0.05), 1e-6),
-        "output_scale": max(float(raw_artifact.get("output_scale") or 0.03), 1e-6),
-        "output_bias": float(raw_artifact.get("output_bias") or 0.9),
-        "scenario_spread_multiplier": max(float(raw_artifact.get("scenario_spread_multiplier") or 1.0), 0.2),
-        "confidence_bias": float(raw_artifact.get("confidence_bias") or 0.0),
+        "artifact_version": str(raw_artifact.artifact_version or "1"),
+        "model_version": str(raw_artifact.model_version or "v2.0-lstm"),
+        "sequence_length": max(3, int(raw_artifact.sequence_length or 8)),
+        "input_center": float(raw_artifact.input_center or 0.9),
+        "input_scale": max(float(raw_artifact.input_scale or 0.05), 1e-6),
+        "output_scale": max(float(raw_artifact.output_scale or 0.03), 1e-6),
+        "output_bias": float(raw_artifact.output_bias or 0.9),
+        "scenario_spread_multiplier": max(float(raw_artifact.scenario_spread_multiplier or 1.0), 0.2),
+        "confidence_bias": float(raw_artifact.confidence_bias or 0.0),
         "blend_weights": _normalize_weights(
-            raw_artifact.get("blend_weights"),
+            raw_artifact.blend_weights,
             defaults=_DEFAULT_LSTM_BLEND_WEIGHTS,
         ),
         "weights": gate_weights,
@@ -401,9 +407,16 @@ def _build_lstm_explanation(
     return " ".join(details)
 
 
-def _normalize_weights(raw_weights: Any, *, defaults: dict[str, float]) -> dict[str, float]:
-    """Normalize optional blend weights into a stable sum-to-one mapping."""
-    if not isinstance(raw_weights, dict):
+def _normalize_weights(
+    raw_weights: dict[str, ArtifactScalar] | None, *, defaults: dict[str, float]
+) -> dict[str, float]:
+    """Normalize optional blend weights into a stable sum-to-one mapping.
+
+    ``None`` covers both "absent" and "present but not a mapping" — the artifact
+    contract already folds the latter into absence, so the previous
+    ``isinstance(raw_weights, dict)`` branch has the same meaning here.
+    """
+    if raw_weights is None:
         normalized = dict(defaults)
     else:
         normalized = {
@@ -416,7 +429,7 @@ def _normalize_weights(raw_weights: Any, *, defaults: dict[str, float]) -> dict[
     return {key: value / total_weight for key, value in normalized.items()}
 
 
-def _coerce_matrix(raw_value: Any, *, name: str) -> np.ndarray:
+def _coerce_matrix(raw_value: JsonValue, *, name: str) -> np.ndarray:
     """Coerce one persisted matrix into a 2D numpy array."""
     if raw_value is None:
         raise ValueError(f"Missing required LSTM weight '{name}'")
@@ -428,7 +441,7 @@ def _coerce_matrix(raw_value: Any, *, name: str) -> np.ndarray:
     return array
 
 
-def _coerce_vector(raw_value: Any, *, name: str) -> np.ndarray:
+def _coerce_vector(raw_value: JsonValue, *, name: str) -> np.ndarray:
     """Coerce one persisted vector into a 1D numpy array."""
     if raw_value is None:
         raise ValueError(f"Missing required LSTM weight '{name}'")

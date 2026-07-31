@@ -13,6 +13,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from pydantic import ValidationError  # noqa: E402 - follows the sys.path bootstrap
+
+from app.ai.predictors.artifact_contracts import (  # noqa: E402
+    StrictArtifactSummaryDocument,
+    artifact_contract_error_kind,
+    artifact_contract_error_location,
+)
 from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
 
 
@@ -24,19 +31,37 @@ class PreflightResult:
 
 def evaluate_preflight_gate(manifest_path: "Path | str") -> PreflightResult:
     """manifest.summary.group_calibration의 각 그룹 sample_count를 확인해
-    settings.GROUP_CALIBRATION_MIN_SAMPLES 미달 시 거부."""
+    settings.GROUP_CALIBRATION_MIN_SAMPLES 미달 시 거부.
+
+    읽기는 predictor 아티팩트와 같은 계약을 쓰지만 **엄격 변형**
+    (``StrictArtifactSummaryDocument``)을 쓴다: 게이트에서 추론 경로의 관용을 쓰면 손상된
+    ``summary``/표가 "블록 없음"으로 접혀 거부가 통과로 바뀐다. 게이트는 거부가 안전한
+    방향이므로 위반을 접지 않고 fail-closed 로 떨어뜨리고, 사유에 **위반 위치**를 담는다
+    (블록 자체가 없는 아티팩트는 종전처럼 통과).
+    """
     from app.core.config import settings
 
     path = Path(manifest_path)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        document = StrictArtifactSummaryDocument.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except ValidationError as exc:
+        if artifact_contract_error_kind(exc) == "json":
+            return PreflightResult(
+                ok=False, reason=f"manifest 읽기 실패: {exc.errors()[0].get('msg')}"
+            )
+        location = artifact_contract_error_location(exc)
+        if not location:
+            return PreflightResult(ok=False, reason="manifest가 JSON 객체가 아님")
+        return PreflightResult(
+            ok=False,
+            reason=f"manifest 계약 위반({location}): {exc.errors()[0].get('msg')}",
+        )
     except Exception as exc:
         return PreflightResult(ok=False, reason=f"manifest 읽기 실패: {exc}")
 
-    if not isinstance(payload, dict):
-        return PreflightResult(ok=False, reason="manifest가 JSON 객체가 아님")
-
-    calibration = ((payload.get("summary") or {}).get("group_calibration") or {})
+    calibration = document.summary.group_calibration if document.summary else {}
     if not calibration:
         # 그룹 캘리브레이션 블록이 없으면 gate를 통과시킴 (선택적 블록)
         return PreflightResult(ok=True)
@@ -242,6 +267,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _serialize_payload(payload: dict[str, Any]) -> str:
+    # CLI 표준출력 포맷팅은 ``json.dumps`` 를 유지한다: payload 는 서비스가 조립한 자유형식
+    # 결과(manifest·preflight·remote 결과의 합집합)이고 ``default=str`` 폴백에 의존한다.
+    # pydantic 직렬화로 바꾸면 직렬화 불가 값에서 폴백 대신 경고/변형이 발생한다.
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 

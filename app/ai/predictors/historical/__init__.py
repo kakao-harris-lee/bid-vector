@@ -15,11 +15,10 @@ historic ``from app.ai.predictors.historical import <name>`` surface is unchange
 
 from __future__ import annotations
 
-import json
 from math import sqrt
-from pathlib import Path
 from typing import Any
 
+from app.ai.predictors.artifact_contracts import CalibrationValue
 from app.ai.predictors.base import (
     BasePricePredictor,
     PredictionResult,
@@ -33,6 +32,7 @@ from app.ai.predictors.historical.base_rate import (
 from app.ai.predictors.historical.calibration import (
     apply_probability_calibration,
     calibration_raw_signal,
+    load_active_artifact_calibration_blocks,
     load_probability_calibration,
 )
 from app.ai.predictors.historical.procurement_bands import (
@@ -91,6 +91,7 @@ __all__ = [
     "estimate_historical_confidence",
     "get_t_critical",
     "GOODS_BAND_RULES",
+    "load_active_artifact_calibration_blocks",
     "load_group_calibration",
     "load_probability_calibration",
     "normalize_agency_name",
@@ -108,29 +109,18 @@ __all__ = [
 ]
 
 
-def load_group_calibration() -> dict[str, dict[str, float | int]]:
+def load_group_calibration() -> dict[str, dict[str, CalibrationValue]]:
     """Read summary.group_calibration from the active manifest, if present.
 
     Best-effort: any IO/JSON failure or missing block returns an empty dict so
-    callers can safely fall through to the legacy historical statistics.
+    callers can safely fall through to the legacy historical statistics. The read
+    itself is delegated to
+    :func:`~app.ai.predictors.historical.calibration.load_active_artifact_calibration_blocks`
+    so the group and probability blocks share one decode + degrade policy; this
+    thin wrapper stays in the package namespace because it is the monkeypatch seam
+    the golden / business-group tests rely on.
     """
-    from app.core.config import settings
-
-    manifest_path_raw = (settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
-    if not manifest_path_raw:
-        return {}
-    candidate = Path(manifest_path_raw)
-    if not candidate.is_file():
-        return {}
-    try:
-        payload = json.loads(candidate.read_text())
-    except Exception:
-        return {}
-    summary = payload.get("summary") if isinstance(payload, dict) else None
-    if not isinstance(summary, dict):
-        return {}
-    calibration = summary.get("group_calibration")
-    return calibration if isinstance(calibration, dict) else {}
+    return load_active_artifact_calibration_blocks().group_calibration
 
 
 class HistoricalStatisticalPredictor(BasePricePredictor):
