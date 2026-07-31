@@ -34,7 +34,8 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.time import kst_now, utc_now
-from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
+from app.schemas.koneps_items import KonepsCollectedItem
+from app.schemas.schemas import CrawlRequest
 from app.services.koneps import http_client, openapi, parsing
 from app.services.koneps.field_contract_observer import FieldContractObservation
 
@@ -103,7 +104,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
         "inqryEndDt": f"{date_token}2359",
     }
 
-    parsed_items: list[dict[str, Any]] = []
+    parsed_items: list[KonepsCollectedItem] = []
     seen_notice_numbers: set[str] = set()
     total_count = 0
     result_code = ""
@@ -163,7 +164,7 @@ def collect_openapi_items(request: CrawlRequest) -> dict[str, Any]:
             )
             if parsed_item is None:
                 continue
-            notice_number = str(parsed_item["notice_number"])
+            notice_number = str(parsed_item.notice_number)
             if notice_number in seen_notice_numbers:
                 continue
             seen_notice_numbers.add(notice_number)
@@ -221,16 +222,23 @@ def build_mock_items(
     request: CrawlRequest,
     mode: str = "mock",
     fallback_reason: str | None = None,
-    fallback_metadata: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Build deterministic mock notice data while live crawling is under construction."""
+    # live 실패 폴백이 싣는 분류 3개(category/stage/retryable)만 오는 좁은 bag —
+    # ``dict[str, Any]`` 대신 실제 값 타입을 선언한다(경계 계약 명시).
+    fallback_metadata: dict[str, str | bool | None] | None = None,
+) -> list[KonepsCollectedItem]:
+    """Build deterministic mock notice data while live crawling is under construction.
+
+    검증한 모델을 바로 dict 로 강등하지 않고(``model_dump`` 제거) 그대로 반환한다 —
+    직렬화는 경계(HTTP 응답 / celery 반환)에서 ``serialize_collect_payload`` 가 한 번만
+    수행한다.
+    """
     closing_at = utc_now() + timedelta(days=3)
-    target_stamp = request.target_date.replace("-", "")
+    target_stamp = (request.target_date or "").replace("-", "")
     source_root = settings.KONEPS_BASE_URL.rstrip("/")
     fallback_metadata = fallback_metadata or {}
 
     mock_items = [
-        CrawlNoticeItem(
+        KonepsCollectedItem(
             notice_number=f"KONEPS-{target_stamp}-001",
             title=f"{request.keyword} {request.category} 유지관리 용역",
             base_amount=125000000.0,
@@ -249,7 +257,7 @@ def build_mock_items(
                 **fallback_metadata,
             },
         ),
-        CrawlNoticeItem(
+        KonepsCollectedItem(
             notice_number=f"KONEPS-{target_stamp}-002",
             title=f"{request.keyword} 데이터 분석 플랫폼 구축",
             base_amount=98000000.0,
@@ -270,4 +278,25 @@ def build_mock_items(
         ),
     ]
 
-    return [item.model_dump(mode="json") for item in mock_items[: request.max_items]]
+    return mock_items[: request.max_items]
+
+
+def serialize_collect_payload(response: dict[str, Any]) -> dict[str, Any]:
+    """수집 결과를 **경계 payload**(순수 JSON 값)로 한 번만 직렬화한다.
+
+    수집 내부에서는 ``KonepsCollectedItem`` 모델이 흐르고, dict 강등은 여기 한 곳에서만
+    일어난다(HTTP 응답 = ``POST /operations/crawl``, celery 반환 = 수집 태스크). 모델을
+    만들자마자 ``model_dump`` 로 되돌리던 "검증 후 타입 버리기" 안티패턴을 대체한다.
+
+    HTTP 응답은 ``CrawlResponse`` -> ``CrawlNoticeItem`` 으로 좁혀 나가므로 내부 전용
+    필드(``award_floor_rate`` / ``eligibility_raw``)는 스펙에 노출되지 않는다.
+    이미 dict 인 item(외부 호출부가 손으로 만든 payload)은 그대로 통과시킨다.
+    """
+    items = response.get("items") or []
+    return {
+        **response,
+        "items": [
+            item.model_dump(mode="json") if isinstance(item, KonepsCollectedItem) else item
+            for item in items
+        ],
+    }

@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.database import task_session
 from app.models.models import CrawlJob
 from app.schemas.schemas import CrawlRequest
+from app.services.koneps.collection import serialize_collect_payload
 from app.services.koneps.collector import KonepsCollectorService
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,9 @@ def run_koneps_collection_job(
             if deferred_reserve:
                 enqueue_deferred_reserve_detail_backfill(list(deferred_reserve))
 
-            return result
+            # celery 경계: 브로커/결과 백엔드로 나가는 payload 는 순수 JSON 값이어야
+            # 하므로 수집 DTO 직렬화는 여기 한 번만 수행한다(수집 내부는 모델 유지).
+            return serialize_collect_payload(result)
         except SoftTimeLimitExceeded as exc:
             # Stop the redelivery loop: mark this run failed and ack the message so
             # the same payload is not re-run forever past the soft limit.

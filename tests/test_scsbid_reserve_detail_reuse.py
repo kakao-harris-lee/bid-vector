@@ -24,82 +24,12 @@ from app.core.config import settings
 from app.models.models import HistoricalData
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
-
-
-class FakeOpenApiResponse:
-    status_code = 200
-    text = "{}"
-
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
-def _award_body(items, *, total_count, num_of_rows, page_no=1):
-    return {
-        "response": {
-            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
-            "body": {
-                "items": {"item": items},
-                "numOfRows": str(num_of_rows),
-                "pageNo": str(page_no),
-                "totalCount": str(total_count),
-            },
-        }
-    }
-
-
-def _award_item(notice_number, *, title="테스트 낙찰", amount="88,000,000"):
-    return {
-        "bidNtceNo": notice_number,
-        "bidNtceOrd": "000",
-        "bidClsfcNo": "0",
-        "rbidNo": "0",
-        "bidNtceNm": title,
-        "prtcptCnum": "10",
-        "bidwinnrNm": "낙찰사",
-        "bidwinnrBizno": "1234567890",
-        "sucsfbidAmt": amount,
-        "sucsfbidRate": "88.0",
-        "rlOpengDt": "2026-05-13 11:00:00",
-        "dminsttNm": "서울특별시",
-        "rgstDt": "2026-05-13 12:00:00",
-        "fnlSucsfDate": "2026-05-13",
-    }
-
-
-def _reserve_detail_body():
-    """A reserve-detail response carrying two reserve-price rows."""
-    return {
-        "response": {
-            "header": {"resultCode": "00", "resultMsg": "NORMAL"},
-            "body": {
-                "items": {
-                    "item": [
-                        {
-                            "compnoRsrvtnPrceSno": "1",
-                            "bsisPlnprc": "101000000",
-                            "plnprc": "100000000",
-                            "bssamt": "100000000",
-                            "drwtYn": "Y",
-                        },
-                        {
-                            "compnoRsrvtnPrceSno": "2",
-                            "bsisPlnprc": "102000000",
-                            "plnprc": "100000000",
-                            "bssamt": "100000000",
-                            "drwtYn": "N",
-                        },
-                    ]
-                },
-                "numOfRows": "100",
-                "pageNo": "1",
-                "totalCount": "2",
-            },
-        }
-    }
+from tests.support.koneps_openapi_fakes import (
+    FakeOpenApiResponse,
+    award_body as _award_body,
+    award_item as _award_item,
+    reserve_detail_body as _reserve_detail_body,
+)
 
 
 def _scsbid_request():
@@ -151,7 +81,7 @@ def test_persisted_reserve_skips_reserve_detail_fetch(test_db, monkeypatch):
     assert result["metadata"]["reserve_detail_reused_count"] == 1
     assert result["metadata"]["reserve_detail_collected_count"] == 0
     # The item carries an empty list (not fetched) so persist preserves the row.
-    assert result["items"][0]["metadata"]["reserve_prices"] == []
+    assert result["items"][0].metadata["reserve_prices"] == []
 
 
 def test_new_award_still_fetches_reserve_detail(test_db, monkeypatch):
@@ -186,9 +116,9 @@ def test_new_award_still_fetches_reserve_detail(test_db, monkeypatch):
     assert result["metadata"]["reserve_detail_reused_count"] == 1
     assert result["metadata"]["reserve_detail_collected_count"] == 1
     new_item = next(
-        item for item in result["items"] if item["notice_number"] == "NEW-AWARD"
+        item for item in result["items"] if item.notice_number == "NEW-AWARD"
     )
-    assert new_item["metadata"]["reserve_prices"] == [101000000.0, 102000000.0]
+    assert new_item.metadata["reserve_prices"] == [101000000.0, 102000000.0]
 
 
 def test_persisted_reserve_set_loaded_with_single_query(test_db, monkeypatch):

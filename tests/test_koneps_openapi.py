@@ -8,6 +8,7 @@ covered by the collector/scsbid suites.
 """
 
 from app.schemas.schemas import CrawlRequest
+from app.schemas.koneps_items import ScsbidReserveDetail
 from app.services.koneps import openapi
 
 
@@ -124,16 +125,16 @@ def test_build_openapi_notice_item():
         raw_item, request=request, operation="getBidPblancListInfoCnstwk"
     )
     assert item is not None
-    assert item["notice_number"] == "20250101-001"
-    assert item["title"] == "테스트 공사"
-    assert item["base_amount"] == 1000000.0
-    assert item["estimated_amount"] == 900000.0
-    assert item["region"] == "서울"
-    assert item["metadata"]["mode"] == "openapi"
-    assert item["metadata"]["openapi_operation"] == "getBidPblancListInfoCnstwk"
-    assert item["metadata"]["demand_agency"] == "서울시청"
+    assert item.notice_number == "20250101-001"
+    assert item.title == "테스트 공사"
+    assert item.base_amount == 1000000.0
+    assert item.estimated_amount == 900000.0
+    assert item.region == "서울"
+    assert item.metadata["mode"] == "openapi"
+    assert item.metadata["openapi_operation"] == "getBidPblancListInfoCnstwk"
+    assert item.metadata["demand_agency"] == "서울시청"
     # No sucsfbidLwltRate on this row -> award floor rate stays None.
-    assert item["award_floor_rate"] is None
+    assert item.award_floor_rate is None
 
 
 def test_build_openapi_notice_item_extracts_award_floor_rate():
@@ -150,13 +151,13 @@ def test_build_openapi_notice_item_extracts_award_floor_rate():
             raw, request=request, operation="getBidPblancListInfoServc"
         )
 
-    assert _item("88")["award_floor_rate"] == 0.88
-    assert _item("87.995")["award_floor_rate"] == 0.87995
-    assert _item(88)["award_floor_rate"] == 0.88
+    assert _item("88").award_floor_rate == 0.88
+    assert _item("87.995").award_floor_rate == 0.87995
+    assert _item(88).award_floor_rate == 0.88
     # Missing / empty / zero-like values degrade to None (never fabricated).
-    assert _item("")["award_floor_rate"] is None
-    assert _item("0")["award_floor_rate"] is None
-    assert _item(None)["award_floor_rate"] is None
+    assert _item("").award_floor_rate is None
+    assert _item("0").award_floor_rate is None
+    assert _item(None).award_floor_rate is None
 
 
 def test_build_scsbid_award_item_extracts_award_floor_rate_when_present():
@@ -164,13 +165,7 @@ def test_build_scsbid_award_item_extracts_award_floor_rate_when_present():
     from app.services.koneps import scsbid
 
     request = CrawlRequest(source="scsbid-openapi", category="construction")
-    detail = {
-        "reserve_prices": [],
-        "selected_numbers": [],
-        "planned_price": None,
-        "base_amount": None,
-        "raw_reserve_detail_items": [],
-    }
+    detail = ScsbidReserveDetail()
 
     with_rate = scsbid.build_scsbid_award_item(
         {"bidNtceNo": "R26BK01628093", "bidNtceNm": "개찰", "sucsfbidLwltRate": "88"},
@@ -185,8 +180,8 @@ def test_build_scsbid_award_item_extracts_award_floor_rate_when_present():
         operation="getScsbidListSttusCnstwk",
     )
 
-    assert with_rate["award_floor_rate"] == 0.88
-    assert without_rate["award_floor_rate"] is None
+    assert with_rate.award_floor_rate == 0.88
+    assert without_rate.award_floor_rate is None
 
 
 def test_extract_eligibility_flags_copies_declared_flag_keys():
@@ -269,7 +264,8 @@ def test_build_openapi_notice_item_does_not_emit_eligibility_raw():
     item = openapi.build_openapi_notice_item(
         raw, request=request, operation="getBidPblancListInfoCnstwk"
     )
-    assert "eligibility_raw" not in item
+    # 수집 피드는 자격 원문을 채우지 않는다(유일한 writer 는 backfill 스크립트).
+    assert item.eligibility_raw is None
 
 
 def test_build_scsbid_award_item_does_not_emit_eligibility_raw():
@@ -277,13 +273,7 @@ def test_build_scsbid_award_item_does_not_emit_eligibility_raw():
     from app.services.koneps import scsbid
 
     request = CrawlRequest(source="scsbid-openapi", category="construction")
-    detail = {
-        "reserve_prices": [],
-        "selected_numbers": [],
-        "planned_price": None,
-        "base_amount": None,
-        "raw_reserve_detail_items": [],
-    }
+    detail = ScsbidReserveDetail()
 
     item = scsbid.build_scsbid_award_item(
         {"bidNtceNo": "R26BK01628200", "bidNtceNm": "개찰", "indstrytyLmtYn": "Y"},
@@ -292,7 +282,8 @@ def test_build_scsbid_award_item_does_not_emit_eligibility_raw():
         operation="getScsbidListSttusCnstwk",
     )
 
-    assert "eligibility_raw" not in item
+    # 수집 피드는 자격 원문을 채우지 않는다(유일한 writer 는 backfill 스크립트).
+    assert item.eligibility_raw is None
 
 
 def test_build_openapi_notice_item_requires_notice_number():

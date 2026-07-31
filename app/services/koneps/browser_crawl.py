@@ -32,6 +32,7 @@ from time import sleep
 from typing import Any
 
 from app.core.config import settings
+from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import html_parsing, live_failure
 
@@ -85,7 +86,9 @@ def collect_live_items(service: Any, request: CrawlRequest) -> dict[str, Any]:
     service surface stay honored. The parsing/merge/metadata logic is unchanged.
     """
     page_snapshots = service._gather_live_page_snapshots(request)
-    parsed_items: list[dict[str, Any]] = []
+    # ``parse_live_html`` 이 검증해 만든 DTO 를 그대로 운반한다(과거에는 여기서
+    # ``model_dump`` 로 즉시 dict 로 강등해 타입을 버렸다 — 방어적 DTO Phase 3).
+    parsed_items: list[KonepsCollectedItem] = []
     seen_notice_numbers: set[str] = set()
 
     for snapshot in page_snapshots:
@@ -100,7 +103,7 @@ def collect_live_items(service: Any, request: CrawlRequest) -> dict[str, Any]:
             if item.notice_number in seen_notice_numbers:
                 continue
             seen_notice_numbers.add(item.notice_number)
-            parsed_items.append(item.model_dump(mode="json"))
+            parsed_items.append(item)
             if len(parsed_items) >= request.max_items:
                 break
         if len(parsed_items) >= request.max_items:

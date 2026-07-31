@@ -262,7 +262,7 @@ def test_collect_live_items_dispatches_inner_steps_through_service():
     assert service.opening_calls == 1
     assert result["metadata"]["resolved_mode"] == "live"
     assert result["metadata"]["page_count"] == 1
-    assert result["items"][0]["notice_number"] == "20260507-001"
+    assert result["items"][0].notice_number == "20260507-001"
 
 
 def test_collect_live_items_raises_when_no_items_parsed():
@@ -289,7 +289,7 @@ def test_collect_live_items_classifies_opening_result_failure_without_failing():
     result = browser_crawl.collect_live_items(service, _request())
 
     # Notice crawl still succeeds; opening-result failure is classified, not raised.
-    assert result["items"][0]["notice_number"] == "20260507-001"
+    assert result["items"][0].notice_number == "20260507-001"
     meta = result["metadata"]
     assert meta["opening_result_failure_category"] == "selector_drift"
     assert meta["opening_result_failure_stage"] == "opening_result"

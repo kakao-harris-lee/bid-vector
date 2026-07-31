@@ -259,7 +259,7 @@ def test_base_resolution_order_agrees_with_production_build():
             raw_item, request=request, operation=_NOTICE_OP
         )
         assert built is not None
-        assert built["base_amount"] == expected_value, (
+        assert built.base_amount == expected_value, (
             f"suffix i={i}: 프로덕션이 {expected_key} 를 고르지 않음 — "
             f"BASE_RESOLUTION_ORDER 가 openapi 후보 순서와 어긋남"
         )
@@ -300,7 +300,7 @@ def test_estimated_resolution_order_agrees_with_production_build():
             raw_item, request=request, operation=_NOTICE_OP
         )
         assert built is not None
-        assert built["estimated_amount"] == expected_value, (
+        assert built.estimated_amount == expected_value, (
             f"suffix i={i}: 프로덕션 estimated_amount 가 {expected_key} 를 고르지 않음 — "
             f"ESTIMATED_RESOLUTION_ORDER 가 openapi 후보 순서와 어긋남"
         )

@@ -28,6 +28,7 @@ These tests assert:
 from __future__ import annotations
 
 from app.models.models import Project
+from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collector import KonepsCollectorService
 
@@ -38,8 +39,16 @@ def _request() -> CrawlRequest:
     )
 
 
-def _award_item(notice_number: str | None, **overrides) -> dict:
+def _award_item(notice_number: str | None, **overrides) -> KonepsCollectedItem:
+    """개찰 표본을 수집 item DTO 로 만든다.
+
+    ``notice_number=None`` 은 "공고번호 없는 item"(fuzzy 경로) 표본이다. DTO 에서는
+    필수 필드라 빈 문자열로 표현한다 — 소비자의 정규화
+    (``normalize_notice_number``)가 ``None`` 과 ``""`` 를 모두 ``""`` 로 접으므로
+    분기 판정은 동일하다.
+    """
     item = {
+        "notice_number": notice_number if notice_number is not None else "",
         "title": overrides.get("title", f"개찰결과 {notice_number}"),
         "base_amount": 100_000_000.0,
         "estimated_amount": 96_000_000.0,
@@ -48,11 +57,9 @@ def _award_item(notice_number: str | None, **overrides) -> dict:
         ),
         "metadata": overrides.get("metadata", {"opening_demand_agency": "서울특별시교육청"}),
     }
-    if notice_number is not None:
-        item["notice_number"] = notice_number
     if "closing_at" in overrides:
         item["closing_at"] = overrides["closing_at"]
-    return item
+    return KonepsCollectedItem.model_validate(item)
 
 
 def test_index_fast_path_matches_notice_number_column(test_db):

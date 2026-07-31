@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from app.models.models import Project
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import matching
+from tests.support.koneps_items import collected_item
 
 
 def _request(category: str = "construction") -> CrawlRequest:
@@ -31,69 +32,83 @@ def test_normalize_source_url_keeps_significant_query_only():
 def test_resolve_project_category_prefers_specific_request_then_business_type():
     # Specific request category wins outright.
     assert (
-        matching.resolve_project_category({"business_type": "물품"}, _request("software"))
+        matching.resolve_project_category(
+            collected_item(business_type="물품"), _request("software")
+        )
         == "software"
     )
     # Generic request falls through to business_type mapping.
     assert (
-        matching.resolve_project_category({"business_type": "공사"}, _request("general"))
+        matching.resolve_project_category(
+            collected_item(business_type="공사"), _request("general")
+        )
         == "construction"
     )
     # Empty request category + unmapped business type falls back to the
     # business type (no request_category to shadow it).
     assert (
-        matching.resolve_project_category({"business_type": "기타용역"}, _request(""))
+        matching.resolve_project_category(
+            collected_item(business_type="기타용역"), _request("")
+        )
         == "기타용역"
     )
     # Empty request + no business type falls back to "other".
-    assert matching.resolve_project_category({}, _request("")) == "other"
+    assert matching.resolve_project_category(collected_item(), _request("")) == "other"
 
 
 def test_resolve_budget_estimate_prefers_estimated_then_base():
     assert (
         matching.resolve_budget_estimate(
-            {"estimated_amount": 120.0, "base_amount": 100.0}
+            collected_item(estimated_amount=120.0, base_amount=100.0)
         )
         == 120.0
     )
-    assert matching.resolve_budget_estimate({"base_amount": 100.0}) == 100.0
-    assert matching.resolve_budget_estimate({}) == 0.0
+    assert (
+        matching.resolve_budget_estimate(collected_item(base_amount=100.0)) == 100.0
+    )
+    assert matching.resolve_budget_estimate(collected_item()) == 0.0
 
 
 def test_resolve_project_status_classifies_lifecycle():
     assert (
-        matching.resolve_project_status({"metadata": {"opening_status": "입찰취소"}})
+        matching.resolve_project_status(
+            collected_item(metadata={"opening_status": "입찰취소"})
+        )
         == "cancelled"
     )
     assert (
-        matching.resolve_project_status({"metadata": {"opening_status": "유찰"}})
+        matching.resolve_project_status(
+            collected_item(metadata={"opening_status": "유찰"})
+        )
         == "failed"
     )
     assert (
-        matching.resolve_project_status({"metadata": {"winning_company": "ACME"}})
+        matching.resolve_project_status(
+            collected_item(metadata={"winning_company": "ACME"})
+        )
         == "awarded"
     )
     future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     assert (
-        matching.resolve_project_status({"closing_at": future, "metadata": {}})
+        matching.resolve_project_status(collected_item(closing_at=future, metadata={}))
         == "open"
     )
     past = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     assert (
-        matching.resolve_project_status({"closing_at": past, "metadata": {}})
+        matching.resolve_project_status(collected_item(closing_at=past, metadata={}))
         == "closed"
     )
 
 
 def test_extract_item_agency_keys_normalizes_and_dedupes():
     keys = matching.extract_item_agency_keys(
-        {
-            "metadata": {
+        collected_item(
+            metadata={
                 "issuing_agency": "서울특별시청",
                 "opening_demand_agency": "",
                 "demand_agency": None,
             }
-        }
+        )
     )
     assert keys == {matching.parsing.normalize_agency_name("서울특별시청")}
 

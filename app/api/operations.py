@@ -40,6 +40,7 @@ from app.schemas.schemas import (
 )
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
+from app.services.koneps.collection import serialize_collect_payload
 from app.services.koneps.collector import KonepsCollectorService, format_crawl_error_message
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
@@ -123,7 +124,10 @@ def crawl_notices(request: CrawlRequest, db: Session = Depends(get_db)):
         response = service.collect_notices(request, db=db)
         crawl_job = service.persist_crawl_results(db, crawl_job, request, response)
         response.setdefault("metadata", {})["crawl_job_id"] = crawl_job.id
-        return response
+        # HTTP 경계: 수집 DTO -> JSON payload 직렬화는 여기 한 번만 (수집 내부는 모델을
+        # 유지한다). ``CrawlResponse`` 가 다시 ``CrawlNoticeItem`` 으로 좁혀 나가므로
+        # 수집 내부 전용 필드는 스펙에 노출되지 않는다.
+        return serialize_collect_payload(response)
     except Exception as exc:
         service.mark_crawl_job_failed(db, crawl_job, str(exc))
         raise HTTPException(

@@ -25,7 +25,8 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
-from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
+from app.schemas.koneps_items import KonepsCollectedItem
+from app.schemas.schemas import CrawlRequest
 from app.services.koneps import parsing
 
 
@@ -35,10 +36,15 @@ OPENING_RESULT_DATA_LIST_KEY = "mf_wfm_container_dlOnbsRsltClsfListOutL"
 
 
 def merge_opening_result_rows(
-    items: list[dict[str, Any]],
+    items: list[KonepsCollectedItem],
     opening_rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Merge opening-result data into collected notice items by notice number."""
+) -> tuple[list[KonepsCollectedItem], dict[str, Any]]:
+    """Merge opening-result data into collected notice items by notice number.
+
+    ``items`` 는 이미 승격된 수집 DTO 다(모델을 유지한 채 metadata 만 갱신). 개찰결과
+    행(``opening_rows``)은 WebSquare 그리드 원시 dict 로 남는다 — 브라우저 경로 전용
+    이라 아직 타입화 범위가 아니다(후속).
+    """
     opening_index: dict[str, dict[str, Any]] = {}
     normalized_rows = [
         row if row.get("notice_number") else normalize_opening_result_row(row)
@@ -52,22 +58,21 @@ def merge_opening_result_rows(
 
     enriched_count = 0
     for item in items:
-        notice_number = item.get("notice_number", "")
+        notice_number = item.notice_number or ""
         opening_row = opening_index.get(notice_number)
         if opening_row is None and "-" in notice_number:
             opening_row = opening_index.get(notice_number.split("-", maxsplit=1)[0])
         if opening_row is None:
             continue
 
-        item_metadata = dict(item.get("metadata", {}))
+        scheduled_at = opening_row.get("scheduled_at")
+        item_metadata = dict(item.metadata or {})
         item_metadata.update(
             {
                 "opening_notice_full_number": opening_row.get("notice_full_number"),
                 "opening_status": opening_row.get("status"),
                 "opening_scheduled_at": (
-                    opening_row.get("scheduled_at").isoformat()
-                    if opening_row.get("scheduled_at")
-                    else None
+                    scheduled_at.isoformat() if scheduled_at else None
                 ),
                 "opening_bid_classification": opening_row.get("bid_classification"),
                 "opening_bid_progress_order": opening_row.get("bid_progress_order"),
@@ -97,11 +102,11 @@ def merge_opening_result_rows(
                 "announced_at"
             ].isoformat()
 
-        item["metadata"] = item_metadata
-        if not item.get("business_type") and opening_row.get("business_type"):
-            item["business_type"] = opening_row["business_type"]
-        if not item.get("region") and opening_row.get("demand_agency"):
-            item["region"] = parsing.extract_region([opening_row["demand_agency"]])
+        item.metadata = item_metadata
+        if not item.business_type and opening_row.get("business_type"):
+            item.business_type = opening_row["business_type"]
+        if not item.region and opening_row.get("demand_agency"):
+            item.region = parsing.extract_region([opening_row["demand_agency"]])
         enriched_count += 1
 
     return items, {
@@ -137,7 +142,7 @@ def parse_live_html(
     page_url: str | None = None,
     page_number: int = 1,
     detail_pages: dict[str, dict[str, str]] | None = None,
-) -> list[CrawlNoticeItem]:
+) -> list[KonepsCollectedItem]:
     """Parse a live KONEPS list page into crawl notice items."""
     soup = BeautifulSoup(html, "html.parser")
     result_table = soup.select_one(f"#{HOME_SEARCH_RESULT_TABLE_ID}")
@@ -151,7 +156,7 @@ def parse_live_html(
         )
 
     rows = soup.select("table tbody tr, table tr")
-    parsed_items: list[CrawlNoticeItem] = []
+    parsed_items: list[KonepsCollectedItem] = []
 
     for index, row in enumerate(rows):
         cells = [cell.get_text(" ", strip=True) for cell in row.select("td, th")]
@@ -178,9 +183,9 @@ def parse_koneps_result_table(
     page_url: str | None,
     page_number: int,
     detail_pages: dict[str, dict[str, str]] | None = None,
-) -> list[CrawlNoticeItem]:
+) -> list[KonepsCollectedItem]:
     """Parse the real KONEPS 입찰공고 검색결과 테이블."""
-    parsed_items: list[CrawlNoticeItem] = []
+    parsed_items: list[KonepsCollectedItem] = []
 
     for row_index, row in enumerate(table.select("tr")):
         cells = row.select("td")
@@ -209,7 +214,7 @@ def build_notice_from_result_row(
     page_url: str | None,
     page_number: int,
     detail_pages: dict[str, dict[str, str]] | None = None,
-) -> CrawlNoticeItem | None:
+) -> KonepsCollectedItem | None:
     """Build a notice item from the observed KONEPS search result row format."""
     if len(cells) < 15:
         return None
@@ -255,9 +260,9 @@ def build_notice_from_result_row(
         row_text
     )
 
-    return CrawlNoticeItem(
+    return KonepsCollectedItem(
         notice_number=notice_number
-        or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}",
+        or f"LIVE-{(request.target_date or '').replace('-', '')}-{row_index + 1:03d}",
         title=detail_data.get("title") or title,
         base_amount=base_amount,
         estimated_amount=estimated_amount,
@@ -498,7 +503,7 @@ def build_notice_from_cells(
     row_index: int,
     page_url: str | None,
     page_number: int,
-) -> CrawlNoticeItem | None:
+) -> KonepsCollectedItem | None:
     """Convert parsed table cells into a normalized crawl notice item."""
     cleaned_cells = [cell for cell in cells if cell]
     if not cleaned_cells:
@@ -508,7 +513,7 @@ def build_notice_from_cells(
     amounts = parsing.extract_amounts(combined_text)
     notice_number = (
         parsing.extract_notice_number(combined_text)
-        or f"LIVE-{request.target_date.replace('-', '')}-{row_index + 1:03d}"
+        or f"LIVE-{(request.target_date or '').replace('-', '')}-{row_index + 1:03d}"
     )
     title = parsing.extract_title(
         cleaned_cells, notice_number, link.get_text(strip=True) if link else None
@@ -526,7 +531,7 @@ def build_notice_from_cells(
         else (page_url or settings.KONEPS_HOME_URL)
     )
 
-    return CrawlNoticeItem(
+    return KonepsCollectedItem(
         notice_number=notice_number,
         title=title,
         base_amount=amounts[0] if amounts else 0.0,

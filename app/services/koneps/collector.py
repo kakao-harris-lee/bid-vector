@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project
 from app.core.time import kst_now
-from app.schemas.schemas import CrawlNoticeItem, CrawlRequest
+from app.schemas.koneps_items import KonepsCollectedItem, ScsbidReserveDetail
+from app.schemas.schemas import CrawlRequest
 from app.services.koneps import (
     browser_crawl,
     collection,
@@ -66,7 +67,7 @@ class _ScsbidSweepState:
     are preserved bit-for-bit (no copying, no re-ordering).
     """
 
-    parsed_items: list[dict[str, Any]] = field(default_factory=list)
+    parsed_items: list[KonepsCollectedItem] = field(default_factory=list)
     seen_notice_numbers: set[str] = field(default_factory=set)
     deferred_reserve_detail: list[dict[str, str]] = field(default_factory=list)
     deferred_reserve_seen: set[tuple[str, str]] = field(default_factory=set)
@@ -95,17 +96,12 @@ class KonepsCollectorService:
 
     # The live-crawl form/selector constants (``HOME_SEARCH_*`` /
     # ``OPENING_RESULT_*``) and the Playwright homepage-scraping cluster now live
-    # in ``browser_crawl`` (single source); the collector keeps only thin
+    # in ``browser_crawl``; the result-table/grid ids in ``html_parsing``; the
+    # live-failure classification helpers in ``live_failure`` (each a single
+    # source, referenced as ``<module>.<name>``). The collector keeps only thin
     # delegator methods (``_collect_live_items`` / ``_gather_live_page_snapshots``
-    # / ``_collect_opening_result_rows``) so tests that monkeypatch those names on
-    # the service surface keep working.
-    # ``OPENING_RESULT_GRID_ID`` / ``OPENING_RESULT_DATA_LIST_KEY`` /
-    # ``HOME_SEARCH_RESULT_TABLE_ID`` now live in ``html_parsing`` (single
-    # source); collector references them as ``html_parsing.<CONST>``.
-    # ``LIVE_FAILURE_RETRYABLE_CATEGORIES`` and the live-failure classification
-    # helpers now live in ``live_failure`` (single source); collector calls
-    # them as ``live_failure.<name>`` (and keeps thin delegator methods below
-    # for external instance-method callers).
+    # / ``_collect_opening_result_rows`` / ``_live_collection_error`` …) so tests
+    # that monkeypatch those names on the service surface keep working.
 
     def collect_notices(
         self,
@@ -627,8 +623,11 @@ class KonepsCollectorService:
         post-build dedup and append. Counter increments, set adds, the throttle
         sleep before the inline fetch, and the ``api_call_count`` bump on a
         successful inline fetch all happen at the same points as before.
+
+        복수예비가격 상세(``_fetch_scsbid_reserve_detail`` — celery backfill 과 공유되는
+        dict 계약)는 여기서 한 번 ``ScsbidReserveDetail`` 로 승격해 빌더에 넘긴다.
         """
-        detail: dict[str, Any] = {}
+        reserve_detail = ScsbidReserveDetail()
         notice_number = str(raw_item.get("bidNtceNo") or "").strip()
         if not notice_number:
             return
@@ -689,28 +688,31 @@ class KonepsCollectorService:
                 try:
                     if config.delay_seconds > 0:
                         sleep(config.delay_seconds)
-                    detail = self._fetch_scsbid_reserve_detail(
+                    fetched = self._fetch_scsbid_reserve_detail(
                         raw_item,
                         category=category,
                         service_key=config.service_key,
                     )
                     state.api_call_count += 1
-                    if detail.get("reserve_prices"):
+                    # 승격을 이 격리 **안**에서 한다: 상세 응답의 구조 결손이 조회 실패와
+                    # 같은 취급을 받아 그 item 만 격리되고 sweep 은 계속된다.
+                    reserve_detail = ScsbidReserveDetail.model_validate(fetched)
+                    if reserve_detail.reserve_prices:
                         state.reserve_detail_count += 1
                 except Exception as exc:
                     state.reserve_detail_error_count += 1
-                    detail = {"reserve_detail_error": str(exc)}
+                    reserve_detail = ScsbidReserveDetail(reserve_detail_error=str(exc))
 
         parsed_item = scsbid.build_scsbid_award_item(
             raw_item,
-            detail=detail,
+            detail=reserve_detail,
             request=request,
             operation=operation,
             category=category,
         )
         if parsed_item is None:
             return
-        notice_number = str(parsed_item["notice_number"])
+        notice_number = str(parsed_item.notice_number)
         if notice_number in state.seen_notice_numbers:
             return
         state.seen_notice_numbers.add(notice_number)
@@ -887,7 +889,7 @@ class KonepsCollectorService:
         page_url: str | None = None,
         page_number: int = 1,
         detail_pages: dict[str, dict[str, str]] | None = None,
-    ) -> list[CrawlNoticeItem]:
+    ) -> list[KonepsCollectedItem]:
         """Thin delegator to ``html_parsing.parse_live_html``.
 
         Kept for backward compatibility with external callers/tests that invoke
@@ -916,7 +918,7 @@ class KonepsCollectorService:
         self,
         db: Session,
         *,
-        item: dict[str, Any],
+        item: KonepsCollectedItem,
         request: CrawlRequest,
         historical_record: HistoricalData,
         project_similarity: ProjectSimilarityService,
@@ -941,7 +943,7 @@ class KonepsCollectorService:
         self,
         db: Session,
         *,
-        item: dict[str, Any],
+        item: KonepsCollectedItem,
         request: CrawlRequest,
     ) -> Project | None:
         """Thin delegator to ``persistence.find_matching_project``.
@@ -954,7 +956,7 @@ class KonepsCollectorService:
         return persistence.find_matching_project(db, item=item, request=request)
 
     def _update_project_from_item(
-        self, project: Project, *, item: dict[str, Any], request: CrawlRequest
+        self, project: Project, *, item: KonepsCollectedItem, request: CrawlRequest
     ) -> None:
         """Thin delegator to ``persistence.update_project_from_item``.
 

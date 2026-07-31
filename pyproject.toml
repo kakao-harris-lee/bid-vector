@@ -197,6 +197,34 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 3e — KONEPS 수집 DTO 체인(방어적 DTO Phase 3)의 **ORM 비접촉** 절반. 원시 dict
+# 릴레이를 ``KonepsCollectedItem``/``CrawlItemMetadataFacts``/``ScsbidReserveDetail`` 로
+# 바꾼 경로에 정적 검사를 붙여, 다음 변경이 조용히 ``Any``/``dict`` 로 되돌아가는(강등 재발)
+# 것을 막는다. ``bs4``(html_parsing) 는 스텁을 싣지 않으므로 ``import-untyped`` 만 완화한다
+# — 전역 ``ignore_missing_imports`` 와 같은 정책이며 아일랜드 내부 강도는 유지된다.
+#
+# 같은 체인의 ``persistence``(51) / ``matching``(10) / ``scsbid``(1) 는 **의도적으로 제외**
+# 한다: 그 셋은 old-style ``Column(...)`` 모델 속성을 읽고 대입하므로 위 grandfather 블록이
+# 존재하는 이유인 ``Column[str]``-vs-``str`` 오탐이 전부 되살아난다(실측 62건, 정확성 결함
+# 0건). 올리려면 모델을 ``Mapped[...]`` 로 옮기는 선행 작업이 필요하고, 그 없이 넣으면
+# ``assignment``/``arg-type``/``list-item``/``return-value`` 를 통째로 완화해야 해서 아일랜드
+# 의 의미가 사라진다(이 파일 상단 규칙: "Do NOT add legacy modules here without first typing
+# them"). 후속 트랙에서 모델 타입화와 함께 승격한다.
+[[tool.mypy.overrides]]
+module = [
+    "app.schemas.koneps_items",
+    "app.services.koneps.collection",
+    "app.services.koneps.html_parsing",
+    "app.services.koneps.openapi",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+disable_error_code = ["import-untyped"]
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------

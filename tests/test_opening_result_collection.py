@@ -22,6 +22,7 @@ from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import BidDecisionRecord, Project, TenderResult
 from app.services.koneps import openapi
+from app.schemas.koneps_items import CrawlItemMetadataFacts
 from app.services.koneps.persistence import resolve_tender_result
 from app.services.opening_result_collection import OpeningResultCollectionService
 from app.services.real_bid_track import RealBidTrackService
@@ -560,12 +561,12 @@ def test_resolve_tender_result_reuses_opening_shell(test_db):
     resolve_tender_result(
         test_db,
         project_id=project.id,
-        item_metadata={
-            "winning_company": "주식회사해림",
-            "winning_amount": 77_308_840,
-            "winning_rate": 0.88001,
-            "opening_announced_at": "2026-07-16T15:00:00",
-        },
+        facts=CrawlItemMetadataFacts(
+            winning_company="주식회사해림",
+            winning_amount=77_308_840,
+            winning_rate=0.88001,
+            opening_announced_at="2026-07-16T15:00:00",
+        ),
         crawl_job_status="completed",
     )
     test_db.commit()
@@ -587,12 +588,12 @@ def test_resolve_tender_result_no_shell_creates_new_row(test_db):
     resolve_tender_result(
         test_db,
         project_id=project.id,
-        item_metadata={
-            "winning_company": "낙찰건설",
-            "winning_amount": 78_000_000,
-            "winning_rate": 0.78,
-            "opening_announced_at": "2026-07-16T15:00:00",
-        },
+        facts=CrawlItemMetadataFacts(
+            winning_company="낙찰건설",
+            winning_amount=78_000_000,
+            winning_rate=0.78,
+            opening_announced_at="2026-07-16T15:00:00",
+        ),
         crawl_job_status="completed",
     )
     test_db.commit()
