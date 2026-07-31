@@ -61,6 +61,30 @@ export function formatDateTime(value: string | Date | null | undefined): string 
   }).format(date);
 }
 
+/**
+ * "3분 전" 형태의 상대 시각. 스냅샷 신선도 배지("N분 전 기준")가 쓴다.
+ *
+ * 하루를 넘기면 상대 표기가 정보를 잃으므로 KST 절대 시각(`formatDateTime`)으로
+ * 폴백한다 — 포맷터를 새로 만들지 않고 기존 단일 출처를 재사용한다(§4.5-6).
+ * 서버·클라이언트 시계 차이로 미래 시각이 오면 "-3분 전" 같은 거짓 표기 대신
+ * "방금"으로 눕힌다. `now` 는 테스트 주입용(§4.7-3).
+ */
+export function formatRelativeTime(
+  value: string | Date | null | undefined,
+  now: Date = new Date()
+): string {
+  const date = parseDate(value);
+  if (!date) return "-";
+  const elapsedMs = now.getTime() - date.getTime();
+  if (elapsedMs < 0) return "방금";
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) return "방금";
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  return formatDateTime(date);
+}
+
 export function formatHours(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "-";
   if (value < 0) return "마감 지남";

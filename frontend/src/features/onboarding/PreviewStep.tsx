@@ -23,7 +23,13 @@ export function PreviewStep({ onRestart }: PreviewStepProps) {
         </Button>
       </CardHeader>
       <CardContent>
-        {/* 확정 직후 기존 전략 candidates 재사용(설계 §UI 4단계). */}
+        {/*
+          확정 직후 기존 전략 candidates 재사용(설계 §UI 4단계). PR-B 이후 이 GET 은
+          스냅샷 순수 읽기이고, 온보딩 apply 는 스냅샷 재계산을 디스패치하지 않으므로
+          (services/onboarding/apply.py) **이 단계 진입의 첫 GET 이 자동 디스패치**를
+          겸한다. 그래서 최초 진입은 CandidatesPreview 의 진행 UI(경과 안내)로
+          대기하고, 계산이 끝나면 같은 카드가 목록으로 바뀐다(설계 §7·§9).
+        */}
         <CandidatesPreview />
       </CardContent>
     </Card>

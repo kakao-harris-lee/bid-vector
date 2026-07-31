@@ -79,6 +79,12 @@ export const queryKeys = {
         { limit: limit ?? null, highPriorityOnly: highPriorityOnly ?? null },
         { operatorId }
       ] as const,
+    /**
+     * 후보 쿼리 전체(limit·우선순위·operator 변형)의 prefix. 재계산 디스패치 후
+     * 캐시된 모든 변형을 한 번에 갱신하는 데 쓴다 — 변형별 폴링은 각자의 서버
+     * status 가 결정한다.
+     */
+    candidatesAll: () => ["strategy", "candidates"] as const,
     runs: (limit: number) => ["strategy", "runs", { limit }] as const
   },
   projects: {

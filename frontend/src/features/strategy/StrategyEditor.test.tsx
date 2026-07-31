@@ -37,7 +37,13 @@ const baseCandidates: OperatorStrategyCandidatesResponse = {
   evaluated_project_count: 12,
   returned_candidate_count: 3,
   high_priority_only: false,
-  candidates: []
+  candidates: [],
+  // PR-B 이후 GET 은 스냅샷 순수 읽기다. 계산된 스냅샷(idle + computed_at)이라야
+  // 카드가 통계·목록을 그리고 폴링을 멈춘다(부트스트랩=computed_at null 은
+  // 진행 UI 로 빠진다 — features/strategy/snapshotState.ts).
+  computed_at: "2026-07-30T02:00:00Z",
+  snapshot_status: "idle",
+  stale: false
 };
 
 const baseRuns: OperatorStrategyRunListResponse = {
@@ -279,6 +285,47 @@ describe("StrategyEditor", () => {
     await waitFor(() => {
       expect(screen.getByText("7건")).toBeInTheDocument();
     });
+  });
+
+  it("저장 후 서버가 running 을 보고하면 갱신 중 표시가 뜨고 이전 스냅샷은 유지된다", async () => {
+    // 전략 PUT 은 백엔드에서 스냅샷 재계산을 디스패치하고(dispatch_for_strategy_write)
+    // 프론트는 ["strategy"] 를 전면 invalidate 한다. 두 경로가 만나 다음 GET 이
+    // running 을 돌려주는 것이 정상 흐름이다(설계 §6.3·§7).
+    let candidatesCallCount = 0;
+    const candidatesOverride: RouteOverride = {
+      matcher: (url) => url.startsWith("/api/v1/operator/strategy/candidates"),
+      handler: () => {
+        candidatesCallCount += 1;
+        return jsonResponse(
+          candidatesCallCount === 1
+            ? baseCandidates
+            : { ...baseCandidates, snapshot_status: "running" }
+        );
+      }
+    };
+    const putOverride: RouteOverride = {
+      matcher: (url, init) => url.endsWith("/api/v1/operator/strategy") && init?.method === "PUT",
+      handler: () => jsonResponse(baseStrategy)
+    };
+    const fetchMock = buildFetchMock({ overrides: [putOverride, candidatesOverride] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(
+      await screen.findByRole("heading", { name: "전략 편집", level: 2 })
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(findNumberByLabel("최소 매칭 점수").value).toBe("0.6");
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => expect(findPutCall(fetchMock)).toBeDefined());
+    const progress = await screen.findByTestId("snapshot-progress");
+    expect(progress).toHaveTextContent("다시 계산하고 있습니다");
+    // 재계산 중에도 직전 스냅샷의 통계는 살아 있다(즉시 렌더 계약).
+    expect(screen.getByText("3건")).toBeInTheDocument();
   });
 
   it("저장이 서버 측에서 실패하면 danger toast가 나타난다", async () => {
