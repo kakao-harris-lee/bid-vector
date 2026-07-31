@@ -90,19 +90,27 @@ def test_task_session_default_factory_is_resolved_at_call_time(monkeypatch):
 
 
 def test_reserve_detail_backfill_job_honours_injected_session_factory():
-    """A delegated task body opens/closes its session through the injected seam."""
+    """A delegated task body opens/closes its session through the injected seam.
+
+    The body's payload argument is the validated DTO the ``@task`` shell promotes
+    (``app.schemas.task_payloads``), so the seam is exercised with the same input
+    the worker produces.
+    """
+    from app.schemas.task_payloads import ScsbidReserveDetailBackfillRequest
     from app.tasks.reserve_detail_backfill import (
         run_scsbid_reserve_detail_backfill_job,
     )
 
     session = _FakeSession()
-    chained: list[list[dict]] = []
+    chained: list[ScsbidReserveDetailBackfillRequest] = []
 
     # No service key configured in the test environment -> the body returns the
     # missing-key result without HTTP, but it must still have taken its session
     # from the injected factory and closed it.
     result = run_scsbid_reserve_detail_backfill_job(
-        [{"notice_number": "N-1", "category": "construction"}],
+        ScsbidReserveDetailBackfillRequest.model_validate(
+            {"notices": [{"notice_number": "N-1", "category": "construction"}]}
+        ),
         enqueue_continuation=lambda rest: bool(chained.append(rest)),
         session_factory=lambda: session,
     )
@@ -123,6 +131,7 @@ def _forbid_global_session(monkeypatch) -> None:
 
 def test_synthetic_backtest_job_honours_injected_session_factory(monkeypatch):
     """The synthetic-backtest body hands the injected session to the service."""
+    from app.schemas.task_payloads import SyntheticOperatorBacktestTaskRequest
     from app.services.synthetic_backtest import SyntheticBacktestService
     from app.tasks.backtest_jobs import run_synthetic_operator_backtest_job
 
@@ -137,7 +146,7 @@ def test_synthetic_backtest_job_honours_injected_session_factory(monkeypatch):
     monkeypatch.setattr(SyntheticBacktestService, "run_for_all", _fake_run_for_all)
 
     result = run_synthetic_operator_backtest_job(
-        {"limit": 1}, session_factory=lambda: session
+        SyntheticOperatorBacktestTaskRequest(limit=1), session_factory=lambda: session
     )
 
     assert result == {"ok": "synthetic"}
@@ -147,6 +156,7 @@ def test_synthetic_backtest_job_honours_injected_session_factory(monkeypatch):
 
 def test_historical_backtest_job_honours_injected_session_factory(monkeypatch):
     """The historical-backtest body hands the injected session to the service."""
+    from app.schemas.task_payloads import HistoricalBacktestTaskRequest
     from app.services.paper_bidding_backtest import PaperBiddingBacktestService
     from app.tasks.backtest_jobs import run_historical_backtest_job
 
@@ -163,7 +173,7 @@ def test_historical_backtest_job_honours_injected_session_factory(monkeypatch):
     )
 
     result = run_historical_backtest_job(
-        {"limit": 1}, session_factory=lambda: session
+        HistoricalBacktestTaskRequest(limit=1), session_factory=lambda: session
     )
 
     assert result == {"ok": "historical"}
@@ -173,6 +183,7 @@ def test_historical_backtest_job_honours_injected_session_factory(monkeypatch):
 
 def test_koneps_collection_job_honours_injected_session_factory(monkeypatch):
     """The collection body queries the injected session and closes it on failure."""
+    from app.schemas.task_payloads import CrawlTaskRequest
     from app.tasks.collection_jobs import run_koneps_collection_job
 
     class _BoomSession(_FakeSession):
@@ -195,7 +206,7 @@ def test_koneps_collection_job_honours_injected_session_factory(monkeypatch):
     with pytest.raises(RuntimeError, match="injected session reached"):
         run_koneps_collection_job(
             None,
-            request_payload={},
+            request=CrawlTaskRequest(),
             crawl_job_id=1,
             enqueue_deferred_embedding_backfill=lambda ids: 0,
             enqueue_deferred_reserve_detail_backfill=lambda notices: 0,

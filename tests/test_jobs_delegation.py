@@ -3,13 +3,20 @@
 The §4.5 size decomposition moved several task *bodies* into sibling
 ``app/tasks/`` modules; the ``@task`` entries stay in ``app.tasks.jobs`` (so their
 Celery registration names are unchanged) as thin shells that delegate to the
-extracted body. These tests lock the delegation contract: each shell forwards its
-arguments verbatim and, where a helper that references a Celery task must stay in
-the ``jobs`` module (for the monkeypatch seam), passes that helper in by its
+extracted body. These tests lock the delegation contract: each shell **promotes the
+broker payload to its validated DTO** and forwards it (plus the non-payload args
+verbatim) and, where a helper that references a Celery task must stay in the
+``jobs`` module (for the monkeypatch seam), passes that helper in by its
 ``jobs``-module binding so a patch on ``jobs.<helper>`` still flows through.
 """
 
 import app.tasks.jobs as jobs
+from app.schemas.crawl import CrawlRequest
+from app.schemas.task_payloads import (
+    HistoricalBacktestTaskRequest,
+    ScsbidReserveDetailBackfillRequest,
+    SyntheticOperatorBacktestTaskRequest,
+)
 
 
 class _DummyDB:
@@ -28,13 +35,13 @@ def test_collect_koneps_notices_delegates_with_injected_enqueue_helpers(monkeypa
     def _spy(
         self_arg,
         *,
-        request_payload,
+        request,
         crawl_job_id,
         enqueue_deferred_embedding_backfill,
         enqueue_deferred_reserve_detail_backfill,
     ):
         captured.update(
-            request_payload=request_payload,
+            request=request,
             crawl_job_id=crawl_job_id,
             emb=enqueue_deferred_embedding_backfill,
             res=enqueue_deferred_reserve_detail_backfill,
@@ -48,7 +55,9 @@ def test_collect_koneps_notices_delegates_with_injected_enqueue_helpers(monkeypa
     )
 
     assert out == {"ok": "collect"}
-    assert captured["request_payload"] == {"source": "scsbid-openapi"}
+    # The body receives the validated model, not the raw broker dict.
+    assert isinstance(captured["request"], CrawlRequest)
+    assert captured["request"].source == "scsbid-openapi"
     assert captured["crawl_job_id"] == 7
     # The injected enqueue helpers must be this module's bindings so the
     # jobs._enqueue_deferred_embedding_backfill monkeypatch seam keeps working.
@@ -59,8 +68,8 @@ def test_collect_koneps_notices_delegates_with_injected_enqueue_helpers(monkeypa
 def test_backfill_scsbid_reserve_detail_delegates_with_injected_continuation(monkeypatch):
     captured: dict = {}
 
-    def _spy(notices, *, enqueue_continuation):
-        captured.update(notices=notices, cont=enqueue_continuation)
+    def _spy(request, *, enqueue_continuation):
+        captured.update(request=request, cont=enqueue_continuation)
         return {"ok": "backfill"}
 
     monkeypatch.setattr(jobs, "run_scsbid_reserve_detail_backfill_job", _spy)
@@ -70,15 +79,17 @@ def test_backfill_scsbid_reserve_detail_delegates_with_injected_continuation(mon
     )
 
     assert out == {"ok": "backfill"}
-    assert captured["notices"] == [{"notice_number": "N1", "category": "service"}]
+    assert captured["request"] == ScsbidReserveDetailBackfillRequest.model_validate(
+        {"notices": [{"notice_number": "N1", "category": "service"}]}
+    )
     assert captured["cont"] is jobs._enqueue_reserve_detail_continuation
 
 
 def test_run_synthetic_operator_backtest_delegates(monkeypatch):
     captured: dict = {}
 
-    def _spy(payload):
-        captured["payload"] = payload
+    def _spy(request):
+        captured["request"] = request
         return {"ok": "synthetic"}
 
     monkeypatch.setattr(jobs, "run_synthetic_operator_backtest_job", _spy)
@@ -86,14 +97,14 @@ def test_run_synthetic_operator_backtest_delegates(monkeypatch):
     out = jobs.run_synthetic_operator_backtest.run(payload={"limit": 5})
 
     assert out == {"ok": "synthetic"}
-    assert captured["payload"] == {"limit": 5}
+    assert captured["request"] == SyntheticOperatorBacktestTaskRequest(limit=5)
 
 
 def test_run_historical_backtest_delegates(monkeypatch):
     captured: dict = {}
 
-    def _spy(request_payload):
-        captured["request_payload"] = request_payload
+    def _spy(request):
+        captured["request"] = request
         return {"ok": "historical"}
 
     monkeypatch.setattr(jobs, "run_historical_backtest_job", _spy)
@@ -101,7 +112,7 @@ def test_run_historical_backtest_delegates(monkeypatch):
     out = jobs.run_historical_backtest.run(request_payload={"limit": 3})
 
     assert out == {"ok": "historical"}
-    assert captured["request_payload"] == {"limit": 3}
+    assert captured["request"] == HistoricalBacktestTaskRequest(limit=3)
 
 
 def test_collect_g2_evidence_delegates_with_db_and_injected_draft_writer(monkeypatch):
