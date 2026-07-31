@@ -31,7 +31,7 @@
     },
     "app/ai/predictor_backtest.py": {
       "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 9
+      "dict_boundary_functions": 8
     },
     "app/ai/predictors/base.py": {
       "dict_boundary_functions": 1
@@ -40,7 +40,7 @@
       "functions_over_soft_limit": 1,
       "functions_over_hard_limit": 1,
       "json_direct_calls": 1,
-      "dict_boundary_functions": 6
+      "dict_boundary_functions": 5
     },
     "app/ai/predictors/historical/__init__.py": {
       "functions_over_soft_limit": 2,
@@ -74,7 +74,7 @@
     "app/ai/predictors/lstm.py": {
       "functions_over_soft_limit": 1,
       "json_direct_calls": 1,
-      "dict_boundary_functions": 13
+      "dict_boundary_functions": 12
     },
     "app/ai/price_prediction/feedback.py": {
       "dict_boundary_functions": 1
@@ -92,7 +92,7 @@
     },
     "app/ai/price_prediction/orchestration.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 6
+      "dict_boundary_functions": 3
     },
     "app/ai/price_prediction/price_regime.py": {
       "functions_over_soft_limit": 2,
@@ -107,7 +107,6 @@
     },
     "app/api/analytics.py": {
       "file_loc_band": 21,
-      "json_direct_calls": 1,
       "dict_boundary_functions": 2
     },
     "app/api/auth.py": {
@@ -124,9 +123,6 @@
     },
     "app/api/operations.py": {
       "dict_boundary_functions": 2
-    },
-    "app/api/operator_accounts.py": {
-      "dict_boundary_functions": 1
     },
     "app/api/operator_common.py": {
       "dict_boundary_functions": 1
@@ -181,8 +177,8 @@
       "dict_boundary_functions": 1
     },
     "app/services/analytics_reporting/base.py": {
-      "json_direct_calls": 2,
-      "dict_boundary_functions": 5
+      "json_direct_calls": 1,
+      "dict_boundary_functions": 4
     },
     "app/services/analytics_reporting/crawl.py": {
       "dict_boundary_functions": 2
@@ -506,22 +502,16 @@
     "app/services/notifications/email.py": {
       "functions_over_soft_limit": 2,
       "file_loc_band": 21,
-      "json_direct_calls": 1,
       "dict_boundary_functions": 4,
       "env_test_sniff": 1
     },
     "app/services/notifications/fatigue.py": {
       "dict_boundary_functions": 2
     },
-    "app/services/notifications/fatigue_gate.py": {
-      "json_direct_calls": 2,
-      "dict_boundary_functions": 3
-    },
     "app/services/notifications/manager.py": {
-      "functions_over_soft_limit": 3,
-      "file_loc_band": 25,
-      "json_direct_calls": 1,
-      "dict_boundary_functions": 7,
+      "functions_over_soft_limit": 1,
+      "file_loc_band": 22,
+      "dict_boundary_functions": 4,
       "env_test_sniff": 1
     },
     "app/services/notifications/telegram.py": {
@@ -529,8 +519,7 @@
       "dict_boundary_functions": 7
     },
     "app/services/notifications/telegram_strategy.py": {
-      "json_direct_calls": 2,
-      "dict_boundary_functions": 10
+      "dict_boundary_functions": 8
     },
     "app/services/notifications/telegram_strategy_fields.py": {
       "dict_boundary_functions": 12
