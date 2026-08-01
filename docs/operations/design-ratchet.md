@@ -2,9 +2,11 @@
 
 - 데이터 계약 · 순수 비교: `scripts/_design_ratchet_contracts.py`
 - 측정 코어(AST 스캔): `scripts/_design_ratchet_scan.py`
+- 측정 코어(중복 클론 탐지): `scripts/_design_ratchet_clones.py`
 - CLI · baseline 영속화 · 리포트: `scripts/design_ratchet.py`
 - baseline: `tests/design_ratchet_baseline.json`
 - 게이트: `tests/test_design_ratchet.py`
+- 게이트(중복 클론 판정 픽스처): `tests/test_design_ratchet_clones.py`
 
 ## 목적
 
@@ -107,11 +109,31 @@
 
 | 단계 | 규칙 |
 |---|---|
-| 1. 후보 | **데코레이터가 하나도 없는** 함수/메서드. 라우터·celery task·`property` 가 전부 배제된다 |
+| 1. 후보 | **데코레이터가 하나도 없는** 함수/메서드. 라우터·celery task·`property`·`staticmethod` 가 전부 배제된다 |
 | 2. 메커니컬 | 본문에 `MECHANICAL_EXCLUDED_NAMES`(db·session·requests·settings·logger·self·cls …) / `MECHANICAL_EXCLUDED_ATTRS`(query·commit·execute …) 가 없고 `global`/`nonlocal` 이 없음 |
-| 3. 크기 | AST 노드 수 ≥ `CLONE_MIN_AST_NODES`(20) |
-| 4. 정규화 | 변수·인자명 → 등장순 `v0,v1,…` · docstring/데코레이터/annotation/반환타입 제거 · **상수 리터럴은 보존** |
-| 5. 그룹핑 | 정규화 본문의 sha256 앞 12자가 동일 |
+| 3. 정규화 | 변수·인자명 → 등장순 `v0,v1,…` · docstring/데코레이터/annotation/반환타입 제거 · **상수 리터럴은 보존** |
+| 4. 위임 배제 | 정규화 본문이 **순수 파라미터 위임** 한 줄이면 후보에서 뺀다 (아래 경계표) |
+| 5. 크기 | **정규화 후** AST 노드 수 ≥ `CLONE_MIN_AST_NODES`(14) |
+| 6. 그룹핑 | 정규화 본문의 sha256 앞 12자가 동일 |
+
+**크기를 정규화 후 형태에서 재는 이유.** 원본에서 재면 타입힌트와 docstring 이 두꺼운
+얇은 델리게이터가 임계값을 넘어 오탐이 된다(`_average` 는 원본 29노드 · 정규화 12노드).
+기준이 어긋난 채로 두면 §4.5-8 이 처방하는 "파라미터화된 해석기 + 얇은 명명 래퍼"
+리팩터가 지표를 줄이지 못한다 — 게이트가 자기 법을 처벌한다.
+
+**순수 파라미터 위임 배제(4단계)의 경계.** 배제는 정규화 본문이 정확히 하나의 `return
+<Call>` 이고 ① 호출 대상이 bare 이름 ② 모든 위치 인자가 이름/상수 ③ 모든 키워드 값이
+이름/상수 ④ `*`/`**` 언패킹 없음 을 **전부** 만족할 때만이다. 더 넓게 잡으면 한 줄로
+쓴 진짜 복붙까지 죽는다.
+
+| 본문 | 판정 | 이유 |
+|---|---|---|
+| `return average(values, digits=4)` | **배제** | bare 이름 + 파라미터/상수 인자 |
+| `return _cast_or_none(value, int)` | **배제** | 동일 |
+| `return resolve_band(RULES, text=t, title=title_line(t))` | 유지 | 키워드 값이 중첩 `Call` |
+| `return "".join(str(v or "").strip().lower().split())` | 유지 | 호출 대상이 `Attribute` |
+| `return tuple(item.strip() for item in raw.split(","))` | 유지 | 인자가 `GeneratorExp` |
+| `return combine(*items, mode)` / `return combine(mode, **options)` | 유지 | 언패킹은 전달이 아니라 재조립 |
 
 `open`·`Path`·`json`·`datetime` 은 **일부러 배제하지 않는다**. 얇은 메커니컬 I/O
 래퍼(`_write_json` 류)가 실제 중복의 최대 밀도 구간이라 대상에 포함해야 한다.
@@ -126,7 +148,42 @@
 - **부분 통합** — 4곳 중 1곳만 제거하면 남은 3곳이 각 1을 유지해 지표가 줄지 않는다.
   위반은 아니지만(증가가 아니므로) 개선이 baseline 에 반영되지도 않는다.
 - **클래스·타입·상수의 중복** — 함수만 스캔한다.
-- **20 AST 노드 미만** — `_average` 류 소형 중복은 임계값 아래라 계수되지 않는다.
+- **임계값(정규화 14노드) 미만** — 저장소 실측 예: `_kst_stamp`×4(10노드, `scripts/`
+  4파일) · `app/core/time.py` 의 `kst_now`/`utc_now`(10노드). 소형 중복은 계수되지
+  않는다.
+- **데코레이터가 붙은 함수 전부** — 1단계가 데코레이터 유무만 보므로 `@staticmethod`
+  나 `@functools.cache` 를 얹으면 **완전히 회피된다**. 설계가 `ast.walk` 로 "헬퍼를
+  클래스로 감싸기" 회피를 막았지만 `@staticmethod` 는 같은 회피를 그대로 남긴다.
+  `def _average(self, …)` → `@staticmethod def _average(…)` 라는 평범한 개선이 지표를
+  조용히 0 으로 만든다. **실사례**: `_csv_safe` 는 `app/services/decision_samples.py`
+  와 `app/services/bid_form_draft.py` 에 사실상 동일한 본문으로 2벌 있지만 둘 다
+  `@staticmethod` 라 후보에조차 오르지 않는다.
+- **배제 이름 섀도잉** — `is_mechanical` 은 `ast.Name` 을 ctx 무관하게 보므로 본문에
+  `settings = None` 한 줄만 넣으면 배제된다(대입 타깃도 `ast.Name`). 반대로 **인자
+  이름**은 `ast.arg` 라 배제되지 않는 비대칭이 있다 — `def f(settings, limit)` 는
+  여전히 후보다. 배제 목록은 "본문이 인프라에 닿는가"의 근사치일 뿐이다.
+- **`MECHANICAL_EXCLUDED_ATTRS` 의 과잉 배제** — 목록에 `add` 가 들어 있어
+  `seen.add(x)` 를 쓰는 순수 dedup 헬퍼가 통째로 빠진다(`seen |= {x}` 로 바꾸면
+  잡힌다). SQLAlchemy `session.add` 를 노린 항목이 순수 `set.add` 까지 함께 배제한다.
+- **`self` 인자 arity 차이** — 같은 알고리즘이라도 한쪽이 메서드면 `self` 가 인자
+  하나로 남아 정규화 지문이 갈린다. **실사례**: `_round_optional` 은
+  `app/services/prediction_feedback.py`(메서드, 25노드)와
+  `app/services/dashboard_summary/normalizers.py`(모듈 함수, 24노드)에 2벌 있는데
+  둘 다 임계값 위인데도 서로 다른 그룹이라 미탐이다.
+
+**주의: 클론 그룹은 한 PR 안에서 원자적으로 통합한다.** 새 허브 파일에 canonical 함수를
+두고 기존 복사본을 남기면 **허브 파일이 0→1 로 위반**이 된다 — 새 파일은 baseline 에
+없어 0 으로 취급되기 때문이다 — 설계 문서 §4.4 의 "새 파일이 허브 헬퍼를 복붙"
+시나리오와 같은 경로다. `_write_json`×5 를 `app/utils/jsonio.py` 로 옮기되 복사본을
+남기는 경우의 시뮬레이션 실측:
+
+```
+app/utils/jsonio.py:              baseline 0 -> current 1   <-- VIOLATION
+scripts/build_g2_exit_review.py:  baseline 2 -> current 2
+```
+
+허브 신설과 복사본 제거를 같은 커밋에 넣으면 그룹의 모든 파일이 동시에 내려가 통과한다.
+불가피하게 나눠야 하면 중간 커밋에서 `--update-baseline` 을 하지 말고 PR 단위로 묶는다.
 
 스캔 대상은 `app/`·`scripts/` 의 `*.py`(`__pycache__` 제외)다. 상수는 세 모듈에 나뉜다:
 기존 7개 지표의 임계값·대상·allowlist(`JSON_CALL_ALLOWLIST`)는
@@ -227,6 +284,14 @@ CI(`.github/workflows/ci.yml`)는 `pytest -q tests/` 로 이 게이트를 돌고
 
 ## 탐지기 변경 이력
 
+- **웨이브 3 (중복 클론 지표 기준 정정)**: 노드 수를 **원본 AST** 가 아니라 **정규화
+  트리**에서 재도록 고쳤고, 순수 파라미터 위임을 후보에서 배제했다. 기준이 어긋난 탓에
+  이미 공용 `average()` 로 통합을 마친 `_average`×6 이 중복으로 계수돼 있었다 — §4.5-8
+  이 처방하는 리팩터의 산출물을 게이트가 위반으로 잡는 상태였다. 기준이 정규화로
+  바뀌면서 `CLONE_MIN_AST_NODES` 의 의미가 달라져 20 → **14** 로 조정했다(스윕 근거는
+  설계 문서 §2.2). 결과: 교차파일 지표 67 → 65(오탐 6 제거, 실제 중복 2그룹 신규 포착 —
+  `_email_for`×2 15노드 · `format_threshold`×2 14노드), 동일파일 지표 10 유지, **기존
+  7개 지표는 파일×지표 전수 비교에서 증가 0**. 같은 커밋에서 baseline 을 재동결했다.
 - **웨이브 2 (탐지기 강화)**: `unvalidated_dict_tasks` 승격 면제를 "weak 파라미터를 **위치
   인자/splat 대상**으로 받는 승격 + 중첩 정의 제외"로 좁혔다(미탐 잔여: `Thread(**payload)`;
   오탐 잔여: comprehension 변수·지역 재바인딩·keyword 형태 — 위 잔여 오차 참조).

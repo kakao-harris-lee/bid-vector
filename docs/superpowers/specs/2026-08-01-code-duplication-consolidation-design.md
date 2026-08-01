@@ -46,34 +46,59 @@ predicate 적용 전의 원시 클론 수는 §4.2 의 판정을 거치지 않�
 
 ### 2.2 판정 predicate 적용 후
 
-현재 main(`a2b90ca`) 기준으로 `app/` · `scripts/` 의 **378 파일 · 함수 2,646 개**를
-스캔했고 파싱 실패는 0 이다. 함수 열거는 `ast.walk` 로 **메서드와 중첩 함수까지**
-포함한다(§10). 여기에 "메커니컬 유틸리티"(도메인 지식 없는 함수) predicate 와 임계값을
-적용한 결과:
+PR1 구현 시점(`8f8f1e8`) 기준으로 `app/` · `scripts/` 의 **379 파일 · 87,734 줄 ·
+함수 2,669 개**를 스캔했고 파싱 실패는 0 이다. 함수 열거는 `ast.walk` 로 **메서드와
+중첩 함수까지** 포함한다(§10). 여기에 "메커니컬 유틸리티"(도메인 지식 없는 함수)
+predicate 와 임계값을 적용한 결과다.
 
-| 임계값(AST 노드) | 후보 함수 | 클론 그룹 | 그룹 내 함수 | 교차파일 그룹 | 동일파일 그룹 |
+**측정 기준이 바뀌었다.** 노드 수는 **정규화 후** 형태에서 재고(§4.2 3·5단계), 순수
+파라미터 위임은 후보에서 제외한다(§4.2 4단계). 그래서 아래 수치는 구 표(원본 노드 수
+기준)와 직접 비교할 수 없다. 임계값의 절대값도 의미가 달라져 20 → **14** 로 내렸다.
+
+| 임계값(정규화 AST 노드) | 후보 함수 | 클론 그룹 | 그룹 내 함수 | 교차파일 그룹 | 동일파일 그룹 |
 |---|---|---|---|---|---|
-| 12 | 1,303 | 44 | 103 | 38 | 6 |
-| 16 | 1,283 | 40 | 89 | 35 | 5 |
-| **20** | **1,249** | **36** | **81** | **31** | **5** |
-| 25 | 1,188 | 34 | 77 | 29 | 5 |
-| 30 | 1,116 | 31 | 69 | 27 | 4 |
-| 40 | 965 | 19 | 43 | 17 | 2 |
+| 6 | 1,291 | 42 | 95 | 36 | 6 |
+| 8 | 1,288 | 42 | 95 | 36 | 6 |
+| 10 | 1,280 | 41 | 92 | 35 | 6 |
+| 12 | 1,259 | 37 | 81 | 32 | 5 |
+| **14** | **1,228** | **36** | **79** | **31** | **5** |
+| 16 | 1,195 | 33 | 73 | 28 | 5 |
+| 18 | 1,175 | 32 | 71 | 27 | 5 |
+| 20 | 1,139 | 30 | 67 | 26 | 4 |
 
-- **임계값 20 의 근거가 바뀌었다.** 구 측정이 보고한 "20~25 안정 구간"은 좁은 스캔
-  범위가 만든 착시였다. 실제로는 12→40 사이가 완만한 단조 감소이고 평평한 구간이 없다.
-  20 을 채택하는 근거는 이제 둘이다 — (a) 12~16 구간에서만 잡히는 8그룹은 우연의 구조
-  일치이고, (b) §7.1 의 "반드시 잡아야 할" 목록이 20 에서 전부 살아남는다. **임계값의
-  정당성은 이제 픽스처가 진다.**
+(그룹 수는 `CLONE_ALLOWLIST` 적용 **전** 원시 값이다. 14 에서 allowlist 2그룹·4함수를
+빼면 래칫이 기록하는 값은 교차파일 29그룹 / 65함수 · 동일파일 5그룹 / 10함수다.)
+
+**14 를 고른 근거는 위아래 양쪽 경계를 실측으로 확인한 것이다.**
+
+- **아래로 12 이하는 우연의 일치가 섞인다.** 12 에서만 잡히고 14 에서 사라지는 그룹은
+  정확히 하나이고, 그것이 이 스윕 전체에서 유일한 우연 일치다 —
+  `app/services/license_eligibility.py:parse_license_limit_groups` ↔
+  `scripts/_design_ratchet_scan.py:scan_repo`(12노드). 도메인이 전혀 다른 두 함수가
+  "루프 안에서 조건부로 리스트에 append" 라는 골격만 같다. 10 이하로 더 내리면
+  `app/core/time.py` 의 `kst_now`/`utc_now`(10노드) 처럼 **의도적으로 대칭인 쌍**과
+  `_is_pbkdf2_hash` ↔ `is_custom_slug`(11노드) 같은 `startswith` 우연 일치가 추가된다.
+- **위로 16 이상은 진짜 중복을 잃는다.** 14~15 구간에서만 잡히는 3그룹이 전부 실제
+  복붙이다 — `_mapping_or_empty` ↔ `_as_dict`(15, 아래 "게이트 필요성의 직접 증거"가
+  가리키는 바로 그 신규 중복) · `_email_for` ↔ `_email`(15) · `format_threshold` ↔
+  `_format_threshold`(14).
+- **18 이상은 게이트를 깨뜨린다.** `CLONE_ALLOWLIST` 의
+  `build_default_predictor_registry` ↔ `build_registry` 는 정규화 16노드다. 임계값을
+  18 이나 20 으로 두면 이 그룹이 후보에서 사라져 `unused_allowlist_keys` 가 죽은 항목
+  으로 신고하고 **CLI 와 pytest 게이트가 실패한다**. 20 은 §4.1 이 열거한 동일파일
+  5쌍 중 `_resolve_goods_procurement_rate_band` 쌍(18노드)까지 잃는다.
+- **§7.1 의 "반드시 잡아야 할" 목록이 14 에서 전부 살아남는다.** 교차파일 27종 대표
+  함수와 동일파일 5쌍을 실측으로 확인했다. **임계값의 정당성은 픽스처가 진다.**
 - **얼짜 라우터 위양성은 여전히 0 이다.** 데코레이터 배제만으로 `app/api/operator.py` 의
   FastAPI 엔드포인트 7개가 전부 걸러진다. 이들은 CLAUDE.md §4 "라우터는 얇게" 를 지킨
   결과이므로 통합 대상이 아니며, predicate 가 이를 정확히 걸러낸다.
 - **다만 "`app/api/` 하위는 전부 위양성"은 아니다.** `_with_current_operator` 가
   `app/api/analytics.py:63` 과 `app/api/decision_samples.py:34` 에 2벌 있다. 데코레이터가
   없는 진짜 중복 헬퍼이고(본문 동일, 한쪽에만 docstring) 통합 대상이 맞다.
-- **진짜 중복은 전부 포착**: `_write_json`×5 · `_read_json_object`×3 · `_count_lines`×3 ·
-  `_average`×4 등 §7.1 이 "반드시 잡아야 할 것"으로 고정하는 대표 함수 20종이 모두
-  그룹으로 잡힌다.
+- **진짜 중복은 전부 포착**: `_write_json`×5 · `_read_json_object`×3 · `_count_lines`×3
+  등 §7.1 이 "반드시 잡아야 할 것"으로 고정하는 대표 함수가 모두 그룹으로 잡힌다.
+  단 `_average`×6 은 **더 이상 대상이 아니다** — 여섯 곳 모두 이미 공용
+  `average()` 로 위임을 마친 얇은 명명 래퍼라 §4.2 4단계가 배제한다.
 - **게이트 필요성의 직접 증거**: 최초 측정(`db57f8c`) 이후 5일 만에 머지된 PR #337~#341
   은 기존 중복을 **0건** 없앴고, 오히려 **새 중복 1건을 들여왔다** —
   `app/ai/predictors/artifact_contracts.py:106 _mapping_or_empty` ↔
@@ -146,10 +171,21 @@ duplicate_mechanical_helpers_local[파일] =
 큰 동일파일 클론이고 이름과 docstring 이 서로 다른 **진짜 복붙**이다. 동일파일을
 면제하면 지표가 가장 잡아야 할 종류를 놓친다.
 
-**가독성 우려는 임계값이 자동으로 해소한다.** 공개 이름(`_int_or_none` ·
-`_float_or_none`)은 얇은 델리게이터로 남길 수 있고, 델리게이터는 10~12 AST 노드라
-`CLONE_MIN_AST_NODES`(20) 아래로 떨어져 계수되지 않는다. 이름의 가독성을 지키면서
-중복은 사라지며, **allowlist 항목이 0개** 필요하다.
+**가독성 우려는 판정 파이프라인이 자동으로 해소한다.** 공개 이름(`_int_or_none` ·
+`_float_or_none`)은 얇은 델리게이터로 남길 수 있고, 그 델리게이터는 **두 겹으로**
+계수에서 빠진다.
+
+1. **위임 배제(§4.2 4단계)** — 본문이 `return _cast_or_none(value, int)` 한 줄이면
+   노드 수와 무관하게 후보에서 제외된다. 타입힌트와 docstring 을 붙여도 마찬가지다.
+2. **크기(§4.2 5단계)** — 크기는 **정규화 후** 형태에서 재므로 델리게이터는 실측
+   10~12 노드로 `CLONE_MIN_AST_NODES`(14) 아래다.
+
+두 번째 항목이 성립하려면 크기를 정규화 후에 재야 한다는 점이 중요하다. 원본에서 재면
+`def _average(self, values: list[int | float]) -> float | None:` + docstring 이 붙은
+델리게이터가 29노드로 임계값을 넘어 **처방의 산출물이 위반으로 계수된다**. 실제로
+PR1 초기 구현이 이 상태였고, 그래서 이미 통합을 마친 `_average`×6 이 baseline 에
+오탐으로 동결됐다(§7.4). 기준을 정규화 후로 맞추면 이름의 가독성을 지키면서 중복은
+사라지며, **allowlist 항목이 0개** 필요하다.
 
 ### 4.2 판정 파이프라인
 
@@ -157,9 +193,37 @@ duplicate_mechanical_helpers_local[파일] =
 |---|---|
 | 1. 후보 | 함수/메서드 중 **데코레이터가 하나도 없는** 것. 라우터·celery task·`property`·`staticmethod` 가 전부 배제된다 |
 | 2. 메커니컬 | 본문에 `MECHANICAL_EXCLUDED_NAMES` · `MECHANICAL_EXCLUDED_ATTRS` 가 없고 `global`/`nonlocal` 이 없음 |
-| 3. 크기 | AST 노드 수 ≥ `CLONE_MIN_AST_NODES` (= 20) |
-| 4. 정규화 | 변수·인자명 → 등장순 `v0,v1,…` · docstring/데코레이터/annotation/반환타입 제거 · **상수 리터럴은 보존** |
-| 5. 그룹핑 | `sha1(ast.unparse(정규화))[:12]` 가 동일한 함수를 한 그룹으로 묶고, 소속 **파일이 2개 이상**이면 교차파일 축(`duplicate_mechanical_helpers`), **한 파일 안**이면 동일파일 축(`duplicate_mechanical_helpers_local`)으로 나눈다 |
+| 3. 정규화 | 변수·인자명 → 등장순 `v0,v1,…` · docstring/데코레이터/annotation/반환타입 제거 · **상수 리터럴은 보존** |
+| 4. 위임 배제 | 정규화 본문이 **순수 파라미터 위임** 한 줄이면 후보에서 뺀다 (아래 경계표) |
+| 5. 크기 | **정규화 후** AST 노드 수 ≥ `CLONE_MIN_AST_NODES` (= 14) |
+| 6. 그룹핑 | `sha256(ast.unparse(정규화))[:12]` 가 동일한 함수를 한 그룹으로 묶고, 소속 **파일이 2개 이상**이면 교차파일 축(`duplicate_mechanical_helpers`), **한 파일 안**이면 동일파일 축(`duplicate_mechanical_helpers_local`)으로 나눈다 |
+
+**3·5 단계가 같은 트리를 봐야 한다.** 원본에서 크기를 재고 정규화 후에 지문을 내면
+기준이 어긋나 얇은 델리게이터가 오탐이 된다(§4.1). 구현은 정규화 트리 하나에서
+`(digest, node_count)` 를 함께 낸다.
+
+**4단계 — 순수 파라미터 위임 배제.** 이 형태가 곧 §4.1 처방("파라미터화된 해석기 +
+얇은 명명 래퍼")의 산출물이므로, 계수하면 게이트가 자기 법을 처벌한다. 배제는 정규화
+본문이 정확히 하나의 `ast.Return` 이고 그 값이 `ast.Call` 이며 다음을 **전부** 만족할
+때만이다.
+
+1. 호출 대상(`.func`)이 bare `ast.Name` (`ast.Attribute`·`ast.Subscript` 는 해당 없음)
+2. 모든 위치 인자가 `ast.Name` 또는 `ast.Constant`
+3. 모든 키워드 인자의 **값**이 `ast.Name` 또는 `ast.Constant`
+4. `*`/`**` 언패킹(`ast.Starred` · `keyword.arg is None`)이 없음
+
+정의를 더 넓게 잡으면(예: "본문이 `return <Call>` 하나면 배제") 한 줄로 쓴 진짜 복붙
+까지 죽는다. 측정으로 확인한 경계:
+
+| 본문 | 판정 | 이유 |
+|---|---|---|
+| `return average(values, digits=4)` | **배제** | bare 이름 + 파라미터/상수 인자 |
+| `return _cast_or_none(value, int)` | **배제** | 동일 |
+| `return resolve_band(RULES, text=t, title=title_line(t))` | 유지 | 키워드 값이 중첩 `Call` |
+| `return "".join(str(v or "").strip().lower().split())` | 유지 | 호출 대상이 `Attribute` |
+| `return tuple(item.strip() for item in raw.split(","))` | 유지 | 인자가 `GeneratorExp` |
+| `return " ".join(f"{k}={v}" for k, v in rows)` | 유지 | 호출 대상이 `Attribute` |
+| `return combine(*items, mode)` / `return combine(mode, **options)` | 유지 | 언패킹은 전달이 아니라 재조립 |
 
 배제 목록 초안(스캐너 상단 선언 상수로 고정):
 
@@ -176,7 +240,7 @@ MECHANICAL_EXCLUDED_NAMES = frozenset({
 MECHANICAL_EXCLUDED_ATTRS = frozenset({
     "query", "commit", "add", "execute", "flush", "refresh", "scalar", "scalars",
 })
-CLONE_MIN_AST_NODES = 20
+CLONE_MIN_AST_NODES = 14
 ```
 
 `open` · `Path` · `json` · `datetime` 은 **배제하지 않는다**. 얇은 메커니컬 I/O 래퍼
@@ -225,8 +289,22 @@ def scan_repo(root: Path) -> RatchetReport:
 | 기존 허브 함수를 어딘가로 복사 | 허브 파일 카운트가 0→1 로 상승 → **위반** |
 | 그룹을 완전 통합 | 그룹의 모든 파일이 동시에 0 으로 하락 → 통과 |
 | 부분 통합 (4곳 중 1곳만 제거) | 남은 3곳은 각 1 유지 → 감소 없음. **위반도 아님**(증가가 아니므로) |
+| **새 허브에 canonical 을 두고 복사본을 남김** | 첫 행과 같은 경로다. 새 허브 파일이 baseline 에 없어 **0→1 로 위반** |
 
-마지막 행은 수용 가능한 성질이지만 **부분 개선이 baseline 에 반영되지 않는다**는 점을
+마지막 행은 통합 작업 자체가 걸리는 경로라서 따로 적는다. `_write_json`×5 를
+`app/utils/jsonio.py` 로 옮기되 복사본을 지우지 않은 상태를 시뮬레이션한 실측:
+
+```
+app/utils/jsonio.py:              baseline 0 -> current 1   <-- VIOLATION
+scripts/build_g2_exit_review.py:  baseline 2 -> current 2
+```
+
+따라서 **클론 그룹은 한 PR 안에서 원자적으로 통합한다.** 허브 신설과 복사본 제거가 같은
+커밋에 있으면 그룹의 모든 파일이 동시에 내려가 통과한다. 나눠야 한다면 중간 커밋에서
+`--update-baseline` 으로 허브의 위반을 잠그지 말고 PR 단위로 묶는다 — 잠그면 그 허브에
+복붙 1건이 영구히 무료로 허용된다.
+
+부분 통합 행은 수용 가능한 성질이지만 **부분 개선이 baseline 에 반영되지 않는다**는 점을
 §8 에 한계로 명시한다.
 
 ### 4.5 튜닝 표면 고정
@@ -302,9 +380,7 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 | PR | 대상 | 목적지 |
 |---|---|---|
 | PR2 | `optional_float`(`app/ai/guardrail_core.py`) · `_safe_optional_int`(`app/services/synthetic_experiment/sample_gap.py`) | `app/utils/numeric.py` |
-| PR2 | `_coerce_amount`(`app/ai/predictors/legal_floor_spec.py`) · `_coerce_float`(`app/services/award_verification.py`) · `_as_float`(`app/services/decision_samples.py`) · `amount_float`(`scripts/backtest_latest_award_holdouts.py`) | `app/utils/numeric.py` |
-| PR2 | `_average`×4 (`app/services/analytics_reporting/base.py` · `decision_analytics/base.py` · `prediction_feedback.py` · `prediction_reporting.py`) | `app/utils/numeric.py` |
-| PR2 | `_average`×2 (`app/services/ml_training/helpers.py` · `paper_bidding_backtest/scoring.py`) — 앞 그룹과 digest 가 달라 **별개 그룹**이다. 통합 전에 두 변형의 차이를 먼저 확인한다 | `app/utils/numeric.py` |
+| PR2 | `_coerce_amount`(`app/ai/predictors/legal_floor_spec.py`) · `_coerce_float`(`app/services/award_verification.py`) · `_as_float`(`app/services/decision_samples.py`) · `amount_float`(`scripts/backtest_latest_award_holdouts.py`) — **네 번째 멤버가 `scripts/` 다. PR2 가 그 스크립트까지 같은 커밋에서 처리한다**(§5.1 대로 스크립트가 `app.utils.numeric` 을 직접 import) | `app/utils/numeric.py` |
 | PR2 | `_rate`×2 (`app/services/analytics_reporting/base.py` · `prediction_reporting.py`) | `app/utils/numeric.py` |
 | PR2 | `_delta`×2 (`app/services/decision_analytics/base.py` · `decision_experiments/base.py`) | `app/utils/numeric.py` |
 | PR2 | `_memberships_by_group` / `_tech_fields_by_group` (`app/services/classification/`) | `app/services/classification/_grouping.py` |
@@ -317,6 +393,7 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 | PR2 | `_rollout_check`(`app/services/ml_release/base.py`) · `_check`(`app/services/ml_release/storage/base.py`) | `app/services/ml_release/` 내부 공통화 |
 | PR2 | `_with_current_operator`×2 (`app/api/analytics.py` · `app/api/decision_samples.py`) | `app/api/operator_common.py` |
 | PR2 | `guidance_for`(`app/services/smoke_failure_taxonomy.py`) · `failure_guidance`(`scripts/production_smoke_test.py`) | `smoke_failure_taxonomy.py` canonical → 스크립트가 import |
+| PR2 | `_email_for`(`app/services/synthetic_custom_operator.py`) · `_email`(`scripts/seed_synthetic_operators.py`) | `synthetic_custom_operator.py` canonical → 스크립트가 import |
 | PR2 | **동일파일 5그룹** — §4.1 표의 5쌍 | 각 파일 안에서 파라미터화 + 얇은 명명 래퍼 유지 (§4.1 처방) |
 | PR3 | `_read_json_object`×3 (`build_g2_exit_review` · `g2_blocking_gap_register` · `verify_g2_notification_targets`) | `app/utils/jsonio.py` |
 | PR3 | `_write_json`×4 + `write_json`×1 (`build_g2_exit_review` · `check_g2_exit_readiness` · `collect_g2_evidence` · `g2_blocking_gap_register` · `verify_g2_notification_targets`) | `app/utils/jsonio.py` |
@@ -331,18 +408,32 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 | PR3 | `_verdict_line`×2 (`report_license_eligibility` · `report_license_gate_impact`) | `scripts/_common/report.py` |
 | PR3 | `_ordered_segments`×2 (`report_eligibility_segment_backtest` · `report_no_candidate_cause`) | `scripts/_common/report.py` |
 | PR3 | `_classify_label_for` · `_segment_label_for` (`report_eligibility_segment_backtest` · `report_no_candidate_cause`) — 이름이 달라 의미 동일성 확인 후 통합 | `scripts/_common/report.py` |
+| PR3 | `format_threshold` · `_format_threshold` (`backtest_latest_award_holdouts` · `report_eligibility_segment_backtest`) | `scripts/_common/report.py` |
 
-합계: PR2 21그룹(교차 16 + 동일 5) · PR3 13그룹 · 보류 2그룹 = **측정된 36그룹 전부**를
+합계: PR2 20그룹(교차 15 + 동일 5) · PR3 14그룹 · 보류 2그룹 = **측정된 36그룹 전부**를
 다룬다 (교차파일 31 + 동일파일 5).
 
 `_classify_label_for` / `_segment_label_for` 은 이름이 다르므로 통합 전에 두 함수의
 **의미가 실제로 같은지** 확인한다. 다르면 allowlist 로 옮긴다.
 
+**각 행은 그룹 전체를 한 커밋에서 처리한다.** §4.4 마지막 행대로, 새 허브
+(`app/utils/numeric.py` 등)에 canonical 만 두고 복사본을 남기면 그 허브 파일이 0→1 로
+위반이 되어 PR 이 첫 커밋부터 실패한다. 허브 신설 · 복사본 제거 · 호출부 이전이 같은
+커밋에 있어야 그룹의 모든 파일이 동시에 내려간다.
+
 ### 5.2.1 지표 임계값 아래의 중복
 
-`_round_optional`×2 · `_csv_safe`×2 처럼 **AST 20노드 미만이라 지표가 잡지
-않는** 중복이 따로 있다. 해당 파일을 어차피 건드리는 PR 에서는 같이 정리하되, §7.4 의
-성공 기준에는 넣지 않는다. 지표가 세지 않는 것을 목표로 잡으면 검증할 수 없기 때문이다.
+지표가 잡지 않는 중복이 따로 있다. 원인은 셋이고 **임계값만이 아니다**(실측 확인).
+
+| 중복 | 미탐 원인 |
+|---|---|
+| `_csv_safe`×2 (`app/services/decision_samples.py` · `app/services/bid_form_draft.py`) | 둘 다 `@staticmethod` 라 §4.2 1단계에서 후보에조차 오르지 않는다. 사실상 동일한 본문이다 |
+| `_round_optional`×2 (`app/services/prediction_feedback.py` 메서드 25노드 · `app/services/dashboard_summary/normalizers.py` 모듈 함수 24노드) | 둘 다 임계값 위지만 한쪽이 메서드라 `self` 가 인자 하나로 남아 정규화 지문이 갈린다 |
+| `_kst_stamp`×4 (`scripts/` 4파일, 10노드) · `kst_now`/`utc_now`(`app/core/time.py`, 10노드) | 정규화 14노드 미만 |
+
+해당 파일을 어차피 건드리는 PR 에서는 같이 정리하되, §7.4 의 성공 기준에는 넣지 않는다.
+지표가 세지 않는 것을 목표로 잡으면 검증할 수 없기 때문이다. `kst_now`/`utc_now` 는
+의도적으로 대칭인 쌍이라 통합 대상이 아니다 — 임계값이 이를 자동으로 걸러 준다.
 
 ### 5.3 통합하지 않고 보류하는 2건
 
@@ -447,15 +538,27 @@ CI 에 프론트 job 을 신설한다: `tsc --noEmit` · `vitest run` · `vite b
 - 이름만 다르고 구조가 같은 쌍 (`_coerce_float` / `amount_float`)
 - 동일 파일 내 상수만 다른 쌍 (`extract_eligibility_flags` /
   `_project_license_limit_item` — `…_local` 지표)
-- 동일 파일 내 캐스트만 다른 쌍 (`_int_or_none` / `_float_or_none` — `…_local` 지표)
+- 동일 파일 내 캐스트만 다른 쌍 (`_int_or_none` / `_float_or_none` — `…_local` 지표).
+  **합성 시그니처가 아니라 실제 소스 문자열로** digest 동치를 고정한다 — 합성
+  `CloneSignature` 로만 덮으면 정규화 경로가 바뀌어도 픽스처가 깨지지 않는다
+- **한 줄로 쓴 진짜 복붙** — `return "".join(…)`(호출 대상이 `Attribute`) ·
+  `return tuple(x.strip() for x in …)`(인자가 `GeneratorExp`) ·
+  `return f(RULES, title=g(t))`(키워드 값이 중첩 `Call`) · `return f(*items, mode)`.
+  §4.2 4단계 배제가 **너무 넓어지지 않았음**을 고정한다
 
 **반드시 놓쳐야 할 것**
 
 - 데코레이터가 붙은 얼짜 FastAPI 라우터 (`app/api/operator.py` 패턴)
 - DB 세션에 접근하는 서비스 메서드
 - 상수 리터럴만 다른 쌍 (`round(x, 2)` vs `round(x, 3)`)
-- **파라미터화 후 남는 얇은 명명 델리게이터** (10~12 노드 — 임계값 아래). 이 케이스가
-  깨지면 §4.1 의 "이름은 지키고 중복만 없앤다" 처방이 성립하지 않는다
+- **파라미터화 후 남는 얇은 명명 델리게이터**. 이 케이스가 깨지면 §4.1 의 "이름은
+  지키고 중복만 없앤다" 처방이 성립하지 않는다. 두 형태를 모두 고정한다 —
+  (a) annotation 없는 짧은 델리게이터(정규화 10~12노드, 임계값 아래),
+  (b) **타입힌트 + docstring 이 붙어 원본 노드 수가 임계값을 넘는 델리게이터**
+  (`_average` 실사례: 원본 29노드 · 정규화 12노드). (b) 가 없으면 크기 기준이 원본으로
+  퇴행해도 테스트가 통과한다 — 실제로 그렇게 회귀했다(§7.4)
+- **annotation·docstring 유무가 노드 수를 바꾸지 않음** — 같은 알고리즘에 타입힌트만
+  붙인 쌍이 같은 `node_count` · 같은 digest 를 갖는지 고정한다
 - (TS) React 컴포넌트와 커스텀 훅
 
 기존 `compare_reports` 계약 테스트와 "저장소 스캔이 baseline 을 초과하지 않음" 통합
@@ -489,22 +592,32 @@ allowlist 가 stale 해지면서 면제 범위가 조용히 넓어진다.
 
 ### 7.4 성공 기준
 
-측정된 교차파일 인벤토리는 31그룹 / 71함수다. 이 중 allowlist 2그룹(4함수, §5.3)은
-지표에서 제외되므로, 래칫이 기록하는 값은 아래와 같다.
+측정된 교차파일 인벤토리는 31그룹 / 69함수다. 이 중 allowlist 2그룹(4함수, §5.3)은
+지표에서 제외되므로, 래칫이 기록하는 값은 아래와 같다. **현재·PR1 행은 PR1 이
+`tests/design_ratchet_baseline.json` 에 실제로 동결한 값이다.**
 
 | 시점 | 교차파일 지표 (`duplicate_mechanical_helpers`) | 동일파일 지표 (`…_local`) |
 |---|---|---|
-| 현재 | 29 그룹 / 67 함수 | 5 그룹 / 10 함수 |
+| 현재 | 29 그룹 / **65 함수** | 5 그룹 / **10 함수** |
 | PR1 완료 | 동일 (baseline 동결 — 이 시점부터 증가 차단) | 동일 |
-| PR2 완료 | 13 그룹 / 31 함수 | **0 그룹 / 0 함수** |
+| PR2 완료 | 14 그룹 / 33 함수 | **0 그룹 / 0 함수** |
 | PR3 완료 | **0 그룹 / 0 함수** | 0 그룹 / 0 함수 |
 
-위 수치는 **통과 조건이 아니라 기대치**다. PR1 이 구현하는 스캐너의 predicate 가 이
-문서의 프로토타입과 완전히 같지 않을 수 있으므로 실제로 기록되는 값은 달라질 수 있다.
-**baseline 의 실제 값은 PR1 에서 기록한다.**
+PR2 이후 값은 **통과 조건이 아니라 기대치**다. PR2·PR3 이 §5.2 의 배분대로 진행된다는
+가정에서 나온 산술이다(PR2 가 교차 15그룹 / 32함수, PR3 이 나머지 14그룹 / 33함수).
+
+**PR1 의 baseline 은 한 번 재동결됐다.** 최초 동결값은 교차 67함수였는데, 그중 6건이
+오탐이었다 — 크기를 원본 AST 에서 재는 바람에 이미 공용 `average()` 로 통합을 마친
+`_average`×6 이 계수됐다. 처방의 산출물이 위반으로 잡히는 상태였으므로 PR3 의 "0/0"
+목표가 애초에 도달 불가능했다. 크기 기준을 정규화 후로 바꾸고 순수 파라미터 위임을
+배제한 뒤(§4.1·§4.2) 재동결한 값이 위 표다. 같은 변경으로 임계값이 20→14 로 내려가
+실제 중복 2그룹(`_email_for`×2 · `format_threshold`×2, 각 15·14노드)이 새로 잡혔고,
+기존 7개 지표는 파일×지표 전수 비교에서 증가 0 이었다.
 
 동일파일 목표가 0 인 것은 §4.1 에서 5그룹 전수를 확인한 결과 전부 환원 가능하다고
-판정했기 때문이다. 파라미터화 후 남는 얇은 명명 래퍼는 임계값 아래라 계수되지 않는다.
+판정했기 때문이다. 파라미터화 후 남는 얇은 명명 래퍼는 §4.2 4단계가 배제하고, 그것을
+빠져나가더라도 정규화 10~12노드라 임계값(14) 아래다. 이 처방의 산출물이 실제로 0 으로
+떨어지는지는 §7.1 픽스처가 고정한다.
 
 프론트 목표치는 PR4 스캐너 리포트가 확정한다. 현재 프론트 수치는 수동 grep 추정이므로
 목표로 박지 않는다.
@@ -542,14 +655,17 @@ allowlist 가 stale 해지면서 면제 범위가 조용히 넓어진다.
 1. `app/` · `scripts/` 의 `*.py` 를 `ast.parse` (`__pycache__` 제외)
 2. `ast.walk(tree)` 로 **모든** 함수/비동기함수 노드를 순회한다 — 모듈 최상위뿐 아니라
    **메서드와 중첩 함수를 포함**한다. 최상위만 세면 헬퍼를 클래스로 감싸는 것만으로
-   지표를 회피할 수 있다. 각 노드의 AST 노드 수를 세고 `CLONE_MIN_AST_NODES` 미만은 제외
+   지표를 회피할 수 있다
 3. §4.2 의 predicate 로 메커니컬 여부 판정
 4. `ast.unparse` → `ast.parse` 로 복제한 뒤 `name="f"` · `decorator_list=[]` ·
    `returns=None`, 첫 문장이 문자열 상수 `Expr`(docstring)이면 제거
-5. `NodeTransformer` 로 `ast.Name.id` 와 `ast.arg.arg` 를 등장 순서대로 `v0,v1,…` 치환,
+5. docstring 제거 후 본문이 **순수 파라미터 위임**(§4.2 4단계)이면 제외
+6. `NodeTransformer` 로 `ast.Name.id` 와 `ast.arg.arg` 를 등장 순서대로 `v0,v1,…` 치환,
    `arg.annotation=None`
-6. `sha1(ast.unparse(정규화))[:12]` 를 그룹 키로 사용
-7. 멤버가 2개 이상인 그룹만 남기고, 소속 파일이 2개 이상이면 교차파일
+7. **정규화가 끝난 트리**의 AST 노드 수를 세고 `CLONE_MIN_AST_NODES`(14) 미만은 제외.
+   크기와 지문을 같은 트리에서 재야 기준이 어긋나지 않는다(§4.1)
+8. `sha256(ast.unparse(정규화))[:12]` 를 그룹 키로 사용
+9. 멤버가 2개 이상인 그룹만 남기고, 소속 파일이 2개 이상이면 교차파일
    축(`duplicate_mechanical_helpers`), 한 파일 안이면 동일파일
    축(`duplicate_mechanical_helpers_local`)으로 나눈다
 
