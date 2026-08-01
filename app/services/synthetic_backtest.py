@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.single_user import split_multi_value_text
 from app.models.models import CompanyProfile, OperatorStrategy, User
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
+from app.utils.numeric import optional_float, optional_int
 
 SYNTHETIC_USERNAME_PREFIX = "synthetic-"
 
@@ -235,31 +236,17 @@ def _slice_settlement_item(item: dict[str, Any]) -> dict[str, Any]:
     histogram in the UI.
     """
     return {
-        "project_id": _int_or_none(item.get("project_id")),
+        "project_id": optional_int(item.get("project_id")),
         "project_title": str(item.get("project_title") or ""),
         "category": item.get("category"),
-        "paper_bid_id": _int_or_none(item.get("paper_bid_id")),
+        "paper_bid_id": optional_int(item.get("paper_bid_id")),
         "decision_action": item.get("decision_action"),
-        "bid_amount": _float_or_none(item.get("bid_amount")),
-        "winning_amount": _float_or_none(item.get("winning_amount")),
-        "absolute_bid_rate_error": _float_or_none(item.get("absolute_bid_rate_error")),
+        "bid_amount": optional_float(item.get("bid_amount")),
+        "winning_amount": optional_float(item.get("winning_amount")),
+        "absolute_bid_rate_error": optional_float(item.get("absolute_bid_rate_error")),
         "would_have_won": bool(item.get("would_have_won")),
         "settled_at": item.get("settled_at"),
     }
-
-
-def _int_or_none(value: Any) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _float_or_none(value: Any) -> float | None:
-    try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 def serialize_synthetic_operators(
