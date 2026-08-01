@@ -28,6 +28,7 @@ from app.services.award_verification import (
     strip_notice_suffix,
 )
 from app.utils.numeric import optional_float
+from app.utils.textfmt import append_unique_note
 
 
 class RealBidNotFoundError(ValueError):
@@ -96,7 +97,11 @@ class RealBidTrackService:
         record.submitted_at = submitted_ts
         if floor_rate is not None:
             record.submitted_floor_rate = float(floor_rate)
-        self._append_note(record, note or self.REGISTER_NOTE)
+        appended_reasoning = append_unique_note(
+            record.reasoning, note or self.REGISTER_NOTE
+        )
+        if appended_reasoning != record.reasoning:
+            record.reasoning = appended_reasoning
 
         db.commit()
         db.refresh(record)
@@ -260,13 +265,3 @@ class RealBidTrackService:
             .order_by(BidDecisionRecord.updated_at.desc(), BidDecisionRecord.id.desc())
             .first()
         )
-
-    def _append_note(self, record: BidDecisionRecord, note: str) -> None:
-        """Append a note to reasoning without duplicating the same sentence."""
-        if not note:
-            return
-        if record.reasoning:
-            if note not in record.reasoning:
-                record.reasoning = f"{record.reasoning} {note}".strip()
-            return
-        record.reasoning = note

@@ -226,6 +226,35 @@ def test_record_real_bid_preserves_existing_recommendation(test_db):
     assert record.decision_status == "submitted"
 
 
+def test_record_real_bid_appends_reasoning_note_once(test_db):
+    project = _seed_project(test_db)
+    operator = ensure_operator_account(test_db)
+    service = RealBidTrackService()
+
+    first = service.record_real_bid(
+        test_db, operator=operator, project=project, bid_amount=88_000_000
+    )
+    assert first.reasoning == RealBidTrackService.REGISTER_NOTE
+
+    # Re-registering repeats the default note — it must not be duplicated.
+    repeated = service.record_real_bid(
+        test_db, operator=operator, project=project, bid_amount=88_500_000
+    )
+    assert repeated.reasoning == RealBidTrackService.REGISTER_NOTE
+
+    # A new note is appended after a single space.
+    extended = service.record_real_bid(
+        test_db,
+        operator=operator,
+        project=project,
+        bid_amount=89_000_000,
+        note="투찰가를 상향 재등록",
+    )
+    assert extended.reasoning == (
+        f"{RealBidTrackService.REGISTER_NOTE} 투찰가를 상향 재등록"
+    )
+
+
 def test_resolve_project_raises_when_missing(test_db):
     service = RealBidTrackService()
     try:

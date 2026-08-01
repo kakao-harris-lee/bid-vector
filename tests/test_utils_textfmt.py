@@ -12,11 +12,17 @@ from __future__ import annotations
 
 import pytest
 
+from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.decision_experiments.application import _ApplicationMixin
 from app.services.ml_training.helpers import HelpersMixin
 from app.services.prediction_dataset import PredictionDatasetService
-from app.utils.textfmt import clean_text, normalize_lookup_key, optional_text
+from app.utils.textfmt import (
+    append_unique_note,
+    clean_text,
+    normalize_lookup_key,
+    optional_text,
+)
 
 ALIASES = {
     "general-service": "service",
@@ -122,3 +128,51 @@ def test_decision_experiment_clean_category_name(value, expected):
 def test_ml_training_clean_optional(value, expected):
     mixin = HelpersMixin()
     assert mixin._clean_optional(value) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Caller path — reasoning notes stay idempotent and skip redundant writes.
+# --------------------------------------------------------------------------- #
+# (existing reasoning, note, resulting reasoning, attribute writes)
+NOTE_CASES = [
+    (None, "메모", "메모", 1),
+    ("", "메모", "메모", 1),
+    ("기존", "메모", "기존 메모", 1),
+    ("기존 메모", "메모", "기존 메모", 0),  # already present — no rewrite
+    ("메모", "메모", "메모", 0),
+    ("기존", "", "기존", 0),  # empty note is a no-op
+    (None, "", None, 0),
+    ("기존 ", "메모", "기존  메모", 1),  # only the ends are stripped, not the seam
+    ("기존", "메모 ", "기존 메모", 1),
+    ("메", "메모", "메 메모", 1),  # substring of the note is not a match
+]
+
+
+class _ReasoningRecord:
+    """Stand-in for ``BidDecisionRecord`` counting writes to ``reasoning``.
+
+    The write count is part of the contract: re-assigning an unchanged value
+    would mark the ORM row dirty and emit a redundant UPDATE.
+    """
+
+    def __init__(self, reasoning: str | None) -> None:
+        self.writes = 0
+        self.reasoning = reasoning
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "reasoning" and "reasoning" in self.__dict__:
+            object.__setattr__(self, "writes", self.writes + 1)
+        object.__setattr__(self, name, value)
+
+
+@pytest.mark.parametrize(("existing", "note", "expected", "writes"), NOTE_CASES)
+def test_append_unique_note(existing, note, expected, writes):
+    assert append_unique_note(existing, note) == expected
+
+
+@pytest.mark.parametrize(("existing", "note", "expected", "writes"), NOTE_CASES)
+def test_allocation_append_reasoning_note(existing, note, expected, writes):
+    record = _ReasoningRecord(existing)
+    BidDecisionService()._append_reasoning_note(record, note)
+    assert record.reasoning == expected
+    assert record.writes == writes

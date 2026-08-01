@@ -23,6 +23,7 @@ from app.services.operator_strategy_tuning import (
     DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
     get_strategy_auto_workload_penalty_multiplier,
 )
+from app.utils.textfmt import append_unique_note
 
 
 class BidDecisionService:
@@ -478,13 +479,9 @@ class BidDecisionService:
 
     def _append_reasoning_note(self, record: BidDecisionRecord, note: str) -> None:
         """Append a note to reasoning without duplicating the same sentence."""
-        if not note:
-            return
-        if record.reasoning:
-            if note not in record.reasoning:
-                record.reasoning = f"{record.reasoning} {note}".strip()
-            return
-        record.reasoning = note
+        appended_reasoning = append_unique_note(record.reasoning, note)
+        if appended_reasoning != record.reasoning:
+            record.reasoning = appended_reasoning
 
     def _compute_urgency_score(self, deadline_hours_remaining: int | None) -> float:
         """Convert remaining hours into an urgency score."""
