@@ -128,9 +128,11 @@
 - **클래스·타입·상수의 중복** — 함수만 스캔한다.
 - **20 AST 노드 미만** — `_average` 류 소형 중복은 임계값 아래라 계수되지 않는다.
 
-스캔 대상은 `app/`·`scripts/` 의 `*.py`(`__pycache__` 제외)다. 임계값·대상·allowlist 는
-모두 `scripts/_design_ratchet_scan.py` 상단 상수로, 지표 모델과 밴드 환산은
-`scripts/_design_ratchet_contracts.py` 에 선언되어 있다.
+스캔 대상은 `app/`·`scripts/` 의 `*.py`(`__pycache__` 제외)다. 상수는 세 모듈에 나뉜다:
+기존 7개 지표의 임계값·대상·allowlist(`JSON_CALL_ALLOWLIST`)는
+`scripts/_design_ratchet_scan.py` 상단에, 중복 헬퍼 지표의 임계값(`CLONE_MIN_AST_NODES`)과
+`CLONE_ALLOWLIST` 는 `scripts/_design_ratchet_clones.py` 상단에, 지표 모델·`file_loc`
+임계값·밴드 환산은 `scripts/_design_ratchet_contracts.py` 에 선언되어 있다.
 
 ## 사용
 
