@@ -14,7 +14,10 @@ avoid import cycles.
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+T = TypeVar("T")
 
 
 def coerce_sequence(raw_value: Any) -> list[Any]:
@@ -32,28 +35,31 @@ def coerce_sequence(raw_value: Any) -> list[Any]:
     return []
 
 
-def coerce_numeric_list(raw_value: Any) -> list[float]:
-    """Coerce a JSON string or list of numbers into floats."""
+def _coerce_cast_list(raw_value: Any, cast: Callable[[Any], T]) -> list[T]:
+    """Cast every member of a list-like value, dropping the ones ``cast`` rejects.
+
+    The single interpreter behind ``coerce_numeric_list`` / ``coerce_integer_list``
+    — those differ only in ``cast``, so the loop lives here once and the named
+    wrappers keep the readable call sites (CLAUDE.md §4.5-8).
+    """
     parsed = coerce_sequence(raw_value)
-    numbers: list[float] = []
+    values: list[T] = []
     for item in parsed:
         try:
-            numbers.append(float(item))
+            values.append(cast(item))
         except (TypeError, ValueError):
             continue
-    return numbers
+    return values
+
+
+def coerce_numeric_list(raw_value: Any) -> list[float]:
+    """Coerce a JSON string or list of numbers into floats."""
+    return _coerce_cast_list(raw_value, float)
 
 
 def coerce_integer_list(raw_value: Any) -> list[int]:
     """Coerce a JSON string or list of numbers into integers."""
-    parsed = coerce_sequence(raw_value)
-    numbers: list[int] = []
-    for item in parsed:
-        try:
-            numbers.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return numbers
+    return _coerce_cast_list(raw_value, int)
 
 
 def as_str_list(raw_value: Any) -> list[str]:
