@@ -345,18 +345,20 @@ scripts/build_g2_exit_review.py:  baseline 2 -> current 2
 ```
 app/utils/                       app/ · scripts/ 공통 메커니컬 허브
   numeric.py                     coerce_float · coerce_amount · optional_float · optional_int
-                                 average · rate · delta
   jsonio.py                      read_json_object · write_json · parse_json_or_text
                                  mapping_or_empty
   textfmt.py                     clip_title · normalize_category · clean_optional
                                  append_note
   sequence_coercion.py           (기존) + as_str_list
 
+app/domain/
+  aggregates.py                  (기존) average · error_rate + rate · delta
+
 app/services/classification/
   _grouping.py                   memberships_by_group · tech_fields_by_group · format_groups
 
 app/api/
-  operator_common.py             with_current_operator
+  operator_common.py             (기존) + with_current_operator
 
 scripts/_common.py → scripts/_common/    stdlib-only CLI 전용
   __init__.py                    기존 parse_datetime · positive_int 재수출 (import 보존)
@@ -371,6 +373,16 @@ frontend/src/shared/
     index.ts
   lib.ts                         cn + 라벨/상태 매핑만 (shared/format 재수출로 기존 import 보존)
 ```
+
+**정정 (2026-08-01, PR2 착수 시):** 초안은 `average · rate · delta` 를
+`app/utils/numeric.py` 에 두었으나 이는 숫자 허브를 둘로 가르는 오류였다.
+`app/domain/aggregates.py` 가 이미 집계 원시 연산(`average` · `error_rate`)의 단일
+출처로 10개 이상 모듈에서 import 되고 있다(§4.1 의 `_average`×6 얇은 래퍼가 그
+증거다). 경계는 이렇다 — **`app/domain/` = 도메인 의미가 있는 계산(strict mypy 섬),
+`app/utils/` = 도메인 지식 없는 메커니컬 강제변환·포맷.** 따라서 `rate` · `delta` 는
+aggregates 로 가고 numeric.py 는 강제변환만 갖는다. `app/api/operator_common.py` 도
+신설이 아니라 **기존 모듈**이며, 그 안의 `_operator_context_fields` 가 이미
+`current_operator_*` 필드의 단일 출처이므로 `with_current_operator` 는 이를 재사용한다.
 
 **`scripts/_common/` 이 `app/utils/` 를 재수출하지 않는 것**이 중요하다.
 `scripts/_common.py` 는 docstring 에서 "app 의존성을 끌어오지 않는 stdlib-only" 를
@@ -388,8 +400,8 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 |---|---|---|
 | PR2 | `optional_float`(`app/ai/guardrail_core.py`) · `_safe_optional_int`(`app/services/synthetic_experiment/sample_gap.py`) | `app/utils/numeric.py` |
 | PR2 | `_coerce_amount`(`app/ai/predictors/legal_floor_spec.py`) · `_coerce_float`(`app/services/award_verification.py`) · `_as_float`(`app/services/decision_samples.py`) · `amount_float`(`scripts/backtest_latest_award_holdouts.py`) — **네 번째 멤버가 `scripts/` 다. PR2 가 그 스크립트까지 같은 커밋에서 처리한다**(§5.1 대로 스크립트가 `app.utils.numeric` 을 직접 import) | `app/utils/numeric.py` |
-| PR2 | `_rate`×2 (`app/services/analytics_reporting/base.py` · `prediction_reporting.py`) | `app/utils/numeric.py` |
-| PR2 | `_delta`×2 (`app/services/decision_analytics/base.py` · `decision_experiments/base.py`) | `app/utils/numeric.py` |
+| PR2 | `_rate`×2 (`app/services/analytics_reporting/base.py` · `prediction_reporting.py`) | `app/domain/aggregates.py`(기존) |
+| PR2 | `_delta`×2 (`app/services/decision_analytics/base.py` · `decision_experiments/base.py`) | `app/domain/aggregates.py`(기존) |
 | PR2 | `_memberships_by_group` / `_tech_fields_by_group` (`app/services/classification/`) | `app/services/classification/_grouping.py` |
 | PR2 | `_format_groups`×2 (`app/services/classification/`) | `app/services/classification/_grouping.py` |
 | PR2 | `_as_str_list` (`app/schemas/opportunity.py` · `app/services/bid_summary.py`) | `app/utils/sequence_coercion.py` |
@@ -398,7 +410,7 @@ import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 | PR2 | `normalize_agency_name`×2 (`app/ai/predictors/historical/statistics.py` · `app/services/koneps/parsing.py`) | `koneps/parsing.py` canonical → `statistics.py` 가 import |
 | PR2 | `_append_reasoning_note`(`app/services/allocation.py`) · `_append_note`(`app/services/real_bid_track.py`) | `app/utils/textfmt.py` |
 | PR2 | `_rollout_check`(`app/services/ml_release/base.py`) · `_check`(`app/services/ml_release/storage/base.py`) | `app/services/ml_release/` 내부 공통화 |
-| PR2 | `_with_current_operator`×2 (`app/api/analytics.py` · `app/api/decision_samples.py`) | `app/api/operator_common.py` |
+| PR2 | `_with_current_operator`×2 (`app/api/analytics.py` · `app/api/decision_samples.py`) | `app/api/operator_common.py`(기존) — `_operator_context_fields` 재사용 |
 | PR2 | `guidance_for`(`app/services/smoke_failure_taxonomy.py`) · `failure_guidance`(`scripts/production_smoke_test.py`) | `smoke_failure_taxonomy.py` canonical → 스크립트가 import |
 | PR2 | `_email_for`(`app/services/synthetic_custom_operator.py`) · `_email`(`scripts/seed_synthetic_operators.py`) | `synthetic_custom_operator.py` canonical → 스크립트가 import |
 | PR2 | **동일파일 5그룹** — §4.1 표의 5쌍 | 각 파일 안에서 파라미터화 + 얇은 명명 래퍼 유지 (§4.1 처방) |

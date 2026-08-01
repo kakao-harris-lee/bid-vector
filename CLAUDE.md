@@ -189,7 +189,8 @@ segments:
 
 | 용도 | 허브 |
 |---|---|
-| 숫자 변환·집계 | `app/utils/numeric.py` |
+| 숫자 강제변환 | `app/utils/numeric.py` |
+| 집계(평균·오차율·비율·증감) | `app/domain/aggregates.py` |
 | JSON 읽기/쓰기 | `app/utils/jsonio.py` |
 | 문자열·포맷 | `app/utils/textfmt.py` |
 | 시퀀스 강제변환 | `app/utils/sequence_coercion.py` |
@@ -199,9 +200,11 @@ segments:
 | CLI 인자 (stdlib-only) | `scripts/_common/cliargs.py` |
 | 프론트 포맷 | `@/shared/format` |
 
-`numeric.py`·`jsonio.py`·`textfmt.py`·`scripts/_common/cliargs.py`·`@/shared/format` 은
-아직 없는 목적지로, 후속 중복 통합 PR 이 만든다. 주소표를 먼저 두는 이유는 그 PR 들이
-헬퍼를 어디로 모을지 흔들리지 않게 하기 위함이다.
+`numeric.py`·`jsonio.py`·`textfmt.py`·`scripts/_common/cliargs.py`·`@/shared/format` 중
+아직 없는 것은 후속 중복 통합 PR 이 만든다. 주소표를 먼저 두는 이유는 그 PR 들이
+헬퍼를 어디로 모을지 흔들리지 않게 하기 위함이다. 집계는 `app/domain/aggregates.py`
+(기존, strict mypy 섬)가 단일 출처다 — 도메인 의미가 있는 계산을 `app/utils/` 로
+내리지 않는다.
 
 ### 7. 이벤트 드리븐 + 스트림 데이터 파이프라인 유지
 
