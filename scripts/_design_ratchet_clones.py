@@ -24,6 +24,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import sys
+from collections import Counter
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +74,24 @@ MECHANICAL_EXCLUDED_ATTRS = frozenset(
 DIGEST_LENGTH = 12
 PLACEHOLDER_PREFIX = "v"
 NORMALIZED_FUNCTION_NAME = "f"
+
+# 구조는 같지만 통합하면 안 되는 그룹. 키는 **멤버 신원**("파일:함수" 정렬 후 "|" 결합)
+# 이지 콘텐츠 해시가 아니다 — 해시로 잡으면 면제된 함수를 사소하게 고칠 때마다 키가
+# 바뀌어 빌드가 깨진다. 멤버 신원이면 본문 수정은 통과하고, 복사본이 하나 더 생기면
+# 멤버 집합이 달라져 면제가 풀린다. 근거는
+# docs/superpowers/specs/2026-08-01-code-duplication-consolidation-design.md §5.3.
+CLONE_ALLOWLIST: dict[str, str] = {
+    "app/services/award_verification.py:_rate_to_fraction"
+    "|app/services/base_amount_basis.py:normalize_winning_rate": (
+        "금액 basis 도메인 — 두 함수의 basis 의미가 동일함을 증명하기 전에 합치면"
+        " 예정가/기초금액 혼동을 코드에 굳힌다."
+    ),
+    "app/ai/predictors/registry.py:build_default_predictor_registry"
+    "|scripts/backtest_price_predictors.py:build_registry": (
+        "CLAUDE.md §4.7-2 팩토리/레지스트리 — 스크립트가 축소 레지스트리를 주입하는"
+        " 테스트 격리 seam 이라 통합하면 격리가 사라진다."
+    ),
+}
 
 _FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -173,3 +193,79 @@ def collect_clone_signatures(
             )
         )
     return signatures
+
+
+# --- 그룹핑 + allowlist (§4.5-2: 카운트/면제를 데이터 흐름으로) -------------------
+class CloneGroup(FrozenStrictModel):
+    """같은 지문을 공유하는 함수들. ``key`` 는 allowlist 조회에 쓰는 멤버 신원이다."""
+
+    members: tuple[str, ...]
+    files: tuple[str, ...]
+    node_count: int
+
+    @property
+    def key(self) -> str:
+        return "|".join(self.members)
+
+
+def _buckets_by_digest(
+    signatures: Iterable[CloneSignature],
+) -> dict[str, list[CloneSignature]]:
+    buckets: dict[str, list[CloneSignature]] = {}
+    for signature in signatures:
+        buckets.setdefault(signature.digest, []).append(signature)
+    return buckets
+
+
+def _build_group(members: Sequence[CloneSignature]) -> CloneGroup:
+    return CloneGroup(
+        members=tuple(sorted(member.member for member in members)),
+        files=tuple(sorted({member.file for member in members})),
+        node_count=max(member.node_count for member in members),
+    )
+
+
+def _cross_file_buckets(
+    signatures: Iterable[CloneSignature],
+) -> Iterator[list[CloneSignature]]:
+    for members in _buckets_by_digest(signatures).values():
+        if len({member.file for member in members}) > 1:
+            yield members
+
+
+def cross_file_clone_groups(
+    signatures: Sequence[CloneSignature],
+) -> list[CloneGroup]:
+    """소속 파일이 2개 이상인 그룹. allowlist 등재분은 제외한다."""
+    groups = [
+        group
+        for members in _cross_file_buckets(signatures)
+        if (group := _build_group(members)).key not in CLONE_ALLOWLIST
+    ]
+    return sorted(groups, key=lambda group: group.key)
+
+
+def count_cross_file_clones(signatures: Sequence[CloneSignature]) -> dict[str, int]:
+    """파일별 교차 파일 클론 멤버 수."""
+    counts: Counter[str] = Counter()
+    for group in cross_file_clone_groups(signatures):
+        counts.update(member.rsplit(":", 1)[0] for member in group.members)
+    return dict(counts)
+
+
+def count_local_clones(signatures: Sequence[CloneSignature]) -> int:
+    """한 파일 안에서 서로 클론인 헬퍼 수(같은 파일의 지문만 넘길 것)."""
+    return sum(
+        len(members)
+        for members in _buckets_by_digest(signatures).values()
+        if len(members) > 1
+    )
+
+
+def unused_allowlist_keys(signatures: Sequence[CloneSignature]) -> list[str]:
+    """현재 스캔에 더 이상 존재하지 않는 allowlist 항목.
+
+    비워 두면 면제 범위가 조용히 넓어지므로 호출부가 실패시킨다.
+    """
+    live = {_build_group(members).key for members in _cross_file_buckets(signatures)}
+    return sorted(set(CLONE_ALLOWLIST) - live)
