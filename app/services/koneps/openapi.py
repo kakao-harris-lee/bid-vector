@@ -16,6 +16,7 @@ to keep the collector focused on orchestration. The OpenAPI IO clients
 """
 
 import re
+from collections.abc import Collection
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -38,14 +39,23 @@ from app.services.koneps.openapi_operations import (
 )
 
 
+def _source_in(source: str | None, aliases: Collection[str]) -> bool:
+    """Whether a crawl-request source matches one of the declared aliases.
+
+    The single matcher behind the two named predicates below — they differ only
+    in the alias table, which stays declared in ``openapi_operations`` (§4.5-3).
+    """
+    return str(source or "").strip().lower() in aliases
+
+
 def is_openapi_source(source: str | None) -> bool:
     """Return whether the crawl request should use the KONEPS OpenAPI path."""
-    return str(source or "").strip().lower() in OPENAPI_SOURCE_ALIASES
+    return _source_in(source, OPENAPI_SOURCE_ALIASES)
 
 
 def is_scsbid_openapi_source(source: str | None) -> bool:
     """Return whether the crawl request should use the KONEPS award OpenAPI path."""
-    return str(source or "").strip().lower() in SCSBID_OPENAPI_SOURCE_ALIASES
+    return _source_in(source, SCSBID_OPENAPI_SOURCE_ALIASES)
 
 
 def scsbid_operation_for_category(category: str | None) -> str:
