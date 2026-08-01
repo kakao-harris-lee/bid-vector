@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from app.core.constants import ACTIVE_DECISION_STATUSES
+from app.core.constants import ACTIVE_DECISION_STATUSES, DECISION_STATUSES
 
-_OPPORTUNITY_STATUSES = {"planned", "reviewing", "submitted", "skipped"}
+# 정규화기(``normalizers._normalize_decision_status``)의 허용 어휘 — 단일 출처
+# (``app/core/constants.py::DecisionStatus``)에서 파생한다. 여기서 다시 나열하면
+# 스키마 ``Literal`` 과 한 값만 갈라져도 그 값이 조용히 기본값으로 접힌다.
+_OPPORTUNITY_STATUSES = set(DECISION_STATUSES)
 _ACTIVE_OPPORTUNITY_STATUSES = ACTIVE_DECISION_STATUSES
 _BID_STATUSES = {"submitted", "reviewed", "accepted", "rejected"}
 _PAPER_ACTION_STATUS = {"bid_now": "planned", "review": "reviewing", "skip": "skipped"}

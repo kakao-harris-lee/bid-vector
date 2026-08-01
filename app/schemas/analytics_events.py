@@ -23,9 +23,13 @@
 :class:`AnalyticsEventEnvelope` 로 키를 보존만 한다). 읽기 계약만 선언해 레지스트리에
 등록한다 — 어떤 키를 기대하는지가 코드 주석이 아니라 타입으로 남는다.
 
-이 중 일부 복원 모델(``project_view`` / ``recommendation_feedback`` / 이메일·보류 레코드)
-은 아직 **읽기 계약 선언**까지다. KPI·리포트 소비처를 이 모델로 승격하는 작업은 값 테이블
-특성 테스트가 선행돼야 하므로 **Phase 4.3 으로 예약**한다(현 소비처는 종전 dict 경로 유지).
+Phase 4.3 에서 ``project_view`` / ``recommendation_feedback`` 복원 모델에 **실소비자**를
+붙였다: 리뷰 시간 KPI(``_earliest_view_by_project``)와 피드백 dedupe
+(``_dedupe_latest_feedback_verdicts``)가 raw dict ``.get()`` 대신 이 모델을 읽는다. 그
+승격은 **산출 불변**이어야 했으므로 두 모델은 pydantic 기본 강제 대신 관용 validator
+(:func:`coerce_payload_int` / :func:`coerce_payload_str`)를 쓴다 — 종전 ``_coerce_int``
+와 같은 규칙이며 그 동치는 ``tests/test_analytics_persisted_consumers.py`` 의 값 테이블이
+고정한다. 남은 두 모델(이메일 배달 · 보류 레코드)은 아직 읽기 계약 선언까지다.
 
 G-2 증적 sweep 이벤트(``g2_candidate_recheck`` / ``collect_g2_evidence``)의 계약은
 per-operator 2모양 union 때문에 분량이 커서 :mod:`app.schemas.g2_evidence` 에 따로
@@ -36,7 +40,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from app.core.constants import (
     BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE,
@@ -73,6 +77,9 @@ __all__ = [
     "TelegramStrategyPendingEditActivated",
     "TelegramStrategyPendingEditCleared",
     "TelegramStrategyPendingEditEvent",
+    "coerce_payload_int",
+    "coerce_payload_str",
+    "enforce_client_payload_caps",
 ]
 
 # 해석 불가/미기록 상태를 나타내는 대체 문구. 종전 생산 경로의 ``or`` 폴백과 같은 값을
@@ -83,13 +90,91 @@ UNKNOWN_EVENT_STATUS = "unknown"
 class AnalyticsEventEnvelope(BaseModel):
     """임의 payload 를 **키 그대로 보존**하는 통과 모델.
 
-    ``POST /api/v1/analytics/event`` 는 프론트가 올리는 열린 텔레메트리 싱크다. 여기에
+    ``POST /api/v1/analytics/event`` 는 프론트가 올리는 텔레메트리 싱크다. 여기에
     ``extra="forbid"`` 를 걸면 새 클라이언트 이벤트가 400 이 되고, 반대로 특정 모델로
-    좁히면 기록되던 키가 조용히 사라진다. 그래서 이 모델은 검증하지 않고 **직렬화
+    좁히면 기록되던 키가 조용히 사라진다. 그래서 이 모델은 키를 검증하지 않고 **직렬화
     단일 경로를 태우기 위한 seam** 으로만 쓴다(``json.dumps`` 제거).
+
+    키 *집합* 은 열려 있지만 payload *크기* 는 열려 있지 않다 —
+    :func:`enforce_client_payload_caps` 가 키 수/직렬화 길이 상한을 강제한다(그 상한은
+    ``event_type`` 어휘 제한과 함께 이 엔드포인트의 유일한 입력 방어선이다).
     """
 
     model_config = ConfigDict(extra="allow")
+
+
+def coerce_payload_int(value: JsonValue) -> int | None:
+    """저장된 payload 의 식별자를 관용적으로 int 로 읽는다(불가하면 ``None``).
+
+    ``analytics.event_data`` 는 스키마 없는 Text 컬럼이라 과거 행에는 ``"42"``(문자열)나
+    ``42.0``(부동소수)로 들어간 식별자가 있다. 그 행을 계속 세려면 관용 해석이 필요하고,
+    동시에 **정수가 아닌 값은 지어내지 않아야** 한다:
+
+    * ``12.7`` 은 ``12`` 로 절삭하지 않고 거부한다 — 틀린 프로젝트에 조인될 수 있다.
+    * ``True`` 는 ``int`` 서브클래스지만 식별자가 아니다.
+
+    이 규칙의 단일 출처다: 복원 모델의 관용 validator 와
+    ``_DecisionAnalyticsBase._coerce_int`` 가 모두 이 함수를 쓴다. 두 곳에 따로 적으면
+    같은 행이 소비처마다 다르게 해석된다.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lstrip("-").isdigit():
+            return int(text)
+    return None
+
+
+def coerce_payload_str(value: JsonValue) -> str | None:
+    """저장된 payload 의 라벨을 관용적으로 문자열로 읽는다.
+
+    종전 소비처는 ``str(payload.get("verdict") or "")`` 로 어떤 타입이든 문자열화한 뒤
+    어휘를 판정했다. 그 산출을 유지하려면 복원 모델도 비문자열을 거부(=행 전체 유실)하지
+    않고 문자열화해야 한다 — 유효 어휘 판정은 소비처의 책임이다.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
+
+
+def enforce_client_payload_caps(
+    payload: dict[str, JsonValue],
+    *,
+    max_keys: int,
+    max_chars: int,
+) -> dict[str, JsonValue]:
+    """열린 클라이언트 payload 의 크기 상한을 검사하고 그대로 돌려준다.
+
+    상한 두 값은 **주입**받는다(§4.7-3) — 순수 함수라 설정 없이 값 테이블로 검증된다.
+    상한의 단일 출처는 요청 경계인 ``app/schemas/analytics.py`` 의 모듈 상수
+    (``ANALYTICS_EVENT_MAX_PAYLOAD_KEYS`` / ``..._CHARS``)이고, 왜 ``Settings`` 가 아니라
+    거기에 선언하는지는 그 모듈 주석에 있다(§4.5-1).
+
+    * ``max_keys`` — 최상위 키 수. 키를 무한히 늘려 컬럼을 채우는 경로를 막는다.
+    * ``max_chars`` — **저장될 문자열**의 길이. 중첩 구조까지 포함한 실제 크기를 재려면
+      직렬화된 결과를 봐야 하므로, 저장 경로와 **같은** 단일 직렬화
+      (:class:`AnalyticsEventEnvelope` 의 ``model_dump_json``)를 써서 잰다. 다른 방법으로
+      재면 "상한을 통과했는데 저장 문자열은 상한을 넘는" 불일치가 생긴다.
+
+    초과는 ``ValueError`` 로 올린다 — pydantic validator 안에서 호출되므로 라우터까지
+    가지 않고 ``422`` 로 매핑된다.
+    """
+    if len(payload) > max_keys:
+        raise ValueError(
+            f"event_data 키 수 상한({max_keys})을 초과했습니다: {len(payload)}"
+        )
+    serialized = AnalyticsEventEnvelope.model_validate(payload).model_dump_json()
+    if len(serialized) > max_chars:
+        raise ValueError(
+            f"event_data 직렬화 길이 상한({max_chars}자)을 초과했습니다: "
+            f"{len(serialized)}자"
+        )
+    return payload
 
 
 class TelegramDeliveryEvent(StrictModel):
@@ -269,11 +354,22 @@ class PersistedTelegramStrategyPendingEditEvent(StrictModel):
 
 
 class PersistedProjectViewEvent(StrictModel):
-    """저장된 ``project_view`` 행 복원용 (프론트 생산, 읽기 계약만 선언)."""
+    """저장된 ``project_view`` 행 복원용 (프론트 생산, 리뷰 시간 KPI 입력).
+
+    ``project_id`` 는 pydantic 기본 강제(``12.7`` → ValidationError)가 아니라
+    :func:`coerce_payload_int` 규칙으로 읽는다. 이 모델은 **행 하나를 거부하는** 게
+    아니라 **식별할 수 없는 값을 부재로 접는** 계약이다 — 엄격하게 걸면 옛 행 하나가
+    KPI 전체를 500 으로 만들고, 관용적으로 접으면 그 행만 조인에서 빠진다.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     project_id: int | None = None
+
+    @field_validator("project_id", mode="before")
+    @classmethod
+    def _coerce_project_id(cls, value: JsonValue) -> int | None:
+        return coerce_payload_int(value)
 
 
 class PersistedRecommendationFeedbackEvent(StrictModel):
@@ -281,6 +377,11 @@ class PersistedRecommendationFeedbackEvent(StrictModel):
 
     ``verdict`` 는 ``Literal`` 이 아니라 ``str | None`` 이다 — 어휘가 바뀌기 전 행을
     읽어도 KPI 집계가 죽지 않아야 하고, 유효 어휘 판정은 소비처의 책임이다.
+
+    세 필드 모두 관용 해석이다(:func:`coerce_payload_int` / :func:`coerce_payload_str`).
+    한 키가 망가진 행에서 **나머지 키는 살아 있어야** 하기 때문이다: ``project_id`` 가
+    쓰레기값이어도 ``decision_record_id``/``verdict`` 이 유효하면 그 피드백은 계속
+    집계된다(엄격 검증은 그 행을 통째로 지워 ``feedback_count`` 를 조용히 줄인다).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -288,6 +389,16 @@ class PersistedRecommendationFeedbackEvent(StrictModel):
     project_id: int | None = None
     decision_record_id: int | None = None
     verdict: str | None = None
+
+    @field_validator("project_id", "decision_record_id", mode="before")
+    @classmethod
+    def _coerce_identifiers(cls, value: JsonValue) -> int | None:
+        return coerce_payload_int(value)
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def _coerce_verdict(cls, value: JsonValue) -> str | None:
+        return coerce_payload_str(value)
 
 
 # 복원 union: 레지스트리 조회 결과의 타입.

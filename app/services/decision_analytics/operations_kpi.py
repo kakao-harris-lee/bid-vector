@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, func
@@ -22,8 +22,12 @@ from app.models.models import (
     PaperBidSettlement,
     User,
 )
+from app.schemas.analytics_events import (
+    PersistedProjectViewEvent,
+    PersistedRecommendationFeedbackEvent,
+)
+from app.services.analytics_event_payload import load_analytics_event_as
 from app.services.decision_analytics.base import _DecisionAnalyticsBase
-from app.services.decision_analytics.events import parse_analytics_event_data
 from app.services.prediction_feedback import PredictionFeedbackService
 
 
@@ -208,16 +212,7 @@ class _OperationsKpiMixin(_DecisionAnalyticsBase):
             event_type=PROJECT_VIEW_EVENT_TYPE,
             start_at=start_at,
         )
-        earliest_view_by_project: dict[int, Any] = {}
-        for event in view_events:
-            payload = parse_analytics_event_data(event.event_data)
-            project_id = self._coerce_int(payload.get("project_id"))
-            if project_id is None or event.timestamp is None:
-                continue
-            viewed_at = ensure_utc(event.timestamp)
-            existing = earliest_view_by_project.get(project_id)
-            if existing is None or viewed_at < existing:
-                earliest_view_by_project[project_id] = viewed_at
+        earliest_view_by_project = self._earliest_view_by_project(view_events)
 
         review_seconds: list[float] = []
         for decision in decisions:
@@ -243,6 +238,33 @@ class _OperationsKpiMixin(_DecisionAnalyticsBase):
             "sample_count": len(review_seconds),
         }
 
+    def _earliest_view_by_project(
+        self,
+        view_events: list[Analytics],
+    ) -> dict[int, datetime]:
+        """``project_view`` 행들을 프로젝트별 **최초** 열람 시각으로 접는다.
+
+        I/O 와 분리된 해석 단계(§4.7-4)라 값 테이블로 검증된다
+        (``tests/test_analytics_persisted_consumers.py``). 식별할 수 없는
+        ``project_id`` 나 시각 없는 행은 조인 대상에서 제외한다 — 없는 값을 지어내
+        리뷰 시간 평균을 오염시키지 않는다.
+        """
+        earliest_view_by_project: dict[int, datetime] = {}
+        for event in view_events:
+            view = load_analytics_event_as(
+                event.event_data,
+                model=PersistedProjectViewEvent,
+                event_type=PROJECT_VIEW_EVENT_TYPE,
+            )
+            project_id = view.project_id if view is not None else None
+            if project_id is None or event.timestamp is None:
+                continue
+            viewed_at = ensure_utc(event.timestamp)
+            existing = earliest_view_by_project.get(project_id)
+            if existing is None or viewed_at < existing:
+                earliest_view_by_project[project_id] = viewed_at
+        return earliest_view_by_project
+
     def _dedupe_latest_feedback_verdicts(
         self,
         feedback_events: list[Analytics],
@@ -256,14 +278,20 @@ class _OperationsKpiMixin(_DecisionAnalyticsBase):
         """
         latest_by_decision: dict[int, dict[str, Any]] = {}
         for event in feedback_events:
-            payload = parse_analytics_event_data(event.event_data)
-            decision_record_id = self._coerce_int(payload.get("decision_record_id"))
-            verdict = str(payload.get("verdict") or "").strip().lower()
+            feedback = load_analytics_event_as(
+                event.event_data,
+                model=PersistedRecommendationFeedbackEvent,
+                event_type=RECOMMENDATION_FEEDBACK_EVENT_TYPE,
+            )
+            if feedback is None:
+                continue
+            decision_record_id = feedback.decision_record_id
+            verdict = str(feedback.verdict or "").strip().lower()
             if decision_record_id is None or verdict not in {"useful", "not_useful"}:
                 continue
             latest_by_decision[decision_record_id] = {
                 "verdict": verdict,
-                "project_id": self._coerce_int(payload.get("project_id")),
+                "project_id": feedback.project_id,
                 "feedback_at": ensure_utc(event.timestamp) if event.timestamp is not None else None,
             }
         return latest_by_decision

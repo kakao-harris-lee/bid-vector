@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
-from app.core.constants import PaperBidAction
+from app.core.constants import DecisionStatus, PaperBidAction
 
 # 실험 판정 어휘 — 이 모듈 안에서 5번 중복 선언되어 있었다(§4.5-1). 값과 순서는 그대로다.
 DecisionExperimentOutcome = Literal[
@@ -15,7 +15,7 @@ class DecisionInsightsRecentItem(BaseModel):
     decision_record_id: int
     project_id: int
     action: PaperBidAction
-    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    decision_status: DecisionStatus
     priority_score: float = Field(ge=0.0, le=1.0)
     expected_margin_score: float = Field(ge=0.0, le=1.0)
     execution_complexity_score: float = Field(ge=0.0, le=1.0)
@@ -54,9 +54,9 @@ class DecisionFunnelRecentSubmissionItem(BaseModel):
     project_id: int
     project_title: str
     initial_action: PaperBidAction
-    initial_decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    initial_decision_status: DecisionStatus
     current_action: PaperBidAction
-    current_decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    current_decision_status: DecisionStatus
     priority_score: float = Field(ge=0.0, le=1.0)
     recommended_amount: float
     first_decided_at: Optional[datetime] = None

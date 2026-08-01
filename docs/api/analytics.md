@@ -1,13 +1,13 @@
 # Analytics API
 
 > 베이스 경로: `/api/v1/analytics` · 베이스 URL 예시: `http://localhost:3000`
-> 인증: Bearer 토큰은 선택이다. 토큰이 없으면 legacy 단일 운영자 경로로 canonical `operator`를 사용한다. 토큰이 있으면 토큰 소유자가 기본 target이고, canonical `operator` 또는 admin만 `?operator_id=`로 다른 운영자(`synthetic-*` 포함)를 조회/실행할 수 있다.
+> 인증: 읽기(GET) 엔드포인트에서 Bearer 토큰은 선택이다(쓰기 엔드포인트 `POST /event`는 필수 — 아래 참고). 토큰이 없으면 legacy 단일 운영자 경로로 canonical `operator`를 사용한다. 토큰이 있으면 토큰 소유자가 기본 target이고, canonical `operator` 또는 admin만 `?operator_id=`로 다른 운영자(`synthetic-*` 포함)를 조회/실행할 수 있다.
 > operator context: `operator_id`는 응답 데이터가 귀속된 target 운영자다. `current_operator_id`/`current_operator_username`도 프론트가 현재 선택한 회사로 표시해야 하는 target 운영자를 뜻한다. 프론트는 선택값이 `null`이면 `operator_id` query를 생략하고, privileged 사용자가 다른 회사를 선택했을 때만 숫자 `operator_id`를 전달한다.
 > 공통 에러: 모든 엔드포인트는 쿼리/경로/바디 검증 실패 시 `422`(`{"detail": [...]}`)를 반환한다.
 > 도메인: 결정 분석(decision analytics) · 예측 리포팅(prediction reporting) · 실험(decision experiments).
 
 ## 목차
-- [POST /api/v1/analytics/event](#post-apiv1analyticsevent) — 분석 이벤트 적재
+- [POST /api/v1/analytics/event](#post-apiv1analyticsevent) — 분석 이벤트 적재 (인증 필수)
 - [GET /api/v1/analytics/summary](#get-apiv1analyticssummary) — 저장소 전역 기간 요약
 - [GET /api/v1/analytics/operator-stats](#get-apiv1analyticsoperator-stats) — 단일 운영자 통계
 - [GET /api/v1/analytics/prediction-feedback](#get-apiv1analyticsprediction-feedback) — 예측·추천 vs 실 낙찰 정확도
@@ -29,22 +29,28 @@
 ---
 
 ## POST /api/v1/analytics/event
-운영자 워크플로에서 발생한 분석 이벤트 한 건을 적재한다. 프론트엔드/내부 작업이 사용자 행동이나 내부 텔레메트리를 기록할 때 호출한다. 이벤트는 항상 canonical 운영자에 귀속된다. `event_data`(object)는 서버에서 문자열로 직렬화되어 저장된다.
+프론트 클라이언트에서 발생한 분석 이벤트 한 건을 적재한다. 이 라우터의 **유일한 쓰기 엔드포인트**라 다른 analytics 엔드포인트와 달리 **Bearer 토큰이 필수**다(익명 401). 이벤트는 토큰 소유자에게 귀속된다 — `synthetic-*` 계정의 이벤트가 canonical 운영자 KPI에 섞이지 않는다. `event_data`(object)는 서버에서 문자열로 직렬화되어 저장된다.
+
+`event_type`은 프론트가 실제로 올리는 어휘로 제한된다: `project_view`, `recommendation_feedback`. 그 외 값은 422다. 어휘를 늘릴 때는 `app/core/constants.py`의 `ClientAnalyticsEventType`와 `app/schemas/analytics_events.py`의 복원 모델/레지스트리를 함께 추가한다.
+
+`event_data`의 키 집합은 열려 있지만 크기는 제한된다: 최상위 키 32개, 직렬화 4096자. 두 상한은 `app/schemas/analytics.py`의 선언 상수(`ANALYTICS_EVENT_MAX_PAYLOAD_KEYS` / `ANALYTICS_EVENT_MAX_PAYLOAD_CHARS`)이며 `.env` 값이 아니다.
 
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
-| body | event_type | string | 예 | 이벤트 종류 키 |
-| body | event_data | object | 예 | 이벤트 부가 데이터(문자열로 저장됨) |
+| header | Authorization | string | 예 | `Bearer <access_token>` |
+| body | event_type | string(enum) | 예 | `project_view` \| `recommendation_feedback` |
+| body | event_data | object | 예 | 이벤트 부가 데이터(문자열로 저장됨, 크기 상한 적용) |
 
 **요청 예시**
 ```bash
 curl -X POST "http://localhost:3000/api/v1/analytics/event" \
   -H "Content-Type: application/json" \
-  -d '{"event_type": "project.viewed", "event_data": {"project_id": 4821, "from": "watchlist"}}'
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"event_type": "project_view", "event_data": {"project_id": 4821, "from": "watchlist"}}'
 ```
 ```json
-{ "event_type": "project.viewed", "event_data": { "project_id": 4821, "from": "watchlist" } }
+{ "event_type": "project_view", "event_data": { "project_id": 4821, "from": "watchlist" } }
 ```
 
 **응답 200**
@@ -55,7 +61,8 @@ curl -X POST "http://localhost:3000/api/v1/analytics/event" \
 **에러**
 | 코드 | 의미 |
 |---|---|
-| 422 | event_type/event_data 누락 또는 타입 오류 |
+| 401 | Bearer 토큰 누락 또는 무효 |
+| 422 | event_type 어휘 위반, event_data 누락/타입 오류, payload 크기 상한 초과 |
 
 ---
 

@@ -100,6 +100,7 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
     window.history.pushState({}, "", "/dashboard/projects/101");
 
     const eventBodies: unknown[] = [];
+    const eventAuthHeaders: (string | undefined)[] = [];
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
@@ -109,6 +110,7 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
       if (url.startsWith("/api/v1/projects/101/similar")) return jsonResponse(emptySimilar);
       if (url === "/api/v1/analytics/event" && init?.method === "POST") {
         eventBodies.push(JSON.parse(String(init.body ?? "{}")));
+        eventAuthHeaders.push((init.headers as Record<string, string>)?.Authorization);
         return jsonResponse({}, 200);
       }
       return jsonResponse({}, 404);
@@ -129,5 +131,7 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
     );
     expect(projectViews.length).toBeGreaterThanOrEqual(1);
     expect(projectViews[0]?.event_data.project_id).toBe(101);
+    // 서버가 이 엔드포인트에서 bearer 를 요구한다 — 헤더가 빠지면 401 로 조용히 유실된다.
+    expect(eventAuthHeaders[0]).toBe("Bearer token-detail");
   });
 });

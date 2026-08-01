@@ -31,11 +31,15 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from app.core.config import Settings, settings
+from app.core.constants import (
+    NON_DELIVERING_ENVIRONMENTS as _SHARED_NON_DELIVERING_ENVIRONMENTS,
+)
 
 logger = logging.getLogger(__name__)
 
-# 실제 송신을 하지 않는 환경(선언적 데이터 — 환경 추가는 이 집합에 한 줄).
-NON_DELIVERING_ENVIRONMENTS = frozenset({"test"})
+# 실제 송신을 하지 않는 환경. 단일 출처는 ``app/core/constants.py`` 로 올라갔다(메일 경계도
+# 같은 집합을 본다) — 여기서는 기존 import 경로와 이름을 유지하기 위한 별칭만 둔다.
+NON_DELIVERING_ENVIRONMENTS = _SHARED_NON_DELIVERING_ENVIRONMENTS
 
 # 환경 이름을 밝히지 않은 미배달 transport 가 스킵 문구에서 자신을 부르는 이름.
 UNKNOWN_ENVIRONMENT_LABEL = "non-delivering"

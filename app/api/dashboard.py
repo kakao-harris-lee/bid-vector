@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.constants import ACTIVE_DECISION_STATUSES
+from app.core.constants import ACTIVE_DECISION_STATUSES, DECISION_STATUSES
 from app.core.database import get_db
 from app.core.security import get_current_operator_from_bearer, resolve_target_operator
 from app.core.time import utc_now
@@ -34,6 +34,11 @@ router = APIRouter()
 # canonical constant (see tests/test_active_decision_statuses_constant.py).
 _ACTIVE_OPPORTUNITY_STATUSES = ACTIVE_DECISION_STATUSES
 
+# ``?status=`` 쿼리 검증 패턴 — 어휘를 정규식에 다시 적지 않고 단일 출처
+# (``DecisionStatus``) 순서 그대로 조립한다. 산출 문자열은 종전 리터럴과 동일하다
+# (OpenAPI ``pattern`` 바이트 불변).
+_DECISION_STATUS_QUERY_PATTERN = f"^({'|'.join(DECISION_STATUSES)})$"
+
 
 def _list_meta(
     *, operator: User, generated_at, limit: int, returned_count: int
@@ -50,8 +55,7 @@ def _list_meta(
 
 @router.get("/opportunities", response_model=DashboardOpportunityListResponse)
 def list_dashboard_opportunities(
-    status: str
-    | None = Query(default=None, pattern="^(planned|reviewing|submitted|skipped)$"),
+    status: str | None = Query(default=None, pattern=_DECISION_STATUS_QUERY_PATTERN),
     limit: int = Query(default=50, ge=1, le=100),
     operator_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),

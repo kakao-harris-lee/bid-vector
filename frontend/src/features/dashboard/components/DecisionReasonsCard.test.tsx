@@ -168,6 +168,10 @@ describe("DecisionReasonsCard", () => {
           verdict: "useful"
         }
       });
+      // 서버가 이 엔드포인트에서 bearer 를 요구한다 — 헤더가 빠지면 401 로 조용히 유실된다.
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer token-feedback"
+      );
 
       // Re-click on 'not_useful' should swap the toggle state.
       fireEvent.click(notUsefulButton);

@@ -1,8 +1,10 @@
 """Legacy bid CRUD schemas."""
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 from pydantic import BaseModel
+
+from app.core.constants import DecisionStatus
 
 
 class BidBase(BaseModel):
@@ -27,8 +29,6 @@ class BidResponse(BidBase):
     user_id: int
     status: str
     decision_record_id: Optional[int] = None
-    decision_status: Optional[
-        Literal["planned", "reviewing", "submitted", "skipped"]
-    ] = None
+    decision_status: Optional[DecisionStatus] = None
     score: Optional[float] = None
     created_at: datetime

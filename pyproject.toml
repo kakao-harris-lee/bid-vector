@@ -263,6 +263,21 @@ warn_return_any = true
 no_implicit_optional = true
 strict_equality = true
 
+# Phase 4c — app.services.verification.nts_adapter (국세청 사업자 검증 어댑터 + 팩토리).
+# 이 모듈의 HTTP seam 은 ``Callable[..., Any]`` 였다가 typed Protocol(``HttpPost``)로
+# 올라갔는데, 그 계약("timeout 은 키워드 필수")은 **정적 검사가 돌아야** 실제 강제가 된다.
+# grandfather 아래 두면 포트는 문서일 뿐이므로 아일랜드로 승격한다. ``requests`` 는 stubs
+# 를 싣지 않아 koneps.http_client(Phase 2a)와 같은 ``import-untyped`` 완화만 적용한다.
+[[tool.mypy.overrides]]
+module = ["app.services.verification.nts_adapter"]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+disable_error_code = ["import-untyped"]
+
 # ---------------------------------------------------------------------------
 # ruff — lint (real errors, not style churn)
 # ---------------------------------------------------------------------------

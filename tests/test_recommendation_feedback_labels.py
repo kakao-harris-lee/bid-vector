@@ -8,6 +8,7 @@ import pytest
 
 from app.models.models import Analytics, BidDecisionRecord, Project
 from app.services.decision_analytics import DecisionAnalyticsService
+from tests.support.auth import authenticate_client
 
 
 def _bootstrap_operator(
@@ -16,7 +17,12 @@ def _bootstrap_operator(
     email="labels@example.com",
     password="password123",
 ):
-    return client.post(
+    """운영자를 부트스트랩하고 클라이언트를 인증 상태로 만든다.
+
+    ``POST /analytics/event`` 는 bearer 를 요구하므로(프론트도 토큰이 있을 때만 발신)
+    피드백 라벨 흐름 전체를 인증된 클라이언트로 태운다.
+    """
+    response = client.post(
         "/api/v1/auth/bootstrap",
         json={
             "username": username,
@@ -26,6 +32,9 @@ def _bootstrap_operator(
             "password": password,
         },
     )
+    assert response.status_code == 200, response.text
+    authenticate_client(client, username=username, password=password)
+    return response
 
 
 def _make_project(
