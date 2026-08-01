@@ -29,6 +29,8 @@
 | `dict_boundary_functions` | 인자(`*args`/`**kwargs` 포함)나 반환 annotation 이 약한 경계인 함수 수 | 검증되지 않는 경계 |
 | `env_test_sniff` | 환경값 읽기와 `"test"` 리터럴이 같은 Compare 노드에 있는 지점 수(`app/` 만) | 프로덕션 코드가 테스트를 스니핑하는 지점 |
 | `unvalidated_dict_tasks` | celery task 중 검증되지 않는 입력을 받으면서 **그 입력을 대상으로 한** `model_validate`/`Model(**payload)` 승격이 본문에 없는 함수 수 | 재배달 payload 가 검증 없이 흐르는 지점 |
+| `duplicate_mechanical_helpers` | 그 파일이 정의한 메커니컬 헬퍼 중 **다른 파일**의 헬퍼와 구조 클론 그룹을 이루는 함수 수 | §4.5-8 중복 금지. 처방은 허브로 이동 |
+| `duplicate_mechanical_helpers_local` | 그 파일 **안에서만** 서로 구조 클론인 메커니컬 헬퍼 수 | §4.5-8. 처방은 파라미터화된 해석기 + 얇은 명명 래퍼 |
 
 ### 약한 경계(weak annotation) 판정
 
@@ -97,6 +99,34 @@
 `str(settings.ENVIRONMENT).lower() == "test"` 처럼 읽기를 함수로 한 번 감싼 형태,
 `{a, settings.ENVIRONMENT} & {"test"}` 같은 집합 연산(Compare 가 아님), 헬퍼 함수로 감싼
 판정. 이 지표는 "테스트 스니핑 총량"이 아니라 **흔한 형태의 증가를 막는 래칫**이다.
+
+### 중복 헬퍼 지표의 판정 파이프라인
+
+측정 코어는 `scripts/_design_ratchet_clones.py` 다(스캐너 자신도 500줄 한도를 지켜야
+해서 `_design_ratchet_scan.py` 에서 분리했다).
+
+| 단계 | 규칙 |
+|---|---|
+| 1. 후보 | **데코레이터가 하나도 없는** 함수/메서드. 라우터·celery task·`property` 가 전부 배제된다 |
+| 2. 메커니컬 | 본문에 `MECHANICAL_EXCLUDED_NAMES`(db·session·requests·settings·logger·self·cls …) / `MECHANICAL_EXCLUDED_ATTRS`(query·commit·execute …) 가 없고 `global`/`nonlocal` 이 없음 |
+| 3. 크기 | AST 노드 수 ≥ `CLONE_MIN_AST_NODES`(20) |
+| 4. 정규화 | 변수·인자명 → 등장순 `v0,v1,…` · docstring/데코레이터/annotation/반환타입 제거 · **상수 리터럴은 보존** |
+| 5. 그룹핑 | 정규화 본문의 sha256 앞 12자가 동일 |
+
+`open`·`Path`·`json`·`datetime` 은 **일부러 배제하지 않는다**. 얇은 메커니컬 I/O
+래퍼(`_write_json` 류)가 실제 중복의 최대 밀도 구간이라 대상에 포함해야 한다.
+
+상수 리터럴을 보존하므로 `round(x, 2)` 와 `round(x, 3)` 은 다른 그룹이다(보수적 판정).
+반대로 annotation 을 제거하므로 타입만 다른 쌍은 같은 그룹이 된다(제네릭 통합 후보가
+맞으므로 의도된 동작).
+
+**미탐 범위(한정).** 이 지표도 총량 측정이 아니라 증가 차단 래칫이다.
+
+- **의미적 유사** — 구조가 다르면서 같은 일을 하는 함수는 잡히지 않는다.
+- **부분 통합** — 4곳 중 1곳만 제거하면 남은 3곳이 각 1을 유지해 지표가 줄지 않는다.
+  위반은 아니지만(증가가 아니므로) 개선이 baseline 에 반영되지도 않는다.
+- **클래스·타입·상수의 중복** — 함수만 스캔한다.
+- **20 AST 노드 미만** — `_average` 류 소형 중복은 임계값 아래라 계수되지 않는다.
 
 스캔 대상은 `app/`·`scripts/` 의 `*.py`(`__pycache__` 제외)다. 임계값·대상·allowlist 는
 모두 `scripts/_design_ratchet_scan.py` 상단 상수로, 지표 모델과 밴드 환산은
@@ -182,6 +212,16 @@ CI(`.github/workflows/ci.yml`)는 `pytest -q tests/` 로 이 게이트를 돌고
 `app/services/ml_release/signing.py` 하나이고, 서명 대상 바이트 정합성을 직접 통제해야
 하기 때문이다. "여기는 고치기 귀찮다"는 allowlist 사유가 아니다 — 그 경우는 baseline
 카운트로 남겨 두고 나중에 줄인다(baseline 은 줄어드는 것을 항상 허용한다).
+
+### `CLONE_ALLOWLIST`
+
+통합하면 안 되는 그룹의 면제 목록이다. 키는 **멤버 신원**(`"파일:함수"` 정렬 후 `|`
+결합)이지 콘텐츠 해시가 아니다. 해시로 잡으면 면제된 함수를 사소하게 고칠 때마다 키가
+바뀌어 빌드가 깨진다. 멤버 신원이면 본문 수정은 통과하고, 복사본이 하나 더 생기면 멤버
+집합이 달라져 면제가 풀린다.
+
+등재됐지만 현재 스캔에 더 이상 없는 항목은 `python scripts/design_ratchet.py` 가
+실패시킨다. 죽은 항목을 방치하면 면제 범위가 조용히 넓어지기 때문이다.
 
 ## 탐지기 변경 이력
 
