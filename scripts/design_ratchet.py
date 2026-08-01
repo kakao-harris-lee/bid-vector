@@ -45,7 +45,13 @@ from scripts._design_ratchet_contracts import (  # noqa: E402
     count_improvements,
     without_paths,
 )
-from scripts._design_ratchet_scan import scan_repo  # noqa: E402
+from scripts._design_ratchet_clones import (  # noqa: E402
+    CLONE_ALLOWLIST,
+    CloneGroup,
+    cross_file_clone_groups,
+    unused_allowlist_keys,
+)
+from scripts._design_ratchet_scan import scan_repo_with_signatures  # noqa: E402
 
 # --- 선언적 구성 (§4.5-1) ---------------------------------------------------------
 BASELINE_PATH = REPO_ROOT / "tests" / "design_ratchet_baseline.json"
@@ -136,6 +142,40 @@ def format_totals(report: RatchetReport) -> str:
     for metric in METRIC_NAMES:
         formatter = METRIC_TOTAL_FORMATTERS.get(metric, _format_plain_total)
         lines.append(formatter(metric, report))
+    return "\n".join(lines)
+
+
+# --- 클론 리포트 (통합 대상 · 죽은 allowlist) ------------------------------------
+CLONE_GROUP_PREVIEW_LIMIT = 30
+
+DEAD_ALLOWLIST_HINT = (
+    "CLONE_ALLOWLIST 에 등재됐지만 현재 스캔에 없는 항목입니다."
+    " 면제가 stale 해지면 범위가 조용히 넓어지므로 해당 항목을 삭제하세요."
+)
+
+
+def format_clone_groups(groups: Sequence[CloneGroup]) -> str:
+    """통합 대상 교차 파일 클론 그룹(allowlist 제외분)."""
+    if not groups:
+        return "교차 파일 클론 그룹: 없음"
+    header = f"교차 파일 클론 그룹 {len(groups)}개 (allowlist {len(CLONE_ALLOWLIST)}개 제외):"
+    lines = [header]
+    for group in sorted(groups, key=lambda item: -item.node_count)[
+        :CLONE_GROUP_PREVIEW_LIMIT
+    ]:
+        lines.append(f"  ~{group.node_count}노드 · {len(group.members)}벌")
+        lines.extend(f"      {member}" for member in group.members)
+    hidden = len(groups) - min(len(groups), CLONE_GROUP_PREVIEW_LIMIT)
+    if hidden:
+        lines.append(f"  ... 외 {hidden}개 그룹")
+    return "\n".join(lines)
+
+
+def format_dead_allowlist(keys: Sequence[str]) -> str:
+    if not keys:
+        return "죽은 allowlist 항목: 없음"
+    lines = [f"죽은 allowlist 항목 {len(keys)}개:", *(f"  {key}" for key in keys)]
+    lines.append(DEAD_ALLOWLIST_HINT)
     return "\n".join(lines)
 
 
@@ -252,8 +292,14 @@ def run_baseline_update(report: RatchetReport) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    report = scan_repo(REPO_ROOT)
+    report, signatures = scan_repo_with_signatures(REPO_ROOT)
     print(format_totals(report))
+
+    print(format_clone_groups(cross_file_clone_groups(signatures)))
+    dead = unused_allowlist_keys(signatures)
+    if dead:
+        print(format_dead_allowlist(dead))
+
     if args.update_baseline:
         return run_baseline_update(report)
     if not BASELINE_PATH.exists():
@@ -263,11 +309,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     for note in baseline_drift_notes(baseline, report, REPO_ROOT):
         print(note)
     violations = compare_reports(baseline, report)
-    if not violations:
+    if not violations and not dead:
         print("위반 없음 (baseline 이하)")
         return 0
-    print(format_violations(violations))
-    print(UPDATE_BASELINE_HINT)
+    if violations:
+        print(format_violations(violations))
+        print(UPDATE_BASELINE_HINT)
     return 1
 
 

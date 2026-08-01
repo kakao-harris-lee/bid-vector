@@ -20,17 +20,24 @@ from pydantic import ValidationError
 from scripts import design_ratchet
 
 from scripts._design_ratchet_contracts import (
+    METRIC_NAMES,
     FileMetrics,
     RatchetReport,
     compare_reports,
     count_improvements,
     without_paths,
 )
+from scripts._design_ratchet_clones import (
+    CloneGroup,
+    unused_allowlist_keys,
+)
 from scripts._design_ratchet_scan import (
     REPO_ROOT,
     RatchetScanError,
     file_loc_band,
+    scan_file,
     scan_repo,
+    scan_repo_with_signatures,
     scan_source,
 )
 from scripts.design_ratchet import (
@@ -38,6 +45,8 @@ from scripts.design_ratchet import (
     baseline_drift_notes,
     format_baseline_delta,
     format_baseline_slack,
+    format_clone_groups,
+    format_dead_allowlist,
     format_totals,
     format_violations,
     load_baseline,
@@ -286,7 +295,15 @@ class TestStaleBaseline:
         save_baseline(self._baseline_with("app/gone.py"), path)
         monkeypatch.setattr(design_ratchet, "BASELINE_PATH", path)
         monkeypatch.setattr(design_ratchet, "REPO_ROOT", tmp_path)
-        monkeypatch.setattr(design_ratchet, "scan_repo", lambda root: RatchetReport())
+        # main() 은 이제 scan_repo_with_signatures 를 부른다. 빈 스캔은 시그니처가
+        # 없어 모든 allowlist 항목이 죽은 것처럼 보이므로, 이 테스트가 격리하려는
+        # stale-baseline 경로만 남기려면 죽은 allowlist 게이트를 중립화한다.
+        monkeypatch.setattr(
+            design_ratchet,
+            "scan_repo_with_signatures",
+            lambda root: (RatchetReport(), []),
+        )
+        monkeypatch.setattr(design_ratchet, "unused_allowlist_keys", lambda _: [])
 
         assert design_ratchet.main([]) == 0
 
@@ -701,6 +718,126 @@ class TestScanSource:
             scan_source("app/broken.py", "def broken(:\n")
         assert "app/broken.py" in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, SyntaxError)
+
+
+DECLARED_KEY_PROJECTION = """
+def project(raw_item):
+    picked = {}
+    for key in DECLARED_KEYS:
+        value = raw_item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            picked[key] = text
+    return picked or None
+"""
+
+
+class TestDuplicateHelperMetrics:
+    def test_local_clone_pair_is_counted_in_scan_source(self) -> None:
+        source = DECLARED_KEY_PROJECTION + DECLARED_KEY_PROJECTION.replace(
+            "def project", "def project_other"
+        )
+        metrics = scan_source("app/sample.py", source)
+        assert metrics.duplicate_mechanical_helpers_local == 2
+
+    def test_single_helper_has_no_local_clone(self) -> None:
+        metrics = scan_source("app/sample.py", DECLARED_KEY_PROJECTION)
+        assert metrics.duplicate_mechanical_helpers_local == 0
+
+    def test_scan_source_never_sets_cross_file_metric(self) -> None:
+        """교차 파일 지표는 한 파일만 봐서는 알 수 없다 — pass 2 의 책임이다."""
+        metrics = scan_source("app/sample.py", DECLARED_KEY_PROJECTION)
+        assert metrics.duplicate_mechanical_helpers == 0
+
+    def test_scan_file_returns_signatures(self) -> None:
+        metrics, signatures = scan_file("app/sample.py", DECLARED_KEY_PROJECTION)
+        assert metrics.duplicate_mechanical_helpers_local == 0
+        assert [signature.function for signature in signatures] == ["project"]
+
+    def test_scan_repo_attributes_cross_file_clones(self, tmp_path: Path) -> None:
+        for directory in ("app", "scripts"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "app" / "one.py").write_text(
+            DECLARED_KEY_PROJECTION, encoding="utf-8"
+        )
+        (tmp_path / "scripts" / "two.py").write_text(
+            DECLARED_KEY_PROJECTION.replace("def project", "def project_copy"),
+            encoding="utf-8",
+        )
+        report = scan_repo(tmp_path)
+        assert report.metrics_for("app/one.py").duplicate_mechanical_helpers == 1
+        assert report.metrics_for("scripts/two.py").duplicate_mechanical_helpers == 1
+
+    def test_scan_repo_with_signatures_returns_every_file_signature(
+        self, tmp_path: Path
+    ) -> None:
+        """pass 1 이 모은 저장소 전체 지문을 재파싱 없이 그대로 돌려줘야 한다."""
+        for directory in ("app", "scripts"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "app" / "one.py").write_text(
+            DECLARED_KEY_PROJECTION, encoding="utf-8"
+        )
+        (tmp_path / "scripts" / "two.py").write_text(
+            DECLARED_KEY_PROJECTION.replace("def project", "def project_copy"),
+            encoding="utf-8",
+        )
+        report, signatures = scan_repo_with_signatures(tmp_path)
+        assert {signature.file for signature in signatures} == {
+            "app/one.py",
+            "scripts/two.py",
+        }
+        # 리포트는 얇은 델리게이터 scan_repo 와 동일해야 한다.
+        assert report == scan_repo(tmp_path)
+
+    def test_scan_repo_leaves_unique_helpers_clean(self, tmp_path: Path) -> None:
+        for directory in ("app", "scripts"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "app" / "one.py").write_text(
+            DECLARED_KEY_PROJECTION, encoding="utf-8"
+        )
+        (tmp_path / "scripts" / "two.py").write_text(
+            "def tiny(value):\n    return value\n", encoding="utf-8"
+        )
+        report = scan_repo(tmp_path)
+        assert report.files == {}
+
+    def test_new_metrics_are_part_of_the_ratchet_contract(self) -> None:
+        assert "duplicate_mechanical_helpers" in METRIC_NAMES
+        assert "duplicate_mechanical_helpers_local" in METRIC_NAMES
+        # 필드 순서가 계약의 일부다(``METRIC_NAMES = tuple(FileMetrics.model_fields)``).
+        # 두 지표는 기존 7개 뒤에 붙어야 baseline 열 순서가 안정적으로 유지된다.
+        assert METRIC_NAMES[-2:] == (
+            "duplicate_mechanical_helpers",
+            "duplicate_mechanical_helpers_local",
+        )
+
+
+class TestCloneReporting:
+    def test_format_clone_groups_lists_members(self) -> None:
+        group = CloneGroup(
+            members=("app/a.py:write", "app/b.py:dump"),
+            files=("app/a.py", "app/b.py"),
+            node_count=53,
+        )
+        rendered = format_clone_groups([group])
+        assert "app/a.py:write" in rendered
+        assert "app/b.py:dump" in rendered
+        assert "53" in rendered
+
+    def test_format_clone_groups_handles_empty(self) -> None:
+        assert "없음" in format_clone_groups([])
+
+    def test_format_dead_allowlist_lists_keys(self) -> None:
+        rendered = format_dead_allowlist(["app/a.py:x|app/b.py:y"])
+        assert "app/a.py:x|app/b.py:y" in rendered
+
+    def test_repository_has_no_dead_allowlist_entries(self) -> None:
+        """면제가 stale 해지면 범위가 조용히 넓어진다 — 죽은 항목은 즉시 실패다."""
+        _, signatures = scan_repo_with_signatures(REPO_ROOT)
+        dead = unused_allowlist_keys(signatures)
+        assert not dead, format_dead_allowlist(dead)
 
 
 class TestRepositoryRatchet:

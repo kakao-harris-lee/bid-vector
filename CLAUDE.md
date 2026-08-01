@@ -184,6 +184,24 @@ segments:
 
 - 새 코드는 **기존 패턴을 먼저 찾아 따릅니다**: db 주입 service 클래스, repository-style 조회, `defer + chunk + idempotency` backfill(#82/#123/#138), self-chain 직렬화, 시간 헬퍼(`utc_now`/`ensure_utc`/`kst_now`/`to_kst`), react-query 훅, `zod` 폼, shadcn 래퍼.
 - 같은 문제를 두 번째로 풀면 **공용 헬퍼/모듈로 추출**합니다. 복붙·중복 로직 금지.
+- 헬퍼를 새로 쓰기 전에 **아래 주소를 먼저 grep** 합니다. 있으면 재사용하고, 없으면
+  거기에 만듭니다.
+
+| 용도 | 허브 |
+|---|---|
+| 숫자 변환·집계 | `app/utils/numeric.py` |
+| JSON 읽기/쓰기 | `app/utils/jsonio.py` |
+| 문자열·포맷 | `app/utils/textfmt.py` |
+| 시퀀스 강제변환 | `app/utils/sequence_coercion.py` |
+| 시간 | `app/core/time.py` |
+| 교차 모듈 도메인 상수 | `app/core/constants.py` |
+| 런타임·환경 설정 | `app/core/config.py` |
+| CLI 인자 (stdlib-only) | `scripts/_common/cliargs.py` |
+| 프론트 포맷 | `@/shared/format` |
+
+`numeric.py`·`jsonio.py`·`textfmt.py`·`scripts/_common/cliargs.py`·`@/shared/format` 은
+아직 없는 목적지로, 후속 중복 통합 PR 이 만든다. 주소표를 먼저 두는 이유는 그 PR 들이
+헬퍼를 어디로 모을지 흔들리지 않게 하기 위함이다.
 
 ### 7. 이벤트 드리븐 + 스트림 데이터 파이프라인 유지
 
@@ -191,6 +209,57 @@ segments:
 - 대량 작업은 **스트림/청크 단위**로 처리하고 **부분 진행을 영속화**(중간 commit), **멱등성**(`celery_task_id`/persisted-state)으로 재배달·재시작에 안전하게 만듭니다.
 - 외부 호출(KONEPS 등)은 **rate/quota를 존중**해 직렬·throttle·backoff합니다. 동시 burst 금지(reserve-detail 동시 청크가 KONEPS rate limit을 초과한 사례에서 얻은 교훈).
 - 작업은 soft/hard time limit 안에 들도록 분할하고, 못 끝내면 self-chain/재배달로 이어가되 **orphan을 남기지 않습니다**(reconciler·idempotency).
+
+### 8. 중복 금지 (허브에만 정의 · 래칫이 차단)
+
+- 메커니컬 헬퍼(숫자 변환·JSON I/O·문자열 포맷·CLI 인자 파싱)는 **허브에만** 정의합니다.
+  위 6의 주소표를 먼저 grep 하고, 없으면 허브에 만들어 거기서 import 합니다.
+- 교차 파일 중복은 `duplicate_mechanical_helpers` 가, 동일 파일 중복은
+  `duplicate_mechanical_helpers_local` 이 **자동 차단**합니다. 두 지표 중 하나라도
+  baseline 보다 오르는 PR 은 CI 에서 실패합니다.
+- 같은 알고리즘이 **상수나 캐스트만 달라** 반복되면 복사하지 말고
+  **파라미터화된 해석기 + 얇은 명명 래퍼**로 씁니다. 이름의 가독성은 래퍼가 지키고,
+  알고리즘은 한 벌만 존재합니다. `return _cast_or_none(value, int)` 같은 순수 파라미터
+  위임은 타입힌트·docstring 을 붙여도 판정에서 배제되므로 계수되지 않습니다.
+
+```python
+# Bad — 알고리즘이 두 벌
+def _int_or_none(value):
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value):
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+# Good — 해석기 한 벌 + 얇은 명명 래퍼
+def _cast_or_none(value, cast):
+    try:
+        return cast(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value):
+    return _cast_or_none(value, int)
+
+
+def _float_or_none(value):
+    return _cast_or_none(value, float)
+```
+
+- **클론 그룹은 한 PR 안에서 원자적으로 통합합니다.** 새 허브에 canonical 만 두고
+  복사본을 남기면 그 허브 파일이 baseline 에 없어 0→1 로 **위반**이 됩니다. 허브 신설·
+  복사본 제거·호출부 이전을 같은 커밋에 넣으면 그룹의 모든 파일이 동시에 내려갑니다.
+- 통합하면 안 되는 예외는 `scripts/_design_ratchet_clones.py` 의 `CLONE_ALLOWLIST` 에
+  **사유와 함께** 등재합니다(주석으로 넘기지 않습니다). 등재됐지만 더 이상 존재하지
+  않는 항목은 게이트가 실패시키므로, 면제 범위가 조용히 넓어지지 않습니다.
 
 ## 4.6 구현 규율 (계획 · TDD · 테스트 · 불필요한 변경 금지)
 
@@ -295,6 +364,7 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 - [ ] PR 본문에 어느 로드맵 단계/게이트와 연결되는지 명시
 - [ ] 설계 규칙(§4.5): 매직값 없음(config/`constants.py`로 선언), 3단계+ 조건 분기 없음(룩업/FSM), 특수케이스는 데이터로 선언(config/YAML/DSL), 파일/함수 크기 한도 준수(초과 시 분해 또는 사유), 기존 패턴·헬퍼 재사용(복붙 없음), 무거운 작업은 task 경로·외부 호출은 throttle/멱등(파이프라인 유지)
 - [ ] 테스트 용이성(§4.7): 경계는 포트/인터페이스에 의존, 구현 선택은 팩토리/레지스트리, 협력자는 주입(전역 직접 호출 금지), 결정 로직은 순수 함수로 분리
+- [ ] 설계 래칫 통과: `python scripts/design_ratchet.py` 종료코드 0 (증가 시 위반을 없애는 것이 기본 대응, `--update-baseline` 은 사유를 PR 본문에 기재)
 
 ## 10. 워크플로
 
