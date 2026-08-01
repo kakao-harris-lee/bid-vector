@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.time import utc_now
+from app.services.ml_release.base import build_preflight_check
 from app.services.ml_release.contracts import ReleaseStorageProbeObject
 from app.services.ml_release.storage.base import _ObjectStorageBase
 
@@ -29,7 +30,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
 
         if not self.enabled:
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_configured",
                     False,
                     "not_configured",
@@ -41,7 +42,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
         scheme = self.parsed.scheme.lower()
         if scheme not in {"", "file", "s3"}:
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_provider",
                     False,
                     "unsupported",
@@ -52,7 +53,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             return self._finalize_preflight(description, checks)
 
         checks.append(
-            self._check(
+            build_preflight_check(
                 "object_storage_configured",
                 True,
                 "passed",
@@ -85,7 +86,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
         base_path = self._local_base_path()
         if base_path.exists() and not base_path.is_dir():
             return [
-                self._check(
+                build_preflight_check(
                     "object_storage_target",
                     False,
                     "invalid_target",
@@ -95,7 +96,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             ]
 
         checks.append(
-            self._check(
+            build_preflight_check(
                 "object_storage_target",
                 True,
                 "passed",
@@ -106,7 +107,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
         )
         if not probe_write:
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_write_probe",
                     True,
                     "skipped",
@@ -129,7 +130,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             destination.unlink(missing_ok=True)
         except OSError as exc:
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_write_probe",
                     False,
                     "write_failed",
@@ -141,7 +142,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             return checks
 
         checks.append(
-            self._check(
+            build_preflight_check(
                 "object_storage_write_probe",
                 True,
                 "passed",
@@ -165,7 +166,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
         prefix = self.parsed.path.strip("/")
         if not bucket:
             return [
-                self._check(
+                build_preflight_check(
                     "object_storage_target",
                     False,
                     "invalid_target",
@@ -189,7 +190,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
 
         if not probe_write:
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_write_probe",
                     True,
                     "skipped",
@@ -225,7 +226,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             )
         except ImportError as exc:  # pragma: no cover - depends on deployment extras
             return None, [
-                self._check(
+                build_preflight_check(
                     "object_storage_dependency",
                     False,
                     "dependency_missing",
@@ -241,7 +242,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             PartialCredentialsError,
         ) as exc:  # pragma: no cover - depends on deployed env
             return None, [
-                self._check(
+                build_preflight_check(
                     "object_storage_credentials",
                     False,
                     "credentials_missing",
@@ -251,7 +252,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             ]
         except BotoCoreError as exc:  # pragma: no cover - depends on deployed env
             return None, [
-                self._check(
+                build_preflight_check(
                     "object_storage_target",
                     False,
                     "connection_failed",
@@ -283,7 +284,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             NoCredentialsError
         ) as exc:  # pragma: no cover - depends on deployed credential chain
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_credentials",
                     False,
                     "credentials_missing",
@@ -296,7 +297,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             PartialCredentialsError
         ) as exc:  # pragma: no cover - depends on deployed credential chain
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_credentials",
                     False,
                     "credentials_incomplete",
@@ -316,7 +317,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             BotoCoreError
         ) as exc:  # pragma: no cover - depends on remote AWS behavior
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_target",
                     False,
                     "connection_failed",
@@ -328,7 +329,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             return checks
 
         return [
-            self._check(
+            build_preflight_check(
                 "object_storage_target",
                 True,
                 "passed",
@@ -370,7 +371,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             NoCredentialsError
         ) as exc:  # pragma: no cover - depends on deployed credential chain
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_credentials",
                     False,
                     "credentials_missing",
@@ -383,7 +384,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             PartialCredentialsError
         ) as exc:  # pragma: no cover - depends on deployed credential chain
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_credentials",
                     False,
                     "credentials_incomplete",
@@ -408,7 +409,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             BotoCoreError
         ) as exc:  # pragma: no cover - depends on remote AWS behavior
             checks.append(
-                self._check(
+                build_preflight_check(
                     "object_storage_write_probe",
                     False,
                     "write_failed",
@@ -422,7 +423,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
             return checks
 
         checks.append(
-            self._check(
+            build_preflight_check(
                 "object_storage_write_probe",
                 True,
                 "passed",
@@ -456,7 +457,7 @@ class _ObjectStoragePreflightMixin(_ObjectStorageBase):
         )
         if code in {"404", "NoSuchBucket", "NotFound"}:
             normalized_status = "not_found"
-        return self._check(
+        return build_preflight_check(
             name,
             False,
             normalized_status,

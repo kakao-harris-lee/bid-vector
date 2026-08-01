@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.ai.predictors.historical.statistics import normalize_category_key
 from app.ai.predictors.procurement_band_rules import (
     SERVICE_BAND_RULES,
+    BandKeywordRule,
     build_goods_band_rules,
     resolve_band,
     title_line,
@@ -52,20 +53,29 @@ def resolve_procurement_rate_band(*, category: str, description: str) -> str | N
     return _resolve_service_procurement_rate_band(normalized_text)
 
 
-def _resolve_goods_procurement_rate_band(normalized_text: str) -> str | None:
+def _resolve_rate_band(
+    rules: tuple[BandKeywordRule, ...], normalized_text: str
+) -> str | None:
+    """Run a rule table against the notice text, deriving the title-scoped span.
+
+    The single interpreter behind the two named resolvers below — they differ
+    only in the rule table, which stays declared in ``procurement_band_rules``
+    (§4.5-3). First-match priority and the title/body scope split live in
+    ``resolve_band`` and are untouched here.
+    """
     return resolve_band(
-        GOODS_BAND_RULES,
+        rules,
         text=normalized_text,
         title=title_line(normalized_text),
     )
+
+
+def _resolve_goods_procurement_rate_band(normalized_text: str) -> str | None:
+    return _resolve_rate_band(GOODS_BAND_RULES, normalized_text)
 
 
 def _resolve_service_procurement_rate_band(normalized_text: str) -> str | None:
-    return resolve_band(
-        SERVICE_BAND_RULES,
-        text=normalized_text,
-        title=title_line(normalized_text),
-    )
+    return _resolve_rate_band(SERVICE_BAND_RULES, normalized_text)
 
 
 def _is_goods_deep_discount_notice(normalized_text: str) -> bool:

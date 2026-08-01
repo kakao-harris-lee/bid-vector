@@ -111,8 +111,11 @@ def _username_for(bare_slug: str) -> str:
     return f"{CUSTOM_USERNAME_PREFIX}{bare_slug}"
 
 
-def _email_for(bare_slug: str) -> str:
-    return f"{CUSTOM_USERNAME_PREFIX}{bare_slug}@{SYNTHETIC_EMAIL_DOMAIN}"
+def synthetic_email(username: str) -> str:
+    """Address for one synthetic account — custom companies here, preset
+    archetypes in ``scripts/seed_synthetic_operators.py``. The local part is
+    exactly the username, so the two can never drift apart."""
+    return f"{username}@{SYNTHETIC_EMAIL_DOMAIN}"
 
 
 def _public_slug_for(bare_slug: str) -> str:
@@ -192,7 +195,7 @@ class SyntheticCustomOperatorService:
 
         user = User(
             username=username,
-            email=_email_for(bare_slug),
+            email=synthetic_email(username),
             full_name=display_name,
             company=company_name,
             hashed_password=_unusable_password_hash(),

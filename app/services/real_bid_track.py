@@ -22,12 +22,13 @@ from sqlalchemy.orm import Session
 from app.core.time import ensure_utc, utc_now
 from app.models.models import BidDecisionRecord, Project, User
 from app.services.award_verification import (
-    _coerce_float,
     _find_project,
     _tender_result,
     normalize_company_name,
     strip_notice_suffix,
 )
+from app.utils.numeric import optional_float
+from app.utils.textfmt import append_unique_note
 
 
 class RealBidNotFoundError(ValueError):
@@ -96,7 +97,11 @@ class RealBidTrackService:
         record.submitted_at = submitted_ts
         if floor_rate is not None:
             record.submitted_floor_rate = float(floor_rate)
-        self._append_note(record, note or self.REGISTER_NOTE)
+        appended_reasoning = append_unique_note(
+            record.reasoning, note or self.REGISTER_NOTE
+        )
+        if appended_reasoning != record.reasoning:
+            record.reasoning = appended_reasoning
 
         db.commit()
         db.refresh(record)
@@ -184,7 +189,7 @@ class RealBidTrackService:
         project = record.project
         tender = _tender_result(db, project)
         winning_company = str(tender.winning_company).strip() if tender and tender.winning_company else None
-        winning_amount = _coerce_float(tender.winning_amount) if tender else None
+        winning_amount = optional_float(tender.winning_amount) if tender else None
         # 개찰 1위(잠정) — 낙찰 확정(winning_*)이 아니다. 적격심사는 1위부터
         # 캐스케이드라 1위≠낙찰 가능(수의계약이면 사실상 확정). 낙찰이 확정되면
         # 낙찰피드가 최신 TenderResult 를 새로 만들 수 있어 이 잠정 신호는 자연히
@@ -199,9 +204,9 @@ class RealBidTrackService:
             "project_id": int(record.project_id) if record.project_id is not None else None,
             "notice_number": project.notice_number if project is not None else None,
             "project_title": project.title if project is not None else None,
-            "submitted_bid_amount": _coerce_float(record.submitted_bid_amount),
-            "submitted_floor_rate": _coerce_float(record.submitted_floor_rate),
-            "recommended_amount": _coerce_float(record.recommended_amount),
+            "submitted_bid_amount": optional_float(record.submitted_bid_amount),
+            "submitted_floor_rate": optional_float(record.submitted_floor_rate),
+            "recommended_amount": optional_float(record.recommended_amount),
             "submitted_at": record.submitted_at,
             "award_notified_at": record.award_notified_at,
             "award_outcome": str(record.award_outcome) if record.award_outcome else None,
@@ -213,8 +218,8 @@ class RealBidTrackService:
             # 개찰 1위(잠정): 낙찰 확정 아님(적격심사 캐스케이드 가능), 수의계약이면
             # 사실상 확정. is_ours 는 운영자 상호↔1위 상호 정규화 매칭(상호 부재 시 None).
             "opening_rank1_company": opening_rank1_company,
-            "opening_rank1_amount": _coerce_float(tender.opening_rank1_amount) if tender else None,
-            "opening_rank1_rate": _coerce_float(tender.opening_rank1_rate) if tender else None,
+            "opening_rank1_amount": optional_float(tender.opening_rank1_amount) if tender else None,
+            "opening_rank1_rate": optional_float(tender.opening_rank1_rate) if tender else None,
             "opening_participant_count": (
                 int(tender.opening_participant_count)
                 if tender and tender.opening_participant_count is not None
@@ -260,13 +265,3 @@ class RealBidTrackService:
             .order_by(BidDecisionRecord.updated_at.desc(), BidDecisionRecord.id.desc())
             .first()
         )
-
-    def _append_note(self, record: BidDecisionRecord, note: str) -> None:
-        """Append a note to reasoning without duplicating the same sentence."""
-        if not note:
-            return
-        if record.reasoning:
-            if note not in record.reasoning:
-                record.reasoning = f"{record.reasoning} {note}".strip()
-            return
-        record.reasoning = note

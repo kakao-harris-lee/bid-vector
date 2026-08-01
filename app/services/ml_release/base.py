@@ -3,7 +3,10 @@
 Holds the ``MLReleasePromotionRequest`` value object plus ``_MLReleaseBase``:
 the promotion-gate presets, dataset-quality ordering, ``__init__`` and the
 stateless leaf helpers (path resolution, sha256, env parsing, archive/probe
-builders). Every member is moved verbatim from the original module."""
+builders). Every member is moved verbatim from the original module.
+
+``build_preflight_check`` also lives here because release preflight and object
+storage preflight both emit it into one merged ``checks`` array."""
 
 from __future__ import annotations
 
@@ -16,6 +19,28 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from app.core.config import settings
+
+
+def build_preflight_check(
+    name: str,
+    passed: bool,
+    status: str,
+    detail: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Build one preflight check payload.
+
+    ``passed`` is narrowed to ``bool`` because consumers compare it with
+    ``is True``; ``extra`` carries per-check fields (object name, byte count)
+    and cannot shadow the four fixed keys, which are named parameters.
+    """
+    return {
+        "name": name,
+        "passed": bool(passed),
+        "status": status,
+        "detail": detail,
+        **extra,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,23 +216,6 @@ class _MLReleaseBase:
                 "file_count": len(file_paths),
             }
         raise ValueError(f"Artifact path must be a file or directory: {path}")
-
-    def _rollout_check(
-        self,
-        name: str,
-        passed: bool,
-        status: str,
-        detail: str,
-        **extra: Any,
-    ) -> dict[str, Any]:
-        """Build one rollout preflight check payload."""
-        return {
-            "name": name,
-            "passed": bool(passed),
-            "status": status,
-            "detail": detail,
-            **extra,
-        }
 
     def _sha256_file(self, path: Path) -> str:
         """Hash one file without loading it fully into memory."""

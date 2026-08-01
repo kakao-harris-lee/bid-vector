@@ -36,6 +36,7 @@ from app.models.models import (
 )
 from app.services.stored_json_payload import load_stored_json_value
 from app.services.synthetic_experiment import RESULT_BREAKDOWN_COLUMN
+from app.utils.sequence_coercion import as_str_list
 
 # 이 서비스가 직접 읽는 컬럼의 degrade 라벨(교차 패키지 컬럼은 소유 모듈 상수를 쓴다).
 BID_DECISION_SCORE_BREAKDOWN_COLUMN = "bid_decision_record.score_breakdown"
@@ -312,12 +313,7 @@ class BidSummaryService:
         if not isinstance(parsed, dict):
             return [], []
 
-        def _as_str_list(value: Any) -> list[str]:
-            if not isinstance(value, list):
-                return []
-            return [str(item) for item in value if isinstance(item, str) and item]
-
-        return _as_str_list(parsed.get("strengths")), _as_str_list(
+        return as_str_list(parsed.get("strengths")), as_str_list(
             parsed.get("risk_flags")
         )
 

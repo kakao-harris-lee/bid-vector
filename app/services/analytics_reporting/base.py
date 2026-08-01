@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import settings
-from app.domain.aggregates import average
+from app.domain.aggregates import average, rate
 from app.services.smoke_failure_taxonomy import SMOKE_FAILURE_CATEGORIES
 from app.services.stored_json_payload import load_stored_json_object
 
@@ -70,9 +70,7 @@ class _AnalyticsReportingBase:
 
     def _rate(self, numerator: int, denominator: int) -> float:
         """Return a dashboard-friendly ratio."""
-        if denominator <= 0:
-            return 0.0
-        return round(numerator / denominator, 4)
+        return rate(numerator, denominator, digits=4)
 
     def _status_for_rate(self, value: float, *, warning: float, critical: float) -> str:
         """Convert a ratio to a simple status token."""

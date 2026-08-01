@@ -14,6 +14,7 @@ from typing import Any
 
 from app.core.time import utc_now
 from app.domain.aggregates import average
+from app.utils.textfmt import optional_text
 
 
 class HelpersMixin:
@@ -111,8 +112,7 @@ class HelpersMixin:
         return release_tag
 
     def _clean_optional(self, value: Any) -> str | None:
-        cleaned = str(value or "").strip()
-        return cleaned or None
+        return optional_text(value)
 
     def _dump_json(self, payload: dict[str, Any]) -> str:
         # 학습 리포트/아티팩트 쓰기 경로는 ``json.dumps`` 를 유지한다: payload 는 학습이

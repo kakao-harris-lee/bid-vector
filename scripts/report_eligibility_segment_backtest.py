@@ -64,6 +64,7 @@ from app.services.query_predicates import (  # noqa: E402
     open_projects,
     settled_any_signal,
 )
+from app.utils.numeric import optional_float  # noqa: E402
 
 # --- 매직값은 여기 선언(§4.5.1) ---------------------------------------------
 
@@ -556,7 +557,7 @@ def load_rows(
             continue
         basis = holdouts.resolve_base_basis(historical, result)
         budget, _base_source = holdouts.resolve_pricing_base(project, historical, basis)
-        actual_amount = holdouts.amount_float(result.winning_amount)
+        actual_amount = optional_float(result.winning_amount)
         if not budget or budget <= 0 or not actual_amount or actual_amount <= 0:
             skipped_no_award += 1
             continue

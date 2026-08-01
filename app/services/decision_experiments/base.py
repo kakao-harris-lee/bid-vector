@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.single_user import ensure_operator_account, ensure_operator_strategy, ensure_operator_strategy_for
+from app.domain.aggregates import delta
 from app.models.models import DecisionExperimentRun, User
 from app.services.decision_analytics import DecisionAnalyticsService
 from app.services.stored_json_payload import load_stored_json_object
@@ -160,9 +161,7 @@ class _DecisionExperimentBase:
 
     def _delta(self, current_value: float | None, baseline_value: float | None) -> float | None:
         """Return a rounded metric delta when both current and baseline are known."""
-        if current_value is None or baseline_value is None:
-            return None
-        return round(float(current_value) - float(baseline_value), 4)
+        return delta(current_value, baseline_value, digits=4)
 
     def _merge_notes(self, current_notes: str | None, appended_note: str) -> str:
         """Append operator notes without losing the existing note body."""

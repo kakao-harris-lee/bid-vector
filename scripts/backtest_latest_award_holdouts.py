@@ -53,6 +53,7 @@ from app.services.bid_base import (
 )
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.query_predicates import settled_any_signal
+from app.utils.numeric import optional_float
 from app.utils.sequence_coercion import coerce_numeric_list
 
 DEFAULT_GROUPS = ("construction", "service", "goods")
@@ -245,15 +246,6 @@ def display_dt(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat()
 
 
-def amount_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def normalize_rate(value: Any) -> float | None:
     if value is None:
         return None
@@ -311,7 +303,7 @@ def base_amount(project: Project, historical: HistoricalData) -> float | None:
     ``historical.base_amount`` was falsy. That crash stayed latent because
     ``base_amount`` is truthy for almost every row, short-circuiting the fallback.
     """
-    return amount_float(historical.base_amount) or amount_float(project.budget_estimate)
+    return optional_float(historical.base_amount) or optional_float(project.budget_estimate)
 
 
 # Provenance labels for the base value fed into error measurement.
@@ -352,9 +344,9 @@ def resolve_pricing_base(
     I/O, so the choice stays unit-testable as a value table.
     """
     reliable = get_reliable_base(
-        base_amount=amount_float(historical.base_amount),
+        base_amount=optional_float(historical.base_amount),
         basis=basis,
-        base_amount_estimated=amount_float(
+        base_amount_estimated=optional_float(
             getattr(historical, "base_amount_estimated", None)
         ),
     )
@@ -374,7 +366,7 @@ def resolve_base_basis(historical: HistoricalData, result: TenderResult) -> str:
     """
     return classify_base_basis(
         getattr(historical, "base_amount", None),
-        amount_float(result.winning_amount),
+        optional_float(result.winning_amount),
         normalize_rate(result.winning_rate),
     )
 
@@ -511,7 +503,7 @@ def select_latest_targets(
         seen_project_ids.add(result.project_id)
         basis = resolve_base_basis(historical, result)
         budget, _base_source = resolve_pricing_base(project, historical, basis)
-        actual_amount = amount_float(result.winning_amount)
+        actual_amount = optional_float(result.winning_amount)
         if not budget or budget <= 0 or not actual_amount or actual_amount <= 0:
             continue
 
@@ -612,7 +604,7 @@ def select_targets_by_notice(
             continue
         basis = resolve_base_basis(historical, result)
         budget, _base_source = resolve_pricing_base(project, historical, basis)
-        actual_amount = amount_float(result.winning_amount)
+        actual_amount = optional_float(result.winning_amount)
         if not budget or budget <= 0 or not actual_amount or actual_amount <= 0:
             continue
 
@@ -694,13 +686,13 @@ def evaluate_target(
     project = target.project
     historical = target.historical
     basis = resolve_base_basis(historical, result)
-    stored_base = amount_float(historical.base_amount)
-    estimated_base = amount_float(getattr(historical, "base_amount_estimated", None))
+    stored_base = optional_float(historical.base_amount)
+    estimated_base = optional_float(getattr(historical, "base_amount_estimated", None))
     # For non-clean rows the stored base_amount is 예정가-역산/VAT contaminated, so
     # resolve_pricing_base swaps in the recovered 기초금액 estimate — this measures
     # error on a 기초금액-basis instead of the polluted 예정가-basis.
     budget, base_source = resolve_pricing_base(project, historical, basis)
-    actual_amount = amount_float(result.winning_amount)
+    actual_amount = optional_float(result.winning_amount)
     if not budget or not actual_amount:
         raise ValueError(f"Target {historical.notice_number} has no usable budget or winning amount.")
 
@@ -785,7 +777,7 @@ def evaluate_target(
 
     recommended = scenario_metrics(
         label="recommended",
-        price=amount_float(prediction.get("predicted_price")),
+        price=optional_float(prediction.get("predicted_price")),
         rate=normalize_rate(prediction.get("predicted_bid_rate") or prediction.get("bid_rate")),
         budget=budget,
         actual_amount=actual_amount,
@@ -795,7 +787,7 @@ def evaluate_target(
     for candidate in candidate_rows(prediction.get("bid_rate_candidates")):
         scenario = scenario_metrics(
             label=str(candidate.get("label") or candidate.get("scenario") or "candidate"),
-            price=amount_float(candidate.get("predicted_price") or candidate.get("price")),
+            price=optional_float(candidate.get("predicted_price") or candidate.get("price")),
             rate=normalize_rate(candidate.get("bid_rate") or candidate.get("predicted_bid_rate")),
             budget=budget,
             actual_amount=actual_amount,

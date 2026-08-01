@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.aggregates import average, error_rate
+from app.domain.aggregates import average, delta, error_rate, rate
 
 
 # --- error_rate: 순수 규칙 경계 -------------------------------------------
@@ -73,7 +73,112 @@ def test_average_digits_is_required_keyword() -> None:
         average([1.0, 2.0])  # type: ignore[call-arg]
 
 
+# --- rate: 순수 규칙 경계 -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "numerator, denominator, expected",
+    [
+        (1, 2, 0.5),
+        (5, 5, 1.0),
+        (0, 5, 0.0),
+        (1, 3, 0.3333),
+        (2, 3, 0.6667),
+        (1, 0, 0.0),  # 0 분모 → 0.0 폴백 (error_rate 의 None 과 갈리는 지점)
+        (1, -4, 0.0),  # 음수 분모 → 0.0 폴백
+        (0, 0, 0.0),
+    ],
+)
+def test_rate_boundaries(numerator: int, denominator: int, expected: float) -> None:
+    assert rate(numerator, denominator, digits=4) == expected
+
+
+def test_rate_matches_inline_formula() -> None:
+    # 리포팅 두 곳의 기존 인라인식 round(n/d, 4) 와 동일.
+    for numerator, denominator in [(3, 7), (11, 13), (0, 9), (99, 100), (12, 5)]:
+        assert rate(numerator, denominator, digits=4) == round(
+            numerator / denominator, 4
+        )
+
+
+def test_rate_digits_is_required_keyword() -> None:
+    with pytest.raises(TypeError):
+        rate(1, 2)  # type: ignore[call-arg]
+
+
+# --- delta: 순수 규칙 경계 ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "current_value, baseline_value, expected",
+    [
+        (1.5, 1.0, 0.5),
+        (1.0, 1.5, -0.5),
+        (1.0, 1.0, 0.0),
+        (0.123456, 0.1, 0.0235),  # 4자리 반올림
+        (3, 1, 2.0),  # int 입력에서도 float 캐스트가 no-op
+        (None, 1.0, None),  # 한쪽이 None → 비교 불가
+        (1.0, None, None),
+        (None, None, None),
+        (0.0, 0.0, 0.0),  # 0 은 None 이 아니므로 차분이 계산된다
+    ],
+)
+def test_delta_boundaries(
+    current_value: float | None, baseline_value: float | None, expected: float | None
+) -> None:
+    assert delta(current_value, baseline_value, digits=4) == expected
+
+
+def test_delta_matches_inline_formula() -> None:
+    # decision_analytics/decision_experiments 의 기존 인라인식과 동일.
+    for current_value, baseline_value in [(0.87, 0.885), (12.5, 3.0), (0.0, 1.0)]:
+        assert delta(current_value, baseline_value, digits=4) == round(
+            float(current_value) - float(baseline_value), 4
+        )
+
+
+def test_delta_digits_is_required_keyword() -> None:
+    with pytest.raises(TypeError):
+        delta(1.0, 2.0)  # type: ignore[call-arg]
+
+
 # --- 콜사이트 위임 등가(golden) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "numerator, denominator",
+    [(0, 0), (3, 0), (3, -1), (0, 10), (7, 10), (1, 3), (10, 10)],
+)
+def test_reporting_rate_delegates_unchanged(numerator: int, denominator: int) -> None:
+    # analytics_reporting/prediction_reporting 의 `_rate` 는 바이트 동일 사본이었다.
+    # 통합 후에도 두 메서드가 기존 인라인식과 값이 같아야 한다(0-분모 → 0.0).
+    from app.services.analytics_reporting.base import _AnalyticsReportingBase
+    from app.services.prediction_reporting import PredictionReportingService
+
+    old = 0.0 if denominator <= 0 else round(numerator / denominator, 4)
+    assert _AnalyticsReportingBase()._rate(numerator, denominator) == old
+    assert PredictionReportingService()._rate(numerator, denominator) == old
+
+
+@pytest.mark.parametrize(
+    "current_value, baseline_value",
+    [(0.9, 0.85), (0.85, 0.9), (1.0, 1.0), (None, 0.5), (0.5, None), (None, None)],
+)
+def test_decision_delta_delegates_unchanged(
+    current_value: float | None, baseline_value: float | None
+) -> None:
+    # decision_analytics(기간 비교)·decision_experiments(실험 평가) 의 `_delta` 는
+    # 인자명만 다른 동일 구현이었다. 통합 후에도 두 메서드가 기존 식과 값이 같아야 한다.
+    from app.services.decision_analytics import DecisionAnalyticsService
+    from app.services.decision_experiments import DecisionExperimentService
+
+    old = (
+        None
+        if current_value is None or baseline_value is None
+        else round(float(current_value) - float(baseline_value), 4)
+    )
+    assert DecisionAnalyticsService()._delta(current_value, baseline_value) == old
+    assert DecisionExperimentService()._delta(current_value, baseline_value) == old
 
 
 def test_dashboard_compute_error_rate_delegates_unchanged() -> None:

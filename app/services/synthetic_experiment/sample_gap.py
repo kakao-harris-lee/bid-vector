@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from app.core.constants import PAPER_BID_ACTIONS
 from app.models.models import SyntheticExperiment, SyntheticExperimentRun
+from app.utils.numeric import optional_int
 
 from .constants import (
     REPORT_STATUS_DATA_MIXED,
@@ -30,12 +31,8 @@ def _safe_positive_int(value: Any, default: int = 0) -> int:
 
 
 def _safe_optional_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    """Package-public alias kept for ``synthetic_experiment.__all__`` re-export."""
+    return optional_int(value)
 
 
 def _normalize_settle_actions(value: Any) -> list[str]:

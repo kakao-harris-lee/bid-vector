@@ -28,6 +28,7 @@ from app.services.operator_strategy_tuning import (
     get_strategy_auto_workload_penalty_multiplier,
     get_strategy_category_priority_overrides,
 )
+from app.utils.textfmt import optional_text
 
 
 class _ApplicationMixin(_DecisionExperimentBase):
@@ -328,8 +329,7 @@ class _ApplicationMixin(_DecisionExperimentBase):
 
     def _clean_category_name(self, raw_value: Any) -> str | None:
         """Normalize category labels from experiment snapshots."""
-        category = str(raw_value or "").strip()
-        return category or None
+        return optional_text(raw_value)
 
     def _category_override_for(self, overrides: dict[str, float], category: str) -> float:
         """Read an existing category override using case-insensitive matching."""

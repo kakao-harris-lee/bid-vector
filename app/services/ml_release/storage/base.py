@@ -81,23 +81,6 @@ class _ObjectStorageBase:
         """Return a short-lived object name for rollout write probes."""
         return f"preflight/ml-release-{int(time.time())}-{os.getpid()}.json"
 
-    def _check(
-        self,
-        name: str,
-        passed: bool,
-        status: str,
-        detail: str,
-        **extra: Any,
-    ) -> dict[str, Any]:
-        """Build one object-storage preflight check."""
-        return {
-            "name": name,
-            "passed": bool(passed),
-            "status": status,
-            "detail": detail,
-            **extra,
-        }
-
     def _finalize_preflight(
         self,
         description: dict[str, Any],

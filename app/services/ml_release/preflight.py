@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.services.ml_release.base import _MLReleaseBase
+from app.services.ml_release.base import _MLReleaseBase, build_preflight_check
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
     is_json_decode_error,
@@ -127,7 +127,7 @@ class _PreflightMixin(_MLReleaseBase):
             manifest_text = manifest_path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
             checks.append(
-                self._rollout_check(
+                build_preflight_check(
                     "manifest_load",
                     False,
                     "not_found",
@@ -143,7 +143,7 @@ class _PreflightMixin(_MLReleaseBase):
         except ValidationError as exc:
             if is_json_decode_error(exc):
                 checks.append(
-                    self._rollout_check(
+                    build_preflight_check(
                         "manifest_load",
                         False,
                         "invalid_json",
@@ -153,7 +153,7 @@ class _PreflightMixin(_MLReleaseBase):
                 )
                 return None, manifest_path
             checks.append(
-                self._rollout_check(
+                build_preflight_check(
                     "manifest_load",
                     False,
                     "invalid_json",
@@ -165,7 +165,7 @@ class _PreflightMixin(_MLReleaseBase):
             manifest.get("release_tag") or manifest_path.stem
         )
         checks.append(
-            self._rollout_check(
+            build_preflight_check(
                 "manifest_load",
                 True,
                 "passed",
@@ -193,7 +193,7 @@ class _PreflightMixin(_MLReleaseBase):
         except ValueError as exc:
             manifest_summary["signature_status"] = "invalid"
             checks.append(
-                self._rollout_check(
+                build_preflight_check(
                     "manifest_signature",
                     False,
                     "invalid",
@@ -205,7 +205,7 @@ class _PreflightMixin(_MLReleaseBase):
         signature_status = "verified" if verification.get("verified") else "missing"
         manifest_summary["signature_status"] = signature_status
         checks.append(
-            self._rollout_check(
+            build_preflight_check(
                 "manifest_signature",
                 True,
                 signature_status,
@@ -232,7 +232,7 @@ class _PreflightMixin(_MLReleaseBase):
         promotion_gate = self._resolve_manifest_promotion_gate(manifest)
         gate_passed = bool(promotion_gate.get("passed"))
         checks.append(
-            self._rollout_check(
+            build_preflight_check(
                 "predictor_promotion_gate",
                 gate_passed,
                 str(
@@ -266,7 +266,7 @@ class _PreflightMixin(_MLReleaseBase):
         if failing_groups:
             detail = ", ".join(f"{group}={count}" for group, count in failing_groups)
             checks.append(
-                self._rollout_check(
+                build_preflight_check(
                     "group_calibration_sample_count",
                     False,
                     "failed",
@@ -277,7 +277,7 @@ class _PreflightMixin(_MLReleaseBase):
             )
             return
         checks.append(
-            self._rollout_check(
+            build_preflight_check(
                 "group_calibration_sample_count",
                 True,
                 "passed",
@@ -300,7 +300,7 @@ class _PreflightMixin(_MLReleaseBase):
                 else "file" if artifact_path.is_file() else "missing"
             )
             checks.append(
-                self._rollout_check(
+                build_preflight_check(
                     f"artifact_path:{artifact['key']}",
                     exists,
                     "passed" if exists else "not_found",
@@ -316,7 +316,7 @@ class _PreflightMixin(_MLReleaseBase):
             )
         if not checks:
             checks.append(
-                self._rollout_check(
+                build_preflight_check(
                     "artifact_path",
                     True,
                     "not_applicable",

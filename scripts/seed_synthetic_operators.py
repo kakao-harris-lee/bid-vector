@@ -45,10 +45,10 @@ from app.core.single_user import (
     join_multi_value_text,
 )
 from app.models.models import CompanyProfile, OperatorStrategy, User
+from app.services.synthetic_custom_operator import synthetic_email
 
 
 SYNTHETIC_USERNAME_PREFIX = "synthetic-"
-SYNTHETIC_EMAIL_DOMAIN = "synthetic.bid-vector.local"
 SYNTHETIC_PASSWORD = "synthetic-backtest-only"  # never used for real auth
 
 
@@ -329,14 +329,10 @@ def _username(slug: str) -> str:
     return f"{SYNTHETIC_USERNAME_PREFIX}{slug}"
 
 
-def _email(slug: str) -> str:
-    return f"{SYNTHETIC_USERNAME_PREFIX}{slug}@{SYNTHETIC_EMAIL_DOMAIN}"
-
-
 def upsert_synthetic_operator(db: Session, archetype: SyntheticArchetype) -> dict[str, Any]:
     """Create or update one synthetic operator + profile + strategy."""
     username = _username(archetype.slug)
-    email = _email(archetype.slug)
+    email = synthetic_email(username)
 
     user = db.query(User).filter(User.username == username).first()
     created_user = False

@@ -37,6 +37,7 @@ from app.core.config import settings
 from app.core.time import kst_now
 from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import HistoricalData, Project, TenderResult
+from app.utils.numeric import optional_float
 
 # Verdict codes (also asserted by tests).
 VERDICT_NOT_SETTLED = "미적재/개찰 전"
@@ -146,18 +147,9 @@ def _default_fetch_detail(notice: str, category: str | None) -> dict[str, Any]:
     )
 
 
-def _coerce_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _rate_to_fraction(value: Any) -> float | None:
     """Normalize a rate that may be stored as a ratio or a percentage."""
-    numeric = _coerce_float(value)
+    numeric = optional_float(value)
     if numeric is None or numeric <= 0:
         return None
     return to_bid_rate_fraction(numeric)
@@ -185,7 +177,7 @@ def _historical_base_amount(db: Session, project: Project | None) -> float | Non
     )
     if record is None:
         return None
-    amount = _coerce_float(record.base_amount)
+    amount = optional_float(record.base_amount)
     return amount if amount and amount > 0 else None
 
 
@@ -274,12 +266,12 @@ def verify_one(
 
     reserve_prices = list(detail.get("reserve_prices") or [])
     selected_numbers = list(detail.get("selected_numbers") or [])
-    planned_price = _coerce_float(detail.get("planned_price"))
-    reserve_base = _coerce_float(detail.get("base_amount"))
+    planned_price = optional_float(detail.get("planned_price"))
+    reserve_base = optional_float(detail.get("base_amount"))
     total_count = int(detail.get("reserve_detail_total_count") or 0)
 
     result = _tender_result(db, project)
-    winning_amount = _coerce_float(result.winning_amount) if result else None
+    winning_amount = optional_float(result.winning_amount) if result else None
     base_amount = reserve_base or _historical_base_amount(db, project)
 
     settled = (

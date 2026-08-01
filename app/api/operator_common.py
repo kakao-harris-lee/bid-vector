@@ -31,6 +31,18 @@ def _operator_context_fields(target: User) -> dict:
     }
 
 
+def _with_current_operator(payload: dict, operator: User) -> dict:
+    """Inject the ``current_operator_*`` envelope into a reporting payload.
+
+    Reporting payloads already carry ``operator_id``; these fields make the actor
+    explicit so the frontend can render which company the response is scoped to.
+    Mutates ``payload`` in place and returns it — the routers return the result
+    directly, so the two envelope keys land last in the response body.
+    """
+    payload.update(_operator_context_fields(operator))
+    return payload
+
+
 def _is_profile_configured(
     license_codes: list[str],
     region_codes: list[str],

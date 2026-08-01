@@ -17,6 +17,8 @@ from app.services.smoke_failure_taxonomy import (
     classify_failure,
     guidance_for,
 )
+from scripts.production_smoke_test import FAILURE_GUIDANCE as CLI_FAILURE_GUIDANCE
+from scripts.production_smoke_test import failure_guidance as cli_failure_guidance
 
 
 def test_guidance_map_keys_match_categories_and_are_complete():
@@ -94,4 +96,57 @@ def test_koneps_response_retry_method_is_canonical_producer_wording():
         guidance_for("koneps_response")["retry_method"]
         == "Retry the smoke after KONEPS responds normally; use "
         "`--max-items 3 --write` for a bounded manual check."
+    )
+
+
+# --- Standalone CLI runner (scripts/production_smoke_test.py) ----------------
+# The CLI runner keeps its OWN remediation wording ("rerun this smoke command")
+# because its evidence file is read by whoever ran that command, while the
+# scheduled producer's wording points at the beat task. Only the *lookup* was
+# duplicated, so the CLI now reuses ``guidance_for`` with its own table. These
+# tests pin both the CLI wording and the shared fallback behaviour.
+
+
+def test_cli_guidance_table_covers_every_category():
+    assert set(CLI_FAILURE_GUIDANCE) == set(SMOKE_FAILURE_CATEGORIES)
+    for category, guidance in CLI_FAILURE_GUIDANCE.items():
+        assert guidance.get("action_required"), category
+        assert guidance.get("retry_method"), category
+
+
+@pytest.mark.parametrize(
+    ("category", "action_required", "retry_method"),
+    [
+        (
+            "credential",
+            "Rotate or restore the missing API/Telegram credential.",
+            "Fix the credential, then rerun this smoke command.",
+        ),
+        (
+            "koneps_response",
+            "Check KONEPS OpenAPI availability and request parameters.",
+            "Retry with `--write --max-items 3` after KONEPS responds normally.",
+        ),
+        (
+            "unknown",
+            "Inspect the step error and application logs.",
+            "Rerun the same command after the logged root cause is corrected.",
+        ),
+    ],
+)
+def test_cli_failure_guidance_wording_is_pinned(category, action_required, retry_method):
+    guidance = cli_failure_guidance(category)
+    assert guidance["action_required"] == action_required
+    assert guidance["retry_method"] == retry_method
+
+
+def test_cli_failure_guidance_unknown_category_falls_back_to_cli_table():
+    assert cli_failure_guidance("not-a-real-category") == CLI_FAILURE_GUIDANCE["unknown"]
+
+
+def test_cli_wording_stays_distinct_from_the_scheduled_producer():
+    """The two tables are intentionally different; consolidation is code-only."""
+    assert (
+        cli_failure_guidance("credential")["retry_method"]
+        != guidance_for("credential")["retry_method"]
     )

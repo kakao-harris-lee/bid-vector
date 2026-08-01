@@ -23,6 +23,7 @@ from app.utils.sequence_coercion import (
     coerce_integer_list,
     coerce_numeric_list,
 )
+from app.utils.textfmt import normalize_lookup_key
 
 _CATEGORY_ALIASES = {
     "general-service": "service",
@@ -239,8 +240,7 @@ class PredictionDatasetService:
         return categories
 
     def _normalize_category(self, category: str | None) -> str:
-        normalized = str(category or "").strip().lower()
-        return _CATEGORY_ALIASES.get(normalized, normalized)
+        return normalize_lookup_key(category, _CATEGORY_ALIASES)
 
     def build_training_dataset(
         self,
