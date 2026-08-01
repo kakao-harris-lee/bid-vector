@@ -43,7 +43,10 @@ from __future__ import annotations
 from app.core.single_user import split_multi_value_text
 from app.models.models import CompanyProfile, Project
 from app.services.classification import config
-from app.services.classification._grouping import terms_by_license_group
+from app.services.classification._grouping import (
+    format_groups,
+    terms_by_license_group,
+)
 from app.services.classification.assessment import RuleAssessment
 from app.services.classification.group_or import (
     GroupOrVerdict,
@@ -81,11 +84,6 @@ def _held_association_memberships(profile: CompanyProfile) -> set[str]:
     for token in split_multi_value_text(profile.association_memberships):
         held |= match_association_terms(token)
     return held
-
-
-def _format_groups(groups: list[frozenset[str]]) -> str:
-    """협회 요건 그룹 목록을 사람이 읽는 ``[a, b] / [c]`` 형태로 만든다(reason 용)."""
-    return " / ".join(f"[{', '.join(sorted(group))}]" for group in groups)
 
 
 def assess_association(project: Project, profile: CompanyProfile) -> RuleAssessment:
@@ -141,7 +139,7 @@ def assess_association(project: Project, profile: CompanyProfile) -> RuleAssessm
             penalty=config.ASSOCIATION_MISMATCH_PENALTY,
             reasons=[
                 "공고가 요구하는 협회 가입을 어느 그룹으로도 충족하지 못했습니다"
-                f"(그룹별 요구, 하나만 전부 보유하면 됨: {_format_groups(constrained)})."
+                f"(그룹별 요구, 하나만 전부 보유하면 됨: {format_groups(constrained)})."
             ],
         )
 

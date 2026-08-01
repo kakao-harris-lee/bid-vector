@@ -1,17 +1,17 @@
-"""면허 그룹(``lmtGrpNo``) 매핑 해석기 — ``classification`` 패키지 내부 전용.
+"""면허 그룹(``lmtGrpNo``) 매핑·표시 해석기 — ``classification`` 패키지 내부 전용.
 
 밑줄 프리픽스는 **패키지 내부 계약**이라는 뜻이다. 패키지 밖에서 import 하지 않는다.
 
 협회 가입(:mod:`association`) 축과 기술부문(:mod:`tech_field`) 축은 도메인 어휘만
-다른 **같은** 그룹핑 알고리즘을 쓴다. CLAUDE.md §4.5-8 처방대로 알고리즘은 여기 한
-벌만 두고, 각 축은 자기 매처를 넘기는 얇은 명명 래퍼로 도메인 이름과 근거를 지킨다.
-새 축(예: 또 다른 cohort 자격)이 생겨도 해석기를 복사하지 않는다.
+다른 **같은** 그룹핑·표시 알고리즘을 쓴다. CLAUDE.md §4.5-8 처방대로 알고리즘은
+여기 한 벌만 두고, 각 축은 자기 매처를 넘기는 얇은 명명 래퍼로 도메인 이름과 근거를
+지킨다. 새 축(예: 또 다른 cohort 자격)이 생겨도 해석기를 복사하지 않는다.
 
-**경계**: 이 모듈은 그룹 경계를 존중한 *매핑*만 해석한다. 그룹 의미론(그룹 간 OR·
-그룹 내 AND) 판정은 :func:`app.services.classification.group_or.evaluate_group_or`
-가, 어휘 매칭 규칙은 :mod:`app.services.eligibility_labeling` 가, 그룹핑 자체는
-:func:`app.services.license_eligibility.parse_license_limit_groups` 가 소유한다.
-그 셋을 여기로 옮기지 않는다(단일 출처 유지).
+**경계**: 이 모듈은 그룹 경계를 존중한 *매핑*과 *표시*만 해석한다. 그룹 의미론
+(그룹 간 OR·그룹 내 AND) 판정은 :func:`app.services.classification.group_or.
+evaluate_group_or` 가, 어휘 매칭 규칙은 :mod:`app.services.eligibility_labeling`
+가, 그룹핑 자체는 :func:`app.services.license_eligibility.parse_license_limit_groups`
+가 소유한다. 그 셋을 여기로 옮기지 않는다(단일 출처 유지).
 """
 
 from __future__ import annotations
@@ -47,3 +47,16 @@ def terms_by_license_group(
             terms |= match_terms(name)
         groups.append(frozenset(terms))
     return groups
+
+
+def format_groups(groups: list[frozenset[str]]) -> str:
+    """요건 그룹 목록을 사람이 읽는 ``[a, b] / [c]`` 형태로 만든다(reason 용).
+
+    그룹 **안**은 정렬해 결정적으로 출력하고(집합은 순서가 불안정해 정렬 없이는
+    reason 문구가 실행마다 흔들린다), 그룹 **사이**는 입력 순서를 그대로 둔다
+    (등장 순서 = 공고의 lmtGrpNo 순서). 빈 그룹은 ``[]`` 로 나타난다.
+
+    도메인 어휘를 모르므로 협회 요건과 기술부문 요건에 그대로 쓰인다. 호출부는
+    "하나만 전부 보유하면 됨" 같은 그룹 간 OR 설명을 자기 문장으로 덧붙인다.
+    """
+    return " / ".join(f"[{', '.join(sorted(group))}]" for group in groups)

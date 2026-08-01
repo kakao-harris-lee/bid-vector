@@ -1,15 +1,19 @@
 """``classification/_grouping`` 해석기 특성화 테스트.
 
-협회 가입·기술부문 두 축이 공유하는 그룹핑 해석기를 (a) 매처를 모르는 순수 해석기
-표, (b) 두 축 호출부 경로의 실측 형태 입력으로 고정한다. 통합 전 두 복사본
-(``_memberships_by_group`` · ``_tech_fields_by_group``)의 출력을 그대로 계약으로
-잠근다 — 이 파일이 깨지면 동작이 바뀐 것이다. 실 API/DB 접속 없음.
+협회 가입·기술부문 두 축이 공유하는 그룹핑·표시 해석기를 (a) 매처를 모르는 순수
+해석기 표, (b) 두 축 호출부 경로의 실측 형태 입력으로 고정한다. 통합 전 복사본
+(``_memberships_by_group`` · ``_tech_fields_by_group`` · ``_format_groups``×2)의
+출력을 그대로 계약으로 잠근다 — 이 파일이 깨지면 동작이 바뀐 것이다.
+실 API/DB 접속 없음.
 """
 from __future__ import annotations
 
 import pytest
 
-from app.services.classification._grouping import terms_by_license_group
+from app.services.classification._grouping import (
+    format_groups,
+    terms_by_license_group,
+)
 from app.services.classification.association import _memberships_by_group
 from app.services.classification.tech_field import _tech_fields_by_group
 
@@ -125,3 +129,40 @@ def test_unconstrained_groups_stay_as_empty_frozensets(eligibility_raw):
     group_count = len({str(row.get("lmtGrpNo") or "") for row in rows})
     assert len(_memberships_by_group(eligibility_raw)) == group_count
     assert len(_tech_fields_by_group(eligibility_raw)) == group_count
+
+
+# --- format_groups 표시 계약 ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("groups", "expected"),
+    [
+        ([], ""),
+        ([frozenset()], "[]"),
+        ([frozenset({"엔지니어링협회"})], "[엔지니어링협회]"),
+        ([frozenset({"b", "a"})], "[a, b]"),
+        ([frozenset({"c", "a", "b"})], "[a, b, c]"),
+        ([frozenset({"a"}), frozenset({"b"})], "[a] / [b]"),
+        ([frozenset({"b", "a"}), frozenset()], "[a, b] / []"),
+        ([frozenset(), frozenset({"z", "y"})], "[] / [y, z]"),
+        (
+            [frozenset({"항만및해안", "해양엔지니어링"}), frozenset({"수로조사"})],
+            "[항만및해안, 해양엔지니어링] / [수로조사]",
+        ),
+    ],
+)
+def test_format_groups_value_table(groups, expected):
+    """그룹 안은 정렬, 그룹 사이는 입력 순서 유지, 빈 그룹은 ``[]``."""
+    assert format_groups(groups) == expected
+
+
+def test_format_groups_group_order_follows_input_not_content():
+    """그룹 **사이**는 정렬하지 않는다(등장 순서 = 공고의 lmtGrpNo 순서)."""
+    assert format_groups([frozenset({"나"}), frozenset({"가"})]) == "[나] / [가]"
+
+
+def test_format_groups_is_deterministic_across_equal_sets():
+    """같은 집합은 삽입 순서와 무관하게 같은 문자열을 낸다(reason 문구 안정)."""
+    assert format_groups([frozenset(["b", "a", "c"])]) == format_groups(
+        [frozenset(["c", "b", "a"])]
+    )
