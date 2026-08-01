@@ -40,6 +40,7 @@ from __future__ import annotations
 from app.core.single_user import split_multi_value_text
 from app.models.models import CompanyProfile, Project
 from app.services.classification import config
+from app.services.classification._grouping import terms_by_license_group
 from app.services.classification.assessment import RuleAssessment
 from app.services.classification.group_or import (
     GroupOrVerdict,
@@ -47,7 +48,6 @@ from app.services.classification.group_or import (
     evaluate_group_or,
 )
 from app.services.eligibility_labeling import match_tech_field_terms
-from app.services.license_eligibility import parse_license_limit_groups
 
 
 def _tech_fields_by_group(eligibility_raw: dict | None) -> list[frozenset[str]]:
@@ -55,17 +55,13 @@ def _tech_fields_by_group(eligibility_raw: dict | None) -> list[frozenset[str]]:
 
     면허 게이트와 **동일한 그룹핑 단일 출처**(``parse_license_limit_groups``)로 행을
     lmtGrpNo 그룹으로 묶고(그룹 간 OR·그룹 내 AND), 각 그룹의 요구 면허명(``.names()``)
-    을 ``match_tech_field_terms`` 로 기술부문 표준명 집합에 union 한다. 그룹 등장
-    순서를 유지하며, 기술부문을 요구하지 않는 그룹(비-기술 면허만)은 빈 frozenset 으로
-    남긴다(호출부가 "무제약 자격 경로"로 인지해 과차단하지 않도록). IO/DB 접근 없음.
+    을 ``match_tech_field_terms`` 로 기술부문 표준명 집합에 union 한다(그룹핑 해석기는
+    :func:`app.services.classification._grouping.terms_by_license_group` 로 협회 축과
+    공유한다). 그룹 등장 순서를 유지하며, 기술부문을 요구하지 않는 그룹(비-기술
+    면허만)은 빈 frozenset 으로 남긴다(호출부가 "무제약 자격 경로"로 인지해 과차단하지
+    않도록). IO/DB 접근 없음.
     """
-    groups: list[frozenset[str]] = []
-    for group in parse_license_limit_groups(eligibility_raw):
-        fields: set[str] = set()
-        for name in group.names():
-            fields |= match_tech_field_terms(name)
-        groups.append(frozenset(fields))
-    return groups
+    return terms_by_license_group(eligibility_raw, match_tech_field_terms)
 
 
 def _held_tech_fields(profile: CompanyProfile) -> set[str]:

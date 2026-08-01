@@ -262,6 +262,9 @@
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 1
     },
+    "app/services/classification/_grouping.py": {
+      "dict_boundary_functions": 1
+    },
     "app/services/classification/association.py": {
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 1,
