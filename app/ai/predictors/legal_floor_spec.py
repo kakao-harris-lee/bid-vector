@@ -38,6 +38,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from app.utils.numeric import optional_float
+
 # 억 단위 상수(KRW). 구간 경계는 법령 표기 그대로 [하한, 상한).
 _EOK = 100_000_000.0
 _10_EOK = 10 * _EOK  # 1,000,000,000
@@ -101,15 +103,6 @@ _NATIONAL_CONSTRUCTION_FLOOR_SCHEDULES: tuple[_FloorSchedule, ...] = (
 )
 
 
-def _coerce_amount(value: object) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-
-
 def _coerce_reference_date(value: date | datetime | None) -> date | None:
     if value is None:
         return None
@@ -148,7 +141,7 @@ def resolve_construction_qualification_floor(
     이 값은 예정가-기준이다. 기초금액 기준 변환(E[사정률])과 기존 floor 결합은
     호출부(guardrail_core)가 담당한다 — 이 리졸버는 표 해석만 하는 순수 함수다.
     """
-    amount = _coerce_amount(estimation_amount)
+    amount = optional_float(estimation_amount)
     if amount is None or amount <= 0:
         return None
     ref = _coerce_reference_date(reference_date)

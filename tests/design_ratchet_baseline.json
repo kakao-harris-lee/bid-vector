@@ -72,10 +72,6 @@
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 1
     },
-    "app/ai/predictors/legal_floor_spec.py": {
-      "dict_boundary_functions": 1,
-      "duplicate_mechanical_helpers": 1
-    },
     "app/ai/predictors/lstm.py": {
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 9
@@ -231,8 +227,7 @@
     },
     "app/services/award_verification.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 11,
-      "duplicate_mechanical_helpers": 1
+      "dict_boundary_functions": 10
     },
     "app/services/backtest_cutoff.py": {
       "functions_over_soft_limit": 2,
@@ -368,8 +363,7 @@
     },
     "app/services/decision_samples.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 4,
-      "duplicate_mechanical_helpers": 1
+      "dict_boundary_functions": 4
     },
     "app/services/eligibility_labeling.py": {
       "file_loc_band": 22,
@@ -811,10 +805,10 @@
     "scripts/backtest_latest_award_holdouts.py": {
       "functions_over_soft_limit": 5,
       "functions_over_hard_limit": 3,
-      "file_loc_band": 51,
+      "file_loc_band": 50,
       "json_direct_calls": 2,
-      "dict_boundary_functions": 12,
-      "duplicate_mechanical_helpers": 4
+      "dict_boundary_functions": 11,
+      "duplicate_mechanical_helpers": 3
     },
     "scripts/backtest_paper_bidding.py": {
       "json_direct_calls": 2,

@@ -11,6 +11,7 @@ the table below covers the inputs where that guard could have mattered.
 from __future__ import annotations
 
 import math
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -118,3 +119,34 @@ class TestConsolidatedCallPaths:
         from app.services.synthetic_experiment.sample_gap import _safe_optional_int
 
         assert reexported is _safe_optional_int
+
+    def test_legal_floor_resolver_still_coerces_its_amount(self):
+        # Former ``legal_floor_spec._coerce_amount`` call path: the resolver takes
+        # the estimation amount through the coercion before the 구간 lookup, so a
+        # numeric string must resolve exactly like the float it denotes.
+        from app.ai.predictors.legal_floor_spec import (
+            resolve_construction_qualification_floor,
+        )
+
+        reference_date = date(2026, 1, 1)
+        expected = resolve_construction_qualification_floor(
+            5_000_000_000.0, reference_date
+        )
+        assert expected is not None
+        assert (
+            resolve_construction_qualification_floor("5000000000", reference_date)
+            == expected
+        )
+        assert resolve_construction_qualification_floor(None, reference_date) is None
+        assert resolve_construction_qualification_floor("abc", reference_date) is None
+        assert resolve_construction_qualification_floor("", reference_date) is None
+
+    def test_rate_to_fraction_still_coerces_its_input(self):
+        # Former ``award_verification._coerce_float`` call path.
+        from app.services.award_verification import _rate_to_fraction
+
+        assert _rate_to_fraction("88.5") == _rate_to_fraction(88.5)
+        assert _rate_to_fraction(None) is None
+        assert _rate_to_fraction("") is None
+        assert _rate_to_fraction("abc") is None
+        assert _rate_to_fraction(0) is None  # non-positive stays rejected

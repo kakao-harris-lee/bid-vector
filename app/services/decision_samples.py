@@ -29,6 +29,7 @@ from app.core.single_user import ensure_operator_account
 from app.core.time import utc_now
 from app.models.models import BidDecisionRecord, PricePrediction, Project
 from app.schemas.decision_samples import DECISION_SAMPLES_NOTES
+from app.utils.numeric import optional_float
 
 logger = logging.getLogger(__name__)
 
@@ -214,10 +215,10 @@ class DecisionSampleService:
             "recommended_bid_rate": recommended_bid_rate,
             "action": record.action,
             "decision_status": record.decision_status,
-            "probability_score": _as_float(record.probability_score),
-            "priority_score": _as_float(record.priority_score),
-            "matched_score": _as_float(record.matched_score),
-            "competitiveness_score": _as_float(record.competitiveness_score),
+            "probability_score": optional_float(record.probability_score),
+            "priority_score": optional_float(record.priority_score),
+            "matched_score": optional_float(record.matched_score),
+            "competitiveness_score": optional_float(record.competitiveness_score),
             "reasoning": record.reasoning,
             "decided_at": record.first_decided_at,
             "created_at": record.created_at,
@@ -229,10 +230,10 @@ class DecisionSampleService:
         if prediction is None:
             return None
         return {
-            "predicted_price": _as_float(prediction.predicted_price),
-            "price_range_min": _as_float(prediction.price_range_min),
-            "price_range_max": _as_float(prediction.price_range_max),
-            "confidence_score": _as_float(prediction.confidence_score),
+            "predicted_price": optional_float(prediction.predicted_price),
+            "price_range_min": optional_float(prediction.price_range_min),
+            "price_range_max": optional_float(prediction.price_range_max),
+            "confidence_score": optional_float(prediction.confidence_score),
             "predictor_name": prediction.predictor_name,
             "predictor_family": prediction.predictor_family,
             "pricing_mode": prediction.pricing_mode,
@@ -307,15 +308,6 @@ class DecisionSampleService:
             return value.isoformat()
         except (AttributeError, ValueError):
             return str(value)
-
-
-def _as_float(value) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _timedelta_days(days: int):

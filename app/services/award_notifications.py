@@ -33,7 +33,6 @@ from app.services.award_verification import (
     VERDICT_NOT_SETTLED,
     FetchDetail,
     TelegramSender,
-    _coerce_float,
     _default_fetch_detail,
     _tender_result,
     build_telegram_message,
@@ -42,6 +41,7 @@ from app.services.award_verification import (
     verify_one,
 )
 from app.services.real_bid_track import RealBidTrackService
+from app.utils.numeric import optional_float
 
 
 class AwardResultNotificationService:
@@ -130,8 +130,8 @@ class AwardResultNotificationService:
             result = verify_one(
                 db,
                 str(project.notice_number or ""),
-                _coerce_float(record.submitted_bid_amount) or 0.0,
-                _coerce_float(record.submitted_floor_rate),
+                optional_float(record.submitted_bid_amount) or 0.0,
+                optional_float(record.submitted_floor_rate),
                 fetch_detail=fetch_detail,
             )
             if result.get("verdict") == VERDICT_NOT_SETTLED:
@@ -145,7 +145,7 @@ class AwardResultNotificationService:
         if tender is None:
             return False
         company = str(tender.winning_company or "").strip()
-        amount = _coerce_float(tender.winning_amount) or 0.0
+        amount = optional_float(tender.winning_amount) or 0.0
         return bool(company) or amount > 0
 
     def _mark_notified(
@@ -184,7 +184,7 @@ class AwardResultNotificationService:
                 result.get("winning_company"),
                 result.get("winning_amount"),
                 operator_name,
-                _coerce_float(record.submitted_bid_amount),
+                optional_float(record.submitted_bid_amount),
             )
             if outcome is not None and record.award_outcome is None:
                 record.award_outcome = outcome
