@@ -526,7 +526,8 @@ CI 에 프론트 job 을 신설한다: `tsc --noEmit` · `vitest run` · `vite b
 
 | 용도 | 허브 |
 |---|---|
-| 숫자 변환·집계 | `app/utils/numeric.py` |
+| 숫자 강제변환 | `app/utils/numeric.py` |
+| 집계(평균·오차율·비율·증감) | `app/domain/aggregates.py` |
 | JSON 읽기/쓰기 | `app/utils/jsonio.py` |
 | 문자열·포맷 | `app/utils/textfmt.py` |
 | 시퀀스 강제변환 | `app/utils/sequence_coercion.py` |
@@ -659,7 +660,7 @@ PR2 이후 값은 **통과 조건이 아니라 기대치**다. PR2·PR3 이 §5.
 | PR | 내용 | 게이트 효과 |
 |---|---|---|
 | **PR1** | `_design_ratchet_scan.py` 2-pass + predicate 선언 상수 + 양방향 픽스처 · baseline 현재값 동결 · CLAUDE.md §4.5-8 신설/§4.5-6 주소표/§9 체크리스트 · `docs/operations/design-ratchet.md` 갱신 | 파이썬 신규 중복 차단 시작 |
-| **PR2** | `app/` 통합 — `app/utils/numeric.py` · `classification/_grouping.py` · canonical 지정 2건 + baseline 갱신 | — |
+| **PR2** | `app/` 통합 — `app/utils/numeric.py` · `app/utils/textfmt.py` · `app/domain/aggregates.py`(기존) · `classification/_grouping.py` · canonical 지정 + baseline 갱신 | — |
 | **PR3** | `scripts/` 통합 — `app/utils/jsonio.py` · `scripts/_common/` 패키지화(`cliargs.py`·`report.py`) + baseline 갱신 | 목표치 도달 |
 | **PR4** | 프론트 래칫(`designRatchet.ts` + vitest 게이트) + CI 프론트 job 신설 · baseline 현재값 동결 | 프론트 신규 중복 차단 시작 |
 | **PR5** | `frontend/src/shared/format/` 신설 · `lib.ts` 그랩백 해소 + baseline 갱신 | — |
