@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.time import ensure_utc
 from app.models.models import HistoricalData, Project, TenderResult
 from app.utils.sequence_coercion import coerce_sequence
+from app.utils.textfmt import normalize_lookup_key
 
 _CATEGORY_ALIASES = {
     "general-service": "service",
@@ -201,8 +202,7 @@ class BacktestCutoffService:
         return categories
 
     def _normalize_category(self, category: str | None) -> str:
-        normalized = str(category or "").strip().lower()
-        return _CATEGORY_ALIASES.get(normalized, normalized)
+        return normalize_lookup_key(category, _CATEGORY_ALIASES)
 
     def _agency_similarity_terms(self, agency_name: str | None) -> list[str]:
         """Extract broad agency terms for a second-pass similar-agency lookup."""
