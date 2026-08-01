@@ -27,6 +27,10 @@ from scripts._design_ratchet_contracts import (
     count_improvements,
     without_paths,
 )
+from scripts._design_ratchet_clones import (
+    CloneGroup,
+    unused_allowlist_keys,
+)
 from scripts._design_ratchet_scan import (
     REPO_ROOT,
     RatchetScanError,
@@ -41,6 +45,8 @@ from scripts.design_ratchet import (
     baseline_drift_notes,
     format_baseline_delta,
     format_baseline_slack,
+    format_clone_groups,
+    format_dead_allowlist,
     format_totals,
     format_violations,
     load_baseline,
@@ -289,7 +295,15 @@ class TestStaleBaseline:
         save_baseline(self._baseline_with("app/gone.py"), path)
         monkeypatch.setattr(design_ratchet, "BASELINE_PATH", path)
         monkeypatch.setattr(design_ratchet, "REPO_ROOT", tmp_path)
-        monkeypatch.setattr(design_ratchet, "scan_repo", lambda root: RatchetReport())
+        # main() 은 이제 scan_repo_with_signatures 를 부른다. 빈 스캔은 시그니처가
+        # 없어 모든 allowlist 항목이 죽은 것처럼 보이므로, 이 테스트가 격리하려는
+        # stale-baseline 경로만 남기려면 죽은 allowlist 게이트를 중립화한다.
+        monkeypatch.setattr(
+            design_ratchet,
+            "scan_repo_with_signatures",
+            lambda root: (RatchetReport(), []),
+        )
+        monkeypatch.setattr(design_ratchet, "unused_allowlist_keys", lambda _: [])
 
         assert design_ratchet.main([]) == 0
 
@@ -798,6 +812,32 @@ class TestDuplicateHelperMetrics:
             "duplicate_mechanical_helpers",
             "duplicate_mechanical_helpers_local",
         )
+
+
+class TestCloneReporting:
+    def test_format_clone_groups_lists_members(self) -> None:
+        group = CloneGroup(
+            members=("app/a.py:write", "app/b.py:dump"),
+            files=("app/a.py", "app/b.py"),
+            node_count=53,
+        )
+        rendered = format_clone_groups([group])
+        assert "app/a.py:write" in rendered
+        assert "app/b.py:dump" in rendered
+        assert "53" in rendered
+
+    def test_format_clone_groups_handles_empty(self) -> None:
+        assert "없음" in format_clone_groups([])
+
+    def test_format_dead_allowlist_lists_keys(self) -> None:
+        rendered = format_dead_allowlist(["app/a.py:x|app/b.py:y"])
+        assert "app/a.py:x|app/b.py:y" in rendered
+
+    def test_repository_has_no_dead_allowlist_entries(self) -> None:
+        """면제가 stale 해지면 범위가 조용히 넓어진다 — 죽은 항목은 즉시 실패다."""
+        _, signatures = scan_repo_with_signatures(REPO_ROOT)
+        dead = unused_allowlist_keys(signatures)
+        assert not dead, format_dead_allowlist(dead)
 
 
 class TestRepositoryRatchet:
