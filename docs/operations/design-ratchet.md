@@ -232,7 +232,7 @@ pytest -q tests/test_design_ratchet.py              # CI 게이트와 동일한 
 줄여 놓고 잠그지 않으면 그만큼의 재악화가 무료로 통과한다.
 
 CI(`.github/workflows/ci.yml`)는 `pytest -q tests/` 로 이 게이트를 돌고, `ruff check` 대상에
-래칫 세 모듈(contracts · scan · CLI)이 포함된다.
+래칫 네 모듈(contracts · scan · clones · CLI)이 포함된다.
 
 ## 실패했을 때
 
