@@ -16,7 +16,7 @@ to keep the collector focused on orchestration. The OpenAPI IO clients
 """
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -296,31 +296,17 @@ LICENSE_LIMIT_ITEM_KEYS = (
 )
 
 
-def extract_eligibility_flags(raw_item: dict[str, Any]) -> dict[str, Any] | None:
-    """공고 item에서 참가자격 **플래그** 필드만 골라 dict로 보존한다(순수 함수).
+def project_declared_keys(
+    raw_item: dict[str, Any], keys: Sequence[str]
+) -> dict[str, Any] | None:
+    """선언된 키 표로 raw item을 투영한다 — 비어있지 않은 값만, 전부 결측이면 ``None``.
 
-    ``ELIGIBILITY_RAW_KEYS``에 선언된 키 중 **비어있지 않은 값**만 복사한다. 전부
-    결측이면 ``None``. 목록/표적조회 응답에는 자격 상세가 없고 플래그만 있으므로
-    (실측) 이 함수는 그 플래그만 추출한다. IO/DB 없음.
-    """
-    flags: dict[str, Any] = {}
-    for key in ELIGIBILITY_RAW_KEYS:
-        value = raw_item.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            flags[key] = text
-    return flags or None
-
-
-def _project_license_limit_item(raw_item: dict[str, Any]) -> dict[str, Any] | None:
-    """license-limit 서브 응답 한 행을 ``LICENSE_LIMIT_ITEM_KEYS``로 투영한다.
-
-    선언된 키 중 비어있지 않은 값만 남긴다. 전부 결측이면 ``None``. 순수 함수.
+    위 두 선언 테이블(``ELIGIBILITY_RAW_KEYS`` · ``LICENSE_LIMIT_ITEM_KEYS``)을
+    해석하는 유일한 코드다. 규칙은 데이터로, 코드는 해석기만(§4.5-3) — 새 키 집합은
+    표를 추가해 확장하고 이 루프는 그대로 둔다. IO/DB 없음.
     """
     projected: dict[str, Any] = {}
-    for key in LICENSE_LIMIT_ITEM_KEYS:
+    for key in keys:
         value = raw_item.get(key)
         if value is None:
             continue
@@ -328,6 +314,24 @@ def _project_license_limit_item(raw_item: dict[str, Any]) -> dict[str, Any] | No
         if text:
             projected[key] = text
     return projected or None
+
+
+def extract_eligibility_flags(raw_item: dict[str, Any]) -> dict[str, Any] | None:
+    """공고 item에서 참가자격 **플래그** 필드만 골라 dict로 보존한다(순수 함수).
+
+    ``ELIGIBILITY_RAW_KEYS``에 선언된 키 중 **비어있지 않은 값**만 복사한다. 전부
+    결측이면 ``None``. 목록/표적조회 응답에는 자격 상세가 없고 플래그만 있으므로
+    (실측) 이 함수는 그 플래그만 추출한다. IO/DB 없음.
+    """
+    return project_declared_keys(raw_item, ELIGIBILITY_RAW_KEYS)
+
+
+def _project_license_limit_item(raw_item: dict[str, Any]) -> dict[str, Any] | None:
+    """license-limit 서브 응답 한 행을 ``LICENSE_LIMIT_ITEM_KEYS``로 투영한다.
+
+    선언된 키 중 비어있지 않은 값만 남긴다. 전부 결측이면 ``None``. 순수 함수.
+    """
+    return project_declared_keys(raw_item, LICENSE_LIMIT_ITEM_KEYS)
 
 
 def build_eligibility_raw(

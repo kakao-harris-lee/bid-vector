@@ -419,7 +419,7 @@
     },
     "app/services/koneps/openapi.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 12,
+      "dict_boundary_functions": 13,
       "duplicate_mechanical_helpers_local": 4
     },
     "app/services/koneps/parsing.py": {
