@@ -47,6 +47,23 @@ def _project_license_limit_item(row):
     return projected or None
 """
 
+# app/services/synthetic_backtest.py 의 실제 소스(§7.1 "반드시 잡아야 할 것" —
+# 동일 파일 내 캐스트만 다른 쌍). 합성 ``_sig(...)`` 가 아니라 진짜 소스로 고정한다.
+SYNTHETIC_BACKTEST_CAST_PAIR = """
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+"""
+
 
 def _signatures(source: str, path: str = "app/sample.py"):
     return collect_clone_signatures(path, ast.parse(source))
@@ -200,6 +217,111 @@ def placeholder(value):
     """이 함수는 본문이 docstring 뿐이라 비교 대상이 아니다."""
 '''
         assert _signatures(source) == []
+
+    def test_real_source_cast_pair_shares_digest(self) -> None:
+        """§7.1 "반드시 잡아야 할 것" — 실제 소스의 캐스트만 다른 동일파일 쌍."""
+        signatures = _signatures(
+            SYNTHETIC_BACKTEST_CAST_PAIR, "app/services/synthetic_backtest.py"
+        )
+        assert [signature.function for signature in signatures] == [
+            "_int_or_none",
+            "_float_or_none",
+        ]
+        assert signatures[0].digest == signatures[1].digest
+        assert count_local_clones(signatures) == 2
+
+
+class TestThinDelegatorExclusion:
+    """§4.5-8 처방("파라미터화 + 얇은 명명 래퍼")의 산출물은 계수되면 안 된다.
+
+    동시에 배제 정의가 **너무 넓어도** 안 된다 — 한 줄로 쓴 진짜 복붙까지 죽는다.
+    두 방향을 함께 고정한다.
+    """
+
+    def test_annotated_thin_delegator_is_excluded(self) -> None:
+        """처방(파라미터화 + 얇은 명명 래퍼)의 결과물이 계수되면 처방이 성립하지 않는다."""
+        source = '''
+def _int_or_none(value: Any) -> int | None:
+    """정수로 강제하거나 None."""
+    return _cast_or_none(value, int)
+'''
+        assert _signatures(source) == []
+
+    def test_annotated_method_delegator_is_excluded(self) -> None:
+        """타입힌트·docstring 때문에 **원본** 노드 수가 임계값을 넘어도 배제된다.
+
+        이 케이스가 C1 의 실제 오탐이었다. 원본 29노드 · 정규화 12노드.
+        """
+        source = '''
+class Reporter:
+    def _average(self, values: list[int | float]) -> float | None:
+        """Return a rounded average while preserving empty sets."""
+        return average(values, digits=4)
+'''
+        assert sum(1 for _ in ast.walk(ast.parse(source))) > CLONE_MIN_AST_NODES
+        assert _signatures(source) == []
+
+    def test_attribute_callee_one_liner_is_kept(self) -> None:
+        """호출 대상이 ``Attribute`` 면 위임이 아니라 로직이다(한 줄 복붙은 잡아야 한다)."""
+        source = '''
+def _normalize_key(value):
+    """공백 접기 + 소문자."""
+    return "".join(str(value or "").strip().lower().split())
+'''
+        assert len(_signatures(source)) == 1
+
+    def test_generator_argument_one_liner_is_kept(self) -> None:
+        """인자가 ``GeneratorExp`` 면 파라미터 전달이 아니다."""
+        source = '''
+def _split_csv(raw):
+    """콤마 분해 후 공백 제거."""
+    return tuple(item.strip() for item in str(raw or "").split(",") if item.strip())
+'''
+        assert len(_signatures(source)) == 1
+
+    def test_nested_call_argument_delegation_is_kept(self) -> None:
+        """키워드 값이 중첩 호출이면 순수 파라미터 위임이 아니다."""
+        source = '''
+def _band_for(t):
+    """중첩 호출을 인자로 넘기는 위임은 로직이다."""
+    return resolve_band(RULES, text=t, title=title_line(t), fallback=DEFAULT_BAND)
+'''
+        assert len(_signatures(source)) == 1
+
+    def test_splat_delegation_is_kept(self) -> None:
+        """``*``/``**`` 언패킹은 파라미터 전달이 아니라 재조립이다."""
+        starred = """
+def _forward(items, mode, fallback, digits):
+    return combine(*items, mode, fallback, digits)
+"""
+        double_starred = """
+def _forward(options, mode, fallback, digits):
+    return combine(mode, fallback, digits, **options)
+"""
+        assert len(_signatures(starred)) == 1
+        assert len(_signatures(double_starred)) == 1
+
+    def test_node_count_is_measured_on_normalized_shape(self) -> None:
+        """annotation·docstring 을 붙여도 노드 수가 변하지 않아야 기준이 일관된다."""
+        bare = """
+def _clip(text, limit):
+    trimmed = str(text or "").strip()
+    if len(trimmed) <= limit:
+        return trimmed
+    return trimmed[:limit] + "..."
+"""
+        annotated = '''
+def _clip(text: str | None, limit: int) -> str:
+    """길이를 제한하고 말줄임표를 붙인다."""
+    trimmed = str(text or "").strip()
+    if len(trimmed) <= limit:
+        return trimmed
+    return trimmed[:limit] + "..."
+'''
+        plain, decorated = _signatures(bare), _signatures(annotated)
+        assert len(plain) == len(decorated) == 1
+        assert plain[0].node_count == decorated[0].node_count
+        assert plain[0].digest == decorated[0].digest
 
 
 class TestSignatureFields:

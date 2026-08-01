@@ -17,6 +17,11 @@ DB 세션·네트워크·전역 설정에 닿지 않는다. 순수 계산뿐 아
 
 정규화는 변수·인자명을 등장 순서 플레이스홀더로 치환해 "이름만 바꾼 복붙"을 같게 보되,
 **상수 리터럴은 보존**해 ``round(x, 2)`` 와 ``round(x, 3)`` 을 다르게 본다(보수적 판정).
+
+크기 판정과 지문은 **같은 정규화 트리**에서 낸다. 기준이 어긋나면(원본에서 크기를 재고
+정규화 후 지문을 내면) annotation·docstring 이 두꺼운 얇은 델리게이터가 임계값을 넘어
+오탐이 된다. 같은 이유로 순수 파라미터 위임(``return callee(a, b, key=c)`` 한 줄)은
+후보에서 아예 뺀다 — 그것이 §4.5-8 처방의 산출물이기 때문이다.
 """
 # ruff: noqa: E402 - imports follow the sys.path bootstrap below.
 from __future__ import annotations
@@ -35,10 +40,16 @@ if str(REPO_ROOT) not in sys.path:
 from app.schemas._base import FrozenStrictModel  # noqa: E402
 
 # --- 선언적 구성 (§4.5-1·3: 튜닝 표면을 함수 밖 데이터로) --------------------------
-# 임계값 20 은 실측 고원의 하단이다: 20 과 25 에서 결과가 같고, 12 로 낮추면 우연의
-# 일치가 섞이며 40 으로 올리면 진짜 중복을 놓친다. 20 에서의 실측 인벤토리는 교차파일
-# 31그룹/71함수 · 동일파일 5그룹/10함수다(allowlist 적용 전).
-CLONE_MIN_AST_NODES = 20
+# 노드 수는 **정규화 후** 형태에서 잰다(annotation·docstring·데코레이터 제거 후). 원본
+# 에서 재면 타입힌트와 docstring 이 두꺼운 얇은 델리게이터가 임계값을 넘어 오탐이 되고,
+# 그러면 §4.5-8 이 처방하는 "파라미터화 + 얇은 명명 래퍼" 리팩터가 지표를 줄이지 못한다
+# (게이트가 자기 법을 처벌한다).
+#
+# 14 는 그 정규화 기준에서의 하한이다: `_average` 류 위임(정규화 12노드)과 유일한 우연
+# 일치 그룹(`parse_license_limit_groups`|`scan_repo`, 12노드)을 배제하면서
+# `_mapping_or_empty`(15) · CLONE_ALLOWLIST 두 항목(16) · `guidance_for`(18) 같은 실제
+# 중복은 살린다. 임계값 스윕 실측은 설계 문서 §2.2 에 있다.
+CLONE_MIN_AST_NODES = 14
 
 # 본문에 이 이름이 나타나면 도메인·인프라에 결합된 것으로 보고 후보에서 뺀다.
 # ``open``/``Path``/``json``/``datetime`` 은 **일부러 넣지 않았다** — 얇은 메커니컬
@@ -152,8 +163,46 @@ def is_mechanical(node: _FunctionNode) -> bool:
     return True
 
 
-def _normalized_digest(node: _FunctionNode) -> str | None:
-    """정규화 본문의 지문. 본문이 docstring 뿐이면 비교 대상이 아니라 ``None``."""
+def _is_pure_parameter_delegation(body: Sequence[ast.stmt]) -> bool:
+    """본문이 ``return callee(a, b, key=c)`` **한 줄뿐인** 얇은 명명 델리게이터인가.
+
+    §4.5-8 의 처방("파라미터화된 해석기 + 얇은 명명 래퍼")을 적용한 결과물이 바로 이
+    형태다. 처방의 산출물을 중복으로 계수하면 게이트가 자기 법을 처벌하므로 배제한다.
+
+    정의는 **좁게** 잡는다. "본문이 ``return <Call>`` 하나"까지 넓히면 한 줄로 쓴 진짜
+    복붙까지 죽는다. 그래서 네 조건을 **전부** 만족할 때만 배제한다.
+
+    1. 호출 대상이 bare ``ast.Name`` (``"".join(...)`` 같은 ``Attribute`` 는 해당 없음)
+    2. 모든 위치 인자가 ``ast.Name`` 또는 ``ast.Constant``
+    3. 모든 키워드 인자의 **값**이 ``ast.Name`` 또는 ``ast.Constant``
+    4. ``*``/``**`` 언패킹이 없음 (``**`` 는 ``keyword.arg is None``, ``*`` 는
+       ``ast.Starred`` 라 2번의 타입 검사에서 이미 걸린다)
+
+    즉 인자가 중첩 호출(``title=title_line(t)``)이거나 comprehension
+    (``tuple(x for x in ...)``)이면 위임이 아니라 로직이므로 후보로 남는다.
+    """
+    if len(body) != 1:
+        return False
+    statement = body[0]
+    if not isinstance(statement, ast.Return):
+        return False
+    call = statement.value
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return False
+    if any(keyword.arg is None for keyword in call.keywords):
+        return False
+    operands = [*call.args, *(keyword.value for keyword in call.keywords)]
+    return all(isinstance(operand, (ast.Name, ast.Constant)) for operand in operands)
+
+
+def _normalized(node: _FunctionNode) -> tuple[str, int] | None:
+    """정규화 본문의 ``(지문, 노드 수)``. 비교 대상이 아니면 ``None``.
+
+    지문과 노드 수를 **같은 트리**에서 함께 낸다. 원본에서 노드 수를 재면 annotation ·
+    docstring 이 두꺼운 얇은 델리게이터가 임계값을 넘어 오탐이 된다.
+
+    ``None`` 인 경우는 둘이다 — 본문이 docstring 뿐이거나, 순수 파라미터 위임이다.
+    """
     clone = ast.parse(ast.unparse(node)).body[0]
     if not isinstance(clone, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return None
@@ -161,13 +210,14 @@ def _normalized_digest(node: _FunctionNode) -> str | None:
     clone.decorator_list = []
     clone.returns = None
     body = clone.body[1:] if clone.body and _is_docstring(clone.body[0]) else clone.body
-    if not body:
+    if not body or _is_pure_parameter_delegation(body):
         return None
     clone.body = body
     normalized = _NameNormalizer().visit(clone)
     ast.fix_missing_locations(normalized)
     encoded = ast.unparse(normalized).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()[:DIGEST_LENGTH]
+    digest = hashlib.sha256(encoded).hexdigest()[:DIGEST_LENGTH]
+    return digest, sum(1 for _ in ast.walk(normalized))
 
 
 def collect_clone_signatures(
@@ -178,11 +228,13 @@ def collect_clone_signatures(
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        node_count = sum(1 for _ in ast.walk(node))
-        if node_count < CLONE_MIN_AST_NODES or not is_mechanical(node):
+        if not is_mechanical(node):
             continue
-        digest = _normalized_digest(node)
-        if digest is None:
+        normalized = _normalized(node)
+        if normalized is None:
+            continue
+        digest, node_count = normalized
+        if node_count < CLONE_MIN_AST_NODES:
             continue
         signatures.append(
             CloneSignature(

@@ -186,7 +186,7 @@
     },
     "app/services/analytics_reporting/base.py": {
       "dict_boundary_functions": 4,
-      "duplicate_mechanical_helpers": 2
+      "duplicate_mechanical_helpers": 1
     },
     "app/services/analytics_reporting/crawl.py": {
       "dict_boundary_functions": 2
@@ -314,7 +314,7 @@
     },
     "app/services/decision_analytics/base.py": {
       "dict_boundary_functions": 3,
-      "duplicate_mechanical_helpers": 2
+      "duplicate_mechanical_helpers": 1
     },
     "app/services/decision_analytics/events.py": {
       "json_direct_calls": 1,
@@ -506,7 +506,7 @@
     "app/services/ml_training/helpers.py": {
       "json_direct_calls": 1,
       "dict_boundary_functions": 9,
-      "duplicate_mechanical_helpers": 2
+      "duplicate_mechanical_helpers": 1
     },
     "app/services/ml_training/orchestration.py": {
       "functions_over_soft_limit": 1,
@@ -619,8 +619,7 @@
     },
     "app/services/paper_bidding_backtest/scoring.py": {
       "json_direct_calls": 1,
-      "dict_boundary_functions": 3,
-      "duplicate_mechanical_helpers": 1
+      "dict_boundary_functions": 3
     },
     "app/services/paper_bidding_backtest/settlement.py": {
       "functions_over_soft_limit": 3,
@@ -638,14 +637,13 @@
     },
     "app/services/prediction_feedback.py": {
       "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 3,
-      "duplicate_mechanical_helpers": 1
+      "dict_boundary_functions": 3
     },
     "app/services/prediction_reporting.py": {
       "functions_over_soft_limit": 1,
       "functions_over_hard_limit": 1,
       "dict_boundary_functions": 9,
-      "duplicate_mechanical_helpers": 2
+      "duplicate_mechanical_helpers": 1
     },
     "app/services/prediction_schema.py": {
       "functions_over_soft_limit": 1
@@ -697,7 +695,8 @@
     "app/services/synthetic_custom_operator.py": {
       "functions_over_soft_limit": 2,
       "file_loc_band": 22,
-      "dict_boundary_functions": 9
+      "dict_boundary_functions": 9,
+      "duplicate_mechanical_helpers": 1
     },
     "app/services/synthetic_experiment/breakdown.py": {
       "functions_over_soft_limit": 1,
@@ -814,7 +813,7 @@
       "file_loc_band": 51,
       "json_direct_calls": 2,
       "dict_boundary_functions": 12,
-      "duplicate_mechanical_helpers": 3
+      "duplicate_mechanical_helpers": 4
     },
     "scripts/backtest_paper_bidding.py": {
       "json_direct_calls": 2,
@@ -889,7 +888,7 @@
       "functions_over_hard_limit": 1,
       "file_loc_band": 29,
       "dict_boundary_functions": 4,
-      "duplicate_mechanical_helpers": 4
+      "duplicate_mechanical_helpers": 5
     },
     "scripts/report_license_eligibility.py": {
       "duplicate_mechanical_helpers": 3
@@ -923,7 +922,8 @@
       "functions_over_soft_limit": 1,
       "file_loc_band": 23,
       "json_direct_calls": 5,
-      "dict_boundary_functions": 3
+      "dict_boundary_functions": 3,
+      "duplicate_mechanical_helpers": 1
     },
     "scripts/sync_openapi_types.py": {
       "json_direct_calls": 1,
