@@ -8,6 +8,7 @@ These guard the byte-identical behavior consolidated from
 from __future__ import annotations
 
 from app.utils.sequence_coercion import (
+    as_str_list,
     coerce_integer_list,
     coerce_numeric_list,
     coerce_sequence,
@@ -82,3 +83,30 @@ class TestCoerceIntegerList:
         # JSON floats are coerced with int() (truncation); non-numeric strings
         # raise ValueError and are skipped.
         assert coerce_integer_list([1, "x", 3.9, None]) == [1, 3]
+
+
+class TestAsStrList:
+    def test_none_returns_empty(self):
+        assert as_str_list(None) == []
+
+    def test_strings_kept_in_order(self):
+        assert as_str_list(["실적 충족", "지역 가산"]) == ["실적 충족", "지역 가산"]
+
+    def test_non_string_items_dropped_not_cast(self):
+        assert as_str_list(["a", 1, 2.5, None, True, ["b"]]) == ["a"]
+
+    def test_empty_strings_dropped(self):
+        # 빈 문자열만 떨어진다 — "0"·공백은 non-empty 라 남는다.
+        assert as_str_list(["", "0", " "]) == ["0", " "]
+
+    def test_json_string_is_not_parsed(self):
+        # ``coerce_sequence`` 와 다른 지점: 문자열 입력은 중첩 payload 가 아니라 데이터다.
+        assert as_str_list('["a", "b"]') == []
+
+    def test_non_list_returns_empty(self):
+        assert as_str_list({"a": 1}) == []
+        assert as_str_list(42) == []
+
+    def test_returns_new_list(self):
+        original = ["a"]
+        assert as_str_list(original) is not original

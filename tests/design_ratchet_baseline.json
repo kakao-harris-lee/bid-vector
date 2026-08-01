@@ -776,7 +776,7 @@
     },
     "app/utils/sequence_coercion.py": {
       "json_direct_calls": 1,
-      "dict_boundary_functions": 3,
+      "dict_boundary_functions": 4,
       "duplicate_mechanical_helpers_local": 2
     },
     "app/utils/textfmt.py": {

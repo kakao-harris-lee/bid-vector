@@ -9,6 +9,7 @@ from app.schemas._shared import _PROBABILITY_SCORE_DESCRIPTION
 from app.schemas.crawl import ClassificationResponse
 from app.schemas.prediction import PricePredictionResponse
 from app.schemas.project import ProjectSimilaritySearchResponse
+from app.utils.sequence_coercion import as_str_list
 
 
 def _extract_decision_reasons(score_breakdown) -> tuple[list[str], list[str]]:
@@ -31,12 +32,7 @@ def _extract_decision_reasons(score_breakdown) -> tuple[list[str], list[str]]:
     if not isinstance(parsed, dict):
         return [], []
 
-    def _as_str_list(value) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value if isinstance(item, str) and item]
-
-    return _as_str_list(parsed.get("strengths")), _as_str_list(parsed.get("risk_flags"))
+    return as_str_list(parsed.get("strengths")), as_str_list(parsed.get("risk_flags"))
 
 
 class OpportunityAnalysisRequest(BaseModel):
