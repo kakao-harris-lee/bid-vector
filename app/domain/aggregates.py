@@ -1,6 +1,6 @@
-"""집계 원시 연산(절대 오차율·산술평균·비율) 단일 출처.
+"""집계 원시 연산(절대 오차율·산술평균·비율·차분) 단일 출처.
 
-세 수식이 기능별로 독립 재구현돼 있었다:
+네 수식이 기능별로 독립 재구현돼 있었다:
 
 * **절대 오차율** ``abs(value - reference) / reference`` — dashboard/feedback/
   reporting/paper_bidding/holdouts 등 6곳 이상에 복붙(그중 dashboard·feedback 는
@@ -9,6 +9,8 @@
   메서드 + synthetic_experiment 인라인식.
 * **비율** ``round(numerator / denominator, digits)`` — analytics_reporting ·
   prediction_reporting 의 ``_rate`` 메서드(본문 바이트 동일).
+* **차분** ``round(float(a) - float(b), digits)`` — decision_analytics(기간 비교) ·
+  decision_experiments(실험 평가) 의 ``_delta`` 메서드(인자명만 다름).
 
 이 모듈은 그 수식들을 **단일 출처**로 소유한다. 콜사이트마다 정당하게 다른 부분
 (반올림 자리수, 0-분모 폴백을 None 으로 둘지 0.0 으로 둘지, 입력 coercion)은
@@ -64,3 +66,18 @@ def rate(numerator: float, denominator: float, *, digits: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(numerator / denominator, digits)
+
+
+def delta(
+    current_value: float | None, baseline_value: float | None, *, digits: int
+) -> float | None:
+    """차분 ``current_value - baseline_value`` 를 ``digits`` 자리로 반올림해 반환.
+
+    한쪽이라도 ``None`` 이면 비교 불가로 보고 ``None`` 을 반환한다(기간 비교·실험
+    평가 두 콜사이트의 공통 규칙). 두 피연산자의 ``float`` 캐스트는 저장 계층에서
+    올라온 비-float 수치가 섞여도 결과 타입이 흔들리지 않게 하던 기존 동작이라
+    그대로 유지한다.
+    """
+    if current_value is None or baseline_value is None:
+        return None
+    return round(float(current_value) - float(baseline_value), digits)

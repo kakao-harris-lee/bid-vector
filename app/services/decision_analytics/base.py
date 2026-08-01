@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.time import ensure_utc, utc_now
-from app.domain.aggregates import average
+from app.domain.aggregates import average, delta
 from app.models.models import Analytics, BidDecisionRecord
 from app.schemas.analytics_events import coerce_payload_int
 
@@ -97,9 +97,7 @@ class _DecisionAnalyticsBase:
 
     def _delta(self, current_value: float | None, previous_value: float | None) -> float | None:
         """Return a rounded period-over-period delta when both values exist."""
-        if current_value is None or previous_value is None:
-            return None
-        return round(float(current_value) - float(previous_value), 4)
+        return delta(current_value, previous_value, digits=4)
 
     def _entry_datetime(self, decision: BidDecisionRecord):
         """Resolve the timestamp that represents entry into the decision workflow.
