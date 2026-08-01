@@ -14,10 +14,13 @@ dispatch so the monkeypatch-hook contract is locked.
 Behavior must stay byte-identical to the original collector methods.
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
+from app.schemas.koneps_items import OpeningResultRow
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import browser_crawl
 
@@ -180,7 +183,7 @@ def test_read_opening_result_rows_filters_rows_without_notice_number():
         ]
     )
     rows = browser_crawl.read_opening_result_rows(page)
-    notice_numbers = [row.get("notice_number") for row in rows]
+    notice_numbers = [row.notice_number for row in rows]
     assert "R-1" in notice_numbers
     # Empty bid number is dropped (no notice_number after normalization).
     assert all(nn for nn in notice_numbers)
@@ -310,3 +313,61 @@ def test_collect_live_items_caps_items_at_max_items():
     )
     result = browser_crawl.collect_live_items(service, _request(max_items=2))
     assert len(result["items"]) == 2
+
+
+# --- 개찰결과 행 승격 경계 (promote_opening_result_rows) --------------------
+
+
+def test_promote_keeps_typed_rows_unchanged():
+    """이미 ``OpeningResultRow`` 인 행은 재검증 없이 같은 객체로 통과한다(브라우저 경로)."""
+    row = OpeningResultRow(notice_number="20260507-011", status="개찰완료")
+
+    promoted = browser_crawl.promote_opening_result_rows([row])
+
+    assert promoted[0] is row
+
+
+def test_promote_validates_already_normalized_dict_rows_without_reparsing():
+    """이미 내부 이름으로 온 dict 행은 승격만 한다(원시 키 재해석 없음).
+
+    승격 경계가 dict 릴레이 시절의 분기 판정(``notice_number`` 유무)을 그대로 따르는지
+    고정한다 — 여기서 정규화를 태우면 ``bidPbancNo`` 계열 폴백이 값을 덮어쓴다.
+    """
+    promoted = browser_crawl.promote_opening_result_rows(
+        [
+            {
+                "notice_number": "20260507-010",
+                "bidPbancNo": "무시되어야 하는 원시 키",
+                "status": "개찰완료",
+                "scheduled_at": datetime(2026, 5, 10, 18, 5, tzinfo=UTC),
+            }
+        ]
+    )
+
+    assert promoted[0].notice_number == "20260507-010"
+    assert promoted[0].scheduled_at == datetime(2026, 5, 10, 18, 5, tzinfo=UTC)
+    # 정규화를 타지 않았으므로 원시 키에서 만들어지는 full number 는 생기지 않는다.
+    assert promoted[0].notice_full_number is None
+
+
+def test_promote_normalizes_raw_grid_rows():
+    """WebSquare 원시 키 행은 정규화를 태운다(내부 이름 부재 판정)."""
+    promoted = browser_crawl.promote_opening_result_rows(
+        [{"bidPbancNo": "20260507-020", "bidPbancOrd": "00", "prcmBsneSeCd": "07"}]
+    )
+
+    assert promoted[0].notice_number == "20260507-020"
+    assert promoted[0].notice_full_number == "20260507-020-00"
+    assert promoted[0].business_type == "공사"
+
+
+def test_promote_rejects_unparseable_instant():
+    """승격 경계에서 해석 불가 시각 토큰은 거부된다(소비 지점 AttributeError 대신).
+
+    dict 릴레이 시절에는 문자열 ``scheduled_at`` 이 merge 안쪽까지 흘러가
+    ``.isoformat()`` 호출에서 죽었다. 계약 위반은 경계에서 드러나야 한다.
+    """
+    with pytest.raises(ValidationError):
+        browser_crawl.promote_opening_result_rows(
+            [{"notice_number": "20260507-012", "scheduled_at": "2026/05/10 18:05"}]
+        )

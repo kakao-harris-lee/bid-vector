@@ -43,8 +43,15 @@ import pytest
 
 from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
+from app.schemas.koneps_items import ScsbidReserveDetail
 from app.schemas.schemas import CrawlRequest
-from app.services.koneps import collection, matching, persistence
+from app.services.koneps import (
+    collection,
+    html_parsing,
+    matching,
+    persistence,
+    scsbid,
+)
 from app.services.koneps.collector import KonepsCollectorService
 from tests.support.koneps_openapi_fakes import (
     FakeOpenApiResponse,
@@ -80,6 +87,29 @@ ITEM_FIELDS: tuple[str, ...] = (
     "metadata",
 )
 
+# 개찰결과 그리드 행(``normalize_opening_result_row`` 산출)의 선언 필드 전수. 생산자가 이
+# 목록 밖의 키를 배출하면 골든 투영이 실패한다(타입화가 조용히 버리는 필드를 잡는 가드).
+OPENING_ROW_FIELDS: tuple[str, ...] = (
+    "notice_number",
+    "notice_order",
+    "notice_full_number",
+    "title",
+    "bid_classification",
+    "bid_progress_order",
+    "demand_agency",
+    "status",
+    "scheduled_at",
+    "business_type",
+    "opening_amount",
+    "reserve_prices",
+    "selected_numbers",
+    "winning_company",
+    "winning_amount",
+    "winning_rate",
+    "announced_at",
+    "raw",
+)
+
 PROJECT_COLUMNS = (
     "notice_number",
     "title",
@@ -101,6 +131,9 @@ PROJECT_COLUMNS = (
 )
 HISTORICAL_COLUMNS = (
     "notice_number",
+    # project 링크는 투영에 포함한다: 개찰 결과가 project 에 붙는지(orphan 아닌지)는
+    # 정산/대시보드가 의존하는 사실이고, 링크 대입 지점이 한 곳뿐임을 골든이 고정한다.
+    "project_id",
     "agency_name",
     "category",
     "base_amount",
@@ -114,6 +147,7 @@ HISTORICAL_COLUMNS = (
     "basis_checked_at",
 )
 TENDER_COLUMNS = (
+    "project_id",
     "winning_company",
     "winning_amount",
     "winning_rate",
@@ -165,6 +199,17 @@ def _canonical_item(item: Any) -> dict[str, Any]:
     assert not unknown, f"ITEM_FIELDS 에 선언되지 않은 수집 item 필드: {unknown}"
     canonical = {name: raw.get(name) for name in ITEM_FIELDS}
     canonical["closing_at"] = _canonical_instant(canonical["closing_at"])
+    return canonical
+
+
+def _canonical_row(row: Any) -> dict[str, Any]:
+    """개찰결과 행을 선언 필드 전수로 투영한다(dict / DTO 양쪽 동일 결과)."""
+    raw = row.model_dump(mode="python") if hasattr(row, "model_dump") else dict(row)
+    unknown = sorted(set(raw) - set(OPENING_ROW_FIELDS))
+    assert not unknown, f"OPENING_ROW_FIELDS 에 선언되지 않은 개찰행 필드: {unknown}"
+    canonical = {name: raw.get(name) for name in OPENING_ROW_FIELDS}
+    for instant_field in ("scheduled_at", "announced_at"):
+        canonical[instant_field] = _canonical_instant(canonical[instant_field])
     return canonical
 
 
@@ -290,6 +335,18 @@ def test_openapi_notice_collect_matches_golden(monkeypatch):
     result = _collect_openapi(monkeypatch)
 
     _assert_golden("openapi_notice_collect", _canonical_response(result))
+
+
+def test_openapi_collect_boundary_payload_matches_golden(monkeypatch):
+    """경계 payload(``serialize_collect_payload``) 의 **wire 표현**을 고정한다.
+
+    수집 내부 골든은 DTO 를 python 값으로 투영하므로 실제로 HTTP 응답/celery 반환에
+    실리는 JSON 표현(``closing_at`` 의 ``...Z`` 접미, None 채움, metadata 통과)은 고정되지
+    않는다. 프론트/브로커가 소비하는 표현이 그 계층이므로 별도 골든으로 못 박는다.
+    """
+    payload = collection.serialize_collect_payload(_collect_openapi(monkeypatch))
+
+    _assert_golden("openapi_collect_payload", payload)
 
 
 def test_openapi_collect_skips_row_without_notice_number(monkeypatch):
@@ -469,6 +526,114 @@ def test_live_html_collect_matches_golden(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# 3b. 개찰결과 그리드 행 정규화(WebSquare raw 키 경로)
+# --------------------------------------------------------------------------- #
+# ``_collect_live`` 가 쓰는 mocked 행은 이미 ``notice_number`` 를 실어 merge 가 정규화를
+# **건너뛰는** passthrough 경로다. 실 브라우저 경로는 WebSquare 원시 키(bidPbancNo /
+# onbsPrnmntDt / bizAmt / prcmBsneSeCd / detail_html)로 도착해 정규화를 태운다. 두 경로의
+# 산출을 모두 골든으로 고정한다 — 행 타입화(DTO 승격)가 어느 쪽 표현도 바꾸지 않도록.
+OPENING_DETAIL_HTML = """
+<html><body><table>
+    <tr><th>복수예비가격</th><td>101,000,000 / 102,000,000 / 103,000,000</td></tr>
+    <tr><th>선택번호</th><td>1, 4</td></tr>
+    <tr><th>낙찰업체</th><td>주식회사 테스트</td></tr>
+    <tr><th>낙찰금액</th><td>119,000,000 KRW</td></tr>
+    <tr><th>낙찰률</th><td>95.2%</td></tr>
+    <tr><th>개찰일시</th><td>2026.05.10 18:05:00</td></tr>
+</table></body></html>
+"""
+
+GRID_ROWS: tuple[dict[str, Any], ...] = (
+    {
+        "bidPbancNo": "R26BK01510407",
+        "bidPbancOrd": "000",
+        "bidPbancNoPbancOrd": "R26BK01510407-000",
+        "bidPbancNm": "AI 소프트웨어 &amp; 통합 구축",
+        "bidClsfNo": "1",
+        "bidPrgrsOrd": "000",
+        "dmstGrpNm": "서울특별시교육청",
+        "bidPgstCd": "개찰완료",
+        "bizAmt": "119,000,000 KRW",
+        "onbsPrnmntDt": "2026/05/10 18:05",
+        "prcmBsneSeCd": "05",
+        "detail_html": OPENING_DETAIL_HTML,
+    },
+    # 상세 팝업이 없고 코드만 오는 최소 행(차수 결합으로 full number 를 만든다).
+    {
+        "bidPbancNo": "R26BK01510408",
+        "bidPbancOrd": "00",
+        "prcmBsneSeCd": "07",
+        "bizAmt": "1,000,000",
+    },
+    # ``detail`` dict 로 결과가 실려오는 행(빈 값은 무시되고 상세가 행을 이긴다).
+    {
+        "bidPbancNo": "R26BK01510409",
+        "bidPgstCd": "개찰완료",
+        "winning_company": "행 낙찰사",
+        "detail": {
+            "winning_company": "상세 낙찰사",
+            "winning_amount": 88_000_000.0,
+            "winning_rate": None,
+            "reserve_prices": [],
+        },
+    },
+)
+
+
+def test_opening_result_rows_normalize_matches_golden():
+    normalized = [
+        html_parsing.normalize_opening_result_row(dict(row)) for row in GRID_ROWS
+    ]
+
+    _assert_golden(
+        "opening_result_rows_normalize", [_canonical_row(row) for row in normalized]
+    )
+
+
+def _collect_live_from_grid_rows(monkeypatch) -> dict[str, Any]:
+    """live 수집 + 개찰결과 **원시 그리드 행** merge(정규화 경로)."""
+    service = KonepsCollectorService()
+    monkeypatch.setattr(
+        service,
+        "_gather_live_page_snapshots",
+        lambda request: [
+            {
+                "page_number": 1,
+                "url": "https://www.g2b.go.kr/",
+                "html": RESULT_TABLE_HTML,
+                "detail_pages": {
+                    "detail-row-1": {
+                        "url": "http://ebid.example.com/detail/R26BK01510407",
+                        "html": DETAIL_HTML,
+                    }
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_collect_opening_result_rows",
+        lambda request: [dict(row) for row in GRID_ROWS],
+    )
+    return service.collect_notices(
+        CrawlRequest(
+            source="koneps",
+            category="technical-service",
+            execution_mode="live",
+            keyword="AI",
+            target_date="2026-05-08",
+            max_items=5,
+        )
+    )
+
+
+def test_live_opening_grid_collect_matches_golden(monkeypatch):
+    result = _collect_live_from_grid_rows(monkeypatch)
+
+    _assert_golden("live_opening_grid_collect", _canonical_response(result))
+
+
+# --------------------------------------------------------------------------- #
 # 4. persistence 왕복
 # --------------------------------------------------------------------------- #
 def _row_projection(row: Any, columns: tuple[str, ...]) -> dict[str, Any]:
@@ -517,12 +682,97 @@ def _persist(db, monkeypatch, request: CrawlRequest, response: dict[str, Any]) -
     )
 
 
+# 복수예비가격 15개(전량)를 실은 개찰 — ``estimate_base_amount_from_reserves`` 는 15개
+# 전량이 있을 때만 추정치를 낸다. 실 기초금액(bssamt)은 주지 않아 base 는 미상(0.0)이고
+# ``base_amount_estimated`` 만 채워지는 경로를 골든에 넣는다(#정직 명세: 추정은 추정 칼럼).
+RECOVERED_RESERVE_PRICES: tuple[float, ...] = tuple(
+    float(99_000_000 + 200_000 * index) for index in range(15)
+)
+
+
+def _recovered_base_award_item() -> Any:
+    """실 기초금액 없이 예비가격 15개만 있는 개찰 item(생산자를 그대로 태운다)."""
+    return scsbid.build_scsbid_award_item(
+        award_item("D-RECOVERED", title="예비가격 15개 개찰", amount="88,000,000"),
+        detail=ScsbidReserveDetail(
+            reserve_prices=list(RECOVERED_RESERVE_PRICES),
+            selected_numbers=[3, 9],
+            planned_price="100,000,000",
+        ),
+        request=_scsbid_request(),
+        operation="getScsbidListSttusCnstwk",
+        category="construction",
+    )
+
+
+# 업무구분 셀('0411 기술용역')에서 코드/라벨이 분리돼 project 로 흐르는 행. openapi/scsbid
+# 시나리오의 공고번호와 겹치지 않게 별도 번호를 쓴다(기존 골든 행 불변).
+BUSINESS_TYPE_TABLE_HTML = """
+<html><body>
+    <table id="mf_wfm_container_testTable">
+        <tr>
+            <th>No</th><th>업무구분</th><th>공고번호</th><th>공고명</th><th></th><th>공고상태</th>
+            <th>국제여부</th><th>공고일시</th><th>개찰일시</th><th>입찰마감일시</th>
+            <th>공고기관</th><th>수요기관</th><th>계약방법</th><th>공도급여부</th><th>투찰</th>
+        </tr>
+        <tr>
+            <td>1</td>
+            <td>0411 기술용역</td>
+            <td>R26BK01599001</td>
+            <td title="업무구분 코드 분리 검증"><label class="link_txt">업무구분 코드 분리 검증</label></td>
+            <td><a id="detail-row-9" href="javascript:void(null);">바로가기</a></td>
+            <td>등록공고</td>
+            <td>국내입찰</td>
+            <td>2026/05/08</td>
+            <td>2026/05/10 18:00</td>
+            <td>2026/05/10 18:00</td>
+            <td>조달청</td>
+            <td>서울특별시교육청</td>
+            <td>제한경쟁</td>
+            <td>아니오</td>
+            <td></td>
+        </tr>
+    </table>
+</body></html>
+"""
+
+
+def _business_type_items() -> list[Any]:
+    """업무구분 코드/라벨을 실은 live 파싱 item(코드 분리는 파서가 수행)."""
+    return html_parsing.parse_live_html(
+        BUSINESS_TYPE_TABLE_HTML,
+        CrawlRequest(
+            source="koneps",
+            category="technical-service",
+            execution_mode="live",
+            target_date="2026-05-08",
+            max_items=5,
+        ),
+        page_url="https://www.g2b.go.kr/",
+        page_number=1,
+    )
+
+
 def test_persistence_roundtrip_matches_golden(test_db, monkeypatch):
     openapi_response = _collect_openapi(monkeypatch)
     scsbid_response = _collect_scsbid(monkeypatch)
 
     _persist(test_db, monkeypatch, _openapi_request(), openapi_response)
     _persist(test_db, monkeypatch, _scsbid_request(), scsbid_response)
+    # 추가 시나리오 2건: (1) 예비가격 복구 기초금액(추정) 행, (2) 업무구분 코드/라벨 행.
+    # 위 두 pass 의 공고번호와 겹치지 않으므로 기존 골든 행은 그대로 유지된다.
+    _persist(
+        test_db,
+        monkeypatch,
+        _scsbid_request(),
+        {"items": [_recovered_base_award_item()], "metadata": {}},
+    )
+    _persist(
+        test_db,
+        monkeypatch,
+        _openapi_request(),
+        {"items": _business_type_items(), "metadata": {}},
+    )
 
     test_db.expire_all()
     _assert_golden("persistence_roundtrip", _db_projection(test_db))

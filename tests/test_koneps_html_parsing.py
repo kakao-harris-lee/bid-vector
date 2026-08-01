@@ -4,6 +4,7 @@ These guard the behavior-preserving extraction from
 ``KonepsCollectorService`` into ``app.services.koneps.html_parsing``.
 """
 
+from app.schemas.koneps_items import OpeningResultRow
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import html_parsing
 from tests.support.koneps_items import collected_item
@@ -93,11 +94,13 @@ def test_normalize_opening_result_row_maps_codes():
         "bizAmt": "1,000,000",
     }
     normalized = html_parsing.normalize_opening_result_row(row)
-    assert normalized["notice_number"] == "20260507-001"
-    assert normalized["notice_full_number"] == "20260507-001-00"
-    assert normalized["business_type"] == "공사"
-    assert normalized["title"] == "도로 & 교량 보수"
-    assert normalized["opening_amount"] == 1000000.0
+    assert normalized.notice_number == "20260507-001"
+    assert normalized.notice_full_number == "20260507-001-00"
+    assert normalized.business_type == "공사"
+    assert normalized.title == "도로 & 교량 보수"
+    assert normalized.opening_amount == 1000000.0
+    # 원시 행은 provenance 로 보존된다(승격이 정보를 버리지 않는다).
+    assert normalized.raw == row
 
 
 def test_merge_opening_result_rows_enriches_items():
@@ -106,15 +109,15 @@ def test_merge_opening_result_rows_enriches_items():
         collected_item(notice_number="99999999-999", metadata={}),
     ]
     opening_rows = [
-        {
-            "notice_number": "20260507-001",
-            "notice_full_number": "20260507-001-00",
-            "status": "개찰완료",
-            "business_type": "공사",
-            "demand_agency": "서울특별시청",
-            "winning_company": "가나건설",
-            "winning_amount": 980000.0,
-        }
+        OpeningResultRow(
+            notice_number="20260507-001",
+            notice_full_number="20260507-001-00",
+            status="개찰완료",
+            business_type="공사",
+            demand_agency="서울특별시청",
+            winning_company="가나건설",
+            winning_amount=980000.0,
+        )
     ]
     merged_items, meta = html_parsing.merge_opening_result_rows(items, opening_rows)
     assert meta["opening_result_enriched_count"] == 1
@@ -143,12 +146,12 @@ def test_merge_opening_result_rows_does_not_overwrite_filled_item_fields():
         )
     ]
     opening_rows = [
-        {
-            "notice_number": "20260507-002",
-            "status": "개찰완료",
-            "business_type": "공사",
-            "demand_agency": "서울특별시청",
-        }
+        OpeningResultRow(
+            notice_number="20260507-002",
+            status="개찰완료",
+            business_type="공사",
+            demand_agency="서울특별시청",
+        )
     ]
 
     merged_items, meta = html_parsing.merge_opening_result_rows(items, opening_rows)

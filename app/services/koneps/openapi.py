@@ -1,12 +1,18 @@
 """Pure OpenAPI protocol helpers for the KONEPS collector.
 
-These functions and the source/category mapping constants were extracted
-verbatim from ``KonepsCollectorService`` (``collector.py``). They have no
+These functions were extracted verbatim from ``KonepsCollectorService``
+(``collector.py``). They have no
 IO (``requests``), DB (``Session``), or HTML (``BeautifulSoup``) dependencies
 and do not use instance state, so they live here as module-level pure helpers
-and constants to keep the collector focused on orchestration. The OpenAPI IO clients
+to keep the collector focused on orchestration. The OpenAPI IO clients
 (``request_openapi_with_key_variants`` / ``load_openapi_json``) live in
 ``app.services.koneps.http_client`` and consume these pure helpers.
+
+소스 별칭 · 카테고리→오퍼레이션 **선언 테이블**은 ``openapi_operations`` 로 갈라 두고
+(§4.5-1: 값 집합은 함수 밖 단일 출처) 여기서는 그 표를 해석하는 셀렉터만 유지한다 —
+이 모듈이 500줄 한도 경계까지 자랐기 때문에 데이터/해석을 책임 단위로 나눈 것이다.
+표는 여기서 다시 이름을 노출하므로(``openapi.SCSBID_OPENAPI_SOURCE_ALIASES``) 기존
+호출부의 참조 경로는 그대로다.
 """
 
 import re
@@ -18,85 +24,18 @@ from app.core.time import utc_now
 from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import parsing
-from app.services.koneps.field_contract import (
+from app.services.koneps.field_contract_spec import (
     BASE_RESOLUTION_ORDER,
     ESTIMATED_RESOLUTION_ORDER,
 )
-
-
-OPENAPI_SOURCE_ALIASES = {
-    "koneps-openapi",
-    "koneps_api",
-    "koneps-api",
-    "koneps-public-api",
-    "bid-public-info",
-}
-SCSBID_OPENAPI_SOURCE_ALIASES = {
-    "koneps-scsbid",
-    "koneps-award-openapi",
-    "koneps-awards",
-    "scsbid",
-    "scsbid-openapi",
-}
-OPENAPI_CATEGORY_OPERATIONS = {
-    "construction": "getBidPblancListInfoCnstwk",
-    "공사": "getBidPblancListInfoCnstwk",
-    "service": "getBidPblancListInfoServc",
-    "general-service": "getBidPblancListInfoServc",
-    "technical-service": "getBidPblancListInfoServc",
-    "software": "getBidPblancListInfoServc",
-    "용역": "getBidPblancListInfoServc",
-    "goods": "getBidPblancListInfoThng",
-    "물품": "getBidPblancListInfoThng",
-    "foreign": "getBidPblancListInfoFrgcpt",
-    "frgcpt": "getBidPblancListInfoFrgcpt",
-    "외자": "getBidPblancListInfoFrgcpt",
-}
-SCSBID_CATEGORY_OPERATIONS = {
-    "construction": "getScsbidListSttusCnstwk",
-    "공사": "getScsbidListSttusCnstwk",
-    "service": "getScsbidListSttusServc",
-    "general-service": "getScsbidListSttusServc",
-    "technical-service": "getScsbidListSttusServc",
-    "software": "getScsbidListSttusServc",
-    "용역": "getScsbidListSttusServc",
-    "goods": "getScsbidListSttusThng",
-    "물품": "getScsbidListSttusThng",
-    "foreign": "getScsbidListSttusFrgcpt",
-    "frgcpt": "getScsbidListSttusFrgcpt",
-    "외자": "getScsbidListSttusFrgcpt",
-}
-SCSBID_RESERVE_DETAIL_OPERATIONS = {
-    "construction": "getOpengResultListInfoCnstwkPreparPcDetail",
-    "공사": "getOpengResultListInfoCnstwkPreparPcDetail",
-    "service": "getOpengResultListInfoServcPreparPcDetail",
-    "general-service": "getOpengResultListInfoServcPreparPcDetail",
-    "technical-service": "getOpengResultListInfoServcPreparPcDetail",
-    "software": "getOpengResultListInfoServcPreparPcDetail",
-    "용역": "getOpengResultListInfoServcPreparPcDetail",
-    "goods": "getOpengResultListInfoThngPreparPcDetail",
-    "물품": "getOpengResultListInfoThngPreparPcDetail",
-    "foreign": "getOpengResultListInfoFrgcptPreparPcDetail",
-    "frgcpt": "getOpengResultListInfoFrgcptPreparPcDetail",
-    "외자": "getOpengResultListInfoFrgcptPreparPcDetail",
-}
-# 개찰 1위(잠정) 결과 목록 오퍼레이션. ScsbidInfoService ``getOpengResultListInfo*``
-# 계열로, 행에 ``opengCorpInfo``(1위 캐럿 문자열) + ``prtcptCnum``(참가자수)을 싣는다
-# (실측 2026-07-19). reserve-detail 계열과 같은 카테고리 키 집합을 유지한다.
-SCSBID_OPENING_RESULT_OPERATIONS = {
-    "construction": "getOpengResultListInfoCnstwk",
-    "공사": "getOpengResultListInfoCnstwk",
-    "service": "getOpengResultListInfoServc",
-    "general-service": "getOpengResultListInfoServc",
-    "technical-service": "getOpengResultListInfoServc",
-    "software": "getOpengResultListInfoServc",
-    "용역": "getOpengResultListInfoServc",
-    "goods": "getOpengResultListInfoThng",
-    "물품": "getOpengResultListInfoThng",
-    "foreign": "getOpengResultListInfoFrgcpt",
-    "frgcpt": "getOpengResultListInfoFrgcpt",
-    "외자": "getOpengResultListInfoFrgcpt",
-}
+from app.services.koneps.openapi_operations import (
+    OPENAPI_CATEGORY_OPERATIONS,
+    OPENAPI_SOURCE_ALIASES,
+    SCSBID_CATEGORY_OPERATIONS,
+    SCSBID_OPENAPI_SOURCE_ALIASES,
+    SCSBID_OPENING_RESULT_OPERATIONS,
+    SCSBID_RESERVE_DETAIL_OPERATIONS,
+)
 
 
 def is_openapi_source(source: str | None) -> bool:

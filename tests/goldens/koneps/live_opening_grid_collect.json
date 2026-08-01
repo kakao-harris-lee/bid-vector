@@ -1,0 +1,77 @@
+{
+  "collected_count": 1,
+  "items": [
+    {
+      "award_floor_rate": null,
+      "base_amount": 125000000.0,
+      "business_type": "0411 기술용역",
+      "business_type_code": "0411",
+      "business_type_label": "기술용역",
+      "closing_at": "2026-05-10T18:00:00+00:00",
+      "eligibility_raw": null,
+      "estimated_amount": 113636364.0,
+      "license_codes": [
+        "SW001"
+      ],
+      "metadata": {
+        "amount_source": "detail_page",
+        "contract_method": "제한경쟁",
+        "demand_agency": "서울특별시교육청",
+        "detail_action_id": "detail-row-1",
+        "detail_collected": true,
+        "detail_notice_number": "R26BK01510407",
+        "issuing_agency": "조달청",
+        "mode": "live",
+        "opening_amount": 119000000.0,
+        "opening_announced_at": "2026-05-10T18:05:00+00:00",
+        "opening_at": "2026.05.10 18:00:00",
+        "opening_bid_classification": "1",
+        "opening_bid_progress_order": "000",
+        "opening_business_type": "기술용역",
+        "opening_demand_agency": "서울특별시교육청",
+        "opening_detail_collected": true,
+        "opening_notice_full_number": "R26BK01510407-000",
+        "opening_scheduled_at": "2026-05-10T18:05:00+00:00",
+        "opening_status": "개찰완료",
+        "page_number": 1,
+        "posted_at": "2026/05/08",
+        "procurement_scope": "국내입찰",
+        "reserve_prices": [
+          101000000.0,
+          102000000.0,
+          103000000.0
+        ],
+        "row_index": 1,
+        "selected_numbers": [
+          1,
+          4
+        ],
+        "status": "등록공고",
+        "target_date": "2026-05-08",
+        "winning_amount": 119000000.0,
+        "winning_company": "주식회사 테스트",
+        "winning_rate": 95.2
+      },
+      "notice_number": "R26BK01510407",
+      "region": "서울",
+      "source_url": "http://ebid.example.com/detail/R26BK01510407",
+      "title": "AI 소프트웨어 통합 구축"
+    }
+  ],
+  "job_status": "completed",
+  "metadata": {
+    "keyword": "AI",
+    "max_items": 5,
+    "opening_result_enriched_count": 1,
+    "opening_result_grid_id": "mf_wfm_container_onbsRsltClsfInqyGrd",
+    "opening_result_row_count": 3,
+    "page_count": 1,
+    "pager_id_prefix": "mf_wfm_container_pglList_page_",
+    "requested_mode": "live",
+    "resolved_mode": "live",
+    "result_table_id": "mf_wfm_container_testTable",
+    "search_entry_url": "https://www.g2b.go.kr/",
+    "target_date": "2026-05-08"
+  },
+  "source": "koneps"
+}

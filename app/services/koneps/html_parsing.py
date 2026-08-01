@@ -18,6 +18,7 @@ the single owner of the browser IO (``page.evaluate`` /
 """
 
 import re
+from collections.abc import Sequence
 from html import unescape
 from typing import Any
 from urllib.parse import urljoin
@@ -25,7 +26,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
-from app.schemas.koneps_items import KonepsCollectedItem
+from app.schemas.koneps_items import KonepsCollectedItem, OpeningResultRow
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import parsing
 
@@ -37,24 +38,20 @@ OPENING_RESULT_DATA_LIST_KEY = "mf_wfm_container_dlOnbsRsltClsfListOutL"
 
 def merge_opening_result_rows(
     items: list[KonepsCollectedItem],
-    opening_rows: list[dict[str, Any]],
-) -> tuple[list[KonepsCollectedItem], dict[str, Any]]:
+    opening_rows: Sequence[OpeningResultRow],
+) -> tuple[list[KonepsCollectedItem], dict[str, str | int]]:
     """Merge opening-result data into collected notice items by notice number.
 
-    ``items`` 는 이미 승격된 수집 DTO 다(모델을 유지한 채 metadata 만 갱신). 개찰결과
-    행(``opening_rows``)은 WebSquare 그리드 원시 dict 로 남는다 — 브라우저 경로 전용
-    이라 아직 타입화 범위가 아니다(후속).
+    ``items`` 와 개찰결과 행 모두 승격된 DTO 다 — 순수 코어는 타입 있는 입력만 받고 병합
+    규칙만 소유한다. dict 로 도착하는 행(대체된 수집 훅/외부 payload)의 승격은 경계인
+    ``browser_crawl.promote_opening_result_rows`` 가 맡는다.
     """
-    opening_index: dict[str, dict[str, Any]] = {}
-    normalized_rows = [
-        row if row.get("notice_number") else normalize_opening_result_row(row)
-        for row in opening_rows
-    ]
-    for row in normalized_rows:
-        if row.get("notice_number"):
-            opening_index[row["notice_number"]] = row
-        if row.get("notice_full_number"):
-            opening_index[row["notice_full_number"]] = row
+    opening_index: dict[str, OpeningResultRow] = {}
+    for row in opening_rows:
+        if row.notice_number:
+            opening_index[row.notice_number] = row
+        if row.notice_full_number:
+            opening_index[row.notice_full_number] = row
 
     enriched_count = 0
     for item in items:
@@ -65,53 +62,51 @@ def merge_opening_result_rows(
         if opening_row is None:
             continue
 
-        scheduled_at = opening_row.get("scheduled_at")
+        scheduled_at = opening_row.scheduled_at
         item_metadata = dict(item.metadata or {})
         item_metadata.update(
             {
-                "opening_notice_full_number": opening_row.get("notice_full_number"),
-                "opening_status": opening_row.get("status"),
+                "opening_notice_full_number": opening_row.notice_full_number,
+                "opening_status": opening_row.status,
                 "opening_scheduled_at": (
                     scheduled_at.isoformat() if scheduled_at else None
                 ),
-                "opening_bid_classification": opening_row.get("bid_classification"),
-                "opening_bid_progress_order": opening_row.get("bid_progress_order"),
-                "opening_demand_agency": opening_row.get("demand_agency"),
-                "opening_business_type": opening_row.get("business_type"),
-                "opening_amount": opening_row.get("opening_amount"),
+                "opening_bid_classification": opening_row.bid_classification,
+                "opening_bid_progress_order": opening_row.bid_progress_order,
+                "opening_demand_agency": opening_row.demand_agency,
+                "opening_business_type": opening_row.business_type,
+                "opening_amount": opening_row.opening_amount,
                 "opening_detail_collected": bool(
-                    opening_row.get("reserve_prices")
-                    or opening_row.get("selected_numbers")
-                    or opening_row.get("winning_company")
+                    opening_row.reserve_prices
+                    or opening_row.selected_numbers
+                    or opening_row.winning_company
                 ),
             }
         )
 
-        if opening_row.get("reserve_prices"):
-            item_metadata["reserve_prices"] = opening_row["reserve_prices"]
-        if opening_row.get("selected_numbers"):
-            item_metadata["selected_numbers"] = opening_row["selected_numbers"]
-        if opening_row.get("winning_company"):
-            item_metadata["winning_company"] = opening_row["winning_company"]
-        if opening_row.get("winning_amount") is not None:
-            item_metadata["winning_amount"] = opening_row["winning_amount"]
-        if opening_row.get("winning_rate") is not None:
-            item_metadata["winning_rate"] = opening_row["winning_rate"]
-        if opening_row.get("announced_at") is not None:
-            item_metadata["opening_announced_at"] = opening_row[
-                "announced_at"
-            ].isoformat()
+        if opening_row.reserve_prices:
+            item_metadata["reserve_prices"] = opening_row.reserve_prices
+        if opening_row.selected_numbers:
+            item_metadata["selected_numbers"] = opening_row.selected_numbers
+        if opening_row.winning_company:
+            item_metadata["winning_company"] = opening_row.winning_company
+        if opening_row.winning_amount is not None:
+            item_metadata["winning_amount"] = opening_row.winning_amount
+        if opening_row.winning_rate is not None:
+            item_metadata["winning_rate"] = opening_row.winning_rate
+        if opening_row.announced_at is not None:
+            item_metadata["opening_announced_at"] = opening_row.announced_at.isoformat()
 
         item.metadata = item_metadata
-        if not item.business_type and opening_row.get("business_type"):
-            item.business_type = opening_row["business_type"]
-        if not item.region and opening_row.get("demand_agency"):
-            item.region = parsing.extract_region([opening_row["demand_agency"]])
+        if not item.business_type and opening_row.business_type:
+            item.business_type = opening_row.business_type
+        if not item.region and opening_row.demand_agency:
+            item.region = parsing.extract_region([opening_row.demand_agency])
         enriched_count += 1
 
     return items, {
         "opening_result_grid_id": OPENING_RESULT_GRID_ID,
-        "opening_result_row_count": len(normalized_rows),
+        "opening_result_row_count": len(opening_rows),
         "opening_result_enriched_count": enriched_count,
     }
 
@@ -338,8 +333,12 @@ def parse_detail_html(html: str) -> dict[str, Any]:
     }
 
 
-def normalize_opening_result_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Normalize an opening-result row or mocked detail payload into a stable structure."""
+def normalize_opening_result_row(row: dict[str, Any]) -> OpeningResultRow:
+    """Normalize a WebSquare opening-result row into the typed row DTO (승격 지점).
+
+    원시 키(``bidPbancNo`` …) + 상세 팝업 파싱 결과를 합친다. 값 해석 규칙(결측을 빈
+    문자열로 싣는 것 포함)은 dict 를 돌려주던 시절과 동일하다(소비자 falsy 판정 보존).
+    """
     detail_data = {}
     detail_html = row.get("detail_html")
     if isinstance(detail_html, str) and detail_html.strip():
@@ -374,11 +373,11 @@ def normalize_opening_result_row(row: dict[str, Any]) -> dict[str, Any]:
         row.get("opening_amount") or row.get("bizAmt")
     )
 
-    return {
-        "notice_number": notice_number,
-        "notice_order": notice_order,
-        "notice_full_number": notice_full_number,
-        "title": unescape(
+    return OpeningResultRow(
+        notice_number=notice_number,
+        notice_order=notice_order,
+        notice_full_number=notice_full_number,
+        title=unescape(
             str(
                 row.get("title")
                 or row.get("bidPbancNm")
@@ -386,52 +385,52 @@ def normalize_opening_result_row(row: dict[str, Any]) -> dict[str, Any]:
                 or ""
             )
         ).strip(),
-        "bid_classification": str(
+        bid_classification=str(
             row.get("bid_classification") or row.get("bidClsfNo") or ""
         ).strip(),
-        "bid_progress_order": str(
+        bid_progress_order=str(
             row.get("bid_progress_order") or row.get("bidPrgrsOrd") or ""
         ).strip(),
-        "demand_agency": str(
+        demand_agency=str(
             row.get("demand_agency") or row.get("dmstGrpNm") or ""
         ).strip(),
-        "status": str(
+        status=str(
             row.get("status")
             or row.get("bidPgstCd")
             or detail_data.get("result_status")
             or ""
         ).strip(),
-        "scheduled_at": parsing.coerce_datetime(
+        scheduled_at=parsing.coerce_datetime(
             row.get("scheduled_at")
             or row.get("onbsPrnmntDt")
             or detail_data.get("announced_at")
         ),
-        "business_type": row.get("business_type")
+        business_type=row.get("business_type")
         or map_opening_business_type(row.get("prcmBsneSeCd")),
-        "opening_amount": opening_amount,
-        "reserve_prices": detail_data.get("reserve_prices")
+        opening_amount=opening_amount,
+        reserve_prices=detail_data.get("reserve_prices")
         or row.get("reserve_prices")
         or [],
-        "selected_numbers": detail_data.get("selected_numbers")
+        selected_numbers=detail_data.get("selected_numbers")
         or row.get("selected_numbers")
         or [],
-        "winning_company": detail_data.get("winning_company")
+        winning_company=detail_data.get("winning_company")
         or row.get("winning_company"),
-        "winning_amount": (
+        winning_amount=(
             detail_data.get("winning_amount")
             if detail_data.get("winning_amount") is not None
             else row.get("winning_amount")
         ),
-        "winning_rate": (
+        winning_rate=(
             detail_data.get("winning_rate")
             if detail_data.get("winning_rate") is not None
             else row.get("winning_rate")
         ),
-        "announced_at": parsing.coerce_datetime(
+        announced_at=parsing.coerce_datetime(
             detail_data.get("announced_at") or row.get("announced_at")
         ),
-        "raw": row,
-    }
+        raw=row,
+    )
 
 
 def parse_opening_detail_html(html: str) -> dict[str, Any]:

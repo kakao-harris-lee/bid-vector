@@ -13,6 +13,20 @@
       "result_count": 3,
       "source": "scsbid-openapi",
       "status": "completed"
+    },
+    {
+      "completed_at": "2026-06-01T00:00:00",
+      "error_message": null,
+      "result_count": 1,
+      "source": "scsbid-openapi",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-06-01T00:00:00",
+      "error_message": null,
+      "result_count": 1,
+      "source": "koneps-openapi",
+      "status": "completed"
     }
   ],
   "historical": [
@@ -27,6 +41,7 @@
       "notice_number": "A-SETTLED",
       "opened_at": "2026-05-13T11:00:00",
       "predicted_price": 100000000.0,
+      "project_id": 4,
       "reserve_prices": "[101000000.0, 102000000.0]",
       "selected_numbers": "[1]"
     },
@@ -41,6 +56,7 @@
       "notice_number": "B-UNSETTLED",
       "opened_at": "2026-05-13T11:00:00",
       "predicted_price": 51136363.63636363,
+      "project_id": 5,
       "reserve_prices": "[]",
       "selected_numbers": "[]"
     },
@@ -55,8 +71,24 @@
       "notice_number": "C-BROKEN",
       "opened_at": "2026-05-13T11:00:00",
       "predicted_price": 79545454.54545455,
+      "project_id": 6,
       "reserve_prices": "[]",
       "selected_numbers": "[]"
+    },
+    {
+      "agency_name": "서울특별시",
+      "base_amount": 0.0,
+      "base_amount_basis": "suspect-fractional",
+      "base_amount_estimated": 100400000.0,
+      "basis_checked_at": "2026-06-01T00:00:00",
+      "bid_rate": 0.88,
+      "category": "construction",
+      "notice_number": "D-RECOVERED",
+      "opened_at": "2026-05-13T11:00:00",
+      "predicted_price": 100000000.0,
+      "project_id": 7,
+      "reserve_prices": "[99000000.0, 99200000.0, 99400000.0, 99600000.0, 99800000.0, 100000000.0, 100200000.0, 100400000.0, 100600000.0, 100800000.0, 101000000.0, 101200000.0, 101400000.0, 101600000.0, 101800000.0]",
+      "selected_numbers": "[3, 9]"
     },
     {
       "agency_name": "서울특별시교육청",
@@ -69,6 +101,7 @@
       "notice_number": "R26BK01510407",
       "opened_at": "2026-05-20T11:00:00",
       "predicted_price": 113636364.0,
+      "project_id": 1,
       "reserve_prices": "[]",
       "selected_numbers": "[]"
     },
@@ -83,6 +116,7 @@
       "notice_number": "R26BK01510408",
       "opened_at": "2026-05-20T11:00:00",
       "predicted_price": 113636364.0,
+      "project_id": 2,
       "reserve_prices": "[]",
       "selected_numbers": "[]"
     },
@@ -97,6 +131,22 @@
       "notice_number": "R26BK01510409",
       "opened_at": "2026-05-20T11:00:00",
       "predicted_price": 113636364.0,
+      "project_id": 3,
+      "reserve_prices": "[]",
+      "selected_numbers": "[]"
+    },
+    {
+      "agency_name": "서울특별시교육청",
+      "base_amount": 0.0,
+      "base_amount_basis": "suspect-fractional",
+      "base_amount_estimated": null,
+      "basis_checked_at": "2026-06-01T00:00:00",
+      "bid_rate": 0.0,
+      "category": "service",
+      "notice_number": "R26BK01599001",
+      "opened_at": null,
+      "predicted_price": 0.0,
+      "project_id": 8,
       "reserve_prices": "[]",
       "selected_numbers": "[]"
     }
@@ -160,6 +210,25 @@
       "title": "상세 조회 실패"
     },
     {
+      "award_floor_rate": null,
+      "budget_estimate": 100000000.0,
+      "budget_max": 100000000.0,
+      "budget_min": 100000000.0,
+      "business_type_code": null,
+      "business_type_label": null,
+      "category": "construction",
+      "deadline": "2026-05-13T11:00:00",
+      "demand_agency": "서울특별시",
+      "description": "공고번호: D-RECOVERED\n수요기관: 서울특별시\n업무구분: construction\n개찰상태: 낙찰",
+      "eligibility_raw": null,
+      "issuing_agency": null,
+      "notice_number": "D-RECOVERED",
+      "requirements": "지역요건: 서울\n추정금액: 100000000",
+      "source_url": null,
+      "status": "awarded",
+      "title": "예비가격 15개 개찰"
+    },
+    {
       "award_floor_rate": 0.87995,
       "budget_estimate": 113636364.0,
       "budget_max": 125000000.0,
@@ -215,11 +284,31 @@
       "source_url": "https://www.g2b.go.kr/detail/R26BK01510409",
       "status": "closed",
       "title": "R26BK01510409 통합 유지관리 용역"
+    },
+    {
+      "award_floor_rate": null,
+      "budget_estimate": 0.0,
+      "budget_max": null,
+      "budget_min": null,
+      "business_type_code": "0411",
+      "business_type_label": "기술용역",
+      "category": "service",
+      "deadline": "2026-05-10T18:00:00",
+      "demand_agency": "서울특별시교육청",
+      "description": "공고번호: R26BK01599001\n공고기관: 조달청\n수요기관: 서울특별시교육청\n공고원문: https://www.g2b.go.kr/\n업무구분: 0411 기술용역",
+      "eligibility_raw": null,
+      "issuing_agency": "조달청",
+      "notice_number": "R26BK01599001",
+      "requirements": "지역요건: 서울\n계약방법: 제한경쟁",
+      "source_url": "https://www.g2b.go.kr/",
+      "status": "closed",
+      "title": "업무구분 코드 분리 검증"
     }
   ],
   "tender_results": [
     {
       "announced_at": null,
+      "project_id": 1,
       "result_status": "등록공고",
       "winning_amount": 0.0,
       "winning_company": "",
@@ -227,6 +316,7 @@
     },
     {
       "announced_at": null,
+      "project_id": 2,
       "result_status": "등록공고",
       "winning_amount": 0.0,
       "winning_company": "",
@@ -234,6 +324,7 @@
     },
     {
       "announced_at": null,
+      "project_id": 3,
       "result_status": "등록공고",
       "winning_amount": 0.0,
       "winning_company": "",
@@ -241,6 +332,7 @@
     },
     {
       "announced_at": "2026-05-13T11:00:00",
+      "project_id": 4,
       "result_status": "낙찰",
       "winning_amount": 88123000.0,
       "winning_company": "낙찰사",
@@ -248,6 +340,7 @@
     },
     {
       "announced_at": "2026-05-13T11:00:00",
+      "project_id": 5,
       "result_status": "낙찰",
       "winning_amount": 45000000.0,
       "winning_company": "낙찰사",
@@ -255,8 +348,17 @@
     },
     {
       "announced_at": "2026-05-13T11:00:00",
+      "project_id": 6,
       "result_status": "낙찰",
       "winning_amount": 70000000.0,
+      "winning_company": "낙찰사",
+      "winning_rate": 0.88
+    },
+    {
+      "announced_at": "2026-05-13T11:00:00",
+      "project_id": 7,
+      "result_status": "낙찰",
+      "winning_amount": 88000000.0,
       "winning_company": "낙찰사",
       "winning_rate": 0.88
     }

@@ -1,0 +1,97 @@
+[
+  {
+    "announced_at": "2026-05-10T18:05:00+00:00",
+    "bid_classification": "1",
+    "bid_progress_order": "000",
+    "business_type": "기술용역",
+    "demand_agency": "서울특별시교육청",
+    "notice_full_number": "R26BK01510407-000",
+    "notice_number": "R26BK01510407",
+    "notice_order": "000",
+    "opening_amount": 119000000.0,
+    "raw": {
+      "bidClsfNo": "1",
+      "bidPbancNm": "AI 소프트웨어 &amp; 통합 구축",
+      "bidPbancNo": "R26BK01510407",
+      "bidPbancNoPbancOrd": "R26BK01510407-000",
+      "bidPbancOrd": "000",
+      "bidPgstCd": "개찰완료",
+      "bidPrgrsOrd": "000",
+      "bizAmt": "119,000,000 KRW",
+      "detail_html": "\n<html><body><table>\n    <tr><th>복수예비가격</th><td>101,000,000 / 102,000,000 / 103,000,000</td></tr>\n    <tr><th>선택번호</th><td>1, 4</td></tr>\n    <tr><th>낙찰업체</th><td>주식회사 테스트</td></tr>\n    <tr><th>낙찰금액</th><td>119,000,000 KRW</td></tr>\n    <tr><th>낙찰률</th><td>95.2%</td></tr>\n    <tr><th>개찰일시</th><td>2026.05.10 18:05:00</td></tr>\n</table></body></html>\n",
+      "dmstGrpNm": "서울특별시교육청",
+      "onbsPrnmntDt": "2026/05/10 18:05",
+      "prcmBsneSeCd": "05"
+    },
+    "reserve_prices": [
+      101000000.0,
+      102000000.0,
+      103000000.0
+    ],
+    "scheduled_at": "2026-05-10T18:05:00+00:00",
+    "selected_numbers": [
+      1,
+      4
+    ],
+    "status": "개찰완료",
+    "title": "AI 소프트웨어 & 통합 구축",
+    "winning_amount": 119000000.0,
+    "winning_company": "주식회사 테스트",
+    "winning_rate": 95.2
+  },
+  {
+    "announced_at": null,
+    "bid_classification": "",
+    "bid_progress_order": "",
+    "business_type": "공사",
+    "demand_agency": "",
+    "notice_full_number": "R26BK01510408-00",
+    "notice_number": "R26BK01510408",
+    "notice_order": "00",
+    "opening_amount": 1000000.0,
+    "raw": {
+      "bidPbancNo": "R26BK01510408",
+      "bidPbancOrd": "00",
+      "bizAmt": "1,000,000",
+      "prcmBsneSeCd": "07"
+    },
+    "reserve_prices": [],
+    "scheduled_at": null,
+    "selected_numbers": [],
+    "status": "",
+    "title": "",
+    "winning_amount": null,
+    "winning_company": null,
+    "winning_rate": null
+  },
+  {
+    "announced_at": null,
+    "bid_classification": "",
+    "bid_progress_order": "",
+    "business_type": null,
+    "demand_agency": "",
+    "notice_full_number": "R26BK01510409",
+    "notice_number": "R26BK01510409",
+    "notice_order": "",
+    "opening_amount": null,
+    "raw": {
+      "bidPbancNo": "R26BK01510409",
+      "bidPgstCd": "개찰완료",
+      "detail": {
+        "reserve_prices": [],
+        "winning_amount": 88000000.0,
+        "winning_company": "상세 낙찰사",
+        "winning_rate": null
+      },
+      "winning_company": "행 낙찰사"
+    },
+    "reserve_prices": [],
+    "scheduled_at": null,
+    "selected_numbers": [],
+    "status": "개찰완료",
+    "title": "",
+    "winning_amount": 88000000.0,
+    "winning_company": "상세 낙찰사",
+    "winning_rate": null
+  }
+]

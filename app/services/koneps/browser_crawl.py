@@ -3,13 +3,12 @@
 This module holds the homepage HTML-scraping fallback path that the collector
 uses when the OpenAPI sources are not selected: it drives the public KONEPS
 WebSquare SPA with the Playwright *sync* API (form fill, click, pagination,
-detail-tab capture, opening-result grid read) and returns plain snapshot/row
-dicts for the pure ``html_parsing`` layer to parse.
+detail-tab capture, opening-result grid read). 페이지 스냅샷은 원시 dict 로 넘기고, 개찰결과
+그리드 행은 ``html_parsing`` 승격기를 거친 ``OpeningResultRow`` 로 돌려준다.
 
-The 13 functions and 13 form/selector constants here were relocated verbatim
-from ``KonepsCollectorService`` (``collector.py``); behavior is intentionally
-identical (same Playwright call order, selectors, retry/backoff, and error
-classification) -- this is a pure relocation, not a rewrite.
+The page-driving functions and the 13 form/selector constants here were relocated
+verbatim from ``KonepsCollectorService`` (``collector.py``): same Playwright call
+order, selectors, retry/backoff, and error classification.
 
 Import direction (to avoid a cycle): ``browser_crawl`` must never import
 ``collector``. It depends only on the already-extracted sibling modules
@@ -27,12 +26,13 @@ two inner steps back through it, so a monkeypatched hook is still honored.
 requires Playwright to be installed.
 """
 
+from collections.abc import Sequence
 from math import ceil
 from time import sleep
 from typing import Any
 
 from app.core.config import settings
-from app.schemas.koneps_items import KonepsCollectedItem
+from app.schemas.koneps_items import KonepsCollectedItem, OpeningResultRow
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import html_parsing, live_failure
 
@@ -118,7 +118,9 @@ def collect_live_items(service: Any, request: CrawlRequest) -> dict[str, Any]:
         "opening_result_enriched_count": 0,
     }
     try:
-        opening_rows = service._collect_opening_result_rows(request)
+        opening_rows = promote_opening_result_rows(
+            service._collect_opening_result_rows(request)
+        )
         (
             parsed_items,
             opening_result_metadata,
@@ -149,7 +151,28 @@ def collect_live_items(service: Any, request: CrawlRequest) -> dict[str, Any]:
     }
 
 
-def collect_opening_result_rows(request: CrawlRequest) -> list[dict[str, Any]]:
+def promote_opening_result_rows(
+    rows: Sequence[OpeningResultRow | dict[str, Any]],
+) -> list[OpeningResultRow]:
+    """개찰결과 행을 순수 코어(merge)에 넘기기 전에 ``OpeningResultRow`` 로 승격한다.
+
+    실 브라우저 경로는 이미 DTO 를 돌려주지만 ``_collect_opening_result_rows`` 훅을 대체한
+    호출부는 dict 를 돌려줄 수 있어, 타입 없는 값이 들어오는 이 경계에서 한 번만 승격한다.
+    판정은 dict 릴레이 시절과 같다: 내부 이름(``notice_number``)을 실은 행은 원시 키 재해석
+    없이 모델 검증만, WebSquare 원시 키 행은 정규화를 태운다.
+    """
+    promoted: list[OpeningResultRow] = []
+    for row in rows:
+        if isinstance(row, OpeningResultRow):
+            promoted.append(row)
+        elif row.get("notice_number"):
+            promoted.append(OpeningResultRow.model_validate(row))
+        else:
+            promoted.append(html_parsing.normalize_opening_result_row(row))
+    return promoted
+
+
+def collect_opening_result_rows(request: CrawlRequest) -> list[OpeningResultRow]:
     """Collect opening-result rows from 개찰결과분류조회 using the live SPA page."""
     from playwright.sync_api import sync_playwright
 
@@ -242,8 +265,8 @@ def open_opening_result_page(page: Any, request: CrawlRequest) -> None:
     page.wait_for_timeout(settings.KONEPS_SEARCH_WAIT_MS)
 
 
-def read_opening_result_rows(page: Any) -> list[dict[str, Any]]:
-    """Read opening-result rows from the page's WebSquare data list."""
+def read_opening_result_rows(page: Any) -> list[OpeningResultRow]:
+    """Read opening-result rows from the page's WebSquare data list (승격해 반환)."""
     rows = page.evaluate(
         """
         (dataListKey) => {
@@ -261,7 +284,7 @@ def read_opening_result_rows(page: Any) -> list[dict[str, Any]]:
         for normalized_row in (
             html_parsing.normalize_opening_result_row(row) for row in rows or []
         )
-        if normalized_row.get("notice_number")
+        if normalized_row.notice_number
     ]
 
 
