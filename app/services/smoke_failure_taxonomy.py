@@ -167,9 +167,17 @@ def classify_failure(name: str, detail: str) -> str:
     return "unknown"
 
 
-def guidance_for(category: str) -> dict[str, str]:
+def guidance_for(
+    category: str, guidance: dict[str, dict[str, str]] | None = None
+) -> dict[str, str]:
     """Return the ``{action_required, retry_method}`` map for ``category``.
 
-    Unknown categories fall back to the ``"unknown"`` guidance.
+    Unknown categories fall back to the ``"unknown"`` guidance. ``guidance``
+    lets a caller that owns different remediation wording — the standalone CLI
+    runner ``scripts/production_smoke_test.py``, whose retry text points at the
+    command the operator just ran rather than at the beat task — reuse this
+    lookup instead of re-implementing it. Such a table must carry an
+    ``"unknown"`` entry.
     """
-    return FAILURE_GUIDANCE.get(category) or FAILURE_GUIDANCE["unknown"]
+    table = FAILURE_GUIDANCE if guidance is None else guidance
+    return table.get(category) or table["unknown"]

@@ -23,13 +23,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.services.smoke_failure_taxonomy import classify_failure  # noqa: E402
+from app.services.smoke_failure_taxonomy import (  # noqa: E402
+    classify_failure,
+    guidance_for,
+)
 
 
 class SmokeFailure(Exception):
     """Raised when a required smoke-test step fails."""
 
 
+# CLI-specific remediation wording: the retry text points at the command the
+# operator just ran, not at the scheduled beat task. The lookup itself lives in
+# ``smoke_failure_taxonomy.guidance_for``; only this table is local.
 FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
     "credential": {
         "action_required": "Rotate or restore the missing API/Telegram credential.",
@@ -71,7 +77,7 @@ FAILURE_GUIDANCE: dict[str, dict[str, str]] = {
 
 
 def failure_guidance(category: str) -> dict[str, str]:
-    return FAILURE_GUIDANCE.get(category) or FAILURE_GUIDANCE["unknown"]
+    return guidance_for(category, FAILURE_GUIDANCE)
 
 
 def parse_bool_env(value: str | None, *, default: bool = False) -> bool:
