@@ -49,7 +49,7 @@
 |---|---|---|
 | `scripts/_design_ratchet_clones.py` | 메커니컬 판정 · AST 정규화 · 클론 그룹핑 · allowlist | 신규 |
 | `scripts/_design_ratchet_contracts.py` | `FileMetrics` 필드 2개 추가 | 수정 |
-| `scripts/_design_ratchet_scan.py` | `scan_file` 분리 · `scan_repo` 2-pass · `scan_repo_clone_signatures` 추가 | 수정 |
+| `scripts/_design_ratchet_scan.py` | `scan_file` 분리 · `scan_repo_with_signatures` 2-pass · `scan_repo` 델리게이터화 | 수정 |
 | `scripts/design_ratchet.py` | 죽은 allowlist 검사 · 클론 그룹 리포트 | 수정 |
 | `tests/test_design_ratchet_clones.py` | 클론 모듈 단위 테스트(양방향 픽스처) | 신규 |
 | `tests/test_design_ratchet.py` | 신규 지표의 scan/scan_repo 통합 테스트 | 수정 |
@@ -798,7 +798,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   - `FileMetrics.duplicate_mechanical_helpers: int = 0`
   - `FileMetrics.duplicate_mechanical_helpers_local: int = 0`
   - `scan_file(relative_path: str, source: str) -> tuple[FileMetrics, list[CloneSignature]]`
-  - `scan_repo_clone_signatures(root: Path) -> list[CloneSignature]`
+  - `scan_repo_with_signatures(root: Path) -> tuple[RatchetReport, list[CloneSignature]]`
   - `scan_source(relative_path: str, source: str) -> FileMetrics` (기존 계약 유지)
 
 - [ ] **Step 1: 실패하는 테스트 작성**
@@ -1045,7 +1045,7 @@ def scan_source(relative_path: str, source: str) -> FileMetrics:
 - [ ] **Step 6: `scan_repo` 를 2-pass 로**
 
 `scripts/_design_ratchet_scan.py:395-403` 의 `scan_repo` 를 교체하고, 그 아래에
-`scan_repo_clone_signatures` 를 추가한다. 현재 원문(앵커)은 다음과 같다.
+`scan_repo_with_signatures` 를 그 자리에 둔다. 현재 원문(앵커)은 다음과 같다.
 
 ```python
 def scan_repo(root: Path) -> RatchetReport:
@@ -1062,11 +1062,18 @@ def scan_repo(root: Path) -> RatchetReport:
 교체본이다.
 
 ```python
-def scan_repo(root: Path) -> RatchetReport:
-    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다.
+def scan_repo_with_signatures(
+    root: Path,
+) -> tuple[RatchetReport, list[CloneSignature]]:
+    """대상 디렉터리를 스캔해 리포트와 저장소 전체 클론 지문을 함께 돌려준다.
 
     2-pass 다. pass 1 은 파일별 순수 스캔, pass 2 는 교차 파일 클론 귀속이다. 파일
     단위로는 다른 파일의 존재를 알 수 없어서 한 번에 끝낼 수 없다.
+
+    pass 1 은 **위반 0 인 파일도 반드시 수집한다.** 미리 걸러내면 그 파일의 클론이
+    교차 파일 그룹 계산에서 빠져 다른 파일의 카운트까지 틀어진다. 같은 이유로
+    ``is_clean()`` 필터는 pass 2 의 병합 **뒤에** 적용한다 — 먼저 적용하면 클론만
+    가진 파일이 리포트에서 사라진다.
     """
     scanned: list[tuple[str, FileMetrics]] = []
     signatures: list[CloneSignature] = []
@@ -1089,18 +1096,18 @@ def scan_repo(root: Path) -> RatchetReport:
             )
         if not metrics.is_clean():
             report.files[relative_path] = metrics
-    return report
+    return report, signatures
 
 
-def scan_repo_clone_signatures(root: Path) -> list[CloneSignature]:
-    """저장소 전체의 클론 지문(죽은 allowlist 검사·통합 대상 리포트용)."""
-    signatures: list[CloneSignature] = []
-    for path in iter_target_files(root):
-        relative_path = path.relative_to(root).as_posix()
-        tree = _parse_source(relative_path, _read_source(path, relative_path))
-        signatures.extend(collect_clone_signatures(relative_path, tree))
-    return signatures
+def scan_repo(root: Path) -> RatchetReport:
+    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다."""
+    return scan_repo_with_signatures(root)[0]
 ```
+
+`scan_repo` 는 얇은 델리게이터로 남는다 — 시그니처·반환 타입·docstring 이 그대로라
+기존 테스트와 `scripts/design_ratchet.py` 호출부가 영향받지 않는다. 시그니처가 필요한
+호출부(Task 4 의 CLI)는 `scan_repo_with_signatures` 를 **한 번** 호출해 둘 다 얻는다.
+저장소를 두 번 파싱하는 경로를 만들지 마라.
 
 - [ ] **Step 7: 테스트 통과 확인**
 
@@ -1160,7 +1167,27 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Task 2 의 `unused_allowlist_keys`, `cross_file_clone_groups`,
-  `CLONE_ALLOWLIST`; Task 3 의 `scan_repo_clone_signatures`
+  `CLONE_ALLOWLIST`; Task 3 의 `scan_repo_with_signatures`
+
+> **설계 변경 (Task 3 리뷰 결과, 사람 승인).** 원안의
+> `scan_repo_clone_signatures(root) -> list[CloneSignature]` 는 **삭제됐다.**
+> 그 함수는 `scan_repo` 가 pass 1 에서 이미 모아 버리는 시그니처를 재구축하려고
+> 저장소 전체를 다시 읽고 다시 파싱했다 — CLI 가 둘 다 부르면 378개 파일을 두 번
+> 파싱하는 중복 스캔 루프였다. 중복 제거가 주제인 PR 에서 용납할 수 없고, 본문이 달라
+> 우리 탐지기 자신도 못 잡는다.
+>
+> 대신 Task 3 이 한 단계 아래에서 쓴 패턴을 그대로 올렸다:
+>
+> ```
+> scan_source(path, source) -> FileMetrics                               # 얇은 델리게이터
+> scan_file(path, source)   -> tuple[FileMetrics, list[CloneSignature]]  # 실제 작업
+>
+> scan_repo(root)                 -> RatchetReport                              # 얇은 델리게이터
+> scan_repo_with_signatures(root) -> tuple[RatchetReport, list[CloneSignature]] # 실제 작업
+> ```
+>
+> `scan_repo` 의 공개 계약은 불변이므로 기존 테스트와 호출부는 영향이 없다. CLI 는
+> `scan_repo_with_signatures` 를 **한 번** 호출해 리포트와 시그니처를 동시에 얻는다.
 - Produces:
   - `format_clone_groups(groups: Sequence[CloneGroup]) -> str`
   - `format_dead_allowlist(keys: Sequence[str]) -> str`
@@ -1192,18 +1219,20 @@ class TestCloneReporting:
 
     def test_repository_has_no_dead_allowlist_entries(self) -> None:
         """면제가 stale 해지면 범위가 조용히 넓어진다 — 죽은 항목은 즉시 실패다."""
-        dead = unused_allowlist_keys(scan_repo_clone_signatures(REPO_ROOT))
+        _, signatures = scan_repo_with_signatures(REPO_ROOT)
+        dead = unused_allowlist_keys(signatures)
         assert not dead, format_dead_allowlist(dead)
 ```
 
-파일 상단 import 에 추가한다:
+파일 상단 import 에 추가한다(`scan_repo_with_signatures` 는 Task 3 이 이미 넣었을 수
+있으니 중복 import 하지 말고 기존 블록을 넓혀라):
 
 ```python
 from scripts._design_ratchet_clones import (
     CloneGroup,
     unused_allowlist_keys,
 )
-from scripts._design_ratchet_scan import scan_repo_clone_signatures
+from scripts._design_ratchet_scan import scan_repo_with_signatures
 from scripts.design_ratchet import format_clone_groups, format_dead_allowlist
 ```
 
@@ -1229,7 +1258,9 @@ Expected: FAIL — `ImportError: cannot import name 'format_clone_groups'`
    `without_paths`).
 2. 그 뒤에 clones import 블록을 새로 넣고, 기존
    `from scripts._design_ratchet_scan import scan_repo` 한 줄을
-   `scan_repo_clone_signatures` 를 포함하는 블록으로 넓힌다.
+   `scan_repo_with_signatures` 로 **교체**한다. CLI 는 리포트와 시그니처가 둘 다
+   필요하므로 `scan_repo` 는 더 이상 쓰지 않는다(`scan_repo` 자체는 다른 호출부·
+   테스트를 위해 모듈에 그대로 남아 있다).
 
 ```python
 from scripts._design_ratchet_clones import (  # noqa: E402
@@ -1238,10 +1269,7 @@ from scripts._design_ratchet_clones import (  # noqa: E402
     cross_file_clone_groups,
     unused_allowlist_keys,
 )
-from scripts._design_ratchet_scan import (  # noqa: E402
-    scan_repo,
-    scan_repo_clone_signatures,
-)
+from scripts._design_ratchet_scan import scan_repo_with_signatures  # noqa: E402
 ```
 
 `METRIC_TOTAL_FORMATTERS` 정의 아래에 포매터 두 개를 추가한다.
@@ -1288,10 +1316,9 @@ def format_dead_allowlist(keys: Sequence[str]) -> str:
 ```python
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    report = scan_repo(REPO_ROOT)
+    report, signatures = scan_repo_with_signatures(REPO_ROOT)
     print(format_totals(report))
 
-    signatures = scan_repo_clone_signatures(REPO_ROOT)
     print(format_clone_groups(cross_file_clone_groups(signatures)))
     dead = unused_allowlist_keys(signatures)
     if dead:
@@ -1766,7 +1793,7 @@ PR 본문에 포함할 것:
 **3. 타입 일관성** — Task 1 이 만든 `CloneSignature`(필드 `file`·`function`·`digest`·
 `node_count`, 프로퍼티 `member`)를 Task 2 가 `_sig` 헬퍼와 `_build_group` 에서 같은
 이름으로 쓰고, Task 3 이 `scan_file` 반환 타입
-`tuple[FileMetrics, list[CloneSignature]]` 에서, Task 4 가 `scan_repo_clone_signatures`
+`tuple[FileMetrics, list[CloneSignature]]` 에서, Task 4 가 `scan_repo_with_signatures`
 반환 타입에서 같게 쓴다. `CloneGroup`(필드 `members`·`files`·`node_count`, 프로퍼티
 `key`)은 Task 2 정의 → Task 4 `format_clone_groups` 소비로 일치. 두 모델은 baseline
 JSON 으로 직렬화되지 않는 내부 자료구조라 contracts 가 아니라
