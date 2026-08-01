@@ -17,7 +17,10 @@ from app.models.models import (
     SyntheticExperimentRun,
     User,
 )
-from app.services.synthetic_experiment import SAMPLE_STATUS_SUFFICIENT
+from app.services.synthetic_experiment import (
+    RESULT_METRICS_COLUMN,
+    SAMPLE_STATUS_SUFFICIENT,
+)
 from app.services.notifications.manager import (
     mask_notification_route_key,
     mask_notification_target,
@@ -354,7 +357,10 @@ class _G2EvidenceMixin:
         slug_only_results: list[dict[str, Any]] = []
         for run in runs:
             for result in run.results:
-                metrics = self._load_json_object(result.metrics_json)
+                metrics = self._load_json_object(
+                    result.metrics_json,
+                    context=RESULT_METRICS_COLUMN,
+                )
                 result_operator_id = self._optional_int(
                     metrics.get("operator_id") or metrics.get("current_operator_id")
                 )

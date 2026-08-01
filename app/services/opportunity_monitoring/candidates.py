@@ -30,6 +30,9 @@ from app.services.opportunity_monitoring.base import (
     StrategyCandidateEvaluation,
     _MonitoringBase,
 )
+from app.services.operator_strategy_tuning import (
+    CATEGORY_PRIORITY_OVERRIDES_COLUMN,
+)
 
 # Audit logging stays under the historical logger name ("app.services.
 # opportunity_monitoring", not the submodule) so the license-gate exclusion
@@ -267,7 +270,12 @@ class _CandidateCollectionMixin(_MonitoringBase):
             round(float(strategy.review_threshold or DEFAULT_OPERATOR_REVIEW_THRESHOLD), 4)
             != DEFAULT_OPERATOR_REVIEW_THRESHOLD,
             round(float(strategy.auto_workload_penalty_multiplier or 1.0), 4) != 1.0,
-            bool(self._load_json(strategy.category_priority_overrides or "{}")),
+            bool(
+                self._load_json(
+                    strategy.category_priority_overrides or "{}",
+                    context=CATEGORY_PRIORITY_OVERRIDES_COLUMN,
+                )
+            ),
             bool(strategy.notify_only_high_priority) is False,
             int(strategy.max_recommended_candidates or self.DEFAULT_LIMIT) != self.DEFAULT_LIMIT,
         ])

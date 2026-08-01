@@ -21,6 +21,9 @@ from app.services.opportunity_monitoring.base import (
     StrategyCandidateEvaluation,
     _MonitoringBase,
 )
+from app.services.opportunity_monitoring.serialization import (
+    MONITOR_RESULT_PAYLOAD_COLUMN,
+)
 
 
 class _OrchestrationMixin(_MonitoringBase):
@@ -135,7 +138,10 @@ class _OrchestrationMixin(_MonitoringBase):
             exclude_run_id=monitor_run.id,
             before_run_id=monitor_run.id,
         )
-        previous_result_payload = self._load_json(previous_run.result_payload if previous_run else None)
+        previous_result_payload = self._load_json(
+            previous_run.result_payload if previous_run else None,
+            context=MONITOR_RESULT_PAYLOAD_COLUMN,
+        )
         previous_candidate_project_ids = self._previous_candidate_project_ids(
             previous_result_payload
         )

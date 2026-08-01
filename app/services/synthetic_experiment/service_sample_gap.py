@@ -25,7 +25,7 @@ from .sample_gap import (
     _sample_gap_run_warnings,
     _sample_gap_source_context,
 )
-from .serialization import _json_loads
+from .serialization import RUN_SUMMARY_COLUMN, _json_loads
 
 
 class SampleGapPlanningMixin:
@@ -59,7 +59,7 @@ class SampleGapPlanningMixin:
         source_run_count = 0
 
         for run in runs:
-            summary = _json_loads(run.summary_json)
+            summary = _json_loads(run.summary_json, context=RUN_SUMMARY_COLUMN)
             if not isinstance(summary, dict):
                 legacy_run_ids.append(run.id)
                 continue

@@ -15,7 +15,7 @@ from .sample_gap import (
     _sample_gap_operator_slugs_match,
     _sample_gap_params_match,
 )
-from .serialization import _json_loads
+from .serialization import EXPERIMENT_OPERATOR_SLUGS_COLUMN, _json_loads
 
 
 class SampleGapCandidateMixin:
@@ -71,7 +71,10 @@ class SampleGapCandidateMixin:
         if definition is not None:
             return [str(slug) for slug in definition.get("operator_slugs") or []]
         if experiment is not None:
-            operator_slugs = _json_loads(experiment.operator_slugs_json) or []
+            operator_slugs = _json_loads(
+                experiment.operator_slugs_json,
+                context=EXPERIMENT_OPERATOR_SLUGS_COLUMN,
+            ) or []
             if isinstance(operator_slugs, list):
                 return [str(slug) for slug in operator_slugs]
         related_runs = gap.get("related_runs") or []

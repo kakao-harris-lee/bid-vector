@@ -26,6 +26,10 @@
 이 중 일부 복원 모델(``project_view`` / ``recommendation_feedback`` / 이메일·보류 레코드)
 은 아직 **읽기 계약 선언**까지다. KPI·리포트 소비처를 이 모델로 승격하는 작업은 값 테이블
 특성 테스트가 선행돼야 하므로 **Phase 4.3 으로 예약**한다(현 소비처는 종전 dict 경로 유지).
+
+G-2 증적 sweep 이벤트(``g2_candidate_recheck`` / ``collect_g2_evidence``)의 계약은
+per-operator 2모양 union 때문에 분량이 커서 :mod:`app.schemas.g2_evidence` 에 따로
+선언하고 여기서 레지스트리에만 등록한다(Phase 5).
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.constants import (
     BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE,
+    COLLECT_G2_EVIDENCE_EVENT_TYPE,
+    G2_CANDIDATE_RECHECK_EVENT_TYPE,
     PROJECT_VIEW_EVENT_TYPE,
     RECOMMENDATION_FEEDBACK_EVENT_TYPE,
     TELEGRAM_DELIVERY_EVENT_TYPE,
@@ -43,6 +49,12 @@ from app.core.constants import (
     TELEGRAM_STRATEGY_PENDING_EDIT_EVENT_TYPE,
 )
 from app.schemas._base import StrictModel
+from app.schemas.g2_evidence import (
+    G2CandidateRecheckSummary,
+    G2CollectEvidenceSummary,
+    PersistedG2CandidateRecheckSummary,
+    PersistedG2CollectEvidenceSummary,
+)
 
 __all__ = [
     "PERSISTED_EVENT_MODEL_BY_TYPE",
@@ -286,6 +298,8 @@ PersistedAnalyticsEvent = (
     | PersistedTelegramStrategyPendingEditEvent
     | PersistedProjectViewEvent
     | PersistedRecommendationFeedbackEvent
+    | PersistedG2CandidateRecheckSummary
+    | PersistedG2CollectEvidenceSummary
 )
 
 # 생산 union: 직렬화 단일 경로의 인자 타입.
@@ -295,6 +309,8 @@ AnalyticsEventPayload = (
     | BidReportEmailDeliveryEvent
     | TelegramStrategyPendingEditActivated
     | TelegramStrategyPendingEditCleared
+    | G2CandidateRecheckSummary
+    | G2CollectEvidenceSummary
     | AnalyticsEventEnvelope
 )
 
@@ -312,4 +328,6 @@ PERSISTED_EVENT_MODEL_BY_TYPE: dict[str, type[PersistedAnalyticsEvent]] = {
     ),
     PROJECT_VIEW_EVENT_TYPE: PersistedProjectViewEvent,
     RECOMMENDATION_FEEDBACK_EVENT_TYPE: PersistedRecommendationFeedbackEvent,
+    G2_CANDIDATE_RECHECK_EVENT_TYPE: PersistedG2CandidateRecheckSummary,
+    COLLECT_G2_EVIDENCE_EVENT_TYPE: PersistedG2CollectEvidenceSummary,
 }

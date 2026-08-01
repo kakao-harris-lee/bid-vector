@@ -15,7 +15,15 @@ from .constants import (
     _COMPARE_METRIC_KEYS,
 )
 from .sample_status import sample_status_for_settled_count
-from .serialization import _json_loads
+from .serialization import (
+    EXPERIMENT_OPERATOR_SLUGS_COLUMN,
+    EXPERIMENT_PARAMS_COLUMN,
+    RESULT_BREAKDOWN_COLUMN,
+    RESULT_METRICS_COLUMN,
+    RESULT_SETTLEMENT_SAMPLE_COLUMN,
+    RUN_SUMMARY_COLUMN,
+    _json_loads,
+)
 
 
 class RunSerializationMixin:
@@ -26,8 +34,11 @@ class RunSerializationMixin:
             "id": experiment.id,
             "name": experiment.name,
             "description": experiment.description,
-            "params": _json_loads(experiment.params_json) or {},
-            "operator_slugs": _json_loads(experiment.operator_slugs_json) or [],
+            "params": _json_loads(experiment.params_json, context=EXPERIMENT_PARAMS_COLUMN) or {},
+            "operator_slugs": _json_loads(
+                experiment.operator_slugs_json,
+                context=EXPERIMENT_OPERATOR_SLUGS_COLUMN,
+            ) or [],
             "created_at": experiment.created_at,
             "updated_at": experiment.updated_at,
             "runs": [self.serialize_run_summary(run) for run in experiment.runs],
@@ -42,7 +53,7 @@ class RunSerializationMixin:
             "started_at": run.started_at,
             "finished_at": run.finished_at,
             "error": run.error,
-            "summary": _json_loads(run.summary_json),
+            "summary": _json_loads(run.summary_json, context=RUN_SUMMARY_COLUMN),
             "created_at": run.created_at,
         }
 
@@ -51,12 +62,15 @@ class RunSerializationMixin:
         payload["results"] = [
             {
                 **sample_status_for_settled_count(
-                    int((_json_loads(item.metrics_json) or {}).get("settled_count") or 0)
+                    int((_json_loads(item.metrics_json, context=RESULT_METRICS_COLUMN) or {}).get("settled_count") or 0)
                 ),
                 "operator_slug": item.operator_slug,
-                "metrics": _json_loads(item.metrics_json) or {},
-                "settlement_sample": _json_loads(item.settlement_sample_json),
-                "breakdown": _json_loads(item.breakdown_json) or _empty_breakdown(),
+                "metrics": _json_loads(item.metrics_json, context=RESULT_METRICS_COLUMN) or {},
+                "settlement_sample": _json_loads(
+                    item.settlement_sample_json,
+                    context=RESULT_SETTLEMENT_SAMPLE_COLUMN,
+                ),
+                "breakdown": _json_loads(item.breakdown_json, context=RESULT_BREAKDOWN_COLUMN) or _empty_breakdown(),
             }
             for item in run.results
         ]
@@ -80,7 +94,7 @@ class RunSerializationMixin:
         )
         writer.writeheader()
         for item in run.results:
-            metrics = _json_loads(item.metrics_json) or {}
+            metrics = _json_loads(item.metrics_json, context=RESULT_METRICS_COLUMN) or {}
             row: dict[str, Any] = {}
             for column in EXPORT_CSV_COLUMNS:
                 if column == "operator_slug":
@@ -106,7 +120,7 @@ class RunSerializationMixin:
         return {
             "id": run.id,
             "experiment_id": run.experiment_id,
-            "summary": _json_loads(run.summary_json),
+            "summary": _json_loads(run.summary_json, context=RUN_SUMMARY_COLUMN),
         }
 
     @staticmethod
@@ -141,11 +155,11 @@ class RunSerializationMixin:
             return None
 
         metrics_a = {
-            item.operator_slug: (_json_loads(item.metrics_json) or {})
+            item.operator_slug: (_json_loads(item.metrics_json, context=RESULT_METRICS_COLUMN) or {})
             for item in run_a.results
         }
         metrics_b = {
-            item.operator_slug: (_json_loads(item.metrics_json) or {})
+            item.operator_slug: (_json_loads(item.metrics_json, context=RESULT_METRICS_COLUMN) or {})
             for item in run_b.results
         }
 

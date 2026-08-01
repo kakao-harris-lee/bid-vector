@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import settings
 from app.domain.aggregates import average
 from app.services.smoke_failure_taxonomy import SMOKE_FAILURE_CATEGORIES
+from app.services.stored_json_payload import load_stored_json_object
 
 
 class _AnalyticsReportingBase:
@@ -90,15 +90,21 @@ class _AnalyticsReportingBase:
             return "watch"
         return "healthy"
 
-    def _load_json_object(self, raw_payload: Any) -> dict[str, Any]:
-        """Parse a JSON object payload, returning an empty dict for invalid data."""
+    def _load_json_object(
+        self, raw_payload: Any, *, context: str = ""
+    ) -> dict[str, Any]:
+        """Restore a stored JSON object, degrading to an empty dict.
+
+        Decoding + the shape check live in the shared restore path
+        (``app.services.stored_json_payload``); this reporting layer only declares
+        its degrade policy: an unreadable payload renders as an *empty* object so
+        the surrounding dashboard row still renders (``None`` would break every
+        ``summary.get(...)`` consumer). ``context`` labels the column in the
+        degrade warning.
+        """
         if isinstance(raw_payload, dict):
             return raw_payload
-        try:
-            payload = json.loads(str(raw_payload or "{}"))
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        return load_stored_json_object(str(raw_payload or "{}"), context=context) or {}
 
     def _count_payloads_by_key(self, payloads: list[dict[str, Any]], key: str) -> dict[str, int]:
         """Count arbitrary payload values by one key."""

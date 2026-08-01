@@ -21,6 +21,8 @@ from pydantic import ValidationError
 
 from app.core.constants import (
     BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE,
+    COLLECT_G2_EVIDENCE_EVENT_TYPE,
+    G2_CANDIDATE_RECHECK_EVENT_TYPE,
     INTERNAL_TELEMETRY_EVENT_TYPES,
     PROJECT_VIEW_EVENT_TYPE,
     RECOMMENDATION_FEEDBACK_EVENT_TYPE,
@@ -42,6 +44,10 @@ from app.schemas.analytics_events import (
     TelegramDeliverySuppressedEvent,
     TelegramStrategyPendingEditActivated,
     TelegramStrategyPendingEditCleared,
+)
+from app.schemas.g2_evidence import (
+    PersistedG2CandidateRecheckSummary,
+    PersistedG2CollectEvidenceSummary,
 )
 from app.services.analytics_event_payload import (
     dump_analytics_event,
@@ -306,6 +312,8 @@ def test_registry_covers_every_declared_event_type():
         BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE,
         PROJECT_VIEW_EVENT_TYPE,
         RECOMMENDATION_FEEDBACK_EVENT_TYPE,
+        G2_CANDIDATE_RECHECK_EVENT_TYPE,
+        COLLECT_G2_EVIDENCE_EVENT_TYPE,
     }
     # 내부 텔레메트리로 선언된 타입은 전부 복원 계약을 가져야 한다.
     assert INTERNAL_TELEMETRY_EVENT_TYPES <= set(PERSISTED_EVENT_MODEL_BY_TYPE)
@@ -326,6 +334,8 @@ def test_registry_covers_every_declared_event_type():
         (BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE, PersistedBidReportEmailDeliveryEvent),
         (PROJECT_VIEW_EVENT_TYPE, PersistedProjectViewEvent),
         (RECOMMENDATION_FEEDBACK_EVENT_TYPE, PersistedRecommendationFeedbackEvent),
+        (G2_CANDIDATE_RECHECK_EVENT_TYPE, PersistedG2CandidateRecheckSummary),
+        (COLLECT_G2_EVIDENCE_EVENT_TYPE, PersistedG2CollectEvidenceSummary),
     ],
 )
 def test_registry_dispatches_to_the_declared_model(event_type, model):
@@ -359,6 +369,8 @@ def test_event_type_wire_values_are_pinned():
     assert BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE == "email.bid_report.delivery"
     assert PROJECT_VIEW_EVENT_TYPE == "project_view"
     assert RECOMMENDATION_FEEDBACK_EVENT_TYPE == "recommendation_feedback"
+    assert G2_CANDIDATE_RECHECK_EVENT_TYPE == "g2_candidate_recheck"
+    assert COLLECT_G2_EVIDENCE_EVENT_TYPE == "collect_g2_evidence"
 
 
 @pytest.mark.parametrize(

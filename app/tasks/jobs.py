@@ -490,10 +490,12 @@ def run_g2_candidate_recheck() -> dict:
     """Daily read-only G-2 candidate re-check across synthetic operators.
 
     Thin shell: body in ``app.tasks.evidence_jobs``; the session lifecycle stays
-    here via the shared ``task_session`` seam.
+    here via the shared ``task_session`` seam. The body returns the typed summary;
+    the shell lowers it to a JSON-safe dict for the celery result backend (whose
+    json serializer cannot carry a pydantic model).
     """
     with task_session() as db:
-        return run_g2_candidate_recheck_job(db)
+        return run_g2_candidate_recheck_job(db).model_dump(mode="json")
 
 
 @celery_app.task(name=COLLECT_G2_EVIDENCE_TASK_NAME)
@@ -504,7 +506,8 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
     via the shared ``task_session`` seam, and ``_write_g2_daily_evidence_draft``
     (patched via this module in tests) is injected by name — the injected
     reference is resolved from this module's globals at call time, honouring the
-    monkeypatch.
+    monkeypatch. The typed summary is lowered to a JSON-safe dict for the result
+    backend (same reason as ``run_g2_candidate_recheck``).
     """
     with task_session() as db:
         return run_collect_g2_evidence_job(
@@ -512,7 +515,7 @@ def collect_g2_evidence(window_days: int = 30, recent_limit: int = 5) -> dict:
             window_days=window_days,
             recent_limit=recent_limit,
             write_daily_draft=_write_g2_daily_evidence_draft,
-        )
+        ).model_dump(mode="json")
 
 
 @celery_app.task(name=RECONCILE_STALE_TASK_RUNS_TASK_NAME)

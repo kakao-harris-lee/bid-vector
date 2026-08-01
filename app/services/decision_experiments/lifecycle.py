@@ -23,7 +23,10 @@ from app.schemas.schemas import (
     DecisionExperimentStrategyApplyRequest,
     DecisionExperimentThresholdApplyRequest,
 )
-from app.services.decision_experiments.base import _DecisionExperimentBase
+from app.services.decision_experiments.base import (
+    BASELINE_SUMMARY_COLUMN,
+    _DecisionExperimentBase,
+)
 from app.services.decision_experiments.verdict_machine import (
     _DEFAULT_STATUS_EFFECT,
     _EVALUATION_LIFECYCLE_RULES,
@@ -147,7 +150,7 @@ class _LifecycleMixin(_DecisionExperimentBase):
         target_operator = self._resolve_operator(db, operator=operator)
         run = self._get_run_or_raise(db, run_id=run_id, operator=target_operator)
         run_started_at = ensure_utc(run.started_at)
-        baseline_summary = self._load_json(run.baseline_summary, fallback=self._empty_snapshot(run_started_at, run_started_at))
+        baseline_summary = self._load_json(run.baseline_summary, fallback=self._empty_snapshot(run_started_at, run_started_at), context=BASELINE_SUMMARY_COLUMN)
         return {
             **self._operator_context_fields(target_operator),
             "run": self._serialize_run(run),
@@ -168,7 +171,7 @@ class _LifecycleMixin(_DecisionExperimentBase):
         run_started_at = ensure_utc(run.started_at)
         scheduled_end = run_started_at + timedelta(days=int(run.duration_days or 0))
         evaluation_window_end = run_started_at if now < run_started_at else min(now, scheduled_end)
-        baseline_summary = self._load_json(run.baseline_summary, fallback=self._empty_snapshot(run_started_at, run_started_at))
+        baseline_summary = self._load_json(run.baseline_summary, fallback=self._empty_snapshot(run_started_at, run_started_at), context=BASELINE_SUMMARY_COLUMN)
         current_summary = self._build_snapshot(
             db,
             operator_id=int(run.operator_id),

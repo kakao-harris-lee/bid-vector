@@ -36,15 +36,24 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.core.config import settings  # noqa: E402
+from app.core.constants import COLLECT_G2_EVIDENCE_EVENT_TYPE  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.time import to_kst  # noqa: E402
 from app.models.models import Analytics  # noqa: E402
+from app.schemas.g2_evidence import (  # noqa: E402
+    PersistedG2CollectEvidenceSummary,
+)
+from app.services.analytics_event_payload import load_analytics_event_as  # noqa: E402
 from app.services.g2_evidence_draft import build_daily_evidence_draft  # noqa: E402
+
+# A snapshot whose payload cannot be decoded at all: no per-operator cells, so
+# every target reconstructs as ``missing_snapshot`` and the day cannot pass.
+_UNREADABLE_SNAPSHOT = PersistedG2CollectEvidenceSummary()
 
 
 def reconstruct_pass_draft(
     *,
-    event_data: dict[str, Any],
+    event_data: PersistedG2CollectEvidenceSummary,
     target_operator_ids: list[int],
     required_days: int,
     run_date_kst: str,
@@ -54,11 +63,16 @@ def reconstruct_pass_draft(
     Reuses ``build_daily_evidence_draft`` as the single source of truth for the
     daily pass rule: the draft is returned only when its ``daily_status`` verdict
     is ``pass`` (all targets present + ready + zero blocking gaps).
+
+    ``event_data`` is the *restored* contract (:mod:`app.schemas.g2_evidence`), so
+    a key the producer never wrote reads as ``None`` rather than ``0`` — and an
+    unrecorded ``blocking_gaps_count`` is treated as an incomplete snapshot rather
+    than as "no blocking gaps" (see the fail-closed branch below).
     """
     per_operator = {
-        int(item["operator_id"]): item
-        for item in event_data.get("per_operator") or []
-        if item.get("operator_id") is not None
+        int(item.operator_id): item
+        for item in event_data.per_operator or []
+        if item.operator_id is not None
     }
     summaries: list[dict[str, Any]] = []
     for tid in target_operator_ids:
@@ -68,25 +82,39 @@ def reconstruct_pass_draft(
                 {"operator_id": int(tid), "username": None, "error": "missing_snapshot"}
             )
             continue
-        if snap.get("error"):
+        if snap.error:
             summaries.append(
                 {
                     "operator_id": int(tid),
-                    "username": snap.get("username"),
-                    "error": str(snap.get("error")),
+                    "username": snap.username,
+                    "error": str(snap.error),
+                }
+            )
+            continue
+        if snap.blocking_gaps_count is None:
+            # Fail closed: a snapshot with no recorded gap count cannot certify
+            # "zero blocking gaps". Reading the absence as ``0`` would fabricate a
+            # counted day out of a row that never recorded one (§2 정직 명세). The
+            # live producer has always written this key, so this only ever blocks
+            # corrupted/legacy rows — it can lower counted_days, never raise it.
+            summaries.append(
+                {
+                    "operator_id": int(tid),
+                    "username": snap.username,
+                    "error": "incomplete_snapshot",
                 }
             )
             continue
         # The stored compact carries blocking_gaps_count, not the gap list; a
         # count>0 must still block the day, so synthesize placeholder gap rows
         # that only ever appear on a non-pass day (which is dropped below).
-        gap_count = int(snap.get("blocking_gaps_count") or 0)
+        gap_count = int(snap.blocking_gaps_count)
         summaries.append(
             {
                 "operator_id": int(tid),
-                "username": snap.get("username"),
-                "evidence_status": str(snap.get("evidence_status") or ""),
-                "sections": dict(snap.get("sections") or {}),
+                "username": snap.username,
+                "evidence_status": str(snap.evidence_status or ""),
+                "sections": dict(snap.sections or {}),
                 "blocking_gaps": [f"blocking gap #{i}" for i in range(1, gap_count + 1)],
             }
         )
@@ -100,17 +128,9 @@ def reconstruct_pass_draft(
     return draft if draft["daily_status"][0]["status"] == "pass" else None
 
 
-def _safe_json(raw: str | None) -> dict[str, Any]:
-    try:
-        value = json.loads(raw or "{}")
-    except (TypeError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 def select_pass_drafts(
     *,
-    snapshots: list[tuple[Any, dict[str, Any]]],
+    snapshots: list[tuple[Any, PersistedG2CollectEvidenceSummary]],
     target_operator_ids: list[int],
     required_days: int,
 ) -> dict[str, dict[str, Any]]:
@@ -123,7 +143,7 @@ def select_pass_drafts(
     snapshot is therefore NOT counted — same as the live beat would have left it
     — which avoids over-counting an intra-day-only pass.
     """
-    latest: dict[str, tuple[Any, dict[str, Any]]] = {}
+    latest: dict[str, tuple[Any, PersistedG2CollectEvidenceSummary]] = {}
     for timestamp, event_data in snapshots:
         if timestamp is None:
             continue
@@ -151,11 +171,22 @@ def _passing_dates(
     """Load ``collect_g2_evidence`` snapshots and reconstruct per-day pass drafts."""
     rows = (
         db.query(Analytics)
-        .filter(Analytics.event_type == "collect_g2_evidence")
+        .filter(Analytics.event_type == COLLECT_G2_EVIDENCE_EVENT_TYPE)
         .order_by(Analytics.timestamp.asc())
         .all()
     )
-    snapshots = [(row.timestamp, _safe_json(row.event_data)) for row in rows]
+    snapshots = [
+        (
+            row.timestamp,
+            load_analytics_event_as(
+                row.event_data,
+                model=PersistedG2CollectEvidenceSummary,
+                event_type=COLLECT_G2_EVIDENCE_EVENT_TYPE,
+            )
+            or _UNREADABLE_SNAPSHOT,
+        )
+        for row in rows
+    ]
     return select_pass_drafts(
         snapshots=snapshots,
         target_operator_ids=target_operator_ids,

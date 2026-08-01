@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.schemas.g2_evidence import PersistedG2CollectEvidenceSummary
 from scripts.backfill_g2_daily_drafts import reconstruct_pass_draft, select_pass_drafts
 
 TARGET_IDS = [19, 20, 25]
@@ -33,7 +34,13 @@ def _op(operator_id, *, status="ready", gaps=0, slug="op"):
 
 
 def _event(ops):
-    return {"per_operator": ops}
+    """Restore a stored snapshot row into the persisted contract.
+
+    Fixtures stay raw dicts on purpose: they stand in for rows written by the
+    producer, so the restore path (``extra="ignore"`` + optional fields) is part
+    of what these tests exercise.
+    """
+    return PersistedG2CollectEvidenceSummary.model_validate({"per_operator": ops})
 
 
 def test_all_targets_ready_reconstructs_a_pass_draft():
@@ -91,11 +98,86 @@ def test_errored_target_does_not_reconstruct():
     assert draft is None
 
 
+def test_unknown_stored_keys_are_ignored_on_restore():
+    """A row written by a newer/older producer must not break the backfill."""
+    ops = [{**_op(19), "future_key": 1}, _op(20), _op(25)]
+    draft = reconstruct_pass_draft(
+        event_data=_event(ops),
+        target_operator_ids=TARGET_IDS,
+        required_days=7,
+        run_date_kst="2026-07-06",
+    )
+    assert draft is not None
+    assert draft["daily_status"][0]["status"] == "pass"
+
+
+def test_unrecorded_blocking_gap_count_fails_closed():
+    """A snapshot missing ``blocking_gaps_count`` cannot certify a counted day.
+
+    Restoring the absent key as ``0`` would fabricate "zero blocking gaps" for a
+    row that never recorded one, so the target is treated as an incomplete
+    snapshot and the day is not counted.
+    """
+    partial = {key: value for key, value in _op(25).items() if key != "blocking_gaps_count"}
+    draft = reconstruct_pass_draft(
+        event_data=_event([_op(19), _op(20), partial]),
+        target_operator_ids=TARGET_IDS,
+        required_days=7,
+        run_date_kst="2026-07-06",
+    )
+    assert draft is None
+
+
+def test_unrecorded_blocking_gap_count_is_classified_as_incomplete(monkeypatch):
+    """왜 통과하지 않았는지까지 고정한다 — "gap 0" 오독이 아니라 불완전 스냅샷 분류.
+
+    통과하지 않은 날은 draft 가 버려지므로, 판정 입력(``operator_summaries``)을 직접
+    붙잡아 그 target 이 ``incomplete_snapshot`` 에러로 분류됐는지 확인한다.
+    """
+    import scripts.backfill_g2_daily_drafts as mod
+
+    captured: dict = {}
+    real_builder = mod.build_daily_evidence_draft
+
+    def _spy(*, operator_summaries, **kwargs):
+        captured["summaries"] = operator_summaries
+        return real_builder(operator_summaries=operator_summaries, **kwargs)
+
+    monkeypatch.setattr(mod, "build_daily_evidence_draft", _spy)
+
+    partial = {key: value for key, value in _op(25).items() if key != "blocking_gaps_count"}
+    assert (
+        reconstruct_pass_draft(
+            event_data=_event([_op(19), _op(20), partial]),
+            target_operator_ids=TARGET_IDS,
+            required_days=7,
+            run_date_kst="2026-07-06",
+        )
+        is None
+    )
+
+    by_id = {item["operator_id"]: item for item in captured["summaries"]}
+    assert by_id[25]["error"] == "incomplete_snapshot"
+    # 완전한 스냅샷은 그대로 정상 셀로 남는다(불완전 분류가 번지지 않는다).
+    assert "error" not in by_id[19]
+    assert by_id[19]["blocking_gaps"] == []
+
+
+def test_undecodable_snapshot_row_is_not_counted():
+    """A corrupted ``event_data`` row degrades to "no snapshot", never to a pass."""
+    out = select_pass_drafts(
+        snapshots=[(_MORNING, PersistedG2CollectEvidenceSummary())],
+        target_operator_ids=TARGET_IDS,
+        required_days=7,
+    )
+    assert out == {}
+
+
 # 2026-07-06: 01:00 UTC = 10:00 KST, 13:00 UTC = 22:00 KST (same KST date).
 _MORNING = datetime(2026, 7, 6, 1, 0, tzinfo=timezone.utc)
 _EVENING = datetime(2026, 7, 6, 13, 0, tzinfo=timezone.utc)
-_READY = {"per_operator": [_op(19), _op(20), _op(25)]}
-_FLICKER = {"per_operator": [_op(19), _op(20), _op(25, status="insufficient")]}
+_READY = _event([_op(19), _op(20), _op(25)])
+_FLICKER = _event([_op(19), _op(20), _op(25, status="insufficient")])
 
 
 def test_flicker_uses_last_snapshot_of_day_and_drops_it():

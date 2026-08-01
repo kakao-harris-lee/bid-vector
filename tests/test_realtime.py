@@ -221,3 +221,133 @@ def test_realtime_auth_can_be_disabled_for_local_development(client, monkeypatch
 def test_realtime_listener_reconnect_backoff_default():
     """리스너 재접속 백오프 Settings 기본값이 기존 리터럴(5s)과 동일한지 확인."""
     assert settings.REALTIME_LISTENER_RECONNECT_BACKOFF_SECONDS == 5.0
+
+
+# --- pg_notify wire 계약 (발신 model_dump_json / 수신 model_validate_json) ---------
+class _RecordingManager:
+    """``receive_fanout_event`` 만 기록하는 최소 매니저 스텁."""
+
+    def __init__(self) -> None:
+        self.received: list[tuple[dict, str]] = []
+
+    async def receive_fanout_event(self, event: dict, *, publisher_id: str) -> None:
+        self.received.append((event, publisher_id))
+
+
+def _postgres_backend_with_manager():
+    from app.services.realtime import PostgresNotifyRealtimeFanoutBackend
+
+    backend = PostgresNotifyRealtimeFanoutBackend(
+        database_url="postgresql+psycopg://user:pw@localhost/db",
+        channel="bid_vector_realtime_events",
+    )
+    manager = _RecordingManager()
+    backend._manager = manager
+    return backend, manager
+
+
+def test_fanout_publish_string_matches_legacy_compact_dumps():
+    """NOTIFY 문자열이 종전 ``json.dumps(separators=(",", ":"))`` 산출과 동일해야 한다."""
+    import json
+
+    from app.schemas.realtime import RealtimeEvent, RealtimeFanoutEnvelope
+
+    event = {
+        "event_id": "e-1",
+        "event_type": "project.created",
+        "created_at": "2026-05-12T00:00:00+00:00",
+        "payload": {"project_id": 7, "title": "한글 공고"},
+    }
+    legacy = json.dumps(
+        {"publisher_id": "pub-1", "event": event},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    current = RealtimeFanoutEnvelope(
+        publisher_id="pub-1",
+        event=RealtimeEvent.model_validate(event),
+    ).model_dump_json()
+
+    assert current == legacy
+
+
+def test_fanout_receive_forwards_event_and_publisher_id():
+    backend, manager = _postgres_backend_with_manager()
+    raw = (
+        '{"publisher_id":"other-process","event":{"event_id":"e-1",'
+        '"event_type":"project.created","created_at":"2026-05-12T00:00:00+00:00",'
+        '"payload":{"project_id":7}}}'
+    )
+
+    asyncio.run(backend._handle_notification_payload(raw))
+
+    event, publisher_id = manager.received[0]
+    assert publisher_id == "other-process"
+    assert event["event_type"] == "project.created"
+    assert event["payload"] == {"project_id": 7}
+
+
+def test_fanout_receive_warns_once_on_malformed_json(caplog):
+    backend, manager = _postgres_backend_with_manager()
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(backend._handle_notification_payload("{not json"))
+
+    assert manager.received == []
+    assert "malformed realtime fanout payload" in caplog.text
+    # 원문은 로그에 남기지 않는다(§8).
+    assert "not json" not in caplog.text
+
+
+def test_fanout_receive_drops_non_object_event_silently(caplog):
+    """``event`` 가 객체가 아니면 종전처럼 조용히 버린다(경고 없음)."""
+    backend, manager = _postgres_backend_with_manager()
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(
+            backend._handle_notification_payload('{"publisher_id":"p","event":"nope"}')
+        )
+        asyncio.run(backend._handle_notification_payload('{"publisher_id":"p"}'))
+
+    assert manager.received == []
+    assert caplog.text == ""
+
+
+def test_fanout_receive_tolerates_non_object_payload_and_unknown_keys():
+    """payload 가 객체가 아니어도 이벤트는 살아남고, 모르는 키는 무시된다."""
+    backend, manager = _postgres_backend_with_manager()
+    raw = (
+        '{"publisher_id":"p","future_top_key":1,"event":{"event_id":"e-2",'
+        '"event_type":"remote.event","created_at":"2026-05-12T00:00:00+00:00",'
+        '"payload":"not-an-object","future_event_key":2}}'
+    )
+
+    asyncio.run(backend._handle_notification_payload(raw))
+
+    event, _ = manager.received[0]
+    assert event["event_type"] == "remote.event"
+    assert event["payload"] is None
+    assert "future_event_key" not in event
+
+
+def test_manager_normalizes_payloadless_remote_event_to_empty_dict():
+    """수신 이벤트의 payload 부재는 매니저가 ``{}`` 로 정규화한다(종전 판정 유지)."""
+    manager = RealtimeEventManager(history_limit=3)
+
+    asyncio.run(
+        manager.receive_fanout_event(
+            {
+                "event_id": None,
+                "event_type": "remote.event",
+                "created_at": None,
+                "payload": None,
+            },
+            publisher_id="other-process",
+        )
+    )
+
+    recorded = manager.recent_events()[-1]
+    assert recorded["event_type"] == "remote.event"
+    assert recorded["payload"] == {}
+    assert recorded["event_id"]
+    assert recorded["created_at"]

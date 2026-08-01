@@ -2,6 +2,14 @@
 
 Payload helpers shared across the monitoring mixins, moved verbatim from the
 original ``opportunity_monitoring`` module.
+
+The **load** half delegates to the shared restore path
+(:mod:`app.services.stored_json_payload`). The **dump** half still calls
+``json.dumps(default=str)``: that fallback is the serialization contract for the
+monitor ``result_payload`` (an open response dict), so moving it to pydantic needs
+a key contract for that payload first — otherwise the stored string changes. The
+``request_payload`` half already has a model and is dumped by it
+(``runs.py``: ``request.model_dump_json()``).
 """
 
 from __future__ import annotations
@@ -9,6 +17,12 @@ from __future__ import annotations
 import json
 
 from app.services.opportunity_monitoring.base import _MonitoringBase
+from app.services.stored_json_payload import load_stored_json_object
+
+# degrade 경고에서 어느 컬럼이 해석 불가였는지 특정하는 라벨(§4.5-1 단일 출처 — 같은
+# 리터럴이 runs.py / orchestration.py 에 흩어져 있으면 한쪽만 바뀌어 로그가 갈라진다).
+MONITOR_REQUEST_PAYLOAD_COLUMN = "operator_strategy_run.request_payload"
+MONITOR_RESULT_PAYLOAD_COLUMN = "operator_strategy_run.result_payload"
 
 
 class _SerializationMixin(_MonitoringBase):
@@ -18,15 +32,14 @@ class _SerializationMixin(_MonitoringBase):
         """Serialize monitoring payloads without escaping Korean text."""
         return json.dumps(payload, ensure_ascii=False, default=str)
 
-    def _load_json(self, raw_payload: str | None) -> dict:
-        """Parse stored JSON payloads defensively for empty or legacy rows."""
-        if not raw_payload:
-            return {}
-        try:
-            parsed = json.loads(raw_payload)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
+    def _load_json(self, raw_payload: str | None, *, context: str = "") -> dict:
+        """Restore a stored monitoring payload, degrading to an empty dict.
+
+        Empty dict (not ``None``) is this layer's degrade policy: every consumer
+        does ``payload.get("results", [])``, so a corrupt row must render as "no
+        results" rather than break the run diff.
+        """
+        return load_stored_json_object(raw_payload, context=context) or {}
 
     def _extract_result_items(self, payload: dict) -> list[dict]:
         """Return valid monitor result items from a stored payload."""

@@ -82,13 +82,29 @@ from .sample_report import (
     build_sample_report,
 )
 from .sample_status import aggregate_sample_status, sample_status_for_settled_count
-from .serialization import _json_dumps, _json_loads, _parse_dt
+from .serialization import (
+    EXPERIMENT_OPERATOR_SLUGS_COLUMN,
+    EXPERIMENT_PARAMS_COLUMN,
+    RESULT_BREAKDOWN_COLUMN,
+    RESULT_METRICS_COLUMN,
+    RESULT_SETTLEMENT_SAMPLE_COLUMN,
+    RUN_SUMMARY_COLUMN,
+    _json_dumps,
+    _json_loads,
+    _parse_dt,
+)
 from .service import SyntheticExperimentService
 
 __all__ = [
     "BUDGET_BAND_BOUNDARIES",
     "BUDGET_BAND_TOP_KEY",
+    "EXPERIMENT_OPERATOR_SLUGS_COLUMN",
+    "EXPERIMENT_PARAMS_COLUMN",
     "EXPORT_CSV_COLUMNS",
+    "RESULT_BREAKDOWN_COLUMN",
+    "RESULT_METRICS_COLUMN",
+    "RESULT_SETTLEMENT_SAMPLE_COLUMN",
+    "RUN_SUMMARY_COLUMN",
     "REPORT_STATUS_DATA_MIXED",
     "REPORT_STATUS_READY",
     "RUN_STATUS_COMPLETED",
