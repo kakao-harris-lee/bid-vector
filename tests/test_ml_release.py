@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.models.models import Project
 from app.services.classifier import NoticeClassifierService
 from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
+from app.services.ml_release.base import build_preflight_check
 
 
 def _write_embedding_snapshot(path: Path) -> Path:
@@ -966,3 +967,80 @@ def test_default_repo_root_points_at_repository_root():
     expected_repo_root = Path(app.__file__).resolve().parents[1]
 
     assert MLReleasePromotionService().repo_root == expected_repo_root
+
+
+# --- preflight check payload -------------------------------------------------
+# Release preflight (``_MLReleaseBase._rollout_check``) and object-storage
+# preflight (``_ObjectStorageBase._check``) built this payload separately with
+# byte-identical bodies. Both results are consumed as one ``checks`` array
+# (``_finalize_preflight`` reads ``passed``/``detail``), so the shape below is a
+# contract, not an implementation detail. These pin what both copies produced.
+
+
+@pytest.mark.parametrize(
+    ("args", "extra", "expected"),
+    [
+        (
+            ("artifact_paths", True, "passed", "3 artifacts resolved"),
+            {},
+            {
+                "name": "artifact_paths",
+                "passed": True,
+                "status": "passed",
+                "detail": "3 artifacts resolved",
+            },
+        ),
+        (
+            ("manifest_signature", False, "failed", "signature missing"),
+            {},
+            {
+                "name": "manifest_signature",
+                "passed": False,
+                "status": "failed",
+                "detail": "signature missing",
+            },
+        ),
+        (
+            ("write_probe", 1, "passed", "ok"),
+            {"object_name": "preflight/x.json", "bytes": 12},
+            {
+                "name": "write_probe",
+                "passed": True,
+                "status": "passed",
+                "detail": "ok",
+                "object_name": "preflight/x.json",
+                "bytes": 12,
+            },
+        ),
+        # Falsy non-bools narrow to False; the consumer compares with ``is True``.
+        (
+            ("write_probe", "", "skipped", ""),
+            {},
+            {"name": "write_probe", "passed": False, "status": "skipped", "detail": ""},
+        ),
+        (
+            ("write_probe", None, "skipped", "no store"),
+            {},
+            {
+                "name": "write_probe",
+                "passed": False,
+                "status": "skipped",
+                "detail": "no store",
+            },
+        ),
+    ],
+)
+def test_build_preflight_check_payload(args, extra, expected):
+    assert build_preflight_check(*args, **extra) == expected
+
+
+def test_build_preflight_check_keeps_fixed_keys_first():
+    payload = build_preflight_check("n", True, "passed", "d", bytes=1, object_name="o")
+
+    assert list(payload) == ["name", "passed", "status", "detail", "bytes", "object_name"]
+
+
+def test_build_preflight_check_extras_cannot_shadow_fixed_keys():
+    """``status`` and friends are named parameters, so an extra cannot overwrite them."""
+    with pytest.raises(TypeError):
+        build_preflight_check("n", True, "passed", "d", **{"status": "spoofed"})
