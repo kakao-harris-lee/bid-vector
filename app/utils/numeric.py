@@ -45,5 +45,9 @@ def optional_float(value: Any) -> float | None:
 
 
 def optional_int(value: Any) -> int | None:
-    """Coerce ``value`` to ``int``, or ``None`` when it is not an integer."""
+    """Coerce ``value`` to ``int``, or ``None`` when ``int()`` rejects it.
+
+    ``int()`` 의 계약을 그대로 따른다: ``1.9`` 같은 float 는 절사되어 ``1`` 이
+    되고, ``"1.9"`` 같은 소수 문자열은 ``ValueError`` 라 ``None`` 이 된다.
+    """
     return coerce_or_none(value, int)

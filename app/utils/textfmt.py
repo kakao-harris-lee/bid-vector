@@ -41,7 +41,7 @@ def optional_text(value: Any) -> str | None:
 
 
 def normalize_lookup_key(value: Any, aliases: Mapping[str, str]) -> str:
-    """Casefold ``value`` into a lookup key, resolving ``aliases`` to canonical.
+    """Lowercase ``value`` into a lookup key, resolving ``aliases`` to canonical.
 
     Keys outside ``aliases`` pass through unchanged, so an unknown label stays
     visible to the caller instead of collapsing into a default bucket.
