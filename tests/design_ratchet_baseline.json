@@ -126,7 +126,7 @@
       "dict_boundary_functions": 2
     },
     "app/api/operator_common.py": {
-      "dict_boundary_functions": 1
+      "dict_boundary_functions": 2
     },
     "app/api/operator_dashboard.py": {
       "functions_over_soft_limit": 2,

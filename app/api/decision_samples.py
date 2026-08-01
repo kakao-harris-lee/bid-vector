@@ -14,6 +14,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
+from app.api.operator_common import _with_current_operator
 from app.core.database import get_db
 from app.core.security import get_current_operator_optional
 from app.core.single_user import resolve_read_operator
@@ -29,12 +30,6 @@ router = APIRouter()
 # policy (canonical fallback / 403 / 404). Kept as a thin alias so the existing
 # call site and its name remain stable.
 _resolve_samples_operator = resolve_read_operator
-
-
-def _with_current_operator(payload: dict, operator: User) -> dict:
-    payload["current_operator_id"] = int(operator.id)
-    payload["current_operator_username"] = str(operator.username or "")
-    return payload
 
 
 @router.get(

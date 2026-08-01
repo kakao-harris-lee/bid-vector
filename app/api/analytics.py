@@ -3,6 +3,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.operator_common import _with_current_operator
 from app.core.constants import INTERNAL_TELEMETRY_EVENT_TYPES as SHARED_INTERNAL_TELEMETRY_EVENT_TYPES
 from app.core.database import get_db
 from app.core.security import get_current_operator_from_bearer, get_current_operator_optional
@@ -58,18 +59,6 @@ INTERNAL_TELEMETRY_EVENT_TYPES = SHARED_INTERNAL_TELEMETRY_EVENT_TYPES
 # policy (canonical fallback / 403 / 404). Kept as a thin alias so existing
 # call sites and their names remain stable.
 _resolve_analytics_operator = resolve_read_operator
-
-
-def _with_current_operator(payload: dict, operator) -> dict:
-    """Inject ``current_operator_id`` / ``current_operator_username`` into the response.
-
-    Analytics service payloads carry ``operator_id`` already; this helper just
-    makes the actor explicit so the frontend can render which company is
-    currently shown in the dropdown.
-    """
-    payload["current_operator_id"] = int(operator.id)
-    payload["current_operator_username"] = str(operator.username or "")
-    return payload
 
 
 def _raise_decision_experiment_http_error(exc: ValueError) -> None:
