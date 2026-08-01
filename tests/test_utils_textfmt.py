@@ -1,9 +1,11 @@
 """Characterization tests for the canonical text cleanup helpers.
 
 These pin the behavior that was consolidated into ``app/utils/textfmt.py`` from
-``_normalize_category`` (backtest_cutoff · prediction_dataset). The table below
-is the differential input set that was run against both pre-consolidation
-copies; every row produced the identical result in all of them.
+``_normalize_category`` (backtest_cutoff · prediction_dataset) and
+``_clean_category_name``/``_clean_optional`` (decision_experiments ·
+ml_training). The table below is the differential input set that was run
+against every pre-consolidation copy; every row produced the identical result
+in all of them.
 """
 
 from __future__ import annotations
@@ -11,8 +13,10 @@ from __future__ import annotations
 import pytest
 
 from app.services.backtest_cutoff import BacktestCutoffService
+from app.services.decision_experiments.application import _ApplicationMixin
+from app.services.ml_training.helpers import HelpersMixin
 from app.services.prediction_dataset import PredictionDatasetService
-from app.utils.textfmt import clean_text, normalize_lookup_key
+from app.utils.textfmt import clean_text, normalize_lookup_key, optional_text
 
 ALIASES = {
     "general-service": "service",
@@ -49,6 +53,9 @@ TEXT_CASES = [
 class TestTextCleanupTable:
     def test_clean_text(self, value, expected_text, expected_key):
         assert clean_text(value) == expected_text
+
+    def test_optional_text(self, value, expected_text, expected_key):
+        assert optional_text(value) == (expected_text or None)
 
     def test_normalize_lookup_key(self, value, expected_text, expected_key):
         assert normalize_lookup_key(value, ALIASES) == expected_key
@@ -88,3 +95,30 @@ def test_backtest_cutoff_normalize_category(category, expected):
 def test_prediction_dataset_normalize_category(category, expected):
     service = PredictionDatasetService()
     assert service._normalize_category(category) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Caller paths — blank-to-``None`` cleanup keeps its "missing" contract.
+# --------------------------------------------------------------------------- #
+OPTIONAL_CASES = [
+    (None, None),
+    ("", None),
+    ("   ", None),
+    (0, None),  # falsy non-string reads as missing, not as "0"
+    (False, None),
+    ("공사", "공사"),
+    ("  release-tag  ", "release-tag"),
+    (5, "5"),
+]
+
+
+@pytest.mark.parametrize(("value", "expected"), OPTIONAL_CASES)
+def test_decision_experiment_clean_category_name(value, expected):
+    mixin = _ApplicationMixin()
+    assert mixin._clean_category_name(value) == expected
+
+
+@pytest.mark.parametrize(("value", "expected"), OPTIONAL_CASES)
+def test_ml_training_clean_optional(value, expected):
+    mixin = HelpersMixin()
+    assert mixin._clean_optional(value) == expected

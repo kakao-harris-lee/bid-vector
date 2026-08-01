@@ -780,7 +780,7 @@
       "duplicate_mechanical_helpers_local": 2
     },
     "app/utils/textfmt.py": {
-      "dict_boundary_functions": 2
+      "dict_boundary_functions": 3
     },
     "scripts/backfill_award_floor_rate.py": {
       "functions_over_soft_limit": 5,

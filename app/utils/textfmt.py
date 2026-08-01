@@ -1,8 +1,10 @@
 """Canonical text cleanup helpers for untyped values (stdlib-only).
 
-These utilities centralize the previously duplicated ``_normalize_category``
-logic that lived in ``app/services/backtest_cutoff.py`` and
-``app/services/prediction_dataset.py``. The behavior is identical to the
+These utilities centralize the previously duplicated ``_normalize_category`` /
+``_clean_category_name`` / ``_clean_optional`` logic that lived in
+``app/services/backtest_cutoff.py``, ``app/services/prediction_dataset.py``,
+``app/services/decision_experiments/application.py`` and
+``app/services/ml_training/helpers.py``. The behavior is identical to the
 original implementations.
 
 Scope boundary: value → text cleanup with **no domain knowledge**. The tables
@@ -28,6 +30,11 @@ def clean_text(value: Any) -> str:
     ``str(value or "")`` idiom, so that quirk is the contract.
     """
     return str(value or "").strip()
+
+
+def optional_text(value: Any) -> str | None:
+    """Return the cleaned text, or ``None`` when nothing survives the strip."""
+    return clean_text(value) or None
 
 
 def normalize_lookup_key(value: Any, aliases: Mapping[str, str]) -> str:
