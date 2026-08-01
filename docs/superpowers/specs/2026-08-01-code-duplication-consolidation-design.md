@@ -38,30 +38,47 @@
 
 | 축 | 수치 |
 |---|---|
-| Python (`app/` + `scripts/`) | 329 파일 · 70,127 줄 |
-| Frontend (`frontend/src/`) | 277 파일 · 46,883 줄 |
-| 스캔 대상 함수 (≥12 AST 노드) | 2,558 |
-| AST 정규화 후 **구조 완전일치 클론 그룹** | 63 그룹 / 155 함수 |
+| Python (`app/` + `scripts/`) | 378 파일 · 87,290 줄 |
+| Frontend (`frontend/src/`) | 277 파일 · 46,894 줄 |
+
+predicate 적용 전의 원시 클론 수는 §4.2 의 판정을 거치지 않은 값이라 운용 의미가 없어
+싣지 않는다. **운영 수치는 §2.2 이고, 함수 총계도 그쪽의 2,646 이 유일한 기준이다.**
 
 ### 2.2 판정 predicate 적용 후
 
-"메커니컬 유틸리티"(도메인 지식 없는 함수) predicate 와 임계값을 적용한 결과:
+현재 main(`a2b90ca`) 기준으로 `app/` · `scripts/` 의 **378 파일 · 함수 2,646 개**를
+스캔했고 파싱 실패는 0 이다. 함수 열거는 `ast.walk` 로 **메서드와 중첩 함수까지**
+포함한다(§10). 여기에 "메커니컬 유틸리티"(도메인 지식 없는 함수) predicate 와 임계값을
+적용한 결과:
 
-| 임계값(AST 노드) | 클론 그룹 | 그룹 내 함수 | 교차파일 그룹 |
-|---|---|---|---|
-| 12 | 33 | 75 | 27 |
-| **20** | **25** | **55** | **20** |
-| 25 | 25 | 55 | 20 |
-| 30 | 23 | 51 | 19 |
-| 40 | 14 | 32 | 12 |
+| 임계값(AST 노드) | 후보 함수 | 클론 그룹 | 그룹 내 함수 | 교차파일 그룹 | 동일파일 그룹 |
+|---|---|---|---|---|---|
+| 12 | 1,303 | 44 | 103 | 38 | 6 |
+| 16 | 1,283 | 40 | 89 | 35 | 5 |
+| **20** | **1,249** | **36** | **81** | **31** | **5** |
+| 25 | 1,188 | 34 | 77 | 29 | 5 |
+| 30 | 1,116 | 31 | 69 | 27 | 4 |
+| 40 | 965 | 19 | 43 | 17 | 2 |
 
-- **min 20~25 가 안정 고원**이다. 임계값 선택에 결과가 민감하지 않다는 뜻이고, 래칫
-  지표로 쓰기에 적합한 성질이다. 고원의 하단인 **20** 을 채택한다.
-- **위양성 0**: `app/api/operator.py` 의 얼짜 FastAPI 라우터 7개는 구조가 동일하지만
-  데코레이터 배제만으로 그룹이 0개가 된다. 이들은 CLAUDE.md §4 "라우터는 얇게" 를 지킨
+- **임계값 20 의 근거가 바뀌었다.** 구 측정이 보고한 "20~25 안정 구간"은 좁은 스캔
+  범위가 만든 착시였다. 실제로는 12→40 사이가 완만한 단조 감소이고 평평한 구간이 없다.
+  20 을 채택하는 근거는 이제 둘이다 — (a) 12~16 구간에서만 잡히는 8그룹은 우연의 구조
+  일치이고, (b) §7.1 의 "반드시 잡아야 할" 목록이 20 에서 전부 살아남는다. **임계값의
+  정당성은 이제 픽스처가 진다.**
+- **얼짜 라우터 위양성은 여전히 0 이다.** 데코레이터 배제만으로 `app/api/operator.py` 의
+  FastAPI 엔드포인트 7개가 전부 걸러진다. 이들은 CLAUDE.md §4 "라우터는 얇게" 를 지킨
   결과이므로 통합 대상이 아니며, predicate 가 이를 정확히 걸러낸다.
-- **진짜 중복은 포착**: `_write_json`×4 · `_read_json_object`×3 이 min=20 에서 모두
+- **다만 "`app/api/` 하위는 전부 위양성"은 아니다.** `_with_current_operator` 가
+  `app/api/analytics.py:63` 과 `app/api/decision_samples.py:34` 에 2벌 있다. 데코레이터가
+  없는 진짜 중복 헬퍼이고(본문 동일, 한쪽에만 docstring) 통합 대상이 맞다.
+- **진짜 중복은 전부 포착**: `_write_json`×5 · `_read_json_object`×3 · `_count_lines`×3 ·
+  `_average`×4 등 §7.1 이 "반드시 잡아야 할 것"으로 고정하는 대표 함수 20종이 모두
   그룹으로 잡힌다.
+- **게이트 필요성의 직접 증거**: 최초 측정(`db57f8c`) 이후 5일 만에 머지된 PR #337~#341
+  은 기존 중복을 **0건** 없앴고, 오히려 **새 중복 1건을 들여왔다** —
+  `app/ai/predictors/artifact_contracts.py:106 _mapping_or_empty` ↔
+  `scripts/check_g2_exit_readiness.py:126 _as_dict`. 같은 스크립트를 두 커밋에 각각 돌린
+  apples-to-apples 델타가 35→36 그룹(+1)이다.
 
 ### 2.3 프론트엔드
 
@@ -116,17 +133,18 @@ duplicate_mechanical_helpers_local[파일] =
 "환원 불가능한 의도적 대칭 API" 가 아니었다.** 5그룹 모두 같은 형태다 — *알고리즘은
 동일하고 선언된 상수 하나 또는 캐스트 함수 하나만 다르다.*
 
-| 그룹 | 다른 점 | 처방 |
+| 그룹 (동일 파일 내 쌍) | 다른 점 | 처방 |
 |---|---|---|
-| G01 `extract_eligibility_flags` / `_project_license_limit_item` | 키 집합 상수 (`ELIGIBILITY_RAW_KEYS` / `LICENSE_LIMIT_ITEM_KEYS`) | `project_declared_keys(raw_item, keys)` |
-| G06 `coerce_numeric_list` / `coerce_integer_list` | 캐스트 (`float` / `int`) | `_coerce_cast_list(raw_value, cast)` |
-| G18 `_int_or_none` / `_float_or_none` | 캐스트 (`int` / `float`) | `_cast_or_none(value, cast)` |
-| G21 `is_openapi_source` / `is_scsbid_openapi_source` | 별칭 집합 상수 | `_source_in(source, aliases)` |
-| G25 `_resolve_goods_…` / `_resolve_service_…_rate_band` | 룰 테이블 (`GOODS_BAND_RULES` / `SERVICE_BAND_RULES`) | `resolve_band(rules, …)` 직접 호출 |
+| `app/services/koneps/openapi.py:289 extract_eligibility_flags` / `:307 _project_license_limit_item` | 키 집합 상수 (`ELIGIBILITY_RAW_KEYS` / `LICENSE_LIMIT_ITEM_KEYS`) | `project_declared_keys(raw_item, keys)` |
+| `app/utils/sequence_coercion.py:34 coerce_numeric_list` / `:46 coerce_integer_list` | 캐스트 (`float` / `int`) | `_coerce_cast_list(raw_value, cast)` |
+| `app/services/synthetic_backtest.py:251 _int_or_none` / `:258 _float_or_none` | 캐스트 (`int` / `float`) | `_cast_or_none(value, cast)` |
+| `app/services/koneps/openapi.py:41 is_openapi_source` / `:46 is_scsbid_openapi_source` | 별칭 집합 상수 | `_source_in(source, aliases)` |
+| `app/ai/predictors/historical/procurement_bands.py:55 _resolve_goods_procurement_rate_band` / `:63 _resolve_service_procurement_rate_band` | 룰 테이블 (`GOODS_BAND_RULES` / `SERVICE_BAND_RULES`) | `resolve_band(rules, …)` 직접 호출 |
 
 이는 CLAUDE.md §4.5-1·2·3 이 말하는 **"규칙은 데이터로, 코드는 해석기만"** 그 자체다.
-특히 G01 은 93 AST 노드로 가장 큰 동일파일 클론이고 이름과 docstring 이 서로 다른
-**진짜 복붙**이다. 동일파일을 면제하면 지표가 가장 잡아야 할 종류를 놓친다.
+특히 `extract_eligibility_flags` / `_project_license_limit_item` 쌍은 93 AST 노드로 가장
+큰 동일파일 클론이고 이름과 docstring 이 서로 다른 **진짜 복붙**이다. 동일파일을
+면제하면 지표가 가장 잡아야 할 종류를 놓친다.
 
 **가독성 우려는 임계값이 자동으로 해소한다.** 공개 이름(`_int_or_none` ·
 `_float_or_none`)은 얇은 델리게이터로 남길 수 있고, 델리게이터는 10~12 AST 노드라
@@ -141,7 +159,7 @@ duplicate_mechanical_helpers_local[파일] =
 | 2. 메커니컬 | 본문에 `MECHANICAL_EXCLUDED_NAMES` · `MECHANICAL_EXCLUDED_ATTRS` 가 없고 `global`/`nonlocal` 이 없음 |
 | 3. 크기 | AST 노드 수 ≥ `CLONE_MIN_AST_NODES` (= 20) |
 | 4. 정규화 | 변수·인자명 → 등장순 `v0,v1,…` · docstring/데코레이터/annotation/반환타입 제거 · **상수 리터럴은 보존** |
-| 5. 그룹핑 | `sha1(ast.unparse(정규화))[:12]` 가 동일하고 소속 **파일이 2개 이상** |
+| 5. 그룹핑 | `sha1(ast.unparse(정규화))[:12]` 가 동일한 함수를 한 그룹으로 묶고, 소속 **파일이 2개 이상**이면 교차파일 축(`duplicate_mechanical_helpers`), **한 파일 안**이면 동일파일 축(`duplicate_mechanical_helpers_local`)으로 나눈다 |
 
 배제 목록 초안(스캐너 상단 선언 상수로 고정):
 
@@ -213,11 +231,13 @@ def scan_repo(root: Path) -> RatchetReport:
 
 ### 4.5 튜닝 표면 고정
 
-배제 목록을 바꾸자 후보 함수 수가 1,148 → 1,012 로 움직이는 것을 관측했다. 이 목록은
-지표값을 직접 좌우하는 **튜닝 표면**이므로 CLAUDE.md §4.5-3(특수케이스는 데이터로 선언)
+배제 목록과 함수 열거 범위는 지표값을 직접 좌우하는 **튜닝 표면**이다. 임계값 20 에서
+후보 함수는 1,249 개이고, 이 집합의 경계를 정하는 것이 곧 이 표면이다. 민감도는 이미
+실증됐다 — 열거 범위를 모듈 최상위 함수로 한정한 선택 하나 때문에 최초 측정이 클론을
+25그룹으로 과소 보고했다(§10.1). 그러므로 CLAUDE.md §4.5-3(특수케이스는 데이터로 선언)
 에 따라 고정한다.
 
-- 배제 목록·임계값은 스캐너 상단 **선언 상수** (기존 7개 지표와 동일 스타일)
+- 배제 목록·임계값·열거 범위는 스캐너 상단 **선언 상수** (기존 7개 지표와 동일 스타일)
 - `CLONE_ALLOWLIST` 상수로 의도적 예외를 사유와 함께 선언 (기존 `JSON_CALL_ALLOWLIST`
   패턴 재사용)
 - **라벨링된 픽스처**로 predicate 를 양방향 고정 (§7.1)
@@ -240,9 +260,18 @@ def scan_repo(root: Path) -> RatchetReport:
 ```
 app/utils/                       app/ · scripts/ 공통 메커니컬 허브
   numeric.py                     coerce_float · coerce_amount · optional_float · optional_int
+                                 average · rate · delta
   jsonio.py                      read_json_object · write_json · parse_json_or_text
-  textfmt.py                     clip_title
-  sequence_coercion.py           (기존)
+                                 mapping_or_empty
+  textfmt.py                     clip_title · normalize_category · clean_optional
+                                 append_note
+  sequence_coercion.py           (기존) + as_str_list
+
+app/services/classification/
+  _grouping.py                   memberships_by_group · tech_fields_by_group · format_groups
+
+app/api/
+  operator_common.py             with_current_operator
 
 scripts/_common.py → scripts/_common/    stdlib-only CLI 전용
   __init__.py                    기존 parse_datetime · positive_int 재수출 (import 보존)
@@ -265,45 +294,68 @@ frontend/src/shared/
 `from app.services... import` 를 하고 있으므로, **스크립트는 `app.utils.*` 를 직접
 import** 한다. `scripts/_common/` 은 stdlib-only CLI 헬퍼만 유지한다.
 
-### 5.2 통합 매핑 (측정된 25그룹)
+### 5.2 통합 매핑 (측정된 36그룹)
 
-| PR | 그룹 | 대상 | 목적지 |
-|---|---|---|---|
-| PR2 | G15·G16 | `optional_float` · `_safe_optional_int` · `_coerce_amount` · `_coerce_float` · `amount_float` | `app/utils/numeric.py` |
-| PR2 | G03·G14 | `_memberships_by_group`/`_tech_fields_by_group` · `_format_groups`×2 | `app/services/classification/_grouping.py` |
-| PR2 | G20 | `normalize_agency_name`×2 | `koneps/parsing.py` canonical → `predictors/historical/statistics.py` 가 import |
-| PR2 | G19 | `guidance_for`/`failure_guidance` | `smoke_failure_taxonomy.py` canonical → `scripts/production_smoke_test.py` 가 import |
-| PR2 | G01·G21 (동일파일) | `extract_eligibility_flags`/`_project_license_limit_item` · `is_openapi_source`/`is_scsbid_openapi_source` | `koneps/openapi.py` 안에서 파라미터화 (§4.1 처방) |
-| PR2 | G06·G18·G25 (동일파일) | `coerce_numeric_list`/`coerce_integer_list` · `_int_or_none`/`_float_or_none` · `_resolve_{goods,service}_procurement_rate_band` | 각 파일 안에서 파라미터화 + 얇은 명명 래퍼 유지 |
-| PR3 | G02·G10·G22 | `_read_json_object`×3 · `_write_json`×4 · `parse_json_or_text`×2 | `app/utils/jsonio.py` |
-| PR3 | G07 | `_optional_int`×2 | `app/utils/numeric.py` |
-| PR3 | G04·G09·G12 | `parse_thresholds`×2 · `parse_actions`×2 · `parse_csv`×2 | `scripts/_common/cliargs.py` |
-| PR3 | G11 | `_clip_title`×2 | `app/utils/textfmt.py` |
-| PR3 | G08·G05·G17·G23 | `_count_lines`×3 · `_ordered_segments`×2 · `_verdict_line`×2 · `*_label_for`×2 | `scripts/_common/report.py` |
+그룹은 **함수명으로 식별**한다. 구 측정의 `G01`~`G25` 번호는 스캔 범위가 달라 현재
+그룹과 대응하지 않으므로 쓰지 않는다.
 
-합계: PR2 11그룹(교차 6 + 동일 5) · PR3 12그룹 · 보류 2그룹 = **측정된 25그룹 전부**를
-다룬다 (교차파일 20 + 동일파일 5).
+| PR | 대상 | 목적지 |
+|---|---|---|
+| PR2 | `optional_float`(`app/ai/guardrail_core.py`) · `_safe_optional_int`(`app/services/synthetic_experiment/sample_gap.py`) | `app/utils/numeric.py` |
+| PR2 | `_coerce_amount`(`app/ai/predictors/legal_floor_spec.py`) · `_coerce_float`(`app/services/award_verification.py`) · `_as_float`(`app/services/decision_samples.py`) · `amount_float`(`scripts/backtest_latest_award_holdouts.py`) | `app/utils/numeric.py` |
+| PR2 | `_average`×4 (`app/services/analytics_reporting/base.py` · `decision_analytics/base.py` · `prediction_feedback.py` · `prediction_reporting.py`) | `app/utils/numeric.py` |
+| PR2 | `_average`×2 (`app/services/ml_training/helpers.py` · `paper_bidding_backtest/scoring.py`) — 앞 그룹과 digest 가 달라 **별개 그룹**이다. 통합 전에 두 변형의 차이를 먼저 확인한다 | `app/utils/numeric.py` |
+| PR2 | `_rate`×2 (`app/services/analytics_reporting/base.py` · `prediction_reporting.py`) | `app/utils/numeric.py` |
+| PR2 | `_delta`×2 (`app/services/decision_analytics/base.py` · `decision_experiments/base.py`) | `app/utils/numeric.py` |
+| PR2 | `_memberships_by_group` / `_tech_fields_by_group` (`app/services/classification/`) | `app/services/classification/_grouping.py` |
+| PR2 | `_format_groups`×2 (`app/services/classification/`) | `app/services/classification/_grouping.py` |
+| PR2 | `_as_str_list` (`app/schemas/opportunity.py` · `app/services/bid_summary.py`) | `app/utils/sequence_coercion.py` |
+| PR2 | `_normalize_category` (`app/services/backtest_cutoff.py` · `prediction_dataset.py`) | `app/utils/textfmt.py` |
+| PR2 | `_clean_category_name`(`app/services/decision_experiments/application.py`) · `_clean_optional`(`app/services/ml_training/helpers.py`) | `app/utils/textfmt.py` |
+| PR2 | `normalize_agency_name`×2 (`app/ai/predictors/historical/statistics.py` · `app/services/koneps/parsing.py`) | `koneps/parsing.py` canonical → `statistics.py` 가 import |
+| PR2 | `_append_reasoning_note`(`app/services/allocation.py`) · `_append_note`(`app/services/real_bid_track.py`) | `app/utils/textfmt.py` |
+| PR2 | `_rollout_check`(`app/services/ml_release/base.py`) · `_check`(`app/services/ml_release/storage/base.py`) | `app/services/ml_release/` 내부 공통화 |
+| PR2 | `_with_current_operator`×2 (`app/api/analytics.py` · `app/api/decision_samples.py`) | `app/api/operator_common.py` |
+| PR2 | `guidance_for`(`app/services/smoke_failure_taxonomy.py`) · `failure_guidance`(`scripts/production_smoke_test.py`) | `smoke_failure_taxonomy.py` canonical → 스크립트가 import |
+| PR2 | **동일파일 5그룹** — §4.1 표의 5쌍 | 각 파일 안에서 파라미터화 + 얇은 명명 래퍼 유지 (§4.1 처방) |
+| PR3 | `_read_json_object`×3 (`build_g2_exit_review` · `g2_blocking_gap_register` · `verify_g2_notification_targets`) | `app/utils/jsonio.py` |
+| PR3 | `_write_json`×4 + `write_json`×1 (`build_g2_exit_review` · `check_g2_exit_readiness` · `collect_g2_evidence` · `g2_blocking_gap_register` · `verify_g2_notification_targets`) | `app/utils/jsonio.py` |
+| PR3 | `parse_json_or_text`×2 (`collect_g2_evidence` · `production_smoke_test`) | `app/utils/jsonio.py` |
+| PR3 | `_mapping_or_empty`(`app/ai/predictors/artifact_contracts.py`) · `_as_dict`(`scripts/check_g2_exit_readiness.py`) | `app/utils/jsonio.py` |
+| PR3 | `_optional_int`×2 (`collect_g2_evidence` · `verify_g2_notification_targets`) | `app/utils/numeric.py` |
+| PR3 | `parse_thresholds`×2 (`backtest_latest_award_holdouts` · `report_eligibility_segment_backtest`) | `scripts/_common/cliargs.py` |
+| PR3 | `parse_actions`×2 (`backtest_paper_bidding` · `backtest_synthetic_operators`) | `scripts/_common/cliargs.py` |
+| PR3 | `parse_csv`×2 (`backtest_latest_award_holdouts` · `report_eligibility_segment_backtest`) | `scripts/_common/cliargs.py` |
+| PR3 | `_count_lines`×3 (`report_eligibility_labels` · `report_license_eligibility` · `report_license_gate_impact`) | `scripts/_common/report.py` |
+| PR3 | `_clip_title`×2 (`report_license_eligibility` · `report_license_gate_impact`) | `app/utils/textfmt.py` |
+| PR3 | `_verdict_line`×2 (`report_license_eligibility` · `report_license_gate_impact`) | `scripts/_common/report.py` |
+| PR3 | `_ordered_segments`×2 (`report_eligibility_segment_backtest` · `report_no_candidate_cause`) | `scripts/_common/report.py` |
+| PR3 | `_classify_label_for` · `_segment_label_for` (`report_eligibility_segment_backtest` · `report_no_candidate_cause`) — 이름이 달라 의미 동일성 확인 후 통합 | `scripts/_common/report.py` |
 
-`G23` (`_classify_label_for` / `_segment_label_for`) 은 이름이 다르므로 통합 전에 두
-함수의 **의미가 실제로 같은지** 확인한다. 다르면 allowlist 로 옮긴다.
+합계: PR2 21그룹(교차 16 + 동일 5) · PR3 13그룹 · 보류 2그룹 = **측정된 36그룹 전부**를
+다룬다 (교차파일 31 + 동일파일 5).
+
+`_classify_label_for` / `_segment_label_for` 은 이름이 다르므로 통합 전에 두 함수의
+**의미가 실제로 같은지** 확인한다. 다르면 allowlist 로 옮긴다.
 
 ### 5.2.1 지표 임계값 아래의 중복
 
-`_average`×4 · `_round_optional`×2 · `_csv_safe`×2 처럼 **AST 20노드 미만이라 지표가 잡지
+`_round_optional`×2 · `_csv_safe`×2 처럼 **AST 20노드 미만이라 지표가 잡지
 않는** 중복이 따로 있다. 해당 파일을 어차피 건드리는 PR 에서는 같이 정리하되, §7.4 의
 성공 기준에는 넣지 않는다. 지표가 세지 않는 것을 목표로 잡으면 검증할 수 없기 때문이다.
 
 ### 5.3 통합하지 않고 보류하는 2건
 
-교차파일 20그룹 전부가 통합이 옳은 것은 아니다. 다음 둘은 `CLONE_ALLOWLIST` 에 **사유와 함께
-등재**하고 코드를 건드리지 않는다.
+교차파일 31그룹 전부가 통합이 옳은 것은 아니다. 다음 둘은 `CLONE_ALLOWLIST` 에 **사유와 함께
+등재**하고 코드를 건드리지 않는다. 둘 다 현재 main 에도 그대로 존재함이 재확인됐다
+(digest 일치).
 
-- **G13** — `app/services/award_verification.py:158 _rate_to_fraction` /
+- `app/services/award_verification.py:158 _rate_to_fraction` /
   `app/services/base_amount_basis.py:64 normalize_winning_rate`.
   구조는 같지만 **금액 basis 도메인**이다. 이 저장소에서 basis 혼동은 반복 버그의
   근본원인으로 지목된 영역이므로, 두 함수의 basis 의미가 동일함을 증명하기 전에 합치면
   버그를 만든다.
-- **G24** — `app/ai/predictors/registry.py:13 build_default_predictor_registry` /
+- `app/ai/predictors/registry.py:13 build_default_predictor_registry` /
   `scripts/backtest_price_predictors.py:56 build_registry`.
   CLAUDE.md §4.7-2 팩토리/레지스트리 패턴이다. 스크립트가 **축소 레지스트리를 주입**하는
   것이 설계 의도일 수 있어, 통합하면 테스트 격리 seam 이 사라진다.
@@ -437,12 +489,19 @@ allowlist 가 stale 해지면서 면제 범위가 조용히 넓어진다.
 
 ### 7.4 성공 기준
 
-| 시점 | 교차파일 (`duplicate_mechanical_helpers`) | 동일파일 (`…_local`) |
+측정된 교차파일 인벤토리는 31그룹 / 71함수다. 이 중 allowlist 2그룹(4함수, §5.3)은
+지표에서 제외되므로, 래칫이 기록하는 값은 아래와 같다.
+
+| 시점 | 교차파일 지표 (`duplicate_mechanical_helpers`) | 동일파일 지표 (`…_local`) |
 |---|---|---|
-| 현재 | 20 그룹 / 45 함수 | 5 그룹 / 10 함수 |
+| 현재 | 29 그룹 / 67 함수 | 5 그룹 / 10 함수 |
 | PR1 완료 | 동일 (baseline 동결 — 이 시점부터 증가 차단) | 동일 |
-| PR2 완료 | 14 그룹 / 33 함수 | **0 그룹 / 0 함수** |
-| PR3 완료 | **2 그룹 / 4 함수** (allowlist 등재한 G13 · G24 만 잔존) | 0 그룹 / 0 함수 |
+| PR2 완료 | 13 그룹 / 31 함수 | **0 그룹 / 0 함수** |
+| PR3 완료 | **0 그룹 / 0 함수** | 0 그룹 / 0 함수 |
+
+위 수치는 **통과 조건이 아니라 기대치**다. PR1 이 구현하는 스캐너의 predicate 가 이
+문서의 프로토타입과 완전히 같지 않을 수 있으므로 실제로 기록되는 값은 달라질 수 있다.
+**baseline 의 실제 값은 PR1 에서 기록한다.**
 
 동일파일 목표가 0 인 것은 §4.1 에서 5그룹 전수를 확인한 결과 전부 환원 가능하다고
 판정했기 때문이다. 파라미터화 후 남는 얇은 명명 래퍼는 임계값 아래라 계수되지 않는다.
@@ -481,13 +540,28 @@ allowlist 가 stale 해지면서 면제 범위가 조용히 넓어진다.
 이 문서의 수치는 다음 절차로 재현한다.
 
 1. `app/` · `scripts/` 의 `*.py` 를 `ast.parse` (`__pycache__` 제외)
-2. 함수/비동기함수 노드마다 AST 노드 수를 세고 `CLONE_MIN_AST_NODES` 미만은 제외
+2. `ast.walk(tree)` 로 **모든** 함수/비동기함수 노드를 순회한다 — 모듈 최상위뿐 아니라
+   **메서드와 중첩 함수를 포함**한다. 최상위만 세면 헬퍼를 클래스로 감싸는 것만으로
+   지표를 회피할 수 있다. 각 노드의 AST 노드 수를 세고 `CLONE_MIN_AST_NODES` 미만은 제외
 3. §4.2 의 predicate 로 메커니컬 여부 판정
 4. `ast.unparse` → `ast.parse` 로 복제한 뒤 `name="f"` · `decorator_list=[]` ·
    `returns=None`, 첫 문장이 문자열 상수 `Expr`(docstring)이면 제거
 5. `NodeTransformer` 로 `ast.Name.id` 와 `ast.arg.arg` 를 등장 순서대로 `v0,v1,…` 치환,
    `arg.annotation=None`
 6. `sha1(ast.unparse(정규화))[:12]` 를 그룹 키로 사용
-7. 소속 파일이 2개 이상인 그룹만 남긴다
+7. 멤버가 2개 이상인 그룹만 남기고, 소속 파일이 2개 이상이면 교차파일
+   축(`duplicate_mechanical_helpers`), 한 파일 안이면 동일파일
+   축(`duplicate_mechanical_helpers_local`)으로 나눈다
 
 PR1 이후에는 `python scripts/design_ratchet.py` 가 이 절차를 수행하고 리포트를 낸다.
+
+### 10.1 최초 측정의 정정
+
+이 문서의 최초 측정은 2번 항목을 **모듈 최상위 함수만** 순회하도록 구현해 클론 그룹을
+25그룹으로 과소 보고했다. `_average` 처럼 클래스 메서드로 존재하는 중복이 통째로
+빠졌다. 스크립트를 `ast.walk` 기준으로 고쳐 최초 측정 시점 커밋(`db57f8c`)에 되돌려
+돌린 결과 35그룹이었고, 현재 main(`a2b90ca`)은 36그룹이다. 본문의 수치는 이
+apples-to-apples 재측정으로 정정한 값이다.
+
+메서드·중첩 함수를 제외하는 선택은 **채택하지 않는다.** 제외하면 헬퍼를 클래스로 감싸는
+것만으로 래칫을 회피할 수 있는 구멍이 열리기 때문이다.

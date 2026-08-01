@@ -6,10 +6,15 @@
 `duplicate_mechanical_helpers_local`)를 신설하고 현재값으로 baseline 을 동결해, 이 시점부터
 새 중복이 CI 에서 차단되게 한다.
 
-**Architecture:** 클론 탐지 로직은 `scripts/_design_ratchet_clones.py` 신규 모듈에 격리한다
-(`_design_ratchet_scan.py` 가 429줄이라 여기에 추가하면 스캐너 자신이 500줄 한도를 넘겨
-`file_loc_band` 를 올린다). 기존 `scan_source(relative_path, source) -> FileMetrics` 순수
-함수 계약은 유지하고, 교차 파일 정보가 필요한 지표만 `scan_repo` 의 2-pass 에서 채운다.
+**Architecture:** 스캐너는 이미 책임 3분할이다 —
+`scripts/_design_ratchet_contracts.py`(143줄, 데이터 계약 + 순수 비교) ·
+`scripts/_design_ratchet_scan.py`(403줄, AST 측정) ·
+`scripts/design_ratchet.py`(275줄, CLI · baseline 영속화 · 리포트). 클론 탐지 로직은
+같은 패턴을 이어 `scripts/_design_ratchet_clones.py` 신규 모듈에 격리한다(403줄인 scan
+모듈에 클론 탐지를 얹으면 500줄 한도를 넘겨 스캐너가 스스로 `file_loc_band` 를 올린다).
+신규 필드 2개는 baseline JSON 으로 직렬화되므로 `FileMetrics` 가 있는 contracts 모듈에
+추가한다. 기존 `scan_source(relative_path, source) -> FileMetrics` 순수 함수 계약은
+유지하고, 교차 파일 정보가 필요한 지표만 `scan_repo` 의 2-pass 에서 채운다.
 
 **Tech Stack:** Python 3.12 · `ast` 표준 라이브러리 · pydantic v2 (`StrictModel`) · pytest
 
@@ -18,6 +23,8 @@
 - 대상 스펙: `docs/superpowers/specs/2026-08-01-code-duplication-consolidation-design.md`
 - 작업 worktree: `/home/deploy/project/bid-vector-dup-spec`, 브랜치
   `docs/code-duplication-consolidation-spec`
+- 이 worktree 는 `origin/main` **`a2b90ca`** 기준으로 rebase 되어 있다. 이 플랜의 모든
+  파일·심볼 참조는 그 커밋 기준이다(PR #337~#341 의 래칫 3분할이 반영된 상태).
 - 이 worktree 에는 `.venv` 가 없다. 파이썬은 **메인 체크아웃의 절대경로**로 실행한다:
   `/home/deploy/project/bid-vector/.venv/bin/python` ·
   `/home/deploy/project/bid-vector/.venv/bin/pytest` ·
@@ -41,7 +48,8 @@
 | 파일 | 책임 | 상태 |
 |---|---|---|
 | `scripts/_design_ratchet_clones.py` | 메커니컬 판정 · AST 정규화 · 클론 그룹핑 · allowlist | 신규 |
-| `scripts/_design_ratchet_scan.py` | `FileMetrics` 필드 2개 추가 · `scan_file` 분리 · `scan_repo` 2-pass | 수정 |
+| `scripts/_design_ratchet_contracts.py` | `FileMetrics` 필드 2개 추가 | 수정 |
+| `scripts/_design_ratchet_scan.py` | `scan_file` 분리 · `scan_repo` 2-pass · `scan_repo_clone_signatures` 추가 | 수정 |
 | `scripts/design_ratchet.py` | 죽은 allowlist 검사 · 클론 그룹 리포트 | 수정 |
 | `tests/test_design_ratchet_clones.py` | 클론 모듈 단위 테스트(양방향 픽스처) | 신규 |
 | `tests/test_design_ratchet.py` | 신규 지표의 scan/scan_repo 통합 테스트 | 수정 |
@@ -237,9 +245,15 @@ Expected: collection 단계에서 FAIL —
 #!/usr/bin/env python3
 """설계 래칫의 중복 클론 측정 — 메커니컬 헬퍼의 구조 클론 탐지.
 
-``_design_ratchet_scan.py`` 에서 분리한 이유는 크기다. 스캐너 자신도 스캔 대상이라
-CLAUDE.md §4.5-4 의 파일 500줄 한도를 지켜야 하는데, 클론 탐지를 그 모듈에 넣으면
+스캐너는 이미 measurement(``_design_ratchet_scan.py``) · contracts
+(``_design_ratchet_contracts.py``) · CLI(``design_ratchet.py``) 로 나뉘어 있다. 클론
+탐지를 네 번째 모듈로 뺀 것도 같은 이유다: 스캐너 자신이 스캔 대상이라 CLAUDE.md
+§4.5-4 의 파일 500줄 한도를 지켜야 하는데, 403줄인 scan 모듈에 클론 탐지를 얹으면
 한도를 넘겨 ``file_loc_band`` 를 스스로 올린다.
+
+여기의 ``CloneSignature``/``CloneGroup`` 은 baseline JSON 으로 직렬화되지 않는 내부
+자료구조라 contracts 모듈이 아니라 이 모듈에 둔다. contracts 의 경계는 "baseline 에
+직렬화되는 계약 + 순수 비교"다.
 
 "메커니컬 헬퍼" = 도메인 지식이 없는 함수. 데코레이터가 없고(라우터·celery task 배제),
 DB 세션·네트워크·전역 설정에 닿지 않는다. 순수 계산뿐 아니라 얇은 파일 I/O 래퍼도
@@ -265,8 +279,9 @@ if str(REPO_ROOT) not in sys.path:
 from app.schemas._base import FrozenStrictModel  # noqa: E402
 
 # --- 선언적 구성 (§4.5-1·3: 튜닝 표면을 함수 밖 데이터로) --------------------------
-# 임계값 20 은 실측 고원의 하단이다: 20 과 25 에서 결과가 동일(25그룹/55함수)하고,
-# 12 로 낮추면 우연의 일치가 섞이며 40 으로 올리면 진짜 중복을 놓친다.
+# 임계값 20 은 실측 고원의 하단이다: 20 과 25 에서 결과가 같고, 12 로 낮추면 우연의
+# 일치가 섞이며 40 으로 올리면 진짜 중복을 놓친다. 20 에서의 실측 인벤토리는 교차파일
+# 31그룹/71함수 · 동일파일 5그룹/10함수다(allowlist 적용 전).
 CLONE_MIN_AST_NODES = 20
 
 # 본문에 이 이름이 나타나면 도메인·인프라에 결합된 것으로 보고 후보에서 뺀다.
@@ -771,9 +786,9 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 3: 스캐너 배선 (`FileMetrics` 2필드 + `scan_repo` 2-pass)
 
 **Files:**
-- Modify: `scripts/_design_ratchet_scan.py:101-119` (FileMetrics),
-  `scripts/_design_ratchet_scan.py:379-403` (scan_source),
-  `scripts/_design_ratchet_scan.py:420-428` (scan_repo)
+- Modify: `scripts/_design_ratchet_contracts.py:45-51` (FileMetrics 필드 목록)
+- Modify: `scripts/_design_ratchet_scan.py:354-379` (scan_source),
+  `scripts/_design_ratchet_scan.py:395-403` (scan_repo)
 - Test: `tests/test_design_ratchet.py` (클래스 추가)
 
 **Interfaces:**
@@ -859,12 +874,26 @@ class TestDuplicateHelperMetrics:
         assert "duplicate_mechanical_helpers_local" in METRIC_NAMES
 ```
 
-`Path` 와 `METRIC_NAMES` 가 아직 import 되지 않았으면 파일 상단에 추가한다:
+`Path` 는 이미 import 되어 있다. `METRIC_NAMES` 는 **contracts 모듈**에, `scan_file` 은
+scan 모듈에 있으므로 기존 import 블록 두 개를 각각 넓힌다:
 
 ```python
-from pathlib import Path
-
-from scripts._design_ratchet_scan import METRIC_NAMES, scan_file
+from scripts._design_ratchet_contracts import (
+    METRIC_NAMES,
+    FileMetrics,
+    RatchetReport,
+    compare_reports,
+    count_improvements,
+    without_paths,
+)
+from scripts._design_ratchet_scan import (
+    REPO_ROOT,
+    RatchetScanError,
+    file_loc_band,
+    scan_file,
+    scan_repo,
+    scan_source,
+)
 ```
 
 - [ ] **Step 2: 테스트 실패 확인**
@@ -879,7 +908,9 @@ Expected: FAIL — `ImportError: cannot import name 'scan_file'`
 
 - [ ] **Step 3: `FileMetrics` 확장**
 
-`scripts/_design_ratchet_scan.py:104-110` 의 필드 목록 끝에 두 줄을 추가한다.
+신규 필드는 baseline JSON 으로 직렬화되므로 **contracts 모듈**이 자리다.
+`scripts/_design_ratchet_contracts.py:45-51` 의 `FileMetrics` 필드 목록 끝에 두 줄을
+추가한다(교체 후 전체 필드 목록).
 
 ```python
     functions_over_soft_limit: int = 0
@@ -894,12 +925,25 @@ Expected: FAIL — `ImportError: cannot import name 'scan_file'`
 ```
 
 기본값이 0 이고 `save_baseline` 이 `exclude_defaults=True` 로 저장하므로 **기존 baseline
-JSON 과 스키마 호환**이다(`_is_corrupt_baseline` 경로를 타지 않는다).
+JSON 과 스키마 호환**이다(`_is_corrupt_baseline` 경로를 타지 않는다). `METRIC_NAMES` 는
+`tuple(FileMetrics.model_fields)` 라서 두 지표가 자동으로 래칫 계약에 편입되고,
+`is_clean()`·`totals()`·`compare_reports` 도 별도 수정 없이 새 지표를 다룬다.
 
 - [ ] **Step 4: import 추가**
 
-`scripts/_design_ratchet_scan.py:26` 의 `from app.schemas._base import StrictModel`
-아래에 추가한다.
+`scripts/_design_ratchet_scan.py` 상단에는 이미 contracts import 블록이 있다.
+
+```python
+from scripts._design_ratchet_contracts import (  # noqa: E402
+    FILE_LOC_BAND_LINES,
+    FILE_LOC_SOFT_LIMIT,
+    FileMetrics,
+    RatchetReport,
+)
+```
+
+이 블록 **바로 아래**에 clones import 를 넣는다(ruff 규칙 집합에 isort(`I`) 가 없어
+정렬은 강제되지 않는다 — 인접 배치로 읽기 좋게만 둔다).
 
 ```python
 from scripts._design_ratchet_clones import (  # noqa: E402
@@ -912,7 +956,41 @@ from scripts._design_ratchet_clones import (  # noqa: E402
 
 - [ ] **Step 5: `scan_source` 를 `scan_file` 로 분리**
 
-`scripts/_design_ratchet_scan.py:379-403` 의 `scan_source` 를 통째로 다음으로 교체한다.
+`scripts/_design_ratchet_scan.py:354-379` 의 `scan_source` 를 통째로 교체한다. 현재
+원문(앵커)은 다음과 같다.
+
+```python
+def scan_source(relative_path: str, source: str) -> FileMetrics:
+    """한 파일의 소스 텍스트에서 지표를 센다(파일 I/O 없는 순수 함수)."""
+    tree = _parse_source(relative_path, source)
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    return FileMetrics(
+        functions_over_soft_limit=_count_functions_over(
+            functions, FUNCTION_SOFT_LIMIT_LINES
+        ),
+        functions_over_hard_limit=_count_functions_over(
+            functions, FUNCTION_HARD_LIMIT_LINES
+        ),
+        file_loc_band=file_loc_band(source),
+        json_direct_calls=_count_json_direct_calls(tree, relative_path),
+        dict_boundary_functions=sum(
+            1 for node in functions if _has_weak_boundary(node)
+        ),
+        env_test_sniff=_count_env_test_sniff(tree, relative_path),
+        unvalidated_dict_tasks=sum(
+            1 for node in functions if _is_unvalidated_dict_task(node)
+        ),
+    )
+```
+
+교체본이다. 기존 7개 지표의 계산식은 **한 글자도 바꾸지 않고** 그대로 옮기고
+`duplicate_mechanical_helpers_local` 한 줄만 더한다(PR1 은 기존 지표를 움직이지
+않는다 — Task 5 Step 1 이 이를 검증한다). `Sequence` 는 scan 모듈 상단이 이미
+import 하고 있으므로 추가 import 는 필요 없다.
 
 ```python
 def _metrics_from_tree(
@@ -966,8 +1044,22 @@ def scan_source(relative_path: str, source: str) -> FileMetrics:
 
 - [ ] **Step 6: `scan_repo` 를 2-pass 로**
 
-`scripts/_design_ratchet_scan.py:420-428` 의 `scan_repo` 를 다음으로 교체하고, 그 아래에
-`scan_repo_clone_signatures` 를 추가한다.
+`scripts/_design_ratchet_scan.py:395-403` 의 `scan_repo` 를 교체하고, 그 아래에
+`scan_repo_clone_signatures` 를 추가한다. 현재 원문(앵커)은 다음과 같다.
+
+```python
+def scan_repo(root: Path) -> RatchetReport:
+    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다."""
+    report = RatchetReport()
+    for path in iter_target_files(root):
+        relative_path = path.relative_to(root).as_posix()
+        metrics = scan_source(relative_path, _read_source(path, relative_path))
+        if not metrics.is_clean():
+            report.files[relative_path] = metrics
+    return report
+```
+
+교체본이다.
 
 ```python
 def scan_repo(root: Path) -> RatchetReport:
@@ -1042,13 +1134,15 @@ Expected: `TestRepositoryRatchet::test_current_repository_does_not_exceed_baseli
 ```bash
 cd /home/deploy/project/bid-vector-dup-spec && \
 /home/deploy/project/bid-vector/.venv/bin/ruff check \
-  scripts/_design_ratchet_scan.py scripts/_design_ratchet_clones.py && \
-git add scripts/_design_ratchet_scan.py tests/test_design_ratchet.py && \
+  scripts/_design_ratchet_scan.py scripts/_design_ratchet_clones.py \
+  scripts/_design_ratchet_contracts.py && \
+git add scripts/_design_ratchet_contracts.py scripts/_design_ratchet_scan.py \
+  tests/test_design_ratchet.py && \
 git commit -m "feat(quality): 중복 헬퍼 지표 2개를 래칫에 배선
 
-FileMetrics 에 duplicate_mechanical_helpers(교차파일) 와 _local(동일파일)
-추가. scan_source 의 파일 단위 순수 함수 계약은 유지하고, 교차 파일
-정보가 필요한 지표만 scan_repo 의 pass 2 에서 귀속한다.
+contracts 의 FileMetrics 에 duplicate_mechanical_helpers(교차파일) 와
+_local(동일파일) 추가. scan_source 의 파일 단위 순수 함수 계약은 유지하고,
+교차 파일 정보가 필요한 지표만 scan_repo 의 pass 2 에서 귀속한다.
 
 baseline 은 아직 미갱신이라 저장소 게이트는 의도적으로 실패 상태다.
 
@@ -1060,8 +1154,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 4: CLI 리포트 + 죽은 allowlist 게이트 + CI ruff 대상
 
 **Files:**
-- Modify: `scripts/design_ratchet.py:36-47` (import), `scripts/design_ratchet.py:205-220` (main)
-- Modify: `.github/workflows/ci.yml:38`
+- Modify: `scripts/design_ratchet.py` (import 블록 확장 · 포매터 2개 추가 · `main()`)
+- Modify: `.github/workflows/ci.yml` (Ruff 스텝의 `run:` folded 스칼라)
 - Test: `tests/test_design_ratchet.py` (클래스 추가)
 
 **Interfaces:**
@@ -1125,7 +1219,17 @@ Expected: FAIL — `ImportError: cannot import name 'format_clone_groups'`
 
 - [ ] **Step 3: CLI 구현**
 
-`scripts/design_ratchet.py:36-47` 의 import 블록을 넓힌다.
+`scripts/design_ratchet.py` 는 이제 contracts 와 scan **양쪽**에서 심볼을 가져온다.
+**먼저 파일을 읽어 현재 import 블록을 확인한 뒤** 아래 두 가지를 반영한다(라인 번호에
+의존하지 말 것 — 이 파일은 275줄이고 블록 위치가 바뀔 수 있다).
+
+1. 기존 contracts import 블록은 **그대로 둔다**(`FILE_LOC_BAND_LINES` ·
+   `FILE_LOC_METRIC` · `FILE_LOC_SOFT_LIMIT` · `METRIC_NAMES` · `FileMetrics` ·
+   `RatchetReport` · `RatchetViolation` · `compare_reports` · `count_improvements` ·
+   `without_paths`).
+2. 그 뒤에 clones import 블록을 새로 넣고, 기존
+   `from scripts._design_ratchet_scan import scan_repo` 한 줄을
+   `scan_repo_clone_signatures` 를 포함하는 블록으로 넓힌다.
 
 ```python
 from scripts._design_ratchet_clones import (  # noqa: E402
@@ -1135,21 +1239,12 @@ from scripts._design_ratchet_clones import (  # noqa: E402
     unused_allowlist_keys,
 )
 from scripts._design_ratchet_scan import (  # noqa: E402
-    FILE_LOC_BAND_LINES,
-    FILE_LOC_METRIC,
-    FILE_LOC_SOFT_LIMIT,
-    METRIC_NAMES,
-    FileMetrics,
-    RatchetReport,
-    RatchetViolation,
-    compare_reports,
-    count_improvements,
     scan_repo,
     scan_repo_clone_signatures,
 )
 ```
 
-`METRIC_TOTAL_FORMATTERS` 정의(`:108`) 아래에 포매터 두 개를 추가한다.
+`METRIC_TOTAL_FORMATTERS` 정의 아래에 포매터 두 개를 추가한다.
 
 ```python
 CLONE_GROUP_PREVIEW_LIMIT = 30
@@ -1185,7 +1280,10 @@ def format_dead_allowlist(keys: Sequence[str]) -> str:
     return "\n".join(lines)
 ```
 
-`main`(`:205-220`)을 다음으로 교체한다.
+`main()` 을 다음으로 교체한다. **교체 전에 현재 `main()` 본문을 읽어 아래와 대조한다** —
+아래는 `format_totals` → baseline 비교 → 위반 출력 흐름에 클론 리포트와 죽은 allowlist
+게이트만 끼워 넣은 것이므로, 현재 본문에 이 플랜이 모르는 분기가 더 있으면 그 분기를
+살린 채 삽입한다.
 
 ```python
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1219,11 +1317,32 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 - [ ] **Step 4: CI ruff 대상에 신규 모듈 추가**
 
-`.github/workflows/ci.yml:38` 을 다음으로 바꾼다.
+Ruff 스텝의 `run:` 은 folded 스칼라(`>-`)다. 현재 원문(앵커)은 다음과 같다.
 
 ```yaml
-        run: ruff check app/ scripts/design_ratchet.py scripts/_design_ratchet_scan.py scripts/_design_ratchet_clones.py
+      - name: Ruff (lint)
+        # 설계 래칫 스캐너는 자신이 검사하는 규율을 지켜야 하므로 lint 대상에 포함한다
+        # (scripts/ 전체는 아직 grandfathered — docs/operations/design-ratchet.md).
+        run: >-
+          ruff check app/ scripts/design_ratchet.py
+          scripts/_design_ratchet_scan.py scripts/_design_ratchet_contracts.py
 ```
+
+마지막 줄 끝에 신규 모듈을 덧붙인다(88자를 넘지 않게 줄을 나눈다).
+
+```yaml
+      - name: Ruff (lint)
+        # 설계 래칫 스캐너는 자신이 검사하는 규율을 지켜야 하므로 lint 대상에 포함한다
+        # (scripts/ 전체는 아직 grandfathered — docs/operations/design-ratchet.md).
+        run: >-
+          ruff check app/ scripts/design_ratchet.py
+          scripts/_design_ratchet_scan.py scripts/_design_ratchet_contracts.py
+          scripts/_design_ratchet_clones.py
+```
+
+folded 스칼라는 이어진 줄을 공백 하나로 접합하므로 결과 명령은 한 줄짜리
+`ruff check app/ scripts/design_ratchet.py scripts/_design_ratchet_scan.py
+scripts/_design_ratchet_contracts.py scripts/_design_ratchet_clones.py` 와 같다.
 
 - [ ] **Step 5: 테스트 통과 확인**
 
@@ -1259,7 +1378,7 @@ Expected: `duplicate_mechanical_helpers` · `duplicate_mechanical_helpers_local`
 cd /home/deploy/project/bid-vector-dup-spec && \
 /home/deploy/project/bid-vector/.venv/bin/ruff check \
   scripts/design_ratchet.py scripts/_design_ratchet_scan.py \
-  scripts/_design_ratchet_clones.py && \
+  scripts/_design_ratchet_contracts.py scripts/_design_ratchet_clones.py && \
 git add scripts/design_ratchet.py tests/test_design_ratchet.py .github/workflows/ci.yml && \
 git commit -m "feat(quality): 클론 그룹 리포트 + 죽은 allowlist 게이트
 
@@ -1319,12 +1438,15 @@ print('동일파일 중복 함수:', local)
 print('baseline 파일 수:', len(data['files']))
 "
 ```
-Expected: 교차파일·동일파일 모두 0 보다 크다.
+Expected: `교차파일 중복 함수: 67` · `동일파일 중복 함수: 10`
 
-스펙 §7.4 의 추정치는 프로토타입 기준 교차 41(=45−allowlist 4) · 동일 10 이었다.
-실제 구현의 predicate 와 정확히 같지 않을 수 있으므로 **이 숫자와의 일치를 통과
-조건으로 삼지 않는다.** 크게 어긋나면(예: 교차가 0 이거나 200 이상) predicate 를
-재점검한다. 실제 기록값을 PR 본문에 적는다.
+근거는 재측정된 인벤토리다: 교차파일 **31그룹 / 71함수**, 동일파일 **5그룹 / 10함수**.
+여기서 `CLONE_ALLOWLIST` 의 2그룹(4함수)이 지표에서 제외되므로 baseline 이 기록하는
+교차파일 값은 71 − 4 = **67**, 동일파일은 면제 대상이 없어 **10** 이다.
+
+이 수치는 **통과 조건이 아니라 기대치**다. 구현된 predicate 가 측정 스크립트와 완전히
+같지 않을 수 있어 소폭 차이는 정상이다. 다만 크게 어긋나면(교차가 0 이거나 200 이상)
+Task 1~2 의 predicate 를 재점검한다. 실제 기록값을 PR 본문에 적는다.
 
 - [ ] **Step 3: 게이트가 이제 통과하는지 확인**
 
@@ -1478,7 +1600,12 @@ def _float_or_none(value):
 
 - [ ] **Step 4: `docs/operations/design-ratchet.md` 지표표에 2행 추가**
 
-`## 지표` 표의 `unvalidated_dict_tasks` 행 **뒤**에 추가한다.
+> 이 문서는 main 에서 크게 늘었다(탐지기 강화·allowlist 절·변경 이력 추가). **Step 4·5 를
+> 시작하기 전에 문서 전체를 먼저 읽고** `## 지표` 표의 마지막 행과 판정 절들의 실제
+> 위치를 확인한다. 아래 앵커 문구가 그대로 없으면 같은 역할을 하는 위치에 넣는다 —
+> 삽입할 마크다운 본문 자체는 바꾸지 않는다.
+
+`## 지표` 표의 마지막 행(`unvalidated_dict_tasks`) **뒤**에 추가한다.
 
 ```markdown
 | `duplicate_mechanical_helpers` | 그 파일이 정의한 메커니컬 헬퍼 중 **다른 파일**의 헬퍼와 구조 클론 그룹을 이루는 함수 수 | §4.5-8 중복 금지. 처방은 허브로 이동 |
@@ -1487,8 +1614,14 @@ def _float_or_none(value):
 
 - [ ] **Step 5: `docs/operations/design-ratchet.md` 에 판정 절 추가**
 
-`### \`env_test_sniff\` 의 탐지 범위(한정)` 절 **뒤**, `스캔 대상은 ...` 문단 **앞**에
-삽입한다.
+지표별 판정 절들이 끝나는 지점, 즉 마지막 판정 절(현재는
+`### \`env_test_sniff\` 의 탐지 범위(한정)`) **뒤**이자 `스캔 대상은 ...` 문단 **앞**에
+삽입한다. 판정 절 구성이 바뀌었으면 "마지막 판정 절 뒤 · `스캔 대상은` 문단 앞"이라는
+위치 관계를 기준으로 삼는다.
+
+아래 두 번째 블록(`### CLONE_ALLOWLIST`)은 문서에 이미 `## allowlist 추가 기준`
+(`JSON_CALL_ALLOWLIST` 설명) 절이 있으면 그 절 안으로 옮겨 붙여도 된다. 어느 쪽이든
+본문은 그대로 쓴다.
 
 ```markdown
 ### 중복 헬퍼 지표의 판정 파이프라인
@@ -1550,7 +1683,7 @@ Run:
 cd /home/deploy/project/bid-vector-dup-spec && \
 /home/deploy/project/bid-vector/.venv/bin/ruff check \
   app/ scripts/design_ratchet.py scripts/_design_ratchet_scan.py \
-  scripts/_design_ratchet_clones.py && \
+  scripts/_design_ratchet_contracts.py scripts/_design_ratchet_clones.py && \
 /home/deploy/project/bid-vector/.venv/bin/mypy app/ && \
 /home/deploy/project/bid-vector/.venv/bin/pytest -q tests/
 ```
@@ -1607,7 +1740,7 @@ PR 본문에 포함할 것:
 
 | 스펙 절 | 커버 |
 |---|---|
-| §4.1 지표 2축 정의 | Task 2(그룹핑) · Task 3(FileMetrics 2필드) |
+| §4.1 지표 2축 정의 | Task 2(그룹핑) · Task 3(contracts 의 `FileMetrics` 2필드) |
 | §4.2 판정 파이프라인 5단계 | Task 1(1~4단계) · Task 2(5단계) |
 | §4.3 2-pass 아키텍처 · 계약 보존 | Task 3 Step 5·6 |
 | §4.4 래칫 동작 검증 | Task 5 Step 4 (probe 실증) |
@@ -1623,6 +1756,10 @@ PR 본문에 포함할 것:
 
 §5(통합)와 프론트(§5.4)는 이 플랜의 범위가 아니다 — 스펙 §9 의 PR1 정의와 일치한다.
 
+스펙 §7.4 의 수치는 재측정으로 갱신됐다: 인벤토리 교차파일 31그룹/71함수 · 동일파일
+5그룹/10함수 → allowlist 2그룹(4함수) 제외 후 baseline 기대치 **교차 67 · 동일 10**
+(Task 5 Step 2). 통과 조건이 아니라 sanity 기대치다.
+
 **2. Placeholder 스캔** — "TBD"/"나중에"/"적절히 처리" 없음. 모든 코드 스텝에 실제
 코드 블록이 있고, 모든 실행 스텝에 명령과 기대 출력이 있다.
 
@@ -1631,7 +1768,9 @@ PR 본문에 포함할 것:
 이름으로 쓰고, Task 3 이 `scan_file` 반환 타입
 `tuple[FileMetrics, list[CloneSignature]]` 에서, Task 4 가 `scan_repo_clone_signatures`
 반환 타입에서 같게 쓴다. `CloneGroup`(필드 `members`·`files`·`node_count`, 프로퍼티
-`key`)은 Task 2 정의 → Task 4 `format_clone_groups` 소비로 일치.
+`key`)은 Task 2 정의 → Task 4 `format_clone_groups` 소비로 일치. 두 모델은 baseline
+JSON 으로 직렬화되지 않는 내부 자료구조라 contracts 가 아니라
+`_design_ratchet_clones.py` 에 산다(contracts 의 경계 = 직렬화되는 계약 + 순수 비교).
 `count_cross_file_clones -> dict[str, int]` 는 value 가 스칼라라
 `dict_boundary_functions` 지표에 잡히지 않는다(스캐너 자신의 위반 0 유지).
 
