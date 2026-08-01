@@ -19,7 +19,7 @@ from .constants import (
     SAMPLE_GAP_WARNING_MIXED_DATA,
     SYNTHETIC_REPORT_GROUP_SAMPLE_TARGET,
 )
-from .serialization import _json_loads
+from .serialization import EXPERIMENT_OPERATOR_SLUGS_COLUMN, EXPERIMENT_PARAMS_COLUMN, _json_loads
 
 
 def _safe_positive_int(value: Any, default: int = 0) -> int:
@@ -74,10 +74,10 @@ def _sample_gap_run_context(
     summary: dict[str, Any],
     sample_report: dict[str, Any],
 ) -> dict[str, Any]:
-    params = _json_loads(run.experiment.params_json) if run.experiment else {}
+    params = _json_loads(run.experiment.params_json, context=EXPERIMENT_PARAMS_COLUMN) if run.experiment else {}
     params = params if isinstance(params, dict) else {}
     operator_slugs = (
-        _json_loads(run.experiment.operator_slugs_json) if run.experiment else []
+        _json_loads(run.experiment.operator_slugs_json, context=EXPERIMENT_OPERATOR_SLUGS_COLUMN) if run.experiment else []
     )
     operator_slugs = operator_slugs if isinstance(operator_slugs, list) else []
     preset_name = _first_present(
@@ -231,7 +231,7 @@ def _sample_gap_params_match(
     experiment: SyntheticExperiment,
     params: dict[str, Any],
 ) -> bool:
-    saved = _json_loads(experiment.params_json) or {}
+    saved = _json_loads(experiment.params_json, context=EXPERIMENT_PARAMS_COLUMN) or {}
     if not isinstance(saved, dict):
         return False
     return _sample_gap_core_params(saved) == _sample_gap_core_params(params)
@@ -253,7 +253,7 @@ def _sample_gap_operator_slugs_match(
     experiment: SyntheticExperiment,
     operator_slugs: list[str],
 ) -> bool:
-    saved = _json_loads(experiment.operator_slugs_json) or []
+    saved = _json_loads(experiment.operator_slugs_json, context=EXPERIMENT_OPERATOR_SLUGS_COLUMN) or []
     if not isinstance(saved, list):
         return False
     return [str(slug) for slug in saved] == [str(slug) for slug in operator_slugs]

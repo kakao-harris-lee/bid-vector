@@ -11,7 +11,12 @@ from .constants import (
     RUN_STATUS_RUNNING,
     SYNTHETIC_EXPERIMENT_PRESETS,
 )
-from .serialization import _json_dumps, _json_loads
+from .serialization import (
+    EXPERIMENT_OPERATOR_SLUGS_COLUMN,
+    EXPERIMENT_PARAMS_COLUMN,
+    _json_dumps,
+    _json_loads,
+)
 
 
 class ExperimentCrudMixin:
@@ -123,8 +128,10 @@ class ExperimentCrudMixin:
         self.db.commit()
         self.db.refresh(run)
 
-        params = _json_loads(experiment.params_json) or {}
-        operator_slugs = _json_loads(experiment.operator_slugs_json) or []
+        params = _json_loads(experiment.params_json, context=EXPERIMENT_PARAMS_COLUMN) or {}
+        operator_slugs = _json_loads(
+            experiment.operator_slugs_json, context=EXPERIMENT_OPERATOR_SLUGS_COLUMN
+        ) or []
         payload: dict[str, Any] = dict(params)
         payload["experiment_id"] = experiment.id
         payload["run_id"] = run.id

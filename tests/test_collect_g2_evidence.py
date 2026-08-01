@@ -261,3 +261,64 @@ def test_collect_g2_evidence_continues_when_one_operator_raises(test_db, monkeyp
 
     # Read-only invariant holds even on partial failure.
     assert test_db.query(OperatorStrategyRun).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Operator activity counters (관측 가능한 변화 — Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_events_stay_out_of_operator_activity_counts(test_db):
+    """beat sweep 2건/일이 운영자 활동 카운트에 섞이지 않는다.
+
+    관측 가능한 변화: 이전에는 두 sweep event_type 이
+    ``INTERNAL_TELEMETRY_EVENT_TYPES`` 밖이라 ``/analytics/summary`` 의
+    ``total_events`` 와 운영자 대시보드 ``recent_event_count`` 가 **운영자가 아무 것도
+    하지 않은 날에도** 매일 2씩 올라갔다. 두 타입을 내부 텔레메트리로 선언해 상수 주석이
+    선언한 정책과 일치시킨다(카운트는 낮아질 수만 있다).
+    """
+    from app.api.analytics import INTERNAL_TELEMETRY_EVENT_TYPES
+    from app.api.operator_dashboard import INTERNAL_OPERATOR_EVENT_TYPES
+    from app.core.constants import (
+        COLLECT_G2_EVIDENCE_EVENT_TYPE,
+        G2_CANDIDATE_RECHECK_EVENT_TYPE,
+    )
+    from app.core.single_user import ensure_operator_account
+
+    operator = ensure_operator_account(test_db)
+    test_db.add_all(
+        [
+            Analytics(
+                user_id=operator.id,
+                event_type=G2_CANDIDATE_RECHECK_EVENT_TYPE,
+                event_data="{}",
+            ),
+            Analytics(
+                user_id=operator.id,
+                event_type=COLLECT_G2_EVIDENCE_EVENT_TYPE,
+                event_data="{}",
+            ),
+            Analytics(
+                user_id=operator.id,
+                event_type="dashboard_opened",
+                event_data="{}",
+            ),
+        ]
+    )
+    test_db.commit()
+
+    # 두 카운터가 공유하는 제외 집합에 sweep 타입이 들어 있다.
+    for event_type in (G2_CANDIDATE_RECHECK_EVENT_TYPE, COLLECT_G2_EVIDENCE_EVENT_TYPE):
+        assert event_type in INTERNAL_TELEMETRY_EVENT_TYPES
+        assert event_type in INTERNAL_OPERATOR_EVENT_TYPES
+
+    # 제외 집합을 실제 쿼리 술어로 적용하면 운영자 활동 1건만 남는다.
+    counted = (
+        test_db.query(Analytics)
+        .filter(
+            Analytics.user_id == operator.id,
+            ~Analytics.event_type.in_(INTERNAL_TELEMETRY_EVENT_TYPES),
+        )
+        .all()
+    )
+    assert [row.event_type for row in counted] == ["dashboard_opened"]

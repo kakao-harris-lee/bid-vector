@@ -14,7 +14,10 @@ from typing import Any
 
 from app.core.time import ensure_utc
 from app.models.models import DecisionExperimentRun
-from app.services.decision_experiments.base import _DecisionExperimentBase
+from app.services.decision_experiments.base import (
+    LATEST_EVALUATION_COLUMN,
+    _DecisionExperimentBase,
+)
 
 
 class _SerializationMixin(_DecisionExperimentBase):
@@ -22,7 +25,9 @@ class _SerializationMixin(_DecisionExperimentBase):
 
     def _serialize_run(self, run: DecisionExperimentRun) -> dict[str, Any]:
         """Serialize one run row into the API response shape."""
-        latest_evaluation = self._load_json(run.latest_evaluation, fallback=None)
+        latest_evaluation = self._load_json(
+            run.latest_evaluation, fallback=None, context=LATEST_EVALUATION_COLUMN
+        )
         if latest_evaluation == {}:
             latest_evaluation = None
         notes = str(run.notes or "").strip() or None

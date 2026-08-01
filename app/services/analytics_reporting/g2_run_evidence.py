@@ -10,6 +10,7 @@ from app.models.models import (
     SyntheticExperimentResult,
     SyntheticExperimentRun,
 )
+from app.services.decision_experiments.base import LATEST_EVALUATION_COLUMN
 from app.services.synthetic_experiment import sample_status_for_settled_count
 
 
@@ -33,7 +34,10 @@ class _G2RunEvidenceMixin:
         }
 
     def _g2_decision_experiment_run_evidence(self, run: DecisionExperimentRun) -> dict[str, Any]:
-        latest_evaluation = self._load_json_object(run.latest_evaluation)
+        latest_evaluation = self._load_json_object(
+            run.latest_evaluation,
+            context=LATEST_EVALUATION_COLUMN,
+        )
         return {
             "run_id": int(run.id),
             "operator_id": int(run.operator_id),

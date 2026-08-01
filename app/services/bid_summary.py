@@ -19,7 +19,6 @@ Sources:
   operator, if any.
 """
 
-import json
 import logging
 from typing import Any, Optional
 
@@ -35,6 +34,11 @@ from app.models.models import (
     SyntheticExperimentRun,
     User,
 )
+from app.services.stored_json_payload import load_stored_json_value
+from app.services.synthetic_experiment import RESULT_BREAKDOWN_COLUMN
+
+# 이 서비스가 직접 읽는 컬럼의 degrade 라벨(교차 패키지 컬럼은 소유 모듈 상수를 쓴다).
+BID_DECISION_SCORE_BREAKDOWN_COLUMN = "bid_decision_record.score_breakdown"
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +267,9 @@ class BidSummaryService:
             .all()
         )
         for result in results:
-            breakdown = self._loads_json(result.breakdown_json)
+            breakdown = self._loads_json(
+                result.breakdown_json, context=RESULT_BREAKDOWN_COLUMN
+            )
             if not isinstance(breakdown, dict):
                 continue
             for row in breakdown.get("by_category", []) or []:
@@ -300,7 +306,9 @@ class BidSummaryService:
         stores decision signals as JSON text with optional ``strengths`` /
         ``risk_flags`` keys. Older records simply lack the keys.
         """
-        parsed = self._loads_json(score_breakdown)
+        parsed = self._loads_json(
+            score_breakdown, context=BID_DECISION_SCORE_BREAKDOWN_COLUMN
+        )
         if not isinstance(parsed, dict):
             return [], []
 
@@ -313,15 +321,19 @@ class BidSummaryService:
             parsed.get("risk_flags")
         )
 
-    def _loads_json(self, value: Any) -> Any:
+    def _loads_json(self, value: Any, *, context: str = "") -> Any:
+        """Restore a stored score/breakdown payload (object or array), else ``None``.
+
+        Decoding + the degrade warning live in the shared restore path; already
+        decoded values (ORM JSON columns) pass through as before. ``context`` is the
+        **column label** of the caller so a degrade warning names the column that is
+        actually unreadable (this service reads two different columns).
+        """
         if value is None:
             return None
         if isinstance(value, (dict, list)):
             return value
-        try:
-            return json.loads(value)
-        except (TypeError, ValueError):
-            return None
+        return load_stored_json_value(value, context=context)
 
     def _as_optional_float(self, value: Any) -> Optional[float]:
         if value is None:

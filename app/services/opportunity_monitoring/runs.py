@@ -17,6 +17,10 @@ from app.core.time import utc_now
 from app.models.models import OperatorStrategy, OperatorStrategyRun, User
 from app.schemas.schemas import OperatorStrategyMonitorRequest
 from app.services.opportunity_monitoring.base import _MonitoringBase
+from app.services.opportunity_monitoring.serialization import (
+    MONITOR_REQUEST_PAYLOAD_COLUMN,
+    MONITOR_RESULT_PAYLOAD_COLUMN,
+)
 from app.services.realtime import realtime_event_manager
 
 
@@ -51,7 +55,7 @@ class _RunLifecycleMixin(_MonitoringBase):
             status=status,
             high_priority_only=resolved_high_priority_only,
             limit_applied=resolved_limit,
-            request_payload=self._dump_json(request.model_dump(mode="json")),
+            request_payload=request.model_dump_json(),
             started_at=utc_now() if status == "running" else None,
         )
         db.add(monitor_run)
@@ -116,15 +120,22 @@ class _RunLifecycleMixin(_MonitoringBase):
         if monitor_run is None:
             raise ValueError("Monitoring run not found")
 
-        request_payload = self._load_json(monitor_run.request_payload)
-        result_payload = self._load_json(monitor_run.result_payload)
+        request_payload = self._load_json(
+            monitor_run.request_payload, context=MONITOR_REQUEST_PAYLOAD_COLUMN
+        )
+        result_payload = self._load_json(
+            monitor_run.result_payload, context=MONITOR_RESULT_PAYLOAD_COLUMN
+        )
         previous_run = self._get_previous_completed_run(
             db,
             operator_id=operator.id,
             exclude_run_id=monitor_run.id,
             before_run_id=monitor_run.id,
         )
-        previous_result_payload = self._load_json(previous_run.result_payload if previous_run else None)
+        previous_result_payload = self._load_json(
+            previous_run.result_payload if previous_run else None,
+            context=MONITOR_RESULT_PAYLOAD_COLUMN,
+        )
         diff = self._build_run_diff(result_payload, previous_result_payload) if result_payload else {
             "new_candidate_count": 0,
             "continuing_candidate_count": 0,
@@ -220,7 +231,7 @@ class _RunLifecycleMixin(_MonitoringBase):
         monitor_run.status = "running"
         monitor_run.high_priority_only = resolved_high_priority_only
         monitor_run.limit_applied = resolved_limit
-        monitor_run.request_payload = self._dump_json(request.model_dump(mode="json"))
+        monitor_run.request_payload = request.model_dump_json()
         monitor_run.error_message = None
         monitor_run.started_at = monitor_run.started_at or utc_now()
         monitor_run.completed_at = None

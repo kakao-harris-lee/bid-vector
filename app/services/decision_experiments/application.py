@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.core.time import utc_now
 from app.models.models import DecisionExperimentRun
-from app.services.decision_experiments.base import _DecisionExperimentBase
+from app.services.decision_experiments.base import (
+    BASELINE_SUMMARY_COLUMN,
+    LATEST_EVALUATION_COLUMN,
+    _DecisionExperimentBase,
+)
 from app.services.operator_strategy_tuning import (
     clamp_auto_workload_penalty_multiplier,
     clamp_category_priority_override,
@@ -309,13 +313,17 @@ class _ApplicationMixin(_DecisionExperimentBase):
 
     def _strategy_source_summary(self, run: DecisionExperimentRun) -> dict[str, Any]:
         """Choose the best available metrics snapshot for strategy application."""
-        latest_evaluation = self._load_json(run.latest_evaluation, fallback={})
+        latest_evaluation = self._load_json(
+            run.latest_evaluation, fallback={}, context=LATEST_EVALUATION_COLUMN
+        )
         if isinstance(latest_evaluation, dict):
             current_summary = latest_evaluation.get("current_summary")
             if isinstance(current_summary, dict):
                 return current_summary
 
-        baseline_summary = self._load_json(run.baseline_summary, fallback={})
+        baseline_summary = self._load_json(
+            run.baseline_summary, fallback={}, context=BASELINE_SUMMARY_COLUMN
+        )
         return baseline_summary if isinstance(baseline_summary, dict) else {}
 
     def _clean_category_name(self, raw_value: Any) -> str | None:

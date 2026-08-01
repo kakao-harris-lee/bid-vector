@@ -177,3 +177,20 @@ def test_monitor_task_finalizes_run_failed_on_exception(test_db, monkeypatch):
     run = test_db.query(OperatorStrategyRun).one()
     assert run.status == "failed"
     assert run.status != "running"
+
+
+def test_stored_request_payload_string_is_parse_equivalent_to_legacy_dumps():
+    """``request_payload`` 저장 문자열이 종전 ``json.dumps(model_dump(mode="json"))`` 와 동치.
+
+    방어적 DTO 규율 Phase 5: 이 컬럼은 이미 pydantic 모델이 만드는 payload 였으므로
+    ``_dump_json(request.model_dump(mode="json"))`` 대신 모델이 직접 직렬화한다. 감사용
+    컬럼이라 compact separator 차이 외에는 달라져서는 안 된다.
+    """
+    import json
+
+    request = OperatorStrategyMonitorRequest(limit=10, high_priority_only=False)
+    legacy = json.dumps(request.model_dump(mode="json"), ensure_ascii=False, default=str)
+    stored = request.model_dump_json()
+
+    assert json.loads(stored) == json.loads(legacy)
+    assert list(json.loads(stored)) == list(json.loads(legacy))

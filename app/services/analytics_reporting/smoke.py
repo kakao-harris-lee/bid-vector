@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,6 +14,7 @@ from app.services.smoke_failure_taxonomy import (
     classify_failure,
     guidance_for,
 )
+from app.services.stored_json_payload import load_stored_json_array
 
 
 class _SmokeTestMixin:
@@ -222,16 +222,20 @@ class _SmokeTestMixin:
         return f"{detail} {self.SYNTHETIC_CANONICAL_ONLY_REASON}"
 
     def _load_smoke_phases(self, raw_phases: Any) -> list[dict[str, Any]]:
-        """Parse a SmokeTestRun.phases JSON string into a list of phase dicts."""
+        """Restore ``SmokeTestRun.phases`` into a list of phase dicts.
+
+        Decoding + the array shape check live in the shared restore path
+        (``app.services.stored_json_payload``); this mixin keeps its own degrade
+        policy (unreadable -> *no* phases, so a corrupt run counts as zero
+        attempted phases rather than crashing the smoke summary) and the
+        per-element ``isinstance`` filter that drops non-object entries.
+        """
         if isinstance(raw_phases, list):
             return [phase for phase in raw_phases if isinstance(phase, dict)]
-        try:
-            parsed = json.loads(str(raw_phases or "[]"))
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(parsed, list):
-            return []
-        return [phase for phase in parsed if isinstance(phase, dict)]
+        items = load_stored_json_array(
+            str(raw_phases or "[]"), context="smoke_test_run.phases"
+        )
+        return [phase for phase in items or [] if isinstance(phase, dict)]
 
     def _is_skipped_phase(self, phase: dict[str, Any]) -> bool:
         """Return whether a phase record marks a *skipped* (never-run) occurrence.

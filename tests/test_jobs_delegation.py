@@ -12,6 +12,10 @@ verbatim) and, where a helper that references a Celery task must stay in the
 
 import app.tasks.jobs as jobs
 from app.schemas.crawl import CrawlRequest
+from app.schemas.g2_evidence import (
+    G2CandidateRecheckSummary,
+    G2CollectEvidenceSummary,
+)
 from app.schemas.task_payloads import (
     HistoricalBacktestTaskRequest,
     ScsbidReserveDetailBackfillRequest,
@@ -127,13 +131,28 @@ def test_collect_g2_evidence_delegates_with_db_and_injected_draft_writer(monkeyp
             recent_limit=recent_limit,
             writer=write_daily_draft,
         )
-        return {"ok": "collect_g2"}
+        return G2CollectEvidenceSummary(
+            generated_window_days=window_days,
+            recent_limit=recent_limit,
+            operator_count=0,
+            ready_count=0,
+            error_count=0,
+        )
 
     monkeypatch.setattr(jobs, "run_collect_g2_evidence_job", _spy)
 
     out = jobs.collect_g2_evidence.run(window_days=21, recent_limit=7)
 
-    assert out == {"ok": "collect_g2"}
+    # The shell lowers the body's typed summary to a JSON-safe dict so the celery
+    # result backend (json serializer) can carry it.
+    assert out == {
+        "generated_window_days": 21,
+        "recent_limit": 7,
+        "operator_count": 0,
+        "ready_count": 0,
+        "error_count": 0,
+        "per_operator": [],
+    }
     assert captured["db"] is dummy
     assert captured["window_days"] == 21
     assert captured["recent_limit"] == 7
@@ -151,12 +170,24 @@ def test_run_g2_candidate_recheck_delegates_with_db(monkeypatch):
 
     def _spy(db):
         captured["db"] = db
-        return {"ok": "recheck"}
+        return G2CandidateRecheckSummary(
+            operator_count=0,
+            total_candidates=0,
+            operators_with_candidates=0,
+            error_count=0,
+        )
 
     monkeypatch.setattr(jobs, "run_g2_candidate_recheck_job", _spy)
 
     out = jobs.run_g2_candidate_recheck.run()
 
-    assert out == {"ok": "recheck"}
+    # Typed summary lowered to a JSON-safe dict by the shell.
+    assert out == {
+        "operator_count": 0,
+        "total_candidates": 0,
+        "operators_with_candidates": 0,
+        "error_count": 0,
+        "per_operator": [],
+    }
     assert captured["db"] is dummy
     assert dummy.closed is True

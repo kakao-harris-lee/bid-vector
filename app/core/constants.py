@@ -159,6 +159,13 @@ BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE: str = "email.bid_report.delivery"
 # 프론트가 열린 텔레메트리 엔드포인트(``POST /analytics/event``)로 올리는 이벤트.
 PROJECT_VIEW_EVENT_TYPE: str = "project_view"
 RECOMMENDATION_FEEDBACK_EVENT_TYPE: str = "recommendation_feedback"
+# G-2 증적 sweep beat 가 남기는 관측 이벤트. ``collect_g2_evidence`` 행은
+# scripts/backfill_g2_daily_drafts.py 가 되읽어 counted_days 판정에 쓰이는 **게이트
+# 입력**이다 — 생산(app/tasks/evidence_jobs.py)과 소비(backfill 스크립트)가 같은 문자열을
+# 따로 적어 두면 조용히 0건이 되어 통과한 날이 사라진다. 동시에 운영자 활동이 아니라
+# beat 가 남긴 내부 관측이므로 아래 INTERNAL_TELEMETRY_EVENT_TYPES 에도 든다.
+G2_CANDIDATE_RECHECK_EVENT_TYPE: str = "g2_candidate_recheck"
+COLLECT_G2_EVIDENCE_EVENT_TYPE: str = "collect_g2_evidence"
 
 # Internal telemetry event types that operator-facing event *counts* exclude.
 #
@@ -169,10 +176,15 @@ RECOMMENDATION_FEEDBACK_EVENT_TYPE: str = "recommendation_feedback"
 # Both used to declare the same literal set independently; new internal event
 # types are added here so neither counter silently starts reporting telemetry as
 # operator activity.
+# G-2 sweep beat 이벤트도 여기 든다: beat 가 매일 2건을 남기므로, 제외하지 않으면
+# **운영자가 아무 것도 하지 않은 날에도** 활동 카운트가 올라가 위 주석이 선언한 정책
+# ("텔레메트리를 운영자 활동으로 보고하지 않는다")과 정면으로 어긋난다.
 INTERNAL_TELEMETRY_EVENT_TYPES: frozenset[str] = frozenset(
     {
         TELEGRAM_DELIVERY_EVENT_TYPE,
         TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE,
         TELEGRAM_STRATEGY_PENDING_EDIT_EVENT_TYPE,
+        G2_CANDIDATE_RECHECK_EVENT_TYPE,
+        COLLECT_G2_EVIDENCE_EVENT_TYPE,
     }
 )

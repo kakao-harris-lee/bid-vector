@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from collections import deque
@@ -12,10 +11,16 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import WebSocket
+from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import settings
 from app.core.time import utc_now
+from app.schemas.realtime import (
+    PersistedRealtimeFanoutEnvelope,
+    RealtimeEvent,
+    RealtimeFanoutEnvelope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,15 +76,26 @@ class PostgresNotifyRealtimeFanoutBackend(RealtimeFanoutBackend):
         self._listener_task = None
 
     def publish(self, event: dict[str, Any], *, publisher_id: str) -> None:
-        """Publish one event through PostgreSQL NOTIFY."""
-        payload = json.dumps(
-            {
-                "publisher_id": publisher_id,
-                "event": event,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
+        """Publish one event through PostgreSQL NOTIFY.
+
+        The event dict is promoted to the declared wire contract
+        (:class:`RealtimeFanoutEnvelope`) here — the same place the old
+        ``json.dumps`` sat — so the local (no-op) backend is unaffected and a
+        payload that could never be serialized still fails at this exact boundary.
+        ``model_dump_json`` emits the same compact separators the old call
+        requested, so the NOTIFY string is unchanged.
+
+        One case is **newly stricter**, not merely relocated: ``json.dumps`` coerced
+        non-string ``payload`` keys (``{1: "a"}`` -> ``{"1": "a"}``), while the
+        declared ``dict[str, JsonValue]`` contract rejects them. That only affects
+        the Postgres backend, and a non-string key was never round-trip safe (JSON
+        has no non-string keys, so the receiver already got a different dict).
+        """
+        envelope = RealtimeFanoutEnvelope(
+            publisher_id=publisher_id,
+            event=RealtimeEvent.model_validate(event),
         )
+        payload = envelope.model_dump_json()
         payload_size = len(payload.encode("utf-8"))
         if payload_size > self._MAX_NOTIFY_PAYLOAD_BYTES:
             logger.warning("Skipping realtime fanout event larger than PostgreSQL NOTIFY limit: %s bytes", payload_size)
@@ -130,20 +146,29 @@ class PostgresNotifyRealtimeFanoutBackend(RealtimeFanoutBackend):
                     )
 
     async def _handle_notification_payload(self, raw_payload: str) -> None:
-        """Decode one NOTIFY payload and forward it to the local manager."""
+        """Decode one NOTIFY payload and forward it to the local manager.
+
+        Restored through the tolerant receive contract
+        (:class:`PersistedRealtimeFanoutEnvelope`): a sibling process may run a
+        different build, so unknown keys are ignored and missing ones stay ``None``.
+        A payload that carries no event object is dropped silently (as before);
+        only an undecodable payload is warned about, and the raw text is never
+        logged.
+        """
         if self._manager is None:
             return
         try:
-            payload = json.loads(raw_payload)
-        except json.JSONDecodeError:
+            envelope = PersistedRealtimeFanoutEnvelope.model_validate_json(raw_payload)
+        except ValidationError:
             logger.warning("Ignoring malformed realtime fanout payload")
             return
 
-        publisher_id = str(payload.get("publisher_id") or "")
-        event = payload.get("event")
-        if not isinstance(event, dict):
+        if envelope.event is None:
             return
-        await self._manager.receive_fanout_event(event, publisher_id=publisher_id)
+        await self._manager.receive_fanout_event(
+            envelope.event.model_dump(),
+            publisher_id=str(envelope.publisher_id or ""),
+        )
 
     def _normalize_psycopg_url(self, database_url: str) -> str:
         """Convert SQLAlchemy-style PostgreSQL URLs into psycopg-compatible DSNs."""

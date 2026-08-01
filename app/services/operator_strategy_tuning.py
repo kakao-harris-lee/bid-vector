@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.services.stored_json_payload import load_stored_json_object
+
+# degrade 경고에서 어느 컬럼이 해석 불가였는지 특정하는 라벨.
+CATEGORY_PRIORITY_OVERRIDES_COLUMN = "operator_strategy.category_priority_overrides"
 
 DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER = 1.0
 MIN_AUTO_WORKLOAD_PENALTY_MULTIPLIER = 0.0
@@ -49,9 +53,12 @@ def parse_category_priority_overrides(raw_value: Any) -> dict[str, float]:
         return {}
 
     if isinstance(raw_value, str):
-        try:
-            parsed_value = json.loads(raw_value)
-        except json.JSONDecodeError:
+        # 복원(디코딩 + 객체 모양 검사)은 공유 경로가 담당한다; 객체가 아닌 값은 부재로
+        # 내려오므로 종전과 같이 빈 매핑으로 degrade 한다.
+        parsed_value = load_stored_json_object(
+            raw_value, context=CATEGORY_PRIORITY_OVERRIDES_COLUMN
+        )
+        if parsed_value is None:
             return {}
     else:
         parsed_value = raw_value
@@ -69,7 +76,12 @@ def parse_category_priority_overrides(raw_value: Any) -> dict[str, float]:
 
 
 def dump_category_priority_overrides(overrides: Any) -> str:
-    """Serialize category overrides into stable JSON for the strategy row."""
+    """Serialize category overrides into stable JSON for the strategy row.
+
+    Still ``json.dumps``: ``sort_keys=True`` is the stability contract for this
+    column (the same overrides must produce the same string regardless of insertion
+    order) and pydantic's serializer has no ``sort_keys`` equivalent.
+    """
     return json.dumps(
         parse_category_priority_overrides(overrides),
         ensure_ascii=False,

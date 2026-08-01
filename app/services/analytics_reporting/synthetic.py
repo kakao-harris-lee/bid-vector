@@ -12,6 +12,7 @@ from app.models.models import (
     SyntheticExperimentRun,
 )
 from app.services.synthetic_experiment import (
+    RUN_SUMMARY_COLUMN,
     SAMPLE_STATUS_SUFFICIENT,
     SYNTHETIC_EXPERIMENT_PRESETS,
     SYNTHETIC_RUN_TOTAL_SAMPLE_TARGET,
@@ -134,7 +135,8 @@ class _SyntheticValidationMixin:
         latest_preset_run: SyntheticExperimentRun | None,
     ) -> dict[str, Any]:
         summary = self._load_json_object(
-            latest_preset_run.summary_json if latest_preset_run else None
+            latest_preset_run.summary_json if latest_preset_run else None,
+            context=RUN_SUMMARY_COLUMN,
         )
         row_experiment_id = (
             int(latest_preset_run.experiment_id)
@@ -192,7 +194,10 @@ class _SyntheticValidationMixin:
     ) -> dict[str, Any] | None:
         if latest_run is None:
             return None
-        latest_summary = self._load_json_object(latest_run.summary_json)
+        latest_summary = self._load_json_object(
+            latest_run.summary_json,
+            context=RUN_SUMMARY_COLUMN,
+        )
         return {
             "experiment_id": int(latest_run.experiment_id),
             "experiment_name": latest_run.experiment.name if latest_run.experiment else None,

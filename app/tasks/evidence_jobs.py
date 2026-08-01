@@ -13,19 +13,46 @@ still intercepts the draft write. Service methods
 (``StrategyMonitoringService.preview_candidates`` /
 ``AnalyticsReportingService.build_g2_evidence_summary``) are patched at the class
 level in tests, so they are intercepted regardless of this module boundary.
+
+Payload 계약(방어적 DTO 규율 Phase 5): 두 sweep 이 내보내는 요약은
+:mod:`app.schemas.g2_evidence` 가 선언하고, ``Analytics.event_data`` 직렬화는 P4.2 의
+단일 경로(``dump_analytics_event``)를 쓴다. 남은 ``json.dumps`` 한 곳은 daily
+``manifest-draft.json`` **파일** 쓰기다: 그 파일은 ``scripts/build_g2_exit_review.py``
+가 되읽는 diff 가능한 증적 산출물이라 ``indent=2, sort_keys=True`` 로 바이트 안정성을
+유지해야 하는데 pydantic 직렬화에는 ``sort_keys`` 대응이 없어, 모델로 태우면 기존 모든
+draft 의 키 순서가 조용히 바뀐다. 같은 이유로 ``build_daily_evidence_draft`` 는 아직
+dict 를 받고, 타입 요약은 그 호출 한 줄에서만 dict 로 낮춘다(builder 타입화는 후속).
 """
 
 import logging
-from typing import Any, Callable
+from typing import Callable
 
 from app.core.config import settings
+from app.core.constants import (
+    COLLECT_G2_EVIDENCE_EVENT_TYPE,
+    G2_CANDIDATE_RECHECK_EVENT_TYPE,
+)
 from app.models.models import User
+from app.schemas.g2_evidence import (
+    G2CandidateRecheckOperatorEntry,
+    G2CandidateRecheckOperatorError,
+    G2CandidateRecheckOperatorResult,
+    G2CandidateRecheckSummary,
+    G2CollectEvidenceSummary,
+    G2EvidenceOperatorSnapshot,
+    G2EvidenceOperatorSnapshotEntry,
+    G2EvidenceOperatorSnapshotError,
+    G2LedgerOperatorSummary,
+    G2LedgerOperatorSummaryEntry,
+    G2LedgerOperatorSummaryError,
+)
+from app.services.analytics_event_payload import dump_analytics_event
 from app.services.opportunity_monitoring import StrategyMonitoringService
 
 logger = logging.getLogger(__name__)
 
 
-def run_g2_candidate_recheck_job(db) -> dict:
+def run_g2_candidate_recheck_job(db) -> G2CandidateRecheckSummary:
     """Read-only G-2 candidate re-check body (db lifecycle owned by the caller).
 
     Re-runs the read-only ``preview_candidates`` for every active synthetic
@@ -40,9 +67,10 @@ def run_g2_candidate_recheck_job(db) -> dict:
     Each operator is swept inside its own ``try/except`` so one failure cannot
     abort the whole sweep; failures are recorded per operator and the task
     continues.
-    """
-    import json
 
+    Returns the typed summary (:class:`G2CandidateRecheckSummary`); the celery
+    shell serializes it for the result backend.
+    """
     from app.core.single_user import ensure_operator_account
     from app.models.models import Analytics
 
@@ -55,7 +83,7 @@ def run_g2_candidate_recheck_job(db) -> dict:
     )
 
     service = StrategyMonitoringService()
-    per_operator: list[dict[str, Any]] = []
+    per_operator: list[G2CandidateRecheckOperatorEntry] = []
     total_candidates = 0
     operators_with_candidates = 0
     error_count = 0
@@ -74,12 +102,12 @@ def run_g2_candidate_recheck_job(db) -> dict:
             if returned > 0:
                 operators_with_candidates += 1
             per_operator.append(
-                {
-                    "operator_id": int(op.id),
-                    "username": str(op.username or ""),
-                    "evaluated_project_count": evaluated,
-                    "returned_candidate_count": returned,
-                }
+                G2CandidateRecheckOperatorResult(
+                    operator_id=int(op.id),
+                    username=str(op.username or ""),
+                    evaluated_project_count=evaluated,
+                    returned_candidate_count=returned,
+                )
             )
         except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
             error_count += 1
@@ -89,26 +117,26 @@ def run_g2_candidate_recheck_job(db) -> dict:
                 getattr(op, "username", None),
             )
             per_operator.append(
-                {
-                    "operator_id": int(op.id),
-                    "username": str(op.username or ""),
-                    "error": type(exc).__name__,
-                }
+                G2CandidateRecheckOperatorError(
+                    operator_id=int(op.id),
+                    username=str(op.username or ""),
+                    error=type(exc).__name__,
+                )
             )
 
-    summary = {
-        "operator_count": len(operators),
-        "total_candidates": total_candidates,
-        "operators_with_candidates": operators_with_candidates,
-        "error_count": error_count,
-        "per_operator": per_operator,
-    }
+    summary = G2CandidateRecheckSummary(
+        operator_count=len(operators),
+        total_candidates=total_candidates,
+        operators_with_candidates=operators_with_candidates,
+        error_count=error_count,
+        per_operator=per_operator,
+    )
 
     # The only permitted write: one analytics evidence event for the sweep.
     analytics = Analytics(
         user_id=operator.id,
-        event_type="g2_candidate_recheck",
-        event_data=json.dumps(summary, ensure_ascii=False),
+        event_type=G2_CANDIDATE_RECHECK_EVENT_TYPE,
+        event_data=dump_analytics_event(summary),
     )
     db.add(analytics)
     db.commit()
@@ -116,7 +144,7 @@ def run_g2_candidate_recheck_job(db) -> dict:
     logger.info(
         "g2_candidate_recheck completed operators=%s total_candidates=%s "
         "operators_with_candidates=%s errors=%s",
-        summary["operator_count"],
+        summary.operator_count,
         total_candidates,
         operators_with_candidates,
         error_count,
@@ -124,7 +152,9 @@ def run_g2_candidate_recheck_job(db) -> dict:
     return summary
 
 
-def _write_g2_daily_evidence_draft(*, target_summaries: list[dict[str, Any]]) -> None:
+def _write_g2_daily_evidence_draft(
+    *, target_summaries: list[G2LedgerOperatorSummaryEntry]
+) -> None:
     """Write today's ledger-based G-2 ``manifest-draft.json`` for the targets.
 
     Best-effort and idempotent: the KST-day directory is overwritten on re-run so
@@ -132,6 +162,8 @@ def _write_g2_daily_evidence_draft(*, target_summaries: list[dict[str, Any]]) ->
     ONLY this local JSON file — no operator data, no execution, no external
     calls. Skipped in ``ENVIRONMENT=test`` to keep the repo working tree clean.
     Callers wrap this in ``try/except`` so a write failure never aborts the sweep.
+    See the module docstring for why the draft file keeps ``json.dumps`` and why
+    the typed ledger summaries are lowered to dicts at the builder boundary.
     """
     import json
     from pathlib import Path
@@ -147,7 +179,7 @@ def _write_g2_daily_evidence_draft(*, target_summaries: list[dict[str, Any]]) ->
 
     run_date_kst = kst_now().date().isoformat()
     draft = build_daily_evidence_draft(
-        operator_summaries=target_summaries,
+        operator_summaries=[summary.model_dump() for summary in target_summaries],
         target_operator_ids=target_ids,
         run_date_kst=run_date_kst,
         required_days=max(1, int(settings.G2_EVIDENCE_REQUIRED_DAYS)),
@@ -174,7 +206,7 @@ def run_collect_g2_evidence_job(
     window_days: int,
     recent_limit: int,
     write_daily_draft: Callable[..., None],
-) -> dict:
+) -> G2CollectEvidenceSummary:
     """Read-only per-operator G-2 evidence ledger snapshot body.
 
     db lifecycle is owned by the caller; ``write_daily_draft`` is injected so the
@@ -203,9 +235,10 @@ def run_collect_g2_evidence_job(
     Each operator is summarized inside its own ``try/except`` so one failure
     cannot abort the whole sweep; failures are recorded per operator and the task
     continues.
-    """
-    import json
 
+    Returns the typed summary (:class:`G2CollectEvidenceSummary`); the celery
+    shell serializes it for the result backend.
+    """
     from app.core.single_user import ensure_operator_account
     from app.models.models import Analytics
     from app.services.analytics_reporting import AnalyticsReportingService
@@ -228,11 +261,11 @@ def run_collect_g2_evidence_job(
         "synthetic_experiments",
         "notifications",
     )
-    per_operator: list[dict[str, Any]] = []
+    per_operator: list[G2EvidenceOperatorSnapshotEntry] = []
     # Full per-target ledger summaries (with blocking_gaps list) feeding the
     # daily manifest-draft.json; a subset of the swept operators.
     target_id_set = set(settings.g2_evidence_target_operator_ids)
-    target_summaries: list[dict[str, Any]] = []
+    target_summaries: list[G2LedgerOperatorSummaryEntry] = []
     ready_count = 0
     error_count = 0
 
@@ -251,23 +284,25 @@ def run_collect_g2_evidence_job(
                 key: str((summary.get(key) or {}).get("status") or "")
                 for key in section_keys
             }
-            compact = {
-                "operator_id": int(op.id),
-                "username": str(op.username or ""),
-                "evidence_status": evidence_status,
-                "blocking_gaps_count": len(summary.get("blocking_gaps") or []),
-                "sections": sections,
-            }
-            per_operator.append(compact)
+            blocking_gaps = [str(gap) for gap in summary.get("blocking_gaps") or []]
+            per_operator.append(
+                G2EvidenceOperatorSnapshot(
+                    operator_id=int(op.id),
+                    username=str(op.username or ""),
+                    evidence_status=evidence_status,
+                    blocking_gaps_count=len(blocking_gaps),
+                    sections=sections,
+                )
+            )
             if int(op.id) in target_id_set:
                 target_summaries.append(
-                    {
-                        "operator_id": int(op.id),
-                        "username": str(op.username or ""),
-                        "evidence_status": evidence_status,
-                        "sections": sections,
-                        "blocking_gaps": list(summary.get("blocking_gaps") or []),
-                    }
+                    G2LedgerOperatorSummary(
+                        operator_id=int(op.id),
+                        username=str(op.username or ""),
+                        evidence_status=evidence_status,
+                        sections=sections,
+                        blocking_gaps=blocking_gaps,
+                    )
                 )
         except Exception as exc:  # noqa: BLE001 — one operator must not abort the sweep
             error_count += 1
@@ -277,35 +312,35 @@ def run_collect_g2_evidence_job(
                 getattr(op, "username", None),
             )
             per_operator.append(
-                {
-                    "operator_id": int(op.id),
-                    "username": str(op.username or ""),
-                    "error": type(exc).__name__,
-                }
+                G2EvidenceOperatorSnapshotError(
+                    operator_id=int(op.id),
+                    username=str(op.username or ""),
+                    error=type(exc).__name__,
+                )
             )
             if int(op.id) in target_id_set:
                 target_summaries.append(
-                    {
-                        "operator_id": int(op.id),
-                        "username": str(op.username or ""),
-                        "error": type(exc).__name__,
-                    }
+                    G2LedgerOperatorSummaryError(
+                        operator_id=int(op.id),
+                        username=str(op.username or ""),
+                        error=type(exc).__name__,
+                    )
                 )
 
-    summary_payload = {
-        "generated_window_days": window_days,
-        "recent_limit": recent_limit,
-        "operator_count": len(operators),
-        "ready_count": ready_count,
-        "error_count": error_count,
-        "per_operator": per_operator,
-    }
+    summary_payload = G2CollectEvidenceSummary(
+        generated_window_days=window_days,
+        recent_limit=recent_limit,
+        operator_count=len(operators),
+        ready_count=ready_count,
+        error_count=error_count,
+        per_operator=per_operator,
+    )
 
     # The only permitted write: one analytics evidence event for the snapshot.
     analytics = Analytics(
         user_id=operator.id,
-        event_type="collect_g2_evidence",
-        event_data=json.dumps(summary_payload, ensure_ascii=False, default=str),
+        event_type=COLLECT_G2_EVIDENCE_EVENT_TYPE,
+        event_data=dump_analytics_event(summary_payload),
     )
     db.add(analytics)
     db.commit()
@@ -321,7 +356,7 @@ def run_collect_g2_evidence_job(
 
     logger.info(
         "collect_g2_evidence completed operators=%s ready=%s errors=%s window_days=%s",
-        summary_payload["operator_count"],
+        summary_payload.operator_count,
         ready_count,
         error_count,
         window_days,
