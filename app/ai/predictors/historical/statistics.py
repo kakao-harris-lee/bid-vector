@@ -7,6 +7,10 @@ from typing import Any
 
 import numpy as np
 
+# 기관명 정규화 단일 출처. 여기서는 re-export 만 한다 — 발주처 밴드 키와 예측 이력 매칭이
+# ``app.ai.predictors.historical.normalize_agency_name`` 경로로 계속 import 하기 때문이다.
+from app.services.koneps.parsing import normalize_agency_name
+
 
 _T_CRITICAL_95 = {
     1: 12.706,
@@ -85,11 +89,6 @@ def resolve_record_weight(record: object, normalized_target_agency: str) -> tupl
     if normalized_target_agency in record_agency or record_agency in normalized_target_agency:
         return 1.8, False
     return 1.0, False
-
-
-def normalize_agency_name(value: Any) -> str:
-    """Normalize agency names for fuzzy equality checks."""
-    return "".join(str(value or "").strip().lower().split())
 
 
 def normalize_category_key(value: Any) -> str:
