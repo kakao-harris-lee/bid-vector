@@ -33,6 +33,7 @@ from scripts._design_ratchet_scan import (
     file_loc_band,
     scan_file,
     scan_repo,
+    scan_repo_with_signatures,
     scan_source,
 )
 from scripts.design_ratchet import (
@@ -755,6 +756,27 @@ class TestDuplicateHelperMetrics:
         assert report.metrics_for("app/one.py").duplicate_mechanical_helpers == 1
         assert report.metrics_for("scripts/two.py").duplicate_mechanical_helpers == 1
 
+    def test_scan_repo_with_signatures_returns_every_file_signature(
+        self, tmp_path: Path
+    ) -> None:
+        """pass 1 이 모은 저장소 전체 지문을 재파싱 없이 그대로 돌려줘야 한다."""
+        for directory in ("app", "scripts"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "app" / "one.py").write_text(
+            DECLARED_KEY_PROJECTION, encoding="utf-8"
+        )
+        (tmp_path / "scripts" / "two.py").write_text(
+            DECLARED_KEY_PROJECTION.replace("def project", "def project_copy"),
+            encoding="utf-8",
+        )
+        report, signatures = scan_repo_with_signatures(tmp_path)
+        assert {signature.file for signature in signatures} == {
+            "app/one.py",
+            "scripts/two.py",
+        }
+        # 리포트는 얇은 델리게이터 scan_repo 와 동일해야 한다.
+        assert report == scan_repo(tmp_path)
+
     def test_scan_repo_leaves_unique_helpers_clean(self, tmp_path: Path) -> None:
         for directory in ("app", "scripts"):
             (tmp_path / directory).mkdir()
@@ -770,6 +792,12 @@ class TestDuplicateHelperMetrics:
     def test_new_metrics_are_part_of_the_ratchet_contract(self) -> None:
         assert "duplicate_mechanical_helpers" in METRIC_NAMES
         assert "duplicate_mechanical_helpers_local" in METRIC_NAMES
+        # 필드 순서가 계약의 일부다(``METRIC_NAMES = tuple(FileMetrics.model_fields)``).
+        # 두 지표는 기존 7개 뒤에 붙어야 baseline 열 순서가 안정적으로 유지된다.
+        assert METRIC_NAMES[-2:] == (
+            "duplicate_mechanical_helpers",
+            "duplicate_mechanical_helpers_local",
+        )
 
 
 class TestRepositoryRatchet:

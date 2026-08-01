@@ -420,11 +420,24 @@ def _read_source(path: Path, relative_path: str) -> str:
         raise RatchetScanError(f"{relative_path} 디코딩 실패: {exc}") from exc
 
 
-def scan_repo(root: Path) -> RatchetReport:
-    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다.
+def scan_repo_with_signatures(
+    root: Path,
+) -> tuple[RatchetReport, list[CloneSignature]]:
+    """대상 디렉터리를 스캔해 리포트 + 저장소 전체 클론 지문을 함께 돌려준다.
 
     2-pass 다. pass 1 은 파일별 순수 스캔, pass 2 는 교차 파일 클론 귀속이다. 파일
     단위로는 다른 파일의 존재를 알 수 없어서 한 번에 끝낼 수 없다.
+
+    **pass 1 은 위반 0 인 파일의 시그니처도 반드시 모은다.** 교차 파일 클론은 위반이
+    있는 파일들 사이에서만 생기지 않는다 — 아직 아무 위반도 없는 두 clean 파일이 서로
+    복붙이면 pass 2 에서 처음으로 위반이 된다. pass 1 에서 clean 파일을 미리 걸러내면
+    그 쌍을 놓친다. 그래서 ``is_clean()`` 필터는 cross-file 병합이 끝난 pass 2 에서만
+    적용한다. 이 순서(clean 도 수집 → 병합 → 필터)를 뒤집으면 교차파일 카운트가 틀어지므로
+    "최적화"로 앞당기지 마라.
+
+    지문 리스트를 함께 반환하는 이유: pass 1 이 이미 저장소 전체를 파싱하며 모았으므로,
+    호출부(CLI 의 죽은 allowlist 검사·통합 대상 리포트)가 같은 파일을 다시 파싱하지 않고
+    이 리스트를 재사용한다.
     """
     scanned: list[tuple[str, FileMetrics]] = []
     signatures: list[CloneSignature] = []
@@ -447,14 +460,13 @@ def scan_repo(root: Path) -> RatchetReport:
             )
         if not metrics.is_clean():
             report.files[relative_path] = metrics
-    return report
+    return report, signatures
 
 
-def scan_repo_clone_signatures(root: Path) -> list[CloneSignature]:
-    """저장소 전체의 클론 지문(죽은 allowlist 검사·통합 대상 리포트용)."""
-    signatures: list[CloneSignature] = []
-    for path in iter_target_files(root):
-        relative_path = path.relative_to(root).as_posix()
-        tree = _parse_source(relative_path, _read_source(path, relative_path))
-        signatures.extend(collect_clone_signatures(relative_path, tree))
-    return signatures
+def scan_repo(root: Path) -> RatchetReport:
+    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다.
+
+    2-pass 다. pass 1 은 파일별 순수 스캔, pass 2 는 교차 파일 클론 귀속이다. 파일
+    단위로는 다른 파일의 존재를 알 수 없어서 한 번에 끝낼 수 없다.
+    """
+    return scan_repo_with_signatures(root)[0]
