@@ -59,9 +59,9 @@ def average(values: Iterable[float], *, digits: int) -> float | None:
 def rate(numerator: float, denominator: float, *, digits: int) -> float:
     """비율 ``numerator / denominator`` 를 ``digits`` 자리로 반올림해 반환.
 
-    분모가 0 이하이면 ``0.0`` 을 반환한다(리포팅 카드는 표본이 없는 구간을 빈칸이
-    아니라 비율 0 으로 렌더한다). ``digits`` 는 :func:`average` 와 같은 이유로
-    필수 키워드다.
+    분모가 0 이하이면 ``0.0`` 을 반환한다 — 표본이 없는 구간을 ``None`` 이 아니라
+    비율 0 으로 내보내던 두 리포팅 콜사이트의 기존 규칙이다. ``digits`` 는
+    :func:`average` 와 같은 이유로 필수 키워드다.
     """
     if denominator <= 0:
         return 0.0
