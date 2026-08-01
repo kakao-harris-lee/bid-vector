@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.providers import get_koneps_collector
 from app.core.database import get_db
 from app.core.time import utc_now
 from app.core.security import (
@@ -115,9 +116,12 @@ def _sync_crawl_job_from_task_status(db: Session, crawl_job: CrawlJob, task_stat
 
 
 @router.post("/crawl", response_model=CrawlResponse)
-def crawl_notices(request: CrawlRequest, db: Session = Depends(get_db)):
+def crawl_notices(
+    request: CrawlRequest,
+    db: Session = Depends(get_db),
+    service: KonepsCollectorService = Depends(get_koneps_collector),
+):
     """Execute a crawl immediately and persist the resulting crawl history."""
-    service = KonepsCollectorService()
     crawl_job = service.create_crawl_job(db, request)
 
     try:

@@ -14,6 +14,7 @@
 from app.domain.money import Basis
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import field_contract as fc
+from app.services.koneps import field_contract_spec as fcs
 from app.services.koneps import openapi
 from app.services.koneps.field_contract import (
     OperationFamily,
@@ -28,7 +29,7 @@ _RESERVE_OP = "getOpengResultListInfoServcPreparPcDetail"
 _OPENING_OP = "getOpengResultListInfoServc"
 
 # openapi.build_openapi_notice_item 의 base_amount 후보 키 순서(openapi.py:436-444)를
-# 그대로 옮긴 기대값. field_contract.BASE_RESOLUTION_ORDER 가 이것과 같아야 위반 detail
+# 그대로 옮긴 기대값. field_contract_spec.BASE_RESOLUTION_ORDER 가 이것과 같아야 위반 detail
 # 의 resolved_key·--dry-run 표시가 프로덕션이 실제 고른 키와 일치한다. 아래 행동 가드
 # 테스트가 실제 build_openapi_notice_item 해석과 동치임을 실행으로 확인한다.
 _PRODUCTION_BASE_ORDER = (
@@ -231,7 +232,7 @@ def test_non_base_violation_has_no_resolved_key_and_not_benign():
 def test_base_resolution_order_matches_documented_production_order():
     # openapi.py:436-444 후보 리스트를 그대로 옮긴 기대값과 정확히 일치해야 한다
     # (그룹 내부 순서 포함 — 예산 2키 다음 예정가 2키).
-    assert fc.BASE_RESOLUTION_ORDER == _PRODUCTION_BASE_ORDER
+    assert fcs.BASE_RESOLUTION_ORDER == _PRODUCTION_BASE_ORDER
 
 
 def _drift_guard_request() -> CrawlRequest:
@@ -243,12 +244,12 @@ def test_base_resolution_order_agrees_with_production_build():
     키가 ``BASE_RESOLUTION_ORDER`` 예측과 일치하는지 실행으로 확인한다.
 
     각 접미(suffix) 케이스에서 ``order[i:]`` 키만 서로 다른 값으로 채우면 프로덕션은
-    ``order[i]`` (첫 후보)를 골라야 한다. field_contract 순서가 openapi 순서와 어긋나면
+    ``order[i]`` (첫 후보)를 골라야 한다. 선언 순서가 openapi 순서와 어긋나면
     (향후 어느 쪽이 바뀌든) 이 assert 가 깨져 드리프트를 잡는다. 상수 추출 없이 실제
     프로덕션 함수를 실행하므로 openapi 인라인 리스트 변경도 포착한다.
     """
     request = _drift_guard_request()
-    order = fc.BASE_RESOLUTION_ORDER
+    order = fcs.BASE_RESOLUTION_ORDER
     for i, expected_key in enumerate(order):
         raw_item = {"bidNtceNo": "20260600001", "bidNtceNm": "드리프트 가드"}
         for offset, key in enumerate(order[i:]):
@@ -270,15 +271,15 @@ def test_base_resolution_order_agrees_with_production_build():
 
 def test_estimated_resolution_order_matches_documented_production_order():
     # openapi.build_openapi_notice_item 의 estimated_amount 후보(추정가격 우선)와 일치.
-    assert fc.ESTIMATED_RESOLUTION_ORDER == _PRODUCTION_ESTIMATED_ORDER
+    assert fcs.ESTIMATED_RESOLUTION_ORDER == _PRODUCTION_ESTIMATED_ORDER
 
 
 def test_estimated_resolution_order_excludes_true_base_keys():
     # 추정가격은 기초금액과 섞지 않는다(#162): 기초금액 키는 후보에 없어야 하고,
     # base 후보와는 의도적으로 다른 순서/집합이어야 한다.
     for base_key in ("bssAmt", "bssamt", "bssAmtPurcnstcst"):
-        assert base_key not in fc.ESTIMATED_RESOLUTION_ORDER
-    assert fc.ESTIMATED_RESOLUTION_ORDER != fc.BASE_RESOLUTION_ORDER
+        assert base_key not in fcs.ESTIMATED_RESOLUTION_ORDER
+    assert fcs.ESTIMATED_RESOLUTION_ORDER != fcs.BASE_RESOLUTION_ORDER
 
 
 def test_estimated_resolution_order_agrees_with_production_build():
@@ -287,10 +288,10 @@ def test_estimated_resolution_order_agrees_with_production_build():
 
     각 접미(suffix) 케이스에서 ``order[i:]`` 만 서로 다른 양수로 채우면 프로덕션은
     ``order[i]`` 를 estimated_amount 로 골라야 한다(추정가격이 양수라 base 폴백 안 탐).
-    openapi 인라인 리스트가 field_contract 상수와 어긋나면 이 assert 가 깨진다.
+    openapi 인라인 리스트가 field_contract_spec 상수와 어긋나면 이 assert 가 깨진다.
     """
     request = _drift_guard_request()
-    order = fc.ESTIMATED_RESOLUTION_ORDER
+    order = fcs.ESTIMATED_RESOLUTION_ORDER
     for i, expected_key in enumerate(order):
         raw_item = {"bidNtceNo": "20260600002", "bidNtceNm": "추정 드리프트 가드"}
         for offset, key in enumerate(order[i:]):

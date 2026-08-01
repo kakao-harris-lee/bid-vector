@@ -190,6 +190,13 @@ def test_persist_promotes_dict_items_to_dto(test_db):
         {"notice_number": "N-1", "base_amount": 1.0},  # title 결손
         {"notice_number": "N-1", "title": "금액 결손"},  # base_amount 결손
         {"notice_number": "N-1", "title": "타입 불일치", "base_amount": "협의"},
+        # 오타 키(선언되지 않은 필드) — extra="forbid" 로 거부한다.
+        {
+            "notice_number": "N-1",
+            "title": "오타 키",
+            "base_amount": 1.0,
+            "award_floor": 0.87995,
+        },
     ],
 )
 def test_persist_rejects_structurally_invalid_item(test_db, broken_item):
@@ -208,9 +215,84 @@ def test_persist_rejects_structurally_invalid_item(test_db, broken_item):
         )
 
 
+def test_unknown_item_key_is_rejected_not_silently_dropped():
+    """미지 키는 조용히 드롭되지 않고 거부된다(오타가 값 유실로 숨지 않게).
+
+    부모(``CrawlNoticeItem``)를 그대로 상속하면 pydantic 기본값 ``extra="ignore"`` 라서
+    ``award_floor_rate`` 오타(``award_floor``)가 통과하고 하한율만 조용히 사라진다.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        KonepsCollectedItem.model_validate(
+            {
+                "notice_number": "N-1",
+                "title": "오타 키",
+                "base_amount": 1.0,
+                "award_floor": 0.87995,
+            }
+        )
+
+    assert "award_floor" in str(excinfo.value)
+
+
+def test_public_crawl_notice_item_still_tolerates_extra_keys():
+    """공개 표면(OpenAPI 스키마)의 관용은 바뀌지 않는다 — forbid 는 수집 내부 계약만.
+
+    ``CrawlNoticeItem`` 은 HTTP 응답 스키마이므로 여기까지 좁히면 외부 계약이 흔들린다.
+    """
+    narrowed = CrawlNoticeItem.model_validate(
+        {"notice_number": "N-1", "title": "t", "base_amount": 1.0, "unknown": 1}
+    )
+
+    assert not hasattr(narrowed, "unknown")
+
+
 # --------------------------------------------------------------------------- #
 # 4. metadata 읽기 투영
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        (None, None),
+        ("낙찰사", "낙찰사"),
+        ("", ""),  # 빈 문자열은 보존(falsy 게이트 유지)
+        (0, "0"),  # 스칼라는 기존처럼 문자열화
+        (12, "12"),
+        (1.5, "1.5"),
+        (True, "True"),
+        ({"name": "낙찰사"}, None),  # 비스칼라는 값 없음으로 접는다
+        ([1, 2], None),
+        ((1, 2), None),
+    ],
+)
+def test_metadata_text_normalization_value_table(raw_value, expected):
+    """``Text`` 정규화 값 테이블: 스칼라만 문자열화하고 비스칼라는 ``None``."""
+    facts = CrawlItemMetadataFacts.model_validate({"winning_company": raw_value})
+
+    assert facts.winning_company == expected
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected_signal"),
+    [
+        ({"winning_company": "낙찰사"}, True),
+        ({"opening_status": "개찰완료"}, True),
+        ({"winning_company": ""}, False),
+        ({}, False),
+        # 구조가 어긋난 값(중첩 객체/목록)은 개찰 흔적으로 세지 않는다: ``str({...})`` 가
+        # truthy 라서 게이트를 통과하면 빈 TenderResult 가 생기고 파이썬 repr 이 저장된다.
+        ({"winning_company": {"name": "낙찰사"}}, False),
+        ({"opening_status": ["개찰완료"]}, False),
+        # 같은 metadata 에 정상 스칼라 흔적이 있으면 게이트는 그대로 열린다.
+        ({"winning_company": {"name": "x"}, "winning_amount": 88_000_000.0}, True),
+    ],
+)
+def test_award_signal_gate_ignores_non_scalar_text(metadata, expected_signal):
+    facts = CrawlItemMetadataFacts.model_validate(metadata)
+
+    assert facts.has_award_signal() is expected_signal
+
+
+
 def test_metadata_facts_ignores_unknown_keys_and_keeps_bag_intact():
     metadata = {
         "opening_demand_agency": "서울특별시교육청",

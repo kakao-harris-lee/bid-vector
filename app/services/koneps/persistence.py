@@ -784,14 +784,19 @@ def _persist_tender_result_for_item(
 ) -> None:
     if not facts.has_award_signal():
         return
-    tender_result = resolve_tender_result(
+    # ``resolve_tender_result`` 는 반환 직전 ``tender_result.project_id = project_id`` 를
+    # **무조건** 대입한다. 그래서 반환값의 project_id 가 None 인 경우는 여기서 넘긴
+    # project_id 가 None 인 경우뿐이고, 그건 project 도 None 이고
+    # ``historical_record.project_id`` 도 None 일 때만 성립한다(아래 인자식 참조). 즉
+    # "반환 project_id 는 None 인데 historical 에는 값이 있다"는 상태는 상호 배타라
+    # 도달 불가다 — 과거 여기 있던 백필 분기는 죽은 코드였다(동등 뮤턴트로 증명).
+    # 링크 보정이 필요한 지점은 이 뒤가 아니라 project_id 인자 그 자체다.
+    resolve_tender_result(
         db,
         project_id=project.id if project is not None else historical_record.project_id,
         facts=facts,
         crawl_job_status=crawl_job_status,
     )
-    if tender_result.project_id is None and historical_record.project_id is not None:
-        tender_result.project_id = historical_record.project_id
 
 
 def _commit_and_publish_crawl_job(

@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.models import CrawlJob, HistoricalData, Project
 from app.core.time import kst_now
-from app.schemas.koneps_items import KonepsCollectedItem, ScsbidReserveDetail
+from app.schemas.koneps_items import (
+    KonepsCollectedItem,
+    OpeningResultRow,
+    ScsbidReserveDetail,
+)
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import (
     browser_crawl,
@@ -838,13 +842,14 @@ class KonepsCollectorService:
 
     def _collect_opening_result_rows(
         self, request: CrawlRequest
-    ) -> list[dict[str, Any]]:
+    ) -> list[OpeningResultRow]:
         """Thin delegator to ``browser_crawl.collect_opening_result_rows``.
 
         The implementation now lives in ``app.services.koneps.browser_crawl``.
         Retained as an instance method because ``test_operations`` monkeypatches
         it on the service surface to substitute opening-result rows (and assert
-        opening-result enrichment / failure classification).
+        opening-result enrichment / failure classification). 대체 행이 dict 로 와도
+        ``merge_opening_result_rows`` 진입에서 승격되므로 기존 훅은 그대로 동작한다.
         """
         return browser_crawl.collect_opening_result_rows(request)
 

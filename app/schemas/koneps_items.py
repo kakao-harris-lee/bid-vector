@@ -37,15 +37,31 @@ from app.schemas.crawl import CrawlNoticeItem
 
 
 def _as_text(value: str | int | float | bool | None) -> str | None:
-    """관용 텍스트 정규화 — None 은 유지하고 비문자는 문자열화한다.
+    """관용 텍스트 정규화 — 문자/스칼라만 문자열로 접고 비스칼라는 ``None``.
+
+    선언 타입은 **계약**(텍스트로 쓸 수 있는 스칼라)이고, 런타임에 pydantic 은 임의 값을
+    넘길 수 있으므로 계약 밖 타입은 아래에서 명시적으로 접는다. ``object``/``Any`` 로 넓히지
+    않는 이유: 설계 래칫이 그 둘을 "검증되지 않는 경계"로 세고 이 파일은 현재 0 이라, 넓은
+    입력은 시그니처가 아니라 런타임 분기로 다룬다(baseline 갱신 없이 계약을 유지).
 
     KONEPS JSON 은 같은 필드를 문자/숫자로 섞어 보낼 수 있고 기존 소비자는
-    ``str(item_metadata.get(...) or "")`` 로 받아 썼으므로 문자열화가 동등하다.
-    빈 문자열은 그대로 두어 falsy 판정(개찰 결과 유무 게이트)을 보존한다.
+    ``str(item_metadata.get(...) or "")`` 로 받아 썼으므로 스칼라(``int``/``float``/
+    ``bool``)의 문자열화는 동등하다. 빈 문자열은 그대로 두어 falsy 판정(개찰 결과 유무
+    게이트)을 보존한다.
+
+    반면 ``dict``/``list`` 같은 **비스칼라**는 문자열화하지 않고 ``None`` 으로 접는다.
+    ``str({...})`` 는 항상 비어있지 않은 문자열이라 truthy 가 되어, 구조가 어긋난 값
+    (예: ``winning_company`` 자리에 중첩 객체)이 ``has_award_signal`` 게이트를 통과시켜
+    빈 ``TenderResult`` 를 만들고 ``"{'a': 1}"`` 같은 파이썬 repr 을 기관명/낙찰자명
+    컬럼에 저장한다. 텍스트 계약을 만족하지 못하는 값은 "값 없음"으로 다루는 것이
+    구조 계약(DTO)의 역할이다 — 관용은 스칼라까지만.
     """
     if value is None or isinstance(value, str):
         return value
-    return str(value)
+    # bool 은 int 서브클래스라 이 검사에 포함된다(``str(True)`` -> "True", 기존과 동등).
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
 
 
 Text = Annotated[str | None, BeforeValidator(_as_text)]
@@ -64,7 +80,20 @@ class KonepsCollectedItem(CrawlNoticeItem):
 
     ``CrawlNoticeItem`` (공개 표면) + 수집 내부 전용 필드. HTTP 응답은 부모 스키마로
     좁혀 나가므로 여기 추가 필드는 스펙에 노출되지 않는다.
+
+    ``extra="forbid"``: 부모(``CrawlNoticeItem``)를 그대로 상속하면 pydantic 기본값인
+    ``extra="ignore"`` 라서, dict payload 승격 경로(``persistence._promote_items``)의
+    **오타 키가 조용히 드롭**된다. 오늘의 생산자는 모두 DTO 를 배출하므로 이 경로를 타는
+    것은 **앞으로 생길 dict payload 생산자**(손으로 만든 item 을 넘기는 스크립트·태스크·
+    외부 호출부)이고, 그 첫 사용에서 오타가 드러나야 한다
+    (``award_floor_rate`` 를 ``award_floor`` 로 쓰면 값이 사라진 채 통과). 영속화 승격은
+    best-effort 가 아니므로(필수 필드 결손을 이미 ``ValidationError`` 로 거부한다) 미지
+    키도 같은 기준으로 거부해 오타가 즉시 드러나게 한다. 모드별로 키가 다른 자유형 bag 은
+    ``metadata`` 필드 **안**이며, 그 안쪽은 계속 자유형이다(``CrawlItemMetadataFacts`` 는
+    읽기 투영이라 ``extra="ignore"`` 유지).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     award_floor_rate: float | None = Field(
         default=None,
@@ -150,6 +179,58 @@ class CrawlItemMetadataFacts(BaseModel):
         )
 
 
+class OpeningResultRow(BaseModel):
+    """개찰결과 그리드(개찰결과분류조회) 한 행의 **정규화 산출** — 17키 dict 를 대체한다.
+
+    생산자는 ``koneps.html_parsing.normalize_opening_result_row`` (WebSquare 원시 키 →
+    내부 이름) 이고, 소비자는 ``merge_opening_result_rows`` (수집 item metadata 로 병합)
+    다. 브라우저 경로(``browser_crawl.read_opening_result_rows``)도 이 모델을 실어 나른다.
+
+    ``extra="ignore"``: 이 모델은 원시 그리드 행이 아니라 **정규화된 행**의 계약이다.
+    이미 내부 이름으로 정규화된 행(테스트/외부 호출부가 손으로 만든 payload)을 그대로
+    승격할 때 남는 원시 키·부가 키는 무시한다(원본은 ``raw`` 로 보존).
+
+    필드 기본값은 전부 "값 없음"(``None`` / 빈 리스트)이다: 정규화 생산자는 결측을 빈
+    문자열로 명시해 싣고(``str(...).strip()``), 승격 경로는 키 부재를 ``None`` 으로 남겨야
+    소비자의 falsy 판정이 dict 릴레이 시절(``row.get(...)``)과 동일하다(산출 불변).
+
+    ``scheduled_at`` / ``announced_at`` 만 ``datetime`` 으로 좁힌다: 소비자가 ``.isoformat()``
+    을 직접 부르므로 원시 토큰(str)을 그대로 흘리면 그 자리에서 ``AttributeError`` 로 죽는다
+    (dict 릴레이 시절의 잠재 결함). 승격 경계에서 ISO 토큰은 pydantic 이 해석하고, 해석
+    불가 토큰은 여기서 ``ValidationError`` 로 거부한다 — 정규화 경로는 이미
+    ``parsing.coerce_datetime`` 으로 ``datetime``/``None`` 만 싣는다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    # --- 식별자 (제로패딩 문자열 — int 변환 금지) -----------------------------
+    notice_number: Text = None
+    notice_order: Text = None
+    notice_full_number: Text = None
+
+    # --- 행 텍스트 -----------------------------------------------------------
+    title: Text = None
+    bid_classification: Text = None
+    bid_progress_order: Text = None
+    demand_agency: Text = None
+    status: Text = None
+    business_type: Text = None
+
+    # --- 개찰/낙찰 결과 -------------------------------------------------------
+    scheduled_at: datetime | None = None
+    announced_at: datetime | None = None
+    opening_amount: RawAmount = None
+    winning_company: Text = None
+    winning_amount: RawAmount = None
+    winning_rate: RawAmount = None
+    # 복수예비가격/추첨번호는 그대로 item metadata 로 릴레이된다(원소 검증 없음 — 산출 불변).
+    reserve_prices: list[Any] = Field(default_factory=list)
+    selected_numbers: list[Any] = Field(default_factory=list)
+
+    # 원시 그리드 행(provenance). 소비자는 읽지 않고 진단/골든에만 쓰인다.
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class ScsbidReserveDetail(BaseModel):
     """복수예비가격 상세 조회 산출 — scsbid 개찰 item 빌더의 입력 계약.
 
@@ -173,6 +254,7 @@ class ScsbidReserveDetail(BaseModel):
 __all__ = [
     "CrawlItemMetadataFacts",
     "KonepsCollectedItem",
+    "OpeningResultRow",
     "RawAmount",
     "RawInstant",
     "ScsbidReserveDetail",

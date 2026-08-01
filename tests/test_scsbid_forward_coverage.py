@@ -2,10 +2,9 @@
 
 Covers multi-category, paginated, date-window collection. All external HTTP is
 replaced by injecting the collector's ``http_get`` seam
-(``KonepsCollectorService(http_get=...)``); the one API-driven test that cannot
-reach the service constructor substitutes the module's single default transport
-(``http_client._default_http_get``). No real KONEPS calls are made under
-``ENVIRONMENT=test``.
+(``KonepsCollectorService(http_get=...)``); the one API-driven test overrides the
+crawl route's collector provider (``get_koneps_collector``) with an injected
+collector. No real KONEPS calls are made under ``ENVIRONMENT=test``.
 """
 
 from __future__ import annotations
@@ -15,12 +14,13 @@ import pathlib
 import sys
 from datetime import UTC, datetime
 
+from app.api.providers import get_koneps_collector
 from app.core.config import settings
 from app.core.time import KST
+from app.main import app
 from app.models.models import CrawlJob, Project, TenderResult
 from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
-from app.services.koneps import http_client
 from app.services.koneps.collector import KonepsCollectorService
 from tests.support.koneps_openapi_fakes import (
     FakeOpenApiResponse,
@@ -362,30 +362,33 @@ def test_scsbid_award_attaches_to_existing_forward_project(
             )
         raise AssertionError(f"unexpected URL: {url}")
 
-    # The service is constructed inside the crawl route, so there is no constructor
-    # to inject: substitute the module's single default transport instead (a named
-    # attribute on our own module, not a library function behind a string path).
-    monkeypatch.setattr(http_client, "_default_http_get", fake_get)
-
-    response = client.post(
-        "/api/v1/operations/crawl",
-        json={
-            "source": "koneps-scsbid",
-            "categories": ["construction"],
-            "start_date": "20260501",
-            "end_date": "20260513",
-            "collect_reserve_detail": False,
-        },
+    # 수집기는 크롤 라우트의 provider 로 주입되므로, 전역 transport patch 대신 획득 seam 이
+    # 주입된 수집기를 ``dependency_overrides`` 로 넘긴다(§4.7-3).
+    app.dependency_overrides[get_koneps_collector] = lambda: KonepsCollectorService(
+        http_get=fake_get
     )
-    assert response.status_code == 200
+    try:
+        response = client.post(
+            "/api/v1/operations/crawl",
+            json={
+                "source": "koneps-scsbid",
+                "categories": ["construction"],
+                "start_date": "20260501",
+                "end_date": "20260513",
+                "collect_reserve_detail": False,
+            },
+        )
+        assert response.status_code == 200
 
-    test_db.expire_all()
-    assert test_db.query(Project).count() == project_count_before  # no new project
-    tender_result = (
-        test_db.query(TenderResult).filter(TenderResult.project_id == existing_id).one()
-    )
-    assert tender_result.winning_amount == 90000000.0
-    assert tender_result.result_status == "낙찰"
+        test_db.expire_all()
+        assert test_db.query(Project).count() == project_count_before  # no new project
+        tender_result = (
+            test_db.query(TenderResult).filter(TenderResult.project_id == existing_id).one()
+        )
+        assert tender_result.winning_amount == 90000000.0
+        assert tender_result.result_status == "낙찰"
+    finally:
+        app.dependency_overrides.pop(get_koneps_collector, None)
 
 
 def test_scsbid_legacy_single_day_single_category_regression(monkeypatch):

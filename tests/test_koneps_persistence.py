@@ -314,12 +314,14 @@ def test_resolve_tender_result_upserts_without_duplicate(test_db):
     assert float(second.winning_amount) == 95_000_000.0
 
 
-def test_persist_tender_result_backfills_project_id_from_historical_record(test_db):
+def test_persist_tender_result_links_project_id_from_historical_record(test_db):
     """``project`` 가 없어도 HistoricalData 가 아는 project_id 로 TenderResult 를 잇는다.
 
-    이 백필 한 줄은 persist 정상 경로(``resolve_project_for_item`` 이 항상 Project 를
-    돌려준다)로는 타지 않아 골든에도 안 잡힌다. 그래서 경계 함수를 직접 구동해 고정한다 —
-    없으면 개찰 결과가 project 미연결(orphan)로 남아 정산/대시보드에서 사라진다.
+    이 경로는 persist 정상 경로(``resolve_project_for_item`` 이 항상 Project 를 돌려준다)
+    로는 타지 않아 골든에도 안 잡힌다. 그래서 경계 함수를 직접 구동해 고정한다 — 없으면
+    개찰 결과가 project 미연결(orphan)로 남아 정산/대시보드에서 사라진다. 링크는
+    ``resolve_tender_result`` 에 넘기는 ``project_id`` 인자 **한 곳**에서만 일어난다(호출
+    뒤의 사후 백필은 도달 불가라 제거됐다 — 아래 불변식 테스트 참조).
     """
     project = Project(
         title="개찰 연결 대상",
@@ -354,6 +356,39 @@ def test_persist_tender_result_backfills_project_id_from_historical_record(test_
         .one()
     )
     assert tender_result.winning_company == "낙찰사"
+
+
+@pytest.mark.parametrize("linked", [True, False])
+def test_resolve_tender_result_always_stamps_the_given_project_id(test_db, linked):
+    """불변식: 반환 행의 project_id 는 **항상** 인자와 같다(사후 백필 분기 도달 불가 근거).
+
+    ``_persist_tender_result_for_item`` 에는 "반환 project_id 가 None 인데 historical 에는
+    값이 있으면 채운다"는 분기가 있었다. 이 불변식 때문에 그 상태는 상호 배타(반환이 None
+    이려면 인자가 None 이어야 하고, 인자가 None 이려면 historical 도 None) — 죽은 코드였다.
+    """
+    project_id = None
+    if linked:
+        project = Project(
+            title="불변식 대상",
+            description="",
+            requirements="",
+            budget_estimate=1.0,
+            category="construction",
+            notice_number="INVARIANT-1",
+        )
+        test_db.add(project)
+        test_db.flush()
+        project_id = project.id
+
+    tender_result = persistence.resolve_tender_result(
+        test_db,
+        project_id=project_id,
+        facts=CrawlItemMetadataFacts(winning_company="낙찰사"),
+        crawl_job_status="completed",
+    )
+    test_db.flush()
+
+    assert tender_result.project_id == project_id
 
 
 def test_persist_tender_result_skips_when_no_award_signal(test_db):

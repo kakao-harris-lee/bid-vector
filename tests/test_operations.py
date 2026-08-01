@@ -23,9 +23,10 @@ from app.schemas.schemas import (
     CrawlRequest,
     OpportunityAnalysisRequest,
 )
+from app.api.providers import get_koneps_collector
+from app.main import app
 from app.services.allocation import BidDecisionService
 from app.services.classifier import NoticeClassifierService
-from app.services.koneps import http_client
 from app.services.koneps.collector import KonepsCollectorService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.notifications.telegram import TelegramNotificationService
@@ -110,47 +111,50 @@ def test_openapi_crawl_collects_bid_public_info_and_persists_history(
         return FakeOpenApiResponse()
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    # Route-driven crawl: the collector is built inside the endpoint, so substitute
-    # the KONEPS module's single default transport (named attribute on our own
-    # module) instead of patching ``requests.get`` behind a string path.
-    monkeypatch.setattr(http_client, "_default_http_get", fake_get)
-
-    response = client.post(
-        "/api/v1/operations/crawl",
-        json={
-            "source": "koneps-openapi",
-            "category": "software",
-            "target_date": "2026-05-13",
-            "max_items": 5,
-        },
+    # Route-driven crawl: 수집기는 provider(``get_koneps_collector``)로 주입되므로
+    # 전역 transport 를 patch 하지 않고 **획득 seam 이 주입된 수집기**를 override 한다.
+    app.dependency_overrides[get_koneps_collector] = lambda: KonepsCollectorService(
+        http_get=fake_get
     )
+    try:
+        response = client.post(
+            "/api/v1/operations/crawl",
+            json={
+                "source": "koneps-openapi",
+                "category": "software",
+                "target_date": "2026-05-13",
+                "max_items": 5,
+            },
+        )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["job_status"] == "completed"
-    assert payload["metadata"]["resolved_mode"] == "openapi"
-    assert payload["metadata"]["openapi_operation"] == "getBidPblancListInfoServc"
-    assert payload["items"][0]["notice_number"] == "R26BK01510407"
-    assert payload["items"][0]["base_amount"] == 125000000.0
-    assert captured["params"]["ServiceKey"] == "test-service-key"
-    assert captured["params"]["inqryBgnDt"] == "202605130000"
-    assert captured["params"]["inqryEndDt"] == "202605132359"
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["job_status"] == "completed"
+        assert payload["metadata"]["resolved_mode"] == "openapi"
+        assert payload["metadata"]["openapi_operation"] == "getBidPblancListInfoServc"
+        assert payload["items"][0]["notice_number"] == "R26BK01510407"
+        assert payload["items"][0]["base_amount"] == 125000000.0
+        assert captured["params"]["ServiceKey"] == "test-service-key"
+        assert captured["params"]["inqryBgnDt"] == "202605130000"
+        assert captured["params"]["inqryEndDt"] == "202605132359"
 
-    historical_record = (
-        test_db.query(HistoricalData)
-        .filter(HistoricalData.notice_number == "R26BK01510407")
-        .one()
-    )
-    assert historical_record.category == "software"
-    assert historical_record.base_amount == 125000000.0
-    assert historical_record.predicted_price == 113636364.0
-    assert historical_record.bid_rate == 0.0
-    project = (
-        test_db.query(Project).filter(Project.notice_number == "R26BK01510407").one()
-    )
-    assert historical_record.project_id == project.id
-    assert project.issuing_agency == "조달청"
-    assert project.demand_agency == "서울특별시교육청"
+        historical_record = (
+            test_db.query(HistoricalData)
+            .filter(HistoricalData.notice_number == "R26BK01510407")
+            .one()
+        )
+        assert historical_record.category == "software"
+        assert historical_record.base_amount == 125000000.0
+        assert historical_record.predicted_price == 113636364.0
+        assert historical_record.bid_rate == 0.0
+        project = (
+            test_db.query(Project).filter(Project.notice_number == "R26BK01510407").one()
+        )
+        assert historical_record.project_id == project.id
+        assert project.issuing_agency == "조달청"
+        assert project.demand_agency == "서울특별시교육청"
+    finally:
+        app.dependency_overrides.pop(get_koneps_collector, None)
 
 
 def test_scsbid_openapi_crawl_collects_awards_and_reserve_details(
@@ -257,61 +261,64 @@ def test_scsbid_openapi_crawl_collects_awards_and_reserve_details(
         raise AssertionError(f"unexpected URL: {url}")
 
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
-    # Route-driven crawl: the collector is built inside the endpoint, so substitute
-    # the KONEPS module's single default transport (named attribute on our own
-    # module) instead of patching ``requests.get`` behind a string path.
-    monkeypatch.setattr(http_client, "_default_http_get", fake_get)
-
-    response = client.post(
-        "/api/v1/operations/crawl",
-        json={
-            "source": "koneps-scsbid",
-            "category": "construction",
-            "target_date": "2026-05-13",
-            "max_items": 5,
-        },
+    # Route-driven crawl: 수집기는 provider(``get_koneps_collector``)로 주입되므로
+    # 전역 transport 를 patch 하지 않고 **획득 seam 이 주입된 수집기**를 override 한다.
+    app.dependency_overrides[get_koneps_collector] = lambda: KonepsCollectorService(
+        http_get=fake_get
     )
+    try:
+        response = client.post(
+            "/api/v1/operations/crawl",
+            json={
+                "source": "koneps-scsbid",
+                "category": "construction",
+                "target_date": "2026-05-13",
+                "max_items": 5,
+            },
+        )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["job_status"] == "completed"
-    assert payload["metadata"]["resolved_mode"] == "scsbid_openapi"
-    assert payload["metadata"]["openapi_operation"] == "getScsbidListSttusCnstwk"
-    assert payload["metadata"]["reserve_detail_collected_count"] == 1
-    assert payload["items"][0]["notice_number"] == "R26BK01599999"
-    assert payload["items"][0]["metadata"]["winning_company"] == "테스트 낙찰사"
-    assert payload["items"][0]["metadata"]["winning_rate"] == 0.88123
-    assert payload["items"][0]["metadata"]["reserve_prices"] == [
-        99000000.0,
-        100000000.0,
-        101000000.0,
-    ]
-    assert payload["items"][0]["metadata"]["selected_numbers"] == [1, 4]
-    assert captured[0]["params"]["ServiceKey"] == "test-service-key"
-    assert captured[0]["params"]["inqryBgnDt"] == "202605130000"
-    assert captured[1]["params"]["bidNtceNo"] == "R26BK01599999"
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["job_status"] == "completed"
+        assert payload["metadata"]["resolved_mode"] == "scsbid_openapi"
+        assert payload["metadata"]["openapi_operation"] == "getScsbidListSttusCnstwk"
+        assert payload["metadata"]["reserve_detail_collected_count"] == 1
+        assert payload["items"][0]["notice_number"] == "R26BK01599999"
+        assert payload["items"][0]["metadata"]["winning_company"] == "테스트 낙찰사"
+        assert payload["items"][0]["metadata"]["winning_rate"] == 0.88123
+        assert payload["items"][0]["metadata"]["reserve_prices"] == [
+            99000000.0,
+            100000000.0,
+            101000000.0,
+        ]
+        assert payload["items"][0]["metadata"]["selected_numbers"] == [1, 4]
+        assert captured[0]["params"]["ServiceKey"] == "test-service-key"
+        assert captured[0]["params"]["inqryBgnDt"] == "202605130000"
+        assert captured[1]["params"]["bidNtceNo"] == "R26BK01599999"
 
-    historical_record = (
-        test_db.query(HistoricalData)
-        .filter(HistoricalData.notice_number == "R26BK01599999")
-        .one()
-    )
-    assert historical_record.category == "construction"
-    assert historical_record.base_amount == 100000000.0
-    assert historical_record.predicted_price == 100000000.0
-    assert historical_record.bid_rate == 0.88123
-    assert json.loads(historical_record.reserve_prices) == [
-        99000000.0,
-        100000000.0,
-        101000000.0,
-    ]
-    assert json.loads(historical_record.selected_numbers) == [1, 4]
+        historical_record = (
+            test_db.query(HistoricalData)
+            .filter(HistoricalData.notice_number == "R26BK01599999")
+            .one()
+        )
+        assert historical_record.category == "construction"
+        assert historical_record.base_amount == 100000000.0
+        assert historical_record.predicted_price == 100000000.0
+        assert historical_record.bid_rate == 0.88123
+        assert json.loads(historical_record.reserve_prices) == [
+            99000000.0,
+            100000000.0,
+            101000000.0,
+        ]
+        assert json.loads(historical_record.selected_numbers) == [1, 4]
 
-    tender_result = test_db.query(TenderResult).one()
-    assert tender_result.winning_company == "테스트 낙찰사"
-    assert tender_result.winning_amount == 88123000.0
-    assert tender_result.winning_rate == 0.88123
-    assert tender_result.result_status == "낙찰"
+        tender_result = test_db.query(TenderResult).one()
+        assert tender_result.winning_company == "테스트 낙찰사"
+        assert tender_result.winning_amount == 88123000.0
+        assert tender_result.winning_rate == 0.88123
+        assert tender_result.result_status == "낙찰"
+    finally:
+        app.dependency_overrides.pop(get_koneps_collector, None)
 
 
 def test_live_crawl_parses_html(monkeypatch):
