@@ -7,6 +7,7 @@ import pytest
 
 from app.core.security import get_password_hash, verify_password
 from app.models.models import BidDecisionRecord, DecisionExperimentRun, PricePrediction, TenderResult
+from tests.support.auth import bearer_headers
 
 
 def _bootstrap_operator(client, username: str = "solo-operator", email: str = "solo@example.com", password: str = "password123"):
@@ -127,12 +128,14 @@ def test_operator_analytics_endpoints_report_single_user_stats(client):
     )
     assert bid_response.status_code == 200
 
+    # 이벤트 적재는 인증된 클라이언트만 가능하고 event_type 은 프론트 어휘로 제한된다.
     log_response = client.post(
         "/api/v1/analytics/event",
         json={
-            "event_type": "dashboard_opened",
-            "event_data": {"source": "tests"},
+            "event_type": "project_view",
+            "event_data": {"project_id": project_id},
         },
+        headers=bearer_headers(client, username="analytics-operator"),
     )
     assert log_response.status_code == 200
 

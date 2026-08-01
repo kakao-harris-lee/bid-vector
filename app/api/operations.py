@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.providers import get_koneps_collector
+from app.core.constants import DecisionStatus
 from app.core.database import get_db
 from app.core.time import utc_now
 from app.core.security import (
@@ -14,7 +15,6 @@ from app.core.security import (
 from app.core.single_user import DEFAULT_OPERATOR_USERNAME, ensure_operator_account, get_operator_profile
 from app.models.models import BidDecisionRecord, CompanyProfile, CrawlJob, Project, User
 from pydantic import BaseModel
-from typing import Literal
 
 from app.schemas.schemas import (
     BackgroundJobResponse,
@@ -256,7 +256,7 @@ def get_project_bid_decision_timeline(
 
 
 class BidDecisionStatusUpdateRequest(BaseModel):
-    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    decision_status: DecisionStatus
 
 
 @router.patch(

@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
 from app.core.constants import (
     BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE,
+    CLIENT_ANALYTICS_EVENT_TYPES,
     COLLECT_G2_EVIDENCE_EVENT_TYPE,
     G2_CANDIDATE_RECHECK_EVENT_TYPE,
     INTERNAL_TELEMETRY_EVENT_TYPES,
@@ -29,6 +31,7 @@ from app.core.constants import (
     TELEGRAM_DELIVERY_EVENT_TYPE,
     TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE,
     TELEGRAM_STRATEGY_PENDING_EDIT_EVENT_TYPE,
+    ClientAnalyticsEventType,
 )
 from app.schemas.analytics_events import (
     PERSISTED_EVENT_MODEL_BY_TYPE,
@@ -44,6 +47,7 @@ from app.schemas.analytics_events import (
     TelegramDeliverySuppressedEvent,
     TelegramStrategyPendingEditActivated,
     TelegramStrategyPendingEditCleared,
+    enforce_client_payload_caps,
 )
 from app.schemas.g2_evidence import (
     PersistedG2CandidateRecheckSummary,
@@ -357,6 +361,64 @@ def test_unknown_event_type_is_explicitly_absent():
     )
 
 
+def test_client_event_vocabulary_matches_the_shared_constants():
+    """클라이언트가 올릴 수 있는 어휘는 프론트 생산 타입 두 개와 정확히 같다.
+
+    ``Literal`` 은 리터럴만 받으므로 어휘를 상수 참조로 조립할 수 없다. 그래서 값이 두 번
+    적히는데, 그 동치를 여기서 고정한다 — 한쪽만 바뀌면 엔드포인트가 프론트가 실제로
+    올리는 타입을 422 로 거부한다.
+    """
+    assert CLIENT_ANALYTICS_EVENT_TYPES == (
+        PROJECT_VIEW_EVENT_TYPE,
+        RECOMMENDATION_FEEDBACK_EVENT_TYPE,
+    )
+    assert get_args(ClientAnalyticsEventType) == CLIENT_ANALYTICS_EVENT_TYPES
+    # 받아들이는 타입은 전부 복원 계약이 있어야 한다(아무도 못 읽는 행을 만들지 않는다).
+    assert set(CLIENT_ANALYTICS_EVENT_TYPES) <= set(PERSISTED_EVENT_MODEL_BY_TYPE)
+    # 내부 텔레메트리 타입은 클라이언트가 위장해 올릴 수 없다.
+    assert not (set(CLIENT_ANALYTICS_EVENT_TYPES) & INTERNAL_TELEMETRY_EVENT_TYPES)
+
+
+# --- payload 크기 상한 (순수 함수 · 주입된 상한) ------------------------------------
+
+CAP_CASES = [
+    pytest.param({}, True, id="empty_ok"),
+    pytest.param({"a": 1, "b": 2, "c": 3}, True, id="at_key_cap"),
+    pytest.param({"a": 1, "b": 2, "c": 3, "d": 4}, False, id="over_key_cap"),
+    pytest.param({"a": "x" * 80}, True, id="under_char_cap"),
+    pytest.param({"a": "x" * 200}, False, id="over_char_cap"),
+    # 중첩은 키 수로 안 잡히지만 직렬화 길이로 잡힌다.
+    pytest.param({"a": {"nested": ["y" * 200]}}, False, id="nested_over_char_cap"),
+    # 비ASCII 는 저장 문자열 그대로 센다(이스케이프 확장 아님).
+    pytest.param({"a": "가" * 80}, True, id="non_ascii_counted_as_characters"),
+]
+
+
+@pytest.mark.parametrize(("payload", "allowed"), CAP_CASES)
+def test_enforce_client_payload_caps_value_table(payload, allowed):
+    """상한 판정은 주입된 값만 보는 순수 함수다(§4.7-3/4)."""
+    if allowed:
+        assert (
+            enforce_client_payload_caps(payload, max_keys=3, max_chars=100) is payload
+        )
+        return
+    with pytest.raises(ValueError):
+        enforce_client_payload_caps(payload, max_keys=3, max_chars=100)
+
+
+def test_enforce_client_payload_caps_measures_the_stored_string():
+    """길이 상한은 **저장될 문자열** 기준이다(다른 직렬화로 재면 불일치가 생긴다)."""
+    payload = {"note": "가" * 50}
+    serialized = AnalyticsEventEnvelope.model_validate(payload).model_dump_json()
+
+    assert (
+        enforce_client_payload_caps(payload, max_keys=8, max_chars=len(serialized))
+        is payload
+    )
+    with pytest.raises(ValueError):
+        enforce_client_payload_caps(payload, max_keys=8, max_chars=len(serialized) - 1)
+
+
 def test_event_type_wire_values_are_pinned():
     """event_type 은 저장된 행과의 **wire 계약**이다 — 이름 정리로 바꿀 수 없다.
 
@@ -415,3 +477,40 @@ def test_absent_payload_degrades_quietly_but_corrupted_text_warns(caplog):
             is None
         )
     assert "reason=decode" in caplog.text
+
+
+def test_decoded_empty_mapping_is_absent_without_a_decode_warning(caplog):
+    """``"{}"`` 는 손상이 아니라 "기록된 키 없음"이다 — 거짓 ``reason=decode`` 금지.
+
+    디코더가 손상 행과 빈 매핑을 똑같이 ``{}`` 로 접어 돌려주기 때문에, 이 구분이 없으면
+    멀쩡한 빈 행이 운영 로그를 채워 진짜 손상 경고를 묻는다.
+    """
+    with caplog.at_level(logging.WARNING):
+        assert (
+            load_analytics_event_as(
+                "{}",
+                model=PersistedTelegramDeliveryEvent,
+                event_type=TELEGRAM_DELIVERY_EVENT_TYPE,
+            )
+            is None
+        )
+
+    assert caplog.text == ""
+
+
+def test_empty_envelope_dump_round_trips_to_the_silent_absent_path(caplog):
+    """생산 경로가 실제로 내는 빈 payload 문자열이 그 조용한 부재 경로를 탄다(배선 확인)."""
+    empty_dump = dump_analytics_event(AnalyticsEventEnvelope.model_validate({}))
+
+    assert empty_dump == "{}"
+    with caplog.at_level(logging.WARNING):
+        assert (
+            load_analytics_event_as(
+                empty_dump,
+                model=PersistedProjectViewEvent,
+                event_type=PROJECT_VIEW_EVENT_TYPE,
+            )
+            is None
+        )
+
+    assert caplog.text == ""

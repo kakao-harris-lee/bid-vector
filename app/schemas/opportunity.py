@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from app.core.constants import PaperBidAction
+from app.core.constants import DecisionStatus, PaperBidAction
 from app.schemas._shared import _PROBABILITY_SCORE_DESCRIPTION
 from app.schemas.crawl import ClassificationResponse
 from app.schemas.prediction import PricePredictionResponse
@@ -148,9 +148,7 @@ class OpportunityAnalysisResponse(BaseModel):
 
 
 class BidDecisionSaveRequest(BidDecisionRequest):
-    decision_status: Optional[
-        Literal["planned", "reviewing", "submitted", "skipped"]
-    ] = None
+    decision_status: Optional[DecisionStatus] = None
     strengths: List[str] = Field(
         default_factory=list,
         description="Why this notice is pursuable; persisted into score_breakdown.",
@@ -167,11 +165,9 @@ class BidDecisionRecordResponse(BaseModel):
     operator_id: int
     pursue_bid: bool
     action: PaperBidAction
-    decision_status: Literal["planned", "reviewing", "submitted", "skipped"]
+    decision_status: DecisionStatus
     initial_action: PaperBidAction = "skip"
-    initial_decision_status: Literal[
-        "planned", "reviewing", "submitted", "skipped"
-    ] = "planned"
+    initial_decision_status: DecisionStatus = "planned"
     first_decided_at: Optional[datetime] = None
     priority_score: float
     urgency_score: float = Field(default=0.0, ge=0.0, le=1.0)

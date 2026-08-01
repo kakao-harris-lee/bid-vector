@@ -25,13 +25,21 @@ SessionLocal = sessionmaker(
 Base = declarative_base()
 
 
-def get_db():
-    """Dependency for getting database session"""
-    db = SessionLocal()
-    try:
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency that owns one request-scoped session.
+
+    Delegates the lifecycle (open → yield → always close) to :func:`task_session`
+    so the request path and the background/Celery path cannot drift apart. The
+    semantics are unchanged and deliberately identical to the previous inline
+    ``try/finally``: **no implicit commit and no implicit rollback**. Endpoints
+    that need either keep doing it explicitly.
+
+    FastAPI throws endpoint exceptions back into this generator at the ``yield``,
+    which propagates into the ``with`` block, so ``task_session``'s ``finally``
+    still closes the session on both the success and failure paths.
+    """
+    with task_session() as db:
         yield db
-    finally:
-        db.close()
 
 
 @contextmanager

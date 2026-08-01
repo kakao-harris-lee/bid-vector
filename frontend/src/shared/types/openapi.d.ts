@@ -1120,7 +1120,7 @@ export interface paths {
         put?: never;
         /**
          * Log Event
-         * @description Log an analytics event for the singleton operator.
+         * @description Log one client telemetry event, attributed to the authenticated operator.
          */
         post: operations["log_event_api_v1_analytics_event_post"];
         delete?: never;
@@ -2590,8 +2590,11 @@ export interface components {
         };
         /** AnalyticsEventRequest */
         AnalyticsEventRequest: {
-            /** Event Type */
-            event_type: string;
+            /**
+             * Event Type
+             * @enum {string}
+             */
+            event_type: "project_view" | "recommendation_feedback";
             /** Event Data */
             event_data: Record<string, never>;
         };

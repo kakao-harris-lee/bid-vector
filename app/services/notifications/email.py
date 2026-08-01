@@ -31,7 +31,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE
+from app.core.constants import BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE, NON_DELIVERING_ENVIRONMENTS
 from app.core.time import utc_now
 from app.models.models import Analytics, User
 from app.schemas.analytics_events import BidReportEmailDeliveryEvent
@@ -408,8 +408,12 @@ class EmailNotificationService:
         return message
 
     def _should_send_live(self) -> bool:
-        """라이브 송신 조건 — 기본 False(DRY-RUN). test 환경에서는 항상 False."""
-        if settings.ENVIRONMENT == "test":
+        """라이브 송신 조건 — 기본 False(DRY-RUN). 미배달 환경에서는 항상 False.
+
+        미배달 환경은 선언 데이터(``NON_DELIVERING_ENVIRONMENTS``)가 정한다 — Telegram
+        경계와 같은 집합이라 채널마다 판정이 갈라지지 않는다(§4.5-1/3).
+        """
+        if settings.ENVIRONMENT in NON_DELIVERING_ENVIRONMENTS:
             return False
         return bool(settings.EMAIL_DELIVERY_ENABLED and not settings.EMAIL_DRY_RUN)
 

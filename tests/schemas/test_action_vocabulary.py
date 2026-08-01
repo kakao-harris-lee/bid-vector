@@ -1,9 +1,10 @@
-"""``PaperBidAction`` / ``PriceScenario`` 어휘 단일 출처 drift 가드.
+"""``PaperBidAction`` / ``PriceScenario`` / ``DecisionStatus`` 어휘 단일 출처 drift 가드.
 
-투찰 액션 3값(``bid_now``/``review``/``skip``)과 가격 시나리오 3값
-(``conservative``/``base``/``aggressive``)은 라우터 · 요청/응답 스키마 · task payload ·
-beat 스케줄 · 서비스 정규화기에 걸쳐 쓰인다. 종전에는 각 파일이 같은 값 집합을
-``Literal`` 이나 ``set`` 으로 **다시 선언**해서(§4.5-1 위반) 한 곳만 고쳐도 나머지가
+투찰 액션 3값(``bid_now``/``review``/``skip``), 가격 시나리오 3값
+(``conservative``/``base``/``aggressive``), 결정 워크플로 상태 4값
+(``planned``/``reviewing``/``submitted``/``skipped``)은 라우터 · 요청/응답 스키마 ·
+task payload · beat 스케줄 · 서비스 정규화기에 걸쳐 쓰인다. 종전에는 각 파일이 같은 값
+집합을 ``Literal`` 이나 ``set`` 으로 **다시 선언**해서(§4.5-1 위반) 한 곳만 고쳐도 나머지가
 조용히 갈라졌다. 이제 ``app/core/constants.py`` 가 단일 출처이고, 이 모듈은 셋을 고정한다.
 
 1. 단일 출처의 **값과 순서**(기본값·직렬화 순서·CLI 선택지가 여기에 붙어 있다).
@@ -23,15 +24,19 @@ from typing import Any, Literal, get_args, get_origin
 import pytest
 from pydantic import BaseModel
 
+from app.api.operations import BidDecisionStatusUpdateRequest
 from app.api.synthetic import SyntheticBacktestRunRequest
 from app.core.constants import (
+    DECISION_STATUSES,
     PAPER_BID_ACTIONS,
     PRICE_SCENARIOS,
+    DecisionStatus,
     PaperBidAction,
     PriceScenario,
 )
 from app.schemas.accuracy import RecommendationFeedbackLabelItem
-from app.schemas.dashboard import DashboardOpportunityItem
+from app.schemas.bid import BidResponse
+from app.schemas.dashboard import DashboardBidItem, DashboardOpportunityItem
 from app.schemas.decision import (
     DecisionExperimentOutcome,
     DecisionFunnelRecentSubmissionItem,
@@ -45,6 +50,7 @@ from app.schemas.operator_strategy import (
 from app.schemas.opportunity import (
     BidDecisionRecordResponse,
     BidDecisionResponse,
+    BidDecisionSaveRequest,
 )
 from app.schemas.paper_bidding import (
     ForwardPaperBiddingRunRequest,
@@ -61,7 +67,10 @@ from app.schemas.task_payloads import (
     SyntheticOperatorBacktestTaskRequest,
 )
 from app.schemas.telegram import TelegramActionResponse
-from app.services.dashboard_summary.constants import _PAPER_ACTION_STATUS
+from app.services.dashboard_summary.constants import (
+    _OPPORTUNITY_STATUSES,
+    _PAPER_ACTION_STATUS,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # 어휘 재선언을 스캔할 소스 트리. ``scripts/`` 는 CLI ``choices`` 로 어휘를 복제하기 쉬운
@@ -183,6 +192,31 @@ class TestVocabularySingleSource:
         assert PRICE_SCENARIOS == ("conservative", "base", "aggressive")
         assert get_args(PriceScenario) == PRICE_SCENARIOS
 
+    def test_decision_statuses_are_pinned(self) -> None:
+        """저장 값이자 wire 값이다 — 하나라도 바뀌면 기존 행 조회가 조용히 0건이 된다.
+
+        순서도 계약이다: ``app/api/dashboard.py`` 의 ``?status=`` 정규식이 이 순서로
+        조립되므로(OpenAPI ``pattern`` 문자열) 순서가 바뀌면 스펙 산출이 흔들린다.
+        """
+        assert DECISION_STATUSES == ("planned", "reviewing", "submitted", "skipped")
+        assert get_args(DecisionStatus) == DECISION_STATUSES
+
+    def test_active_decision_statuses_is_a_subset_of_the_workflow_vocabulary(
+        self,
+    ) -> None:
+        """열린 상태 집합은 전체 어휘의 부분집합이어야 한다(오타 상태 유입 차단)."""
+        from app.core.constants import ACTIVE_DECISION_STATUSES
+
+        assert ACTIVE_DECISION_STATUSES <= set(DECISION_STATUSES)
+
+    def test_dashboard_opportunity_status_filter_covers_every_status(self) -> None:
+        """대시보드 정규화기의 허용 집합이 어휘 전체를 덮는지 확인한다.
+
+        빠진 값은 ``_normalize_decision_status`` 에서 조용히 기본값으로 접혀, 응답에
+        운영자가 고른 적 없는 상태가 표시된다.
+        """
+        assert _OPPORTUNITY_STATUSES == set(DECISION_STATUSES)
+
     def test_paper_action_status_map_covers_every_action(self) -> None:
         """대시보드 action -> decision_status 룩업이 어휘 전체를 덮는지 확인한다.
 
@@ -246,6 +280,61 @@ class TestActionVocabularyConsumers:
         )
 
 
+class TestDecisionStatusVocabularyConsumers:
+    """결정 상태 어휘를 쓰는 필드가 모두 같은 값 묶음을 갖는지 고정한다.
+
+    이 값은 ``BidDecisionRecord.decision_status`` 컬럼에 그대로 저장되고 다시 응답으로
+    나가므로, 한 경계만 값 집합이 달라지면 그 경계에서만 422 가 나거나(쓰기) 저장된 행이
+    직렬화에서 터진다(읽기).
+    """
+
+    FIELDS = [
+        pytest.param(RecommendationFeedbackLabelItem, "decision_status", id="feedback_label"),
+        pytest.param(BidResponse, "decision_status", id="bid_response"),
+        pytest.param(DashboardOpportunityItem, "decision_status", id="dashboard_opportunity"),
+        pytest.param(DashboardBidItem, "decision_status", id="dashboard_bid"),
+        pytest.param(DecisionInsightsRecentItem, "decision_status", id="decision_recent"),
+        pytest.param(
+            DecisionFunnelRecentSubmissionItem,
+            "initial_decision_status",
+            id="funnel_initial",
+        ),
+        pytest.param(
+            DecisionFunnelRecentSubmissionItem,
+            "current_decision_status",
+            id="funnel_current",
+        ),
+        pytest.param(
+            OperatorDashboardDecisionItem, "decision_status", id="operator_dashboard"
+        ),
+        pytest.param(
+            OperatorStrategyMonitorResultItem, "decision_status", id="strategy_monitor"
+        ),
+        pytest.param(BidDecisionSaveRequest, "decision_status", id="decision_save"),
+        pytest.param(
+            BidDecisionRecordResponse, "decision_status", id="bid_decision_record"
+        ),
+        pytest.param(
+            BidDecisionRecordResponse,
+            "initial_decision_status",
+            id="bid_record_initial",
+        ),
+        pytest.param(TelegramActionResponse, "decision_status", id="telegram_action"),
+        pytest.param(
+            BidDecisionStatusUpdateRequest, "decision_status", id="status_update_request"
+        ),
+    ]
+
+    @pytest.mark.parametrize(("model", "field_name"), FIELDS)
+    def test_field_uses_the_single_source_vocabulary(
+        self, model: type[BaseModel], field_name: str
+    ) -> None:
+        assert DECISION_STATUSES in _field_literals(model, field_name), (
+            f"{model.__name__}.{field_name} 이 {VOCABULARY_SOURCE} 의 DecisionStatus 를 "
+            "쓰지 않습니다."
+        )
+
+
 class TestScenarioVocabularyConsumers:
     """예측기 라벨과 run 요청의 시나리오가 같은 어휘인지 고정한다.
 
@@ -276,6 +365,7 @@ class TestNoRedeclaration:
     VOCABULARIES = [
         pytest.param(PAPER_BID_ACTIONS, VOCABULARY_SOURCE, id="paper_bid_action"),
         pytest.param(PRICE_SCENARIOS, VOCABULARY_SOURCE, id="price_scenario"),
+        pytest.param(DECISION_STATUSES, VOCABULARY_SOURCE, id="decision_status"),
         # 한 모듈 전용 어휘(종전 같은 파일 안에서 5번 선언)도 같은 가드로 묶는다.
         pytest.param(
             get_args(DecisionExperimentOutcome),
@@ -348,6 +438,7 @@ class TestVocabularyScanner:
         """실제 트리 스캔이 단일 출처를 집어내는지(경로 배선 확인)."""
         assert _redeclaring_paths(PAPER_BID_ACTIONS) == [VOCABULARY_SOURCE]
         assert _redeclaring_paths(PRICE_SCENARIOS) == [VOCABULARY_SOURCE]
+        assert _redeclaring_paths(DECISION_STATUSES) == [VOCABULARY_SOURCE]
 
     def test_scanned_tree_covers_app_and_scripts(self) -> None:
         scanned = {path.relative_to(REPO_ROOT).parts[0] for path in _scanned_modules()}

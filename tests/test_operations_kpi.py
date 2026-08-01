@@ -13,12 +13,19 @@ from app.models.models import (
     Project,
     TenderResult,
 )
+from tests.support.auth import authenticate_client
 
 
 def _bootstrap_operator(
     client, username="kpi-operator", email="kpi@example.com", password="password123"
 ):
-    return client.post(
+    """운영자를 부트스트랩하고 클라이언트를 인증 상태로 만든다.
+
+    ``POST /analytics/event`` 는 bearer 를 요구하므로(프론트도 토큰이 있을 때만 발신)
+    KPI 흐름 전체를 인증된 클라이언트로 태운다. 읽기 엔드포인트 산출은 영향이 없다 —
+    토큰 소유자가 곧 이 테스트의 단일 운영자다.
+    """
+    response = client.post(
         "/api/v1/auth/bootstrap",
         json={
             "username": username,
@@ -28,6 +35,9 @@ def _bootstrap_operator(
             "password": password,
         },
     )
+    assert response.status_code == 200, response.text
+    authenticate_client(client, username=username, password=password)
+    return response
 
 
 def _make_project(

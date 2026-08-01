@@ -34,7 +34,6 @@ from app.schemas.analytics_events import (
     AnalyticsEventPayload,
     PersistedAnalyticsEvent,
 )
-from app.services.decision_analytics.events import parse_analytics_event_data
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +44,12 @@ __all__ = [
 ]
 
 _PersistedT = TypeVar("_PersistedT", bound=BaseModel)
+
+# 디코딩에 성공했지만 키가 하나도 없는 행의 원문. 디코더는 손상 행과 빈 매핑을 똑같이
+# ``{}`` 로 접어 돌려주므로, 이 값 집합으로 둘을 가른다 — 빈 매핑은 손상이 아니라 "기록된
+# 키가 없음"이라 경고 대상이 아니다(운영 로그에 거짓 ``reason=decode`` 를 남기지 않는다).
+# 두 생산 경로 모두 정확히 이 문자열을 낸다: ``model_dump_json()`` 과 legacy ``str({})``.
+_EMPTY_MAPPING_TEXTS: frozenset[str] = frozenset({"{}"})
 
 
 def dump_analytics_event(payload: AnalyticsEventPayload) -> str:
@@ -76,15 +81,23 @@ def load_analytics_event_as(
     """저장된 payload 를 지정한 복원 모델로 되읽는다. 해석 불가면 ``None``.
 
     두 갈래 degrade 를 **모두** 경고로 남긴다: 텍스트는 있는데 디코딩되지 않는 손상 행
-    (``reason=decode``)과, 디코딩은 되지만 계약을 어긴 행(``reason=schema``). 값이 아예
-    없는 행(``None``/빈 문자열)만 정상적인 부재로 조용히 넘어간다 — 손상 행이 조용히
-    사라지면 판정이 왜 달라졌는지 사후에 알 수 없다.
+    (``reason=decode``)과, 디코딩은 되지만 계약을 어긴 행(``reason=schema``). 정상적인
+    부재 — 값이 아예 없는 행(``None``/빈 문자열)과 디코딩은 됐지만 키가 없는 빈 매핑
+    (``"{}"``) — 만 조용히 넘어간다. 손상 행이 조용히 사라지면 판정이 왜 달라졌는지
+    사후에 알 수 없고, 반대로 멀쩡한 빈 행에 경고를 남기면 진짜 손상이 묻힌다.
 
     ``event_type`` 은 경고 로그에서 어떤 이벤트가 degrade 됐는지 특정하기 위한 것이다.
     """
+    # 지연 import: 디코더는 ``decision_analytics`` 패키지 안에 있고 그 패키지의
+    # ``__init__`` 이 KPI 믹스인을 끌어오는데, 그 믹스인이 다시 이 모듈을 쓴다
+    # (import 시점 순환). 함수 시점 import 는 sys.modules 캐시를 타므로 비용이 없고,
+    # 디코딩 단일 출처(legacy repr 복구 포함)는 그대로 유지된다.
+    from app.services.decision_analytics.events import parse_analytics_event_data
+
     mapping = parse_analytics_event_data(raw)
     if not mapping:
-        if raw and raw.strip():
+        text = (raw or "").strip()
+        if text and text not in _EMPTY_MAPPING_TEXTS:
             _warn_degraded(event_type, model, reason="decode")
         return None
     try:

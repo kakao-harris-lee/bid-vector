@@ -19,9 +19,10 @@ odcloud 응답 스키마는 실제 키가 있을 때 정확히 검증해 보정�
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Optional, Protocol
 
 import requests
+from pydantic import JsonValue
 
 from app.core.config import settings
 from app.services.verification.hashing import mask_business_number, normalize_business_number
@@ -34,8 +35,34 @@ from app.services.verification.status import (
 
 logger = logging.getLogger(__name__)
 
-# HTTP POST seam(§4.7-3). 기본 구현은 requests.post 를 쓰고, 테스트는 가짜를 주입한다.
-HttpPost = Callable[..., Any]
+# --- HTTP POST seam (§4.7-1/3) ----------------------------------------------------
+# 국세청(odcloud)으로 나가는 POST 는 이 모듈에서만 일어난다. 종전 이 seam 은
+# ``Callable[..., Any]`` 여서 **어떤 콜러블이든** 통과했다 — 인자 이름/타임아웃 유무가
+# 계약에 없으니 timeout 을 빼먹은 주입이나 다른 키워드를 쓰는 주입도 타입상 정상이었다.
+# 포트로 승격해 호출 형태를 계약으로 고정한다(``app/services/koneps/http_client.py`` 의
+# ``HttpGet`` 미러). 구현이 그 값을 실제로 지키는지는 포트가 보장하지 않는다.
+
+# 요청 body/쿼리 파라미터 — JSON 직렬화 가능한 값만 실린다(좁은 계약 명시).
+HttpPostJson = dict[str, JsonValue]
+
+
+class HttpPost(Protocol):
+    """HTTP POST 획득 포트.
+
+    ``timeout`` 은 키워드 필수 — 이 모듈의 어떤 호출 지점도 타임아웃을 빼먹을 수 없다
+    (mypy 강제). ``params`` 는 query string 으로만 실리는 서비스키 자리이며 body 나
+    로그에 남지 않는다(§8).
+    """
+
+    def __call__(
+        self,
+        url: str,
+        *,
+        json_body: HttpPostJson,
+        timeout: int,
+        params: HttpPostJson,
+    ) -> requests.Response: ...
+
 
 STATUS_ENDPOINT = "status"
 VALIDATE_ENDPOINT = "validate"
@@ -52,9 +79,9 @@ _VALIDATE_KEEP_KEYS = ("valid", "b_stt", "b_stt_cd", "tax_type")
 def _default_http_post(
     url: str,
     *,
-    json_body: dict[str, Any],
+    json_body: HttpPostJson,
     timeout: int,
-    params: dict[str, Any],
+    params: HttpPostJson,
 ) -> requests.Response:
     """기본 HTTP POST(요청 흐름 seam). data.go.kr odcloud 는 JSON body POST 를 받고
     ``serviceKey`` 는 query string(``params``)으로 전달한다."""
@@ -124,7 +151,9 @@ class NtsBusinessVerificationAdapter(BusinessVerificationPort):
         representative_name: str,
     ) -> VerificationResult:
         digits = normalize_business_number(business_number)
-        body = {
+        # 포트 계약 타입으로 선언한다 — 어노테이션이 없으면 추론된 구체 타입
+        # (``dict[str, list[dict[str, str]]]``)이 dict 불변성 때문에 포트 인자와 어긋난다.
+        body: HttpPostJson = {
             "businesses": [
                 {
                     "b_no": digits,
@@ -148,7 +177,7 @@ class NtsBusinessVerificationAdapter(BusinessVerificationPort):
 
     # --- helpers --------------------------------------------------------------
 
-    def _post(self, endpoint: str, json_body: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _post(self, endpoint: str, json_body: HttpPostJson) -> Optional[dict[str, Any]]:
         """엔드포인트 POST 후 JSON dict 를 돌려준다. 실패는 raise 없이 None(베스트에포트).
 
         서비스키는 query string(``serviceKey``)으로만 전달하고 로그/payload 에 남기지

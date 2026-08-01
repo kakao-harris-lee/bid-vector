@@ -37,14 +37,36 @@ from typing import Literal, get_args
 # are NOT the same set — do not merge them:
 #   - the operator's submit-time vocabulary ``{"submit", "review", "skip"}``
 #     (``BidDecisionActionRequest.action`` in app/schemas/opportunity.py);
-#   - the 4-value ``decision_status`` vocabulary
-#     ``{"planned", "reviewing", "submitted", "skipped"}``, still declared inline in
-#     ~10 schema files (a separate single-source candidate);
+#   - the 4-value ``decision_status`` workflow vocabulary (:data:`DecisionStatus`
+#     below) — a *lifecycle* state, not a recommendation;
 #   - ``PaperBidDecisionStatus`` in app/schemas/paper_bidding_items.py, which is the
 #     3-value set ``{"planned", "reviewing", "skipped"}`` that
 #     ``_decision_status_for_action`` can produce and therefore has NO "submitted".
 PaperBidAction = Literal["bid_now", "review", "skip"]
 PAPER_BID_ACTIONS: tuple[PaperBidAction, ...] = get_args(PaperBidAction)
+
+# ``BidDecisionRecord.decision_status`` 워크플로 어휘 — 한 결정 레코드가 지나는 상(相)
+# 전체다. 운영자가 계획(``planned``)에서 검토(``reviewing``)를 거쳐 투찰(``submitted``)
+# 하거나 포기(``skipped``)한다. 액션(:data:`PaperBidAction`) 은 "무엇을 권고했는가",
+# 이 어휘는 "그 뒤 운영자가 어디까지 진행했는가"라 서로 다른 축이다.
+#
+# 종전에는 같은 4값 ``Literal`` 을 스키마 10곳 · 라우터 2곳 · 서비스 상수 1곳이 각각 다시
+# 선언했다(§4.5-1 위반). 값 하나를 늘리려면 13곳을 동시에 고쳐야 했고, 한 곳만 빠지면
+# 그 경계에서만 422 가 나는 조용한 어긋남이 됐다. 여기서 한 번 선언하고 pydantic 필드
+# 주석(별칭) · 런타임 멤버십/쿼리 패턴(값 튜플)으로 나눠 쓴다.
+#
+# 공유 소비처(종전 각자 인라인 재선언):
+#   - app/schemas/{accuracy,bid,dashboard,decision,operator,operator_strategy,
+#                  opportunity,telegram}.py  (decision_status / initial_ / current_)
+#   - app/api/operations.py                  (BidDecisionStatusUpdateRequest)
+#   - app/api/dashboard.py                   (status 쿼리 pattern — 값 튜플로 조립)
+#   - app/services/dashboard_summary/constants.py (_OPPORTUNITY_STATUSES)
+#
+# NOTE: 부분집합 두 개와 혼동하지 않는다 — :data:`ACTIVE_DECISION_STATUSES`
+# (``{"planned", "reviewing"}``: 아직 열려 있는 건)와 ``PaperBidDecisionStatus``
+# (``submitted`` 가 없는 3값: 자동 생성기가 낼 수 있는 상태).
+DecisionStatus = Literal["planned", "reviewing", "submitted", "skipped"]
+DECISION_STATUSES: tuple[DecisionStatus, ...] = get_args(DecisionStatus)
 
 # Price-stance scenario vocabulary — how conservatively one bid amount is derived.
 # The predictors emit one entry per label (``PricePredictionScenario.label``) and a
@@ -79,9 +101,10 @@ PRICE_SCENARIOS: tuple[PriceScenario, ...] = get_args(PriceScenario)
 #   - app/api/dashboard.py                 (_ACTIVE_OPPORTUNITY_STATUSES)
 #   - app/api/operator.py                  (active_decision_count .in_() filter)
 #
-# NOTE: This is intentionally distinct from experiment lifecycle statuses such
-# as {"planned", "running"} used in app/services/decision_experiments.py — do
-# not merge the two; "running" is not a bid-decision status.
+# NOTE: This is a strict subset of :data:`DECISION_STATUSES` (the full workflow
+# vocabulary) and is intentionally distinct from experiment lifecycle statuses
+# such as {"planned", "running"} used in app/services/decision_experiments.py —
+# do not merge those two; "running" is not a bid-decision status.
 ACTIVE_DECISION_STATUSES: frozenset[str] = frozenset({"planned", "reviewing"})
 
 # The base *open* Project status ONLY — deliberately NARROWER than
@@ -140,6 +163,19 @@ PAPER_BID_RUN_MODES: frozenset[str] = frozenset(
     {HISTORICAL_BACKTEST_RUN_MODE, FORWARD_PAPER_RUN_MODE}
 )
 
+# 실제 외부 송신을 하지 않는 환경(선언적 데이터 — 환경 추가는 이 집합에 한 줄).
+#
+# ``ENVIRONMENT=test`` 에서 Telegram/메일 실호출이 0 이어야 한다는 불변 요구
+# (CLAUDE.md §7)를 도메인 코드의 ``settings.ENVIRONMENT == "test"`` 분기가 아니라 **데이터**
+# 로 선언한다. 분기로 흩어지면 새 채널이 그 판정을 빠뜨려도 아무 테스트가 실패하지 않고
+# 조용히 실제 송신이 새어 나간다.
+#
+# 공유 소비처:
+#   - app/services/notifications/telegram_transport.py (transport 선택 — 실호출 0 구현)
+#   - app/services/notifications/manager.py            (Telegram 실송신 가능 판정)
+#   - app/services/notifications/email.py              (라이브 SMTP 송신 판정)
+NON_DELIVERING_ENVIRONMENTS: frozenset[str] = frozenset({"test"})
+
 # Telegram delivery telemetry event types written to the ``analytics`` table.
 #
 # ``TELEGRAM_DELIVERY_EVENT_TYPE`` records every delivery attempt that reached
@@ -156,7 +192,7 @@ TELEGRAM_DELIVERY_SUPPRESSED_EVENT_TYPE: str = "telegram.delivery.suppressed"
 # 집계가 0건이 되므로 여기서 단일 출처를 유지한다.
 TELEGRAM_STRATEGY_PENDING_EDIT_EVENT_TYPE: str = "telegram.strategy.pending_edit"
 BID_REPORT_EMAIL_DELIVERY_EVENT_TYPE: str = "email.bid_report.delivery"
-# 프론트가 열린 텔레메트리 엔드포인트(``POST /analytics/event``)로 올리는 이벤트.
+# 프론트가 텔레메트리 엔드포인트(``POST /analytics/event``)로 올리는 이벤트.
 PROJECT_VIEW_EVENT_TYPE: str = "project_view"
 RECOMMENDATION_FEEDBACK_EVENT_TYPE: str = "recommendation_feedback"
 # G-2 증적 sweep beat 가 남기는 관측 이벤트. ``collect_g2_evidence`` 행은
@@ -166,6 +202,26 @@ RECOMMENDATION_FEEDBACK_EVENT_TYPE: str = "recommendation_feedback"
 # beat 가 남긴 내부 관측이므로 아래 INTERNAL_TELEMETRY_EVENT_TYPES 에도 든다.
 G2_CANDIDATE_RECHECK_EVENT_TYPE: str = "g2_candidate_recheck"
 COLLECT_G2_EVIDENCE_EVENT_TYPE: str = "collect_g2_evidence"
+
+# 클라이언트가 ``POST /analytics/event`` 로 **올릴 수 있는** event_type 전체.
+#
+# 종전 이 엔드포인트는 임의 문자열을 받았다: 인증도 상한도 없어서 아무 클라이언트가
+# 아무 타입으로 ``analytics`` 테이블을 채울 수 있었고, 그렇게 들어온 타입은 어떤 소비처도
+# 읽지 않으면서 운영자 활동 카운트(``total_events``)만 부풀렸다. 프론트가 실제로 올리는
+# 타입은 두 개뿐이므로(``frontend/src/shared/api/operations.ts`` 의 ``trackProjectView`` /
+# ``submitRecommendationFeedback``) 어휘를 그 둘로 좁혀 미지 타입을 422 로 거부한다.
+#
+# 값은 위의 두 상수와 같은 문자열이며 그 동치는
+# ``tests/test_analytics_event_contracts.py`` 가 고정한다(``Literal`` 은 리터럴만 받으므로
+# 상수 참조로 조립할 수 없어 값을 다시 적는다 — 그 대신 동치를 테스트로 못박는다).
+#
+# 새 클라이언트 이벤트를 추가할 때: 여기 한 값 + app/schemas/analytics_events.py 의
+# 복원 모델/레지스트리 한 줄. 그 둘을 함께 하지 않으면 이벤트는 저장되지만 아무도
+# 읽지 못한다(레지스트리 미등록 = 명시적 부재).
+ClientAnalyticsEventType = Literal["project_view", "recommendation_feedback"]
+CLIENT_ANALYTICS_EVENT_TYPES: tuple[ClientAnalyticsEventType, ...] = get_args(
+    ClientAnalyticsEventType
+)
 
 # Internal telemetry event types that operator-facing event *counts* exclude.
 #

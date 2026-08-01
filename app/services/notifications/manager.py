@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import TELEGRAM_DELIVERY_EVENT_TYPE
+from app.core.constants import NON_DELIVERING_ENVIRONMENTS, TELEGRAM_DELIVERY_EVENT_TYPE
 from app.core.single_user import DEFAULT_OPERATOR_USERNAME
 from app.core.time import utc_now
 from app.models.models import (
@@ -435,11 +435,15 @@ class OperatorNotificationService:
         ).route_send_allowed
 
     def _can_actually_send_telegram(self, *, route_send_allowed: bool) -> bool:
-        """Return whether this process may perform a real Telegram send now."""
+        """Return whether this process may perform a real Telegram send now.
+
+        환경 판정은 인라인 스니핑이 아니라 선언 데이터(``NON_DELIVERING_ENVIRONMENTS``)
+        멤버십이다 — transport 선택과 같은 집합을 봐야 게이트와 transport 가 갈라지지 않는다.
+        """
         return bool(
             route_send_allowed
             and self.telegram.is_configured()
-            and settings.ENVIRONMENT != "test"
+            and settings.ENVIRONMENT not in NON_DELIVERING_ENVIRONMENTS
         )
 
     def _select_telegram_channel(

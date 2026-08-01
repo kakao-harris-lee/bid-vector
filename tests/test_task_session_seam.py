@@ -11,6 +11,11 @@ migrated onto it without changing their outcomes:
 * the factory is injectable (``session_factory=``), and when omitted the
   module-level ``SessionLocal`` is resolved at call time so tests driving a whole
   task have exactly one patch surface.
+
+The FastAPI request dependency ``get_db`` now delegates to the same helper (it was
+a byte-for-byte copy of that boilerplate), so the request path and the background
+path cannot drift apart. ``TestRequestDependencyLifecycle`` below pins that the
+delegation is lifecycle-equivalent on both the success and the exception path.
 """
 
 from __future__ import annotations
@@ -87,6 +92,83 @@ def test_task_session_default_factory_is_resolved_at_call_time(monkeypatch):
         assert db is session
 
     assert session.closed is True
+
+
+class TestRequestDependencyLifecycle:
+    """``get_db`` 위임이 종전 인라인 try/finally 와 수명 동치인지 고정한다.
+
+    이 의존성은 모든 요청 경로에 걸리므로 회귀 비용이 크다. 세션을 **한 번** 열고, 요청
+    본문이 끝나거나 예외로 끝나도 **정확히 한 번** 닫고, 암묵 commit/rollback 을 넣지
+    않는다는 세 가지를 고정한다(§4.7-3 의 주입 seam 을 그대로 재사용).
+    """
+
+    def test_opens_one_session_and_closes_it_after_the_request(self, monkeypatch):
+        session = _FakeSession()
+        opened: list[int] = []
+        monkeypatch.setattr(
+            database_mod, "SessionLocal", lambda: (opened.append(1), session)[1]
+        )
+
+        generator = database_mod.get_db()
+        yielded = next(generator)
+
+        assert yielded is session
+        assert opened == [1]
+        assert session.closed is False
+
+        with pytest.raises(StopIteration):
+            next(generator)
+
+        assert session.closed is True
+        assert session.committed == 0
+        assert session.rolled_back == 0
+
+    def test_closes_the_session_when_the_endpoint_raises(self, monkeypatch):
+        """FastAPI 는 엔드포인트 예외를 yield 지점으로 되던진다 — 그때도 닫아야 한다."""
+        session = _FakeSession()
+        monkeypatch.setattr(database_mod, "SessionLocal", lambda: session)
+
+        generator = database_mod.get_db()
+        next(generator)
+
+        with pytest.raises(RuntimeError, match="endpoint failed"):
+            generator.throw(RuntimeError("endpoint failed"))
+
+        assert session.closed is True
+        # 암묵 rollback 을 넣지 않는다(종전 동작 유지 — 필요한 곳은 명시적으로 한다).
+        assert session.rolled_back == 0
+        assert session.committed == 0
+
+    def test_closes_the_session_when_the_generator_is_closed_early(self, monkeypatch):
+        """클라이언트 중단 등으로 의존성 제너레이터가 close() 되는 경로."""
+        session = _FakeSession()
+        monkeypatch.setattr(database_mod, "SessionLocal", lambda: session)
+
+        generator = database_mod.get_db()
+        next(generator)
+        generator.close()
+
+        assert session.closed is True
+
+    def test_request_path_reaches_the_patched_factory_end_to_end(self, monkeypatch):
+        """실제 요청이 이 의존성을 타는지(배선 확인) — 패치한 팩토리가 쓰인다."""
+        from fastapi import Depends, FastAPI
+        from fastapi.testclient import TestClient
+
+        session = _FakeSession()
+        monkeypatch.setattr(database_mod, "SessionLocal", lambda: session)
+
+        app = FastAPI()
+
+        @app.get("/probe")
+        def probe(db=Depends(database_mod.get_db)):  # noqa: ANN001 - test route
+            return {"same_session": db is session, "closed_during": session.closed}
+
+        with TestClient(app) as client:
+            payload = client.get("/probe").json()
+
+        assert payload == {"same_session": True, "closed_during": False}
+        assert session.closed is True
 
 
 def test_reserve_detail_backfill_job_honours_injected_session_factory():

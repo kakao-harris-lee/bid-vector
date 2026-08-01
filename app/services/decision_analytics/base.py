@@ -17,6 +17,7 @@ from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STAT
 from app.core.time import ensure_utc, utc_now
 from app.domain.aggregates import average
 from app.models.models import Analytics, BidDecisionRecord
+from app.schemas.analytics_events import coerce_payload_int
 
 
 class _DecisionAnalyticsBase:
@@ -65,18 +66,15 @@ class _DecisionAnalyticsBase:
     CATEGORY_PARAMETER_MAX_DELTA = 0.05
 
     def _coerce_int(self, value: Any) -> int | None:
-        """Best-effort coercion of event payload identifiers to int."""
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float) and value.is_integer():
-            return int(value)
-        if isinstance(value, str):
-            text = value.strip()
-            if text.lstrip("-").isdigit():
-                return int(text)
-        return None
+        """Best-effort coercion of event payload identifiers to int.
+
+        Thin delegator: the rule itself is declared once in
+        :func:`app.schemas.analytics_events.coerce_payload_int`, which the
+        ``Persisted*`` restore models apply as a lenient field validator. Keeping
+        two copies would let the same stored row resolve differently depending on
+        which consumer read it.
+        """
+        return coerce_payload_int(value)
 
     def _reasoning_excerpt(self, reasoning: Any, *, limit: int = 200) -> str:
         """Return a bounded excerpt of the persisted reasoning text."""
