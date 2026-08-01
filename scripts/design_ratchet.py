@@ -33,7 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from pydantic import ValidationError  # noqa: E402
 
-from scripts._design_ratchet_scan import (  # noqa: E402
+from scripts._design_ratchet_contracts import (  # noqa: E402
     FILE_LOC_BAND_LINES,
     FILE_LOC_METRIC,
     FILE_LOC_SOFT_LIMIT,
@@ -43,8 +43,9 @@ from scripts._design_ratchet_scan import (  # noqa: E402
     RatchetViolation,
     compare_reports,
     count_improvements,
-    scan_repo,
+    without_paths,
 )
+from scripts._design_ratchet_scan import scan_repo  # noqa: E402
 
 # --- 선언적 구성 (§4.5-1) ---------------------------------------------------------
 BASELINE_PATH = REPO_ROOT / "tests" / "design_ratchet_baseline.json"
@@ -59,6 +60,23 @@ MISSING_BASELINE_MESSAGE = "\n".join(
     )
 )
 UPDATE_BASELINE_HINT = f"정당한 경우 `{BASELINE_UPDATE_COMMAND}` 후 사유를 PR 본문에 기재하세요."
+# 삭제된 경로가 baseline 에 남아 있으면 **같은 이름의 파일이 다시 생겼을 때 예전
+# allowance 를 상속**한다. 위반은 아니지만(삭제는 항상 통과) 조용히 두면 래칫이 샌다.
+STALE_BASELINE_HEADER = "\n".join(
+    (
+        "경고: baseline 에만 있고 디스크에 없는 파일이 있습니다(위반 아님).",
+        "  남겨 두면 같은 경로가 다시 생길 때 예전 allowance 를 상속합니다"
+        f" — `{BASELINE_UPDATE_COMMAND}` 으로 정리하세요.",
+    )
+)
+# 감소는 항상 통과라 잠그지 않아도 실패하지 않는다. 그래서 조용히 두면 회수한 부채가
+# 영영 baseline 에 slack 으로 남아 나중의 재악화를 무료로 허용한다.
+BASELINE_SLACK_HEADER = "\n".join(
+    (
+        "안내: baseline 이 현재 스캔보다 느슨합니다(위반 아님).",
+        f"  회수한 감소분을 잠그려면 `{BASELINE_UPDATE_COMMAND}` 을 실행하세요.",
+    )
+)
 # 지표를 추가/개명하면 구 baseline 은 스키마가 맞지 않는다. 검사 경로는 그대로 크게
 # 실패하고, 명시적 재생성 경로에서만 delta 를 생략한다.
 INCOMPATIBLE_BASELINE_NOTE = (
@@ -79,6 +97,11 @@ def load_baseline(path: Path) -> RatchetReport:
 def save_baseline(report: RatchetReport, path: Path) -> None:
     payload = report.model_dump_json(indent=2, exclude_defaults=True)
     path.write_text(f"{payload}\n", encoding="utf-8")
+
+
+def stale_baseline_files(baseline: RatchetReport, root: Path) -> list[str]:
+    """baseline 에 있으나 디스크에 없는 경로(정렬)."""
+    return sorted(path for path in baseline.files if not (root / path).exists())
 
 
 # --- 리포트 출력 -----------------------------------------------------------------
@@ -132,6 +155,31 @@ def _format_reductions(reduced: FileMetrics) -> str:
         if reduced.count(metric)
     ]
     return ", ".join(parts) if parts else "없음"
+
+
+def format_stale_baseline_warning(stale: Sequence[str]) -> str:
+    return "\n".join([STALE_BASELINE_HEADER, _format_preview("정리 대상", stale)])
+
+
+def format_baseline_slack(reduced: FileMetrics) -> str:
+    detail = f"  미회수 감소: {_format_reductions(reduced)}"
+    return "\n".join([BASELINE_SLACK_HEADER, detail])
+
+
+def baseline_drift_notes(
+    baseline: RatchetReport, current: RatchetReport, root: Path
+) -> list[str]:
+    """실패시키지 않는 안내: 사라진 경로 + **현존 파일의** 미회수 감소분.
+
+    둘 다 래칫 계약상 통과(삭제·감소는 항상 허용)지만 조용히 두면 래칫이 샌다. 사라진
+    경로의 감소분은 stale 경고가 이미 지목하므로 slack 집계에서는 제외한다.
+    """
+    stale = stale_baseline_files(baseline, root)
+    notes = [format_stale_baseline_warning(stale)] if stale else []
+    slack = count_improvements(without_paths(baseline, stale), current)
+    if not slack.is_clean():
+        notes.append(format_baseline_slack(slack))
+    return notes
 
 
 def format_baseline_delta(baseline: RatchetReport, current: RatchetReport) -> str:
@@ -211,7 +259,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not BASELINE_PATH.exists():
         print(MISSING_BASELINE_MESSAGE)
         return 1
-    violations = compare_reports(load_baseline(BASELINE_PATH), report)
+    baseline = load_baseline(BASELINE_PATH)
+    for note in baseline_drift_notes(baseline, report, REPO_ROOT):
+        print(note)
+    violations = compare_reports(baseline, report)
     if not violations:
         print("위반 없음 (baseline 이하)")
         return 0

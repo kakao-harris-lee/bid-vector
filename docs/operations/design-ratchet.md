@@ -1,6 +1,7 @@
 # 설계 래칫 (design ratchet)
 
-- 측정 코어: `scripts/_design_ratchet_scan.py` (AST 스캔 · 데이터 계약 · 순수 비교)
+- 데이터 계약 · 순수 비교: `scripts/_design_ratchet_contracts.py`
+- 측정 코어(AST 스캔): `scripts/_design_ratchet_scan.py`
 - CLI · baseline 영속화 · 리포트: `scripts/design_ratchet.py`
 - baseline: `tests/design_ratchet_baseline.json`
 - 게이트: `tests/test_design_ratchet.py`
@@ -26,8 +27,8 @@
 | `file_loc_band` | **500줄 초과** 파일의 25줄 밴드 `ceil(LOC/25)` (500줄 이하면 항목 없음) | §4.5-4 파일 ~500줄. LOC 원값이 아니라 밴드로 재서, 큰 파일에 한 줄 더하는 버그픽스가 baseline 상승을 요구하지 않게 한다(501~525줄 → 21, 526~550줄 → 22) |
 | `json_direct_calls` | `json.loads/dumps/load/dump` 호출 지점 수 | 경계를 원시 dict 로 흘리는 주 원인 |
 | `dict_boundary_functions` | 인자(`*args`/`**kwargs` 포함)나 반환 annotation 이 약한 경계인 함수 수 | 검증되지 않는 경계 |
-| `env_test_sniff` | `…ENVIRONMENT` 와 `"test"` 를 비교하는 Compare 노드 수(`app/` 만) | 프로덕션 코드가 테스트를 스니핑하는 지점 |
-| `unvalidated_dict_tasks` | celery task 중 검증되지 않는 입력을 받으면서 본문에 `model_validate` 도 `Model(**payload)` 승격도 없는 함수 수 | 재배달 payload 가 검증 없이 흐르는 지점 |
+| `env_test_sniff` | 환경값 읽기와 `"test"` 리터럴이 같은 Compare 노드에 있는 지점 수(`app/` 만) | 프로덕션 코드가 테스트를 스니핑하는 지점 |
+| `unvalidated_dict_tasks` | celery task 중 검증되지 않는 입력을 받으면서 **그 입력을 대상으로 한** `model_validate`/`Model(**payload)` 승격이 본문에 없는 함수 수 | 재배달 payload 가 검증 없이 흐르는 지점 |
 
 ### 약한 경계(weak annotation) 판정
 
@@ -52,16 +53,54 @@
 않는 입력으로 본다. 어노테이션을 지우거나 `**kwargs: Any` 로 받는 것으로 지표를 피할 수
 없다.
 
+승격(면제) 판정은 **대상 이름**까지 본다. `Model.model_validate(x)` 의 **위치 인자** 또는
+`Model(**x)` 의 splat 대상이 **그 task 의 weak 파라미터 이름을 참조**할 때만 면제한다
+(`request_payload or {}`, `{"notices": notices or []}` 처럼 감싸도 안쪽 참조를 찾고,
+`schemas.Req(**payload)` 같은 모듈 경로 호출은 마지막 세그먼트로 판정한다). 따라서 payload
+와 무관한 `Other.model_validate(CONST)` 나 `Thread(**options)` 로는 면제되지 않고,
+`Other.model_validate(CONST, context=payload)` 처럼 payload 를 **keyword 인자로만** 스치는
+참조 세탁도 면제 근거가 아니다. 또 승격 탐색은 **중첩 함수·lambda 본문을 제외**한다 —
+호출되는지 알 수 없는 정의 안의 승격은 payload 검증 증거가 못 된다.
+
+이 판정의 잔여 오차(알고도 두는 것):
+
+- **미탐**: splat 대상이 실제 payload 인 비-DTO 호출(`Thread(**payload)`)은 이름만으로
+  DTO 와 구분할 수 없어 여전히 면제된다.
+- **오탐(FP)**: 승격 대상이 payload 이름을 직접 들고 있지 않은 형태는 실제로 검증하더라도
+  카운트된다 — comprehension 변수 경유(`[Req.model_validate(p) for p in payload]`), 1단
+  지역 재바인딩(`data = payload or {}` 후 `Req.model_validate(data)`), keyword 형태
+  (`Req.model_validate(obj=payload)`). 이름 추적(별칭 해석)을 하지 않는 대가이며, 실제
+  task 는 모두 직접 참조 형태라 현재 저장소 카운트는 0 이다. 걸리면 승격을 payload 를
+  직접 참조하는 한 줄로 바꾸는 것이 정답이다.
+
 ### `env_test_sniff` 의 탐지 범위(한정)
 
-`X.ENVIRONMENT` **속성 접근**과 문자열 리터럴 `"test"` 가 같은 `Compare` 노드에 있는 경우만
-센다(`settings.ENVIRONMENT == "test"`, `config.ENVIRONMENT != "test"`). 따라서 다음은
-**미탐**이다: `settings.ENVIRONMENT in {"test", "ci"}` 같은 집합 멤버십,
-`env = settings.ENVIRONMENT` 후 변수 비교, `os.getenv("ENVIRONMENT") == "test"`, 헬퍼 함수로
-감싼 판정. 이 지표는 "테스트 스니핑 총량"이 아니라 **가장 흔한 형태의 증가를 막는 래칫**이다.
+같은 `Compare` 노드 안에 **환경값 읽기**와 **`"test"` 리터럴**이 함께 있으면 센다.
+
+- 환경값 읽기: `X.ENVIRONMENT` 속성 접근, `os.environ["ENVIRONMENT"]`,
+  `os.getenv("ENVIRONMENT")` / `os.environ.get("ENVIRONMENT")`(키를 keyword 로 넘기는
+  `os.getenv(key="ENVIRONMENT")` 포함).
+- `"test"` 리터럴: 직접 비교(`== "test"`, `!= "test"`)뿐 아니라 **리터럴 컨테이너**의
+  원소(`in ("test", "ci")`, `in {"test"}`, `not in ["test"]`)도 포함한다.
+
+`settings.ENVIRONMENT in NON_DELIVERING_ENVIRONMENTS` 처럼 **선언 데이터(이름) 참조**
+멤버십은 세지 않는다. 인라인 스니핑을 데이터 선언으로 바꾼 것이 이 저장소가 채택한
+패턴이라(`app/core/constants.py`) 지표로 벌하면 안 된다. 리터럴 집합만 본다.
+
+**이 면제는 원칙이 아니라 알려진 우회 통로(stated bypass)다.** 파일 안에 한 줄짜리 지역
+상수(`_TEST_ENVS = {"test"}`)를 두고 `settings.ENVIRONMENT in _TEST_ENVS` 라고 쓰면 스니핑을
+그대로 하면서 지표를 피할 수 있다. 이름 참조를 해석하지 않는 대가로 남겨 둔 구멍이므로,
+리뷰에서 "선언 데이터로 바꿨다"는 주장은 그 상수가 `app/core/constants.py` 의 공유 선언인지
+확인한다.
+
+여전히 **미탐**인 형태: `env = settings.ENVIRONMENT` 후 변수 비교,
+`str(settings.ENVIRONMENT).lower() == "test"` 처럼 읽기를 함수로 한 번 감싼 형태,
+`{a, settings.ENVIRONMENT} & {"test"}` 같은 집합 연산(Compare 가 아님), 헬퍼 함수로 감싼
+판정. 이 지표는 "테스트 스니핑 총량"이 아니라 **흔한 형태의 증가를 막는 래칫**이다.
 
 스캔 대상은 `app/`·`scripts/` 의 `*.py`(`__pycache__` 제외)다. 임계값·대상·allowlist 는
-모두 `scripts/_design_ratchet_scan.py` 상단 상수로 선언되어 있다.
+모두 `scripts/_design_ratchet_scan.py` 상단 상수로, 지표 모델과 밴드 환산은
+`scripts/_design_ratchet_contracts.py` 에 선언되어 있다.
 
 ## 사용
 
@@ -76,8 +115,35 @@ pytest -q tests/test_design_ratchet.py              # CI 게이트와 동일한 
 이 출력을 붙인다. 구 baseline 이 현재 지표 스키마로 해석되지 않으면(지표 추가·개명) delta
 를 생략하고 안내만 출력한 뒤 저장한다.
 
+### baseline 표류 안내 (stale · slack)
+
+검사 경로는 **실패시키지 않는 안내 두 가지**를 출력한다. 둘 다 래칫 계약상 통과지만
+(삭제·감소는 항상 허용) 조용히 두면 래칫이 샌다. CLI 는 stdout 으로, pytest 게이트
+(`test_current_repository_does_not_exceed_baseline`)는 `warnings.warn` 으로 같은 문구를
+낸다 — 통과해도 `pytest -q` 의 warnings summary 에 남아 CI 로그에서 보인다. exit code 와
+게이트 판정은 어느 쪽도 바뀌지 않는다.
+
+1. **stale**: baseline 에만 있고 디스크에 없는 경로.
+2. **slack**: 현존 파일에서 baseline 이 현재 스캔보다 느슨한 양(= 회수했지만 잠그지 않은
+   감소분). 사라진 경로의 감소분은 stale 이 이미 지목하므로 slack 집계에서 제외한다.
+
+```
+경고: baseline 에만 있고 디스크에 없는 파일이 있습니다(위반 아님).
+  남겨 두면 같은 경로가 다시 생길 때 예전 allowance 를 상속합니다 — `python scripts/design_ratchet.py --update-baseline` 으로 정리하세요.
+  정리 대상 1개: app/services/gone.py
+안내: baseline 이 현재 스캔보다 느슨합니다(위반 아님).
+  회수한 감소분을 잠그려면 `python scripts/design_ratchet.py --update-baseline` 을 실행하세요.
+  미회수 감소: json_direct_calls -4, dict_boundary_functions -2
+```
+
+**리스크: 삭제 → 동명 재생성 allowance 상속.** 파일을 지워도 그 경로의 카운트는 baseline
+에 남는다. 나중에 **같은 경로**로 파일이 다시 생기면 예전 allowance 를 그대로 물려받아
+그만큼의 위반이 무료로 통과한다. `--update-baseline` 은 이 잔여 항목을 정리하므로, 파일을
+삭제·이동한 PR 은 경고가 뜨면 재생성을 함께 커밋한다. slack 도 같은 성격이다 — 부채를
+줄여 놓고 잠그지 않으면 그만큼의 재악화가 무료로 통과한다.
+
 CI(`.github/workflows/ci.yml`)는 `pytest -q tests/` 로 이 게이트를 돌고, `ruff check` 대상에
-스캐너 두 모듈이 포함된다.
+래칫 세 모듈(contracts · scan · CLI)이 포함된다.
 
 ## 실패했을 때
 
@@ -116,3 +182,16 @@ CI(`.github/workflows/ci.yml`)는 `pytest -q tests/` 로 이 게이트를 돌고
 `app/services/ml_release/signing.py` 하나이고, 서명 대상 바이트 정합성을 직접 통제해야
 하기 때문이다. "여기는 고치기 귀찮다"는 allowlist 사유가 아니다 — 그 경우는 baseline
 카운트로 남겨 두고 나중에 줄인다(baseline 은 줄어드는 것을 항상 허용한다).
+
+## 탐지기 변경 이력
+
+- **웨이브 2 (탐지기 강화)**: `unvalidated_dict_tasks` 승격 면제를 "weak 파라미터를 **위치
+  인자/splat 대상**으로 받는 승격 + 중첩 정의 제외"로 좁혔다(미탐 잔여: `Thread(**payload)`;
+  오탐 잔여: comprehension 변수·지역 재바인딩·keyword 형태 — 위 잔여 오차 참조).
+  `env_test_sniff` 에 리터럴 컨테이너 멤버십(`in ("test", "ci")`)과 `os.environ`/`os.getenv`
+  읽기(keyword 키 포함)를 추가했다(미탐 잔여: 변수·헬퍼로 한 번 감싼 판정, Compare 가 아닌
+  집합 연산, 지역 상수 집합 우회). 선언 데이터(`NON_DELIVERING_ENVIRONMENTS`) 멤버십은
+  의도적으로 계속 미탐이다. 검사 경로에 stale/slack 안내를 추가하고(게이트는
+  `warnings.warn`) 데이터 계약을 `_design_ratchet_contracts.py` 로 분리했다. 저장소 실측
+  기준 탐지 변경으로 인한 신규 위반은 0 이었고, 같은 커밋의 baseline 재생성은 레인 A~D 의
+  감소분만 잠갔다.

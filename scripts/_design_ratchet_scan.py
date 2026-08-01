@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""설계 래칫의 측정 코어 — AST 스캔 + 데이터 계약 + 순수 비교.
+"""설계 래칫의 측정 코어 — 소스 텍스트에서 지표를 세는 AST 스캔.
 
-``scripts/design_ratchet.py`` (CLI · baseline 영속화 · 리포트 출력) 에서 쓰는 계측
-부분만 분리한 모듈이다. 파일/함수 크기 한도(CLAUDE.md §4.5-4)를 스캐너 자신도 지켜야
-하므로 "측정"과 "표현/영속화"를 책임 단위로 나눴다.
+지표를 담는 데이터 계약과 순수 비교는 ``scripts/_design_ratchet_contracts.py``, CLI ·
+baseline 영속화 · 리포트 출력은 ``scripts/design_ratchet.py`` 에 있다. 파일/함수 크기
+한도(CLAUDE.md §4.5-4)를 스캐너 자신도 지켜야 하므로 "측정"·"계약"·"표현/영속화"를
+책임 단위로 나눴다.
 
-여기에는 baseline 이라는 개념이 없다(파일 I/O 는 소스 읽기뿐). 비교·집계는 모두 순수
+여기에는 baseline 이라는 개념이 없다(파일 I/O 는 소스 읽기뿐). ``scan_source`` 는 순수
 함수라 값 테이블로 테스트한다(§4.7-4).
 """
 # ruff: noqa: E402 - imports follow the sys.path bootstrap below.
@@ -21,20 +22,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pydantic import Field  # noqa: E402
-
-from app.schemas._base import StrictModel  # noqa: E402
+from scripts._design_ratchet_contracts import (  # noqa: E402
+    FILE_LOC_BAND_LINES,
+    FILE_LOC_SOFT_LIMIT,
+    FileMetrics,
+    RatchetReport,
+)
 
 # --- 선언적 구성 (§4.5-1: 임계값·대상·예외는 함수 밖에) ----------------------------
 TARGET_DIRS: tuple[str, ...] = ("app", "scripts")
 
 FUNCTION_SOFT_LIMIT_LINES = 50
 FUNCTION_HARD_LIMIT_LINES = 100
-FILE_LOC_SOFT_LIMIT = 500
-# 500줄 초과 파일은 LOC 자체가 아니라 25줄 밴드로 센다. 한 줄 추가하는 버그픽스가
-# baseline 상승을 요구하지 않게 하되(잡음 제거), 파일이 계속 자라면 밴드가 올라간다.
-FILE_LOC_BAND_LINES = 25
-FILE_LOC_METRIC = "file_loc_band"
 
 WEAK_BOUNDARY_ANNOTATIONS = frozenset(
     {"dict", "Dict", "Any", "Mapping", "MutableMapping", "object"}
@@ -71,20 +70,23 @@ JSON_CALL_ALLOWLIST = frozenset({"app/services/ml_release/signing.py"})
 ENVIRONMENT_ATTR_NAME = "ENVIRONMENT"
 TEST_ENVIRONMENT_LITERAL = "test"
 ENV_SNIFF_SCAN_DIR = "app"
+# 속성 접근 말고 프로세스 환경을 직접 읽는 형태도 같은 스니핑이다.
+ENVIRONMENT_MAPPING_NAMES = frozenset({"os.environ", "environ"})
+ENVIRONMENT_LOOKUP_CALL_NAMES = frozenset(
+    {"os.getenv", "getenv", "os.environ.get", "environ.get"}
+)
+# 멤버십 비교는 **리터럴 컨테이너**만 센다. ``NON_DELIVERING_ENVIRONMENTS`` 같은 선언
+# 데이터 참조는 이 저장소가 의도적으로 채택한 패턴이라 스니핑이 아니다.
+ENVIRONMENT_LITERAL_CONTAINERS = (ast.Tuple, ast.List, ast.Set)
 
 CELERY_TASK_DECORATORS = frozenset({"celery_app.task", "shared_task"})
 VALIDATION_PROMOTION_ATTRS = frozenset({"model_validate", "model_validate_json"})
 # celery ``bind=True`` 의 self 와 메서드 수신자는 payload 가 아니라서 제외한다.
 IMPLICIT_RECEIVER_ARG_NAMES = frozenset({"self", "cls"})
+# 중첩 정의 본문은 task 가 실행한다는 보장이 없으므로 승격 탐색에서 제외한다.
+DEFERRED_BODY_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 EXCLUDED_PATH_PARTS = frozenset({"__pycache__"})
-
-# 밴드 숫자만 보면 무슨 단위인지 알 수 없으므로 위반 메시지에 환산을 붙인다.
-FILE_LOC_BAND_HINT = (
-    f"(밴드≈{FILE_LOC_BAND_LINES}줄, {FILE_LOC_SOFT_LIMIT}줄 초과 진입 시"
-    f" {FILE_LOC_SOFT_LIMIT // FILE_LOC_BAND_LINES + 1}부터)"
-)
-METRIC_DESCRIBE_SUFFIXES = {FILE_LOC_METRIC: FILE_LOC_BAND_HINT}
 
 _FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -95,99 +97,6 @@ class RatchetScanError(RuntimeError):
     조용히 건너뛰면 그 파일의 위반이 0 으로 보고되어 "삭제 = 통과" 경로로 사라지므로
     래칫이 샌다. 그래서 침묵하지 않고 크게 실패한다.
     """
-
-
-# --- 데이터 계약 (§4.7: 원시 dict 대신 검증되는 모델) -----------------------------
-class FileMetrics(StrictModel):
-    """한 파일의 규율 위반 카운트. 0 은 "해당 위반 없음"을 뜻한다."""
-
-    functions_over_soft_limit: int = 0
-    functions_over_hard_limit: int = 0
-    file_loc_band: int = 0
-    json_direct_calls: int = 0
-    dict_boundary_functions: int = 0
-    env_test_sniff: int = 0
-    unvalidated_dict_tasks: int = 0
-
-    def count(self, metric: str) -> int:
-        return int(getattr(self, metric))
-
-    def is_clean(self) -> bool:
-        return all(self.count(metric) == 0 for metric in METRIC_NAMES)
-
-
-METRIC_NAMES: tuple[str, ...] = tuple(FileMetrics.model_fields)
-
-
-class RatchetReport(StrictModel):
-    """파일 경로(posix 상대경로) → 위반 카운트."""
-
-    files: dict[str, FileMetrics] = Field(default_factory=dict)
-
-    def metrics_for(self, path: str) -> FileMetrics:
-        return self.files.get(path) or FileMetrics()
-
-    def totals(self) -> FileMetrics:
-        summed = {
-            metric: sum(metrics.count(metric) for metrics in self.files.values())
-            for metric in METRIC_NAMES
-        }
-        return FileMetrics(**summed)
-
-
-class RatchetViolation(StrictModel):
-    """baseline 대비 악화된 (파일, 지표) 한 건."""
-
-    metric: str
-    file: str
-    baseline: int
-    current: int
-
-    def describe(self) -> str:
-        line = f"  {self.metric}: {self.file} {self.baseline} -> {self.current}"
-        suffix = METRIC_DESCRIBE_SUFFIXES.get(self.metric, "")
-        return f"{line} {suffix}" if suffix else line
-
-
-# --- 순수 비교 (I/O 없음) ---------------------------------------------------------
-def compare_reports(
-    baseline: RatchetReport, current: RatchetReport
-) -> list[RatchetViolation]:
-    """current 가 baseline 을 초과한 (파일, 지표) 목록. 감소·삭제는 통과."""
-    violations: list[RatchetViolation] = []
-    for path in sorted(current.files):
-        before = baseline.metrics_for(path)
-        after = current.metrics_for(path)
-        violations.extend(_violations_for_file(path, before, after))
-    return violations
-
-
-def _violations_for_file(
-    path: str, baseline: FileMetrics, current: FileMetrics
-) -> list[RatchetViolation]:
-    return [
-        RatchetViolation(
-            metric=metric,
-            file=path,
-            baseline=baseline.count(metric),
-            current=current.count(metric),
-        )
-        for metric in METRIC_NAMES
-        if current.count(metric) > baseline.count(metric)
-    ]
-
-
-def count_improvements(baseline: RatchetReport, current: RatchetReport) -> FileMetrics:
-    """지표별 감소 총량(양수로). 파일 삭제로 사라진 카운트도 포함하는 순수 함수."""
-    reduced = dict.fromkeys(METRIC_NAMES, 0)
-    for path in set(baseline.files) | set(current.files):
-        before = baseline.metrics_for(path)
-        after = current.metrics_for(path)
-        for metric in METRIC_NAMES:
-            delta = before.count(metric) - after.count(metric)
-            if delta > 0:
-                reduced[metric] += delta
-    return FileMetrics(**reduced)
 
 
 # --- AST 해석 헬퍼 ---------------------------------------------------------------
@@ -276,36 +185,70 @@ def _is_celery_task(node: _FunctionNode) -> bool:
     return bool(names & CELERY_TASK_DECORATORS)
 
 
-def _is_validation_promotion(node: ast.Call) -> bool:
+def _promotion_targets(node: ast.Call) -> list[ast.expr]:
+    """승격 호출이 "승격하는 값" 들(승격 형태가 아니면 빈 목록).
+
+    ``Model.model_validate(x)`` 은 **위치 인자**가, ``Model(**x)`` 은 splat 대상이 그
+    값이다. keyword 인자는 대상이 아니다 — ``Other.model_validate(CONST, context=payload)``
+    처럼 payload 를 부수 인자로만 스치고 면제받는 세탁을 막는다.
+    ``schemas.Req(**payload)`` 같은 모듈 경로 호출도 마지막 세그먼트로 판정한다.
+    """
     func = node.func
     if isinstance(func, ast.Attribute) and func.attr in VALIDATION_PROMOTION_ATTRS:
-        return True
-    if not any(keyword.arg is None for keyword in node.keywords):
-        return False
-    name = _callable_name(node)
-    return bool(name) and name[0].isupper()
+        return list(node.args)
+    splatted = [keyword.value for keyword in node.keywords if keyword.arg is None]
+    constructed = (_callable_name(node) or "").rpartition(".")[2]
+    return splatted if splatted and constructed[:1].isupper() else []
 
 
-def _has_unvalidated_task_input(node: _FunctionNode) -> bool:
+def _is_validation_promotion(node: ast.Call, weak_names: frozenset[str]) -> bool:
+    """이 task 의 **weak 파라미터를 대상으로 한** 승격인가.
+
+    대상 이름을 보지 않으면 payload 와 무관한 ``Other.model_validate(CONST)`` 나
+    ``Thread(**options)`` 만으로 면제되어 지표가 무비용으로 우회된다.
+    """
+    referenced = {
+        child.id
+        for target in _promotion_targets(node)
+        for child in ast.walk(target)
+        if isinstance(child, ast.Name)
+    }
+    return bool(referenced & weak_names)
+
+
+def _weak_parameter_names(node: _FunctionNode) -> frozenset[str]:
     """task 인자가 dict/Any 이거나 **어노테이션이 없으면** 검증되지 않는 입력이다."""
-    payload_arguments = [
-        argument
+    return frozenset(
+        argument.arg
         for argument in _all_arguments(node)
         if argument.arg not in IMPLICIT_RECEIVER_ARG_NAMES
-    ]
-    return any(
-        argument.annotation is None or is_weak_annotation(argument.annotation)
-        for argument in payload_arguments
+        and (argument.annotation is None or is_weak_annotation(argument.annotation))
     )
+
+
+def _iter_executed_nodes(node: _FunctionNode) -> Iterator[ast.AST]:
+    """중첩 정의(함수·lambda) 본문을 제외한, 이 함수가 실행하는 노드들.
+
+    호출되는지 알 수 없는 중첩 정의 안의 승격은 payload 검증 증거가 못 된다.
+    """
+    stack: list[ast.AST] = list(node.body)
+    while stack:
+        current = stack.pop()
+        yield current
+        if not isinstance(current, DEFERRED_BODY_NODES):
+            stack.extend(ast.iter_child_nodes(current))
 
 
 def _is_unvalidated_dict_task(node: _FunctionNode) -> bool:
     if not _is_celery_task(node):
         return False
-    if not _has_unvalidated_task_input(node):
+    weak_names = _weak_parameter_names(node)
+    if not weak_names:
         return False
-    calls = (child for child in ast.walk(node) if isinstance(child, ast.Call))
-    return not any(_is_validation_promotion(call) for call in calls)
+    return not any(
+        isinstance(child, ast.Call) and _is_validation_promotion(child, weak_names)
+        for child in _iter_executed_nodes(node)
+    )
 
 
 def _is_json_direct_call(node: ast.Call) -> bool:
@@ -318,17 +261,49 @@ def _is_json_direct_call(node: ast.Call) -> bool:
     )
 
 
+def _dotted_name(node: ast.expr) -> str | None:
+    """``os.environ.get`` 처럼 점으로 이어진 이름 전체(중간이 이름이 아니면 None)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else None
+    return None
+
+
+def _is_environment_key(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value == ENVIRONMENT_ATTR_NAME
+
+
+def _reads_environment(node: ast.expr) -> bool:
+    """``settings.ENVIRONMENT`` · ``os.environ["ENVIRONMENT"]`` · ``os.getenv("…")``."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == ENVIRONMENT_ATTR_NAME
+    if isinstance(node, ast.Subscript) and _is_environment_key(node.slice):
+        return _dotted_name(node.value) in ENVIRONMENT_MAPPING_NAMES
+    if isinstance(node, ast.Call):
+        # ``os.getenv(key="ENVIRONMENT")`` 처럼 keyword 로 넘겨도 같은 읽기다.
+        arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+        return _dotted_name(node.func) in ENVIRONMENT_LOOKUP_CALL_NAMES and any(
+            _is_environment_key(argument) for argument in arguments
+        )
+    return False
+
+
+def _mentions_test_literal(node: ast.expr) -> bool:
+    """``"test"`` 리터럴이거나 ``("test", "ci")`` 같은 리터럴 컨테이너의 원소인가."""
+    if isinstance(node, ast.Constant):
+        return node.value == TEST_ENVIRONMENT_LITERAL
+    if isinstance(node, ENVIRONMENT_LITERAL_CONTAINERS):
+        return any(_mentions_test_literal(element) for element in node.elts)
+    return False
+
+
 def _is_env_test_compare(node: ast.Compare) -> bool:
     operands = [node.left, *node.comparators]
-    touches_environment = any(
-        isinstance(operand, ast.Attribute) and operand.attr == ENVIRONMENT_ATTR_NAME
-        for operand in operands
+    return any(_reads_environment(operand) for operand in operands) and any(
+        _mentions_test_literal(operand) for operand in operands
     )
-    compares_test = any(
-        isinstance(operand, ast.Constant) and operand.value == TEST_ENVIRONMENT_LITERAL
-        for operand in operands
-    )
-    return touches_environment and compares_test
 
 
 # --- 스캔 ------------------------------------------------------------------------
