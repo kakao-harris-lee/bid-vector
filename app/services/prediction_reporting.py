@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.single_user import ensure_operator_account
 from app.core.time import ensure_utc, utc_now
-from app.domain.aggregates import average, error_rate
+from app.domain.aggregates import average, error_rate, rate
 from app.models.models import PricePrediction, TenderResult, User
 from app.services.query_predicates import settled_with_amount
 
@@ -324,6 +324,4 @@ class PredictionReportingService:
 
     def _rate(self, numerator: int, denominator: int) -> float:
         """Return a stable ratio rounded for dashboard display."""
-        if denominator <= 0:
-            return 0.0
-        return round(numerator / denominator, 4)
+        return rate(numerator, denominator, digits=4)

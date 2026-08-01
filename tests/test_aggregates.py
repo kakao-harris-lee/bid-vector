@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.aggregates import average, error_rate
+from app.domain.aggregates import average, error_rate, rate
 
 
 # --- error_rate: 순수 규칙 경계 -------------------------------------------
@@ -73,7 +73,55 @@ def test_average_digits_is_required_keyword() -> None:
         average([1.0, 2.0])  # type: ignore[call-arg]
 
 
+# --- rate: 순수 규칙 경계 -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "numerator, denominator, expected",
+    [
+        (1, 2, 0.5),
+        (5, 5, 1.0),
+        (0, 5, 0.0),
+        (1, 3, 0.3333),
+        (2, 3, 0.6667),
+        (1, 0, 0.0),  # 0 분모 → 0.0 폴백 (error_rate 의 None 과 갈리는 지점)
+        (1, -4, 0.0),  # 음수 분모 → 0.0 폴백
+        (0, 0, 0.0),
+    ],
+)
+def test_rate_boundaries(numerator: int, denominator: int, expected: float) -> None:
+    assert rate(numerator, denominator, digits=4) == expected
+
+
+def test_rate_matches_inline_formula() -> None:
+    # 리포팅 두 곳의 기존 인라인식 round(n/d, 4) 와 동일.
+    for numerator, denominator in [(3, 7), (11, 13), (0, 9), (99, 100), (12, 5)]:
+        assert rate(numerator, denominator, digits=4) == round(
+            numerator / denominator, 4
+        )
+
+
+def test_rate_digits_is_required_keyword() -> None:
+    with pytest.raises(TypeError):
+        rate(1, 2)  # type: ignore[call-arg]
+
+
 # --- 콜사이트 위임 등가(golden) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "numerator, denominator",
+    [(0, 0), (3, 0), (3, -1), (0, 10), (7, 10), (1, 3), (10, 10)],
+)
+def test_reporting_rate_delegates_unchanged(numerator: int, denominator: int) -> None:
+    # analytics_reporting/prediction_reporting 의 `_rate` 는 바이트 동일 사본이었다.
+    # 통합 후에도 두 메서드가 기존 인라인식과 값이 같아야 한다(0-분모 → 0.0).
+    from app.services.analytics_reporting.base import _AnalyticsReportingBase
+    from app.services.prediction_reporting import PredictionReportingService
+
+    old = 0.0 if denominator <= 0 else round(numerator / denominator, 4)
+    assert _AnalyticsReportingBase()._rate(numerator, denominator) == old
+    assert PredictionReportingService()._rate(numerator, denominator) == old
 
 
 def test_dashboard_compute_error_rate_delegates_unchanged() -> None:
