@@ -31,6 +31,7 @@ from app.domain.basis_conversion import (
     # re-exported for existing callers/tests that import it from guardrail_core
     resolve_band_assessment_rate as resolve_band_assessment_rate,
 )
+from app.utils.numeric import optional_float
 
 
 _CATEGORY_FLOOR_RATE_ALIASES = {
@@ -264,15 +265,6 @@ def resolve_safe_floor_bid_rate(
     if ceiling_bid_rate is not None:
         safe_floor_bid_rate = min(safe_floor_bid_rate, float(ceiling_bid_rate))
     return max(float(floor_bid_rate), safe_floor_bid_rate)
-
-
-def optional_float(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def resolve_prediction_price(payload: dict[str, Any], *, budget: float) -> float:

@@ -16,8 +16,7 @@
     },
     "app/ai/guardrail_core.py": {
       "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 6,
-      "duplicate_mechanical_helpers": 1
+      "dict_boundary_functions": 5
     },
     "app/ai/holdout_grouping.py": {
       "dict_boundary_functions": 5
@@ -708,8 +707,7 @@
     },
     "app/services/synthetic_experiment/sample_gap.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 18,
-      "duplicate_mechanical_helpers": 1
+      "dict_boundary_functions": 18
     },
     "app/services/synthetic_experiment/sample_report.py": {
       "functions_over_soft_limit": 1,
@@ -778,6 +776,9 @@
     },
     "app/tasks/task_status.py": {
       "dict_boundary_functions": 7
+    },
+    "app/utils/numeric.py": {
+      "dict_boundary_functions": 3
     },
     "app/utils/sequence_coercion.py": {
       "json_direct_calls": 1,
