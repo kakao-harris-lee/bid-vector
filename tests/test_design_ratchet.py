@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from scripts import design_ratchet
 
 from scripts._design_ratchet_contracts import (
+    METRIC_NAMES,
     FileMetrics,
     RatchetReport,
     compare_reports,
@@ -30,6 +31,7 @@ from scripts._design_ratchet_scan import (
     REPO_ROOT,
     RatchetScanError,
     file_loc_band,
+    scan_file,
     scan_repo,
     scan_source,
 )
@@ -701,6 +703,73 @@ class TestScanSource:
             scan_source("app/broken.py", "def broken(:\n")
         assert "app/broken.py" in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, SyntaxError)
+
+
+DECLARED_KEY_PROJECTION = """
+def project(raw_item):
+    picked = {}
+    for key in DECLARED_KEYS:
+        value = raw_item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            picked[key] = text
+    return picked or None
+"""
+
+
+class TestDuplicateHelperMetrics:
+    def test_local_clone_pair_is_counted_in_scan_source(self) -> None:
+        source = DECLARED_KEY_PROJECTION + DECLARED_KEY_PROJECTION.replace(
+            "def project", "def project_other"
+        )
+        metrics = scan_source("app/sample.py", source)
+        assert metrics.duplicate_mechanical_helpers_local == 2
+
+    def test_single_helper_has_no_local_clone(self) -> None:
+        metrics = scan_source("app/sample.py", DECLARED_KEY_PROJECTION)
+        assert metrics.duplicate_mechanical_helpers_local == 0
+
+    def test_scan_source_never_sets_cross_file_metric(self) -> None:
+        """교차 파일 지표는 한 파일만 봐서는 알 수 없다 — pass 2 의 책임이다."""
+        metrics = scan_source("app/sample.py", DECLARED_KEY_PROJECTION)
+        assert metrics.duplicate_mechanical_helpers == 0
+
+    def test_scan_file_returns_signatures(self) -> None:
+        metrics, signatures = scan_file("app/sample.py", DECLARED_KEY_PROJECTION)
+        assert metrics.duplicate_mechanical_helpers_local == 0
+        assert [signature.function for signature in signatures] == ["project"]
+
+    def test_scan_repo_attributes_cross_file_clones(self, tmp_path: Path) -> None:
+        for directory in ("app", "scripts"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "app" / "one.py").write_text(
+            DECLARED_KEY_PROJECTION, encoding="utf-8"
+        )
+        (tmp_path / "scripts" / "two.py").write_text(
+            DECLARED_KEY_PROJECTION.replace("def project", "def project_copy"),
+            encoding="utf-8",
+        )
+        report = scan_repo(tmp_path)
+        assert report.metrics_for("app/one.py").duplicate_mechanical_helpers == 1
+        assert report.metrics_for("scripts/two.py").duplicate_mechanical_helpers == 1
+
+    def test_scan_repo_leaves_unique_helpers_clean(self, tmp_path: Path) -> None:
+        for directory in ("app", "scripts"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "app" / "one.py").write_text(
+            DECLARED_KEY_PROJECTION, encoding="utf-8"
+        )
+        (tmp_path / "scripts" / "two.py").write_text(
+            "def tiny(value):\n    return value\n", encoding="utf-8"
+        )
+        report = scan_repo(tmp_path)
+        assert report.files == {}
+
+    def test_new_metrics_are_part_of_the_ratchet_contract(self) -> None:
+        assert "duplicate_mechanical_helpers" in METRIC_NAMES
+        assert "duplicate_mechanical_helpers_local" in METRIC_NAMES
 
 
 class TestRepositoryRatchet:

@@ -49,6 +49,8 @@ class FileMetrics(StrictModel):
     dict_boundary_functions: int = 0
     env_test_sniff: int = 0
     unvalidated_dict_tasks: int = 0
+    duplicate_mechanical_helpers: int = 0
+    duplicate_mechanical_helpers_local: int = 0
 
     def count(self, metric: str) -> int:
         return int(getattr(self, metric))

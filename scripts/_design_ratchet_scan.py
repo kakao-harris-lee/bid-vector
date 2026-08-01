@@ -28,6 +28,12 @@ from scripts._design_ratchet_contracts import (  # noqa: E402
     FileMetrics,
     RatchetReport,
 )
+from scripts._design_ratchet_clones import (  # noqa: E402
+    CloneSignature,
+    collect_clone_signatures,
+    count_cross_file_clones,
+    count_local_clones,
+)
 
 # --- 선언적 구성 (§4.5-1: 임계값·대상·예외는 함수 밖에) ----------------------------
 TARGET_DIRS: tuple[str, ...] = ("app", "scripts")
@@ -351,9 +357,12 @@ def _parse_source(relative_path: str, source: str) -> ast.Module:
         raise RatchetScanError(f"{relative_path} 파싱 실패: {exc}") from exc
 
 
-def scan_source(relative_path: str, source: str) -> FileMetrics:
-    """한 파일의 소스 텍스트에서 지표를 센다(파일 I/O 없는 순수 함수)."""
-    tree = _parse_source(relative_path, source)
+def _metrics_from_tree(
+    relative_path: str,
+    source: str,
+    tree: ast.Module,
+    signatures: Sequence[CloneSignature],
+) -> FileMetrics:
     functions = [
         node
         for node in ast.walk(tree)
@@ -375,7 +384,26 @@ def scan_source(relative_path: str, source: str) -> FileMetrics:
         unvalidated_dict_tasks=sum(
             1 for node in functions if _is_unvalidated_dict_task(node)
         ),
+        duplicate_mechanical_helpers_local=count_local_clones(signatures),
     )
+
+
+def scan_file(
+    relative_path: str, source: str
+) -> tuple[FileMetrics, list[CloneSignature]]:
+    """지표 + 클론 지문을 한 번의 파싱으로 얻는다(파일 I/O 없는 순수 함수).
+
+    ``duplicate_mechanical_helpers`` 는 교차 파일 정보가 필요하므로 여기서는 0 이고
+    ``scan_repo`` 의 pass 2 에서 채워진다.
+    """
+    tree = _parse_source(relative_path, source)
+    signatures = collect_clone_signatures(relative_path, tree)
+    return _metrics_from_tree(relative_path, source, tree, signatures), signatures
+
+
+def scan_source(relative_path: str, source: str) -> FileMetrics:
+    """한 파일의 소스 텍스트에서 지표를 센다(파일 I/O 없는 순수 함수)."""
+    return scan_file(relative_path, source)[0]
 
 
 def iter_target_files(root: Path) -> Iterator[Path]:
@@ -393,11 +421,40 @@ def _read_source(path: Path, relative_path: str) -> str:
 
 
 def scan_repo(root: Path) -> RatchetReport:
-    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다."""
-    report = RatchetReport()
+    """대상 디렉터리를 스캔한다. 위반 0 인 파일은 리포트에 넣지 않는다.
+
+    2-pass 다. pass 1 은 파일별 순수 스캔, pass 2 는 교차 파일 클론 귀속이다. 파일
+    단위로는 다른 파일의 존재를 알 수 없어서 한 번에 끝낼 수 없다.
+    """
+    scanned: list[tuple[str, FileMetrics]] = []
+    signatures: list[CloneSignature] = []
     for path in iter_target_files(root):
         relative_path = path.relative_to(root).as_posix()
-        metrics = scan_source(relative_path, _read_source(path, relative_path))
+        metrics, file_signatures = scan_file(
+            relative_path, _read_source(path, relative_path)
+        )
+        scanned.append((relative_path, metrics))
+        signatures.extend(file_signatures)
+
+    cross_file_counts = count_cross_file_clones(signatures)
+
+    report = RatchetReport()
+    for relative_path, metrics in scanned:
+        duplicates = cross_file_counts.get(relative_path, 0)
+        if duplicates:
+            metrics = metrics.model_copy(
+                update={"duplicate_mechanical_helpers": duplicates}
+            )
         if not metrics.is_clean():
             report.files[relative_path] = metrics
     return report
+
+
+def scan_repo_clone_signatures(root: Path) -> list[CloneSignature]:
+    """저장소 전체의 클론 지문(죽은 allowlist 검사·통합 대상 리포트용)."""
+    signatures: list[CloneSignature] = []
+    for path in iter_target_files(root):
+        relative_path = path.relative_to(root).as_posix()
+        tree = _parse_source(relative_path, _read_source(path, relative_path))
+        signatures.extend(collect_clone_signatures(relative_path, tree))
+    return signatures
