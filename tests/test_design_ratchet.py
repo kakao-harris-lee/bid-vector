@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import pytest
@@ -18,25 +19,31 @@ from pydantic import ValidationError
 
 from scripts import design_ratchet
 
-from scripts._design_ratchet_scan import (
-    REPO_ROOT,
+from scripts._design_ratchet_contracts import (
     FileMetrics,
     RatchetReport,
-    RatchetScanError,
     compare_reports,
     count_improvements,
+    without_paths,
+)
+from scripts._design_ratchet_scan import (
+    REPO_ROOT,
+    RatchetScanError,
     file_loc_band,
     scan_repo,
     scan_source,
 )
 from scripts.design_ratchet import (
     BASELINE_PATH,
+    baseline_drift_notes,
     format_baseline_delta,
+    format_baseline_slack,
     format_totals,
     format_violations,
     load_baseline,
     run_baseline_update,
     save_baseline,
+    stale_baseline_files,
 )
 
 RATCHET_FAILURE_HINT = (
@@ -249,6 +256,91 @@ class TestBaselineUpdate:
         assert load_baseline(path) == current
 
 
+class TestStaleBaseline:
+    """baseline 에만 남은 경로는 위반이 아니지만 조용히 두면 allowance 를 상속한다."""
+
+    @staticmethod
+    def _baseline_with(*paths: str) -> RatchetReport:
+        return RatchetReport(
+            files={path: FileMetrics(json_direct_calls=2) for path in paths}
+        )
+
+    def test_missing_path_is_reported_as_stale(self, tmp_path: Path) -> None:
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "kept.py").write_text("x = 1\n", encoding="utf-8")
+        baseline = self._baseline_with("app/kept.py", "app/gone.py")
+        assert stale_baseline_files(baseline, tmp_path) == ["app/gone.py"]
+
+    def test_all_present_paths_are_not_stale(self, tmp_path: Path) -> None:
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "kept.py").write_text("x = 1\n", encoding="utf-8")
+        assert stale_baseline_files(self._baseline_with("app/kept.py"), tmp_path) == []
+
+    def test_check_path_warns_but_still_passes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        path = tmp_path / "baseline.json"
+        save_baseline(self._baseline_with("app/gone.py"), path)
+        monkeypatch.setattr(design_ratchet, "BASELINE_PATH", path)
+        monkeypatch.setattr(design_ratchet, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(design_ratchet, "scan_repo", lambda root: RatchetReport())
+
+        assert design_ratchet.main([]) == 0
+
+        printed = capsys.readouterr().out
+        assert "baseline 에만 있고 디스크에 없는 파일" in printed
+        assert "정리 대상 1개: app/gone.py" in printed
+
+    def test_without_paths_drops_only_the_named_entries(self) -> None:
+        report = self._baseline_with("app/a.py", "app/b.py")
+        assert set(without_paths(report, ["app/a.py"]).files) == {"app/b.py"}
+
+
+class TestBaselineDrift:
+    """감소·삭제는 통과지만, 잠기지 않은 slack 은 CI 로그에 드러나야 한다."""
+
+    def test_slack_is_reported_for_existing_files(self, tmp_path: Path) -> None:
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "kept.py").write_text("x = 1\n", encoding="utf-8")
+        baseline = RatchetReport(
+            files={"app/kept.py": FileMetrics(json_direct_calls=5)}
+        )
+        current = RatchetReport(files={"app/kept.py": FileMetrics(json_direct_calls=1)})
+
+        notes = baseline_drift_notes(baseline, current, tmp_path)
+
+        assert len(notes) == 1
+        assert "baseline 이 현재 스캔보다 느슨합니다" in notes[0]
+        assert "미회수 감소: json_direct_calls -4" in notes[0]
+
+    def test_deleted_file_counts_as_stale_not_as_slack(self, tmp_path: Path) -> None:
+        """사라진 경로의 감소분을 slack 으로도 세면 같은 사실을 두 번 보고한다."""
+        baseline = RatchetReport(
+            files={"app/gone.py": FileMetrics(json_direct_calls=5)}
+        )
+
+        notes = baseline_drift_notes(baseline, RatchetReport(), tmp_path)
+
+        assert len(notes) == 1
+        assert "정리 대상 1개: app/gone.py" in notes[0]
+        assert "미회수 감소" not in notes[0]
+
+    def test_synced_baseline_produces_no_notes(self, tmp_path: Path) -> None:
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "kept.py").write_text("x = 1\n", encoding="utf-8")
+        report = RatchetReport(files={"app/kept.py": FileMetrics(json_direct_calls=1)})
+        assert baseline_drift_notes(report, report, tmp_path) == []
+
+    def test_slack_formatter_lists_every_reduced_metric(self) -> None:
+        rendered = format_baseline_slack(
+            FileMetrics(json_direct_calls=2, env_test_sniff=1)
+        )
+        assert "미회수 감소: json_direct_calls -2, env_test_sniff -1" in rendered
+
+
 class TestTotalsFormatting:
     def test_file_loc_band_is_rendered_as_file_count_and_max_loc(self) -> None:
         report = _report(
@@ -436,6 +528,48 @@ class TestScanSource:
         source = 'def f():\n    return settings.ENVIRONMENT == "production"\n'
         assert scan_source("app/sample.py", source).env_test_sniff == 0
 
+    @pytest.mark.parametrize(
+        ("expression", "expected"),
+        [
+            ('settings.ENVIRONMENT == "test"', 1),
+            ('settings.ENVIRONMENT in ("test", "ci")', 1),
+            ('settings.ENVIRONMENT in {"test"}', 1),
+            ('settings.ENVIRONMENT not in ["test"]', 1),
+            ('os.environ["ENVIRONMENT"] == "test"', 1),
+            ('os.getenv("ENVIRONMENT") == "test"', 1),
+            ('os.getenv(key="ENVIRONMENT") == "test"', 1),
+            ('os.environ.get("ENVIRONMENT") in ("test",)', 1),
+            ("settings.ENVIRONMENT in NON_DELIVERING_ENVIRONMENTS", 0),
+            ("settings.ENVIRONMENT not in NON_DELIVERING_ENVIRONMENTS", 0),
+            ('settings.ENVIRONMENT in {"prod", "production"}', 0),
+            ('row["ENVIRONMENT"] == "test"', 0),
+            ('payload.get("ENVIRONMENT") == "test"', 0),
+        ],
+        ids=[
+            "equality",
+            "in-tuple-literal",
+            "in-set-literal",
+            "not-in-list-literal",
+            "os-environ-subscript",
+            "os-getenv",
+            "os-getenv-keyword",
+            "os-environ-get",
+            "declared-frozenset-name",
+            "declared-frozenset-name-negated",
+            "literal-set-without-test",
+            "unrelated-mapping-key",
+            "unrelated-get-call",
+        ],
+    )
+    def test_env_sniff_variants(self, expression: str, expected: int) -> None:
+        """리터럴 멤버십·``os.environ`` 읽기는 세고, 선언 데이터 참조는 세지 않는다.
+
+        ``NON_DELIVERING_ENVIRONMENTS`` 멤버십은 이 저장소가 인라인 스니핑 대신
+        의도적으로 채택한 패턴이라 지표로 벌하면 안 된다.
+        """
+        source = f"def f():\n    return {expression}\n"
+        assert scan_source("app/sample.py", source).env_test_sniff == expected
+
     def test_counts_unvalidated_dict_task(self) -> None:
         source = (
             "@celery_app.task(name='x')\n"
@@ -493,6 +627,65 @@ class TestScanSource:
         source = "@celery_app.task\ndef run() -> None:\n    return None\n"
         assert scan_source("app/tasks/sample.py", source).unvalidated_dict_tasks == 0
 
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            ("    Thread(**thread_options).start()\n", 1),
+            ("    Other.model_validate(SOME_CONSTANT)\n", 1),
+            ("    Other.model_validate(SOME_CONSTANT, context=payload)\n", 1),
+            ("    schemas.Req(**payload)\n", 0),
+            (
+                "    def later():\n"
+                "        Payload.model_validate(payload)\n"
+                "    return None\n",
+                1,
+            ),
+            ("    hook = lambda: Payload.model_validate(payload)\n", 1),
+            ("    Payload(**payload)\n", 0),
+            ("    Payload.model_validate(payload or {})\n", 0),
+            ("    Payload.model_validate({'k': payload})\n", 0),
+        ],
+        ids=[
+            "unrelated-splat",
+            "unrelated-model-validate",
+            "keyword-only-payload-reference",
+            "module-qualified-model-splat",
+            "nested-function",
+            "lambda",
+            "payload-splat",
+            "payload-or-default",
+            "payload-in-dict-literal",
+        ],
+    )
+    def test_promotion_exemption_requires_touching_the_weak_parameter(
+        self, body: str, expected: int
+    ) -> None:
+        """payload 를 건드리지 않는 호출은 승격이 아니다(무비용 우회 차단).
+
+        중첩 함수·lambda 안의 승격도 실행 보장이 없으므로 면제 근거가 못 된다.
+        """
+        source = f"@celery_app.task\ndef run(payload: dict) -> None:\n{body}"
+        metrics = scan_source("app/tasks/sample.py", source)
+        assert metrics.unvalidated_dict_tasks == expected
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "    return go(R.model_validate(request_payload or {}))\n",
+            "    return go(R(**(request_payload or {})))\n",
+            "    return go(R.model_validate({'p': request_payload}))\n",
+        ],
+        ids=["or-default", "kwargs-splat", "dict-literal"],
+    )
+    def test_real_task_promotion_shapes_stay_exempt(self, body: str) -> None:
+        """실제 task 가 쓰는 승격 형태는 계속 면제여야 한다(거짓 상승 방지)."""
+        source = (
+            "@celery_app.task(bind=True)\n"
+            "def run(self, request_payload: dict[str, Any] | None = None) -> dict:\n"
+            f"{body}"
+        )
+        assert scan_source("app/tasks/sample.py", source).unvalidated_dict_tasks == 0
+
     def test_task_with_list_of_dict_payload_is_counted(self) -> None:
         """``list[dict[str, Any]]`` payload 도 검증되지 않는 입력이다."""
         source = (
@@ -520,7 +713,13 @@ class TestRepositoryRatchet:
         assert isinstance(load_baseline(BASELINE_PATH), RatchetReport)
 
     def test_current_repository_does_not_exceed_baseline(self) -> None:
-        violations = compare_reports(load_baseline(BASELINE_PATH), scan_repo(REPO_ROOT))
+        baseline = load_baseline(BASELINE_PATH)
+        current = scan_repo(REPO_ROOT)
+        # 실패는 아니지만 CI 로그에 드러나야 하는 표류(사라진 경로 · 미회수 감소분).
+        # ``pytest -q`` 의 warnings summary 에 뜨므로 print 와 달리 통과해도 보인다.
+        for note in baseline_drift_notes(baseline, current, REPO_ROOT):
+            warnings.warn(note, stacklevel=1)
+        violations = compare_reports(baseline, current)
         assert (
             not violations
         ), f"{RATCHET_FAILURE_HINT}\n\n{format_violations(violations)}"
