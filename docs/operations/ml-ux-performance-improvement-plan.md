@@ -137,11 +137,14 @@ reconciler와 같은 `bid_vector_ops` 큐를 사용한다. concurrency 2를 prev
 점유한 로컬 재현에서 no-op task의 p95 wait가 약 25.8ms에서 3.10초로 증가했다.
 운영 데이터가 많으면 이 지연은 preview 실행시간만큼 커질 수 있다.
 
-### P1 — scan 단위 중복 계산
+### P1 — scan 단위 중복 계산 (top-N 재분석 해결, 공통 query 공유 대기)
 
-후보별로 similarity, prediction calibration, historical series, 시장 통계와 workload를
-조회하고, 선택된 top-N은 후속 단계에서 다시 분석된다. 메모리 고정 문제는 완화됐지만
-DB query/CPU 증폭과 task runtime 변동은 남아 있다.
+후보별 최초 분석 결과는 ORM/전체 analysis tree 대신 typed `CandidateDecisionInputs`로
+축약해 유지하며, 선택된 top-N은 classifier·predictor·similarity를 다시 실행하지 않는다.
+다만 순차 저장 사이에 변하는 active-bid capacity와 auto workload는 공개된 경량
+`OpportunityWorkloadContext`로 저장 직전에 다시 조회해 guardrail을 보존한다. 남은 문제는
+시장 집계·calibration·category historical series 같은 run 공통 query가 후보별로 반복되는
+부분이다.
 
 ### P1 — 갱신 전달과 관측의 내구성 부족 (전달 경계 해결, 서버 관측 대기)
 
@@ -245,6 +248,8 @@ Read-model 후속 계획:
 ### Work package 3 — durable outbox와 projection invalidation
 
 - [x] 수집 project facts와 `semantic_input.changed`를 같은 transaction에 기록한다.
+- [x] 수동 project 생성/의미 필드 수정도 facts·embedding invalidation·
+  `semantic_input.changed`를 같은 transaction에 기록하며, 비의미 변경은 outbox no-op이다.
 - [x] KONEPS source별 inline embedding/defer 분기를 제거하고 inference task로 통일한다.
 - [x] 동일 재수집의 pending dedupe와 vectorless/stale/failed event 복구를 적용한다.
 - [x] embedding refresh와 같은 transaction에 `embedding.ready` outbox row를 기록한다.
@@ -267,7 +272,9 @@ Read-model 후속 계획:
   재사용하고 artifact 교체와 worker fork에 안전하게 무효화한다.
 - run-scoped `AnalysisContext`에 workload, 시장 집계, calibration, category historical
   series를 캐시한다.
-- 최초 분석 결과를 typed `CandidateDecisionInputs`로 유지하고 top-N 전체 재분석을 없앤다.
+- [x] 최초 분석 결과를 typed `CandidateDecisionInputs`로 유지하고 top-N 전체 재분석을
+  없앤다. 저장 직전에는 ML 재실행 없이 `OpportunityWorkloadContext`만 갱신해 순차 capacity
+  guardrail을 유지한다.
 - 수동 scan에도 기본 분석 상한을 적용하고 full audit는 별도 offline task로 둔다.
 - query count, analyzed candidate 수, task runtime을 같은 run id로 기록한다.
 

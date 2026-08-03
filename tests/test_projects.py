@@ -1,7 +1,7 @@
 """Tests for project endpoints"""
 
 from app.core.single_user import DEFAULT_OPERATOR_PASSWORD, ensure_operator_account
-from app.models.models import Project
+from app.models.models import InferenceOutboxEvent, Project
 from tests.support.auth import authenticate_client
 
 
@@ -120,14 +120,14 @@ def test_get_nonexistent_project(client):
     assert "not found" in response.json()["detail"].lower()
 
 
-def test_create_project_defers_embedding_to_backfill_task(client, test_db):
+def test_create_project_defers_embedding_to_outbox_task(client, test_db):
     """Creating a project should NOT compute the embedding inline.
 
     The heavy SBERT ``model.encode`` is moved off the synchronous request path:
-    ``POST /projects`` returns immediately and enqueues a
-    ``rebuild_project_embeddings`` worker task. On the in-memory eager broker
-    (tests) with ``CELERY_ALLOW_INLINE_ML_TASKS=false`` the task is only queued,
-    so the row has no embedding metadata until a worker runs the backfill.
+    ``POST /projects`` returns after committing a durable semantic-input event.
+    On the in-memory eager broker (tests) with
+    ``CELERY_ALLOW_INLINE_ML_TASKS=false`` inference is only notified, so the
+    row has no embedding metadata until the outbox worker runs.
     """
     response = client.post(
         "/api/v1/projects/",
@@ -144,7 +144,7 @@ def test_create_project_defers_embedding_to_backfill_task(client, test_db):
     project_id = response.json()["id"]
     project = test_db.query(Project).filter(Project.id == project_id).first()
     assert project is not None
-    # Embedding is deferred to the async backfill task; nothing computed inline.
+    # Embedding is deferred to the async outbox task; nothing computed inline.
     # Columns keep their schema defaults ("" / "[]") rather than a real vector.
     assert project.semantic_text == ""
     assert project.embedding_payload == "[]"
@@ -152,9 +152,9 @@ def test_create_project_defers_embedding_to_backfill_task(client, test_db):
     assert project.embedding_updated_at is None
 
 
-def test_create_project_embedding_backfill_task_populates_metadata(client, test_db):
-    """Running the enqueued backfill task fills in the deferred embedding metadata."""
-    from app.tasks.jobs import rebuild_project_embeddings as rebuild_project_embeddings_task
+def test_create_project_inference_outbox_task_populates_metadata(client, test_db):
+    """The outbox processor fills in the deferred embedding metadata."""
+    from app.tasks.jobs import process_inference_outbox
 
     response = client.post(
         "/api/v1/projects/",
@@ -169,10 +169,9 @@ def test_create_project_embedding_backfill_task_populates_metadata(client, test_
     assert response.status_code == 200
     project_id = response.json()["id"]
 
-    # Simulate the worker draining the enqueued single-project backfill.
-    result = rebuild_project_embeddings_task.run(project_ids=[project_id])
+    # Simulate the periodic worker draining the durable semantic-input event.
+    result = process_inference_outbox.run(limit=10)
     assert result["processed_count"] == 1
-    assert result["requested_project_ids"] == [project_id]
 
     test_db.expire_all()
     project = test_db.query(Project).filter(Project.id == project_id).first()
@@ -183,7 +182,7 @@ def test_create_project_embedding_backfill_task_populates_metadata(client, test_
     assert project.embedding_updated_at is not None
 
 
-def test_update_project_invalidates_embedding_and_queues_refresh(client, test_db, monkeypatch):
+def test_update_project_invalidates_embedding_and_writes_outbox(client, test_db, monkeypatch):
     """Updating semantic fields must never run embedding inference in the API process."""
     from app.api import projects as projects_api
     from app.core.time import utc_now
@@ -209,17 +208,15 @@ def test_update_project_invalidates_embedding_and_queues_refresh(client, test_db
     def _fail_inline_embedding(self, semantic_text):
         raise AssertionError(f"inline embedding attempted: {semantic_text}")
 
-    queued: list[tuple[int, bool]] = []
-
-    class _TaskHandle:
-        id = "update-refresh-task"
-
-    def _fake_enqueue(*, project_id: int, force: bool = False):
-        queued.append((project_id, force))
-        return _TaskHandle()
+    def _fail_direct_refresh(*, project_id: int, force: bool = False):
+        raise AssertionError(
+            f"direct refresh called: project_id={project_id}, force={force}"
+        )
 
     monkeypatch.setattr(ProjectSimilarityService, "_embed_text", _fail_inline_embedding)
-    monkeypatch.setattr(projects_api, "enqueue_project_embedding_refresh", _fake_enqueue)
+    monkeypatch.setattr(
+        projects_api, "enqueue_project_embedding_refresh", _fail_direct_refresh
+    )
 
     response = client.put(
         f"/api/v1/projects/{created['id']}",
@@ -233,12 +230,18 @@ def test_update_project_invalidates_embedding_and_queues_refresh(client, test_db
     )
 
     assert response.status_code == 200
-    assert queued == [(created["id"], False)]
     test_db.expire_all()
     updated = test_db.get(Project, created["id"])
     assert updated.embedding_payload == "[]"
     assert updated.embedding_model is None
     assert updated.embedding_updated_at is None
+    events = (
+        test_db.query(InferenceOutboxEvent)
+        .filter(InferenceOutboxEvent.aggregate_id == created["id"])
+        .all()
+    )
+    assert len(events) == 2
+    assert {event.event_type for event in events} == {"semantic_input.changed"}
 
 
 def test_update_project_preserves_embedding_when_only_source_url_changes(

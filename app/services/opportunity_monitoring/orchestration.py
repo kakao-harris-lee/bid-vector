@@ -15,9 +15,11 @@ from app.core.single_user import (
     ensure_operator_strategy,
     ensure_operator_strategy_for,
 )
-from app.models.models import OperatorStrategy, Project, User
+from app.models.models import OperatorStrategy, OperatorStrategyRun, Project, User
 from app.schemas.schemas import BidDecisionSaveRequest, OperatorStrategyMonitorRequest
+from app.services.opportunity_analysis import OpportunityWorkloadContext
 from app.services.opportunity_monitoring.base import (
+    CandidateDecisionInputs,
     StrategyCandidateEvaluation,
     _MonitoringBase,
 )
@@ -167,43 +169,71 @@ class _OrchestrationMixin(_MonitoringBase):
             results = self._process_monitor_evaluations(
                 db,
                 selected_evaluations=selected_evaluations,
-                strategy=strategy,
                 operator=operator,
-                request=request,
-                high_priority_only=resolved_high_priority_only,
                 previous_candidate_project_ids=previous_candidate_project_ids,
             )
 
-            run_diff = self._build_run_diff({"results": results}, previous_result_payload)
-            notification_count = sum(1 for item in results if item.get("notification_created"))
-
-            response = {
-                "monitor_run_id": monitor_run.id,
-                "task_id": monitor_run.task_id,
-                "trigger_source": trigger_source,
-                "previous_run_id": previous_run.id if previous_run else None,
-                "operator_id": operator.id,
-                "current_operator_id": int(operator.id),
-                "current_operator_username": str(operator.username or ""),
-                "evaluated_project_count": evaluated_project_count,
-                "selected_candidate_count": len(selected_evaluations),
-                "persisted_candidate_count": len(results),
-                "notification_count": notification_count,
-                "new_candidate_count": run_diff["new_candidate_count"],
-                "continuing_candidate_count": run_diff["continuing_candidate_count"],
-                "dropped_candidate_count": run_diff["dropped_candidate_count"],
-                "high_priority_only": resolved_high_priority_only,
-                "limit_applied": resolved_limit,
-                "new_candidate_project_ids": run_diff["new_candidate_project_ids"],
-                "continuing_candidate_project_ids": run_diff["continuing_candidate_project_ids"],
-                "dropped_candidate_project_ids": run_diff["dropped_candidate_project_ids"],
-                "results": results,
-            }
+            response = self._build_monitor_response(
+                monitor_run=monitor_run,
+                previous_run=previous_run,
+                trigger_source=trigger_source,
+                operator=operator,
+                evaluated_project_count=evaluated_project_count,
+                selected_candidate_count=len(selected_evaluations),
+                results=results,
+                previous_result_payload=previous_result_payload,
+                high_priority_only=resolved_high_priority_only,
+                limit_applied=resolved_limit,
+            )
             self._mark_run_completed(db, run_id=monitor_run.id, response=response)
             return response
         except Exception as exc:
             self._mark_run_failed(db, run_id=monitor_run.id, error_message=str(exc))
             raise
+
+    def _build_monitor_response(
+        self,
+        *,
+        monitor_run: OperatorStrategyRun,
+        previous_run: OperatorStrategyRun | None,
+        trigger_source: str,
+        operator: User,
+        evaluated_project_count: int,
+        selected_candidate_count: int,
+        results: list[dict],
+        previous_result_payload: dict,
+        high_priority_only: bool,
+        limit_applied: int,
+    ) -> dict:
+        """Assemble one completed-run response from persisted decision results."""
+        run_diff = self._build_run_diff({"results": results}, previous_result_payload)
+        notification_count = sum(
+            1 for item in results if item.get("notification_created")
+        )
+        return {
+            "monitor_run_id": monitor_run.id,
+            "task_id": monitor_run.task_id,
+            "trigger_source": trigger_source,
+            "previous_run_id": previous_run.id if previous_run else None,
+            "operator_id": operator.id,
+            "current_operator_id": int(operator.id),
+            "current_operator_username": str(operator.username or ""),
+            "evaluated_project_count": evaluated_project_count,
+            "selected_candidate_count": selected_candidate_count,
+            "persisted_candidate_count": len(results),
+            "notification_count": notification_count,
+            "new_candidate_count": run_diff["new_candidate_count"],
+            "continuing_candidate_count": run_diff["continuing_candidate_count"],
+            "dropped_candidate_count": run_diff["dropped_candidate_count"],
+            "high_priority_only": high_priority_only,
+            "limit_applied": limit_applied,
+            "new_candidate_project_ids": run_diff["new_candidate_project_ids"],
+            "continuing_candidate_project_ids": run_diff[
+                "continuing_candidate_project_ids"
+            ],
+            "dropped_candidate_project_ids": run_diff["dropped_candidate_project_ids"],
+            "results": results,
+        }
 
     def _resolve_monitor_operator_context(
         self,
@@ -238,10 +268,7 @@ class _OrchestrationMixin(_MonitoringBase):
         db: Session,
         *,
         selected_evaluations: list[StrategyCandidateEvaluation],
-        strategy: OperatorStrategy,
         operator: User,
-        request: OperatorStrategyMonitorRequest,
-        high_priority_only: bool,
         previous_candidate_project_ids: set[int],
     ) -> list[dict]:
         results: list[dict] = []
@@ -249,10 +276,7 @@ class _OrchestrationMixin(_MonitoringBase):
             result = self._process_monitor_evaluation(
                 db,
                 evaluation=evaluation,
-                strategy=strategy,
                 operator=operator,
-                request=request,
-                high_priority_only=high_priority_only,
                 previous_candidate_project_ids=previous_candidate_project_ids,
             )
             if result is not None:
@@ -264,105 +288,73 @@ class _OrchestrationMixin(_MonitoringBase):
         db: Session,
         *,
         evaluation: StrategyCandidateEvaluation,
-        strategy: OperatorStrategy,
         operator: User,
-        request: OperatorStrategyMonitorRequest,
-        high_priority_only: bool,
         previous_candidate_project_ids: set[int],
     ) -> dict | None:
-        # 슬림 evaluation 은 ORM 참조를 갖지 않는다(설계 §5 PR-A-1): 선택된
-        # top-N(≤ resolved_limit 행)만 PK 로 재조회한다. 스캔과 같은
-        # 세션/트랜잭션이므로 행 내용은 동일하다.
+        # Only selected top-N rows are rehydrated, for notification rendering.
+        # Decision inputs and result summary come from the first scan.
         project = db.get(Project, evaluation.project_id)
         if project is None:  # pragma: no cover - 동일 트랜잭션에서 행 소실 불가
             return None
-        refreshed_analysis = self._analyze_project(
-            db,
-            project,
-            operator=operator,
-            max_active_bids=request.max_active_bids,
-            current_workload_score=request.current_workload_score,
-            same_category_only=request.same_category_only,
-            similar_limit=request.similar_limit,
-            min_similarity=request.min_similarity,
-        )
-        if not self._passes_monitor_thresholds(
-            refreshed_analysis,
-            strategy=strategy,
-            high_priority_only=high_priority_only,
-        ):
-            return None
-
-        decision_record = self.decision_service.save_decision(
-            db,
-            self._build_monitor_decision_request(
-                project,
-                refreshed_analysis,
-                request=request,
-            ),
-            operator=operator,
-        )
-        is_new_candidate = project.id not in previous_candidate_project_ids
-        notification = self._maybe_create_monitor_notification(
-            db,
-            operator=operator,
-            project=project,
-            decision_record=decision_record,
-            is_new_candidate=is_new_candidate,
-        )
-        return self._serialize_monitor_result(
-            evaluation=evaluation,
-            project=project,
-            decision_record=decision_record,
-            notification=notification,
-            refreshed_analysis=refreshed_analysis,
-            is_new_candidate=is_new_candidate,
-        )
-
-    def _passes_monitor_thresholds(
-        self,
-        refreshed_analysis: dict,
-        *,
-        strategy: OperatorStrategy,
-        high_priority_only: bool,
-    ) -> bool:
-        if float(refreshed_analysis["matched_score"]) < float(strategy.minimum_match_score or 0.0):
-            return False
-        if float(refreshed_analysis["probability_score"]) < float(strategy.minimum_probability_score or 0.0):
-            return False
-        if high_priority_only and not self._is_high_priority_candidate(refreshed_analysis):
-            return False
-        return True
+        try:
+            workload_context = self.analysis_service.resolve_workload_context(
+                db,
+                operator_id=int(operator.id),
+                max_active_bids=evaluation.decision_inputs.max_active_bids,
+                current_workload_score=(
+                    evaluation.decision_inputs.provided_workload_score
+                ),
+                exclude_project_id=evaluation.project_id,
+            )
+            decision_record = self.decision_service.save_decision(
+                db,
+                self._build_monitor_decision_request(
+                    evaluation.decision_inputs,
+                    workload_context=workload_context,
+                ),
+                operator=operator,
+            )
+            is_new_candidate = project.id not in previous_candidate_project_ids
+            notification = self._maybe_create_monitor_notification(
+                db,
+                operator=operator,
+                project=project,
+                decision_record=decision_record,
+                is_new_candidate=is_new_candidate,
+            )
+            return self._serialize_monitor_result(
+                evaluation=evaluation,
+                project=project,
+                decision_record=decision_record,
+                notification=notification,
+                is_new_candidate=is_new_candidate,
+            )
+        finally:
+            if project in db:
+                db.expunge(project)
 
     def _build_monitor_decision_request(
         self,
-        project: Project,
-        refreshed_analysis: dict,
+        inputs: CandidateDecisionInputs,
         *,
-        request: OperatorStrategyMonitorRequest,
+        workload_context: OpportunityWorkloadContext,
     ) -> BidDecisionSaveRequest:
         return BidDecisionSaveRequest(
-            project_id=project.id,
-            recommended_amount=float(refreshed_analysis["recommended_amount"]),
-            probability_score=float(refreshed_analysis["probability_score"]),
-            matched_score=float(refreshed_analysis["matched_score"]),
-            deadline_hours_remaining=refreshed_analysis.get("deadline_hours_remaining"),
-            current_active_bids=int(refreshed_analysis.get("current_active_bids") or 0),
-            max_active_bids=int(refreshed_analysis.get("max_active_bids") or request.max_active_bids),
-            current_workload_score=self._resolve_current_workload_score(
-                refreshed_analysis,
-                fallback=request.current_workload_score,
-            ),
-            budget_estimate=float(project.budget_estimate or 0.0),
-            competitiveness_score=self._resolve_competitiveness_score(refreshed_analysis),
-            expected_margin_score=self._resolve_expected_margin_score(refreshed_analysis),
-            execution_complexity_score=self._resolve_execution_complexity_score(refreshed_analysis),
-            workload_source=str(
-                refreshed_analysis.get("workload_source")
-                or ("provided" if request.current_workload_score is not None else "auto")
-            ),
-            strengths=list(refreshed_analysis.get("strengths") or []),
-            risk_flags=list(refreshed_analysis.get("risk_flags") or []),
+            project_id=inputs.project_id,
+            recommended_amount=inputs.recommended_amount,
+            probability_score=inputs.probability_score,
+            matched_score=inputs.matched_score,
+            deadline_hours_remaining=inputs.deadline_hours_remaining,
+            current_active_bids=workload_context.current_active_bids,
+            max_active_bids=inputs.max_active_bids,
+            current_workload_score=workload_context.current_workload_score,
+            budget_estimate=inputs.budget_estimate,
+            competitiveness_score=inputs.competitiveness_score,
+            expected_margin_score=inputs.expected_margin_score,
+            execution_complexity_score=inputs.execution_complexity_score,
+            workload_source=workload_context.workload_source,
+            strengths=list(inputs.strengths),
+            risk_flags=list(inputs.risk_flags),
         )
 
     def _maybe_create_monitor_notification(
@@ -390,7 +382,6 @@ class _OrchestrationMixin(_MonitoringBase):
         project: Project,
         decision_record,
         notification,
-        refreshed_analysis: dict,
         is_new_candidate: bool,
     ) -> dict:
         return {
@@ -404,7 +395,7 @@ class _OrchestrationMixin(_MonitoringBase):
             "probability_score": float(decision_record.probability_score or 0.0),
             "matched_score": float(decision_record.matched_score or 0.0),
             "recommended_amount": float(decision_record.recommended_amount or 0.0),
-            "analysis_summary": str(refreshed_analysis.get("analysis_summary") or ""),
+            "analysis_summary": evaluation.decision_inputs.analysis_summary,
             "is_new_candidate": is_new_candidate,
             "notification_created": notification is not None,
             "strategy_reasons": evaluation.strategy_reasons,

@@ -41,10 +41,14 @@ from app.services.opportunity_analysis.score_tables import (
     _WORKLOAD_COMPOSITE_WEIGHTS,
 )
 from app.services.opportunity_analysis.scoring import _ScoringMixin
-from app.services.opportunity_analysis.workload import _WorkloadMixin
+from app.services.opportunity_analysis.workload import (
+    OpportunityWorkloadContext,
+    _WorkloadMixin,
+)
 
 __all__ = [
     "OpportunityAnalysisService",
+    "OpportunityWorkloadContext",
     # Value carriers / base
     "_AnalysisInputs",
     "_AnalysisScores",

@@ -29,9 +29,11 @@
 ## 수집·추론 경계
 
 - 수집기는 외부 데이터를 정규화해 canonical project facts를 저장하고, 같은 DB transaction에 `semantic_input.changed` outbox event를 기록한다.
+- 수동 project 생성과 의미 필드 수정도 같은 application service를 통해 facts·embedding invalidation·`semantic_input.changed`를 원자적으로 기록한다. source URL 같은 비의미 변경은 event와 inference notification을 만들지 않는다.
 - commit 이후 task enqueue는 지연을 줄이는 best-effort 알림일 뿐이다. broker 장애 시에도 주기적 outbox sweep과 stale-claim 회수가 전달을 복구한다.
 - inference worker가 embedding을 저장한 뒤 `embedding.ready`를 기록하고 similarity read model을 갱신한다. KONEPS source별 inline embedding 분기는 두지 않는다.
 - bulk opportunity scan은 저장된 similarity/features만 소비한다. 단일 프로젝트의 명시적 분석 경로만 기존 refresh-capable 동작을 유지한다.
+- strategy monitor는 후보마다 opportunity analysis를 한 번만 실행하고 typed `CandidateDecisionInputs`만 유지한다. top-N 저장 직전에는 predictor/similarity를 재실행하지 않고 경량 `OpportunityWorkloadContext`만 갱신해 active-bid capacity와 auto workload guardrail을 보존한다.
 - release artifact는 파일 identity별 bounded process-local cache를 사용하며, worker fork 이후 cache와 lock을 재초기화한다.
 
 ## Release Manifest 정책

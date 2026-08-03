@@ -8,6 +8,7 @@ post-filter analysis budget.
 from __future__ import annotations
 
 import logging
+from typing import TypedDict
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -27,6 +28,7 @@ from app.services.license_eligibility import (
     assess_license_eligibility,
 )
 from app.services.opportunity_monitoring.base import (
+    CandidateDecisionInputs,
     StrategyCandidateEvaluation,
     _MonitoringBase,
 )
@@ -38,6 +40,30 @@ from app.services.operator_strategy_tuning import (
 # opportunity_monitoring", not the submodule) so the license-gate exclusion
 # record keeps the exact logger name callers (and tests) capture on.
 logger = logging.getLogger("app.services.opportunity_monitoring")
+
+
+class _CandidateMarketInsights(TypedDict, total=False):
+    competitiveness_score: float
+
+
+class _CandidateDecisionMetadata(TypedDict, total=False):
+    competitiveness_score: float
+    expected_margin_score: float
+    execution_complexity_score: float
+
+
+class _CandidateAnalysisPayload(TypedDict, total=False):
+    """First-analysis fields copied into ``CandidateDecisionInputs``."""
+
+    recommended_amount: float
+    probability_score: float
+    matched_score: float
+    deadline_hours_remaining: int | None
+    strengths: list[str]
+    risk_flags: list[str]
+    analysis_summary: str
+    market_insights: _CandidateMarketInsights
+    decision: _CandidateDecisionMetadata
 
 
 class _CandidateCollectionMixin(_MonitoringBase):
@@ -157,6 +183,8 @@ class _CandidateCollectionMixin(_MonitoringBase):
                         project=project,
                         analysis=analysis,
                         strategy_reasons=filter_result.reasons,
+                        max_active_bids=max_active_bids,
+                        current_workload_score=current_workload_score,
                     )
                 )
             finally:
@@ -314,16 +342,16 @@ class _CandidateCollectionMixin(_MonitoringBase):
         project: Project,
         analysis: dict,
         strategy_reasons: list[str],
+        max_active_bids: int,
+        current_workload_score: float | None,
     ) -> StrategyCandidateEvaluation:
         """통과한 후보를 즉시 직렬화한다 (설계 §5 PR-A-1).
 
-        반환되는 evaluation 은 순수 값(candidate dict + sort_key)만 들고 있어
-        스캔 루프가 분석 예산(≤250)만큼의 ORM Project 행/전체 analysis dict 를
-        정렬 시점까지 보유하지 않는다. sort_key 는 기존 루프 종료 후
-        sort(key=...) 람다와 동일한 튜플이다.
+        반환되는 evaluation 은 preview dict, 정렬키, decision-save 입력만 들고
+        있어 스캔 루프가 ORM Project 행/전체 analysis dict 를 정렬 시점까지
+        보유하지 않는다.
         """
         return StrategyCandidateEvaluation(
-            project_id=int(project.id),
             candidate=self._serialize_candidate(project, analysis, strategy_reasons),
             sort_key=(
                 -float(analysis.get("decision", {}).get("priority_score", 0.0) or 0.0),
@@ -333,6 +361,43 @@ class _CandidateCollectionMixin(_MonitoringBase):
                 int(project.id),
             ),
             strategy_reasons=strategy_reasons,
+            decision_inputs=self._build_candidate_decision_inputs(
+                project=project,
+                analysis=analysis,
+                max_active_bids=max_active_bids,
+                current_workload_score=current_workload_score,
+            ),
+        )
+
+    def _build_candidate_decision_inputs(
+        self,
+        *,
+        project: Project,
+        analysis: _CandidateAnalysisPayload,
+        max_active_bids: int,
+        current_workload_score: float | None,
+    ) -> CandidateDecisionInputs:
+        """Copy only persistence/result fields out of the first analysis."""
+        deadline_hours = analysis.get("deadline_hours_remaining")
+        return CandidateDecisionInputs(
+            project_id=int(project.id),
+            recommended_amount=float(analysis["recommended_amount"]),
+            probability_score=float(analysis["probability_score"]),
+            matched_score=float(analysis["matched_score"]),
+            deadline_hours_remaining=(
+                int(deadline_hours) if deadline_hours is not None else None
+            ),
+            max_active_bids=max_active_bids,
+            provided_workload_score=current_workload_score,
+            budget_estimate=float(project.budget_estimate or 0.0),
+            competitiveness_score=self._resolve_competitiveness_score(analysis),
+            expected_margin_score=self._resolve_expected_margin_score(analysis),
+            execution_complexity_score=self._resolve_execution_complexity_score(
+                analysis
+            ),
+            strengths=tuple(analysis.get("strengths") or ()),
+            risk_flags=tuple(analysis.get("risk_flags") or ()),
+            analysis_summary=str(analysis.get("analysis_summary") or ""),
         )
 
     def _serialize_candidate(

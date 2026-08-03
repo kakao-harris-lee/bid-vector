@@ -7,6 +7,9 @@ from the original ``OpportunityAnalysisService`` body.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Literal
+
 from sqlalchemy.orm import Session
 
 from app.core.time import ensure_utc, utc_now
@@ -14,6 +17,15 @@ from app.models.models import BidDecisionRecord, Project
 from app.schemas.schemas import OpportunityAnalysisRequest
 from app.services.opportunity_analysis.base import _OpportunityAnalysisBase
 from app.services.opportunity_analysis.score_tables import _WORKLOAD_COMPOSITE_WEIGHTS
+
+
+@dataclass(frozen=True, slots=True)
+class OpportunityWorkloadContext:
+    """Current capacity inputs for one opportunity decision boundary."""
+
+    current_active_bids: int
+    current_workload_score: float
+    workload_source: Literal["provided", "auto"]
 
 
 class _WorkloadMixin(_OpportunityAnalysisBase):
@@ -39,6 +51,52 @@ class _WorkloadMixin(_OpportunityAnalysisBase):
             query = query.filter(BidDecisionRecord.project_id != exclude_project_id)
         return query.all()
 
+    def resolve_workload_context(
+        self,
+        db: Session,
+        *,
+        operator_id: int,
+        max_active_bids: int,
+        current_active_bids: int | None = None,
+        current_workload_score: float | None = None,
+        exclude_project_id: int | None = None,
+    ) -> OpportunityWorkloadContext:
+        """Resolve live capacity plus either provided or stored-decision workload.
+
+        This public, narrow contract lets persistence paths refresh the cheap
+        dynamic decision context without re-running classifiers, predictors, or
+        similarity lookup.
+        """
+        active_records = self._load_current_active_bid_records(
+            db,
+            operator_id,
+            exclude_project_id=exclude_project_id,
+        )
+        resolved_active_bids = (
+            int(current_active_bids)
+            if current_active_bids is not None
+            else len(active_records)
+        )
+
+        if current_workload_score is not None:
+            normalized_workload = max(0.0, min(1.0, float(current_workload_score)))
+            return OpportunityWorkloadContext(
+                current_active_bids=resolved_active_bids,
+                current_workload_score=round(normalized_workload, 2),
+                workload_source="provided",
+            )
+
+        auto_workload_score = self._estimate_current_workload_score(
+            active_records=active_records,
+            current_active_bids=resolved_active_bids,
+            max_active_bids=max_active_bids,
+        )
+        return OpportunityWorkloadContext(
+            current_active_bids=resolved_active_bids,
+            current_workload_score=auto_workload_score,
+            workload_source="auto",
+        )
+
     def _resolve_workload_context(
         self,
         db: Session,
@@ -47,28 +105,20 @@ class _WorkloadMixin(_OpportunityAnalysisBase):
         request: OpportunityAnalysisRequest,
         exclude_project_id: int | None = None,
     ) -> tuple[int, float, str]:
-        """Resolve active bid count and workload score from explicit input or stored active decisions."""
-        active_records = self._load_current_active_bid_records(
+        """Preserve the analysis-internal tuple contract over the public value object."""
+        context = self.resolve_workload_context(
             db,
-            operator_id,
+            operator_id=operator_id,
+            max_active_bids=request.max_active_bids,
+            current_active_bids=request.current_active_bids,
+            current_workload_score=request.current_workload_score,
             exclude_project_id=exclude_project_id,
         )
-        current_active_bids = (
-            int(request.current_active_bids)
-            if request.current_active_bids is not None
-            else len(active_records)
+        return (
+            context.current_active_bids,
+            context.current_workload_score,
+            context.workload_source,
         )
-
-        if request.current_workload_score is not None:
-            normalized_workload = max(0.0, min(1.0, float(request.current_workload_score)))
-            return current_active_bids, round(normalized_workload, 2), "provided"
-
-        auto_workload_score = self._estimate_current_workload_score(
-            active_records=active_records,
-            current_active_bids=current_active_bids,
-            max_active_bids=request.max_active_bids,
-        )
-        return current_active_bids, auto_workload_score, "auto"
 
     def _estimate_current_workload_score(
         self,

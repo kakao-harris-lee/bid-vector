@@ -23,17 +23,17 @@ from app.schemas.schemas import (
 )
 from app.schemas.project import SimilarProjectsResponse
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.project_writes import (
+    ProjectWriteNotFound,
+    ProjectWriteService,
+    get_project_write_service,
+)
 from app.services.similar_projects_refresh import (
     SimilarProjectsRefreshOperationNotFound,
     SimilarProjectsRefreshService,
     get_similar_projects_refresh_service,
 )
-from app.services.similarity_read_model import (
-    invalidate_project_embedding,
-    project_embedding_input_state,
-)
 from app.tasks.jobs import (
-    enqueue_project_embedding_backfill,
     enqueue_project_embedding_refresh,
     enqueue_project_embedding_rebuild,
     get_project_embedding_rebuild_task_status,
@@ -43,35 +43,13 @@ router = APIRouter()
 
 
 @router.post("/", response_model=ProjectResponse)
-def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
+def create_project(
+    project: ProjectCreate,
+    db: Session = Depends(get_db),
+    write_service: ProjectWriteService = Depends(get_project_write_service),
+):
     """Create a new project"""
-    db_project = Project(
-        title=project.title,
-        description=project.description,
-        requirements=project.requirements,
-        budget_estimate=project.budget_estimate,
-        budget_min=project.budget_min,
-        budget_max=project.budget_max,
-        category=project.category,
-        notice_number=project.notice_number,
-        source_url=project.source_url,
-        issuing_agency=project.issuing_agency,
-        demand_agency=project.demand_agency,
-        deadline=project.deadline,
-    )
-    db.add(db_project)
-    db.commit()
-    db.refresh(db_project)
-
-    # Move the heavy SBERT model.encode off the synchronous request path: the
-    # semantic embedding for this new project is computed by the
-    # rebuild_project_embeddings worker task (eventual, seconds in production)
-    # instead of inline. Similarity GETs read only stored embeddings and the
-    # on-demand refresh endpoint queues a worker job, so newly created rows are
-    # visible after the background refresh completes.
-    enqueue_project_embedding_backfill([db_project.id])
-
-    return db_project
+    return write_service.create(db, project)
 
 
 @router.get("/", response_model=List[ProjectResponse])
@@ -371,31 +349,18 @@ def refresh_project_embedding(
 def update_project(
     project_id: int,
     project_update: ProjectCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    write_service: ProjectWriteService = Depends(get_project_write_service),
 ):
     """Update project"""
-    project = db.query(Project).filter(Project.id == project_id).first()
-
-    if not project:
+    try:
+        return write_service.update(
+            db,
+            project_id=project_id,
+            project_update=project_update,
+        )
+    except ProjectWriteNotFound as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found"
-        )
-
-    previous_embedding_input = project_embedding_input_state(project)
-    for key, value in project_update.model_dump(exclude_unset=True).items():
-        setattr(project, key, value)
-
-    embedding_input_changed = (
-        project_embedding_input_state(project) != previous_embedding_input
-    )
-    if embedding_input_changed:
-        # Never run model.encode on the request path. Clearing the old vector makes
-        # reads report pending instead of serving a semantically stale embedding.
-        invalidate_project_embedding(project)
-    db.commit()
-    db.refresh(project)
-    if embedding_input_changed:
-        enqueue_project_embedding_refresh(project_id=project.id, force=False)
-
-    return project
+            detail="Project not found",
+        ) from exc

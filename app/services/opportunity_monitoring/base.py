@@ -30,20 +30,51 @@ class StrategyFilterResult:
     reasons: list[str]
 
 
-@dataclass
-class StrategyCandidateEvaluation:
-    """A strategy-filtered candidate, serialized at analysis time (slim).
+@dataclass(frozen=True, slots=True)
+class CandidateDecisionInputs:
+    """Compact first-scan values needed after candidate ranking.
 
-    스캔 메모리 위생(설계 2026-07-30 §5 PR-A-1): 분석 직후 ``candidate``
-    (preview 직렬화 dict)와 ``sort_key`` 만 보관하고 ORM ``Project`` / 전체
-    analysis dict 참조는 즉시 해제한다. monitor 경로는 선택된 top-N 만
-    ``project_id`` 로 재조회한다 (orchestration._process_monitor_evaluation).
+    The full opportunity-analysis payload can contain classifier, predictor,
+    and similarity result trees. Monitoring keeps only the scalar/list inputs
+    needed to build ``BidDecisionSaveRequest`` plus the summary returned in the
+    monitor result.
     """
 
     project_id: int
+    recommended_amount: float
+    probability_score: float
+    matched_score: float
+    deadline_hours_remaining: int | None
+    max_active_bids: int
+    provided_workload_score: float | None
+    budget_estimate: float
+    competitiveness_score: float
+    expected_margin_score: float
+    execution_complexity_score: float
+    strengths: tuple[str, ...]
+    risk_flags: tuple[str, ...]
+    analysis_summary: str
+
+
+@dataclass(slots=True)
+class StrategyCandidateEvaluation:
+    """A strategy-filtered candidate serialized into bounded first-scan values.
+
+    스캔 메모리 위생(설계 2026-07-30 §5 PR-A-1): 분석 직후 ``candidate``
+    (preview 직렬화 dict), ``sort_key``, compact ``decision_inputs`` 만 보관하고
+    ORM ``Project`` / 전체 analysis dict 참조는 즉시 해제한다. monitor 경로는
+    선택된 top-N 만 ``project_id`` 로 재조회한다.
+    """
+
     candidate: dict
     sort_key: tuple
     strategy_reasons: list[str]
+    decision_inputs: CandidateDecisionInputs
+
+    @property
+    def project_id(self) -> int:
+        """Keep the historical evaluation accessor without duplicating state."""
+        return self.decision_inputs.project_id
 
 
 class _MonitoringBase:
