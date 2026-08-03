@@ -1,6 +1,6 @@
 # Test and Operating Server Tasks
 
-기준일: 2026-07-03
+기준일: 2026-08-03
 
 이 문서는 `docs/roadmap.md`의 남은 작업 중 테스트/운영 서버에서 진행해야 의미가 있는 항목을 분리한다. 기준은 실제 DB, KONEPS 응답, scheduler/worker, Telegram/app target, SMTP/provider, Supabase staging, 실제 사용자 또는 실제 사업자 데이터가 있어야 검증 가능한지 여부다.
 
@@ -52,6 +52,110 @@
 - GET similarity가 API에서 모델을 로드하지 않는지, preview 부하 중 ops 큐가 inference
   runtime만큼 지연되지 않는지를 개선 전후 동일 명령으로 검증한다.
 - 서버 판정 전까지 로컬 수치를 운영 SLO 달성 근거로 사용하지 않는다.
+
+## 수집 → 분석 → 적재 E2E handoff
+
+이 검증은 실제 KONEPS 응답, PostgreSQL/pgvector, RabbitMQ, beat, 전용 worker와
+학습 완료된 signed release가 함께 있는 테스트/운영 서버에서 이어간다. 개발 장비의 mock
+수집이나 미학습 heuristic 결과는 E2E 통과 근거로 사용하지 않는다. 기준 코드는
+`refactor/architecture-boundaries` 브랜치이며 실행 전에 서버의 git SHA를 증적에 남긴다.
+
+### 통제 실행 설정
+
+첫 실행은 schedule 중복을 피하기 위해 수집·monitor schedule을 끄고 수동 smoke 한 번으로
+검증한다. 아래는 값 자체가 아니라 필요한 설정 상태이며 secret은 출력하거나 증적에 넣지
+않는다.
+
+```dotenv
+CELERY_ALLOW_INLINE_ML_TASKS=false
+INFERENCE_OUTBOX_SCHEDULE_ENABLED=true
+STALE_TASK_RECONCILER_SCHEDULE_ENABLED=true
+KONEPS_COLLECTION_SOURCE=koneps-openapi
+KONEPS_COLLECTION_EXECUTION_MODE=auto
+KONEPS_SCSBID_COLLECTION_SOURCE=scsbid-openapi
+KONEPS_SCSBID_COLLECTION_EXECUTION_MODE=auto
+KONEPS_COLLECTION_SCHEDULE_ENABLED=false
+KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED=false
+OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED=false
+ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE=true
+```
+
+API, `worker`, `inference-worker`, `ml-worker`, `training-worker`, `beat`, RabbitMQ와 DB를
+기동하고 다음 gate를 먼저 통과시킨다.
+
+1. `alembic current`가 repository head이며 API와 worker가 같은 git SHA/image를 쓴다.
+2. `python scripts/promote_ml_release.py preflight-rollout --manifest <release> --require-signature`
+   가 성공하고 manifest의 git SHA, artifact checksum, model path가 현재 배포와 일치한다.
+3. ops/inference/backfill/training/reevaluation queue별 전용 worker가 응답하며
+   `inference-worker`가 embedding/similarity task를 등록했다.
+4. 승인된 격리 operator와 notification dry-run 또는 안전한 테스트 target을 사용한다.
+5. 대상 DB를 백업하고 notice/project/decision/notification 기준 count를 먼저 기록한다.
+
+### 한 번의 추적 가능한 검증
+
+```bash
+python scripts/production_smoke_test.py \
+  --base-url https://<test-api-host> \
+  --write \
+  --max-items 3 \
+  --monitor-limit 3 \
+  --evidence-out reports/g2-evidence/pipeline-e2e-<git-sha>.json
+```
+
+같은 소량 notice 집합을 따라 아래 불변식을 확인한다.
+
+1. **수집/정규화:** `CrawlJob`의 live 응답 건수, 정규화 성공 건수, 탈락 건수와 사유가
+   합계로 맞고 `fallback_mock`/mock 결과가 canonical `Project` 후보에 들어오지 않는다.
+2. **원자 적재:** 각 notice가 `Project`, `HistoricalData`/`TenderResult`와 필요한
+   `semantic_input.changed` outbox row로 연결된다. 재실행해도 notice별 canonical row가
+   중복 생성되지 않는다.
+3. **추론 projection:** outbox가 terminal `processed`가 되고 현재 semantic fingerprint와
+   embedding/model identity가 일치한 뒤에만 similarity edge/read model이 준비된다. failed,
+   stale, missing projection이 하나라도 있으면 monitor를 실행하지 않는다.
+4. **분석/결정:** 격리 operator의 monitor가 저장된 projection을 소비하고 candidate별 분석을
+   한 번만 수행한다. `evaluated >= selected >= persisted`를 만족하고 모든 persisted decision을
+   하나의 `monitor_run_id`로 추적할 수 있어야 한다.
+5. **알림/완료:** decision, notification, delivery와 monitor run의 성공/실패 상태가 모순되지
+   않는다. 중간 오류 뒤 일부 decision/notification만 commit된 경우 E2E 실패로 판정한다.
+6. **성능:** 같은 SHA와 학습 release에서
+   `scripts/measure_runtime_performance.py`로 HTTP p95/p99, queue wait p95/p99, API/worker RSS를
+   수집한다. 절차와 container 이름은
+   `docs/operations/ml-ux-performance-improvement-plan.md`를 따른다.
+
+증적에는 git SHA, release tag/checksum, 격리 operator id, crawl/monitor run id, notice 수,
+source→destination count, outbox 상태/지연, decision/notification count와 p95/p99/RSS만 남긴다.
+token, DB URL, raw 사업자정보, raw 알림 target, 원문 KONEPS payload는 남기지 않는다.
+
+### 중단 기준과 후속 구현 우선순위
+
+다음 중 하나면 schedule을 켜지 말고 row와 log를 삭제하지 않은 채 증적을 보존한다:
+`fallback_mock` 유입, 설명 없는 item drop, 동일 notice 중복, outbox failed/stale, projection 이전
+분석, monitor partial commit, 학습 release 불일치, 실제 사용자 알림 발송. 운영 데이터에서
+강제 cleanup이나 fault injection은 하지 않는다.
+
+검증에서 재현되면 다음 순서로 별도 변경한다.
+
+1. P0: mock/fallback origin을 canonical production 후보에서 격리하고 수집 provenance를 저장한다.
+2. P1: item receipt/drop reason과 notice DB unique key를 추가하고 projection readiness barrier를
+   monitor 앞에 둔다.
+3. P1: decision에 `monitor_run_id`를 연결하고 decision/notification/run의 commit 또는 durable
+   checkpoint 경계를 일관되게 만든다.
+4. P1: 수집/분석 task retry, dead-letter/visibility와 stale reconciler 운영 정책을 확정한다.
+5. P2: raw payload/Celery result 중복 및 JSON Text 이중 decode를 줄이고 heuristic 추천 계약을
+   ML predictor와 명확히 분리한다.
+
+### 다음 작업자용 짧은 프롬프트
+
+```text
+bid-vector의 refactor/architecture-boundaries 최신 커밋을 ML 학습 완료 테스트 서버에 배포해
+docs/operations/test-operating-server-tasks.md의 "수집 → 분석 → 적재 E2E handoff"를 수행해줘.
+signed release preflight와 read-only 점검 후 격리 operator로 max-items=3 수동 smoke만 실행하고,
+수집 count/탈락 사유 → canonical rows/outbox → embedding·similarity readiness → monitor
+decision/notification을 같은 notice/run으로 추적해. fallback_mock, silent drop, duplicate notice,
+stale projection, partial commit이면 즉시 중단하고 증적을 보존해. 같은 SHA/release에서 HTTP
+p95/p99, queue wait p95/p99, API·worker RSS도 측정한 뒤 원인·재현 절차·P0/P1 수정안을 보고해.
+승인 없이 schedule 활성화, 실제 사용자 알림, 운영 데이터 삭제, push/merge는 하지 마.
+```
 
 ## 원격 데이터/모델 전환
 
