@@ -3,6 +3,7 @@ import { ApiError, getStoredToken } from "./session";
 import type {
   BidDecisionTimelineResponse,
   ProjectEmbeddingRefreshResponse,
+  ProjectEmbeddingTaskStatusResponse,
   ProjectListResult,
   ProjectResponse,
   ProjectSimilaritySearchResponse
@@ -133,6 +134,18 @@ export function refreshProjectEmbedding(
       (res) => res.data
     ),
     "임베딩 재계산에 실패했습니다."
+  );
+}
+
+export function fetchProjectEmbeddingTaskStatus(
+  pollUrl: string,
+  token?: string | null
+): Promise<ProjectEmbeddingTaskStatusResponse> {
+  return wrap(
+    rawFetch<ProjectEmbeddingTaskStatusResponse>(pollUrl, { token }).then(
+      (res) => res.data
+    ),
+    "임베딩 작업 상태를 확인하지 못했습니다."
   );
 }
 

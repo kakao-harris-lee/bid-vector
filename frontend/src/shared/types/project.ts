@@ -58,6 +58,17 @@ export interface ProjectEmbeddingRefreshResponse {
   poll_url: string;
 }
 
+export interface ProjectEmbeddingTaskStatusResponse {
+  task_id: string;
+  task_name: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  raw_status: string;
+  ready: boolean;
+  successful: boolean;
+  detail: string;
+  error?: string | null;
+}
+
 export type BidDecisionAction = "bid_now" | "review" | "skip";
 export type BidDecisionStatus = "planned" | "reviewing" | "submitted" | "skipped";
 

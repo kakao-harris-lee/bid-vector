@@ -172,6 +172,123 @@ def test_create_project_embedding_backfill_task_populates_metadata(client, test_
     assert project.embedding_updated_at is not None
 
 
+def test_update_project_invalidates_embedding_and_queues_refresh(client, test_db, monkeypatch):
+    """Updating semantic fields must never run embedding inference in the API process."""
+    from app.api import projects as projects_api
+    from app.core.time import utc_now
+    from app.services.project_similarity import ProjectSimilarityService
+
+    created = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "기존 공고",
+            "description": "기존 설명",
+            "requirements": "기존 요구사항",
+            "budget_estimate": 10_000_000.0,
+            "category": "software",
+        },
+    ).json()
+    project = test_db.get(Project, created["id"])
+    project.semantic_text = "old semantic text"
+    project.embedding_payload = "[1.0]"
+    project.embedding_model = "old-model"
+    project.embedding_updated_at = utc_now()
+    test_db.commit()
+
+    def _fail_inline_embedding(self, semantic_text):
+        raise AssertionError(f"inline embedding attempted: {semantic_text}")
+
+    queued: list[tuple[int, bool]] = []
+
+    class _TaskHandle:
+        id = "update-refresh-task"
+
+    def _fake_enqueue(*, project_id: int, force: bool = False):
+        queued.append((project_id, force))
+        return _TaskHandle()
+
+    monkeypatch.setattr(ProjectSimilarityService, "_embed_text", _fail_inline_embedding)
+    monkeypatch.setattr(projects_api, "enqueue_project_embedding_refresh", _fake_enqueue)
+
+    response = client.put(
+        f"/api/v1/projects/{created['id']}",
+        json={
+            "title": "수정된 공고",
+            "description": "수정된 설명",
+            "requirements": "수정된 요구사항",
+            "budget_estimate": 20_000_000.0,
+            "category": "software",
+        },
+    )
+
+    assert response.status_code == 200
+    assert queued == [(created["id"], False)]
+    test_db.expire_all()
+    updated = test_db.get(Project, created["id"])
+    assert updated.embedding_payload == "[]"
+    assert updated.embedding_model is None
+    assert updated.embedding_updated_at is None
+
+
+def test_update_project_preserves_embedding_when_only_source_url_changes(
+    client, test_db, monkeypatch
+):
+    """Non-semantic metadata updates must not enqueue unnecessary ML work."""
+    from app.api import projects as projects_api
+    from app.core.time import utc_now
+    from app.services.project_similarity import ProjectSimilarityService
+
+    created = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "원본 공고",
+            "description": "원본 설명",
+            "requirements": "원본 요구사항",
+            "budget_estimate": 10_000_000.0,
+            "category": "software",
+            "source_url": "https://example.com/old",
+        },
+    ).json()
+    project = test_db.get(Project, created["id"])
+    project.semantic_text = ProjectSimilarityService().build_semantic_text(project)
+    project.embedding_payload = "[1.0]"
+    project.embedding_model = "old-model"
+    project.embedding_updated_at = utc_now()
+    original_updated_at = project.embedding_updated_at
+    test_db.commit()
+
+    queued: list[int] = []
+    monkeypatch.setattr(
+        projects_api,
+        "enqueue_project_embedding_refresh",
+        lambda *, project_id, force=False: queued.append(project_id),
+    )
+
+    response = client.put(
+        f"/api/v1/projects/{created['id']}",
+        json={
+            "title": "원본 공고",
+            "description": "원본 설명",
+            "requirements": "원본 요구사항",
+            "budget_estimate": 10_000_000.0,
+            "category": "software",
+            "source_url": "https://example.com/new",
+        },
+    )
+
+    assert response.status_code == 200
+    assert queued == []
+    test_db.expire_all()
+    updated = test_db.get(Project, created["id"])
+    assert updated.embedding_payload == "[1.0]"
+    assert updated.embedding_model == "old-model"
+    assert updated.embedding_updated_at is not None
+    assert (
+        updated.embedding_updated_at.replace(tzinfo=original_updated_at.tzinfo)
+        == original_updated_at
+    )
+
+
 def test_get_similar_projects_missing_embedding_is_read_only(client, test_db, monkeypatch):
     """Similarity GET should not build embeddings or write rows when the target is missing one."""
     from app.services.project_similarity import ProjectSimilarityService
@@ -260,6 +377,8 @@ def test_get_similar_projects_stale_embedding_is_read_only(client, test_db, monk
     assert payload["target_embedding_status"] == "stale"
     assert payload["target_embedding_refresh_required"] is True
     assert payload["target_embedding_model"] == "fallback-hash-v1"
+    assert payload["result_count"] == 0
+    assert payload["results"] == []
     test_db.expire_all()
     unchanged = test_db.query(Project).filter(Project.id == target["id"]).first()
     assert unchanged is not None

@@ -4,7 +4,8 @@ from typing import List
 from urllib.parse import quote_plus
 
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+from app.core.inference_config import InferenceOutboxSettings
 
 DEFAULT_DATABASE_URL = (
     "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
@@ -23,9 +24,8 @@ def _to_celery_database_result_backend(database_url: str) -> str:
     return f"db+{normalized_database_url}"
 
 
-class Settings(BaseSettings):
+class Settings(InferenceOutboxSettings):
     """Application settings"""
-
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

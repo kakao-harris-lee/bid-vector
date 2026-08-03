@@ -1,17 +1,17 @@
 # ML-UX runtime 성능 기준선과 개선 계획
 
 - 기준일: 2026-08-03
-- 상태: 로컬 재현 완료, 테스트/운영 서버 기준선 대기
+- 상태: 로컬 구현·재검증 완료, 테스트/운영 서버 기준선 대기
 - 범위: 프로젝트 유사공고, 전략 후보 preview, Celery 큐 격리, API/worker 메모리
 - 원칙: 현재 모듈형 모놀리스를 유지하고 요청/작업/read-model 경계를 먼저 분리한다.
 
 ## 결론
 
-현재 성능 저하는 ML 연산량 자체보다 **ML 생명주기가 UX 요청과 운영 큐에 결합된 것**이
-핵심이다.
+초기 기준선의 성능 저하는 ML 연산량 자체보다 **ML 생명주기가 UX 요청과 운영 큐에
+결합된 것**이 핵심이었다.
 
-1. 프로젝트 상세 화면이 자동 호출하는 `GET /projects/{id}/similar`는 저장 벡터가
-   없거나 stale이면 API 프로세스에서 모델을 로드하고 encode한 뒤 commit한다.
+1. 초기 구현에서 프로젝트 상세 화면이 자동 호출하는 `GET /projects/{id}/similar`는 저장
+   벡터가 없거나 stale이면 API 프로세스에서 모델을 로드하고 encode한 뒤 commit했다.
 2. preview snapshot 계산은 비동기화됐지만 크롤링·알림·reconciler와 같은 ops 큐를
    사용한다. worker 동시성을 preview가 모두 점유하면 짧은 운영 작업도 뒤에서 기다린다.
 3. 현재 운영 리포트는 일부 task의 평균 queue wait만 제공하고 p95, preview/embedding
@@ -83,14 +83,15 @@ projects)에서 다음 수치를 확인했다.
 ### 2026-08-03 재측정 — similarity read-model/outbox 적용
 
 schema/outbox 변경 후 API·worker 이미지를 재빌드하고 컨테이너를 재생성했다. Alembic head
-`e6a9d4c2b7f8`가 적용됐고 `project_similarity_edges`,
-`inference_outbox_events` 테이블이 현재 PostgreSQL에 생성됐다. 기존 embedded project
+`e6a9d4c2b7f8`가 적용됐고 `project_similarity_snapshots`,
+`project_similarity_edges`, `inference_outbox_events` 테이블이 현재 PostgreSQL에 생성됐다. 기존 embedded project
 `80934`에 `embedding.ready` outbox row를 기록한 뒤 inference outbox processor가
 `pgvector_hnsw` source edge 20개를 materialize했다. 이후 동일 GET은
 `search_mode=read_model`으로 응답했다.
 
-주의: 측정 JSON의 `git_sha`는 HEAD(`f4bc633924c6468022a9f27e8f1c436dc15427fc`)만
-담고 있으며, 이번 schema/outbox 변경은 아직 미커밋 working tree에 포함된 상태다.
+주의: 측정 JSON의 `git_sha`는 측정 당시 HEAD
+(`f4bc633924c6468022a9f27e8f1c436dc15427fc`)를 가리킨다. 이후 outbox 복구와 UX 폴링
+보강분은 같은 로컬 조건에서 회귀 테스트했으며, 서버 배포 후 동일 probe로 다시 측정한다.
 
 | 측정 | 표본/동시성 | 결과 |
 |---|---:|---:|
@@ -141,8 +142,9 @@ DB query/CPU 증폭과 task runtime 변동은 남아 있다.
 
 ### P1 — 갱신 전달과 관측의 내구성 부족
 
-공고 저장 후 embedding enqueue는 broker 장애 시 DB 행과 원자적이지 않다. task가
-유실되면 UI GET이 동기 복구 지점이 된다. 현재 analytics의 queue wait 평균은
+공고 생성/수정 후 최초 embedding enqueue는 broker 장애 시 DB 행과 원자적이지 않다.
+다만 embedding 완료 후 similarity projection은 transaction outbox에 기록되고, 즉시 publish가
+실패해도 beat sweep과 stale-claim 복구가 처리한다. 현재 analytics의 queue wait 평균은
 `OperatorStrategyRun` 일부만 집계해 preview/embedding queue의 p95를 설명하지 못한다.
 
 ### P1 — 빈 DB migration 불가
@@ -210,7 +212,7 @@ reconciler 작업이 inference 실행시간만큼 기다리지 않는다.
 - [x] pgvector 경로의 `ORDER BY`를 distance 단일 정렬로 제한해 HNSW 인덱스를 사용한다.
 - [x] similarity result 자체를 versioned read-model로 저장하고 embedding-ready recompute를
   inference worker로 연결한다.
-- [ ] `SimilarPanel`은 이전 결과를 즉시 표시하고 서버 상태로 polling하며, 최초 자동
+- [x] `SimilarPanel`은 이전 결과를 즉시 표시하고 task terminal 상태까지 polling하며, 최초 자동
   진입이 모델 로드를 일으키지 않게 한다.
 
 완료 조건:
@@ -222,24 +224,27 @@ reconciler 작업이 inference 실행시간만큼 기다리지 않는다.
 
 Read-model 후속 계획:
 
-1. [x] `project_similarity_edges` read model을 둔다. key는 `(target_project_id,
-   embedding_model, target_embedding_updated_at, same_category_only, min_similarity_bucket,
-   rank)`이고 값은 `candidate_project_id`, `similarity_score`, `computed_at`,
-   `source = pgvector_hnsw|offline_recompute`로 한다.
+1. [x] `project_similarity_snapshots` header와 `project_similarity_edges`를 분리한다. snapshot은
+   target embedding version, query bucket, corpus embedding count/max timestamp, 0건 결과까지
+   기록하고 edge는 snapshot별 rank/candidate/score만 보유한다.
 2. [x] GET은 target embedding이 ready이고 read model freshness가 맞으면 edge rows만 읽는다.
    miss/stale이면 현재 pgvector HNSW 경로로 즉시 응답하되, refresh/recompute job은 GET이
    직접 enqueue하지 않고 outbox/inference worker가 담당한다.
 3. [x] `embedding.ready` 이벤트가 같은 transaction의 outbox에 기록되고 inference worker가
-   해당 target의 read model을 재계산한다. `project.category.changed`,
-   `project.closed/awarded` 및 debounce/batch는 후속 범위로 남긴다.
+   해당 target의 read model을 재계산한다. 후보 semantic/category 변경 경로는 기존 embedding을
+   먼저 무효화해 corpus watermark가 오래된 snapshot 사용을 차단하고 비동기 backfill한다.
+   closed/awarded 전용 debounce/batch는 후속 범위로 남긴다.
 4. [ ] API는 read-model hit/miss, pgvector fallback latency, edge freshness age를
    runtime performance report에 남긴다.
 
 ### Work package 3 — durable outbox와 projection invalidation
 
 - [x] embedding refresh와 같은 transaction에 `embedding.ready` outbox row를 기록한다.
-- [ ] `project.ingested`, `project.category.changed`, `project.closed/awarded`,
-  `strategy.changed`를 명시적으로 연결한다.
+- [x] event version별 dedupe, bounded retry/backoff, stale running claim 회수를 적용한다.
+- [x] 즉시 enqueue 실패를 보완하는 30초 기본 Celery beat sweep을 연결한다.
+- [x] 수동 수정·수집 갱신·category 재분류에서 stale embedding을 먼저 제거하고 backfill한다.
+- [ ] `project.ingested`, `project.closed/awarded`, `strategy.changed`를 별도 event type과
+  debounce/batch로 연결한다.
 - project 대량 유입은 debounce/batch로 preview projection을 갱신한다.
 - task idempotency와 stale-job reconciler 범위를 embedding/preview까지 통합한다.
 

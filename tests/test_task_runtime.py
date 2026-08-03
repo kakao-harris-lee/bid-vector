@@ -50,7 +50,11 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
 
     config = build_celery_runtime_config()
 
-    assert config["imports"] == ("app.tasks.jobs", "app.tasks.performance_probe")
+    assert config["imports"] == (
+        "app.tasks.jobs",
+        "app.tasks.inference_jobs",
+        "app.tasks.performance_probe",
+    )
     assert config["task_default_queue"] == "bid_vector_ops"
     assert config["task_routes"]["jobs.collect_koneps_notices"]["queue"] == settings.CELERY_OPS_QUEUE
     assert (
@@ -82,7 +86,7 @@ def test_embedding_rebuild_enqueues_outbox_processor_for_entire_event_batch(monk
     """A rebuild that creates more than 50 outbox rows must enqueue a large enough sweep."""
     from contextlib import contextmanager
 
-    from app.tasks import jobs
+    from app.tasks import inference_jobs, jobs
 
     class _FakeDb:
         def commit(self):
@@ -116,7 +120,7 @@ def test_embedding_rebuild_enqueues_outbox_processor_for_entire_event_batch(monk
     monkeypatch.setattr(jobs, "task_session", _fake_task_session)
     monkeypatch.setattr(jobs, "ProjectSimilarityService", _FakeSimilarityService)
     monkeypatch.setattr(
-        jobs,
+        inference_jobs,
         "enqueue_inference_outbox_processing",
         _fake_enqueue_inference_outbox_processing,
     )
@@ -125,6 +129,20 @@ def test_embedding_rebuild_enqueues_outbox_processor_for_entire_event_batch(monk
 
     assert result["outbox_processor_task_id"] == "outbox-processor-75"
     assert queued_limits == [75]
+
+
+def test_inference_outbox_schedule_retries_durable_events(monkeypatch):
+    monkeypatch.setattr(settings, "INFERENCE_OUTBOX_SCHEDULE_ENABLED", True)
+    monkeypatch.setattr(settings, "INFERENCE_OUTBOX_INTERVAL_SECONDS", 17)
+    monkeypatch.setattr(settings, "INFERENCE_OUTBOX_BATCH_LIMIT", 23)
+
+    schedule = build_celery_runtime_config()["beat_schedule"][
+        "inference_outbox_periodic"
+    ]
+
+    assert schedule["task"] == INFERENCE_OUTBOX_PROCESS_TASK_NAME
+    assert schedule["schedule"] == 17.0
+    assert schedule["kwargs"] == {"limit": 23}
 
 
 def test_worker_max_memory_per_child_zero_disables_the_limit(monkeypatch):

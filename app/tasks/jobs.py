@@ -11,12 +11,12 @@ rely on them resolving each other within this module namespace.
 
 import logging
 from typing import Any
-from uuid import uuid4
 
 from app.core.config import settings
 from app.core.database import task_session
 from app.models.models import User
 from app.schemas.schemas import CrawlRequest, OperatorStrategyMonitorRequest
+from app.schemas.similarity_runtime import EmbeddingRebuildDispatchInput
 from app.schemas.task_payloads import CrawlTaskRequest, ForwardPaperBiddingTaskRequest, HistoricalBacktestTaskRequest, PricePredictionTrainingTaskRequest, ScsbidReserveDetailBackfillRequest, SyntheticOperatorBacktestTaskRequest, TelegramNotificationTaskRequest
 from app.services.decision_experiments import DecisionExperimentService
 from app.services.ml_training import PricePredictionTrainingService
@@ -39,7 +39,6 @@ from app.tasks.celery_app import (
     FORWARD_SETTLEMENT_TASK_NAME,
     G2_CANDIDATE_RECHECK_TASK_NAME,
     HISTORICAL_BACKTEST_TASK_NAME,
-    INFERENCE_OUTBOX_PROCESS_TASK_NAME,
     NOTIFY_AWARD_RESULTS_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
@@ -53,10 +52,16 @@ from app.tasks.celery_app import (
     celery_app,
 )
 from app.tasks.collection_jobs import run_koneps_collection_job
+from app.tasks.dispatch import MlTaskDispatch, enqueue_ml_task
 from app.tasks.evidence_jobs import (
     _write_g2_daily_evidence_draft,
     run_collect_g2_evidence_job,
     run_g2_candidate_recheck_job,
+)
+from app.tasks.inference_jobs import (
+    enqueue_inference_outbox_processing,
+    notify_embedding_rebuild_committed,
+    process_inference_outbox,
 )
 from app.tasks.reserve_detail_backfill import (
     _normalize_deferred_reserve_notices,
@@ -79,27 +84,20 @@ logger = logging.getLogger(__name__)
 # ``__all__`` marks them as used for linters. ``_write_g2_daily_evidence_draft``
 # and the job/helper functions are used internally by the shells below.
 __all__ = [
+    "enqueue_inference_outbox_processing",
     "get_decision_experiment_reevaluation_task_status",
     "get_koneps_notice_collection_task_status",
     "get_operator_strategy_monitor_task_status",
     "get_price_predictor_training_task_status",
     "get_project_embedding_rebuild_task_status",
     "get_synthetic_backtest_task_status",
+    "process_inference_outbox",
 ]
 
 
-class _QueuedOnlyTaskHandle:
-    """Task handle used when ML work must not execute inside the API process."""
-
-    def __init__(self, task_id: str) -> None:
-        self.id = task_id
-
-
 def _enqueue_ml_task(task, *, kwargs: dict[str, Any], queue: str):
-    """Queue an ML task, refusing eager in-process execution unless explicitly allowed."""
-    if settings.uses_in_memory_celery and not settings.CELERY_ALLOW_INLINE_ML_TASKS:
-        return _QueuedOnlyTaskHandle(str(uuid4()))
-    return task.apply_async(kwargs=kwargs, queue=queue)
+    """Compatibility seam around the shared guarded ML dispatcher."""
+    return enqueue_ml_task(MlTaskDispatch(task=task, kwargs=kwargs, queue=queue))
 
 
 @celery_app.task(bind=True, name=COLLECT_KONEPS_NOTICES_TASK_NAME)
@@ -177,53 +175,25 @@ def rebuild_project_embeddings(
                 project_ids=project_ids,
             )
             db.commit()
-            outbox_event_ids = result.get("outbox_event_ids") or []
-            if outbox_event_ids:
-                try:
-                    async_result = enqueue_inference_outbox_processing(
-                        limit=max(50, len(outbox_event_ids))
-                    )
-                    result["outbox_processor_task_id"] = str(async_result.id)
-                    result["outbox_processor_queue"] = settings.CELERY_ML_INFERENCE_QUEUE
-                except Exception:  # noqa: BLE001 - outbox rows are durable after commit
-                    logger.exception("failed to enqueue inference outbox processor")
+            dispatch = notify_embedding_rebuild_committed(
+                EmbeddingRebuildDispatchInput(
+                    outbox_event_ids=result.get("outbox_event_ids") or []
+                )
+            )
+            if dispatch.task_id:
+                result["outbox_processor_task_id"] = dispatch.task_id
+                result["outbox_processor_queue"] = dispatch.queue
             return result
         except Exception:
             db.rollback()
             raise
 
 
-@celery_app.task(name=INFERENCE_OUTBOX_PROCESS_TASK_NAME)
-def process_inference_outbox(limit: int = 50) -> dict:
-    """Process pending inference outbox rows into read-model projections."""
-    with task_session() as db:
-        try:
-            return ProjectSimilarityService().process_inference_outbox_events(
-                db, limit=max(1, int(limit or 50))
-            )
-        except Exception:
-            db.rollback()
-            raise
-
-
 def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> int:
-    """Queue async embedding rebuild(s) for projects whose embeddings were deferred.
+    """Queue bounded, non-forced embedding chunks without breaking a crawl.
 
-    The ids are split into bounded chunks (``EMBEDDING_BACKFILL_CHUNK_SIZE``) and
-    enqueued as separate ``rebuild_project_embeddings`` tasks so a large catch-up
-    sweep cannot run as one unbounded task that re-creates the time-limit
-    redelivery loop on the ML backfill queue.
-
-    ``force=False`` mirrors the original inline semantics: a freshly created
-    project (no cached vector) is still embedded, while an unchanged existing
-    project that matched the crawl is a no-op (skipped) — so award rows that map
-    to pre-existing notices do not trigger thousands of needless re-embeds.
-
-    Isolated with a try/except so a failed enqueue never breaks a successful
-    crawl. Honours the ``CELERY_ALLOW_INLINE_ML_TASKS`` guard: on the in-memory
-    eager broker the ML task is not run inline unless explicitly allowed.
-
-    Returns the number of tasks enqueued (0 on empty input or failure).
+    The shared ML guard prevents eager API-process inference unless explicitly
+    enabled. Empty input or a publish failure returns zero.
     """
     normalized = sorted({int(pid) for pid in project_ids})
     if not normalized:
@@ -249,22 +219,7 @@ def _enqueue_deferred_embedding_backfill(project_ids: list[int]) -> int:
 
 
 def enqueue_project_embedding_backfill(project_ids: list[int]) -> int:
-    """Queue async embedding rebuild(s) for a specific set of project ids.
-
-    Thin public wrapper over :func:`_enqueue_deferred_embedding_backfill` for
-    request-path callers (e.g. ``POST /projects``) that need to move the heavy
-    SBERT ``model.encode`` off the synchronous request: the freshly created row
-    is embedded later by the ``rebuild_project_embeddings`` worker task instead
-    of inline. Shares the same semantics as the deferred-crawl backfill:
-
-    - ``force=False`` so a brand-new project (no cached vector) is embedded while
-      an unchanged existing project is a no-op.
-    - bounded chunking via ``EMBEDDING_BACKFILL_CHUNK_SIZE``.
-    - honours the ``CELERY_ALLOW_INLINE_ML_TASKS`` guard, so on the in-memory
-      eager broker (tests) the ML task is only queued, never run inline.
-
-    Returns the number of tasks enqueued (0 on empty input or failure).
-    """
+    """Queue guarded embedding chunks for request-path project ids."""
     return _enqueue_deferred_embedding_backfill(project_ids)
 
 
@@ -490,7 +445,11 @@ def reclassify_pending_categories(limit: int | None = None) -> dict:
     effective_limit = max(1, effective_limit)
 
     with task_session() as db:
-        return CategoryClassifierService().reclassify_pending(db, limit=effective_limit)
+        result = CategoryClassifierService().reclassify_pending(db, limit=effective_limit)
+        result["embedding_backfill_task_count"] = enqueue_project_embedding_backfill(
+            result.get("updated_project_ids") or []
+        )
+        return result
 
 
 @celery_app.task(name=SMOKE_TEST_TASK_NAME)
@@ -630,15 +589,6 @@ def enqueue_project_embedding_refresh(*, project_id: int, force: bool = False):
     return _enqueue_ml_task(
         rebuild_project_embeddings,
         kwargs={"limit": 1, "project_ids": [int(project_id)], "force": force},
-        queue=settings.CELERY_ML_INFERENCE_QUEUE,
-    )
-
-
-def enqueue_inference_outbox_processing(*, limit: int = 50):
-    """Queue inference outbox processing on the online inference queue."""
-    return _enqueue_ml_task(
-        process_inference_outbox,
-        kwargs={"limit": max(1, int(limit or 50))},
         queue=settings.CELERY_ML_INFERENCE_QUEUE,
     )
 

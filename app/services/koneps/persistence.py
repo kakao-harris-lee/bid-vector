@@ -263,6 +263,12 @@ def update_project_from_item(
     project: Project, *, item: KonepsCollectedItem, request: CrawlRequest
 ) -> None:
     """Apply crawled notice details onto a project without discarding user-entered context."""
+    from app.services.similarity_read_model import (
+        invalidate_project_embedding,
+        project_embedding_input_state,
+    )
+
+    previous_semantic_state = project_embedding_input_state(project)
     facts = item.opening_facts()
     resolved_category = matching.resolve_project_category(item, request)
     budget_estimate = matching.resolve_budget_estimate(item)
@@ -305,6 +311,9 @@ def update_project_from_item(
         project.business_type_code = item.business_type_code
     if item.business_type_label is not None:
         project.business_type_label = item.business_type_label
+
+    if project_embedding_input_state(project) != previous_semantic_state:
+        invalidate_project_embedding(project)
 
     # 공고 낙찰하한율은 값이 있을 때만 갱신한다. scsbid/재수집 아이템이 이 필드를
     # 실어오지 않는 경우(None) 기존 값을 지우지 않도록 덮어쓰지 않는다.

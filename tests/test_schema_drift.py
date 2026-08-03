@@ -64,6 +64,7 @@ MIGRATION_OWNED_TABLES = {
     "operator_notification_channels",
     "onboarding_suggestions",
     "operator_preview_snapshots",
+    "project_similarity_snapshots",
     "project_similarity_edges",
     "inference_outbox_events",
 }

@@ -1,23 +1,62 @@
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { formatCurrencyCompact, formatPercent } from "@/shared/lib";
-import { useRefreshEmbeddingMutation, useSimilarProjectsQuery } from "./hooks";
+import type { ProjectEmbeddingRefreshResponse } from "@/shared/types/project";
+import {
+  useEmbeddingRefreshStatusQuery,
+  useRefreshEmbeddingMutation,
+  useSimilarProjectsQuery
+} from "./hooks";
 
 const SIMILAR_LIMIT = 5;
 
 export function SimilarPanel({ projectId }: { projectId: number }) {
   const { session } = useShellContext();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [refreshTask, setRefreshTask] = useState<ProjectEmbeddingRefreshResponse | null>(null);
   const similar = useSimilarProjectsQuery(session, projectId, { limit: SIMILAR_LIMIT });
   const refresh = useRefreshEmbeddingMutation(session);
+  const refreshStatus = useEmbeddingRefreshStatusQuery(session, refreshTask);
+
+  useEffect(() => {
+    const result = refreshStatus.data;
+    if (!refreshTask || !result?.ready) return;
+    if (result.status === "completed") {
+      void queryClient.invalidateQueries({ queryKey: ["projects", "similar", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["projects", "detail", projectId] });
+      toastApi.success({
+        title: "임베딩 재계산 완료",
+        description: "최신 유사 공고 결과를 불러옵니다."
+      });
+    } else {
+      toastApi.danger({
+        title: "임베딩 재계산 실패",
+        description: result.error || result.detail
+      });
+    }
+    setRefreshTask(null);
+  }, [projectId, queryClient, refreshStatus.data, refreshTask]);
+
+  useEffect(() => {
+    if (!refreshTask || !refreshStatus.error) return;
+    toastApi.danger({
+      title: "임베딩 작업 상태 확인 실패",
+      description: refreshStatus.error.message
+    });
+    setRefreshTask(null);
+  }, [refreshStatus.error, refreshTask]);
 
   const embeddingStatus = similar.data?.target_embedding_status;
   const hasEmbedding = embeddingStatus ? embeddingStatus === "ready" : Boolean(similar.data?.target_embedding_model);
   const handleRefresh = async () => {
     try {
       const result = await refresh.mutateAsync({ id: projectId, force: true });
+      setRefreshTask(result);
       toastApi.success({
         title: "임베딩 재계산 요청됨",
         description: `${result.queue} 큐에 작업이 등록되었습니다.`
@@ -39,11 +78,11 @@ export function SimilarPanel({ projectId }: { projectId: number }) {
           variant="ghost"
           size="sm"
           onClick={handleRefresh}
-          disabled={refresh.isPending}
+          disabled={refresh.isPending || refreshTask !== null}
           aria-label="임베딩 재계산"
         >
           <RefreshCw size={14} className="mr-1" />
-          {refresh.isPending ? "재계산 중" : "재계산"}
+          {refresh.isPending || refreshTask ? "재계산 중" : "재계산"}
         </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-xs">

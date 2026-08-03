@@ -5,7 +5,7 @@
 > 도메인: "Project"는 KONEPS(나라장터) 공고를 시스템 내부에서 다루는 단위다. 공고 텍스트는 `paraphrase-multilingual-MiniLM-L12-v2`(384차원) 임베딩으로 pgvector에 저장되어 유사 공고 검색에 쓰인다.
 
 ## 목차
-- [POST /api/v1/projects/](#post-apiv1projects) — 공고 생성(임베딩 동반)
+- [POST /api/v1/projects/](#post-apiv1projects) — 공고 생성(임베딩 비동기 등록)
 - [GET /api/v1/projects/](#get-apiv1projects) — 공고 목록 조회(필터/페이지네이션)
 - [POST /api/v1/projects/embeddings/rebuild](#post-apiv1projectsembeddingsrebuild-deprecated) — 임베딩 배치 재계산(**deprecated**)
 - [POST /api/v1/projects/embeddings/rebuild/async](#post-apiv1projectsembeddingsrebuildasync) — 임베딩 배치 재계산(권장)
@@ -19,7 +19,10 @@
 
 ## POST /api/v1/projects/
 
-새 공고(Project)를 생성한다. 저장 직전 semantic 임베딩을 만들어 pgvector에 적재한 뒤 커밋하므로, 생성 직후 바로 유사도 검색 대상에 포함된다. 수집 파이프라인이 아닌 경로로 공고를 수동 등록할 때 사용한다. 인증 불필요.
+새 공고(Project)를 먼저 저장하고 semantic 임베딩 생성을 ML backfill 큐에 등록한다. API
+요청에서는 모델을 로드하거나 encode하지 않는다. worker가 완료할 때까지 유사도 응답의
+target 상태는 `pending`일 수 있다. 수집 파이프라인이 아닌 수동 등록에도 사용한다.
+인증 불필요.
 
 **파라미터**
 
@@ -337,8 +340,10 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024"
 임베딩을 생성하거나 DB commit을 수행하지 않는다. target 임베딩이 없거나 stale이면 결과를
 계산하지 않고 상태(`pending`/`stale`)와 빈 결과를 반환하므로, 필요 시
 `POST /embedding/refresh`로 비동기 갱신을 요청한다. pgvector 사용 가능 시 `postgres_vector`,
-아니면 `python_fallback` 모드로 동작한다. 저장된 similarity projection이 최신이면
-`read_model` 모드로 edge row만 읽는다. 인증 불필요.
+아니면 `python_fallback` 모드로 동작한다. target 버전과 전체 embedding corpus watermark가
+일치하는 similarity snapshot이 있으면 `read_model` 모드로 edge row만 읽는다. 결과가 0건인
+snapshot도 유효한 hit이며, 후보 embedding 또는 카테고리 변경 시 기존 snapshot은 사용하지
+않는다. 인증 불필요.
 
 **파라미터**
 
@@ -448,7 +453,11 @@ curl -X POST "http://localhost:3000/api/v1/projects/1024/embedding/refresh?force
 
 ## PUT /api/v1/projects/{project_id}
 
-기존 공고를 수정한다. 요청에 포함된 필드만 갱신하며(`exclude_unset`), 수정 후 임베딩을 강제 재생성해 유사도 검색이 최신 내용을 반영하도록 한다. 본문 스키마가 `ProjectCreate`라 OpenAPI상 모든 필드가 표시되지만 실제로는 전달된 필드만 반영된다(부분 갱신). 인증 불필요.
+기존 공고를 수정한다. 요청에 포함된 필드만 갱신하며(`exclude_unset`), 기존 임베딩을 즉시
+무효화한 뒤 단일 공고 refresh를 online inference 큐에 등록한다. API 요청에서는 embedding을
+계산하지 않으므로 수정 직후 유사도 응답은 worker 완료 전까지 `pending`일 수 있다. 본문
+스키마가 `ProjectCreate`라 OpenAPI상 모든 필드가 표시되지만 실제로는 전달된 필드만
+반영된다(부분 갱신). 인증 불필요.
 
 **파라미터**
 

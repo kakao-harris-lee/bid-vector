@@ -189,6 +189,7 @@ class CategoryClassifierService:
           2. SBERT cosine sim (confidence-gated) for rows the regex didn't match.
         """
         from app.models.models import Project
+        from app.services.similarity_read_model import invalidate_project_embedding
 
         @dataclass
         class _Stats:
@@ -200,6 +201,7 @@ class CategoryClassifierService:
             skipped_model_unavailable: int = 0
 
         stats = _Stats()
+        updated_project_ids: list[int] = []
 
         prototypes = self._ensure_prototypes()
         model_available = bool(prototypes)
@@ -218,7 +220,9 @@ class CategoryClassifierService:
             keyword_match = self.match_title_keyword(project.title)
             if keyword_match is not None:
                 project.category = keyword_match
+                invalidate_project_embedding(project)
                 db.add(project)
+                updated_project_ids.append(int(project.id))
                 stats.updated_from_keyword += 1
                 continue
 
@@ -243,13 +247,16 @@ class CategoryClassifierService:
                 continue
 
             project.category = best
+            invalidate_project_embedding(project)
             db.add(project)
+            updated_project_ids.append(int(project.id))
             stats.updated_from_sbert += 1
 
         if stats.updated_from_keyword or stats.updated_from_sbert:
             db.commit()
 
         result = asdict(stats)
+        result["updated_project_ids"] = updated_project_ids
         # legacy alias for any consumer reading a single "updated" field
         result["updated"] = stats.updated_from_keyword + stats.updated_from_sbert
         return result

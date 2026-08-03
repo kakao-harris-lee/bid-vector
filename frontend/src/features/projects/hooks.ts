@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   fetchBidDecisionTimeline,
   fetchProject,
   fetchProjectList,
+  fetchProjectEmbeddingTaskStatus,
   fetchSimilarProjects,
   queryKeys,
   refreshProjectEmbedding,
@@ -12,11 +13,13 @@ import {
 import type {
   BidDecisionTimelineResponse,
   ProjectEmbeddingRefreshResponse,
+  ProjectEmbeddingTaskStatusResponse,
   ProjectListResult,
   ProjectResponse,
   ProjectSimilaritySearchResponse
 } from "@/shared/types/project";
 import type { AuthSession } from "@/app/layout/AuthGate";
+import { embeddingTaskPollInterval } from "./embeddingTaskState";
 
 export function useProjectsQuery(session: AuthSession | null, query: ProjectListQuery) {
   return useQuery<ProjectListResult, Error>({
@@ -66,12 +69,21 @@ export function useTimelineQuery(
 }
 
 export function useRefreshEmbeddingMutation(session: AuthSession | null) {
-  const queryClient = useQueryClient();
   return useMutation<ProjectEmbeddingRefreshResponse, Error, { id: number; force?: boolean }>({
-    mutationFn: ({ id, force }) => refreshProjectEmbedding(id, { force }, session?.token),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["projects", "similar", variables.id] });
-      queryClient.invalidateQueries({ queryKey: ["projects", "detail", variables.id] });
-    }
+    mutationFn: ({ id, force }) => refreshProjectEmbedding(id, { force }, session?.token)
+  });
+}
+
+export function useEmbeddingRefreshStatusQuery(
+  session: AuthSession | null,
+  task: ProjectEmbeddingRefreshResponse | null
+) {
+  return useQuery<ProjectEmbeddingTaskStatusResponse, Error>({
+    queryKey: task
+      ? queryKeys.projects.embeddingTask(task.task_id)
+      : ["projects", "embedding-task", "none"],
+    queryFn: () => fetchProjectEmbeddingTaskStatus(task?.poll_url ?? "", session?.token),
+    enabled: Boolean(session?.token) && task !== null,
+    refetchInterval: (query) => embeddingTaskPollInterval(query.state.data?.status)
   });
 }

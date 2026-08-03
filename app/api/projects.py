@@ -17,6 +17,10 @@ from app.schemas.schemas import (
     ProjectSimilaritySearchResponse,
 )
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.similarity_read_model import (
+    invalidate_project_embedding,
+    project_embedding_input_state,
+)
 from app.tasks.jobs import (
     enqueue_project_embedding_backfill,
     enqueue_project_embedding_refresh,
@@ -299,12 +303,20 @@ def update_project(
             detail="Project not found"
         )
 
-    # Update fields
-    for key, value in project_update.dict(exclude_unset=True).items():
+    previous_embedding_input = project_embedding_input_state(project)
+    for key, value in project_update.model_dump(exclude_unset=True).items():
         setattr(project, key, value)
 
-    ProjectSimilarityService().refresh_project_embedding_details(db, project, force=True)
+    embedding_input_changed = (
+        project_embedding_input_state(project) != previous_embedding_input
+    )
+    if embedding_input_changed:
+        # Never run model.encode on the request path. Clearing the old vector makes
+        # reads report pending instead of serving a semantically stale embedding.
+        invalidate_project_embedding(project)
     db.commit()
     db.refresh(project)
+    if embedding_input_changed:
+        enqueue_project_embedding_refresh(project_id=project.id, force=False)
 
     return project
