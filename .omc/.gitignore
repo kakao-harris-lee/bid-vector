@@ -1,0 +1,8 @@
+# OMC writes host-, path-, and session-specific runtime state here.
+*
+
+# Keep the sharing policy and reviewed durable specs version-controlled.
+!.gitignore
+!README.md
+!specs/
+!specs/**
