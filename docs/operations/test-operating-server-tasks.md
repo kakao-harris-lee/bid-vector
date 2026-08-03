@@ -42,6 +42,16 @@
 - 데이터 품질 flag 검증: `low_actual_rate`, `amount_rate_mismatch`, denominator mismatch 표본을 clean 표본과 분리한다.
 - 알림 품질 조정: 실제 클릭, 확인, 보류, 투찰 결정, 알림 피로도를 기반으로 threshold를 조정한다.
 
+## ML-UX runtime 성능
+
+- `docs/operations/ml-ux-performance-improvement-plan.md`의 측정 CLI로 HTTP p95/p99,
+  queue wait p95/p99, API/worker RSS 기준선을 같은 git SHA에서 수집한다.
+- idle 측정과 승인된 synthetic operator preview 부하 측정을 분리하고, 운영 사용자나 실제
+  알림 대상에는 부하 작업을 실행하지 않는다.
+- GET similarity가 API에서 모델을 로드하지 않는지, preview 부하 중 ops 큐가 inference
+  runtime만큼 지연되지 않는지를 개선 전후 동일 명령으로 검증한다.
+- 서버 판정 전까지 로컬 수치를 운영 SLO 달성 근거로 사용하지 않는다.
+
 ## 원격 데이터/모델 전환
 
 - Supabase staging migration rehearsal: dump/restore, row count, schema drift, FK 정합, holdout, smoke test를 staging DB에서 검증한다.

@@ -1,0 +1,248 @@
+# ML-UX runtime 성능 기준선과 개선 계획
+
+- 기준일: 2026-08-03
+- 상태: 로컬 재현 완료, 테스트/운영 서버 기준선 대기
+- 범위: 프로젝트 유사공고, 전략 후보 preview, Celery 큐 격리, API/worker 메모리
+- 원칙: 현재 모듈형 모놀리스를 유지하고 요청/작업/read-model 경계를 먼저 분리한다.
+
+## 결론
+
+현재 성능 저하는 ML 연산량 자체보다 **ML 생명주기가 UX 요청과 운영 큐에 결합된 것**이
+핵심이다.
+
+1. 프로젝트 상세 화면이 자동 호출하는 `GET /projects/{id}/similar`는 저장 벡터가
+   없거나 stale이면 API 프로세스에서 모델을 로드하고 encode한 뒤 commit한다.
+2. preview snapshot 계산은 비동기화됐지만 크롤링·알림·reconciler와 같은 ops 큐를
+   사용한다. worker 동시성을 preview가 모두 점유하면 짧은 운영 작업도 뒤에서 기다린다.
+3. 현재 운영 리포트는 일부 task의 평균 queue wait만 제공하고 p95, preview/embedding
+   작업, API route latency, container RSS 추이를 함께 보존하지 않는다.
+
+따라서 우선순위는 **인라인 similarity ML 제거 → online inference 큐 분리 → durable
+job/read-model → scan 중복 제거** 순서다. 별도 마이크로서비스 분리는 이 단계의 목표가
+아니다.
+
+## 2026-08-03 로컬 실측
+
+### 측정 조건
+
+- git 기준: `08aed5750b63aade8661ba3564b4f8a315ba4deb`
+- Docker Desktop의 격리 compose project, 외부 트래픽·beat·Telegram 없음
+- API와 ops worker는 embedding 의존성이 포함된 이미지
+- worker concurrency 2, prefetch 1
+- synthetic software 공고 30건
+- SentenceTransformer 파일은 임시 디스크 캐시에 선다운로드해 네트워크 다운로드 시간을 제외
+- HTTP p95는 클라이언트 wall time, RSS는 cgroup v2 `memory.stat`의 `anon` 합계
+
+빈 PostgreSQL에서는 첫 Alembic migration이 기존 `projects` 테이블을 전제로 해 API가
+기동하지 못했다. 로컬 측정 DB에만 ORM schema를 생성하고 Alembic head를 stamp한 뒤
+측정했다. 이 우회는 성능 결과와 별개이며 fresh-install 결함으로 후속 수정해야 한다.
+
+| 측정 | 표본/동시성 | 결과 |
+|---|---:|---:|
+| `GET /health` p95 | 100 / 4 | 2.112ms |
+| 저장된 preview snapshot GET p95 | 100 / 4 | 15.698ms |
+| warm/stored similarity GET p95 | 100 / 4 | 15.408ms |
+| 서로 다른 missing-embedding similarity GET p95 | 20 / 1 | 116.981ms |
+| 디스크 캐시 후 첫 similarity 응답 | 1 / 1 | **5,930.354ms** |
+| idle ops queue wait p95 | 50 probes | 25.816ms |
+| cold preview 2개 동시 실행 중 ops queue wait p95 | 5~20 probes | **2,939.145~3,099.846ms** |
+| API RSS: 모델 로드 전 → 후 | 각 5~10회 | **192.781 → 1,216.215MiB** |
+| worker RSS: idle → cold preview 2개 완료 후 | 각 5~10회 | **228.383 → 837.902MiB** |
+
+cold preview 두 작업은 각각 공고 30건을 평가하며 약 2.9~3.1초 걸렸다. 동일 프로세스가
+warm인 후에는 같은 로컬 표본을 약 0.22초에 처리했지만, probe 최대 wait가 5.341초인
+표본도 있었다. 즉 평균만 보면 사라지는 cold-start와 pool tail을 p95/p99로 계속 봐야 한다.
+
+이 수치는 운영 처리량을 대표하지 않는다. 실제 DB 크기, 모델 캐시, CPU, 동시 작업이
+다른 테스트/운영 서버에서 아래 절차를 다시 실행해야 최종 기준선이 된다.
+
+## 문제별 코드 연결
+
+### P0 — 프로젝트 상세 GET에서 인라인 ML 실행
+
+`ProjectDetailScreen` → `SimilarPanel` → `GET /projects/{id}/similar` 흐름이 자동 실행된다.
+라우터는 `ProjectSimilarityService.find_similar_projects()`를 기본 `read_only=False`로
+호출하고 GET 안에서 commit한다. missing/stale target이면
+`NoticeClassifierService`의 SentenceTransformer를 lazy-load하고 encode한다.
+
+영향:
+
+- cold 모델 로드가 첫 화면 응답에 포함된다.
+- API RSS가 로컬에서 약 1.0GiB 증가한 뒤 유지된다.
+- GET이 조회와 상태 변경을 동시에 수행해 캐시·재시도·운영 추적이 어려워진다.
+- API worker 수가 늘면 모델 메모리가 프로세스별로 중복될 수 있다.
+
+### P0 — ops 큐의 head-of-line blocking
+
+`jobs.recompute_preview_snapshot`과 strategy monitor는 크롤링, Telegram, 알림,
+reconciler와 같은 `bid_vector_ops` 큐를 사용한다. concurrency 2를 preview 두 개가
+점유한 로컬 재현에서 no-op task의 p95 wait가 약 25.8ms에서 3.10초로 증가했다.
+운영 데이터가 많으면 이 지연은 preview 실행시간만큼 커질 수 있다.
+
+### P1 — scan 단위 중복 계산
+
+후보별로 similarity, prediction calibration, historical series, 시장 통계와 workload를
+조회하고, 선택된 top-N은 후속 단계에서 다시 분석된다. 메모리 고정 문제는 완화됐지만
+DB query/CPU 증폭과 task runtime 변동은 남아 있다.
+
+### P1 — 갱신 전달과 관측의 내구성 부족
+
+공고 저장 후 embedding enqueue는 broker 장애 시 DB 행과 원자적이지 않다. task가
+유실되면 UI GET이 동기 복구 지점이 된다. 현재 analytics의 queue wait 평균은
+`OperatorStrategyRun` 일부만 집계해 preview/embedding queue의 p95를 설명하지 못한다.
+
+### P1 — 빈 DB migration 불가
+
+문서의 `docker compose up` 경로에서 첫 migration이 아직 생성되지 않은 `projects`에
+컬럼을 추가한다. 새 개발자·CI·재해복구 rehearsal이 현재 migration만으로 기동되지 않아
+개발/운영 재현성이 떨어진다.
+
+## 목표 구조
+
+```text
+KONEPS 수집 / 전략 변경
+        │
+        ▼
+DB transaction + outbox
+        │
+        ├── online inference queue ──► embedding/similarity/preview worker
+        │                                  │
+        │                                  ▼
+        │                            versioned read models
+        │                                  │
+        └── ops queue ───────────────► crawl/notification/reconcile
+                                           │
+                                           ▼
+                                   read-only FastAPI ──► React UI
+
+명시 갱신 POST ──► 202 + job id ──► 상태/스냅샷 polling
+```
+
+## 구현 계획
+
+### Work package 0 — 서버 기준선과 회귀 게이트
+
+- [x] no-op Celery queue probe 추가
+- [x] HTTP p50/p95/p99, queue p50/p95/p99, cgroup anon RSS를 JSON으로 저장하는 CLI 추가
+- [x] 로컬 idle/cold/warm/queue-contention 기준선 기록
+- [ ] 테스트/운영 서버에서 idle 기준선 수집
+- [ ] 승인된 synthetic operator의 preview 부하 기준선 수집
+- [ ] 변경 전 evidence JSON과 컨테이너/worker 로그 시각을 같은 측정 창으로 보존
+
+완료 조건: 서버에서 동일 git SHA로 HTTP, 모든 queue, API/worker RSS 측정 JSON을 한 번에
+재생성할 수 있다.
+
+### Work package 1 — online inference 큐 분리
+
+- `CELERY_ML_INFERENCE_QUEUE`와 전용 `inference-worker`를 추가한다.
+- preview recompute, 단일 공고 embedding refresh, 사용자 요청 similarity projection을
+  inference 큐로 옮긴다.
+- ops 큐에는 짧은 orchestration, 크롤링, 알림, reconciler만 남긴다.
+- 초기값은 concurrency 1~2, prefetch 1, child RSS recycle을 유지하고 서버 실측 후 조정한다.
+
+완료 조건: preview 두 개를 실행하는 동안 ops queue probe p95가 250ms 이하이며 알림/
+reconciler 작업이 inference 실행시간만큼 기다리지 않는다.
+
+### Work package 2 — similarity를 snapshot/read-model로 전환
+
+- GET `/projects/{id}/similar`는 저장된 target vector와 저장 결과만 읽고 commit하지 않는다.
+- missing/stale이면 `ready/stale/pending/failed`, model version, `computed_at`, `last_error`를
+  반환한다.
+- POST `/projects/{id}/embedding/refresh`는 202 + durable job id를 반환한다.
+- inference worker가 embedding과 similarity read-model을 갱신한다.
+- `SimilarPanel`은 이전 결과를 즉시 표시하고 서버 상태로 polling하며, 최초 자동 진입이
+  모델 로드를 일으키지 않게 한다.
+
+완료 조건:
+
+- 자동 UI GET에서 `SentenceTransformer.encode`에 도달하지 않는다.
+- stored similarity GET 서버 p95 300ms 이하
+- first-seen 프로젝트 20개를 열어도 API RSS 증가 100MiB 이하
+- GET route에서 DB commit 또는 task enqueue가 없다.
+
+### Work package 3 — durable outbox와 projection invalidation
+
+- project/strategy write와 같은 transaction에 outbox 또는 inference job row를 기록한다.
+- `project.ingested`, `embedding.ready`, `strategy.changed`를 명시적으로 연결한다.
+- project 대량 유입은 debounce/batch로 preview projection을 갱신한다.
+- task idempotency와 stale-job reconciler 범위를 embedding/preview까지 통합한다.
+
+완료 조건: broker 일시 장애 후 재시작해도 missing embedding job이 유실되지 않고 UI GET이
+동기 복구를 담당하지 않는다.
+
+### Work package 4 — scan 실행 컨텍스트와 중복 제거
+
+- run-scoped `AnalysisContext`에 workload, 시장 집계, calibration, category historical
+  series를 캐시한다.
+- 최초 분석 결과를 typed `CandidateDecisionInputs`로 유지하고 top-N 전체 재분석을 없앤다.
+- 수동 scan에도 기본 분석 상한을 적용하고 full audit는 별도 offline task로 둔다.
+- query count, analyzed candidate 수, task runtime을 같은 run id로 기록한다.
+
+완료 조건: 후보 수 증가에 대해 공통 query가 후보별로 선형 증가하지 않고, 동일 fixture의
+후보 순서·점수·결정 결과가 유지된다.
+
+### Work package 5 — fresh-install migration과 운영 재현성
+
+- 빈 PostgreSQL에서 `alembic upgrade head`만으로 전체 schema가 생성되게 baseline
+  migration을 보완하거나 정식 bootstrap revision을 만든다.
+- ORM `create_all + stamp` 우회를 runbook에서 제거한다.
+- CI에 blank PostgreSQL migration smoke를 추가한다.
+
+완료 조건: 새 volume에서 server compose가 수동 DB 조작 없이 health 상태가 된다.
+
+## 테스트/운영 서버 측정 절차
+
+새 probe task가 worker registry에 들어가야 하므로 배포 후 API와 대상 worker를 먼저
+재시작한다. 실제 토큰이 필요한 경로는 `BID_VECTOR_PERF_TOKEN` 환경 변수로만 전달하고
+명령행이나 evidence에 기록하지 않는다. 현재 similarity GET은 missing/stale embedding에
+side effect가 있으므로 idle 반복 측정에는 embedding이 이미 저장된 안전한 project를 쓴다.
+
+Idle 기준선 예시:
+
+```bash
+.venv/bin/python scripts/measure_runtime_performance.py \
+  --base-url http://127.0.0.1:3000 \
+  --http-path /health \
+  --http-path '/api/v1/operator/strategy/candidates?limit=10' \
+  --http-path '/api/v1/projects/<safe-project-id>/similar?limit=5' \
+  --http-samples 100 \
+  --http-concurrency 4 \
+  --queue bid_vector_ops \
+  --queue bid_vector_ml_backfill \
+  --queue bid_vector_ml_training \
+  --queue bid_vector_ml_reevaluation \
+  --container bid_vector_api \
+  --container bid_vector_worker \
+  --container bid_vector_ml_worker \
+  --container bid_vector_training_worker \
+  --environment-label test-server-idle \
+  --output reports/performance/runtime-idle.json
+```
+
+승인된 synthetic operator에 preview 부하를 넣는 측정은 snapshot을 실제로 갱신하므로
+명시적인 실행 창에서만 수행한다.
+
+```bash
+.venv/bin/python scripts/measure_runtime_performance.py \
+  --skip-http \
+  --queue bid_vector_ops \
+  --queue-samples 50 \
+  --queue-timeout-seconds 180 \
+  --preview-load-operator-id <approved-synthetic-operator-id> \
+  --container bid_vector_worker \
+  --environment-label test-server-preview-load \
+  --output reports/performance/runtime-preview-load.json
+```
+
+`reports/`는 gitignore 대상이다. evidence에는 토큰, DB URL, 사업자정보, raw Telegram target을
+넣지 않고 측정 환경, git SHA, 표본 수, p95/p99, RSS만 남긴다.
+
+## 중단·롤백 기준
+
+- 측정 probe는 외부 호출이나 DB write를 하지 않는다. 단,
+  `--preview-load-operator-id`는 명시한 operator의 preview snapshot을 재계산한다.
+- inference 큐 전환 후 task 유실 또는 snapshot 갱신 실패가 증가하면 라우팅만 기존 큐로
+  되돌릴 수 있어야 한다. API 인라인 ML은 롤백 경로로 복원하지 않는다.
+- API RSS가 1.5GiB를 넘거나 연속 5회 UX 흐름에서 단조 증가하면 배포를 중단한다.
+- worker RSS recycle보다 container OOM이 먼저 발생하면 concurrency/child limit을 낮추고
+  evidence를 다시 수집한다.

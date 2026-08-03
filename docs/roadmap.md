@@ -457,6 +457,12 @@ SaaS 세부 설계 축:
 
 G-2 exit 승인(2026-07-17)으로 이전 1~6번(G-2 증적 축적·blocking gap·표본 실행·알림 대상 검증·exit review)은 완료·종결되었습니다. Phase 3 기준 우선순위는 다음과 같습니다.
 
+> **긴급 ML-UX 성능 게이트(2026-08-03):** 로컬 실측에서 디스크 캐시 후 첫 유사공고
+> 응답 5.93초, API RSS 약 +1.0GiB, cold preview 2개가 ops worker를 점유할 때 queue wait
+> p95 3.10초가 재현됐다. 신규 기능보다 API 인라인 similarity ML 제거와 online inference
+> 큐 분리를 먼저 수행하고, 테스트/운영 서버에서 같은 probe로 재측정한다. 기준선·실행
+> 계획은 `docs/operations/ml-ux-performance-improvement-plan.md`를 따른다.
+
 1. 실투찰 재검증(완료 2026-07-25): 실투찰 2건(`R26BK01627948`, `R26BK01628093`)은 두 건 모두 **패찰(적격이나 낙찰가보다 높아 밀림)** 으로 확정됐고, #195 발주처 밴드 가설을 확정 낙찰가 기준으로 재검증했다. 결과 — 현 predictor 추천이 확정 낙찰가 대비 여전히 **+0.34%p / +0.68%p 과추천**이며, 원인은 floor 앵커 base 불일치(법정 하한 0.88을 예정가가 아니라 **기초금액(사업금액)** 에 곱함 → 사정률<1이라 0.88×기초금액 > 0.88×예정가=실현 하한으로 구조적 초과)로 규명됐다. #195의 E[사정률] 변환은 발주처 밴드 edge에만 적용되고 하드 법정 floor에는 미적용이라 `max()`가 보정을 지운다(비대칭 확인). **n=2(동일 발주처·동일 밴드) 과적합 방지로 밴드/floor 재캘리브레이션은 보류**하고, 다음 가설(floor 앵커 base 정합 = 0.88 × E[예정가])과 검증 게이트를 고정했다(상세: `docs/operations/real-bid-195-revalidation.md`). **후속 검증 완료(2026-07-27)**: 그 가설을 floor-bound 실측 코어 532쌍으로 검증한 결과 **불지지 — 앵커 하향 재캘리브레이션은 하지 않는다**(실측 사정률이 1에 밀착·양방향이라 E 전환은 잔차 무개선에 실격 위험만 악화, 실투찰 패인은 사정률 추첨 랜덤 — 낙찰자들이 실현 하한 +0.1/+1.9bp 착지). 남는 개선 축은 candidate selector. 상세: `docs/operations/floor-anchor-recalibration-verdict.md`.
 2. 엔지니어링협회 실증 코어(**코어 구축 완료 · 잔여 소진 중**): 자격 원문 수집(`eligibility_raw` license-limit 서브콜, #206·#209·#210) → 룰 해석기(#207) → 라벨셋 영속화+식별 리포트(#213)의 A→B→C 코어는 구축·배포되어 라이브 라벨링이 진행 중이다. 잔여는 ① 기존 공고 자격 원문 수집 잔여분 크론 소진(일일 KONEPS 쿼터 `--limit` 분할), ② 운영자 적합/부적합 라벨 확보 후 precision/recall 실증 리포트 산출(정직 명세상 라벨 확보 전 수치 추정 금지), ③ cohort 실제 회사별 확정값(협회 가입 여부·기술부문/전문분야·수행 지역·금액대) 저장(Phase 3 "해야 할 일" 상단 항목들).
 3. 사업자 온보딩·전달 채널(**코드 구현 완료 · 전부 게이트 대기**): 사업자번호 기반 반자동 온보딩(#231~#244·국세청 검증 #248·wizard #249 — 실호출은 data.go.kr 키 게이트), 투찰 보고서 메일 전달(dry-run #246/#247·465 SSL #250 — 실전 발송은 SMTP 자격 게이트), 알림 품질 조정(#269 피로도 게이트: 운영자별 KST 일일 상한·같은 공고 재알림 쿨다운, **기본 0=비활성** — 활성화는 `.env` 두 키+`up -d` opt-in, 시작값은 실사용 관찰 후 결정).
@@ -478,6 +484,7 @@ G-2 exit 승인(2026-07-17)으로 이전 1~6번(G-2 증적 축적·blocking gap�
 - `docs/operations/latest-award-holdout-backtest.md`: 최신 낙찰결과 holdout 백테스트 절차와 개선 전후 수치
 - `docs/operations/floor-anchor-recalibration-verdict.md`: floor 앵커 base 정합 가설 검증(2026-07-27, 불지지 판정)과 candidate selector 후속 축
 - `docs/operations/candidate-selector-rederivation-verdict.md`: candidate selector 정책 재도출 판정(2026-07-28, 구 Option A 기각·P1' draft 보류)과 승격 전 잔여 게이트
+- `docs/operations/ml-ux-performance-improvement-plan.md`: ML-UX HTTP/queue/RSS 실측 기준선, 서버 재현 절차, 인라인 ML·큐 분리 개선 계획
 - `docs/operations/procurement-segment-improvement-notes.md`: 조달 세그먼트별 투찰가 예측 개선 축과 후속 과제
 - `docs/operations/ml-release-business-group.md`: business group별 ML release guardrail과 holdout 검증 절차
 - `docs/operations/development-notebook-tasks.md`: 개발 노트북에서 진행 가능한 남은 작업 목록

@@ -47,7 +47,7 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
 
     config = build_celery_runtime_config()
 
-    assert config["imports"] == ("app.tasks.jobs",)
+    assert config["imports"] == ("app.tasks.jobs", "app.tasks.performance_probe")
     assert config["task_default_queue"] == "bid_vector_ops"
     assert config["task_routes"]["jobs.collect_koneps_notices"]["queue"] == settings.CELERY_OPS_QUEUE
     assert config["task_routes"]["jobs.rebuild_project_embeddings"]["queue"] == settings.CELERY_ML_BACKFILL_QUEUE

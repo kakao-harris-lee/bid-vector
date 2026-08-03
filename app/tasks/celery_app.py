@@ -109,6 +109,7 @@ TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 NOTIFY_AWARD_RESULTS_TASK_NAME = "jobs.notify_award_results"
 PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME = "jobs.recompute_preview_snapshot"
+RUNTIME_PERFORMANCE_PROBE_TASK_NAME = "jobs.runtime_performance_probe"
 
 
 def build_task_routes() -> dict[str, dict[str, str]]:
@@ -601,7 +602,7 @@ def build_celery_runtime_config() -> dict[str, object]:
     eager_mode = settings.uses_in_memory_celery
 
     config: dict[str, object] = {
-        "imports": ("app.tasks.jobs",),
+        "imports": ("app.tasks.jobs", "app.tasks.performance_probe"),
         "task_serializer": "json",
         "accept_content": ["json"],
         "result_serializer": "json",
