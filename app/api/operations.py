@@ -133,6 +133,11 @@ def crawl_notices(
         # 수집 내부 전용 필드는 스펙에 노출되지 않는다.
         return serialize_collect_payload(response)
     except Exception as exc:
+        # Persistence can fail after PostgreSQL has marked the transaction
+        # aborted. Clear that transaction before recording the terminal job
+        # state, otherwise the failure update itself is rejected and leaves a
+        # committed crawl job stuck in ``running``.
+        db.rollback()
         service.mark_crawl_job_failed(db, crawl_job, str(exc))
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

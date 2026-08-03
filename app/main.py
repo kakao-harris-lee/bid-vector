@@ -9,15 +9,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.core.database import engine, Base
-from app.api import routes
-from app.services.bid_decision_schema import ensure_bid_decision_schema
-from app.services.operator_strategy_schema import ensure_operator_strategy_schema
-from app.services.prediction_schema import ensure_price_prediction_metadata_schema
-from app.services.project_similarity import (
-    ensure_project_metadata_schema,
-    ensure_project_vector_schema,
+from app.core.database import engine
+from app.core.schema_bootstrap import (
+    bootstrap_application_schema,
+    startup_schema_bootstrap_enabled,
 )
+from app.api import routes
 from app.services.realtime import realtime_event_manager
 from app.services.paper_bidding_scheduler import paper_bidding_forward_scheduler
 from app.services.strategy_scheduler import strategy_scheduler
@@ -37,19 +34,14 @@ async def lifespan(app: FastAPI):
     """Manage app lifecycle"""
     # Startup
     logger.info("Starting up application...")
-    # Schema source of truth is alembic: containers run `alembic upgrade head`
-    # before serving (see docker-compose api command). The create_all/ensure_*_schema
-    # calls below are a safety net for environments where alembic is not applied
-    # (test sqlite via conftest, local first boot). They create missing tables but
-    # NOT missing columns on existing tables — so any production schema change MUST
-    # be added as an alembic migration, never relied on from create_all.
-    # tests/test_schema_drift.py guards model <-> migration consistency.
-    Base.metadata.create_all(bind=engine)
-    ensure_bid_decision_schema(engine)
-    ensure_operator_strategy_schema(engine)
-    ensure_price_prediction_metadata_schema(engine)
-    ensure_project_metadata_schema(engine)
-    ensure_project_vector_schema(engine)
+    # Production schema DDL runs once in the container's pre-uvicorn Alembic
+    # command. Running model bootstrap in every uvicorn worker races PostgreSQL
+    # catalog writes. Keep the local first-boot safety net serialized and outside
+    # production, where migrations are the only schema source of truth.
+    if startup_schema_bootstrap_enabled(settings.ENVIRONMENT):
+        bootstrap_application_schema(engine)
+    else:
+        logger.info("Skipping lifespan schema bootstrap in %s", settings.ENVIRONMENT)
     await realtime_event_manager.start()
     await strategy_scheduler.start()
     await paper_bidding_forward_scheduler.start()

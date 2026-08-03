@@ -3,6 +3,10 @@
 from datetime import UTC, datetime, timedelta
 import json
 
+from fastapi import HTTPException
+import pytest
+
+from app.api.operations import crawl_notices
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
 from app.models.models import (
@@ -825,6 +829,37 @@ def test_crawl_endpoint_persists_history_and_job(client, test_db, monkeypatch):
     assert tender_result.winning_amount == 119000000.0
     assert tender_result.winning_rate == 95.2
     assert tender_result.result_status == "개찰완료"
+
+
+def test_crawl_endpoint_rolls_back_before_recording_persistence_failure():
+    """A poisoned persistence transaction must not strand the crawl job running."""
+    events = []
+    crawl_job = object()
+
+    class FakeDb:
+        def rollback(self):
+            events.append("rollback")
+
+    class FakeCollector:
+        def create_crawl_job(self, db, request):
+            return crawl_job
+
+        def collect_notices(self, request, db=None):
+            return {"items": [], "metadata": {}}
+
+        def persist_crawl_results(self, db, job, request, response):
+            raise RuntimeError("simulated aborted transaction")
+
+        def mark_crawl_job_failed(self, db, job, error_message):
+            events.append("mark_failed")
+            assert job is crawl_job
+            assert error_message == "simulated aborted transaction"
+
+    with pytest.raises(HTTPException) as exc_info:
+        crawl_notices(CrawlRequest(), db=FakeDb(), service=FakeCollector())
+
+    assert exc_info.value.status_code == 502
+    assert events == ["rollback", "mark_failed"]
 
 
 def test_crawl_endpoint_creates_project_and_links_history_feedback_records(
