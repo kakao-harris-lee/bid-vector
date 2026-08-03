@@ -814,6 +814,7 @@ export interface paths {
         put?: never;
         /**
          * Rebuild Project Embeddings Async
+         * @deprecated
          * @description Queue a batch embedding rebuild task and return a pollable task id.
          */
         post: operations["rebuild_project_embeddings_async_api_v1_projects_embeddings_rebuild_async_post"];
@@ -832,6 +833,7 @@ export interface paths {
         };
         /**
          * Get Rebuild Project Embeddings Task Status
+         * @deprecated
          * @description Inspect the current status and result of a queued embedding rebuild task.
          */
         get: operations["get_rebuild_project_embeddings_task_status_api_v1_projects_embeddings_rebuild_tasks__task_id__get"];
@@ -887,6 +889,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/similar/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Similar Projects
+         * @description Queue a user-facing refresh without exposing ML infrastructure details.
+         */
+        post: operations["refresh_similar_projects_api_v1_projects__project_id__similar_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/similar/refresh/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Similar Projects Refresh Status
+         * @description Return the domain lifecycle state for a similar-project refresh.
+         */
+        get: operations["get_similar_projects_refresh_status_api_v1_projects__project_id__similar_refresh_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/embedding/refresh": {
         parameters: {
             query?: never;
@@ -898,6 +940,7 @@ export interface paths {
         put?: never;
         /**
          * Refresh Project Embedding
+         * @deprecated
          * @description Queue one project's semantic embedding refresh without running ML inline.
          */
         post: operations["refresh_project_embedding_api_v1_projects__project_id__embedding_refresh_post"];
@@ -989,6 +1032,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/ml/backfills/project-embeddings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enqueue Project Embedding Backfill
+         * @description Queue a project embedding backfill on the ML backfill queue.
+         */
+        post: operations["enqueue_project_embedding_backfill_api_v1_admin_ml_backfills_project_embeddings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ml/backfills/project-embeddings/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Embedding Backfill Task Status
+         * @description Inspect the status of a queued project embedding backfill.
+         */
+        get: operations["get_project_embedding_backfill_task_status_api_v1_admin_ml_backfills_project_embeddings_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ml/training/price-predictor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enqueue Price Predictor Training Job
+         * @description Queue price predictor training on the dedicated training queue.
+         */
+        post: operations["enqueue_price_predictor_training_job_api_v1_admin_ml_training_price_predictor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ml/training/price-predictor/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Price Predictor Training Job Status
+         * @description Inspect the status of a queued price predictor training job.
+         */
+        get: operations["get_price_predictor_training_job_status_api_v1_admin_ml_training_price_predictor_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ml/reevaluations/decision-experiments/{experiment_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enqueue Decision Experiment Reevaluation Job
+         * @description Queue decision experiment re-evaluation on the ML re-evaluation queue.
+         */
+        post: operations["enqueue_decision_experiment_reevaluation_job_api_v1_admin_ml_reevaluations_decision_experiments__experiment_run_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ml/reevaluations/decision-experiments/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Experiment Reevaluation Job Status
+         * @description Inspect the status of a queued decision experiment re-evaluation.
+         */
+        get: operations["get_decision_experiment_reevaluation_job_status_api_v1_admin_ml_reevaluations_decision_experiments_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ml/backfills/project-embeddings": {
         parameters: {
             query?: never;
@@ -1000,6 +1163,7 @@ export interface paths {
         put?: never;
         /**
          * Enqueue Project Embedding Backfill
+         * @deprecated
          * @description Queue a project embedding backfill on the ML backfill queue.
          */
         post: operations["enqueue_project_embedding_backfill_api_v1_ml_backfills_project_embeddings_post"];
@@ -1018,6 +1182,7 @@ export interface paths {
         };
         /**
          * Get Project Embedding Backfill Task Status
+         * @deprecated
          * @description Inspect the status of a queued project embedding backfill.
          */
         get: operations["get_project_embedding_backfill_task_status_api_v1_ml_backfills_project_embeddings_tasks__task_id__get"];
@@ -1040,6 +1205,7 @@ export interface paths {
         put?: never;
         /**
          * Enqueue Price Predictor Training Job
+         * @deprecated
          * @description Queue price predictor training on the dedicated training queue.
          */
         post: operations["enqueue_price_predictor_training_job_api_v1_ml_training_price_predictor_post"];
@@ -1058,6 +1224,7 @@ export interface paths {
         };
         /**
          * Get Price Predictor Training Job Status
+         * @deprecated
          * @description Inspect the status of a queued price predictor training job.
          */
         get: operations["get_price_predictor_training_job_status_api_v1_ml_training_price_predictor_tasks__task_id__get"];
@@ -1080,6 +1247,7 @@ export interface paths {
         put?: never;
         /**
          * Enqueue Decision Experiment Reevaluation Job
+         * @deprecated
          * @description Queue decision experiment re-evaluation on the ML re-evaluation queue.
          */
         post: operations["enqueue_decision_experiment_reevaluation_job_api_v1_ml_reevaluations_decision_experiments__experiment_run_id__post"];
@@ -1098,6 +1266,7 @@ export interface paths {
         };
         /**
          * Get Decision Experiment Reevaluation Job Status
+         * @deprecated
          * @description Inspect the status of a queued decision experiment re-evaluation.
          */
         get: operations["get_decision_experiment_reevaluation_job_status_api_v1_ml_reevaluations_decision_experiments_tasks__task_id__get"];
@@ -2596,7 +2765,9 @@ export interface components {
              */
             event_type: "project_view" | "recommendation_feedback";
             /** Event Data */
-            event_data: Record<string, never>;
+            event_data: {
+                [key: string]: unknown;
+            };
         };
         /** AnalyticsSummaryResponse */
         AnalyticsSummaryResponse: {
@@ -3684,9 +3855,13 @@ export interface components {
             /** Reasons */
             reasons: string[];
             /** Criteria */
-            criteria?: Record<string, never>;
+            criteria?: {
+                [key: string]: unknown;
+            };
             /** Score Breakdown */
-            score_breakdown?: Record<string, never>;
+            score_breakdown?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlFailureItem */
         CrawlFailureItem: {
@@ -3733,7 +3908,9 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
             /** Metadata */
-            metadata?: Record<string, never>;
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlOperationsSummary */
         CrawlOperationsSummary: {
@@ -3836,7 +4013,9 @@ export interface components {
             /** Items */
             items: components["schemas"]["CrawlNoticeItem"][];
             /** Metadata */
-            metadata?: Record<string, never>;
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** CrawlTaskResponse */
         CrawlTaskResponse: {
@@ -4463,7 +4642,9 @@ export interface components {
             /** Reason */
             reason: string;
             /** Payload */
-            payload?: Record<string, never>;
+            payload?: {
+                [key: string]: unknown;
+            };
             /**
              * Dry Run Supported
              * @default false
@@ -4597,7 +4778,9 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             /**
              * Baseline Days
              * @default 14
@@ -5315,7 +5498,9 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
         };
         /** DecisionRecommendationHistoryAdjustment */
         DecisionRecommendationHistoryAdjustment: {
@@ -5357,7 +5542,9 @@ export interface components {
             /** Suggested Adjustment */
             suggested_adjustment?: string | null;
             /** Supporting Metrics */
-            supporting_metrics?: Record<string, never>;
+            supporting_metrics?: {
+                [key: string]: unknown;
+            };
             /**
              * Priority Score
              * @default 0
@@ -5365,7 +5552,9 @@ export interface components {
             priority_score: number;
             history_adjustment: components["schemas"]["DecisionRecommendationHistoryAdjustment"];
             /** Parameter Recommendation */
-            parameter_recommendation?: Record<string, never>;
+            parameter_recommendation?: {
+                [key: string]: unknown;
+            };
             experiment_plan?: components["schemas"]["DecisionRecommendationExperiment"] | null;
         };
         /** DecisionRecommendationResponse */
@@ -5405,7 +5594,9 @@ export interface components {
             headline: string;
             comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
             /** Experiment History */
-            experiment_history?: Record<string, never>;
+            experiment_history?: {
+                [key: string]: unknown;
+            };
             recommended_next_experiment?: components["schemas"]["DecisionRecommendationExperiment"] | null;
             /** Experiments */
             experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
@@ -5863,15 +6054,25 @@ export interface components {
              */
             evidence_status: "ready" | "insufficient" | "mixed_scope" | "missing";
             /** Smoke */
-            smoke?: Record<string, never>;
+            smoke?: {
+                [key: string]: unknown;
+            };
             /** Strategy Monitor */
-            strategy_monitor?: Record<string, never>;
+            strategy_monitor?: {
+                [key: string]: unknown;
+            };
             /** Decision Experiments */
-            decision_experiments?: Record<string, never>;
+            decision_experiments?: {
+                [key: string]: unknown;
+            };
             /** Synthetic Experiments */
-            synthetic_experiments?: Record<string, never>;
+            synthetic_experiments?: {
+                [key: string]: unknown;
+            };
             /** Notifications */
-            notifications?: Record<string, never>;
+            notifications?: {
+                [key: string]: unknown;
+            };
             /** Blocking Gaps */
             blocking_gaps?: string[];
             /** Supporting Gaps */
@@ -6110,7 +6311,9 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Result */
-            result?: Record<string, never> | null;
+            result?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** NotificationOperationsSummary */
         NotificationOperationsSummary: {
@@ -7397,7 +7600,9 @@ export interface components {
             /** Dropped Candidate Count */
             dropped_candidate_count: number;
             /** Request Payload */
-            request_payload?: Record<string, never>;
+            request_payload?: {
+                [key: string]: unknown;
+            };
             result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
             /** New Candidates */
             new_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
@@ -7536,7 +7741,9 @@ export interface components {
              */
             min_similarity: number;
             /** User Historical Data */
-            user_historical_data?: Record<string, never> | null;
+            user_historical_data?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** OpportunityAnalysisResponse */
         OpportunityAnalysisResponse: {
@@ -8496,7 +8703,9 @@ export interface components {
             /** Backtest Average Absolute Error Rate */
             backtest_average_absolute_error_rate?: number | null;
             /** Backtest Report */
-            backtest_report?: Record<string, never> | null;
+            backtest_report?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Training Window Size
              * @default 0
@@ -8676,7 +8885,9 @@ export interface components {
             /** Amount Bucket */
             amount_bucket?: string | null;
             /** Agency Recent Rate Profile */
-            agency_recent_rate_profile?: Record<string, never>;
+            agency_recent_rate_profile?: {
+                [key: string]: unknown;
+            };
             /** Data Quality Flags */
             data_quality_flags?: string[];
             /** Procurement Rate Band */
@@ -8851,7 +9062,10 @@ export interface components {
              */
             created_at: string;
         };
-        /** ProjectSimilaritySearchResponse */
+        /**
+         * ProjectSimilaritySearchResponse
+         * @description Internal/admin similarity result including diagnostic metadata.
+         */
         ProjectSimilaritySearchResponse: {
             /** Target Project Id */
             target_project_id: number;
@@ -9106,6 +9320,103 @@ export interface components {
             /** Embedding Model */
             embedding_model?: string | null;
         };
+        /**
+         * SimilarProjectSummary
+         * @description User-facing similar-project row without ML implementation metadata.
+         */
+        SimilarProjectSummary: {
+            /** Project Id */
+            project_id: number;
+            /** Title */
+            title: string;
+            /** Category */
+            category?: string | null;
+            /** Status */
+            status: string;
+            /** Budget Estimate */
+            budget_estimate: number;
+            /** Deadline */
+            deadline?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Similarity Score */
+            similarity_score: number;
+        };
+        /**
+         * SimilarProjectsRefreshOperationResponse
+         * @description User-facing handle for refreshing one project's similar-project results.
+         */
+        SimilarProjectsRefreshOperationResponse: {
+            /** Operation Id */
+            operation_id: string;
+            /**
+             * Operation
+             * @default refresh_similar_projects
+             * @constant
+             */
+            operation: "refresh_similar_projects";
+            /** Project Id */
+            project_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "in_progress" | "succeeded" | "failed" | "cancelled";
+            /** Message */
+            message: string;
+            /** Poll Url */
+            poll_url: string;
+        };
+        /**
+         * SimilarProjectsRefreshOperationStatusResponse
+         * @description Infrastructure-neutral polling state for a similar-project refresh.
+         */
+        SimilarProjectsRefreshOperationStatusResponse: {
+            /** Operation Id */
+            operation_id: string;
+            /**
+             * Operation
+             * @default refresh_similar_projects
+             * @constant
+             */
+            operation: "refresh_similar_projects";
+            /** Project Id */
+            project_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "in_progress" | "succeeded" | "failed" | "cancelled";
+            /** Is Terminal */
+            is_terminal: boolean;
+            /** Succeeded */
+            succeeded: boolean;
+            /** Message */
+            message: string;
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * SimilarProjectsResponse
+         * @description User-facing similar-project results with storage details filtered out.
+         */
+        SimilarProjectsResponse: {
+            /** Target Project Id */
+            target_project_id: number;
+            /** Target Project Title */
+            target_project_title: string;
+            /** Same Category Only */
+            same_category_only: boolean;
+            /** Min Similarity */
+            min_similarity: number;
+            /** Result Count */
+            result_count: number;
+            /** Results */
+            results?: components["schemas"]["SimilarProjectSummary"][];
+        };
         /** SmokeTestLatestPhase */
         SmokeTestLatestPhase: {
             /** Name */
@@ -9123,7 +9434,9 @@ export interface components {
             /** Skip Reason */
             skip_reason?: string | null;
             /** Evidence */
-            evidence?: Record<string, never>;
+            evidence?: {
+                [key: string]: unknown;
+            };
         };
         /** SmokeTestLatestRun */
         SmokeTestLatestRun: {
@@ -9625,7 +9938,9 @@ export interface components {
             /** Experiment Id */
             experiment_id: number;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SyntheticExperimentCompareSide
@@ -9744,7 +10059,9 @@ export interface components {
             /** Operator Slug */
             operator_slug: string;
             /** Metrics */
-            metrics?: Record<string, never>;
+            metrics?: {
+                [key: string]: unknown;
+            };
             /** Settlement Sample */
             settlement_sample?: unknown | null;
             breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
@@ -9775,7 +10092,9 @@ export interface components {
          */
         SyntheticExperimentRunCreateRequest: {
             /** Source Sample Gap Candidate */
-            source_sample_gap_candidate?: Record<string, never> | null;
+            source_sample_gap_candidate?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * SyntheticExperimentRunResponse
@@ -9797,7 +10116,9 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at?: string | null;
             /** Results */
@@ -9823,7 +10144,9 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: Record<string, never> | null;
+            summary?: {
+                [key: string]: unknown;
+            } | null;
             /** Created At */
             created_at?: string | null;
         };
@@ -9880,7 +10203,9 @@ export interface components {
              */
             dry_run_default: boolean;
             /** Source Context */
-            source_context?: Record<string, never>;
+            source_context?: {
+                [key: string]: unknown;
+            };
             preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             experiment_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
@@ -9904,7 +10229,9 @@ export interface components {
             /** Path */
             path: string;
             /** Body */
-            body?: Record<string, never>;
+            body?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * SyntheticExperimentSampleGapItem
@@ -9997,7 +10324,9 @@ export interface components {
             /** Preset Name */
             preset_name?: string | null;
             /** Params */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: unknown;
+            };
             /** Actions */
             actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
         };
@@ -10081,7 +10410,9 @@ export interface components {
             /** Settle Actions */
             settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
             /** Params */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: unknown;
+            };
             /** Operator Slugs */
             operator_slugs?: string[];
             /**
@@ -12096,7 +12427,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectSimilaritySearchResponse"];
+                    "application/json": components["schemas"]["SimilarProjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_similar_projects_api_v1_projects__project_id__similar_refresh_post: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimilarProjectsRefreshOperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_similar_projects_refresh_status_api_v1_projects__project_id__similar_refresh_operations__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: number;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimilarProjectsRefreshOperationStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12329,6 +12725,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentAnalysisResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_project_embedding_backfill_api_v1_admin_ml_backfills_project_embeddings_post: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                category?: string | null;
+                project_status?: string | null;
+                force?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_embedding_backfill_task_status_api_v1_admin_ml_backfills_project_embeddings_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_price_predictor_training_job_api_v1_admin_ml_training_price_predictor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PricePredictionTrainingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_price_predictor_training_job_status_api_v1_admin_ml_training_price_predictor_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_decision_experiment_reevaluation_job_api_v1_admin_ml_reevaluations_decision_experiments__experiment_run_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_decision_experiment_reevaluation_job_status_api_v1_admin_ml_reevaluations_decision_experiments_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MLTaskStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -13838,7 +14426,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {

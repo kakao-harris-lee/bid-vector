@@ -28,13 +28,22 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, TypedDict
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
+from app.ai.predictors.artifact_provider import (
+    ArtifactSource,
+    VersionAwareArtifactProvider,
+)
+
 __all__ = [
+    "ArtifactSource",
     "ArtifactScalar",
     "CalibrationValue",
+    "LSTMWeightArrays",
+    "NormalizedLSTMArtifact",
     "PersistedArtifactCalibrationBlocks",
     "PersistedArtifactSummaryDocument",
     "PersistedEnsembleArtifact",
@@ -42,6 +51,7 @@ __all__ = [
     "PersistedLSTMWeightBlock",
     "StrictArtifactCalibrationBlocks",
     "StrictArtifactSummaryDocument",
+    "VersionAwareArtifactProvider",
     "artifact_contract_error_kind",
     "artifact_contract_error_location",
     "read_persisted_artifact",
@@ -53,6 +63,41 @@ logger = logging.getLogger(__name__)
 # 실제 형변환은 호출부의 기존 ``int()``/``float()``/``str()`` 식이 그대로 담당한다.
 ArtifactScalar = str | int | float | bool | None
 
+
+class LSTMWeightArrays(TypedDict):
+    """Normalized numpy tensors used by the lightweight LSTM cell."""
+
+    W_i: np.ndarray
+    U_i: np.ndarray
+    b_i: np.ndarray
+    W_f: np.ndarray
+    U_f: np.ndarray
+    b_f: np.ndarray
+    W_o: np.ndarray
+    U_o: np.ndarray
+    b_o: np.ndarray
+    W_c: np.ndarray
+    U_c: np.ndarray
+    b_c: np.ndarray
+    dense_W: np.ndarray
+    dense_b: np.ndarray
+
+
+class NormalizedLSTMArtifact(TypedDict):
+    """Validated, inference-ready representation of one LSTM release."""
+
+    artifact_version: str
+    model_version: str
+    sequence_length: int
+    input_center: float
+    input_scale: float
+    output_scale: float
+    output_bias: float
+    scenario_spread_multiplier: float
+    confidence_bias: float
+    blend_weights: dict[str, float]
+    weights: LSTMWeightArrays
+
 # calibration 표의 항목 값(중첩 컨테이너 없음). 학습이 숫자·문자열(``method``,
 # ``label_source``)·정수 카운트를 함께 넣는다.
 CalibrationValue = float | int | str | bool | None
@@ -62,7 +107,6 @@ CalibrationValue = float | int | str | bool | None
 _CALIBRATION_LEAF_TYPES = (str, int, float, bool)
 
 _JSON_DECODE_ERROR_TYPES = frozenset({"json_invalid", "json_type"})
-
 
 class _ArtifactReadModel(BaseModel):
     """저장 아티팩트 읽기 베이스 — 미지 필드 무시 + 불변.
@@ -286,7 +330,7 @@ _ArtifactModelT = TypeVar("_ArtifactModelT", bound=_ArtifactReadModel)
 
 
 def read_persisted_artifact(
-    model_source: str | Path | dict[str, JsonValue],
+    model_source: ArtifactSource,
     *,
     model: type[_ArtifactModelT],
     label: str,

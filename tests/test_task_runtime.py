@@ -1,6 +1,7 @@
 """Tests for broker-backed Celery runtime configuration."""
 
 from app.core.config import Settings, settings
+from app.core.single_user import DEFAULT_OPERATOR_PASSWORD, ensure_operator_account
 from app.services.strategy_scheduler import OperatorStrategyScheduler
 from app.tasks.celery_app import (
     Celery,
@@ -11,6 +12,7 @@ from app.tasks.celery_app import (
     build_celery_runtime_config,
     celery_app,
 )
+from tests.support.auth import authenticate_client
 
 
 def test_settings_auto_promote_database_result_backend_for_external_broker():
@@ -190,10 +192,16 @@ def test_strategy_scheduler_only_runs_inprocess_for_memory_broker(monkeypatch):
     assert scheduler.should_run_inprocess() is False
 
 
-def test_ml_training_endpoint_queues_without_inline_execution(client):
+def test_ml_training_endpoint_queues_without_inline_execution(client, test_db):
     """ML training requests should return a queued task handle in the API process."""
+    operator = ensure_operator_account(test_db)
+    authenticate_client(
+        client,
+        username=operator.username,
+        password=DEFAULT_OPERATOR_PASSWORD,
+    )
     response = client.post(
-        "/api/v1/ml/training/price-predictor",
+        "/api/v1/admin/ml/training/price-predictor",
         json={
             "release_tag": "test-training-queued",
             "category": "software",

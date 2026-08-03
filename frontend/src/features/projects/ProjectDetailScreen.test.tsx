@@ -70,8 +70,6 @@ const projectBareTimeline: BidDecisionTimelineResponse = {
 const emptySimilar: ProjectSimilaritySearchResponse = {
   target_project_id: projectA.id,
   target_project_title: projectA.title,
-  target_embedding_model: "test",
-  search_mode: "python_fallback",
   same_category_only: true,
   min_similarity: 0.15,
   result_count: 0,
@@ -135,7 +133,7 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
     expect(eventAuthHeaders[0]).toBe("Bearer token-detail");
   });
 
-  it("임베딩 작업 완료까지 폴링한 뒤 유사 공고를 다시 조회한다", async () => {
+  it("유사 공고 갱신 완료까지 폴링한 뒤 결과를 다시 조회한다", async () => {
     window.history.pushState({}, "", "/dashboard/projects/101");
     let similarCalls = 0;
     let statusCalls = 0;
@@ -145,39 +143,39 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
       if (url === "/api/v1/projects/101") return jsonResponse(projectA);
       if (url.startsWith("/api/v1/projects/101/decision-timeline"))
         return jsonResponse(projectBareTimeline);
-      if (url.startsWith("/api/v1/projects/101/similar")) {
-        similarCalls += 1;
-        return jsonResponse(emptySimilar);
-      }
       if (
-        url === "/api/v1/projects/101/embedding/refresh?force=true" &&
+        url === "/api/v1/projects/101/similar/refresh?force=true" &&
         init?.method === "POST"
       ) {
         return jsonResponse(
           {
             project_id: 101,
-            task_id: "embedding-task-1",
-            task_name: "jobs.rebuild_project_embeddings",
-            queue: "bid_vector_ml_inference",
-            status: "queued",
-            detail: "queued",
-            poll_url: "/api/v1/projects/embeddings/rebuild/tasks/embedding-task-1"
+            operation_id: "similar-refresh-1",
+            operation: "refresh_similar_projects",
+            status: "accepted",
+            message: "유사 공고 갱신을 요청했습니다.",
+            poll_url:
+              "/api/v1/projects/101/similar/refresh/operations/similar-refresh-1"
           },
           202
         );
       }
-      if (url.endsWith("/embeddings/rebuild/tasks/embedding-task-1")) {
+      if (url.endsWith("/similar/refresh/operations/similar-refresh-1")) {
         statusCalls += 1;
         return jsonResponse({
-          task_id: "embedding-task-1",
-          task_name: "jobs.rebuild_project_embeddings",
-          status: "completed",
-          raw_status: "SUCCESS",
-          ready: true,
-          successful: true,
-          detail: "completed",
+          project_id: 101,
+          operation_id: "similar-refresh-1",
+          operation: "refresh_similar_projects",
+          status: "succeeded",
+          is_terminal: true,
+          succeeded: true,
+          message: "유사 공고 갱신이 완료되었습니다.",
           error: null
         });
+      }
+      if (url.startsWith("/api/v1/projects/101/similar")) {
+        similarCalls += 1;
+        return jsonResponse(emptySimilar);
       }
       if (url === "/api/v1/analytics/event" && init?.method === "POST") {
         return jsonResponse({}, 200);
@@ -187,11 +185,12 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
-    fireEvent.click(await screen.findByRole("button", { name: "임베딩 재계산" }));
+    fireEvent.click(await screen.findByRole("button", { name: "유사 공고 갱신" }));
 
     await waitFor(() => expect(statusCalls).toBe(1));
     await waitFor(() => expect(similarCalls).toBeGreaterThanOrEqual(2));
-    expect(await screen.findByText("임베딩 재계산 완료")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "임베딩 재계산" })).toBeEnabled();
+    expect(await screen.findByText("유사 공고 갱신 완료")).toBeInTheDocument();
+    expect(screen.queryByText(/임베딩|bid_vector_ml_inference/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "유사 공고 갱신" })).toBeEnabled();
   });
 });

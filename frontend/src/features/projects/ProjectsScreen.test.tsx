@@ -169,8 +169,6 @@ describe("ProjectsScreen", () => {
     const similarResponse: ProjectSimilaritySearchResponse = {
       target_project_id: projectA.id,
       target_project_title: projectA.title,
-      target_embedding_model: "test",
-      search_mode: "python_fallback",
       same_category_only: true,
       min_similarity: 0.15,
       result_count: 1,
@@ -183,8 +181,7 @@ describe("ProjectsScreen", () => {
           budget_estimate: projectB.budget_estimate,
           deadline: null,
           created_at: projectB.created_at,
-          similarity_score: 0.82,
-          embedding_model: "test"
+          similarity_score: 0.82
         }
       ]
     };

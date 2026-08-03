@@ -3,23 +3,23 @@ import {
   fetchBidDecisionTimeline,
   fetchProject,
   fetchProjectList,
-  fetchProjectEmbeddingTaskStatus,
+  fetchSimilarProjectsRefreshStatus,
   fetchSimilarProjects,
   queryKeys,
-  refreshProjectEmbedding,
+  refreshSimilarProjects,
   type ProjectListQuery,
   type SimilarProjectsQuery
 } from "@/shared/api";
 import type {
   BidDecisionTimelineResponse,
-  ProjectEmbeddingRefreshResponse,
-  ProjectEmbeddingTaskStatusResponse,
   ProjectListResult,
   ProjectResponse,
-  ProjectSimilaritySearchResponse
+  ProjectSimilaritySearchResponse,
+  SimilarProjectsRefreshOperationResponse,
+  SimilarProjectsRefreshOperationStatusResponse
 } from "@/shared/types/project";
 import type { AuthSession } from "@/app/layout/AuthGate";
-import { embeddingTaskPollInterval } from "./embeddingTaskState";
+import { similarProjectsRefreshPollInterval } from "./similarProjectsRefreshState";
 
 export function useProjectsQuery(session: AuthSession | null, query: ProjectListQuery) {
   return useQuery<ProjectListResult, Error>({
@@ -68,22 +68,28 @@ export function useTimelineQuery(
   });
 }
 
-export function useRefreshEmbeddingMutation(session: AuthSession | null) {
-  return useMutation<ProjectEmbeddingRefreshResponse, Error, { id: number; force?: boolean }>({
-    mutationFn: ({ id, force }) => refreshProjectEmbedding(id, { force }, session?.token)
+export function useRefreshSimilarProjectsMutation(session: AuthSession | null) {
+  return useMutation<
+    SimilarProjectsRefreshOperationResponse,
+    Error,
+    { id: number; force?: boolean }
+  >({
+    mutationFn: ({ id, force }) =>
+      refreshSimilarProjects(id, { force }, session?.token)
   });
 }
 
-export function useEmbeddingRefreshStatusQuery(
+export function useSimilarProjectsRefreshStatusQuery(
   session: AuthSession | null,
-  task: ProjectEmbeddingRefreshResponse | null
+  operation: SimilarProjectsRefreshOperationResponse | null
 ) {
-  return useQuery<ProjectEmbeddingTaskStatusResponse, Error>({
-    queryKey: task
-      ? queryKeys.projects.embeddingTask(task.task_id)
-      : ["projects", "embedding-task", "none"],
-    queryFn: () => fetchProjectEmbeddingTaskStatus(task?.poll_url ?? "", session?.token),
-    enabled: Boolean(session?.token) && task !== null,
-    refetchInterval: (query) => embeddingTaskPollInterval(query.state.data?.status)
+  return useQuery<SimilarProjectsRefreshOperationStatusResponse, Error>({
+    queryKey: operation
+      ? queryKeys.projects.similarRefreshOperation(operation.operation_id)
+      : ["projects", "similar-refresh", "none"],
+    queryFn: () =>
+      fetchSimilarProjectsRefreshStatus(operation?.poll_url ?? "", session?.token),
+    enabled: Boolean(session?.token) && operation !== null,
+    refetchInterval: (query) => similarProjectsRefreshPollInterval(query.state.data?.status)
   });
 }

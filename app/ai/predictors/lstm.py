@@ -9,8 +9,11 @@ import numpy as np
 from pydantic import JsonValue
 
 from app.ai.predictors.artifact_contracts import (
+    ArtifactSource,
     ArtifactScalar,
+    NormalizedLSTMArtifact,
     PersistedLSTMArtifact,
+    VersionAwareArtifactProvider,
     read_persisted_artifact,
 )
 from app.ai.predictors.base import (
@@ -70,6 +73,14 @@ class LSTMBidRatePredictor(BasePricePredictor):
     name = "lstm_sequence"
     family = "sequence_model"
 
+    def __init__(
+        self,
+        *,
+        artifact_provider: VersionAwareArtifactProvider[NormalizedLSTMArtifact]
+        | None = None,
+    ) -> None:
+        self._artifact_provider = artifact_provider or _LSTM_ARTIFACT_PROVIDER
+
     def check_availability(self, context: PricePredictionContext) -> PredictorAvailability:
         """Validate whether the predictor is configured well enough to run."""
         if not settings.PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS:
@@ -85,7 +96,7 @@ class LSTMBidRatePredictor(BasePricePredictor):
         if not Path(model_path).exists():
             return PredictorAvailability(False, f"Configured LSTM model artifact was not found: {model_path}")
         try:
-            load_lstm_artifact(model_path)
+            self._artifact_provider.load(model_path)
         except Exception as exc:
             return PredictorAvailability(False, f"Configured LSTM model artifact is invalid: {exc}")
         return PredictorAvailability(True)
@@ -93,14 +104,16 @@ class LSTMBidRatePredictor(BasePricePredictor):
     def predict(self, context: PricePredictionContext) -> PredictionResult:
         """Predict a bid rate from a persisted LSTM model artifact."""
         model_path = str(settings.PRICE_PREDICTION_LSTM_MODEL_PATH or "").strip()
-        artifact = load_lstm_artifact(model_path)
+        artifact = self._artifact_provider.load(model_path)
         signal = infer_lstm_sequence_signal(context, artifact=artifact)
         return PredictionResult.model_validate(
             build_lstm_prediction_payload(context, artifact=artifact, signal=signal)
         )
 
 
-def load_lstm_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, Any]:
+def _load_lstm_artifact_uncached(
+    model_source: ArtifactSource,
+) -> NormalizedLSTMArtifact:
     """Load one persisted LSTM artifact from JSON or reuse an embedded dictionary.
 
     The persisted JSON is promoted into the declared
@@ -147,6 +160,14 @@ def load_lstm_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, A
         ),
         "weights": gate_weights,
     }
+
+
+_LSTM_ARTIFACT_PROVIDER = VersionAwareArtifactProvider(_load_lstm_artifact_uncached)
+
+
+def load_lstm_artifact(model_source: ArtifactSource) -> NormalizedLSTMArtifact:
+    """Load a normalized LSTM artifact through the bounded version cache."""
+    return _LSTM_ARTIFACT_PROVIDER.load(model_source)
 
 
 def infer_lstm_sequence_signal(

@@ -1,7 +1,15 @@
 """Tests for predictor selection and metadata."""
 
 import json
+import signal
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from threading import Barrier, Event, Lock, Thread
+
+import numpy as np
+import pytest
 
 from app.ai.price_prediction import predict_price
 from app.ai.predictors.base import (
@@ -400,6 +408,361 @@ def test_predict_price_uses_ensemble_predictor_when_artifact_is_configured(monke
     assert prediction["historical_sample_size"] == 12
     assert 0.9 <= prediction["predicted_bid_rate"] <= 1.05
     assert "ensemble이" in prediction["explanation"]
+
+
+def test_lstm_predictor_caches_unchanged_artifact_and_reloads_changed_identity(
+    monkeypatch, tmp_path
+):
+    """Availability + repeated inference normalize one immutable version once."""
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+    from app.ai.predictors.lstm import LSTMBidRatePredictor, load_lstm_artifact
+    import app.ai.predictors.historical as historical
+
+    artifact_path = Path(_write_lstm_artifact(tmp_path))
+    load_calls: list[str] = []
+
+    def _load_from_file(source):
+        load_calls.append(str(source))
+        payload = json.loads(Path(source).read_text(encoding="utf-8"))
+        return load_lstm_artifact(payload)
+
+    provider = VersionAwareArtifactProvider(_load_from_file, max_entries=2)
+    predictor = LSTMBidRatePredictor(artifact_provider=provider)
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        category="software",
+        description="version-aware LSTM cache",
+        historical_records=tuple(_build_bid_rate_history(10)),
+    )
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MIN_SAMPLES", 8)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MODEL_PATH", str(artifact_path))
+    monkeypatch.setattr(historical, "load_group_calibration", lambda: {})
+    assert predictor.check_availability(context).available is True
+    assert predictor.predict(context).model_version == "v2.0-lstm"
+    assert predictor.predict(context).model_version == "v2.0-lstm"
+    assert load_calls == [str(artifact_path)]
+
+    changed = json.loads(artifact_path.read_text(encoding="utf-8"))
+    changed["model_version"] = "v2.0-lstm-released-2"
+    artifact_path.write_text(json.dumps(changed), encoding="utf-8")
+
+    assert predictor.predict(context).model_version == "v2.0-lstm-released-2"
+    assert load_calls == [str(artifact_path), str(artifact_path)]
+
+
+def test_artifact_provider_resets_pid_local_lock_and_cache_after_fork_boundary(
+    monkeypatch, tmp_path
+):
+    """A child PID must never wait on a lock inherited from a parent thread."""
+    import app.ai.predictors.artifact_provider as artifact_provider
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+
+    artifact_path = tmp_path / "pid-local-artifact.json"
+    artifact_path.write_text('{"model_version": "v1"}', encoding="utf-8")
+    load_calls: list[str] = []
+    child_hooks = []
+
+    monkeypatch.setattr(
+        artifact_provider.os,
+        "register_at_fork",
+        lambda **hooks: child_hooks.append(hooks["after_in_child"]),
+    )
+
+    def _load(source):
+        load_calls.append(str(source))
+        return json.loads(Path(source).read_text(encoding="utf-8"))
+
+    provider = VersionAwareArtifactProvider(_load)
+    assert provider.load(artifact_path)["model_version"] == "v1"
+    parent_state = provider._state
+    parent_pid = artifact_provider.os.getpid()
+    completed = Event()
+    loaded_versions: list[str] = []
+    errors: list[BaseException] = []
+
+    parent_state.lock.acquire()
+    monkeypatch.setattr(artifact_provider.os, "getpid", lambda: parent_pid + 1)
+    assert len(child_hooks) == 1
+    child_hooks[0]()
+
+    def _load_in_child_pid() -> None:
+        try:
+            loaded_versions.append(provider.load(artifact_path)["model_version"])
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            completed.set()
+
+    thread = Thread(target=_load_in_child_pid)
+    thread.start()
+    completed_without_parent_unlock = completed.wait(timeout=1.0)
+    parent_state.lock.release()
+    thread.join(timeout=1.0)
+
+    assert completed_without_parent_unlock is True
+    assert errors == []
+    assert loaded_versions == ["v1"]
+    assert load_calls == [str(artifact_path), str(artifact_path)]
+
+
+def test_artifact_provider_remains_portable_without_register_at_fork(
+    monkeypatch, tmp_path
+):
+    """Platforms without a fork hook retain the atomic lazy PID fallback."""
+    import app.ai.predictors.artifact_provider as artifact_provider
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+
+    artifact_path = tmp_path / "portable-artifact.json"
+    artifact_path.write_text('{"model_version": "v1"}', encoding="utf-8")
+    monkeypatch.delattr(artifact_provider.os, "register_at_fork", raising=False)
+
+    provider = VersionAwareArtifactProvider(
+        lambda source: json.loads(Path(source).read_text(encoding="utf-8"))
+    )
+
+    assert provider.load(artifact_path)["model_version"] == "v1"
+
+
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded, use of fork.*:DeprecationWarning"
+)
+def test_hookless_artifact_provider_does_not_wait_on_inherited_transition_lock(
+    monkeypatch, tmp_path
+):
+    """A real fork must finish even when another parent thread owns the fallback lock."""
+    import os
+
+    import app.ai.predictors.artifact_provider as artifact_provider
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+
+    if not hasattr(os, "fork"):
+        pytest.skip("requires os.fork")
+
+    artifact_path = tmp_path / "hookless-fork-artifact.json"
+    artifact_path.write_text('{"model_version": "v1"}', encoding="utf-8")
+    monkeypatch.delattr(artifact_provider.os, "register_at_fork", raising=False)
+    provider = VersionAwareArtifactProvider(
+        lambda source: json.loads(Path(source).read_text(encoding="utf-8"))
+    )
+    assert provider.load(artifact_path)["model_version"] == "v1"
+
+    lock_held = Event()
+    release_parent_lock = Event()
+
+    def _hold_parent_transition_lock() -> None:
+        with provider._process_transition_lock:
+            lock_held.set()
+            release_parent_lock.wait(timeout=5.0)
+
+    holder = Thread(target=_hold_parent_transition_lock)
+    holder.start()
+    assert lock_held.wait(timeout=1.0)
+    read_fd, write_fd = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:  # pragma: no cover - assertions execute in the parent
+        os.close(read_fd)
+        try:
+            version = provider.load(artifact_path)["model_version"]
+            os.write(write_fd, str(version).encode("utf-8"))
+            exit_code = 0
+        except BaseException as exc:
+            os.write(write_fd, f"error:{exc}".encode("utf-8"))
+            exit_code = 1
+        finally:
+            os.close(write_fd)
+        os._exit(exit_code)
+
+    os.close(write_fd)
+    child_status = None
+    deadline = time.monotonic() + 2.0
+    try:
+        while time.monotonic() < deadline:
+            waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
+            if waited_pid == child_pid:
+                child_status = status
+                break
+            time.sleep(0.01)
+        if child_status is None:
+            os.kill(child_pid, signal.SIGKILL)
+            os.waitpid(child_pid, 0)
+    finally:
+        release_parent_lock.set()
+        holder.join(timeout=1.0)
+
+    child_output = os.read(read_fd, 4096).decode("utf-8")
+    os.close(read_fd)
+    assert child_status is not None, "child deadlocked on an inherited transition lock"
+    assert os.waitstatus_to_exitcode(child_status) == 0
+    assert child_output == "v1"
+
+
+def test_artifact_provider_serializes_concurrent_first_loads_after_pid_transition(
+    monkeypatch, tmp_path
+):
+    """One child-side state wins even when first callers observe the new PID together."""
+    import app.ai.predictors.artifact_provider as artifact_provider
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+
+    artifact_path = tmp_path / "concurrent-child-artifact.json"
+    artifact_path.write_text('{"model_version": "v1"}', encoding="utf-8")
+    load_lock = Lock()
+    load_calls = 0
+
+    def _load(source):
+        nonlocal load_calls
+        with load_lock:
+            load_calls += 1
+        return json.loads(Path(source).read_text(encoding="utf-8"))
+
+    monkeypatch.delattr(artifact_provider.os, "register_at_fork", raising=False)
+    provider = VersionAwareArtifactProvider(_load)
+    assert provider.load(artifact_path)["model_version"] == "v1"
+
+    worker_count = 8
+    child_pid = artifact_provider.os.getpid() + 1
+    pid_barrier = Barrier(worker_count)
+    constructor_lock = Lock()
+    all_child_constructors_started = Event()
+    release_child_constructors = Event()
+    child_constructor_count = 0
+    original_state_type = artifact_provider._ArtifactProcessState
+
+    class _SlowChildStateFactory:
+        @classmethod
+        def __class_getitem__(cls, _item):
+            return cls
+
+        def __new__(cls, process_id):
+            nonlocal child_constructor_count
+            state = original_state_type(process_id)
+            if process_id == child_pid:
+                with constructor_lock:
+                    child_constructor_count += 1
+                    if child_constructor_count == worker_count:
+                        all_child_constructors_started.set()
+                assert release_child_constructors.wait(timeout=2.0)
+            return state
+
+    def _child_pid_after_rendezvous():
+        pid_barrier.wait(timeout=2.0)
+        return child_pid
+
+    monkeypatch.setattr(
+        artifact_provider, "_ArtifactProcessState", _SlowChildStateFactory
+    )
+    monkeypatch.setattr(
+        artifact_provider.os, "getpid", _child_pid_after_rendezvous
+    )
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(provider.load, artifact_path) for _ in range(worker_count)]
+        all_child_constructors_started.wait(timeout=0.5)
+        release_child_constructors.set()
+        artifacts = [future.result(timeout=2.0) for future in futures]
+
+    assert [artifact["model_version"] for artifact in artifacts] == ["v1"] * worker_count
+    assert load_calls == 2
+
+
+def test_artifact_provider_serializes_concurrent_loads_for_one_version(tmp_path):
+    """Concurrent first callers parse and normalize one immutable identity once."""
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+
+    artifact_path = tmp_path / "concurrent-artifact.json"
+    artifact_path.write_text('{"model_version": "v1"}', encoding="utf-8")
+    call_lock = Lock()
+    load_calls = 0
+
+    def _load(source):
+        nonlocal load_calls
+        with call_lock:
+            load_calls += 1
+        time.sleep(0.02)
+        return {
+            "model_version": json.loads(
+                Path(source).read_text(encoding="utf-8")
+            )["model_version"],
+            "weights": np.asarray([[1.0, 2.0]], dtype=float),
+        }
+
+    provider = VersionAwareArtifactProvider(_load)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        artifacts = list(executor.map(provider.load, [artifact_path] * 8))
+
+    assert load_calls == 1
+    assert [artifact["model_version"] for artifact in artifacts] == ["v1"] * 8
+
+
+def test_artifact_provider_returns_mutation_isolated_cached_values(tmp_path):
+    """Caller mutation cannot poison later predictions that reuse the cache."""
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+
+    artifact_path = tmp_path / "isolated-artifact.json"
+    artifact_path.write_text('{"model_version": "v1"}', encoding="utf-8")
+    load_calls = 0
+
+    def _load(source):
+        nonlocal load_calls
+        load_calls += 1
+        return {
+            "metadata": {"model_version": "v1", "weights": {"lstm": 0.75}},
+            "weights": np.asarray([[1.0, 2.0]], dtype=float),
+        }
+
+    provider = VersionAwareArtifactProvider(_load)
+    first = provider.load(artifact_path)
+    first["metadata"]["weights"]["lstm"] = 0.0
+    first["weights"][0, 0] = 999.0
+
+    second = provider.load(artifact_path)
+
+    assert load_calls == 1
+    assert second["metadata"]["weights"]["lstm"] == 0.75
+    np.testing.assert_array_equal(second["weights"], np.asarray([[1.0, 2.0]]))
+
+
+def test_ensemble_predictor_caches_unchanged_artifact_and_reloads_changed_identity(
+    monkeypatch, tmp_path
+):
+    """The ensemble provider shares one normalized artifact across predictions."""
+    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
+    from app.ai.predictors.ensemble import EnsembleBidRatePredictor, load_ensemble_artifact
+    import app.ai.predictors.historical as historical
+
+    _write_lstm_artifact(tmp_path)
+    artifact_path = Path(_write_ensemble_artifact(tmp_path))
+    load_calls: list[str] = []
+
+    def _load_from_file(source):
+        load_calls.append(str(source))
+        payload = json.loads(Path(source).read_text(encoding="utf-8"))
+        return load_ensemble_artifact(payload)
+
+    provider = VersionAwareArtifactProvider(_load_from_file, max_entries=2)
+    predictor = EnsembleBidRatePredictor(artifact_provider=provider)
+    context = PricePredictionContext(
+        budget=100_000_000.0,
+        category="software",
+        description="version-aware ensemble cache",
+        historical_records=tuple(_build_bid_rate_history(12)),
+    )
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES", 8)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MODEL_PATH", str(artifact_path))
+    monkeypatch.setattr(historical, "load_group_calibration", lambda: {})
+
+    assert predictor.check_availability(context).available is True
+    assert predictor.predict(context).model_version == "v2.0-ensemble"
+    assert predictor.predict(context).model_version == "v2.0-ensemble"
+    assert load_calls == [str(artifact_path)]
+
+    changed = json.loads(artifact_path.read_text(encoding="utf-8"))
+    changed["model_version"] = "v2.0-ensemble-released-2"
+    artifact_path.write_text(json.dumps(changed), encoding="utf-8")
+
+    assert predictor.predict(context).model_version == "v2.0-ensemble-released-2"
+    assert load_calls == [str(artifact_path), str(artifact_path)]
 
 
 def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch, tmp_path):

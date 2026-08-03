@@ -290,7 +290,7 @@ def test_koneps_collection_job_honours_injected_session_factory(monkeypatch):
             None,
             request=CrawlTaskRequest(),
             crawl_job_id=1,
-            enqueue_deferred_embedding_backfill=lambda ids: 0,
+            notify_inference_outbox_committed=lambda ids: None,
             enqueue_deferred_reserve_detail_backfill=lambda notices: 0,
             session_factory=factory,
         )

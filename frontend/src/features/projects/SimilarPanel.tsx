@@ -5,11 +5,11 @@ import { RefreshCw } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, toastApi } from "@/shared/components/ui";
 import { formatCurrencyCompact, formatPercent } from "@/shared/lib";
-import type { ProjectEmbeddingRefreshResponse } from "@/shared/types/project";
+import type { SimilarProjectsRefreshOperationResponse } from "@/shared/types/project";
 import {
-  useEmbeddingRefreshStatusQuery,
-  useRefreshEmbeddingMutation,
-  useSimilarProjectsQuery
+  useRefreshSimilarProjectsMutation,
+  useSimilarProjectsQuery,
+  useSimilarProjectsRefreshStatusQuery
 } from "./hooks";
 
 const SIMILAR_LIMIT = 5;
@@ -18,52 +18,51 @@ export function SimilarPanel({ projectId }: { projectId: number }) {
   const { session } = useShellContext();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [refreshTask, setRefreshTask] = useState<ProjectEmbeddingRefreshResponse | null>(null);
+  const [refreshOperation, setRefreshOperation] =
+    useState<SimilarProjectsRefreshOperationResponse | null>(null);
   const similar = useSimilarProjectsQuery(session, projectId, { limit: SIMILAR_LIMIT });
-  const refresh = useRefreshEmbeddingMutation(session);
-  const refreshStatus = useEmbeddingRefreshStatusQuery(session, refreshTask);
+  const refresh = useRefreshSimilarProjectsMutation(session);
+  const refreshStatus = useSimilarProjectsRefreshStatusQuery(session, refreshOperation);
 
   useEffect(() => {
     const result = refreshStatus.data;
-    if (!refreshTask || !result?.ready) return;
-    if (result.status === "completed") {
+    if (!refreshOperation || !result?.is_terminal) return;
+    if (result.succeeded) {
       void queryClient.invalidateQueries({ queryKey: ["projects", "similar", projectId] });
       void queryClient.invalidateQueries({ queryKey: ["projects", "detail", projectId] });
       toastApi.success({
-        title: "임베딩 재계산 완료",
+        title: "유사 공고 갱신 완료",
         description: "최신 유사 공고 결과를 불러옵니다."
       });
     } else {
       toastApi.danger({
-        title: "임베딩 재계산 실패",
-        description: result.error || result.detail
+        title: "유사 공고 갱신 실패",
+        description: result.error || result.message
       });
     }
-    setRefreshTask(null);
-  }, [projectId, queryClient, refreshStatus.data, refreshTask]);
+    setRefreshOperation(null);
+  }, [projectId, queryClient, refreshOperation, refreshStatus.data]);
 
   useEffect(() => {
-    if (!refreshTask || !refreshStatus.error) return;
+    if (!refreshOperation || !refreshStatus.error) return;
     toastApi.danger({
-      title: "임베딩 작업 상태 확인 실패",
+      title: "유사 공고 갱신 상태 확인 실패",
       description: refreshStatus.error.message
     });
-    setRefreshTask(null);
-  }, [refreshStatus.error, refreshTask]);
+    setRefreshOperation(null);
+  }, [refreshOperation, refreshStatus.error]);
 
-  const embeddingStatus = similar.data?.target_embedding_status;
-  const hasEmbedding = embeddingStatus ? embeddingStatus === "ready" : Boolean(similar.data?.target_embedding_model);
   const handleRefresh = async () => {
     try {
       const result = await refresh.mutateAsync({ id: projectId, force: true });
-      setRefreshTask(result);
+      setRefreshOperation(result);
       toastApi.success({
-        title: "임베딩 재계산 요청됨",
-        description: `${result.queue} 큐에 작업이 등록되었습니다.`
+        title: "유사 공고 갱신 요청됨",
+        description: result.message
       });
     } catch (err) {
       toastApi.danger({
-        title: "임베딩 재계산 실패",
+        title: "유사 공고 갱신 실패",
         description: err instanceof Error ? err.message : "알 수 없는 오류"
       });
     }
@@ -78,19 +77,14 @@ export function SimilarPanel({ projectId }: { projectId: number }) {
           variant="ghost"
           size="sm"
           onClick={handleRefresh}
-          disabled={refresh.isPending || refreshTask !== null}
-          aria-label="임베딩 재계산"
+          disabled={refresh.isPending || refreshOperation !== null}
+          aria-label="유사 공고 갱신"
         >
           <RefreshCw size={14} className="mr-1" />
-          {refresh.isPending || refreshTask ? "재계산 중" : "재계산"}
+          {refresh.isPending || refreshOperation ? "갱신 중" : "갱신"}
         </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 text-xs">
-        {!hasEmbedding && similar.data ? (
-          <p className="rounded-md border border-[var(--color-warn)] bg-[color-mix(in_oklch,var(--color-warn),white_85%)] px-2 py-1 text-[var(--color-warn)]">
-            이 공고의 임베딩이 아직 생성되지 않았습니다. "재계산"으로 다시 시도하세요.
-          </p>
-        ) : null}
         {similar.error ? (
           <p className="text-[var(--color-danger)]" role="alert">
             {similar.error.message ?? "유사 공고를 불러오지 못했습니다."}
@@ -100,7 +94,9 @@ export function SimilarPanel({ projectId }: { projectId: number }) {
           <p className="text-[var(--color-muted)]">불러오는 중…</p>
         ) : null}
         {similar.data && similar.data.results.length === 0 ? (
-          <p className="text-[var(--color-muted)]">유사한 공고가 없습니다.</p>
+          <p className="text-[var(--color-muted)]">
+            유사한 공고가 없습니다. 갱신하면 최신 결과를 확인할 수 있습니다.
+          </p>
         ) : null}
         {similar.data?.results.length ? (
           <ul className="flex flex-col gap-2" aria-label="유사 공고 결과">

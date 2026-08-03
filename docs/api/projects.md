@@ -1,18 +1,19 @@
 # Projects API
 
-> 베이스 경로: `/api/v1/projects` · 인증: 불필요 (이 태그의 모든 엔드포인트는 인증 토큰 없이 호출)
+> 베이스 경로: `/api/v1/projects` · 인증: 엔드포인트별 상이. 사용자 refresh operation과 모든 deprecated embedding control 경로는 bearer token 필수
 > 베이스 URL 예시: `http://localhost:3000`
 > 도메인: "Project"는 KONEPS(나라장터) 공고를 시스템 내부에서 다루는 단위다. 공고 텍스트는 `paraphrase-multilingual-MiniLM-L12-v2`(384차원) 임베딩으로 pgvector에 저장되어 유사 공고 검색에 쓰인다.
 
 ## 목차
 - [POST /api/v1/projects/](#post-apiv1projects) — 공고 생성(임베딩 비동기 등록)
 - [GET /api/v1/projects/](#get-apiv1projects) — 공고 목록 조회(필터/페이지네이션)
-- [POST /api/v1/projects/embeddings/rebuild](#post-apiv1projectsembeddingsrebuild-deprecated) — 임베딩 배치 재계산(**deprecated**)
-- [POST /api/v1/projects/embeddings/rebuild/async](#post-apiv1projectsembeddingsrebuildasync) — 임베딩 배치 재계산(권장)
-- [GET /api/v1/projects/embeddings/rebuild/tasks/{task_id}](#get-apiv1projectsembeddingsrebuildtaskstask_id) — 배치 태스크 상태 조회
+- [POST /api/v1/projects/embeddings/rebuild](#post-apiv1projectsembeddingsrebuild-deprecated) — privileged 임베딩 배치 재계산(**deprecated**)
+- [POST /api/v1/projects/embeddings/rebuild/async](#post-apiv1projectsembeddingsrebuildasync-deprecated) — privileged 임베딩 배치 재계산(**deprecated**)
+- [GET /api/v1/projects/embeddings/rebuild/tasks/{task_id}](#get-apiv1projectsembeddingsrebuildtaskstask_id) — privileged 배치 태스크 상태 조회(**deprecated**)
 - [GET /api/v1/projects/{project_id}](#get-apiv1projectsproject_id) — 공고 상세 조회
 - [GET /api/v1/projects/{project_id}/similar](#get-apiv1projectsproject_idsimilar) — 유사 공고 검색
-- [POST /api/v1/projects/{project_id}/embedding/refresh](#post-apiv1projectsproject_idembeddingrefresh) — 단일 공고 임베딩 재생성
+- [POST /api/v1/projects/{project_id}/similar/refresh](#post-apiv1projectsproject_idsimilarrefresh) — 사용자 유사 공고 갱신 operation 시작
+- [GET /api/v1/projects/{project_id}/similar/refresh/operations/{operation_id}](#get-apiv1projectsproject_idsimilarrefreshoperationsoperation_id) — 사용자 갱신 operation 상태 조회
 - [PUT /api/v1/projects/{project_id}](#put-apiv1projectsproject_id) — 공고 수정(부분 갱신)
 
 ---
@@ -148,9 +149,9 @@ X-Total-Count: 37
 
 ## POST /api/v1/projects/embeddings/rebuild (deprecated)
 
-> **Deprecated** — 신규 호출은 `/embeddings/rebuild/async`를 사용.
+> **Deprecated** — 신규 운영 호출은 `/api/v1/admin/ml/backfills/project-embeddings`를 사용.
 
-다수 공고의 semantic 임베딩을 백필하는 배치 작업을 큐에 등록하고, 폴링 가능한 task 정보를 즉시 반환한다. API 요청 안에서 임베딩을 직접 계산하지 않으므로 요청이 빠르게 끝난다. 인증 불필요.
+다수 공고의 semantic 임베딩을 백필하는 배치 작업을 큐에 등록하고, 폴링 가능한 task 정보를 즉시 반환한다. API 요청 안에서 임베딩을 직접 계산하지 않으므로 요청이 빠르게 끝난다. privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -165,7 +166,8 @@ X-Total-Count: 37
 **요청 예시**
 
 ```bash
-curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild?limit=200&offset=0&force=false"
+curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild?limit=200&offset=0&force=false" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 202**
@@ -188,9 +190,9 @@ curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild?limit=200
 
 ---
 
-## POST /api/v1/projects/embeddings/rebuild/async
+## POST /api/v1/projects/embeddings/rebuild/async (deprecated)
 
-배치 임베딩 재계산 작업을 큐에 등록하고 폴링 가능한 task_id를 반환한다(정식 권장 경로). 응답의 `poll_url`로 진행 상태를 조회한다. 인증 불필요.
+배치 임베딩 재계산 작업을 큐에 등록하고 폴링 가능한 task_id를 반환한다. 응답의 `poll_url`로 진행 상태를 조회한다. privileged operator bearer token 필수이며 신규 운영 호출은 admin ML API를 사용한다.
 
 **파라미터**
 
@@ -205,7 +207,8 @@ curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild?limit=200
 **요청 예시**
 
 ```bash
-curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild/async?limit=500&force=true"
+curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild/async?limit=500&force=true" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 202**
@@ -230,7 +233,7 @@ curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild/async?lim
 
 ## GET /api/v1/projects/embeddings/rebuild/tasks/{task_id}
 
-큐에 등록된 임베딩 재계산 태스크의 현재 상태와 결과를 조회한다. rebuild 계열이 반환한 task_id를 폴링하는 용도다. 인증 불필요.
+큐에 등록된 임베딩 재계산 태스크의 현재 상태와 결과를 조회한다. rebuild 계열이 반환한 task_id를 폴링하는 deprecated privileged 경로다.
 
 **파라미터**
 
@@ -241,7 +244,8 @@ curl -X POST "http://localhost:3000/api/v1/projects/embeddings/rebuild/async?lim
 **요청 예시**
 
 ```bash
-curl -X GET "http://localhost:3000/api/v1/projects/embeddings/rebuild/tasks/1b7d9e0c-5a22-4f31-9c8a-7e63b4d2f019"
+curl -X GET "http://localhost:3000/api/v1/projects/embeddings/rebuild/tasks/1b7d9e0c-5a22-4f31-9c8a-7e63b4d2f019" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 200**
@@ -338,12 +342,11 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024"
 
 주어진 공고와 의미적으로 유사한 공고들을 저장된 임베딩으로 검색한다. 이 GET 경로는
 임베딩을 생성하거나 DB commit을 수행하지 않는다. target 임베딩이 없거나 stale이면 결과를
-계산하지 않고 상태(`pending`/`stale`)와 빈 결과를 반환하므로, 필요 시
-`POST /embedding/refresh`로 비동기 갱신을 요청한다. pgvector 사용 가능 시 `postgres_vector`,
-아니면 `python_fallback` 모드로 동작한다. target 버전과 전체 embedding corpus watermark가
-일치하는 similarity snapshot이 있으면 `read_model` 모드로 edge row만 읽는다. 결과가 0건인
-snapshot도 유효한 hit이며, 후보 embedding 또는 카테고리 변경 시 기존 snapshot은 사용하지
-않는다. 인증 불필요.
+계산하지 않고 빈 결과를 반환하므로, 필요 시 인증된 사용자가 `POST /similar/refresh`로
+비동기 갱신을 요청한다. 내부적으로 pgvector/read-model을 선택하지만 사용자 응답에는
+embedding model/status나 storage search mode를 노출하지 않는다. 결과가 0건인 snapshot도
+유효한 hit이며, 후보 embedding 또는 카테고리 변경 시 기존 snapshot은 사용하지 않는다.
+GET 자체는 인증 불필요다.
 
 **파라미터**
 
@@ -366,11 +369,6 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
 {
   "target_project_id": 1024,
   "target_project_title": "교내 통합 보안관제 시스템 구축",
-  "target_embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
-  "target_embedding_status": "ready",
-  "target_embedding_updated_at": "2025-05-29T09:25:00",
-  "target_embedding_refresh_required": false,
-  "search_mode": "read_model",
   "same_category_only": true,
   "min_similarity": 0.2,
   "result_count": 2,
@@ -383,8 +381,7 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
       "budget_estimate": 510000000,
       "deadline": "2025-06-10T18:00:00",
       "created_at": "2025-05-21T11:00:00",
-      "similarity_score": 0.83,
-      "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2"
+      "similarity_score": 0.83
     },
     {
       "project_id": 987,
@@ -394,8 +391,7 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
       "budget_estimate": 320000000,
       "deadline": null,
       "created_at": "2025-04-30T15:30:00",
-      "similarity_score": 0.61,
-      "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2"
+      "similarity_score": 0.61
     }
   ]
 }
@@ -410,10 +406,11 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
 
 ---
 
-## POST /api/v1/projects/{project_id}/embedding/refresh
+## POST /api/v1/projects/{project_id}/similar/refresh
 
-단일 공고의 semantic 임베딩 재생성을 online inference 큐에 등록하고 poll 가능한 task id를
-반환한다. API 프로세스에서는 모델 로드나 `encode`를 실행하지 않는다. 인증 불필요.
+사용자가 보는 유사 공고 결과의 갱신을 요청한다. 응답은 Celery task 이름·queue·raw status를
+노출하지 않는 opaque operation이며 project와 요청 operator에 묶인다. API 프로세스에서는
+모델 로드나 `encode`를 실행하지 않는다. bearer token 필수.
 
 **파라미터**
 
@@ -425,7 +422,8 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
 **요청 예시**
 
 ```bash
-curl -X POST "http://localhost:3000/api/v1/projects/1024/embedding/refresh?force=true"
+curl -X POST "http://localhost:3000/api/v1/projects/1024/similar/refresh?force=true" \
+  -H "Authorization: Bearer $BID_VECTOR_TOKEN"
 ```
 
 **응답 202**
@@ -433,12 +431,11 @@ curl -X POST "http://localhost:3000/api/v1/projects/1024/embedding/refresh?force
 ```json
 {
   "project_id": 1024,
-  "task_id": "4fb4182b-9a19-4e43-9182-d99327e70038",
-  "task_name": "jobs.rebuild_project_embeddings",
-  "queue": "bid_vector_ml_inference",
-  "status": "queued",
-  "detail": "Task is queued or unknown to the current result backend.",
-  "poll_url": "/api/v1/projects/embeddings/rebuild/tasks/4fb4182b-9a19-4e43-9182-d99327e70038"
+  "operation_id": "opaque-operation-token",
+  "operation": "refresh_similar_projects",
+  "status": "accepted",
+  "message": "유사 공고 갱신을 요청했습니다.",
+  "poll_url": "/api/v1/projects/1024/similar/refresh/operations/opaque-operation-token"
 }
 ```
 
@@ -447,7 +444,38 @@ curl -X POST "http://localhost:3000/api/v1/projects/1024/embedding/refresh?force
 | 코드 | 의미 |
 |---|---|
 | 404 | 대상 공고 없음 (`{"detail": "Project not found"}`) |
+| 401 | bearer token 없음 또는 유효하지 않음 |
 | 422 | 경로/쿼리 검증 실패 |
+
+---
+
+## GET /api/v1/projects/{project_id}/similar/refresh/operations/{operation_id}
+
+갱신 operation의 domain 상태(`accepted`, `in_progress`, `succeeded`, `failed`,
+`cancelled`)를 조회한다. operation은 시작한 operator와 project에 묶이므로 다른 operator나
+project로 조회하면 존재 여부를 숨기기 위해 404를 반환한다. 만료되었거나 task 연결이 없는
+operation은 terminal `failed` 상태로 전환된다. bearer token 필수.
+
+```bash
+curl "http://localhost:3000/api/v1/projects/1024/similar/refresh/operations/opaque-operation-token" \
+  -H "Authorization: Bearer $BID_VECTOR_TOKEN"
+```
+
+```json
+{
+  "project_id": 1024,
+  "operation_id": "opaque-operation-token",
+  "operation": "refresh_similar_projects",
+  "status": "succeeded",
+  "is_terminal": true,
+  "succeeded": true,
+  "message": "유사 공고 갱신이 완료되었습니다.",
+  "error": null
+}
+```
+
+기존 `POST /projects/{project_id}/embedding/refresh`는 privileged operator만 사용할 수 있는
+deprecated infrastructure 호환 경로다. 사용자 UI에서는 사용하지 않는다.
 
 ---
 

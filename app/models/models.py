@@ -10,6 +10,7 @@ from app.models.similarity import (
     ProjectSimilarityEdge as ProjectSimilarityEdge,
     ProjectSimilaritySnapshot as ProjectSimilaritySnapshot,
 )
+from app.models.operations import SimilarProjectsRefreshOperation as SimilarProjectsRefreshOperation
 
 
 class User(Base):

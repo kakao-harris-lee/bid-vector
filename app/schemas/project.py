@@ -42,7 +42,33 @@ class SimilarProjectItem(BaseModel):
     embedding_model: Optional[str] = None
 
 
+class SimilarProjectSummary(BaseModel):
+    """User-facing similar-project row without ML implementation metadata."""
+
+    project_id: int
+    title: str
+    category: Optional[str] = None
+    status: str
+    budget_estimate: float
+    deadline: Optional[datetime] = None
+    created_at: datetime
+    similarity_score: float = Field(ge=0.0, le=1.0)
+
+
+class SimilarProjectsResponse(BaseModel):
+    """User-facing similar-project results with storage details filtered out."""
+
+    target_project_id: int
+    target_project_title: str
+    same_category_only: bool
+    min_similarity: float = Field(ge=0.0, le=1.0)
+    result_count: int
+    results: List[SimilarProjectSummary] = Field(default_factory=list)
+
+
 class ProjectSimilaritySearchResponse(BaseModel):
+    """Internal/admin similarity result including diagnostic metadata."""
+
     target_project_id: int
     target_project_title: str
     target_embedding_model: Optional[str] = None
@@ -103,3 +129,36 @@ class ProjectEmbeddingBatchRefreshTaskStatusResponse(BaseModel):
     detail: str
     error: Optional[str] = None
     result: Optional[ProjectEmbeddingBatchRefreshResponse] = None
+
+
+SimilarProjectsRefreshStatus = Literal[
+    "accepted",
+    "in_progress",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
+
+
+class SimilarProjectsRefreshOperationResponse(BaseModel):
+    """User-facing handle for refreshing one project's similar-project results."""
+
+    operation_id: str
+    operation: Literal["refresh_similar_projects"] = "refresh_similar_projects"
+    project_id: int
+    status: SimilarProjectsRefreshStatus
+    message: str
+    poll_url: str
+
+
+class SimilarProjectsRefreshOperationStatusResponse(BaseModel):
+    """Infrastructure-neutral polling state for a similar-project refresh."""
+
+    operation_id: str
+    operation: Literal["refresh_similar_projects"] = "refresh_similar_projects"
+    project_id: int
+    status: SimilarProjectsRefreshStatus
+    is_terminal: bool
+    succeeded: bool
+    message: str
+    error: Optional[str] = None

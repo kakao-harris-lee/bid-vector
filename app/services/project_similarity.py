@@ -39,7 +39,10 @@ class ProjectSimilarityService:
     def __init__(self) -> None:
         self._classifier = NoticeClassifierService()
         self._read_model = ProjectSimilarityReadModelService(self)
-        self._outbox = InferenceOutboxService(self._read_model)
+        self._outbox = InferenceOutboxService(
+            self._read_model,
+            embedding_refresher=self.refresh_project_embedding,
+        )
 
     def refresh_project_embedding(self, db: Session, project: Project, force: bool = False) -> tuple[list[float], str]:
         """Rebuild and persist a project's embedding when its semantic text changed."""

@@ -176,7 +176,6 @@ def test_persist_promotes_dict_items_to_dto(test_db):
             ],
             "metadata": {},
         },
-        defer_embeddings=True,
     )
 
     assert crawl_job.status == "completed"
@@ -211,7 +210,6 @@ def test_persist_rejects_structurally_invalid_item(test_db, broken_item):
             _crawl_job(test_db),
             _notice_request(),
             {"job_status": "completed", "collected_count": 1, "items": [broken_item]},
-            defer_embeddings=True,
         )
 
 

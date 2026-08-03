@@ -24,6 +24,7 @@ DEFAULT_OPERATOR_FULL_NAME = "Primary Operator"
 DEFAULT_OPERATOR_PASSWORD = "change-me-now"
 DEFAULT_OPERATOR_BID_NOW_THRESHOLD = 0.7
 DEFAULT_OPERATOR_REVIEW_THRESHOLD = 0.45
+SYNTHETIC_OPERATOR_USERNAME_PREFIX = "synthetic-"
 
 
 def split_multi_value_text(raw_value: str | None) -> list[str]:
@@ -61,11 +62,35 @@ def get_operator_account(db: Session) -> User | None:
     return db.query(User).order_by(User.id.asc()).first()
 
 
+def _is_defensible_owner_identity(db: Session, operator: User) -> bool:
+    """Return whether a legacy row is safe to promote to singleton owner."""
+    if operator.username == DEFAULT_OPERATOR_USERNAME:
+        return True
+    if not operator.username or operator.username.startswith(
+        SYNTHETIC_OPERATOR_USERNAME_PREFIX
+    ):
+        return False
+
+    user_ids = db.query(User.id).order_by(User.id.asc()).limit(2).all()
+    return len(user_ids) == 1 and int(user_ids[0][0]) == int(operator.id)
+
+
+def ensure_operator_owner_privilege(db: Session, operator: User) -> User:
+    """Persist admin privilege for a defensible legacy singleton owner only."""
+    if operator.is_admin or not _is_defensible_owner_identity(db, operator):
+        return operator
+
+    operator.is_admin = True
+    db.commit()
+    db.refresh(operator)
+    return operator
+
+
 def ensure_operator_account(db: Session) -> User:
     """Ensure there is always exactly one practical operator account to work with."""
     operator = get_operator_account(db)
     if operator:
-        return operator
+        return ensure_operator_owner_privilege(db, operator)
 
     operator = User(
         username=DEFAULT_OPERATOR_USERNAME,
@@ -74,6 +99,7 @@ def ensure_operator_account(db: Session) -> User:
         company="",
         hashed_password=get_password_hash(DEFAULT_OPERATOR_PASSWORD),
         is_active=True,
+        is_admin=True,
     )
     db.add(operator)
     db.commit()

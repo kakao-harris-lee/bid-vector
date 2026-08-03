@@ -300,3 +300,83 @@ def test_preview_scan_leaves_session_clean_and_releases_rows(client, test_db):
     assert [obj for obj in test_db.new if isinstance(obj, Project)] == []
     # 세션 위생: 분석 완료 행은 identity map 에서 해제됨 (expunge)
     assert project not in test_db
+
+
+def test_preview_scan_never_embeds_missing_similarity_materialization(
+    client, test_db, monkeypatch
+):
+    """Bulk scans consume stored similarity state and never encode inline."""
+    _configure_software_operator(client)
+    project = _make_similarity_project(
+        test_db, title="서울 AI 데이터 통합 플랫폼 구축"
+    )
+    project.description = "서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축"
+    project.requirements = "SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함"
+    project.status = "open"
+    project.deadline = datetime.now(UTC) + timedelta(hours=12)
+    test_db.commit()
+    test_db.refresh(project)
+
+    def _fail_inline_encode(self, semantic_text: str):
+        raise AssertionError(
+            f"candidate scan must not encode missing embedding: {semantic_text}"
+        )
+
+    monkeypatch.setattr(ProjectSimilarityService, "_embed_text", _fail_inline_encode)
+
+    payload = StrategyMonitoringService().preview_candidates(
+        test_db, limit=10, high_priority_only=False
+    )
+
+    assert payload["evaluated_project_count"] == 1
+    test_db.expire_all()
+    unchanged = test_db.get(Project, project.id)
+    assert unchanged.embedding_payload in {None, "[]"}
+    assert unchanged.embedding_updated_at is None
+
+
+def test_preview_scan_uses_ready_similarity_materialization_without_encoding(
+    client, test_db, monkeypatch
+):
+    """A ready target follows the positive scan path using stored vectors only."""
+    _configure_software_operator(client)
+    target = _make_similarity_project(
+        test_db, title="서울 AI 데이터 통합 플랫폼 구축"
+    )
+    target.description = "서울특별시 대상 AI 데이터 분석과 대시보드 자동화 구축"
+    target.requirements = "SW001 보유 업체, 서울특별시 수행 가능, 데이터 연계 포함"
+    target.status = "open"
+    target.deadline = datetime.now(UTC) + timedelta(hours=12)
+    neighbor = _make_similarity_project(
+        test_db, title="서울 데이터 분석 운영 지원"
+    )
+    neighbor.status = "closed"
+    test_db.commit()
+
+    materializer = ProjectSimilarityService()
+    materializer.refresh_project_embedding_details(test_db, target, force=True)
+    materializer.refresh_project_embedding_details(test_db, neighbor, force=True)
+    projection = materializer.recompute_similarity_read_model(
+        test_db,
+        project_id=target.id,
+        limit=5,
+        min_similarity=0.0,
+    )
+    test_db.commit()
+    assert projection.status == "completed"
+
+    def _fail_inline_encode(self, semantic_text: str):
+        raise AssertionError(
+            f"candidate scan must use ready materialization: {semantic_text}"
+        )
+
+    monkeypatch.setattr(ProjectSimilarityService, "_embed_text", _fail_inline_encode)
+
+    payload = StrategyMonitoringService().preview_candidates(
+        test_db, limit=10, high_priority_only=False
+    )
+
+    assert payload["evaluated_project_count"] == 1
+    assert {candidate["project_id"] for candidate in payload["candidates"]} == {
+        target.id
+    }

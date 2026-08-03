@@ -28,7 +28,6 @@ from app.services.koneps import (
     scsbid,
 )
 from app.services.koneps.live_failure import KonepsLiveCollectionError
-from app.services.project_similarity import ProjectSimilarityService
 
 
 # ``format_crawl_error_message`` now lives in ``parsing`` (a pure, no-IO helper)
@@ -254,8 +253,6 @@ class KonepsCollectorService:
         crawl_job: CrawlJob,
         request: CrawlRequest,
         response: dict[str, Any],
-        *,
-        defer_embeddings: bool = False,
     ) -> CrawlJob:
         """Thin delegator to ``persistence.persist_crawl_results``.
 
@@ -268,11 +265,7 @@ class KonepsCollectorService:
         end, followed by the post-commit realtime event.
         """
         return persistence.persist_crawl_results(
-            db,
-            crawl_job,
-            request,
-            response,
-            defer_embeddings=defer_embeddings,
+            db, crawl_job, request, response
         )
 
     def mark_crawl_job_failed(
@@ -905,8 +898,6 @@ class KonepsCollectorService:
         item: KonepsCollectedItem,
         request: CrawlRequest,
         historical_record: HistoricalData,
-        project_similarity: ProjectSimilarityService,
-        defer_embeddings: bool = False,
     ) -> tuple[Project | None, bool]:
         """Thin delegator to ``persistence.resolve_project_for_item``.
 
@@ -919,8 +910,6 @@ class KonepsCollectorService:
             item=item,
             request=request,
             historical_record=historical_record,
-            project_similarity=project_similarity,
-            defer_embeddings=defer_embeddings,
         )
 
     def _find_matching_project(

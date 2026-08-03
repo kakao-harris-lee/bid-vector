@@ -1,11 +1,9 @@
 """KONEPS collection job body.
 
-Extracted verbatim from ``app.tasks.jobs`` (§4.5 size decomposition). The
-``@task`` entry ``collect_koneps_notices`` stays in ``app.tasks.jobs``
-(registration name unchanged) as a thin shell that injects the two deferred
-backfill enqueue helpers — those helpers reference other Celery tasks and are
-patched via the ``jobs`` module in tests (``jobs._enqueue_deferred_embedding_backfill``),
-so they must stay defined in ``app.tasks.jobs`` and be passed in here.
+Extracted from ``app.tasks.jobs`` (§4.5 size decomposition). The ``@task`` entry
+``collect_koneps_notices`` stays in ``app.tasks.jobs`` (registration name
+unchanged) as a thin shell that injects the post-commit inference notification
+and reserve-detail enqueue seams.
 """
 
 import logging
@@ -30,7 +28,7 @@ def run_koneps_collection_job(
     *,
     request: CrawlRequest,
     crawl_job_id: int | None,
-    enqueue_deferred_embedding_backfill: Callable[[list[int]], int],
+    notify_inference_outbox_committed: Callable[[list[int]], Any],
     enqueue_deferred_reserve_detail_backfill: Callable[[list[dict[str, Any]]], int],
     session_factory: Callable[[], Session] | None = None,
 ) -> dict:
@@ -93,15 +91,11 @@ def run_koneps_collection_job(
                 db.commit()
                 db.refresh(crawl_job)
 
-            # Defer embeddings AND the per-notice scsbid reserve-detail HTTP fetch
-            # only on this time-limited Celery path; synchronous callers do both
-            # inline (see persist_crawl_results / collect_notices docstrings). The
-            # inline reserve-detail fetch (one throttled HTTP call per non-settled
-            # award, thousands per sweep) is what blew past the hard time limit and
-            # spun a 0-row redelivery loop; deferring it to a bounded backfill keeps
-            # the collection task short.
+            # Only the per-notice reserve-detail HTTP fetch remains source-specific.
+            # Embeddings never run in collection persistence for any source: the
+            # transaction records semantic-input outbox rows consumed by the
+            # declared inference task path.
             is_scsbid = service._is_scsbid_openapi_source(request.source)
-            defer_embeddings = is_scsbid
             defer_reserve_detail = (
                 bool(settings.KONEPS_SCSBID_RESERVE_DETAIL_DEFER) and is_scsbid
             )
@@ -109,13 +103,21 @@ def run_koneps_collection_job(
                 request, db=db, defer_reserve_detail=defer_reserve_detail
             )
             crawl_job = service.persist_crawl_results(
-                db, crawl_job, request, result, defer_embeddings=defer_embeddings
+                db, crawl_job, request, result
             )
             result.setdefault("metadata", {})["crawl_job_id"] = crawl_job.id
 
-            deferred_ids = result.get("metadata", {}).get("deferred_embedding_project_ids")
-            if deferred_ids:
-                enqueue_deferred_embedding_backfill(list(deferred_ids))
+            outbox_event_ids = result.get("metadata", {}).get(
+                "semantic_input_outbox_event_ids"
+            )
+            if outbox_event_ids:
+                try:
+                    notify_inference_outbox_committed(list(outbox_event_ids))
+                except Exception:  # noqa: BLE001 - durable outbox remains retryable
+                    logger.exception(
+                        "semantic-input outbox fast dispatch failed for %d event(s)",
+                        len(outbox_event_ids),
+                    )
 
             deferred_reserve = result.get("metadata", {}).get(
                 "deferred_reserve_detail_notices"
@@ -129,6 +131,7 @@ def run_koneps_collection_job(
         except SoftTimeLimitExceeded as exc:
             # Stop the redelivery loop: mark this run failed and ack the message so
             # the same payload is not re-run forever past the soft limit.
+            db.rollback()
             if crawl_job is not None:
                 service.mark_crawl_job_failed(
                     db, crawl_job, f"soft time limit exceeded: {exc}"
@@ -149,6 +152,7 @@ def run_koneps_collection_job(
                 },
             }
         except Exception as exc:
+            db.rollback()
             if crawl_job is not None:
                 service.mark_crawl_job_failed(db, crawl_job, str(exc))
             raise

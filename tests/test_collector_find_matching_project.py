@@ -363,13 +363,7 @@ def test_noncanonical_stored_value_matches_after_write_normalization(test_db):
     subsequent lookup with a differently-formatted (but equivalent) notice number
     resolves to the same project through the index fast path -- no duplicate.
     """
-    from app.services.project_similarity import ProjectSimilarityService
-
     service = KonepsCollectorService()
-    similarity = ProjectSimilarityService()
-    similarity.refresh_project_embedding = (  # type: ignore[method-assign]
-        lambda db, project, force=False: ([], "spy-model")
-    )
 
     # First crawl persists a project with a messy raw notice number.
     from app.models.models import HistoricalData
@@ -384,7 +378,6 @@ def test_noncanonical_stored_value_matches_after_write_normalization(test_db):
         item=first_item,
         request=_request(),
         historical_record=historical,
-        project_similarity=similarity,
     )
     test_db.flush()
     assert project.notice_number == "R26BK01552430"

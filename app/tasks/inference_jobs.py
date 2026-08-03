@@ -50,11 +50,18 @@ def notify_embedding_rebuild_committed(
     dispatch: EmbeddingRebuildDispatchInput,
 ) -> EmbeddingRebuildDispatchResult:
     """Best-effort fast dispatch; periodic sweep remains the delivery guarantee."""
-    if not dispatch.outbox_event_ids:
+    return notify_inference_outbox_committed(dispatch.outbox_event_ids)
+
+
+def notify_inference_outbox_committed(
+    outbox_event_ids: list[int],
+) -> EmbeddingRebuildDispatchResult:
+    """Fast-dispatch any committed outbox batch without weakening durability."""
+    if not outbox_event_ids:
         return EmbeddingRebuildDispatchResult()
     try:
         result = enqueue_inference_outbox_processing(
-            limit=max(50, len(dispatch.outbox_event_ids))
+            limit=max(50, len(outbox_event_ids))
         )
         return EmbeddingRebuildDispatchResult(
             task_id=str(result.id), queue=settings.CELERY_ML_INFERENCE_QUEUE

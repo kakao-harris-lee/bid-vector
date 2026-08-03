@@ -242,14 +242,27 @@ def get_current_operator_optional(
 def is_privileged_operator(operator: User) -> bool:
     """Return whether the operator can act on behalf of other operator accounts.
 
-    The canonical ``operator`` account (single-user mode) and any admin-flagged
-    account are allowed to fetch dashboard/analytics payloads scoped to other
-    operator IDs (e.g. synthetic-* companies).
+    Bootstrap and single-user account creation mark the singleton owner as an
+    admin, so customized owner usernames are recognized without treating an
+    arbitrary first database row as privileged. The literal ``operator`` check
+    remains for existing installations created before that explicit marker.
     """
     return bool(
         getattr(operator, "is_admin", False)
         or operator.username == CANONICAL_OPERATOR_USERNAME
     )
+
+
+def require_privileged_operator(
+    operator: User = Depends(get_current_operator_from_bearer),
+) -> User:
+    """Require an authenticated canonical or admin-flagged operator."""
+    if not is_privileged_operator(operator):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Privileged operator access required",
+        )
+    return operator
 
 
 def resolve_target_operator(

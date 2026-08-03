@@ -36,7 +36,7 @@ from app.services.base_amount_basis import (
     normalize_winning_rate,
 )
 from app.services.koneps import matching, parsing, scsbid
-from app.services.project_similarity import ProjectSimilarityService
+from app.services.inference_outbox import InferenceOutboxService
 from app.services.realtime import realtime_event_manager
 
 
@@ -96,15 +96,12 @@ def resolve_project_for_item(
     item: KonepsCollectedItem,
     request: CrawlRequest,
     historical_record: HistoricalData,
-    project_similarity: ProjectSimilarityService,
-    defer_embeddings: bool = False,
 ) -> tuple[Project | None, bool]:
-    """Find or create a project row for a crawled notice and keep it enriched with crawl metadata.
+    """Find or create a project and report whether its semantic input changed.
 
-    Returns ``(project, embedding_deferred)``. When ``defer_embeddings`` is
-    True the synchronous embedding refresh is skipped (so high-volume scsbid
-    award collection does not exceed the Celery time limit); the caller is
-    expected to enqueue an async backfill for the touched project ids.
+    This persistence boundary never performs embedding inference. The caller
+    stages a durable semantic-input event for changed rows in the same unit of
+    work, and the inference task path builds the embedding after commit.
     """
     project: Project | None = None
     if historical_record.project_id is not None:
@@ -115,7 +112,6 @@ def resolve_project_for_item(
     if project is None:
         project = find_matching_project(db, item=item, request=request)
 
-    is_new_project = project is None
     if project is None:
         project = Project(
             title=item.title or item.notice_number or "KONEPS notice",
@@ -127,14 +123,11 @@ def resolve_project_for_item(
         db.add(project)
         db.flush()
 
-    update_project_from_item(project, item=item, request=request)
-    if defer_embeddings:
-        # Persist a project row now; embedding is rebuilt asynchronously.
-        db.flush()
-        return project, True
-
-    project_similarity.refresh_project_embedding(db, project, force=is_new_project)
-    return project, False
+    semantic_input_changed = update_project_from_item(
+        project, item=item, request=request
+    )
+    db.flush()
+    return project, semantic_input_changed
 
 
 def find_matching_project(
@@ -261,7 +254,7 @@ def find_matching_project(
 
 def update_project_from_item(
     project: Project, *, item: KonepsCollectedItem, request: CrawlRequest
-) -> None:
+) -> bool:
     """Apply crawled notice details onto a project without discarding user-entered context."""
     from app.services.similarity_read_model import (
         invalidate_project_embedding,
@@ -312,7 +305,10 @@ def update_project_from_item(
     if item.business_type_label is not None:
         project.business_type_label = item.business_type_label
 
-    if project_embedding_input_state(project) != previous_semantic_state:
+    semantic_input_changed = (
+        project_embedding_input_state(project) != previous_semantic_state
+    )
+    if semantic_input_changed:
         invalidate_project_embedding(project)
 
     # 공고 낙찰하한율은 값이 있을 때만 갱신한다. scsbid/재수집 아이템이 이 필드를
@@ -329,6 +325,7 @@ def update_project_from_item(
 
     db_title = project.title or item.notice_number or "KONEPS notice"
     project.title = db_title.strip()
+    return semantic_input_changed
 
 
 def _project_description_lines(
@@ -532,18 +529,13 @@ def persist_crawl_results(
     crawl_job: CrawlJob,
     request: CrawlRequest,
     response: dict[str, Any],
-    *,
-    defer_embeddings: bool = False,
 ) -> CrawlJob:
     """Persist crawl history and any usable opening-result data.
 
-    ``defer_embeddings`` is decided by the *caller*, not this method: only the
-    Celery collection task (the single path with a hard time limit) defers
-    embeddings to an async backfill. Synchronous callers (``POST
-    /operations/crawl``, the scsbid backfill script) leave it at the default
-    ``False`` so projects are embedded inline -- otherwise their newly created
-    projects would never be embedded (no inline, no enqueued backfill) and
-    silently drop out of pgvector search/recommendation.
+    Project facts and ``semantic_input.changed`` outbox rows are committed
+    atomically. No source embeds inline: the declared inference task consumes
+    the durable event and later emits the existing ``embedding.ready`` event
+    that drives the similarity projection.
 
     ``response`` 봉투는 celery/HTTP payload 형태를 유지하지만, 그 안의 ``items`` 는
     여기서 ``KonepsCollectedItem`` 으로 **승격**된다(방어적 DTO Phase 3의 검증 지점):
@@ -552,6 +544,7 @@ def persist_crawl_results(
     """
     items = _promote_items(response.get("items", []))
     metadata = response.get("metadata", {})
+    metadata.pop("semantic_input_outbox_event_ids", None)
 
     _apply_crawl_response_summary(
         crawl_job,
@@ -560,38 +553,33 @@ def persist_crawl_results(
         metadata=metadata,
     )
 
-    project_similarity = ProjectSimilarityService()
+    inference_outbox = InferenceOutboxService()
     linked_project_ids: set[int] = set()
-    # When deferred (Celery collection task for high-volume scsbid sweeps),
-    # per-item embedding is skipped and the touched project ids are surfaced
-    # for a single async backfill; CPU model inference per item would
-    # otherwise exceed the Celery hard time limit.
-    deferred_embedding_project_ids: set[int] = set()
+    semantic_input_outbox_event_ids: set[int] = set()
 
     for item in items:
-        project, embedding_deferred = _persist_crawl_item(
+        project, outbox_event_id = _persist_crawl_item(
             db,
             item=item,
             request=request,
-            project_similarity=project_similarity,
+            inference_outbox=inference_outbox,
             crawl_job_status=crawl_job.status,
-            defer_embeddings=defer_embeddings,
         )
         if project is not None:
             linked_project_ids.add(int(project.id))
-            if embedding_deferred:
-                deferred_embedding_project_ids.add(int(project.id))
+        if outbox_event_id is not None:
+            semantic_input_outbox_event_ids.add(outbox_event_id)
 
     if len(linked_project_ids) == 1:
         crawl_job.project_id = next(iter(linked_project_ids))
 
-    # Surface deferred-embedding project ids so the task layer can enqueue a
-    # single async backfill. The service layer never imports the task module
-    # (avoids a circular import); the orchestration lives in the task.
-    if deferred_embedding_project_ids:
-        response.setdefault("metadata", {})["deferred_embedding_project_ids"] = sorted(
-            deferred_embedding_project_ids
-        )
+    # Surface committed outbox ids so task callers can fast-dispatch the
+    # inference processor after this method returns. The periodic sweep remains
+    # the delivery guarantee if that best-effort enqueue fails.
+    if semantic_input_outbox_event_ids:
+        response.setdefault("metadata", {})[
+            "semantic_input_outbox_event_ids"
+        ] = sorted(semantic_input_outbox_event_ids)
 
     return _commit_and_publish_crawl_job(
         db, crawl_job, event_name=_crawl_event_name(crawl_job.status)
@@ -632,21 +620,18 @@ def _persist_crawl_item(
     *,
     item: KonepsCollectedItem,
     request: CrawlRequest,
-    project_similarity: ProjectSimilarityService,
+    inference_outbox: InferenceOutboxService,
     crawl_job_status: str,
-    defer_embeddings: bool,
-) -> tuple[Project | None, bool]:
+) -> tuple[Project | None, int | None]:
     facts = item.opening_facts()
     historical_record = _resolve_historical_record(
         db, notice_number=item.notice_number
     )
-    project, embedding_deferred = resolve_project_for_item(
+    project, semantic_input_changed = resolve_project_for_item(
         db,
         item=item,
         request=request,
         historical_record=historical_record,
-        project_similarity=project_similarity,
-        defer_embeddings=defer_embeddings,
     )
     if project is not None:
         historical_record.project_id = project.id
@@ -663,7 +648,16 @@ def _persist_crawl_item(
         facts=facts,
         crawl_job_status=crawl_job_status,
     )
-    return project, embedding_deferred
+    if project is None:
+        return project, None
+    event = inference_outbox.ensure_semantic_input_changed_event(
+        db,
+        project,
+        semantic_input_changed=semantic_input_changed,
+    )
+    if event is None:
+        return project, None
+    return project, int(event.id)
 
 
 def _resolve_historical_record(

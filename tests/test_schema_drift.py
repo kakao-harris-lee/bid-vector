@@ -67,6 +67,7 @@ MIGRATION_OWNED_TABLES = {
     "project_similarity_snapshots",
     "project_similarity_edges",
     "inference_outbox_events",
+    "similar_projects_refresh_operations",
 }
 
 # Columns added to a pre-existing table by an alembic migration.

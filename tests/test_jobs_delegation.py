@@ -41,13 +41,13 @@ def test_collect_koneps_notices_delegates_with_injected_enqueue_helpers(monkeypa
         *,
         request,
         crawl_job_id,
-        enqueue_deferred_embedding_backfill,
+        notify_inference_outbox_committed,
         enqueue_deferred_reserve_detail_backfill,
     ):
         captured.update(
             request=request,
             crawl_job_id=crawl_job_id,
-            emb=enqueue_deferred_embedding_backfill,
+            inference=notify_inference_outbox_committed,
             res=enqueue_deferred_reserve_detail_backfill,
         )
         return {"ok": "collect"}
@@ -63,9 +63,9 @@ def test_collect_koneps_notices_delegates_with_injected_enqueue_helpers(monkeypa
     assert isinstance(captured["request"], CrawlRequest)
     assert captured["request"].source == "scsbid-openapi"
     assert captured["crawl_job_id"] == 7
-    # The injected enqueue helpers must be this module's bindings so the
-    # jobs._enqueue_deferred_embedding_backfill monkeypatch seam keeps working.
-    assert captured["emb"] is jobs._enqueue_deferred_embedding_backfill
+    # The injected notification must be this module's binding so monkeypatching
+    # the task shell still controls post-commit dispatch.
+    assert captured["inference"] is jobs.notify_inference_outbox_committed
     assert captured["res"] is jobs._enqueue_deferred_reserve_detail_backfill
 
 

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 
 from app.ai.predictors.artifact_contracts import (
+    ArtifactSource,
     ArtifactScalar,
+    NormalizedLSTMArtifact,
     PersistedEnsembleArtifact,
+    VersionAwareArtifactProvider,
     read_persisted_artifact,
 )
 from app.ai.predictors.base import (
@@ -72,11 +75,34 @@ _CONFIDENCE_MIN = 0.45
 _CONFIDENCE_MAX = 0.97
 
 
+class NormalizedEnsembleArtifact(TypedDict):
+    """Validated, inference-ready representation of one ensemble release."""
+
+    artifact_version: str
+    model_version: str
+    sequence_length: int
+    momentum_window: int
+    scenario_spread_multiplier: float
+    confidence_bias: float
+    component_weights: dict[str, float]
+    lstm_artifact: dict[str, Any] | None
+    _loaded_lstm_artifact: NormalizedLSTMArtifact | None
+    lstm_artifact_path: str | None
+
+
 class EnsembleBidRatePredictor(BasePricePredictor):
     """Ensemble predictor that blends persisted component weights at inference time."""
 
     name = "ensemble_blend"
     family = "ensemble"
+
+    def __init__(
+        self,
+        *,
+        artifact_provider: VersionAwareArtifactProvider[NormalizedEnsembleArtifact]
+        | None = None,
+    ) -> None:
+        self._artifact_provider = artifact_provider or _ENSEMBLE_ARTIFACT_PROVIDER
 
     def check_availability(self, context: PricePredictionContext) -> PredictorAvailability:
         """Validate whether the predictor is configured well enough to run."""
@@ -93,7 +119,7 @@ class EnsembleBidRatePredictor(BasePricePredictor):
         if not Path(model_path).exists():
             return PredictorAvailability(False, f"Configured ensemble model artifact was not found: {model_path}")
         try:
-            load_ensemble_artifact(model_path)
+            self._artifact_provider.load(model_path)
         except Exception as exc:
             return PredictorAvailability(False, f"Configured ensemble model artifact is invalid: {exc}")
         return PredictorAvailability(True)
@@ -101,13 +127,15 @@ class EnsembleBidRatePredictor(BasePricePredictor):
     def predict(self, context: PricePredictionContext) -> PredictionResult:
         """Predict a bid rate from a persisted ensemble model artifact."""
         model_path = str(settings.PRICE_PREDICTION_ENSEMBLE_MODEL_PATH or "").strip()
-        artifact = load_ensemble_artifact(model_path)
+        artifact = self._artifact_provider.load(model_path)
         return PredictionResult.model_validate(
             build_ensemble_prediction_payload(context, artifact=artifact)
         )
 
 
-def load_ensemble_artifact(model_source: str | Path | dict[str, Any]) -> dict[str, Any]:
+def _load_ensemble_artifact_uncached(
+    model_source: ArtifactSource,
+) -> NormalizedEnsembleArtifact:
     """Load one persisted ensemble artifact from JSON or reuse an embedded dictionary.
 
     The persisted JSON is promoted into the declared
@@ -118,6 +146,7 @@ def load_ensemble_artifact(model_source: str | Path | dict[str, Any]) -> dict[st
     raw_artifact = read_persisted_artifact(
         model_source, model=PersistedEnsembleArtifact, label=_ENSEMBLE_ARTIFACT_LABEL
     )
+    embedded_lstm_artifact = raw_artifact.lstm_artifact
 
     return {
         "artifact_version": str(raw_artifact.artifact_version or "1"),
@@ -127,9 +156,28 @@ def load_ensemble_artifact(model_source: str | Path | dict[str, Any]) -> dict[st
         "scenario_spread_multiplier": max(float(raw_artifact.scenario_spread_multiplier or 1.0), 0.2),
         "confidence_bias": float(raw_artifact.confidence_bias or 0.0),
         "component_weights": _normalize_component_weights(raw_artifact.component_weights),
-        "lstm_artifact": raw_artifact.lstm_artifact,
+        # Preserve the raw mapping for release-manifest metadata while also
+        # normalizing it once with the containing immutable ensemble version.
+        "lstm_artifact": embedded_lstm_artifact,
+        "_loaded_lstm_artifact": (
+            load_lstm_artifact(embedded_lstm_artifact)
+            if isinstance(embedded_lstm_artifact, dict)
+            else None
+        ),
         "lstm_artifact_path": str(raw_artifact.lstm_artifact_path or "").strip() or None,
     }
+
+
+_ENSEMBLE_ARTIFACT_PROVIDER = VersionAwareArtifactProvider(
+    _load_ensemble_artifact_uncached
+)
+
+
+def load_ensemble_artifact(
+    model_source: ArtifactSource,
+) -> NormalizedEnsembleArtifact:
+    """Load a normalized ensemble artifact through the version cache."""
+    return _ENSEMBLE_ARTIFACT_PROVIDER.load(model_source)
 
 
 def build_ensemble_prediction_payload(
@@ -274,8 +322,12 @@ def build_ensemble_prediction_payload(
 
 def _load_optional_lstm_component(context: PricePredictionContext, *, artifact: dict[str, Any]) -> dict[str, Any] | None:
     """Load an optional embedded/configured LSTM artifact for the ensemble."""
+    loaded_lstm_artifact = artifact.get("_loaded_lstm_artifact")
     raw_lstm_artifact = artifact.get("lstm_artifact")
     configured_lstm_path = artifact.get("lstm_artifact_path") or str(settings.PRICE_PREDICTION_LSTM_MODEL_PATH or "").strip()
+
+    if isinstance(loaded_lstm_artifact, dict):
+        return infer_lstm_sequence_signal(context, artifact=loaded_lstm_artifact)
 
     if isinstance(raw_lstm_artifact, dict):
         lstm_artifact = load_lstm_artifact(raw_lstm_artifact)

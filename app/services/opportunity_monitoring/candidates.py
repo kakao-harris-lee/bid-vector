@@ -292,7 +292,7 @@ class _CandidateCollectionMixin(_MonitoringBase):
         similar_limit: int,
         min_similarity: float,
     ) -> dict:
-        """Run the shared multi-angle opportunity analysis with runtime overrides."""
+        """Run scan analysis using only already-materialized similarity state."""
         return self.analysis_service.analyze_project(
             db,
             project,

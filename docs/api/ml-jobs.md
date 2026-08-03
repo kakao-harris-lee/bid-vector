@@ -1,7 +1,11 @@
 # ML Jobs API
 
-> 베이스 경로: `/api/v1/ml` · 인증: **불필요** (이 라우터에는 operator 토큰·DB 의존성이 없음)
+> 베이스 경로: `/api/v1/admin/ml` · 인증: **privileged operator bearer token 필수**
 > 베이스 URL 예시: `http://localhost:3000`
+
+기존 `/api/v1/ml/**` 경로는 deprecated 호환 alias로 유지되지만 동일한 privileged
+authorization을 적용한다. 사용자 웹은 이 API나 Celery task를 직접 호출하지 않고
+`/api/v1/projects/{id}/similar/refresh`의 domain operation 계약만 사용한다.
 
 이 라우터의 POST 엔드포인트는 무거운 ML 작업을 **직접 실행하지 않고 Celery 큐에 적재(enqueue)만** 한다. 즉시 `202 Accepted`와 함께 `task_id`·`poll_url`을 반환하며, 실제 학습/임베딩 재계산은 워커가 비동기로 수행한다. 진행·완료·실패는 짝이 되는 GET 상태 엔드포인트(`poll_url`)를 폴링해 확인한다.
 
@@ -13,22 +17,22 @@
 - 알 수 없는 `task_id`도 Celery는 `PENDING`으로 조회하므로 상태 조회는 `404`가 아니라 `status="queued"`를 돌려준다.
 
 ## 목차
-- [POST /api/v1/ml/backfills/project-embeddings](#post-apiv1mlbackfillsproject-embeddings) — 프로젝트 임베딩 백필 적재
-- [GET /api/v1/ml/backfills/project-embeddings/tasks/{task_id}](#get-apiv1mlbackfillsproject-embeddingstaskstask_id) — 백필 작업 상태 조회
-- [POST /api/v1/ml/training/price-predictor](#post-apiv1mltrainingprice-predictor) — 가격 예측기 학습 적재
-- [GET /api/v1/ml/training/price-predictor/tasks/{task_id}](#get-apiv1mltrainingprice-predictortaskstask_id) — 학습 작업 상태 조회
-- [POST /api/v1/ml/reevaluations/decision-experiments/{experiment_run_id}](#post-apiv1mlreevaluationsdecision-experimentsexperiment_run_id) — 결정 실험 재평가 적재
-- [GET /api/v1/ml/reevaluations/decision-experiments/tasks/{task_id}](#get-apiv1mlreevaluationsdecision-experimentstaskstask_id) — 재평가 작업 상태 조회
+- [POST /api/v1/admin/ml/backfills/project-embeddings](#post-apiv1adminmlbackfillsproject-embeddings) — 프로젝트 임베딩 백필 적재
+- [GET /api/v1/admin/ml/backfills/project-embeddings/tasks/{task_id}](#get-apiv1adminmlbackfillsproject-embeddingstaskstask_id) — 백필 작업 상태 조회
+- [POST /api/v1/admin/ml/training/price-predictor](#post-apiv1adminmltrainingprice-predictor) — 가격 예측기 학습 적재
+- [GET /api/v1/admin/ml/training/price-predictor/tasks/{task_id}](#get-apiv1adminmltrainingprice-predictortaskstask_id) — 학습 작업 상태 조회
+- [POST /api/v1/admin/ml/reevaluations/decision-experiments/{experiment_run_id}](#post-apiv1adminmlreevaluationsdecision-experimentsexperiment_run_id) — 결정 실험 재평가 적재
+- [GET /api/v1/admin/ml/reevaluations/decision-experiments/tasks/{task_id}](#get-apiv1adminmlreevaluationsdecision-experimentstaskstask_id) — 재평가 작업 상태 조회
 
 ---
 
-## POST /api/v1/ml/backfills/project-embeddings
+## POST /api/v1/admin/ml/backfills/project-embeddings
 
 프로젝트(공고) 임베딩을 일괄 재계산하는 백필 작업을 ML 백필 큐(`bid_vector_ml_backfill`)에 적재한다. 즉시 실행하지 않고 `202`와 함께 `task_id`·`poll_url`을 반환한다.
 
 - 언제 쓰나: 임베딩 모델 교체·필드 보강 후 기존 프로젝트의 pgvector 임베딩을 다시 채울 때. `force=true`면 이미 임베딩이 있는 프로젝트도 강제 재계산한다. `limit`/`offset`으로 배치를 나누고 `category`/`project_status`로 대상을 좁힌다.
 - 도메인: 임베딩 차원 384 고정(`Project.embedding`, `paraphrase-multilingual-MiniLM-L12-v2`). 백필은 이 차원을 유지한다.
-- 인증: 불필요.
+- 인증: privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -42,7 +46,8 @@
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/ml/backfills/project-embeddings?limit=200&offset=0&category=용역&force=true"
+curl -X POST "http://localhost:3000/api/v1/admin/ml/backfills/project-embeddings?limit=200&offset=0&category=용역&force=true" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 202**
@@ -53,7 +58,7 @@ curl -X POST "http://localhost:3000/api/v1/ml/backfills/project-embeddings?limit
   "queue": "bid_vector_ml_backfill",
   "status": "queued",
   "detail": "Task status is available.",
-  "poll_url": "/api/v1/ml/backfills/project-embeddings/tasks/3f1c2a4e-8b9d-4c1a-9e21-6d0f7a2b3c4d"
+  "poll_url": "/api/v1/admin/ml/backfills/project-embeddings/tasks/3f1c2a4e-8b9d-4c1a-9e21-6d0f7a2b3c4d"
 }
 ```
 
@@ -77,13 +82,13 @@ curl -X POST "http://localhost:3000/api/v1/ml/backfills/project-embeddings?limit
 
 ---
 
-## GET /api/v1/ml/backfills/project-embeddings/tasks/{task_id}
+## GET /api/v1/admin/ml/backfills/project-embeddings/tasks/{task_id}
 
 위 백필 작업의 현재 상태를 조회한다. POST 응답의 `poll_url`로 주기적으로 폴링한다.
 
 - 언제 쓰나: 백필 적재 후 완료 여부와 결과(`result`)를 확인할 때.
 - 도메인: 알 수 없는 `task_id`도 `status="queued"`로 반환된다(404 아님) — 잘못된 ID와 시작 전 작업은 구분되지 않는다.
-- 인증: 불필요.
+- 인증: privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -93,7 +98,8 @@ curl -X POST "http://localhost:3000/api/v1/ml/backfills/project-embeddings?limit
 
 **요청 예시**
 ```bash
-curl "http://localhost:3000/api/v1/ml/backfills/project-embeddings/tasks/3f1c2a4e-8b9d-4c1a-9e21-6d0f7a2b3c4d"
+curl "http://localhost:3000/api/v1/admin/ml/backfills/project-embeddings/tasks/3f1c2a4e-8b9d-4c1a-9e21-6d0f7a2b3c4d" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 200**
@@ -124,13 +130,13 @@ curl "http://localhost:3000/api/v1/ml/backfills/project-embeddings/tasks/3f1c2a4
 
 ---
 
-## POST /api/v1/ml/training/price-predictor
+## POST /api/v1/admin/ml/training/price-predictor
 
 가격 예측기 학습 작업을 전용 학습 큐(`bid_vector_ml_training`)에 적재한다. 모든 필드가 기본값을 가지므로 본문 없이(`{}`)도 호출 가능하다.
 
 - 언제 쓰나: 새 가격 예측 모델을 학습·릴리스할 때. `release_tag`로 릴리스 태그를 지정하고, `category`/`agency_name`으로 학습 데이터 범위를 좁히며, `limit`으로 표본 수를 제한한다. `create_manifest=true`면 릴리스 manifest를 생성하고, `publish_remote=true`면 원격 발행한다.
 - 도메인: 학습 산출물은 manifest 서명·promotion gate(차원 호환성 검증 포함)를 거쳐 배포된다. 적재 단계에서는 서명/게이트를 수행하지 않고 작업만 발행하며, 실제 처리는 워커·릴리스 파이프라인에서 이뤄진다. 서명키 등 시크릿은 이 API로 전달하지 않는다.
-- 인증: 불필요.
+- 인증: privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -146,7 +152,8 @@ curl "http://localhost:3000/api/v1/ml/backfills/project-embeddings/tasks/3f1c2a4
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/ml/training/price-predictor" \
+curl -X POST "http://localhost:3000/api/v1/admin/ml/training/price-predictor" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "release_tag": "price-2026-05-29",
@@ -177,7 +184,7 @@ curl -X POST "http://localhost:3000/api/v1/ml/training/price-predictor" \
   "queue": "bid_vector_ml_training",
   "status": "queued",
   "detail": "Task status is available.",
-  "poll_url": "/api/v1/ml/training/price-predictor/tasks/a7b2c9d4-1e3f-4a5b-8c6d-9f0a1b2c3d4e"
+  "poll_url": "/api/v1/admin/ml/training/price-predictor/tasks/a7b2c9d4-1e3f-4a5b-8c6d-9f0a1b2c3d4e"
 }
 ```
 
@@ -201,13 +208,13 @@ curl -X POST "http://localhost:3000/api/v1/ml/training/price-predictor" \
 
 ---
 
-## GET /api/v1/ml/training/price-predictor/tasks/{task_id}
+## GET /api/v1/admin/ml/training/price-predictor/tasks/{task_id}
 
 가격 예측기 학습 작업의 상태를 조회한다. POST 응답의 `poll_url`로 폴링한다.
 
 - 언제 쓰나: 학습 완료·실패 여부, 결과(`result`)·오류(`error`)를 확인할 때.
 - 도메인: 학습 성공 시 `result`에 작업 산출 요약(dict)이 담길 수 있다. 알 수 없는 task_id는 `queued`로 보고된다(404 아님).
-- 인증: 불필요.
+- 인증: privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -217,7 +224,8 @@ curl -X POST "http://localhost:3000/api/v1/ml/training/price-predictor" \
 
 **요청 예시**
 ```bash
-curl "http://localhost:3000/api/v1/ml/training/price-predictor/tasks/a7b2c9d4-1e3f-4a5b-8c6d-9f0a1b2c3d4e"
+curl "http://localhost:3000/api/v1/admin/ml/training/price-predictor/tasks/a7b2c9d4-1e3f-4a5b-8c6d-9f0a1b2c3d4e" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 200**
@@ -244,13 +252,13 @@ curl "http://localhost:3000/api/v1/ml/training/price-predictor/tasks/a7b2c9d4-1e
 
 ---
 
-## POST /api/v1/ml/reevaluations/decision-experiments/{experiment_run_id}
+## POST /api/v1/admin/ml/reevaluations/decision-experiments/{experiment_run_id}
 
 특정 결정 실험 실행(`experiment_run_id`)에 대한 재평가 작업을 ML 재평가 큐(`bid_vector_ml_reevaluation`)에 적재한다.
 
 - 언제 쓰나: 예측기·전략 변경 후 과거 결정 실험을 다시 평가해 결과를 비교할 때.
 - 도메인: 적재 시점에는 `experiment_run_id` 존재 여부를 검증하지 않고 즉시 작업을 발행한다 — 존재하지 않는 ID 처리는 워커 실행 단계에서 이뤄지며 작업 실패로 귀결될 수 있다.
-- 인증: 불필요.
+- 인증: privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -260,7 +268,8 @@ curl "http://localhost:3000/api/v1/ml/training/price-predictor/tasks/a7b2c9d4-1e
 
 **요청 예시**
 ```bash
-curl -X POST "http://localhost:3000/api/v1/ml/reevaluations/decision-experiments/42"
+curl -X POST "http://localhost:3000/api/v1/admin/ml/reevaluations/decision-experiments/42" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 202**
@@ -271,7 +280,7 @@ curl -X POST "http://localhost:3000/api/v1/ml/reevaluations/decision-experiments
   "queue": "bid_vector_ml_reevaluation",
   "status": "queued",
   "detail": "Task status is available.",
-  "poll_url": "/api/v1/ml/reevaluations/decision-experiments/tasks/c3d4e5f6-7a8b-4c9d-0e1f-2a3b4c5d6e7f"
+  "poll_url": "/api/v1/admin/ml/reevaluations/decision-experiments/tasks/c3d4e5f6-7a8b-4c9d-0e1f-2a3b4c5d6e7f"
 }
 ```
 
@@ -295,13 +304,13 @@ curl -X POST "http://localhost:3000/api/v1/ml/reevaluations/decision-experiments
 
 ---
 
-## GET /api/v1/ml/reevaluations/decision-experiments/tasks/{task_id}
+## GET /api/v1/admin/ml/reevaluations/decision-experiments/tasks/{task_id}
 
 결정 실험 재평가 작업의 상태를 조회한다. POST 응답의 `poll_url`로 폴링한다.
 
 - 언제 쓰나: 재평가 완료·실패 여부와 결과를 확인할 때.
 - 도메인: 알 수 없는 task_id는 `queued`로 보고된다(404 아님).
-- 인증: 불필요.
+- 인증: privileged operator bearer token 필수.
 
 **파라미터**
 
@@ -311,7 +320,8 @@ curl -X POST "http://localhost:3000/api/v1/ml/reevaluations/decision-experiments
 
 **요청 예시**
 ```bash
-curl "http://localhost:3000/api/v1/ml/reevaluations/decision-experiments/tasks/c3d4e5f6-7a8b-4c9d-0e1f-2a3b4c5d6e7f"
+curl "http://localhost:3000/api/v1/admin/ml/reevaluations/decision-experiments/tasks/c3d4e5f6-7a8b-4c9d-0e1f-2a3b4c5d6e7f" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 **응답 200**

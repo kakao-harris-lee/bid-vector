@@ -29,6 +29,8 @@ from app.schemas.project import (
     ProjectEmbeddingRefreshTaskResponse,
     ProjectResponse,
     ProjectSimilaritySearchResponse,
+    SimilarProjectsRefreshOperationResponse,
+    SimilarProjectsRefreshOperationStatusResponse,
     SimilarProjectItem,
 )
 
@@ -305,6 +307,8 @@ __all__ = [
     "ProjectEmbeddingRefreshTaskResponse",
     "ProjectResponse",
     "ProjectSimilaritySearchResponse",
+    "SimilarProjectsRefreshOperationResponse",
+    "SimilarProjectsRefreshOperationStatusResponse",
     "SimilarProjectItem",
     "BidTargetMenu",
     "BidTargetOption",

@@ -1,8 +1,9 @@
 """ML operation endpoints that only enqueue background work."""
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.core.config import settings
+from app.core.security import require_privileged_operator
 from app.schemas.schemas import MLTaskResponse, MLTaskStatusResponse, PricePredictionTrainingRequest
 from app.tasks.jobs import (
     enqueue_decision_experiment_reevaluation,
@@ -13,7 +14,7 @@ from app.tasks.jobs import (
     get_project_embedding_rebuild_task_status,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_privileged_operator)])
 
 
 @router.post(
@@ -43,7 +44,7 @@ def enqueue_project_embedding_backfill(
         "queue": settings.CELERY_ML_BACKFILL_QUEUE,
         "status": status_payload["status"],
         "detail": status_payload["detail"],
-        "poll_url": f"/api/v1/ml/backfills/project-embeddings/tasks/{async_result.id}",
+        "poll_url": f"/api/v1/admin/ml/backfills/project-embeddings/tasks/{async_result.id}",
     }
 
 
@@ -73,7 +74,7 @@ def enqueue_price_predictor_training_job(request: PricePredictionTrainingRequest
         "queue": settings.CELERY_ML_TRAINING_QUEUE,
         "status": status_payload["status"],
         "detail": status_payload["detail"],
-        "poll_url": f"/api/v1/ml/training/price-predictor/tasks/{async_result.id}",
+        "poll_url": f"/api/v1/admin/ml/training/price-predictor/tasks/{async_result.id}",
     }
 
 
@@ -101,7 +102,10 @@ def enqueue_decision_experiment_reevaluation_job(experiment_run_id: int):
         "queue": settings.CELERY_ML_REEVALUATION_QUEUE,
         "status": status_payload["status"],
         "detail": status_payload["detail"],
-        "poll_url": f"/api/v1/ml/reevaluations/decision-experiments/tasks/{async_result.id}",
+        "poll_url": (
+            "/api/v1/admin/ml/reevaluations/decision-experiments/tasks/"
+            f"{async_result.id}"
+        ),
     }
 
 

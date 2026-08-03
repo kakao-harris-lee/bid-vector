@@ -9,7 +9,7 @@
 | Queue | Worker | Docker target | 용도 |
 | --- | --- | --- | --- |
 | `CELERY_OPS_QUEUE` | `worker` | `api-runtime` | crawl, Telegram polling, notification, reconciler |
-| `CELERY_ML_INFERENCE_QUEUE` | `inference-worker` | `api-ml-full` | strategy monitoring and preview snapshot recompute |
+| `CELERY_ML_INFERENCE_QUEUE` | `inference-worker` | `api-ml-full` | semantic-input embedding, similarity projection, strategy monitoring, preview snapshot recompute |
 | `CELERY_ML_BACKFILL_QUEUE` | `ml-worker` | `api-ml-full` | project embedding backfill |
 | `CELERY_ML_REEVALUATION_QUEUE` | `ml-worker` | `api-ml-full` | decision experiment re-evaluation |
 | `CELERY_ML_TRAINING_QUEUE` | `training-worker` | `api-training` | price predictor training and artifact generation |
@@ -18,11 +18,21 @@
 
 ## API 경계
 
-- `POST /api/v1/ml/backfills/project-embeddings`는 임베딩 백필을 enqueue한다.
-- `POST /api/v1/ml/training/price-predictor`는 학습 작업을 enqueue한다.
-- `POST /api/v1/ml/reevaluations/decision-experiments/{id}`는 실험 재평가를 enqueue한다.
-- 기존 `POST /api/v1/projects/embeddings/rebuild`는 호환성 alias지만 더 이상 inline rebuild를 실행하지 않는다.
+- 사용자 UI는 trainer·embedding task를 직접 호출하지 않는다. `POST /api/v1/projects/{id}/similar/refresh`가 프로젝트/요청자에 묶인 opaque operation을 반환하며, 사용자는 그 operation만 폴링한다.
+- `POST /api/v1/admin/ml/backfills/project-embeddings`는 임베딩 백필을 enqueue한다.
+- `POST /api/v1/admin/ml/training/price-predictor`는 학습 작업을 enqueue한다.
+- `POST /api/v1/admin/ml/reevaluations/decision-experiments/{id}`는 실험 재평가를 enqueue한다.
+- `/api/v1/admin/ml/**`와 기존 `/api/v1/ml/**`, `/api/v1/projects/**/embedding/**` 호환 경로는 모두 privileged operator 전용이다.
+- 기존 `POST /api/v1/projects/embeddings/rebuild`는 deprecated 호환성 alias이며 더 이상 inline rebuild를 실행하지 않는다.
 - 기존 `POST /api/v1/analytics/decision-experiments/{id}/evaluate`도 직접 평가하지 않고 re-evaluation task id를 반환한다.
+
+## 수집·추론 경계
+
+- 수집기는 외부 데이터를 정규화해 canonical project facts를 저장하고, 같은 DB transaction에 `semantic_input.changed` outbox event를 기록한다.
+- commit 이후 task enqueue는 지연을 줄이는 best-effort 알림일 뿐이다. broker 장애 시에도 주기적 outbox sweep과 stale-claim 회수가 전달을 복구한다.
+- inference worker가 embedding을 저장한 뒤 `embedding.ready`를 기록하고 similarity read model을 갱신한다. KONEPS source별 inline embedding 분기는 두지 않는다.
+- bulk opportunity scan은 저장된 similarity/features만 소비한다. 단일 프로젝트의 명시적 분석 경로만 기존 refresh-capable 동작을 유지한다.
+- release artifact는 파일 identity별 bounded process-local cache를 사용하며, worker fork 이후 cache와 lock을 재초기화한다.
 
 ## Release Manifest 정책
 

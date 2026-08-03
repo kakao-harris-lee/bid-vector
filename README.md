@@ -33,18 +33,23 @@
 KONEPS OpenAPI / Crawl
         |
         v
-Project / HistoricalData / TenderResult
+Canonical Project / HistoricalData / TenderResult
         |
-        +--> Classifier + pgvector similarity
+        +--> transactional semantic_input.changed outbox
+        |          |
+        |          v
+        |    inference worker --> embedding.ready --> similarity read model
         |
-        +--> Price predictors + guardrails
+        +--> stored-only opportunity scan --> Price predictors + guardrails
         |
         v
 BidDecisionRecord / PaperBid / SyntheticExperiment
         |
         +--> Telegram / Web notification / WebSocket
         |
-        +--> Dashboard / Analytics / Accuracy report
+        +--> read-only user API / Dashboard / Analytics / Accuracy report
+
+Admin API --> training / backfill / reevaluation queues --> versioned artifacts
 ```
 
 ## 주요 디렉토리

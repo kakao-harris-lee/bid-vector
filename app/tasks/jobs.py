@@ -61,6 +61,7 @@ from app.tasks.evidence_jobs import (
 from app.tasks.inference_jobs import (
     enqueue_inference_outbox_processing,
     notify_embedding_rebuild_committed,
+    notify_inference_outbox_committed,
     process_inference_outbox,
 )
 from app.tasks.reserve_detail_backfill import (
@@ -116,7 +117,7 @@ def collect_koneps_notices(
         self,
         request=CrawlTaskRequest.model_validate(request_payload or {}),
         crawl_job_id=crawl_job_id,
-        enqueue_deferred_embedding_backfill=_enqueue_deferred_embedding_backfill,
+        notify_inference_outbox_committed=notify_inference_outbox_committed,
         enqueue_deferred_reserve_detail_backfill=_enqueue_deferred_reserve_detail_backfill,
     )
 

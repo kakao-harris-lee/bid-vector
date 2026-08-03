@@ -31,41 +31,41 @@ export interface SimilarProjectItem {
   deadline?: string | null;
   created_at: string;
   similarity_score: number;
-  embedding_model?: string | null;
 }
 
 export interface ProjectSimilaritySearchResponse {
   target_project_id: number;
   target_project_title: string;
-  target_embedding_model?: string | null;
-  target_embedding_status?: "ready" | "pending" | "stale";
-  target_embedding_updated_at?: string | null;
-  target_embedding_refresh_required?: boolean;
-  search_mode: "read_model" | "postgres_vector" | "python_fallback";
   same_category_only: boolean;
   min_similarity: number;
   result_count: number;
   results: SimilarProjectItem[];
 }
 
-export interface ProjectEmbeddingRefreshResponse {
+export type SimilarProjectsRefreshStatus =
+  | "accepted"
+  | "in_progress"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface SimilarProjectsRefreshOperationResponse {
   project_id: number;
-  task_id: string;
-  task_name: string;
-  queue: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
-  detail: string;
+  operation_id: string;
+  operation: "refresh_similar_projects";
+  status: SimilarProjectsRefreshStatus;
+  message: string;
   poll_url: string;
 }
 
-export interface ProjectEmbeddingTaskStatusResponse {
-  task_id: string;
-  task_name: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
-  raw_status: string;
-  ready: boolean;
-  successful: boolean;
-  detail: string;
+export interface SimilarProjectsRefreshOperationStatusResponse {
+  project_id: number;
+  operation_id: string;
+  operation: "refresh_similar_projects";
+  status: SimilarProjectsRefreshStatus;
+  is_terminal: boolean;
+  succeeded: boolean;
+  message: string;
   error?: string | null;
 }
 

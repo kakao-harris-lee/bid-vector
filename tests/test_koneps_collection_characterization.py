@@ -677,8 +677,6 @@ def _persist(db, monkeypatch, request: CrawlRequest, response: dict[str, Any]) -
             "items": response["items"],
             "metadata": response["metadata"],
         },
-        # 임베딩은 지연시켜 sbert 추론 없이 결정적으로 돈다.
-        defer_embeddings=True,
     )
 
 

@@ -7,16 +7,27 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import Project
+from app.core.security import (
+    get_current_operator_from_bearer,
+    require_privileged_operator,
+)
+from app.models.models import Project, User
 from app.schemas.schemas import (
     ProjectCreate,
     ProjectEmbeddingBatchRefreshTaskResponse,
     ProjectEmbeddingBatchRefreshTaskStatusResponse,
     ProjectEmbeddingRefreshTaskResponse,
     ProjectResponse,
-    ProjectSimilaritySearchResponse,
+    SimilarProjectsRefreshOperationResponse,
+    SimilarProjectsRefreshOperationStatusResponse,
 )
+from app.schemas.project import SimilarProjectsResponse
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.similar_projects_refresh import (
+    SimilarProjectsRefreshOperationNotFound,
+    SimilarProjectsRefreshService,
+    get_similar_projects_refresh_service,
+)
 from app.services.similarity_read_model import (
     invalidate_project_embedding,
     project_embedding_input_state,
@@ -168,6 +179,7 @@ def _enqueue_project_embedding_rebuild_response(
     response_model=ProjectEmbeddingBatchRefreshTaskResponse,
     status_code=status.HTTP_202_ACCEPTED,
     deprecated=True,
+    dependencies=[Depends(require_privileged_operator)],
 )
 def rebuild_project_embeddings(
     limit: int = Query(default=100, ge=1, le=1000),
@@ -190,6 +202,8 @@ def rebuild_project_embeddings(
     "/embeddings/rebuild/async",
     response_model=ProjectEmbeddingBatchRefreshTaskResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    dependencies=[Depends(require_privileged_operator)],
 )
 def rebuild_project_embeddings_async(
     limit: int = Query(default=100, ge=1, le=1000),
@@ -208,7 +222,12 @@ def rebuild_project_embeddings_async(
     )
 
 
-@router.get("/embeddings/rebuild/tasks/{task_id}", response_model=ProjectEmbeddingBatchRefreshTaskStatusResponse)
+@router.get(
+    "/embeddings/rebuild/tasks/{task_id}",
+    response_model=ProjectEmbeddingBatchRefreshTaskStatusResponse,
+    deprecated=True,
+    dependencies=[Depends(require_privileged_operator)],
+)
 def get_rebuild_project_embeddings_task_status(task_id: str):
     """Inspect the current status and result of a queued embedding rebuild task."""
     return get_project_embedding_rebuild_task_status(task_id)
@@ -228,7 +247,7 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     return project
 
 
-@router.get("/{project_id}/similar", response_model=ProjectSimilaritySearchResponse)
+@router.get("/{project_id}/similar", response_model=SimilarProjectsResponse)
 def get_similar_projects(
     project_id: int,
     limit: int = Query(default=5, ge=1, le=20),
@@ -257,9 +276,69 @@ def get_similar_projects(
 
 
 @router.post(
+    "/{project_id}/similar/refresh",
+    response_model=SimilarProjectsRefreshOperationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def refresh_similar_projects(
+    project_id: int,
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    operator: User = Depends(get_current_operator_from_bearer),
+    refresh_service: SimilarProjectsRefreshService = Depends(
+        get_similar_projects_refresh_service
+    ),
+):
+    """Queue a user-facing refresh without exposing ML infrastructure details."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    return refresh_service.start(
+        db,
+        project=project,
+        operator=operator,
+        force=force,
+    )
+
+
+@router.get(
+    "/{project_id}/similar/refresh/operations/{operation_id}",
+    response_model=SimilarProjectsRefreshOperationStatusResponse,
+)
+def get_similar_projects_refresh_status(
+    project_id: int,
+    operation_id: str,
+    db: Session = Depends(get_db),
+    operator: User = Depends(get_current_operator_from_bearer),
+    refresh_service: SimilarProjectsRefreshService = Depends(
+        get_similar_projects_refresh_service
+    ),
+):
+    """Return the domain lifecycle state for a similar-project refresh."""
+    try:
+        return refresh_service.get_status(
+            db,
+            operation_id=operation_id,
+            project_id=project_id,
+            operator=operator,
+        )
+    except SimilarProjectsRefreshOperationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Refresh operation not found",
+        ) from exc
+
+
+@router.post(
     "/{project_id}/embedding/refresh",
     response_model=ProjectEmbeddingRefreshTaskResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    dependencies=[Depends(require_privileged_operator)],
 )
 def refresh_project_embedding(
     project_id: int,

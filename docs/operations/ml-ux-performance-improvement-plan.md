@@ -18,8 +18,10 @@
    작업, API route latency, container RSS 추이를 함께 보존하지 않는다.
 
 따라서 우선순위는 **인라인 similarity ML 제거 → online inference 큐 분리 → durable
-job/read-model → scan 중복 제거** 순서다. 별도 마이크로서비스 분리는 이 단계의 목표가
-아니다.
+operation/outbox/read-model → scan 중복 제거** 순서다. 별도 마이크로서비스 분리는 이
+단계의 목표가 아니다. 2026-08-03 아키텍처 경계 리팩터링에서 사용자 surface와 admin ML
+control plane, 수집 transaction과 inference 실행, bulk scan과 artifact 로딩 경계를 코드로
+분리했다.
 
 ## 2026-08-03 로컬 실측
 
@@ -117,8 +119,9 @@ schema/outbox 변경 후 API·worker 이미지를 재빌드하고 컨테이너�
 초기 기준선 당시 라우터는 `ProjectSimilarityService.find_similar_projects()`를 기본
 `read_only=False`로 호출하고 GET 안에서 commit했다. missing/stale target이면
 `NoticeClassifierService`의 SentenceTransformer를 lazy-load하고 encode했다. 2026-08-03
-후속 변경으로 GET은 저장 embedding만 읽고, missing/stale이면 `pending`/`stale` 상태와 빈
-결과를 반환한다.
+후속 변경으로 GET은 저장 embedding/read model만 읽고 빈 결과를 반환한다. embedding
+model/status와 storage search mode는 더 이상 사용자 응답에 노출하지 않으며, 명시적
+`POST /projects/{id}/similar/refresh`가 opaque domain operation을 반환한다.
 
 영향:
 
@@ -140,12 +143,14 @@ reconciler와 같은 `bid_vector_ops` 큐를 사용한다. concurrency 2를 prev
 조회하고, 선택된 top-N은 후속 단계에서 다시 분석된다. 메모리 고정 문제는 완화됐지만
 DB query/CPU 증폭과 task runtime 변동은 남아 있다.
 
-### P1 — 갱신 전달과 관측의 내구성 부족
+### P1 — 갱신 전달과 관측의 내구성 부족 (전달 경계 해결, 서버 관측 대기)
 
-공고 생성/수정 후 최초 embedding enqueue는 broker 장애 시 DB 행과 원자적이지 않다.
-다만 embedding 완료 후 similarity projection은 transaction outbox에 기록되고, 즉시 publish가
-실패해도 beat sweep과 stale-claim 복구가 처리한다. 현재 analytics의 queue wait 평균은
-`OperatorStrategyRun` 일부만 집계해 preview/embedding queue의 p95를 설명하지 못한다.
+공고 생성/수정은 canonical project facts와 `semantic_input.changed`를 같은 transaction에
+기록한다. commit 후 즉시 enqueue가 실패해도 beat sweep과 stale-claim 복구가 embedding을
+생성하고, 이어지는 `embedding.ready`가 similarity projection을 갱신한다. 동일 재수집은
+healthy current embedding이면 no-op이고 vectorless/stale/failed event면 복구한다. 남은 문제는
+analytics의 queue wait 평균이 `OperatorStrategyRun` 일부만 집계해 preview/embedding queue의
+p95를 설명하지 못한다는 점이다.
 
 ### P1 — 빈 DB migration 불가
 
@@ -171,7 +176,8 @@ DB transaction + outbox
                                            ▼
                                    read-only FastAPI ──► React UI
 
-명시 갱신 POST ──► 202 + job id ──► 상태/스냅샷 polling
+사용자 명시 갱신 POST ──► 202 + opaque operation ──► domain 상태 polling
+관리자 ML API ──► backfill/training/reevaluation queue ──► versioned artifact
 ```
 
 ## 구현 계획
@@ -205,15 +211,14 @@ reconciler 작업이 inference 실행시간만큼 기다리지 않는다.
 
 - [x] GET `/projects/{id}/similar`는 저장된 target vector와 저장 embedding만 읽고
   commit하지 않는다.
-- [x] missing/stale이면 `ready/stale/pending`, model, `embedding_updated_at`, refresh 필요
-  여부를 반환한다.
-- [x] POST `/projects/{id}/embedding/refresh`는 202 + job id를 반환한다.
+- [x] 사용자 GET 응답에서 embedding 상태/model과 storage mode를 제거한다.
+- [x] POST `/projects/{id}/similar/refresh`는 project/operator에 묶인 opaque operation을 반환한다.
 - [x] inference worker가 단일 project embedding refresh를 처리한다.
 - [x] pgvector 경로의 `ORDER BY`를 distance 단일 정렬로 제한해 HNSW 인덱스를 사용한다.
 - [x] similarity result 자체를 versioned read-model로 저장하고 embedding-ready recompute를
   inference worker로 연결한다.
-- [x] `SimilarPanel`은 이전 결과를 즉시 표시하고 task terminal 상태까지 polling하며, 최초 자동
-  진입이 모델 로드를 일으키지 않게 한다.
+- [x] `SimilarPanel`은 ML/Celery 명칭 없이 domain operation의 terminal 상태까지 polling하며,
+  최초 자동 진입이 모델 로드를 일으키지 않게 한다.
 
 완료 조건:
 
@@ -239,6 +244,9 @@ Read-model 후속 계획:
 
 ### Work package 3 — durable outbox와 projection invalidation
 
+- [x] 수집 project facts와 `semantic_input.changed`를 같은 transaction에 기록한다.
+- [x] KONEPS source별 inline embedding/defer 분기를 제거하고 inference task로 통일한다.
+- [x] 동일 재수집의 pending dedupe와 vectorless/stale/failed event 복구를 적용한다.
 - [x] embedding refresh와 같은 transaction에 `embedding.ready` outbox row를 기록한다.
 - [x] event version별 dedupe, bounded retry/backoff, stale running claim 회수를 적용한다.
 - [x] 즉시 enqueue 실패를 보완하는 30초 기본 Celery beat sweep을 연결한다.
@@ -253,6 +261,10 @@ Read-model 후속 계획:
 
 ### Work package 4 — scan 실행 컨텍스트와 중복 제거
 
+- [x] bulk opportunity scan은 missing/ready 여부와 관계없이 저장 similarity만 사용하며 inline
+  encode를 실행하지 않는다.
+- [x] LSTM/ensemble release artifact parsing·validation은 파일 identity별 bounded worker cache로
+  재사용하고 artifact 교체와 worker fork에 안전하게 무효화한다.
 - run-scoped `AnalysisContext`에 workload, 시장 집계, calibration, category historical
   series를 캐시한다.
 - 최초 분석 결과를 typed `CandidateDecisionInputs`로 유지하고 top-N 전체 재분석을 없앤다.

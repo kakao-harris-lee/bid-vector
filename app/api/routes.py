@@ -38,7 +38,13 @@ router.include_router(
 router.include_router(projects.router, prefix="/projects", tags=["Projects"])
 router.include_router(bids.router, prefix="/bids", tags=["Bids"])
 router.include_router(predictions.router, prefix="/predictions", tags=["AI Predictions"])
-router.include_router(ml.router, prefix="/ml", tags=["ML Jobs"])
+router.include_router(ml.router, prefix="/admin/ml", tags=["Admin ML Operations"])
+router.include_router(
+    ml.router,
+    prefix="/ml",
+    tags=["ML Jobs (Deprecated)"],
+    deprecated=True,
+)
 router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 router.include_router(admin.router, prefix="/admin", tags=["Legacy Admin"])
 router.include_router(operations.router, prefix="/operations", tags=["Operations"])

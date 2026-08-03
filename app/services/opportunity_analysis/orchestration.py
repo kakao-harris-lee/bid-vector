@@ -38,7 +38,7 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
         operator: User | None = None,
         read_only: bool = False,
     ) -> dict:
-        """Build a multi-angle bid opportunity analysis for one project. read_only=True(스캔 전용): 유사공고 검색의 임베딩 영속화를 건너뜀, 기본 False — 기존 호출자 불변."""
+        """Build one analysis; scan reads use stored similarity state only."""
         operator, profile, strategy = self._resolve_operator_context(db, operator)
 
         analysis_inputs = self._build_analysis_inputs(
@@ -172,7 +172,10 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
             limit=request.similar_limit,
             min_similarity=request.min_similarity,
             same_category_only=request.same_category_only,
-            read_only=read_only,
+            # Bulk candidate scans must not turn a missing/stale materialization
+            # into inline model work. The single-project default remains the
+            # existing refresh-capable path when ``read_only`` is false.
+            stored_only=read_only,
         )
         return _AnalysisInputs(
             classification=classification,

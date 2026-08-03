@@ -127,21 +127,19 @@ def test_update_project_from_item_persists_canonical_notice(test_db):
 
 
 def test_resolve_project_for_item_creates_and_enriches(test_db):
-    """A notice with no prior project creates one, enriched and embedding-deferred."""
+    """A notice with no prior project creates one and reports semantic change."""
     historical = HistoricalData(notice_number="NEW-AWARD")
     test_db.add(historical)
     test_db.flush()
 
-    project, deferred = persistence.resolve_project_for_item(
+    project, semantic_input_changed = persistence.resolve_project_for_item(
         test_db,
         item=_award_item("NEW-AWARD"),
         request=_request(),
         historical_record=historical,
-        project_similarity=None,  # unused on the defer path
-        defer_embeddings=True,
     )
 
-    assert deferred is True
+    assert semantic_input_changed is True
     assert project is not None
     assert project.id is not None
     assert project.notice_number == "NEW-AWARD"
@@ -259,8 +257,6 @@ def test_resolve_project_creation_persists_award_floor_rate(test_db):
         item=item,
         request=_request(),
         historical_record=historical,
-        project_similarity=None,
-        defer_embeddings=True,
     )
 
     assert project is not None
@@ -481,8 +477,8 @@ def test_write_delegators_forward_to_persistence(test_db, monkeypatch):
         calls["create"] = (db, request, celery_task_id)
         return "created-job"
 
-    def _spy_persist(db, crawl_job, request, response, *, defer_embeddings=False):
-        calls["persist"] = (db, crawl_job, request, response, defer_embeddings)
+    def _spy_persist(db, crawl_job, request, response):
+        calls["persist"] = (db, crawl_job, request, response)
         return "persisted-job"
 
     def _spy_mark(db, crawl_job, error_message):
@@ -503,12 +499,10 @@ def test_write_delegators_forward_to_persistence(test_db, monkeypatch):
     assert calls["create"] == (test_db, request, "t-9")
 
     assert (
-        service.persist_crawl_results(
-            test_db, "job", request, {"items": []}, defer_embeddings=True
-        )
+        service.persist_crawl_results(test_db, "job", request, {"items": []})
         == "persisted-job"
     )
-    assert calls["persist"] == (test_db, "job", request, {"items": []}, True)
+    assert calls["persist"] == (test_db, "job", request, {"items": []})
 
     assert service.mark_crawl_job_failed(test_db, "job", "err") == "failed-job"
     assert calls["mark"] == (test_db, "job", "err")

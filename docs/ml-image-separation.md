@@ -226,15 +226,17 @@ API_DOCKER_TARGET=api-embedding docker compose up -d --build
 가장 안전한 순서는 아래입니다.
 
 1. 임베딩 타깃 API 기동 확인
-2. `POST /api/v1/ml/backfills/project-embeddings?force=true&limit=...` 실행
+2. privileged operator token으로 `POST /api/v1/admin/ml/backfills/project-embeddings?force=true&limit=...` 실행
 3. task status API로 완료 확인
 4. 샘플 공고에서 `/api/v1/projects/{id}/similar` 결과 검증
 
 예시:
 
 ```bash
-curl -X POST "http://localhost:3000/api/v1/ml/backfills/project-embeddings?force=true&limit=100"
-curl "http://localhost:3000/api/v1/ml/backfills/project-embeddings/tasks/<task_id>"
+curl -X POST "http://localhost:3000/api/v1/admin/ml/backfills/project-embeddings?force=true&limit=100" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
+curl "http://localhost:3000/api/v1/admin/ml/backfills/project-embeddings/tasks/<task_id>" \
+  -H "Authorization: Bearer $BID_VECTOR_ADMIN_TOKEN"
 ```
 
 여기서 핵심은:
@@ -273,7 +275,7 @@ python scripts/promote_ml_release.py apply-manifest \
 - `ML_RELEASE_OBJECT_STORAGE_URL`이 설정되어 있으면 `--publish-remote`로 manifest와 artifact를 원격 object storage에 보관
 - 필요 시 `.env`에 `API_DOCKER_TARGET`, predictor path, embedding model path를 직접 반영
 - 재색인 시 manifest의 embedding 모델 경로를 임시 적용한 뒤 project vectors 재생성
-- rollout 모드에서는 `docker compose up -d --build api` 후 `/health`를 확인하고 `/api/v1/ml/backfills/project-embeddings`에 재색인 작업을 enqueue
+- rollout 모드에서는 `docker compose up -d --build api` 후 `/health`를 확인하고 privileged token으로 `/api/v1/admin/ml/backfills/project-embeddings`에 재색인 작업을 enqueue
 
 ### 5) 검증 체크리스트
 

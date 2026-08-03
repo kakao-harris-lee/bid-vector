@@ -1,6 +1,17 @@
 """Tests for project endpoints"""
 
+from app.core.single_user import DEFAULT_OPERATOR_PASSWORD, ensure_operator_account
 from app.models.models import Project
+from tests.support.auth import authenticate_client
+
+
+def _authenticate_privileged_operator(client, test_db) -> None:
+    operator = ensure_operator_account(test_db)
+    authenticate_client(
+        client,
+        username=operator.username,
+        password=DEFAULT_OPERATOR_PASSWORD,
+    )
 
 
 def test_create_project(client):
@@ -289,8 +300,8 @@ def test_update_project_preserves_embedding_when_only_source_url_changes(
     )
 
 
-def test_get_similar_projects_missing_embedding_is_read_only(client, test_db, monkeypatch):
-    """Similarity GET should not build embeddings or write rows when the target is missing one."""
+def test_get_similar_projects_missing_analysis_is_read_only(client, test_db, monkeypatch):
+    """Similarity GET should not run analysis or expose its internal readiness state."""
     from app.services.project_similarity import ProjectSimilarityService
 
     def _boom(self, semantic_text: str):
@@ -315,8 +326,15 @@ def test_get_similar_projects_missing_embedding_is_read_only(client, test_db, mo
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["target_embedding_status"] == "pending"
-    assert payload["target_embedding_refresh_required"] is True
+    assert set(payload).isdisjoint(
+        {
+            "target_embedding_model",
+            "target_embedding_status",
+            "target_embedding_updated_at",
+            "target_embedding_refresh_required",
+            "search_mode",
+        }
+    )
     assert payload["result_count"] == 0
     assert payload["results"] == []
     test_db.expire_all()
@@ -327,8 +345,8 @@ def test_get_similar_projects_missing_embedding_is_read_only(client, test_db, mo
     assert unchanged.embedding_updated_at is None
 
 
-def test_get_similar_projects_stale_embedding_is_read_only(client, test_db, monkeypatch):
-    """Similarity GET should report stale target embeddings without rebuilding them."""
+def test_get_similar_projects_stale_analysis_is_read_only(client, test_db, monkeypatch):
+    """Similarity GET should not rebuild or expose stale internal analysis state."""
     from app.models.models import Project
     from app.services.project_similarity import ProjectSimilarityService
     from app.tasks.jobs import rebuild_project_embeddings as rebuild_project_embeddings_task
@@ -374,9 +392,15 @@ def test_get_similar_projects_stale_embedding_is_read_only(client, test_db, monk
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["target_embedding_status"] == "stale"
-    assert payload["target_embedding_refresh_required"] is True
-    assert payload["target_embedding_model"] == "fallback-hash-v1"
+    assert set(payload).isdisjoint(
+        {
+            "target_embedding_model",
+            "target_embedding_status",
+            "target_embedding_updated_at",
+            "target_embedding_refresh_required",
+            "search_mode",
+        }
+    )
     assert payload["result_count"] == 0
     assert payload["results"] == []
     test_db.expire_all()
@@ -449,9 +473,15 @@ def test_get_similar_projects_returns_ranked_matches(client):
     assert response.status_code == 200
     data = response.json()
     assert data["target_project_id"] == target["id"]
-    assert data["target_embedding_status"] == "ready"
-    assert data["target_embedding_refresh_required"] is False
-    assert data["search_mode"] == "python_fallback"
+    assert set(data).isdisjoint(
+        {
+            "target_embedding_model",
+            "target_embedding_status",
+            "target_embedding_updated_at",
+            "target_embedding_refresh_required",
+            "search_mode",
+        }
+    )
     assert data["result_count"] == 2
     assert data["results"][0]["project_id"] == close_match["id"]
     assert data["results"][1]["project_id"] == farther_match["id"]
@@ -511,8 +541,8 @@ def test_get_similar_projects_respects_similarity_threshold(client):
     assert data["results"] == []
 
 
-def test_refresh_single_project_embedding_endpoint(client, test_db):
-    """Single-project refresh endpoint should queue inference work instead of embedding inline."""
+def test_refresh_similar_projects_endpoint_uses_domain_operation_contract(client, test_db):
+    """User refresh should queue work without exposing ML infrastructure details."""
     from app.tasks.jobs import rebuild_project_embeddings as rebuild_project_embeddings_task
 
     created = client.post(
@@ -534,17 +564,26 @@ def test_refresh_single_project_embedding_endpoint(client, test_db):
     project.embedding_updated_at = None
     test_db.commit()
 
-    response = client.post(
-        f"/api/v1/projects/{created['id']}/embedding/refresh?force=true"
-    )
+    _authenticate_privileged_operator(client, test_db)
+    response = client.post(f"/api/v1/projects/{created['id']}/similar/refresh?force=true")
 
     assert response.status_code == 202
     payload = response.json()
-    assert payload["task_id"]
-    assert payload["task_name"] == "jobs.rebuild_project_embeddings"
+    assert payload["operation_id"]
+    assert payload["operation"] == "refresh_similar_projects"
     assert payload["project_id"] == created["id"]
-    assert payload["queue"] == "bid_vector_ml_inference"
-    assert payload["status"] == "queued"
+    assert payload["status"] == "accepted"
+    assert set(payload).isdisjoint({"task_name", "queue", "raw_status"})
+    assert "embedding" not in payload["poll_url"]
+
+    status_response = client.get(payload["poll_url"])
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["operation_id"] == payload["operation_id"]
+    assert status_payload["status"] == "accepted"
+    assert status_payload["is_terminal"] is False
+    assert status_payload["succeeded"] is False
+    assert set(status_payload).isdisjoint({"task_name", "queue", "raw_status"})
 
     refreshed = test_db.query(Project).filter(Project.id == created["id"]).first()
     assert refreshed is not None
@@ -560,7 +599,7 @@ def test_refresh_single_project_embedding_endpoint(client, test_db):
     assert refreshed.embedding_updated_at is not None
 
 
-def test_rebuild_project_embeddings_endpoint_queues_backfill(client):
+def test_rebuild_project_embeddings_endpoint_queues_backfill(client, test_db):
     """Legacy batch refresh endpoint should only enqueue work from the API process."""
     software_ids = []
     for index in range(2):
@@ -587,6 +626,7 @@ def test_rebuild_project_embeddings_endpoint_queues_backfill(client):
         },
     )
 
+    _authenticate_privileged_operator(client, test_db)
     response = client.post(
         "/api/v1/projects/embeddings/rebuild?category=software&force=true&limit=10"
     )
@@ -636,7 +676,7 @@ def test_rebuild_project_embeddings_task_returns_batch_summary(test_db):
     assert all(item["embedding_dimensions"] == 384 for item in result["results"])
 
 
-def test_rebuild_project_embeddings_async_endpoint_returns_pollable_task(client):
+def test_rebuild_project_embeddings_async_endpoint_returns_pollable_task(client, test_db):
     """Async rebuild endpoint should return a task id and poll URL for batch refresh jobs."""
     for index in range(2):
         client.post(
@@ -650,6 +690,7 @@ def test_rebuild_project_embeddings_async_endpoint_returns_pollable_task(client)
             },
         )
 
+    _authenticate_privileged_operator(client, test_db)
     response = client.post(
         "/api/v1/projects/embeddings/rebuild/async?category=software&force=true&limit=10"
     )
@@ -662,7 +703,7 @@ def test_rebuild_project_embeddings_async_endpoint_returns_pollable_task(client)
     assert payload["poll_url"].endswith(payload["task_id"])
 
 
-def test_rebuild_project_embeddings_task_status_endpoint_returns_result(client):
+def test_rebuild_project_embeddings_task_status_endpoint_returns_result(client, test_db):
     """Task status endpoint should expose the completed batch summary for eager/fallback tasks."""
     software_ids = []
     for index in range(2):
@@ -678,6 +719,7 @@ def test_rebuild_project_embeddings_task_status_endpoint_returns_result(client):
         ).json()
         software_ids.append(created["id"])
 
+    _authenticate_privileged_operator(client, test_db)
     task_response = client.post(
         "/api/v1/projects/embeddings/rebuild/async?category=software&force=true&limit=10"
     )

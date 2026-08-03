@@ -2,11 +2,11 @@ import { httpErrorMessage } from "./httpErrorMessages";
 import { ApiError, getStoredToken } from "./session";
 import type {
   BidDecisionTimelineResponse,
-  ProjectEmbeddingRefreshResponse,
-  ProjectEmbeddingTaskStatusResponse,
   ProjectListResult,
   ProjectResponse,
-  ProjectSimilaritySearchResponse
+  ProjectSimilaritySearchResponse,
+  SimilarProjectsRefreshOperationResponse,
+  SimilarProjectsRefreshOperationStatusResponse
 } from "@/shared/types/project";
 
 export interface ProjectListQuery {
@@ -121,31 +121,31 @@ export function fetchSimilarProjects(
   );
 }
 
-export function refreshProjectEmbedding(
+export function refreshSimilarProjects(
   id: number,
   options: { force?: boolean } = {},
   token?: string | null
-): Promise<ProjectEmbeddingRefreshResponse> {
+): Promise<SimilarProjectsRefreshOperationResponse> {
   const path = options.force
-    ? `/api/v1/projects/${id}/embedding/refresh?force=true`
-    : `/api/v1/projects/${id}/embedding/refresh`;
+    ? `/api/v1/projects/${id}/similar/refresh?force=true`
+    : `/api/v1/projects/${id}/similar/refresh`;
   return wrap(
-    rawFetch<ProjectEmbeddingRefreshResponse>(path, { method: "POST", token }).then(
+    rawFetch<SimilarProjectsRefreshOperationResponse>(path, { method: "POST", token }).then(
       (res) => res.data
     ),
-    "임베딩 재계산에 실패했습니다."
+    "유사 공고 갱신을 요청하지 못했습니다."
   );
 }
 
-export function fetchProjectEmbeddingTaskStatus(
+export function fetchSimilarProjectsRefreshStatus(
   pollUrl: string,
   token?: string | null
-): Promise<ProjectEmbeddingTaskStatusResponse> {
+): Promise<SimilarProjectsRefreshOperationStatusResponse> {
   return wrap(
-    rawFetch<ProjectEmbeddingTaskStatusResponse>(pollUrl, { token }).then(
+    rawFetch<SimilarProjectsRefreshOperationStatusResponse>(pollUrl, { token }).then(
       (res) => res.data
     ),
-    "임베딩 작업 상태를 확인하지 못했습니다."
+    "유사 공고 갱신 상태를 확인하지 못했습니다."
   );
 }
 
