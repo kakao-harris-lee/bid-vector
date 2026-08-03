@@ -46,7 +46,10 @@ class ProjectSimilaritySearchResponse(BaseModel):
     target_project_id: int
     target_project_title: str
     target_embedding_model: Optional[str] = None
-    search_mode: Literal["postgres_vector", "python_fallback"]
+    target_embedding_status: Literal["ready", "pending", "stale"] = "ready"
+    target_embedding_updated_at: Optional[datetime] = None
+    target_embedding_refresh_required: bool = False
+    search_mode: Literal["read_model", "postgres_vector", "python_fallback"]
     same_category_only: bool
     min_similarity: float = Field(ge=0.0, le=1.0)
     result_count: int
@@ -83,6 +86,11 @@ class ProjectEmbeddingBatchRefreshTaskResponse(BaseModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     detail: str
     poll_url: str
+
+
+class ProjectEmbeddingRefreshTaskResponse(ProjectEmbeddingBatchRefreshTaskResponse):
+    project_id: int
+    queue: str
 
 
 class ProjectEmbeddingBatchRefreshTaskStatusResponse(BaseModel):

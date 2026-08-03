@@ -13,11 +13,20 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.time import utc_now
 from app.core.vector import PGVECTOR_SQLALCHEMY_AVAILABLE
-from app.models.models import Project
+from app.models.models import InferenceOutboxEvent, Project, ProjectSimilarityEdge
 from app.services.classifier import NoticeClassifierService
 
 PROJECT_VECTOR_DIMENSIONS = 384
 FALLBACK_EMBEDDING_MODEL = "fallback-hash-v1"
+SIMILARITY_READ_MODEL_LIMIT = 20
+SIMILARITY_READ_MODEL_MIN_SIMILARITY = 0.15
+SIMILARITY_READ_MODEL_SOURCE_PGVECTOR = "pgvector_hnsw"
+SIMILARITY_READ_MODEL_SOURCE_PYTHON = "python_fallback"
+INFERENCE_OUTBOX_EVENT_EMBEDDING_READY = "embedding.ready"
+INFERENCE_OUTBOX_STATUS_PENDING = "pending"
+INFERENCE_OUTBOX_STATUS_RUNNING = "running"
+INFERENCE_OUTBOX_STATUS_COMPLETED = "completed"
+INFERENCE_OUTBOX_STATUS_FAILED = "failed"
 
 
 def ensure_project_vector_schema(engine) -> None:
@@ -108,6 +117,25 @@ class ProjectSimilarityService:
         embedding, model_name = self._embed_text(semantic_text)
         return embedding, model_name
 
+    def stored_embedding_state(self, project: Project) -> dict[str, Any]:
+        """Return target embedding readiness without computing a replacement."""
+        semantic_text = self.build_semantic_text(project)
+        cached_vector = self._load_embedding(project)
+        stored_text = (project.semantic_text or "").strip()
+        if not cached_vector:
+            status = "pending"
+        elif semantic_text != stored_text:
+            status = "stale"
+        else:
+            status = "ready"
+        return {
+            "vector": cached_vector,
+            "status": status,
+            "model": project.embedding_model if cached_vector else None,
+            "updated_at": project.embedding_updated_at,
+            "refresh_required": status != "ready",
+        }
+
     def refresh_project_embeddings(self, db: Session, projects: Iterable[Project]) -> None:
         """Refresh embeddings for a batch of projects within the current transaction."""
         touched = False
@@ -128,7 +156,12 @@ class ProjectSimilarityService:
         """Refresh one project's embedding and return API-ready status metadata."""
         _, model_name = self.refresh_project_embedding(db, project, force=force)
         db.flush()
-        return self._serialize_embedding_state(db, project, model_name)
+        result = self._serialize_embedding_state(db, project, model_name)
+        outbox_event = self.append_embedding_ready_outbox_event(db, project)
+        if outbox_event is not None:
+            db.flush()
+            result["outbox_event_id"] = int(outbox_event.id)
+        return result
 
     def rebuild_project_embeddings(
         self,
@@ -182,8 +215,252 @@ class ProjectSimilarityService:
             "requested_project_ids": normalized_ids,
             "vector_storage_enabled": self._can_persist_pgvector(db),
             "project_ids": [result["project_id"] for result in results],
+            "outbox_event_ids": [
+                int(result["outbox_event_id"])
+                for result in results
+                if result.get("outbox_event_id") is not None
+            ],
             "results": results,
         }
+
+    def append_embedding_ready_outbox_event(
+        self,
+        db: Session,
+        project: Project,
+    ) -> InferenceOutboxEvent | None:
+        """Record an embedding-ready event in the current transaction."""
+        if (
+            project.id is None
+            or project.embedding_updated_at is None
+            or not project.embedding_model
+            or not self._load_embedding(project)
+        ):
+            return None
+
+        event = InferenceOutboxEvent(
+            event_type=INFERENCE_OUTBOX_EVENT_EMBEDDING_READY,
+            aggregate_type="project",
+            aggregate_id=int(project.id),
+            payload_json={
+                "project_id": int(project.id),
+                "embedding_model": project.embedding_model,
+                "embedding_updated_at": project.embedding_updated_at.isoformat(),
+                "same_category_only": True,
+                "min_similarity": SIMILARITY_READ_MODEL_MIN_SIMILARITY,
+                "limit": SIMILARITY_READ_MODEL_LIMIT,
+            },
+            status=INFERENCE_OUTBOX_STATUS_PENDING,
+            attempts=0,
+            available_at=utc_now(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        db.add(event)
+        return event
+
+    def process_inference_outbox_events(self, db: Session, *, limit: int = 50) -> dict[str, Any]:
+        """Claim pending inference outbox rows and update similarity read models."""
+        rows = (
+            db.query(InferenceOutboxEvent)
+            .filter(
+                InferenceOutboxEvent.status == INFERENCE_OUTBOX_STATUS_PENDING,
+                InferenceOutboxEvent.available_at <= utc_now(),
+            )
+            .order_by(InferenceOutboxEvent.id.asc())
+            .limit(max(1, int(limit)))
+            .all()
+        )
+
+        processed: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        skipped = 0
+
+        for row in rows:
+            if not self._claim_inference_outbox_event(db, int(row.id)):
+                skipped += 1
+                continue
+            try:
+                current = (
+                    db.query(InferenceOutboxEvent)
+                    .filter(InferenceOutboxEvent.id == int(row.id))
+                    .first()
+                )
+                if current is None:
+                    skipped += 1
+                    continue
+                result = self._process_inference_outbox_event(db, current)
+                current.status = INFERENCE_OUTBOX_STATUS_COMPLETED
+                current.processed_at = utc_now()
+                current.updated_at = utc_now()
+                current.last_error = None
+                db.commit()
+                processed.append({"event_id": int(current.id), "result": result})
+            except Exception as exc:  # noqa: BLE001 - one bad event must not stop the sweep
+                db.rollback()
+                self._mark_inference_outbox_failed(db, int(row.id), str(exc))
+                failed.append({"event_id": int(row.id), "error": str(exc)})
+
+        return {
+            "processed_count": len(processed),
+            "failed_count": len(failed),
+            "skipped_count": skipped,
+            "event_ids": [item["event_id"] for item in processed],
+            "failed_event_ids": [item["event_id"] for item in failed],
+            "results": processed,
+        }
+
+    def _claim_inference_outbox_event(self, db: Session, event_id: int) -> bool:
+        now = utc_now()
+        updated = (
+            db.query(InferenceOutboxEvent)
+            .filter(
+                InferenceOutboxEvent.id == int(event_id),
+                InferenceOutboxEvent.status == INFERENCE_OUTBOX_STATUS_PENDING,
+            )
+            .update(
+                {
+                    "status": INFERENCE_OUTBOX_STATUS_RUNNING,
+                    "locked_at": now,
+                    "updated_at": now,
+                    "attempts": InferenceOutboxEvent.attempts + 1,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        return bool(updated)
+
+    def _mark_inference_outbox_failed(self, db: Session, event_id: int, error: str) -> None:
+        row = (
+            db.query(InferenceOutboxEvent)
+            .filter(InferenceOutboxEvent.id == int(event_id))
+            .first()
+        )
+        if row is None:
+            return
+        row.status = INFERENCE_OUTBOX_STATUS_FAILED
+        row.last_error = error
+        row.updated_at = utc_now()
+        db.commit()
+
+    def _process_inference_outbox_event(
+        self,
+        db: Session,
+        event: InferenceOutboxEvent,
+    ) -> dict[str, Any]:
+        if event.event_type != INFERENCE_OUTBOX_EVENT_EMBEDDING_READY:
+            return {"status": "skipped", "reason": f"unsupported event_type {event.event_type}"}
+        payload = dict(event.payload_json or {})
+        return self.recompute_similarity_read_model(
+            db,
+            project_id=int(event.aggregate_id),
+            same_category_only=bool(payload.get("same_category_only", True)),
+            min_similarity=float(
+                payload.get("min_similarity", SIMILARITY_READ_MODEL_MIN_SIMILARITY)
+            ),
+            limit=int(payload.get("limit", SIMILARITY_READ_MODEL_LIMIT)),
+        )
+
+    def recompute_similarity_read_model(
+        self,
+        db: Session,
+        *,
+        project_id: int,
+        same_category_only: bool = True,
+        min_similarity: float = SIMILARITY_READ_MODEL_MIN_SIMILARITY,
+        limit: int = SIMILARITY_READ_MODEL_LIMIT,
+    ) -> dict[str, Any]:
+        """Recompute persisted similarity edges for one ready target project."""
+        project = db.query(Project).filter(Project.id == int(project_id)).first()
+        if project is None:
+            return {"status": "skipped", "reason": "project_not_found", "project_id": int(project_id)}
+
+        state = self.stored_embedding_state(project)
+        if state["status"] != "ready" or not state["vector"]:
+            return {
+                "status": "skipped",
+                "reason": f"target_embedding_{state['status']}",
+                "project_id": int(project.id),
+            }
+
+        if self._can_query_pgvector(db):
+            results = self._search_with_postgres(
+                db,
+                project=project,
+                query_embedding=state["vector"],
+                limit=max(1, int(limit)),
+                min_similarity=float(min_similarity),
+                same_category_only=bool(same_category_only),
+            )
+            source = SIMILARITY_READ_MODEL_SOURCE_PGVECTOR
+        else:
+            candidate_query = db.query(Project).filter(Project.id != project.id)
+            if same_category_only and project.category:
+                candidate_query = candidate_query.filter(Project.category == project.category)
+            results = self._search_with_python(
+                candidate_query.all(),
+                query_embedding=state["vector"],
+                limit=max(1, int(limit)),
+                min_similarity=float(min_similarity),
+                embedding_resolver=self._load_embedding,
+            )
+            source = SIMILARITY_READ_MODEL_SOURCE_PYTHON
+
+        edge_count = self.replace_similarity_edges(
+            db,
+            project=project,
+            results=results,
+            same_category_only=bool(same_category_only),
+            min_similarity=float(min_similarity),
+            source=source,
+        )
+        db.flush()
+        return {
+            "status": "completed",
+            "project_id": int(project.id),
+            "edge_count": edge_count,
+            "same_category_only": bool(same_category_only),
+            "min_similarity_bucket": self._min_similarity_bucket(min_similarity),
+            "source": source,
+        }
+
+    def replace_similarity_edges(
+        self,
+        db: Session,
+        *,
+        project: Project,
+        results: list[dict[str, Any]],
+        same_category_only: bool,
+        min_similarity: float,
+        source: str,
+    ) -> int:
+        """Replace one target/version/key's read-model edge rows."""
+        if project.embedding_updated_at is None or not project.embedding_model:
+            return 0
+
+        filters = self._similarity_edge_filters(
+            project,
+            same_category_only=same_category_only,
+            min_similarity=min_similarity,
+        )
+        db.query(ProjectSimilarityEdge).filter(*filters).delete(synchronize_session=False)
+        computed_at = utc_now()
+        for rank, result in enumerate(results, start=1):
+            db.add(
+                ProjectSimilarityEdge(
+                    target_project_id=int(project.id),
+                    candidate_project_id=int(result["project_id"]),
+                    embedding_model=str(project.embedding_model),
+                    target_embedding_updated_at=project.embedding_updated_at,
+                    same_category_only=bool(same_category_only),
+                    min_similarity_bucket=self._min_similarity_bucket(min_similarity),
+                    rank=rank,
+                    similarity_score=float(result["similarity_score"]),
+                    source=source,
+                    computed_at=computed_at,
+                )
+            )
+        return len(results)
 
     def find_similar_projects(
         self,
@@ -194,6 +471,7 @@ class ProjectSimilarityService:
         min_similarity: float = 0.0,
         same_category_only: bool = True,
         read_only: bool = False,
+        stored_only: bool = False,
     ) -> dict[str, Any]:
         """Find projects closest to the target project's embedding.
 
@@ -209,8 +487,58 @@ class ProjectSimilarityService:
         쓰지 않는다 — 산출(점수·정렬)은 write 경로와 동일하고, 임베딩
         freshness 는 수집/backfill 파이프라인 소관이다 (설계 §5 PR-A-2 / S4).
         기본값 ``False`` 로 기존 호출자 동작은 불변이다.
+
+        ``stored_only=True`` (UX GET 경로) 는 저장 embedding 만 사용하고
+        missing/stale embedding 을 API 프로세스에서 재계산하지 않는다.
         """
-        if read_only:
+        embedding_status = "ready"
+        embedding_updated_at = project.embedding_updated_at
+        refresh_required = False
+
+        if stored_only:
+            state = self.stored_embedding_state(project)
+            target_embedding = state["vector"]
+            target_model = state["model"]
+            embedding_status = state["status"]
+            embedding_updated_at = state["updated_at"]
+            refresh_required = bool(state["refresh_required"])
+            if not target_embedding:
+                return {
+                    "target_project_id": project.id,
+                    "target_project_title": project.title,
+                    "target_embedding_model": target_model,
+                    "target_embedding_status": embedding_status,
+                    "target_embedding_updated_at": embedding_updated_at,
+                    "target_embedding_refresh_required": refresh_required,
+                    "search_mode": "postgres_vector" if self._can_query_pgvector(db) else "python_fallback",
+                    "same_category_only": same_category_only,
+                    "min_similarity": round(min_similarity, 4),
+                    "result_count": 0,
+                    "results": [],
+                }
+            if embedding_status == "ready":
+                read_model_results = self.load_similarity_edges(
+                    db,
+                    project,
+                    limit=limit,
+                    min_similarity=min_similarity,
+                    same_category_only=same_category_only,
+                )
+                if read_model_results is not None:
+                    return {
+                        "target_project_id": project.id,
+                        "target_project_title": project.title,
+                        "target_embedding_model": target_model,
+                        "target_embedding_status": embedding_status,
+                        "target_embedding_updated_at": embedding_updated_at,
+                        "target_embedding_refresh_required": refresh_required,
+                        "search_mode": "read_model",
+                        "same_category_only": same_category_only,
+                        "min_similarity": round(min_similarity, 4),
+                        "result_count": len(read_model_results),
+                        "results": read_model_results,
+                    }
+        elif read_only:
             target_embedding, target_model = self.resolve_embedding_without_persist(project)
         else:
             target_embedding, target_model = self.refresh_project_embedding(db, project)
@@ -238,6 +566,8 @@ class ProjectSimilarityService:
                     return self.resolve_embedding_without_persist(candidate)[0]
 
                 embedding_resolver = _resolve_candidate_embedding
+            elif stored_only:
+                embedding_resolver = self._load_embedding
             else:
                 self.refresh_project_embeddings(db, candidates)
                 embedding_resolver = self._load_embedding
@@ -255,12 +585,66 @@ class ProjectSimilarityService:
             "target_project_id": project.id,
             "target_project_title": project.title,
             "target_embedding_model": target_model,
+            "target_embedding_status": embedding_status,
+            "target_embedding_updated_at": embedding_updated_at,
+            "target_embedding_refresh_required": refresh_required,
             "search_mode": search_mode,
             "same_category_only": same_category_only,
             "min_similarity": round(min_similarity, 4),
             "result_count": len(results),
             "results": results,
         }
+
+    def load_similarity_edges(
+        self,
+        db: Session,
+        project: Project,
+        *,
+        limit: int,
+        min_similarity: float,
+        same_category_only: bool,
+    ) -> list[dict[str, Any]] | None:
+        """Load a fresh similarity read-model hit, or None when it is missing."""
+        if project.embedding_updated_at is None or not project.embedding_model:
+            return None
+        rows = (
+            db.query(ProjectSimilarityEdge, Project)
+            .join(Project, Project.id == ProjectSimilarityEdge.candidate_project_id)
+            .filter(
+                *self._similarity_edge_filters(
+                    project,
+                    same_category_only=same_category_only,
+                    min_similarity=min_similarity,
+                )
+            )
+            .order_by(ProjectSimilarityEdge.rank.asc())
+            .limit(max(1, int(limit)))
+            .all()
+        )
+        if not rows:
+            return None
+        return [
+            self._serialize_result(candidate, float(edge.similarity_score))
+            for edge, candidate in rows
+        ]
+
+    def _similarity_edge_filters(
+        self,
+        project: Project,
+        *,
+        same_category_only: bool,
+        min_similarity: float,
+    ) -> tuple[Any, ...]:
+        return (
+            ProjectSimilarityEdge.target_project_id == int(project.id),
+            ProjectSimilarityEdge.embedding_model == str(project.embedding_model),
+            ProjectSimilarityEdge.target_embedding_updated_at == project.embedding_updated_at,
+            ProjectSimilarityEdge.same_category_only == bool(same_category_only),
+            ProjectSimilarityEdge.min_similarity_bucket == self._min_similarity_bucket(min_similarity),
+        )
+
+    def _min_similarity_bucket(self, min_similarity: float) -> float:
+        return round(float(min_similarity), 4)
 
     def build_semantic_text(self, project: Project) -> str:
         """Build a rich semantic description used for embeddings and retrieval."""
@@ -311,7 +695,10 @@ class ProjectSimilarityService:
         if min_similarity > 0:
             query = query.filter(distance_expression <= (1 - min_similarity))
 
-        rows = query.order_by(distance_expression.asc(), Project.id.asc()).limit(limit).all()
+        # pgvector HNSW can satisfy ORDER BY distance LIMIT, but adding a
+        # secondary sort key (for example Project.id) pushes PostgreSQL back to
+        # seq scan + top-N sort on large tables.
+        rows = query.order_by(distance_expression.asc()).limit(limit).all()
         return [self._serialize_result(candidate, float(similarity_score)) for candidate, similarity_score in rows]
 
     def _search_with_python(
@@ -425,6 +812,8 @@ class ProjectSimilarityService:
         except (TypeError, json.JSONDecodeError):
             return []
         if not isinstance(payload, list):
+            return []
+        if not payload:
             return []
         return self._normalize_vector([float(value) for value in payload])
 

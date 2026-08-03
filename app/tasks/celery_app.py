@@ -109,6 +109,7 @@ TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 NOTIFY_AWARD_RESULTS_TASK_NAME = "jobs.notify_award_results"
 PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME = "jobs.recompute_preview_snapshot"
+INFERENCE_OUTBOX_PROCESS_TASK_NAME = "jobs.process_inference_outbox"
 RUNTIME_PERFORMANCE_PROBE_TASK_NAME = "jobs.runtime_performance_probe"
 
 
@@ -119,7 +120,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         "jobs.send_telegram_notification": {"queue": settings.CELERY_OPS_QUEUE},
         TELEGRAM_POLLING_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
-        OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         FORWARD_SETTLEMENT_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         HISTORICAL_BACKTEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
@@ -130,7 +131,8 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         COLLECT_G2_EVIDENCE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         NOTIFY_AWARD_RESULTS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
-        PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
+        INFERENCE_OUTBOX_PROCESS_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},

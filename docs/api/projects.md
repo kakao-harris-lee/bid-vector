@@ -333,7 +333,12 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024"
 
 ## GET /api/v1/projects/{project_id}/similar
 
-주어진 공고와 의미적으로 유사한 공고들을 pgvector 임베딩 유사도로 검색한다. pgvector 사용 가능 시 `postgres_vector`, 아니면 `python_fallback` 모드로 동작한다. 특정 공고와 비슷한 과거/현재 공고를 참고가·경쟁 양상 추정에 활용할 때 쓴다. 인증 불필요.
+주어진 공고와 의미적으로 유사한 공고들을 저장된 임베딩으로 검색한다. 이 GET 경로는
+임베딩을 생성하거나 DB commit을 수행하지 않는다. target 임베딩이 없거나 stale이면 결과를
+계산하지 않고 상태(`pending`/`stale`)와 빈 결과를 반환하므로, 필요 시
+`POST /embedding/refresh`로 비동기 갱신을 요청한다. pgvector 사용 가능 시 `postgres_vector`,
+아니면 `python_fallback` 모드로 동작한다. 저장된 similarity projection이 최신이면
+`read_model` 모드로 edge row만 읽는다. 인증 불필요.
 
 **파라미터**
 
@@ -357,7 +362,10 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
   "target_project_id": 1024,
   "target_project_title": "교내 통합 보안관제 시스템 구축",
   "target_embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
-  "search_mode": "postgres_vector",
+  "target_embedding_status": "ready",
+  "target_embedding_updated_at": "2025-05-29T09:25:00",
+  "target_embedding_refresh_required": false,
+  "search_mode": "read_model",
   "same_category_only": true,
   "min_similarity": 0.2,
   "result_count": 2,
@@ -399,7 +407,8 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
 
 ## POST /api/v1/projects/{project_id}/embedding/refresh
 
-단일 공고의 semantic 임베딩을 재생성하고 최신 벡터 메타데이터를 영속화한 뒤 결과를 반환한다. 공고 텍스트가 갱신됐거나 임베딩이 비어 있어 즉시 한 건만 재계산하고 싶을 때 사용한다. 인증 불필요.
+단일 공고의 semantic 임베딩 재생성을 online inference 큐에 등록하고 poll 가능한 task id를
+반환한다. API 프로세스에서는 모델 로드나 `encode`를 실행하지 않는다. 인증 불필요.
 
 **파라미터**
 
@@ -414,19 +423,17 @@ curl -X GET "http://localhost:3000/api/v1/projects/1024/similar?limit=5&min_simi
 curl -X POST "http://localhost:3000/api/v1/projects/1024/embedding/refresh?force=true"
 ```
 
-**응답 200**
+**응답 202**
 
 ```json
 {
   "project_id": 1024,
-  "title": "교내 통합 보안관제 시스템 구축",
-  "category": "정보통신",
-  "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
-  "semantic_text_length": 184,
-  "embedding_dimensions": 384,
-  "embedding_updated_at": "2025-05-29T09:25:00",
-  "vector_storage_enabled": true,
-  "vector_persisted": true
+  "task_id": "4fb4182b-9a19-4e43-9182-d99327e70038",
+  "task_name": "jobs.rebuild_project_embeddings",
+  "queue": "bid_vector_ml_inference",
+  "status": "queued",
+  "detail": "Task is queued or unknown to the current result backend.",
+  "poll_url": "/api/v1/projects/embeddings/rebuild/tasks/4fb4182b-9a19-4e43-9182-d99327e70038"
 }
 ```
 

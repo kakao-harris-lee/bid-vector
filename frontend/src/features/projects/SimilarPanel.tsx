@@ -13,13 +13,14 @@ export function SimilarPanel({ projectId }: { projectId: number }) {
   const similar = useSimilarProjectsQuery(session, projectId, { limit: SIMILAR_LIMIT });
   const refresh = useRefreshEmbeddingMutation(session);
 
-  const hasEmbedding = Boolean(similar.data?.target_embedding_model);
+  const embeddingStatus = similar.data?.target_embedding_status;
+  const hasEmbedding = embeddingStatus ? embeddingStatus === "ready" : Boolean(similar.data?.target_embedding_model);
   const handleRefresh = async () => {
     try {
       const result = await refresh.mutateAsync({ id: projectId, force: true });
       toastApi.success({
-        title: "임베딩 재계산 완료",
-        description: result.vector_persisted ? "벡터 저장소가 갱신되었습니다." : "재계산만 적용되었습니다."
+        title: "임베딩 재계산 요청됨",
+        description: `${result.queue} 큐에 작업이 등록되었습니다.`
       });
     } catch (err) {
       toastApi.danger({

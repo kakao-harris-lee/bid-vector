@@ -5,19 +5,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import Project
 from app.schemas.schemas import (
     ProjectCreate,
     ProjectEmbeddingBatchRefreshTaskResponse,
     ProjectEmbeddingBatchRefreshTaskStatusResponse,
-    ProjectEmbeddingRefreshResponse,
+    ProjectEmbeddingRefreshTaskResponse,
     ProjectResponse,
     ProjectSimilaritySearchResponse,
 )
 from app.services.project_similarity import ProjectSimilarityService
 from app.tasks.jobs import (
     enqueue_project_embedding_backfill,
+    enqueue_project_embedding_refresh,
     enqueue_project_embedding_rebuild,
     get_project_embedding_rebuild_task_status,
 )
@@ -49,9 +51,9 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     # Move the heavy SBERT model.encode off the synchronous request path: the
     # semantic embedding for this new project is computed by the
     # rebuild_project_embeddings worker task (eventual, seconds in production)
-    # instead of inline. The semantic similarity search (POST /{id}/similar) and
-    # the on-demand refresh endpoint still recompute on demand, so newly created
-    # rows are not invisible to callers that explicitly query for them.
+    # instead of inline. Similarity GETs read only stored embeddings and the
+    # on-demand refresh endpoint queues a worker job, so newly created rows are
+    # visible after the background refresh completes.
     enqueue_project_embedding_backfill([db_project.id])
 
     return db_project
@@ -245,18 +247,22 @@ def get_similar_projects(
         limit=limit,
         min_similarity=min_similarity,
         same_category_only=same_category_only,
+        stored_only=True,
     )
-    db.commit()
     return response
 
 
-@router.post("/{project_id}/embedding/refresh", response_model=ProjectEmbeddingRefreshResponse)
+@router.post(
+    "/{project_id}/embedding/refresh",
+    response_model=ProjectEmbeddingRefreshTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def refresh_project_embedding(
     project_id: int,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    """Rebuild one project's semantic embedding and persist the latest vector metadata."""
+    """Queue one project's semantic embedding refresh without running ML inline."""
     project = db.query(Project).filter(Project.id == project_id).first()
 
     if not project:
@@ -265,9 +271,17 @@ def refresh_project_embedding(
             detail="Project not found"
         )
 
-    response = ProjectSimilarityService().refresh_project_embedding_details(db, project, force=force)
-    db.commit()
-    return response
+    async_result = enqueue_project_embedding_refresh(project_id=project.id, force=force)
+    status_payload = get_project_embedding_rebuild_task_status(async_result.id)
+    return {
+        "task_id": async_result.id,
+        "task_name": status_payload["task_name"],
+        "project_id": project.id,
+        "queue": settings.CELERY_ML_INFERENCE_QUEUE,
+        "status": status_payload["status"],
+        "detail": status_payload["detail"],
+        "poll_url": f"/api/v1/projects/embeddings/rebuild/tasks/{async_result.id}",
+    }
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
@@ -289,7 +303,7 @@ def update_project(
     for key, value in project_update.dict(exclude_unset=True).items():
         setattr(project, key, value)
 
-    ProjectSimilarityService().refresh_project_embedding(db, project, force=True)
+    ProjectSimilarityService().refresh_project_embedding_details(db, project, force=True)
     db.commit()
     db.refresh(project)
 

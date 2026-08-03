@@ -39,6 +39,7 @@ from app.tasks.celery_app import (
     FORWARD_SETTLEMENT_TASK_NAME,
     G2_CANDIDATE_RECHECK_TASK_NAME,
     HISTORICAL_BACKTEST_TASK_NAME,
+    INFERENCE_OUTBOX_PROCESS_TASK_NAME,
     NOTIFY_AWARD_RESULTS_TASK_NAME,
     OPERATOR_STRATEGY_MONITOR_TASK_NAME,
     PAPER_BIDDING_FORWARD_TASK_NAME,
@@ -176,7 +177,30 @@ def rebuild_project_embeddings(
                 project_ids=project_ids,
             )
             db.commit()
+            outbox_event_ids = result.get("outbox_event_ids") or []
+            if outbox_event_ids:
+                try:
+                    async_result = enqueue_inference_outbox_processing(
+                        limit=max(50, len(outbox_event_ids))
+                    )
+                    result["outbox_processor_task_id"] = str(async_result.id)
+                    result["outbox_processor_queue"] = settings.CELERY_ML_INFERENCE_QUEUE
+                except Exception:  # noqa: BLE001 - outbox rows are durable after commit
+                    logger.exception("failed to enqueue inference outbox processor")
             return result
+        except Exception:
+            db.rollback()
+            raise
+
+
+@celery_app.task(name=INFERENCE_OUTBOX_PROCESS_TASK_NAME)
+def process_inference_outbox(limit: int = 50) -> dict:
+    """Process pending inference outbox rows into read-model projections."""
+    with task_session() as db:
+        try:
+            return ProjectSimilarityService().process_inference_outbox_events(
+                db, limit=max(1, int(limit or 50))
+            )
         except Exception:
             db.rollback()
             raise
@@ -601,6 +625,24 @@ def enqueue_project_embedding_rebuild(
     )
 
 
+def enqueue_project_embedding_refresh(*, project_id: int, force: bool = False):
+    """Queue one project's embedding refresh on the online inference queue."""
+    return _enqueue_ml_task(
+        rebuild_project_embeddings,
+        kwargs={"limit": 1, "project_ids": [int(project_id)], "force": force},
+        queue=settings.CELERY_ML_INFERENCE_QUEUE,
+    )
+
+
+def enqueue_inference_outbox_processing(*, limit: int = 50):
+    """Queue inference outbox processing on the online inference queue."""
+    return _enqueue_ml_task(
+        process_inference_outbox,
+        kwargs={"limit": max(1, int(limit or 50))},
+        queue=settings.CELERY_ML_INFERENCE_QUEUE,
+    )
+
+
 def enqueue_price_predictor_training(*, request_payload: dict[str, Any]):
     """Queue a price predictor training task and return the async task handle."""
     return _enqueue_ml_task(
@@ -638,14 +680,15 @@ def enqueue_operator_strategy_monitor(
     operator_id: int | None = None,
 ):
     """Queue an operator strategy monitoring task and return the async task handle."""
-    return monitor_operator_strategy.apply_async(
+    return _enqueue_ml_task(
+        monitor_operator_strategy,
         kwargs={
             "request_payload": request.model_dump(mode="json"),
             "monitor_run_id": monitor_run_id,
             "trigger_source": trigger_source,
             "operator_id": operator_id,
         },
-        queue=settings.CELERY_OPS_QUEUE,
+        queue=settings.CELERY_ML_INFERENCE_QUEUE,
     )
 
 
@@ -666,10 +709,11 @@ def enqueue_koneps_notice_collection(
 
 def enqueue_preview_snapshot_recompute(*, operator_id: int, high_priority_only: bool):
     """Queue a preview-snapshot recompute task and return the async task handle."""
-    return recompute_preview_snapshot.apply_async(
+    return _enqueue_ml_task(
+        recompute_preview_snapshot,
         kwargs={
             "operator_id": int(operator_id),
             "high_priority_only": bool(high_priority_only),
         },
-        queue=settings.CELERY_OPS_QUEUE,
+        queue=settings.CELERY_ML_INFERENCE_QUEUE,
     )

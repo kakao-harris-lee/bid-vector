@@ -161,14 +161,59 @@ services:
       MALLOC_ARENA_MAX: "2"
       OMP_NUM_THREADS: "1"
     shm_size: "1gb"
-    # 스캔 ML 이주지(설계 2026-07-30 §6.4): monitor·g2 recheck·preview 스냅샷
-    # 재계산이 임베딩 포함 스캔을 이 컨테이너에서 실행한다. 상주 ~4.8GiB 관측
-    # 대비 여유 10g — worker_max_memory_per_child(자식 3GiB)와 이중 가드.
+    # 운영 큐 워커 메모리 상한. ML inference 장시간 작업은 inference-worker 로
+    # 분리하고, 이 컨테이너는 crawl/notification/reconcile 등 ops 작업을 처리한다.
+    # 기존 상한은 보수적으로 유지해 worker_max_memory_per_child 와 이중 가드한다.
     # 값 변경 반영은 restart 가 아니라 `docker compose up -d worker` 재생성(§0).
     mem_limit: 10g
     volumes:
       - .:/app
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_OPS_QUEUE:-bid_vector_ops},${CELERY_TASK_DEFAULT_QUEUE:-bid_vector}
+
+  inference-worker:
+    build:
+      context: .
+      target: ${INFERENCE_WORKER_DOCKER_TARGET:-api-ml-full}
+    container_name: bid_vector_inference_worker
+    restart: unless-stopped
+    init: true
+    profiles:
+      - tasks
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-bid_vector_db}
+      DATABASE_USER: ${DATABASE_USER:-biduser}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-bidpassword}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-cache+memory://}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      MODEL_CACHE_DIR: /app/models
+      CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY: ${CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY:-true}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PYTHONPATH: /app
+      # 스레드/아레나 선언적 튜닝 (설계 2026-07-30 §5 PR-A-4, S1): 스레드풀 x
+      # torch/BLAS 가 glibc malloc 아레나를 스레드마다 비대화시키는 것을 상한.
+      # 값 변경 반영은 restart 가 아니라 `docker compose up -d <service>` 재생성(§0).
+      MALLOC_ARENA_MAX: "2"
+      OMP_NUM_THREADS: "1"
+    shm_size: "1gb"
+    # UX-triggered online inference 큐 워커 메모리 상한. preview snapshot 과
+    # strategy monitor ML 스캔을 ops 큐에서 격리하며, 자식 리사이클러가 컨테이너
+    # OOM 보다 먼저 동작하도록 ml-worker 와 같은 8g 를 둔다.
+    # 반영은 `docker compose up -d inference-worker` 재생성(§0).
+    mem_limit: 8g
+    volumes:
+      - .:/app
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_ML_INFERENCE_QUEUE:-bid_vector_ml_inference}
 
   ml-worker:
     build:

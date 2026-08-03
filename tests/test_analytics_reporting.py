@@ -179,7 +179,7 @@ def test_operations_dashboard_summarizes_crawl_and_strategy_health(client, test_
     queue_map = {item["queue"]: item for item in tasks["queues"]}
     assert settings.CELERY_OPS_QUEUE in queue_map
     assert "jobs.collect_koneps_notices" in queue_map[settings.CELERY_OPS_QUEUE]["task_names"]
-    assert "jobs.monitor_operator_strategy" in queue_map[settings.CELERY_OPS_QUEUE]["task_names"]
+    assert "jobs.monitor_operator_strategy" in queue_map[settings.CELERY_ML_INFERENCE_QUEUE]["task_names"]
 
 
 def test_g2_evidence_summary_reports_ready_operator_scoped_evidence(client, test_db):

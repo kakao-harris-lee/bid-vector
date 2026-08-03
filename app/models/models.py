@@ -1,5 +1,5 @@
 """Database models"""
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -79,6 +79,69 @@ class Project(Base):
     historical_records = relationship("HistoricalData", back_populates="project")
     tender_results = relationship("TenderResult", back_populates="project")
     crawl_jobs = relationship("CrawlJob", back_populates="project")
+
+
+class ProjectSimilarityEdge(Base):
+    """Versioned read-model rows for stored project similarity results."""
+    __tablename__ = "project_similarity_edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_project_id",
+            "embedding_model",
+            "target_embedding_updated_at",
+            "same_category_only",
+            "min_similarity_bucket",
+            "rank",
+            name="uq_project_similarity_edges_version_rank",
+        ),
+        Index(
+            "ix_project_similarity_edges_lookup",
+            "target_project_id",
+            "embedding_model",
+            "target_embedding_updated_at",
+            "same_category_only",
+            "min_similarity_bucket",
+            "rank",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    target_project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    candidate_project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    embedding_model = Column(String(255), nullable=False)
+    target_embedding_updated_at = Column(DateTime(timezone=True), nullable=False)
+    same_category_only = Column(Boolean, default=True, nullable=False)
+    min_similarity_bucket = Column(Float, default=0.15, nullable=False)
+    rank = Column(Integer, nullable=False)
+    similarity_score = Column(Float, nullable=False)
+    source = Column(String(50), default="pgvector_hnsw", nullable=False)
+    computed_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    target_project = relationship("Project", foreign_keys=[target_project_id])
+    candidate_project = relationship("Project", foreign_keys=[candidate_project_id])
+
+
+class InferenceOutboxEvent(Base):
+    """Durable event queue for inference/read-model side effects."""
+    __tablename__ = "inference_outbox_events"
+    __table_args__ = (
+        Index("ix_inference_outbox_events_claim", "status", "available_at", "id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    event_type = Column(String(100), nullable=False, index=True)
+    aggregate_type = Column(String(50), default="project", nullable=False, index=True)
+    aggregate_id = Column(Integer, nullable=False, index=True)
+    payload_json = Column(JSON(none_as_null=True), nullable=True)
+    status = Column(String(20), default="pending", nullable=False, index=True)
+    task_id = Column(String(155), nullable=True, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    available_at = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class Bid(Base):

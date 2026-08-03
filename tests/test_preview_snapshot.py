@@ -214,7 +214,7 @@ def test_claim_reclaims_stale_running_row(test_db):
 
 
 # ---------------------------------------------------------------------------
-# 디스패치 (API·전략 쓰기 트리거) + ops 큐 라우팅 + task 멱등
+# 디스패치 (API·전략 쓰기 트리거) + inference 큐 라우팅 + task 멱등
 # ---------------------------------------------------------------------------
 
 
@@ -238,13 +238,16 @@ def enqueue_stub(monkeypatch) -> _EnqueueRecorder:
     return recorder
 
 
-def test_recompute_task_is_routed_to_ops_queue():
-    """워커 컨테이너(이미 monitor·g2 recheck 로 동일 스캔 실행 중)로 라우팅 (§6.3)."""
+def test_recompute_task_is_routed_to_inference_queue():
+    """preview 재계산은 운영 큐와 분리된 inference worker 로 라우팅한다."""
     from app.core.config import settings
     from app.tasks.celery_app import PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME, build_task_routes
 
     assert PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME == "jobs.recompute_preview_snapshot"
-    assert build_task_routes()[PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME]["queue"] == settings.CELERY_OPS_QUEUE
+    assert (
+        build_task_routes()[PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME]["queue"]
+        == settings.CELERY_ML_INFERENCE_QUEUE
+    )
 
 
 def test_dispatch_recompute_is_single_flight(test_db, enqueue_stub):
@@ -356,9 +359,8 @@ def test_get_candidates_bootstraps_empty_running_when_snapshot_missing(
     assert len(enqueue_stub.calls) == 1
 
 
-def test_get_candidates_first_read_computes_inline_in_eager_mode(client, test_db, monkeypatch):
-    """eager(테스트) 모드: 첫 GET 이 스냅샷을 인라인 계산해 반환하고, 재조회는
-    스캔 없이 스냅샷을 서빙한다 — 구 repeat-read 스탬피드 테스트의 승계."""
+def test_get_candidates_first_read_queues_without_inline_scan(client, test_db, monkeypatch):
+    """memory:// 테스트 모드에서도 GET 은 재계산을 큐잉하고 직접 스캔하지 않는다."""
     _configure_software_operator(client)
     project = _seed_matching_project(test_db)
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
@@ -370,8 +372,7 @@ def test_get_candidates_first_read_computes_inline_in_eager_mode(client, test_db
         return original(self, db, **kwargs)
 
     monkeypatch.setattr(StrategyMonitoringService, "_collect_candidate_evaluations", counting)
-    # _configure 의 전략 PUT 은 이제 재계산을 디스패치한다(§6.3): project 시드 전에
-    # 빈 스냅샷을 선계산했으므로, 첫 GET 이 시드 공고를 실제로 계산하도록 비운다.
+    # _configure 의 전략 PUT 이 project 시드 전에 재계산을 디스패치했으므로 비운다.
     test_db.query(OperatorPreviewSnapshot).delete()
     test_db.commit()
 
@@ -385,11 +386,12 @@ def test_get_candidates_first_read_computes_inline_in_eager_mode(client, test_db
     )
 
     assert first.status_code == 200 and second.status_code == 200
-    assert calls["count"] == 1  # 스캔은 task 1회뿐
-    assert {c["project_id"] for c in first.json()["candidates"]} == {project.id}
+    assert project.id is not None
+    assert calls["count"] == 0
+    assert first.json()["candidates"] == []
     assert first.json()["candidates"] == second.json()["candidates"]
-    assert second.json()["snapshot_status"] == "idle"
-    assert second.json()["computed_at"] is not None
+    assert second.json()["snapshot_status"] == SNAPSHOT_STATUS_RUNNING
+    assert second.json()["computed_at"] is None
     assert second.json()["stale"] is False
 
 
@@ -683,9 +685,8 @@ def test_experiment_strategy_apply_dispatches_recompute(test_db, enqueue_stub):
     assert enqueue_stub.calls == [(int(operator.id), False)]
 
 
-def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypatch):
-    """(eager) 저장 → 재계산 → 다음 GET 은 새 규칙 반영 — 구
-    test_preview_candidates_recomputes_after_strategy_update 의 승계."""
+def test_strategy_update_does_not_refresh_preview_inline(client, test_db, monkeypatch):
+    """전략 저장과 다음 GET 모두 preview 스캔을 API 프로세스에서 직접 실행하지 않는다."""
     _configure_software_operator(client)
     _seed_matching_project(test_db)
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
@@ -697,8 +698,7 @@ def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypat
         return original(self, db, **kwargs)
 
     monkeypatch.setattr(StrategyMonitoringService, "_collect_candidate_evaluations", counting)
-    # _configure 의 전략 PUT 이 (project 시드 전에) 빈 스냅샷을 선계산했다. 첫 GET 이
-    # 실제로 계산하고 이후 PUT 트리거가 재계산하도록 setup 잔여 스냅샷을 비운다.
+    # _configure 의 전략 PUT 이 project 시드 전에 재계산을 디스패치했으므로 비운다.
     test_db.query(OperatorPreviewSnapshot).delete()
     test_db.commit()
 
@@ -709,8 +709,9 @@ def test_strategy_update_refreshes_preview_end_to_end(client, test_db, monkeypat
     )
 
     assert update.status_code == 200
-    assert calls["count"] == 2  # 최초 1 + 전략 저장 트리거 1 (GET 재조회는 0)
-    assert after.json()["candidates"] == []  # 새 규칙이 시드 공고를 배제
+    assert calls["count"] == 0
+    assert after.json()["snapshot_status"] == SNAPSHOT_STATUS_RUNNING
+    assert after.json()["candidates"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +991,7 @@ def test_candidates_refresh_reports_enqueue_failure_without_running_message(
         raise RuntimeError("broker down")
 
     _configure_software_operator(client)
+    _reset_snapshots(test_db)
     monkeypatch.setattr(jobs, "enqueue_preview_snapshot_recompute", boom)
 
     response = client.post("/api/v1/operator/strategy/candidates/refresh")
@@ -1001,9 +1003,9 @@ def test_candidates_refresh_reports_enqueue_failure_without_running_message(
 
 
 def test_sync_monitor_route_returns_202_async_envelope(client, test_db, monkeypatch):
-    """(eager) POST /monitor 는 202 async envelope 을 반환하고 결과는 poll_url 로 읽는다."""
+    """POST /monitor 는 memory://에서도 inline 실행 없이 pollable queued envelope 을 반환한다."""
     _configure_software_operator(client)
-    project = _seed_matching_project(test_db)
+    _seed_matching_project(test_db)
     monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", _canned_analyze)
 
     kickoff = client.post(
@@ -1017,9 +1019,7 @@ def test_sync_monitor_route_returns_202_async_envelope(client, test_db, monkeypa
     assert envelope["poll_url"].endswith(envelope["task_id"])
 
     status_payload = client.get(envelope["poll_url"]).json()
-    assert status_payload["status"] == "completed"
-    assert status_payload["result"]["results"][0]["project_id"] == project.id
-    assert (
-        status_payload["result"]["trigger_source"]
-        == StrategyMonitoringService.ASYNC_TRIGGER_SOURCE
-    )
+    assert status_payload["status"] == "queued"
+    assert status_payload["ready"] is False
+    assert status_payload["successful"] is False
+    assert status_payload["result"] is None

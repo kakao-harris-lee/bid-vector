@@ -4,6 +4,9 @@ from app.core.config import Settings, settings
 from app.services.strategy_scheduler import OperatorStrategyScheduler
 from app.tasks.celery_app import (
     Celery,
+    INFERENCE_OUTBOX_PROCESS_TASK_NAME,
+    OPERATOR_STRATEGY_MONITOR_TASK_NAME,
+    PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME,
     apply_task_result_repr_maxsize,
     build_celery_runtime_config,
     celery_app,
@@ -50,6 +53,18 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
     assert config["imports"] == ("app.tasks.jobs", "app.tasks.performance_probe")
     assert config["task_default_queue"] == "bid_vector_ops"
     assert config["task_routes"]["jobs.collect_koneps_notices"]["queue"] == settings.CELERY_OPS_QUEUE
+    assert (
+        config["task_routes"][OPERATOR_STRATEGY_MONITOR_TASK_NAME]["queue"]
+        == settings.CELERY_ML_INFERENCE_QUEUE
+    )
+    assert (
+        config["task_routes"][PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME]["queue"]
+        == settings.CELERY_ML_INFERENCE_QUEUE
+    )
+    assert (
+        config["task_routes"][INFERENCE_OUTBOX_PROCESS_TASK_NAME]["queue"]
+        == settings.CELERY_ML_INFERENCE_QUEUE
+    )
     assert config["task_routes"]["jobs.rebuild_project_embeddings"]["queue"] == settings.CELERY_ML_BACKFILL_QUEUE
     assert config["task_routes"]["ml.train_price_predictor"]["queue"] == settings.CELERY_ML_TRAINING_QUEUE
     assert config["task_routes"]["ml.reevaluate_decision_experiment"]["queue"] == settings.CELERY_ML_REEVALUATION_QUEUE
@@ -61,6 +76,55 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
     assert config["task_time_limit"] == 600
     assert config["task_soft_time_limit"] == 590
     assert config["worker_max_memory_per_child"] == 1048576
+
+
+def test_embedding_rebuild_enqueues_outbox_processor_for_entire_event_batch(monkeypatch):
+    """A rebuild that creates more than 50 outbox rows must enqueue a large enough sweep."""
+    from contextlib import contextmanager
+
+    from app.tasks import jobs
+
+    class _FakeDb:
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    class _FakeSimilarityService:
+        def rebuild_project_embeddings(self, db, **kwargs):
+            del db, kwargs
+            return {
+                "processed_count": 75,
+                "outbox_event_ids": list(range(1, 76)),
+                "results": [],
+            }
+
+    class _FakeAsyncResult:
+        id = "outbox-processor-75"
+
+    @contextmanager
+    def _fake_task_session():
+        yield _FakeDb()
+
+    queued_limits: list[int] = []
+
+    def _fake_enqueue_inference_outbox_processing(*, limit: int = 50):
+        queued_limits.append(limit)
+        return _FakeAsyncResult()
+
+    monkeypatch.setattr(jobs, "task_session", _fake_task_session)
+    monkeypatch.setattr(jobs, "ProjectSimilarityService", _FakeSimilarityService)
+    monkeypatch.setattr(
+        jobs,
+        "enqueue_inference_outbox_processing",
+        _fake_enqueue_inference_outbox_processing,
+    )
+
+    result = jobs.rebuild_project_embeddings.run(limit=75, force=True)
+
+    assert result["outbox_processor_task_id"] == "outbox-processor-75"
+    assert queued_limits == [75]
 
 
 def test_worker_max_memory_per_child_zero_disables_the_limit(monkeypatch):
