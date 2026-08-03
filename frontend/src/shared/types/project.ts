@@ -38,7 +38,10 @@ export interface ProjectSimilaritySearchResponse {
   target_project_id: number;
   target_project_title: string;
   target_embedding_model?: string | null;
-  search_mode: "postgres_vector" | "python_fallback";
+  target_embedding_status?: "ready" | "pending" | "stale";
+  target_embedding_updated_at?: string | null;
+  target_embedding_refresh_required?: boolean;
+  search_mode: "read_model" | "postgres_vector" | "python_fallback";
   same_category_only: boolean;
   min_similarity: number;
   result_count: number;
@@ -47,14 +50,23 @@ export interface ProjectSimilaritySearchResponse {
 
 export interface ProjectEmbeddingRefreshResponse {
   project_id: number;
-  title: string;
-  category?: string | null;
-  embedding_model?: string | null;
-  semantic_text_length: number;
-  embedding_dimensions: number;
-  embedding_updated_at?: string | null;
-  vector_storage_enabled: boolean;
-  vector_persisted: boolean;
+  task_id: string;
+  task_name: string;
+  queue: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  detail: string;
+  poll_url: string;
+}
+
+export interface ProjectEmbeddingTaskStatusResponse {
+  task_id: string;
+  task_name: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  raw_status: string;
+  ready: boolean;
+  successful: boolean;
+  detail: string;
+  error?: string | null;
 }
 
 export type BidDecisionAction = "bid_now" | "review" | "skip";

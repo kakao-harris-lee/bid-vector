@@ -147,8 +147,9 @@ def test_update_operator_strategy_persists_watch_rules(client):
     assert payload["strategy_configured"] is True
 
 
-def test_operator_strategy_candidates_filter_and_rank_projects(client, test_db):
+def test_operator_strategy_candidates_filter_and_rank_projects(client, test_db, monkeypatch):
     """Strategy candidates endpoint should return only projects that pass watch rules and analysis thresholds."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
         json={
@@ -231,8 +232,11 @@ def test_operator_strategy_candidates_filter_and_rank_projects(client, test_db):
     assert any("관심 키워드" in reason for reason in candidate["strategy_reasons"])
 
 
-def test_operator_strategy_candidates_include_re_notice_but_skip_cancelled_and_failed(client, test_db):
+def test_operator_strategy_candidates_include_re_notice_but_skip_cancelled_and_failed(
+    client, test_db, monkeypatch
+):
     """Strategy candidate preview should treat re-notices as active while excluding cancelled/failed notices."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
         json={
@@ -316,6 +320,7 @@ def test_operator_strategy_candidates_include_re_notice_but_skip_cancelled_and_f
 
 def test_operator_strategy_monitor_persists_decisions_and_notifications(client, test_db, monkeypatch):
     """Strategy monitoring should persist bid decisions and create notifications for selected candidates."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
         json={
@@ -998,6 +1003,7 @@ def test_operator_strategy_monitor_scheduled_scan_budget_reaches_late_matches(cl
 
 def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(client, test_db, monkeypatch):
     """High-priority monitoring runs should avoid review-only candidates and reuse active records on repeat runs."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
         json={
@@ -1113,8 +1119,8 @@ def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(cl
     assert test_db.query(Notification).count() == 1
 
 
-def test_operator_strategy_monitor_async_returns_pollable_task_and_result(client, test_db, monkeypatch):
-    """Async strategy monitoring should return a task id and expose the final persisted result when run eagerly."""
+def test_operator_strategy_monitor_async_returns_pollable_queued_task(client, test_db, monkeypatch):
+    """Async strategy monitoring should return a task id without running inline under memory://."""
     client.put(
         "/api/v1/operator/profile",
         json={
@@ -1184,7 +1190,7 @@ def test_operator_strategy_monitor_async_returns_pollable_task_and_result(client
     assert kickoff_payload["task_id"]
     assert kickoff_payload["monitor_run_id"] >= 1
     assert kickoff_payload["task_name"] == "jobs.monitor_operator_strategy"
-    assert kickoff_payload["status"] == "completed"
+    assert kickoff_payload["status"] == "queued"
     assert kickoff_payload["poll_url"].endswith(kickoff_payload["task_id"])
 
     status_response = client.get(f"/api/v1/operator/strategy/monitor/tasks/{kickoff_payload['task_id']}")
@@ -1193,21 +1199,20 @@ def test_operator_strategy_monitor_async_returns_pollable_task_and_result(client
     assert payload["task_id"] == kickoff_payload["task_id"]
     assert payload["monitor_run_id"] == kickoff_payload["monitor_run_id"]
     assert payload["task_name"] == "jobs.monitor_operator_strategy"
-    assert payload["status"] == "completed"
-    assert payload["raw_status"] == "SUCCESS"
-    assert payload["ready"] is True
-    assert payload["successful"] is True
+    assert payload["status"] == "queued"
+    assert payload["raw_status"] == "PENDING"
+    assert payload["ready"] is False
+    assert payload["successful"] is False
     assert payload["error"] is None
-    assert payload["result"]["monitor_run_id"] == kickoff_payload["monitor_run_id"]
-    assert payload["result"]["trigger_source"] == StrategyMonitoringService.ASYNC_TRIGGER_SOURCE
-    assert payload["result"]["persisted_candidate_count"] == 1
-    assert payload["result"]["results"][0]["project_id"] == high_priority_project.id
-    assert test_db.query(BidDecisionRecord).count() == 1
-    assert test_db.query(Notification).count() == 1
+    assert payload["result"] is None
+    assert high_priority_project.id is not None
+    assert test_db.query(BidDecisionRecord).count() == 0
+    assert test_db.query(Notification).count() == 0
 
 
 def test_operator_strategy_monitor_runs_endpoint_returns_recent_history(client, test_db, monkeypatch):
     """Recent monitoring history endpoint should expose completed strategy run summaries."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
         json={
@@ -1282,6 +1287,7 @@ def test_operator_strategy_monitor_runs_endpoint_returns_recent_history(client, 
 
 def test_operator_strategy_monitor_run_detail_exposes_diff_and_only_new_alerts(client, test_db, monkeypatch):
     """Run detail endpoint should expose new/continuing/dropped candidates and suppress repeat alerts."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
         json={

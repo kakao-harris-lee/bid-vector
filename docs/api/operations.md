@@ -307,7 +307,7 @@ curl -X POST http://localhost:3000/api/v1/operations/opportunity-analysis \
     "target_project_id": 1024,
     "target_project_title": "OO청 정보시스템 유지보수 용역",
     "target_embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
-    "search_mode": "postgres_vector",
+    "search_mode": "read_model",
     "same_category_only": true,
     "min_similarity": 0.2,
     "result_count": 1,

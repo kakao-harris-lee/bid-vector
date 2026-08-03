@@ -217,6 +217,7 @@ class _TaskRuntimeMixin:
             settings.CELERY_TASK_DEFAULT_QUEUE: [],
             settings.CELERY_OPS_QUEUE: [],
             settings.CELERY_ML_BACKFILL_QUEUE: [],
+            settings.CELERY_ML_INFERENCE_QUEUE: [],
             settings.CELERY_ML_TRAINING_QUEUE: [],
             settings.CELERY_ML_REEVALUATION_QUEUE: [],
         }

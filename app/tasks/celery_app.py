@@ -109,6 +109,7 @@ TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 NOTIFY_AWARD_RESULTS_TASK_NAME = "jobs.notify_award_results"
 PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME = "jobs.recompute_preview_snapshot"
+INFERENCE_OUTBOX_PROCESS_TASK_NAME = "jobs.process_inference_outbox"
 RUNTIME_PERFORMANCE_PROBE_TASK_NAME = "jobs.runtime_performance_probe"
 
 
@@ -119,7 +120,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         BACKFILL_SCSBID_RESERVE_DETAIL_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         "jobs.send_telegram_notification": {"queue": settings.CELERY_OPS_QUEUE},
         TELEGRAM_POLLING_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
-        OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        OPERATOR_STRATEGY_MONITOR_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
         PAPER_BIDDING_FORWARD_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         FORWARD_SETTLEMENT_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         HISTORICAL_BACKTEST_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
@@ -130,7 +131,8 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         COLLECT_G2_EVIDENCE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         NOTIFY_AWARD_RESULTS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
-        PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
+        PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
+        INFERENCE_OUTBOX_PROCESS_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -602,7 +604,7 @@ def build_celery_runtime_config() -> dict[str, object]:
     eager_mode = settings.uses_in_memory_celery
 
     config: dict[str, object] = {
-        "imports": ("app.tasks.jobs", "app.tasks.performance_probe"),
+        "imports": ("app.tasks.jobs", "app.tasks.inference_jobs", "app.tasks.performance_probe"),
         "task_serializer": "json",
         "accept_content": ["json"],
         "result_serializer": "json",
@@ -641,6 +643,11 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_price_predictor_training_beat_schedule(),
             **build_telegram_polling_beat_schedule(),
             **build_stale_task_reconciler_beat_schedule(),
+            **({"inference_outbox_periodic": {
+                "task": INFERENCE_OUTBOX_PROCESS_TASK_NAME,
+                "schedule": float(max(1, settings.INFERENCE_OUTBOX_INTERVAL_SECONDS)),
+                "kwargs": {"limit": max(1, settings.INFERENCE_OUTBOX_BATCH_LIMIT)},
+            }} if settings.INFERENCE_OUTBOX_SCHEDULE_ENABLED else {}),
         },
         # Resolved lazily by celery from the string path to avoid a circular
         # import; auto-recovers from a corrupt shelve/dbm schedule db instead
@@ -674,15 +681,7 @@ def build_celery_runtime_config() -> dict[str, object]:
 
 
 def apply_task_result_repr_maxsize(app: Celery) -> None:
-    """Trim the task-success result echo on the app Task base.
-
-    ``celery.app.trace`` logs ``saferepr(R, resultrepr_maxsize)`` at INFO for
-    every succeeded task; the celery ``Task`` default of 1024 lets bulky return
-    payloads (e.g. the koneps 수집 task's ``items[]``) fill up to ~1KB per line.
-    The payload is already persisted to the result backend and ``crawl_jobs`` so
-    the echo is redundant. Setting the attribute on the app Task base makes every
-    registered task inherit the smaller cap. 0 이하 = celery 기본(1024) 유지.
-    """
+    """Apply the configured success-result log cap; non-positive keeps default."""
     maxsize = int(settings.CELERY_TASK_RESULT_REPR_MAXSIZE)
     task_base = getattr(app, "Task", None)
     if maxsize > 0 and task_base is not None:

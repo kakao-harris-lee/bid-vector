@@ -22,6 +22,15 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
     volumes: []
 
+  inference-worker:
+    profiles: []
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://bidvector:bidvector@rabbitmq:5672/bidvector}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-db+postgresql+psycopg://biduser:bidpassword@db:5432/bid_vector_db}
+    volumes: []
+
   ml-worker:
     profiles: []
     environment:

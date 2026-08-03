@@ -45,7 +45,8 @@
 ## ML-UX runtime 성능
 
 - `docs/operations/ml-ux-performance-improvement-plan.md`의 측정 CLI로 HTTP p95/p99,
-  queue wait p95/p99, API/worker RSS 기준선을 같은 git SHA에서 수집한다.
+  ops/inference queue wait p95/p99, API/worker/inference-worker RSS 기준선을 같은 git
+  SHA에서 수집한다.
 - idle 측정과 승인된 synthetic operator preview 부하 측정을 분리하고, 운영 사용자나 실제
   알림 대상에는 부하 작업을 실행하지 않는다.
 - GET similarity가 API에서 모델을 로드하지 않는지, preview 부하 중 ops 큐가 inference
@@ -56,7 +57,7 @@
 
 - Supabase staging migration rehearsal: dump/restore, row count, schema drift, FK 정합, holdout, smoke test를 staging DB에서 검증한다.
 - 모델 아티팩트 Storage 이전: private bucket, checksum, release manifest, mirror export, restore 가능성을 확인한다.
-- runtime 설정 분리: API/worker/training-worker의 DB 연결, pooler mode, active manifest URI, local cache dir를 환경별로 검증한다.
+- runtime 설정 분리: API/worker/inference-worker/training-worker의 DB 연결, pooler mode, active manifest URI, local cache dir를 환경별로 검증한다.
 - 비용/호출량 모니터링: KONEPS/API 호출량, Telegram/app 알림량, ML inference 비용, 메일 발송량을 tenant/operator별로 관찰한다.
 
 ## SaaS/정산 검증

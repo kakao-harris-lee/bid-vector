@@ -279,7 +279,7 @@ python scripts/promote_ml_release.py apply-manifest \
 
 - `GET /health` 정상
 - `GET /api/v1/operator/strategy` 정상
-- `worker`, `ml-worker`, `training-worker`, `beat`, `rabbitmq`가 의도한 queue만 소비
+- `worker`, `inference-worker`, `ml-worker`, `training-worker`, `beat`, `rabbitmq`가 의도한 queue만 소비
 - embedding backfill task 완료
 - `/api/v1/projects/{id}/similar` 결과가 새 모델 기준으로 정상
 - 필요 시 `CLASSIFIER_EMBEDDING_MODEL`과 predictor artifact 경로를 manifest에 기록

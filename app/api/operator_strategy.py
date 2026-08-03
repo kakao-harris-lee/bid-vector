@@ -395,6 +395,8 @@ def get_monitor_status_impl(task_id: str, operator: User, db: Session) -> dict:
     if resolved_owner_id is not None and int(resolved_owner_id) != int(operator.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitoring task not found")
 
+    if monitor_run is not None:
+        payload["monitor_run_id"] = int(monitor_run.id)
     payload["operator_id"] = int(operator.id)
     payload.update(_operator_context_fields(operator))
     return payload

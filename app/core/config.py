@@ -4,7 +4,8 @@ from typing import List
 from urllib.parse import quote_plus
 
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+from app.core.inference_config import InferenceOutboxSettings
 
 DEFAULT_DATABASE_URL = (
     "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
@@ -23,9 +24,8 @@ def _to_celery_database_result_backend(database_url: str) -> str:
     return f"db+{normalized_database_url}"
 
 
-class Settings(BaseSettings):
+class Settings(InferenceOutboxSettings):
     """Application settings"""
-
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,
@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     CELERY_TASK_DEFAULT_QUEUE: str = "bid_vector"
     CELERY_OPS_QUEUE: str = "bid_vector_ops"
     CELERY_ML_BACKFILL_QUEUE: str = "bid_vector_ml_backfill"
+    CELERY_ML_INFERENCE_QUEUE: str = "bid_vector_ml_inference"
     CELERY_ML_TRAINING_QUEUE: str = "bid_vector_ml_training"
     CELERY_ML_REEVALUATION_QUEUE: str = "bid_vector_ml_reevaluation"
     CELERY_ALLOW_INLINE_ML_TASKS: bool = False

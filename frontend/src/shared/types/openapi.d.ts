@@ -898,7 +898,7 @@ export interface paths {
         put?: never;
         /**
          * Refresh Project Embedding
-         * @description Rebuild one project's semantic embedding and persist the latest vector metadata.
+         * @description Queue one project's semantic embedding refresh without running ML inline.
          */
         post: operations["refresh_project_embedding_api_v1_projects__project_id__embedding_refresh_post"];
         delete?: never;
@@ -8801,6 +8801,26 @@ export interface components {
             /** Vector Persisted */
             vector_persisted: boolean;
         };
+        /** ProjectEmbeddingRefreshTaskResponse */
+        ProjectEmbeddingRefreshTaskResponse: {
+            /** Task Id */
+            task_id: string;
+            /** Task Name */
+            task_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** Detail */
+            detail: string;
+            /** Poll Url */
+            poll_url: string;
+            /** Project Id */
+            project_id: number;
+            /** Queue */
+            queue: string;
+        };
         /** ProjectResponse */
         ProjectResponse: {
             /** Title */
@@ -8840,10 +8860,23 @@ export interface components {
             /** Target Embedding Model */
             target_embedding_model?: string | null;
             /**
+             * Target Embedding Status
+             * @default ready
+             * @enum {string}
+             */
+            target_embedding_status: "ready" | "pending" | "stale";
+            /** Target Embedding Updated At */
+            target_embedding_updated_at?: string | null;
+            /**
+             * Target Embedding Refresh Required
+             * @default false
+             */
+            target_embedding_refresh_required: boolean;
+            /**
              * Search Mode
              * @enum {string}
              */
-            search_mode: "postgres_vector" | "python_fallback";
+            search_mode: "read_model" | "postgres_vector" | "python_fallback";
             /** Same Category Only */
             same_category_only: boolean;
             /** Min Similarity */
@@ -12091,12 +12124,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectEmbeddingRefreshResponse"];
+                    "application/json": components["schemas"]["ProjectEmbeddingRefreshTaskResponse"];
                 };
             };
             /** @description Validation Error */

@@ -5,6 +5,11 @@ from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.core.time import utc_now
 from app.core.vector import VECTOR
+from app.models.similarity import (
+    InferenceOutboxEvent as InferenceOutboxEvent,
+    ProjectSimilarityEdge as ProjectSimilarityEdge,
+    ProjectSimilaritySnapshot as ProjectSimilaritySnapshot,
+)
 
 
 class User(Base):

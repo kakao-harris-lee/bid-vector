@@ -981,6 +981,7 @@ def test_dashboard_results_full_payload_preserves_existing_fields(client, test_d
 
 def test_strategy_monitor_sync_uses_target_operator_context(client, test_db, monkeypatch):
     """Canonical callers can run monitoring for synthetic operators without falling back to canonical decisions."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
     _configure_monitor_context(test_db, operator_id=canonical.id, required_keyword="canonical-only")
     _configure_monitor_context(test_db, operator_id=synthetic.id, required_keyword="synthetic-only")
@@ -1023,6 +1024,7 @@ def test_strategy_monitor_sync_uses_target_operator_context(client, test_db, mon
 
 def test_strategy_monitor_async_and_status_preserve_target_operator(client, test_db, monkeypatch):
     """Async monitor enqueue passes operator_id through to the eager job and task status response."""
+    monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     _canonical, synthetic, _other = _seed_canonical_and_synthetic(test_db)
     _configure_monitor_context(test_db, operator_id=synthetic.id, required_keyword="async-target")
     project = _seed_monitor_project(test_db, keyword="async-target")

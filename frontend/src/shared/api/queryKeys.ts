@@ -92,6 +92,8 @@ export const queryKeys = {
     detail: (id: number) => ["projects", "detail", id] as const,
     similar: (id: number, params: SimilarProjectsQuery) =>
       ["projects", "similar", id, normalizeSimilarKey(params)] as const,
+    embeddingTask: (taskId: string) =>
+      ["projects", "embedding-task", taskId] as const,
     timeline: (id: number, limit: number) => ["projects", "timeline", id, { limit }] as const
   },
   decisions: {

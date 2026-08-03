@@ -7,62 +7,30 @@ import json
 import math
 from typing import Any, Callable, Iterable
 
-from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.time import utc_now
 from app.core.vector import PGVECTOR_SQLALCHEMY_AVAILABLE
 from app.models.models import Project
+from app.schemas.project import ProjectSimilaritySearchResponse, SimilarProjectItem
+from app.schemas.similarity_runtime import (
+    InferenceOutboxProcessResult,
+    SimilarityProjectionResult,
+    SimilaritySearchExecution,
+    SimilaritySearchPreparation,
+)
 from app.services.classifier import NoticeClassifierService
-
-PROJECT_VECTOR_DIMENSIONS = 384
-FALLBACK_EMBEDDING_MODEL = "fallback-hash-v1"
-
-
-def ensure_project_vector_schema(engine) -> None:
-    """Ensure pgvector extension, project embedding columns, and HNSW index exist."""
-    if engine.dialect.name != "postgresql":
-        return
-
-    statements = [
-        "CREATE EXTENSION IF NOT EXISTS vector",
-        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS semantic_text TEXT DEFAULT ''",
-        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS embedding_payload TEXT DEFAULT '[]'",
-        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(255)",
-        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ",
-        f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS embedding VECTOR({PROJECT_VECTOR_DIMENSIONS})",
-        "CREATE INDEX IF NOT EXISTS ix_projects_embedding_hnsw ON projects USING hnsw (embedding vector_cosine_ops)",
-    ]
-
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.exec_driver_sql(statement)
-
-
-def ensure_project_metadata_schema(engine) -> None:
-    """Ensure project metadata columns used for crawl linkage exist in already-created databases."""
-    inspector = inspect(engine)
-    if "projects" not in set(inspector.get_table_names()):
-        return
-
-    existing_columns = {column["name"] for column in inspector.get_columns("projects")}
-    column_statements = {
-        "notice_number": "VARCHAR(100)",
-        "source_url": "TEXT",
-        "issuing_agency": "VARCHAR(255)",
-        "demand_agency": "VARCHAR(255)",
-    }
-
-    with engine.begin() as connection:
-        for column_name, ddl in column_statements.items():
-            if column_name not in existing_columns:
-                connection.exec_driver_sql(f"ALTER TABLE projects ADD COLUMN {column_name} {ddl}")
-
-        if engine.dialect.name in {"sqlite", "postgresql"}:
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_projects_notice_number ON projects (notice_number)")
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_projects_issuing_agency ON projects (issuing_agency)")
-            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_projects_demand_agency ON projects (demand_agency)")
+from app.services.inference_outbox import InferenceOutboxService
+from app.services.project_similarity_constants import (
+    FALLBACK_EMBEDDING_MODEL,
+    PROJECT_VECTOR_DIMENSIONS,
+)
+from app.services.project_similarity_schema import (
+    ensure_project_metadata_schema as ensure_project_metadata_schema,
+    ensure_project_vector_schema as ensure_project_vector_schema,
+)
+from app.services.similarity_read_model import ProjectSimilarityReadModelService
 
 
 class ProjectSimilarityService:
@@ -70,6 +38,8 @@ class ProjectSimilarityService:
 
     def __init__(self) -> None:
         self._classifier = NoticeClassifierService()
+        self._read_model = ProjectSimilarityReadModelService(self)
+        self._outbox = InferenceOutboxService(self._read_model)
 
     def refresh_project_embedding(self, db: Session, project: Project, force: bool = False) -> tuple[list[float], str]:
         """Rebuild and persist a project's embedding when its semantic text changed."""
@@ -128,7 +98,12 @@ class ProjectSimilarityService:
         """Refresh one project's embedding and return API-ready status metadata."""
         _, model_name = self.refresh_project_embedding(db, project, force=force)
         db.flush()
-        return self._serialize_embedding_state(db, project, model_name)
+        result = self._serialize_embedding_state(db, project, model_name)
+        outbox_event = self._outbox.append_embedding_ready_event(db, project)
+        if outbox_event is not None:
+            db.flush()
+            result["outbox_event_id"] = int(outbox_event.id)
+        return result
 
     def rebuild_project_embeddings(
         self,
@@ -150,9 +125,7 @@ class ProjectSimilarityService:
         """
         query = db.query(Project)
 
-        normalized_ids = (
-            sorted({int(pid) for pid in project_ids}) if project_ids is not None else None
-        )
+        normalized_ids = sorted({int(pid) for pid in project_ids}) if project_ids is not None else None
         if normalized_ids is not None:
             query = query.filter(Project.id.in_(normalized_ids))
 
@@ -167,10 +140,7 @@ class ProjectSimilarityService:
             query = query.offset(offset).limit(limit)
 
         projects = query.all()
-        results = [
-            self.refresh_project_embedding_details(db, project, force=force)
-            for project in projects
-        ]
+        results = [self.refresh_project_embedding_details(db, project, force=force) for project in projects]
 
         return {
             "processed_count": len(results),
@@ -182,6 +152,7 @@ class ProjectSimilarityService:
             "requested_project_ids": normalized_ids,
             "vector_storage_enabled": self._can_persist_pgvector(db),
             "project_ids": [result["project_id"] for result in results],
+            "outbox_event_ids": [int(result["outbox_event_id"]) for result in results if result.get("outbox_event_id") is not None],
             "results": results,
         }
 
@@ -194,73 +165,147 @@ class ProjectSimilarityService:
         min_similarity: float = 0.0,
         same_category_only: bool = True,
         read_only: bool = False,
+        stored_only: bool = False,
     ) -> dict[str, Any]:
-        """Find projects closest to the target project's embedding.
+        """Find closest projects; stored-only UX reads never run inference inline."""
+        prepared = self._prepare_similarity_search(
+            db,
+            project,
+            limit,
+            min_similarity,
+            same_category_only,
+            read_only,
+            stored_only,
+        )
+        if prepared.response is not None:
+            return prepared.response.model_dump(mode="python")
+        executed = self._execute_similarity_search(
+            db,
+            project,
+            prepared.vector,
+            limit,
+            min_similarity,
+            same_category_only,
+            read_only,
+            stored_only,
+        )
+        response = ProjectSimilaritySearchResponse(
+            target_project_id=int(project.id),
+            target_project_title=project.title,
+            target_embedding_model=prepared.model,
+            target_embedding_status=prepared.status,
+            target_embedding_updated_at=prepared.updated_at,
+            target_embedding_refresh_required=prepared.refresh_required,
+            search_mode=executed.search_mode,
+            same_category_only=same_category_only,
+            min_similarity=round(min_similarity, 4),
+            result_count=len(executed.items),
+            results=executed.items,
+        )
+        return response.model_dump(mode="python")
 
-        The pgvector path searches against *stored* embeddings via the HNSW
-        index, so candidate freshness is the responsibility of the
-        collection/backfill pipeline (deferred-embedding backfill,
-        :meth:`rebuild_project_embeddings`) rather than this read path. Only the
-        Python fallback (tests/in-memory, no pgvector) loads every candidate and
-        refreshes in-memory embeddings, since it has no stored index to query.
+    def recompute_similarity_read_model(
+        self,
+        db: Session,
+        *,
+        project_id: int,
+        same_category_only: bool = True,
+        min_similarity: float = 0.15,
+        limit: int = 20,
+    ) -> SimilarityProjectionResult:
+        """Rebuild one versioned similarity projection."""
+        return self._read_model.recompute(
+            db,
+            project_id=project_id,
+            same_category_only=same_category_only,
+            min_similarity=min_similarity,
+            limit=limit,
+        )
 
-        ``read_only=True`` (스캔 경로 전용) 은 target/candidate 임베딩을
-        :meth:`resolve_embedding_without_persist` 로 해석해 세션에 아무것도
-        쓰지 않는다 — 산출(점수·정렬)은 write 경로와 동일하고, 임베딩
-        freshness 는 수집/backfill 파이프라인 소관이다 (설계 §5 PR-A-2 / S4).
-        기본값 ``False`` 로 기존 호출자 동작은 불변이다.
-        """
-        if read_only:
-            target_embedding, target_model = self.resolve_embedding_without_persist(project)
-        else:
-            target_embedding, target_model = self.refresh_project_embedding(db, project)
+    def process_inference_outbox_events(self, db: Session, *, limit: int = 50) -> InferenceOutboxProcessResult:
+        """Process recoverable similarity-projection events."""
+        return self._outbox.process(db, limit=limit)
 
-        if self._can_query_pgvector(db):
-            results = self._search_with_postgres(
+    def _prepare_similarity_search(
+        self,
+        db: Session,
+        project: Project,
+        limit: int,
+        min_similarity: float,
+        same_category_only: bool,
+        read_only: bool,
+        stored_only: bool,
+    ) -> SimilaritySearchPreparation:
+        if stored_only:
+            return self._read_model.prepare_search(
                 db,
-                project=project,
-                query_embedding=target_embedding,
+                project,
                 limit=limit,
                 min_similarity=min_similarity,
                 same_category_only=same_category_only,
             )
-            search_mode = "postgres_vector"
+        if read_only:
+            vector, model = self.resolve_embedding_without_persist(project)
         else:
-            candidate_query = db.query(Project).filter(Project.id != project.id)
-            if same_category_only and project.category:
-                candidate_query = candidate_query.filter(
-                    Project.category == project.category
-                )
+            vector, model = self.refresh_project_embedding(db, project)
+        return SimilaritySearchPreparation(
+            vector=vector,
+            model=model,
+            status="ready",
+            updated_at=project.embedding_updated_at,
+            refresh_required=False,
+        )
 
-            candidates = candidate_query.all()
-            if read_only:
-                def _resolve_candidate_embedding(candidate: Project) -> list[float]:
-                    return self.resolve_embedding_without_persist(candidate)[0]
-
-                embedding_resolver = _resolve_candidate_embedding
-            else:
-                self.refresh_project_embeddings(db, candidates)
-                embedding_resolver = self._load_embedding
-
-            results = self._search_with_python(
-                candidates,
-                query_embedding=target_embedding,
+    def _execute_similarity_search(
+        self,
+        db: Session,
+        project: Project,
+        vector: list[float],
+        limit: int,
+        min_similarity: float,
+        same_category_only: bool,
+        read_only: bool,
+        stored_only: bool,
+    ) -> SimilaritySearchExecution:
+        if self._can_query_pgvector(db):
+            raw = self._search_with_postgres(
+                db,
+                project=project,
+                query_embedding=vector,
                 limit=limit,
                 min_similarity=min_similarity,
-                embedding_resolver=embedding_resolver,
+                same_category_only=same_category_only,
             )
-            search_mode = "python_fallback"
+            return SimilaritySearchExecution(
+                items=[SimilarProjectItem.model_validate(item) for item in raw],
+                search_mode="postgres_vector",
+            )
+        candidates = self._load_similarity_candidates(db, project, same_category_only)
+        resolver = self._candidate_embedding_resolver(read_only, stored_only)
+        if not read_only and not stored_only:
+            self.refresh_project_embeddings(db, candidates)
+        raw = self._search_with_python(
+            candidates,
+            query_embedding=vector,
+            limit=limit,
+            min_similarity=min_similarity,
+            embedding_resolver=resolver,
+        )
+        return SimilaritySearchExecution(
+            items=[SimilarProjectItem.model_validate(item) for item in raw],
+            search_mode="python_fallback",
+        )
 
-        return {
-            "target_project_id": project.id,
-            "target_project_title": project.title,
-            "target_embedding_model": target_model,
-            "search_mode": search_mode,
-            "same_category_only": same_category_only,
-            "min_similarity": round(min_similarity, 4),
-            "result_count": len(results),
-            "results": results,
-        }
+    def _load_similarity_candidates(self, db: Session, project: Project, same_category_only: bool) -> list[Project]:
+        query = db.query(Project).filter(Project.id != project.id)
+        if same_category_only and project.category:
+            query = query.filter(Project.category == project.category)
+        return query.all()
+
+    def _candidate_embedding_resolver(self, read_only: bool, stored_only: bool) -> Callable[[Project], list[float]]:
+        if read_only:
+            return lambda candidate: self.resolve_embedding_without_persist(candidate)[0]
+        return self._load_embedding
 
     def build_semantic_text(self, project: Project) -> str:
         """Build a rich semantic description used for embeddings and retrieval."""
@@ -311,7 +356,10 @@ class ProjectSimilarityService:
         if min_similarity > 0:
             query = query.filter(distance_expression <= (1 - min_similarity))
 
-        rows = query.order_by(distance_expression.asc(), Project.id.asc()).limit(limit).all()
+        # pgvector HNSW can satisfy ORDER BY distance LIMIT, but adding a
+        # secondary sort key (for example Project.id) pushes PostgreSQL back to
+        # seq scan + top-N sort on large tables.
+        rows = query.order_by(distance_expression.asc()).limit(limit).all()
         return [self._serialize_result(candidate, float(similarity_score)) for candidate, similarity_score in rows]
 
     def _search_with_python(
@@ -425,6 +473,8 @@ class ProjectSimilarityService:
         except (TypeError, json.JSONDecodeError):
             return []
         if not isinstance(payload, list):
+            return []
+        if not payload:
             return []
         return self._normalize_vector([float(value) for value in payload])
 

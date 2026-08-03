@@ -12,8 +12,8 @@ from pathlib import Path
 import yaml
 
 COMPOSE_PATH = Path(__file__).resolve().parents[1] / "docker-compose.yml"
-# 스펙 §5 PR-A-4 가 명시한 4개 서비스 (beat 는 ML 미실행이라 제외).
-TUNED_SERVICES = ("api", "worker", "ml-worker", "training-worker")
+# 스펙 §5 PR-A-4 가 명시한 ML 실행 서비스 (beat 는 ML 미실행이라 제외).
+TUNED_SERVICES = ("api", "worker", "inference-worker", "ml-worker", "training-worker")
 
 
 def test_malloc_arena_and_omp_threads_declared_for_all_ml_services():
@@ -30,11 +30,12 @@ def test_malloc_arena_and_omp_threads_declared_for_all_ml_services():
 DECLARED_MEM_LIMITS = {
     "api": "8g",
     "worker": "10g",
+    "inference-worker": "8g",
     "ml-worker": "8g",
     "training-worker": "8g",
 }
 # celery 워커를 돌리는 서비스만 자식 리사이클러 산술의 적용 대상이다(api 제외).
-CELERY_WORKER_SERVICES = ("worker", "ml-worker", "training-worker")
+CELERY_WORKER_SERVICES = ("worker", "inference-worker", "ml-worker", "training-worker")
 _MEM_LIMIT_UNIT_BYTES = {"k": 1024, "m": 1024**2, "g": 1024**3}
 
 
@@ -48,6 +49,17 @@ def test_mem_limits_declared_for_all_ml_services():
     compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
     for service_name, expected in DECLARED_MEM_LIMITS.items():
         assert str(compose["services"][service_name].get("mem_limit")) == expected, service_name
+
+
+def test_inference_worker_listens_only_to_inference_queue():
+    compose = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    command = str(compose["services"]["inference-worker"]["command"])
+
+    assert "${CELERY_ML_INFERENCE_QUEUE:-bid_vector_ml_inference}" in command
+    assert "${CELERY_OPS_QUEUE" not in command
+    assert "${CELERY_ML_BACKFILL_QUEUE" not in command
+    assert "${CELERY_ML_REEVALUATION_QUEUE" not in command
+    assert "${CELERY_ML_TRAINING_QUEUE" not in command
 
 
 def test_mem_limits_leave_headroom_above_child_recycler_budget():

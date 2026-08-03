@@ -53,8 +53,12 @@ from app.schemas.runtime_performance import (
 from scripts._common import positive_int
 
 DEFAULT_HTTP_PATHS = ("/health",)
-DEFAULT_QUEUES = ("bid_vector_ops",)
-DEFAULT_CONTAINERS = ("bid_vector_api", "bid_vector_worker")
+DEFAULT_QUEUES = ("bid_vector_ops", "bid_vector_ml_inference")
+DEFAULT_CONTAINERS = (
+    "bid_vector_api",
+    "bid_vector_worker",
+    "bid_vector_inference_worker",
+)
 TOKEN_ENV_NAME = "BID_VECTOR_PERF_TOKEN"
 _MEMORY_VALUE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)([KMGTP]?i?B)$", re.IGNORECASE)
 _UNIT_BYTES = {
@@ -154,19 +158,19 @@ def _enqueue_preview_load(operator_id: int | None) -> PreviewLoadEvidence | None
     if operator_id is None:
         return None
     from app.core.config import settings
-    from app.tasks.jobs import recompute_preview_snapshot
+    from app.tasks.jobs import enqueue_preview_snapshot_recompute
 
     load_tasks = [
-        recompute_preview_snapshot.apply_async(
-            kwargs={"operator_id": operator_id, "high_priority_only": flag},
-            queue=settings.CELERY_OPS_QUEUE,
+        enqueue_preview_snapshot_recompute(
+            operator_id=operator_id,
+            high_priority_only=flag,
         )
         for flag in (False, True)
     ]
     return PreviewLoadEvidence(
         operator_id=operator_id,
         task_ids=[str(task.id) for task in load_tasks],
-        queue=settings.CELERY_OPS_QUEUE,
+        queue=settings.CELERY_ML_INFERENCE_QUEUE,
     )
 
 

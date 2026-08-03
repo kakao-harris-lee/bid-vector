@@ -156,11 +156,13 @@ docker exec bid_vector_worker grep -c "<fix-marker>" /app/<changed-file>
 docker restart \
     bid_vector_worker         \
     bid_vector_beat           \
+    bid_vector_inference_worker \
     bid_vector_ml_worker      \
     bid_vector_training_worker
 
 # 재시작 검증 (모든 워커가 ready 상태인지)
 docker logs --tail 5 bid_vector_worker | grep "celery@.* ready"
+docker logs --tail 5 bid_vector_inference_worker | grep "celery@.* ready"
 docker logs --tail 5 bid_vector_ml_worker | grep "celery@.* ready"
 docker logs --tail 5 bid_vector_training_worker | grep "celery@.* ready"
 docker logs --tail 5 bid_vector_beat | grep "beat: Starting"
@@ -234,7 +236,7 @@ BUSINESS_GROUP_CALIBRATION_ENABLED=false
 
 # 2. API + Celery 컨테이너 모두 재시작 (워커도 새 환경 변수를 읽어야 함)
 docker compose restart api
-docker restart bid_vector_worker bid_vector_beat bid_vector_ml_worker bid_vector_training_worker
+docker restart bid_vector_worker bid_vector_beat bid_vector_inference_worker bid_vector_ml_worker bid_vector_training_worker
 ```
 
 이 설정으로 predictor는 카테고리 전용 경로로 폴백한다. DB 변경이나 마이그레이션은 불필요하다.

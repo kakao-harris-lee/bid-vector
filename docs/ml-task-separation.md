@@ -8,7 +8,8 @@
 
 | Queue | Worker | Docker target | 용도 |
 | --- | --- | --- | --- |
-| `CELERY_OPS_QUEUE` | `worker` | `api-runtime` | crawl, Telegram polling, strategy monitoring |
+| `CELERY_OPS_QUEUE` | `worker` | `api-runtime` | crawl, Telegram polling, notification, reconciler |
+| `CELERY_ML_INFERENCE_QUEUE` | `inference-worker` | `api-ml-full` | strategy monitoring and preview snapshot recompute |
 | `CELERY_ML_BACKFILL_QUEUE` | `ml-worker` | `api-ml-full` | project embedding backfill |
 | `CELERY_ML_REEVALUATION_QUEUE` | `ml-worker` | `api-ml-full` | decision experiment re-evaluation |
 | `CELERY_ML_TRAINING_QUEUE` | `training-worker` | `api-training` | price predictor training and artifact generation |

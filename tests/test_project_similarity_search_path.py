@@ -22,8 +22,17 @@ into the Python-fallback ``else`` branch only. These tests assert:
 
 from __future__ import annotations
 
-from app.models.models import Project
+from datetime import timedelta
+
+from app.core.time import utc_now
+from app.models.models import (
+    InferenceOutboxEvent,
+    Project,
+    ProjectSimilarityEdge,
+    ProjectSimilaritySnapshot,
+)
 from app.services.project_similarity import ProjectSimilarityService
+from app.services.similarity_read_model import invalidate_project_embedding
 
 
 def _make_project(db, *, title: str, category: str = "construction") -> Project:
@@ -44,7 +53,7 @@ def test_pgvector_path_skips_bulk_candidate_refresh(test_db, monkeypatch):
     """When pgvector is queryable, the 12k candidate load/refresh must be skipped."""
     target = _make_project(test_db, title="타겟 공고")
     # Other same-category rows that the OLD code would have bulk-loaded/refreshed.
-    _make_project(test_db, title="후보 A")
+    candidate = _make_project(test_db, title="후보 A")
     _make_project(test_db, title="후보 B")
     test_db.flush()
 
@@ -66,7 +75,7 @@ def test_pgvector_path_skips_bulk_candidate_refresh(test_db, monkeypatch):
         db, *, project, query_embedding, limit, min_similarity, same_category_only
     ):
         postgres_calls.append({"project_id": project.id, "limit": limit})
-        return [{"project_id": -1, "title": "from-pg", "similarity_score": 0.9}]
+        return [service._serialize_result(candidate, 0.9)]
 
     monkeypatch.setattr(service, "_search_with_postgres", _fake_postgres)
 
@@ -82,11 +91,65 @@ def test_pgvector_path_skips_bulk_candidate_refresh(test_db, monkeypatch):
     assert plural_refresh_calls == []
     # Results come straight from the pgvector search mock.
     assert response["search_mode"] == "postgres_vector"
-    assert response["results"] == [
-        {"project_id": -1, "title": "from-pg", "similarity_score": 0.9}
-    ]
+    assert response["results"][0]["project_id"] == candidate.id
+    assert response["results"][0]["similarity_score"] == 0.9
     assert len(postgres_calls) == 1
     assert postgres_calls[0]["project_id"] == target.id
+
+
+def test_postgres_search_orders_only_by_vector_distance_for_hnsw():
+    """HNSW requires ORDER BY distance LIMIT without a secondary sort key."""
+    target = Project(id=101, title="타겟 공고", category="service")
+    candidate = Project(
+        id=202,
+        title="후보 공고",
+        category="service",
+        status="open",
+        budget_estimate=1000.0,
+    )
+
+    class _FakeQuery:
+        def __init__(self) -> None:
+            self.order_by_args = None
+            self.limit_value = None
+
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            self.order_by_args = args
+            return self
+
+        def limit(self, value):
+            self.limit_value = value
+            return self
+
+        def all(self):
+            return [(candidate, 0.91)]
+
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.query_obj = _FakeQuery()
+
+        def query(self, *args):
+            return self.query_obj
+
+    db = _FakeDb()
+    service = ProjectSimilarityService()
+
+    result = service._search_with_postgres(
+        db,
+        project=target,
+        query_embedding=[0.0] * 384,
+        limit=5,
+        min_similarity=0.15,
+        same_category_only=True,
+    )
+
+    assert db.query_obj.limit_value == 5
+    assert db.query_obj.order_by_args is not None
+    assert len(db.query_obj.order_by_args) == 1
+    assert result[0]["project_id"] == candidate.id
 
 
 def test_python_fallback_still_loads_and_refreshes_candidates(test_db, monkeypatch):
@@ -111,13 +174,13 @@ def test_python_fallback_still_loads_and_refreshes_candidates(test_db, monkeypat
 
     searched_candidates: list[list[int]] = []
 
-    def _fake_python(candidates, *, query_embedding, limit, min_similarity, embedding_resolver=None):
+    def _fake_python(
+        candidates, *, query_embedding, limit, min_similarity, embedding_resolver=None
+    ):
         # 기본(비-read_only) 경로: 저장본을 읽는 _load_embedding resolver 가 주입된다.
         assert embedding_resolver == service._load_embedding
         searched_candidates.append([c.id for c in candidates])
-        return [
-            {"project_id": cand_a.id, "title": cand_a.title, "similarity_score": 0.5}
-        ]
+        return [service._serialize_result(cand_a, 0.5)]
 
     monkeypatch.setattr(service, "_search_with_python", _fake_python)
 
@@ -158,3 +221,261 @@ def test_python_fallback_real_search_returns_ranked_results(test_db):
     result_ids = [row["project_id"] for row in response["results"]]
     # The semantically closest "도로 포장 공사" row should be present and ranked.
     assert near.id in result_ids
+
+
+def test_stored_similarity_reads_fresh_read_model_without_searching(
+    test_db, monkeypatch
+):
+    """Stored UX reads should use fresh read-model edges before search fallback."""
+    target = _make_project(test_db, title="클라우드 보안 관제", category="software")
+    candidate = _make_project(test_db, title="클라우드 보안 운영", category="software")
+    _make_project(test_db, title="건물 보수 공사", category="construction")
+
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, target, force=True)
+    service.refresh_project_embedding_details(test_db, candidate, force=True)
+    test_db.flush()
+
+    recompute = service.recompute_similarity_read_model(
+        test_db,
+        project_id=target.id,
+        limit=5,
+        min_similarity=0.15,
+    )
+    test_db.commit()
+    test_db.refresh(target)
+
+    assert recompute.status == "completed"
+    assert recompute.edge_count == 1
+
+    def _fail_search(*args, **kwargs):
+        raise AssertionError("fresh read-model hit must not run similarity search")
+
+    monkeypatch.setattr(service, "_search_with_postgres", _fail_search)
+    monkeypatch.setattr(service, "_search_with_python", _fail_search)
+
+    response = service.find_similar_projects(
+        test_db,
+        target,
+        limit=5,
+        min_similarity=0.15,
+        same_category_only=True,
+        stored_only=True,
+    )
+
+    assert response["search_mode"] == "read_model"
+    assert response["target_embedding_status"] == "ready"
+    assert response["result_count"] == 1
+    assert response["results"][0]["project_id"] == candidate.id
+
+
+def test_zero_result_snapshot_is_a_valid_read_model_hit(test_db, monkeypatch):
+    """A projection with no edges must not force every UX GET back onto search."""
+    target = _make_project(test_db, title="단독 공고", category="software")
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, target, force=True)
+    result = service.recompute_similarity_read_model(
+        test_db, project_id=target.id, limit=5, min_similarity=0.99
+    )
+    test_db.commit()
+
+    assert result.status == "completed"
+    assert result.edge_count == 0
+    monkeypatch.setattr(
+        service,
+        "_search_with_python",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("zero-edge snapshot must be served")
+        ),
+    )
+
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.99, stored_only=True
+    )
+
+    assert response["search_mode"] == "read_model"
+    assert response["result_count"] == 0
+
+
+def test_candidate_category_change_invalidates_target_snapshot(test_db, monkeypatch):
+    """Candidate-side semantic/category changes cannot leave target edges fresh."""
+    target = _make_project(test_db, title="AI 분석", category="software")
+    candidate = _make_project(test_db, title="AI 데이터 분석", category="software")
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, target, force=True)
+    service.refresh_project_embedding_details(test_db, candidate, force=True)
+    service.recompute_similarity_read_model(test_db, project_id=target.id, limit=5)
+    test_db.commit()
+
+    candidate.category = "construction"
+    invalidate_project_embedding(candidate)
+    test_db.commit()
+    fallback_calls: list[int] = []
+
+    def _fallback(candidates, **kwargs):
+        del kwargs
+        fallback_calls.append(-1)
+        fallback_calls.extend(item.id for item in candidates)
+        return []
+
+    monkeypatch.setattr(service, "_search_with_python", _fallback)
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.15, stored_only=True
+    )
+
+    assert response["search_mode"] == "python_fallback"
+    assert fallback_calls == [-1]
+
+
+def test_embedding_ready_outbox_is_deduplicated_per_version(test_db):
+    project = _make_project(test_db, title="중복 이벤트 방지")
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, project, force=True)
+    duplicate = service._outbox.append_embedding_ready_event(test_db, project)
+    test_db.flush()
+
+    assert duplicate is not None
+    assert test_db.query(InferenceOutboxEvent).count() == 1
+
+
+def test_stale_running_outbox_claim_is_recovered_and_processed(test_db, monkeypatch):
+    project = _make_project(test_db, title="중단 복구 공고")
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, project, force=True)
+    test_db.flush()
+    event = test_db.query(InferenceOutboxEvent).one()
+    event.status = "running"
+    event.attempts = 1
+    event.locked_at = utc_now() - timedelta(hours=1)
+    event_id = int(event.id)
+    test_db.commit()
+    monkeypatch.setattr(
+        "app.services.inference_outbox.settings.INFERENCE_OUTBOX_LOCK_TIMEOUT_SECONDS",
+        60,
+    )
+
+    processed = service.process_inference_outbox_events(test_db, limit=10)
+
+    assert processed.recovered_count == 1
+    assert processed.processed_count == 1
+    test_db.expire_all()
+    assert test_db.get(InferenceOutboxEvent, event_id).status == "completed"
+
+
+def test_publish_failure_leaves_outbox_for_periodic_delivery(test_db, monkeypatch):
+    """Fast-dispatch failure after commit must not lose the projection event."""
+    from app.tasks import inference_jobs, jobs
+
+    project = _make_project(test_db, title="발행 실패 복구")
+    test_db.commit()
+
+    def _fail_publish(*, limit: int = 50):
+        raise RuntimeError(f"broker unavailable for {limit}")
+
+    monkeypatch.setattr(
+        inference_jobs, "enqueue_inference_outbox_processing", _fail_publish
+    )
+    rebuilt = jobs.rebuild_project_embeddings.run(
+        project_ids=[project.id], force=True
+    )
+
+    assert "outbox_processor_task_id" not in rebuilt
+    test_db.expire_all()
+    event = test_db.query(InferenceOutboxEvent).one()
+    assert event.status == "pending"
+
+    swept = jobs.process_inference_outbox.run(limit=10)
+    assert swept["processed_count"] == 1
+
+
+def test_inference_outbox_processor_creates_similarity_read_model_edges(
+    test_db, monkeypatch
+):
+    """Embedding rebuild writes outbox events; the processor materializes edges."""
+    from app.tasks import inference_jobs, jobs
+
+    queued_processor_limits: list[int] = []
+
+    class _FakeAsyncResult:
+        id = "outbox-processor-test-task"
+
+    def _fake_enqueue_inference_outbox_processing(*, limit: int = 50):
+        queued_processor_limits.append(limit)
+        return _FakeAsyncResult()
+
+    monkeypatch.setattr(
+        inference_jobs,
+        "enqueue_inference_outbox_processing",
+        _fake_enqueue_inference_outbox_processing,
+    )
+
+    target = _make_project(test_db, title="AI 민원 분석")
+    near = _make_project(test_db, title="AI 상담 데이터 분석")
+    far = _make_project(test_db, title="네트워크 장비 유지보수")
+    test_db.commit()
+
+    rebuild = jobs.rebuild_project_embeddings.run(
+        project_ids=[target.id, near.id, far.id],
+        force=True,
+    )
+
+    assert rebuild["processed_count"] == 3
+    assert len(rebuild["outbox_event_ids"]) == 3
+    assert rebuild["outbox_processor_task_id"] == "outbox-processor-test-task"
+    assert queued_processor_limits == [50]
+
+    test_db.expire_all()
+    pending_events = (
+        test_db.query(InferenceOutboxEvent)
+        .order_by(InferenceOutboxEvent.id.asc())
+        .all()
+    )
+    assert [event.status for event in pending_events] == [
+        "pending",
+        "pending",
+        "pending",
+    ]
+
+    processed = jobs.process_inference_outbox.run(limit=10)
+
+    assert processed["processed_count"] == 3
+    assert processed["failed_count"] == 0
+
+    test_db.expire_all()
+    completed_events = (
+        test_db.query(InferenceOutboxEvent)
+        .order_by(InferenceOutboxEvent.id.asc())
+        .all()
+    )
+    assert [event.status for event in completed_events] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
+
+    target_edges = (
+        test_db.query(ProjectSimilarityEdge)
+        .join(
+            ProjectSimilaritySnapshot,
+            ProjectSimilaritySnapshot.id == ProjectSimilarityEdge.snapshot_id,
+        )
+        .filter(ProjectSimilaritySnapshot.target_project_id == target.id)
+        .order_by(ProjectSimilarityEdge.rank.asc())
+        .all()
+    )
+    assert [edge.rank for edge in target_edges] == [1, 2]
+
+    service = ProjectSimilarityService()
+    target = test_db.query(Project).filter(Project.id == target.id).one()
+    response = service.find_similar_projects(
+        test_db,
+        target,
+        limit=5,
+        min_similarity=0.15,
+        same_category_only=True,
+        stored_only=True,
+    )
+
+    assert response["search_mode"] == "read_model"
+    assert response["result_count"] == 2
+    assert {row["project_id"] for row in response["results"]} == {near.id, far.id}

@@ -1,8 +1,12 @@
 """Tests for the safe runtime performance probe and measurement helpers."""
 
+from types import SimpleNamespace
+
+from app.core.config import settings
 from app.tasks.celery_app import RUNTIME_PERFORMANCE_PROBE_TASK_NAME
 from app.tasks.performance_probe import runtime_performance_probe
 from scripts.measure_runtime_performance import (
+    _enqueue_preview_load,
     build_parser,
     parse_cgroup_anon_bytes,
     parse_memory_bytes,
@@ -43,3 +47,22 @@ def test_preview_load_is_explicit_and_scoped_to_one_operator():
 
     assert default_args.preview_load_operator_id is None
     assert load_args.preview_load_operator_id == 42
+
+
+def test_preview_load_uses_inference_queue(monkeypatch):
+    from app.tasks import jobs
+
+    calls: list[tuple[int, bool]] = []
+
+    def _fake_enqueue(*, operator_id: int, high_priority_only: bool):
+        calls.append((operator_id, high_priority_only))
+        return SimpleNamespace(id=f"preview-load-{len(calls)}")
+
+    monkeypatch.setattr(jobs, "enqueue_preview_snapshot_recompute", _fake_enqueue)
+
+    payload = _enqueue_preview_load(42)
+
+    assert payload is not None
+    assert payload.queue == settings.CELERY_ML_INFERENCE_QUEUE
+    assert payload.task_ids == ["preview-load-1", "preview-load-2"]
+    assert calls == [(42, False), (42, True)]
