@@ -272,7 +272,7 @@ def _make_foreign_model_corpus(test_db, service):
 
 
 def test_python_fallback_excludes_other_embedding_models(test_db):
-    """Fallback 후보 스코프는 pgvector 경로와 같다 (다른 모델 벡터는 채점 안 함)."""
+    """다른 모델의 저장 벡터는 채점에서 제외된다 — 교차 좌표계 채점 금지."""
     service = ProjectSimilarityService()
     target, same_model, other_model = _make_foreign_model_corpus(test_db, service)
 
@@ -306,8 +306,25 @@ def test_read_only_python_fallback_excludes_other_embedding_models(test_db):
     assert other_model.id not in result_ids
 
 
+def test_python_fallback_excludes_candidates_with_null_embedding_model(test_db):
+    """모델 컬럼 NULL 후보는 이름을 지어내지 않고 제외한다 — pgvector 등치와 같은 판정."""
+    service = ProjectSimilarityService()
+    target, same_model, other_model = _make_foreign_model_corpus(test_db, service)
+    other_model.embedding_model = None
+    test_db.flush()
+
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.0, same_category_only=True
+    )
+
+    assert response["search_mode"] == "python_fallback"
+    result_ids = [row["project_id"] for row in response["results"]]
+    assert same_model.id in result_ids
+    assert other_model.id not in result_ids
+
+
 def test_recompute_skips_projection_when_embedding_model_is_null(test_db):
-    """embedding_model NULL 은 not-ready 로 돌린다 — 문자열 'None' 버킷 금지."""
+    """embedding_model NULL 은 명시적 skip 으로 돌린다 — 문자열 'None' 버킷 금지."""
     project = _make_project(test_db, title="모델 미상 공고")
     service = ProjectSimilarityService()
     service.refresh_project_embedding_details(test_db, project, force=True)
