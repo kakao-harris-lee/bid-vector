@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine, make_url
 
+from app.core.constants import POSTGRES_DRIVERNAME
+
 
 @dataclass(frozen=True)
 class DatabaseTargetFingerprint:
@@ -135,7 +137,7 @@ def validate_database_configuration(
         return [
             "DATABASE_URL query options cannot be preserved when split DATABASE_* settings are active"
         ]
-    if url.drivername != "postgresql+psycopg":
+    if url.drivername != POSTGRES_DRIVERNAME:
         return ["DATABASE_URL driver disagrees with split DATABASE_* settings"]
     url_identity = (url.username, url.password, url.host, url.port, url.database)
     split_identity = (

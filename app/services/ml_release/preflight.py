@@ -9,6 +9,9 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.services.base_amount_basis import BASIS_CLEAN
+from app.services.ml_release.artifact_integrity import (
+    resolve_artifact_integrity_verdict,
+)
 from app.services.ml_release.base import _MLReleaseBase, build_preflight_check
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
@@ -85,8 +88,8 @@ class _PreflightMixin(_MLReleaseBase):
         """Assemble the preflight result payload from the accumulated checks/summaries.
 
         ``passed`` is the AND of every check; ``failure_reasons`` mirrors the failing
-        checks' details. Field set and pass/fail semantics are unchanged from the inline
-        return it replaces.
+        checks' details. ``production`` is echoed back so a rollout record shows which
+        gate profile produced the verdict.
         """
         passed = all(bool(check.get("passed")) for check in checks)
         return {
@@ -376,7 +379,16 @@ class _PreflightMixin(_MLReleaseBase):
         *,
         require_integrity: bool = False,
     ) -> list[dict[str, Any]]:
-        """Verify that all manifest artifact references resolve before publish/apply rollout."""
+        """Verify that all manifest artifact references resolve before publish/apply rollout.
+
+        Each artifact path is resolved, and when the manifest carries a signed
+        ``integrity`` block the artifact's sha256 is recomputed and compared with it
+        (directories hash as a sha256 tree — see ``_path_integrity_metadata``).
+
+        ``require_integrity`` decides what a *missing* integrity block means: a
+        production rollout fails on it, other rollouts pass but are reported as
+        ``checksum_missing`` — the check never claims a checksum it did not verify.
+        """
         checks: list[dict[str, Any]] = []
         for artifact in self._iter_manifest_artifact_paths(manifest):
             artifact_path = self._resolve_portable_path(artifact["path"])
@@ -389,10 +401,11 @@ class _PreflightMixin(_MLReleaseBase):
             actual_integrity = (
                 self._path_integrity_metadata(artifact_path) if exists else None
             )
-            integrity_matches = (
-                not require_integrity
-                if not integrity_present
-                else actual_integrity == expected_integrity
+            verdict = resolve_artifact_integrity_verdict(
+                exists=exists,
+                integrity_present=integrity_present,
+                integrity_matches=actual_integrity == expected_integrity,
+                require_integrity=require_integrity,
             )
             path_type = (
                 "directory"
@@ -402,26 +415,15 @@ class _PreflightMixin(_MLReleaseBase):
             checks.append(
                 build_preflight_check(
                     f"artifact_path:{artifact['key']}",
-                    exists and integrity_matches,
-                    (
-                        "passed"
-                        if exists and integrity_matches
-                        else "checksum_missing"
-                        if exists and not integrity_present
-                        else "checksum_mismatch" if exists else "not_found"
-                    ),
-                    (
-                        f"Manifest artifact '{artifact['key']}' is available and matches its checksum."
-                        if exists and integrity_matches
-                        else f"Manifest artifact '{artifact['key']}' has no signed checksum."
-                        if exists and not integrity_present
-                        else f"Manifest artifact '{artifact['key']}' checksum does not match the signed manifest."
-                        if exists
-                        else f"Manifest artifact '{artifact['key']}' was not found: {artifact_path}"
+                    verdict.passed,
+                    verdict.status,
+                    verdict.detail_template.format(
+                        key=artifact["key"], path=artifact_path
                     ),
                     artifact_key=artifact["key"],
                     path=str(artifact_path),
                     path_type=path_type,
+                    checksum_verified=verdict.checksum_verified,
                     expected_sha256=(
                         expected_integrity.get("sha256")
                         if isinstance(expected_integrity, dict)

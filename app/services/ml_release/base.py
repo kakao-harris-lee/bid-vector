@@ -3,7 +3,10 @@
 Holds the ``MLReleasePromotionRequest`` value object plus ``_MLReleaseBase``:
 the promotion-gate presets, dataset-quality ordering, ``__init__`` and the
 stateless leaf helpers (path resolution, sha256, env parsing, archive/probe
-builders). Every member is moved verbatim from the original module.
+builders). Most members started as verbatim moves from the original module;
+``_iter_manifest_artifact_paths`` has since grown the per-artifact ``integrity``
+metadata and the ``promotion_gate.predictor_backtest`` report entry, so the
+release preflight can checksum them.
 
 ``build_preflight_check`` also lives here because release preflight and object
 storage preflight both emit it into one merged ``checks`` array."""

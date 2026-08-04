@@ -454,6 +454,108 @@ def test_preflight_release_rollout_rejects_artifact_checksum_mismatch(
     assert artifact_check["expected_sha256"] != artifact_check["actual_sha256"]
 
 
+def _write_unsigned_artifact_manifest(repo_root: Path, *, release_tag: str) -> Path:
+    """Craft a manifest whose artifact carries no ``integrity`` block (legacy shape)."""
+    artifact_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / f"{release_tag}.json"
+    )
+    manifest_dir = repo_root / "models" / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / f"{release_tag}.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "release_tag": release_tag,
+                "artifacts": {"predictors": {"lstm": {"path": str(artifact_path)}}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def test_preflight_reports_unverified_artifact_as_checksum_missing(
+    tmp_path, monkeypatch
+):
+    """무결성 없는 아티팩트는 통과하되 '체크섬이 일치한다'고 단언하지 않는다."""
+    repo_root = tmp_path / "repo"
+    manifest_path = _write_unsigned_artifact_manifest(
+        repo_root, release_tag="2026-08-04-unsigned-artifact"
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+    service = MLReleasePromotionService(repo_root=repo_root)
+
+    result = service.preflight_release_rollout(
+        str(manifest_path), require_signature=False, probe_write=False
+    )
+
+    artifact_check = next(
+        check for check in result["checks"] if check["name"] == "artifact_path:lstm"
+    )
+    assert artifact_check["passed"] is True
+    assert artifact_check["status"] == "checksum_missing"
+    assert artifact_check["checksum_verified"] is False
+    assert artifact_check["expected_sha256"] is None
+    assert "matches its" not in artifact_check["detail"]
+    assert "has no signed checksum" in artifact_check["detail"]
+
+
+def test_production_preflight_rejects_artifact_without_signed_checksum(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    manifest_path = _write_unsigned_artifact_manifest(
+        repo_root, release_tag="2026-08-04-unsigned-production"
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+    service = MLReleasePromotionService(repo_root=repo_root)
+
+    result = service.preflight_release_rollout(
+        str(manifest_path),
+        require_signature=False,
+        probe_write=False,
+        production=True,
+    )
+
+    artifact_check = next(
+        check for check in result["checks"] if check["name"] == "artifact_path:lstm"
+    )
+    assert result["passed"] is False
+    assert artifact_check["passed"] is False
+    assert artifact_check["status"] == "checksum_missing"
+    assert "requires" in artifact_check["detail"]
+
+
+def test_preflight_reports_verified_artifact_checksum(tmp_path, monkeypatch):
+    """서명된 체크섬을 실제로 재계산해 맞춘 아티팩트만 일치를 단언한다."""
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "verified.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-verified-artifact",
+            lstm_artifact_path=str(lstm_path),
+        )
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"], require_signature=True, probe_write=False
+    )
+
+    artifact_check = next(
+        check for check in result["checks"] if check["name"] == "artifact_path:lstm"
+    )
+    assert artifact_check["passed"] is True
+    assert artifact_check["status"] == "passed"
+    assert artifact_check["checksum_verified"] is True
+    assert artifact_check["expected_sha256"] == artifact_check["actual_sha256"]
+    assert "matches its signed checksum" in artifact_check["detail"]
+
+
 def test_production_preflight_requires_checksummed_predictor_backtest(
     tmp_path, monkeypatch
 ):
