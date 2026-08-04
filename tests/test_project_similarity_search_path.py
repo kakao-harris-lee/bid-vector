@@ -205,10 +205,16 @@ def test_python_fallback_still_loads_and_refreshes_candidates(test_db, monkeypat
     searched_candidates: list[list[int]] = []
 
     def _fake_python(
-        candidates, *, query_embedding, limit, min_similarity, embedding_resolver=None
+        candidates,
+        *,
+        query_embedding,
+        query_embedding_model,
+        limit,
+        min_similarity,
+        embedding_resolver=None,
     ):
-        # 기본(비-read_only) 경로: 저장본을 읽는 _load_embedding resolver 가 주입된다.
-        assert embedding_resolver == service._load_embedding
+        # 기본(비-read_only) 경로: 저장본을 읽는 resolver 가 주입된다.
+        assert embedding_resolver == service._stored_embedding_with_model
         searched_candidates.append([c.id for c in candidates])
         return [service._serialize_result(cand_a, 0.5)]
 
@@ -251,6 +257,87 @@ def test_python_fallback_real_search_returns_ranked_results(test_db):
     result_ids = [row["project_id"] for row in response["results"]]
     # The semantically closest "도로 포장 공사" row should be present and ranked.
     assert near.id in result_ids
+
+
+def _make_foreign_model_corpus(test_db, service):
+    """같은 카테고리에 (질의 모델 후보, 다른 모델 후보) 를 하나씩 만든다."""
+    target = _make_project(test_db, title="도로 포장 공사 서울")
+    same_model = _make_project(test_db, title="도로 포장 공사 부산")
+    other_model = _make_project(test_db, title="도로 포장 공사 대구")
+    for project in (target, same_model, other_model):
+        service.refresh_project_embedding_details(test_db, project, force=True)
+    other_model.embedding_model = "incompatible-model-v2"
+    test_db.flush()
+    return target, same_model, other_model
+
+
+def test_python_fallback_excludes_other_embedding_models(test_db):
+    """다른 모델의 저장 벡터는 채점에서 제외된다 — 교차 좌표계 채점 금지."""
+    service = ProjectSimilarityService()
+    target, same_model, other_model = _make_foreign_model_corpus(test_db, service)
+
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.0, same_category_only=True
+    )
+
+    assert response["search_mode"] == "python_fallback"
+    result_ids = [row["project_id"] for row in response["results"]]
+    assert same_model.id in result_ids
+    assert other_model.id not in result_ids
+
+
+def test_read_only_python_fallback_excludes_other_embedding_models(test_db):
+    """재임베딩이 없는 read-only 스캔도 같은 모델 스코프를 본다."""
+    service = ProjectSimilarityService()
+    target, same_model, other_model = _make_foreign_model_corpus(test_db, service)
+
+    response = service.find_similar_projects(
+        test_db,
+        target,
+        limit=5,
+        min_similarity=0.0,
+        same_category_only=True,
+        read_only=True,
+    )
+
+    assert response["search_mode"] == "python_fallback"
+    result_ids = [row["project_id"] for row in response["results"]]
+    assert same_model.id in result_ids
+    assert other_model.id not in result_ids
+
+
+def test_python_fallback_excludes_candidates_with_null_embedding_model(test_db):
+    """모델 컬럼 NULL 후보는 이름을 지어내지 않고 제외한다 — pgvector 등치와 같은 판정."""
+    service = ProjectSimilarityService()
+    target, same_model, other_model = _make_foreign_model_corpus(test_db, service)
+    other_model.embedding_model = None
+    test_db.flush()
+
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.0, same_category_only=True
+    )
+
+    assert response["search_mode"] == "python_fallback"
+    result_ids = [row["project_id"] for row in response["results"]]
+    assert same_model.id in result_ids
+    assert other_model.id not in result_ids
+
+
+def test_recompute_skips_projection_when_embedding_model_is_null(test_db):
+    """embedding_model NULL 은 명시적 skip 으로 돌린다 — 문자열 'None' 버킷 금지."""
+    project = _make_project(test_db, title="모델 미상 공고")
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, project, force=True)
+    project.embedding_model = None
+    test_db.flush()
+
+    result = service.recompute_similarity_read_model(
+        test_db, project_id=project.id, limit=5
+    )
+
+    assert result.status == "skipped"
+    assert result.reason == "target_embedding_model_missing"
+    assert test_db.query(ProjectSimilaritySnapshot).count() == 0
 
 
 def test_stored_similarity_reads_fresh_read_model_without_searching(
