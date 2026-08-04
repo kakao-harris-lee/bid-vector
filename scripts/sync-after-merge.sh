@@ -6,16 +6,21 @@
 # whichever branch the host has checked out. Merging a fix to main does NOT
 # deploy it if the host is parked on a feature branch.
 #
+# Services are recreated (up -d --force-recreate), not restarted, because a
+# restart keeps the container's original command and environment — compose
+# changes such as a worker's --queues or --concurrency would silently not apply.
+#
 # Usage:
-#   scripts/sync-after-merge.sh                     # restart all task services
-#   scripts/sync-after-merge.sh api                 # restart only api
-#   scripts/sync-after-merge.sh worker beat         # restart specific services
+#   scripts/sync-after-merge.sh                     # recreate all task services
+#   scripts/sync-after-merge.sh api                 # recreate only api
+#   scripts/sync-after-merge.sh worker beat         # recreate specific services
 #
 # Steps:
 #   1. Verify (or perform) checkout to main
 #   2. Fast-forward pull from origin
 #   3. Stop beat, recreate runtime services, and wait for readiness
-#   4. Verify scheduled task registration/queues before recreating beat last
+#   4. Gate on exact queue topology + scheduled task registration, then
+#      recreate beat last (see scripts/_sync_queue_check.py)
 
 set -euo pipefail
 
@@ -118,56 +123,27 @@ if [ "$overall_ok" -ne 0 ]; then
     exit 1
 fi
 
+# Gate beat on the live cluster matching the declared per-worker queue topology
+# and having every beat-scheduled task registered on its routed queue's
+# consumers. Expectations come from settings + beat schedule, never from a list
+# duplicated here; scripts/_sync_queue_check.py holds the checks.
 verify_worker_registry() {
-    local registered active_queues_json active_queue_names routing_queues
-    registered="$(docker compose --profile tasks exec -T worker \
-        celery -A app.tasks.celery_app.celery_app inspect registered --timeout=10)"
+    local registered_json active_queues_json
+    registered_json="$(docker compose --profile tasks exec -T worker \
+        celery -A app.tasks.celery_app.celery_app inspect registered \
+        --timeout=10 --json)"
     active_queues_json="$(docker compose --profile tasks exec -T worker \
         celery -A app.tasks.celery_app.celery_app inspect active_queues \
         --timeout=10 --json)"
-    active_queue_names="$(printf '%s' "$active_queues_json" | python3 -c '
-import json, sys
-payload = json.load(sys.stdin)
-for queues in payload.values():
-    for queue in queues:
-        print(queue["name"])
-')"
-    routing_queues="$(docker compose --profile tasks exec -T worker python - <<'PY'
-from app.core.config import settings
-
-for value in (
-    settings.CELERY_OPS_QUEUE,
-    settings.CELERY_ML_INFERENCE_QUEUE,
-    settings.CELERY_ML_BACKFILL_QUEUE,
-    settings.CELERY_ML_TRAINING_QUEUE,
-    settings.CELERY_ML_REEVALUATION_QUEUE,
-):
-    print(value)
-PY
-)"
-    local task
-    for task in \
-        jobs.collect_koneps_notices \
-        jobs.monitor_operator_strategy \
-        jobs.process_inference_outbox \
-        jobs.process_notification_delivery_outbox \
-        jobs.reconcile_stale_task_runs \
-        jobs.stage_active_similarity_projection_backfill; do
-        if ! grep -Fq "$task" <<<"$registered"; then
-            echo "[sync] missing registered task: $task" >&2
-            return 1
-        fi
-    done
-    local queue
-    while IFS= read -r queue; do
-        if [ -z "$queue" ]; then
-            continue
-        fi
-        if ! grep -Fxq "$queue" <<<"$active_queue_names"; then
-            echo "[sync] missing active queue: $queue" >&2
-            return 1
-        fi
-    done <<<"$routing_queues"
+    # celery exits non-zero with empty stdout when no node replies in time.
+    if [ -z "$registered_json" ] || [ -z "$active_queues_json" ]; then
+        echo "[sync] no worker replied to celery inspect within the timeout" >&2
+        return 1
+    fi
+    printf '{"registered": %s, "active_queues": %s}' \
+        "$registered_json" "$active_queues_json" \
+        | docker compose --profile tasks exec -T worker \
+            python -m scripts._sync_queue_check || return 1
     echo "[sync] worker registry and queue gates passed"
 }
 
