@@ -125,6 +125,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
             db,
             project,
             prepared.vector,
+            prepared.model or FALLBACK_EMBEDDING_MODEL,
             limit,
             min_similarity,
             same_category_only,
@@ -215,6 +216,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
         db: Session,
         project: Project,
         vector: list[float],
+        query_model: str,
         limit: int,
         min_similarity: float,
         same_category_only: bool,
@@ -230,6 +232,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
                 db,
                 project=project,
                 query_embedding=vector,
+                query_embedding_model=query_model,
                 limit=limit,
                 min_similarity=min_similarity,
                 same_category_only=same_category_only,
@@ -254,7 +257,9 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
             search_mode="python_fallback",
         )
 
-    def _load_similarity_candidates(self, db: Session, project: Project, same_category_only: bool) -> list[Project]:
+    def _load_similarity_candidates(
+        self, db: Session, project: Project, same_category_only: bool,
+    ) -> list[Project]:
         query = db.query(Project).filter(Project.id != project.id)
         if same_category_only and project.category:
             query = query.filter(Project.category == project.category)
@@ -295,6 +300,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
         *,
         project: Project,
         query_embedding: list[float],
+        query_embedding_model: str,
         limit: int,
         min_similarity: float,
         same_category_only: bool,
@@ -306,7 +312,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
         query = db.query(Project, similarity_expression).filter(
             Project.id != project.id,
             Project.embedding.isnot(None),
-            Project.embedding_model == project.embedding_model,
+            Project.embedding_model == query_embedding_model,
         )
 
         if same_category_only and project.category:

@@ -71,3 +71,18 @@ def test_database_configuration_accepts_matching_url_and_split_target():
     )
 
     assert errors == []
+
+
+def test_database_configuration_rejects_url_query_options_with_split_settings():
+    errors = validate_database_configuration(
+        "postgresql+psycopg://biduser:secret@db:5432/bid_vector_db?options=-csearch_path%3Dtenant",
+        split_user="biduser",
+        split_password="secret",
+        split_host="db",
+        split_port=5432,
+        split_database="bid_vector_db",
+    )
+
+    assert errors == [
+        "DATABASE_URL query options cannot be preserved when split DATABASE_* settings are active"
+    ]

@@ -192,6 +192,8 @@ class _PromotionGateMixin(_MLReleaseBase):
         fallback_rate = self._first_float(backtest_report.get("fallback_rate"))
         dataset_quality = backtest_report.get("dataset_quality")
         dataset_quality = dataset_quality if isinstance(dataset_quality, dict) else {}
+        report_settings = backtest_report.get("settings")
+        report_settings = report_settings if isinstance(report_settings, dict) else {}
         dataset_quality_status = (
             str(backtest_report.get("dataset_quality_status") or "").strip().lower()
             or str(dataset_quality.get("status") or "").strip().lower()
@@ -208,6 +210,9 @@ class _PromotionGateMixin(_MLReleaseBase):
             "fallback_rate": fallback_rate,
             "dataset_quality_status": dataset_quality_status,
             "dataset_quality_score": dataset_quality_score,
+            "base_amount_basis": (
+                str(report_settings.get("base_amount_basis") or "").strip() or None
+            ),
             "best_predictor_key": resolved_best_predictor_key,
             "best_predictor_name": resolved_best_predictor_name,
         }

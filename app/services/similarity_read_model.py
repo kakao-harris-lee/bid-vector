@@ -265,6 +265,7 @@ class ProjectSimilarityReadModelService:
                 db,
                 project=project,
                 query_embedding=state.vector,
+                query_embedding_model=state.model,
                 limit=max(1, int(limit)),
                 min_similarity=min_similarity,
                 same_category_only=same_category_only,

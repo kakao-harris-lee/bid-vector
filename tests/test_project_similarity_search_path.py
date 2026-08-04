@@ -72,9 +72,14 @@ def test_pgvector_path_skips_bulk_candidate_refresh(test_db, monkeypatch):
     postgres_calls: list[dict] = []
 
     def _fake_postgres(
-        db, *, project, query_embedding, limit, min_similarity, same_category_only
+        db, *, project, query_embedding, query_embedding_model, limit,
+        min_similarity, same_category_only,
     ):
-        postgres_calls.append({"project_id": project.id, "limit": limit})
+        postgres_calls.append({
+            "project_id": project.id,
+            "limit": limit,
+            "model": query_embedding_model,
+        })
         return [service._serialize_result(candidate, 0.9)]
 
     monkeypatch.setattr(service, "_search_with_postgres", _fake_postgres)
@@ -141,6 +146,7 @@ def test_postgres_search_orders_only_by_vector_distance_for_hnsw():
         db,
         project=target,
         query_embedding=[0.0] * 384,
+        query_embedding_model=str(target.embedding_model),
         limit=5,
         min_similarity=0.15,
         same_category_only=True,
@@ -150,6 +156,30 @@ def test_postgres_search_orders_only_by_vector_distance_for_hnsw():
     assert db.query_obj.order_by_args is not None
     assert len(db.query_obj.order_by_args) == 1
     assert result[0]["project_id"] == candidate.id
+
+
+def test_read_only_pgvector_uses_resolved_query_model(test_db, monkeypatch):
+    target = _make_project(test_db, title="stale target")
+    target.embedding_model = None
+    service = ProjectSimilarityService()
+    captured: dict[str, str] = {}
+    monkeypatch.setattr(service, "_can_query_pgvector", lambda db: True)
+    monkeypatch.setattr(
+        service,
+        "resolve_embedding_without_persist",
+        lambda project: ([0.0] * 384, "resolved-model-v2"),
+    )
+
+    def _capture(*args, **kwargs):
+        captured["model"] = kwargs["query_embedding_model"]
+        return []
+
+    monkeypatch.setattr(service, "_search_with_postgres", _capture)
+
+    response = service.find_similar_projects(test_db, target, read_only=True)
+
+    assert response["search_mode"] == "postgres_vector"
+    assert captured["model"] == "resolved-model-v2"
 
 
 def test_python_fallback_still_loads_and_refreshes_candidates(test_db, monkeypatch):

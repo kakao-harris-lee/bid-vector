@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.services.base_amount_basis import BASIS_CLEAN
 from app.services.ml_release.base import _MLReleaseBase, build_preflight_check
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
@@ -306,9 +307,7 @@ class _PreflightMixin(_MLReleaseBase):
             if isinstance(report_integrity, dict) else None
         )
         sample_count = int(metrics.get("sample_count") or 0)
-        dataset_quality_status = (
-            str(metrics.get("dataset_quality_status") or "") or None
-        )
+        dataset_quality_status = str(metrics.get("dataset_quality_status") or "") or None
         passed = bool(
             gate_payload.get("passed") and gate_payload.get("status") == "passed"
             and gate_payload.get("report_path")
@@ -316,6 +315,7 @@ class _PreflightMixin(_MLReleaseBase):
             and metrics.get("average_absolute_error_rate") is not None
             and metrics.get("guardrail_rate") is not None
             and metrics.get("fallback_rate") is not None
+            and metrics.get("base_amount_basis") == BASIS_CLEAN
             and dataset_quality_status
         )
         return MLReleaseJsonDocument(root=build_preflight_check(
@@ -329,6 +329,7 @@ class _PreflightMixin(_MLReleaseBase):
             ),
             sample_count=sample_count,
             dataset_quality_status=dataset_quality_status,
+            base_amount_basis=metrics.get("base_amount_basis"),
         ))
 
     def _append_group_calibration_check(

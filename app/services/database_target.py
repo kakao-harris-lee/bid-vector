@@ -131,6 +131,12 @@ def validate_database_configuration(
         url = make_url(database_url)
     except Exception:  # noqa: BLE001 - report a non-secret configuration error
         return ["DATABASE_URL is invalid and cannot be compared to DATABASE_* settings"]
+    if url.query:
+        return [
+            "DATABASE_URL query options cannot be preserved when split DATABASE_* settings are active"
+        ]
+    if url.drivername != "postgresql+psycopg":
+        return ["DATABASE_URL driver disagrees with split DATABASE_* settings"]
     url_identity = (url.username, url.password, url.host, url.port, url.database)
     split_identity = (
         split_user,

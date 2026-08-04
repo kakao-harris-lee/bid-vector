@@ -108,6 +108,7 @@ def _write_predictor_backtest_report(
     dataset_quality_status: str | None = None,
     guardrail_rate: float | None = 0.0,
     fallback_rate: float | None = 0.0,
+    base_amount_basis: str = "clean",
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -120,6 +121,7 @@ def _write_predictor_backtest_report(
                 "best_average_absolute_error_rate": average_error_rate,
                 "guardrail_rate": guardrail_rate,
                 "fallback_rate": fallback_rate,
+                "settings": {"base_amount_basis": base_amount_basis},
                 **(
                     {"dataset_quality_status": dataset_quality_status}
                     if dataset_quality_status is not None
@@ -562,6 +564,40 @@ def test_production_preflight_rejects_incomplete_predictor_metrics(
     )
     assert result["passed"] is False
     assert check["status"] == "missing_or_unverified"
+
+
+def test_production_preflight_rejects_non_clean_backtest_provenance(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "mixed-basis.json"
+    )
+    report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "mixed-basis.json",
+        dataset_quality_status="warning",
+        base_amount_basis="any",
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-mixed-basis",
+            lstm_artifact_path=str(lstm_path),
+            predictor_backtest_report_path=str(report_path),
+            git_sha="abc123",
+        )
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"], require_signature=True, probe_write=False,
+        production=True, expected_git_sha="abc123",
+    )
+
+    check = next(item for item in result["checks"]
+                 if item["name"] == "production_predictor_backtest")
+    assert result["passed"] is False
+    assert check["base_amount_basis"] == "any"
 
 
 def test_production_preflight_rejects_manifest_deployment_sha_mismatch(
