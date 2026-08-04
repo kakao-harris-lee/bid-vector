@@ -64,6 +64,48 @@ def default_schema_provider() -> dict[str, Any]:
     return app.openapi()
 
 
+# pydantic 2.5 는 자유 ``dict`` 필드를 bare ``{"type": "object"}`` 로 내보내지만 이후 버전은
+# ``additionalProperties: true`` 를 함께 내보낸다. openapi-typescript 는 전자를 키를 하나도
+# 허용하지 않는 ``Record<string, never>`` 로, 후자를 ``{[key: string]: unknown}`` 으로 렌더해서
+# 같은 소스가 생성 환경에 따라 다른 openapi.d.ts 를 만들고 ``--check`` 가 플립플롭한다.
+# 형태를 선언하지 않은 객체를 생성 직후 열린 맵으로 고정해 그 버전 차이를 흡수한다.
+OBJECT_TYPE = "object"
+ADDITIONAL_PROPERTIES_KEY = "additionalProperties"
+OBJECT_SHAPE_KEYS = ("properties", ADDITIONAL_PROPERTIES_KEY)
+OPEN_OBJECT_ADDITIONAL_PROPERTIES = True
+
+# 스키마 트리의 노드. 임의 JSON 이라 구체 모델로 좁힐 수는 없지만, 걸어야 하는 것이
+# "JSON 값"이라는 계약은 ``Any`` 보다 정확하게 표현된다.
+JsonValue = str | int | float | bool | None | dict[str, "JsonValue"] | list["JsonValue"]
+
+
+def is_unconstrained_object(node: dict[str, JsonValue]) -> bool:
+    """형태를 선언하지 않은 ``type: "object"`` 노드인가(= 자유 ``dict`` 필드인가)."""
+    if node.get("type") != OBJECT_TYPE:
+        return False
+    # ``$ref`` 노드의 형태는 참조 대상이 정하므로 여기서 덮어쓰지 않는다.
+    if "$ref" in node:
+        return False
+    return not any(key in node for key in OBJECT_SHAPE_KEYS)
+
+
+def normalize_open_objects(node: JsonValue) -> JsonValue:
+    """형태 미선언 객체에 ``additionalProperties`` 를 주입한 스키마 사본을 돌려준다.
+
+    입력 트리를 변경하지 않는 순수 함수이고, ``--check`` 가 순서 차이를 드리프트로
+    오인하지 않도록 키 순서를 보존한다(주입 키는 노드 끝에 붙는다).
+    """
+    if isinstance(node, list):
+        return [normalize_open_objects(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    normalized = {key: normalize_open_objects(value) for key, value in node.items()}
+    if is_unconstrained_object(node):
+        normalized[ADDITIONAL_PROPERTIES_KEY] = OPEN_OBJECT_ADDITIONAL_PROPERTIES
+    return normalized
+
+
 def write_openapi_schema(schema: dict[str, Any], output_path: Path) -> None:
     # Preserve the natural (router-registration) key order of app.openapi(); the
     # checked-in openapi.d.ts is generated in that order, so sorting keys here
@@ -120,7 +162,7 @@ def main(
         schema_path = tmp_dir / "openapi.json"
         generated_path = tmp_dir / "openapi.d.ts"
 
-        write_openapi_schema(schema_provider(), schema_path)
+        write_openapi_schema(normalize_open_objects(schema_provider()), schema_path)
         generator(
             schema_path=schema_path,
             output_path=generated_path,
