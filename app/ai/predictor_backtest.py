@@ -31,6 +31,9 @@ def build_predictor_backtest_report(
             "status": "insufficient_data",
             "holdout_size": 0,
             "min_training_size": min_training_size,
+            "sample_count": 0,
+            "guardrail_rate": None,
+            "fallback_rate": None,
             "results": [],
             "best_predictor_key": None,
             "best_predictor_name": None,
@@ -79,6 +82,9 @@ def build_predictor_backtest_report(
         "status": "completed" if best_result is not None else "no_eligible_predictor",
         "holdout_size": holdout_size,
         "min_training_size": min_training_size,
+        "sample_count": int(best_result["sample_count"]) if best_result else 0,
+        "guardrail_rate": best_result.get("guardrail_rate") if best_result else None,
+        "fallback_rate": best_result.get("fallback_rate") if best_result else None,
         "results": results,
         "best_predictor_key": best_result["predictor_key"] if best_result else None,
         "best_predictor_name": best_result["predictor_name"] if best_result else None,
@@ -99,6 +105,8 @@ def _backtest_one_predictor(
     """Evaluate one predictor across a rolling historical holdout."""
     absolute_errors: list[float] = []
     skipped_reasons: list[str] = []
+    fallback_count = 0
+    guardrail_count = 0
     rolling_training_records = list(training_prefix)
 
     for holdout_record in holdout_records:
@@ -139,6 +147,8 @@ def _backtest_one_predictor(
             rolling_training_records.append(holdout_record)
             continue
         absolute_errors.append(abs(predicted_bid_rate - actual_bid_rate))
+        fallback_count += 1 if prediction.fallback_reason else 0
+        guardrail_count += 1 if prediction.guardrail_applied else 0
         rolling_training_records.append(holdout_record)
 
     return {
@@ -149,6 +159,8 @@ def _backtest_one_predictor(
         "sample_count": len(absolute_errors),
         "average_absolute_error_rate": _average(absolute_errors),
         "max_absolute_error_rate": round(max(absolute_errors), 6) if absolute_errors else None,
+        "fallback_rate": _rate(fallback_count, len(absolute_errors)),
+        "guardrail_rate": _rate(guardrail_count, len(absolute_errors)),
         "skipped_count": len(skipped_reasons),
         "skipped_reasons": _top_reasons(skipped_reasons),
     }
@@ -202,6 +214,10 @@ def _resolve_prediction_bid_rate(prediction: PredictionResult, *, budget: float)
 def _average(values: list[float]) -> float | None:
     """Return a rounded average while preserving empty sets."""
     return average(values, digits=6)
+
+
+def _rate(count: int, total: int) -> float | None:
+    return round(count / total, 6) if total else None
 
 
 def _top_reasons(reasons: list[str], *, limit: int = 3) -> list[str]:

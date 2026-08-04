@@ -359,6 +359,7 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
         path = self._resolve_existing_path(raw_path, expect_directory=False)
         artifact = load_ensemble_artifact(path)
         resolved_lstm_artifact_path = None
+        resolved_lstm_artifact_integrity = None
         raw_lstm_artifact_path = (
             str(artifact.get("lstm_artifact_path") or "").strip() or None
         )
@@ -369,6 +370,9 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
             )
             load_lstm_artifact(dependent_path)
             resolved_lstm_artifact_path = self._to_portable_path(dependent_path)
+            resolved_lstm_artifact_integrity = self._path_integrity_metadata(
+                dependent_path
+            )
 
         return {
             "path": self._to_portable_path(path),
@@ -379,6 +383,6 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
             "momentum_window": int(artifact["momentum_window"]),
             "has_embedded_lstm": isinstance(artifact.get("lstm_artifact"), dict),
             "resolved_lstm_artifact_path": resolved_lstm_artifact_path,
+            "resolved_lstm_artifact_integrity": resolved_lstm_artifact_integrity,
             "integrity": self._path_integrity_metadata(path),
         }
-

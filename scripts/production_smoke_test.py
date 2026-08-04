@@ -27,6 +27,7 @@ from app.services.smoke_failure_taxonomy import (  # noqa: E402
     classify_failure,
     guidance_for,
 )
+from scripts._production_smoke_evidence import sanitize_evidence  # noqa: E402
 
 
 class SmokeFailure(Exception):
@@ -466,7 +467,7 @@ def smoke_write_checks(args: argparse.Namespace, evidence: dict[str, Any]) -> No
         return {
             "summary": (
                 f"status={payload.get('status')} processed={payload.get('processed_count')} "
-                f"known_chat_ids={payload.get('known_chat_ids')}"
+                f"known_chat_ids={len(payload.get('known_chat_ids') or [])}"
             ),
             "payload": payload,
         }
@@ -483,7 +484,12 @@ def write_evidence(path: str, evidence: dict[str, Any]) -> None:
     evidence_path = Path(path)
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(
-        json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(
+            sanitize_evidence(evidence),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
     print(f"[evidence] wrote {evidence_path}")

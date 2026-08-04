@@ -50,6 +50,7 @@ class _PromotionGateMixin(_MLReleaseBase):
                 f"Predictor backtest report must decode to a JSON object: {path}"
             ) from exc
         report["report_path"] = self._to_portable_path(path)
+        report["report_integrity"] = self._path_integrity_metadata(path)
         return report
 
     def _build_predictor_promotion_gate(
@@ -145,6 +146,7 @@ class _PromotionGateMixin(_MLReleaseBase):
             "best_predictor_key": metrics.get("best_predictor_key"),
             "best_predictor_name": metrics.get("best_predictor_name"),
             "report_path": backtest_report.get("report_path"),
+            "report_integrity": backtest_report.get("report_integrity"),
             "reasons": reasons or ["Predictor backtest gate passed."],
         }
 
@@ -190,6 +192,8 @@ class _PromotionGateMixin(_MLReleaseBase):
         fallback_rate = self._first_float(backtest_report.get("fallback_rate"))
         dataset_quality = backtest_report.get("dataset_quality")
         dataset_quality = dataset_quality if isinstance(dataset_quality, dict) else {}
+        report_settings = backtest_report.get("settings")
+        report_settings = report_settings if isinstance(report_settings, dict) else {}
         dataset_quality_status = (
             str(backtest_report.get("dataset_quality_status") or "").strip().lower()
             or str(dataset_quality.get("status") or "").strip().lower()
@@ -206,6 +210,9 @@ class _PromotionGateMixin(_MLReleaseBase):
             "fallback_rate": fallback_rate,
             "dataset_quality_status": dataset_quality_status,
             "dataset_quality_score": dataset_quality_score,
+            "base_amount_basis": (
+                str(report_settings.get("base_amount_basis") or "").strip() or None
+            ),
             "best_predictor_key": resolved_best_predictor_key,
             "best_predictor_name": resolved_best_predictor_name,
         }
@@ -365,4 +372,3 @@ class _PromotionGateMixin(_MLReleaseBase):
         return self._build_predictor_promotion_gate(
             None, has_predictor_artifact=has_predictor_artifact
         )
-

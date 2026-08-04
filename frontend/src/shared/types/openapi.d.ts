@@ -2765,9 +2765,7 @@ export interface components {
              */
             event_type: "project_view" | "recommendation_feedback";
             /** Event Data */
-            event_data: {
-                [key: string]: unknown;
-            };
+            event_data: Record<string, never>;
         };
         /** AnalyticsSummaryResponse */
         AnalyticsSummaryResponse: {
@@ -3855,13 +3853,9 @@ export interface components {
             /** Reasons */
             reasons: string[];
             /** Criteria */
-            criteria?: {
-                [key: string]: unknown;
-            };
+            criteria?: Record<string, never>;
             /** Score Breakdown */
-            score_breakdown?: {
-                [key: string]: unknown;
-            };
+            score_breakdown?: Record<string, never>;
         };
         /** CrawlFailureItem */
         CrawlFailureItem: {
@@ -3908,9 +3902,7 @@ export interface components {
             /** Source Url */
             source_url?: string | null;
             /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
+            metadata?: Record<string, never>;
         };
         /** CrawlOperationsSummary */
         CrawlOperationsSummary: {
@@ -4013,9 +4005,7 @@ export interface components {
             /** Items */
             items: components["schemas"]["CrawlNoticeItem"][];
             /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            };
+            metadata?: Record<string, never>;
         };
         /** CrawlTaskResponse */
         CrawlTaskResponse: {
@@ -4642,9 +4632,7 @@ export interface components {
             /** Reason */
             reason: string;
             /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            };
+            payload?: Record<string, never>;
             /**
              * Dry Run Supported
              * @default false
@@ -4778,9 +4766,7 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
+            parameter_recommendation?: Record<string, never>;
             /**
              * Baseline Days
              * @default 14
@@ -5498,9 +5484,7 @@ export interface components {
             /** Rollback Trigger */
             rollback_trigger: string;
             /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
+            parameter_recommendation?: Record<string, never>;
         };
         /** DecisionRecommendationHistoryAdjustment */
         DecisionRecommendationHistoryAdjustment: {
@@ -5542,9 +5526,7 @@ export interface components {
             /** Suggested Adjustment */
             suggested_adjustment?: string | null;
             /** Supporting Metrics */
-            supporting_metrics?: {
-                [key: string]: unknown;
-            };
+            supporting_metrics?: Record<string, never>;
             /**
              * Priority Score
              * @default 0
@@ -5552,9 +5534,7 @@ export interface components {
             priority_score: number;
             history_adjustment: components["schemas"]["DecisionRecommendationHistoryAdjustment"];
             /** Parameter Recommendation */
-            parameter_recommendation?: {
-                [key: string]: unknown;
-            };
+            parameter_recommendation?: Record<string, never>;
             experiment_plan?: components["schemas"]["DecisionRecommendationExperiment"] | null;
         };
         /** DecisionRecommendationResponse */
@@ -5594,9 +5574,7 @@ export interface components {
             headline: string;
             comparison: components["schemas"]["DecisionFunnelComparisonSummary"];
             /** Experiment History */
-            experiment_history?: {
-                [key: string]: unknown;
-            };
+            experiment_history?: Record<string, never>;
             recommended_next_experiment?: components["schemas"]["DecisionRecommendationExperiment"] | null;
             /** Experiments */
             experiments?: components["schemas"]["DecisionRecommendationExperiment"][];
@@ -6054,25 +6032,15 @@ export interface components {
              */
             evidence_status: "ready" | "insufficient" | "mixed_scope" | "missing";
             /** Smoke */
-            smoke?: {
-                [key: string]: unknown;
-            };
+            smoke?: Record<string, never>;
             /** Strategy Monitor */
-            strategy_monitor?: {
-                [key: string]: unknown;
-            };
+            strategy_monitor?: Record<string, never>;
             /** Decision Experiments */
-            decision_experiments?: {
-                [key: string]: unknown;
-            };
+            decision_experiments?: Record<string, never>;
             /** Synthetic Experiments */
-            synthetic_experiments?: {
-                [key: string]: unknown;
-            };
+            synthetic_experiments?: Record<string, never>;
             /** Notifications */
-            notifications?: {
-                [key: string]: unknown;
-            };
+            notifications?: Record<string, never>;
             /** Blocking Gaps */
             blocking_gaps?: string[];
             /** Supporting Gaps */
@@ -6311,9 +6279,7 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Result */
-            result?: {
-                [key: string]: unknown;
-            } | null;
+            result?: Record<string, never> | null;
         };
         /** NotificationOperationsSummary */
         NotificationOperationsSummary: {
@@ -7370,6 +7336,10 @@ export interface components {
             task_id?: string | null;
             /** Trigger Source */
             trigger_source?: string | null;
+            /** Release Sha */
+            release_sha?: string | null;
+            /** Release Tag */
+            release_tag?: string | null;
             /** Previous Run Id */
             previous_run_id?: number | null;
             /** Operator Id */
@@ -7386,6 +7356,18 @@ export interface components {
             persisted_candidate_count: number;
             /** Notification Count */
             notification_count: number;
+            /**
+             * Projection Not Ready Count
+             * @default 0
+             */
+            projection_not_ready_count: number;
+            /** Projection Not Ready Project Ids */
+            projection_not_ready_project_ids?: number[];
+            /**
+             * Duplicate Suppressed
+             * @default false
+             */
+            duplicate_suppressed: boolean;
             /** New Candidate Count */
             new_candidate_count: number;
             /** Continuing Candidate Count */
@@ -7415,6 +7397,8 @@ export interface components {
             decision_record_id: number;
             /** Notification Id */
             notification_id?: number | null;
+            /** Run Item Id */
+            run_item_id?: number | null;
             /**
              * Action
              * @enum {string}
@@ -7563,6 +7547,10 @@ export interface components {
             task_id?: string | null;
             /** Trigger Source */
             trigger_source: string;
+            /** Release Sha */
+            release_sha?: string | null;
+            /** Release Tag */
+            release_tag?: string | null;
             /**
              * Status
              * @enum {string}
@@ -7580,6 +7568,11 @@ export interface components {
             persisted_candidate_count: number;
             /** Notification Count */
             notification_count: number;
+            /**
+             * Projection Not Ready Count
+             * @default 0
+             */
+            projection_not_ready_count: number;
             /** Error Message */
             error_message?: string | null;
             /**
@@ -7600,9 +7593,7 @@ export interface components {
             /** Dropped Candidate Count */
             dropped_candidate_count: number;
             /** Request Payload */
-            request_payload?: {
-                [key: string]: unknown;
-            };
+            request_payload?: Record<string, never>;
             result?: components["schemas"]["OperatorStrategyMonitorResponse"] | null;
             /** New Candidates */
             new_candidates?: components["schemas"]["OperatorStrategyMonitorResultItem"][];
@@ -7638,6 +7629,10 @@ export interface components {
             task_id?: string | null;
             /** Trigger Source */
             trigger_source: string;
+            /** Release Sha */
+            release_sha?: string | null;
+            /** Release Tag */
+            release_tag?: string | null;
             /**
              * Status
              * @enum {string}
@@ -7655,6 +7650,11 @@ export interface components {
             persisted_candidate_count: number;
             /** Notification Count */
             notification_count: number;
+            /**
+             * Projection Not Ready Count
+             * @default 0
+             */
+            projection_not_ready_count: number;
             /** Error Message */
             error_message?: string | null;
             /**
@@ -7741,9 +7741,7 @@ export interface components {
              */
             min_similarity: number;
             /** User Historical Data */
-            user_historical_data?: {
-                [key: string]: unknown;
-            } | null;
+            user_historical_data?: Record<string, never> | null;
         };
         /** OpportunityAnalysisResponse */
         OpportunityAnalysisResponse: {
@@ -8703,9 +8701,7 @@ export interface components {
             /** Backtest Average Absolute Error Rate */
             backtest_average_absolute_error_rate?: number | null;
             /** Backtest Report */
-            backtest_report?: {
-                [key: string]: unknown;
-            } | null;
+            backtest_report?: Record<string, never> | null;
             /**
              * Training Window Size
              * @default 0
@@ -8885,9 +8881,7 @@ export interface components {
             /** Amount Bucket */
             amount_bucket?: string | null;
             /** Agency Recent Rate Profile */
-            agency_recent_rate_profile?: {
-                [key: string]: unknown;
-            };
+            agency_recent_rate_profile?: Record<string, never>;
             /** Data Quality Flags */
             data_quality_flags?: string[];
             /** Procurement Rate Band */
@@ -9087,10 +9081,16 @@ export interface components {
              */
             target_embedding_refresh_required: boolean;
             /**
+             * Projection Status
+             * @default not_applicable
+             * @enum {string}
+             */
+            projection_status: "ready" | "missing" | "stale" | "not_applicable";
+            /**
              * Search Mode
              * @enum {string}
              */
-            search_mode: "read_model" | "postgres_vector" | "python_fallback";
+            search_mode: "read_model" | "stored_missing" | "postgres_vector" | "python_fallback";
             /** Same Category Only */
             same_category_only: boolean;
             /** Min Similarity */
@@ -9434,9 +9434,7 @@ export interface components {
             /** Skip Reason */
             skip_reason?: string | null;
             /** Evidence */
-            evidence?: {
-                [key: string]: unknown;
-            };
+            evidence?: Record<string, never>;
         };
         /** SmokeTestLatestRun */
         SmokeTestLatestRun: {
@@ -9938,9 +9936,7 @@ export interface components {
             /** Experiment Id */
             experiment_id: number;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
         };
         /**
          * SyntheticExperimentCompareSide
@@ -10059,9 +10055,7 @@ export interface components {
             /** Operator Slug */
             operator_slug: string;
             /** Metrics */
-            metrics?: {
-                [key: string]: unknown;
-            };
+            metrics?: Record<string, never>;
             /** Settlement Sample */
             settlement_sample?: unknown | null;
             breakdown?: components["schemas"]["SyntheticExperimentBreakdown"];
@@ -10092,9 +10086,7 @@ export interface components {
          */
         SyntheticExperimentRunCreateRequest: {
             /** Source Sample Gap Candidate */
-            source_sample_gap_candidate?: {
-                [key: string]: unknown;
-            } | null;
+            source_sample_gap_candidate?: Record<string, never> | null;
         };
         /**
          * SyntheticExperimentRunResponse
@@ -10116,9 +10108,7 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
             /** Created At */
             created_at?: string | null;
             /** Results */
@@ -10144,9 +10134,7 @@ export interface components {
             /** Error */
             error?: string | null;
             /** Summary */
-            summary?: {
-                [key: string]: unknown;
-            } | null;
+            summary?: Record<string, never> | null;
             /** Created At */
             created_at?: string | null;
         };
@@ -10203,9 +10191,7 @@ export interface components {
              */
             dry_run_default: boolean;
             /** Source Context */
-            source_context?: {
-                [key: string]: unknown;
-            };
+            source_context?: Record<string, never>;
             preset_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             experiment_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
             run_request?: components["schemas"]["SyntheticExperimentSampleGapHttpRequest"] | null;
@@ -10229,9 +10215,7 @@ export interface components {
             /** Path */
             path: string;
             /** Body */
-            body?: {
-                [key: string]: unknown;
-            };
+            body?: Record<string, never>;
         };
         /**
          * SyntheticExperimentSampleGapItem
@@ -10324,9 +10308,7 @@ export interface components {
             /** Preset Name */
             preset_name?: string | null;
             /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
+            params?: Record<string, never>;
             /** Actions */
             actions?: components["schemas"]["SyntheticExperimentSampleGapAction"][];
         };
@@ -10410,9 +10392,7 @@ export interface components {
             /** Settle Actions */
             settle_actions?: boolean | ("bid_now" | "review" | "skip")[];
             /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
+            params?: Record<string, never>;
             /** Operator Slugs */
             operator_slugs?: string[];
             /**
@@ -10722,6 +10702,8 @@ export interface components {
             inline_ml_tasks_allowed: boolean;
             /** Worker Concurrency */
             worker_concurrency: number;
+            /** Inference Worker Concurrency */
+            inference_worker_concurrency: number;
             /** Worker Prefetch Multiplier */
             worker_prefetch_multiplier: number;
             /** Worker Max Tasks Per Child */
@@ -14426,9 +14408,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": Record<string, never>;
             };
         };
         responses: {

@@ -1,5 +1,5 @@
 """Database models"""
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -54,6 +54,14 @@ class User(Base):
 class Project(Base):
     """Project/Procurement model"""
     __tablename__ = "projects"
+    __table_args__ = (
+        Index(
+            "ix_projects_embedding_model_category_updated_at",
+            "embedding_model",
+            "category",
+            "embedding_updated_at",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     title = Column(String(255), index=True)

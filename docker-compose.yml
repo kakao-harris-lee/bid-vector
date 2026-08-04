@@ -213,7 +213,7 @@ services:
     mem_limit: 8g
     volumes:
       - .:/app
-    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --queues=${CELERY_ML_INFERENCE_QUEUE:-bid_vector_ml_inference}
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --concurrency=${CELERY_INFERENCE_WORKER_CONCURRENCY:-1} --queues=${CELERY_ML_INFERENCE_QUEUE:-bid_vector_ml_inference}
 
   ml-worker:
     build:

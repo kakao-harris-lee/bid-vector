@@ -45,6 +45,13 @@ from typing import Literal, get_args
 PaperBidAction = Literal["bid_now", "review", "skip"]
 PAPER_BID_ACTIONS: tuple[PaperBidAction, ...] = get_args(PaperBidAction)
 
+# SQLAlchemy drivername of the only database target this deployment supports.
+# The composer that builds ``DATABASE_URL`` from split ``DATABASE_*`` settings
+# (app/core/config.py) and the check that rejects a ``DATABASE_URL`` disagreeing
+# with those settings (app/services/database_target.py) MUST use one value: if
+# they drift, the deployment gate compares against a driver nobody composes.
+POSTGRES_DRIVERNAME = "postgresql+psycopg"
+
 # ``BidDecisionRecord.decision_status`` 워크플로 어휘 — 한 결정 레코드가 지나는 상(相)
 # 전체다. 운영자가 계획(``planned``)에서 검토(``reviewing``)를 거쳐 투찰(``submitted``)
 # 하거나 포기(``skipped``)한다. 액션(:data:`PaperBidAction`) 은 "무엇을 권고했는가",

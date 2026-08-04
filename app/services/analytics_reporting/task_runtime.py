@@ -90,6 +90,9 @@ class _TaskRuntimeMixin:
                 "eager_mode": bool(settings.uses_in_memory_celery),
                 "inline_ml_tasks_allowed": bool(settings.CELERY_ALLOW_INLINE_ML_TASKS),
                 "worker_concurrency": int(settings.CELERY_WORKER_CONCURRENCY or 0),
+                "inference_worker_concurrency": int(
+                    settings.CELERY_INFERENCE_WORKER_CONCURRENCY or 0
+                ),
                 "worker_prefetch_multiplier": int(settings.CELERY_WORKER_PREFETCH_MULTIPLIER or 0),
                 "worker_max_tasks_per_child": int(settings.CELERY_WORKER_MAX_TASKS_PER_CHILD or 0),
                 "task_time_limit_seconds": int(settings.CELERY_TASK_TIME_LIMIT_SECONDS or 0),

@@ -60,6 +60,7 @@ def test_inference_worker_listens_only_to_inference_queue():
     assert "${CELERY_ML_BACKFILL_QUEUE" not in command
     assert "${CELERY_ML_REEVALUATION_QUEUE" not in command
     assert "${CELERY_ML_TRAINING_QUEUE" not in command
+    assert "--concurrency=${CELERY_INFERENCE_WORKER_CONCURRENCY:-1}" in command
 
 
 def test_mem_limits_leave_headroom_above_child_recycler_budget():

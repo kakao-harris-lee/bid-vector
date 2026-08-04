@@ -8,6 +8,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.services.base_amount_basis import BASIS_CLEAN
+from app.services.ml_release.artifact_integrity import (
+    resolve_artifact_integrity_verdict,
+)
 from app.services.ml_release.base import _MLReleaseBase, build_preflight_check
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
@@ -21,21 +25,17 @@ class _PreflightMixin(_MLReleaseBase):
     """Read-only preflight checks run before applying a release manifest."""
 
     def preflight_release_rollout(
-        self,
-        manifest_ref: str | Path | None = None,
-        *,
+        self, manifest_ref: str | Path | None = None, *,
         require_signature: bool | None = None,
-        probe_write: bool = True,
+        probe_write: bool = True, production: bool = False,
+        expected_git_sha: str | None = None,
     ) -> dict[str, Any]:
         """Validate manifest signature/artifacts and object-storage readiness before rollout."""
         checks: list[dict[str, Any]] = []
-        manifest_summary: dict[str, Any] = {
-            "configured": bool(manifest_ref),
-            "path": None,
-            "release_tag": None,
-            "signature_status": None,
-            "artifact_count": 0,
-        }
+        manifest_summary: dict[str, Any] = dict(
+            configured=bool(manifest_ref), path=None, release_tag=None,
+            signature_status=None, artifact_count=0,
+        )
         signature_required = (
             bool(settings.ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE)
             if require_signature is None
@@ -43,24 +43,23 @@ class _PreflightMixin(_MLReleaseBase):
         )
 
         manifest, manifest_path = self._load_rollout_manifest(
-            manifest_ref,
-            manifest_summary=manifest_summary,
-            checks=checks,
+            manifest_ref, manifest_summary=manifest_summary, checks=checks
         )
 
         if manifest is not None and manifest_path is not None:
             self._append_manifest_signature_check(
-                checks,
-                manifest_summary=manifest_summary,
-                manifest=manifest,
+                checks, manifest_summary=manifest_summary, manifest=manifest,
                 manifest_path=manifest_path,
                 signature_required=signature_required,
             )
             self._append_manifest_artifact_and_gate_checks(
-                checks,
-                manifest_summary=manifest_summary,
-                manifest=manifest,
+                checks, manifest_summary=manifest_summary, manifest=manifest,
+                production=production,
             )
+            checks.append(self._manifest_git_sha_check(
+                manifest_git_sha=manifest.get("git_sha"),
+                expected_git_sha=expected_git_sha, required=production,
+            ))
             self._append_group_calibration_check(checks, manifest=manifest)
 
         storage_preflight = RemoteObjectStorageClient(
@@ -70,11 +69,10 @@ class _PreflightMixin(_MLReleaseBase):
         )
         checks.extend(storage_preflight.get("checks", []))
         return self._build_preflight_result(
-            checks=checks,
-            manifest_summary=manifest_summary,
+            checks=checks, manifest_summary=manifest_summary,
             storage_preflight=storage_preflight,
-            signature_required=signature_required,
-            probe_write=probe_write,
+            signature_required=signature_required, probe_write=probe_write,
+            production=production,
         )
 
     @staticmethod
@@ -85,12 +83,13 @@ class _PreflightMixin(_MLReleaseBase):
         storage_preflight: dict[str, Any],
         signature_required: bool,
         probe_write: bool,
+        production: bool,
     ) -> dict[str, Any]:
         """Assemble the preflight result payload from the accumulated checks/summaries.
 
         ``passed`` is the AND of every check; ``failure_reasons`` mirrors the failing
-        checks' details. Field set and pass/fail semantics are unchanged from the inline
-        return it replaces.
+        checks' details. ``production`` is echoed back so a rollout record shows which
+        gate profile produced the verdict.
         """
         passed = all(bool(check.get("passed")) for check in checks)
         return {
@@ -98,6 +97,7 @@ class _PreflightMixin(_MLReleaseBase):
             "passed": passed,
             "signature_required": signature_required,
             "probe_write": bool(probe_write),
+            "production": bool(production),
             "manifest": manifest_summary,
             "object_storage": {
                 key: value
@@ -111,6 +111,32 @@ class _PreflightMixin(_MLReleaseBase):
                 if not bool(check.get("passed")) and check.get("detail")
             ],
         }
+
+    def _manifest_git_sha_check(
+        self,
+        *,
+        manifest_git_sha: str | None,
+        expected_git_sha: str | None,
+        required: bool,
+    ) -> dict[str, bool | str | None]:
+        expected = str(expected_git_sha or "").strip()
+        actual = str(manifest_git_sha or "").strip()
+        if not expected and not required:
+            return build_preflight_check(
+                "manifest_git_sha", True, "not_required",
+                "Manifest git SHA comparison was not requested.",
+            )
+        passed = bool(expected and actual and actual == expected)
+        return build_preflight_check(
+            "manifest_git_sha", passed, "passed" if passed else "mismatch",
+            (
+                "Release manifest git SHA matches the deployment SHA."
+                if passed
+                else "Production release requires an exact manifest/deployment git SHA match."
+            ),
+            expected_git_sha=expected or None,
+            manifest_git_sha=actual or None,
+        )
 
     def _load_rollout_manifest(
         self,
@@ -225,8 +251,11 @@ class _PreflightMixin(_MLReleaseBase):
         *,
         manifest_summary: dict[str, Any],
         manifest: dict[str, Any],
+        production: bool,
     ) -> None:
-        artifact_checks = self._manifest_artifact_preflight_checks(manifest)
+        artifact_checks = self._manifest_artifact_preflight_checks(
+            manifest, require_integrity=production
+        )
         manifest_summary["artifact_count"] = len(artifact_checks)
         checks.extend(artifact_checks)
         promotion_gate = self._resolve_manifest_promotion_gate(manifest)
@@ -247,6 +276,64 @@ class _PreflightMixin(_MLReleaseBase):
                 ),
             )
         )
+        if production:
+            checks.append(
+                self._production_predictor_backtest_check(
+                    manifest=MLReleaseJsonDocument(root=manifest),
+                    promotion_gate=MLReleaseJsonDocument(root=promotion_gate),
+                ).root
+            )
+
+    def _production_predictor_backtest_check(
+        self, *, manifest: MLReleaseJsonDocument,
+        promotion_gate: MLReleaseJsonDocument,
+    ) -> MLReleaseJsonDocument:
+        manifest_payload, gate_payload = manifest.root, promotion_gate.root
+        artifacts = manifest_payload.get("artifacts")
+        artifacts = artifacts if isinstance(artifacts, dict) else {}
+        predictors = artifacts.get("predictors")
+        predictors = predictors if isinstance(predictors, dict) else {}
+        has_predictor = any(isinstance(predictors.get(key), dict)
+                            for key in ("lstm", "ensemble"))
+        if not has_predictor:
+            return MLReleaseJsonDocument(root=build_preflight_check(
+                "production_predictor_backtest",
+                True,
+                "not_applicable",
+                "No predictor artifact is included in this production release.",
+            ))
+        metrics = gate_payload.get("metrics")
+        metrics = metrics if isinstance(metrics, dict) else {}
+        report_integrity = gate_payload.get("report_integrity")
+        report_sha256 = (
+            str(report_integrity.get("sha256") or "") or None
+            if isinstance(report_integrity, dict) else None
+        )
+        sample_count = int(metrics.get("sample_count") or 0)
+        dataset_quality_status = str(metrics.get("dataset_quality_status") or "") or None
+        passed = bool(
+            gate_payload.get("passed") and gate_payload.get("status") == "passed"
+            and gate_payload.get("report_path")
+            and report_sha256 and sample_count > 0
+            and metrics.get("average_absolute_error_rate") is not None
+            and metrics.get("guardrail_rate") is not None
+            and metrics.get("fallback_rate") is not None
+            and metrics.get("base_amount_basis") == BASIS_CLEAN
+            and dataset_quality_status
+        )
+        return MLReleaseJsonDocument(root=build_preflight_check(
+            "production_predictor_backtest",
+            passed,
+            "passed" if passed else "missing_or_unverified",
+            (
+                "Production predictor release has a passing, checksummed backtest."
+                if passed
+                else "Production predictor release requires complete quality, error, guardrail, fallback, sample, and checksum evidence."
+            ),
+            sample_count=sample_count,
+            dataset_quality_status=dataset_quality_status,
+            base_amount_basis=metrics.get("base_amount_basis"),
+        ))
 
     def _append_group_calibration_check(
         self,
@@ -287,13 +374,39 @@ class _PreflightMixin(_MLReleaseBase):
         )
 
     def _manifest_artifact_preflight_checks(
-        self, manifest: dict[str, Any]
+        self,
+        manifest: dict[str, Any],
+        *,
+        require_integrity: bool = False,
     ) -> list[dict[str, Any]]:
-        """Verify that all manifest artifact references resolve before publish/apply rollout."""
+        """Verify that all manifest artifact references resolve before publish/apply rollout.
+
+        Each artifact path is resolved, and when the manifest carries a signed
+        ``integrity`` block the artifact's sha256 is recomputed and compared with it
+        (directories hash as a sha256 tree — see ``_path_integrity_metadata``).
+
+        ``require_integrity`` decides what a *missing* integrity block means: a
+        production rollout fails on it, other rollouts pass but are reported as
+        ``checksum_missing`` — the check never claims a checksum it did not verify.
+        """
         checks: list[dict[str, Any]] = []
         for artifact in self._iter_manifest_artifact_paths(manifest):
             artifact_path = self._resolve_portable_path(artifact["path"])
             exists = artifact_path.exists()
+            expected_integrity = artifact.get("integrity")
+            integrity_present = bool(
+                isinstance(expected_integrity, dict)
+                and expected_integrity.get("sha256")
+            )
+            actual_integrity = (
+                self._path_integrity_metadata(artifact_path) if exists else None
+            )
+            verdict = resolve_artifact_integrity_verdict(
+                exists=exists,
+                integrity_present=integrity_present,
+                integrity_matches=actual_integrity == expected_integrity,
+                require_integrity=require_integrity,
+            )
             path_type = (
                 "directory"
                 if artifact_path.is_dir()
@@ -302,16 +415,25 @@ class _PreflightMixin(_MLReleaseBase):
             checks.append(
                 build_preflight_check(
                     f"artifact_path:{artifact['key']}",
-                    exists,
-                    "passed" if exists else "not_found",
-                    (
-                        f"Manifest artifact '{artifact['key']}' is available."
-                        if exists
-                        else f"Manifest artifact '{artifact['key']}' was not found: {artifact_path}"
+                    verdict.passed,
+                    verdict.status,
+                    verdict.detail_template.format(
+                        key=artifact["key"], path=artifact_path
                     ),
                     artifact_key=artifact["key"],
                     path=str(artifact_path),
                     path_type=path_type,
+                    checksum_verified=verdict.checksum_verified,
+                    expected_sha256=(
+                        expected_integrity.get("sha256")
+                        if isinstance(expected_integrity, dict)
+                        else None
+                    ),
+                    actual_sha256=(
+                        actual_integrity.get("sha256")
+                        if isinstance(actual_integrity, dict)
+                        else None
+                    ),
                 )
             )
         if not checks:
@@ -324,4 +446,3 @@ class _PreflightMixin(_MLReleaseBase):
                 )
             )
         return checks
-
