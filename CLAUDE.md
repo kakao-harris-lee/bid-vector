@@ -15,18 +15,33 @@
 
 `docker-compose.yml` 서비스는 `./:/app` 바인드 마운트를 사용합니다. 컨테이너가 실행하는 코드는 호스트 working tree의 현재 브랜치입니다. PR이 main에 머지되어도 호스트가 feature 브랜치에 있으면 컨테이너는 feature 브랜치 코드를 계속 실행합니다. api는 hot-reload 없이 구동되므로(OOM 자가복구를 위해 `--reload` 제거) 코드 반영에는 api 재시작이 필수입니다.
 
-머지 후 운영 반영 순서:
+머지 후 운영 반영은 `scripts/sync-after-merge.sh`로 합니다. 브랜치 확인 → main 동기화 → 런타임 서비스 재생성(`up -d --force-recreate`) → 준비 대기 → 큐 토폴로지·스케줄 태스크 게이트 통과 후 beat 마지막 기동까지 한 번에 수행합니다. `restart`가 아니라 재생성이므로 compose command 변경(워커 `--queues`·`--concurrency` 등)도 같이 반영됩니다.
+
+```bash
+scripts/sync-after-merge.sh                  # api + 워커 4종 + beat
+scripts/sync-after-merge.sh api              # 일부 서비스만 반영
+docker compose run --rm frontend-build       # 프론트 산출물이 바뀐 경우
+```
+
+게이트(`scripts/_sync_queue_check.py`)는 두 가지를 검사하고, 실패하면 beat를 정지 상태로 둡니다.
+
+- 워커별 활성 큐 집합이 docker-compose 선언과 정확히 일치하는지(전체 합집합이 아니라 노드별 set 일치 — ops 워커가 ML 큐까지 소비하는 격리 파손을 잡습니다)
+- beat가 이 환경에서 실제로 예약할 태스크가 각자 라우팅된 큐의 소비자에 등록되어 있는지
+
+스크립트를 쓸 수 없을 때의 수동 fallback입니다. beat를 먼저 멈추고 마지막에 올리는 순서를 지킵니다(런타임이 준비되기 전에 beat가 태스크를 뿌리지 않게 하려는 것이 게이트의 목적입니다).
 
 ```bash
 git branch --show-current
 git checkout main
 git pull --rebase origin main
-docker compose restart api
-docker compose --profile tasks restart worker beat
+docker compose --profile tasks stop beat
+docker compose up -d --force-recreate api
+docker compose --profile tasks up -d --force-recreate worker inference-worker ml-worker training-worker
+docker compose --profile tasks up -d --force-recreate beat
 docker compose run --rm frontend-build
 ```
 
-requirements, Dockerfile, 이미지 타깃 변경이 있으면 `docker compose --profile tasks up -d --build`를 사용합니다. docker-compose.yml의 서비스 정의(command·mem_limit·환경값)가 바뀐 경우 `restart`로는 반영되지 않으므로 해당 서비스를 `docker compose up -d <service>`로 재생성합니다(§4.5.1의 env 함정과 동일).
+requirements, Dockerfile, 이미지 타깃 변경이 있으면 `docker compose --profile tasks up -d --build`를 사용합니다. docker-compose.yml의 서비스 정의(command·mem_limit·환경값)가 바뀐 경우 `restart`로는 반영되지 않으므로 위 재생성 경로를 유지합니다(§4.5.1의 env 함정과 동일).
 
 ## 1. 프로젝트 요약
 
