@@ -15,10 +15,10 @@ from app.core.time import ensure_utc, utc_now
 from app.models.models import InferenceOutboxEvent, Project
 from app.schemas.similarity_runtime import (
     InferenceOutboxFailure,
-    InferenceOutboxProcessedEvent,
     InferenceOutboxProcessResult,
     SimilarityProjectionResult,
 )
+from app.services.inference_outbox_result import InferenceOutboxResultAccumulator
 from app.services.similarity_read_model import (
     SIMILARITY_READ_MODEL_LIMIT,
     SIMILARITY_READ_MODEL_MIN_SIMILARITY,
@@ -226,7 +226,9 @@ class InferenceOutboxService:
     def process(self, db: Session, *, limit: int = 50) -> InferenceOutboxProcessResult:
         recovered = self.recover_stale_claims(db)
         rows = self._pending_rows(db, limit)
-        processed: list[InferenceOutboxProcessedEvent] = []
+        result_accumulator = InferenceOutboxResultAccumulator(
+            sample_limit=int(settings.INFERENCE_OUTBOX_RESULT_SAMPLE_LIMIT)
+        )
         failures: list[InferenceOutboxFailure] = []
         skipped = 0
         for row in rows:
@@ -241,9 +243,8 @@ class InferenceOutboxService:
                 result = self._process_event(db, current)
                 self._mark_completed(current)
                 db.commit()
-                processed.append(
-                    InferenceOutboxProcessedEvent(event_id=current.id, result=result)
-                )
+                event_id = int(current.id)
+                result_accumulator.add(event_id, result)
             except Exception as exc:  # noqa: BLE001 - one event must not stop the sweep
                 db.rollback()
                 permanently_failed = self._reschedule_or_fail(db, int(row.id), str(exc))
@@ -253,15 +254,10 @@ class InferenceOutboxService:
                     )
                 else:
                     skipped += 1
-        return InferenceOutboxProcessResult(
-            processed_count=len(processed),
-            failed_count=len(failures),
+        return result_accumulator.build(
+            failures=failures,
             skipped_count=skipped,
             recovered_count=recovered,
-            event_ids=[item.event_id for item in processed],
-            failed_event_ids=[item.event_id for item in failures],
-            results=processed,
-            failures=failures,
         )
 
     def recover_stale_claims(self, db: Session) -> int:

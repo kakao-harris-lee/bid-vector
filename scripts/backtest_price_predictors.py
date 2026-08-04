@@ -14,12 +14,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.ai.predictor_backtest import build_predictor_backtest_report
-from app.ai.predictors import EnsembleBidRatePredictor, HistoricalStatisticalPredictor, LSTMBidRatePredictor, PricePredictionContext
-from app.core.config import settings
-from app.core.database import SessionLocal
-from app.models.models import HistoricalData
-from scripts._common import parse_datetime
+from app.ai.predictor_backtest import build_predictor_backtest_report  # noqa: E402
+from app.ai.predictors import (  # noqa: E402
+    EnsembleBidRatePredictor,
+    HistoricalStatisticalPredictor,
+    LSTMBidRatePredictor,
+    PricePredictionContext,
+)
+from app.core.config import settings  # noqa: E402
+from app.core.database import SessionLocal  # noqa: E402
+from app.models.models import HistoricalData  # noqa: E402
+from app.services.base_amount_basis import BASIS_CLEAN  # noqa: E402
+from scripts._common import parse_datetime  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--holdout-size", type=int, default=None, help="Override PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE.")
     parser.add_argument("--min-training-samples", type=int, default=None, help="Override PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES.")
     parser.add_argument(
+        "--base-amount-basis",
+        choices=[BASIS_CLEAN, "any"],
+        default=BASIS_CLEAN,
+        help="Base-amount provenance allowed in the holdout (default: clean).",
+    )
+    parser.add_argument(
         "--out",
         default="",
         help="Optional JSON output path. Defaults to models/reports/price-backtest-<timestamp>.json.",
@@ -38,8 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_records(db, *, category: str | None, start_at: datetime | None, end_at: datetime | None, limit: int) -> list[HistoricalData]:
+def load_records(
+    db,
+    *,
+    category: str | None,
+    start_at: datetime | None,
+    end_at: datetime | None,
+    limit: int,
+    base_amount_basis: str | None = BASIS_CLEAN,
+) -> list[HistoricalData]:
     query = db.query(HistoricalData).filter(HistoricalData.bid_rate > 0, HistoricalData.base_amount > 0)
+    if base_amount_basis:
+        query = query.filter(HistoricalData.base_amount_basis == base_amount_basis)
     if category:
         query = query.filter(HistoricalData.category == category)
     if start_at is not None:
@@ -81,6 +103,9 @@ def main() -> int:
             start_at=parse_datetime(args.start_date),
             end_at=parse_datetime(args.end_date, end_of_day=True),
             limit=args.limit,
+            base_amount_basis=(
+                None if args.base_amount_basis == "any" else args.base_amount_basis
+            ),
         )
     finally:
         db.close()
@@ -93,6 +118,7 @@ def main() -> int:
         historical_records=tuple(records),
         agency_name=None,
     )
+    backtest = build_predictor_backtest_report(context, build_registry())
     report = {
         "generated_at": datetime.now(UTC).isoformat(),
         "category": args.category.strip() or None,
@@ -100,18 +126,28 @@ def main() -> int:
         "settings": {
             "holdout_size": settings.PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE,
             "min_training_samples": settings.PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES,
+            "base_amount_basis": args.base_amount_basis,
         },
-        "backtest": build_predictor_backtest_report(context, build_registry()),
+        "dataset_quality_status": "warning",
+        "dataset_quality": {
+            "status": "warning",
+            "record_count": len(records),
+            "base_amount_basis": args.base_amount_basis,
+            "scope": "usable bid-rate and base-amount rows; no freshness audit",
+        },
+        **backtest,
     }
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     print(
         json.dumps(
             {
-                "status": report["backtest"]["status"],
+                "status": report["status"],
                 "out": str(output_path),
                 "record_count": len(records),
-                "best_predictor_key": report["backtest"].get("best_predictor_key"),
-                "best_average_absolute_error_rate": report["backtest"].get("best_average_absolute_error_rate"),
+                "best_predictor_key": report.get("best_predictor_key"),
+                "best_average_absolute_error_rate": report.get(
+                    "best_average_absolute_error_rate"
+                ),
             },
             ensure_ascii=False,
         )

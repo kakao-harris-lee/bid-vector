@@ -75,6 +75,10 @@ class InferenceOutboxProcessResult(BaseModel):
     failed_count: int = Field(ge=0)
     skipped_count: int = Field(ge=0)
     recovered_count: int = Field(default=0, ge=0)
+    processed_event_id_first: int | None = None
+    processed_event_id_last: int | None = None
+    result_sample_count: int = Field(default=0, ge=0)
+    result_sample_truncated: bool = False
     event_ids: list[int] = Field(default_factory=list)
     failed_event_ids: list[int] = Field(default_factory=list)
     results: list[InferenceOutboxProcessedEvent] = Field(default_factory=list)

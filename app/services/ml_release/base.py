@@ -146,25 +146,30 @@ class _MLReleaseBase:
                 continue
         return None
 
-    def _iter_manifest_artifact_paths(
-        self, manifest: dict[str, Any]
-    ) -> list[dict[str, str]]:
+    def _iter_manifest_artifact_paths(self, manifest: dict[str, Any]) -> list[dict[str, Any]]:
         """Return artifact path references from a release manifest."""
         artifacts = manifest.get("artifacts") or {}
-        results: list[dict[str, str]] = []
+        results: list[dict[str, Any]] = []
         embedding_model = artifacts.get("embedding_model")
         if isinstance(embedding_model, dict) and embedding_model.get("path"):
             results.append(
-                {"key": "embedding_model", "path": str(embedding_model["path"])}
+                {
+                    "key": "embedding_model",
+                    "path": str(embedding_model["path"]),
+                    "integrity": embedding_model.get("integrity"),
+                }
             )
-
         predictors = artifacts.get("predictors") if isinstance(artifacts, dict) else {}
         if isinstance(predictors, dict):
             for predictor_key in ("lstm", "ensemble"):
                 predictor = predictors.get(predictor_key)
                 if isinstance(predictor, dict) and predictor.get("path"):
                     results.append(
-                        {"key": predictor_key, "path": str(predictor["path"])}
+                        {
+                            "key": predictor_key,
+                            "path": str(predictor["path"]),
+                            "integrity": predictor.get("integrity"),
+                        }
                     )
                 if (
                     predictor_key == "ensemble"
@@ -175,8 +180,20 @@ class _MLReleaseBase:
                         {
                             "key": "linked_lstm",
                             "path": str(predictor["resolved_lstm_artifact_path"]),
+                            "integrity": predictor.get("resolved_lstm_artifact_integrity"),
                         }
                     )
+        promotion_gate = manifest.get("promotion_gate")
+        promotion_gate = promotion_gate if isinstance(promotion_gate, dict) else {}
+        predictor_gate = promotion_gate.get("predictor_backtest")
+        if isinstance(predictor_gate, dict) and predictor_gate.get("report_path"):
+            results.append(
+                {
+                    "key": "predictor_backtest",
+                    "path": str(predictor_gate["report_path"]),
+                    "integrity": predictor_gate.get("report_integrity"),
+                }
+            )
         return results
 
     def _archive_artifact_directory(
@@ -362,4 +379,3 @@ class _MLReleaseBase:
             yield
         finally:
             os.chdir(previous_cwd)
-

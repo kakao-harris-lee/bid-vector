@@ -87,6 +87,7 @@ class TaskRuntimeHealth(BaseModel):
     eager_mode: bool
     inline_ml_tasks_allowed: bool
     worker_concurrency: int = Field(ge=0)
+    inference_worker_concurrency: int = Field(ge=0)
     worker_prefetch_multiplier: int = Field(ge=0)
     worker_max_tasks_per_child: int = Field(ge=0)
     task_time_limit_seconds: int = Field(ge=0)

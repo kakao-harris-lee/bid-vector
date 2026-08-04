@@ -6,7 +6,6 @@ from urllib.parse import quote_plus
 from pydantic import Field, model_validator
 from pydantic_settings import SettingsConfigDict
 from app.core.inference_config import InferenceOutboxSettings
-
 DEFAULT_DATABASE_URL = (
     "postgresql+psycopg://postgres:password@localhost:5432/bid_vector_db"
 )
@@ -66,6 +65,7 @@ class Settings(InferenceOutboxSettings):
     CELERY_ML_REEVALUATION_QUEUE: str = "bid_vector_ml_reevaluation"
     CELERY_ALLOW_INLINE_ML_TASKS: bool = False
     CELERY_WORKER_CONCURRENCY: int = 2
+    CELERY_INFERENCE_WORKER_CONCURRENCY: int = 1
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
     CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 100
     # Celery worker 자식 프로세스 RSS 상한(KB, celery 네이티브

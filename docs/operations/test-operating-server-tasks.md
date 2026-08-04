@@ -83,11 +83,15 @@ ML_RELEASE_MANIFEST_REQUIRE_SIGNATURE=true
 API, `worker`, `inference-worker`, `ml-worker`, `training-worker`, `beat`, RabbitMQ와 DB를
 기동하고 다음 gate를 먼저 통과시킨다.
 
-1. `alembic current`가 repository head이며 API와 worker가 같은 git SHA/image를 쓴다.
-2. `python scripts/promote_ml_release.py preflight-rollout --manifest <release> --require-signature`
+1. `python scripts/checked_alembic.py --expected-database <database> --check-only`로
+   비밀값 없는 DB fingerprint와 현재 revision을 기록한 뒤, 같은 명령에서 `--check-only`를
+   빼고 migration을 적용한다. 적용 후 repository head가 아니면 중단한다.
+2. `python scripts/promote_ml_release.py preflight-rollout --manifest <release> --require-signature --production --expected-git-sha "$(git rev-parse HEAD)"`
    가 성공하고 manifest의 git SHA, artifact checksum, model path가 현재 배포와 일치한다.
 3. ops/inference/backfill/training/reevaluation queue별 전용 worker가 응답하며
-   `inference-worker`가 embedding/similarity task를 등록했다.
+   `inference-worker`가 embedding/similarity task를 등록했다. 배포 시 beat는 중지한 채
+   runtime을 먼저 재생성하고 `inspect registered`와 `inspect active_queues`가 통과한 뒤
+   마지막에 기동한다(`scripts/sync-after-merge.sh`).
 4. 승인된 격리 operator와 notification dry-run 또는 안전한 테스트 target을 사용한다.
 5. 대상 DB를 백업하고 notice/project/decision/notification 기준 count를 먼저 기록한다.
 

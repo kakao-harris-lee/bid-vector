@@ -106,6 +106,8 @@ def _write_predictor_backtest_report(
     average_error_rate: float = 0.012,
     best_predictor_key: str = "ensemble",
     dataset_quality_status: str | None = None,
+    guardrail_rate: float | None = 0.0,
+    fallback_rate: float | None = 0.0,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -116,6 +118,8 @@ def _write_predictor_backtest_report(
                 "best_predictor_key": best_predictor_key,
                 "best_predictor_name": f"{best_predictor_key}_blend",
                 "best_average_absolute_error_rate": average_error_rate,
+                "guardrail_rate": guardrail_rate,
+                "fallback_rate": fallback_rate,
                 **(
                     {"dataset_quality_status": dataset_quality_status}
                     if dataset_quality_status is not None
@@ -417,6 +421,180 @@ def test_preflight_release_rollout_checks_file_storage_and_signature(
     assert "manifest_signature" in check_names
     assert "artifact_path:lstm" in check_names
     assert "object_storage_write_probe" in check_names
+
+
+def test_preflight_release_rollout_rejects_artifact_checksum_mismatch(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "tampered.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-tampered-artifact",
+            lstm_artifact_path=str(lstm_path),
+        )
+    )
+    lstm_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"], require_signature=True, probe_write=False
+    )
+
+    artifact_check = next(
+        check for check in result["checks"] if check["name"] == "artifact_path:lstm"
+    )
+    assert result["passed"] is False
+    assert artifact_check["status"] == "checksum_mismatch"
+    assert artifact_check["expected_sha256"] != artifact_check["actual_sha256"]
+
+
+def test_production_preflight_requires_checksummed_predictor_backtest(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "no-backtest.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-no-backtest",
+            lstm_artifact_path=str(lstm_path),
+        )
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"],
+        require_signature=True,
+        probe_write=False,
+        production=True,
+    )
+
+    check = next(
+        item
+        for item in result["checks"]
+        if item["name"] == "production_predictor_backtest"
+    )
+    assert result["passed"] is False
+    assert check["status"] == "missing_or_unverified"
+
+
+def test_production_preflight_accepts_checksummed_predictor_backtest(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    object_store = tmp_path / "object-store"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "backtested.json"
+    )
+    report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "backtested.json",
+        dataset_quality_status="warning",
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-backtested",
+            lstm_artifact_path=str(lstm_path),
+            predictor_backtest_report_path=str(report_path),
+            git_sha="abc123",
+        )
+    )
+    monkeypatch.setattr(
+        settings, "ML_RELEASE_OBJECT_STORAGE_URL", object_store.as_uri()
+    )
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"],
+        require_signature=True,
+        probe_write=False,
+        production=True,
+        expected_git_sha="abc123",
+    )
+
+    assert result["passed"] is True
+    check_names = {item["name"] for item in result["checks"]}
+    assert "artifact_path:predictor_backtest" in check_names
+    check = next(
+        item
+        for item in result["checks"]
+        if item["name"] == "production_predictor_backtest"
+    )
+    assert check["status"] == "passed"
+
+
+def test_production_preflight_rejects_incomplete_predictor_metrics(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "incomplete.json"
+    )
+    report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "incomplete.json",
+        dataset_quality_status=None,
+        guardrail_rate=None,
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-incomplete-backtest",
+            lstm_artifact_path=str(lstm_path),
+            predictor_backtest_report_path=str(report_path),
+            git_sha="abc123",
+        )
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"], require_signature=True, probe_write=False,
+        production=True, expected_git_sha="abc123",
+    )
+
+    check = next(
+        item for item in result["checks"]
+        if item["name"] == "production_predictor_backtest"
+    )
+    assert result["passed"] is False
+    assert check["status"] == "missing_or_unverified"
+
+
+def test_production_preflight_rejects_manifest_deployment_sha_mismatch(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    lstm_path = _write_lstm_artifact(
+        repo_root / "models" / "predictors" / "lstm" / "sha.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-04-sha",
+            lstm_artifact_path=str(lstm_path),
+            git_sha="manifest-sha",
+        )
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+
+    result = service.preflight_release_rollout(
+        manifest["manifest_path"],
+        require_signature=True,
+        probe_write=False,
+        production=True,
+        expected_git_sha="deployment-sha",
+    )
+
+    check = next(
+        item for item in result["checks"] if item["name"] == "manifest_git_sha"
+    )
+    assert check["status"] == "mismatch"
+    assert check["manifest_git_sha"] == "manifest-sha"
+    assert check["expected_git_sha"] == "deployment-sha"
 
 
 def test_preflight_release_rollout_reports_missing_required_signature(

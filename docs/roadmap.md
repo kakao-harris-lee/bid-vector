@@ -463,6 +463,23 @@ G-2 exit 승인(2026-07-17)으로 이전 1~6번(G-2 증적 축적·blocking gap�
 > 큐 분리를 먼저 수행하고, 테스트/운영 서버에서 같은 probe로 재측정한다. 기준선·실행
 > 계획은 `docs/operations/ml-ux-performance-improvement-plan.md`를 따른다.
 
+> **데이터 파이프라인 E2E 후속 보강(2026-08-04):** 수집부터 monitor까지의 원자적
+> handoff 검증에서 확인된 운영 리스크를 코드 gate로 전환했다. similarity snapshot의
+> corpus watermark와 후보 검색은 embedding model/category bucket으로 제한하고 전용
+> 복합 인덱스를 둔다. inference outbox task 결과는 총계와 first/last ID를 유지하되 성공
+> 상세 sample을 제한한다. production smoke 증적은 notice/run lineage와 집계만 allowlist로
+> 저장한다. signed release는 deployment SHA, artifact와 backtest report checksum, clean
+> provenance holdout의 sample/error/guardrail/fallback/dataset-quality 지표가 모두 맞아야
+> 통과한다. migration은 URL/split 설정 일치, expected database/revision/fingerprint를 먼저
+> 확인한다. 배포는 beat를 중지한 상태에서 runtime을 재생성하고 worker registry와 queue를
+> 확인한 뒤 beat를 마지막에 기동한다. 운영 완료 판정과 p95/p99/RSS 수치는
+> `reports/g2-evidence/pipeline-hardening-20260804/`의 동일 SHA 증적을 기준으로 한다.
+>
+> 잔여 관찰 계획은 bucket 내부 대량 변경 시 projection backlog age/count, concurrency=1
+> inference 처리량과 child RSS, clean provenance 비율과 source별 freshness다. bucket 단위
+> invalidation으로도 SLO를 넘으면 immutable corpus generation과 delta fan-out을 다음 단계로
+> 승격하고, 무결성 gate를 낮추거나 inline/fallback 경로를 되살리는 방식으로 우회하지 않는다.
+
 1. 실투찰 재검증(완료 2026-07-25): 실투찰 2건(`R26BK01627948`, `R26BK01628093`)은 두 건 모두 **패찰(적격이나 낙찰가보다 높아 밀림)** 으로 확정됐고, #195 발주처 밴드 가설을 확정 낙찰가 기준으로 재검증했다. 결과 — 현 predictor 추천이 확정 낙찰가 대비 여전히 **+0.34%p / +0.68%p 과추천**이며, 원인은 floor 앵커 base 불일치(법정 하한 0.88을 예정가가 아니라 **기초금액(사업금액)** 에 곱함 → 사정률<1이라 0.88×기초금액 > 0.88×예정가=실현 하한으로 구조적 초과)로 규명됐다. #195의 E[사정률] 변환은 발주처 밴드 edge에만 적용되고 하드 법정 floor에는 미적용이라 `max()`가 보정을 지운다(비대칭 확인). **n=2(동일 발주처·동일 밴드) 과적합 방지로 밴드/floor 재캘리브레이션은 보류**하고, 다음 가설(floor 앵커 base 정합 = 0.88 × E[예정가])과 검증 게이트를 고정했다(상세: `docs/operations/real-bid-195-revalidation.md`). **후속 검증 완료(2026-07-27)**: 그 가설을 floor-bound 실측 코어 532쌍으로 검증한 결과 **불지지 — 앵커 하향 재캘리브레이션은 하지 않는다**(실측 사정률이 1에 밀착·양방향이라 E 전환은 잔차 무개선에 실격 위험만 악화, 실투찰 패인은 사정률 추첨 랜덤 — 낙찰자들이 실현 하한 +0.1/+1.9bp 착지). 남는 개선 축은 candidate selector. 상세: `docs/operations/floor-anchor-recalibration-verdict.md`.
 2. 엔지니어링협회 실증 코어(**코어 구축 완료 · 잔여 소진 중**): 자격 원문 수집(`eligibility_raw` license-limit 서브콜, #206·#209·#210) → 룰 해석기(#207) → 라벨셋 영속화+식별 리포트(#213)의 A→B→C 코어는 구축·배포되어 라이브 라벨링이 진행 중이다. 잔여는 ① 기존 공고 자격 원문 수집 잔여분 크론 소진(일일 KONEPS 쿼터 `--limit` 분할), ② 운영자 적합/부적합 라벨 확보 후 precision/recall 실증 리포트 산출(정직 명세상 라벨 확보 전 수치 추정 금지), ③ cohort 실제 회사별 확정값(협회 가입 여부·기술부문/전문분야·수행 지역·금액대) 저장(Phase 3 "해야 할 일" 상단 항목들).
 3. 사업자 온보딩·전달 채널(**코드 구현 완료 · 전부 게이트 대기**): 사업자번호 기반 반자동 온보딩(#231~#244·국세청 검증 #248·wizard #249 — 실호출은 data.go.kr 키 게이트), 투찰 보고서 메일 전달(dry-run #246/#247·465 SSL #250 — 실전 발송은 SMTP 자격 게이트), 알림 품질 조정(#269 피로도 게이트: 운영자별 KST 일일 상한·같은 공고 재알림 쿨다운, **기본 0=비활성** — 활성화는 `.env` 두 키+`up -d` opt-in, 시작값은 실사용 관찰 후 결정).

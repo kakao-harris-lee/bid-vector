@@ -128,7 +128,7 @@ class ProjectSimilarityReadModelService:
             "missing"
             if snapshot is None
             else "ready"
-            if self._snapshot_is_current(db, snapshot)
+            if self._snapshot_is_current(db, project, snapshot)
             else "stale"
         )
         items = None
@@ -166,11 +166,19 @@ class ProjectSimilarityReadModelService:
         state = self.embedding_state(project)
         if state.status != "ready" or not state.vector:
             return self._skipped(project.id, f"target_embedding_{state.status}")
-        before = self.corpus_watermark(db)
+        before = self.corpus_watermark(
+            db,
+            embedding_model=str(project.embedding_model),
+            category=project.category if same_category_only else None,
+        )
         items, source = self._compute_results(
             db, project, state, limit, min_similarity, same_category_only
         )
-        if before != self.corpus_watermark(db):
+        if before != self.corpus_watermark(
+            db,
+            embedding_model=str(project.embedding_model),
+            category=project.category if same_category_only else None,
+        ):
             raise SimilarityCorpusChangedError(
                 "embedding corpus changed during projection"
             )
@@ -196,7 +204,7 @@ class ProjectSimilarityReadModelService:
         same_category_only: bool,
     ) -> list[SimilarProjectItem] | None:
         snapshot = self._load_snapshot(db, project, min_similarity, same_category_only)
-        if snapshot is None or not self._snapshot_is_current(db, snapshot):
+        if snapshot is None or not self._snapshot_is_current(db, project, snapshot):
             return None
         query = (
             db.query(ProjectSimilarityEdge, Project)
@@ -221,11 +229,20 @@ class ProjectSimilarityReadModelService:
             for edge, candidate in rows
         ]
 
-    def corpus_watermark(self, db: Session) -> SimilarityCorpusWatermark:
-        count, updated_at = db.query(
+    def corpus_watermark(
+        self,
+        db: Session,
+        *,
+        embedding_model: str,
+        category: str | None = None,
+    ) -> SimilarityCorpusWatermark:
+        query = db.query(
             func.count(Project.embedding_updated_at),
             func.max(Project.embedding_updated_at),
-        ).one()
+        ).filter(Project.embedding_model == embedding_model)
+        if category:
+            query = query.filter(Project.category == category)
+        count, updated_at = query.one()
         return SimilarityCorpusWatermark(
             embedding_count=int(count or 0),
             embedding_updated_at=updated_at,
@@ -254,7 +271,10 @@ class ProjectSimilarityReadModelService:
             )
             source = SIMILARITY_READ_MODEL_SOURCE_PGVECTOR
         else:
-            query = db.query(Project).filter(Project.id != project.id)
+            query = db.query(Project).filter(
+                Project.id != project.id,
+                Project.embedding_model == project.embedding_model,
+            )
             if same_category_only and project.category:
                 query = query.filter(Project.category == project.category)
             raw = self._similarity._search_with_python(
@@ -326,9 +346,14 @@ class ProjectSimilarityReadModelService:
     def _snapshot_is_current(
         self,
         db: Session,
+        project: Project,
         snapshot: ProjectSimilaritySnapshot,
     ) -> bool:
-        watermark = self.corpus_watermark(db)
+        watermark = self.corpus_watermark(
+            db,
+            embedding_model=str(snapshot.embedding_model),
+            category=project.category if snapshot.same_category_only else None,
+        )
         return (
             int(snapshot.corpus_embedding_count) == watermark.embedding_count
             and snapshot.corpus_embedding_updated_at == watermark.embedding_updated_at

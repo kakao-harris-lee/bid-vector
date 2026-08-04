@@ -327,6 +327,84 @@ def test_candidate_category_change_closes_stored_read_on_stale_snapshot(
     assert response["result_count"] == 0
 
 
+def test_unrelated_category_embedding_change_keeps_scoped_snapshot_fresh(
+    test_db, monkeypatch
+):
+    target = _make_project(test_db, title="AI 분석", category="software")
+    candidate = _make_project(test_db, title="AI 데이터 분석", category="software")
+    unrelated = _make_project(test_db, title="교량 보수", category="construction")
+    service = ProjectSimilarityService()
+    for project in (target, candidate, unrelated):
+        service.refresh_project_embedding_details(test_db, project, force=True)
+    service.recompute_similarity_read_model(test_db, project_id=target.id, limit=5)
+    test_db.commit()
+
+    unrelated.title = "교량 내진 보강"
+    service.refresh_project_embedding_details(test_db, unrelated, force=True)
+    test_db.commit()
+
+    monkeypatch.setattr(
+        service,
+        "_search_with_python",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unrelated category must not invalidate the snapshot")
+        ),
+    )
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.15, stored_only=True
+    )
+
+    assert response["search_mode"] == "read_model"
+    assert response["projection_status"] == "ready"
+    assert response["results"][0]["project_id"] == candidate.id
+
+
+def test_similarity_projection_excludes_other_embedding_models(test_db):
+    target = _make_project(test_db, title="AI 분석", category="software")
+    same_model = _make_project(test_db, title="AI 데이터 분석", category="software")
+    other_model = _make_project(test_db, title="AI 분석 플랫폼", category="software")
+    service = ProjectSimilarityService()
+    for project in (target, same_model, other_model):
+        service.refresh_project_embedding_details(test_db, project, force=True)
+    other_model.embedding_model = "incompatible-model-v2"
+    test_db.flush()
+
+    result = service.recompute_similarity_read_model(
+        test_db, project_id=target.id, limit=5, min_similarity=0.0
+    )
+    test_db.commit()
+    other_model.title = "AI 분석 플랫폼 개편"
+    service.refresh_project_embedding_details(test_db, other_model, force=True)
+    other_model.embedding_model = "incompatible-model-v2"
+    test_db.commit()
+    response = service.find_similar_projects(
+        test_db, target, limit=5, min_similarity=0.0, stored_only=True
+    )
+
+    assert result.edge_count == 1
+    assert [item["project_id"] for item in response["results"]] == [same_model.id]
+
+
+def test_projection_backfill_ignores_unrelated_corpus_changes(test_db):
+    target = _make_project(test_db, title="AI 분석", category="software")
+    candidate = _make_project(test_db, title="AI 데이터 분석", category="software")
+    unrelated = _make_project(test_db, title="교량 보수", category="construction")
+    service = ProjectSimilarityService()
+    for project in (target, candidate, unrelated):
+        project.status = "open"
+        service.refresh_project_embedding_details(test_db, project, force=True)
+    service.recompute_similarity_read_model(test_db, project_id=target.id, limit=5)
+    test_db.commit()
+
+    unrelated.title = "교량 내진 보강"
+    service.refresh_project_embedding_details(test_db, unrelated, force=True)
+    test_db.commit()
+
+    result = service.stage_active_similarity_projection_backfill(test_db, limit=10)
+
+    assert target.id not in result.project_ids
+
+
 def test_embedding_ready_outbox_is_deduplicated_per_version(test_db):
     project = _make_project(test_db, title="중복 이벤트 방지")
     service = ProjectSimilarityService()
@@ -458,10 +536,20 @@ def test_inference_outbox_processor_creates_similarity_read_model_edges(
         "pending",
     ]
 
+    monkeypatch.setattr(
+        "app.services.inference_outbox.settings.INFERENCE_OUTBOX_RESULT_SAMPLE_LIMIT",
+        2,
+    )
     processed = jobs.process_inference_outbox.run(limit=10)
 
     assert processed["processed_count"] == 3
     assert processed["failed_count"] == 0
+    assert processed["processed_event_id_first"] == pending_events[0].id
+    assert processed["processed_event_id_last"] == pending_events[-1].id
+    assert processed["result_sample_count"] == 2
+    assert processed["result_sample_truncated"] is True
+    assert processed["event_ids"] == [event.id for event in pending_events[:2]]
+    assert len(processed["results"]) == 2
 
     test_db.expire_all()
     completed_events = (

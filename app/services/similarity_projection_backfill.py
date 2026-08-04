@@ -2,6 +2,7 @@
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.constants import ACTIVE_PROJECT_STATUSES
 from app.core.time import utc_now
@@ -13,8 +14,43 @@ from app.models.models import (
 from app.schemas.similarity_runtime import SimilarityProjectionBackfillResult
 
 
+def _corpus_watermark_subqueries() -> tuple[ColumnElement[int], ColumnElement]:
+    corpus = aliased(Project)
+    corpus_scope = and_(
+        corpus.embedding_model == Project.embedding_model,
+        or_(
+            Project.category.is_(None),
+            Project.category == "",
+            corpus.category == Project.category,
+        ),
+    )
+    count = (
+        select(func.count(corpus.embedding_updated_at))
+        .where(corpus_scope)
+        .correlate(Project)
+        .scalar_subquery()
+    )
+    updated_at = (
+        select(func.max(corpus.embedding_updated_at))
+        .where(corpus_scope)
+        .correlate(Project)
+        .scalar_subquery()
+    )
+    return count, updated_at
+
+
+def _watermark_time_mismatch(snapshot, corpus_updated_at) -> ColumnElement[bool]:
+    return or_(
+        and_(corpus_updated_at.is_(None), snapshot.corpus_embedding_updated_at.isnot(None)),
+        and_(
+            corpus_updated_at.isnot(None),
+            or_(snapshot.corpus_embedding_updated_at.is_(None),
+                snapshot.corpus_embedding_updated_at != corpus_updated_at),
+        ),
+    )
+
+
 def _backfill_candidates(db, read_model, limit: int):
-    watermark = read_model.corpus_watermark(db)
     snapshot = aliased(ProjectSimilaritySnapshot)
     edge_count = (
         select(func.count(ProjectSimilarityEdge.id))
@@ -22,13 +58,11 @@ def _backfill_candidates(db, read_model, limit: int):
         .correlate(snapshot)
         .scalar_subquery()
     )
-    time_mismatch = (
-        snapshot.corpus_embedding_updated_at.isnot(None)
-        if watermark.embedding_updated_at is None
-        else or_(
-            snapshot.corpus_embedding_updated_at.is_(None),
-            snapshot.corpus_embedding_updated_at != watermark.embedding_updated_at,
-        )
+    corpus_embedding_count, corpus_embedding_updated_at = (
+        _corpus_watermark_subqueries()
+    )
+    time_mismatch = _watermark_time_mismatch(
+        snapshot, corpus_embedding_updated_at
     )
     return (
         db.query(Project)
@@ -52,7 +86,7 @@ def _backfill_candidates(db, read_model, limit: int):
             Project.embedding_payload != "[]",
             or_(
                 snapshot.id.is_(None),
-                snapshot.corpus_embedding_count != watermark.embedding_count,
+                snapshot.corpus_embedding_count != corpus_embedding_count,
                 time_mismatch,
                 snapshot.edge_count != edge_count,
             ),

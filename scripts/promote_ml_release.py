@@ -20,7 +20,10 @@ from app.ai.predictors.artifact_contracts import (  # noqa: E402
     artifact_contract_error_kind,
     artifact_contract_error_location,
 )
-from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
+from app.services.ml_release import (  # noqa: E402
+    MLReleasePromotionRequest,
+    MLReleasePromotionService,
+)
 
 
 @dataclass
@@ -175,6 +178,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the object-storage write/delete probe.",
     )
+    preflight_parser.add_argument(
+        "--production",
+        action="store_true",
+        help="Require a passing checksummed predictor backtest for production rollout.",
+    )
+    preflight_parser.add_argument(
+        "--expected-git-sha",
+        default="",
+        help="Deployment git SHA that the signed manifest must match.",
+    )
 
     apply_parser = subparsers.add_parser(
         "apply-manifest",
@@ -313,6 +326,8 @@ def main() -> int:
             args.manifest,
             require_signature=True if args.require_signature else None,
             probe_write=not bool(args.no_write_probe),
+            production=bool(args.production),
+            expected_git_sha=_clean_optional(args.expected_git_sha),
         )
         print(_serialize_payload(payload))
         return 0 if payload.get("passed") else 2

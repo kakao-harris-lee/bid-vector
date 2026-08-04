@@ -306,6 +306,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
         query = db.query(Project, similarity_expression).filter(
             Project.id != project.id,
             Project.embedding.isnot(None),
+            Project.embedding_model == project.embedding_model,
         )
 
         if same_category_only and project.category:
