@@ -13,9 +13,10 @@ def test_sync_after_merge_starts_beat_only_after_worker_registry_gate():
 
     assert stop_index < registry_index < beat_start_index
     assert "inspect registered --timeout=10" in content
-    assert "inspect active_queues --timeout=10" in content
-    assert "config --environment" in content
-    assert "compose_value CELERY_ML_INFERENCE_QUEUE" in content
+    assert "inspect active_queues" in content
+    assert "--timeout=10 --json" in content
+    assert "from app.core.config import settings" in content
+    assert "grep -Fxq" in content
     assert "jobs.process_inference_outbox" in content
     assert "jobs.stage_active_similarity_projection_backfill" in content
-    assert "bid_vector_ml_inference" in content
+    assert "settings.CELERY_ML_INFERENCE_QUEUE" in content

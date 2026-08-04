@@ -119,12 +119,32 @@ if [ "$overall_ok" -ne 0 ]; then
 fi
 
 verify_worker_registry() {
-    local registered active_queues compose_environment
+    local registered active_queues_json active_queue_names routing_queues
     registered="$(docker compose --profile tasks exec -T worker \
         celery -A app.tasks.celery_app.celery_app inspect registered --timeout=10)"
-    active_queues="$(docker compose --profile tasks exec -T worker \
-        celery -A app.tasks.celery_app.celery_app inspect active_queues --timeout=10)"
-    compose_environment="$(docker compose --profile tasks config --environment)"
+    active_queues_json="$(docker compose --profile tasks exec -T worker \
+        celery -A app.tasks.celery_app.celery_app inspect active_queues \
+        --timeout=10 --json)"
+    active_queue_names="$(printf '%s' "$active_queues_json" | python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+for queues in payload.values():
+    for queue in queues:
+        print(queue["name"])
+')"
+    routing_queues="$(docker compose --profile tasks exec -T worker python - <<'PY'
+from app.core.config import settings
+
+for value in (
+    settings.CELERY_OPS_QUEUE,
+    settings.CELERY_ML_INFERENCE_QUEUE,
+    settings.CELERY_ML_BACKFILL_QUEUE,
+    settings.CELERY_ML_TRAINING_QUEUE,
+    settings.CELERY_ML_REEVALUATION_QUEUE,
+):
+    print(value)
+PY
+)"
     local task
     for task in \
         jobs.collect_koneps_notices \
@@ -138,35 +158,16 @@ verify_worker_registry() {
             return 1
         fi
     done
-    compose_value() {
-        local key="$1" line
-        while IFS= read -r line; do
-            if [[ "$line" == "$key="* ]]; then
-                printf '%s' "${line#*=}"
-                return
-            fi
-        done <<<"$compose_environment"
-    }
     local queue
-    local queues=(
-        "$(compose_value CELERY_OPS_QUEUE || true)"
-        "$(compose_value CELERY_ML_INFERENCE_QUEUE || true)"
-        "$(compose_value CELERY_ML_BACKFILL_QUEUE || true)"
-        "$(compose_value CELERY_ML_TRAINING_QUEUE || true)"
-        "$(compose_value CELERY_ML_REEVALUATION_QUEUE || true)"
-    )
-    local defaults=(
-        bid_vector_ops bid_vector_ml_inference bid_vector_ml_backfill
-        bid_vector_ml_training bid_vector_ml_reevaluation
-    )
-    local index
-    for index in "${!queues[@]}"; do
-        queue="${queues[$index]:-${defaults[$index]}}"
-        if ! grep -Fq "$queue" <<<"$active_queues"; then
+    while IFS= read -r queue; do
+        if [ -z "$queue" ]; then
+            continue
+        fi
+        if ! grep -Fxq "$queue" <<<"$active_queue_names"; then
             echo "[sync] missing active queue: $queue" >&2
             return 1
         fi
-    done
+    done <<<"$routing_queues"
     echo "[sync] worker registry and queue gates passed"
 }
 
