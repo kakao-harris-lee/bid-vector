@@ -166,24 +166,28 @@ class ProjectSimilarityReadModelService:
         state = self.embedding_state(project)
         if state.status != "ready" or not state.vector:
             return self._skipped(project.id, f"target_embedding_{state.status}")
-        before = self.corpus_watermark(
-            db,
-            embedding_model=str(project.embedding_model),
-            category=project.category if same_category_only else None,
+        embedding_model = state.model
+        if not embedding_model:
+            # nullable 컬럼이라 멈추지 않으면 뒤의 스코프가 전부 문자열 "None"
+            # 버킷으로 샌다: 그 이름의 행이 없어 watermark 는 항상 0 건이고, 그렇게
+            # 저장된 스냅샷은 :meth:`_load_snapshot` 이 다시 읽지 못해 재계산만 돈다.
+            return self._skipped(project.id, "target_embedding_model_missing")
+        before = self._scoped_watermark(
+            db, project, embedding_model, same_category_only
         )
         items, source = self._compute_results(
-            db, project, state, limit, min_similarity, same_category_only
+            db, project, state, embedding_model,
+            limit, min_similarity, same_category_only,
         )
-        if before != self.corpus_watermark(
-            db,
-            embedding_model=str(project.embedding_model),
-            category=project.category if same_category_only else None,
+        if before != self._scoped_watermark(
+            db, project, embedding_model, same_category_only
         ):
             raise SimilarityCorpusChangedError(
                 "embedding corpus changed during projection"
             )
         self._replace_snapshot(
-            db, project, items, before, source, same_category_only, min_similarity
+            db, project, items, before, source, same_category_only, min_similarity,
+            embedding_model=embedding_model,
         )
         return SimilarityProjectionResult(
             status="completed",
@@ -248,6 +252,20 @@ class ProjectSimilarityReadModelService:
             embedding_updated_at=updated_at,
         )
 
+    def _scoped_watermark(
+        self,
+        db: Session,
+        project: Project,
+        embedding_model: str,
+        same_category_only: bool,
+    ) -> SimilarityCorpusWatermark:
+        """Watermark of one projection scope: embedding model + optional category."""
+        return self.corpus_watermark(
+            db,
+            embedding_model=embedding_model,
+            category=project.category if same_category_only else None,
+        )
+
     def min_similarity_bucket(self, min_similarity: float) -> float:
         return round(float(min_similarity), 4)
 
@@ -256,6 +274,7 @@ class ProjectSimilarityReadModelService:
         db: Session,
         project: Project,
         state: StoredEmbeddingState,
+        embedding_model: str,
         limit: int,
         min_similarity: float,
         same_category_only: bool,
@@ -265,7 +284,7 @@ class ProjectSimilarityReadModelService:
                 db,
                 project=project,
                 query_embedding=state.vector,
-                query_embedding_model=state.model,
+                query_embedding_model=embedding_model,
                 limit=max(1, int(limit)),
                 min_similarity=min_similarity,
                 same_category_only=same_category_only,
@@ -274,16 +293,17 @@ class ProjectSimilarityReadModelService:
         else:
             query = db.query(Project).filter(
                 Project.id != project.id,
-                Project.embedding_model == project.embedding_model,
+                Project.embedding_model == embedding_model,
             )
             if same_category_only and project.category:
                 query = query.filter(Project.category == project.category)
             raw = self._similarity._search_with_python(
                 query.all(),
                 query_embedding=state.vector,
+                query_embedding_model=embedding_model,
                 limit=max(1, int(limit)),
                 min_similarity=min_similarity,
-                embedding_resolver=self._similarity._load_embedding,
+                embedding_resolver=self._similarity._stored_embedding_with_model,
             )
             source = SIMILARITY_READ_MODEL_SOURCE_PYTHON
         return [SimilarProjectItem.model_validate(item) for item in raw], source
@@ -297,10 +317,14 @@ class ProjectSimilarityReadModelService:
         source: str,
         same_category_only: bool,
         min_similarity: float,
+        *,
+        embedding_model: str,
     ) -> None:
         snapshot = self._load_snapshot(db, project, min_similarity, same_category_only)
         if snapshot is None:
-            snapshot = self._new_snapshot(project, min_similarity, same_category_only)
+            snapshot = self._new_snapshot(
+                project, embedding_model, min_similarity, same_category_only
+            )
             db.add(snapshot)
             db.flush()
         db.query(ProjectSimilarityEdge).filter(
@@ -350,10 +374,11 @@ class ProjectSimilarityReadModelService:
         project: Project,
         snapshot: ProjectSimilaritySnapshot,
     ) -> bool:
-        watermark = self.corpus_watermark(
+        watermark = self._scoped_watermark(
             db,
-            embedding_model=str(snapshot.embedding_model),
-            category=project.category if snapshot.same_category_only else None,
+            project,
+            str(snapshot.embedding_model),
+            bool(snapshot.same_category_only),
         )
         return (
             int(snapshot.corpus_embedding_count) == watermark.embedding_count
@@ -363,12 +388,13 @@ class ProjectSimilarityReadModelService:
     def _new_snapshot(
         self,
         project: Project,
+        embedding_model: str,
         min_similarity: float,
         same_category_only: bool,
     ) -> ProjectSimilaritySnapshot:
         return ProjectSimilaritySnapshot(
             target_project_id=int(project.id),
-            embedding_model=str(project.embedding_model),
+            embedding_model=embedding_model,
             target_embedding_updated_at=project.embedding_updated_at,
             same_category_only=bool(same_category_only),
             min_similarity_bucket=self.min_similarity_bucket(min_similarity),

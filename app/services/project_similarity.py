@@ -248,6 +248,7 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
         raw = self._search_with_python(
             candidates,
             query_embedding=vector,
+            query_embedding_model=query_model,
             limit=limit,
             min_similarity=min_similarity,
             embedding_resolver=resolver,
@@ -265,10 +266,25 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
             query = query.filter(Project.category == project.category)
         return query.all()
 
-    def _candidate_embedding_resolver(self, read_only: bool, stored_only: bool) -> Callable[[Project], list[float]]:
+    def _candidate_embedding_resolver(
+        self, read_only: bool, stored_only: bool
+    ) -> Callable[[Project], tuple[list[float], str]]:
         if read_only:
-            return lambda candidate: self.resolve_embedding_without_persist(candidate)[0]
-        return self._load_embedding
+            return self.resolve_embedding_without_persist
+        return self._stored_embedding_with_model
+
+    def _stored_embedding_with_model(self, project: Project) -> tuple[list[float], str]:
+        """Read a candidate's stored vector with the model that produced it.
+
+        모델이 비어 있는 저장본을 ``FALLBACK_EMBEDDING_MODEL`` 로 보는 것은
+        질의 모델을 정하는 :meth:`refresh_project_embedding` /
+        :meth:`resolve_embedding_without_persist` 와 같은 규칙이라, 양쪽이
+        같은 이름으로 만나야 비교된다.
+        """
+        return (
+            self._load_embedding(project),
+            project.embedding_model or FALLBACK_EMBEDDING_MODEL,
+        )
 
     def build_semantic_text(self, project: Project) -> str:
         """Build a rich semantic description used for embeddings and retrieval."""
@@ -332,23 +348,32 @@ class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
         candidates: Iterable[Project],
         *,
         query_embedding: list[float],
+        query_embedding_model: str,
         limit: int,
         min_similarity: float,
-        embedding_resolver: Callable[[Project], list[float]] | None = None,
+        embedding_resolver: Callable[[Project], tuple[list[float], str]] | None = None,
     ) -> list[dict[str, Any]]:
         """Fallback similarity search using stored embedding payloads.
 
-        ``embedding_resolver`` 은 candidate → embedding 벡터 조회를 갈아끼우는
-        seam 이다. 기본값(``None``)은 저장본을 읽는 :meth:`_load_embedding` 이며,
-        read-only 스캔은 세션 쓰기 없이 재해석하는 resolver 를 주입한다 —
-        어느 쪽이든 같은 (정규화된) 벡터를 돌려주므로 산출은 동일하다.
+        ``embedding_resolver`` 은 candidate → (벡터, 그 벡터를 만든 모델) 조회를
+        갈아끼우는 seam 이다. 기본값(``None``)은 저장본을 읽는
+        :meth:`_stored_embedding_with_model` 이며, read-only 스캔은 세션 쓰기 없이
+        재해석하는 resolver 를 주입한다 — 어느 쪽이든 같은 (정규화된) 벡터를
+        돌려주므로 산출은 동일하다.
+
+        다른 모델로 만들어진 벡터는 좌표계가 달라 코사인 값이 의미를 잃지만
+        :meth:`_cosine_similarity` 는 zip 이라 조용히 점수를 낸다. pgvector 경로가
+        ``embedding_model`` 필터로 그런 후보를 이미 제외하므로, 같은 요청이 pgvector
+        가용 여부에 따라 다른 후보 집합을 보지 않도록 여기서도 같은 스코프를
+        적용한다. 필터는 저장 컬럼이 아니라 **채점에 쓰는 벡터의 모델**에 걸어,
+        refresh/재해석으로 질의 모델과 같아지는 후보를 미리 잘라내지 않는다.
         """
-        resolver = embedding_resolver or self._load_embedding
+        resolver = embedding_resolver or self._stored_embedding_with_model
         matches: list[dict[str, Any]] = []
 
         for candidate in candidates:
-            candidate_embedding = resolver(candidate)
-            if not candidate_embedding:
+            candidate_embedding, candidate_model = resolver(candidate)
+            if not candidate_embedding or candidate_model != query_embedding_model:
                 continue
 
             similarity = self._cosine_similarity(query_embedding, candidate_embedding)
