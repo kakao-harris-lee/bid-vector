@@ -11,8 +11,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, TextIO, cast
 
+# 재귀 JSON 값 타입의 canonical 은 pydantic.JsonValue 다(app/schemas/stored_json.py 참조).
+from pydantic import JsonValue
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FRONTEND_DIR = REPO_ROOT / "frontend"
@@ -74,10 +76,6 @@ ADDITIONAL_PROPERTIES_KEY = "additionalProperties"
 OBJECT_SHAPE_KEYS = ("properties", ADDITIONAL_PROPERTIES_KEY)
 OPEN_OBJECT_ADDITIONAL_PROPERTIES = True
 
-# 스키마 트리의 노드. 임의 JSON 이라 구체 모델로 좁힐 수는 없지만, 걸어야 하는 것이
-# "JSON 값"이라는 계약은 ``Any`` 보다 정확하게 표현된다.
-JsonValue = str | int | float | bool | None | dict[str, "JsonValue"] | list["JsonValue"]
-
 
 def is_unconstrained_object(node: dict[str, JsonValue]) -> bool:
     """형태를 선언하지 않은 ``type: "object"`` 노드인가(= 자유 ``dict`` 필드인가)."""
@@ -104,6 +102,11 @@ def normalize_open_objects(node: JsonValue) -> JsonValue:
     if is_unconstrained_object(node):
         normalized[ADDITIONAL_PROPERTIES_KEY] = OPEN_OBJECT_ADDITIONAL_PROPERTIES
     return normalized
+
+
+def normalize_openapi_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """문서 최상위 경계용 얇은 래퍼 — dict 문서는 항상 dict 로 돌아온다(재귀 본체는 위)."""
+    return cast(dict[str, Any], normalize_open_objects(schema))
 
 
 def write_openapi_schema(schema: dict[str, Any], output_path: Path) -> None:
@@ -162,7 +165,7 @@ def main(
         schema_path = tmp_dir / "openapi.json"
         generated_path = tmp_dir / "openapi.d.ts"
 
-        write_openapi_schema(normalize_open_objects(schema_provider()), schema_path)
+        write_openapi_schema(normalize_openapi_schema(schema_provider()), schema_path)
         generator(
             schema_path=schema_path,
             output_path=generated_path,
