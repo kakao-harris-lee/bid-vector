@@ -95,9 +95,22 @@ def parse_active_queues(payload: InspectPayload) -> dict[str, frozenset[str]]:
     }
 
 
+def _registered_task_name(entry: str) -> str:
+    """Drop celery's task info suffix: ``jobs.x [rate_limit=10/m]`` → ``jobs.x``.
+
+    ``inspect registered`` appends ``[exchange=… routing_key=… rate_limit=…]``
+    for any task that sets one of them, so giving a gated task a rate limit
+    would otherwise read as a missing registration and keep beat down.
+    """
+    return entry.split(" [", 1)[0]
+
+
 def parse_registered_tasks(payload: InspectPayload) -> dict[str, frozenset[str]]:
     """Map each replying node to the task names registered on it."""
-    return {node: frozenset(tasks) for node, tasks in payload.registered.items()}
+    return {
+        node: frozenset(_registered_task_name(entry) for entry in tasks)
+        for node, tasks in payload.registered.items()
+    }
 
 
 def resolve_expected_queue_sets(

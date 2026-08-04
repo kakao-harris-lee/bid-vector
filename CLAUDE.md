@@ -20,11 +20,13 @@
 ```bash
 scripts/sync-after-merge.sh                  # api + 워커 4종 + beat
 scripts/sync-after-merge.sh api              # 일부 서비스만 반영
-docker compose run --rm frontend-build       # 프론트 산출물이 바뀐 경우
 ```
 
-게이트(`scripts/_sync_queue_check.py`)는 두 가지를 검사하고, 실패하면 beat를 정지 상태로 둡니다.
+api는 `frontend-build`에 `service_completed_successfully`로 의존하므로, api를 재생성하면 프론트 빌드가 **매번 함께 돌아갑니다**(수 분 소요). 별도로 실행할 필요가 없고, 프론트만 다시 굽고 싶을 때만 `docker compose run --rm frontend-build`를 씁니다.
 
+게이트(`scripts/_sync_queue_check.py`)는 세 가지를 검사하고, 실패하면 beat를 정지 상태로 둡니다.
+
+- 큐 이름 6개가 서로 다른지(두 설정이 같은 이름으로 붕괴하면 워커별 격리 자체를 검증할 수 없으므로 실패시킵니다)
 - 워커별 활성 큐 집합이 docker-compose 선언과 정확히 일치하는지(전체 합집합이 아니라 노드별 set 일치 — ops 워커가 ML 큐까지 소비하는 격리 파손을 잡습니다)
 - beat가 이 환경에서 실제로 예약할 태스크가 각자 라우팅된 큐의 소비자에 등록되어 있는지
 
@@ -38,7 +40,6 @@ docker compose --profile tasks stop beat
 docker compose up -d --force-recreate api
 docker compose --profile tasks up -d --force-recreate worker inference-worker ml-worker training-worker
 docker compose --profile tasks up -d --force-recreate beat
-docker compose run --rm frontend-build
 ```
 
 requirements, Dockerfile, 이미지 타깃 변경이 있으면 `docker compose --profile tasks up -d --build`를 사용합니다. docker-compose.yml의 서비스 정의(command·mem_limit·환경값)가 바뀐 경우 `restart`로는 반영되지 않으므로 위 재생성 경로를 유지합니다(§4.5.1의 env 함정과 동일).

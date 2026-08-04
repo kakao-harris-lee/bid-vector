@@ -281,6 +281,41 @@ class TestPayloadContract:
         assert parse_active_queues(payload) == {"celery@a": frozenset({"q"})}
         assert parse_registered_tasks(payload) == {"celery@a": frozenset({"jobs.x"})}
 
+    def test_task_info_suffix_does_not_read_as_a_missing_registration(self):
+        """celery appends ``[rate_limit=…]``; a throttled task is still registered."""
+        payload = InspectPayload.model_validate(
+            {
+                "registered": {
+                    "celery@a": [
+                        "jobs.collect_koneps_notices [rate_limit=10/m]",
+                        "jobs.monitor_operator_strategy "
+                        "[exchange=bid_vector routing_key=bid_vector rate_limit=1/s]",
+                        "ml.train_price_predictor",
+                    ]
+                }
+            }
+        )
+
+        assert parse_registered_tasks(payload) == {
+            "celery@a": frozenset(
+                {
+                    "jobs.collect_koneps_notices",
+                    "jobs.monitor_operator_strategy",
+                    "ml.train_price_predictor",
+                }
+            )
+        }
+
+    def test_rate_limited_task_passes_the_registration_gate(self):
+        payload = _build_payload(
+            registered_overrides={
+                node: [f"{task} [rate_limit=10/m]" for task in sorted(QUEUE_BY_TASK)]
+                for node in NODE_BY_SERVICE.values()
+            }
+        )
+
+        assert _run(payload) == []
+
     def test_missing_sections_default_to_empty(self):
         assert InspectPayload().active_queues == {}
         assert InspectPayload().registered == {}
@@ -338,30 +373,52 @@ def test_compose_declares_no_worker_outside_the_declared_topology():
     assert celery_workers == set(WORKER_QUEUE_SETTING_NAMES)
 
 
+# Each pipeline schedule toggle with the task it schedules and that task's
+# routed queue. The tests drive both toggle states explicitly so they hold on a
+# bare checkout and on the operating checkout, whose .env enables some of these.
+PIPELINE_SCHEDULE_TOGGLES = (
+    (
+        "INFERENCE_OUTBOX_SCHEDULE_ENABLED",
+        "jobs.process_inference_outbox",
+        "CELERY_ML_INFERENCE_QUEUE",
+    ),
+    (
+        "SIMILARITY_PROJECTION_BACKFILL_SCHEDULE_ENABLED",
+        "jobs.stage_active_similarity_projection_backfill",
+        "CELERY_ML_INFERENCE_QUEUE",
+    ),
+    (
+        "NOTIFICATION_DELIVERY_OUTBOX_SCHEDULE_ENABLED",
+        "jobs.process_notification_delivery_outbox",
+        "CELERY_OPS_QUEUE",
+    ),
+)
+
+
 class TestLiveWiring:
-    def test_gate_reads_queue_names_and_schedule_from_the_running_config(self):
+    def test_gate_reads_every_queue_name_from_the_running_config(self):
         wiring = load_live_wiring()
 
         assert set(wiring.queue_names) == set(QUEUE_SETTING_NAMES)
         assert all(wiring.queue_names.values())
-        # The gate verifies whatever beat will actually dispatch here: the
-        # outbox schedules default on, so they must appear.
-        assert (
-            wiring.routed_queues["jobs.process_inference_outbox"]
-            == wiring.queue_names["CELERY_ML_INFERENCE_QUEUE"]
-        )
-        assert (
-            wiring.routed_queues["jobs.stage_active_similarity_projection_backfill"]
-            == wiring.queue_names["CELERY_ML_INFERENCE_QUEUE"]
-        )
 
-    def test_schedules_disabled_in_this_environment_are_not_gated(self):
+    @pytest.mark.parametrize("enabled", [True, False])
+    @pytest.mark.parametrize(
+        "setting_name,task_name,queue_setting", PIPELINE_SCHEDULE_TOGGLES
+    )
+    def test_schedule_toggle_decides_whether_a_task_is_gated(
+        self, monkeypatch, setting_name, task_name, queue_setting, enabled
+    ):
+        """The gate covers exactly what beat will dispatch in this environment."""
         from app.core.config import settings
 
+        monkeypatch.setattr(settings, setting_name, enabled)
         wiring = load_live_wiring()
 
-        assert not settings.NOTIFICATION_DELIVERY_OUTBOX_SCHEDULE_ENABLED
-        assert "jobs.process_notification_delivery_outbox" not in wiring.routed_queues
+        if enabled:
+            assert wiring.routed_queues[task_name] == wiring.queue_names[queue_setting]
+        else:
+            assert task_name not in wiring.routed_queues
 
     def test_formerly_hardcoded_gate_tasks_resolve_to_their_routed_queues(self):
         """The shell no longer lists task names; routing must still be exact."""
