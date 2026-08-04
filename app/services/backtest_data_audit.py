@@ -51,6 +51,7 @@ class BacktestDataAuditService:
             .join(Project, Project.id == TenderResult.project_id)
             .filter(
                 TenderResult.project_id.isnot(None),
+                TenderResult.is_current.is_(True),
                 or_(TenderResult.winning_amount.is_(None), TenderResult.winning_amount <= 0),
                 *result_window_filters,
                 *category_filters,

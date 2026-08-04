@@ -75,7 +75,12 @@ class ProjectSimilaritySearchResponse(BaseModel):
     target_embedding_status: Literal["ready", "pending", "stale"] = "ready"
     target_embedding_updated_at: Optional[datetime] = None
     target_embedding_refresh_required: bool = False
-    search_mode: Literal["read_model", "postgres_vector", "python_fallback"]
+    projection_status: Literal["ready", "missing", "stale", "not_applicable"] = (
+        "not_applicable"
+    )
+    search_mode: Literal[
+        "read_model", "stored_missing", "postgres_vector", "python_fallback"
+    ]
     same_category_only: bool
     min_similarity: float = Field(ge=0.0, le=1.0)
     result_count: int

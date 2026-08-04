@@ -12,16 +12,20 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.time import utc_now
 from app.core.vector import PGVECTOR_SQLALCHEMY_AVAILABLE
-from app.models.models import Project
+from app.models.models import (
+    Project,
+)
 from app.schemas.project import ProjectSimilaritySearchResponse, SimilarProjectItem
 from app.schemas.similarity_runtime import (
     InferenceOutboxProcessResult,
+    SimilarityProjectionBackfillResult,
     SimilarityProjectionResult,
     SimilaritySearchExecution,
     SimilaritySearchPreparation,
 )
 from app.services.classifier import NoticeClassifierService
 from app.services.inference_outbox import InferenceOutboxService
+from app.services.project_embedding_batch import ProjectEmbeddingBatchMixin
 from app.services.project_similarity_constants import (
     FALLBACK_EMBEDDING_MODEL,
     PROJECT_VECTOR_DIMENSIONS,
@@ -31,9 +35,12 @@ from app.services.project_similarity_schema import (
     ensure_project_vector_schema as ensure_project_vector_schema,
 )
 from app.services.similarity_read_model import ProjectSimilarityReadModelService
+from app.services.similarity_projection_backfill import (
+    stage_active_similarity_projection_backfill,
+)
 
 
-class ProjectSimilarityService:
+class ProjectSimilarityService(ProjectEmbeddingBatchMixin):
     """Persist project embeddings and query similar projects."""
 
     def __init__(self) -> None:
@@ -91,74 +98,6 @@ class ProjectSimilarityService:
         if touched:
             db.flush()
 
-    def refresh_project_embedding_details(
-        self,
-        db: Session,
-        project: Project,
-        *,
-        force: bool = False,
-    ) -> dict[str, Any]:
-        """Refresh one project's embedding and return API-ready status metadata."""
-        _, model_name = self.refresh_project_embedding(db, project, force=force)
-        db.flush()
-        result = self._serialize_embedding_state(db, project, model_name)
-        outbox_event = self._outbox.append_embedding_ready_event(db, project)
-        if outbox_event is not None:
-            db.flush()
-            result["outbox_event_id"] = int(outbox_event.id)
-        return result
-
-    def rebuild_project_embeddings(
-        self,
-        db: Session,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-        category: str | None = None,
-        project_status: str | None = None,
-        force: bool = False,
-        project_ids: Iterable[int] | None = None,
-    ) -> dict[str, Any]:
-        """Refresh stored embeddings for a filtered batch of projects.
-
-        When ``project_ids`` is supplied the rebuild targets exactly those rows
-        (used by the async backfill that follows deferred-embedding crawl
-        persistence); ``offset``/``limit`` paging is then bypassed. This is a
-        pure row-selection filter and does not change embedding computation.
-        """
-        query = db.query(Project)
-
-        normalized_ids = sorted({int(pid) for pid in project_ids}) if project_ids is not None else None
-        if normalized_ids is not None:
-            query = query.filter(Project.id.in_(normalized_ids))
-
-        if category:
-            query = query.filter(Project.category == category)
-
-        if project_status:
-            query = query.filter(Project.status == project_status)
-
-        query = query.order_by(Project.id.asc())
-        if normalized_ids is None:
-            query = query.offset(offset).limit(limit)
-
-        projects = query.all()
-        results = [self.refresh_project_embedding_details(db, project, force=force) for project in projects]
-
-        return {
-            "processed_count": len(results),
-            "limit": limit,
-            "offset": offset,
-            "category": category,
-            "project_status": project_status,
-            "force": force,
-            "requested_project_ids": normalized_ids,
-            "vector_storage_enabled": self._can_persist_pgvector(db),
-            "project_ids": [result["project_id"] for result in results],
-            "outbox_event_ids": [int(result["outbox_event_id"]) for result in results if result.get("outbox_event_id") is not None],
-            "results": results,
-        }
-
     def find_similar_projects(
         self,
         db: Session,
@@ -199,6 +138,7 @@ class ProjectSimilarityService:
             target_embedding_status=prepared.status,
             target_embedding_updated_at=prepared.updated_at,
             target_embedding_refresh_required=prepared.refresh_required,
+            projection_status="not_applicable",
             search_mode=executed.search_mode,
             same_category_only=same_category_only,
             min_similarity=round(min_similarity, 4),
@@ -228,6 +168,17 @@ class ProjectSimilarityService:
     def process_inference_outbox_events(self, db: Session, *, limit: int = 50) -> InferenceOutboxProcessResult:
         """Process recoverable similarity-projection events."""
         return self._outbox.process(db, limit=limit)
+
+    def stage_active_similarity_projection_backfill(
+        self,
+        db: Session,
+        *,
+        limit: int = 100,
+    ) -> SimilarityProjectionBackfillResult:
+        """Stage bounded durable work for active targets with no current projection."""
+        return stage_active_similarity_projection_backfill(
+            db, read_model=self._read_model, outbox=self._outbox, limit=limit
+        )
 
     def _prepare_similarity_search(
         self,
@@ -270,6 +221,10 @@ class ProjectSimilarityService:
         read_only: bool,
         stored_only: bool,
     ) -> SimilaritySearchExecution:
+        if stored_only:
+            raise RuntimeError(
+                "stored-only similarity search reached inline execution"
+            )
         if self._can_query_pgvector(db):
             raw = self._search_with_postgres(
                 db,

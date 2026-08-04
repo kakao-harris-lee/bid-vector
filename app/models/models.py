@@ -11,6 +11,15 @@ from app.models.similarity import (
     ProjectSimilaritySnapshot as ProjectSimilaritySnapshot,
 )
 from app.models.operations import SimilarProjectsRefreshOperation as SimilarProjectsRefreshOperation
+from app.models.pipeline import (
+    CrawlJob as CrawlJob,
+    Notification as Notification,
+    NotificationDeliveryOutbox as NotificationDeliveryOutbox,
+    OperatorStrategyRun as OperatorStrategyRun,
+    OperatorStrategyRunItem as OperatorStrategyRunItem,
+    TenderResult as TenderResult,
+    TenderResultEvent as TenderResultEvent,
+)
 
 
 class User(Base):
@@ -244,32 +253,6 @@ class OperatorNotificationChannel(Base):
     operator = relationship("User", back_populates="notification_channels")
 
 
-class OperatorStrategyRun(Base):
-    """Execution history for manual or scheduled operator strategy monitoring runs."""
-    __tablename__ = "operator_strategy_runs"
-
-    id = Column(Integer, primary_key=True)
-    operator_id = Column(Integer, ForeignKey("users.id"), index=True)
-    task_id = Column(String(100), nullable=True, index=True)
-    trigger_source = Column(String(50), default="manual_sync", index=True)
-    status = Column(String(50), default="queued", index=True)
-    high_priority_only = Column(Boolean, default=True)
-    limit_applied = Column(Integer, default=10)
-    request_payload = Column(Text, default="{}")
-    result_payload = Column(Text, default="{}")
-    evaluated_project_count = Column(Integer, default=0)
-    selected_candidate_count = Column(Integer, default=0)
-    persisted_candidate_count = Column(Integer, default=0)
-    notification_count = Column(Integer, default=0)
-    error_message = Column(Text, nullable=True)
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
-
-    operator = relationship("User", back_populates="strategy_runs")
-
-
 class HistoricalData(Base):
     """Historical tender/opening data for prediction"""
     __tablename__ = "historical_data"
@@ -322,6 +305,9 @@ class BidDecisionRecord(Base):
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"), index=True)
     operator_id = Column(Integer, ForeignKey("users.id"), index=True)
+    monitor_run_id = Column(
+        Integer, ForeignKey("operator_strategy_runs.id"), nullable=True, index=True
+    )
     pursue_bid = Column(Boolean, default=False)
     action = Column(String(50), default="skip")
     decision_status = Column(String(50), default="planned")
@@ -422,35 +408,6 @@ class Allocation(Base):
     user = relationship("User", back_populates="allocations")
 
 
-class TenderResult(Base):
-    """Actual tender result snapshot"""
-    __tablename__ = "tender_results"
-
-    id = Column(Integer, primary_key=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), index=True)
-    winning_company = Column(String(255))
-    winning_amount = Column(Float, default=0.0)
-    winning_rate = Column(Float, default=0.0)
-    result_status = Column(String(50), default="pending")
-    announced_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-
-    # 개찰 1위(잠정) 스냅샷 — 낙찰 확정(winning_*)과 구분되는 개찰 직후 신호.
-    # 수의계약이면 1위=사실상 확정이나 적격심사는 1위부터 캐스케이드라 1위≠낙찰
-    # 가능(§2 정직 명세). 사업자번호는 제로패딩 보존 문자열(#210 교훈 준용 — KONEPS
-    # 식별자 int 변환 금지). opening_checked_at 은 수집 패스의 recheck backoff
-    # 마커(NULL=미조회).
-    opening_rank1_company = Column(String(255), nullable=True)
-    opening_rank1_business_no = Column(String(20), nullable=True)
-    opening_rank1_amount = Column(Float, nullable=True)
-    opening_rank1_rate = Column(Float, nullable=True)
-    opening_participant_count = Column(Integer, nullable=True)
-    opened_at = Column(DateTime(timezone=True), nullable=True)
-    opening_checked_at = Column(DateTime(timezone=True), nullable=True)
-
-    project = relationship("Project", back_populates="tender_results")
-
-
 class PaperBidRun(Base):
     """Backtest or forward paper-bidding execution run."""
     __tablename__ = "paper_bid_runs"
@@ -549,27 +506,6 @@ class PaperBidSettlement(Base):
     tender_result = relationship("TenderResult")
 
 
-class CrawlJob(Base):
-    """Crawler execution history"""
-    __tablename__ = "crawl_jobs"
-
-    id = Column(Integer, primary_key=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
-    source = Column(String(100), default="koneps")
-    target_date = Column(String(20), nullable=True)
-    status = Column(String(50), default="queued")
-    result_count = Column(Integer, default=0)
-    error_message = Column(Text, nullable=True)
-    # Celery task id that owns this row. Used as an idempotency key so a
-    # redelivered task (acks_late + time-limit SIGKILL) reuses its existing
-    # running row instead of spawning an orphan ``running`` crawl job.
-    celery_task_id = Column(String(155), nullable=True, index=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-
-    project = relationship("Project", back_populates="crawl_jobs")
-
-
 class SmokeTestRun(Base):
     """Persisted KONEPS + Telegram end-to-end smoke test cycle.
 
@@ -604,22 +540,6 @@ class DocumentAnalysis(Base):
     estimated_effort = Column(Float)
     risks = Column(Text)  # JSON
     created_at = Column(DateTime(timezone=True), default=utc_now)
-
-
-class Notification(Base):
-    """Notification model"""
-    __tablename__ = "notifications"
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    title = Column(String(255))
-    message = Column(Text)
-    type = Column(String(50))  # bid_update, recommendation, alert
-    is_read = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), default=utc_now)
-    read_at = Column(DateTime(timezone=True), nullable=True)
-
-    user = relationship("User", back_populates="notifications")
 
 
 class Analytics(Base):

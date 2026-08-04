@@ -110,3 +110,4 @@ class _MonitoringBase:
         self.decision_service = BidDecisionService()
         self.notification_service = OperatorNotificationService()
         self._session_factory = session_factory
+        self._projection_deferrals: list[dict[str, int | str]] = []

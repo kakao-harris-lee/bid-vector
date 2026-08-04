@@ -89,6 +89,13 @@ except ImportError:  # pragma: no cover - exercised in lightweight test environm
 
 from app.core.config import settings
 from app.core.constants import PRICE_SCENARIOS
+from app.tasks.pipeline_schedules import (
+    INFERENCE_OUTBOX_PROCESS_TASK_NAME as INFERENCE_OUTBOX_PROCESS_TASK_NAME,
+    NOTIFICATION_DELIVERY_OUTBOX_TASK_NAME as NOTIFICATION_DELIVERY_OUTBOX_TASK_NAME,
+    SIMILARITY_PROJECTION_BACKFILL_TASK_NAME as SIMILARITY_PROJECTION_BACKFILL_TASK_NAME,
+    build_pipeline_beat_schedule,
+    build_pipeline_task_routes,
+)
 
 OPERATOR_STRATEGY_MONITOR_TASK_NAME = "jobs.monitor_operator_strategy"
 PAPER_BIDDING_FORWARD_TASK_NAME = "jobs.run_forward_paper_bidding"
@@ -109,7 +116,6 @@ TELEGRAM_POLLING_TASK_NAME = "jobs.poll_telegram_updates"
 RECONCILE_STALE_TASK_RUNS_TASK_NAME = "jobs.reconcile_stale_task_runs"
 NOTIFY_AWARD_RESULTS_TASK_NAME = "jobs.notify_award_results"
 PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME = "jobs.recompute_preview_snapshot"
-INFERENCE_OUTBOX_PROCESS_TASK_NAME = "jobs.process_inference_outbox"
 RUNTIME_PERFORMANCE_PROBE_TASK_NAME = "jobs.runtime_performance_probe"
 
 
@@ -132,7 +138,7 @@ def build_task_routes() -> dict[str, dict[str, str]]:
         NOTIFY_AWARD_RESULTS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         RECONCILE_STALE_TASK_RUNS_TASK_NAME: {"queue": settings.CELERY_OPS_QUEUE},
         PREVIEW_SNAPSHOT_RECOMPUTE_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
-        INFERENCE_OUTBOX_PROCESS_TASK_NAME: {"queue": settings.CELERY_ML_INFERENCE_QUEUE},
+        **build_pipeline_task_routes(),
         PROJECT_EMBEDDING_REBUILD_TASK_NAME: {"queue": settings.CELERY_ML_BACKFILL_QUEUE},
         PRICE_PREDICTOR_TRAINING_TASK_NAME: {"queue": settings.CELERY_ML_TRAINING_QUEUE},
         DECISION_EXPERIMENT_REEVALUATION_TASK_NAME: {"queue": settings.CELERY_ML_REEVALUATION_QUEUE},
@@ -604,7 +610,7 @@ def build_celery_runtime_config() -> dict[str, object]:
     eager_mode = settings.uses_in_memory_celery
 
     config: dict[str, object] = {
-        "imports": ("app.tasks.jobs", "app.tasks.inference_jobs", "app.tasks.performance_probe"),
+        "imports": ("app.tasks.jobs", "app.tasks.inference_jobs", "app.tasks.performance_probe", "app.tasks.pipeline_delivery_jobs"),
         "task_serializer": "json",
         "accept_content": ["json"],
         "result_serializer": "json",
@@ -643,11 +649,7 @@ def build_celery_runtime_config() -> dict[str, object]:
             **build_price_predictor_training_beat_schedule(),
             **build_telegram_polling_beat_schedule(),
             **build_stale_task_reconciler_beat_schedule(),
-            **({"inference_outbox_periodic": {
-                "task": INFERENCE_OUTBOX_PROCESS_TASK_NAME,
-                "schedule": float(max(1, settings.INFERENCE_OUTBOX_INTERVAL_SECONDS)),
-                "kwargs": {"limit": max(1, settings.INFERENCE_OUTBOX_BATCH_LIMIT)},
-            }} if settings.INFERENCE_OUTBOX_SCHEDULE_ENABLED else {}),
+            **build_pipeline_beat_schedule(),
         },
         # Resolved lazily by celery from the string path to avoid a circular
         # import; auto-recovers from a corrupt shelve/dbm schedule db instead

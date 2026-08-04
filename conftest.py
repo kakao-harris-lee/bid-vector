@@ -49,8 +49,10 @@ os.environ["OPERATOR_STRATEGY_MONITOR_SCHEDULE_ENABLED"] = "false"
 os.environ["OPERATOR_STRATEGY_MONITOR_RUN_ON_STARTUP"] = "false"
 os.environ["PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED"] = "false"
 os.environ["PAPER_BIDDING_FORWARD_RUN_ON_STARTUP"] = "false"
+os.environ["TELEGRAM_DECISION_DAILY_CAP"] = "0"
+os.environ["TELEGRAM_DECISION_RENOTIFY_COOLDOWN_HOURS"] = "0"
 
-from app.core.database import Base
+from app.core.database import Base  # noqa: E402 - test env must precede app import
 
 
 @pytest.fixture

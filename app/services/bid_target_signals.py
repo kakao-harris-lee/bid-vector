@@ -69,6 +69,7 @@ def resolve_bid_target_signals(
         )
         .join(Project, Project.id == TenderResult.project_id)
         .filter(
+            TenderResult.is_current.is_(True),
             Project.issuing_agency == agency_name,
             # Gate on the NORMALIZED value so mixed-scale garbage (e.g. a stray
             # 200.0 → 2.0, or a 0.3 fraction) never inflates the dispersion.

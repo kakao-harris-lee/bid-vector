@@ -1,9 +1,7 @@
 """Background jobs.
 
-Celery task registry. Each ``@celery_app.task`` entry is defined here so its
-registration name is unchanged; heavier task bodies and pure helpers live in
-sibling ``app/tasks/`` modules (§4.5 size decomposition) and are delegated to
-from thin shells. The deferred-backfill enqueue helpers and ``_enqueue_ml_task``
+Celery task registry with thin shells delegating to sibling task modules. The
+deferred-backfill enqueue helpers and ``_enqueue_ml_task``
 stay in THIS module because tests patch them here
 (``jobs._enqueue_ml_task`` / ``jobs._enqueue_deferred_embedding_backfill``) and
 rely on them resolving each other within this module namespace.
@@ -51,7 +49,10 @@ from app.tasks.celery_app import (
     SYNTHETIC_BACKTEST_RUN_TASK_NAME,
     celery_app,
 )
-from app.tasks.collection_jobs import run_koneps_collection_job
+from app.tasks.collection_jobs import (
+    run_koneps_collection_job,
+    run_singleton_koneps_collection_job,
+)
 from app.tasks.dispatch import MlTaskDispatch, enqueue_ml_task
 from app.tasks.evidence_jobs import (
     _write_g2_daily_evidence_draft,
@@ -113,12 +114,16 @@ def collect_koneps_notices(
     same field set), the body lives in ``app.tasks.collection_jobs`` and the deferred
     backfill enqueue helpers (patched here in tests) are injected.
     """
-    return run_koneps_collection_job(
+    request = CrawlTaskRequest.model_validate(request_payload or {})
+    return run_singleton_koneps_collection_job(
         self,
-        request=CrawlTaskRequest.model_validate(request_payload or {}),
+        request=request,
         crawl_job_id=crawl_job_id,
         notify_inference_outbox_committed=notify_inference_outbox_committed,
-        enqueue_deferred_reserve_detail_backfill=_enqueue_deferred_reserve_detail_backfill,
+        enqueue_deferred_reserve_detail_backfill=(
+            _enqueue_deferred_reserve_detail_backfill
+        ),
+        run_job=run_koneps_collection_job,
     )
 
 

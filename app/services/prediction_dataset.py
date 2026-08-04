@@ -601,7 +601,10 @@ class PredictionDatasetService:
 
         results = (
             db.query(TenderResult)
-            .filter(TenderResult.project_id.in_(sorted(project_ids)))
+            .filter(
+                TenderResult.project_id.in_(sorted(project_ids)),
+                TenderResult.is_current.is_(True),
+            )
             .order_by(TenderResult.project_id.asc(), TenderResult.id.desc())
             .all()
         )

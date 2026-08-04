@@ -56,6 +56,7 @@ def test_build_celery_runtime_config_registers_tasks_and_worker_defaults(monkeyp
         "app.tasks.jobs",
         "app.tasks.inference_jobs",
         "app.tasks.performance_probe",
+        "app.tasks.pipeline_delivery_jobs",
     )
     assert config["task_default_queue"] == "bid_vector_ops"
     assert config["task_routes"]["jobs.collect_koneps_notices"]["queue"] == settings.CELERY_OPS_QUEUE

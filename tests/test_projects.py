@@ -416,7 +416,10 @@ def test_get_similar_projects_stale_analysis_is_read_only(client, test_db, monke
 
 def test_get_similar_projects_returns_ranked_matches(client):
     """Similar project endpoint should rank the closest notices first."""
-    from app.tasks.jobs import rebuild_project_embeddings as rebuild_project_embeddings_task
+    from app.tasks.jobs import (
+        process_inference_outbox,
+        rebuild_project_embeddings as rebuild_project_embeddings_task,
+    )
 
     target = client.post(
         "/api/v1/projects/",
@@ -470,6 +473,7 @@ def test_get_similar_projects_returns_ranked_matches(client):
             other_category["id"],
         ]
     )
+    process_inference_outbox.run(limit=10)
 
     response = client.get(f"/api/v1/projects/{target['id']}/similar")
 

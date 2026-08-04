@@ -289,6 +289,12 @@ def test_preview_scan_leaves_session_clean_and_releases_rows(client, test_db):
     test_db.commit()
     test_db.refresh(project)
     project_id = project.id
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, project, force=True)
+    service.recompute_similarity_read_model(
+        test_db, project_id=project_id, min_similarity=0.15
+    )
+    test_db.commit()
 
     payload = StrategyMonitoringService().preview_candidates(
         test_db, limit=10, high_priority_only=False
@@ -360,7 +366,7 @@ def test_preview_scan_uses_ready_similarity_materialization_without_encoding(
         test_db,
         project_id=target.id,
         limit=5,
-        min_similarity=0.0,
+        min_similarity=0.15,
     )
     test_db.commit()
     assert projection.status == "completed"

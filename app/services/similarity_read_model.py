@@ -100,32 +100,17 @@ class ProjectSimilarityReadModelService:
         response = None
         if state.status != "ready":
             response = self._build_response(
-                db,
                 project,
                 state,
                 [],
                 min_similarity,
                 same_category_only,
-                "stored_missing",
+                projection_status="missing",
             )
         else:
-            items = self.load(
-                db,
-                project,
-                limit=limit,
-                min_similarity=min_similarity,
-                same_category_only=same_category_only,
+            response = self._projected_search_response(
+                db, project, state, limit, min_similarity, same_category_only
             )
-            if items is not None:
-                response = self._build_response(
-                    db,
-                    project,
-                    state,
-                    items,
-                    min_similarity,
-                    same_category_only,
-                    "read_model",
-                )
         return SimilaritySearchPreparation(
             vector=state.vector,
             model=state.model,
@@ -133,6 +118,37 @@ class ProjectSimilarityReadModelService:
             updated_at=state.updated_at,
             refresh_required=state.refresh_required,
             response=response,
+        )
+
+    def _projected_search_response(
+        self, db, project, state, limit, min_similarity, same_category_only
+    ):
+        snapshot = self._load_snapshot(db, project, min_similarity, same_category_only)
+        projection_status = (
+            "missing"
+            if snapshot is None
+            else "ready"
+            if self._snapshot_is_current(db, snapshot)
+            else "stale"
+        )
+        items = None
+        if projection_status == "ready":
+            items = self.load(
+                db,
+                project,
+                limit=limit,
+                min_similarity=min_similarity,
+                same_category_only=same_category_only,
+            )
+            if items is None:
+                projection_status = "stale"
+        return self._build_response(
+            project,
+            state,
+            items or [],
+            min_similarity,
+            same_category_only,
+            projection_status=projection_status,
         )
 
     def recompute(
@@ -379,19 +395,14 @@ class ProjectSimilarityReadModelService:
 
     def _build_response(
         self,
-        db: Session,
         project: Project,
         state: StoredEmbeddingState,
         items: list[SimilarProjectItem],
         min_similarity: float,
         same_category_only: bool,
-        search_mode: str,
+        *,
+        projection_status: str,
     ) -> ProjectSimilaritySearchResponse:
-        fallback = (
-            "postgres_vector"
-            if self._similarity._can_query_pgvector(db)
-            else "python_fallback"
-        )
         return ProjectSimilaritySearchResponse(
             target_project_id=int(project.id),
             target_project_title=project.title,
@@ -399,7 +410,10 @@ class ProjectSimilarityReadModelService:
             target_embedding_status=state.status,
             target_embedding_updated_at=state.updated_at,
             target_embedding_refresh_required=state.refresh_required,
-            search_mode=fallback if search_mode == "stored_missing" else "read_model",
+            projection_status=projection_status,
+            search_mode=(
+                "read_model" if projection_status == "ready" else "stored_missing"
+            ),
             same_category_only=same_category_only,
             min_similarity=round(min_similarity, 4),
             result_count=len(items),

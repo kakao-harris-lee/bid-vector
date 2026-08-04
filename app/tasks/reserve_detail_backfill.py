@@ -139,7 +139,7 @@ def run_scsbid_reserve_detail_backfill_job(
 
             db.commit()
             _log_reserve_detail_backfill_errors(requested=plan.requested, stats=stats)
-            continued = enqueue_continuation(
+            continued = bool(plan.rest) and enqueue_continuation(
                 ScsbidReserveDetailBackfillRequest(notices=plan.rest)
             )
             return _reserve_detail_backfill_result(

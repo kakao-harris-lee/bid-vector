@@ -13,6 +13,7 @@ from app.core.single_user import (
     ensure_operator_strategy,
     ensure_operator_strategy_for,
 )
+from app.core.config import settings
 from app.core.time import utc_now
 from app.models.models import OperatorStrategy, OperatorStrategyRun, User
 from app.schemas.schemas import OperatorStrategyMonitorRequest
@@ -56,6 +57,8 @@ class _RunLifecycleMixin(_MonitoringBase):
             high_priority_only=resolved_high_priority_only,
             limit_applied=resolved_limit,
             request_payload=request.model_dump_json(),
+            release_sha=str(settings.APP_RELEASE_SHA or "").strip() or None,
+            release_tag=str(settings.APP_RELEASE_TAG or "").strip() or None,
             started_at=utc_now() if status == "running" else None,
         )
         db.add(monitor_run)
@@ -170,6 +173,8 @@ class _RunLifecycleMixin(_MonitoringBase):
             "current_operator_username": current_operator_username,
             "task_id": monitor_run.task_id,
             "trigger_source": str(monitor_run.trigger_source),
+            "release_sha": monitor_run.release_sha,
+            "release_tag": monitor_run.release_tag,
             "status": str(monitor_run.status),
             "high_priority_only": bool(monitor_run.high_priority_only),
             "limit_applied": int(monitor_run.limit_applied or self.DEFAULT_LIMIT),
@@ -177,6 +182,9 @@ class _RunLifecycleMixin(_MonitoringBase):
             "selected_candidate_count": int(monitor_run.selected_candidate_count or 0),
             "persisted_candidate_count": int(monitor_run.persisted_candidate_count or 0),
             "notification_count": int(monitor_run.notification_count or 0),
+            "projection_not_ready_count": int(
+                monitor_run.projection_not_ready_count or 0
+            ),
             "error_message": monitor_run.error_message,
             "created_at": monitor_run.created_at,
             "started_at": monitor_run.started_at,
@@ -232,6 +240,8 @@ class _RunLifecycleMixin(_MonitoringBase):
         monitor_run.high_priority_only = resolved_high_priority_only
         monitor_run.limit_applied = resolved_limit
         monitor_run.request_payload = request.model_dump_json()
+        monitor_run.release_sha = str(settings.APP_RELEASE_SHA or "").strip() or None
+        monitor_run.release_tag = str(settings.APP_RELEASE_TAG or "").strip() or None
         monitor_run.error_message = None
         monitor_run.started_at = monitor_run.started_at or utc_now()
         monitor_run.completed_at = None
@@ -267,6 +277,9 @@ class _RunLifecycleMixin(_MonitoringBase):
         monitor_run.selected_candidate_count = int(response.get("selected_candidate_count") or 0)
         monitor_run.persisted_candidate_count = int(response.get("persisted_candidate_count") or 0)
         monitor_run.notification_count = int(response.get("notification_count") or 0)
+        monitor_run.projection_not_ready_count = int(
+            response.get("projection_not_ready_count") or 0
+        )
         monitor_run.result_payload = self._dump_json(response)
         monitor_run.error_message = None
         monitor_run.completed_at = utc_now()

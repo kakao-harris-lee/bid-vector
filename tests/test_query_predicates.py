@@ -85,7 +85,8 @@ def test_open_projects_composes_into_a_select_where():
 def test_settled_with_amount_requires_positive_amount():
     sql = _sql(settled_with_amount())
     assert sql == (
-        "tender_results.winning_amount IS NOT NULL "
+        "tender_results.is_current IS true "
+        "AND tender_results.winning_amount IS NOT NULL "
         "AND tender_results.winning_amount > 0"
     )
 
@@ -102,8 +103,9 @@ def test_settled_with_amount_does_not_reference_winning_rate():
 def test_settled_any_signal_accepts_amount_or_rate():
     sql = _sql(settled_any_signal())
     assert sql == (
-        "tender_results.winning_amount > 0 "
-        "OR tender_results.winning_rate > 0"
+        "tender_results.is_current IS true "
+        "AND (tender_results.winning_amount > 0 "
+        "OR tender_results.winning_rate > 0)"
     )
 
 

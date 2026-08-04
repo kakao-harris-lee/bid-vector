@@ -6,6 +6,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.domain.reliable_base import get_reliable_base
+
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -218,13 +220,19 @@ class BacktestCutoffService:
 
     def serialize_historical_record(self, record: HistoricalData) -> dict[str, Any]:
         """Convert an ORM row into the predictor's lightweight record shape."""
+        reliable_base = get_reliable_base(
+            record.base_amount,
+            record.base_amount_basis,
+            record.base_amount_estimated,
+        )
         return {
             "historical_data_id": int(record.id),
             "project_id": int(record.project_id) if record.project_id is not None else None,
             "notice_number": record.notice_number,
             "category": record.category,
             "agency_name": record.agency_name,
-            "base_amount": float(record.base_amount or 0.0),
+            "base_amount": float(reliable_base.value or 0.0),
+            "base_amount_source": reliable_base.source.value,
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": float(record.bid_rate or 0.0),
             "reserve_prices": coerce_sequence(record.reserve_prices),

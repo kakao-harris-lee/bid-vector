@@ -159,18 +159,35 @@ class _CandidateCollectionMixin(_MonitoringBase):
                 break
 
             evaluated_project_count += 1
-            analysis = self._analyze_project(
-                db,
-                project,
-                operator=operator,
-                max_active_bids=max_active_bids,
-                current_workload_score=current_workload_score,
-                same_category_only=same_category_only,
-                similar_limit=similar_limit,
-                min_similarity=min_similarity,
-            )
-
             try:
+                analysis = self._analyze_project(
+                    db,
+                    project,
+                    operator=operator,
+                    max_active_bids=max_active_bids,
+                    current_workload_score=current_workload_score,
+                    same_category_only=same_category_only,
+                    similar_limit=similar_limit,
+                    min_similarity=min_similarity,
+                )
+                similarity = analysis.get("similar_projects") or {}
+                if similarity and similarity.get("search_mode") != "read_model":
+                    self._projection_deferrals.append(
+                        {
+                            "project_id": int(project.id),
+                            "projection_status": str(
+                                similarity.get("projection_status") or "missing"
+                            ),
+                        }
+                    )
+                    logger.warning(
+                        "monitor candidate deferred: similarity projection not ready "
+                        "(project_id=%s projection_status=%s)",
+                        project.id,
+                        similarity.get("projection_status") or "missing",
+                    )
+                    continue
+
                 if float(analysis["matched_score"]) < float(strategy.minimum_match_score or 0.0):
                     continue
                 if float(analysis["probability_score"]) < float(strategy.minimum_probability_score or 0.0):

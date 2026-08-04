@@ -41,6 +41,7 @@ from app.core.time import ensure_utc, to_kst, utc_now
 from app.models.models import BidDecisionRecord, Project, TenderResult, User
 from app.services.award_verification import strip_notice_suffix
 from app.services.koneps import http_client, openapi, parsing
+from app.services.tender_result_events import stage_tender_result_event
 
 # A ``FetchOpeningResults`` takes ``(operation, inqry_bgn_dt, inqry_end_dt)`` —
 # YYYYMMDDHHMM date-window tokens — and returns the raw 개찰결과 목록 rows.
@@ -259,7 +260,12 @@ class OpeningResultCollectionService:
     ) -> bool:
         """True if opening was already collected or checked within the backoff."""
         results = (
-            db.query(TenderResult).filter(TenderResult.project_id == project.id).all()
+            db.query(TenderResult)
+            .filter(
+                TenderResult.project_id == project.id,
+                TenderResult.is_current.is_(True),
+            )
+            .all()
         )
         for result in results:
             if result.opening_rank1_company:
@@ -314,18 +320,10 @@ class OpeningResultCollectionService:
         ``winning_*``. An unmatched candidate is only stamped so the backoff
         applies; a matched one also records the 1위 snapshot.
         """
-        tender = (
-            db.query(TenderResult)
-            .filter(TenderResult.project_id == project.id)
-            .order_by(TenderResult.id.desc())
-            .first()
-        )
-        if tender is None:
-            tender = TenderResult(project_id=project.id)
-            db.add(tender)
-
+        tender = self._current_tender(db, project)
         tender.opening_checked_at = stamp
         if summary is None:
+            self._stage_opening_event(db, project, tender, stamp, matched=False)
             return
         rank1 = summary.get("rank1")
         if rank1 is not None:
@@ -335,3 +333,48 @@ class OpeningResultCollectionService:
             tender.opening_rank1_rate = rank1.get("rate")
         tender.opening_participant_count = summary.get("participant_count")
         tender.opened_at = summary.get("opened_at")
+        self._stage_opening_event(db, project, tender, stamp, matched=True)
+
+    def _current_tender(self, db: Session, project: Project) -> TenderResult:
+        tender = (
+            db.query(TenderResult)
+            .filter(
+                TenderResult.project_id == project.id,
+                TenderResult.is_current.is_(True),
+            )
+            .order_by(TenderResult.id.desc())
+            .first()
+        )
+        if tender is None:
+            tender = TenderResult(project_id=project.id, is_current=True)
+            db.add(tender)
+            db.flush()
+        return tender
+
+    def _stage_opening_event(
+        self,
+        db: Session,
+        project: Project,
+        tender: TenderResult,
+        stamp: datetime,
+        *,
+        matched: bool,
+    ) -> None:
+        payload = {"matched": matched, "checked_at": stamp.isoformat()}
+        if matched:
+            payload.update(
+                opening_rank1_company=tender.opening_rank1_company,
+                opening_rank1_business_no=tender.opening_rank1_business_no,
+                opening_rank1_amount=tender.opening_rank1_amount,
+                opening_rank1_rate=tender.opening_rank1_rate,
+                opening_participant_count=tender.opening_participant_count,
+                opened_at=tender.opened_at.isoformat() if tender.opened_at else None,
+            )
+        stage_tender_result_event(
+            db,
+            tender_result=tender,
+            project_id=int(project.id),
+            payload=payload,
+            observed_at=(tender.opened_at or stamp) if matched else stamp,
+            event_type="opening_observation" if matched else "opening_check",
+        )

@@ -16,8 +16,21 @@ from app.models.models import (
 )
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.notifications.telegram import TelegramNotificationService
+from app.services.project_similarity import ProjectSimilarityService
 from app.services.strategy_scheduler import OperatorStrategyScheduler
 from app.tasks.celery_app import build_operator_strategy_monitor_beat_schedule
+
+
+def _materialize_similarity(test_db, *projects: Project) -> None:
+    service = ProjectSimilarityService()
+    for project in projects:
+        service.refresh_project_embedding_details(test_db, project, force=True)
+    test_db.flush()
+    for project in projects:
+        service.recompute_similarity_read_model(
+            test_db, project_id=project.id, min_similarity=0.15
+        )
+    test_db.commit()
 
 
 def test_get_operator_profile_bootstraps_single_operator(client):
@@ -210,6 +223,7 @@ def test_operator_strategy_candidates_filter_and_rank_projects(client, test_db, 
     test_db.add_all([matching_project, excluded_keyword_project, low_budget_project, wrong_category_project])
     test_db.commit()
     test_db.refresh(matching_project)
+    _materialize_similarity(test_db, matching_project)
     # 전략 PUT 은 이제 스냅샷 재계산을 디스패치한다(§6.3): project 시드 전에 빈
     # 스냅샷을 선계산하므로, GET 이 시드 공고를 실제로 계산하도록 스냅샷을 비운다.
     test_db.query(OperatorPreviewSnapshot).delete()
@@ -299,6 +313,7 @@ def test_operator_strategy_candidates_include_re_notice_but_skip_cancelled_and_f
     )
     test_db.add_all([open_project, re_notice_project, failed_project, cancelled_project])
     test_db.commit()
+    _materialize_similarity(test_db, open_project, re_notice_project)
     # 전략 PUT 은 이제 스냅샷 재계산을 디스패치한다(§6.3): project 시드 전에 빈
     # 스냅샷을 선계산하므로, GET 이 시드 공고를 실제로 계산하도록 스냅샷을 비운다.
     test_db.query(OperatorPreviewSnapshot).delete()
@@ -1001,8 +1016,8 @@ def test_operator_strategy_monitor_scheduled_scan_budget_reaches_late_matches(cl
     assert analyzed_project_ids == matching_ids
 
 
-def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(client, test_db, monkeypatch):
-    """High-priority monitoring runs should avoid review-only candidates and reuse active records on repeat runs."""
+def test_operator_strategy_monitor_high_priority_only_preserves_run_lineage(client, test_db, monkeypatch):
+    """Repeat runs append decisions while suppressing continuing notifications."""
     monkeypatch.setattr(settings, "CELERY_ALLOW_INLINE_ML_TASKS", True)
     client.put(
         "/api/v1/operator/profile",
@@ -1115,7 +1130,12 @@ def test_operator_strategy_monitor_high_priority_only_reuses_existing_records(cl
     assert second["results"][0]["is_new_candidate"] is False
     assert second["results"][0]["notification_created"] is False
     assert second["results"][0]["notification_id"] is None
-    assert test_db.query(BidDecisionRecord).count() == 1
+    records = test_db.query(BidDecisionRecord).order_by(BidDecisionRecord.id).all()
+    assert len(records) == 2
+    assert [record.monitor_run_id for record in records] == [
+        first["monitor_run_id"],
+        second["monitor_run_id"],
+    ]
     assert test_db.query(Notification).count() == 1
 
 

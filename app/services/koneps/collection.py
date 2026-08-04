@@ -117,6 +117,9 @@ def collect_openapi_items(
     result_message = ""
     key_variant = ""
     pages_fetched = 0
+    received_count = 0
+    duplicate_count = 0
+    parse_drop_count = 0
     # 관찰 전용 계약 관찰기(#227 배선): 토글 ON 일 때만 생성해 raw item 을 순수 검증기에
     # 흘려보내며 위반·미지 필드를 run 단위로 센다. OFF 면 None → 무비용. 수집 동작 불변.
     contract_observer = (
@@ -151,6 +154,7 @@ def collect_openapi_items(
 
         pages_fetched += 1
         raw_items = openapi.openapi_item_list(body)
+        received_count += len(raw_items)
         if not raw_items:
             break
 
@@ -170,9 +174,11 @@ def collect_openapi_items(
                 operation=operation,
             )
             if parsed_item is None:
+                parse_drop_count += 1
                 continue
             notice_number = str(parsed_item.notice_number)
             if notice_number in seen_notice_numbers:
+                duplicate_count += 1
                 continue
             seen_notice_numbers.add(notice_number)
             parsed_items.append(parsed_item)
@@ -204,6 +210,10 @@ def collect_openapi_items(
             logger.warning(contract_observer.summary_line())
         contract_observation = contract_observer.summary()
 
+    cap_skipped_count = max(
+        0,
+        received_count - len(parsed_items) - parse_drop_count - duplicate_count,
+    )
     return {
         "items": parsed_items,
         "metadata": {
@@ -221,6 +231,23 @@ def collect_openapi_items(
             "query_date": date_token,
             "query_type": "registration_datetime",
             "field_contract_observation": contract_observation,
+            "received_count": received_count,
+            "normalized_count": len(parsed_items),
+            "duplicate_count": duplicate_count,
+            "dropped_count": (
+                parse_drop_count + duplicate_count + cap_skipped_count
+            ),
+            "drop_reasons": {
+                "parse_rejected": parse_drop_count,
+                "duplicate_notice": duplicate_count,
+                "max_items_cap": cap_skipped_count,
+            },
+            "source_total_count": total_count,
+            "pages_fetched": pages_fetched,
+            "truncated": bool(
+                len(parsed_items) >= max_total
+                and (total_count == 0 or total_count > len(parsed_items))
+            ),
         },
     }
 

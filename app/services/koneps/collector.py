@@ -19,6 +19,7 @@ from app.schemas.schemas import CrawlRequest
 from app.services.koneps import (
     browser_crawl,
     collection,
+    collection_accounting,
     html_parsing,
     http_client,
     live_failure,
@@ -50,6 +51,7 @@ class _ScsbidSweepConfig:
     service_key: str
     page_size: int
     max_pages: int
+    max_items: int
     delay_seconds: float
     begin_token: str
     end_token: str
@@ -85,6 +87,12 @@ class _ScsbidSweepState:
     last_result_code: str = ""
     last_result_message: str = ""
     category_metadata: list[dict[str, Any]] = field(default_factory=list)
+    received_count: int = 0
+    missing_notice_count: int = 0
+    parse_drop_count: int = 0
+    duplicate_count: int = 0
+    cap_skipped_count: int = 0
+    truncated_by_max_items: bool = False
 
 
 class KonepsCollectorService:
@@ -221,6 +229,8 @@ class KonepsCollectorService:
                     "search_entry_url": settings.KONEPS_HOME_URL,
                 }
             )
+
+        collection_accounting.ensure_collection_accounting(response_metadata, items)
 
         return {
             "job_status": job_status,
@@ -429,6 +439,7 @@ class KonepsCollectorService:
             service_key=service_key,
             page_size=scsbid.page_size(request),
             max_pages=scsbid.max_pages(request),
+            max_items=max(1, int(request.max_items or 100)),
             delay_seconds=scsbid.request_delay_seconds(),
             begin_token=begin_token,
             end_token=end_token,
@@ -441,6 +452,8 @@ class KonepsCollectorService:
         state = _ScsbidSweepState()
 
         for category in categories:
+            if collection_accounting.scsbid_cap_reached(state, config, source_has_more=True):
+                break
             self._sweep_scsbid_category(
                 category, state=state, config=config, request=request
             )
@@ -491,6 +504,7 @@ class KonepsCollectorService:
                 "query_date_begin": config.begin_token,
                 "query_date_end": config.end_token,
                 "query_type": "award_registration_datetime",
+                **collection_accounting.scsbid_accounting(state, config),
             },
         }
 
@@ -523,11 +537,14 @@ class KonepsCollectorService:
                 config=config,
                 state=state,
             )
+            state.received_count += len(raw_items)
             if category_total_count is None:
                 category_total_count = parsing.safe_int(body.get("totalCount"))
             category_pages += 1
 
-            for raw_item in raw_items:
+            for index, raw_item in enumerate(raw_items):
+                if collection_accounting.scsbid_cap_reached(state, config, skipped_count=len(raw_items) - index):
+                    break
                 self._process_scsbid_raw_item(
                     raw_item,
                     state=state,
@@ -537,7 +554,9 @@ class KonepsCollectorService:
                     request=request,
                 )
 
-            # Stop conditions: empty/short page or totalCount window reached.
+            # Stop conditions: max-items cap, empty/short page, or totalCount window.
+            if collection_accounting.scsbid_cap_reached(state, config, source_has_more=category_total_count is not None and page_no * config.page_size < category_total_count):
+                break
             if not raw_items:
                 break
             if len(raw_items) < config.page_size:
@@ -632,8 +651,10 @@ class KonepsCollectorService:
         reserve_detail = ScsbidReserveDetail()
         notice_number = str(raw_item.get("bidNtceNo") or "").strip()
         if not notice_number:
+            state.missing_notice_count += 1
             return
         if notice_number in state.seen_notice_numbers:
+            state.duplicate_count += 1
             return
         if config.collect_reserve_detail:
             if notice_number in config.already_have_reserve:
@@ -713,9 +734,11 @@ class KonepsCollectorService:
             category=category,
         )
         if parsed_item is None:
+            state.parse_drop_count += 1
             return
         notice_number = str(parsed_item.notice_number)
         if notice_number in state.seen_notice_numbers:
+            state.duplicate_count += 1
             return
         state.seen_notice_numbers.add(notice_number)
         state.parsed_items.append(parsed_item)

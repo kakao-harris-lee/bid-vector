@@ -14,13 +14,72 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import task_session
+from app.core.database import engine, task_session
+from app.core.time import utc_now
 from app.models.models import CrawlJob
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps.collection import serialize_collect_payload
 from app.services.koneps.collector import KonepsCollectorService
+from app.services.task_singleton import AdvisorySingletonLease
 
 logger = logging.getLogger(__name__)
+
+
+def _record_duplicate_collection(self, request):
+    with task_session() as db:
+        row = CrawlJob(
+            source=request.source,
+            target_date=request.target_date,
+            category=request.category,
+            execution_mode=request.execution_mode,
+            max_items=request.max_items,
+            release_sha=str(settings.APP_RELEASE_SHA or "").strip() or None,
+            release_tag=str(settings.APP_RELEASE_TAG or "").strip() or None,
+            status="duplicate_suppressed",
+            result_count=0,
+            error_message="singleton lock busy; duplicate collection suppressed",
+            celery_task_id=str(getattr(self.request, "id", "") or "") or None,
+            completed_at=utc_now(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {
+            "job_status": "duplicate_suppressed",
+            "source": request.source,
+            "collected_count": 0,
+            "items": [],
+            "metadata": {
+                "crawl_job_id": int(row.id),
+                "reason": "singleton_lock_busy",
+            },
+        }
+
+
+def run_singleton_koneps_collection_job(
+    self,
+    *,
+    request,
+    crawl_job_id,
+    notify_inference_outbox_committed,
+    enqueue_deferred_reserve_detail_backfill,
+    run_job,
+):
+    lease = AdvisorySingletonLease(engine, "koneps_collection")
+    if not lease.acquire():
+        return _record_duplicate_collection(self, request)
+    try:
+        return run_job(
+            self,
+            request=request,
+            crawl_job_id=crawl_job_id,
+            notify_inference_outbox_committed=notify_inference_outbox_committed,
+            enqueue_deferred_reserve_detail_backfill=(
+                enqueue_deferred_reserve_detail_backfill
+            ),
+        )
+    finally:
+        lease.release()
 
 
 def run_koneps_collection_job(
@@ -48,6 +107,7 @@ def run_koneps_collection_job(
     created on every redelivery.
     """
     service = KonepsCollectorService()
+    request = service._normalize_request(request)
     with task_session(session_factory) as db:
         crawl_job: CrawlJob | None = None
         task_id = getattr(getattr(self, "request", None), "id", None)
@@ -78,8 +138,22 @@ def run_koneps_collection_job(
                 # row to running and ensure the task id is recorded.
                 crawl_job.source = request.source
                 crawl_job.target_date = request.target_date
+                crawl_job.category = request.category
+                crawl_job.execution_mode = request.execution_mode
+                crawl_job.max_items = request.max_items
+                crawl_job.release_sha = str(settings.APP_RELEASE_SHA or "").strip() or None
+                crawl_job.release_tag = str(settings.APP_RELEASE_TAG or "").strip() or None
                 crawl_job.status = "running"
                 crawl_job.result_count = 0
+                crawl_job.received_count = 0
+                crawl_job.normalized_count = 0
+                crawl_job.duplicate_count = 0
+                crawl_job.dropped_count = 0
+                crawl_job.persisted_count = 0
+                crawl_job.source_total_count = None
+                crawl_job.pages_fetched = None
+                crawl_job.truncated = False
+                crawl_job.drop_reasons = {}
                 crawl_job.error_message = None
                 crawl_job.completed_at = None
                 # Only stamp when empty: a manual re-queue / async retry may reuse an

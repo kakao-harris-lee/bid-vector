@@ -25,10 +25,16 @@ import json
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.time import utc_now
-from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
+from app.models.models import (
+    CrawlJob,
+    HistoricalData,
+    Project,
+)
 from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
 from app.services.base_amount_basis import (
@@ -38,6 +44,13 @@ from app.services.base_amount_basis import (
 from app.services.koneps import matching, parsing, scsbid
 from app.services.inference_outbox import InferenceOutboxService
 from app.services.realtime import realtime_event_manager
+from app.services.task_singleton import singleton_lock_id
+from app.services.tender_result_events import (
+    stage_tender_result_event as stage_tender_result_event,
+)
+from app.services.tender_result_persistence import (
+    resolve_tender_result as resolve_tender_result,
+)
 
 
 def notice_numbers_with_persisted_reserve(db: Session) -> set[str]:
@@ -407,74 +420,6 @@ def _update_project_agencies(
         project.demand_agency = str(demand_agency).strip()
 
 
-def resolve_tender_result(
-    db: Session,
-    *,
-    project_id: int | None,
-    facts: CrawlItemMetadataFacts,
-    crawl_job_status: str,
-) -> TenderResult:
-    """Upsert a tender result snapshot so repeated crawls do not duplicate the same award record.
-
-    ``facts`` 는 수집 item ``metadata`` 의 검증된 읽기 투영이다(원시 dict 릴레이 대체).
-    금액/시각의 관용 파싱은 여기서 기존과 동일하게 수행한다.
-    """
-    announced_at = parsing.coerce_datetime(facts.opening_announced_at)
-    winning_company = facts.winning_company or ""
-    winning_amount = facts.winning_amount or 0.0
-    winning_rate = facts.winning_rate or 0.0
-    result_status = facts.opening_status or crawl_job_status
-
-    tender_result: TenderResult | None = None
-    if project_id is not None:
-        candidates = (
-            db.query(TenderResult)
-            .filter(TenderResult.project_id == project_id)
-            .order_by(TenderResult.id.desc())
-            .all()
-        )
-        for candidate in candidates:
-            if announced_at is not None and candidate.announced_at == announced_at:
-                tender_result = candidate
-                break
-            if (
-                candidate.winning_company == winning_company
-                and float(candidate.winning_amount or 0.0)
-                == float(winning_amount or 0.0)
-                and float(candidate.winning_rate or 0.0) == float(winning_rate or 0.0)
-            ):
-                tender_result = candidate
-                break
-
-        if tender_result is None:
-            # 현실 순서(개찰 1위 수집이 먼저 → 낙찰 피드가 나중)에서 남는 opening
-            # 전용 shell(낙찰자 미확정: winning_company 비어 있고 announced_at NULL)을
-            # 재사용해 winning_* 를 같은 행에 병합한다. 그러지 않으면 새 행이 생겨
-            # opening_rank1_*/참가자수/opened_at 이 최신행만 읽는 serializer 에서
-            # 소실된다(참가자수·개찰시각은 winning_* 에 등가물이 없어 영구 소실).
-            # 기존 매칭(announced_at/winning 동등)이 모두 실패했을 때만 발동하므로
-            # 기존 케이스 동작은 불변이다.
-            for candidate in candidates:
-                if (
-                    not str(candidate.winning_company or "").strip()
-                    and candidate.announced_at is None
-                ):
-                    tender_result = candidate
-                    break
-
-    if tender_result is None:
-        tender_result = TenderResult(project_id=project_id)
-        db.add(tender_result)
-
-    tender_result.project_id = project_id
-    tender_result.winning_company = winning_company
-    tender_result.winning_amount = winning_amount
-    tender_result.winning_rate = winning_rate
-    tender_result.result_status = result_status
-    tender_result.announced_at = announced_at
-    return tender_result
-
-
 def _crawl_event_name(status: str) -> str:
     """Realtime event name for a crawl job's current status.
 
@@ -500,9 +445,14 @@ def create_crawl_job(
     crawl_job = CrawlJob(
         source=request.source,
         target_date=request.target_date,
+        category=request.category,
+        execution_mode=request.execution_mode,
+        max_items=request.max_items,
         status="running",
         result_count=0,
         celery_task_id=str(celery_task_id) if celery_task_id else None,
+        release_sha=str(settings.APP_RELEASE_SHA or "").strip() or None,
+        release_tag=str(settings.APP_RELEASE_TAG or "").strip() or None,
     )
     db.add(crawl_job)
     db.commit()
@@ -556,6 +506,7 @@ def persist_crawl_results(
     inference_outbox = InferenceOutboxService()
     linked_project_ids: set[int] = set()
     semantic_input_outbox_event_ids: set[int] = set()
+    persisted_count = 0
 
     for item in items:
         project, outbox_event_id = _persist_crawl_item(
@@ -567,11 +518,14 @@ def persist_crawl_results(
         )
         if project is not None:
             linked_project_ids.add(int(project.id))
+            persisted_count += 1
         if outbox_event_id is not None:
             semantic_input_outbox_event_ids.add(outbox_event_id)
 
     if len(linked_project_ids) == 1:
         crawl_job.project_id = next(iter(linked_project_ids))
+    crawl_job.persisted_count = persisted_count
+    response.setdefault("metadata", {})["persisted_count"] = persisted_count
 
     # Surface committed outbox ids so task callers can fast-dispatch the
     # inference processor after this method returns. The periodic sweep remains
@@ -611,6 +565,24 @@ def _apply_crawl_response_summary(
 ) -> None:
     crawl_job.status = job_status
     crawl_job.result_count = collected_count
+    crawl_job.received_count = int(metadata.get("received_count") or 0)
+    crawl_job.normalized_count = int(
+        metadata.get("normalized_count") or collected_count or 0
+    )
+    crawl_job.duplicate_count = int(metadata.get("duplicate_count") or 0)
+    crawl_job.dropped_count = int(metadata.get("dropped_count") or 0)
+    crawl_job.source_total_count = (
+        int(metadata["source_total_count"])
+        if metadata.get("source_total_count") is not None
+        else None
+    )
+    crawl_job.pages_fetched = (
+        int(metadata["pages_fetched"])
+        if metadata.get("pages_fetched") is not None
+        else None
+    )
+    crawl_job.truncated = bool(metadata.get("truncated"))
+    crawl_job.drop_reasons = dict(metadata.get("drop_reasons") or {})
     crawl_job.error_message = parsing.format_crawl_error_message(metadata)
     crawl_job.completed_at = utc_now()
 
@@ -623,6 +595,7 @@ def _persist_crawl_item(
     inference_outbox: InferenceOutboxService,
     crawl_job_status: str,
 ) -> tuple[Project | None, int | None]:
+    _lock_notice_identity(db, item.notice_number)
     facts = item.opening_facts()
     historical_record = _resolve_historical_record(
         db, notice_number=item.notice_number
@@ -658,6 +631,17 @@ def _persist_crawl_item(
     if event is None:
         return project, None
     return project, int(event.id)
+
+
+def _lock_notice_identity(db: Session, notice_number: str | None) -> None:
+    """Serialize one canonical notice upsert inside the crawl transaction."""
+    canonical = parsing.normalize_notice_number(notice_number)
+    if not canonical or db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_id)"),
+        {"lock_id": singleton_lock_id(f"project_notice:{canonical}")},
+    )
 
 
 def _resolve_historical_record(

@@ -23,6 +23,8 @@ from app.services.operator_strategy_tuning import (
     DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
     get_strategy_auto_workload_penalty_multiplier,
 )
+from app.services.monitor_decision_reuse import find_reusable_monitor_decision
+from app.services.transaction_staging import finalize_staged_record
 from app.utils.textfmt import append_unique_note
 
 
@@ -54,6 +56,8 @@ class BidDecisionService:
     TELEGRAM_SUBMITTED_NOTE = "텔레그램에서 투찰 버튼을 눌러 제출 상태로 전환했습니다."
     TELEGRAM_REVIEW_NOTE = "텔레그램에서 검토 버튼을 눌러 검토 대기 상태로 유지했습니다."
     TELEGRAM_SKIP_NOTE = "텔레그램에서 보류 버튼을 눌러 이번 공고를 보류 처리했습니다."
+
+    defer_commit, monitor_run_id = False, None
 
     def evaluate_opportunity(
         self,
@@ -188,7 +192,7 @@ class BidDecisionService:
         operator = operator or ensure_operator_account(db)
         decision = self.evaluate_opportunity(request, db=db, operator=operator)
         decision_status = self._resolve_decision_status(decision["action"], request.decision_status)
-        record = self._get_existing_active_record(db, request.project_id, operator.id)
+        record = find_reusable_monitor_decision(db, request.project_id, operator.id, int(self.monitor_run_id)) if self.monitor_run_id is not None else self._get_existing_active_record(db, request.project_id, operator.id)
 
         if record is None:
             record = BidDecisionRecord(
@@ -229,9 +233,10 @@ class BidDecisionService:
             risk_flags=getattr(request, "risk_flags", None) or [],
         )
         record.reasoning = decision["reasoning"]
+        if self.monitor_run_id is not None:
+            record.monitor_run_id = int(self.monitor_run_id)
 
-        db.commit()
-        db.refresh(record)
+        finalize_staged_record(db, record, defer_commit=self.defer_commit)
         return record
 
     def _serialize_score_breakdown(

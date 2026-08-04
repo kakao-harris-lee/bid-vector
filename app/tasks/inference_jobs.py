@@ -11,7 +11,11 @@ from app.schemas.similarity_runtime import (
     EmbeddingRebuildDispatchResult,
 )
 from app.services.project_similarity import ProjectSimilarityService
-from app.tasks.celery_app import INFERENCE_OUTBOX_PROCESS_TASK_NAME, celery_app
+from app.tasks.celery_app import (
+    INFERENCE_OUTBOX_PROCESS_TASK_NAME,
+    SIMILARITY_PROJECTION_BACKFILL_TASK_NAME,
+    celery_app,
+)
 from app.tasks.dispatch import MlTaskDispatch, enqueue_ml_task
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,23 @@ def process_inference_outbox(limit: int = 50) -> InferenceOutboxTaskPayload:
             result = ProjectSimilarityService().process_inference_outbox_events(
                 db, limit=max(1, int(limit or 50))
             )
+            return InferenceOutboxTaskPayload(result.model_dump(mode="python"))
+        except Exception:
+            db.rollback()
+            raise
+
+
+@celery_app.task(name=SIMILARITY_PROJECTION_BACKFILL_TASK_NAME)
+def stage_active_similarity_projection_backfill(
+    limit: int = 100,
+) -> InferenceOutboxTaskPayload:
+    """Stage current active-target projections without computing them inline."""
+    with task_session() as db:
+        try:
+            result = ProjectSimilarityService().stage_active_similarity_projection_backfill(
+                db, limit=max(1, int(limit or 100))
+            )
+            db.commit()
             return InferenceOutboxTaskPayload(result.model_dump(mode="python"))
         except Exception:
             db.rollback()

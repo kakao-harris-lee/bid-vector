@@ -62,6 +62,7 @@ def settled_with_amount() -> ColumnElement[bool]:
     - ``app/services/paper_bidding_backtest.py`` (EXISTS gate + two loaders)
     """
     return and_(
+        TenderResult.is_current.is_(True),
         TenderResult.winning_amount.isnot(None),
         TenderResult.winning_amount > 0,
     )
@@ -105,7 +106,10 @@ def settled_any_signal() -> ColumnElement[bool]:
     - ``scripts/report_eligibility_segment_backtest.py``
     - ``scripts/backtest_latest_award_holdouts.py`` (two holdout loaders)
     """
-    return or_(
-        TenderResult.winning_amount > 0,
-        TenderResult.winning_rate > 0,
+    return and_(
+        TenderResult.is_current.is_(True),
+        or_(
+            TenderResult.winning_amount > 0,
+            TenderResult.winning_rate > 0,
+        ),
     )

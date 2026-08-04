@@ -60,18 +60,26 @@
   ],
   "job_status": "completed",
   "metadata": {
+    "drop_reasons": {},
+    "dropped_count": 0,
+    "duplicate_count": 0,
     "keyword": "AI",
     "max_items": 5,
+    "normalized_count": 1,
     "opening_result_enriched_count": 1,
     "opening_result_grid_id": "mf_wfm_container_onbsRsltClsfInqyGrd",
     "opening_result_row_count": 3,
     "page_count": 1,
     "pager_id_prefix": "mf_wfm_container_pglList_page_",
+    "pages_fetched": null,
+    "received_count": 1,
     "requested_mode": "live",
     "resolved_mode": "live",
     "result_table_id": "mf_wfm_container_testTable",
     "search_entry_url": "https://www.g2b.go.kr/",
-    "target_date": "2026-05-08"
+    "source_total_count": null,
+    "target_date": "2026-05-08",
+    "truncated": false
   },
   "source": "koneps"
 }

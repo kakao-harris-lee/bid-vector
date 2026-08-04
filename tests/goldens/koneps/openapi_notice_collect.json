@@ -186,6 +186,13 @@
     }
   ],
   "metadata": {
+    "drop_reasons": {
+      "duplicate_notice": 0,
+      "max_items_cap": 0,
+      "parse_rejected": 1
+    },
+    "dropped_count": 1,
+    "duplicate_count": 0,
     "field_contract_observation": {
       "benign_suppressed": {
         "base_basis_yega_only": 3
@@ -197,6 +204,7 @@
       "violations": {},
       "warns": 0
     },
+    "normalized_count": 3,
     "openapi_endpoint": "https://apis.data.go.kr/1230000/ad/BidPublicInfoService",
     "openapi_last_page_no": 2,
     "openapi_num_of_rows": 2,
@@ -207,8 +215,12 @@
     "openapi_service": "BidPublicInfoService",
     "openapi_service_key_variant": "configured",
     "openapi_total_count": 4,
+    "pages_fetched": 2,
     "query_date": "20260513",
     "query_type": "registration_datetime",
-    "resolved_mode": "openapi"
+    "received_count": 4,
+    "resolved_mode": "openapi",
+    "source_total_count": 4,
+    "truncated": false
   }
 }

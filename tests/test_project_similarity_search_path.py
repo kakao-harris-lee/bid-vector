@@ -264,6 +264,7 @@ def test_stored_similarity_reads_fresh_read_model_without_searching(
     )
 
     assert response["search_mode"] == "read_model"
+    assert response["projection_status"] == "ready"
     assert response["target_embedding_status"] == "ready"
     assert response["result_count"] == 1
     assert response["results"][0]["project_id"] == candidate.id
@@ -297,7 +298,9 @@ def test_zero_result_snapshot_is_a_valid_read_model_hit(test_db, monkeypatch):
     assert response["result_count"] == 0
 
 
-def test_candidate_category_change_invalidates_target_snapshot(test_db, monkeypatch):
+def test_candidate_category_change_closes_stored_read_on_stale_snapshot(
+    test_db, monkeypatch
+):
     """Candidate-side semantic/category changes cannot leave target edges fresh."""
     target = _make_project(test_db, title="AI 분석", category="software")
     candidate = _make_project(test_db, title="AI 데이터 분석", category="software")
@@ -310,21 +313,18 @@ def test_candidate_category_change_invalidates_target_snapshot(test_db, monkeypa
     candidate.category = "construction"
     invalidate_project_embedding(candidate)
     test_db.commit()
-    fallback_calls: list[int] = []
+    def _fail_search(*args, **kwargs):
+        raise AssertionError("stale stored projection must not run inline search")
 
-    def _fallback(candidates, **kwargs):
-        del kwargs
-        fallback_calls.append(-1)
-        fallback_calls.extend(item.id for item in candidates)
-        return []
-
-    monkeypatch.setattr(service, "_search_with_python", _fallback)
+    monkeypatch.setattr(service, "_search_with_postgres", _fail_search)
+    monkeypatch.setattr(service, "_search_with_python", _fail_search)
     response = service.find_similar_projects(
         test_db, target, limit=5, min_similarity=0.15, stored_only=True
     )
 
-    assert response["search_mode"] == "python_fallback"
-    assert fallback_calls == [-1]
+    assert response["search_mode"] == "stored_missing"
+    assert response["projection_status"] == "stale"
+    assert response["result_count"] == 0
 
 
 def test_embedding_ready_outbox_is_deduplicated_per_version(test_db):
@@ -336,6 +336,28 @@ def test_embedding_ready_outbox_is_deduplicated_per_version(test_db):
 
     assert duplicate is not None
     assert test_db.query(InferenceOutboxEvent).count() == 1
+
+
+def test_active_projection_backfill_reactivates_completed_missing_work(test_db):
+    project = _make_project(test_db, title="projection backfill")
+    project.status = "open"
+    service = ProjectSimilarityService()
+    service.refresh_project_embedding_details(test_db, project, force=True)
+    event = test_db.query(InferenceOutboxEvent).one()
+    event.status = "completed"
+    event.processed_at = utc_now()
+    test_db.commit()
+
+    result = service.stage_active_similarity_projection_backfill(test_db, limit=10)
+    test_db.commit()
+
+    assert result.selected_count == 1
+    assert result.staged_count == 1
+    assert result.project_ids == [project.id]
+    staged = test_db.get(InferenceOutboxEvent, result.event_ids[0])
+    assert staged is not None
+    assert staged.status == "pending"
+    assert staged.processed_at is None
 
 
 def test_stale_running_outbox_claim_is_recovered_and_processed(test_db, monkeypatch):

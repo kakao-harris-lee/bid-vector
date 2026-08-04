@@ -25,6 +25,7 @@ from app.services.notifications.fatigue_gate import (
     NotificationFatigueGate,
     record_fatigue_suppression,
 )
+from app.services.notifications.bid_decision import BidDecisionNotificationMixin
 from app.services.notifications.telegram import TelegramNotificationService
 from app.services.notifications.telegram_delivery_plan import (
     DETAIL_TRANSPORT_CONTRACT_FAILURE,
@@ -39,6 +40,7 @@ from app.services.notifications.telegram_delivery_plan import (
     resolve_telegram_delivery_plan,
 )
 from app.services.realtime import realtime_event_manager
+from app.services.transaction_staging import finalize_staged_record
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +112,7 @@ def mask_notification_route_key(value: object | None) -> str:
     return mask_notification_target(text) or ""
 
 
-class OperatorNotificationService:
+class OperatorNotificationService(BidDecisionNotificationMixin):
     """Create and update operator-facing notification records and Telegram payloads."""
 
     DECISION_TYPE = "recommendation"
@@ -119,61 +121,9 @@ class OperatorNotificationService:
     def __init__(self, *, fatigue_gate: NotificationFatigueGate | None = None) -> None:
         self.telegram = TelegramNotificationService()
         self.fatigue_gate = fatigue_gate or NotificationFatigueGate()
-
-    def create_bid_decision_notification(
-        self,
-        db: Session,
-        operator_id: int,
-        project: Project,
-        decision_record: BidDecisionRecord,
-    ) -> Notification:
-        """Create or refresh a notification for a persisted bid decision."""
-        operator_id = self._require_bid_decision_owner(operator_id, decision_record)
-        message = self.telegram.build_bid_decision_message(
-            project_title=project.title,
-            project_id=project.id,
-            action=decision_record.action,
-            decision_status=decision_record.decision_status,
-            priority_score=decision_record.priority_score,
-            recommended_amount=decision_record.recommended_amount,
-            probability_score=decision_record.probability_score,
-            reasoning=decision_record.reasoning,
-        )
-        title = f"입찰 판단 · 프로젝트 {project.id}"
-        notification = self._upsert_notification(
-            db,
-            operator_id=operator_id,
-            title=title,
-            message=message,
-            notification_type=self.DECISION_TYPE,
-        )
-
-        if self.should_deliver_bid_decision_to_telegram(decision_record):
-            self._deliver_bid_decision_to_telegram(
-                db,
-                operator_id=operator_id,
-                project_id=int(project.id),
-                notification_id=int(notification.id),
-                message=message,
-                decision_record=decision_record,
-            )
-        realtime_event_manager.publish_event(
-            "bid_decision.notification",
-            {
-                "notification_id": int(notification.id),
-                "operator_id": int(operator_id),
-                "project_id": int(project.id),
-                "decision_record_id": int(decision_record.id),
-                "action": decision_record.action,
-                "decision_status": decision_record.decision_status,
-                "priority_score": float(decision_record.priority_score or 0.0),
-                "probability_score": float(decision_record.probability_score or 0.0),
-                "recommended_amount": float(decision_record.recommended_amount or 0.0),
-                "title": notification.title,
-                "type": notification.type,
-            },
-        )
-        return notification
+        self.defer_commit = False
+        self.defer_delivery = False
+        self.monitor_run_id: int | None = None
 
     def create_bid_submission_notification(
         self,
@@ -507,19 +457,25 @@ class OperatorNotificationService:
         title: str,
         message: str,
         notification_type: str,
+        project_id: int | None = None,
+        decision_record_id: int | None = None,
     ) -> Notification:
         """Reuse the latest unread notification with the same title/type to reduce noise."""
-        notification = (
-            db.query(Notification)
-            .filter(
-                Notification.user_id == operator_id,
+        query = db.query(Notification).filter(
+            Notification.user_id == operator_id,
+            Notification.type == notification_type,
+        )
+        if self.monitor_run_id is not None:
+            query = query.filter(
+                Notification.monitor_run_id == int(self.monitor_run_id),
+                Notification.project_id == project_id,
+            )
+        else:
+            query = query.filter(
                 Notification.title == title,
-                Notification.type == notification_type,
                 Notification.is_read.is_(False),
             )
-            .order_by(Notification.id.desc())
-            .first()
-        )
+        notification = query.order_by(Notification.id.desc()).first()
 
         if notification is None:
             notification = Notification(
@@ -528,15 +484,20 @@ class OperatorNotificationService:
                 message=message,
                 type=notification_type,
                 is_read=False,
+                monitor_run_id=self.monitor_run_id,
+                project_id=project_id,
+                decision_record_id=decision_record_id,
             )
             db.add(notification)
         else:
             notification.message = message
             notification.is_read = False
             notification.read_at = None
+            notification.monitor_run_id = self.monitor_run_id
+            notification.project_id = project_id
+            notification.decision_record_id = decision_record_id
 
-        db.commit()
-        db.refresh(notification)
+        finalize_staged_record(db, notification, defer_commit=self.defer_commit)
         return notification
 
     def mark_as_read(self, db: Session, notification: Notification) -> Notification:

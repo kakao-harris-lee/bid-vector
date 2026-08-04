@@ -194,6 +194,15 @@
   ],
   "metadata": {
     "deferred_reserve_detail_notices": [],
+    "drop_reasons": {
+      "duplicate_notice": 0,
+      "max_items_cap": 0,
+      "missing_notice_number": 0,
+      "parse_rejected": 0
+    },
+    "dropped_count": 0,
+    "duplicate_count": 0,
+    "normalized_count": 3,
     "openapi_endpoint": "https://apis.data.go.kr/1230000/as/ScsbidInfoService",
     "openapi_operation": "getScsbidListSttusCnstwk",
     "openapi_result_code": "00",
@@ -201,9 +210,11 @@
     "openapi_service": "ScsbidInfoService",
     "openapi_service_key_variant": "configured",
     "openapi_total_count": 3,
+    "pages_fetched": 1,
     "query_date_begin": "202605010000",
     "query_date_end": "202605072359",
     "query_type": "award_registration_datetime",
+    "received_count": 3,
     "reserve_detail_backoff_skipped_count": 0,
     "reserve_detail_collected_count": 1,
     "reserve_detail_deferred_count": 0,
@@ -224,6 +235,8 @@
         "total_count": 3
       }
     ],
-    "scsbid_collected_count": 3
+    "scsbid_collected_count": 3,
+    "source_total_count": 3,
+    "truncated": false
   }
 }

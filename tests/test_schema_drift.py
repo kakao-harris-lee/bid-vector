@@ -68,6 +68,9 @@ MIGRATION_OWNED_TABLES = {
     "project_similarity_edges",
     "inference_outbox_events",
     "similar_projects_refresh_operations",
+    "operator_strategy_run_items",
+    "notification_delivery_outbox",
+    "tender_result_events",
 }
 
 # Columns added to a pre-existing table by an alembic migration.
@@ -80,7 +83,30 @@ MIGRATION_ADDED_COLUMNS = {
         "association_memberships",
         "tech_fields",
     },
-    "crawl_jobs": {"celery_task_id"},
+    "crawl_jobs": {
+        "celery_task_id",
+        "category",
+        "execution_mode",
+        "max_items",
+        "received_count",
+        "normalized_count",
+        "duplicate_count",
+        "dropped_count",
+        "persisted_count",
+        "source_total_count",
+        "pages_fetched",
+        "truncated",
+        "drop_reasons",
+        "release_sha",
+        "release_tag",
+    },
+    "operator_strategy_runs": {
+        "projection_not_ready_count",
+        "release_sha",
+        "release_tag",
+    },
+    "bid_decision_records": {"monitor_run_id"},
+    "notifications": {"monitor_run_id", "project_id", "decision_record_id"},
     "paper_bid_settlements": {"estimated_price", "minimum_bid_price"},
     "tender_results": {
         "opening_rank1_company",
@@ -90,6 +116,7 @@ MIGRATION_ADDED_COLUMNS = {
         "opening_participant_count",
         "opened_at",
         "opening_checked_at",
+        "is_current",
     },
 }
 

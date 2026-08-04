@@ -114,6 +114,8 @@ class InferenceOutboxService:
         self,
         db: Session,
         project: Project,
+        *,
+        reactivate_completed: bool = False,
     ) -> InferenceOutboxEvent | None:
         if not self._embedding_is_ready(project):
             return None
@@ -128,6 +130,7 @@ class InferenceOutboxService:
                 "min_similarity": SIMILARITY_READ_MODEL_MIN_SIMILARITY,
                 "limit": SIMILARITY_READ_MODEL_LIMIT,
             },
+            reactivate_completed=reactivate_completed,
         )
         return None if event.status == INFERENCE_OUTBOX_STATUS_COMPLETED else event
 

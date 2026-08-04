@@ -186,7 +186,10 @@ def _tender_result(db: Session, project: Project | None) -> TenderResult | None:
         return None
     return (
         db.query(TenderResult)
-        .filter(TenderResult.project_id == project.id)
+        .filter(
+            TenderResult.project_id == project.id,
+            TenderResult.is_current.is_(True),
+        )
         .order_by(TenderResult.id.desc())
         .first()
     )

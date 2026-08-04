@@ -247,6 +247,7 @@ class PredictionFeedbackService:
             )
             .filter(
                 TenderResult.project_id.isnot(None),
+                TenderResult.is_current.is_(True),
                 or_(
                     TenderResult.announced_at >= date_from,
                     and_(TenderResult.announced_at.is_(None), TenderResult.created_at >= date_from),

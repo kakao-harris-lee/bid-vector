@@ -12,7 +12,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 
 from app.api.providers import get_koneps_collector
 from app.core.config import settings
@@ -201,6 +201,47 @@ def test_scsbid_sweep_visits_each_category_operation(monkeypatch):
     assert result["metadata"]["scsbid_categories"] == ["construction", "service"]
     notice_numbers = {item.notice_number for item in result["items"]}
     assert notice_numbers == {"C-1", "S-1"}
+
+
+def test_scsbid_sweep_honors_global_max_items_and_accounts_for_cap(monkeypatch):
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0
+    )
+
+    def fake_get(url, params, timeout):
+        del params, timeout
+        if "PreparPcDetail" in url:
+            return FakeOpenApiResponse(_empty_reserve_body())
+        items = [_award_item(f"CAP-{index}") for index in range(5)]
+        return FakeOpenApiResponse(
+            _award_body(items, total_count=5, num_of_rows=5)
+        )
+
+    service = KonepsCollectorService(http_get=fake_get)
+    request = CrawlRequest(
+        source="scsbid-openapi",
+        categories=["construction"],
+        start_date="20260501",
+        end_date="20260507",
+        execution_mode="auto",
+        page_size=5,
+        max_items=3,
+    )
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(request)
+    )
+
+    assert [item.notice_number for item in result["items"]] == [
+        "CAP-0",
+        "CAP-1",
+        "CAP-2",
+    ]
+    assert result["metadata"]["received_count"] == 5
+    assert result["metadata"]["normalized_count"] == 3
+    assert result["metadata"]["dropped_count"] == 2
+    assert result["metadata"]["drop_reasons"]["max_items_cap"] == 2
+    assert result["metadata"]["truncated"] is True
 
 
 def test_scsbid_sweep_paginates_until_total_count(monkeypatch):

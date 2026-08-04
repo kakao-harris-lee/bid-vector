@@ -110,6 +110,7 @@ class OperatorStrategyMonitorResultItem(BaseModel):
     title: str
     decision_record_id: int
     notification_id: Optional[int] = None
+    run_item_id: Optional[int] = None
     action: PaperBidAction
     decision_status: DecisionStatus
     priority_score: float = Field(ge=0.0, le=1.0)
@@ -128,6 +129,8 @@ class OperatorStrategyMonitorResponse(BaseModel):
     monitor_run_id: Optional[int] = None
     task_id: Optional[str] = None
     trigger_source: Optional[str] = None
+    release_sha: Optional[str] = None
+    release_tag: Optional[str] = None
     previous_run_id: Optional[int] = None
     operator_id: int
     current_operator_id: Optional[int] = None
@@ -136,6 +139,9 @@ class OperatorStrategyMonitorResponse(BaseModel):
     selected_candidate_count: int = Field(ge=0)
     persisted_candidate_count: int = Field(ge=0)
     notification_count: int = Field(ge=0)
+    projection_not_ready_count: int = Field(default=0, ge=0)
+    projection_not_ready_project_ids: List[int] = Field(default_factory=list)
+    duplicate_suppressed: bool = False
     new_candidate_count: int = Field(ge=0)
     continuing_candidate_count: int = Field(ge=0)
     dropped_candidate_count: int = Field(ge=0)
@@ -182,6 +188,8 @@ class OperatorStrategyRunResponse(BaseModel):
     current_operator_username: str
     task_id: Optional[str] = None
     trigger_source: str
+    release_sha: Optional[str] = None
+    release_tag: Optional[str] = None
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     high_priority_only: bool
     limit_applied: int = Field(ge=1, le=100)
@@ -189,6 +197,7 @@ class OperatorStrategyRunResponse(BaseModel):
     selected_candidate_count: int = Field(ge=0)
     persisted_candidate_count: int = Field(ge=0)
     notification_count: int = Field(ge=0)
+    projection_not_ready_count: int = Field(default=0, ge=0)
     error_message: Optional[str] = None
     created_at: datetime
     started_at: Optional[datetime] = None
@@ -210,6 +219,8 @@ class OperatorStrategyRunDetailResponse(BaseModel):
     current_operator_username: str
     task_id: Optional[str] = None
     trigger_source: str
+    release_sha: Optional[str] = None
+    release_tag: Optional[str] = None
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     high_priority_only: bool
     limit_applied: int = Field(ge=1, le=100)
@@ -217,6 +228,7 @@ class OperatorStrategyRunDetailResponse(BaseModel):
     selected_candidate_count: int = Field(ge=0)
     persisted_candidate_count: int = Field(ge=0)
     notification_count: int = Field(ge=0)
+    projection_not_ready_count: int = Field(default=0, ge=0)
     error_message: Optional[str] = None
     created_at: datetime
     started_at: Optional[datetime] = None

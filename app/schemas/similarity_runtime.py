@@ -81,6 +81,14 @@ class InferenceOutboxProcessResult(BaseModel):
     failures: list[InferenceOutboxFailure] = Field(default_factory=list)
 
 
+class SimilarityProjectionBackfillResult(BaseModel):
+    selected_count: int = Field(ge=0)
+    staged_count: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    project_ids: list[int] = Field(default_factory=list)
+    event_ids: list[int] = Field(default_factory=list)
+
+
 class EmbeddingRebuildDispatchInput(BaseModel):
     outbox_event_ids: list[int] = Field(default_factory=list)
 

@@ -8,8 +8,15 @@ from dataclasses import fields
 
 import pytest
 
+from app.core.config import settings
 from app.core.single_user import ensure_operator_account, ensure_operator_strategy
-from app.models.models import BidDecisionRecord, OperatorStrategyRun, Project
+from app.models.models import (
+    BidDecisionRecord,
+    Notification,
+    OperatorStrategyRun,
+    OperatorStrategyRunItem,
+    Project,
+)
 from app.schemas.schemas import OperatorStrategyMonitorRequest
 from app.services.opportunity_monitoring import StrategyMonitoringService
 from app.services.opportunity_monitoring.base import (
@@ -58,6 +65,8 @@ def test_execute_monitoring_reuses_first_analysis_for_selected_candidates(
     scan_fixture._configure_software_operator(client)
     projects = scan_fixture._seed_characterization_projects(test_db)
     service = StrategyMonitoringService()
+    monkeypatch.setattr(settings, "APP_RELEASE_SHA", "review-sha")
+    monkeypatch.setattr(settings, "APP_RELEASE_TAG", "review-release")
     analysis_calls: Counter[int] = Counter()
     read_only_calls: list[tuple[int, bool]] = []
     project_gets: list[int] = []
@@ -110,6 +119,22 @@ def test_execute_monitoring_reuses_first_analysis_for_selected_candidates(
         record.project_id: record for record in test_db.query(BidDecisionRecord).all()
     }
     assert set(records) == set(selected_ids)
+    run_id = int(response["monitor_run_id"])
+    assert response["release_sha"] == "review-sha"
+    assert response["release_tag"] == "review-release"
+    run = test_db.get(OperatorStrategyRun, run_id)
+    assert run.release_sha == "review-sha"
+    assert run.release_tag == "review-release"
+    assert {record.monitor_run_id for record in records.values()} == {run_id}
+    run_items = (
+        test_db.query(OperatorStrategyRunItem)
+        .filter(OperatorStrategyRunItem.run_id == run_id)
+        .all()
+    )
+    assert {item.project_id for item in run_items} == set(selected_ids)
+    assert {item.status for item in run_items} == {"completed"}
+    notifications = test_db.query(Notification).filter_by(monitor_run_id=run_id).all()
+    assert {row.project_id for row in notifications} == set(selected_ids)
     live_workload_scores: list[float] = []
     for active_count, result in enumerate(response["results"]):
         record = records[result["project_id"]]
@@ -321,3 +346,126 @@ def test_monitor_processing_failure_rolls_back_and_finalizes_run(
     run = test_db.query(OperatorStrategyRun).one()
     assert run.status == "failed"
     assert run.error_message == "decision persistence failed"
+    failed_item = test_db.query(OperatorStrategyRunItem).one()
+    assert failed_item.run_id == run.id
+    assert failed_item.project_id == projects["D"].id
+    assert failed_item.status == "failed"
+    assert failed_item.stage == "decision"
+
+
+def test_monitor_defers_candidate_when_stored_projection_is_missing(
+    client, test_db, monkeypatch
+):
+    scan_fixture._configure_software_operator(client)
+    projects = scan_fixture._seed_characterization_projects(test_db)
+    service = StrategyMonitoringService()
+
+    def analyze(self, db, project, **kwargs):
+        del self, db, kwargs
+        payload = _rich_analysis(project)
+        payload["similar_projects"] = {
+            "search_mode": "stored_missing",
+            "projection_status": "missing",
+            "results": [],
+            "result_count": 0,
+        }
+        return payload
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", analyze)
+    response = service.execute_monitoring(
+        test_db,
+        request=OperatorStrategyMonitorRequest(limit=1, high_priority_only=False),
+    )
+
+    assert response["persisted_candidate_count"] == 0
+    assert response["projection_not_ready_count"] == len(projects)
+    assert test_db.query(BidDecisionRecord).count() == 0
+    items = test_db.query(OperatorStrategyRunItem).all()
+    assert len(items) == len(projects)
+    assert {item.status for item in items} == {"deferred"}
+    assert {item.stage for item in items} == {"similarity_projection"}
+    assert not any(project in test_db for project in projects.values())
+
+
+def test_monitor_does_not_mutate_submitted_real_bid(client, test_db, monkeypatch):
+    scan_fixture._configure_software_operator(client)
+    projects = scan_fixture._seed_characterization_projects(test_db)
+    operator = ensure_operator_account(test_db)
+    submitted = BidDecisionRecord(
+        project_id=projects["D"].id,
+        operator_id=operator.id,
+        pursue_bid=True,
+        action="bid_now",
+        decision_status="submitted",
+        initial_action="bid_now",
+        initial_decision_status="submitted",
+        recommended_amount=901_000.0,
+        submitted_bid_amount=899_000.0,
+    )
+    test_db.add(submitted)
+    test_db.commit()
+    submitted_id = int(submitted.id)
+
+    def analyze(self, db, project, **kwargs):
+        del self, db, kwargs
+        return _rich_analysis(project)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", analyze)
+    response = StrategyMonitoringService().execute_monitoring(
+        test_db,
+        request=OperatorStrategyMonitorRequest(limit=1, high_priority_only=False),
+    )
+
+    test_db.refresh(submitted)
+    assert submitted.id == submitted_id
+    assert submitted.decision_status == "submitted"
+    assert submitted.action == "bid_now"
+    assert submitted.recommended_amount == 901_000.0
+    assert submitted.submitted_bid_amount == 899_000.0
+    assert submitted.monitor_run_id is None
+
+    records = (
+        test_db.query(BidDecisionRecord)
+        .filter(BidDecisionRecord.project_id == projects["D"].id)
+        .order_by(BidDecisionRecord.id)
+        .all()
+    )
+    assert len(records) == 2
+    monitor_record = records[1]
+    assert monitor_record.id != submitted_id
+    assert monitor_record.monitor_run_id == response["monitor_run_id"]
+    assert response["results"][0]["decision_record_id"] == monitor_record.id
+
+
+def test_monitor_keeps_decision_lineage_immutable_across_runs(
+    client, test_db, monkeypatch
+):
+    scan_fixture._configure_software_operator(client)
+    projects = scan_fixture._seed_characterization_projects(test_db)
+
+    def analyze(self, db, project, **kwargs):
+        del self, db, kwargs
+        return _rich_analysis(project)
+
+    monkeypatch.setattr(StrategyMonitoringService, "_analyze_project", analyze)
+    service = StrategyMonitoringService()
+    request = OperatorStrategyMonitorRequest(limit=1, high_priority_only=False)
+    first = service.execute_monitoring(test_db, request=request)
+    first_record = test_db.get(
+        BidDecisionRecord, first["results"][0]["decision_record_id"]
+    )
+    first_record_id = int(first_record.id)
+    first_run_id = int(first["monitor_run_id"])
+
+    second = service.execute_monitoring(test_db, request=request)
+    test_db.refresh(first_record)
+    second_record = test_db.get(
+        BidDecisionRecord, second["results"][0]["decision_record_id"]
+    )
+
+    assert first["results"][0]["project_id"] == projects["D"].id
+    assert second["results"][0]["project_id"] == projects["D"].id
+    assert first_record.id == first_record_id
+    assert first_record.monitor_run_id == first_run_id
+    assert second_record.id != first_record_id
+    assert second_record.monitor_run_id == second["monitor_run_id"]
