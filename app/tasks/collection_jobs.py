@@ -39,9 +39,9 @@ def _default_collection_lease() -> AdvisorySingletonLease:
 
 
 def _record_duplicate_collection(self, request, *, retries=0, session_factory=None):
-    error_message = _LEASE_BUSY_MESSAGE
-    if retries:
-        error_message = f"{_LEASE_BUSY_MESSAGE} after {retries} retry attempt(s)"
+    # ``error_message`` 는 analytics 의 failure_reason_breakdown 에서 원문이 곧 키라
+    # 상수로 유지한다. 재시도 횟수를 접미사로 붙이면 같은 원인이 횟수별 버킷으로
+    # 쪼개지므로 횟수는 metadata 에만 남긴다.
     with task_session(session_factory) as db:
         row = CrawlJob(
             source=request.source,
@@ -53,7 +53,7 @@ def _record_duplicate_collection(self, request, *, retries=0, session_factory=No
             release_tag=str(settings.APP_RELEASE_TAG or "").strip() or None,
             status="duplicate_suppressed",
             result_count=0,
-            error_message=error_message,
+            error_message=_LEASE_BUSY_MESSAGE,
             celery_task_id=str(getattr(self.request, "id", "") or "") or None,
             completed_at=utc_now(),
         )
@@ -93,19 +93,28 @@ def lease_busy_retry_budget() -> tuple[int, int]:
     return math.ceil(window / delay), delay
 
 
-def _can_retry_lease_busy(task_request) -> bool:
-    """Redelivery only exists inside a worker.
+def _can_retry_lease_busy(task_request, crawl_job_id) -> bool:
+    """재시도는 beat dispatch 경로에만 적용한다.
 
     Eager mode re-runs a retry inline (``memory://`` broker, ``task_always_eager``)
     and a direct call has no broker at all, so both keep the immediate
     ``duplicate_suppressed`` record instead of looping in-process.
+
+    ``crawl_job_id`` 가 있으면 ``POST /operations/crawl/async`` 가 이미 ``queued`` 행을
+    만들어 두고 사람이 응답을 기다리는 요청이다. 여기서 최대 재시도 창(1800s)만큼 더
+    기다리면 그 행의 나이가 stale reconciler 임계(hard limit + grace = 2100s,
+    ``stale_threshold_seconds()``)를 넘어 **살아있는 작업이** ``failed [reconciled]`` 로
+    오판 마감된다. 이 경로는 즉시 suppressed 로 답하는 편이 정직하고, 이 수정의 목적인
+    beat 기아 해소는 그대로 보존된다(beat 는 ``crawl_job_id`` 를 넘기지 않는다).
     """
+    if crawl_job_id is not None:
+        return False
     if bool(getattr(task_request, "is_eager", False)):
         return False
     return not bool(getattr(task_request, "called_directly", True))
 
 
-def _handle_lease_busy(self, request, *, session_factory=None):
+def _handle_lease_busy(self, request, *, crawl_job_id=None, session_factory=None):
     """Wait for the shared lease instead of starving this category.
 
     The loser of a same-tick collision used to record ``duplicate_suppressed``
@@ -118,7 +127,7 @@ def _handle_lease_busy(self, request, *, session_factory=None):
     retries = max(0, int(getattr(task_request, "retries", 0) or 0))
     max_retries, countdown = lease_busy_retry_budget()
 
-    if retries < max_retries and _can_retry_lease_busy(task_request):
+    if retries < max_retries and _can_retry_lease_busy(task_request, crawl_job_id):
         logger.info(
             "koneps collection lease busy; retrying in %ds "
             "(source=%s category=%s attempt=%d/%d)",
@@ -160,7 +169,12 @@ def run_singleton_koneps_collection_job(
     """
     lease = (lease_factory or _default_collection_lease)()
     if not lease.acquire():
-        return _handle_lease_busy(self, request, session_factory=session_factory)
+        return _handle_lease_busy(
+            self,
+            request,
+            crawl_job_id=crawl_job_id,
+            session_factory=session_factory,
+        )
     try:
         return run_job(
             self,
