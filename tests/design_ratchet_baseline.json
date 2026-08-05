@@ -42,7 +42,7 @@
     "app/ai/predictors/ensemble.py": {
       "functions_over_soft_limit": 1,
       "functions_over_hard_limit": 1,
-      "dict_boundary_functions": 4
+      "dict_boundary_functions": 3
     },
     "app/ai/predictors/historical/__init__.py": {
       "functions_over_soft_limit": 2,
@@ -70,7 +70,7 @@
     },
     "app/ai/predictors/lstm.py": {
       "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 9
+      "dict_boundary_functions": 8
     },
     "app/ai/price_prediction/feedback.py": {
       "dict_boundary_functions": 1
@@ -138,14 +138,14 @@
       "file_loc_band": 25
     },
     "app/core/config.py": {
-      "file_loc_band": 33
+      "file_loc_band": 34
     },
     "app/core/security.py": {
       "json_direct_calls": 2,
       "dict_boundary_functions": 4
     },
     "app/models/models.py": {
-      "file_loc_band": 33
+      "file_loc_band": 30
     },
     "app/schemas/opportunity.py": {
       "json_direct_calls": 2
@@ -406,9 +406,9 @@
       "dict_boundary_functions": 12
     },
     "app/services/koneps/persistence.py": {
-      "functions_over_soft_limit": 4,
+      "functions_over_soft_limit": 3,
       "functions_over_hard_limit": 1,
-      "file_loc_band": 34,
+      "file_loc_band": 33,
       "json_direct_calls": 2,
       "dict_boundary_functions": 3
     },
@@ -486,15 +486,13 @@
     },
     "app/services/notifications/email.py": {
       "functions_over_soft_limit": 2,
-      "file_loc_band": 21,
-      "dict_boundary_functions": 4
+      "dict_boundary_functions": 3
     },
     "app/services/notifications/fatigue.py": {
       "dict_boundary_functions": 2
     },
     "app/services/notifications/manager.py": {
-      "functions_over_soft_limit": 1,
-      "file_loc_band": 22,
+      "file_loc_band": 21,
       "dict_boundary_functions": 4
     },
     "app/services/notifications/telegram.py": {
@@ -567,8 +565,7 @@
       "dict_boundary_functions": 1
     },
     "app/services/opportunity_monitoring/orchestration.py": {
-      "functions_over_soft_limit": 2,
-      "dict_boundary_functions": 9
+      "dict_boundary_functions": 4
     },
     "app/services/opportunity_monitoring/runs.py": {
       "functions_over_soft_limit": 1,
@@ -627,9 +624,8 @@
       "dict_boundary_functions": 5
     },
     "app/services/project_similarity.py": {
-      "functions_over_soft_limit": 2,
       "json_direct_calls": 2,
-      "dict_boundary_functions": 7,
+      "dict_boundary_functions": 5,
       "env_test_sniff": 1
     },
     "app/services/real_bid_track.py": {

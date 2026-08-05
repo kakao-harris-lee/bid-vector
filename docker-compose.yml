@@ -38,6 +38,9 @@ services:
       - "${CELERY_RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      # celery countdown(ETA) 메시지는 배달~ack 간격이 hard limit + countdown 까지
+      # 벌어져 기본 consumer_timeout(30분)을 넘는다. 값 유도는 파일 주석 참고.
+      - ./docker/rabbitmq/conf.d/20-consumer-timeout.conf:/etc/rabbitmq/conf.d/20-consumer-timeout.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s

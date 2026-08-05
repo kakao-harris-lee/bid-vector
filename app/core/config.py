@@ -239,6 +239,7 @@ class Settings(InferenceOutboxSettings):
     KONEPS_COLLECTION_CATEGORIES: str = ""  # comma-separated, e.g. "construction,service"
     KONEPS_COLLECTION_MAX_ITEMS: int = 50  # 기존값 유지, .env에서 500으로 덮어씀
     KONEPS_COLLECTION_EXECUTION_MODE: str = "auto"
+    KONEPS_COLLECTION_LEASE_BUSY_RETRY_DELAY_SECONDS: int = 600  # 0 이면 재시도 없음
     # KONEPS scsbid (개찰 결과) collection — independent beat schedule.
     # Re-uses the same collect_koneps_notices task but routes to the scsbid OpenAPI
     # path via request_payload.source. Default OFF; opt-in via .env.

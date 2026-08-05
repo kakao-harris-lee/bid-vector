@@ -7,6 +7,7 @@ and reserve-detail enqueue seams.
 """
 
 import logging
+import math
 from typing import Any, Callable
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -24,9 +25,24 @@ from app.services.task_singleton import AdvisorySingletonLease
 
 logger = logging.getLogger(__name__)
 
+# Every collection source (construction/service/scsbid) shares this one lease on
+# purpose: KONEPS must be called serially with throttling, so category-scoped
+# locks are not an option. Contention is resolved by waiting (see
+# ``_handle_lease_busy``), never by collecting concurrently.
+KONEPS_COLLECTION_LEASE_KEY = "koneps_collection"
 
-def _record_duplicate_collection(self, request):
-    with task_session() as db:
+_LEASE_BUSY_MESSAGE = "singleton lock busy; duplicate collection suppressed"
+
+
+def _default_collection_lease() -> AdvisorySingletonLease:
+    return AdvisorySingletonLease(engine, KONEPS_COLLECTION_LEASE_KEY)
+
+
+def _record_duplicate_collection(self, request, *, retries=0, session_factory=None):
+    # ``error_message`` 는 analytics 의 failure_reason_breakdown 에서 원문이 곧 키라
+    # 상수로 유지한다. 재시도 횟수를 접미사로 붙이면 같은 원인이 횟수별 버킷으로
+    # 쪼개지므로 횟수는 metadata 에만 남긴다.
+    with task_session(session_factory) as db:
         row = CrawlJob(
             source=request.source,
             target_date=request.target_date,
@@ -37,7 +53,7 @@ def _record_duplicate_collection(self, request):
             release_tag=str(settings.APP_RELEASE_TAG or "").strip() or None,
             status="duplicate_suppressed",
             result_count=0,
-            error_message="singleton lock busy; duplicate collection suppressed",
+            error_message=_LEASE_BUSY_MESSAGE,
             celery_task_id=str(getattr(self.request, "id", "") or "") or None,
             completed_at=utc_now(),
         )
@@ -52,8 +68,87 @@ def _record_duplicate_collection(self, request):
             "metadata": {
                 "crawl_job_id": int(row.id),
                 "reason": "singleton_lock_busy",
+                "lease_busy_retries": int(retries),
             },
         }
+
+
+def lease_busy_retry_budget() -> tuple[int, int]:
+    """``(max_retries, countdown)`` — 공유 리스 대기에 쓸 재시도 창.
+
+    창의 크기는 튜닝 대상이 아니라 유도값이다. 리스는 길어야 hard time limit 만큼
+    잡혀 있고(그 시점에 워커가 SIGKILL 되어 세션 락이 풀린다) 그보다 짧게 기다리면
+    기아가 남는다. 반대로 수집 주기를 넘겨 기다리면 다음 tick 의 dispatch 와 겹쳐
+    대기 메시지가 쌓인다. 그래서 둘 중 작은 쪽을 창으로 삼고 지연으로 나눈다.
+
+    지연을 0 이하로 두면 재시도 없이 기존 즉시 ``duplicate_suppressed`` 로 돌아간다.
+    """
+    delay = int(settings.KONEPS_COLLECTION_LEASE_BUSY_RETRY_DELAY_SECONDS)
+    if delay <= 0:
+        return 0, 0
+    window = min(
+        max(0, int(settings.CELERY_TASK_TIME_LIMIT_SECONDS)),
+        max(0, int(settings.KONEPS_COLLECTION_INTERVAL_MINUTES)) * 60,
+    )
+    return math.ceil(window / delay), delay
+
+
+def _can_retry_lease_busy(task_request, crawl_job_id) -> bool:
+    """재시도는 beat dispatch 경로에만 적용한다.
+
+    Eager mode re-runs a retry inline (``memory://`` broker, ``task_always_eager``)
+    and a direct call has no broker at all, so both keep the immediate
+    ``duplicate_suppressed`` record instead of looping in-process.
+
+    ``crawl_job_id`` 가 있으면 ``POST /operations/crawl/async`` 가 이미 ``queued`` 행을
+    만들어 두고 사람이 응답을 기다리는 요청이다. 여기서 최대 재시도 창(1800s)만큼 더
+    기다리면 그 행의 나이가 stale reconciler 임계(hard limit + grace = 2100s,
+    ``stale_threshold_seconds()``)를 넘어 **살아있는 작업이** ``failed [reconciled]`` 로
+    오판 마감된다. 이 경로는 즉시 suppressed 로 답하는 편이 정직하고, 이 수정의 목적인
+    beat 기아 해소는 그대로 보존된다(beat 는 ``crawl_job_id`` 를 넘기지 않는다).
+    """
+    if crawl_job_id is not None:
+        return False
+    if bool(getattr(task_request, "is_eager", False)):
+        return False
+    return not bool(getattr(task_request, "called_directly", True))
+
+
+def _handle_lease_busy(self, request, *, crawl_job_id=None, session_factory=None):
+    """Wait for the shared lease instead of starving this category.
+
+    The loser of a same-tick collision used to record ``duplicate_suppressed``
+    immediately, which made whichever category lost the race skip collection for
+    the whole cycle. Retrying on a countdown keeps KONEPS calls serial (the lease
+    is still the arbiter) while giving the loser the rest of the cycle to run.
+    The suppressed record is preserved for a genuinely exhausted budget.
+    """
+    task_request = getattr(self, "request", None)
+    retries = max(0, int(getattr(task_request, "retries", 0) or 0))
+    max_retries, countdown = lease_busy_retry_budget()
+
+    if retries < max_retries and _can_retry_lease_busy(task_request, crawl_job_id):
+        logger.info(
+            "koneps collection lease busy; retrying in %ds "
+            "(source=%s category=%s attempt=%d/%d)",
+            countdown,
+            request.source,
+            request.category,
+            retries + 1,
+            max_retries,
+        )
+        raise self.retry(countdown=countdown, max_retries=max_retries)
+
+    logger.warning(
+        "koneps collection lease busy; suppressing run "
+        "(source=%s category=%s retries=%d)",
+        request.source,
+        request.category,
+        retries,
+    )
+    return _record_duplicate_collection(
+        self, request, retries=retries, session_factory=session_factory
+    )
 
 
 def run_singleton_koneps_collection_job(
@@ -64,10 +159,22 @@ def run_singleton_koneps_collection_job(
     notify_inference_outbox_committed,
     enqueue_deferred_reserve_detail_backfill,
     run_job,
+    lease_factory=None,
+    session_factory=None,
 ):
-    lease = AdvisorySingletonLease(engine, "koneps_collection")
+    """Run one collection under the shared KONEPS lease.
+
+    ``lease_factory``/``session_factory`` are the injection seams (§4.7): the
+    defaults bind the app engine/session, tests pass their own.
+    """
+    lease = (lease_factory or _default_collection_lease)()
     if not lease.acquire():
-        return _record_duplicate_collection(self, request)
+        return _handle_lease_busy(
+            self,
+            request,
+            crawl_job_id=crawl_job_id,
+            session_factory=session_factory,
+        )
     try:
         return run_job(
             self,
