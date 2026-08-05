@@ -72,7 +72,7 @@ class ContractViolation:
 # 알려진 양성(known-benign) 위반 시그니처 (선언 데이터 — 코드 분기 금지, §4.5.3)
 # ---------------------------------------------------------------------------
 # 계약 의미론은 **불변**이다: asignBdgtAmt(배정예산액)는 여전히 BUDGET_ESTIMATE basis 이고
-# validate_base_basis 는 기초금액 키 부재 시 여전히 BASE_BASIS_YEGA_ONLY WARN 을 낸다.
+# validate_base_basis 는 양수 기초금액 키가 없을 때 여전히 BASE_BASIS_YEGA_ONLY WARN 을 낸다.
 # 다만 대다수 service 공고는 기초금액 키(bssAmt*) 없이 배정예산(asignBdgtAmt)만 싣고,
 # 이 배정예산은 실무상 기초금액에 근사해 현 실투찰이 정상 작동함이 확인됐다(#228). 그래서
 # 이 WARN 은 매 수집 배치마다 전 service 공고에서 발화해 요약을 도배한다. 라이브 관찰기가
@@ -387,7 +387,8 @@ def describe_contracts() -> list[str]:
     lines.append(
         "  - base_amount(키-집합 트랩): 해석 순서 "
         f"{list(BASE_RESOLUTION_ORDER)} — 기초금액 키{list(TRUE_BASE_KEYS)} 가 앞서고, "
-        "하나도 없을 때만 예정가/예산으로 폴백한다(그 경우 base 는 기초금액이 아님). "
+        "그중 어느 것도 양수로 실리지 않았을 때만 예정가/예산으로 폴백한다"
+        "(그 경우 base 는 기초금액이 아님). "
         "예정가/예산 키가 앞으로 되돌아가면 base==예정가 오염(#220)이라 ERROR 로 잡는다."
     )
     return lines

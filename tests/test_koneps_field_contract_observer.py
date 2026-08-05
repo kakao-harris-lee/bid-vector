@@ -20,6 +20,9 @@ from app.schemas.schemas import CrawlRequest
 from app.services.koneps import field_contract
 from app.services.koneps.collection import collect_openapi_items
 from app.services.koneps.field_contract_observer import FieldContractObservation
+from tests.support.koneps_field_contract_fixtures import (
+    LEGACY_YEGA_FIRST_BASE_ORDER,
+)
 
 _NOTICE_OP = "getBidPblancListInfoServc"
 
@@ -84,10 +87,7 @@ def test_observe_true_base_key_row_is_clean():
 def test_observe_precedence_error_is_counted_under_order_drift(monkeypatch):
     # PRECEDENCE 는 상수 파생 드리프트 감지기 — 순서가 되돌아가면 관찰기가 ERROR 로 센다.
     monkeypatch.setattr(
-        field_contract,
-        "BASE_RESOLUTION_ORDER",
-        ("asignBdgtAmt", "bdgtAmt", "presmptPrce", "presmptAmt")
-        + field_contract.TRUE_BASE_KEYS,
+        field_contract, "BASE_RESOLUTION_ORDER", LEGACY_YEGA_FIRST_BASE_ORDER
     )
     obs = FieldContractObservation()
     obs.observe(

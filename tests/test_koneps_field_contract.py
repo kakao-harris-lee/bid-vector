@@ -21,6 +21,9 @@ from app.services.koneps.field_contract import (
     Severity,
     ViolationKind,
 )
+from tests.support.koneps_field_contract_fixtures import (
+    LEGACY_YEGA_FIRST_BASE_ORDER,
+)
 
 _SCSBID_OP = "getScsbidListSttusServc"
 _NOTICE_OP = "getBidPblancListInfoServc"
@@ -40,18 +43,6 @@ _PRODUCTION_BASE_ORDER = (
     "bdgtAmt",
     "presmptPrce",
     "presmptAmt",
-)
-
-# 교정 전(예산·예정가 우선) 순서. 프로덕션은 더는 쓰지 않지만, BASE_BASIS_PRECEDENCE
-# 위반이 상수에서 파생되는 살아있는 드리프트 감지기임을 증명하는 데 쓴다.
-_LEGACY_YEGA_FIRST_ORDER = (
-    "asignBdgtAmt",
-    "bdgtAmt",
-    "presmptPrce",
-    "presmptAmt",
-    "bssAmt",
-    "bssamt",
-    "bssAmtPurcnstcst",
 )
 
 # openapi.build_openapi_notice_item 의 estimated_amount 후보 순서(추정가격 우선)를 옮긴
@@ -180,7 +171,7 @@ def test_base_precedence_error_fires_if_resolution_order_drifts_back(monkeypatch
     현 순서(기초금액 우선)에서는 발생할 수 없지만, 순서가 예산·예정가 우선으로 되돌아가면
     같은 item 이 즉시 ERROR 를 낸다 — 검증기가 순서를 하드코딩하지 않는다는 증명.
     """
-    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", _LEGACY_YEGA_FIRST_ORDER)
+    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", LEGACY_YEGA_FIRST_BASE_ORDER)
     item = {"presmptPrce": "100000000", "bssAmt": "90000000"}
     violations = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)
     assert _kinds(violations) == [ViolationKind.BASE_BASIS_PRECEDENCE]
@@ -216,7 +207,7 @@ def test_base_yega_only_populates_resolved_key():
 
 def test_base_precedence_populates_resolved_key(monkeypatch):
     # 드리프트 시나리오에서도 resolved_key 는 실제로 선택된 키를 담는다.
-    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", _LEGACY_YEGA_FIRST_ORDER)
+    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", LEGACY_YEGA_FIRST_BASE_ORDER)
     item = {"asignBdgtAmt": "100000000", "bssAmt": "90000000"}
     violations = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)
     assert violations[0].kind is ViolationKind.BASE_BASIS_PRECEDENCE
@@ -241,7 +232,7 @@ def test_presmpt_yega_only_is_not_benign():
 def test_precedence_on_asign_budget_is_not_benign(monkeypatch):
     # precedence(기초금액 키가 있는데도 배정예산이 먼저 선택됨)은 실 오류라 억제 금지.
     # 현 순서에서는 발생 불가라 드리프트 시나리오로 그 분류를 고정한다.
-    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", _LEGACY_YEGA_FIRST_ORDER)
+    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", LEGACY_YEGA_FIRST_BASE_ORDER)
     item = {"asignBdgtAmt": "100000000", "bssAmt": "90000000"}
     violation = fc.validate_base_basis(item, OperationFamily.NOTICE_LIST)[0]
     assert fc.is_known_benign(violation) is False
@@ -258,8 +249,8 @@ def test_non_base_violation_has_no_resolved_key_and_not_benign():
 
 
 def test_base_resolution_order_matches_documented_production_order():
-    # openapi.py:436-444 후보 리스트를 그대로 옮긴 기대값과 정확히 일치해야 한다
-    # (그룹 내부 순서 포함 — 예산 2키 다음 예정가 2키).
+    # 프로덕션이 소비하는 후보 순서를 그대로 옮긴 기대값과 정확히 일치해야 한다
+    # (그룹 내부 순서 포함 — 기초금액 3키 다음 예산 2키, 그다음 예정가 2키).
     assert fcs.BASE_RESOLUTION_ORDER == _PRODUCTION_BASE_ORDER
 
 
@@ -369,6 +360,44 @@ def test_zero_true_base_key_does_not_shadow_budget_fallback():
     )
     assert built is not None
     assert built.base_amount == 100_000_000.0
+
+
+def test_zero_estimate_candidate_does_not_leak_base_into_estimated_amount():
+    """0 으로 실린 추정가격이 선언된 예산 폴백을 건너뛰고 base 로 새지 않는다.
+
+    ``estimated_amount or base_amount`` 최종 폴백(추정가 후보가 전멸했을 때 base 를 쓰는
+    것)은 의도된 동작이다. 하지만 예산 후보가 양수로 살아있는데 추정가격이 0 이라는 이유로
+    그 최종 폴백이 발동하면, estimated 가 기초금액(basis 다름) 값이 되어
+    ``ESTIMATED_RESOLUTION_ORDER`` 선언과 어긋난다.
+    """
+    raw_item = {
+        "bidNtceNo": "20260800005",
+        "bidNtceNm": "추정가격 0",
+        "presmptPrce": "0",
+        "asignBdgtAmt": "100,000,000",
+        "bssAmt": "90,000,000",
+    }
+    built = openapi.build_openapi_notice_item(
+        raw_item, request=_drift_guard_request(), operation=_NOTICE_OP
+    )
+    assert built is not None
+    # 선언된 폴백 순서대로 배정예산이 추정가격 자리를 잇는다(기초금액이 아니라).
+    assert built.estimated_amount == 100_000_000.0
+    assert built.base_amount == 90_000_000.0
+
+
+def test_estimated_falls_back_to_base_when_all_estimate_candidates_absent():
+    # 추정가 후보가 전멸했을 때만 base 를 쓰는 최종 폴백은 기존 의도라 유지한다.
+    raw_item = {
+        "bidNtceNo": "20260800006",
+        "bidNtceNm": "추정가 후보 전멸",
+        "bssAmt": "90,000,000",
+    }
+    built = openapi.build_openapi_notice_item(
+        raw_item, request=_drift_guard_request(), operation=_NOTICE_OP
+    )
+    assert built is not None
+    assert built.estimated_amount == 90_000_000.0
 
 
 def test_true_base_keys_precede_fallback_group_in_resolution_order():
@@ -500,7 +529,7 @@ def test_validate_item_notice_both_base_keys_is_clean():
 
 
 def test_validate_item_notice_base_precedence_under_order_drift(monkeypatch):
-    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", _LEGACY_YEGA_FIRST_ORDER)
+    monkeypatch.setattr(fc, "BASE_RESOLUTION_ORDER", LEGACY_YEGA_FIRST_BASE_ORDER)
     item = {"bidNtceNo": "x", "presmptPrce": "100000000", "bssAmt": "90000000"}
     violations = fc.validate_item(item, operation=_NOTICE_OP)
     assert ViolationKind.BASE_BASIS_PRECEDENCE in _kinds(violations)

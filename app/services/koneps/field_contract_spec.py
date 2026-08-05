@@ -108,8 +108,9 @@ def operation_family(operation: str | None) -> OperationFamily:
 # 만들었다. 지금은 진짜 기초금액 키가 **앞선다**(아래 ``BASE_RESOLUTION_ORDER``). 각 키의
 # 실제 basis 를 데이터로 선언해 검증기가 해석만 한다.
 TRUE_BASE_KEYS: tuple[str, ...] = ("bssAmt", "bssamt", "bssAmtPurcnstcst")
-# 기초금액 키가 하나도 없을 때만 쓰는 **폴백** 그룹. 전부 BUDGET_ESTIMATE basis 라, 여기서
-# 해석되면 base 는 기초금액이 아니다(검증기가 BASE_BASIS_YEGA_ONLY WARN 으로 표면화한다).
+# **양수로 실린** 기초금액 키가 하나도 없을 때만 쓰는 폴백 그룹(0/미상은 없는 것으로 본다).
+# 전부 BUDGET_ESTIMATE basis 라, 여기서 해석되면 base 는 기초금액이 아니다(검증기가
+# BASE_BASIS_YEGA_ONLY WARN 으로 표면화한다).
 _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
     "asignBdgtAmt",  # 배정예산액 — 기초금액 아님
     "bdgtAmt",  # 예산금액 — 기초금액 아님
@@ -118,21 +119,24 @@ _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
 )
 # 이 순서가 base_amount 해석의 **단일 출처**다: openapi.build_openapi_notice_item 이
 # ``BASE_RESOLUTION_ORDER`` 를 import 해 base_amount 후보로 그대로 소비한다(더는 인라인
-# 리스트를 두지 않는다). 진짜 기초금액 3키가 먼저이고, 하나도 양수로 실리지 않은 공고에서만
-# 예산 2키(asignBdgtAmt, bdgtAmt) -> 예정가 2키(presmptPrce, presmptAmt) 로 폴백한다.
-# 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
+# 리스트를 두지 않는다). 진짜 기초금액 3키가 먼저이고, 그중 어느 것도 양수로 실리지 않은
+# 공고에서만 예산 2키(asignBdgtAmt, bdgtAmt) -> 예정가 2키(presmptPrce, presmptAmt) 로
+# 폴백한다. 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
 # ``first_openapi_amount(..., positive_only=True)``, 검증기는 같은 규칙을 모사) — 0 으로
 # 실린 기초금액 키가 양수 예산 폴백을 가리지 않게 하기 위함이다. 같은 상수를 공유하므로
-# 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 드리프트할 수 없다.
-# tests/test_koneps_field_contract.py 의 드리프트 가드가 실제 build_openapi_notice_item
-# 해석과 동치임을 실행으로 확인한다.
+# 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 **순서 축에서는** 드리프트할 수
+# 없다. positive-only 축은 프로덕션(openapi)과 검증기(field_contract)가 각각 구현하므로
+# 상수 공유가 보장해 주지 않는다 — tests/test_koneps_field_contract.py 의 드리프트 가드가
+# 실제 build_openapi_notice_item 해석과의 동치를 실행으로 확인한다.
 BASE_RESOLUTION_ORDER: tuple[str, ...] = TRUE_BASE_KEYS + _YEGA_OR_BUDGET_KEYS
 # 추정가격(estimated_amount) 해석 순서 — base 와 **별도** 후보 집합(단일 출처). base 와
 # 달리 추정가격은 추정가격 키(presmptPrce/presmptAmt)를 **먼저** 시도하고 예산 키로만
 # 폴백하며, 기초금액 키(bssAmt*)는 포함하지 않는다: 추정가격의 basis 는 BUDGET_ESTIMATE
 # 라 기초금액과 섞지 않는다(#162). openapi.build_openapi_notice_item 의 estimated_amount
 # 후보가 이 상수를 그대로 소비한다(인라인 리스트 제거). 후보 전부 BUDGET_ESTIMATE basis
-# 라 base 와 달리 기초금액-우선 재정렬 대상이 아니다.
+# 라 base 와 달리 기초금액-우선 재정렬 대상이 아니다. 0/미상 후보를 건너뛰는 규칙은 base 와
+# 동일하게 적용한다: 그러지 않으면 0 으로 실린 추정가격이 선언된 예산 폴백을 건너뛰고
+# ``estimated_amount or base_amount`` 최종 폴백을 발동시켜 estimated 가 기초금액 값이 된다.
 ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
     "presmptPrce",  # 추정가격(부가세 포함)
     "presmptAmt",  # 추정금액

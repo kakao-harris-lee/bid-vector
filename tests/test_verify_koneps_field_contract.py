@@ -11,6 +11,9 @@ from scripts.verify_koneps_field_contract import (
 )
 from app.services.koneps import field_contract
 from app.services.koneps.field_contract import Severity
+from tests.support.koneps_field_contract_fixtures import (
+    LEGACY_YEGA_FIRST_BASE_ORDER,
+)
 
 _SCSBID_OP = "getScsbidListSttusServc"
 _NOTICE_OP = "getBidPblancListInfoServc"
@@ -55,10 +58,7 @@ def test_build_report_renders_base_violation_and_fails(monkeypatch):
     # ERROR 가 나면 리포트가 FAIL 로 렌더된다는 계약은 유지 — base 위반으로 고정한다.
     # 현 순서에서는 precedence 가 불가능하므로 드리프트(예산·예정가 우선)로 재현한다.
     monkeypatch.setattr(
-        field_contract,
-        "BASE_RESOLUTION_ORDER",
-        ("asignBdgtAmt", "bdgtAmt", "presmptPrce", "presmptAmt")
-        + field_contract.TRUE_BASE_KEYS,
+        field_contract, "BASE_RESOLUTION_ORDER", LEGACY_YEGA_FIRST_BASE_ORDER
     )
     items = [{"bidNtceNo": "A", "presmptPrce": "100000000", "bssAmt": "90000000"}]
     report = build_report(items, operation=_NOTICE_OP)

@@ -385,13 +385,14 @@ def build_openapi_notice_item(
     title = str(
         raw_item.get("bidNtceNm") or raw_item.get("ntceNm") or notice_number
     ).strip()
-    # base_amount/estimated_amount 후보 키는 field_contract 가 단일 출처로 선언한다
-    # (#220 base==예정가 오염의 발원지 정리 — 순서·basis 는 그 모듈에서만 바뀐다).
-    # base 는 기초금액 키 우선이고 0/미상 후보는 건너뛴다(폴백을 가리지 않게).
+    # 후보 키와 순서는 field_contract_spec 이 단일 출처로 선언한다(#220 발원지 정리).
+    # 두 축 모두 0/미상 후보는 건너뛴다 — 0 이 뒤따르는 폴백 후보를 가리지 않게.
     base_amount = first_openapi_amount(
         raw_item, list(BASE_RESOLUTION_ORDER), positive_only=True
     )
-    estimated_amount = first_openapi_amount(raw_item, list(ESTIMATED_RESOLUTION_ORDER))
+    estimated_amount = first_openapi_amount(
+        raw_item, list(ESTIMATED_RESOLUTION_ORDER), positive_only=True
+    )
     business_type = str(
         raw_item.get("bsnsDivNm")
         or raw_item.get("prcmBsneSeCd")
@@ -472,10 +473,12 @@ def first_openapi_amount(
     """Return the first parseable amount from one OpenAPI row.
 
     ``positive_only`` treats a 0/negative value as absent and falls through to the
-    next candidate. base_amount resolution needs that: a ``bssAmt`` filled with 0
-    would otherwise shadow the positive budget fallback that follows it, and the
-    ``field_contract`` validator already simulates resolution as "first candidate
-    with a positive amount".
+    next candidate. Both notice amount axes need that: a ``bssAmt`` filled with 0
+    would otherwise shadow the positive budget fallback behind it, and a
+    ``presmptPrce`` filled with 0 would skip the declared estimate fallback and let
+    the ``estimated_amount or base_amount`` last resort put a 기초금액-basis value in
+    the estimate. The ``field_contract`` validator already simulates resolution as
+    "first candidate with a positive amount".
     """
     for key in candidate_keys:
         value = parsing.coerce_amount(raw_item.get(key))
