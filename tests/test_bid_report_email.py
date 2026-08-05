@@ -24,6 +24,7 @@ from app.core.single_user import ensure_operator_account
 from app.models.models import Analytics, BidDecisionRecord, Project, User
 from app.schemas.bid_form_draft import BID_FORM_DRAFT_NOTICE
 from app.schemas.bid_summary import DIRECT_SUBMISSION_NOTICE
+from app.schemas.prediction import FloorShortfallEstimate
 from app.services.notifications.email import (
     STATUS_DRY_RUN,
     STATUS_FAILED,
@@ -39,10 +40,15 @@ REPORT_EMAIL_PATH = "/api/v1/operations/bid-decisions/{record_id}/report-email"
 
 
 def _sample_summary() -> dict:
-    """이메일 렌더가 읽는 최소 요약 dict(값 테이블)."""
+    """이메일 렌더가 읽는 최소 요약 dict(값 테이블).
+
+    ``BidSummaryResponse`` 검증을 통과해야 하므로 그 계약의 필수 필드를 모두 담는다.
+    """
     return {
         "decision_record_id": 42,
         "operator_id": 1,
+        "generated_at": datetime(2026, 1, 20, 9, 0, tzinfo=UTC),
+        "category_floor": {"category": "construction", "floor_bid_rate": 0.87},
         "notice": {
             "project_id": 7,
             "title": "해양 준설 공사 공고",
@@ -50,14 +56,26 @@ def _sample_summary() -> dict:
             "demand_agency": "수요기관 D",
             "category": "construction",
             "business_type_label": "건축공사",
+            "budget_estimate": 100_000_000.0,
+            "bid_base_amount": 110_000_000.0,
             "deadline": datetime(2026, 2, 1, 10, 30, tzinfo=UTC),
         },
         "recommendation": {
-            "recommended_amount": 90_000_000.0,
-            "recommended_bid_rate": 0.9,
+            "recommended_amount": 96_800_000.0,
+            "recommended_bid_rate": 0.968,
+            "recommended_bid_rate_on_base": 0.88,
+            "probability_score": 0.72,
             "action": "bid_now",
             "decision_status": "planned",
         },
+        "floor_shortfall": FloorShortfallEstimate(
+            shortfall_frequency=0.3,
+            shortfall_sample_count=60,
+            sample_count=200,
+            minimum_sample_count=150,
+            critical_assessment_rate=1.0,
+            scope="테스트 표본",
+        ),
     }
 
 
@@ -127,15 +145,25 @@ def test_build_bid_report_email_renders_subject_html_text_csv():
     assert rendered.subject == "[투찰 보고서] 해양 준설 공사 공고"
 
     # 텍스트 본문: 추천 투찰가/투찰률/판단/결정 상태/공고 메타.
-    assert "추천 투찰가: 90,000,000원" in rendered.text_body
-    assert "투찰률(%): 90.000%" in rendered.text_body
+    assert "추천 투찰가: 96,800,000원" in rendered.text_body
+    # 투찰률은 낙찰하한율과 basis 가 같은 기초금액 기준 율(0.88)이어야 한다 —
+    # 추정가격 기준 율(0.968)을 실으면 하한 여유가 부풀어 보인다.
+    assert "투찰률(%) — 기초금액 기준: 88.000%" in rendered.text_body
+    assert "96.800%" not in rendered.text_body
+    # 두 금액이 각각 제 이름으로 실린다(한 라벨로 묶지 않는다).
+    assert "기초금액(사업금액): 110,000,000원" in rendered.text_body
+    assert "추정가격(부가세 별도): 100,000,000원" in rendered.text_body
+    # 하한 미달 빈도가 표본 수·임계 사정률과 함께 실린다(확률 아님).
+    assert "하한 미달 빈도(과거 표본): 30.0% (표본 200건, 임계 사정률 1.0)" in (
+        rendered.text_body
+    )
     assert "판단: 즉시 투찰" in rendered.text_body  # bid_now → 한국어 라벨
     assert "결정 상태: planned" in rendered.text_body
     assert "공고번호: 20260101-777" in rendered.text_body
 
     # HTML 본문: escape 적용 + 핵심 값 포함.
     assert "<html>" in rendered.html_body
-    assert "90,000,000원" in rendered.html_body
+    assert "96,800,000원" in rendered.html_body
 
     # 정직 고지가 본문(HTML+텍스트)에 존재 — 자동 제출 아님 / 보장 낙찰가 아님.
     for body in (rendered.text_body, rendered.html_body):

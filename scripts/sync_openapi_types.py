@@ -104,9 +104,9 @@ def normalize_open_objects(node: JsonValue) -> JsonValue:
     return normalized
 
 
-def normalize_openapi_schema(schema: dict[str, Any]) -> dict[str, Any]:
+def normalize_openapi_schema(schema: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """문서 최상위 경계용 얇은 래퍼 — dict 문서는 항상 dict 로 돌아온다(재귀 본체는 위)."""
-    return cast(dict[str, Any], normalize_open_objects(schema))
+    return cast(dict[str, JsonValue], normalize_open_objects(schema))
 
 
 def write_openapi_schema(schema: dict[str, Any], output_path: Path) -> None:

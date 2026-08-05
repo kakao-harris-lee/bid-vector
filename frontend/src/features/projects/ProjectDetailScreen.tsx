@@ -3,12 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { useShellContext } from "@/app/dashboardContext";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
-import {
-  formatCurrency,
-  formatCurrencyCompact,
-  formatDateTime,
-  formatPercent
-} from "@/shared/lib";
+import { formatDateTime, formatPercent } from "@/shared/lib";
+import { AmountWithBasis } from "@/shared/components";
+import { AMOUNT_BASIS_LABEL, BID_BASE_NOTE } from "@/shared/constants/amountBasis";
 import {
   ACTION_LABEL,
   ACTION_TONE,
@@ -84,7 +81,33 @@ export function ProjectDetailScreen() {
               <DetailRow label="공고번호" value={project.data.notice_number ?? "-"} />
               <DetailRow label="발주기관" value={project.data.issuing_agency ?? "-"} />
               <DetailRow label="수요기관" value={project.data.demand_agency ?? "-"} />
-              <DetailRow label="예산" value={formatCurrency(project.data.budget_estimate)} />
+              {/* 추정가격과 투찰 기준금액을 한 이름("예산")으로 묶지 않는다 — 투찰율은
+                  기초금액에 곱해지고 두 금액은 과세 공고에서 어긋난다. */}
+              <DetailRow
+                label={AMOUNT_BASIS_LABEL.estimate}
+                value={
+                  <AmountWithBasis
+                    amount={project.data.budget_estimate}
+                    basis="estimate"
+                    variant="inline"
+                  />
+                }
+              />
+              {project.data.bid_base_amount ? (
+                <DetailRow
+                  label={AMOUNT_BASIS_LABEL.bid_base}
+                  value={
+                    <AmountWithBasis
+                      amount={project.data.bid_base_amount}
+                      basis="bid_base"
+                      source={project.data.bid_base_source}
+                      ratio={project.data.bid_base_to_estimate_ratio}
+                      note={BID_BASE_NOTE}
+                      label={null}
+                    />
+                  }
+                />
+              ) : null}
               <DetailRow label="상태" value={project.data.status} />
               <DetailRow label="등록" value={formatDateTime(project.data.created_at)} />
               {project.data.source_url ? (
@@ -145,7 +168,12 @@ export function ProjectDetailScreen() {
                 </div>
                 <div className="flex items-center justify-between tabular-nums text-[var(--color-muted)]">
                   <span>우선순위 {formatPercent(record.priority_score)}</span>
-                  <span>{formatCurrencyCompact(record.recommended_amount)}</span>
+                  <AmountWithBasis
+                    amount={record.recommended_amount}
+                    basis="submission"
+                    variant="inline"
+                    compact
+                  />
                 </div>
                 {(record.strengths?.length ?? 0) > 0 || (record.risk_flags?.length ?? 0) > 0 ? (
                   <DecisionReasonsCard
@@ -178,7 +206,7 @@ export function ProjectDetailScreen() {
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[80px_1fr] gap-2 text-sm">
+    <div className="grid grid-cols-[132px_1fr] gap-2 text-sm">
       <dt className="text-[var(--color-muted)]">{label}</dt>
       <dd className="break-words text-[var(--color-fg)]">{value}</dd>
     </div>

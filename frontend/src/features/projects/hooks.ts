@@ -12,8 +12,8 @@ import {
 } from "@/shared/api";
 import type {
   BidDecisionTimelineResponse,
+  ProjectDetailResponse,
   ProjectListResult,
-  ProjectResponse,
   ProjectSimilaritySearchResponse,
   SimilarProjectsRefreshOperationResponse,
   SimilarProjectsRefreshOperationStatusResponse
@@ -31,7 +31,7 @@ export function useProjectsQuery(session: AuthSession | null, query: ProjectList
 }
 
 export function useProjectQuery(session: AuthSession | null, id: number | null) {
-  return useQuery<ProjectResponse, Error>({
+  return useQuery<ProjectDetailResponse, Error>({
     queryKey: id !== null ? queryKeys.projects.detail(id) : ["projects", "detail", "none"],
     queryFn: () => fetchProject(id as number, session?.token),
     enabled: Boolean(session?.token) && id !== null

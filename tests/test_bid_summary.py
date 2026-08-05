@@ -15,6 +15,7 @@ from app.core.security import get_password_hash
 from app.core.single_user import ensure_operator_account
 from app.models.models import (
     BidDecisionRecord,
+    HistoricalData,
     PricePrediction,
     Project,
     SyntheticExperiment,
@@ -126,6 +127,57 @@ def test_bid_summary_aggregates_known_decision(client, test_db):
     assert payload["field_stat"] is None
     # 연결된 예측이 없으면 prediction 은 null.
     assert payload["prediction"] is None
+
+
+def test_bid_summary_exposes_bid_base_alongside_budget_estimate(client, test_db):
+    """공고 메타가 기초금액(투찰 기준금액)과 추정가격을 분리해 낸다.
+
+    기초금액이 실제로 적재된 과세 공고에서는 참고 하한가와 하한 비교용 투찰율도
+    기초금액 기준으로 환산돼야 한다 — 추정가격 기준으로 재면 하한 여유가 부풀어 보인다.
+    """
+    project, decision = _seed_project_and_decision(
+        test_db, recommended_amount=96_800_000.0
+    )
+    test_db.add(
+        HistoricalData(
+            project_id=project.id,
+            notice_number=project.notice_number,
+            category="construction",
+            base_amount=110_000_000.0,
+        )
+    )
+    test_db.commit()
+
+    payload = client.get(SUMMARY_PATH.format(record_id=decision.id)).json()
+
+    notice = payload["notice"]
+    assert notice["budget_estimate"] == 100_000_000.0
+    assert notice["bid_base_amount"] == 110_000_000.0
+    assert notice["bid_base_source"] == "base-fallback"
+    assert notice["bid_base_to_estimate_ratio"] == 1.1
+    assert "기초금액" in notice["bid_base_note"]
+
+    rec = payload["recommendation"]
+    assert rec["recommended_bid_rate"] == 0.968  # 추정가격 기준(참고)
+    assert rec["recommended_bid_rate_on_base"] == 0.88  # 기초금액 기준(하한과 동일 basis)
+
+    # 참고 하한가는 기초금액 * 0.87 (추정가격 기준 87,000,000 이 아니다).
+    assert payload["category_floor"]["floor_price"] == 95_700_000.0
+
+
+def test_bid_summary_bid_base_falls_back_to_budget_estimate(client, test_db):
+    """기초금액이 적재되지 않은 공고는 추정가격으로 폴백하고 그 사실을 출처로 알린다."""
+    _, decision = _seed_project_and_decision(test_db)
+
+    payload = client.get(SUMMARY_PATH.format(record_id=decision.id)).json()
+
+    notice = payload["notice"]
+    assert notice["bid_base_amount"] == 100_000_000.0
+    assert notice["bid_base_source"] == "budget-estimate-fallback"
+    assert notice["bid_base_to_estimate_ratio"] == 1.0
+    # 폴백이면 두 basis 의 투찰율이 같은 값이라 기존 판정이 그대로 보존된다.
+    rec = payload["recommendation"]
+    assert rec["recommended_bid_rate"] == rec["recommended_bid_rate_on_base"] == 0.9
 
 
 def test_bid_summary_includes_linked_prediction(client, test_db):

@@ -50,7 +50,9 @@ R26BK01490237, 입찰 2026-04-27~05-06 — 국가계약 +2%p 개정일 **이후*
 
 경계
 ----
-이 모듈은 **분석(홀드아웃 품질 판정) 전용**이다. predictor·guardrail·라이브 예측이
+이 모듈은 **분석·표시 전용**이다(홀드아웃 품질 판정 + 운영자 대면 하한 미달 빈도 —
+``app/services/notice_floor_shortfall.py`` 가 :func:`is_floor_judgeable` 를 같은 규칙으로
+소비한다). predictor·guardrail·라이브 예측이
 쓰는 하한(``legal_floor_spec`` / ``guardrail_core``)에는 관여하지 않는다 — 라이브는
 공고가 게시한 하한을 ``max()`` 로만 접어 올리므로 여기서 "신뢰 못 함"으로 본 값도
 라이브에서는 그대로 안전 방향으로만 작동한다.

@@ -34,6 +34,9 @@ from app.models.models import (
     SyntheticExperimentRun,
     User,
 )
+from app.schemas.bid_summary import BID_BASE_NOTE
+from app.services.bid_base import NoticeBidBase, describe_notice_bid_base
+from app.services.notice_floor_shortfall import estimate_notice_floor_shortfall
 from app.services.stored_json_payload import load_stored_json_value
 from app.services.synthetic_experiment import RESULT_BREAKDOWN_COLUMN
 from app.utils.sequence_coercion import as_str_list
@@ -60,17 +63,9 @@ class BidSummaryService:
         an unknown / cross-operator record id so the router can map it to 404.
         """
         target = operator or ensure_operator_account(db)
-        record = (
-            db.query(BidDecisionRecord)
-            .filter(
-                BidDecisionRecord.id == decision_record_id,
-                BidDecisionRecord.operator_id == target.id,
-            )
-            .first()
+        record = self._load_decision_record(
+            db, decision_record_id, operator_id=int(target.id)
         )
-        if record is None:
-            raise ValueError("Bid decision record not found")
-
         project = record.project
         if project is None:
             raise ValueError("Project not found for bid decision record")
@@ -79,23 +74,57 @@ class BidSummaryService:
         prediction = self._load_linked_prediction(
             db, project_id=record.project_id, operator_id=target.id
         )
+        # 기초금액은 이 요약의 여러 자리(공고 메타·투찰율·참고 하한가·하한 미달 빈도)가
+        # 함께 쓰므로 한 번만 해석해 나눠 쓴다 — 자리마다 다시 풀면 서로 다른 금액을 쓸
+        # 여지가 생긴다(그 어긋남이 애초의 사고 원인이었다).
+        bid_base = describe_notice_bid_base(db, project)
+        recommendation = self._build_recommendation(
+            record, bid_base=bid_base, strengths=strengths, risk_flags=risk_flags
+        )
 
         return {
             "decision_record_id": int(record.id),
             "operator_id": int(target.id),
             "generated_at": utc_now(),
-            "notice": self._build_notice(project),
-            "recommendation": self._build_recommendation(
-                record, strengths=strengths, risk_flags=risk_flags
-            ),
+            "notice": self._build_notice(project, bid_base=bid_base),
+            "recommendation": recommendation,
             "prediction": self._build_prediction(prediction),
-            "category_floor": self._build_category_floor(project),
+            "category_floor": self._build_category_floor(project, bid_base=bid_base),
+            "floor_shortfall": estimate_notice_floor_shortfall(
+                db,
+                project,
+                recommended_amount=float(
+                    recommendation.get("recommended_amount") or 0.0
+                ),
+                bid_base_amount=float(bid_base.amount),
+            ),
             "field_stat": self._build_field_stat(db, category=project.category),
         }
 
+    def _load_decision_record(
+        self, db: Session, decision_record_id: int, *, operator_id: int
+    ) -> BidDecisionRecord:
+        """Return this operator's own decision record, or raise ``ValueError``.
+
+        The operator filter is what keeps the single-operator scope: another
+        operator's record id resolves to nothing and the router maps the
+        ``ValueError`` to 404 (not 403) so ids stay unenumerable.
+        """
+        record = (
+            db.query(BidDecisionRecord)
+            .filter(
+                BidDecisionRecord.id == decision_record_id,
+                BidDecisionRecord.operator_id == operator_id,
+            )
+            .first()
+        )
+        if record is None:
+            raise ValueError("Bid decision record not found")
+        return record
+
     # --- notice ---------------------------------------------------------------
 
-    def _build_notice(self, project: Project) -> dict:
+    def _build_notice(self, project: Project, *, bid_base: NoticeBidBase) -> dict:
         return {
             "project_id": int(project.id),
             "title": str(project.title or ""),
@@ -103,6 +132,10 @@ class BidSummaryService:
             "category": project.category,
             "business_type_label": project.business_type_label,
             "budget_estimate": float(project.budget_estimate or 0.0),
+            "bid_base_amount": float(bid_base.amount),
+            "bid_base_source": bid_base.source,
+            "bid_base_to_estimate_ratio": bid_base.to_estimate_ratio,
+            "bid_base_note": BID_BASE_NOTE,
             "demand_agency": project.demand_agency,
             "issuing_agency": project.issuing_agency,
             "deadline": project.deadline,
@@ -116,6 +149,7 @@ class BidSummaryService:
         self,
         record: BidDecisionRecord,
         *,
+        bid_base: NoticeBidBase,
         strengths: list[str],
         risk_flags: list[str],
     ) -> dict:
@@ -126,9 +160,19 @@ class BidSummaryService:
             if budget > 0 and recommended_amount > 0
             else None
         )
+        # 하한 비교에 쓰이는 율은 기초금액 기준이어야 한다 — 추정가격으로 나눈 위의 율은
+        # 과세 공고에서 약 10% 부풀어(#162), 실제로는 하한 아래인 추천가를 여유 있는
+        # 것처럼 보이게 만든다.
+        base_amount = float(bid_base.amount)
+        recommended_bid_rate_on_base = (
+            round(recommended_amount / base_amount, 6)
+            if base_amount > 0 and recommended_amount > 0
+            else None
+        )
         return {
             "recommended_amount": recommended_amount,
             "recommended_bid_rate": recommended_bid_rate,
+            "recommended_bid_rate_on_base": recommended_bid_rate_on_base,
             "probability_score": float(record.probability_score or 0.0),
             "action": str(record.action or "skip"),
             "decision_status": str(record.decision_status or "planned"),
@@ -190,7 +234,9 @@ class BidSummaryService:
 
     # --- category floor (낙찰하한율 참고) -------------------------------------
 
-    def _build_category_floor(self, project: Project) -> dict:
+    def _build_category_floor(
+        self, project: Project, *, bid_base: NoticeBidBase
+    ) -> dict:
         """Resolve the reference category 낙찰하한율 via the predictor guardrail.
 
         Imports are deferred and read-only — ``app/ai`` is ml-builder territory;
@@ -218,10 +264,13 @@ class BidSummaryService:
                 exc_info=True,
             )
 
-        budget = float(project.budget_estimate or 0.0)
+        # 이 율은 예측이 기초금액에 곱하는 값이므로 참고 하한가도 기초금액으로 환산한다.
+        # (기초금액을 확보하지 못한 공고는 base 가 추정가격으로 폴백하므로 값이 종전과
+        # 동일하다 — 기초금액이 실제로 있는 공고에서만 하한가가 올바르게 올라간다.)
+        base_amount = float(bid_base.amount)
         floor_price = (
-            round(budget * floor_bid_rate, 2)
-            if floor_bid_rate is not None and budget > 0
+            round(base_amount * floor_bid_rate, 2)
+            if floor_bid_rate is not None and base_amount > 0
             else None
         )
         return {

@@ -13,6 +13,8 @@
  * 제출 산출물이 아니다 — 운영자가 나라장터(KONEPS)에 직접 입력·제출한다.
  */
 
+import type { FloorShortfallEstimate } from "@/shared/types/floorShortfall";
+
 export interface BidFormDraftField {
   /** 안정적 식별 키(프론트 매핑용, 영문 snake_case). */
   key: string;
@@ -35,12 +37,28 @@ export interface BidFormDraftResponse {
   notice_number?: string | null;
   title: string;
   demand_agency?: string | null;
-  /** 기초금액(추정가격). 예정가/실하한가는 개찰 전 미공개. */
+  /**
+   * 추정가격(부가세 별도 표기). **투찰 기준금액이 아니다** — 투찰율은
+   * `bid_base_amount` 에 곱해진다. 예정가/실하한가는 개찰 전 미공개.
+   */
   budget_estimate: number;
-  /** 추천 투찰금액(원). */
+  /** 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). */
+  bid_base_amount: number;
+  /** 기초금액 출처(clean-base / reserve-estimate / base-fallback / budget-estimate-fallback). */
+  bid_base_source?: string | null;
+  /** 기초금액 ÷ 추정가격. 추정가격이 0 이면 null. */
+  bid_base_to_estimate_ratio?: number | null;
+  /** 두 금액이 왜 다른지 설명하는 서버 문구(단일 출처). */
+  bid_base_note: string;
+  /**
+   * 추천 투찰금액(원) — 나라장터에 그대로 입력하는 제출값. 기초금액 기준으로 산정되므로
+   * 과세 공고에서는 부가세가 포함된 금액이다.
+   */
   recommended_amount: number;
-  /** 추천 투찰률 = 추천 투찰가 / 추정가격. budget>0 일 때만. */
+  /** 추천 투찰가 / 추정가격 — 참고 지표. 적격심사가 보는 율이 아니다. */
   recommended_bid_rate?: number | null;
+  /** 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율과 같은 basis 의 투찰률. */
+  recommended_bid_rate_on_base?: number | null;
   category?: string | null;
   business_type_label?: string | null;
   /** 투찰 마감일시. */
@@ -56,6 +74,13 @@ export interface BidFormDraftResponse {
    */
   lottery_numbers: number[];
   lottery_numbers_note: string;
+
+  /**
+   * 추천 투찰가가 낙찰하한 미달이 됐을 과거 표본 빈도(실격 확률 아님). null 이면
+   * 산출 경로가 동작하지 않은 것이고, 내부 `shortfall_frequency` 가 null 이면
+   * "위험 없음"이 아니라 "판정 불가"다.
+   */
+  floor_shortfall?: FloorShortfallEstimate | null;
 
   /** 나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력. */
   fields: BidFormDraftField[];

@@ -43,6 +43,11 @@ const bidSummary: BidSummaryResponse = {
     category: "construction",
     business_type_label: "토목공사",
     budget_estimate: 500_000_000,
+    bid_base_amount: 550_000_000,
+    bid_base_source: "clean-base",
+    bid_base_to_estimate_ratio: 1.1,
+    bid_base_note:
+      "투찰율이 곱해지는 기준금액은 기초금액/사업금액(과세 공고면 부가세 포함)이며, 추정가격(부가세 별도 표기)과 다른 금액입니다.",
     demand_agency: "한국공항공사",
     issuing_agency: "조달청",
     deadline: "2026-06-20T05:00:00Z",
@@ -52,6 +57,7 @@ const bidSummary: BidSummaryResponse = {
   recommendation: {
     recommended_amount: 430_000_000,
     recommended_bid_rate: 0.86,
+    recommended_bid_rate_on_base: 0.782,
     probability_score: 0.72,
     action: "bid_now",
     decision_status: "planned",
@@ -90,6 +96,15 @@ const bidSummary: BidSummaryResponse = {
     source_operator_slug: "synthetic-aggressive",
     note: "최신 백테스트 분야 추정 지표입니다. 실제 낙찰률이 아닙니다."
   },
+  floor_shortfall: {
+    shortfall_frequency: 0.124,
+    shortfall_sample_count: 17,
+    sample_count: 137,
+    minimum_sample_count: 30,
+    critical_assessment_rate: 1.0234,
+    scope: "공사 · clean base",
+    unmeasurable_reason: null
+  },
   direct_submission_notice:
     "이 요약은 투찰 판단 참고용입니다. 실제 나라장터(KONEPS) 투찰서 작성·제출은 운영자가 직접 진행해야 합니다."
 };
@@ -102,8 +117,14 @@ const bidFormDraft: BidFormDraftResponse = {
   title: "테스트 공항 시설 공고",
   demand_agency: "한국공항공사",
   budget_estimate: 500_000_000,
+  bid_base_amount: 550_000_000,
+  bid_base_source: "clean-base",
+  bid_base_to_estimate_ratio: 1.1,
+  bid_base_note:
+    "투찰율이 곱해지는 기준금액은 기초금액/사업금액(과세 공고면 부가세 포함)이며, 추정가격(부가세 별도 표기)과 다른 금액입니다.",
   recommended_amount: 430_000_000,
   recommended_bid_rate: 0.86,
+  recommended_bid_rate_on_base: 0.782,
   category: "construction",
   business_type_label: "토목공사",
   deadline: "2026-06-20T05:00:00Z",
@@ -115,18 +136,39 @@ const bidFormDraft: BidFormDraftResponse = {
     "무작위 편의 픽입니다. 개별 번호 선택은 낙찰 결과에 영향이 없습니다.",
   fields: [
     {
+      key: "bid_base_amount",
+      field_label: "기초금액(사업금액)",
+      value: "₩550,000,000",
+      raw_value: 550_000_000,
+      note: "투찰율이 곱해지는 기준금액은 기초금액/사업금액(과세 공고면 부가세 포함)입니다.",
+    },
+    {
+      key: "budget_estimate",
+      field_label: "추정가격(부가세 별도)",
+      value: "₩500,000,000",
+      raw_value: 500_000_000,
+      note: "투찰 기준금액이 아닙니다(기준금액은 기초금액)."
+    },
+    {
       key: "recommended_amount",
       field_label: "투찰금액",
       value: "₩430,000,000",
       raw_value: 430_000_000,
-      note: null
+      note: "기초금액 기준으로 산정된 금액이라 과세 공고에서는 부가세가 포함돼 있습니다 — 그대로 입력합니다."
     },
     {
       key: "recommended_bid_rate",
-      field_label: "투찰률",
-      value: "86.0%",
-      raw_value: 0.86,
-      note: "추천 투찰가 / 추정가격 기준입니다."
+      field_label: "투찰률(%) — 기초금액 기준",
+      value: "78.2%",
+      raw_value: 0.782,
+      note: "투찰가 / 기초금액 비율. 낙찰하한율과 basis 가 같은 율입니다."
+    },
+    {
+      key: "floor_shortfall_frequency",
+      field_label: "하한 미달 빈도(과거 표본)",
+      value: "12.4% (표본 137건, 임계 사정률 1.0234)",
+      raw_value: 0.124,
+      note: "과거 개찰 표본에서 같은 투찰율이 낙찰하한 미달(실격)로 떨어졌을 표본 비율입니다."
     },
     {
       key: "lottery_numbers",
@@ -235,10 +277,33 @@ describe("BidSummaryScreen", () => {
       await screen.findByRole("heading", { name: "투찰 의사결정 요약", level: 2 })
     ).toBeInTheDocument();
 
-    // 추천 투찰가/투찰률 (요약 + 초안 두 곳에 나타날 수 있음)
-    expect(await screen.findByText("추천 투찰가")).toBeInTheDocument();
+    // 추천 투찰금액 (요약 + 초안 두 곳에 나타날 수 있음)
+    expect(await screen.findByText("추천 투찰금액")).toBeInTheDocument();
     expect(screen.getAllByText("₩430,000,000").length).toBeGreaterThan(0);
     expect(screen.getAllByText("86.0%").length).toBeGreaterThan(0);
+
+    // 제출값 basis — 기초금액 기준 산정이라 **과세 공고면** 부가세가 이미 포함돼 있다.
+    // 면세 공고까지 포함이라 단정하지 않도록 뱃지도 조건부로 적는다.
+    expect(screen.getAllByText("제출값 · 과세 공고 부가세 포함").length).toBeGreaterThan(0);
+    expect(screen.queryByText("부가세 포함 제출값")).not.toBeInTheDocument();
+
+    // 두 투찰률은 기준이 라벨에 박혀 서로 구분된다.
+    expect(screen.getByText("투찰률(기초금액 대비)")).toBeInTheDocument();
+    expect(screen.getByText("78.2%")).toBeInTheDocument();
+    expect(screen.getByText("투찰률(추정가격 대비, 참고)")).toBeInTheDocument();
+
+    // 추정가격과 투찰 기준금액이 분리돼 각각 보인다(요약 쪽은 프론트 basis 어휘).
+    expect(screen.getAllByText("추정가격(부가세 별도 표기)").length).toBeGreaterThan(0);
+    expect(screen.getByText("투찰 기준금액(기초금액/사업금액)")).toBeInTheDocument();
+    expect(screen.getAllByText("₩550,000,000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/공고 기초금액\(신뢰\)/).length).toBeGreaterThan(0);
+
+    // 하한 미달 빈도 — 과거 표본 비율로만 표기(확률 주장 금지).
+    expect(screen.getAllByText("하한 미달 빈도(과거 표본)").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("과거 개찰 표본 137건 중 12.4%가 낙찰하한 미달")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/실격 확률입니다|실격 가능성/)).toBeNull();
 
     // 가격 적합도(추정) 라벨 정직성 — "낙찰 확률/가능성" 류 문구가 없어야 함.
     expect(screen.getAllByText("가격 적합도(추정)").length).toBeGreaterThan(0);
@@ -282,6 +347,14 @@ describe("BidSummaryScreen", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("투찰금액")).toBeInTheDocument();
     expect(screen.getAllByText("₩430,000,000").length).toBeGreaterThan(0);
+    // 초안 입력 항목도 두 금액과 기초금액 기준 투찰률을 분리해 싣는다(서버 문구 그대로 —
+    // 프론트 basis 어휘로 바꿔 쓰지 않는다).
+    expect(screen.getByText("기초금액(사업금액)")).toBeInTheDocument();
+    expect(screen.getByText("추정가격(부가세 별도)")).toBeInTheDocument();
+    expect(screen.getByText("투찰률(%) — 기초금액 기준")).toBeInTheDocument();
+    expect(
+      screen.getByText("12.4% (표본 137건, 임계 사정률 1.0234)")
+    ).toBeInTheDocument();
     expect(screen.getByText("적격여부(추정)")).toBeInTheDocument();
     expect(screen.getByText("적격 추정")).toBeInTheDocument();
     // 자동 제출 아님 — 초안의 정직 안내 문구
@@ -584,5 +657,60 @@ describe("BidSummaryScreen", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("표시할 강점이 없습니다.")).toBeInTheDocument();
     expect(screen.getByText("감지된 주요 리스크가 없습니다.")).toBeInTheDocument();
+  });
+
+  it("하한 미달 빈도가 판정 불가면 0% 가 아니라 사유와 함께 판정 불가로 표시한다", async () => {
+    const unmeasurable: BidSummaryResponse = {
+      ...bidSummary,
+      floor_shortfall: {
+        ...bidSummary.floor_shortfall!,
+        shortfall_frequency: null,
+        shortfall_sample_count: 0,
+        sample_count: 4,
+        unmeasurable_reason: "사정률 표본 4건 < 최소 30건"
+      }
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+        return jsonResponse(unmeasurable);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByText("판정 불가")).toBeInTheDocument();
+    expect(screen.getByText("사정률 표본 4건 < 최소 30건")).toBeInTheDocument();
+    // 판정 불가를 0% 로 눕히면 "안전"으로 읽힌다 — 절대 합치지 않는다.
+    expect(screen.queryByText(/0\.0%가 낙찰하한 미달/)).toBeNull();
+  });
+
+  it("하한 미달 빈도 자체가 없으면 미산출로 구분해 표시한다", async () => {
+    const missing: BidSummaryResponse = { ...bidSummary, floor_shortfall: null };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url.endsWith("/api/v1/operations/bid-decisions/101/summary")) {
+        return jsonResponse(missing);
+      }
+      if (url.includes("/bid-decisions/101/bid-form-draft?format=json")) {
+        return jsonResponse(bidFormDraft);
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByText("미산출")).toBeInTheDocument();
+    expect(
+      screen.getByText(/하한 미달 위험이 없다는 뜻이 아니라 계산되지 않았다는 뜻입니다/)
+    ).toBeInTheDocument();
   });
 });

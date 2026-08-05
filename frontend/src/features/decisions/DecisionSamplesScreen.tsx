@@ -13,6 +13,10 @@ import {
   toastApi
 } from "@/shared/components/ui";
 import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
+import {
+  AMOUNT_BASIS_TEXT_LABEL,
+  BID_RATE_ON_ESTIMATE_LABEL
+} from "@/shared/constants/amountBasis";
 import type { DecisionSampleItem } from "@/shared/types/decisionSamples";
 
 const SAMPLE_DAYS_OPTIONS = [7, 30, 90] as const;
@@ -168,8 +172,14 @@ function SamplesCard({
               <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-muted)]">
                 <th className="py-1.5 pr-2 font-medium">공고명</th>
                 <th className="py-1.5 pr-2 font-medium">분야</th>
-                <th className="py-1.5 pr-2 text-right font-medium">추천 투찰가</th>
-                <th className="py-1.5 pr-2 text-right font-medium">추천 투찰률</th>
+                <th className="py-1.5 pr-2 text-right font-medium">
+                  {AMOUNT_BASIS_TEXT_LABEL.submission}
+                </th>
+                {/* 이 응답의 율은 추정가격 분모다(app/services/decision_samples.py) —
+                    적격심사가 보는 기초금액 기준 율과 같은 이름을 쓰지 않는다. */}
+                <th className="py-1.5 pr-2 text-right font-medium">
+                  {BID_RATE_ON_ESTIMATE_LABEL}
+                </th>
                 <th className="py-1.5 pr-2 text-right font-medium">가격 적합도(추정)</th>
                 <th className="py-1.5 pr-2 font-medium">상태</th>
                 <th className="py-1.5 pr-2 text-right font-medium">예측가</th>

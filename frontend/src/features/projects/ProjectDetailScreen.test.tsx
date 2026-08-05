@@ -5,7 +5,7 @@ import { toastApi } from "@/shared/components/ui";
 import type { DashboardSummaryResponse } from "@/shared/types";
 import type {
   BidDecisionTimelineResponse,
-  ProjectResponse,
+  ProjectDetailResponse,
   ProjectSimilaritySearchResponse
 } from "@/shared/types/project";
 
@@ -34,7 +34,7 @@ const emptySummary: DashboardSummaryResponse = {
   realtime_href: "/api/v1/realtime/events"
 };
 
-const projectA: ProjectResponse = {
+const projectA: ProjectDetailResponse = {
   id: 101,
   title: "공항 시스템 구축",
   description: "공항 IT",
@@ -46,7 +46,10 @@ const projectA: ProjectResponse = {
   issuing_agency: "조달청",
   demand_agency: "한국공항공사",
   status: "open",
-  created_at: "2026-05-01T00:00:00Z"
+  created_at: "2026-05-01T00:00:00Z",
+  bid_base_amount: 550_000_000,
+  bid_base_source: "clean-base",
+  bid_base_to_estimate_ratio: 1.1
 };
 
 const projectBareTimeline: BidDecisionTimelineResponse = {
@@ -192,5 +195,57 @@ describe("ProjectDetailScreen — project_view telemetry", () => {
     expect(await screen.findByText("유사 공고 갱신 완료")).toBeInTheDocument();
     expect(screen.queryByText(/임베딩|bid_vector_ml_inference/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "유사 공고 갱신" })).toBeEnabled();
+  });
+});
+
+describe("ProjectDetailScreen — 금액 basis 표시", () => {
+  function stubDetailFetch(project: ProjectDetailResponse) {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/dashboard/summary")) return jsonResponse(emptySummary);
+      if (url === `/api/v1/projects/${project.id}`) return jsonResponse(project);
+      if (url.startsWith(`/api/v1/projects/${project.id}/decision-timeline`))
+        return jsonResponse(projectBareTimeline);
+      if (url.startsWith(`/api/v1/projects/${project.id}/similar`))
+        return jsonResponse(emptySimilar);
+      if (url === "/api/v1/analytics/event" && init?.method === "POST")
+        return jsonResponse({}, 200);
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  }
+
+  it("추정가격과 투찰 기준금액을 서로 다른 금액으로 분리해 보여준다", async () => {
+    window.history.pushState({}, "", "/dashboard/projects/101");
+    stubDetailFetch(projectA);
+
+    renderApp();
+
+    expect(await screen.findByText("추정가격(부가세 별도 표기)")).toBeInTheDocument();
+    expect(screen.getByText("투찰 기준금액(기초금액/사업금액)")).toBeInTheDocument();
+    expect(screen.getByText("₩500,000,000")).toBeInTheDocument();
+    expect(screen.getByText("₩550,000,000")).toBeInTheDocument();
+    expect(screen.getByText("과세 공고 부가세 포함")).toBeInTheDocument();
+    expect(screen.getByText(/공고 기초금액\(신뢰\)/)).toBeInTheDocument();
+    expect(screen.getByText(/추정가격 대비 1.100배/)).toBeInTheDocument();
+    // 두 금액을 "예산" 한 이름으로 묶던 표기가 남아 있으면 안 된다.
+    expect(screen.queryByText("예산")).not.toBeInTheDocument();
+  });
+
+  it("기초금액을 확보하지 못한 공고는 투찰 기준금액 행을 만들지 않는다", async () => {
+    window.history.pushState({}, "", "/dashboard/projects/101");
+    stubDetailFetch({
+      ...projectA,
+      bid_base_amount: 0,
+      bid_base_source: null,
+      bid_base_to_estimate_ratio: null
+    });
+
+    renderApp();
+
+    expect(await screen.findByText("추정가격(부가세 별도 표기)")).toBeInTheDocument();
+    expect(
+      screen.queryByText("투찰 기준금액(기초금액/사업금액)")
+    ).not.toBeInTheDocument();
   });
 });

@@ -86,8 +86,7 @@
     "copy_success": "요약을 클립보드에 복사했습니다.",
     "copy_failure": "클립보드 복사에 실패했습니다.",
     "print": "인쇄",
-    "recommended_amount_label": "추천 투찰가",
-    "recommended_bid_rate_label": "추천 투찰률",
+    "recommended_amount_label": "추천 투찰금액",
     "probability_label": "가격 적합도(추정)",
     "probability_caveat": "P(낙찰)이 아닙니다 — 가격이 예측 적정대에 얼마나 부합하는지의 추정치입니다.",
     "prediction_title": "예측 가격대",
@@ -117,7 +116,6 @@
     "notice_title": "공고 정보",
     "notice_number_label": "공고번호",
     "category_label": "분류",
-    "budget_label": "추정가격(예산)",
     "agency_label": "수요기관",
     "deadline_label": "마감",
     "direct_submission_title": "직접 제출 안내"

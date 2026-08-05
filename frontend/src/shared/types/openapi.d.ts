@@ -854,7 +854,7 @@ export interface paths {
         };
         /**
          * Get Project
-         * @description Get project details
+         * @description Get project details, including the 투찰 기준금액(기초금액) bids are placed against.
          */
         get: operations["get_project_api_v1_projects__project_id__get"];
         /**
@@ -3376,20 +3376,46 @@ export interface components {
             demand_agency?: string | null;
             /**
              * Budget Estimate
-             * @description 기초금액(추정가격). 예정가/실하한가는 개찰 전 미공개.
+             * @description 추정가격(부가세 별도 표기). **기초금액과 다른 금액이며 투찰 기준금액이 아니다** — 투찰율은 bid_base_amount 에 곱해진다. 예정가/실하한가는 개찰 전 미공개.
              * @default 0
              */
             budget_estimate: number;
             /**
+             * Bid Base Amount
+             * @description 공고 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). 추천 투찰금액이 실제로 곱해진 금액이다.
+             * @default 0
+             */
+            bid_base_amount: number;
+            /**
+             * Bid Base Source
+             * @description 기초금액 출처(clean-base / reserve-estimate / base-fallback / budget-estimate-fallback).
+             */
+            bid_base_source?: string | null;
+            /**
+             * Bid Base To Estimate Ratio
+             * @description 기초금액 ÷ 추정가격(관측값). 1.1 부근은 전형적으로 부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다. 추정가격이 0 이면 null.
+             */
+            bid_base_to_estimate_ratio?: number | null;
+            /**
+             * Bid Base Note
+             * @default 투찰율이 곱해지는 기준금액은 기초금액/사업금액(과세 공고면 부가세 포함)이며, 추정가격(부가세 별도 표기)과 다른 금액입니다. 투찰금액은 기초금액 기준으로 산정되므로 추정가격에 투찰율을 곱해 검산하면 값이 어긋납니다.
+             */
+            bid_base_note: string;
+            /**
              * Recommended Amount
-             * @description 추천 투찰금액(원).
+             * @description 추천 투찰금액(원) — 나라장터에 그대로 입력하는 제출값. 기초금액 기준으로 산정되므로 과세 공고에서는 부가세가 포함된 금액이다.
              */
             recommended_amount: number;
             /**
              * Recommended Bid Rate
-             * @description 추천 투찰률 = 추천 투찰가 / 추정가격. budget>0 일 때만.
+             * @description 추천 투찰가 / 추정가격 — **참고 지표**. 적격심사가 보는 율이 아니다(그 율은 recommended_bid_rate_on_base). budget>0 일 때만.
              */
             recommended_bid_rate?: number | null;
+            /**
+             * Recommended Bid Rate On Base
+             * @description 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율(기초금액 기준)과 같은 basis 라 적격여부(추정) 판정과 투찰서 표기는 이 율을 쓴다. 실제 낙찰하한가는 개찰 시 추첨된 **예정가격** 기준이라 이 비교가 실격 여부를 결정하지는 않으며, 그 괴리 위험은 floor_shortfall 이 표시한다. bid_base_amount>0 일 때만.
+             */
+            recommended_bid_rate_on_base?: number | null;
             /**
              * Category
              * @description 카테고리(분류).
@@ -3425,6 +3451,8 @@ export interface components {
              * @default 무작위 편의 픽입니다(공고번호 기준 재현 가능). 복수예비가격 15개 중 2개를 고르는 절차로, 예정가격은 전체 투찰자의 선택을 합산해 정해지므로 개별 번호 선택은 낙찰 결과에 영향이 없습니다. 분석·최적화 결과가 아니며, 공고에 따라 복수예비가격 절차가 적용되지 않을 수 있습니다.
              */
             lottery_numbers_note: string;
+            /** @description 추천 투찰가가 낙찰하한 미달이 됐을 과거 표본 빈도(실격 확률 아님). 내부 shortfall_frequency 가 null 이면 '위험 없음'이 아니라 '판정 불가'이며 사유는 unmeasurable_reason 에 담긴다. */
+            floor_shortfall?: components["schemas"]["FloorShortfallEstimate"] | null;
             /**
              * Fields
              * @description 나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력.
@@ -3543,7 +3571,7 @@ export interface components {
             floor_bid_rate?: number | null;
             /**
              * Floor Price
-             * @description budget_estimate * floor_bid_rate 참고 하한가. 예정가 기준 아님.
+             * @description bid_base_amount * floor_bid_rate 참고 하한가. 이 율은 예측이 기초금액에 곱하는 값이므로 하한가도 기초금액 기준으로 환산한다(추정가격 기준 아님, 예정가 기준도 아님).
              */
             floor_price?: number | null;
             /**
@@ -3602,10 +3630,31 @@ export interface components {
             business_type_label?: string | null;
             /**
              * Budget Estimate
-             * @description 공고 추정가격(예산). 예정가/실하한가는 개찰 전 미공개.
+             * @description 추정가격(부가세 별도 표기). **투찰 기준금액이 아니다** — 투찰율은 bid_base_amount 에 곱해진다. 예정가/실하한가는 개찰 전 미공개.
              * @default 0
              */
             budget_estimate: number;
+            /**
+             * Bid Base Amount
+             * @description 공고 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). 추천 투찰금액이 실제로 곱해진 금액이다.
+             * @default 0
+             */
+            bid_base_amount: number;
+            /**
+             * Bid Base Source
+             * @description 기초금액 출처(clean-base / reserve-estimate / base-fallback / budget-estimate-fallback). budget-estimate-fallback 은 기초금액을 확보하지 못해 추정가격을 그대로 기준금액으로 쓴 상태.
+             */
+            bid_base_source?: string | null;
+            /**
+             * Bid Base To Estimate Ratio
+             * @description 기초금액 ÷ 추정가격(관측값). 1.0 이면 두 금액이 같고 1.1 부근은 전형적으로 부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다(저장된 추정가격의 부가세 포함 여부가 이력상 일관되지 않다). 추정가격이 0 이면 null.
+             */
+            bid_base_to_estimate_ratio?: number | null;
+            /**
+             * Bid Base Note
+             * @default 투찰율이 곱해지는 기준금액은 기초금액/사업금액(과세 공고면 부가세 포함)이며, 추정가격(부가세 별도 표기)과 다른 금액입니다. 투찰금액은 기초금액 기준으로 산정되므로 추정가격에 투찰율을 곱해 검산하면 값이 어긋납니다.
+             */
+            bid_base_note: string;
             /** Demand Agency */
             demand_agency?: string | null;
             /** Issuing Agency */
@@ -3656,14 +3705,19 @@ export interface components {
         BidSummaryRecommendation: {
             /**
              * Recommended Amount
-             * @description 추천 투찰가(원).
+             * @description 추천 투찰가(원) — 나라장터에 그대로 입력하는 제출값이다. 기초금액 기준으로 산정되므로 과세 공고에서는 부가세가 포함된 금액이다(추정가격 기준 아님).
              */
             recommended_amount: number;
             /**
              * Recommended Bid Rate
-             * @description 추천 투찰가 / 추정가격. budget_estimate>0 일 때만 산출.
+             * @description 추천 투찰가 / 추정가격 — **참고 지표**. 적격심사가 보는 율이 아니다(그 율은 recommended_bid_rate_on_base). budget_estimate>0 일 때만 산출.
              */
             recommended_bid_rate?: number | null;
+            /**
+             * Recommended Bid Rate On Base
+             * @description 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율(기초금액 기준)과 같은 basis 의 율이라 그 참고 비교는 이 값으로 한다. 실제 낙찰하한가는 개찰 시 추첨된 **예정가격** 기준으로 결정되므로 이 율이 참고 하한 위에 있어도 실격일 수 있으며, 그 괴리 위험은 floor_shortfall(하한 미달 빈도)이 표시한다. bid_base_amount>0 일 때만 산출.
+             */
+            recommended_bid_rate_on_base?: number | null;
             /**
              * Probability Score
              * @description 가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)
@@ -3726,6 +3780,8 @@ export interface components {
             recommendation: components["schemas"]["BidSummaryRecommendation"];
             prediction?: components["schemas"]["BidSummaryPrediction"] | null;
             category_floor: components["schemas"]["BidSummaryCategoryFloor"];
+            /** @description 추천 투찰가가 낙찰하한 미달이 됐을 과거 표본 빈도(실격 확률 아님). 내부 shortfall_frequency 가 null 이면 '위험 없음'이 아니라 '판정 불가'이며 unmeasurable_reason 에 사유가 담긴다. 이 필드 자체가 null 이면 산출 경로가 동작하지 않은 것. */
+            floor_shortfall?: components["schemas"]["FloorShortfallEstimate"] | null;
             /** @description 분야 통계(없거나 미산출 시 null — graceful). */
             field_stat?: components["schemas"]["BidSummaryFieldStat"] | null;
             /**
@@ -5952,6 +6008,57 @@ export interface components {
             labeler_version?: string | null;
             /** Operator Id */
             operator_id: number;
+        };
+        /**
+         * FloorShortfallEstimate
+         * @description 추천 투찰가가 낙찰하한 미달이 됐을 **과거 빈도**(추정) — 실격 확률이 아니다.
+         *
+         *     추천가는 기초금액 기준이고 실격 하한은 추첨된 예정가격 기준이라, 사정률
+         *     (예정가/기초금액) 추첨 결과에 따라 같은 추천가도 하한 위/아래로 갈린다. 이 DTO 는
+         *     과거 개찰 표본에서 그 경계를 넘긴 **표본 비율**만 전달한다(정직 명세 §2). 이번
+         *     공고의 추첨에 대한 확률 주장이 아니므로 UI/문구에서 "실격 확률"로 표시하면 안 된다.
+         *
+         *     ``shortfall_frequency is None`` 은 **"위험 없음"이 아니라 "판정 불가"** 다
+         *     (``unmeasurable_reason`` 참조). 0.0 과 절대 같은 표시로 합치지 않는다.
+         */
+        FloorShortfallEstimate: {
+            /**
+             * Shortfall Frequency
+             * @description 과거 사정률 표본 중 이 추천율이 낙찰하한 미달이 됐을 표본 비율(0-1). 실제 실격 확률이 아니다. None 이면 판정 불가(표본 부족 등).
+             */
+            shortfall_frequency?: number | null;
+            /**
+             * Shortfall Sample Count
+             * @description 임계 사정률을 초과한 표본 수(빈도의 분자).
+             * @default 0
+             */
+            shortfall_sample_count: number;
+            /**
+             * Sample Count
+             * @description 빈도 산출에 실제로 쓰인 사정률 표본 수(분모).
+             * @default 0
+             */
+            sample_count: number;
+            /**
+             * Minimum Sample Count
+             * @description 빈도를 발표하기 위해 요구한 최소 표본 수(이 미만이면 판정 불가).
+             */
+            minimum_sample_count: number;
+            /**
+             * Critical Assessment Rate
+             * @description 임계 사정률 = 추천 투찰율 ÷ 낙찰하한율. 사정률(예정가/기초금액)이 이 값을 초과하면 추천가가 하한 미달이 된다.
+             */
+            critical_assessment_rate?: number | null;
+            /**
+             * Scope
+             * @description 표본을 고른 기준(오염 필터·카테고리·기준일)을 사람이 읽을 수 있게 요약.
+             */
+            scope: string;
+            /**
+             * Unmeasurable Reason
+             * @description 판정 불가 사유. 측정된 경우 None.
+             */
+            unmeasurable_reason?: string | null;
         };
         /** ForwardPaperBiddingRunRequest */
         ForwardPaperBiddingRunRequest: {
@@ -8948,7 +9055,10 @@ export interface components {
             description: string;
             /** Requirements */
             requirements: string;
-            /** Budget Estimate */
+            /**
+             * Budget Estimate
+             * @description 추정가격(부가세 별도 표기). 투찰율이 곱해지는 기초금액/사업금액과는 다른 금액이므로 이 값에 투찰율을 곱해 투찰금액을 검산하면 안 된다(#162).
+             */
             budget_estimate: number;
             /** Category */
             category: string;
@@ -8966,6 +9076,62 @@ export interface components {
             budget_max?: number | null;
             /** Deadline */
             deadline?: string | null;
+        };
+        /**
+         * ProjectDetailResponse
+         * @description 공고 상세 — 목록 응답에 투찰 기준금액(기초금액)을 더한 형태.
+         *
+         *     목록(``ProjectResponse``)에는 넣지 않는다. 기초금액 해석은 공고당 ``HistoricalData``
+         *     조회를 한 번 더 요구하므로 목록 payload/쿼리를 그만큼 불리고, 운영자가 금액 basis 를
+         *     확인해야 하는 자리는 상세 화면이기 때문이다.
+         */
+        ProjectDetailResponse: {
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            /** Requirements */
+            requirements: string;
+            /**
+             * Budget Estimate
+             * @description 추정가격(부가세 별도 표기). 투찰율이 곱해지는 기초금액/사업금액과는 다른 금액이므로 이 값에 투찰율을 곱해 투찰금액을 검산하면 안 된다(#162).
+             */
+            budget_estimate: number;
+            /** Category */
+            category: string;
+            /** Notice Number */
+            notice_number?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Issuing Agency */
+            issuing_agency?: string | null;
+            /** Demand Agency */
+            demand_agency?: string | null;
+            /** Id */
+            id: number;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Bid Base Amount
+             * @description 공고 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). 추천/제출 투찰금액이 곱해지는 금액이며 budget_estimate(추정가격)와 다르다.
+             * @default 0
+             */
+            bid_base_amount: number;
+            /**
+             * Bid Base Source
+             * @description 기초금액 출처(clean-base / reserve-estimate / base-fallback / budget-estimate-fallback). budget-estimate-fallback 은 기초금액을 확보하지 못해 추정가격을 그대로 기준금액으로 쓴 상태.
+             */
+            bid_base_source?: string | null;
+            /**
+             * Bid Base To Estimate Ratio
+             * @description 기초금액 ÷ 추정가격(관측값). 1.0 이면 두 금액이 같고 1.1 부근은 전형적으로 부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다. 추정가격이 0 이면 null.
+             */
+            bid_base_to_estimate_ratio?: number | null;
         };
         /** ProjectEmbeddingBatchRefreshResponse */
         ProjectEmbeddingBatchRefreshResponse: {
@@ -9076,7 +9242,10 @@ export interface components {
             description: string;
             /** Requirements */
             requirements: string;
-            /** Budget Estimate */
+            /**
+             * Budget Estimate
+             * @description 추정가격(부가세 별도 표기). 투찰율이 곱해지는 기초금액/사업금액과는 다른 금액이므로 이 값에 투찰율을 곱해 투찰금액을 검산하면 안 된다(#162).
+             */
             budget_estimate: number;
             /** Category */
             category: string;
@@ -12401,7 +12570,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectResponse"];
+                    "application/json": components["schemas"]["ProjectDetailResponse"];
                 };
             };
             /** @description Validation Error */

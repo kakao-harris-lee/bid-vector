@@ -21,7 +21,8 @@ from app.schemas.schemas import (
     SimilarProjectsRefreshOperationResponse,
     SimilarProjectsRefreshOperationStatusResponse,
 )
-from app.schemas.project import SimilarProjectsResponse
+from app.schemas.project import ProjectDetailResponse, SimilarProjectsResponse
+from app.services.project_detail import build_project_detail
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.project_writes import (
     ProjectWriteNotFound,
@@ -211,9 +212,9 @@ def get_rebuild_project_embeddings_task_status(task_id: str):
     return get_project_embedding_rebuild_task_status(task_id)
 
 
-@router.get("/{project_id}", response_model=ProjectResponse)
+@router.get("/{project_id}", response_model=ProjectDetailResponse)
 def get_project(project_id: int, db: Session = Depends(get_db)):
-    """Get project details"""
+    """Get project details, including the 투찰 기준금액(기초금액) bids are placed against."""
     project = db.query(Project).filter(Project.id == project_id).first()
 
     if not project:
@@ -222,7 +223,7 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
             detail="Project not found"
         )
 
-    return project
+    return build_project_detail(db, project)
 
 
 @router.get("/{project_id}/similar", response_model=SimilarProjectsResponse)
