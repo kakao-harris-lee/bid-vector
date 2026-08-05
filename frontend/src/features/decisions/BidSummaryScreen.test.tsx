@@ -282,16 +282,18 @@ describe("BidSummaryScreen", () => {
     expect(screen.getAllByText("₩430,000,000").length).toBeGreaterThan(0);
     expect(screen.getAllByText("86.0%").length).toBeGreaterThan(0);
 
-    // 제출값 basis — 기초금액 기준 산정이라 과세 공고면 부가세가 이미 포함돼 있다.
-    expect(screen.getAllByText("부가세 포함 제출값").length).toBeGreaterThan(0);
+    // 제출값 basis — 기초금액 기준 산정이라 **과세 공고면** 부가세가 이미 포함돼 있다.
+    // 면세 공고까지 포함이라 단정하지 않도록 뱃지도 조건부로 적는다.
+    expect(screen.getAllByText("제출값 · 과세 공고 부가세 포함").length).toBeGreaterThan(0);
+    expect(screen.queryByText("부가세 포함 제출값")).not.toBeInTheDocument();
 
     // 두 투찰률은 기준이 라벨에 박혀 서로 구분된다.
     expect(screen.getByText("투찰률(기초금액 대비)")).toBeInTheDocument();
     expect(screen.getByText("78.2%")).toBeInTheDocument();
     expect(screen.getByText("투찰률(추정가격 대비, 참고)")).toBeInTheDocument();
 
-    // 추정가격과 투찰 기준금액이 분리돼 각각 보인다(요약 + 초안 입력 항목).
-    expect(screen.getAllByText("추정가격(부가세 별도)").length).toBeGreaterThan(0);
+    // 추정가격과 투찰 기준금액이 분리돼 각각 보인다(요약 쪽은 프론트 basis 어휘).
+    expect(screen.getAllByText("추정가격(부가세 별도 표기)").length).toBeGreaterThan(0);
     expect(screen.getByText("투찰 기준금액(기초금액/사업금액)")).toBeInTheDocument();
     expect(screen.getAllByText("₩550,000,000").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/공고 기초금액\(신뢰\)/).length).toBeGreaterThan(0);
@@ -345,8 +347,10 @@ describe("BidSummaryScreen", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("투찰금액")).toBeInTheDocument();
     expect(screen.getAllByText("₩430,000,000").length).toBeGreaterThan(0);
-    // 초안 입력 항목도 두 금액과 기초금액 기준 투찰률을 분리해 싣는다(서버 문구 그대로).
+    // 초안 입력 항목도 두 금액과 기초금액 기준 투찰률을 분리해 싣는다(서버 문구 그대로 —
+    // 프론트 basis 어휘로 바꿔 쓰지 않는다).
     expect(screen.getByText("기초금액(사업금액)")).toBeInTheDocument();
+    expect(screen.getByText("추정가격(부가세 별도)")).toBeInTheDocument();
     expect(screen.getByText("투찰률(%) — 기초금액 기준")).toBeInTheDocument();
     expect(
       screen.getByText("12.4% (표본 137건, 임계 사정률 1.0234)")

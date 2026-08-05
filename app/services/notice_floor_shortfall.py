@@ -16,9 +16,10 @@
 정직 명세(§2)
 -------------
 이 모듈이 내보내는 값은 **확률이 아니라 과거 표본 비율**이며, 낼 수 없을 때는 0 이
-아니라 사유가 붙은 "판정 불가"다. 특히 **하한율을 해석할 수 없는 공고**(게시값 없음 +
-공사 tier 도 해석 불가)는 위험이 없는 것이 아니라 측정이 불가능한 것이므로, 표본을
-읽지도 않고 사유를 붙여 돌려준다.
+아니라 사유가 붙은 "판정 불가"다. 판정을 포기하는 경우는 서로 다른 사유로 갈라 둔다 —
+투찰율을 만들 수 없음(기초금액/추천금액 무효) · 하한 모델 적용 대상이 아님(기관 유형) ·
+하한율 미해석(게시값 없음 + 공사 tier 도 해석 불가) · 산출 오류. 어느 쪽도 위험이 없는
+것이 아니라 측정이 불가능한 것이므로, 표본을 읽지도 않고 사유를 붙여 돌려준다.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable, Final, Optional
 
 from sqlalchemy.orm import Session
@@ -46,17 +48,44 @@ from app.services.floor_shortfall import (
 
 logger = logging.getLogger(__name__)
 
-# 하한율을 해석하지 못해 표본을 아예 읽지 않았을 때의 scope/사유(선언 — 호출부가 문자열을
-# 조립하지 않는다). "위험 없음"이 아니라 "측정 불가"임을 문구 자체가 말하게 둔다.
-_SCOPE_NOT_LOADED: Final[str] = "표본 미조회(낙찰하한율 미해석)"
+# 표본을 아예 읽지 않고 판정을 포기할 때의 scope/사유(선언 — 호출부가 문자열을 조립하지
+# 않는다). 사유는 **왜 못 쟀는지에 따라 갈린다** — "하한율을 못 구했다"와 "투찰율을 못
+# 구했다"와 "이 기관에는 하한 모델이 없다"는 운영자가 취할 다음 행동이 서로 다르다.
+# 어느 것도 "위험 없음"이 아니라 "측정 불가"임을 문구 자체가 말하게 둔다.
+_SCOPE_NO_FLOOR: Final[str] = "표본 미조회(낙찰하한율 미해석)"
+_SCOPE_FLOOR_NOT_APPLICABLE: Final[str] = "표본 미조회(적격심사 하한 모델 미적용)"
+_SCOPE_INVALID_INPUTS: Final[str] = "표본 미조회(투찰율 산출 불가)"
+_SCOPE_EXPOSURE_FAILED: Final[str] = "표본 미조회(산출 오류)"
+
 _REASON_FLOOR_UNRESOLVED: Final[str] = (
-    "이 공고의 낙찰하한율을 해석할 수 없어(게시값 없음) 하한 미달 여부의 경계를 "
-    "정의하지 못합니다. 위험이 없다는 뜻이 아닙니다."
+    "이 공고의 낙찰하한율을 해석할 수 없어(게시값 없음·공사 tier 미해석) 하한 미달 "
+    "여부의 경계를 정의하지 못합니다. 위험이 없다는 뜻이 아닙니다."
+)
+_REASON_FLOOR_NOT_APPLICABLE: Final[str] = (
+    "이 발주기관 유형에는 적격심사 낙찰하한 모델이 적용되지 않거나 적용 여부가 "
+    "불확실해 하한 미달 여부를 판정하지 않습니다. 위험이 없다는 뜻이 아닙니다."
+)
+_REASON_INVALID_BID_INPUTS: Final[str] = (
+    "추천 투찰금액 또는 기초금액이 유효하지 않아 투찰율을 산출할 수 없습니다. "
+    "위험이 없다는 뜻이 아닙니다."
 )
 _REASON_EXPOSURE_FAILED: Final[str] = (
     "하한 미달 빈도를 산출하는 중 오류가 발생해 값을 발표하지 않습니다. "
     "위험이 없다는 뜻이 아닙니다."
 )
+
+
+@dataclass(frozen=True)
+class NoticeFloorRate:
+    """해석된 낙찰하한율, 또는 왜 해석하지 못했는지(사유 + 스코프).
+
+    ``rate`` 가 ``None`` 이면 판정 불가이며, 그 이유가 ``reason`` 에 담긴다 — 호출부가
+    "하한을 못 구했다"는 한 가지 문구로 뭉뚱그리지 못하게 사유를 값과 함께 옮긴다.
+    """
+
+    rate: Optional[float]
+    reason: Optional[str] = None
+    scope: str = _SCOPE_NO_FLOOR
 
 
 class AssessmentRateSampleCache:
@@ -125,18 +154,47 @@ class AssessmentRateSampleCache:
 SAMPLE_CACHE: Final[AssessmentRateSampleCache] = AssessmentRateSampleCache()
 
 
-def resolve_notice_floor_rate(project: Project) -> Optional[float]:
-    """공고에 적용되는 낙찰하한율(예정가 기준 분수)을 해석한다. 못 하면 ``None``.
+def _agency_floor_applicability(project: Project) -> str:
+    """적용 범위 판정의 기관 축 — **발주기관 우선, 없으면 수요기관**.
 
-    우선순위 규칙은 :func:`~app.ai.holdout_quality.resolve_legal_floor_rate` 가 이미
-    선언·검증한 것을 그대로 쓴다(게시값 → 산림 예규 → 공사 era-tier). import 를 함수
-    안에 두는 것은 ``app/ai`` 가 ml-builder 소유라 **읽기 전용 소비**임을 경계에서
-    분명히 하려는 것이며, 계약이 깨지면 조용히 값이 사라지지 않도록 traceback 을 남기고
-    ``None``(=판정 불가)으로 떨어진다.
+    :func:`~app.ai.holdout_grouping.resolve_agency_group` 컨벤션을 따른다. 조달청 경유
+    공고처럼 발주≠수요인 건에서 하한 모델의 적용 여부를 가르는 것은 계약 주체인
+    발주기관이기 때문이다.
+    """
+    from app.ai.floor_applicability import resolve_floor_applicability
+
+    return resolve_floor_applicability(
+        getattr(project, "issuing_agency", None)
+        or getattr(project, "demand_agency", None)
+    )
+
+
+def resolve_notice_floor_rate(project: Project) -> NoticeFloorRate:
+    """공고에 적용되는 낙찰하한율(예정가 기준 분수)을 해석한다.
+
+    두 게이트를 순서대로 통과해야 값이 나온다.
+
+    1. **적용 범위**(:func:`~app.ai.floor_applicability.is_floor_judgeable`, #274) —
+       비국가기관(산학협력단·협동조합 등)이나 이름만으로 가릴 수 없는 부류(대학교)는
+       어떤 하한으로 재야 하는지 근거가 없어 판정하지 않는다. 홀드아웃 품질 판정
+       (``holdout_quality._is_floor_comparable``)이 쓰는 것과 **같은 술어**다 — 규칙이
+       두 벌이 되면 분석과 표시가 서로 다른 공고를 판정하게 된다(§4.5.8).
+    2. **하한 해석**(:func:`~app.ai.holdout_quality.resolve_legal_floor_rate`) —
+       게시값 → 산림 예규 → 공사 era-tier 우선순위를 그대로 쓴다.
+
+    ``app/ai`` import 를 함수 안에 두는 것은 그쪽이 ml-builder 소유라 **읽기 전용 소비**
+    임을 경계에서 분명히 하려는 것이며, 계약이 깨지면 조용히 값이 사라지지 않도록
+    traceback 을 남기고 판정 불가로 떨어진다.
     """
     try:
-        from app.ai.floor_applicability import resolve_floor_applicability
+        from app.ai.floor_applicability import is_floor_judgeable
         from app.ai.holdout_quality import resolve_legal_floor_rate
+
+        applicability = _agency_floor_applicability(project)
+        if not is_floor_judgeable(applicability):
+            return NoticeFloorRate(
+                None, _REASON_FLOOR_NOT_APPLICABLE, _SCOPE_FLOOR_NOT_APPLICABLE
+            )
 
         estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
         resolution = resolve_legal_floor_rate(
@@ -144,12 +202,11 @@ def resolve_notice_floor_rate(project: Project) -> Optional[float]:
             category=getattr(project, "category", None),
             estimation_amount=estimation_amount,
             reference_date=reference_date,
-            floor_applicability=resolve_floor_applicability(
-                getattr(project, "demand_agency", None)
-                or getattr(project, "issuing_agency", None)
-            ),
+            floor_applicability=applicability,
         )
-        return resolution.rate
+        if resolution.rate is None or resolution.rate <= 0:
+            return NoticeFloorRate(None, _REASON_FLOOR_UNRESOLVED, _SCOPE_NO_FLOOR)
+        return NoticeFloorRate(float(resolution.rate))
     except Exception as exc:  # pragma: no cover - defensive: keep the response graceful
         logger.warning(
             "낙찰하한율 해석 실패 (project %s): %s",
@@ -157,7 +214,7 @@ def resolve_notice_floor_rate(project: Project) -> Optional[float]:
             exc,
             exc_info=True,
         )
-        return None
+        return NoticeFloorRate(None, _REASON_EXPOSURE_FAILED, _SCOPE_EXPOSURE_FAILED)
 
 
 def _sample_scope_candidates(category: Optional[str]) -> tuple[Optional[str], ...]:
@@ -194,31 +251,34 @@ def estimate_notice_floor_shortfall(
         수 없으면 ``shortfall_frequency`` 가 ``None`` 이고 ``unmeasurable_reason`` 이
         채워진다 — **"위험 없음"이 아니라 "판정 불가"** 다(§2).
     """
-    floor_rate = resolve_notice_floor_rate(project)
-    recommended_rate = (
-        recommended_amount / bid_base_amount if bid_base_amount > 0 else 0.0
-    )
-    if floor_rate is None or floor_rate <= 0 or recommended_rate <= 0:
-        return FloorShortfallEstimate(
-            minimum_sample_count=MIN_ASSESSMENT_SAMPLES,
-            scope=_SCOPE_NOT_LOADED,
-            unmeasurable_reason=_REASON_FLOOR_UNRESOLVED,
-        )
+    # 투찰율을 못 만드는 것과 하한율을 못 구하는 것은 서로 다른 실패다 — 사유를 합치면
+    # 운영자가 "공고에 하한이 안 붙었나 보다"로 잘못 읽는다.
+    if bid_base_amount <= 0 or recommended_amount <= 0:
+        return _unmeasurable(_REASON_INVALID_BID_INPUTS, _SCOPE_INVALID_INPUTS)
+
+    floor = resolve_notice_floor_rate(project)
+    if floor.rate is None:
+        return _unmeasurable(floor.reason or _REASON_FLOOR_UNRESOLVED, floor.scope)
 
     estimate = _first_measurable_estimate(
         db,
         project,
-        recommended_rate=recommended_rate,
-        floor_rate=floor_rate,
+        recommended_rate=recommended_amount / bid_base_amount,
+        floor_rate=floor.rate,
         cache=cache or SAMPLE_CACHE,
     )
     if estimate is None:
-        return FloorShortfallEstimate(
-            minimum_sample_count=MIN_ASSESSMENT_SAMPLES,
-            scope=_SCOPE_NOT_LOADED,
-            unmeasurable_reason=_REASON_EXPOSURE_FAILED,
-        )
+        return _unmeasurable(_REASON_EXPOSURE_FAILED, _SCOPE_EXPOSURE_FAILED)
     return estimate
+
+
+def _unmeasurable(reason: str, scope: str) -> FloorShortfallEstimate:
+    """표본을 읽지 않고 판정을 포기한 결과 — 빈도는 ``None``, 사유는 반드시 붙는다."""
+    return FloorShortfallEstimate(
+        minimum_sample_count=MIN_ASSESSMENT_SAMPLES,
+        scope=scope,
+        unmeasurable_reason=reason,
+    )
 
 
 def _first_measurable_estimate(

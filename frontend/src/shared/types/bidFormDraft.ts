@@ -50,11 +50,14 @@ export interface BidFormDraftResponse {
   bid_base_to_estimate_ratio?: number | null;
   /** 두 금액이 왜 다른지 설명하는 서버 문구(단일 출처). */
   bid_base_note: string;
-  /** 추천 투찰금액(원) — 나라장터에 그대로 입력하는 부가세 포함 제출값. */
+  /**
+   * 추천 투찰금액(원) — 나라장터에 그대로 입력하는 제출값. 기초금액 기준으로 산정되므로
+   * 과세 공고에서는 부가세가 포함된 금액이다.
+   */
   recommended_amount: number;
   /** 추천 투찰가 / 추정가격 — 참고 지표. 적격심사가 보는 율이 아니다. */
   recommended_bid_rate?: number | null;
-  /** 추천 투찰가 / 기초금액 — 낙찰하한율과 같은 basis 의 투찰률. */
+  /** 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율과 같은 basis 의 투찰률. */
   recommended_bid_rate_on_base?: number | null;
   category?: string | null;
   business_type_label?: string | null;

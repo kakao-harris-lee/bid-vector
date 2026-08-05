@@ -221,7 +221,7 @@ describe("ProjectDetailScreen — 금액 basis 표시", () => {
 
     renderApp();
 
-    expect(await screen.findByText("추정가격(부가세 별도)")).toBeInTheDocument();
+    expect(await screen.findByText("추정가격(부가세 별도 표기)")).toBeInTheDocument();
     expect(screen.getByText("투찰 기준금액(기초금액/사업금액)")).toBeInTheDocument();
     expect(screen.getByText("₩500,000,000")).toBeInTheDocument();
     expect(screen.getByText("₩550,000,000")).toBeInTheDocument();
@@ -243,7 +243,7 @@ describe("ProjectDetailScreen — 금액 basis 표시", () => {
 
     renderApp();
 
-    expect(await screen.findByText("추정가격(부가세 별도)")).toBeInTheDocument();
+    expect(await screen.findByText("추정가격(부가세 별도 표기)")).toBeInTheDocument();
     expect(
       screen.queryByText("투찰 기준금액(기초금액/사업금액)")
     ).not.toBeInTheDocument();

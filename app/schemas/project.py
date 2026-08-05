@@ -61,8 +61,9 @@ class ProjectDetailResponse(ProjectResponse):
     bid_base_to_estimate_ratio: Optional[float] = Field(
         default=None,
         description=(
-            "기초금액 ÷ 추정가격. 1.0 이면 두 금액이 같고, 1.1 부근이면 기초금액이 "
-            "추정가격에 없는 부가세를 포함한다는 뜻. 추정가격이 0 이면 null."
+            "기초금액 ÷ 추정가격(관측값). 1.0 이면 두 금액이 같고 1.1 부근은 전형적으로 "
+            "부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다. "
+            "추정가격이 0 이면 null."
         ),
     )
 

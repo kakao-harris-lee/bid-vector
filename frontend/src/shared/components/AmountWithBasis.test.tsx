@@ -8,10 +8,10 @@ import {
 } from "@/shared/constants/amountBasis";
 
 describe("AmountWithBasis", () => {
-  it("추정가격은 부가세 별도 뱃지와 함께 표시한다", () => {
+  it("추정가격은 부가세 별도 표기 뱃지와 함께 표시한다", () => {
     render(<AmountWithBasis amount={100_000_000} basis="estimate" />);
 
-    expect(screen.getByText("추정가격(부가세 별도)")).toBeInTheDocument();
+    expect(screen.getByText("추정가격(부가세 별도 표기)")).toBeInTheDocument();
     expect(screen.getByText("₩100,000,000")).toBeInTheDocument();
     expect(screen.getByText(AMOUNT_BASIS_BADGE.estimate)).toBeInTheDocument();
   });
@@ -34,11 +34,13 @@ describe("AmountWithBasis", () => {
     expect(screen.getByText(BID_BASE_NOTE)).toBeInTheDocument();
   });
 
-  it("추천 투찰금액은 부가세 포함 제출값임을 명시한다", () => {
+  it("추천 투찰금액은 제출값이며 부가세는 과세 공고 조건으로만 단다", () => {
     render(<AmountWithBasis amount={98_500_000} basis="submission" variant="hero" />);
 
     expect(screen.getByText(AMOUNT_BASIS_BADGE.submission)).toBeInTheDocument();
     expect(screen.getByText("₩98,500,000")).toBeInTheDocument();
+    // 면세 공고까지 부가세 포함이라 단정하면 안 된다.
+    expect(screen.queryByText("부가세 포함 제출값")).not.toBeInTheDocument();
   });
 
   it("기초금액 미확보 폴백은 경고 문구를 노출한다", () => {

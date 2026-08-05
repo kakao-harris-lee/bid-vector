@@ -50,6 +50,21 @@ describe("describeFloorShortfall", () => {
     );
   });
 
+  it("측정된 경우 톤 뱃지 라벨을 함께 낸다 — 과거 표본 서술이지 이번 공고 주장이 아니다", () => {
+    expect(describeFloorShortfall(estimate({ shortfall_frequency: 0 })).badgeLabel).toBe(
+      "표본 내 미달 사실상 없음"
+    );
+    expect(describeFloorShortfall(estimate({ shortfall_frequency: 0.05 })).badgeLabel).toBe(
+      "표본 내 미달 드묾"
+    );
+    expect(describeFloorShortfall(estimate({ shortfall_frequency: 0.2 })).badgeLabel).toBe(
+      "표본 내 미달 잦음"
+    );
+    expect(describeFloorShortfall(estimate({ shortfall_frequency: 0.7 })).badgeLabel).toBe(
+      "표본 내 미달 매우 잦음"
+    );
+  });
+
   it("frequency 가 null 이면 0% 가 아니라 판정 불가 + 사유다", () => {
     const display = describeFloorShortfall(
       estimate({
@@ -63,6 +78,8 @@ describe("describeFloorShortfall", () => {
     expect(display.headline).toBe(FLOOR_SHORTFALL_UNMEASURABLE_LABEL);
     expect(display.headline).not.toContain("%");
     expect(display.detail).toBe("사정률 표본 4건 < 최소 30건");
+    // headline 자체가 뱃지 문구다 — 빈도 밴드 라벨을 붙이면 측정된 것처럼 읽힌다.
+    expect(display.badgeLabel).toBeNull();
   });
 
   it("사유 없는 판정 불가도 사유 자리를 비워두지 않는다", () => {
@@ -79,6 +96,7 @@ describe("describeFloorShortfall", () => {
 
     expect(display.kind).toBe("unavailable");
     expect(display.headline).toBe(FLOOR_SHORTFALL_UNAVAILABLE_LABEL);
+    expect(display.badgeLabel).toBeNull();
     expect(display.note).toContain("하한 미달 위험이 없다는 뜻이 아니라");
   });
 });

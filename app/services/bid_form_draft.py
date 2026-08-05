@@ -251,11 +251,15 @@ class BidFormDraftService:
                 ),
             },
             {
-                "key": "recommended_bid_rate",
+                "key": "recommended_bid_rate_on_base",
                 "field_label": "투찰률(%) — 기초금액 기준",
                 "value": self.format_percent(recommended_bid_rate),
                 "raw_value": recommended_bid_rate,
-                "note": "투찰가 / 기초금액 비율. 낙찰하한율과 basis 가 같은 율입니다.",
+                "note": (
+                    "투찰가 / 기초금액 비율로, 카테고리 참고 하한율과 같은 basis 입니다. "
+                    "실제 낙찰하한가는 개찰 시 추첨된 예정가격 기준이라 이 율이 참고 하한 "
+                    "위에 있어도 실격일 수 있습니다 — 아래 하한 미달 빈도를 함께 보십시오."
+                ),
             },
             {
                 "key": "floor_shortfall_frequency",

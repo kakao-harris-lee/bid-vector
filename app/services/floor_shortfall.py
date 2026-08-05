@@ -24,15 +24,26 @@
    판정과 **같은 규칙**(:func:`~app.ai.holdout_quality.is_rate_basis_independent`)을
    재사용한다 — 규칙이 두 벌이 되면 한쪽만 바뀌어 갈린다(§4.5.8).
 
-알려진 편향(2번 필터의 대가)
----------------------------
+알려진 편향(2번 필터의 대가) — 방향은 조건부다
+---------------------------------------------
 2번 필터는 보고율과 금액비의 상대오차가 ``RATE_BASIS_INDEPENDENCE_TOLERANCE``(1e-3)
 미만인 행을 (복수예비가격 증거가 없으면) 버린다. 그 조건은 사정률로 옮기면
-``|1-a|/a < 1e-3``, 즉 **사정률이 1 의 ±0.1% 안에 있는 표본**이다. 실투찰이 문제되는
-구간의 임계 사정률은 1 보다 크므로(a\\* = 추천율/하한율 ≥ 1), 이렇게 빠지는 표본은
-전부 a\\* **아래**(=미달 아님) 쪽이다. 따라서 이 편향은 빈도를 **과대**평가하는
-방향이며 조용히 안심시키지 않는다. 방향이 보수적이므로 감수하되, 이 값을 절대량으로
-읽지 말 것 — 표본 수(``sample_count``)와 함께 상대 비교로만 쓴다.
+``|1-a|/a < 1e-3``, 즉 **사정률이 약 0.999~1.001 안에 있는 표본**이 분모에서 빠진다는
+뜻이다(:data:`EXCLUDED_ASSESSMENT_BAND` — 이 밴드는 스코프 문구에도 드러난다).
+
+빠진 표본이 임계 사정률 a\\* 의 어느 쪽인지에 따라 편향 **방향이 갈린다**:
+
+* ``a\\* > 1.001`` — 빠진 표본이 전부 a\\* 아래(=미달 아님)라 분모만 줄어 빈도가
+  **과대**평가된다. "보수적"이 성립하는 것은 이 구간뿐이다.
+* ``a\\* ≈ 1``(0.999~1.001 — 하한에 밀착한 추천) — 빠진 표본이 a\\* 를 사이에 두고
+  갈려 방향이 **보장되지 않는다**. 하필 실투찰이 가장 위험한 구간이 여기다.
+* ``a\\* < 0.999``(추천율이 하한율보다 낮은 경우 — 이 커널은 그것을 막지 않는다) —
+  빠진 표본이 전부 a\\* 위(=미달)라 빈도가 **과소**평가된다. 이 구간에서는 편향이
+  조용히 안심시키는 방향이다.
+
+따라서 이 값은 표본 수(``sample_count``)·임계 사정률(``critical_assessment_rate``)과
+함께 상대 비교로만 쓰고, a\\* 가 1 부근이거나 1 아래면 방향 보장이 없다는 것을 전제로
+읽는다.
 
 시간 누수 차단
 --------------
@@ -55,7 +66,10 @@ from typing import Any, Final, Sequence
 
 from sqlalchemy.orm import Query, Session
 
-from app.ai.holdout_quality import is_rate_basis_independent
+from app.ai.holdout_quality import (
+    RATE_BASIS_INDEPENDENCE_TOLERANCE,
+    is_rate_basis_independent,
+)
 from app.domain.aggregates import error_rate
 from app.domain.floor_shortfall import (
     MIN_ASSESSMENT_SAMPLES,
@@ -76,6 +90,12 @@ from app.utils.sequence_coercion import coerce_numeric_list
 # 상한은 "최근 N 개찰"로 읽힌다. 표본은 수천 건 규모면 꼬리 추정에 충분하고, 요청
 # 경로에서 전수 스캔(수만 행)을 도는 것은 허용하지 않는다(§4.5.1 매직값 선언).
 ASSESSMENT_SAMPLE_SCAN_LIMIT: Final[int] = 4000
+
+# 2번 필터(낙찰률 basis 독립성)가 분모에서 빼는 사정률 밴드의 반폭 — 1 ± 이 값이 통째로
+# 빠진다. 편향 **방향**이 이 밴드와 임계 사정률의 위치 관계로 갈리므로(모듈 docstring),
+# 값을 읽는 쪽이 밴드를 볼 수 있어야 한다. 필터 자체가 쓰는 허용오차와 같은 출처라
+# 한쪽만 바뀌어 문구와 실제가 갈릴 수 없다(§4.5.8).
+EXCLUDED_ASSESSMENT_BAND: Final[float] = RATE_BASIS_INDEPENDENCE_TOLERANCE
 
 # 낙찰률 정규화(percent↔fraction + 유효범위 게이트)는 학습 데이터셋과 **같은**
 # 프리미티브를 써야 표본이 갈리지 않는다. 계측 스크립트
@@ -106,10 +126,15 @@ class AssessmentRateSamples:
 
 
 def _describe_scope(category: str | None, as_of: datetime | None) -> str:
-    """표본 선택 기준을 사람이 읽을 수 있게 요약한다."""
+    """표본 선택 기준을 사람이 읽을 수 있게 요약한다.
+
+    제외 밴드를 여기에 적는 이유는 그것이 곧 편향 방향의 전제이기 때문이다 — 임계 사정률이
+    이 밴드 안이나 아래에 있으면 빈도가 보수적이라는 보장이 사라진다(모듈 docstring).
+    """
     parts = [
         "clean-basis 기초금액",
         "독립 관측 낙찰률",
+        f"사정률 1±{EXCLUDED_ASSESSMENT_BAND:g} 표본 제외",
         f"최근 개찰 {ASSESSMENT_SAMPLE_SCAN_LIMIT}행 이내",
     ]
     parts.append(f"카테고리={category}" if category else "전 카테고리")

@@ -16,7 +16,11 @@ import pytest
 from app.core.single_user import ensure_operator_account
 from app.models.models import BidDecisionRecord, HistoricalData, Project
 from app.services import notice_floor_shortfall
-from app.services.floor_shortfall import AssessmentRateSamples
+from app.services.floor_shortfall import (
+    EXCLUDED_ASSESSMENT_BAND,
+    AssessmentRateSamples,
+    load_assessment_rate_samples,
+)
 from app.services.notice_floor_shortfall import (
     SAMPLE_CACHE,
     AssessmentRateSampleCache,
@@ -64,6 +68,8 @@ def _seed_notice(
     base_amount: float | None = 110_000_000.0,
     award_floor_rate: float | None = 0.88,
     recommended_amount: float = 96_800_000.0,
+    demand_agency: str = "수요기관 F",
+    issuing_agency: str = "발주기관 G",
 ) -> tuple[Project, BidDecisionRecord]:
     operator = ensure_operator_account(test_db)
     project = Project(
@@ -73,8 +79,8 @@ def _seed_notice(
         budget_estimate=budget,
         category=category,
         notice_number="20260201-001",
-        demand_agency="수요기관 F",
-        issuing_agency="발주기관 G",
+        demand_agency=demand_agency,
+        issuing_agency=issuing_agency,
         award_floor_rate=award_floor_rate,
         deadline=datetime.now(UTC) + timedelta(hours=10),
     )
@@ -242,11 +248,104 @@ def test_estimate_is_unmeasurable_without_a_resolvable_floor(test_db):
         cache=cache,
     )
 
-    assert resolve_notice_floor_rate(project) is None
+    floor = resolve_notice_floor_rate(project)
+    assert floor.rate is None
     assert estimate.shortfall_frequency is None
+    assert "낙찰하한율을 해석할 수 없어" in (estimate.unmeasurable_reason or "")
     assert "위험이 없다는 뜻이 아닙니다" in (estimate.unmeasurable_reason or "")
     # 하한이 없으면 표본을 읽을 이유도 없다(요청 경로에서 헛스캔 금지).
     assert cache.requested == []
+
+
+def test_estimate_separates_invalid_bid_inputs_from_missing_floor(test_db):
+    """기초금액 0 은 '하한율 미해석'이 아니라 '투찰율 산출 불가'로 나가야 한다.
+
+    두 사유를 합치면 운영자가 "이 공고엔 하한이 안 붙었나 보다"로 잘못 읽는다. 실제로는
+    금액 쪽이 비어 있어 우리 계산이 시작조차 못 한 상태다.
+    """
+    project, _ = _seed_notice(test_db)  # 하한율(0.88)은 정상 해석되는 공고
+    cache = _RecordingCache({}, _samples())
+
+    estimate = estimate_notice_floor_shortfall(
+        test_db,
+        project,
+        recommended_amount=96_800_000.0,
+        bid_base_amount=0.0,
+        cache=cache,
+    )
+
+    assert resolve_notice_floor_rate(project).rate == 0.88  # 하한율은 멀쩡하다
+    assert estimate.shortfall_frequency is None
+    reason = estimate.unmeasurable_reason or ""
+    assert "투찰율을 산출할 수 없습니다" in reason
+    assert "낙찰하한율을 해석할 수 없어" not in reason
+    assert "투찰율 산출 불가" in estimate.scope
+    assert cache.requested == []
+
+
+def test_estimate_is_unmeasurable_when_floor_model_does_not_apply(test_db):
+    """비국가기관 발주(협동조합·산학협력단)는 하한 모델 적용 대상이 아니라 판정 불가.
+
+    홀드아웃 품질 판정이 쓰는 것과 같은 게이트(#274)를 표시 경로도 통과해야 한다 —
+    적용 대상이 아닌 공고에 국가계약 하한을 대면 없는 근거로 위험을 말하게 된다.
+    """
+    project, _ = _seed_notice(
+        test_db, issuing_agency="○○농업협동조합", demand_agency="수요기관 F"
+    )
+    cache = _RecordingCache({}, _samples())
+
+    estimate = estimate_notice_floor_shortfall(
+        test_db,
+        project,
+        recommended_amount=96_800_000.0,
+        bid_base_amount=110_000_000.0,
+        cache=cache,
+    )
+
+    assert resolve_notice_floor_rate(project).rate is None
+    assert estimate.shortfall_frequency is None
+    assert "적격심사 낙찰하한 모델이 적용되지 않거나" in (
+        estimate.unmeasurable_reason or ""
+    )
+    assert "하한 모델 미적용" in estimate.scope
+    assert cache.requested == []
+
+
+def test_estimate_is_unmeasurable_for_uncertain_agency_type(test_db):
+    """국공립/사립을 이름으로 가릴 수 없는 부류(대학교)도 판정을 생략한다."""
+    project, _ = _seed_notice(test_db, issuing_agency="○○대학교")
+
+    assert resolve_notice_floor_rate(project).rate is None
+
+
+def test_floor_rate_resolution_prefers_issuing_agency(test_db):
+    """적용 범위 판정의 기관 축은 발주기관 우선(resolve_agency_group 컨벤션).
+
+    조달청 경유 공고처럼 발주≠수요인 건에서 적용 범위를 가르는 것은 계약 주체인
+    발주기관이다. 수요기관이 비국가기관이어도 발주기관이 국가기관이면 판정한다.
+    """
+    judgeable, _ = _seed_notice(
+        test_db, issuing_agency="조달청", demand_agency="○○농업협동조합"
+    )
+    assert resolve_notice_floor_rate(judgeable).rate == 0.88
+
+    # 반대 배치 — 발주기관이 비국가기관이면 수요기관이 국가기관이어도 판정하지 않는다.
+    skipped, _ = _seed_notice(
+        test_db, issuing_agency="○○농업협동조합", demand_agency="조달청"
+    )
+    assert resolve_notice_floor_rate(skipped).rate is None
+
+
+def test_sample_scope_discloses_the_excluded_assessment_band(test_db):
+    """실제 표본 스코프가 제외 밴드(사정률 1±0.001)를 밝혀야 한다.
+
+    그 밴드가 임계 사정률의 어느 쪽에 있느냐로 빈도의 편향 방향이 갈리므로(과대/과소가
+    뒤집힌다), 값을 읽는 쪽이 밴드를 볼 수 없으면 방향을 판단할 수 없다.
+    """
+    samples = load_assessment_rate_samples(test_db, category="construction")
+
+    assert f"사정률 1±{EXCLUDED_ASSESSMENT_BAND:g} 표본 제외" in samples.scope
+    assert "카테고리=construction" in samples.scope
 
 
 def test_estimate_is_unmeasurable_when_sample_load_fails(test_db):

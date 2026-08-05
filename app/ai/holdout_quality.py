@@ -31,7 +31,9 @@
 사실상 일치하고 독립 예정가 증거(복수예비가격)도 없으면 하한 판정을 생략하고 그 사실을
 ``rate_basis_unverified`` 로 남긴다(:func:`_is_rate_basis_unverified`).
 
-이 모듈은 예측·guardrail 을 전혀 건드리지 않는 분석 전용 판정기다.
+이 모듈은 예측·guardrail 을 전혀 건드리지 않는 **분석·표시 전용** 판정기다. 홀드아웃
+품질 판정 외에 운영자 대면 표시 경로(``app/services/notice_floor_shortfall.py`` 의 하한
+미달 빈도)도 하한 해석을 여기서 읽어 간다 — 어느 쪽도 가격 산정에는 관여하지 않는다.
 
 순수 함수(I/O 0).
 """
@@ -274,8 +276,9 @@ def resolve_legal_floor_rate(
     생략된다. 모든 값은 **예정가격 기준**이며, 이 함수는 표 해석만 하고 basis 변환은
     하지 않는다.
 
-    이 판정은 **분석 전용**이다. 라이브 예측이 같은 게시값을 guardrail 하한으로
-    쓰는 경로(``predict_price(legal_floor_bid_rate=...)``)는 건드리지 않는다.
+    이 판정은 **분석·표시 전용**이다(홀드아웃 품질 판정 + 운영자 대면 하한 미달 빈도).
+    라이브 예측이 같은 게시값을 guardrail 하한으로 쓰는 경로
+    (``predict_price(legal_floor_bid_rate=...)``)는 건드리지 않는다.
     """
     implausible = False
     if published_floor_rate is not None and float(published_floor_rate) > 0:

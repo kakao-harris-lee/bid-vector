@@ -49,7 +49,11 @@ export interface BidSummaryRecommendation {
   recommended_amount: number;
   /** 추천 투찰가 / 추정가격 — **참고 지표**. 적격심사가 보는 율이 아니다. */
   recommended_bid_rate?: number | null;
-  /** 추천 투찰가 / 기초금액 — 낙찰하한율과 같은 basis 라 하한 비교는 이 값으로 한다. */
+  /**
+   * 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율과 같은 basis 라 그 참고 비교는 이
+   * 값으로 한다. 실제 낙찰하한가는 개찰 시 추첨된 예정가격 기준이라 참고 하한 위여도
+   * 실격일 수 있고, 그 괴리 위험은 floor_shortfall 이 표시한다.
+   */
   recommended_bid_rate_on_base?: number | null;
   /** 가격 적합도(추정) — P(낙찰) 아님. */
   probability_score: number;

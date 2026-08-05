@@ -158,9 +158,13 @@ def test_bid_form_draft_separates_bid_base_from_budget_estimate(client, test_db)
     assert fields["bid_base_amount"]["raw_value"] == 110_000_000.0
     assert fields["budget_estimate"]["field_label"] == "추정가격(부가세 별도)"
     assert fields["budget_estimate"]["raw_value"] == 100_000_000.0
-    # 투찰서에 적히는 율도 기초금액 기준.
-    assert fields["recommended_bid_rate"]["raw_value"] == 0.88
-    assert "기초금액" in fields["recommended_bid_rate"]["field_label"]
+    # 투찰서에 적히는 율도 기초금액 기준 — key 가 그 basis 를 그대로 말해야 한다
+    # (raw_value 는 on_base 값인데 key 는 추정가격 기준 이름이던 혼동 제거).
+    assert "recommended_bid_rate" not in fields
+    assert fields["recommended_bid_rate_on_base"]["raw_value"] == 0.88
+    assert "기초금액" in fields["recommended_bid_rate_on_base"]["field_label"]
+    # 참고 하한과 실제(예정가 기준) 하한의 괴리를 note 가 분명히 말한다.
+    assert "예정가격" in fields["recommended_bid_rate_on_base"]["note"]
 
 
 def test_bid_form_draft_shortfall_unmeasurable_is_not_zero(client, test_db):

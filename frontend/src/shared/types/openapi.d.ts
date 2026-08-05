@@ -3393,7 +3393,7 @@ export interface components {
             bid_base_source?: string | null;
             /**
              * Bid Base To Estimate Ratio
-             * @description 기초금액 ÷ 추정가격. 1.1 부근이면 기초금액이 추정가격에 없는 부가세를 포함한다는 뜻. 추정가격이 0 이면 null.
+             * @description 기초금액 ÷ 추정가격(관측값). 1.1 부근은 전형적으로 부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다. 추정가격이 0 이면 null.
              */
             bid_base_to_estimate_ratio?: number | null;
             /**
@@ -3413,7 +3413,7 @@ export interface components {
             recommended_bid_rate?: number | null;
             /**
              * Recommended Bid Rate On Base
-             * @description 추천 투찰가 / 기초금액 — 낙찰하한율과 같은 basis 라 적격여부(추정) 판정과 투찰서 표기는 이 율을 쓴다. bid_base_amount>0 일 때만.
+             * @description 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율(기초금액 기준)과 같은 basis 라 적격여부(추정) 판정과 투찰서 표기는 이 율을 쓴다. 실제 낙찰하한가는 개찰 시 추첨된 **예정가격** 기준이라 이 비교가 실격 여부를 결정하지는 않으며, 그 괴리 위험은 floor_shortfall 이 표시한다. bid_base_amount>0 일 때만.
              */
             recommended_bid_rate_on_base?: number | null;
             /**
@@ -3647,7 +3647,7 @@ export interface components {
             bid_base_source?: string | null;
             /**
              * Bid Base To Estimate Ratio
-             * @description 기초금액 ÷ 추정가격. 1.0 이면 두 금액이 같고, 1.1 부근이면 기초금액이 추정가격에 없는 부가세를 포함한다는 뜻이다. 추정가격이 0 이면 null.
+             * @description 기초금액 ÷ 추정가격(관측값). 1.0 이면 두 금액이 같고 1.1 부근은 전형적으로 부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다(저장된 추정가격의 부가세 포함 여부가 이력상 일관되지 않다). 추정가격이 0 이면 null.
              */
             bid_base_to_estimate_ratio?: number | null;
             /**
@@ -3715,7 +3715,7 @@ export interface components {
             recommended_bid_rate?: number | null;
             /**
              * Recommended Bid Rate On Base
-             * @description 추천 투찰가 / 기초금액 — 낙찰하한율과 **같은 basis** 의 투찰율이라 하한 비교는 이 값으로 한다. bid_base_amount>0 일 때만 산출.
+             * @description 추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율(기초금액 기준)과 같은 basis 의 율이라 그 참고 비교는 이 값으로 한다. 실제 낙찰하한가는 개찰 시 추첨된 **예정가격** 기준으로 결정되므로 이 율이 참고 하한 위에 있어도 실격일 수 있으며, 그 괴리 위험은 floor_shortfall(하한 미달 빈도)이 표시한다. bid_base_amount>0 일 때만 산출.
              */
             recommended_bid_rate_on_base?: number | null;
             /**
@@ -9129,7 +9129,7 @@ export interface components {
             bid_base_source?: string | null;
             /**
              * Bid Base To Estimate Ratio
-             * @description 기초금액 ÷ 추정가격. 1.0 이면 두 금액이 같고, 1.1 부근이면 기초금액이 추정가격에 없는 부가세를 포함한다는 뜻. 추정가격이 0 이면 null.
+             * @description 기초금액 ÷ 추정가격(관측값). 1.0 이면 두 금액이 같고 1.1 부근은 전형적으로 부가세 관계가 관측되는 값이나, 이 비율만으로 과세 여부를 단정할 수는 없다. 추정가격이 0 이면 null.
              */
             bid_base_to_estimate_ratio?: number | null;
         };

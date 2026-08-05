@@ -23,7 +23,7 @@ export type AmountBasis = "estimate" | "bid_base" | "submission";
 
 /** 금액 행/필드의 기본 라벨. */
 export const AMOUNT_BASIS_LABEL: Record<AmountBasis, string> = {
-  estimate: "추정가격(부가세 별도)",
+  estimate: "추정가격(부가세 별도 표기)",
   bid_base: "투찰 기준금액(기초금액/사업금액)",
   submission: "투찰금액(제출값)"
 };
@@ -31,14 +31,15 @@ export const AMOUNT_BASIS_LABEL: Record<AmountBasis, string> = {
 /**
  * 금액 옆 뱃지 문구 — 라벨을 못 읽고 숫자만 훑어도 basis 가 붙어 보이게 한다.
  *
- * 기초금액 쪽을 "부가세 포함"이라 단정하지 않는 이유: 면세 공고는 추정가격과 같고,
+ * 세 자리 모두 부가세를 단정하지 않는다. 기초금액은 면세 공고면 추정가격과 같고,
  * 저장된 추정가격의 부가세 포함 여부도 수집 키에 따라 이력상 일관되지 않다
- * (`NoticeBidBase.to_estimate_ratio` docstring).
+ * (`NoticeBidBase.to_estimate_ratio` docstring, `app/services/bid_base.py`). 제출값은
+ * 그 기초금액에서 산정되므로 **과세 공고에서만** 부가세가 포함된 금액이 된다.
  */
 export const AMOUNT_BASIS_BADGE: Record<AmountBasis, string> = {
-  estimate: "부가세 별도",
+  estimate: "부가세 별도 표기",
   bid_base: "과세 공고 부가세 포함",
-  submission: "부가세 포함 제출값"
+  submission: "제출값 · 과세 공고 부가세 포함"
 };
 
 /**
@@ -46,9 +47,9 @@ export const AMOUNT_BASIS_BADGE: Record<AmountBasis, string> = {
  * 같은 어휘를 화면마다 다시 짓지 않기 위한 것이며, 뱃지를 쓸 수 있으면 뱃지를 쓴다.
  */
 export const AMOUNT_BASIS_TEXT_LABEL: Record<AmountBasis, string> = {
-  estimate: "추정가격(부가세 별도)",
+  estimate: "추정가격(부가세 별도 표기)",
   bid_base: "투찰 기준금액(기초금액, 과세 공고 부가세 포함)",
-  submission: "추천 투찰금액(부가세 포함 제출값)"
+  submission: "추천 투찰금액(제출값, 과세 공고 부가세 포함)"
 };
 
 export const AMOUNT_BASIS_TONE: Record<AmountBasis, BadgeTone> = {
@@ -105,8 +106,15 @@ export const BID_RATE_ON_BASE_LABEL = "투찰률(기초금액 대비)";
 /** 참고 지표 쪽 라벨. 적격심사가 보는 율이 아니다. */
 export const BID_RATE_ON_ESTIMATE_LABEL = "투찰률(추정가격 대비, 참고)";
 
+/**
+ * `app/schemas/bid_summary.py::recommended_bid_rate_on_base` 설명과 같은 방향의 문구.
+ * "하한 비교는 이 값으로 한다"고만 적으면 참고 하한 위 = 안전으로 읽히는데, 실제
+ * 낙찰하한가는 개찰 시 추첨된 예정가격에서 정해진다.
+ */
 export const BID_RATE_ON_BASE_NOTE =
-  "낙찰하한율과 같은 기준(기초금액)의 투찰률입니다. 하한 비교는 이 값으로 합니다.";
+  "카테고리 참고 하한율(기초금액 기준)과 같은 기준의 투찰률입니다. 실제 낙찰하한가는 " +
+  "개찰 시 추첨된 예정가격 기준으로 결정되므로 이 율이 참고 하한 위에 있어도 실격일 " +
+  "수 있습니다 — 하한 미달 빈도를 함께 보세요.";
 
 export const BID_RATE_ON_ESTIMATE_NOTE =
   "추정가격 대비 참고 지표입니다. 적격심사가 보는 율이 아닙니다.";

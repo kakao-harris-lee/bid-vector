@@ -13,8 +13,10 @@ values into KONEPS by hand**.
   이고, ``budget_estimate`` 는 추정가격(부가세 별도 표기)이다. **서로 다른 금액**이라
   한 라벨로 묶지 않는다 — 두 금액을 동의어로 표기한 초안이 실투찰 혼동의 원인이었다.
 - ``recommended_bid_rate`` 는 추천 투찰가 / 추정가격(budget_estimate) 비율이고,
-  ``recommended_bid_rate_on_base`` 는 기초금액 기준 투찰율이다. 낙찰하한율과 basis 가
-  같은 쪽은 후자이므로 적격여부(추정) 판정은 후자를 쓴다.
+  ``recommended_bid_rate_on_base`` 는 기초금액 기준 투찰율이다. 카테고리 **참고**
+  하한율이 기초금액 기준이므로 적격여부(추정) 판정은 후자를 쓴다. 다만 실제 낙찰하한가는
+  개찰 시 추첨된 **예정가격** 기준이라 이 비교로는 실격 여부가 결정되지 않으며, 그
+  괴리 위험은 ``floor_shortfall``(하한 미달 빈도)이 따로 표시한다.
 - ``eligibility_estimate`` 는 카테고리 낙찰하한율(참고) 대비 추천가 위치에서 도출한
   **추정 라벨**이다. 실제 적격/낙찰 여부가 아니다. 라이브 공고는 예정가/실하한가를
   개찰 전에 모르므로 하한율은 참고값일 뿐이다.
@@ -117,8 +119,8 @@ class BidFormDraftResponse(BaseModel):
     bid_base_to_estimate_ratio: Optional[float] = Field(
         default=None,
         description=(
-            "기초금액 ÷ 추정가격. 1.1 부근이면 기초금액이 추정가격에 없는 부가세를 "
-            "포함한다는 뜻. 추정가격이 0 이면 null."
+            "기초금액 ÷ 추정가격(관측값). 1.1 부근은 전형적으로 부가세 관계가 관측되는 "
+            "값이나, 이 비율만으로 과세 여부를 단정할 수는 없다. 추정가격이 0 이면 null."
         ),
     )
     bid_base_note: str = Field(default=BID_BASE_NOTE)
@@ -138,8 +140,10 @@ class BidFormDraftResponse(BaseModel):
     recommended_bid_rate_on_base: Optional[float] = Field(
         default=None,
         description=(
-            "추천 투찰가 / 기초금액 — 낙찰하한율과 같은 basis 라 적격여부(추정) 판정과 "
-            "투찰서 표기는 이 율을 쓴다. bid_base_amount>0 일 때만."
+            "추천 투찰가 / 기초금액 — 카테고리 **참고** 하한율(기초금액 기준)과 같은 "
+            "basis 라 적격여부(추정) 판정과 투찰서 표기는 이 율을 쓴다. 실제 낙찰하한가는 "
+            "개찰 시 추첨된 **예정가격** 기준이라 이 비교가 실격 여부를 결정하지는 "
+            "않으며, 그 괴리 위험은 floor_shortfall 이 표시한다. bid_base_amount>0 일 때만."
         ),
     )
     category: Optional[str] = Field(default=None, description="카테고리(분류).")
