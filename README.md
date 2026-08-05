@@ -129,6 +129,22 @@ docker compose config --quiet
 docker compose --profile tasks config --quiet
 ```
 
+Postgres 티어(선택): 기본 스위트는 SQLite에서 돌기 때문에 pgvector `VECTOR(384)`,
+json 컬럼 DISTINCT, 행 잠금 클레임 같은 **PostgreSQL 전용 계약**은 검증되지 않습니다.
+`postgres` 마커가 붙은 소수 테스트가 그 공백을 담당하며, `TEST_POSTGRES_URL`이
+없으면 skip됩니다. 반드시 **일회용 인스턴스**를 쓰고 compose의 `db`(운영 데이터)를
+가리키지 않습니다.
+
+```bash
+docker run --rm -d --name pgtier-test \
+  -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=test \
+  -p 55432:5432 pgvector/pgvector:pg16
+
+TEST_POSTGRES_URL=postgresql://test:test@localhost:55432/test pytest -m postgres -q
+
+docker stop pgtier-test
+```
+
 가상 운영자 검증:
 
 ```bash
