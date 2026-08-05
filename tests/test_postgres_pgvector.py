@@ -26,7 +26,6 @@ from app.models.models import Project
 from app.services.project_similarity import ProjectSimilarityService
 from app.services.project_similarity_constants import PROJECT_VECTOR_DIMENSIONS
 from app.services.project_similarity_schema import ensure_project_vector_schema
-from tests.support.postgres import enable_pgvector
 
 pytestmark = pytest.mark.postgres
 
@@ -181,20 +180,50 @@ def test_similarity_search_excludes_other_embedding_models(postgres_session):
     assert stranger.id not in [item["project_id"] for item in results]
 
 
+def test_similarity_search_excludes_null_embedding_model(postgres_session):
+    """모델이 NULL 인 레거시 행은 SQL 등치에서 매칭되지 않는다.
+
+    #349 가 레퍼런스로 선언한 계약이다: 파이썬 폴백은 ``candidate_model !=
+    query_model`` 로 NULL 을 걸러내고, pgvector 경로는 SQL ``=`` 가 NULL 을 절대
+    매칭하지 않는다는 성질에 의존한다. 후자는 SQLite 에서 실행되지 않으므로 그
+    의존이 성립하는지는 여기서만 확인된다 — 벡터는 남아 있고 모델만 비어 있는
+    행(임베딩 모델 교체 이력이 있는 레거시 형태)이 조용히 채점되면 안 된다.
+    """
+    service = ProjectSimilarityService()
+    target = _project_with_embedding(postgres_session, title="항만 준설 공사 1공구")
+    vectorless_model = _project_with_embedding(
+        postgres_session, title="항만 준설 공사 2공구"
+    )
+    vectorless_model.embedding_model = None
+    postgres_session.commit()
+    assert vectorless_model.embedding is not None, "벡터는 남아 있는 상태여야 한다"
+
+    results = service.find_similar_projects(postgres_session, target, limit=5)["results"]
+
+    assert vectorless_model.id not in [item["project_id"] for item in results]
+
+
 def test_ensure_project_vector_schema_upgrades_a_legacy_database(blank_postgres_url):
     """레거시 데이터베이스 보정 경로가 확장·컬럼·HNSW 인덱스를 실제로 만든다.
 
     :func:`ensure_project_vector_schema` 는 ``dialect.name != "postgresql"`` 이면
-    즉시 반환하므로 SQLite 스위트에서는 본문이 한 줄도 실행되지 않는다. 부트스트랩
-    (``bootstrap_application_schema``)이 매 기동 호출하는 코드인데도 그렇다.
+    즉시 반환하므로 SQLite 스위트에서는 본문이 한 줄도 실행되지 않는다. 실제 커버
+    범위는 **로컬/개발 기동**의 lifespan 부트스트랩이다 — production/staging 에서는
+    :func:`~app.core.schema_bootstrap.startup_schema_bootstrap_enabled` 가 False 라
+    호출되지 않고, 확장은 데이터베이스 초기화 SQL
+    (``docker/postgres/init/01-enable-pgvector.sql``)이 이미 켜 둔다.
+
+    그래서 확장을 **미리 켜지 않은** 데이터베이스에서 시작한다. 이 함수의
+    ``CREATE EXTENSION IF NOT EXISTS vector`` 가 실제로 일하는지 보려는 것이고,
+    확장조차 없는 상태가 곧 진짜 레거시 시나리오다.
     """
     engine = create_engine(blank_postgres_url, poolclass=NullPool)
     try:
-        enable_pgvector(engine)
         _create_legacy_projects_table(engine)
+        assert not _pgvector_extension_installed(engine), "사전 조건: 확장 없음"
 
         ensure_project_vector_schema(engine)
-        # 두 번째 호출도 무해해야 한다(매 기동 실행되는 경로).
+        # 개발 기동마다 다시 호출되므로 두 번째 호출도 무해해야 한다.
         ensure_project_vector_schema(engine)
 
         with engine.connect() as connection:
@@ -211,8 +240,18 @@ def test_ensure_project_vector_schema_upgrades_a_legacy_database(blank_postgres_
 
         assert rendered == f"vector({EXPECTED_VECTOR_DIMENSIONS})"
         assert index_method == "hnsw"
+        assert _pgvector_extension_installed(engine)
     finally:
         engine.dispose()
+
+
+def _pgvector_extension_installed(engine) -> bool:
+    with engine.connect() as connection:
+        return bool(
+            connection.execute(
+                text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+            ).scalar()
+        )
 
 
 def _create_legacy_projects_table(engine) -> None:

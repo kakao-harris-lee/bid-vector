@@ -14,9 +14,9 @@
 * 이름이 같아도 타입이 다를 수 있다(``json`` vs ``jsonb``, ``vector(384)`` vs
   다른 차원, 길이 없는 ``varchar``). 이름 비교는 그것을 통과시킨다.
 
-이 모듈은 두 공백을 실제 Postgres 에서 메운다. 마이그레이션 소유 객체 목록은
-``tests/test_schema_drift.py`` 에서 그대로 가져와, 한 곳만 갱신하면 두 가드가 함께
-움직이게 한다.
+이 모듈은 두 공백을 실제 Postgres 에서 메운다. 베이스라인 재구성과 마이그레이션
+소유 객체 등록부는 ``tests/support/schema_baseline.py`` 한 곳에 있어서, SQLite
+가드와 이 Postgres 가드가 같은 베이스라인을 본다.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from typing import Iterator
 import pytest
 from alembic import command
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, MetaData, Table, create_engine, text
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.pool import NullPool
 
@@ -36,13 +36,20 @@ from app.core.database import Base
 from app.models import models  # noqa: F401  -- registers all tables on Base.metadata
 from tests.support.alembic_config import make_alembic_config
 from tests.support.postgres import enable_pgvector
-from tests.test_schema_drift import (
+from tests.support.schema_baseline import (
     ALEMBIC_INTERNAL_TABLES,
-    MIGRATION_ADDED_COLUMNS,
     MIGRATION_OWNED_TABLES,
+    create_premigration_baseline,
 )
 
 pytestmark = pytest.mark.postgres
+
+# 빈 데이터베이스에서 업그레이드 경로의 첫 리비전(``add_business_type_to_project``)
+# 과 그 리비전이 실행하는 첫 DDL. 아래 KNOWN GAP 가드가 이 지점만 겨냥한다.
+BLANK_DATABASE_FIRST_MIGRATION = "7e85ae125de7"
+BLANK_DATABASE_FIRST_MIGRATION_DDL = (
+    "ALTER TABLE projects ADD COLUMN business_type_code"
+)
 
 COLUMN_TYPES_SQL = text(
     """
@@ -81,25 +88,6 @@ def _upgrade_head(url: str) -> None:
         command.upgrade(make_alembic_config(), "head")
 
 
-def _create_premigration_baseline(engine: Engine) -> None:
-    """마이그레이션 이전 스키마(모델 - 마이그레이션 소유 객체)를 만든다.
-
-    ``alembic upgrade head`` 가 create_all 이 아니라 **마이그레이션 코드로** 그
-    객체들을 다시 만들게 하려는 것이다. 마이그레이션이 추가한 컬럼을 참조하는
-    제약/인덱스는 baseline 에서 의도적으로 빠진다.
-    """
-    baseline = MetaData()
-    for table in Base.metadata.sorted_tables:
-        if table.name in MIGRATION_OWNED_TABLES:
-            continue
-        dropped = MIGRATION_ADDED_COLUMNS.get(table.name, set())
-        columns = [
-            column._copy() for column in table.columns if column.name not in dropped
-        ]
-        Table(table.name, baseline, *columns)
-    baseline.create_all(bind=engine)
-
-
 def _column_types(engine: Engine) -> dict[tuple[str, str], str]:
     with engine.connect() as connection:
         rows = connection.execute(COLUMN_TYPES_SQL).all()
@@ -121,7 +109,7 @@ def test_alembic_upgrade_head_applies_on_postgres(blank_postgres_url):
     """마이그레이션이 실제 Postgres 에서 끝까지 돌고 소유 테이블을 만든다."""
     engine = _prepared_engine(blank_postgres_url)
     try:
-        _create_premigration_baseline(engine)
+        create_premigration_baseline(engine)
 
         _upgrade_head(blank_postgres_url)
 
@@ -159,7 +147,16 @@ def test_blank_database_is_not_buildable_by_migrations_alone(blank_postgres_url)
     따라서 배포 전제는 "데이터베이스는 모델 스키마로 한 번 시드돼 있어야 한다"이다.
     누군가 베이스라인 마이그레이션을 추가해 그 전제를 없애면 이 테스트가 실패하고,
     그때 운영 문서와 함께 성공 단언으로 교체해야 한다.
+
+    단언은 **이 실패 지점 하나**로 좁혀 둔다. ``does not exist`` 광범위 매치로
+    두면, 나중에 다른 마이그레이션이 없는 테이블/컬럼을 참조하게 되는 진짜 회귀가
+    이 테스트를 그대로 통과해 가려진다. 업그레이드 경로의 첫 리비전까지 고정하는
+    이유도 같다 — 앞에 새 리비전이 끼면 아래 DDL 단언이 우연히 맞는 상황을 막는다.
     """
+    script = ScriptDirectory.from_config(make_alembic_config())
+    first_revision = list(script.walk_revisions(base="base", head="head"))[-1]
+    assert first_revision.revision == BLANK_DATABASE_FIRST_MIGRATION
+
     engine = _prepared_engine(blank_postgres_url)
     try:
         with pytest.raises(ProgrammingError) as excinfo:
@@ -167,7 +164,9 @@ def test_blank_database_is_not_buildable_by_migrations_alone(blank_postgres_url)
     finally:
         engine.dispose()
 
-    assert "does not exist" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert 'relation "projects" does not exist' in message
+    assert BLANK_DATABASE_FIRST_MIGRATION_DDL in message
 
 
 def test_model_and_migration_paths_agree_on_column_types(blank_postgres_url_factory):
@@ -182,7 +181,7 @@ def test_model_and_migration_paths_agree_on_column_types(blank_postgres_url_fact
     migration_engine = _prepared_engine(migration_url)
     try:
         Base.metadata.create_all(bind=model_engine)
-        _create_premigration_baseline(migration_engine)
+        create_premigration_baseline(migration_engine)
         _upgrade_head(migration_url)
 
         model_types = _column_types(model_engine)
@@ -208,7 +207,7 @@ def test_embedding_column_survives_the_migration_path(blank_postgres_url):
     """마이그레이션 경로로 세운 스키마에서도 임베딩 컬럼이 ``vector(384)`` 다."""
     engine = _prepared_engine(blank_postgres_url)
     try:
-        _create_premigration_baseline(engine)
+        create_premigration_baseline(engine)
         _upgrade_head(blank_postgres_url)
 
         rendered = _column_types(engine)[("projects", "embedding")]

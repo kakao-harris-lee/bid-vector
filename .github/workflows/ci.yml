@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Unit tests are SQLite-isolated (tests/conftest.py) and never touch the
+          # Unit tests are SQLite-isolated (root conftest.py) and never touch the
           # ML stack at import time, so the heavy ml-embedding/ml-training wheels
           # (torch/sklearn/pandas) are intentionally NOT installed here.
           pip install -r requirements/runtime.txt -r requirements/dev.txt
@@ -44,8 +44,8 @@ jobs:
         run: mypy app/
 
       - name: Pytest (SQLite-isolated unit tests, no external services)
-        # conftest.py forces DATABASE_URL=sqlite, ENVIRONMENT=test, and an
-        # in-memory Celery broker, so no secrets or Docker services are required.
+        # The root conftest.py forces DATABASE_URL=sqlite, ENVIRONMENT=test, and
+        # an in-memory Celery broker, so no secrets or Docker services are needed.
         # `postgres`-marked tests skip here (TEST_POSTGRES_URL is unset); they run
         # in the `postgres` job below.
         run: pytest -q tests/

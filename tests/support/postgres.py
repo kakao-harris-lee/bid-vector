@@ -111,9 +111,13 @@ def disposable_database(admin_url: str, *, prefix: str) -> Iterator[str]:
 def enable_pgvector(engine: Engine) -> None:
     """``VECTOR(384)`` 컬럼을 만들 수 있도록 확장을 켠다.
 
-    프로덕션에서는 ``docker/postgres/init/01-enable-pgvector.sql`` 과
-    :func:`app.services.project_similarity_schema.ensure_project_vector_schema` 가
-    같은 일을 한다. 여기서는 그 두 경로 **밖**에서 스키마를 세우는 픽스처가 쓴다.
+    프로덕션에서 이 전제를 세우는 것은 데이터베이스 초기화 시 1회 실행되는
+    ``docker/postgres/init/01-enable-pgvector.sql`` 이다.
+    :func:`app.services.project_similarity_schema.ensure_project_vector_schema`
+    도 같은 DDL 을 내지만, 그 호출부(lifespan 부트스트랩)는
+    ``ENVIRONMENT`` 가 production/staging 이면 아예 실행되지 않는다
+    (:func:`app.core.schema_bootstrap.startup_schema_bootstrap_enabled`).
+    여기서는 그 두 경로 **밖**에서 스키마를 세우는 픽스처가 쓴다.
     """
     with engine.begin() as connection:
         connection.exec_driver_sql(PGVECTOR_EXTENSION_DDL)

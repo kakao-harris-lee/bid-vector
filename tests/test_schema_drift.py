@@ -23,13 +23,17 @@ Maintenance
 -----------
 When a NEW migration creates a table or adds a column, register the
 migration-owned objects in ``MIGRATION_OWNED_TABLES`` /
-``MIGRATION_ADDED_COLUMNS`` below so the pre-migration baseline can be
-reconstructed. Forgetting to do so makes this test fail loudly, which is the
-intended behaviour -- it forces the model and migrations to stay in lockstep.
+``MIGRATION_ADDED_COLUMNS`` in ``tests/support/schema_baseline.py`` so the
+pre-migration baseline can be reconstructed. Forgetting to do so makes this test
+fail loudly, which is the intended behaviour -- it forces the model and
+migrations to stay in lockstep.
 
 Comparison is intentionally name-level only: sqlite cannot faithfully reflect
 postgres-specific foreign keys or the pgvector ``VECTOR(384)`` type, so a
 structural ``compare_metadata`` diff would be dominated by dialect noise.
+``tests/test_postgres_alembic.py`` runs the same two paths against a real
+PostgreSQL instance and compares rendered column *types*; both reconstruct the
+baseline with ``tests/support/schema_baseline.py``.
 
 Scope / known limitation
 ------------------------
@@ -48,80 +52,17 @@ import tempfile
 
 import pytest
 from alembic import command
-from sqlalchemy import MetaData, Table, create_engine, inspect
+from sqlalchemy import create_engine, inspect
 
 import app.core.config as app_config
 from app.core.database import Base
 from app.models import models  # noqa: F401  -- registers all tables on Base.metadata
 from tests.support.alembic_config import make_alembic_config
-
-# Tables created by an alembic migration (not part of the historical baseline).
-MIGRATION_OWNED_TABLES = {
-    "synthetic_experiments",
-    "synthetic_experiment_runs",
-    "synthetic_experiment_results",
-    "smoke_test_runs",
-    "operator_notification_channels",
-    "onboarding_suggestions",
-    "operator_preview_snapshots",
-    "project_similarity_snapshots",
-    "project_similarity_edges",
-    "inference_outbox_events",
-    "similar_projects_refresh_operations",
-    "operator_strategy_run_items",
-    "notification_delivery_outbox",
-    "tender_result_events",
-}
-
-# Columns added to a pre-existing table by an alembic migration.
-MIGRATION_ADDED_COLUMNS = {
-    "projects": {"business_type_code", "business_type_label"},
-    "synthetic_experiment_results": {"breakdown_json"},
-    "company_profiles": {
-        "construction_capacity_amount",
-        "awarded_contract_limit",
-        "association_memberships",
-        "tech_fields",
-    },
-    "crawl_jobs": {
-        "celery_task_id",
-        "category",
-        "execution_mode",
-        "max_items",
-        "received_count",
-        "normalized_count",
-        "duplicate_count",
-        "dropped_count",
-        "persisted_count",
-        "source_total_count",
-        "pages_fetched",
-        "truncated",
-        "drop_reasons",
-        "release_sha",
-        "release_tag",
-    },
-    "operator_strategy_runs": {
-        "projection_not_ready_count",
-        "release_sha",
-        "release_tag",
-    },
-    "bid_decision_records": {"monitor_run_id"},
-    "notifications": {"monitor_run_id", "project_id", "decision_record_id"},
-    "paper_bid_settlements": {"estimated_price", "minimum_bid_price"},
-    "tender_results": {
-        "opening_rank1_company",
-        "opening_rank1_business_no",
-        "opening_rank1_amount",
-        "opening_rank1_rate",
-        "opening_participant_count",
-        "opened_at",
-        "opening_checked_at",
-        "is_current",
-    },
-}
-
-ALEMBIC_INTERNAL_TABLES = {"alembic_version"}
-
+from tests.support.schema_baseline import (
+    ALEMBIC_INTERNAL_TABLES,
+    MIGRATION_OWNED_TABLES,
+    create_premigration_baseline,
+)
 
 def _table_column_names(engine) -> dict[str, set[str]]:
     """Reflect {table_name: {column_name, ...}} from a live engine."""
@@ -164,19 +105,9 @@ def _build_migration_schema() -> dict[str, set[str]]:
     try:
         engine = create_engine(url)
 
-        baseline = MetaData()
-        for table in Base.metadata.sorted_tables:
-            if table.name in MIGRATION_OWNED_TABLES:
-                continue
-            dropped = MIGRATION_ADDED_COLUMNS.get(table.name, set())
-            # Copy only the baseline columns; constraints/indexes that reference
-            # migration-added columns are intentionally left out so the sqlite
-            # baseline builds cleanly.
-            columns = [
-                column._copy() for column in table.columns if column.name not in dropped
-            ]
-            Table(table.name, baseline, *columns)
-        baseline.create_all(bind=engine)
+        # Shared with the postgres tier so both guards diff the same baseline
+        # (tests/support/schema_baseline.py owns the migration-owned registry).
+        create_premigration_baseline(engine)
 
         # alembic/env.py reads settings.DATABASE_URL at env-load time; point it at
         # the isolated sqlite DB for the duration of the upgrade.

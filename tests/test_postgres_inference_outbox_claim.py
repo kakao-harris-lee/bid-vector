@@ -17,13 +17,16 @@ SQLite 스위트는 이 계약을 검증할 수 없다. 파일 락 기반이라 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import pytest
 
+from app.core.config import settings
 from app.core.time import utc_now
 from app.models.models import InferenceOutboxEvent, Project
 from app.services.inference_outbox import (
     INFERENCE_OUTBOX_EVENT_EMBEDDING_READY,
+    INFERENCE_OUTBOX_STATUS_FAILED,
     INFERENCE_OUTBOX_STATUS_PENDING,
     INFERENCE_OUTBOX_STATUS_RUNNING,
     InferenceOutboxService,
@@ -101,18 +104,61 @@ def test_concurrent_claims_elect_exactly_one_owner(postgres_session_factory):
     assert int(row.attempts) == 1
 
 
-def test_claim_succeeds_again_after_stale_recovery(postgres_session_factory):
-    """회수된(pending 으로 되돌린) 이벤트는 다시 클레임 가능해야 한다."""
+def _expire_claim(session, event_id: int) -> InferenceOutboxEvent:
+    """클레임을 lock timeout 이전으로 밀어 '죽은 워커가 쥔 행' 상태를 만든다."""
+    row = session.get(InferenceOutboxEvent, event_id)
+    row.locked_at = utc_now() - timedelta(
+        seconds=int(settings.INFERENCE_OUTBOX_LOCK_TIMEOUT_SECONDS) + 60
+    )
+    session.commit()
+    return row
+
+
+def test_stale_claim_recovery_makes_the_event_claimable_again(postgres_session_factory):
+    """죽은 워커가 쥔 행을 ``recover_stale_claims`` 가 실제로 되돌린다.
+
+    이 저장소의 orphan 사고(재배달·무한 루프)가 실제로 도는 축이 이 회수 패스인데
+    전 스위트에서 커버되지 않고 있었다. 손으로 status 를 되돌리면 회수 로직은 한 줄도
+    실행되지 않으므로, timeout 을 넘긴 ``locked_at`` 을 만들고 프로덕션 진입점을
+    그대로 호출한다.
+    """
     service = InferenceOutboxService()
     session = postgres_session_factory()
     event_id = _seed_pending_event(session)
 
     assert service._claim(session, event_id) is True
-    row = session.get(InferenceOutboxEvent, event_id)
-    row.status = INFERENCE_OUTBOX_STATUS_PENDING
-    row.locked_at = None
-    session.commit()
+    row = _expire_claim(session, event_id)
+
+    assert service.recover_stale_claims(session) == 1
+
+    session.refresh(row)
+    assert row.status == INFERENCE_OUTBOX_STATUS_PENDING
+    assert row.locked_at is None
 
     assert service._claim(session, event_id) is True
     session.refresh(row)
     assert int(row.attempts) == 2
+
+
+def test_stale_claim_recovery_fails_the_event_when_attempts_are_exhausted(
+    postgres_session_factory,
+):
+    """시도 횟수를 소진한 행은 pending 이 아니라 FAILED 로 끝낸다.
+
+    되돌리면 같은 행이 영원히 재배달되며 워커를 태운다 — 회수 패스의 두 갈래 중
+    이쪽이 무한 루프를 끊는 쪽이다.
+    """
+    service = InferenceOutboxService()
+    session = postgres_session_factory()
+    event_id = _seed_pending_event(session)
+
+    assert service._claim(session, event_id) is True
+    row = _expire_claim(session, event_id)
+    row.attempts = int(settings.INFERENCE_OUTBOX_MAX_ATTEMPTS)
+    session.commit()
+
+    assert service.recover_stale_claims(session) == 1
+
+    session.refresh(row)
+    assert row.status == INFERENCE_OUTBOX_STATUS_FAILED
+    assert service._claim(session, event_id) is False
