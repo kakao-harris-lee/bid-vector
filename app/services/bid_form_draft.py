@@ -25,7 +25,10 @@ from app.schemas.bid_form_draft import (
     BID_FORM_DRAFT_NOTICE,
     ELIGIBILITY_NOTE,
     LOTTERY_NUMBERS_NOTE,
+    SHORTFALL_NOTE,
 )
+from app.schemas.bid_summary import BID_BASE_NOTE
+from app.schemas.prediction import FloorShortfallEstimate
 from app.services.bid_summary import BidSummaryService
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,10 @@ _ELIGIBILITY_UNKNOWN = "판단 불가"
 
 # 추천가가 하한가의 이 비율 이내면 "하한 근접"으로 표기 (참고 하한 기준).
 _NEAR_FLOOR_MARGIN = 0.02
+
+# 하한 미달 빈도 표시값 — 0%(위험 없음)와 절대 섞이지 않도록 문자열 자체를 분리한다.
+_SHORTFALL_UNMEASURABLE = "판정 불가"
+_SHORTFALL_UNAVAILABLE = "미산출"
 
 # 복수예비가격 추첨: 15개 중 2개 선택(표준 절차). 무작위 편의 픽이며
 # 개별 선택은 낙찰 결과에 영향 없음(예정가격은 전체 투찰자 합산으로 결정).
@@ -78,11 +85,19 @@ class BidFormDraftService:
 
         recommended_amount = float(recommendation.get("recommended_amount") or 0.0)
         recommended_bid_rate = recommendation.get("recommended_bid_rate")
+        recommended_bid_rate_on_base = recommendation.get(
+            "recommended_bid_rate_on_base"
+        )
         budget_estimate = float(notice.get("budget_estimate") or 0.0)
+        bid_base_amount = float(notice.get("bid_base_amount") or 0.0)
         floor_bid_rate = category_floor.get("floor_bid_rate")
+        floor_shortfall = summary.get("floor_shortfall")
 
+        # 하한 비교는 낙찰하한율과 basis 가 같은 기초금액 기준 율로 한다. 기초금액을
+        # 확보하지 못한 공고에서는 그 율이 추정가격 기준 율과 같은 값이라(기초금액이
+        # 추정가격으로 폴백) 판정이 종전과 동일하다.
         eligibility = self._estimate_eligibility(
-            recommended_bid_rate=recommended_bid_rate,
+            recommended_bid_rate=recommended_bid_rate_on_base,
             floor_bid_rate=floor_bid_rate,
         )
 
@@ -91,11 +106,13 @@ class BidFormDraftService:
         fields = self._build_field_map(
             notice=notice,
             recommended_amount=recommended_amount,
-            recommended_bid_rate=recommended_bid_rate,
+            recommended_bid_rate=recommended_bid_rate_on_base,
             budget_estimate=budget_estimate,
+            bid_base_amount=bid_base_amount,
             eligibility=eligibility,
             category_floor=category_floor,
             lottery_numbers=lottery_numbers,
+            floor_shortfall=floor_shortfall,
         )
 
         return {
@@ -106,8 +123,13 @@ class BidFormDraftService:
             "title": str(notice.get("title") or ""),
             "demand_agency": notice.get("demand_agency"),
             "budget_estimate": budget_estimate,
+            "bid_base_amount": bid_base_amount,
+            "bid_base_source": notice.get("bid_base_source"),
+            "bid_base_to_estimate_ratio": notice.get("bid_base_to_estimate_ratio"),
+            "bid_base_note": BID_BASE_NOTE,
             "recommended_amount": recommended_amount,
             "recommended_bid_rate": recommended_bid_rate,
+            "recommended_bid_rate_on_base": recommended_bid_rate_on_base,
             "category": notice.get("category"),
             "business_type_label": notice.get("business_type_label"),
             "deadline": notice.get("deadline"),
@@ -115,6 +137,7 @@ class BidFormDraftService:
             "eligibility_note": ELIGIBILITY_NOTE,
             "lottery_numbers": lottery_numbers,
             "lottery_numbers_note": LOTTERY_NUMBERS_NOTE,
+            "floor_shortfall": floor_shortfall,
             "fields": fields,
             "direct_submission_notice": BID_FORM_DRAFT_NOTICE,
         }
@@ -150,11 +173,17 @@ class BidFormDraftService:
         recommended_amount: float,
         recommended_bid_rate: Optional[float],
         budget_estimate: float,
+        bid_base_amount: float,
         eligibility: str,
         category_floor: dict,
         lottery_numbers: Optional[list[int]] = None,
+        floor_shortfall: Optional[FloorShortfallEstimate] = None,
     ) -> list[dict]:
-        """Map the aggregation onto 나라장터 투찰서 입력 항목(label + value pairs)."""
+        """Map the aggregation onto 나라장터 투찰서 입력 항목(label + value pairs).
+
+        ``recommended_bid_rate`` 는 **기초금액 기준** 투찰율을 받는다(호출부가 그 율을
+        넘긴다) — 투찰서에 적히는 율은 하한과 basis 가 같아야 한다.
+        """
         floor_bid_rate = category_floor.get("floor_bid_rate")
         lottery_numbers = lottery_numbers or []
 
@@ -195,25 +224,47 @@ class BidFormDraftService:
                 "note": None,
             },
             {
+                "key": "bid_base_amount",
+                "field_label": "기초금액(사업금액)",
+                "value": self.format_currency(bid_base_amount),
+                "raw_value": bid_base_amount if bid_base_amount else None,
+                "note": BID_BASE_NOTE,
+            },
+            {
                 "key": "budget_estimate",
-                "field_label": "기초금액(추정가격)",
-                "value": self._format_currency(budget_estimate),
+                "field_label": "추정가격(부가세 별도)",
+                "value": self.format_currency(budget_estimate),
                 "raw_value": budget_estimate if budget_estimate else None,
-                "note": "예정가/실하한가는 개찰 전 미공개입니다.",
+                "note": (
+                    "투찰 기준금액이 아닙니다(기준금액은 기초금액). 예정가/실하한가는 "
+                    "개찰 전 미공개입니다."
+                ),
             },
             {
                 "key": "recommended_amount",
                 "field_label": "투찰금액",
-                "value": self._format_currency(recommended_amount),
+                "value": self.format_currency(recommended_amount),
                 "raw_value": recommended_amount if recommended_amount else None,
-                "note": "추천 투찰가이며 보장된 낙찰가가 아닙니다.",
+                "note": (
+                    "추천 투찰가이며 보장된 낙찰가가 아닙니다. 기초금액 기준으로 산정된 "
+                    "금액이라 과세 공고에서는 부가세가 포함돼 있습니다 — 그대로 입력합니다."
+                ),
             },
             {
                 "key": "recommended_bid_rate",
-                "field_label": "투찰률(%)",
-                "value": self._format_percent(recommended_bid_rate),
+                "field_label": "투찰률(%) — 기초금액 기준",
+                "value": self.format_percent(recommended_bid_rate),
                 "raw_value": recommended_bid_rate,
-                "note": "투찰가 / 추정가격 비율(참고).",
+                "note": "투찰가 / 기초금액 비율. 낙찰하한율과 basis 가 같은 율입니다.",
+            },
+            {
+                "key": "floor_shortfall_frequency",
+                "field_label": "하한 미달 빈도(과거 표본)",
+                "value": self.format_shortfall(floor_shortfall),
+                "raw_value": (
+                    floor_shortfall.shortfall_frequency if floor_shortfall else None
+                ),
+                "note": self._shortfall_note(floor_shortfall),
             },
             {
                 "key": "lottery_numbers",
@@ -234,14 +285,14 @@ class BidFormDraftService:
             {
                 "key": "category_floor_bid_rate",
                 "field_label": "카테고리 낙찰하한율(참고)",
-                "value": self._format_percent(floor_bid_rate),
+                "value": self.format_percent(floor_bid_rate),
                 "raw_value": floor_bid_rate,
                 "note": ("참고 하한율입니다. 실제 낙찰하한가는 개찰 시 예정가 기준으로 " "결정됩니다."),
             },
             {
                 "key": "deadline",
                 "field_label": "투찰 마감일시",
-                "value": self._format_datetime(notice.get("deadline")),
+                "value": self.format_datetime(notice.get("deadline")),
                 "raw_value": None,
                 "note": None,
             },
@@ -341,17 +392,39 @@ class BidFormDraftService:
 
     # --- formatting helpers ----------------------------------------------------
 
-    def _format_currency(self, amount: Optional[float]) -> str:
+    def format_currency(self, amount: Optional[float]) -> str:
         if not amount:
             return ""
         return f"{int(round(amount)):,}원"
 
-    def _format_percent(self, rate: Optional[float]) -> str:
+    def format_percent(self, rate: Optional[float]) -> str:
         if rate is None:
             return ""
         return f"{rate * 100:.3f}%"
 
-    def _format_datetime(self, value) -> str:
+    def format_shortfall(self, estimate: Optional[FloorShortfallEstimate]) -> str:
+        """빈도를 사람이 읽는 문자열로. 판정 불가는 0%가 아니라 그렇게 적는다.
+
+        측정된 경우 표본 수와 임계 사정률을 값에 함께 적는다 — 인쇄본만 손에 든
+        운영자도 그 빈도가 무엇으로 나왔는지 확인할 수 있어야 한다.
+        """
+        if estimate is None:
+            return _SHORTFALL_UNAVAILABLE
+        if estimate.shortfall_frequency is None:
+            return _SHORTFALL_UNMEASURABLE
+        return (
+            f"{estimate.shortfall_frequency * 100:.1f}%"
+            f" (표본 {estimate.sample_count:,}건,"
+            f" 임계 사정률 {estimate.critical_assessment_rate})"
+        )
+
+    def _shortfall_note(self, estimate: Optional[FloorShortfallEstimate]) -> str:
+        """판정 불가면 그 사유를, 측정됐으면 정직 caveat 를 note 로 준다."""
+        if estimate is not None and estimate.unmeasurable_reason:
+            return estimate.unmeasurable_reason
+        return SHORTFALL_NOTE
+
+    def format_datetime(self, value) -> str:
         if value is None:
             return ""
         try:

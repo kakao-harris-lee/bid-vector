@@ -112,6 +112,78 @@ def test_create_project_accepts_notice_and_agency_metadata(client):
     assert detail_payload["issuing_agency"] == "조달청"
 
 
+def test_project_detail_exposes_bid_base_amount(client, test_db):
+    """상세 응답은 추정가격과 별도로 투찰 기준금액(기초금액)을 낸다."""
+    from app.models.models import HistoricalData
+
+    created = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "기초금액 노출 공고",
+            "description": "basis 표시",
+            "requirements": "",
+            "budget_estimate": 100_000_000.0,
+            "category": "construction",
+            "notice_number": "20260301-001",
+        },
+    ).json()
+    test_db.add(
+        HistoricalData(
+            project_id=created["id"],
+            notice_number="20260301-001",
+            category="construction",
+            base_amount=110_000_000.0,
+        )
+    )
+    test_db.commit()
+
+    payload = client.get(f"/api/v1/projects/{created['id']}").json()
+
+    assert payload["budget_estimate"] == 100_000_000.0
+    assert payload["bid_base_amount"] == 110_000_000.0
+    assert payload["bid_base_source"] == "base-fallback"
+    assert payload["bid_base_to_estimate_ratio"] == 1.1
+
+
+def test_project_detail_bid_base_falls_back_to_budget_estimate(client):
+    """기초금액이 없으면 추정가격으로 폴백하되 그 사실이 출처로 드러난다."""
+    created = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "기초금액 미적재 공고",
+            "description": "basis 표시",
+            "requirements": "",
+            "budget_estimate": 50_000_000.0,
+            "category": "service",
+        },
+    ).json()
+
+    payload = client.get(f"/api/v1/projects/{created['id']}").json()
+
+    assert payload["bid_base_amount"] == 50_000_000.0
+    assert payload["bid_base_source"] == "budget-estimate-fallback"
+    assert payload["bid_base_to_estimate_ratio"] == 1.0
+
+
+def test_project_list_stays_free_of_bid_base_fields(client):
+    """목록 payload 는 늘리지 않는다(기초금액 해석은 공고당 추가 조회를 요구)."""
+    client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "목록 payload 공고",
+            "description": "list payload",
+            "requirements": "",
+            "budget_estimate": 10_000_000.0,
+            "category": "service",
+        },
+    )
+
+    rows = client.get("/api/v1/projects/").json()
+
+    assert rows, "목록에 최소 한 건은 있어야 한다"
+    assert all("bid_base_amount" not in row for row in rows)
+
+
 def test_get_nonexistent_project(client):
     """Test getting non-existent project"""
     response = client.get("/api/v1/projects/9999")

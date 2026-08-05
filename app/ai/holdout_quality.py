@@ -165,8 +165,10 @@ def _is_floor_comparable(ctx: _QualityContext) -> bool:
     )
 
 
-def _is_rate_basis_unverified(ctx: _QualityContext) -> bool:
-    """보고 낙찰률이 금액비 파생으로 보이고 독립 예정가 증거도 없는가.
+def is_rate_basis_independent(
+    reserve_price_count: int, rate_mismatch_ratio: float | None
+) -> bool:
+    """보고 낙찰률이 금액비 파생이 아닌 **독립 예정가-basis 실측**으로 볼 수 있는가.
 
     보고율이 ``winning_amount / base_amount`` 와 상대오차 경계 밖으로 갈리면 그 값은
     우리가 가진 금액비로 만들 수 없는 정보(=예정가-basis 실측)를 담고 있다는 뜻이다.
@@ -174,13 +176,30 @@ def _is_rate_basis_unverified(ctx: _QualityContext) -> bool:
     하한에 대면 사정률만큼 구조적으로 낮게 나온다.
 
     복수예비가격이 충분히 있으면 예정가를 독립적으로 재구성할 수 있으므로, 일치해도
-    (사정률≈1 인 정상 케이스) 판정을 유지한다.
+    (사정률≈1 인 정상 케이스) 독립으로 인정한다.
+
+    Args:
+        reserve_price_count: 그 공고에 수집된 복수예비가격 개수(독립 증거의 유무).
+        rate_mismatch_ratio: 보고율 vs 금액-역산율의 **상대** 오차. 금액-역산율이
+            없어 계산 불가면 ``None`` — 파생 여부를 반증할 수 없으므로 독립으로 본다
+            (기존 판정 유지).
+
+    이 술어는 홀드아웃 품질 판정(:func:`_is_rate_basis_unverified`)과 사정률 표본
+    수집(:mod:`app.services.floor_shortfall`)이 **같은 규칙**을 쓰도록 공개된 단일
+    출처다(§4.5.8) — 두 곳에서 같은 오탐/spurious 사정률=1 을 막는다.
     """
-    if ctx.reserve_price_count >= MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE:
-        return False
-    if ctx.rate_mismatch_ratio is None:
-        return False
-    return ctx.rate_mismatch_ratio < RATE_BASIS_INDEPENDENCE_TOLERANCE
+    if reserve_price_count >= MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE:
+        return True
+    if rate_mismatch_ratio is None:
+        return True
+    return rate_mismatch_ratio >= RATE_BASIS_INDEPENDENCE_TOLERANCE
+
+
+def _is_rate_basis_unverified(ctx: _QualityContext) -> bool:
+    """보고 낙찰률이 금액비 파생으로 보이고 독립 예정가 증거도 없는가."""
+    return not is_rate_basis_independent(
+        ctx.reserve_price_count, ctx.rate_mismatch_ratio
+    )
 
 
 def _is_floor_verdict_rate_basis_blocked(ctx: _QualityContext) -> bool:

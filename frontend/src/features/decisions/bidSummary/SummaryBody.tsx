@@ -1,9 +1,11 @@
 import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui";
-import { LabeledStat } from "@/shared/components";
-import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
+import { FloorShortfallStat, LabeledStat } from "@/shared/components";
+import { formatCurrency, formatPercent } from "@/shared/lib";
 import { t } from "@/shared/i18n";
 import type { BidSummaryResponse } from "@/shared/types/bidSummary";
 import { FieldStatBody } from "./FieldStatBody";
+import { NoticeMetaCard } from "./NoticeMetaCard";
+import { RecommendationHeadline } from "./RecommendationHeadline";
 
 export function SummaryBody({ data }: { data: BidSummaryResponse }) {
   const { recommendation, prediction, category_floor, field_stat, notice } = data;
@@ -23,39 +25,8 @@ export function SummaryBody({ data }: { data: BidSummaryResponse }) {
         </p>
       </div>
 
-      {/* 추천 투찰가 / 투찰률 — 크게. */}
-      <Card>
-        <CardContent className="grid gap-4 pt-6 sm:grid-cols-3">
-          <div className="flex flex-col gap-1 sm:col-span-2">
-            <span className="text-xs text-[var(--color-muted)]">
-              {t("bid_summary.recommended_amount_label")}
-            </span>
-            <strong className="text-3xl font-bold tabular-nums text-[var(--color-fg)]">
-              {formatCurrency(recommendation.recommended_amount)}
-            </strong>
-            {recommendation.recommended_bid_rate !== null &&
-            recommendation.recommended_bid_rate !== undefined ? (
-              <span className="text-sm text-[var(--color-muted)]">
-                {t("bid_summary.recommended_bid_rate_label")}{" "}
-                <strong className="tabular-nums text-[var(--color-fg)]">
-                  {formatPercent(recommendation.recommended_bid_rate)}
-                </strong>
-              </span>
-            ) : null}
-          </div>
-          <div className="flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-            <span className="text-xs text-[var(--color-muted)]">
-              {t("bid_summary.probability_label")}
-            </span>
-            <strong className="text-2xl font-semibold tabular-nums text-[var(--color-fg)]">
-              {formatPercent(recommendation.probability_score)}
-            </strong>
-            <span className="text-[11px] leading-tight text-[var(--color-muted)]">
-              {t("bid_summary.probability_caveat")}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+      {/* 추천 투찰금액 / 두 투찰률 / 가격 적합도(추정) — 크게. */}
+      <RecommendationHeadline recommendation={recommendation} />
 
       {/* 예측 가격대 */}
       <Card>
@@ -192,6 +163,10 @@ export function SummaryBody({ data }: { data: BidSummaryResponse }) {
           <p className="text-[11px] leading-tight text-[var(--color-muted)]">
             {category_floor.note}
           </p>
+          {/* 추천가가 하한 아래로 갈렸던 과거 빈도 — 하한 이야기 바로 옆에 둔다.
+              추천가는 기초금액 기준이고 실격 하한은 추첨된 예정가 기준이라, 같은
+              추천가도 사정률 추첨에 따라 하한 위/아래로 갈린다. */}
+          <FloorShortfallStat estimate={data.floor_shortfall} />
         </CardContent>
       </Card>
 
@@ -209,30 +184,8 @@ export function SummaryBody({ data }: { data: BidSummaryResponse }) {
         </CardContent>
       </Card>
 
-      {/* 공고 메타 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("bid_summary.notice_title")}</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
-          <LabeledStat variant="field" label={t("bid_summary.notice_number_label")} value={notice.notice_number ?? "-"} full>
-            <strong className="text-[var(--color-fg)]">{notice.title}</strong>
-          </LabeledStat>
-          <LabeledStat variant="field"
-            label={t("bid_summary.category_label")}
-            value={notice.business_type_label ?? notice.category ?? "-"}
-          />
-          <LabeledStat variant="field"
-            label={t("bid_summary.budget_label")}
-            value={formatCurrency(notice.budget_estimate)}
-          />
-          <LabeledStat variant="field" label={t("bid_summary.agency_label")} value={notice.demand_agency ?? "-"} />
-          <LabeledStat variant="field"
-            label={t("bid_summary.deadline_label")}
-            value={notice.deadline ? formatDateTime(notice.deadline) : "-"}
-          />
-        </CardContent>
-      </Card>
+      {/* 공고 메타 — 추정가격과 투찰 기준금액을 각각의 행으로. */}
+      <NoticeMetaCard notice={notice} />
     </div>
   );
 }

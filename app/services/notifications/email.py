@@ -36,19 +36,13 @@ from app.core.time import utc_now
 from app.models.models import Analytics, User
 from app.schemas.analytics_events import BidReportEmailDeliveryEvent
 from app.schemas.bid_form_draft import BID_FORM_DRAFT_NOTICE
-from app.schemas.bid_summary import DIRECT_SUBMISSION_NOTICE
+from app.schemas.bid_summary import DIRECT_SUBMISSION_NOTICE, BidSummaryResponse
 from app.services.analytics_event_payload import dump_analytics_event
 from app.services.bid_form_draft import BidFormDraftService
 from app.services.bid_summary import BidSummaryService
+from app.services.notifications.bid_report_rows import build_report_rows
 
 logger = logging.getLogger(__name__)
-
-# 판단(action) → 한국어 라벨(telegram build_bid_decision_message 미러, 선언적 룩업).
-_ACTION_LABELS = {
-    "bid_now": "즉시 투찰",
-    "review": "추가 검토",
-    "skip": "보류",
-}
 
 # 전달 상태 상수(정직 표기 — 라이브 송신은 기본 비활성).
 STATUS_DRY_RUN = "dry_run_rendered"
@@ -136,31 +130,15 @@ class EmailNotificationService:
         외부(KONEPS) 문자열(공고명/수요기관 등)은 HTML escape 로 중화한다. CSV 첨부는
         ``BidFormDraftService.render_csv`` 를 재사용해 field_label/value/note 를 담고,
         수식 인젝션도 그쪽에서 중화된다.
+
+        요약은 본문 표를 만들기 전에 ``BidSummaryResponse`` 로 검증한다 — 키가 어긋나면
+        빈 칸으로 조용히 렌더링되는 대신 여기서 실패하고, 호출부의 베스트에포트 경로가
+        실패 결과를 돌려준다.
         """
-        notice = summary.get("notice", {}) or {}
-        recommendation = summary.get("recommendation", {}) or {}
+        report = BidSummaryResponse.model_validate(summary)
+        subject = f"[투찰 보고서] {report.notice.title or '(제목 없음)'}"
 
-        title = str(notice.get("title") or "(제목 없음)")
-        subject = f"[투찰 보고서] {title}"
-
-        action = str(recommendation.get("action") or "skip")
-        action_label = _ACTION_LABELS.get(action, action)
-        decision_status = str(recommendation.get("decision_status") or "planned")
-        recommended_amount = float(recommendation.get("recommended_amount") or 0.0)
-        recommended_bid_rate = recommendation.get("recommended_bid_rate")
-
-        rows = [
-            ("공고명", title),
-            ("공고번호", str(notice.get("notice_number") or "")),
-            ("수요기관", str(notice.get("demand_agency") or "")),
-            ("분류(카테고리)", str(notice.get("category") or "")),
-            ("업종", str(notice.get("business_type_label") or "")),
-            ("추천 투찰가", self._format_currency(recommended_amount)),
-            ("투찰률(%)", self._format_percent(recommended_bid_rate)),
-            ("판단", action_label),
-            ("결정 상태", decision_status),
-            ("투찰 마감일시", self._format_datetime(notice.get("deadline"))),
-        ]
+        rows = build_report_rows(report, formatter=self._draft_service)
 
         text_body = self._render_text_body(rows)
         html_body = self._render_html_body(rows)
@@ -501,24 +479,3 @@ class EmailNotificationService:
         except (AttributeError, TypeError, ValueError):
             project_id = None
         return project_id, record_id
-
-    @staticmethod
-    def _format_currency(amount: Optional[float]) -> str:
-        if not amount:
-            return ""
-        return f"{int(round(amount)):,}원"
-
-    @staticmethod
-    def _format_percent(rate: Optional[float]) -> str:
-        if rate is None:
-            return ""
-        return f"{rate * 100:.3f}%"
-
-    @staticmethod
-    def _format_datetime(value: Any) -> str:
-        if value is None:
-            return ""
-        try:
-            return value.strftime("%Y-%m-%d %H:%M")
-        except (AttributeError, ValueError):
-            return str(value)

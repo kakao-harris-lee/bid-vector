@@ -10,3 +10,9 @@ export {
   type LabeledStatProps,
   type LabeledStatVariant
 } from "./LabeledStat";
+export {
+  AmountWithBasis,
+  type AmountWithBasisProps,
+  type AmountWithBasisVariant
+} from "./AmountWithBasis";
+export { FloorShortfallStat, type FloorShortfallStatProps } from "./FloorShortfallStat";

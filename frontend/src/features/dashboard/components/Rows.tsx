@@ -17,6 +17,7 @@ import {
   statusFromOpportunity,
   statusFromOutcome
 } from "@/shared/lib";
+import { AmountWithBasis } from "@/shared/components";
 import type { BidDecisionActionType } from "@/shared/api";
 import { MiniBar, MiniDonut } from "./Helpers";
 import { StatusBadge } from "./StatusBadge";
@@ -82,7 +83,15 @@ export function OpportunityRow({
       </div>
       <div className="row-side">
         <MiniBar value={item.priority_score} />
-        <strong>{formatCurrencyCompact(item.recommended_amount)}</strong>
+        <strong>
+          {/* 라벨 없는 숫자라 basis 뱃지가 유일한 단서다 — 추정가격으로 읽히면 안 된다. */}
+          <AmountWithBasis
+            amount={item.recommended_amount}
+            basis="submission"
+            variant="inline"
+            compact
+          />
+        </strong>
         <small>{formatHours(item.deadline_hours_remaining)}</small>
         {canAct ? (
           <InlineActionButtons

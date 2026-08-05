@@ -3,6 +3,7 @@
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 from app.core.constants import PriceScenario
+from app.schemas._base import StrictModel
 
 
 class MLTaskResponse(BaseModel):
@@ -97,6 +98,58 @@ class PricePredictionFeedbackCalibration(BaseModel):
     average_signed_error_rate: float
     average_absolute_error_rate: float = Field(ge=0.0)
     applied_adjustment_rate: float
+
+
+class FloorShortfallEstimate(StrictModel):
+    """추천 투찰가가 낙찰하한 미달이 됐을 **과거 빈도**(추정) — 실격 확률이 아니다.
+
+    추천가는 기초금액 기준이고 실격 하한은 추첨된 예정가격 기준이라, 사정률
+    (예정가/기초금액) 추첨 결과에 따라 같은 추천가도 하한 위/아래로 갈린다. 이 DTO 는
+    과거 개찰 표본에서 그 경계를 넘긴 **표본 비율**만 전달한다(정직 명세 §2). 이번
+    공고의 추첨에 대한 확률 주장이 아니므로 UI/문구에서 "실격 확률"로 표시하면 안 된다.
+
+    ``shortfall_frequency is None`` 은 **"위험 없음"이 아니라 "판정 불가"** 다
+    (``unmeasurable_reason`` 참조). 0.0 과 절대 같은 표시로 합치지 않는다.
+    """
+
+    shortfall_frequency: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "과거 사정률 표본 중 이 추천율이 낙찰하한 미달이 됐을 표본 비율(0-1). "
+            "실제 실격 확률이 아니다. None 이면 판정 불가(표본 부족 등)."
+        ),
+    )
+    shortfall_sample_count: int = Field(
+        default=0,
+        ge=0,
+        description="임계 사정률을 초과한 표본 수(빈도의 분자).",
+    )
+    sample_count: int = Field(
+        default=0,
+        ge=0,
+        description="빈도 산출에 실제로 쓰인 사정률 표본 수(분모).",
+    )
+    minimum_sample_count: int = Field(
+        ge=0,
+        description="빈도를 발표하기 위해 요구한 최소 표본 수(이 미만이면 판정 불가).",
+    )
+    critical_assessment_rate: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "임계 사정률 = 추천 투찰율 ÷ 낙찰하한율. 사정률(예정가/기초금액)이 이 값을 "
+            "초과하면 추천가가 하한 미달이 된다."
+        ),
+    )
+    scope: str = Field(
+        description="표본을 고른 기준(오염 필터·카테고리·기준일)을 사람이 읽을 수 있게 요약."
+    )
+    unmeasurable_reason: Optional[str] = Field(
+        default=None,
+        description="판정 불가 사유. 측정된 경우 None.",
+    )
 
 
 class PriceRegimeFeatures(BaseModel):

@@ -9,7 +9,12 @@ values into KONEPS by hand**.
 제출합니다.
 
 표시 정직화 (PR7 와 동일 원칙):
-- ``recommended_bid_rate`` 는 추천 투찰가 / 추정가격(budget_estimate) 비율이다.
+- ``bid_base_amount`` 는 투찰율이 곱해지는 기초금액/사업금액(과세 공고면 부가세 포함)
+  이고, ``budget_estimate`` 는 추정가격(부가세 별도 표기)이다. **서로 다른 금액**이라
+  한 라벨로 묶지 않는다 — 두 금액을 동의어로 표기한 초안이 실투찰 혼동의 원인이었다.
+- ``recommended_bid_rate`` 는 추천 투찰가 / 추정가격(budget_estimate) 비율이고,
+  ``recommended_bid_rate_on_base`` 는 기초금액 기준 투찰율이다. 낙찰하한율과 basis 가
+  같은 쪽은 후자이므로 적격여부(추정) 판정은 후자를 쓴다.
 - ``eligibility_estimate`` 는 카테고리 낙찰하한율(참고) 대비 추천가 위치에서 도출한
   **추정 라벨**이다. 실제 적격/낙찰 여부가 아니다. 라이브 공고는 예정가/실하한가를
   개찰 전에 모르므로 하한율은 참고값일 뿐이다.
@@ -19,6 +24,9 @@ from datetime import datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.bid_summary import BID_BASE_NOTE
+from app.schemas.prediction import FloorShortfallEstimate
 
 # 운영자에게 항상 노출되는 정직 안내 문구. 자동 제출이 아님을 분명히 한다.
 # bid_summary 의 DIRECT_SUBMISSION_NOTICE 와 동일 톤이되, 초안 export 맥락을 명시.
@@ -42,6 +50,14 @@ LOTTERY_NUMBERS_NOTE = (
     "고르는 절차로, 예정가격은 전체 투찰자의 선택을 합산해 정해지므로 개별 번호 "
     "선택은 낙찰 결과에 영향이 없습니다. 분석·최적화 결과가 아니며, 공고에 따라 "
     "복수예비가격 절차가 적용되지 않을 수 있습니다."
+)
+
+
+# 하한 미달 빈도 — 정직 표기. 실격 확률이 아니라 과거 개찰 표본에서 같은 투찰율이
+# 하한 아래로 떨어졌을 비율이며, 이번 공고의 추첨 결과를 예측하지 않는다.
+SHORTFALL_NOTE = (
+    "과거 개찰 표본에서 같은 투찰율이 낙찰하한 미달(실격)로 떨어졌을 **표본 비율**"
+    "입니다. 이번 공고의 실격 확률이 아닙니다 — 예정가격은 개찰 시 추첨으로 정해집니다."
 )
 
 
@@ -78,12 +94,53 @@ class BidFormDraftResponse(BaseModel):
     demand_agency: Optional[str] = Field(default=None, description="수요기관.")
     budget_estimate: float = Field(
         default=0.0,
-        description="기초금액(추정가격). 예정가/실하한가는 개찰 전 미공개.",
+        description=(
+            "추정가격(부가세 별도 표기). **기초금액과 다른 금액이며 투찰 기준금액이 "
+            "아니다** — 투찰율은 bid_base_amount 에 곱해진다. 예정가/실하한가는 개찰 전 "
+            "미공개."
+        ),
     )
-    recommended_amount: float = Field(description="추천 투찰금액(원).")
+    bid_base_amount: float = Field(
+        default=0.0,
+        description=(
+            "공고 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). 추천 "
+            "투찰금액이 실제로 곱해진 금액이다."
+        ),
+    )
+    bid_base_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "기초금액 출처(clean-base / reserve-estimate / base-fallback / "
+            "budget-estimate-fallback)."
+        ),
+    )
+    bid_base_to_estimate_ratio: Optional[float] = Field(
+        default=None,
+        description=(
+            "기초금액 ÷ 추정가격. 1.1 부근이면 기초금액이 추정가격에 없는 부가세를 "
+            "포함한다는 뜻. 추정가격이 0 이면 null."
+        ),
+    )
+    bid_base_note: str = Field(default=BID_BASE_NOTE)
+    recommended_amount: float = Field(
+        description=(
+            "추천 투찰금액(원) — 나라장터에 그대로 입력하는 제출값. 기초금액 기준으로 "
+            "산정되므로 과세 공고에서는 부가세가 포함된 금액이다."
+        )
+    )
     recommended_bid_rate: Optional[float] = Field(
         default=None,
-        description="추천 투찰률 = 추천 투찰가 / 추정가격. budget>0 일 때만.",
+        description=(
+            "추천 투찰가 / 추정가격 — **참고 지표**. 적격심사가 보는 율이 아니다"
+            "(그 율은 recommended_bid_rate_on_base). budget>0 일 때만."
+        ),
+    )
+    recommended_bid_rate_on_base: Optional[float] = Field(
+        default=None,
+        description=(
+            "추천 투찰가 / 기초금액 — 낙찰하한율과 같은 basis 라 적격여부(추정) 판정과 "
+            "투찰서 표기는 이 율을 쓴다. bid_base_amount>0 일 때만."
+        ),
     )
     category: Optional[str] = Field(default=None, description="카테고리(분류).")
     business_type_label: Optional[str] = Field(
@@ -107,6 +164,15 @@ class BidFormDraftResponse(BaseModel):
         ),
     )
     lottery_numbers_note: str = Field(default=LOTTERY_NUMBERS_NOTE)
+
+    floor_shortfall: Optional[FloorShortfallEstimate] = Field(
+        default=None,
+        description=(
+            "추천 투찰가가 낙찰하한 미달이 됐을 과거 표본 빈도(실격 확률 아님). 내부 "
+            "shortfall_frequency 가 null 이면 '위험 없음'이 아니라 '판정 불가'이며 사유는 "
+            "unmeasurable_reason 에 담긴다."
+        ),
+    )
 
     fields: List[BidFormDraftField] = Field(
         description="나라장터 입력 항목 매핑(라벨+값) 리스트. 운영자가 그대로 입력."

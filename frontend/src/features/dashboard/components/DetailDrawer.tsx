@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { formatCurrency, formatDateTime, formatPercent } from "@/shared/lib";
+import { AmountWithBasis } from "@/shared/components";
+import { AMOUNT_BASIS_LABEL } from "@/shared/constants/amountBasis";
 import { t } from "@/shared/i18n";
 import { IconButton } from "@/app/layout/IconButton";
 import { trackProjectView } from "@/shared/api/operations";
@@ -66,8 +68,15 @@ export function DetailDrawer({
           <dd>{project.issuing_agency ?? project.demand_agency ?? "-"}</dd>
         </div>
         <div>
-          <dt>예산</dt>
-          <dd>{formatCurrency(project.budget_estimate)}</dd>
+          {/* 투찰율이 곱해지는 금액이 아니다 — "예산" 한 이름으로 부르지 않는다. */}
+          <dt>{AMOUNT_BASIS_LABEL.estimate}</dt>
+          <dd>
+            <AmountWithBasis
+              amount={project.budget_estimate}
+              basis="estimate"
+              variant="inline"
+            />
+          </dd>
         </div>
         <div>
           <dt>마감</dt>
@@ -75,8 +84,14 @@ export function DetailDrawer({
         </div>
         {"recommended_amount" in selection.item && selection.item.recommended_amount ? (
           <div>
-            <dt>추천가</dt>
-            <dd>{formatCurrency(selection.item.recommended_amount)}</dd>
+            <dt>{AMOUNT_BASIS_LABEL.submission}</dt>
+            <dd>
+              <AmountWithBasis
+                amount={selection.item.recommended_amount}
+                basis="submission"
+                variant="inline"
+              />
+            </dd>
           </div>
         ) : null}
         {"source_label" in selection.item ? (

@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
 from app.core.single_user import ensure_operator_account
-from app.models.models import BidDecisionRecord, Project, User
+from app.models.models import BidDecisionRecord, HistoricalData, Project, User
 from app.schemas.bid_form_draft import BID_FORM_DRAFT_NOTICE
 
 DRAFT_PATH = "/api/v1/operations/bid-decisions/{record_id}/bid-form-draft"
@@ -101,13 +101,87 @@ def test_bid_form_draft_maps_known_decision(client, test_db):
 
     # 나라장터 입력 항목 매핑 리스트에 핵심 라벨이 모두 존재.
     field_labels = {f["field_label"] for f in payload["fields"]}
-    for expected in ("공고번호", "공고명", "수요기관", "투찰금액", "투찰률(%)", "적격여부(추정)"):
+    for expected in (
+        "공고번호",
+        "공고명",
+        "수요기관",
+        "투찰금액",
+        "투찰률(%) — 기초금액 기준",
+        "적격여부(추정)",
+    ):
         assert expected in field_labels
 
     # 투찰금액 항목의 표시값/원시값 매핑.
     amount_field = next(f for f in payload["fields"] if f["field_label"] == "투찰금액")
     assert amount_field["value"] == "90,000,000원"
     assert amount_field["raw_value"] == 90_000_000.0
+
+
+def test_bid_form_draft_separates_bid_base_from_budget_estimate(client, test_db):
+    """과세 공고: 기초금액(부가세 포함)과 추정가격이 서로 다른 항목으로 나가야 한다.
+
+    실투찰 사고의 형태를 그대로 재현한다 — 추정가격 1억, 기초금액 1.1억(부가세 포함)인
+    공고에 기초금액의 88%(=96,800,000원)를 투찰하는 상황. 추정가격 기준 율(0.968)로
+    하한(0.87)을 재면 여유가 크게 남는 것처럼 보이지만, 실제로 적격심사가 보는 기초금액
+    기준 율은 0.88 이라 하한 바로 위다.
+    """
+    project, decision = _seed_project_and_decision(
+        test_db, recommended_amount=96_800_000.0
+    )
+    test_db.add(
+        HistoricalData(
+            project_id=project.id,
+            notice_number=project.notice_number,
+            category="construction",
+            base_amount=110_000_000.0,
+        )
+    )
+    test_db.commit()
+
+    payload = client.get(DRAFT_PATH.format(record_id=decision.id)).json()
+
+    # 두 금액이 각각 제 이름으로 나간다.
+    assert payload["budget_estimate"] == 100_000_000.0
+    assert payload["bid_base_amount"] == 110_000_000.0
+    assert payload["bid_base_source"] == "base-fallback"
+    assert payload["bid_base_to_estimate_ratio"] == 1.1
+
+    # 두 basis 의 투찰율이 각각 산출되고, 하한 판정은 기초금액 기준 율을 쓴다.
+    assert payload["recommended_bid_rate"] == 0.968
+    assert payload["recommended_bid_rate_on_base"] == 0.88
+    # 0.88 <= 0.87 * 1.02 → "하한 근접"(추정가격 기준 0.968 로 쟀다면 "적격 추정"이었다).
+    assert payload["eligibility_estimate"] == "하한 근접"
+
+    fields = {f["key"]: f for f in payload["fields"]}
+    assert fields["bid_base_amount"]["field_label"] == "기초금액(사업금액)"
+    assert fields["bid_base_amount"]["value"] == "110,000,000원"
+    assert fields["bid_base_amount"]["raw_value"] == 110_000_000.0
+    assert fields["budget_estimate"]["field_label"] == "추정가격(부가세 별도)"
+    assert fields["budget_estimate"]["raw_value"] == 100_000_000.0
+    # 투찰서에 적히는 율도 기초금액 기준.
+    assert fields["recommended_bid_rate"]["raw_value"] == 0.88
+    assert "기초금액" in fields["recommended_bid_rate"]["field_label"]
+
+
+def test_bid_form_draft_shortfall_unmeasurable_is_not_zero(client, test_db):
+    """표본/하한을 확보하지 못하면 0%가 아니라 '판정 불가'로 표기된다(정직 명세 §2)."""
+    _, decision = _seed_project_and_decision(test_db)
+
+    payload = client.get(DRAFT_PATH.format(record_id=decision.id)).json()
+
+    shortfall = payload["floor_shortfall"]
+    assert shortfall is not None
+    assert shortfall["shortfall_frequency"] is None
+    assert shortfall["unmeasurable_reason"]
+
+    field = next(
+        f for f in payload["fields"] if f["key"] == "floor_shortfall_frequency"
+    )
+    assert field["value"] == "판정 불가"
+    assert field["raw_value"] is None
+    assert "0%" not in field["value"]
+    # note 는 판정 불가 사유를 그대로 전달해, 인쇄본만 봐도 '위험 없음'으로 읽히지 않는다.
+    assert "위험이 없다는 뜻이 아닙니다" in field["note"]
 
 
 def test_bid_form_draft_lottery_numbers_present_and_valid(client, test_db):

@@ -14,9 +14,19 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.prediction import FloorShortfallEstimate
+
 # 가격 적합도(추정) 라벨 — schemas.py 의 _PROBABILITY_SCORE_DESCRIPTION 와 정직 일관.
 _PROBABILITY_SCORE_DESCRIPTION = (
     "가격 적합도(추정) — P(낙찰) 아님(would_have_won_final 게이트 별도)"
+)
+
+# 두 금액이 왜 다른지 운영자에게 항상 같은 문장으로 설명한다(단일 출처). 화면·CSV·
+# 메일 어디서 읽어도 "예산"이 투찰 기준금액이 아니라는 사실이 함께 따라가야 한다.
+BID_BASE_NOTE = (
+    "투찰율이 곱해지는 기준금액은 기초금액/사업금액(과세 공고면 부가세 포함)이며, "
+    "추정가격(부가세 별도 표기)과 다른 금액입니다. 투찰금액은 기초금액 기준으로 "
+    "산정되므로 추정가격에 투찰율을 곱해 검산하면 값이 어긋납니다."
 )
 
 # 운영자에게 항상 노출되는 정직 안내 문구. 자동 제출이 아님을 분명히 한다.
@@ -35,8 +45,35 @@ class BidSummaryNoticeMeta(BaseModel):
     category: Optional[str] = None
     business_type_label: Optional[str] = None
     budget_estimate: float = Field(
-        default=0.0, description="공고 추정가격(예산). 예정가/실하한가는 개찰 전 미공개."
+        default=0.0,
+        description=(
+            "추정가격(부가세 별도 표기). **투찰 기준금액이 아니다** — 투찰율은 "
+            "bid_base_amount 에 곱해진다. 예정가/실하한가는 개찰 전 미공개."
+        ),
     )
+    bid_base_amount: float = Field(
+        default=0.0,
+        description=(
+            "공고 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). 추천 "
+            "투찰금액이 실제로 곱해진 금액이다."
+        ),
+    )
+    bid_base_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "기초금액 출처(clean-base / reserve-estimate / base-fallback / "
+            "budget-estimate-fallback). budget-estimate-fallback 은 기초금액을 확보하지 "
+            "못해 추정가격을 그대로 기준금액으로 쓴 상태."
+        ),
+    )
+    bid_base_to_estimate_ratio: Optional[float] = Field(
+        default=None,
+        description=(
+            "기초금액 ÷ 추정가격. 1.0 이면 두 금액이 같고, 1.1 부근이면 기초금액이 "
+            "추정가격에 없는 부가세를 포함한다는 뜻이다. 추정가격이 0 이면 null."
+        ),
+    )
+    bid_base_note: str = Field(default=BID_BASE_NOTE)
     demand_agency: Optional[str] = None
     issuing_agency: Optional[str] = None
     deadline: Optional[datetime] = None
@@ -47,10 +84,25 @@ class BidSummaryNoticeMeta(BaseModel):
 class BidSummaryRecommendation(BaseModel):
     """추천 투찰가/투찰률/가격대 + 가격 적합도(추정) + 결정 상태."""
 
-    recommended_amount: float = Field(description="추천 투찰가(원).")
+    recommended_amount: float = Field(
+        description=(
+            "추천 투찰가(원) — 나라장터에 그대로 입력하는 제출값이다. 기초금액 기준으로 "
+            "산정되므로 과세 공고에서는 부가세가 포함된 금액이다(추정가격 기준 아님)."
+        )
+    )
     recommended_bid_rate: Optional[float] = Field(
         default=None,
-        description="추천 투찰가 / 추정가격. budget_estimate>0 일 때만 산출.",
+        description=(
+            "추천 투찰가 / 추정가격 — **참고 지표**. 적격심사가 보는 율이 아니다"
+            "(그 율은 recommended_bid_rate_on_base). budget_estimate>0 일 때만 산출."
+        ),
+    )
+    recommended_bid_rate_on_base: Optional[float] = Field(
+        default=None,
+        description=(
+            "추천 투찰가 / 기초금액 — 낙찰하한율과 **같은 basis** 의 투찰율이라 하한 "
+            "비교는 이 값으로 한다. bid_base_amount>0 일 때만 산출."
+        ),
     )
     probability_score: float = Field(description=_PROBABILITY_SCORE_DESCRIPTION)
     action: str = Field(description="bid_now / review / skip 중 현재 판단.")
@@ -99,7 +151,11 @@ class BidSummaryCategoryFloor(BaseModel):
     )
     floor_price: Optional[float] = Field(
         default=None,
-        description="budget_estimate * floor_bid_rate 참고 하한가. 예정가 기준 아님.",
+        description=(
+            "bid_base_amount * floor_bid_rate 참고 하한가. 이 율은 예측이 기초금액에 "
+            "곱하는 값이므로 하한가도 기초금액 기준으로 환산한다(추정가격 기준 아님, "
+            "예정가 기준도 아님)."
+        ),
     )
     note: str = Field(
         default=(
@@ -144,6 +200,15 @@ class BidSummaryResponse(BaseModel):
     recommendation: BidSummaryRecommendation
     prediction: Optional[BidSummaryPrediction] = None
     category_floor: BidSummaryCategoryFloor
+    floor_shortfall: Optional[FloorShortfallEstimate] = Field(
+        default=None,
+        description=(
+            "추천 투찰가가 낙찰하한 미달이 됐을 과거 표본 빈도(실격 확률 아님). 내부 "
+            "shortfall_frequency 가 null 이면 '위험 없음'이 아니라 '판정 불가'이며 "
+            "unmeasurable_reason 에 사유가 담긴다. 이 필드 자체가 null 이면 산출 경로가 "
+            "동작하지 않은 것."
+        ),
+    )
     field_stat: Optional[BidSummaryFieldStat] = Field(
         default=None,
         description="분야 통계(없거나 미산출 시 null — graceful).",

@@ -2,6 +2,7 @@ import { httpErrorMessage } from "./httpErrorMessages";
 import { ApiError, getStoredToken } from "./session";
 import type {
   BidDecisionTimelineResponse,
+  ProjectDetailResponse,
   ProjectListResult,
   ProjectResponse,
   ProjectSimilaritySearchResponse,
@@ -85,9 +86,14 @@ export async function fetchProjectList(
   );
 }
 
-export function fetchProject(id: number, token?: string | null): Promise<ProjectResponse> {
+export function fetchProject(
+  id: number,
+  token?: string | null
+): Promise<ProjectDetailResponse> {
   return wrap(
-    rawFetch<ProjectResponse>(`/api/v1/projects/${id}`, { token }).then((res) => res.data),
+    rawFetch<ProjectDetailResponse>(`/api/v1/projects/${id}`, { token }).then(
+      (res) => res.data
+    ),
     "공고 상세를 불러오지 못했습니다."
   );
 }

@@ -1,6 +1,7 @@
 import { Badge } from "@/shared/components/ui";
 import { formatCurrencyCompact, formatPercent } from "@/shared/lib";
 import { LabeledStat } from "@/shared/components";
+import { AMOUNT_BASIS_TEXT_LABEL } from "@/shared/constants/amountBasis";
 import type { DecisionFunnelRecentSubmissionItem } from "@/shared/types/decisions";
 
 export function DecisionEvidenceChecklist({ item }: { item: DecisionFunnelRecentSubmissionItem }) {
@@ -18,7 +19,11 @@ export function DecisionEvidenceChecklist({ item }: { item: DecisionFunnelRecent
         </Badge>
       </div>
       <dl className="grid gap-2 sm:grid-cols-3">
-        <LabeledStat variant="evidence" label="추천가" value={formatCurrencyCompact(item.recommended_amount)} />
+        <LabeledStat
+          variant="evidence"
+          label={AMOUNT_BASIS_TEXT_LABEL.submission}
+          value={formatCurrencyCompact(item.recommended_amount)}
+        />
         <LabeledStat variant="evidence" label="우선순위" value={formatPercent(item.priority_score)} />
         <LabeledStat
           variant="evidence"

@@ -22,6 +22,23 @@ export interface ProjectResponse {
   created_at: string;
 }
 
+/**
+ * 공고 상세 — 목록 응답에 투찰 기준금액(기초금액)을 더한 형태
+ * (`app/schemas/project.py::ProjectDetailResponse`).
+ *
+ * `budget_estimate`(추정가격, 부가세 별도 표기)와 `bid_base_amount`(투찰율이 실제로
+ * 곱해지는 기초금액/사업금액)는 **다른 금액**이다. 목록에는 기초금액이 없고 상세에만
+ * 있다 — 운영자가 금액 basis 를 확인해야 하는 자리가 상세 화면이기 때문이다.
+ */
+export interface ProjectDetailResponse extends ProjectResponse {
+  /** 투찰 기준금액(기초금액/사업금액, 과세 공고는 부가세 포함). */
+  bid_base_amount: number;
+  /** 기초금액 출처(clean-base / reserve-estimate / base-fallback / budget-estimate-fallback). */
+  bid_base_source?: string | null;
+  /** 기초금액 ÷ 추정가격. 추정가격이 0 이면 null. */
+  bid_base_to_estimate_ratio?: number | null;
+}
+
 export interface SimilarProjectItem {
   project_id: number;
   title: string;

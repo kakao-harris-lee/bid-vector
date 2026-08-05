@@ -148,6 +148,7 @@ class Settings(InferenceOutboxSettings):
     # 짧아, 고착된 미리보기를 운영자가 즉시 복구하되 새로고침 연타가 이 floor
     # 안쪽의 갓 시작한 스캔을 중복 실행하지는 못하게 한다(단일비행 유지).
     OPERATOR_PREVIEW_SNAPSHOT_FORCE_RECLAIM_SECONDS: int = 60
+    FLOOR_SHORTFALL_SAMPLE_CACHE_TTL_SECONDS: int = 900
     PAPER_BIDDING_FORWARD_SCHEDULE_ENABLED: bool = False
     PAPER_BIDDING_FORWARD_RUN_ON_STARTUP: bool = False
     PAPER_BIDDING_FORWARD_INTERVAL_MINUTES: int = 1440
