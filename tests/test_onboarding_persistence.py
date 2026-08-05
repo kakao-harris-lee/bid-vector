@@ -22,9 +22,8 @@ import json
 import app.core.config as app_config
 import pytest
 from alembic import command
-from sqlalchemy import MetaData, Table, create_engine, inspect
+from sqlalchemy import create_engine, inspect
 
-from app.core.database import Base
 from app.core.security import get_password_hash
 from app.models import models  # noqa: F401  -- registers all tables on Base.metadata
 from app.models.models import (
@@ -40,7 +39,7 @@ from app.services.onboarding.apply import (
     apply_onboarding_decisions,
 )
 from tests.support.alembic_config import make_alembic_config
-from tests.test_schema_drift import MIGRATION_ADDED_COLUMNS, MIGRATION_OWNED_TABLES
+from tests.support.schema_baseline import create_premigration_baseline
 
 _APPLY_URL = "/api/v1/operator/onboarding-suggestions/apply"
 _TABLE = "onboarding_suggestions"
@@ -89,20 +88,12 @@ def _rows_for(test_db, operator: User) -> list[OnboardingSuggestion]:
 def _build_baseline_engine(url: str):
     """모델 스키마(마이그레이션 소유 테이블/컬럼 제외)를 sqlite 에 만든 엔진을 낸다.
 
-    ``test_schema_drift`` 와 같은 baseline 재구성 방식(복붙 대신 상수 재사용)이라
-    ``alembic upgrade head`` 가 마이그레이션 소유 객체만 실제로 생성한다.
+    baseline 재구성은 ``tests/support/schema_baseline.py`` 한 벌을 쓴다(스키마 드리프트
+    가드·Postgres 티어와 동일). 세 가드가 같은 전제 위에서 "마이그레이션이 실제로
+    만드는 것"을 보게 하려는 것이다.
     """
     engine = create_engine(url)
-    baseline = MetaData()
-    for table in Base.metadata.sorted_tables:
-        if table.name in MIGRATION_OWNED_TABLES:
-            continue
-        dropped = MIGRATION_ADDED_COLUMNS.get(table.name, set())
-        columns = [
-            column._copy() for column in table.columns if column.name not in dropped
-        ]
-        Table(table.name, baseline, *columns)
-    baseline.create_all(bind=engine)
+    create_premigration_baseline(engine)
     return engine
 
 
