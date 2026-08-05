@@ -387,10 +387,11 @@ def build_openapi_notice_item(
     ).strip()
     # base_amount/estimated_amount 후보 키는 field_contract 가 단일 출처로 선언한다
     # (#220 base==예정가 오염의 발원지 정리 — 순서·basis 는 그 모듈에서만 바뀐다).
-    base_amount = first_openapi_amount(raw_item, list(BASE_RESOLUTION_ORDER))
-    estimated_amount = first_openapi_amount(
-        raw_item, list(ESTIMATED_RESOLUTION_ORDER)
+    # base 는 기초금액 키 우선이고 0/미상 후보는 건너뛴다(폴백을 가리지 않게).
+    base_amount = first_openapi_amount(
+        raw_item, list(BASE_RESOLUTION_ORDER), positive_only=True
     )
+    estimated_amount = first_openapi_amount(raw_item, list(ESTIMATED_RESOLUTION_ORDER))
     business_type = str(
         raw_item.get("bsnsDivNm")
         or raw_item.get("prcmBsneSeCd")
@@ -465,10 +466,22 @@ def build_openapi_notice_item(
 def first_openapi_amount(
     raw_item: dict[str, Any],
     candidate_keys: list[str],
+    *,
+    positive_only: bool = False,
 ) -> float | None:
-    """Return the first parseable amount from one OpenAPI row."""
+    """Return the first parseable amount from one OpenAPI row.
+
+    ``positive_only`` treats a 0/negative value as absent and falls through to the
+    next candidate. base_amount resolution needs that: a ``bssAmt`` filled with 0
+    would otherwise shadow the positive budget fallback that follows it, and the
+    ``field_contract`` validator already simulates resolution as "first candidate
+    with a positive amount".
+    """
     for key in candidate_keys:
         value = parsing.coerce_amount(raw_item.get(key))
-        if value is not None:
-            return value
+        if value is None:
+            continue
+        if positive_only and value <= 0:
+            continue
+        return value
     return None

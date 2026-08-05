@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 from app.core.config import settings
 from app.schemas.schemas import CrawlRequest
+from app.services.koneps import field_contract
 from app.services.koneps.collection import collect_openapi_items
 from app.services.koneps.field_contract_observer import FieldContractObservation
 
@@ -63,8 +64,31 @@ def test_observe_real_yega_contamination_is_counted():
     assert obs.has_findings is True
 
 
-def test_observe_precedence_error_is_counted():
-    # 기초금액 키가 있는데도 배정예산이 먼저 선택됨 -> PRECEDENCE ERROR.
+def test_observe_true_base_key_row_is_clean():
+    # 해석 순서 교정 후: 배정예산과 기초금액이 함께 와도 기초금액이 선택돼 위반 0.
+    obs = FieldContractObservation()
+    obs.observe(
+        {
+            "bidNtceNo": "x",
+            "bidNtceNm": "t",
+            "asignBdgtAmt": "100000000",
+            "bssAmt": "90000000",
+        },
+        operation=_NOTICE_OP,
+    )
+    assert dict(obs.violations) == {}
+    assert obs.errors == 0
+    assert obs.has_findings is False
+
+
+def test_observe_precedence_error_is_counted_under_order_drift(monkeypatch):
+    # PRECEDENCE 는 상수 파생 드리프트 감지기 — 순서가 되돌아가면 관찰기가 ERROR 로 센다.
+    monkeypatch.setattr(
+        field_contract,
+        "BASE_RESOLUTION_ORDER",
+        ("asignBdgtAmt", "bdgtAmt", "presmptPrce", "presmptAmt")
+        + field_contract.TRUE_BASE_KEYS,
+    )
     obs = FieldContractObservation()
     obs.observe(
         {

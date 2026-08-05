@@ -103,27 +103,30 @@ def operation_family(operation: str | None) -> OperationFamily:
 # 기초금액(base) 후보 키의 basis 선언 (#220: base==예정가 오염 근본원인)
 # ---------------------------------------------------------------------------
 # 엔트리포인트(openapi.build_openapi_notice_item)가 base_amount 를 해석하는 후보 키는
-# 예산/예정가/기초금액이 뒤섞여 있고, 현재 해석 순서(``BASE_RESOLUTION_ORDER``)는 예산·
-# 예정가 키를 기초금액 키보다 **먼저** 시도한다. 그래서 예정가(presmptPrce)만 있고
-# 기초금액 키가 없으면 base==예정가 오염이, 둘 다 있으면 예정가가 먼저 선택되는 함정이
-# 생긴다(#220). 각 키의 실제 basis 를 데이터로 선언해 검증기가 해석만 한다.
+# 예산/예정가/기초금액이 뒤섞여 있다. 옛 순서는 예산·예정가 키를 기초금액 키보다 **먼저**
+# 시도해, 두 키가 함께 실린 공고에서 base 가 배정예산/예정가 값으로 저장되는 #220 오염을
+# 만들었다. 지금은 진짜 기초금액 키가 **앞선다**(아래 ``BASE_RESOLUTION_ORDER``). 각 키의
+# 실제 basis 를 데이터로 선언해 검증기가 해석만 한다.
 TRUE_BASE_KEYS: tuple[str, ...] = ("bssAmt", "bssamt", "bssAmtPurcnstcst")
-# 이 순서가 base_amount 해석의 **단일 출처**다: openapi.build_openapi_notice_item 이
-# ``BASE_RESOLUTION_ORDER`` 를 import 해 base_amount 후보로 그대로 소비한다(더는 인라인
-# 리스트를 두지 않는다). 그룹 내부 순서는 예산 2키(asignBdgtAmt, bdgtAmt) 다음 예정가
-# 2키(presmptPrce, presmptAmt) — 여기서 정한 순서를 프로덕션이 곧 따른다. 같은 상수를
-# 공유하므로 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 드리프트할 수 없다.
-# tests/test_koneps_field_contract.py 의 드리프트 가드가 실제 build_openapi_notice_item
-# 해석과 동치임을 실행으로 확인한다.
+# 기초금액 키가 하나도 없을 때만 쓰는 **폴백** 그룹. 전부 BUDGET_ESTIMATE basis 라, 여기서
+# 해석되면 base 는 기초금액이 아니다(검증기가 BASE_BASIS_YEGA_ONLY WARN 으로 표면화한다).
 _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
     "asignBdgtAmt",  # 배정예산액 — 기초금액 아님
     "bdgtAmt",  # 예산금액 — 기초금액 아님
     "presmptPrce",  # 추정가격(부가세 포함) — 기초금액 아님
     "presmptAmt",  # 추정금액 — 기초금액 아님
 )
-# 예산·예정가 키가 기초금액 키보다 앞선다는 사실 자체가 #220 함정이며, 이 검증기가
-# 그것을 표면화한다. openapi 가 이 상수를 소비하므로 여기가 그 순서의 유일한 정의처다.
-BASE_RESOLUTION_ORDER: tuple[str, ...] = _YEGA_OR_BUDGET_KEYS + TRUE_BASE_KEYS
+# 이 순서가 base_amount 해석의 **단일 출처**다: openapi.build_openapi_notice_item 이
+# ``BASE_RESOLUTION_ORDER`` 를 import 해 base_amount 후보로 그대로 소비한다(더는 인라인
+# 리스트를 두지 않는다). 진짜 기초금액 3키가 먼저이고, 하나도 양수로 실리지 않은 공고에서만
+# 예산 2키(asignBdgtAmt, bdgtAmt) -> 예정가 2키(presmptPrce, presmptAmt) 로 폴백한다.
+# 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
+# ``first_openapi_amount(..., positive_only=True)``, 검증기는 같은 규칙을 모사) — 0 으로
+# 실린 기초금액 키가 양수 예산 폴백을 가리지 않게 하기 위함이다. 같은 상수를 공유하므로
+# 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 드리프트할 수 없다.
+# tests/test_koneps_field_contract.py 의 드리프트 가드가 실제 build_openapi_notice_item
+# 해석과 동치임을 실행으로 확인한다.
+BASE_RESOLUTION_ORDER: tuple[str, ...] = TRUE_BASE_KEYS + _YEGA_OR_BUDGET_KEYS
 # 추정가격(estimated_amount) 해석 순서 — base 와 **별도** 후보 집합(단일 출처). base 와
 # 달리 추정가격은 추정가격 키(presmptPrce/presmptAmt)를 **먼저** 시도하고 예산 키로만
 # 폴백하며, 기초금액 키(bssAmt*)는 포함하지 않는다: 추정가격의 basis 는 BUDGET_ESTIMATE
