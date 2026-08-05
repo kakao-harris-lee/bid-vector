@@ -109,6 +109,20 @@ def test_first_openapi_amount():
     assert openapi.first_openapi_amount(row, ["missing"]) is None
 
 
+def test_first_openapi_amount_positive_only_skips_zero_candidates():
+    """``positive_only`` treats a 0 value as absent so it cannot shadow a fallback."""
+    row = {"bssAmt": "0", "asignBdgtAmt": "1,250,000"}
+    keys = ["bssAmt", "asignBdgtAmt"]
+    # Default keeps the legacy semantics (first parseable value wins, even 0).
+    assert openapi.first_openapi_amount(row, keys) == 0.0
+    assert openapi.first_openapi_amount(row, keys, positive_only=True) == 1250000.0
+    # All-zero rows stay unresolved rather than fabricating an amount.
+    assert (
+        openapi.first_openapi_amount({"bssAmt": "0"}, ["bssAmt"], positive_only=True)
+        is None
+    )
+
+
 def test_build_openapi_notice_item():
     request = CrawlRequest(source="koneps-openapi", category="construction")
     raw_item = {
