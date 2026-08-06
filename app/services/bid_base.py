@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 # 나머지 출처 값은 ``ReliableBaseSource`` 어휘를 그대로 쓴다(새 어휘를 만들지 않는다).
 BID_BASE_SOURCE_BUDGET_FALLBACK: Final[str] = "budget-estimate-fallback"
 
+# 저장된 공고 금액이 전혀 없어 **요청 본문의 금액**을 투찰 base 로 썼음을 나타내는 라벨.
+# 위 폴백과 구분하는 이유: 저 값은 우리가 수집·검증한 ``Project.budget_estimate`` 지만
+# 이 값은 클라이언트가 보낸 basis 미표기 float 다. 같은 "추정가격 폴백"으로 뭉뚱그리면
+# 검증된 금액과 검증되지 않은 금액이 화면에서 구별되지 않는다.
+BID_BASE_SOURCE_CLIENT_ESTIMATE: Final[str] = "client-budget-estimate"
+
 
 @dataclass(frozen=True)
 class NoticeBidBase:
@@ -282,6 +288,10 @@ class NoticePredictionInputs:
     keeping the base/text, because they all arrive together from one call.
 
     - ``bid_base``: 기초금액/사업금액 the 적격심사 rate applies to (``resolve_notice_bid_base``).
+    - ``bid_base_source``: where that amount came from (``ReliableBaseSource`` value or
+      :data:`BID_BASE_SOURCE_BUDGET_FALLBACK`) — carried alongside the amount so a
+      caller that surfaces the base can also say what it is, instead of presenting a
+      collected 기초금액 and a 추정가격 substitute as the same thing.
     - ``text``: title+description+requirements predictor input (``build_prediction_text``).
     - ``legal_floor_bid_rate``: the notice's OWN published 낙찰하한율 (award_floor_rate,
       #201), folded into the guardrail floor with ``max()`` only downstream — it can
@@ -291,6 +301,7 @@ class NoticePredictionInputs:
     """
 
     bid_base: BaseAmount
+    bid_base_source: str
     text: str
     legal_floor_bid_rate: float | None
     estimation_amount: float | None
@@ -315,8 +326,12 @@ def prepare_prediction_inputs(
     ``None`` so the notice's own published 하한 is used.
     """
     estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
+    # Resolve amount and provenance in ONE lookup (``resolve_notice_bid_base`` is the
+    # same call minus the source) so a caller can disclose which amount it priced on.
+    notice_bid_base = describe_notice_bid_base(db, project)
     return NoticePredictionInputs(
-        bid_base=resolve_notice_bid_base(db, project),
+        bid_base=notice_bid_base.amount,
+        bid_base_source=notice_bid_base.source,
         text=build_prediction_text(project),
         legal_floor_bid_rate=resolve_notice_legal_floor_bid_rate(
             project, request_legal_floor_bid_rate=request_legal_floor_bid_rate

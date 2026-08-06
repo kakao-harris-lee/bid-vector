@@ -19,12 +19,17 @@ from app.ai.bid_target import build_bid_target_menu
 from app.ai.construction_scenario import is_construction_era_floor_resolved
 from app.core.config import settings
 from app.core.single_user import ensure_operator_account
+from app.domain.money import BaseAmount
 from app.models.models import PricePrediction, Project
 from app.schemas.schemas import (
     DocumentAnalysisRequest,
     PricePredictionRequest,
 )
-from app.services.bid_base import prepare_prediction_inputs
+from app.services.bid_base import (
+    BID_BASE_SOURCE_CLIENT_ESTIMATE,
+    NoticePredictionInputs,
+    prepare_prediction_inputs,
+)
 from app.services.bid_target_signals import resolve_bid_target_signals
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.prediction_feedback import PredictionFeedbackService
@@ -65,7 +70,7 @@ class PredictionWorkflowService:
         inputs = prepare_prediction_inputs(
             db, project, request_legal_floor_bid_rate=request.legal_floor_bid_rate
         )
-        resolved_bid_base = inputs.bid_base
+        resolved_bid_base, bid_base_source = self._resolve_bid_base(inputs, request)
         estimation_amount = inputs.estimation_amount
         reference_date = inputs.reference_date
         # SCOPE BOUNDARY: this path DELIBERATELY does not use ``inputs.text``. This is
@@ -78,7 +83,7 @@ class PredictionWorkflowService:
         # silently ignore a required client input — an API-contract change owned by
         # backend-builder (make description optional + project fallback), not this PR.
         prediction = self.price_prediction_port.predict_price(
-            budget=resolved_bid_base or request.budget_estimate,
+            budget=resolved_bid_base,
             category=request.category,
             description=request.description,
             historical_records=self._load_price_history(db, category=request.category or project.category),
@@ -104,7 +109,7 @@ class PredictionWorkflowService:
             menu = build_bid_target_menu(
                 floor_bid_rate=prediction.get("floor_bid_rate"),
                 ceiling_bid_rate=prediction.get("ceiling_bid_rate"),
-                budget=resolved_bid_base or request.budget_estimate,
+                budget=resolved_bid_base,
                 signals=(
                     resolve_bid_target_signals(
                         db,
@@ -122,6 +127,11 @@ class PredictionWorkflowService:
             )
             if menu is not None:
                 prediction["bid_target_menu"] = menu
+
+        # 이 응답이 "어느 금액에 투찰율을 곱했는지"를 스스로 밝히게 한다. 화면이 예산
+        # (추정가격)과 기초금액을 한 이름으로 뭉개던 것이 반복 실격의 뿌리였다(#350).
+        prediction["bid_base"] = float(resolved_bid_base)
+        prediction["bid_base_source"] = bid_base_source
 
         db_prediction = self._build_price_prediction_row(
             operator_id=operator.id,
@@ -141,6 +151,36 @@ class PredictionWorkflowService:
             request.document_content,
             document_type=request.document_type,
         )
+
+    @staticmethod
+    def _resolve_bid_base(
+        inputs: NoticePredictionInputs, request: PricePredictionRequest
+    ) -> tuple[BaseAmount, str]:
+        """Pick the amount the bid rate is applied to, and say where it came from.
+
+        Precedence is unchanged — the notice's own resolved 기초금액 wins, and only a
+        notice carrying NO stored amount at all (no positive ``HistoricalData.base_amount``
+        AND no ``Project.budget_estimate``) falls through to the request body. What
+        changes is that the fall-through is no longer silent: it used to be a bare
+        ``resolved_bid_base or request.budget_estimate``, so an unvalidated client float
+        of undeclared basis could become the bid base with nothing in the response to
+        say so. On a 과세 공고 that is a ~10% under-bid, the failure class behind this
+        repo's 실투찰 실격 history.
+
+        Rejecting instead of falling back was considered and not taken: this endpoint is
+        the only caller, ``budget_estimate`` is a REQUIRED request field, and a notice
+        with no stored budget would lose its only path to a prediction. Disclosure is the
+        remedy this repo already uses for basis ambiguity (#350), so the caller keeps the
+        answer AND learns not to trust it as a collected 기초금액.
+        """
+        if inputs.bid_base > 0:
+            return inputs.bid_base, inputs.bid_base_source
+        client_budget = float(request.budget_estimate or 0.0)
+        if client_budget > 0:
+            return BaseAmount(client_budget), BID_BASE_SOURCE_CLIENT_ESTIMATE
+        # Nothing anywhere carries an amount — keep the resolved (zero) base and its
+        # own label rather than claiming a client origin for a value we do not have.
+        return inputs.bid_base, inputs.bid_base_source
 
     def _load_project(self, db: Session, project_id: int) -> Project:
         project = db.query(Project).filter(Project.id == project_id).first()
