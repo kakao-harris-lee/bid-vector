@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.ai.business_group import resolve_business_group
+from app.domain.money import BaseAmount
 from app.models.models import CompanyProfile, Project, TenderResult
 from app.schemas.paper_bidding_items import PaperBiddingCandidateItem
 from app.schemas.schemas import BidDecisionRequest
@@ -184,7 +185,7 @@ class _CandidateMixin(_PaperBiddingBase):
         inputs = prepare_prediction_inputs(db, project)
         bid_base = inputs.bid_base
         if bid_base <= 0:
-            bid_base = budget
+            bid_base = BaseAmount(budget)
 
         data_cutoff_at = data_cutoff_at or self.cutoff_service.resolve_data_cutoff_at(
             project,
@@ -219,6 +220,7 @@ class _CandidateMixin(_PaperBiddingBase):
         )
         return CandidatePredictionContext(
             budget=budget,
+            bid_base=bid_base,
             data_cutoff_at=data_cutoff_at,
             history=history,
             business_group=business_group,
@@ -234,12 +236,13 @@ class _CandidateMixin(_PaperBiddingBase):
         scenario: str,
         profile: CompanyProfile | None,
     ) -> CandidateDecisionContext:
-        budget = prediction_context.budget
+        # 결정 점수는 투찰가를 실제로 산정한 기초금액 위에서 매긴다(추정가격이 아니라).
+        bid_base = prediction_context.bid_base
         prediction = prediction_context.prediction
         selected_scenario = self._select_scenario(prediction, scenario=scenario)
         paper_bid_amount = round(float(selected_scenario["predicted_price"]), 2)
         paper_bid_rate = self._normalize_rate(
-            float(selected_scenario.get("bid_rate") or (paper_bid_amount / budget))
+            float(selected_scenario.get("bid_rate") or (paper_bid_amount / bid_base))
         )
         matched_score, match_reasons, match_source = self._resolve_matched_score(
             project=project, profile=profile
@@ -264,7 +267,7 @@ class _CandidateMixin(_PaperBiddingBase):
                 current_active_bids=0,
                 max_active_bids=3,
                 current_workload_score=0.0,
-                budget_estimate=budget,
+                budget_estimate=bid_base,
                 competitiveness_score=self._estimate_competitiveness_score(
                     paper_bid_rate
                 ),

@@ -9,6 +9,7 @@ from app.core.bands import resolve_band
 from app.core.config import settings
 from app.core.constants import ACTIVE_DECISION_STATUSES as _ACTIVE_DECISION_STATUSES
 from app.core.time import utc_now
+from app.domain.money import BaseAmount
 from app.core.single_user import (
     DEFAULT_OPERATOR_BID_NOW_THRESHOLD,
     DEFAULT_OPERATOR_REVIEW_THRESHOLD,
@@ -19,6 +20,7 @@ from app.core.single_user import (
 from app.models.models import BidDecisionRecord, Project, User
 from app.schemas.schemas import BidDecisionRequest
 from app.services import allocation_core
+from app.services.bid_base import resolve_notice_bid_base
 from app.services.operator_strategy_tuning import (
     DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
     get_strategy_auto_workload_penalty_multiplier,
@@ -187,7 +189,9 @@ class BidDecisionService:
         if request.budget_estimate is None:
             project = db.query(Project).filter(Project.id == request.project_id).first()
             if project is not None:
-                request = request.model_copy(update={"budget_estimate": float(project.budget_estimate or 0.0)})
+                # 폴백은 기초금액(사업금액) — 추정가격(ex-VAT)이 아니다. 근거는
+                # allocation_core.budget_capture_score 참조(#162 계열 basis 혼동).
+                request = request.model_copy(update={"budget_estimate": resolve_notice_bid_base(db, project)})
 
         operator = operator or ensure_operator_account(db)
         decision = self.evaluate_opportunity(request, db=db, operator=operator)
@@ -517,12 +521,9 @@ class BidDecisionService:
         safe_max = max(1, max_active_bids)
         return min(1.0, current_active_bids / safe_max)
 
-    def _compute_budget_capture_score(self, recommended_amount: float, budget_estimate: float | None) -> float:
-        """Estimate how much of the published budget the current recommendation preserves."""
-        if budget_estimate is None or float(budget_estimate) <= 0:
-            return 0.5
-        normalized_capture = float(recommended_amount or 0.0) / float(budget_estimate)
-        return self._normalize_unit_score(normalized_capture, default=0.5)
+    def _compute_budget_capture_score(self, recommended_amount: float, budget_estimate: BaseAmount | None) -> float:
+        """추천가가 공고 기초금액의 얼마를 남기는지 — 산식은 strict 타입 순수 코어에 있다."""
+        return allocation_core.budget_capture_score(recommended_amount, budget_estimate)
 
     def _compute_complexity_penalty(self, execution_complexity_score: float) -> float:
         """Apply a mild penalty only when the underlying execution complexity is high."""
@@ -532,9 +533,7 @@ class BidDecisionService:
 
     def _normalize_unit_score(self, value: float | None, *, default: float) -> float:
         """Clamp score-like inputs into a stable 0-1 range."""
-        if value is None:
-            return default
-        return max(0.0, min(1.0, float(value)))
+        return allocation_core.normalize_unit_score(value, default=default)
 
     def _resolve_thresholds(self, db: Session | None) -> tuple[float, float]:
         """Resolve bid-now/review thresholds from persisted operator strategy when available."""

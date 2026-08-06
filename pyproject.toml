@@ -150,6 +150,12 @@ strict_equality = true
 #     (라우터에서 분리한 순수 판정기).
 #   * app.services.base_amount_basis — base_amount provenance 분류기(#199 태그 생산
 #     순수 코어). 유일한 앱 import 는 app.domain.rate_normalization(strict 아일랜드).
+#   * app.services.allocation_core — 투찰 추진 결정의 순수 코어(게이트 사다리 · 근거
+#     조립 · 점수 정규화). ``budget_capture_score`` 가 추천가 ÷ 기초금액을 계산하는
+#     유일한 지점이라 ``DecisionSignals.budget_estimate`` 를 ``money.BaseAmount`` 로
+#     좁혀 추정가격(ex-VAT) 교차 대입을 여기서 정적으로 막는다(#162 계열). 호출부
+#     ``app.services.allocation`` 은 old-style ``Column`` 모델을 만져 아직 승격할 수
+#     없으므로, basis 가 실제로 곱해지는 순수 절반만 아일랜드로 올린다.
 [[tool.mypy.overrides]]
 module = [
     "app.services.classification.assessment",
@@ -157,6 +163,7 @@ module = [
     "app.services.classification.config",
     "app.services.paper_bidding_settlement",
     "app.services.base_amount_basis",
+    "app.services.allocation_core",
 ]
 ignore_errors = false
 disallow_untyped_defs = true

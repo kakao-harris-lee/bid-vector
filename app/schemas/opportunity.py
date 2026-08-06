@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.core.constants import DecisionStatus, PaperBidAction
+from app.domain.money import BaseAmount
 from app.schemas._shared import _PROBABILITY_SCORE_DESCRIPTION
 from app.schemas.crawl import ClassificationResponse
 from app.schemas.prediction import PricePredictionResponse
@@ -65,7 +66,16 @@ class BidDecisionRequest(BaseModel):
     current_active_bids: int = Field(default=0, ge=0)
     max_active_bids: int = Field(default=3, ge=1)
     current_workload_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    budget_estimate: Optional[float] = Field(default=None, ge=0.0)
+    budget_estimate: Optional[BaseAmount] = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "투찰율이 곱해지는 기초금액/사업금액(과세 공고면 부가세 포함). 필드명은 이력상 "
+            "budget_estimate 이지만 추정가격(ex-VAT)이 아니다 — capture 비율의 분자인 "
+            "recommended_amount 와 basis 가 같아야 한다. 생략하면 서버가 공고의 기초금액을 "
+            "해석해 채운다."
+        ),
+    )
     competitiveness_score: float = Field(default=0.5, ge=0.0, le=1.0)
     expected_margin_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     execution_complexity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
