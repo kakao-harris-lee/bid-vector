@@ -15,6 +15,7 @@ from typing import Any
 
 from app.ai.factory import build_price_prediction_port
 from app.ai.service_interfaces import PricePredictionPort
+from app.domain.money import BaseAmount
 from app.services.allocation import BidDecisionService
 from app.services.backtest_cutoff import BacktestCutoffService
 from app.services.classifier import NoticeClassifierService
@@ -38,6 +39,16 @@ RATE_ERROR_BUCKETS: tuple[tuple[str, float], ...] = (
 @dataclass(frozen=True)
 class CandidatePredictionContext:
     budget: float
+    """추정가격(ex-VAT) — 리포팅 필드와 전략 예산밴드 필터가 쓰는 금액."""
+
+    bid_base: BaseAmount
+    """기초금액/사업금액 — 투찰율이 곱해지고 capture 비율의 분모가 되는 금액.
+
+    ``budget`` 과 나뉘어 있는 이유: 과세 공고에서 둘은 ~10% 다른 금액이라, 백테스트의
+    결정 분포가 그것이 측정하려는 라이브 경로와 비교 가능하려면 결정 점수도 라이브가
+    쓰는 base 위에서 매겨져야 한다.
+    """
+
     data_cutoff_at: datetime
     history: list[dict[str, Any]]
     business_group: str | None

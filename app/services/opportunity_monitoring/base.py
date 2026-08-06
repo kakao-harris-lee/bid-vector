@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.constants import ACTIVE_PROJECT_STATUSES as _ACTIVE_PROJECT_STATUSES
 from app.core.database import SessionLocal
+from app.domain.money import BaseAmount
 from app.services.allocation import BidDecisionService
 from app.services.notifications.manager import OperatorNotificationService
 from app.services.opportunity_analysis import OpportunityAnalysisService
@@ -47,7 +48,9 @@ class CandidateDecisionInputs:
     deadline_hours_remaining: int | None
     max_active_bids: int
     provided_workload_score: float | None
-    budget_estimate: float
+    budget_estimate: BaseAmount
+    """기초금액/사업금액 — ``BidDecisionRequest.budget_estimate`` 와 같은 basis 규약."""
+
     competitiveness_score: float
     expected_margin_score: float
     execution_complexity_score: float

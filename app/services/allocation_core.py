@@ -16,9 +16,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.money import BaseAmount
 from app.services.operator_strategy_tuning import (
     DEFAULT_AUTO_WORKLOAD_PENALTY_MULTIPLIER,
 )
+
+# 점수는 전부 0-1 단위 구간이다. 신호가 없을 때 쓰는 중립값이 콜사이트마다 흩어져
+# 있으면 한쪽만 바뀌어 갈라지므로 여기가 단일 출처다(§4.5-1).
+NEUTRAL_UNIT_SCORE = 0.5
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,15 @@ class DecisionSignals:
     budget_capture_score: float
     expected_margin_score: float
     execution_complexity_score: float
-    budget_estimate: float | None
+    budget_estimate: BaseAmount | None
+    """투찰율이 곱해지는 기초금액/사업금액 — ``recommended_amount`` 와 같은 basis.
+
+    이름은 요청 스키마 필드(``BidDecisionRequest.budget_estimate``)를 따르지만 값은
+    추정가격(ex-VAT ``Project.budget_estimate``)이 아니라 ``resolve_notice_bid_base``
+    가 해석한 기초금액이다. ``BaseAmount`` 로 좁혀 두 basis 의 교차 대입을 이 순수
+    코어에서 정적으로 막는다(#162 — 과세 공고에서 capture 가 rate×1.1 로 부풀던 버그).
+    """
+
     workload_source: str
     current_workload_score: float
     auto_workload_penalty_multiplier: float
@@ -79,6 +92,35 @@ class DecisionSignals:
 class Decision:
     action: str
     reasons: list[str]
+
+
+def normalize_unit_score(value: float | None, *, default: float) -> float:
+    """Clamp a score-like input into the stable 0-1 range (``None`` → ``default``)."""
+    if value is None:
+        return default
+    return max(0.0, min(1.0, float(value)))
+
+
+def budget_capture_score(
+    recommended_amount: float, bid_base: BaseAmount | None
+) -> float:
+    """추천 투찰가가 기초금액의 얼마를 남기는지 — 0-1 로 정규화한 capture 비율.
+
+    분자(``recommended_amount``)는 모든 경로에서 기초금액-basis 로 산출된 추천가이므로
+    분모도 **같은 기초금액**이어야 한다. 추정가격(ex-VAT)을 넣으면 과세 공고에서
+    ``capture ≈ rate × 1.1`` 이 되어 1.0 으로 clamp 되고, 그만큼 opportunity/priority
+    점수와 "기초금액 대비 추천가 유지율" 근거 문구가 함께 부풀어 오른다. ``BaseAmount``
+    시그니처가 그 교차 대입을 정적으로 막는다.
+
+    사용 가능한 base 가 없으면(``None``/0 이하) 판단 근거가 없다는 뜻이므로 중립값을
+    돌려준다 — 없는 신호를 유리/불리 어느 쪽으로도 해석하지 않는다.
+    """
+    if bid_base is None or float(bid_base) <= 0:
+        return NEUTRAL_UNIT_SCORE
+    return normalize_unit_score(
+        float(recommended_amount or 0.0) / float(bid_base),
+        default=NEUTRAL_UNIT_SCORE,
+    )
 
 
 def decide(signals: DecisionSignals, thresholds: AllocationThresholds) -> Decision:
@@ -96,7 +138,10 @@ def decide(signals: DecisionSignals, thresholds: AllocationThresholds) -> Decisi
     ]
 
     if signals.budget_estimate and signals.budget_estimate > 0:
-        reasons.append(f"예산 대비 추천가 유지율 {signals.budget_capture_score:.2f}를 반영했습니다.")
+        # 문구가 "예산"이 아니라 "기초금액"인 이유: 이 비율의 분모는 추정가격이 아니라
+        # 투찰율이 곱해지는 기초금액이다. 영속 감사 문구(BidDecisionRecord.reasoning)가
+        # 실제 분모와 다른 금액을 말하면 그 자체로 basis 오해를 재생산한다(#350 축).
+        reasons.append(f"기초금액 대비 추천가 유지율 {signals.budget_capture_score:.2f}를 반영했습니다.")
     reasons.append(f"예상 수익성 점수 {signals.expected_margin_score:.2f}를 반영했습니다.")
 
     if signals.workload_source == "auto":

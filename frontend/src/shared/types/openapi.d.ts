@@ -3078,7 +3078,10 @@ export interface components {
              * @default 0
              */
             current_workload_score: number;
-            /** Budget Estimate */
+            /**
+             * Budget Estimate
+             * @description 투찰율이 곱해지는 기초금액/사업금액(과세 공고면 부가세 포함). 필드명은 이력상 budget_estimate 이지만 추정가격(ex-VAT)이 아니다 — capture 비율의 분자인 recommended_amount 와 basis 가 같아야 한다. 생략 시 동작은 경로마다 다르다: 저장 경로(POST /bid-decisions)는 서버가 공고의 기초금액을 해석해 채우고, 평가 전용 경로(POST /bid-decision)는 공고를 조회하지 않는 stateless 계산이라 채우지 않고 capture 를 중립 0.5 로 둔다. 평가 경로에서 capture 를 실제로 반영하려면 기초금액을 직접 실어 보내야 한다.
+             */
             budget_estimate?: number | null;
             /**
              * Competitiveness Score
@@ -3184,7 +3187,10 @@ export interface components {
              * @default 0
              */
             current_workload_score: number;
-            /** Budget Estimate */
+            /**
+             * Budget Estimate
+             * @description 투찰율이 곱해지는 기초금액/사업금액(과세 공고면 부가세 포함). 필드명은 이력상 budget_estimate 이지만 추정가격(ex-VAT)이 아니다 — capture 비율의 분자인 recommended_amount 와 basis 가 같아야 한다. 생략 시 동작은 경로마다 다르다: 저장 경로(POST /bid-decisions)는 서버가 공고의 기초금액을 해석해 채우고, 평가 전용 경로(POST /bid-decision)는 공고를 조회하지 않는 stateless 계산이라 채우지 않고 capture 를 중립 0.5 로 둔다. 평가 경로에서 capture 를 실제로 반영하려면 기초금액을 직접 실어 보내야 한다.
+             */
             budget_estimate?: number | null;
             /**
              * Competitiveness Score
@@ -8875,6 +8881,16 @@ export interface components {
              * @default 0
              */
             predicted_bid_rate: number;
+            /**
+             * Bid Base
+             * @description 투찰율을 곱한 기준금액(기초금액/사업금액, 과세 공고면 부가세 포함). predicted_price ≈ predicted_bid_rate × bid_base.
+             */
+            bid_base?: number | null;
+            /**
+             * Bid Base Source
+             * @description 위 기준금액의 출처. 수집된 기초금액이면 ReliableBaseSource 값, 공고의 추정가격으로 대체했으면 budget-estimate-fallback, 저장된 금액이 없어 요청 본문의 금액을 그대로 썼으면 client-budget-estimate(검증되지 않은 값).
+             */
+            bid_base_source?: string | null;
             /** Competitive Target Bid Rate */
             competitive_target_bid_rate?: number | null;
             /** Procurement Rate Band */

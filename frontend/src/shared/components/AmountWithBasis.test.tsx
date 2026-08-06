@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { AmountWithBasis } from "@/shared/components";
 import {
   AMOUNT_BASIS_BADGE,
+  BID_BASE_CLIENT_ESTIMATE_WARNING,
   BID_BASE_FALLBACK_WARNING,
   BID_BASE_NOTE
 } from "@/shared/constants/amountBasis";
@@ -54,6 +55,21 @@ describe("AmountWithBasis", () => {
 
     expect(screen.getByText(/기초금액 미확보 — 추정가격으로 대체/)).toBeInTheDocument();
     expect(screen.getByText(BID_BASE_FALLBACK_WARNING)).toBeInTheDocument();
+  });
+
+  it("요청 입력 금액을 쓴 경우도 미검증 경고를 노출한다", () => {
+    render(
+      <AmountWithBasis
+        amount={100_000_000}
+        basis="bid_base"
+        source="client-budget-estimate"
+      />
+    );
+
+    expect(screen.getByText(/요청 입력 금액\(미검증\)/)).toBeInTheDocument();
+    expect(screen.getByText(BID_BASE_CLIENT_ESTIMATE_WARNING)).toBeInTheDocument();
+    // 수집·검증된 폴백 문구를 미검증 값에 돌려 쓰지 않는다.
+    expect(screen.queryByText(BID_BASE_FALLBACK_WARNING)).not.toBeInTheDocument();
   });
 
   it("알 수 없는 출처 값도 감추지 않고 그대로 보여준다", () => {

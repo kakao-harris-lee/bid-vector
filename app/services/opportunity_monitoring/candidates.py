@@ -23,6 +23,7 @@ from app.core.single_user import (
 from app.core.time import utc_now
 from app.models.models import OperatorStrategy, Project, User
 from app.schemas.schemas import OpportunityAnalysisRequest
+from app.services.bid_base import resolve_notice_bid_base
 from app.services.license_eligibility import (
     VERDICT_INELIGIBLE,
     assess_license_eligibility,
@@ -197,6 +198,7 @@ class _CandidateCollectionMixin(_MonitoringBase):
 
                 evaluations.append(
                     self._build_candidate_evaluation(
+                        db,
                         project=project,
                         analysis=analysis,
                         strategy_reasons=filter_result.reasons,
@@ -355,6 +357,7 @@ class _CandidateCollectionMixin(_MonitoringBase):
 
     def _build_candidate_evaluation(
         self,
+        db: Session,
         *,
         project: Project,
         analysis: dict,
@@ -379,6 +382,7 @@ class _CandidateCollectionMixin(_MonitoringBase):
             ),
             strategy_reasons=strategy_reasons,
             decision_inputs=self._build_candidate_decision_inputs(
+                db=db,
                 project=project,
                 analysis=analysis,
                 max_active_bids=max_active_bids,
@@ -389,12 +393,21 @@ class _CandidateCollectionMixin(_MonitoringBase):
     def _build_candidate_decision_inputs(
         self,
         *,
+        db: Session,
         project: Project,
         analysis: _CandidateAnalysisPayload,
         max_active_bids: int,
         current_workload_score: float | None,
     ) -> CandidateDecisionInputs:
-        """Copy only persistence/result fields out of the first analysis."""
+        """Assemble the compact decision inputs: persistence/result fields copied
+        out of the first analysis, PLUS the notice's own 기초금액 resolved here.
+
+        ``budget_estimate`` is resolved from the notice rather than copied from
+        ``Project.budget_estimate``: it is the capture ratio's denominator and the
+        numerator (``recommended_amount``) is 기초금액-basis. Feeding 추정가격(ex-VAT)
+        made a 과세 공고 score capture ≈ rate × 1.1 → clamped to 1.0, so the same notice
+        scored higher through the monitor than through direct analysis (#162 계열).
+        """
         deadline_hours = analysis.get("deadline_hours_remaining")
         return CandidateDecisionInputs(
             project_id=int(project.id),
@@ -406,7 +419,7 @@ class _CandidateCollectionMixin(_MonitoringBase):
             ),
             max_active_bids=max_active_bids,
             provided_workload_score=current_workload_score,
-            budget_estimate=float(project.budget_estimate or 0.0),
+            budget_estimate=resolve_notice_bid_base(db, project),
             competitiveness_score=self._resolve_competitiveness_score(analysis),
             expected_margin_score=self._resolve_expected_margin_score(analysis),
             execution_complexity_score=self._resolve_execution_complexity_score(

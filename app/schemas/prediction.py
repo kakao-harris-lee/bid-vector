@@ -195,6 +195,22 @@ class PricePredictionResponse(BaseModel):
     historical_sample_size: int = Field(default=0, ge=0)
     agency_match_sample_size: int = Field(default=0, ge=0)
     predicted_bid_rate: float = 0.0
+    bid_base: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "투찰율을 곱한 기준금액(기초금액/사업금액, 과세 공고면 부가세 포함). "
+            "predicted_price ≈ predicted_bid_rate × bid_base."
+        ),
+    )
+    bid_base_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "위 기준금액의 출처. 수집된 기초금액이면 ReliableBaseSource 값, 공고의 "
+            "추정가격으로 대체했으면 budget-estimate-fallback, 저장된 금액이 없어 요청 "
+            "본문의 금액을 그대로 썼으면 client-budget-estimate(검증되지 않은 값)."
+        ),
+    )
     competitive_target_bid_rate: Optional[float] = Field(default=None, ge=0.0)
     procurement_rate_band: Optional[str] = None
     bid_rate_candidates: List[PricePredictionScenario] = Field(default_factory=list)

@@ -4,9 +4,8 @@ import {
   AMOUNT_BASIS_BADGE,
   AMOUNT_BASIS_LABEL,
   AMOUNT_BASIS_TONE,
-  BID_BASE_FALLBACK_WARNING,
-  BID_BASE_SOURCE_BUDGET_FALLBACK,
   bidBaseSourceLabel,
+  bidBaseSourceWarning,
   formatBaseToEstimateRatio,
   type AmountBasis
 } from "@/shared/constants/amountBasis";
@@ -67,7 +66,7 @@ export function AmountWithBasis({
   const sourceLabel = bidBaseSourceLabel(source);
   const ratioLabel = formatBaseToEstimateRatio(ratio);
   const provenance = [sourceLabel, ratioLabel].filter(Boolean).join(" · ");
-  const isFallback = source === BID_BASE_SOURCE_BUDGET_FALLBACK;
+  const sourceWarning = bidBaseSourceWarning(source);
 
   const resolvedLabel = label === null ? null : (label ?? AMOUNT_BASIS_LABEL[basis]);
 
@@ -93,9 +92,9 @@ export function AmountWithBasis({
           출처: {provenance}
         </span>
       ) : null}
-      {isFallback ? (
+      {sourceWarning ? (
         <span className="text-[11px] leading-tight text-[var(--color-warn)]">
-          {BID_BASE_FALLBACK_WARNING}
+          {sourceWarning}
         </span>
       ) : null}
       {note ? (

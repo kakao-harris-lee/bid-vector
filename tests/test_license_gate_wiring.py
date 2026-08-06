@@ -154,8 +154,10 @@ def test_resolve_codes_reads_profile_when_enabled(monkeypatch):
 
 
 class _FakeQuery:
-    def __init__(self, projects):
-        self._projects = projects
+    """The read surface the scan loop actually uses, over one entity's rows."""
+
+    def __init__(self, rows):
+        self._rows = rows
 
     def filter(self, *args, **kwargs):
         return self
@@ -166,15 +168,35 @@ class _FakeQuery:
     def yield_per(self, *args, **kwargs):
         # The open-notice scan streams rows in batches (no row bound): the
         # collection loop only iterates the result.
-        return list(self._projects)
+        return list(self._rows)
+
+    def first(self):
+        # ``resolve_notice_bid_base`` reads the notice's latest positive-base
+        # ``HistoricalData`` row to resolve the 기초금액 that the decision's capture
+        # ratio divides by. These fixtures model no such row, so this returns None
+        # and the base falls back to ``Project.budget_estimate`` — the honest answer
+        # for a notice with no collected 기초금액.
+        return self._rows[0] if self._rows else None
 
 
 class _FakeDB:
+    """Entity-aware session double — only ``Project`` is populated.
+
+    The scan loop drives TWO different queries through this session: the open-notice
+    stream (``query(Project)``) and the per-candidate 기초금액 lookup
+    (``query(HistoricalData)``). An entity-blind double would hand the project list
+    to BOTH, so a ``Project`` would stand in for a ``HistoricalData`` row and the base
+    resolution would read attributes that entity does not have — passing by accident.
+    Answering unmodelled entities with an empty result keeps the double's contract
+    aligned with the real usage surface.
+    """
+
     def __init__(self, projects):
         self._projects = projects
 
-    def query(self, *args, **kwargs):
-        return _FakeQuery(self._projects)
+    def query(self, *entities, **kwargs):
+        rows = self._projects if entities and entities[0] is Project else []
+        return _FakeQuery(rows)
 
     def expunge(self, obj):
         """스캔 루프 세션 위생은 인메모리 fake 에선 no-op."""

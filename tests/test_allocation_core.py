@@ -95,7 +95,7 @@ def test_decide_reasons_include_conditional_segments():
         _THRESHOLDS,
     )
     joined = " ".join(decision.reasons)
-    assert "예산 대비 추천가 유지율 1.00를 반영했습니다." in joined
+    assert "기초금액 대비 추천가 유지율 1.00를 반영했습니다." in joined
     assert "업무부하 점수 0.40를 자동 산정했습니다." in joined
     assert "자동 업무부하 감점 배율 1.50를 적용했습니다." in joined
     assert "0.18 감점을 적용했습니다." in joined
