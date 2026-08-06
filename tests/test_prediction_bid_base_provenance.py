@@ -118,3 +118,34 @@ def test_client_budget_fallback_is_exposed_through_the_api(client, test_db):
     payload = response.json()
     assert payload["bid_base"] == pytest.approx(_VAT_BASE_AMOUNT)
     assert payload["bid_base_source"] == BID_BASE_SOURCE_CLIENT_ESTIMATE
+
+
+def test_opportunity_analysis_price_prediction_carries_the_bid_base(test_db):
+    """The live analysis path fills the same two fields, not a permanent null.
+
+    ``OpportunityAnalysisResponse.price_prediction`` reuses ``PricePredictionResponse``,
+    so if the live wiring omits them the operator-facing analysis silently reports
+    ``bid_base: null`` while the API-only endpoint reports the amount — the two
+    surfaces would disagree about what the 투찰율 was applied to.
+    """
+    from app.schemas.schemas import OpportunityAnalysisRequest
+    from app.services.opportunity_analysis import OpportunityAnalysisService
+
+    _seed_price_history(test_db)
+    project = _make_project(test_db)
+    _add_base_row(test_db, project, _VAT_BASE_AMOUNT)
+    test_db.commit()
+
+    analysis = OpportunityAnalysisService().analyze_project(
+        test_db,
+        project,
+        OpportunityAnalysisRequest(project_id=project.id),
+    )
+    price_prediction = analysis["price_prediction"]
+
+    assert price_prediction["bid_base"] == pytest.approx(_VAT_BASE_AMOUNT)
+    assert price_prediction["bid_base_source"] not in {
+        None,
+        BID_BASE_SOURCE_CLIENT_ESTIMATE,
+        BID_BASE_SOURCE_BUDGET_FALLBACK,
+    }

@@ -399,7 +399,8 @@ class _CandidateCollectionMixin(_MonitoringBase):
         max_active_bids: int,
         current_workload_score: float | None,
     ) -> CandidateDecisionInputs:
-        """Copy only persistence/result fields out of the first analysis.
+        """Assemble the compact decision inputs: persistence/result fields copied
+        out of the first analysis, PLUS the notice's own 기초금액 resolved here.
 
         ``budget_estimate`` is resolved from the notice rather than copied from
         ``Project.budget_estimate``: it is the capture ratio's denominator and the

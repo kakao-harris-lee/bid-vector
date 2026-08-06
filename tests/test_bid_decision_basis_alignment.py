@@ -8,7 +8,7 @@ the predictor's recommendation, which every path computes against the 기초금�
 (ex-VAT ``Project.budget_estimate``) instead, a 과세 공고 gets
 ``capture ≈ rate × 1.1`` — clamped to 1.0 — so the SAME notice scores differently
 depending on which path evaluated it, inflating opportunity/priority and the
-"예산 대비 추천가 유지율" reason line.
+"기초금액 대비 추천가 유지율" reason line.
 
 These tests pin every production construction site of ``BidDecisionRequest`` /
 ``BidDecisionSaveRequest`` to the 기초금액 base with an explicit 과세 공고 value

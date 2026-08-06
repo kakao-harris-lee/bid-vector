@@ -251,7 +251,7 @@ class _OrchestrationMixin(_OpportunityAnalysisBase):
                 # recommended_amount is now 기초금액/사업금액(base)-relative, so the
                 # denominator must be the SAME base — passing 추정가격(ex-VAT) here
                 # would make capture ≈ rate × 1.1 for 과세 공고 (clamped to 1.0),
-                # inflating opportunity/priority and the "예산 대비 추천가 유지율"
+                # inflating opportunity/priority and the "기초금액 대비 추천가 유지율"
                 # reason. In allocation.py budget_estimate feeds ONLY the capture
                 # ratio + that reason, so aligning it to the base is correct.
                 budget_estimate=resolve_notice_bid_base(db, project),

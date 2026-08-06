@@ -78,7 +78,7 @@ class BidDecisionService:
             current_active_bids=request.current_active_bids,
             max_active_bids=request.max_active_bids,
         )
-        competitiveness_score = self._normalize_unit_score(request.competitiveness_score, default=0.5)
+        competitiveness_score = self._normalize_unit_score(request.competitiveness_score, default=allocation_core.NEUTRAL_UNIT_SCORE)
         budget_capture_score = self._compute_budget_capture_score(
             recommended_amount=request.recommended_amount,
             budget_estimate=request.budget_estimate,

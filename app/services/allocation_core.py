@@ -109,7 +109,7 @@ def budget_capture_score(
     분자(``recommended_amount``)는 모든 경로에서 기초금액-basis 로 산출된 추천가이므로
     분모도 **같은 기초금액**이어야 한다. 추정가격(ex-VAT)을 넣으면 과세 공고에서
     ``capture ≈ rate × 1.1`` 이 되어 1.0 으로 clamp 되고, 그만큼 opportunity/priority
-    점수와 "예산 대비 추천가 유지율" 근거 문구가 함께 부풀어 오른다. ``BaseAmount``
+    점수와 "기초금액 대비 추천가 유지율" 근거 문구가 함께 부풀어 오른다. ``BaseAmount``
     시그니처가 그 교차 대입을 정적으로 막는다.
 
     사용 가능한 base 가 없으면(``None``/0 이하) 판단 근거가 없다는 뜻이므로 중립값을
@@ -138,7 +138,10 @@ def decide(signals: DecisionSignals, thresholds: AllocationThresholds) -> Decisi
     ]
 
     if signals.budget_estimate and signals.budget_estimate > 0:
-        reasons.append(f"예산 대비 추천가 유지율 {signals.budget_capture_score:.2f}를 반영했습니다.")
+        # 문구가 "예산"이 아니라 "기초금액"인 이유: 이 비율의 분모는 추정가격이 아니라
+        # 투찰율이 곱해지는 기초금액이다. 영속 감사 문구(BidDecisionRecord.reasoning)가
+        # 실제 분모와 다른 금액을 말하면 그 자체로 basis 오해를 재생산한다(#350 축).
+        reasons.append(f"기초금액 대비 추천가 유지율 {signals.budget_capture_score:.2f}를 반영했습니다.")
     reasons.append(f"예상 수익성 점수 {signals.expected_margin_score:.2f}를 반영했습니다.")
 
     if signals.workload_source == "auto":

@@ -102,6 +102,12 @@ class _PredictionWiringMixin(_OpportunityAnalysisBase):
             )
             if menu is not None:
                 prediction["bid_target_menu"] = menu
+        # 이 예측이 투찰율을 곱한 기준금액과 그 출처를 함께 싣는다. API 경로
+        # (prediction_workflow)와 같은 계약이라 OpportunityAnalysisResponse.price_prediction
+        # 에서도 두 필드가 채워진다 — 싣지 않으면 그 자리가 영구 null 이 되어 화면이
+        # 예산(추정가격)과 기초금액을 다시 한 이름으로 뭉갠다(#350 축).
+        prediction["bid_base"] = float(bid_base)
+        prediction["bid_base_source"] = inputs.bid_base_source
         return (prediction, business_group)
 
     def _load_price_history(self, db: Session, project: Project, *, limit: int = 40) -> list[dict[str, object]]:

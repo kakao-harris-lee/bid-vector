@@ -72,8 +72,11 @@ class BidDecisionRequest(BaseModel):
         description=(
             "투찰율이 곱해지는 기초금액/사업금액(과세 공고면 부가세 포함). 필드명은 이력상 "
             "budget_estimate 이지만 추정가격(ex-VAT)이 아니다 — capture 비율의 분자인 "
-            "recommended_amount 와 basis 가 같아야 한다. 생략하면 서버가 공고의 기초금액을 "
-            "해석해 채운다."
+            "recommended_amount 와 basis 가 같아야 한다. 생략 시 동작은 경로마다 다르다: "
+            "저장 경로(POST /bid-decisions)는 서버가 공고의 기초금액을 해석해 채우고, "
+            "평가 전용 경로(POST /bid-decision)는 공고를 조회하지 않는 stateless 계산이라 "
+            "채우지 않고 capture 를 중립 0.5 로 둔다. 평가 경로에서 capture 를 실제로 "
+            "반영하려면 기초금액을 직접 실어 보내야 한다."
         ),
     )
     competitiveness_score: float = Field(default=0.5, ge=0.0, le=1.0)
