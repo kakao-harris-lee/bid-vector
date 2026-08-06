@@ -108,7 +108,7 @@ class _PredictionWiringMixin(_OpportunityAnalysisBase):
         # 예산(추정가격)과 기초금액을 다시 한 이름으로 뭉갠다(#350 축).
         # 표시 전용이 아니다. 소비자: ① 스코어링의 expected_margin 분모(#355,
         # _resolve_margin_bid_base) ② 추천가의 하한 탈출 게이트(#356,
-        # _enforceable_floor_price 가 base/추정가격 비를 여기서 읽는다).
+        # enforceable_floor_price 가 base/추정가격 비를 여기서 읽는다).
         # 빼면 ①은 추정가격 폴백으로, ②는 게이트가 닫혀 legacy 경계로 조용히 되돌아간다.
         prediction["bid_base"] = float(bid_base)
         prediction["bid_base_source"] = inputs.bid_base_source
