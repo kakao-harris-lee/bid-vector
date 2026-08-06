@@ -30,6 +30,34 @@ from app.services.opportunity_analysis.score_tables import (
 )
 
 
+def _resolve_margin_bid_base(
+    reported_base: float | None, budget_estimate: float | None
+) -> float:
+    """The 기초금액 a margin rate must be divided by, with an equivalent fallback.
+
+    The predictor reports the base it actually multiplied (``price_prediction["bid_base"]``,
+    #354), so the scoring layer reuses that value instead of re-deriving it — no DB session
+    is injected into this pure scoring path (§4.7), and the rate cannot drift from the one
+    the predictor's own ``floor_bid_rate`` / ``predicted_bid_rate`` are expressed in.
+
+    Falling back to 추정가격 is NOT a basis swap: that is exactly what
+    ``resolve_notice_bid_base`` itself returns when no positive 기초금액 is on record
+    (면세 공고에서는 두 금액이 같고, 미확보 공고에서는 추정가격이 유일한 근사다), so
+    callers without a reported base stay byte-identical.
+
+    Both operands arrive as scalars rather than the prediction/project objects so this
+    stays a value-in/value-out kernel that a table test can drive directly.
+    """
+    for candidate in (reported_base, budget_estimate):
+        try:
+            value = float(candidate or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 0.0
+
+
 class _ScoringMixin(_OpportunityAnalysisBase):
     """Composite-score and probability-blend computations."""
 
@@ -226,12 +254,22 @@ class _ScoringMixin(_OpportunityAnalysisBase):
         competitiveness_score: float,
         capacity_score: float,
     ) -> float:
-        """Estimate a profitability proxy from budget retention, floor headroom, and execution confidence."""
-        budget_estimate = float(project.budget_estimate or 0.0)
-        if budget_estimate <= 0:
+        """Estimate a profitability proxy from budget retention, floor headroom, and execution confidence.
+
+        ``recommended_rate`` is divided by the **기초금액** the predictor priced against,
+        not 추정가격(ex-VAT). It is subtracted from ``floor_bid_rate`` /
+        ``predicted_bid_rate`` below, and those are rates of that same base — mixing the
+        two bases measured a 과세 공고 with two different rulers, overstating
+        ``floor_headroom`` (하한까지 여유가 있는 것처럼) while understating
+        ``prediction_alignment`` (predictor 자신의 추천율을 어긋났다고 감점). #354 계열.
+        """
+        bid_base = _resolve_margin_bid_base(
+            price_prediction.get("bid_base"), project.budget_estimate
+        )
+        if bid_base <= 0:
             return 0.5
 
-        recommended_rate = max(0.0, min(1.0, float(recommended_amount or 0.0) / budget_estimate))
+        recommended_rate = max(0.0, min(1.0, float(recommended_amount or 0.0) / bid_base))
         floor_bid_rate = max(0.0, min(1.0, float(price_prediction.get("floor_bid_rate", 0.0) or 0.0)))
         predicted_bid_rate = max(
             0.0,
