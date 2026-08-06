@@ -46,8 +46,18 @@ def _prediction(
     range_min: float = _RANGE_MIN,
     range_max: float = _RANGE_MAX,
     bid_base: float | None = BASE_AMOUNT,
+    legal_floor_bid_rate: float | None = 0.95,
 ) -> dict:
-    payload: dict = {"price_range_min": range_min, "price_range_max": range_max}
+    """guarded predictor dict 형태.
+
+    ``legal_floor_bid_rate`` 는 공고가 published 법정하한을 실제로 보고했을 때만 값이
+    있고, 미보고 공고에서는 ``None`` 이다(``guardrails_apply`` 계약).
+    """
+    payload: dict = {
+        "price_range_min": range_min,
+        "price_range_max": range_max,
+        "legal_floor_bid_rate": legal_floor_bid_rate,
+    }
     if floor_price is not None:
         payload["floor_price"] = floor_price
     if bid_base is not None:
@@ -175,3 +185,71 @@ def test_unusable_floor_falls_back_to_the_legacy_bound(bad_floor):
     amount = _resolve(prediction=prediction)
 
     assert amount == pytest.approx(BUDGET_ESTIMATE)
+
+
+# --------------------------------------------------------------------------- #
+# V3 게이트 — 믿을 수 있는 하한에만 상한 초과 권한을 준다
+# --------------------------------------------------------------------------- #
+
+
+def test_unpublished_legal_floor_does_not_escape_the_cap():
+    """공고가 published 법정하한을 보고하지 않으면 상한을 넘지 않는다.
+
+    미보고 공고의 ``floor_price`` 는 config category floor 에서 온 값이라 법적 구속력이
+    없다. 반사실 실측에서 이 경로의 상승 12건이 **12/12 낙찰가에서 멀어졌다**.
+    """
+    amount = _resolve(prediction=_prediction(legal_floor_bid_rate=None))
+
+    assert amount == pytest.approx(BUDGET_ESTIMATE)
+    assert amount < _HIGH_FLOOR_PRICE
+
+
+@pytest.mark.parametrize(
+    "bid_base, escapes",
+    [
+        (BUDGET_ESTIMATE * 1.00, True),   # 면세
+        (BUDGET_ESTIMATE * 1.10, True),   # 정상 과세(부가세 10%)
+        (BUDGET_ESTIMATE * 1.15, True),   # 신뢰 경계값 — 포함
+        (BUDGET_ESTIMATE * 1.1501, False),  # 경계 바로 위 — 차단
+        (BUDGET_ESTIMATE * 1.50, False),
+        (BUDGET_ESTIMATE * 10.0, False),  # 오염
+    ],
+)
+def test_base_ratio_gate(bid_base, escapes):
+    """기초금액이 추정가격의 1.15 배를 넘으면 그 하한은 신뢰하지 않는다.
+
+    하한 금액은 ``rate × 기초금액`` 이라 base 가 부풀면 하한도 부푼다. 그렇게 만들어진
+    임계는 허수였다 — 해당 코호트 78건에서 실낙찰자 78/78 이 그 임계 미만으로 낙찰했다.
+    """
+    floor_price = 0.95 * bid_base
+    amount = _resolve(prediction=_prediction(floor_price=floor_price, bid_base=bid_base))
+
+    if escapes:
+        assert amount >= floor_price
+    else:
+        assert amount == pytest.approx(BUDGET_ESTIMATE)
+        assert amount < floor_price
+
+
+def test_gate_needs_both_conditions():
+    """published 하한이 있어도 비율이 크면 차단, 비율이 작아도 미보고면 차단."""
+    inflated = BUDGET_ESTIMATE * 1.5
+    published_but_inflated = _prediction(floor_price=0.95 * inflated, bid_base=inflated)
+    clean_but_unpublished = _prediction(legal_floor_bid_rate=None)
+
+    assert _resolve(prediction=published_but_inflated) == pytest.approx(BUDGET_ESTIMATE)
+    assert _resolve(prediction=clean_but_unpublished) == pytest.approx(BUDGET_ESTIMATE)
+
+
+def test_missing_bid_base_closes_the_gate():
+    """예측이 ``bid_base`` 를 싣지 않으면 비율을 검증할 수 없어 상한을 넘지 않는다.
+
+    라이브 경로(``_build_price_prediction``)는 포트 호출 직후 ``bid_base`` 를 싣지만
+    (#354), 그 배선이 빠진 dict 로 들어오면 base/추정가격 비를 확인할 방법이 없다.
+    확인 불가일 때는 legacy bound 로 남는 **보수적** 선택을 계약으로 고정한다 —
+    이 성질을 모른 채 포트를 직접 호출하면 게이트가 조용히 닫히므로 명시해 둔다.
+    """
+    amount = _resolve(prediction=_prediction(bid_base=None))
+
+    assert amount == pytest.approx(BUDGET_ESTIMATE)
+    assert amount < _HIGH_FLOOR_PRICE

@@ -3,7 +3,11 @@
 Blends stored bid history with caller what-if inputs, estimates market context
 from similar-notice budgets, and clamps the bid recommendation into a
 budget-aware range (deferring to the per-notice 투찰가 메뉴 when present).
-Methods are moved verbatim from the original ``OpportunityAnalysisService`` body.
+
+CONTRACT CHANGE (#356): "budget-aware" 는 더 이상 무조건이 아니다. 공고가 published
+법정하한을 보고했고 그 하한이 신뢰할 수 있는 base 위에서 계산됐을 때는 추천가가
+추정가격(예산 상한)을 **넘을 수 있다** — 하한 미달 추천을 내지 않기 위해서다.
+:func:`enforceable_floor_price` 가 그 조건을 판정한다.
 """
 
 from __future__ import annotations
@@ -17,6 +21,42 @@ from app.domain.aggregates import average
 from app.models.models import Bid, Project
 from app.utils.numeric import optional_float
 from app.services.opportunity_analysis.base import _OpportunityAnalysisBase
+
+# 기초금액을 "부가세로 설명되는 값"으로 신뢰할 상한 비(기초금액 ÷ 추정가격).
+# 부가세는 10% 이므로 정상 과세 공고는 1.10, 면세는 1.00 이고, 나머지 0.05 는 수집
+# 시점 차이·반올림을 흡수하는 측정 마진이다. 이 비를 넘는 base 는 세금이 아니라
+# 오염이며, 그 base 로 만든 하한 임계는 실낙찰 데이터가 반증한다(PR 본문 참조).
+BID_BASE_TRUST_RATIO_MAX = 1.15
+
+
+def enforceable_floor_price(
+    legal_floor_bid_rate: float | None,
+    floor_price: float | None,
+    bid_base: float | None,
+    budget_cap: float,
+) -> float:
+    """예산 상한을 넘어서라도 지킬 하한. 지킬 수 없으면 ``0.0``.
+
+    상한 초과는 **하한을 믿을 수 있을 때만** 허용한다: ① 공고가 published 법정하한을
+    실제로 보고했고(``legal_floor_bid_rate``) ② 기초금액이 추정가격의
+    :data:`BID_BASE_TRUST_RATIO_MAX` 배 이내일 것. 두 게이트의 실측 근거(미보고 하한
+    경로의 상승 12/12 악화, 오염 base 임계에서 실낙찰자 전원이 임계 미만 낙찰)는 PR #356
+    본문에 있다.
+
+    ``budget_cap`` 이 0 이면 넘을 상한이 없어 비율 검사를 건너뛰고, ``bid_base`` 를 못
+    받으면 비율을 검증할 수 없어 **보수적으로 닫는다**(legacy bound 유지).
+    """
+    if legal_floor_bid_rate is None:
+        return 0.0
+    floor = optional_float(floor_price) or 0.0
+    if floor <= 0:
+        return 0.0
+    if budget_cap <= 0:
+        return floor
+    base = optional_float(bid_base) or 0.0
+    if base <= 0 or base > budget_cap * BID_BASE_TRUST_RATIO_MAX:
+        return 0.0
+    return floor
 
 
 class _MarketInputsMixin(_OpportunityAnalysisBase):
@@ -65,6 +105,9 @@ class _MarketInputsMixin(_OpportunityAnalysisBase):
         option 투찰가 (사업금액 base × 위치조정 rate) so the headline
         recommended_amount and the menu never disagree. The budget-aware clamping
         below is kept as the fallback when there is no menu.
+
+        ★결정2 (#356): 예산 상한은 절대 상한이 아니다 — 신뢰할 수 있는 published
+        법정하한이 그 위에 있으면 하한을 따른다(:func:`enforceable_floor_price`).
         """
         menu = (price_prediction or {}).get("bid_target_menu")
         if menu:
@@ -87,22 +130,19 @@ class _MarketInputsMixin(_OpportunityAnalysisBase):
         if price_lower > 0:
             recommended_amount = max(recommended_amount, min(price_lower, budget_cap or price_lower))
 
-        # RED LINE: 낙찰하한만은 예산 상한을 넘어서라도 지킨다.
-        #
-        # 위 ``price_lower``(=``price_range_min``)는 후보 예측가의 최솟값, 즉 시나리오
-        # 범위의 하단일 뿐 법정 하한이 아니다. 그것까지 상한 위로 풀면 하한 여유가 있는
-        # 공고의 추천가만 올라가 과추천이 된다(홀드아웃: 그 구간 34건 중 28건이 낙찰가에서
-        # 멀어짐). 반대로 guardrail 이 낸 ``floor_price`` 는 법정 하한을 max() 로 접어
-        # 넣은 **하한 그 자체**라, 이것이 상한에 깎이면 그 추천가는 하한 미달이 된다.
-        # 그래서 상한을 넘길 권한은 ``floor_price`` 가 보고된 경우에만 준다.
-        legal_floor_price = optional_float(price_prediction.get("floor_price")) or 0.0
-        if legal_floor_price > 0:
-            recommended_amount = max(recommended_amount, legal_floor_price)
+        # 예산 상한을 넘길 권한은 **믿을 수 있는 하한에만** 준다(아래 게이트 참조).
+        enforced_floor = enforceable_floor_price(
+            price_prediction.get("legal_floor_bid_rate"),
+            price_prediction.get("floor_price"),
+            price_prediction.get("bid_base"),
+            budget_cap,
+        )
+        if enforced_floor > 0:
+            recommended_amount = max(recommended_amount, enforced_floor)
 
         amount = round(max(0.0, recommended_amount), 2)
-        # 반올림이 하한을 깨지 못하게 한다. ``round`` 는 내림이 될 수 있어 정확히 하한에
-        # 착지한 추천가가 1원 미만으로 하한을 밑도는 잔차가 생긴다(홀드아웃 1/743).
-        # 하한 미달은 정도의 문제가 아니라 실격 여부라 올림으로 막는다.
-        if legal_floor_price > 0 and amount < legal_floor_price:
-            amount = math.ceil(legal_floor_price * 100.0) / 100.0
+        # 반올림 내림이 하한을 서브센트만큼 깨던 잔차(반사실 1/743, 0.005원)를 올림으로
+        # 막는다 — 하한 미달은 정도가 아니라 실격 여부의 문제다.
+        if enforced_floor > 0 and amount < enforced_floor:
+            amount = math.ceil(enforced_floor * 100.0) / 100.0
         return amount

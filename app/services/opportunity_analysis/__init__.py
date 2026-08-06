@@ -7,7 +7,8 @@ scoring / workload / market / flags) over a shared ``_OpportunityAnalysisBase``;
 this ``__init__`` composes them. The split is a pure move — every method body is
 the original ``OpportunityAnalysisService`` member relocated verbatim, so the
 honesty-spec caps, the #260 predict wiring, the published-floor path, and the
-recommended_amount resolution are unchanged.
+recommended_amount resolution are unchanged apart from the #356 floor
+contract (신뢰 가능한 published 법정하한은 예산 상한을 넘을 수 있다).
 
 The module-level risk helpers, score tables, and value carriers keep their
 historical import path via the re-exports below (see ``__all__``).

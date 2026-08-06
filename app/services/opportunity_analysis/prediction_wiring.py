@@ -106,8 +106,10 @@ class _PredictionWiringMixin(_OpportunityAnalysisBase):
         # (prediction_workflow)와 같은 계약이라 OpportunityAnalysisResponse.price_prediction
         # 에서도 두 필드가 채워진다 — 싣지 않으면 그 자리가 영구 null 이 되어 화면이
         # 예산(추정가격)과 기초금액을 다시 한 이름으로 뭉갠다(#350 축).
-        # 표시 전용이 아니다: 스코어링의 expected_margin 분모가 이 값을 읽는다(#355,
-        # _resolve_margin_bid_base). 빼면 추정가격 폴백으로 조용히 되돌아간다.
+        # 표시 전용이 아니다. 소비자: ① 스코어링의 expected_margin 분모(#355,
+        # _resolve_margin_bid_base) ② 추천가의 하한 탈출 게이트(#356,
+        # _enforceable_floor_price 가 base/추정가격 비를 여기서 읽는다).
+        # 빼면 ①은 추정가격 폴백으로, ②는 게이트가 닫혀 legacy 경계로 조용히 되돌아간다.
         prediction["bid_base"] = float(bid_base)
         prediction["bid_base_source"] = inputs.bid_base_source
         return (prediction, business_group)
