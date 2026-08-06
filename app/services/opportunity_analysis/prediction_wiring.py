@@ -106,6 +106,8 @@ class _PredictionWiringMixin(_OpportunityAnalysisBase):
         # (prediction_workflow)와 같은 계약이라 OpportunityAnalysisResponse.price_prediction
         # 에서도 두 필드가 채워진다 — 싣지 않으면 그 자리가 영구 null 이 되어 화면이
         # 예산(추정가격)과 기초금액을 다시 한 이름으로 뭉갠다(#350 축).
+        # 표시 전용이 아니다: 스코어링의 expected_margin 분모가 이 값을 읽는다(#355,
+        # _resolve_margin_bid_base). 빼면 추정가격 폴백으로 조용히 되돌아간다.
         prediction["bid_base"] = float(bid_base)
         prediction["bid_base_source"] = inputs.bid_base_source
         return (prediction, business_group)

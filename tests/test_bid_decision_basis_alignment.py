@@ -24,46 +24,30 @@ from datetime import UTC, datetime
 import pytest
 
 from app.domain.money import BaseAmount
-from app.models.models import HistoricalData, Project
+from app.models.models import Project
 from app.schemas.schemas import BidDecisionSaveRequest
 from app.services import allocation_core as ac
 from app.services.allocation import BidDecisionService
 from app.services.paper_bidding_backtest import PaperBiddingBacktestService
 from app.services.paper_bidding_backtest.base import CandidatePredictionContext
 from app.services.opportunity_monitoring import StrategyMonitoringService
+from tests.support.basis_fixtures import (
+    BASE_AMOUNT as _BASE_AMOUNT,
+    BUDGET_ESTIMATE as _BUDGET_ESTIMATE,
+    RATE_ON_BASE as _CAPTURE_ON_BASE,
+    RATE_ON_ESTIMATE as _CAPTURE_ON_ESTIMATE,
+    RECOMMENDED_AMOUNT as _RECOMMENDED_AMOUNT,
+    persist_vat_notice,
+)
 
-# 과세 공고 value table: 기초금액 = 추정가격 × 1.1.
-_BUDGET_ESTIMATE = 100_000_000.0
-_BASE_AMOUNT = 110_000_000.0
-_RECOMMENDED_AMOUNT = 99_000_000.0  # 0.90 × 기초금액
-
-# The two capture ratios the basis choice produces.
-_CAPTURE_ON_BASE = _RECOMMENDED_AMOUNT / _BASE_AMOUNT  # 0.90 — correct
-_CAPTURE_ON_ESTIMATE = _RECOMMENDED_AMOUNT / _BUDGET_ESTIMATE  # 0.99 — the bug
+# 값표(추정가격 100,000,000 / 기초금액 110,000,000 / 추천가 99,000,000)와 공고 빌더는
+# tests/support/basis_fixtures.py 가 단일 출처다 — #355(expected_margin 축)가 같은
+# 시나리오를 쓰므로 두 파일이 각자 선언하면 한쪽만 바뀌어 조용히 갈라진다.
+# _CAPTURE_ON_BASE = 0.90 (정합), _CAPTURE_ON_ESTIMATE = 0.99 (버그).
 
 
 def _vat_project(db, *, category: str = "construction") -> Project:
-    project = Project(
-        title="basis 정합 검증 공고",
-        description="투찰 기준금액 basis 정합",
-        requirements="",
-        budget_estimate=_BUDGET_ESTIMATE,
-        category=category,
-        status="open",
-    )
-    db.add(project)
-    db.flush()
-    db.add(
-        HistoricalData(
-            project_id=project.id,
-            base_amount=_BASE_AMOUNT,
-            bid_rate=0.0,
-            category=category,
-        )
-    )
-    db.commit()
-    db.refresh(project)
-    return project
+    return persist_vat_notice(db, category=category)
 
 
 # --------------------------------------------------------------------------- #
