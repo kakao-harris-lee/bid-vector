@@ -7,8 +7,9 @@
  *
  * 백엔드 대응: `app/schemas/bid_summary.py` 의 `BID_BASE_NOTE`,
  * `app/services/bid_base.py` 의 출처 어휘(`ReliableBaseSource` +
- * `BID_BASE_SOURCE_BUDGET_FALLBACK`). 응답이 note 를 실어 보내면 그 문자열을 그대로
- * 쓰고, note 가 없는 응답(공고 상세)에서만 여기 미러를 폴백으로 쓴다.
+ * `BID_BASE_SOURCE_BUDGET_FALLBACK` + `BID_BASE_SOURCE_CLIENT_ESTIMATE`). 응답이 note 를
+ * 실어 보내면 그 문자열을 그대로 쓰고, note 가 없는 응답(공고 상세)에서만 여기 미러를
+ * 폴백으로 쓴다.
  */
 
 import type { BadgeTone } from "@/shared/components/ui";
@@ -68,8 +69,17 @@ export const BID_BASE_NOTE =
   "추정가격(부가세 별도 표기)과 다른 금액입니다. 투찰금액은 기초금액 기준으로 " +
   "산정되므로 추정가격에 투찰율을 곱해 검산하면 값이 어긋납니다.";
 
-/** 기초금액을 확보하지 못해 추정가격을 그대로 기준금액으로 쓴 상태의 provenance 값. */
+/** 기초금액을 확보하지 못해 공고의 추정가격을 그대로 기준금액으로 쓴 상태의 provenance 값. */
 export const BID_BASE_SOURCE_BUDGET_FALLBACK = "budget-estimate-fallback";
+
+/**
+ * 저장된 공고 금액이 없어 **요청 본문에 실려온 금액**을 그대로 기준금액으로 쓴 상태.
+ *
+ * 위 폴백과 한 이름으로 뭉뚱그리지 않는다: 저쪽은 우리가 수집한 `Project.budget_estimate`
+ * 지만 이 값은 basis 표기 없는 클라이언트 입력값이라 검증 수준이 다르다
+ * (`app/services/bid_base.py::BID_BASE_SOURCE_CLIENT_ESTIMATE`).
+ */
+export const BID_BASE_SOURCE_CLIENT_ESTIMATE = "client-budget-estimate";
 
 /** 기초금액 출처(provenance) 라벨 — `ReliableBaseSource` 어휘 그대로. */
 export const BID_BASE_SOURCE_LABEL: Record<string, string> = {
@@ -77,6 +87,7 @@ export const BID_BASE_SOURCE_LABEL: Record<string, string> = {
   "reserve-estimate": "복수예비가격 복원 추정",
   "base-fallback": "저장된 기초금액(basis 미상)",
   [BID_BASE_SOURCE_BUDGET_FALLBACK]: "기초금액 미확보 — 추정가격으로 대체",
+  [BID_BASE_SOURCE_CLIENT_ESTIMATE]: "요청 입력 금액(미검증)",
   unavailable: "기초금액 없음"
 };
 
@@ -88,10 +99,36 @@ export const BID_BASE_FALLBACK_WARNING =
   "기초금액을 확보하지 못해 추정가격을 그대로 기준금액으로 표시했습니다. " +
   "과세 공고라면 실제 투찰 기준금액과 다를 수 있으니 공고 원문으로 확인하세요.";
 
+/**
+ * 요청 입력값을 기준금액으로 쓴 상태 경고 — 폴백보다 오히려 근거가 약한 값이다.
+ * 수집·검증을 거치지 않았고 부가세 포함 여부(basis)도 표기되지 않는다.
+ */
+export const BID_BASE_CLIENT_ESTIMATE_WARNING =
+  "저장된 공고 금액이 없어 요청에 실려온 금액을 그대로 기준금액으로 표시했습니다. " +
+  "수집·검증된 금액이 아니고 부가세 포함 여부도 확인되지 않았으니 공고 원문으로 확인하세요.";
+
+/**
+ * 기초금액이 아닌 값을 기준금액 자리에 놓은 출처 → 경고 문구.
+ *
+ * 여기에 키가 있으면 경고를 띄운다. 조건을 컴포넌트 안에서 `===` 로 늘리면 새 출처가
+ * 추가될 때 조용히 무경고로 빠지므로(검증된 폴백엔 경고, 미검증 값엔 무경고인 위계
+ * 역전이 실제로 났다) 판정을 이 표 하나로 둔다.
+ */
+export const BID_BASE_SOURCE_WARNING: Record<string, string> = {
+  [BID_BASE_SOURCE_BUDGET_FALLBACK]: BID_BASE_FALLBACK_WARNING,
+  [BID_BASE_SOURCE_CLIENT_ESTIMATE]: BID_BASE_CLIENT_ESTIMATE_WARNING
+};
+
 /** 알 수 없는 출처 값도 감추지 않고 원문 그대로 노출한다(정직 표기). */
 export function bidBaseSourceLabel(source: string | null | undefined): string | null {
   if (!source) return null;
   return BID_BASE_SOURCE_LABEL[source] ?? source;
+}
+
+/** 표시 금액이 기초금액이 아닐 때의 경고 문구. 경고가 필요 없는 출처면 `null`. */
+export function bidBaseSourceWarning(source: string | null | undefined): string | null {
+  if (!source) return null;
+  return BID_BASE_SOURCE_WARNING[source] ?? null;
 }
 
 /** 기초금액 ÷ 추정가격 표시. 두 금액의 관측된 비일 뿐 과세 여부 주장이 아니다. */
