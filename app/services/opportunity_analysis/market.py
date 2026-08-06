@@ -8,38 +8,15 @@ Methods are moved verbatim from the original ``OpportunityAnalysisService`` body
 
 from __future__ import annotations
 
+import math
+
 from sqlalchemy.orm import Session
 
 from app.ai.price_prediction import get_price_insights
 from app.domain.aggregates import average
 from app.models.models import Bid, Project
-from app.services.opportunity_analysis.base import _OpportunityAnalysisBase
 from app.utils.numeric import optional_float
-
-# 기초금액/추정가격 비의 타당 상한. 부가세는 10% 이므로 정상 과세 공고는 ~1.10 이고,
-# 면세 공고는 1.00 이다. 이 값을 넘는 비는 세금이 아니라 수집 오염이다(예: 예정가가
-# base 자리에 덮인 이력 — #199/#220 계열). 오염된 base 를 예산 상한으로 삼으면 추천가가
-# 함께 부풀므로, 그런 공고는 상한을 올리지 않고 추정가격에 머문다.
-BUDGET_CAP_PLAUSIBLE_BASE_RATIO = 1.5
-
-
-def resolve_budget_cap(reported_base: float | None, budget_estimate: float | None) -> float:
-    """추천 투찰가의 예산 상한 — 투찰율이 곱해지는 기초금액과 같은 basis.
-
-    이 상한은 predictor 가 낸 ``price_range``(기초금액-relative)를 자르므로 같은 basis
-    여야 한다. 도입 시점(2026-05-10)에는 predictor 도 추정가격 기준이라 일치했으나,
-    #162 가 predictor 만 기초금액으로 옮기고 이 상한을 남겨 두면서 자가 갈렸다 —
-    설계가 아니라 부수 피해다.
-
-    ``BUDGET_CAP_PLAUSIBLE_BASE_RATIO`` 를 넘는 base 는 오염으로 보고 추정가격을 쓴다.
-    """
-    base = optional_float(reported_base)
-    estimate = optional_float(budget_estimate) or 0.0
-    if base is None or base <= 0:
-        return max(0.0, estimate)
-    if estimate > 0 and base > estimate * BUDGET_CAP_PLAUSIBLE_BASE_RATIO:
-        return estimate
-    return base
+from app.services.opportunity_analysis.base import _OpportunityAnalysisBase
 
 
 class _MarketInputsMixin(_OpportunityAnalysisBase):
@@ -95,23 +72,37 @@ class _MarketInputsMixin(_OpportunityAnalysisBase):
                 if option.get("label") == "recommended" and option.get("bid_price") is not None:
                     return float(option["bid_price"])
 
-        budget_cap = resolve_budget_cap(
-            price_prediction.get("bid_base"), project.budget_estimate
-        )
+        budget_cap = float(project.budget_estimate or 0.0)
         price_lower = float(price_prediction.get("price_range_min", 0.0) or 0.0)
         price_upper = float(price_prediction.get("price_range_max", 0.0) or 0.0)
         recommended_amount = float(bid_recommendation.get("recommended_bid", 0.0) or 0.0)
 
         if budget_cap > 0:
+            price_lower = min(price_lower, budget_cap)
             price_upper = min(price_upper if price_upper > 0 else budget_cap, budget_cap)
             recommended_amount = min(recommended_amount or budget_cap, budget_cap)
 
         if price_upper > 0:
             recommended_amount = min(recommended_amount, price_upper)
         if price_lower > 0:
-            # RED LINE: 예산 상한이 낙찰하한을 끌어내리지 않는다. 예전에는 여기서
-            # ``min(price_lower, budget_cap)`` 으로 깎아, 하한×기초금액이 추정가격보다
-            # 큰 과세 공고에서 **제출 즉시 실격**인 추천가를 만들었다(홀드아웃 78/400).
-            recommended_amount = max(recommended_amount, price_lower)
+            recommended_amount = max(recommended_amount, min(price_lower, budget_cap or price_lower))
 
-        return round(max(0.0, recommended_amount), 2)
+        # RED LINE: 낙찰하한만은 예산 상한을 넘어서라도 지킨다.
+        #
+        # 위 ``price_lower``(=``price_range_min``)는 후보 예측가의 최솟값, 즉 시나리오
+        # 범위의 하단일 뿐 법정 하한이 아니다. 그것까지 상한 위로 풀면 하한 여유가 있는
+        # 공고의 추천가만 올라가 과추천이 된다(홀드아웃: 그 구간 34건 중 28건이 낙찰가에서
+        # 멀어짐). 반대로 guardrail 이 낸 ``floor_price`` 는 법정 하한을 max() 로 접어
+        # 넣은 **하한 그 자체**라, 이것이 상한에 깎이면 그 추천가는 하한 미달이 된다.
+        # 그래서 상한을 넘길 권한은 ``floor_price`` 가 보고된 경우에만 준다.
+        legal_floor_price = optional_float(price_prediction.get("floor_price")) or 0.0
+        if legal_floor_price > 0:
+            recommended_amount = max(recommended_amount, legal_floor_price)
+
+        amount = round(max(0.0, recommended_amount), 2)
+        # 반올림이 하한을 깨지 못하게 한다. ``round`` 는 내림이 될 수 있어 정확히 하한에
+        # 착지한 추천가가 1원 미만으로 하한을 밑도는 잔차가 생긴다(홀드아웃 1/743).
+        # 하한 미달은 정도의 문제가 아니라 실격 여부라 올림으로 막는다.
+        if legal_floor_price > 0 and amount < legal_floor_price:
+            amount = math.ceil(legal_floor_price * 100.0) / 100.0
+        return amount
