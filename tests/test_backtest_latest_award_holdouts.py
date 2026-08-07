@@ -301,6 +301,80 @@ def test_evaluate_target_feeds_published_floor_and_unified_text(test_db, monkeyp
     assert "자격 요건 원문" in description
 
 
+def test_evaluate_target_gates_implausible_floor_from_predictor_but_keeps_it_measured(
+    test_db, monkeypatch
+):
+    """게시 하한 1.00000 은 **predictor 입력에서만** 게이트되고 계측에는 원값이 남는다.
+
+    두 소비가 같은 값을 다르게 써야 한다: 예측 입력은 라이브와 같아야 하므로 게이트를
+    타야 하고(1.0 하한이 홀드아웃 정확도 지표를 오염시킨다), 품질 계측은 범위 밖 값을
+    버리는 대신 ``published_floor_implausible`` 로 세야 한다(원문 품질 관측).
+    """
+    project = Project(
+        title="하한율 1.0 공고",
+        description="본문",
+        requirements="요건",
+        budget_estimate=100_000_000.0,
+        category="construction",
+        award_floor_rate=1.0,
+        notice_number="HOLD-IMPLAUSIBLE",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    test_db.add(project)
+    test_db.flush()
+    historical = HistoricalData(
+        project_id=project.id,
+        category="construction",
+        base_amount=100_000_000.0,
+        bid_rate=0.9,
+        notice_number="HOLD-IMPLAUSIBLE",
+    )
+    test_db.add(historical)
+    test_db.flush()
+    result = TenderResult(
+        project_id=project.id, winning_amount=90_000_000.0, winning_rate=0.9
+    )
+    test_db.add(result)
+    test_db.flush()
+
+    event_at = datetime(2026, 2, 1, tzinfo=UTC)
+    target = holdouts.HoldoutTarget(
+        group="construction",
+        group_source="business_type_code",
+        result=result,
+        project=project,
+        historical=historical,
+        event_at=event_at,
+        available_at=event_at,
+    )
+
+    captured: dict = {}
+
+    def _fake_predict(**kwargs):
+        captured.update(kwargs)
+        return {
+            "predicted_price": 88_000_000.0,
+            "predicted_bid_rate": 0.88,
+            "bid_rate_candidates": [],
+            "procurement_rate_band": None,
+        }
+
+    monkeypatch.setattr(holdouts, "predict_price", _fake_predict)
+
+    row = holdouts.evaluate_target(
+        test_db,
+        service=PredictionDatasetService(),
+        target=target,
+        history_limit=10,
+        thresholds=(0.003,),
+    )
+
+    # 예측 입력: 게이트 통과 못 함 → 미보고와 같은 자리.
+    assert captured["legal_floor_bid_rate"] is None
+    # 계측: 원값이 도달해 개연 범위 밖으로 계수된다(계수기가 죽지 않는다).
+    assert row["data_quality_details"]["published_floor_implausible"] is True
+
+
 def test_evaluate_target_no_award_floor_passes_none(test_db, monkeypatch):
     """A holdout target whose notice has no published 하한 passes
     legal_floor_bid_rate=None, so the configured floor is preserved (no spurious clamp)."""

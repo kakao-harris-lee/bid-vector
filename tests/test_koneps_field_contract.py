@@ -11,7 +11,13 @@
 검증기는 순수 함수이므로 입력->출력만 확인한다(§4.7).
 """
 
+import pytest
+
 from app.domain.money import Basis
+from app.domain.published_floor_rate import (
+    PUBLISHED_FLOOR_MAX_PLAUSIBLE,
+    PUBLISHED_FLOOR_MIN_PLAUSIBLE,
+)
 from app.schemas.schemas import CrawlRequest
 from app.services.koneps import field_contract as fc
 from app.services.koneps import field_contract_spec as fcs
@@ -114,6 +120,40 @@ def test_floor_rate_in_range_ok_but_out_of_range_error():
     assert fc.validate_ranges({"sucsfbidLwltRate": "87.745"}) == []
     violations = fc.validate_ranges({"sucsfbidLwltRate": 0.1})
     assert _kinds(violations) == [ViolationKind.FRACTION_OUT_OF_RANGE]
+
+
+def test_floor_rate_contract_band_matches_the_domain_single_source():
+    """계약 범위는 ``app.domain.published_floor_rate`` 밴드와 **같은 값**이어야 한다.
+
+    두 벌이면 판정이 갈린다: 1.00000 은 계약상 정상인데 DTO 는 드롭하고, 실 게시값
+    0.47995 는 DTO 가 받는데 계약은 ERROR 를 낸다. 계약이 관측(경고)의 출처이므로
+    어긋나면 운영자가 반대 신호를 보게 된다.
+    """
+    contract = next(
+        c for c in fc.FIELD_CONTRACTS if c.raw_name == "sucsfbidLwltRate"
+    )
+
+    assert contract.expected_min == PUBLISHED_FLOOR_MIN_PLAUSIBLE
+    assert contract.expected_max == PUBLISHED_FLOOR_MAX_PLAUSIBLE
+
+
+@pytest.mark.parametrize(
+    "raw, is_violation",
+    [
+        ("100", True),      # KONEPS 원문 퍼센트 표기 — 하한으로 성립하지 않는다
+        (1.0, True),        # 분수 표기 동일 값
+        ("99.6", True),     # 상한 0.995 위
+        ("47.995", False),  # 라이브 실 게시값 — 종전 계약(0.5)은 이걸 ERROR 로 냈다
+        ("89.995", False),  # 관측된 최대 실값
+        ("89.745", False),
+        ("30", False),      # 하한 경계(포함)
+    ],
+)
+def test_floor_rate_range_agrees_with_the_dto_gate(raw, is_violation):
+    """계약 판정과 DTO 게이트가 같은 값에 대해 같은 결론을 낸다."""
+    violations = fc.validate_ranges({"sucsfbidLwltRate": raw})
+
+    assert bool(violations) is is_violation
 
 
 # --- bidNtceOrd 제로패딩/int-파괴 (#210) -------------------------------------

@@ -392,6 +392,65 @@ def test_reserve_detail_promotion_covers_empty_error_and_summary_shapes():
 
 
 # --------------------------------------------------------------------------- #
+# 4b. 게시 낙찰하한율 — DTO 가 자족적으로 정규화 + 신뢰 판정
+# --------------------------------------------------------------------------- #
+def _floor_item(rate) -> KonepsCollectedItem:
+    return KonepsCollectedItem(
+        notice_number="R26BK01654006",
+        title="하한율 계약",
+        base_amount=1.0,
+        award_floor_rate=rate,
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # fraction 입력은 무연산 — 기존 생산자 경로는 이미 정규화해 넘긴다(회귀 고정).
+        (0.89745, 0.89745),
+        (0.89995, 0.89995),
+        (0.47995, 0.47995),
+        (0.30, 0.30),
+        (0.995, 0.995),
+        # percent 입력도 DTO 안에서 접힌다: 계약이 "호출부가 먼저 정규화했다"는 선행
+        # 조건 없이 자족적이어야 한다(손으로 만든 dict payload 승격 경로).
+        (88, 0.88),
+        (87.745, 0.87745),
+        # 성립 불가값은 정규화 후에도 밴드 밖 → "게시 하한 없음".
+        (1.0, None),
+        (100, None),
+        (99.6, None),
+        (0.29, None),
+        (None, None),
+    ],
+)
+def test_award_floor_rate_is_normalized_then_gated(raw, expected):
+    item = _floor_item(raw)
+
+    if expected is None:
+        assert item.award_floor_rate is None
+    else:
+        assert item.award_floor_rate == pytest.approx(expected)
+
+
+def test_refused_floor_rate_warning_names_the_notice(caplog):
+    """거부 로그에 공고번호가 있어야 운영자가 어느 공고인지 특정해 조치할 수 있다."""
+    with caplog.at_level("WARNING"):
+        _floor_item(1.0)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("R26BK01654006" in message for message in messages)
+
+
+def test_accepted_floor_rate_logs_nothing(caplog):
+    """정상 게시값은 경고를 만들지 않는다(로그 노이즈 방지)."""
+    with caplog.at_level("WARNING"):
+        _floor_item(0.89745)
+
+    assert [r for r in caplog.records if "낙찰하한율" in r.getMessage()] == []
+
+
+# --------------------------------------------------------------------------- #
 # 5. 공개 표면(OpenAPI 스키마) 격리
 # --------------------------------------------------------------------------- #
 def test_internal_fields_do_not_leak_into_public_crawl_notice_item():
