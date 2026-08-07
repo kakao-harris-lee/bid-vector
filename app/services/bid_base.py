@@ -253,7 +253,13 @@ def resolve_notice_legal_floor_bid_rate(
 
     The **override is deliberately not gated**: it is an operator instruction for
     this notice, not scraped data, and silently dropping it would erase an explicit
-    decision. A bad override is an input-validation problem for the request schema.
+    decision. Honest caveat: the request schemas do NOT reject an implausible
+    override today — ``legal_floor_bid_rate`` is declared with ``ge=0.0`` only, no
+    upper bound (``app/schemas/prediction.py`` / ``app/schemas/opportunity.py``), so
+    a 1.0 override WOULD reach the guardrail floor. That residual path is accepted
+    here as operator authority (the field is not exposed on the frontend, so the
+    surface is API-direct calls only); tightening the schema bound is a follow-up
+    because it changes the OpenAPI contract.
 
     RED LINE: guardrail_core folds this value into the floor with ``max()`` only
     (``_max_optional_rate(configured_floor, legal_floor)``), so a published 하한 can

@@ -48,6 +48,7 @@ from app.services.base_amount_basis import (
 )
 from app.services.bid_base import (
     build_prediction_text,
+    resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
     resolve_notice_published_floor_bid_rate,
 )
@@ -735,8 +736,8 @@ def evaluate_target(
     # era-correct 하게 적용하도록 한다(2026-01-30 신율 소급 없음). estimation_amount는
     # 추정가격(budget_estimate)이라 pricing base(budget=기초금액)와 별개다.
     estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
-    # 게이트 없는 원값 — 개연 범위 판정은 assess_row_quality 안에서 하고, 범위 밖 값은
-    # published_floor_implausible 로 계수된다(미리 접으면 그 계수기가 0 이 된다).
+    # 게이트 없는 원값 — 품질 계측(assess_row_quality) 전용. 범위 밖 값은 버리는 대신
+    # published_floor_implausible 로 계수한다(미리 접으면 그 계수기가 조용히 0 이 된다).
     published_floor_rate = resolve_notice_published_floor_bid_rate(project)
     # 복수예비가격은 예정가를 독립적으로 재구성할 수 있는 유일한 저장 증거다. 품질
     # 판정기는 I/O 없이 돌아야 하므로 여기서 개수만 뽑아 주입한다(§4.7.3).
@@ -768,11 +769,10 @@ def evaluate_target(
         agency_name=project.issuing_agency or project.demand_agency,
         business_type_code=project.business_type_code,
         business_group=target.group,
-        # 공고 자신의 published 낙찰하한율(award_floor_rate, #201). 공고 시점 공개값
-        # (개찰 후 정보 아님)이라 leakage-safe 하며, guardrail_core 가 max() 로만
-        # 폴드해 floor 를 올리기만 한다. 라이브가 강제하는 하한을 홀드아웃 정확도
-        # 측정에도 태워, 재캘리브레이션 판단이 실 파이프라인과 같은 입력을 쓰게 한다.
-        legal_floor_bid_rate=published_floor_rate,
+        # 공고 자신의 published 낙찰하한율(#201) — 공고 시점 공개값이라 leakage-safe,
+        # guardrail_core 는 max() 폴드만 한다. 라이브 가격 경로와 **같은 리졸버**라 개연
+        # 게이트도 함께 통과한다(성립 불가 게시값 1.00000 의 정확도 지표 오염 차단).
+        legal_floor_bid_rate=resolve_notice_legal_floor_bid_rate(project),
         estimation_amount=estimation_amount,
         reference_date=reference_date,
     )
