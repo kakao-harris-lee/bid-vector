@@ -17,10 +17,12 @@ from app.domain.reliable_base import (
     get_reliable_base,
 )
 from app.services.base_amount_basis import (
+    ALL_BASES,
     BASIS_CLEAN,
     BASIS_DERIVED_VAT,
     BASIS_DERIVED_YEGA,
     BASIS_SUSPECT_FRACTIONAL,
+    BASIS_SUSPECT_RATIO,
 )
 
 _CLEAN_BASE = 55_000_000.0
@@ -60,7 +62,12 @@ def test_null_basis_falls_back_to_base_amount():
 
 @pytest.mark.parametrize(
     "basis",
-    [BASIS_DERIVED_YEGA, BASIS_DERIVED_VAT, BASIS_SUSPECT_FRACTIONAL],
+    [
+        BASIS_DERIVED_YEGA,
+        BASIS_DERIVED_VAT,
+        BASIS_SUSPECT_FRACTIONAL,
+        BASIS_SUSPECT_RATIO,
+    ],
 )
 def test_non_clean_basis_with_estimate_prefers_estimate(basis):
     """non-clean basis(예정가-basis 등 오염) + 양수 추정치 → 추정치로 대체."""
@@ -75,7 +82,12 @@ def test_non_clean_basis_with_estimate_prefers_estimate(basis):
 
 @pytest.mark.parametrize(
     "basis",
-    [BASIS_DERIVED_YEGA, BASIS_DERIVED_VAT, BASIS_SUSPECT_FRACTIONAL],
+    [
+        BASIS_DERIVED_YEGA,
+        BASIS_DERIVED_VAT,
+        BASIS_SUSPECT_FRACTIONAL,
+        BASIS_SUSPECT_RATIO,
+    ],
 )
 def test_non_clean_basis_without_estimate_falls_back_to_base(basis):
     """non-clean basis인데 복구 추정치가 없으면 base_amount 폴백(기존 동작 보존)."""
@@ -120,6 +132,27 @@ def test_non_clean_zero_base_with_estimate_uses_estimate():
 # --------------------------------------------------------------------------- #
 # money.Basis: the selector always yields a 기초금액-basis value, never 예정가
 # --------------------------------------------------------------------------- #
+
+
+def test_every_non_clean_label_is_rejected_as_a_trusted_base():
+    """clean 이 아닌 **모든** 라벨이 추정치로 대체된다 — 새 라벨이 조용히 새지 않는다.
+
+    ``_NON_CLEAN_BASES`` 는 ``ALL_BASES`` 에서 clean 만 뺀 파생이라, 어휘에 라벨을 추가하면
+    이 접근자가 자동으로 non-clean 으로 취급한다. 그 파생 관계를 값표로 못박아, 새 라벨을
+    ``ALL_BASES`` 에 등록하지 않고 도입하면(=clean 처럼 취급되면) 여기서 실패하게 한다.
+    """
+    for basis in ALL_BASES:
+        result = get_reliable_base(
+            base_amount=_CLEAN_BASE,
+            basis=basis,
+            base_amount_estimated=_RESERVE_ESTIMATE,
+        )
+        expected = (
+            ReliableBaseSource.CLEAN_BASE
+            if basis == BASIS_CLEAN
+            else ReliableBaseSource.RESERVE_ESTIMATE
+        )
+        assert result.source is expected, basis
 
 
 def test_result_basis_is_always_base_amount():

@@ -8,12 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from app.models.models import HistoricalData, TenderResult
+from app.models.models import HistoricalData, Project, TenderResult
 from app.services.base_amount_basis import (
     BASIS_CLEAN,
     BASIS_DERIVED_VAT,
     BASIS_DERIVED_YEGA,
     BASIS_SUSPECT_FRACTIONAL,
+    BASIS_SUSPECT_RATIO,
 )
 
 # Load the script module by path (scripts/ is not an importable package).
@@ -213,6 +214,135 @@ def test_reclassify_clean_corrects_mislabeled_rows(test_db):
     again = backfill.run_backfill(test_db, apply=True, basis_filter=BASIS_CLEAN)
     assert again.scanned == 1  # only the genuine clean row remains in the bucket
     assert again.reclassified == 0
+
+
+# --------------------------------------------------------------------------- #
+# base ÷ 추정가격 비율 재분류: Project join 으로 추정가격을 분류기에 공급한다.
+# --------------------------------------------------------------------------- #
+_POLLUTED_BASE = 140_800_000.0  # 추정가격 100,000,000 대비 1.408 (실측 p50)
+_VAT_INCLUSIVE_BASE = 110_000_000.0  # 1.10 — 부가세로 설명됨 ⇒ clean 유지
+
+
+@pytest.fixture
+def ratio_db(test_db):
+    """clean 버킷 4행: 오염 1 + 과세 정상 1 + project 없음 1 + 추정가격 0 1."""
+    test_db.add_all(
+        [
+            Project(
+                id=1,
+                budget_estimate=100_000_000.0,
+                status="open",
+                category="construction",
+            ),
+            Project(
+                id=2,
+                budget_estimate=100_000_000.0,
+                status="awarded",
+                category="service",
+            ),
+            Project(id=4, budget_estimate=0.0, status="open", category="construction"),
+        ]
+    )
+    test_db.add_all(
+        [
+            HistoricalData(
+                id=1,
+                project_id=1,
+                base_amount=_POLLUTED_BASE,
+                base_amount_basis=BASIS_CLEAN,
+                reserve_prices="[]",
+            ),
+            HistoricalData(
+                id=2,
+                project_id=2,
+                base_amount=_VAT_INCLUSIVE_BASE,
+                base_amount_basis=BASIS_CLEAN,
+                reserve_prices="[]",
+            ),
+            # project_id 가 가리키는 Project 행이 없다 ⇒ 비율 검사 비적용
+            HistoricalData(
+                id=3,
+                project_id=99,
+                base_amount=1_000_000_000.0,
+                base_amount_basis=BASIS_CLEAN,
+                reserve_prices="[]",
+            ),
+            # 추정가격 0 ⇒ 비율 검사 비적용
+            HistoricalData(
+                id=4,
+                project_id=4,
+                base_amount=1_000_000_000.0,
+                base_amount_basis=BASIS_CLEAN,
+                reserve_prices="[]",
+            ),
+        ]
+    )
+    test_db.commit()
+    return test_db
+
+
+def test_reclassify_clean_retags_high_ratio_rows(ratio_db):
+    """부가세로 설명 안 되는 base/추정가격 비율의 'clean' 행만 suspect-ratio 로 이동."""
+    dry = backfill.run_backfill(ratio_db, apply=False, basis_filter=BASIS_CLEAN)
+
+    assert dry.scanned == 4
+    assert dry.reclassified == 1
+    assert dry.by_basis[BASIS_SUSPECT_RATIO] == 1
+    assert dry.by_basis[BASIS_CLEAN] == 3
+    # dry-run 은 아무것도 쓰지 않는다
+    assert all(
+        row.base_amount_basis == BASIS_CLEAN
+        for row in ratio_db.query(HistoricalData).all()
+    )
+
+    applied = backfill.run_backfill(ratio_db, apply=True, basis_filter=BASIS_CLEAN)
+    assert applied.reclassified == 1
+
+    by_id = {row.id: row for row in ratio_db.query(HistoricalData).all()}
+    assert by_id[1].base_amount_basis == BASIS_SUSPECT_RATIO
+    assert by_id[1].base_amount == _POLLUTED_BASE  # 원본 금액 불변
+    assert by_id[1].base_amount_estimated is None  # 복구 reserve 없음
+    assert by_id[2].base_amount_basis == BASIS_CLEAN  # 1.10 은 부가세로 설명됨
+    assert by_id[2].base_amount == _VAT_INCLUSIVE_BASE
+    assert by_id[3].base_amount_basis == BASIS_CLEAN  # Project 없음 ⇒ 비적용
+    assert by_id[4].base_amount_basis == BASIS_CLEAN  # 추정가격 0 ⇒ 비적용
+
+    # 멱등: 두 번째 apply 는 남은 clean 3행만 보고 이동 0
+    again = backfill.run_backfill(ratio_db, apply=True, basis_filter=BASIS_CLEAN)
+    assert again.scanned == 3
+    assert again.reclassified == 0
+
+
+def test_dry_run_reports_impact_breakdown(ratio_db):
+    """dry-run 요약이 이동 행수를 status·category 로 분해하고 축소율을 낸다."""
+    summary = backfill.run_backfill(
+        ratio_db, apply=False, basis_filter=BASIS_CLEAN
+    ).as_dict()
+
+    assert summary["reclassified"] == 1
+    assert summary["reclassified_by_status"] == {"open": 1}
+    assert summary["reclassified_by_category"] == {"construction": 1}
+    assert summary["bucket_shrink_ratio"] == pytest.approx(0.25)  # 1 / 4
+    sample = summary["samples"][0]
+    assert sample["id"] == 1
+    assert sample["from_basis"] == BASIS_CLEAN
+    assert sample["to_basis"] == BASIS_SUSPECT_RATIO
+    assert sample["budget_estimate"] == pytest.approx(100_000_000.0)
+    assert sample["base_to_estimate_ratio"] == pytest.approx(1.408)
+
+
+def test_default_pass_also_consumes_budget_estimate(ratio_db):
+    """기본(미태깅) 패스도 Project 추정가격을 분류기에 공급한다."""
+    for row in ratio_db.query(HistoricalData).all():
+        row.base_amount_basis = None
+    ratio_db.commit()
+
+    stats = backfill.run_backfill(ratio_db, apply=True)
+
+    assert stats.by_basis[BASIS_SUSPECT_RATIO] == 1
+    by_id = {row.id: row for row in ratio_db.query(HistoricalData).all()}
+    assert by_id[1].base_amount_basis == BASIS_SUSPECT_RATIO
+    assert by_id[1].base_amount == _POLLUTED_BASE  # 원본 금액 불변
 
 
 def test_percent_form_winning_rate_classified_as_derived_yega(test_db):

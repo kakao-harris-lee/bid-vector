@@ -710,3 +710,26 @@ def test_base_guard_tags_yega_when_stored_base_is_yega_reversal(test_db):
 
     assert historical.base_amount == pytest.approx(yega_base)  # unchanged
     assert historical.base_amount_basis == BASIS_DERIVED_YEGA
+
+
+def test_collection_time_tagging_does_not_apply_the_ratio_rule(test_db):
+    """수집 시점 태깅은 base ÷ 추정가격 비율 규칙을 **아직** 적용하지 않는다(경계 고정).
+
+    비율 규칙은 같은 공고의 ``Project.budget_estimate`` 를 필요로 하는데, 이 write 경로는
+    ``HistoricalData`` 행만 보고 태깅한다. 그래서 오염 base 도 수집 시점에는 clean 으로
+    남고, 교정은 백필(``scripts/backfill_base_amount_basis.py``)이 담당한다 — 즉 이 PR 의
+    재태깅은 **일회성**이고 새로 수집되는 행에는 같은 오염이 다시 들어온다.
+
+    이 테스트는 그 잔여 갭을 회귀가 아니라 **알려진 경계**로 못박는다. 수집 경로에 공고
+    추정가격을 주입하는 후속에서 이 기대값이 바뀌면, 그때 라이브 ``bid_base_source`` 표시가
+    함께 바뀐다는 사실이 이 테스트의 실패로 드러난다.
+    """
+    historical = HistoricalData(notice_number="GUARD-5")
+    test_db.add(historical)
+    test_db.flush()
+
+    # 추정가격 100,000,000 인 공고에 1.408 배 base 가 들어와도 수집 태깅은 clean 이다.
+    _update_base(historical, base_amount=140_800_000.0, estimated_amount=100_000_000.0)
+
+    assert historical.base_amount == 140_800_000.0
+    assert historical.base_amount_basis == BASIS_CLEAN

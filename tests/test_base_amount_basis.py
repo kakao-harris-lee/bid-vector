@@ -5,11 +5,13 @@ import json
 
 import pytest
 
+from app.core.constants import BID_BASE_TRUST_RATIO_MAX
 from app.services.base_amount_basis import (
     BASIS_CLEAN,
     BASIS_DERIVED_VAT,
     BASIS_DERIVED_YEGA,
     BASIS_SUSPECT_FRACTIONAL,
+    BASIS_SUSPECT_RATIO,
     RESERVE_PRICE_COUNT,
     classify_base_basis,
     estimate_base_amount_from_reserves,
@@ -20,6 +22,8 @@ from app.services.base_amount_basis import (
 _YEGA_BASE = 43_996_200 / 0.88035
 # 45,000,001 (VAT-inclusive, not ÷11) ÷ 1.1 = non-integer whose ×1.1 is integer.
 _VAT_BASE = 45_000_001 / 1.1
+
+_BUDGET = 100_000_000.0
 
 
 @pytest.mark.parametrize(
@@ -57,6 +61,90 @@ def test_classify_defaults_missing_winning_args():
     """winning_amount/winning_rate default to None without raising."""
     assert classify_base_basis(43_996_200.0) == BASIS_CLEAN
     assert classify_base_basis(_YEGA_BASE) == BASIS_SUSPECT_FRACTIONAL
+
+
+# --------------------------------------------------------------------------- #
+# suspect-ratio: 기초금액 ÷ 추정가격 이 부가세로 설명 안 되는 배수일 때
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "base, budget_estimate, expected",
+    [
+        # 면세(1.00)·과세(1.10)·경계(1.15) 는 부가세+측정 마진으로 설명된다 ⇒ clean 유지
+        (_BUDGET, _BUDGET, BASIS_CLEAN),
+        (_BUDGET * 1.10, _BUDGET, BASIS_CLEAN),
+        (round(_BUDGET * BID_BASE_TRUST_RATIO_MAX), _BUDGET, BASIS_CLEAN),
+        # 경계 바로 위 ⇒ suspect-ratio (엄격 부등호)
+        (round(_BUDGET * 1.1501), _BUDGET, BASIS_SUSPECT_RATIO),
+        # 운영 DB 실측 p50 1.408 — 부가세로 설명 불가한 "다른 금액 필드 혼입" 계열
+        (round(_BUDGET * 1.408), _BUDGET, BASIS_SUSPECT_RATIO),
+        # 추정가격 쪽 파싱이 깨진 극단(est 3,636원) 도 같은 버킷으로 떨어진다:
+        # 어느 쪽이 깨졌는지 알 수 없으므로 그 base 를 clean 으로 신뢰하지 않는다.
+        (_BUDGET, 3_636.0, BASIS_SUSPECT_RATIO),
+        # 저측(<1.0)은 이 규칙의 대상이 아니다(기존 suspect-fractional 이 커버)
+        (_BUDGET * 0.5, _BUDGET, BASIS_CLEAN),
+        # 추정가격 결측/0/음수/비수치 ⇒ 규칙 비적용 (기존 동작 완전 불변)
+        (_BUDGET * 10, None, BASIS_CLEAN),
+        (_BUDGET * 10, 0.0, BASIS_CLEAN),
+        (_BUDGET * 10, -1.0, BASIS_CLEAN),
+        (_BUDGET * 10, "not-a-number", BASIS_CLEAN),
+    ],
+)
+def test_classify_ratio_rule(base, budget_estimate, expected):
+    assert classify_base_basis(base, 0, 0, budget_estimate) == expected
+
+
+def test_ratio_rule_is_opt_in_by_caller():
+    """budget_estimate 를 넘기지 않는 호출부는 동작이 바이트 동일하다(no-op)."""
+    polluted = _BUDGET * 10
+    assert classify_base_basis(polluted, 0, 0) == BASIS_CLEAN
+    assert classify_base_basis(polluted) == BASIS_CLEAN
+    assert classify_base_basis(polluted, 0, 0, _BUDGET) == BASIS_SUSPECT_RATIO
+
+
+@pytest.mark.parametrize(
+    "base, winning_amount, winning_rate, without_ratio",
+    [
+        # 예정가-역산 패턴이면서 비율도 깨진 행
+        (_YEGA_BASE, 43_996_200, 0.88035, BASIS_DERIVED_YEGA),
+        # 정수 base 라 VAT 패턴에도 걸리는 행
+        (_BUDGET * 10, 0, 0, BASIS_CLEAN),
+    ],
+)
+def test_ratio_verdict_outranks_pattern_verdicts(
+    base, winning_amount, winning_rate, without_ratio
+):
+    """비율 판정이 first-match 테이블의 맨 앞에 선다 — 패턴 판정보다 강한 증거다.
+
+    derived-yega(``base × rate == winning``)는 낙찰률이 ``winning ÷ base`` 로 정규화돼
+    저장되는 settled 행에서 **자기충족**이고(tests/test_backtest_latest_award_holdouts.py
+    참조), derived-vat(``base × 1.1`` 이 정수)은 모든 정수 base 에서 참이다. 둘 다 그
+    base 가 진짜 기초금액인지에 대해서는 아무 말도 하지 않는다. 반면 추정가격 대비 비율은
+    같은 공고의 **독립적인 두 번째 금액**과의 모순이라 더 강한 증거다.
+
+    라벨만 바뀌고 소비자 동작은 불변이다: 세 라벨 모두 non-clean 버킷이다.
+    """
+    assert classify_base_basis(base, winning_amount, winning_rate) == without_ratio
+    assert (
+        classify_base_basis(base, winning_amount, winning_rate, _BUDGET)
+        == BASIS_SUSPECT_RATIO
+    )
+
+
+def test_suspect_ratio_is_registered_in_the_basis_vocabulary():
+    """새 라벨은 ``ALL_BASES`` 에 들어야 clean-only 소비자가 자동으로 배제한다."""
+    from app.services.base_amount_basis import ALL_BASES
+
+    assert BASIS_SUSPECT_RATIO in ALL_BASES
+    # HistoricalData.base_amount_basis 는 String(30) — 컬럼 폭을 넘지 않는다.
+    assert all(len(basis) <= 30 for basis in ALL_BASES)
+
+
+def test_trust_ratio_constant_is_single_sourced():
+    """분류기와 #356 budget_cap 게이트가 같은 상수를 쓴다(§4.5-1 단일 출처)."""
+    from app.services.opportunity_analysis import market
+
+    assert market.BID_BASE_TRUST_RATIO_MAX is BID_BASE_TRUST_RATIO_MAX
+    assert BID_BASE_TRUST_RATIO_MAX == 1.15
 
 
 @pytest.mark.parametrize(
