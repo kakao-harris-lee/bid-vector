@@ -6,7 +6,9 @@ Classifies every ``HistoricalData`` row's stored ``base_amount`` provenance
 기초금액 from 복수예비가격 (``estimate_base_amount_from_reserves``). The original
 ``base_amount`` is NEVER overwritten (정직 명세 §2). Winning result inputs are
 joined from ``TenderResult`` on ``project_id``, preferring a row with a real
-``winning_amount > 0``.
+``winning_amount > 0``; the notice's 추정가격 (``Project.budget_estimate``) is
+joined from ``Project`` so the classifier can compare the two amounts of the SAME
+notice — the only way to see a base that is a non-VAT multiple of the 추정가격.
 
 Idempotent: rows already stamped with ``basis_checked_at`` are skipped unless
 ``--recheck`` is passed. Processing uses keyset (id-ordered) pagination with a
@@ -41,7 +43,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.time import utc_now  # noqa: E402
-from app.models.models import HistoricalData, TenderResult  # noqa: E402
+from app.models.models import HistoricalData, Project, TenderResult  # noqa: E402
 from app.services.base_amount_basis import (  # noqa: E402
     ALL_BASES,
     BASIS_CLEAN,
@@ -49,6 +51,20 @@ from app.services.base_amount_basis import (  # noqa: E402
     estimate_base_amount_from_reserves,
     normalize_winning_rate,
 )
+
+_UNKNOWN_BUCKET = "unknown"  # Project 행이 없거나 값이 비어 분해 키를 못 얻은 경우
+
+
+@dataclass(frozen=True)
+class NoticeFacts:
+    """분류·분해에 필요한 공고(Project) 측 사실. Project 행이 없으면 기본값이 선다."""
+
+    budget_estimate: float = 0.0
+    status: str = _UNKNOWN_BUCKET
+    category: str = _UNKNOWN_BUCKET
+
+
+_NO_NOTICE_FACTS = NoticeFacts()
 
 
 @dataclass
@@ -66,7 +82,16 @@ class BackfillStats:
     # they were selected from (e.g. a row stored 'clean' that re-classifies as
     # derived-yega). Only meaningful when ``basis_filter`` is set.
     reclassified: int = 0
+    # 이동 행을 공고 status / category 로 분해한다. 총량만으로는 재태깅이 열린 공고를
+    # 건드리는지, 특정 카테고리에 몰렸는지 알 수 없어 승인 판단의 근거가 되지 못한다.
+    reclassified_by_status: Counter = field(default_factory=Counter)
+    reclassified_by_category: Counter = field(default_factory=Counter)
     samples: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def bucket_shrink_ratio(self) -> float:
+        """선택한 버킷에서 빠져나가는 비율(이동 ÷ 스캔). 스캔 0 이면 0.0."""
+        return round(self.reclassified / self.scanned, 4) if self.scanned else 0.0
 
     def as_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -82,6 +107,9 @@ class BackfillStats:
         }
         if self.basis_filter is not None:
             result["reclassified"] = self.reclassified
+            result["bucket_shrink_ratio"] = self.bucket_shrink_ratio
+            result["reclassified_by_status"] = dict(self.reclassified_by_status)
+            result["reclassified_by_category"] = dict(self.reclassified_by_category)
             result["samples"] = self.samples
         return result
 
@@ -125,13 +153,44 @@ def _load_result_map(
     return best
 
 
+def _load_notice_map(db: Session, project_ids: list[int]) -> dict[int, NoticeFacts]:
+    """Map project_id -> :class:`NoticeFacts` for one chunk of rows.
+
+    The 추정가격 feeds the classifier's ratio rule; status/category only feed the
+    dry-run impact breakdown. Mirrors ``_load_result_map``'s chunk-scoped ``IN()``
+    so the parameter list stays far below the 65535 limit. A ``HistoricalData`` row
+    whose ``project_id`` has no ``Project`` row is simply absent from the map and
+    falls back to :data:`_NO_NOTICE_FACTS` (ratio rule not applied).
+    """
+    if not project_ids:
+        return {}
+    rows = (
+        db.query(Project.id, Project.budget_estimate, Project.status, Project.category)
+        .filter(Project.id.in_(project_ids))
+        .all()
+    )
+    return {
+        project_id: NoticeFacts(
+            budget_estimate=float(budget_estimate or 0.0),
+            status=status or _UNKNOWN_BUCKET,
+            category=category or _UNKNOWN_BUCKET,
+        )
+        for project_id, budget_estimate, status, category in rows
+        if project_id is not None
+    }
+
+
 def _classify_record(
     record: HistoricalData,
     result_map: dict[int, tuple[float, float]],
+    notice_map: dict[int, NoticeFacts],
 ) -> tuple[str, float | None]:
     """Return (basis, estimated) for one row without touching the DB."""
     winning_amount, winning_rate = result_map.get(record.project_id, (0.0, 0.0))
-    basis = classify_base_basis(record.base_amount, winning_amount, winning_rate)
+    notice = notice_map.get(record.project_id, _NO_NOTICE_FACTS)
+    basis = classify_base_basis(
+        record.base_amount, winning_amount, winning_rate, notice.budget_estimate
+    )
     estimated = None
     if basis != BASIS_CLEAN:
         estimated = estimate_base_amount_from_reserves(record.reserve_prices)
@@ -139,6 +198,47 @@ def _classify_record(
 
 
 _MAX_SAMPLES = 12  # dry-run before/after evidence rows (per reclassify run)
+
+
+def _record_reclassification(
+    stats: BackfillStats,
+    record: HistoricalData,
+    *,
+    previous_basis: str | None,
+    basis: str,
+    estimated: float | None,
+    notice: NoticeFacts,
+) -> None:
+    """Count one bucket-leaving row and keep a bounded before/after sample.
+
+    The sample carries BOTH amounts and their ratio because that ratio is the whole
+    evidence for a ``suspect-ratio`` verdict — a reviewer must be able to see why a
+    row moved without re-querying the DB.
+    """
+    stats.reclassified += 1
+    stats.reclassified_by_status[notice.status] += 1
+    stats.reclassified_by_category[notice.category] += 1
+    if len(stats.samples) >= _MAX_SAMPLES:
+        return
+    base_amount = (
+        float(record.base_amount) if record.base_amount is not None else None
+    )
+    ratio = (
+        round(base_amount / notice.budget_estimate, 6)
+        if base_amount and notice.budget_estimate > 0
+        else None
+    )
+    stats.samples.append(
+        {
+            "id": record.id,
+            "base_amount": base_amount,
+            "budget_estimate": notice.budget_estimate or None,
+            "base_to_estimate_ratio": ratio,
+            "from_basis": previous_basis,
+            "to_basis": basis,
+            "estimated": estimated,
+        }
+    )
 
 
 def run_backfill(
@@ -157,8 +257,10 @@ def run_backfill(
     ``base_amount_basis`` equals the given bucket (e.g. ``'clean'``), regardless of
     ``basis_checked_at``. This corrects rows that an earlier backfill mislabeled —
     a 예정가-역산 base that was stamped 'clean' before the settled ``TenderResult``
-    join was available re-classifies to derived-yega here. The original
-    ``base_amount`` is NEVER mutated; only the provenance tag / estimate move.
+    join was available re-classifies to derived-yega here, and a base that is a
+    non-VAT multiple of its notice's 추정가격 re-classifies to suspect-ratio now that
+    the ``Project`` join supplies that second amount. The original ``base_amount`` is
+    NEVER mutated; only the provenance tag / estimate move.
     """
     stats = BackfillStats(applied=apply, recheck=recheck, basis_filter=basis_filter)
     last_id = 0
@@ -181,11 +283,12 @@ def run_backfill(
 
         project_ids = list({r.project_id for r in chunk if r.project_id is not None})
         result_map = _load_result_map(db, project_ids)
+        notice_map = _load_notice_map(db, project_ids)
         stamp = utc_now()
         for record in chunk:
             last_id = record.id
             previous_basis = record.base_amount_basis
-            basis, estimated = _classify_record(record, result_map)
+            basis, estimated = _classify_record(record, result_map, notice_map)
             stats.scanned += 1
             stats.by_basis[basis] += 1
             if basis != BASIS_CLEAN:
@@ -194,21 +297,14 @@ def run_backfill(
                 else:
                     stats.estimated_missing += 1
             if basis_filter is not None and basis != basis_filter:
-                stats.reclassified += 1
-                if len(stats.samples) < _MAX_SAMPLES:
-                    stats.samples.append(
-                        {
-                            "id": record.id,
-                            "base_amount": (
-                                float(record.base_amount)
-                                if record.base_amount is not None
-                                else None
-                            ),
-                            "from_basis": previous_basis,
-                            "to_basis": basis,
-                            "estimated": estimated,
-                        }
-                    )
+                _record_reclassification(
+                    stats,
+                    record,
+                    previous_basis=previous_basis,
+                    basis=basis,
+                    estimated=estimated,
+                    notice=notice_map.get(record.project_id, _NO_NOTICE_FACTS),
+                )
             if apply:
                 record.base_amount_basis = basis
                 record.base_amount_estimated = estimated
@@ -257,7 +353,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Re-examine rows currently stored as base_amount_basis='clean' and "
             "correct any that are actually derived-yega/VAT/suspect (e.g. a 예정가-"
-            "역산 base mislabeled 'clean' before the settled TenderResult join). "
+            "역산 base mislabeled 'clean' before the settled TenderResult join, or a "
+            "base that is a non-VAT multiple of its notice's 추정가격 → suspect-ratio). "
             "base_amount is never mutated; only the provenance tag/estimate move."
         ),
     )
@@ -275,6 +372,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional path to write the run summary JSON.",
     )
     return parser
+
+
+def print_impact_report(stats: BackfillStats) -> None:
+    """Print the bucket-move impact in a form a reviewer reads before approving.
+
+    The JSON summary already carries every number; this block exists because the
+    approval question ("얼마나 많은 행이, 어느 공고 상태·카테고리에서 clean 버킷을
+    떠나는가") should be answerable from the terminal without piping through ``jq``.
+    Nothing here is a write — a dry-run prints exactly what an ``--apply`` would move.
+    """
+    if stats.basis_filter is None:
+        return
+    print(
+        f"[backfill-base-basis] '{stats.basis_filter}' 버킷 {stats.scanned}행 중 "
+        f"{stats.reclassified}행 이동 (축소율 {stats.bucket_shrink_ratio:.2%})"
+    )
+    for title, counter in (
+        ("status", stats.reclassified_by_status),
+        ("category", stats.reclassified_by_category),
+    ):
+        breakdown = ", ".join(
+            f"{key}={count}" for key, count in sorted(counter.items())
+        )
+        print(f"  이동 {title}별: {breakdown or '없음'}")
+    for sample in stats.samples:
+        print(
+            f"  샘플 id={sample['id']} {sample['from_basis']} → {sample['to_basis']} "
+            f"base={sample['base_amount']} est={sample['budget_estimate']} "
+            f"ratio={sample['base_to_estimate_ratio']}"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -300,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = stats.as_dict()
     mode = "APPLIED" if args.apply else "DRY-RUN (use --apply to write)"
     print(f"[backfill-base-basis] {mode}")
+    print_impact_report(stats)
     print(json.dumps(summary, ensure_ascii=False))
     if args.audit is not None:
         args.audit.parent.mkdir(parents=True, exist_ok=True)

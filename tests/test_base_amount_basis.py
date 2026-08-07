@@ -102,16 +102,16 @@ def test_ratio_rule_is_opt_in_by_caller():
 
 
 @pytest.mark.parametrize(
-    "base, winning_amount, winning_rate, without_ratio",
+    "base, winning_amount, winning_rate, budget_estimate, without_ratio",
     [
-        # 예정가-역산 패턴이면서 비율도 깨진 행
-        (_YEGA_BASE, 43_996_200, 0.88035, BASIS_DERIVED_YEGA),
-        # 정수 base 라 VAT 패턴에도 걸리는 행
-        (_BUDGET * 10, 0, 0, BASIS_CLEAN),
+        # 예정가-역산 패턴이면서 비율도 깨진 행 (49,975,805 ÷ 30,000,000 = 1.67)
+        (_YEGA_BASE, 43_996_200, 0.88035, 30_000_000.0, BASIS_DERIVED_YEGA),
+        # 정수 base 라 VAT 패턴에도 걸리는 행 (1,000,000,000 ÷ 100,000,000 = 10)
+        (_BUDGET * 10, 0, 0, _BUDGET, BASIS_CLEAN),
     ],
 )
 def test_ratio_verdict_outranks_pattern_verdicts(
-    base, winning_amount, winning_rate, without_ratio
+    base, winning_amount, winning_rate, budget_estimate, without_ratio
 ):
     """비율 판정이 first-match 테이블의 맨 앞에 선다 — 패턴 판정보다 강한 증거다.
 
@@ -125,7 +125,7 @@ def test_ratio_verdict_outranks_pattern_verdicts(
     """
     assert classify_base_basis(base, winning_amount, winning_rate) == without_ratio
     assert (
-        classify_base_basis(base, winning_amount, winning_rate, _BUDGET)
+        classify_base_basis(base, winning_amount, winning_rate, budget_estimate)
         == BASIS_SUSPECT_RATIO
     )
 

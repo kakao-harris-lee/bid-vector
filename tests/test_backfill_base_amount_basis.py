@@ -331,6 +331,19 @@ def test_dry_run_reports_impact_breakdown(ratio_db):
     assert sample["base_to_estimate_ratio"] == pytest.approx(1.408)
 
 
+def test_impact_report_prints_move_evidence(ratio_db, capsys):
+    """dry-run 터미널 출력만으로 승인 판단(몇 행이 어디서 왜 이동하는가)이 가능해야 한다."""
+    stats = backfill.run_backfill(ratio_db, apply=False, basis_filter=BASIS_CLEAN)
+    backfill.print_impact_report(stats)
+
+    out = capsys.readouterr().out
+    assert "4행 중 1행 이동" in out
+    assert "25.00%" in out
+    assert "open=1" in out
+    assert "construction=1" in out
+    assert "ratio=1.408" in out
+
+
 def test_default_pass_also_consumes_budget_estimate(ratio_db):
     """기본(미태깅) 패스도 Project 추정가격을 분류기에 공급한다."""
     for row in ratio_db.query(HistoricalData).all():

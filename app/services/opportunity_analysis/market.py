@@ -17,16 +17,11 @@ import math
 from sqlalchemy.orm import Session
 
 from app.ai.price_prediction import get_price_insights
+from app.core.constants import BID_BASE_TRUST_RATIO_MAX
 from app.domain.aggregates import average
 from app.models.models import Bid, Project
 from app.utils.numeric import optional_float
 from app.services.opportunity_analysis.base import _OpportunityAnalysisBase
-
-# 기초금액을 "부가세로 설명되는 값"으로 신뢰할 상한 비(기초금액 ÷ 추정가격).
-# 부가세는 10% 이므로 정상 과세 공고는 1.10, 면세는 1.00 이고, 나머지 0.05 는 수집
-# 시점 차이·반올림을 흡수하는 측정 마진이다. 이 비를 넘는 base 는 세금이 아니라
-# 오염이며, 그 base 로 만든 하한 임계는 실낙찰 데이터가 반증한다(PR 본문 참조).
-BID_BASE_TRUST_RATIO_MAX = 1.15
 
 
 def enforceable_floor_price(
