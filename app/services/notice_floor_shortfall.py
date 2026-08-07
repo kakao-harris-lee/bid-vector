@@ -37,8 +37,8 @@ from app.domain.floor_shortfall import MIN_ASSESSMENT_SAMPLES
 from app.models.models import Project
 from app.schemas.prediction import FloorShortfallEstimate
 from app.services.bid_base import (
-    resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
+    resolve_notice_published_floor_bid_rate,
 )
 from app.services.floor_shortfall import (
     AssessmentRateSamples,
@@ -198,7 +198,11 @@ def resolve_notice_floor_rate(project: Project) -> NoticeFloorRate:
 
         estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
         resolution = resolve_legal_floor_rate(
-            published_floor_rate=resolve_notice_legal_floor_bid_rate(project),
+            # 게이트를 걸지 않은 원값을 넘긴다: 개연 범위 판정은 아래 리졸버가 수행하고,
+            # 범위 밖 값은 버려지는 게 아니라 published_floor_implausible 로 계수된다.
+            # 수집 write 게이트(#357)가 신규 유입을 막아 이 계수는 legacy 행 전용 신호다
+            # — 신규 원문 품질은 DTO 경고+백필 floor_implausible 로 이동(미집계, 후속).
+            published_floor_rate=resolve_notice_published_floor_bid_rate(project),
             category=getattr(project, "category", None),
             estimation_amount=estimation_amount,
             reference_date=reference_date,

@@ -43,9 +43,10 @@ notice count — a Y-flagged notice costs two calls); ``--dry-run`` counts the
 target set (and prints a sample) without any external call.
 
 Per-column write rule: ``award_floor_rate`` is written **only when the row's
-current value is NULL** (an already-set floor is never overwritten, mirroring the
-collector's persistence guard); ``eligibility_raw`` is written when the notice
-yields a non-empty synthesized dict.
+current value is NULL AND the parsed rate clears the plausibility band**
+(``app.domain.published_floor_rate`` — implausible → counted ``floor_implausible``,
+never written; a set floor is never overwritten, mirroring the collector's
+guard); ``eligibility_raw`` is written when a non-empty dict is synthesized.
 
 Call discipline (§4.5.7): serial, throttled (``--delay`` seconds between **all**
 API calls — targeted query and sub-call alike), never a concurrent burst. A
@@ -89,6 +90,7 @@ from app.core.config import settings  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.single_user import get_operator_strategy  # noqa: E402
 from app.core.time import kst_now, utc_now  # noqa: E402
+from app.domain.published_floor_rate import is_published_floor_plausible  # noqa: E402
 from app.models.models import OperatorStrategy, Project  # noqa: E402
 from app.services.koneps import http_client, openapi, parsing  # noqa: E402
 from app.services.opportunity_monitoring import (  # noqa: E402
@@ -191,6 +193,9 @@ class BackfillStats:
     processed: int = 0
     updated: int = 0
     no_value: int = 0
+    # 응답이 하한율을 실어왔지만 성립 불가라 저장을 거부한 건수. ``no_value``("값 없음")와
+    # 합치지 않는다 — 합치면 KONEPS 원문 품질 문제가 응답 결손에 묻혀 관측되지 않는다.
+    floor_implausible: int = 0
     eligibility_saved: int = 0
     license_limit_calls: int = 0
     skipped_blank: int = 0
@@ -209,6 +214,7 @@ class BackfillStats:
             "processed": self.processed,
             "updated": self.updated,
             "no_value": self.no_value,
+            "floor_implausible": self.floor_implausible,
             "eligibility_saved": self.eligibility_saved,
             "license_limit_calls": self.license_limit_calls,
             "skipped_blank": self.skipped_blank,
@@ -665,10 +671,13 @@ def run_backfill(
     carries ``eligibility_raw``, so the run makes exactly one targeted query per
     notice, writes only the floor, and never fetches the license-limit sub-call
     (protecting the daily quota) nor overwrites the existing eligibility. Known
-    limitation: a ``no_value`` row (targeted query carried no ``sucsfbidLwltRate``)
-    keeps ``award_floor_rate`` NULL and, because its eligibility stays set, is
-    re-selected by the floor-only key on the next run — a durable "already
-    checked, no floor available" marker is a migration (out of scope here).
+    limitation: a ``no_value`` row (no ``sucsfbidLwltRate`` in the response) and
+    a ``floor_implausible`` row (value present but outside the band — never
+    written) both keep ``award_floor_rate`` NULL with eligibility set, so the
+    floor-only key re-selects them **every run**: one targeted call each under
+    the serial throttle (§4.5.7), bounded to legacy rows (~71 today) since the
+    DTO gate stops new implausible loads. A durable "already checked" marker
+    is a migration (out of scope here).
     """
     started = time.monotonic()
     stats = BackfillStats(dry_run=dry_run, target_count=len(targets))
@@ -736,10 +745,14 @@ def run_backfill(
         # Floor rate: fill only when the row's current value is NULL — never
         # overwrite an already-set floor (mirrors the persistence guard). A
         # notice whose current floor is already set is not counted as no_value.
+        # Three outcomes, counted separately: no value / implausible (1.00000) / write.
         if current_floor is None:
             rate = floor_rate_from_item(item)
             if rate is None:
                 stats.no_value += 1
+            elif not is_published_floor_plausible(rate):
+                stats.floor_implausible += 1
+                log(f"[floor-backfill] implausible floor {normalized} rate={rate}")
             else:
                 update_values[Project.award_floor_rate] = rate
                 stats.updated += 1
@@ -807,7 +820,8 @@ def run_backfill(
             log(
                 f"[floor-backfill] {_kst_stamp()} processed={stats.processed}/"
                 f"{stats.target_count} updated={stats.updated} "
-                f"no_value={stats.no_value} eligibility={stats.eligibility_saved} "
+                f"no_value={stats.no_value} "
+                f"floor_implausible={stats.floor_implausible} eligibility={stats.eligibility_saved} "
                 f"license_limit_calls={stats.license_limit_calls} "
                 f"errors={stats.errors}"
             )
@@ -971,7 +985,7 @@ def main(argv: list[str] | None = None) -> int:
         f"[floor-backfill] target={summary['target_count']} "
         f"processed={summary['processed']} updated={summary['updated']} "
         f"no_value={summary['no_value']} "
-        f"eligibility_saved={summary['eligibility_saved']} "
+        f"floor_implausible={summary['floor_implausible']} eligibility_saved={summary['eligibility_saved']} "
         f"license_limit_calls={summary['license_limit_calls']} "
         f"skipped_blank={summary['skipped_blank']} "
         f"errors={summary['errors']} aborted={summary['aborted']} "

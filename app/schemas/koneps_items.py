@@ -28,12 +28,17 @@ live / mock)로 실리는 키가 다르고 celery/HTTP payload 로 그대로 나
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from app.domain.published_floor_rate import plausible_published_floor_rate
+from app.domain.rate_normalization import to_bid_rate_fraction
 from app.schemas.crawl import CrawlNoticeItem
+
+logger = logging.getLogger(__name__)
 
 
 def _as_text(value: str | int | float | bool | None) -> str | None:
@@ -97,12 +102,58 @@ class KonepsCollectedItem(CrawlNoticeItem):
 
     award_floor_rate: float | None = Field(
         default=None,
-        description="공고 낙찰하한율(분수). 없으면 None — 기존 값을 지우지 않는 가드의 입력.",
+        description=(
+            "공고 낙찰하한율(분수). percent 원값은 분수로 접히고, 하한으로 성립하지"
+            " 않는 게시값은 None 으로 접힌다 — 없으면 None 이고, 기존 값을 지우지"
+            " 않는 가드의 입력."
+        ),
     )
     eligibility_raw: dict[str, Any] | None = Field(
         default=None,
         description="참가자격 원문. 수집 피드는 배출하지 않고 backfill 스크립트만 채운다.",
     )
+
+    @model_validator(mode="after")
+    def _normalize_and_gate_award_floor_rate(self) -> "KonepsCollectedItem":
+        """게시 낙찰하한율을 정규화한 뒤 **하한으로 성립하는 값만** 남긴다(구조 계약).
+
+        두 단계이고 순서가 의미다:
+
+        1. **스케일 정규화** (:func:`app.domain.rate_normalization.to_bid_rate_fraction`)
+           — 오늘의 생산자(openapi/scsbid)는 이미 fraction 으로 정규화해 넘기므로
+           no-op 이지만, 이 DTO 는 손으로 만든 dict payload 승격 경로도 받는다. 계약이
+           "호출부가 먼저 정규화했다"는 선행 조건에 기대면 percent 원값(88)이 게이트에
+           걸려 **정상 게시값이 드롭**된다 — 자족적 계약은 정규화부터 한다.
+        2. **개연 게이트** (:func:`app.domain.published_floor_rate` 단일 출처) —
+           ``sucsfbidLwltRate`` 는 발주기관 게시값의 충실한 전사인데 하한으로 성립하지
+           않는 값이 섞여 온다(라이브 실측 47건이 ``1.00000`` = "예정가 전액 이상
+           투찰"). 고치지 않고 "게시 하한 없음"(``None``)으로 접는다.
+
+        여기가 게이트인 이유: 이 DTO 가 수집 두 경로(openapi / scsbid)와 dict payload
+        승격이 **모두 통과하는 유일한 지점**이다. 소비 지점마다 게이트를 다시 걸면 한
+        곳을 빠뜨렸을 때 조용히 새어 들어온다. ``_as_text`` 와 같은 축의 판단이다 —
+        타입은 맞지만 계약을 만족하지 못하는 값은 "값 없음"으로 다룬다.
+
+        왜 중요한가: 이 필드는 ``Project.award_floor_rate`` 가 되고, 라이브 가격 경로가
+        추천가에 **예산 상한 초과 권한**을 줄지 판정할 때 읽는 입력이다(#356 V3). 성립
+        불가한 하한이 통과하면 ``1.0 × 기초금액`` 이 하한으로 강제된다.
+
+        필드 ``AfterValidator`` 가 아니라 model validator 인 이유: 거부 경고에
+        ``notice_number`` 를 실어야 운영자가 어느 공고인지 특정해 조치할 수 있는데,
+        필드 검증기는 이웃 필드를 읽지 못한다(침묵 스킵 금지 — 조치 가능한 로그).
+        """
+        raw = self.award_floor_rate
+        if raw is None:
+            return self
+        accepted = plausible_published_floor_rate(to_bid_rate_fraction(raw))
+        if accepted is None:
+            logger.warning(
+                "게시 낙찰하한율이 개연 범위 밖이라 버림: notice=%s rate=%s",
+                self.notice_number,
+                raw,
+            )
+        self.award_floor_rate = accepted
+        return self
 
     def opening_facts(self) -> CrawlItemMetadataFacts:
         """``metadata`` 를 ORM 대입용 읽기 투영으로 검증해 돌려준다.

@@ -188,6 +188,45 @@ def test_notice_floor_rate_used_when_submitted_missing(test_db):
     assert result["verdict"] == VERDICT_ELIGIBLE_WINNABLE
 
 
+def test_implausible_notice_floor_rate_is_refused_not_used(test_db):
+    """게시 하한 1.00000 으로는 적격 판정을 하지 않는다(판정 불가로 정직하게 남긴다).
+
+    동작 변경 가드: 게이트 전에는 이 값이 ``floor_rate_source="notice"`` 로 채택돼
+    하한가 = 예정가 전액이 되고, 그 아래 투찰한 **적법 낙찰이 "하한 미달"로 뒤집혀**
+    보고됐다. 성립 불가한 하한은 근거가 아니므로 source 를 남기지 않는다.
+    """
+    project = _project(test_db)
+    project.award_floor_rate = 1.0
+    test_db.flush()
+    _tender_result(
+        test_db, project, company="가상건설", amount=89_000_000, rate=0.89
+    )
+
+    result = verify_one(test_db, NOTICE, 88_000_000, None, fetch_detail=_settled_detail())
+
+    assert result["floor_rate"] is None
+    assert result["floor_rate_source"] is None
+    assert result["eligible"] is None
+    assert result["verdict"] == VERDICT_UNDETERMINED
+
+
+def test_operator_submitted_floor_rate_is_never_gated(test_db):
+    """운영자가 직접 넣은 하한율은 개연 게이트를 타지 않는다(명시 지시 존중).
+
+    게이트가 막는 것은 KONEPS 원문 전사값이다. 운영자 입력까지 조용히 버리면 지시가
+    근거 없이 사라진다 — 라이브 가격 경로의 override 판단과 같은 축.
+    """
+    project = _project(test_db)
+    _tender_result(
+        test_db, project, company="가상건설", amount=89_000_000, rate=0.89
+    )
+
+    result = verify_one(test_db, NOTICE, 88_000_000, 1.0, fetch_detail=_settled_detail())
+
+    assert result["floor_rate"] == 1.0
+    assert result["floor_rate_source"] == "submitted"
+
+
 def test_undetermined_without_submitted_or_notice_floor(test_db):
     """No floor rate anywhere keeps the existing UNDETERMINED behaviour."""
     project = _project(test_db)  # no award_floor_rate set

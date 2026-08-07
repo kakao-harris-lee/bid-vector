@@ -7,6 +7,8 @@ the IO clients that call these helpers stay in ``collector.py`` and are
 covered by the collector/scsbid suites.
 """
 
+import pytest
+
 from app.schemas.schemas import CrawlRequest
 from app.schemas.koneps_items import ScsbidReserveDetail
 from app.services.koneps import openapi
@@ -196,6 +198,46 @@ def test_build_scsbid_award_item_extracts_award_floor_rate_when_present():
 
     assert with_rate.award_floor_rate == 0.88
     assert without_rate.award_floor_rate is None
+
+
+def test_openapi_item_refuses_implausible_published_floor_rate():
+    """하한으로 성립하지 않는 게시값은 수집 item 에 실리지 않는다(미보고와 같은 자리).
+
+    KONEPS 원문 ``sucsfbidLwltRate`` 는 "100"(퍼센트)/"1"(분수)로도 오고, 그 값은
+    "예정가 전액 이상 투찰"이라 낙찰하한이 아니다(라이브 47건). 정규화는 상한이 없어
+    1.0 을 충실히 전사하므로 게이트는 DTO 계약이 건다.
+    """
+    request = CrawlRequest(source="koneps-openapi", category="service")
+
+    def _item(rate):
+        return openapi.build_openapi_notice_item(
+            {"bidNtceNo": "R26BK01654006", "bidNtceNm": "테스트", "sucsfbidLwltRate": rate},
+            request=request,
+            operation="getBidPblancListInfoServc",
+        )
+
+    assert _item("100").award_floor_rate is None
+    assert _item("1").award_floor_rate is None
+    assert _item(1.0).award_floor_rate is None
+    assert _item("99.6").award_floor_rate is None  # 상한 0.995 위
+    # 진짜 게시값은 막히지 않는다.
+    assert _item("89.745").award_floor_rate == pytest.approx(0.89745)
+    assert _item("89.995").award_floor_rate == pytest.approx(0.89995)
+
+
+def test_scsbid_item_refuses_implausible_published_floor_rate():
+    """개찰(scsbid) 경로도 같은 계약을 통과한다 — 게이트가 한 벌이라 갈라지지 않는다."""
+    from app.services.koneps import scsbid
+
+    request = CrawlRequest(source="scsbid-openapi", category="construction")
+    item = scsbid.build_scsbid_award_item(
+        {"bidNtceNo": "R26BK01654006", "bidNtceNm": "개찰", "sucsfbidLwltRate": "100"},
+        detail=ScsbidReserveDetail(),
+        request=request,
+        operation="getScsbidListSttusCnstwk",
+    )
+
+    assert item.award_floor_rate is None
 
 
 def test_extract_eligibility_flags_copies_declared_flag_keys():

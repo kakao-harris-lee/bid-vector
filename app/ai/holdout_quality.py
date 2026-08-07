@@ -13,8 +13,9 @@
 2. 낙찰률이 era-correct 법정 낙찰하한(공고 자신의 published 하한 우선)을 하회
 3. ``base_amount`` basis 오염 태그(clean 여부)
 
-2번은 **하한 모델이 그 공고에 적용되는 경우에만** 수행한다. 적용 범위 판별(발주기관
-유형 + 게시 하한율 개연성)은 :mod:`app.ai.floor_applicability` 선언 테이블에 위임한다.
+2번은 **하한 모델이 그 공고에 적용되는 경우에만** 수행한다. 적용 범위 판별 중 발주기관
+유형은 :mod:`app.ai.floor_applicability` 선언 테이블에, 게시 하한율 개연 밴드는
+:mod:`app.domain.published_floor_rate` 단일 출처에 위임한다.
 
 판정 규칙은 코드 분기가 아니라 ``_QUALITY_RULES`` 선언 테이블이고 해석기는 그것을
 순회만 한다(§4.5.2/§4.5.3). 허용오차·임계값은 전부 모듈 상수로 선언한다(매직값 금지).
@@ -54,13 +55,13 @@ from app.ai.floor_applicability import (
     FLOOR_SEPARATE_REGIME,
     FORESTRY_REGIME_FLOOR_RATE,
     is_floor_judgeable,
-    is_published_floor_plausible,
     resolve_floor_applicability,
 )
 from app.ai.predictors.legal_floor_spec import (
     resolve_construction_qualification_floor,
 )
 from app.domain.aggregates import error_rate
+from app.domain.published_floor_rate import is_published_floor_plausible
 from app.services.base_amount_basis import BASIS_CLEAN
 
 # ── 플래그 라벨 ────────────────────────────────────────────────────────────────
@@ -261,7 +262,7 @@ def resolve_legal_floor_rate(
 
     1. 공고 자신이 게시한 낙찰하한율(``Project.award_floor_rate``, #201) — 공고 시점
        공개값이라 leakage-safe 하고 가장 구체적이다. 단 **개연 범위 안일 때만** 쓴다
-       (:mod:`app.ai.floor_applicability` 선언 상수). 라이브에 ``1.00000`` 으로
+       (:mod:`app.domain.published_floor_rate` 선언 상수). 라이브에 ``1.00000`` 으로
        적재된 값이 있어 그대로 쓰면 정상 낙찰이 하회로 오탐된다.
     2. ``separate_regime``(산림청 계열)의 **공사** 공고면 산림사업 하한
        :data:`FORESTRY_REGIME_FLOOR_RATE`(예규 728호, 원문 대조 2026-07-26) — 국가계약

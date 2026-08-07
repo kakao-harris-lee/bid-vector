@@ -12,8 +12,10 @@
 * 일부 공고의 ``published_award_floor_rate`` 가 ``1.00000`` 으로 적재돼 있어
   "예정가 전액 이상 투찰"이라는 성립 불가능한 하한으로 하회 판정이 났다.
 
-이 모듈은 그 두 축을 **선언 데이터**로 처리하는 순수 판별기다(§4.5.3 / §4.7.4).
-패턴 추가 = 코드 분기가 아니라 :data:`_AGENCY_PATTERNS` 한 줄.
+이 모듈이 처리하는 것은 그중 **첫 축(발주기관 유형)뿐**이다 — 선언 데이터 기반 순수
+판별기이고(§4.5.3 / §4.7.4), 패턴 추가 = 코드 분기가 아니라 :data:`_AGENCY_PATTERNS`
+한 줄. 둘째 축(게시 하한율 개연 밴드)은 :mod:`app.domain.published_floor_rate` 로
+내려갔다(아래 "경계" 절 참조).
 
 산림사업 별도 규정(2026-07-26 추가)
 -----------------------------------
@@ -50,12 +52,18 @@ R26BK01490237, 입찰 2026-04-27~05-06 — 국가계약 +2%p 개정일 **이후*
 
 경계
 ----
-이 모듈은 **분석·표시 전용**이다(홀드아웃 품질 판정 + 운영자 대면 하한 미달 빈도 —
-``app/services/notice_floor_shortfall.py`` 가 :func:`is_floor_judgeable` 를 같은 규칙으로
-소비한다). predictor·guardrail·라이브 예측이
-쓰는 하한(``legal_floor_spec`` / ``guardrail_core``)에는 관여하지 않는다 — 라이브는
-공고가 게시한 하한을 ``max()`` 로만 접어 올리므로 여기서 "신뢰 못 함"으로 본 값도
-라이브에서는 그대로 안전 방향으로만 작동한다.
+이 모듈이 소유한 **기관 축 판별**(:func:`resolve_floor_applicability` /
+:func:`is_floor_judgeable`)은 분석·표시 경로가 쓴다: 홀드아웃 품질 판정과 운영자 대면
+하한 미달 빈도(``app/services/notice_floor_shortfall.py`` 가 같은 술어를 소비한다).
+predictor·guardrail 이 쓰는 하한(``legal_floor_spec`` / ``guardrail_core``)에는 관여하지
+않는다.
+
+게시 하한율 **개연 밴드는 더 이상 여기 없다** — ``app/domain/published_floor_rate`` 로
+내려갔다. 종전에 이 모듈이 "분석 전용이어도 안전하다"고 든 근거는 "라이브는 게시 하한을
+``max()`` 로만 접어 올리므로 여기서 신뢰 못 한 값도 안전 방향으로만 작동한다"였는데,
+#356 이 그 근거를 무효화했다: V3 게이트가 published 하한의 **존재**를 근거로 추천가에
+예산 상한 초과 권한을 주기 때문에, 성립 불가한 게시값(1.00000)이 기초금액 전액을 하한으로
+강제할 수 있게 됐다. 그래서 밴드는 수집·라이브 가격·분석이 **한 벌로** 공유한다.
 
 순수 함수(I/O 0).
 """
@@ -154,16 +162,6 @@ _AGENCY_PATTERNS: tuple[_AgencyPattern, ...] = (
     _AgencyPattern("대학", FLOOR_APPLICABILITY_UNCERTAIN),
 )
 
-# ── 공고 게시 하한율 개연성 범위(선언 상수) ───────────────────────────────────
-# 하한율 1.00000 은 "예정가 전액 이상 투찰"을 뜻해 낙찰하한의 의미가 성립하지 않는다
-# (라이브 실측 3건). 상한 0.995 는 관측된 최대 실값 0.89995 위로 충분한 여유다.
-PUBLISHED_FLOOR_MAX_PLAUSIBLE = 0.995
-# 하한 0.30 은 백분율/분수 스케일 오적재(예: 0.88 대신 0.0088)를 걸러내는 선이다.
-# 0.5 로 올리지 않는 이유: 라이브에 0.47995 가 3건 있고 .995 로 끝나는 표기 형태가
-# 다른 실값(0.87745/0.89745)과 같아 진짜 게시값으로 보인다. 이 값을 버리고 era-tier
-# (0.89745)로 폴백하면 오히려 새 오탐을 만든다.
-PUBLISHED_FLOOR_MIN_PLAUSIBLE = 0.30
-
 # ── 산림사업(separate_regime) 낙찰하한율(선언 상수, 예정가격 기준) ─────────────
 # 근거(2026-07-26 원문 대조): 산림사업 입찰설명서 원문(공고 R26BK01490237, 입찰
 # 2026-04-27~05-06)이 "예정가격의 87.745% 이상 … 적격심사"를 명시하고 근거 규정을
@@ -191,17 +189,6 @@ def resolve_floor_applicability(agency_name: Any) -> str:
         if pattern.matches(normalized):
             return pattern.applicability
     return FLOOR_APPLICABLE
-
-
-def is_published_floor_plausible(rate: float | None) -> bool:
-    """공고 게시 낙찰하한율이 하회 판정에 쓸 만한 개연 범위 안인가.
-
-    범위 밖 값은 **버리는 게 아니라** 하한 해석에서만 제외하고, 그 사실을
-    ``published_floor_implausible`` 로 리포트에 남긴다.
-    """
-    if rate is None:
-        return False
-    return PUBLISHED_FLOOR_MIN_PLAUSIBLE <= float(rate) <= PUBLISHED_FLOOR_MAX_PLAUSIBLE
 
 
 def is_floor_judgeable(applicability: str) -> bool:

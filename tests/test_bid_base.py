@@ -16,6 +16,7 @@ from app.services.bid_base import (
     prepare_prediction_inputs,
     resolve_notice_bid_base,
     resolve_notice_legal_floor_bid_rate,
+    resolve_notice_published_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
 )
 from app.services.prediction_workflow import PredictionWorkflowService
@@ -416,17 +417,60 @@ _SERVICE_CATEGORY_FLOOR = 0.87
         (None, 0.90, 0.90),  # request-only (unchanged pre-existing behavior)
         (0.85, 0.90, 0.90),  # request wins over published
         (0.88, 0.86, 0.86),  # explicit client override respected even if lower
+        # ── 신뢰 게이트: 개연 범위 밖 게시값은 "하한 미보고"와 동일 취급 ──
+        (1.0, None, None),      # KONEPS 원문 "1"/"100" — 하한이 성립하지 않는다
+        (100.0, None, None),    # percent 원문 → 1.0 정규화 후 거부
+        (0.996, None, None),    # 상한 0.995 바로 위
+        (0.29, None, None),     # 하한 0.30 바로 아래(스케일 오적재 방어)
+        (0.89995, None, 0.89995),  # 관측된 최대 실값은 그대로 통과
+        (0.30, None, 0.30),     # 경계 포함
+        (0.995, None, 0.995),   # 경계 포함
     ],
 )
 def test_resolve_legal_floor_bid_rate_precedence(award_floor_rate, request_legal, expected):
     """Pure precedence table: explicit request value wins; else the published
-    award_floor_rate (normalized); else None."""
+    award_floor_rate (normalized, plausibility-gated); else None."""
     project = Project(
         title="낙찰하한 wiring", category="service", award_floor_rate=award_floor_rate
     )
     resolved = resolve_notice_legal_floor_bid_rate(
         project, request_legal_floor_bid_rate=request_legal
     )
+    if expected is None:
+        assert resolved is None
+    else:
+        assert resolved == pytest.approx(expected)
+
+
+def test_resolve_legal_floor_bid_rate_does_not_gate_the_operator_override():
+    """운영자 override 는 개연 게이트를 타지 않는다.
+
+    게이트가 막는 것은 **KONEPS 원문 전사값**(무인 수집이 47건을 자동 적재했다)이고,
+    override 는 사람이 이 공고에 대해 명시적으로 지시한 값이다. 이를 조용히 떨어뜨리면
+    운영자 지시가 근거 없이 사라진다(silent fallback 금지). 잘못된 override 는 요청
+    스키마 경계에서 거부돼야 할 문제다 — 서비스 내부의 침묵 드롭이 아니라.
+    """
+    project = Project(title="낙찰하한 override", category="service", award_floor_rate=1.0)
+
+    resolved = resolve_notice_legal_floor_bid_rate(
+        project, request_legal_floor_bid_rate=1.0
+    )
+
+    assert resolved == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("award_floor_rate, expected", [(1.0, 1.0), (88.0, 0.88), (None, None)])
+def test_resolve_published_floor_bid_rate_is_not_gated(award_floor_rate, expected):
+    """분석용 접근자는 게시값을 정규화만 하고 개연 게이트를 걸지 않는다.
+
+    홀드아웃 리포트와 운영자 대면 하한 미달 표시는 개연 범위 밖 값을 **버리는 대신**
+    ``published_floor_implausible`` 로 센다. 여기서 미리 ``None`` 으로 접으면 그 계수기가
+    조용히 0 이 되어 KONEPS 원문 품질을 관측할 수 없다(게이트가 도입한 회귀 방지).
+    """
+    project = Project(title="게시값 원값", category="service", award_floor_rate=award_floor_rate)
+
+    resolved = resolve_notice_published_floor_bid_rate(project)
+
     if expected is None:
         assert resolved is None
     else:

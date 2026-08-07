@@ -10,7 +10,7 @@
 (``field_contract.FIELD_CONTRACTS`` 등) 기존 호출부 참조 경로는 그대로다.
 
 mypy strict 아일랜드(``field_contract`` 와 동일 정책): 무거운 의존을 끌지 않고 순수 strict
-아일랜드 ``app.domain.money.Basis`` 만 재사용한다.
+아일랜드만 재사용한다(``app.domain.money.Basis`` · ``app.domain.published_floor_rate``).
 """
 
 from __future__ import annotations
@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from app.domain.money import Basis
+from app.domain.published_floor_rate import (
+    PUBLISHED_FLOOR_MAX_PLAUSIBLE,
+    PUBLISHED_FLOOR_MIN_PLAUSIBLE,
+)
 
 
 class OperationFamily(str, Enum):
@@ -183,10 +187,13 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
         ),
         provenance=(
             "#209: 광범위 목록 피드엔 자격/하한 상세가 없다. 표적조회(inqryDiv=2)와 "
-            "license-limit 서브op만 값을 싣는다. 값은 하한율(분수)."
+            "license-limit 서브op만 값을 싣는다. 값은 하한율(분수). 범위는 개연 밴드 "
+            "단일 출처(app.domain.published_floor_rate)를 그대로 참조한다 — 계약이 "
+            "자체 밴드를 들면 DTO 게이트와 판정이 갈린다(1.0 은 계약상 정상인데 DTO "
+            "는 드롭, 실 게시값 0.47995 는 DTO 가 받는데 계약은 ERROR)."
         ),
-        expected_min=0.5,
-        expected_max=1.0,
+        expected_min=PUBLISHED_FLOOR_MIN_PLAUSIBLE,
+        expected_max=PUBLISHED_FLOOR_MAX_PLAUSIBLE,
     ),
     FieldContract(
         raw_name="bidNtceOrd",

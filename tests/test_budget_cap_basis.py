@@ -39,8 +39,14 @@ from __future__ import annotations
 
 import pytest
 
+from app.services.bid_base import prepare_prediction_inputs
 from app.services.opportunity_analysis import OpportunityAnalysisService
-from tests.support.basis_fixtures import BASE_AMOUNT, BUDGET_ESTIMATE, build_vat_notice
+from tests.support.basis_fixtures import (
+    BASE_AMOUNT,
+    BUDGET_ESTIMATE,
+    build_vat_notice,
+    persist_vat_notice,
+)
 
 # 기초금액 110,000,000 / 추정가격 100,000,000 (비 1.10).
 # 낙찰하한 0.95 × 기초금액 = 104,500,000 > 추정가격 → 예전 상한이 하한을 깎던 구간.
@@ -114,6 +120,49 @@ def test_rounding_cannot_break_the_floor():
     amount = _resolve(prediction=_prediction(floor_price=floor_price))
 
     assert amount >= floor_price
+
+
+# --------------------------------------------------------------------------- #
+# RED LINE — 성립 불가한 게시 하한율은 상한을 넘길 권한을 얻지 못한다
+#
+# V3 게이트의 1번 조건("공고가 published 법정하한을 보고했다")은 값의 **존재**만 보고
+# 값이 하한으로 성립하는지는 보지 않았다. KONEPS 원문 ``sucsfbidLwltRate`` 가 "100"
+# (또는 분수 "1")인 공고 47건이 그대로 적재돼 있어, base/추정가격 ≤ 1.15 인 공고에서
+# ``1.0 × 기초금액`` 이 하한으로 강제돼 기초금액 전액이 추천가가 됐다(라이브 400건 중
+# 1건 실측, 최대 +10% 과추천).
+# --------------------------------------------------------------------------- #
+
+
+def test_implausible_published_floor_cannot_escape_the_budget_cap(test_db):
+    """게시 하한 1.00000 은 V3 두 조건이 모두 성립하는 상황에서도 상한을 못 넘는다."""
+    project = persist_vat_notice(test_db)  # base/est = 1.10 ≤ 1.15 → 2번 조건 통과
+    project.award_floor_rate = 1.0
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(test_db, project)
+    # 1번 조건이 여기서 닫힌다: 성립 불가값은 "하한 미보고"와 동일 취급.
+    assert inputs.legal_floor_bid_rate is None
+
+    amount = _resolve(
+        project=project,
+        prediction=_prediction(
+            floor_price=1.0 * BASE_AMOUNT,  # 110,000,000 — 상한 위
+            legal_floor_bid_rate=inputs.legal_floor_bid_rate,
+        ),
+    )
+
+    assert amount <= BUDGET_ESTIMATE
+
+
+def test_plausible_published_floor_still_reaches_the_gate(test_db):
+    """게이트는 진짜 게시값을 막지 않는다 — 관측된 최대 실값이 그대로 흐른다."""
+    project = persist_vat_notice(test_db)
+    project.award_floor_rate = 0.89995
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(test_db, project)
+
+    assert inputs.legal_floor_bid_rate == pytest.approx(0.89995)
 
 
 # --------------------------------------------------------------------------- #

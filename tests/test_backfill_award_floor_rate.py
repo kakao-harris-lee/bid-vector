@@ -648,6 +648,45 @@ def test_run_backfill_counts_and_persists(seeded_targets):
     assert rows[1].award_floor_rate is None  # no_value stays NULL
 
 
+def test_run_backfill_skips_implausible_floor_rate(seeded_targets):
+    """게시 하한율이 성립 불가값이면 쓰지 않고, ``no_value`` 와 구분해 따로 센다.
+
+    ``no_value`` 는 "응답에 하한율이 없었다"이고 이쪽은 "값은 왔는데 하한으로 성립하지
+    않는다"라, 회계를 합치면 원문 품질 문제가 응답 결손에 묻힌다.
+    """
+    targets = backfill.load_targets(seeded_targets)  # ids 2, 1
+    fetch = _FakeFetch(
+        {
+            "R0002": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "100"}]),
+            "R0001": _payload([{"bidNtceOrd": "1", "sucsfbidLwltRate": "89.745"}]),
+        }
+    )
+
+    stats = backfill.run_backfill(
+        seeded_targets,
+        targets,
+        fetch=fetch,
+        fetch_license_limit=_FakeLicenseLimitFetch(),
+        delay=0,
+        chunk_size=1,
+    )
+
+    assert stats.processed == 2
+    assert stats.updated == 1
+    assert stats.floor_implausible == 1
+    assert stats.no_value == 0  # 별도 회계 — 응답 결손이 아니다
+    rows = {r.id: r for r in seeded_targets.query(Project).all()}
+    assert rows[2].award_floor_rate is None  # 비개연 값은 NULL 로 남는다
+    assert rows[1].award_floor_rate == pytest.approx(0.89745)
+
+
+def test_backfill_stats_report_floor_implausible(seeded_targets):
+    """새 카운터는 요약 dict 에도 노출된다(운영자가 회계를 볼 수 있어야 한다)."""
+    stats = backfill.BackfillStats(floor_implausible=3)
+
+    assert stats.as_dict()["floor_implausible"] == 3
+
+
 def test_run_backfill_records_errors_without_dying(seeded_targets):
     targets = backfill.load_targets(seeded_targets)  # ids 2, 1
     fetch = _FakeFetch(
