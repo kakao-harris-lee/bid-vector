@@ -737,7 +737,8 @@ def evaluate_target(
     # 추정가격(budget_estimate)이라 pricing base(budget=기초금액)와 별개다.
     estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
     # 게이트 없는 원값 — 품질 계측(assess_row_quality) 전용. 범위 밖 값은 버리는 대신
-    # published_floor_implausible 로 계수한다(미리 접으면 그 계수기가 조용히 0 이 된다).
+    # published_floor_implausible 로 계수한다(미리 접으면 조용히 0). 수집 write 게이트가 신규
+    # 유입을 막아 legacy 행 전용 신호다 — 신규 원문 품질은 DTO 경고+백필 floor_implausible(미집계, 후속).
     published_floor_rate = resolve_notice_published_floor_bid_rate(project)
     # 복수예비가격은 예정가를 독립적으로 재구성할 수 있는 유일한 저장 증거다. 품질
     # 판정기는 I/O 없이 돌아야 하므로 여기서 개수만 뽑아 주입한다(§4.7.3).
@@ -1172,12 +1173,15 @@ def main() -> int:
             "below_legal_floor is skipped when the floor model does not apply to the "
             "issuing agency (산학협력단/협동조합 등 non-state = not_applicable) or the "
             "agency type cannot be told from its name (대학교 등 = uncertain); see "
-            "summary.floor_applicability_counts and "
-            "targets[].data_quality_details.floor_applicability. A published "
+            "summary.floor_applicability_counts and targets[].data_quality_details.floor_applicability. A published "
             "award_floor_rate outside the plausible band is not used either "
             "(published_floor_implausible; live data holds 1.00000 rows) and falls "
             "back to the floor of the applicable regime (국가계약 era tier, or the "
             "산림사업 floor for 산림청 계열 공사).",
+            "Prediction input parity: the legal_floor_bid_rate fed to predict_price "
+            "is band-gated through the SAME resolver as the live price path, so an "
+            "implausible published floor (1.00000 rows) never reaches the predictor; "
+            "pre-gate reports are not directly comparable on the affected rows.",
             "separate_regime (산림청 계열) IS judged on CONSTRUCTION notices, against "
             "the 산림사업 floor 87.745% instead of the 국가계약 era tier "
             "(data_quality_details.legal_floor_source = forestry_regime_spec). Non-"
@@ -1194,16 +1198,12 @@ def main() -> int:
             "independent evidence: if it matches winning_amount/base_amount within "
             "data_quality_details.rate_basis_independence_tolerance and fewer than "
             "the documented minimum (5) 복수예비가격 were collected, the reported rate "
-            "may just be that amount ratio and would "
-            "read 사정률(~0.98) below the 예정가-basis floor. See "
-            "summary.rate_basis_unverified_count and data_quality_details."
-            "rate_basis_unverified / reserve_price_count.",
+            "may just be that amount ratio and would read 사정률(~0.98) below the 예정가-basis floor. See "
+            "summary.rate_basis_unverified_count and data_quality_details.rate_basis_unverified / reserve_price_count.",
             "Known limit: shallow undercuts (0.9~2.7%p, 지방계약/공공기관/수의견적 등 "
-            "다른 하한 체계 가능성) outside those gates are NOT resolved and still "
-            "surface as below_legal_floor — the data alone cannot tell which tier applied.",
+            "다른 하한 체계 가능성) outside those gates are NOT resolved and still surface as below_legal_floor — the data alone cannot tell which tier applied.",
             "summary.quality_flag_counts is scoped to the (clean-only) aggregation set, so "
-            "base_basis_contaminated is 0 there by construction; read "
-            "summary.evaluated_quality_flag_counts for all evaluated targets.",
+            "base_basis_contaminated is 0 there by construction; read summary.evaluated_quality_flag_counts for all evaluated targets.",
             "--exclude-agency-history drops history rows matching ANY of the target's "
             "발주/수요/stored agency names, because HistoricalData.agency_name is persisted "
             "수요기관-first while the report's split key is 발주기관-first.",

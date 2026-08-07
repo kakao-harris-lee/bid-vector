@@ -52,6 +52,8 @@ ignore_errors = true
 # Phase 1e adds app.domain.floor_shortfall (추천 투찰가의 하한 미달 빈도 판정 커널 —
 # 기초금액-basis 추천율과 예정가-basis 하한율의 비를 임계 사정률로 해석한다. basis 를
 # 섞으면 곧바로 오판이 되는 계산이라 처음부터 strict 아일랜드로 둔다).
+# Phase 1f adds app.domain.published_floor_rate (공고 게시 낙찰하한율 개연 밴드 단일
+# 출처 — #357 게이트로 수집 DTO·라이브 가격·낙찰 검증·분석 네 소비층이 공유한다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -62,6 +64,7 @@ module = [
     "app.domain.rate_normalization",
     "app.domain.aggregates",
     "app.domain.floor_shortfall",
+    "app.domain.published_floor_rate",
 ]
 ignore_errors = false
 disallow_untyped_defs = true

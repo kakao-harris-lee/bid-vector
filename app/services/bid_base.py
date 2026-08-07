@@ -219,6 +219,9 @@ def resolve_notice_published_floor_bid_rate(project: Project) -> float | None:
     자체 게이트(``holdout_quality.resolve_legal_floor_rate``)를 갖고 있고, 개연 범위 밖
     값을 **버리는 대신 ``published_floor_implausible`` 로 세어야** 한다 — 여기서 미리
     ``None`` 으로 접으면 그 계수기가 조용히 0 이 되어 원문 품질을 관측할 수 없게 된다.
+    수집 write 게이트(#357) 이후 신규 행에는 밴드 밖 값이 적재되지 않으므로 그 계수기는
+    **legacy 행 전용** 신호다 — 신규 수집의 원문 품질 신호는 DTO 거부 경고(notice 포함)와
+    백필 ``floor_implausible`` 카운터로 이동했다(둘 다 아직 미집계, 후속).
 
     가격 경로는 게이트가 걸린 :func:`resolve_notice_legal_floor_bid_rate` 를 쓴다. 두
     이름을 나눈 이유가 이것이다: "하한으로 쓸 값"과 "게시된 값"은 다른 질문이다.

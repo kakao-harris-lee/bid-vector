@@ -256,8 +256,10 @@ feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략
 `1.00000`으로 적재된 값이 있는데(예정가 전액 이상 투찰 = 하한의 의미가 아님) 그대로 쓰면 정상
 낙찰이 하회로 잡힌다. 범위 밖이면 적용 regime의 하한으로 폴백(국가계약 era-tier 또는 산림청
 계열 공사의 산림사업 하한)하고 `published_floor_implausible`을 남긴다.
-경계 상수는 같은 모듈의 `PUBLISHED_FLOOR_MIN_PLAUSIBLE`(0.30) / `PUBLISHED_FLOOR_MAX_PLAUSIBLE`
-(0.995)이며, 하한을 0.5로 올리지 않는 이유는 라이브에 실제 게시값 `0.47995`가 있기 때문이다.
+경계 상수는 `app/domain/published_floor_rate.py`의 `PUBLISHED_FLOOR_MIN_PLAUSIBLE`(0.30) /
+`PUBLISHED_FLOOR_MAX_PLAUSIBLE`(0.995)이다(#357에서 `floor_applicability`로부터 단일 출처로
+이동 — 수집·라이브 가격·검증·분석이 같은 밴드를 공유한다). 하한을 0.5로 올리지 않는 이유는
+라이브에 실제 게시값 `0.47995`가 있기 때문이다.
 
 스킵 규모는 침묵하지 않고 요약에 싣는다.
 
@@ -275,8 +277,11 @@ feature 과적합(로드맵 11번)을 잡기 위한 축이다. `--out`을 생략
 **남는 한계(정직 표기):** 위 두 게이트 밖의 얕은 하회(농어촌공사 지사 등 지방계약·공공기관·
 수의견적 가능성)는 해소되지 않는다. 저장된 데이터만으로 어느 티어였는지 단정할 수 없어 그대로
 `below_legal_floor`로 남긴다. `separate_regime`은 원문 확정(2026-07-26)으로 판정을 재개했지만
-예규 별표의 구간 차등은 여전히 미확인이다(위 절). 이 판별은 전부 분석 전용이며 라이브 예측
-guardrail(게시 하한을 `max()`로만 접어 올리는 경로)에는 관여하지 않는다.
+예규 별표의 구간 차등은 여전히 미확인이다(위 절). 기관 축 판별(`floor_applicability`)은 분석
+전용이 맞지만, 게시 하한율 **개연 밴드는 #357부터 분석 전용이 아니다** — 수집
+DTO(`KonepsCollectedItem`)·라이브 가격 경로(`resolve_notice_legal_floor_bid_rate`, 홀드아웃
+예측 입력 포함)·낙찰 검증(`verify_one`)이 같은 단일 출처 밴드로 게이트한다. 라이브 guardrail이
+게시 하한을 `max()`로만 접어 올린다는 사실은 불변이다.
 
 clean/flag 분리 비교는 `summary.quality_flag_partition`을 본다. `all` / `flag_free` /
 `flagged` 3분할이라 `flag_free + flagged == all`로 검산할 수 있고, 플래그 표본을 뺐을 때
