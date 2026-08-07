@@ -189,6 +189,67 @@ def test_update_project_keeps_award_floor_rate_when_item_missing(test_db):
     assert project.award_floor_rate == 0.88
 
 
+def test_update_project_drops_implausible_award_floor_rate(test_db):
+    """성립 불가한 게시 하한율은 저장하지 않는다 — 이 컬럼은 라이브 가격 경로의 입력이다.
+
+    KONEPS ``sucsfbidLwltRate`` 원문이 "100"(퍼센트) 또는 "1"(분수)인 공고가 실재하고,
+    ``normalize_bid_rate_value`` 는 상한이 없어 1.0 을 충실히 전사한다. 그 값이
+    ``Project.award_floor_rate`` 로 들어가면 ``1.0 × 기초금액`` 이 하한으로 강제된다.
+    """
+    project = Project(
+        title="placeholder",
+        description="",
+        requirements="",
+        budget_estimate=0.0,
+        category="construction",
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    item = _award_item("R26BK01654006", award_floor_rate=1.0)
+    persistence.update_project_from_item(project, item=item, request=_request())
+
+    assert project.award_floor_rate is None
+
+
+def test_update_project_keeps_stored_rate_when_item_is_implausible(test_db):
+    """비개연 값은 이미 저장된 정상 하한율을 덮지도 않는다(미보고와 동일 가드)."""
+    project = Project(
+        title="placeholder",
+        description="",
+        requirements="",
+        budget_estimate=0.0,
+        category="construction",
+        notice_number="R26BK01654007",
+        award_floor_rate=0.89745,
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    item = _award_item("R26BK01654007", award_floor_rate=1.0)
+    persistence.update_project_from_item(project, item=item, request=_request())
+
+    assert project.award_floor_rate == pytest.approx(0.89745)
+
+
+def test_update_project_persists_plausible_award_floor_rate(test_db):
+    """게이트는 진짜 게시값(신율 0.89745)을 막지 않는다."""
+    project = Project(
+        title="placeholder",
+        description="",
+        requirements="",
+        budget_estimate=0.0,
+        category="construction",
+    )
+    test_db.add(project)
+    test_db.flush()
+
+    item = _award_item("R26BK01654008", award_floor_rate=0.89745)
+    persistence.update_project_from_item(project, item=item, request=_request())
+
+    assert project.award_floor_rate == pytest.approx(0.89745)
+
+
 def test_update_project_persists_eligibility_raw(test_db):
     """An item carrying a non-empty eligibility_raw dict writes it onto the project."""
     project = Project(

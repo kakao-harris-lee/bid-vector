@@ -18,9 +18,6 @@ from app.ai.floor_applicability import (
     FLOOR_NOT_APPLICABLE,
     FLOOR_SEPARATE_REGIME,
     FORESTRY_REGIME_FLOOR_RATE,
-    PUBLISHED_FLOOR_MAX_PLAUSIBLE,
-    PUBLISHED_FLOOR_MIN_PLAUSIBLE,
-    is_published_floor_plausible,
     resolve_floor_applicability,
 )
 from app.ai.holdout_quality import (
@@ -123,23 +120,9 @@ def test_whitespace_variants_resolve_to_the_same_verdict():
         assert resolve_floor_applicability(variant) == FLOOR_NOT_APPLICABLE
 
 
-# ── 게시 하한율 개연 범위 ─────────────────────────────────────────────────────
-@pytest.mark.parametrize(
-    "rate,expected",
-    [
-        (PUBLISHED_FLOOR_MIN_PLAUSIBLE, True),  # 경계 포함
-        (PUBLISHED_FLOOR_MAX_PLAUSIBLE, True),  # 경계 포함
-        (PUBLISHED_FLOOR_MIN_PLAUSIBLE - 0.0001, False),
-        (PUBLISHED_FLOOR_MAX_PLAUSIBLE + 0.0001, False),
-        (1.0, False),  # 라이브 실측 이상값(예정가 전액 이상 투찰은 하한이 아니다)
-        (0.47995, True),  # 라이브 실측 최저 실값 — 버리면 새 오탐이 생긴다
-        (0.89745, True),
-        (0.0088, False),  # 스케일 오적재
-        (None, False),
-    ],
-)
-def test_is_published_floor_plausible_boundaries(rate, expected):
-    assert is_published_floor_plausible(rate) is expected
+# 게시 하한율 개연 범위(``is_published_floor_plausible``)는 라이브 가격·수집 경로도
+# 소비하게 되어 ``app/domain/published_floor_rate`` 로 내려갔다. 그 값표는
+# ``tests/test_published_floor_rate.py`` 가 소유한다.
 
 
 # ── 하회 판정 배선 ───────────────────────────────────────────────────────────
