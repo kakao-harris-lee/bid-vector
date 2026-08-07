@@ -13,6 +13,7 @@ from app.services.base_amount_basis import (
     BASIS_CLEAN,
     BASIS_DERIVED_YEGA,
     BASIS_SUSPECT_FRACTIONAL,
+    BASIS_SUSPECT_RATIO,
     classify_base_basis,
 )
 from app.services.prediction_dataset import PredictionDatasetService
@@ -53,6 +54,30 @@ def test_resolve_base_basis_suspect_without_winning():
     historical = HistoricalData(base_amount=12_345_678.4321)
     result = TenderResult(winning_amount=0.0, winning_rate=0.0)
     assert holdouts.resolve_base_basis(historical, result) == BASIS_SUSPECT_FRACTIONAL
+
+
+def test_resolve_base_basis_does_not_see_the_ratio_rule():
+    """홀드아웃은 비율 규칙을 **의도적으로** 보지 않는다(경계 고정, 배선은 후속).
+
+    이 헬퍼는 저장된 ``base_amount_basis`` 를 읽지 않고 매번 재분류하는데, 분류기의 4번째
+    인자(공고 추정가격)를 넘기지 않으므로 백필이 ``suspect-ratio`` 로 재태깅한 행도 여기서는
+    다시 ``clean`` 으로 집계된다. 세 호출부 모두 ``project`` 가 스코프 안에 있어 배선 자체는
+    가능하지만, 배선하면 홀드아웃 오차 수치가 그 시점에 함께 움직여 "이 PR 의 재태깅은
+    측정 수치를 바꾸지 않는다"는 주장과 섞인다. 그래서 defer 하고 경계만 고정한다.
+
+    이 기대값이 바뀌면 홀드아웃 clean 집계의 모집단이 바뀌었다는 뜻이므로, 그때는 오차
+    수치 이동을 함께 보고해야 한다.
+    """
+    historical = HistoricalData(base_amount=140_800_000.0)
+    result = TenderResult(winning_amount=0.0, winning_rate=0.0)
+
+    # 같은 값이라도 추정가격을 함께 넘기면 분류기는 suspect-ratio 로 판정한다.
+    assert (
+        classify_base_basis(140_800_000.0, 0.0, 0.0, 100_000_000.0)
+        == BASIS_SUSPECT_RATIO
+    )
+    # 홀드아웃 경로는 그 인자를 넘기지 않으므로 clean 으로 남는다.
+    assert holdouts.resolve_base_basis(historical, result) == BASIS_CLEAN
 
 
 def test_resolve_base_basis_uses_raw_rate_not_derived_fallback():

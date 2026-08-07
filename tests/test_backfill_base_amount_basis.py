@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
 from app.services.base_amount_basis import (
     BASIS_CLEAN,
@@ -329,6 +330,139 @@ def test_dry_run_reports_impact_breakdown(ratio_db):
     assert sample["to_basis"] == BASIS_SUSPECT_RATIO
     assert sample["budget_estimate"] == pytest.approx(100_000_000.0)
     assert sample["base_to_estimate_ratio"] == pytest.approx(1.408)
+
+
+def test_recheck_pass_records_movement_evidence(test_db):
+    """--recheck 패스에도 이동 증적이 남는다 — 계수 기준은 '저장 라벨과 달라졌는가'다.
+
+    룰 재정렬(비율 규칙 도입)을 전 행에 반영하는 패스는 ``--recheck`` 인데, 계수 조건이
+    ``basis_filter`` 에만 걸려 있으면 바로 그 패스만 증적이 0 이 된다. 스탬프된 행의
+    라벨이 바뀌면 어떤 패스든 샘플·분해가 남아야 한다.
+    """
+    test_db.add(
+        Project(
+            id=1, budget_estimate=100_000_000.0, status="open", category="construction"
+        )
+    )
+    test_db.add_all(
+        [
+            HistoricalData(
+                id=1,
+                project_id=1,
+                base_amount=_POLLUTED_BASE,
+                base_amount_basis=BASIS_CLEAN,
+                basis_checked_at=utc_now(),
+                reserve_prices="[]",
+            ),
+            # 스탬프된 적 없는 행: 첫 태깅은 '이동'이 아니다(previous_basis 없음)
+            HistoricalData(
+                id=2,
+                project_id=1,
+                base_amount=_POLLUTED_BASE,
+                reserve_prices="[]",
+            ),
+        ]
+    )
+    test_db.commit()
+
+    stats = backfill.run_backfill(test_db, apply=False, recheck=True)
+
+    assert stats.scanned == 2
+    assert stats.reclassified == 1  # 스탬프된 행만 이동으로 센다
+    assert stats.reclassified_by_status == {"open": 1}
+    assert [sample["id"] for sample in stats.samples] == [1]
+    assert stats.samples[0]["to_basis"] == BASIS_SUSPECT_RATIO
+
+
+def test_est_equals_base_counter_exposes_blind_cohort(test_db):
+    """추정가격이 base 폴백으로 채워진 행(비율 정확히 1.0)은 규칙이 구조적으로 못 본다.
+
+    수집이 추정가격을 못 얻으면 ``matching.resolve_budget_estimate`` 가 base_amount 를
+    그대로 추정가격으로 쓴다. 그 행의 비율은 항상 1.0 이라 base 가 아무리 오염돼도 이
+    규칙에 걸리지 않는다 — 검증 커버리지의 구멍이므로 요약에 노출한다.
+    """
+    test_db.add_all(
+        [
+            Project(
+                id=1,
+                budget_estimate=_POLLUTED_BASE,  # est == base (수집 폴백)
+                status="open",
+                category="construction",
+            ),
+            Project(
+                id=2,
+                budget_estimate=100_000_000.0,
+                status="open",
+                category="construction",
+            ),
+        ]
+    )
+    test_db.add_all(
+        [
+            HistoricalData(id=1, project_id=1, base_amount=_POLLUTED_BASE),
+            HistoricalData(id=2, project_id=2, base_amount=_POLLUTED_BASE),
+        ]
+    )
+    test_db.commit()
+
+    summary = backfill.run_backfill(test_db, apply=False).as_dict()
+
+    assert summary["est_equals_base"] == 1
+    assert summary["by_basis"][BASIS_SUSPECT_RATIO] == 1  # 비율이 살아 있는 쪽만 이동
+
+
+def test_reserve_estimate_and_status_cross_counters(test_db):
+    """재태깅 행 중 추정치 보유분과, 추정치 채움의 status 교차 분해를 낸다.
+
+    ``get_reliable_base`` 가 금액을 실제로 바꾸는 유일한 축이 "non-clean + 양수 추정치"라,
+    이 두 카운터가 apply 의 라이브 금액 영향(열린 공고 ∩ 추정치 = 0 이어야 함)을 증명한다.
+    """
+    test_db.add_all(
+        [
+            Project(
+                id=1,
+                budget_estimate=100_000_000.0,
+                status="awarded",
+                category="construction",
+            ),
+            Project(
+                id=2,
+                budget_estimate=100_000_000.0,
+                status="open",
+                category="construction",
+            ),
+        ]
+    )
+    test_db.add_all(
+        [
+            # 개찰 후 행: 복수예비가격 15개 ⇒ 추정치 복구 가능
+            HistoricalData(
+                id=1,
+                project_id=1,
+                base_amount=_POLLUTED_BASE,
+                base_amount_basis=BASIS_CLEAN,
+                reserve_prices=_reserves(_POLLUTED_BASE),
+            ),
+            # 열린 공고: reserve 없음 ⇒ 추정치 없음 ⇒ 금액 불변
+            HistoricalData(
+                id=2,
+                project_id=2,
+                base_amount=_POLLUTED_BASE,
+                base_amount_basis=BASIS_CLEAN,
+                reserve_prices="[]",
+            ),
+        ]
+    )
+    test_db.commit()
+
+    summary = backfill.run_backfill(
+        test_db, apply=False, basis_filter=BASIS_CLEAN
+    ).as_dict()
+
+    assert summary["reclassified"] == 2
+    assert summary["reclassified_with_reserve_estimate"] == 1
+    assert summary["estimated_filled_by_status"] == {"awarded": 1}
+    assert "open" not in summary["estimated_filled_by_status"]
 
 
 def test_impact_report_prints_move_evidence(ratio_db, capsys):
