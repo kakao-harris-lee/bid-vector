@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.constants import BID_BASE_TRUST_RATIO_MAX
 from app.services.bid_base import prepare_prediction_inputs
 from app.services.opportunity_analysis import OpportunityAnalysisService
 from tests.support.basis_fixtures import (
@@ -268,7 +269,9 @@ def test_unpublished_legal_floor_does_not_escape_the_cap():
     [
         (BUDGET_ESTIMATE * 1.00, True),   # 면세
         (BUDGET_ESTIMATE * 1.10, True),   # 정상 과세(부가세 10%)
-        (BUDGET_ESTIMATE * 1.15, True),   # 신뢰 경계값 — 포함
+        # 경계값은 리터럴이 아니라 상수를 참조한다 — 임계를 조정하면 이 케이스가 함께
+        # 움직여야 "경계 포함"을 계속 검증한다(리터럴이면 조용히 경계 밖 값을 재게 된다).
+        (BUDGET_ESTIMATE * BID_BASE_TRUST_RATIO_MAX, True),  # 신뢰 경계값 — 포함
         (BUDGET_ESTIMATE * 1.1501, False),  # 경계 바로 위 — 차단
         (BUDGET_ESTIMATE * 1.50, False),
         (BUDGET_ESTIMATE * 10.0, False),  # 오염

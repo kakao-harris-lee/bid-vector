@@ -131,10 +131,28 @@ def _is_suspect_ratio(ctx: _BasisContext) -> bool:
     :data:`~app.core.constants.BID_BASE_TRUST_RATIO_MAX` 를 넘는 배수는 세금이 아니라
     **다른 금액 필드가 혼입**된 것이다(운영 DB 실측 p50 1.408).
 
-    어느 쪽 금액이 깨졌는지는 이 비율만으로 알 수 없다 — base 가 부풀었을 수도, 추정가격
-    파싱이 깨졌을 수도 있다(실측에 est 3,636원 사례 혼재). 그래서 이 규칙은 base 를
-    **교정하지 않고** clean 버킷에서만 뺀다: 두 금액이 서로 모순인 행을 캘리브레이션의
-    ground truth 로 쓸 근거가 없다는 것까지가 이 증거가 말할 수 있는 전부다.
+    이 규칙이 주장하지 **않는** 것 (주장 범위 — 리뷰 교정)
+    ---------------------------------------------------
+    - **"개찰 전 정보만 쓴다"고 주장하지 않는다.** ``Project.budget_estimate`` 는 개찰 후
+      갱신될 수 있다: reserve detail 에 예정가가 없으면 수집이 ``winning_amount ÷
+      sucsfbidRate`` 로 예정가를 역산해(``app/services/koneps/scsbid.py``)
+      ``estimated_amount`` 로 배출하고, persistence 가 그 값으로 기존 추정가격을 덮는다.
+      즉 settled 행에서는 비교 대상 금액 자체가 **개찰 결과에서 파생된 값**일 수 있다.
+    - **"독립적인 두 번째 금액"이 항상 성립하지도 않는다.** 수집이 추정가격을 못 얻으면
+      ``matching.resolve_budget_estimate`` 가 base_amount 를 그대로 추정가격으로 쓰므로 두
+      금액이 같은 값의 두 사본이 되고, 비율이 항상 1.0 이라 이 규칙에 걸리지 않는다(실측
+      clean 33,601 중 10,110 = 30%). 백필이 ``est_equals_base`` 로 그 사각 코호트 크기를
+      함께 보고한다.
+
+    그래서 이 규칙이 실제로 주장하는 것은 하나다: **두 금액이 서로 모순이면, 어느 쪽이
+    파생값이든 그 행을 캘리브레이션의 ground truth 로 쓸 근거가 없다.** 어느 쪽이 깨졌는지는
+    비율만으로 가릴 수 없으므로(실측에 est 3,636원 파싱 실패 사례 혼재) base 를 **교정하지
+    않고** clean 버킷에서만 뺀다.
+
+    부작용으로, settled 행에서 제외 기준은 사실상 결과 조건부가 된다(base ÷ (낙찰가 ÷
+    사정률) > 임계). 남는 clean 버킷은 낙찰가 대비 base 가 낮은 쪽으로 치우치므로, 이
+    버킷으로 밴드를 재캘리브레이션하면 앵커가 **위(안전측)** 로 편향된다 — 그 편향을 함께
+    보고하지 않고 수치를 그대로 쓰지 말 것.
 
     추정가격을 확보하지 못하면(0.0) 비교 자체가 불가능하므로 규칙은 적용되지 않는다.
     저측(base < 추정가격)은 이 규칙의 대상이 아니다 — 기존 suspect-fractional 이 그 계열의
@@ -142,6 +160,10 @@ def _is_suspect_ratio(ctx: _BasisContext) -> bool:
     """
     if ctx.base <= 0 or ctx.budget_estimate <= 0:
         return False
+    # 나눗셈형이다. 같은 임계를 곱셈형으로 쓰는 라이브 게이트
+    # (``app/services/opportunity_analysis/market.py::enforceable_floor_price``)와
+    # 경계값에서 부동소수 반올림이 갈릴 수 있다 — 그쪽 주석에 두 형태를 함께 두는 이유가
+    # 적혀 있다(서로의 판정을 읽지 않으므로 갈림이 오염으로 번지지 않는다).
     return ctx.base / ctx.budget_estimate > BID_BASE_TRUST_RATIO_MAX
 
 
@@ -150,12 +172,13 @@ def _is_suspect_ratio(ctx: _BasisContext) -> bool:
 #
 # ORDER IS LOAD-BEARING. 비율 판정이 맨 앞에 서고, 그 뒤는 기존 순서를 그대로 둔다:
 #
-# 1. ``suspect-ratio`` — 같은 공고의 **독립적인 두 번째 금액**과의 모순이라 가장 강한
-#    증거다. 뒤의 두 패턴 판정은 이 질문("이 값이 진짜 기초금액인가")에 답하지 않는다:
-#    derived-yega 는 낙찰률이 ``winning ÷ base`` 로 정규화돼 저장되는 settled 행에서
-#    자기충족이고, derived-vat 은 **모든 정수 base** 에서 참이다(그래서 clean 이 그 앞에
-#    서 있다). 비율이 깨진 행이 그 패턴에도 걸리면 라벨은 suspect-ratio 로 가지만, 세
-#    라벨 모두 non-clean 버킷이라 소비자 동작은 같다.
+# 1. ``suspect-ratio`` — 같은 공고의 **다른 금액 필드와의 모순**이라 가장 강한 증거다
+#    (그 금액이 개찰 결과에서 파생됐을 수 있다는 한정은 위 predicate docstring 참조 —
+#    "독립적"이라고 주장하지 않는다). 뒤의 두 패턴 판정은 이 질문("이 값이 진짜
+#    기초금액인가")에 답하지 않는다: derived-yega 는 낙찰률이 ``winning ÷ base`` 로
+#    정규화돼 저장되는 settled 행에서 자기충족이고, derived-vat 은 **모든 정수 base** 에서
+#    참이다(그래서 clean 이 그 앞에 서 있다). 비율이 깨진 행이 그 패턴에도 걸리면 라벨은
+#    suspect-ratio 로 가지만, 세 라벨 모두 non-clean 버킷이라 소비자 동작은 같다.
 # 2. ``clean`` — 정수 원화. derived-vat 앞에 서야 정수 base 가 VAT 파생으로 오분류되지
 #    않는다.
 # 3. 예정가 역산 → VAT 파생 (둘 다 걸릴 수 있으면 역산이 더 구체적인 설명이다).

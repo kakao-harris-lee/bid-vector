@@ -49,6 +49,12 @@ def enforceable_floor_price(
     if budget_cap <= 0:
         return floor
     base = optional_float(bid_base) or 0.0
+    # 곱셈형(base > cap × 임계)이다. 같은 임계를 쓰는 분류기
+    # (``app/services/base_amount_basis.py::_is_suspect_ratio``)는 나눗셈형
+    # (base ÷ est > 임계)이라, 경계에 정확히 걸리는 값에서 부동소수 반올림이 갈릴 수 있다.
+    # 형태를 통일하지 않는 이유: 두 지점은 다른 질문에 답하고(라이브 게이트 vs 저장 라벨)
+    # 어느 쪽도 상대의 판정을 읽지 않으므로, 갈려도 한쪽이 다른 쪽을 틀리게 만들지 않는다.
+    # 통일은 두 경로의 수치를 동시에 움직이므로 별도 검증이 필요하다.
     if base <= 0 or base > budget_cap * BID_BASE_TRUST_RATIO_MAX:
         return 0.0
     return floor

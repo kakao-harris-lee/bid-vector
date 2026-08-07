@@ -715,14 +715,21 @@ def test_base_guard_tags_yega_when_stored_base_is_yega_reversal(test_db):
 def test_collection_time_tagging_does_not_apply_the_ratio_rule(test_db):
     """수집 시점 태깅은 base ÷ 추정가격 비율 규칙을 **아직** 적용하지 않는다(경계 고정).
 
-    비율 규칙은 같은 공고의 ``Project.budget_estimate`` 를 필요로 하는데, 이 write 경로는
-    ``HistoricalData`` 행만 보고 태깅한다. 그래서 오염 base 도 수집 시점에는 clean 으로
-    남고, 교정은 백필(``scripts/backfill_base_amount_basis.py``)이 담당한다 — 즉 이 PR 의
-    재태깅은 **일회성**이고 새로 수집되는 행에는 같은 오염이 다시 들어온다.
+    구조적 제약이 아니라 **선택**이다(리뷰 교정): 같은 함수가 이미
+    ``incoming_estimated = parsing.coerce_amount(item.estimated_amount)`` 로 공고 추정가격을
+    손에 쥐고 있으므로 넘길 값이 없어서 못 하는 것이 아니다. 배선하지 않은 이유는 라이브
+    표시가 함께 움직이기 때문이다 — 열린 공고가 ``suspect-ratio`` 로 태깅되면
+    ``get_reliable_base`` 가 ``clean-base`` 대신 ``base-fallback``("저장된 기초금액(basis
+    미상)")을 내보내, 금액은 그대로인데 화면 provenance 만 후퇴한다. 모순으로 **적극
+    판정한** 값을 "미상"으로 표시하는 것은 정직 명세의 역방향이라, 표시 어휘를 먼저 정한
+    뒤 배선하는 것이 순서다.
 
-    이 테스트는 그 잔여 갭을 회귀가 아니라 **알려진 경계**로 못박는다. 수집 경로에 공고
-    추정가격을 주입하는 후속에서 이 기대값이 바뀌면, 그때 라이브 ``bid_base_source`` 표시가
-    함께 바뀐다는 사실이 이 테스트의 실패로 드러난다.
+    따라서 현재 교정은 백필(``scripts/backfill_base_amount_basis.py``)이 담당하고, 이 PR 의
+    재태깅은 **일회성**이다 — 새로 수집되는 행에는 같은 오염이 다시 들어온다.
+
+    후속 배선 시 주의: 반드시 ``item.estimated_amount`` 를 직접 쓸 것.
+    ``matching.resolve_budget_estimate`` 는 추정가격이 없으면 ``base_amount`` 로 폴백하므로
+    비율이 1.0 으로 자기충족해 규칙이 조용히 무력화된다.
     """
     historical = HistoricalData(notice_number="GUARD-5")
     test_db.add(historical)

@@ -316,9 +316,9 @@ def test_reclassify_clean_retags_high_ratio_rows(ratio_db):
 
 def test_dry_run_reports_impact_breakdown(ratio_db):
     """dry-run 요약이 이동 행수를 status·category 로 분해하고 축소율을 낸다."""
-    summary = backfill.run_backfill(
-        ratio_db, apply=False, basis_filter=BASIS_CLEAN
-    ).as_dict()
+    summary = backfill.summarize(
+        backfill.run_backfill(ratio_db, apply=False, basis_filter=BASIS_CLEAN)
+    )
 
     assert summary["reclassified"] == 1
     assert summary["reclassified_by_status"] == {"open": 1}
@@ -405,7 +405,7 @@ def test_est_equals_base_counter_exposes_blind_cohort(test_db):
     )
     test_db.commit()
 
-    summary = backfill.run_backfill(test_db, apply=False).as_dict()
+    summary = backfill.summarize(backfill.run_backfill(test_db, apply=False))
 
     assert summary["est_equals_base"] == 1
     assert summary["by_basis"][BASIS_SUSPECT_RATIO] == 1  # 비율이 살아 있는 쪽만 이동
@@ -455,9 +455,9 @@ def test_reserve_estimate_and_status_cross_counters(test_db):
     )
     test_db.commit()
 
-    summary = backfill.run_backfill(
-        test_db, apply=False, basis_filter=BASIS_CLEAN
-    ).as_dict()
+    summary = backfill.summarize(
+        backfill.run_backfill(test_db, apply=False, basis_filter=BASIS_CLEAN)
+    )
 
     assert summary["reclassified"] == 2
     assert summary["reclassified_with_reserve_estimate"] == 1
