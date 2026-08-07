@@ -28,12 +28,16 @@ live / mock)로 실리는 키가 다르고 celery/HTTP payload 로 그대로 나
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
+from app.domain.published_floor_rate import plausible_published_floor_rate
 from app.schemas.crawl import CrawlNoticeItem
+
+logger = logging.getLogger(__name__)
 
 
 def _as_text(value: str | int | float | bool | None) -> str | None:
@@ -64,7 +68,35 @@ def _as_text(value: str | int | float | bool | None) -> str | None:
     return None
 
 
+def _gate_published_floor_rate(value: float | None) -> float | None:
+    """게시 낙찰하한율 중 **하한으로 성립하는 값만** 통과시킨다(구조 계약의 역할).
+
+    ``sucsfbidLwltRate`` 는 발주기관이 게시한 값의 충실한 전사인데, 원문에 하한으로
+    성립하지 않는 값이 섞여 온다 — 라이브 실측 47건이 ``1.00000`` ("예정가 전액 이상
+    투찰")이다. 이 값을 고치지는 않고 "게시 하한 없음"(``None``)으로 접는다.
+
+    여기가 게이트인 이유: 이 DTO 가 수집 두 경로(openapi / scsbid)와 손으로 만든 dict
+    payload 승격이 **모두 통과하는 유일한 지점**이다. 소비 지점마다 게이트를 다시 걸면
+    한 곳을 빠뜨렸을 때 조용히 새어 들어온다. ``_as_text`` 와 같은 축의 판단이다 —
+    타입은 맞지만 계약을 만족하지 못하는 값은 "값 없음"으로 다룬다.
+
+    왜 중요한가: 이 필드는 ``Project.award_floor_rate`` 가 되고, 라이브 가격 경로가
+    추천가에 **예산 상한 초과 권한**을 줄지 판정할 때 읽는 입력이다(#356 V3). 성립 불가한
+    하한이 통과하면 ``1.0 × 기초금액`` 이 하한으로 강제돼 기초금액 전액이 추천가가 된다.
+    밴드 근거는 :mod:`app.domain.published_floor_rate` 가 소유한다(단일 출처).
+
+    침묵 스킵 금지 — 무엇을 왜 버렸는지 남긴다(율은 공고가 공개 게시한 값이다).
+    """
+    accepted = plausible_published_floor_rate(value)
+    if accepted is None and value is not None:
+        logger.warning("게시 낙찰하한율이 개연 범위 밖이라 버림: rate=%s", value)
+    return accepted
+
+
 Text = Annotated[str | None, BeforeValidator(_as_text)]
+PublishedFloorRate = Annotated[
+    float | None, AfterValidator(_gate_published_floor_rate)
+]
 # KONEPS 원시 금액 토큰. 콤마/단위가 붙은 문자열이 그대로 올 수 있고, 소비자가
 # ``parsing.coerce_amount`` 로 해석한다. 여기서 float 로 강제하면 (a) 파싱 규칙이
 # 두 곳으로 갈라지고 (b) 소비자가 원시값을 그대로 대입하던 경로의 산출이 바뀐다.
@@ -95,9 +127,12 @@ class KonepsCollectedItem(CrawlNoticeItem):
 
     model_config = ConfigDict(extra="forbid")
 
-    award_floor_rate: float | None = Field(
+    award_floor_rate: PublishedFloorRate = Field(
         default=None,
-        description="공고 낙찰하한율(분수). 없으면 None — 기존 값을 지우지 않는 가드의 입력.",
+        description=(
+            "공고 낙찰하한율(분수). 하한으로 성립하지 않는 게시값은 None 으로 접힌다"
+            " — 없으면 None 이고, 기존 값을 지우지 않는 가드의 입력."
+        ),
     )
     eligibility_raw: dict[str, Any] | None = Field(
         default=None,

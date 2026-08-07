@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import to_kst
 from app.domain.money import BaseAmount
+from app.domain.published_floor_rate import plausible_published_floor_rate
 from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
 from app.models.models import HistoricalData, Project
 from app.services.award_verification import _rate_to_fraction
@@ -211,6 +212,20 @@ def resolve_notice_legal_floor_inputs(
     return estimation_amount, reference_date
 
 
+def resolve_notice_published_floor_bid_rate(project: Project) -> float | None:
+    """공고가 게시한 낙찰하한율의 정규화된 **원값** — 개연 게이트를 걸지 않는다.
+
+    분석·리포트 경로 전용이다(``notice_floor_shortfall`` / 홀드아웃 리포트). 그쪽은
+    자체 게이트(``holdout_quality.resolve_legal_floor_rate``)를 갖고 있고, 개연 범위 밖
+    값을 **버리는 대신 ``published_floor_implausible`` 로 세어야** 한다 — 여기서 미리
+    ``None`` 으로 접으면 그 계수기가 조용히 0 이 되어 원문 품질을 관측할 수 없게 된다.
+
+    가격 경로는 게이트가 걸린 :func:`resolve_notice_legal_floor_bid_rate` 를 쓴다. 두
+    이름을 나눈 이유가 이것이다: "하한으로 쓸 값"과 "게시된 값"은 다른 질문이다.
+    """
+    return _rate_to_fraction(getattr(project, "award_floor_rate", None))
+
+
 def resolve_notice_legal_floor_bid_rate(
     project: Project,
     *,
@@ -222,7 +237,23 @@ def resolve_notice_legal_floor_bid_rate(
     on the request wins (operator override is respected); otherwise we fall back to
     the notice's OWN published 낙찰하한율 ``Project.award_floor_rate`` (#201). The
     published value may be stored as a fraction (0.88) or a percent (88), so it is
-    normalized via ``_rate_to_fraction`` (reused, not re-derived).
+    normalized via ``_rate_to_fraction`` (reused, not re-derived) and then has to
+    clear the plausibility band (:func:`plausible_published_floor_rate`).
+
+    WHY THE PUBLISHED VALUE IS GATED (#356 follow-up)
+    -------------------------------------------------
+    ``Project.award_floor_rate`` is a faithful transcription of KONEPS
+    ``sucsfbidLwltRate``, and that source carries values that cannot be a 낙찰하한:
+    47 notices hold 1.00000 ("bid at or above the full 예정가"). The ``max()`` fold
+    below used to make such a value harmless, but #356 gave a *reported* published
+    floor the authority to push the recommendation past the budget cap, so
+    ``1.0 × 기초금액`` could become the enforced floor and the whole 기초금액 the
+    recommended bid. An implausible published rate is therefore treated exactly like
+    "no published 하한" (``None``) — the value is not repaired, only refused.
+
+    The **override is deliberately not gated**: it is an operator instruction for
+    this notice, not scraped data, and silently dropping it would erase an explicit
+    decision. A bad override is an input-validation problem for the request schema.
 
     RED LINE: guardrail_core folds this value into the floor with ``max()`` only
     (``_max_optional_rate(configured_floor, legal_floor)``), so a published 하한 can
@@ -235,7 +266,9 @@ def resolve_notice_legal_floor_bid_rate(
     """
     if request_legal_floor_bid_rate is not None:
         return request_legal_floor_bid_rate
-    return _rate_to_fraction(getattr(project, "award_floor_rate", None))
+    return plausible_published_floor_rate(
+        resolve_notice_published_floor_bid_rate(project)
+    )
 
 
 def build_prediction_text(project: Project) -> str:

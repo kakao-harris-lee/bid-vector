@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.time import kst_now
+from app.domain.published_floor_rate import plausible_published_floor_rate
 from app.domain.rate_normalization import to_bid_rate_fraction
 from app.models.models import HistoricalData, Project, TenderResult
 from app.utils.numeric import optional_float
@@ -253,9 +254,15 @@ def verify_one(
     # 낙찰하한율 근거: 운영자 입력(submitted)이 우선. 없으면 공고 수집 시 저장한
     # Project.award_floor_rate(notice)로 폴백한다. 어떤 근거로 판정했는지 §2 정직
     # 명세에 따라 결과 dict에 남긴다.
+    #
+    # 게시값은 라이브 가격 경로와 **같은 개연 게이트**를 통과해야 한다. 성립 불가한
+    # 하한율(1.00000)로 판정하면 적법 낙찰이 "하한 미달"로 뒤집혀 보고된다. 게이트에
+    # 걸리면 source 가 남지 않아 판정 근거 없음으로 정직하게 표기된다.
     floor_rate_source: str | None = "submitted" if floor_rate is not None else None
     if floor_rate is None and project is not None:
-        notice_floor = _rate_to_fraction(project.award_floor_rate)
+        notice_floor = plausible_published_floor_rate(
+            _rate_to_fraction(project.award_floor_rate)
+        )
         if notice_floor is not None:
             floor_rate = notice_floor
             floor_rate_source = "notice"

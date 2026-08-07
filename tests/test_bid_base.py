@@ -16,6 +16,7 @@ from app.services.bid_base import (
     prepare_prediction_inputs,
     resolve_notice_bid_base,
     resolve_notice_legal_floor_bid_rate,
+    resolve_notice_published_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
 )
 from app.services.prediction_workflow import PredictionWorkflowService
@@ -456,6 +457,24 @@ def test_resolve_legal_floor_bid_rate_does_not_gate_the_operator_override():
     )
 
     assert resolved == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("award_floor_rate, expected", [(1.0, 1.0), (88.0, 0.88), (None, None)])
+def test_resolve_published_floor_bid_rate_is_not_gated(award_floor_rate, expected):
+    """분석용 접근자는 게시값을 정규화만 하고 개연 게이트를 걸지 않는다.
+
+    홀드아웃 리포트와 운영자 대면 하한 미달 표시는 개연 범위 밖 값을 **버리는 대신**
+    ``published_floor_implausible`` 로 센다. 여기서 미리 ``None`` 으로 접으면 그 계수기가
+    조용히 0 이 되어 KONEPS 원문 품질을 관측할 수 없다(게이트가 도입한 회귀 방지).
+    """
+    project = Project(title="게시값 원값", category="service", award_floor_rate=award_floor_rate)
+
+    resolved = resolve_notice_published_floor_bid_rate(project)
+
+    if expected is None:
+        assert resolved is None
+    else:
+        assert resolved == pytest.approx(expected)
 
 
 def _predict_with_award(

@@ -54,13 +54,13 @@ from app.ai.floor_applicability import (
     FLOOR_SEPARATE_REGIME,
     FORESTRY_REGIME_FLOOR_RATE,
     is_floor_judgeable,
-    is_published_floor_plausible,
     resolve_floor_applicability,
 )
 from app.ai.predictors.legal_floor_spec import (
     resolve_construction_qualification_floor,
 )
 from app.domain.aggregates import error_rate
+from app.domain.published_floor_rate import is_published_floor_plausible
 from app.services.base_amount_basis import BASIS_CLEAN
 
 # ── 플래그 라벨 ────────────────────────────────────────────────────────────────

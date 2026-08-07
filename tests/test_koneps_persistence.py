@@ -190,11 +190,12 @@ def test_update_project_keeps_award_floor_rate_when_item_missing(test_db):
 
 
 def test_update_project_drops_implausible_award_floor_rate(test_db):
-    """성립 불가한 게시 하한율은 저장하지 않는다 — 이 컬럼은 라이브 가격 경로의 입력이다.
+    """성립 불가한 게시 하한율은 공고에 적재되지 않는다 — 수집 경로 끝에서 본 결과.
 
-    KONEPS ``sucsfbidLwltRate`` 원문이 "100"(퍼센트) 또는 "1"(분수)인 공고가 실재하고,
-    ``normalize_bid_rate_value`` 는 상한이 없어 1.0 을 충실히 전사한다. 그 값이
-    ``Project.award_floor_rate`` 로 들어가면 ``1.0 × 기초금액`` 이 하한으로 강제된다.
+    게이트는 DTO 계약(``KonepsCollectedItem.award_floor_rate``)에 있어 item 이 만들어질
+    때 이미 ``None`` 으로 접힌다. 여기서 확인하는 것은 그 결과가 persistence 의 anti-clobber
+    가드와 맞물려 **컬럼에 1.0 이 남지 않는다**는 것이다. 이 컬럼은 라이브 가격 경로가
+    예산 상한 초과 권한을 판정할 때 읽는 입력이다(#356 V3).
     """
     project = Project(
         title="placeholder",

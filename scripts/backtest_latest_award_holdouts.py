@@ -48,8 +48,8 @@ from app.services.base_amount_basis import (
 )
 from app.services.bid_base import (
     build_prediction_text,
-    resolve_notice_legal_floor_bid_rate,
     resolve_notice_legal_floor_inputs,
+    resolve_notice_published_floor_bid_rate,
 )
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.query_predicates import settled_any_signal
@@ -735,7 +735,9 @@ def evaluate_target(
     # era-correct 하게 적용하도록 한다(2026-01-30 신율 소급 없음). estimation_amount는
     # 추정가격(budget_estimate)이라 pricing base(budget=기초금액)와 별개다.
     estimation_amount, reference_date = resolve_notice_legal_floor_inputs(project)
-    published_floor_rate = resolve_notice_legal_floor_bid_rate(project)
+    # 게이트 없는 원값 — 개연 범위 판정은 assess_row_quality 안에서 하고, 범위 밖 값은
+    # published_floor_implausible 로 계수된다(미리 접으면 그 계수기가 0 이 된다).
+    published_floor_rate = resolve_notice_published_floor_bid_rate(project)
     # 복수예비가격은 예정가를 독립적으로 재구성할 수 있는 유일한 저장 증거다. 품질
     # 판정기는 I/O 없이 돌아야 하므로 여기서 개수만 뽑아 주입한다(§4.7.3).
     reserve_price_count = len(coerce_numeric_list(historical.reserve_prices))
