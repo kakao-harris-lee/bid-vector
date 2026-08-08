@@ -293,8 +293,12 @@ def update_project_from_item(
         project.requirements, requirement_lines
     )
     project.category = resolved_category or project.category
-    # 추정가격은 출처 인지 가드를 거친다: 개찰 파생 예정가·기초금액 폴백이 저장된 공고
+    # 추정가격은 출처 인지 가드를 거친다: 파생 예정가·예산/기초금액 폴백이 저장된 공고
     # 추정가격을 덮으면 provenance 분모(#358)와 budget_cap(#356)이 함께 흔들린다.
+    # 결합 주의: 신고(``item.estimated_amount_source``)는 item 의 **추정가격 자리**를 서술하고
+    # 가드가 판정하는 값은 ``resolve_budget_estimate``(base 폴백 포함) 산출이다. 둘이 어긋나지
+    # 않는 근거는 DTO 게이트다 — 그 자리가 비면 출처도 ``None`` 으로 접혀, 폴백으로 도착한
+    # base 가 게시값 권위를 얻지 못한다(``app/schemas/koneps_items.py``).
     budget_fields.apply_budget_amounts(project, item=item)
 
     closing_at = parsing.coerce_datetime(item.closing_at)

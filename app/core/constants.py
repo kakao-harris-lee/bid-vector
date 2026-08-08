@@ -213,6 +213,13 @@ ESTIMATE_SOURCE_NOTICE: EstimatedAmountSource = "notice"
 ESTIMATE_SOURCE_DERIVED: EstimatedAmountSource = "derived"
 ESTIMATE_SOURCE_BUDGET_FALLBACK: EstimatedAmountSource = "estimate-budget-fallback"
 ESTIMATE_SOURCE_BASE_FALLBACK: EstimatedAmountSource = "estimate-base-fallback"
+# 신뢰 **정책**을 코드 분기가 아니라 데이터로 선언한다(§4.5-3): 저장된 추정가격을 덮을 수
+# 있는 출처 집합. write 가드(``app/services/koneps/budget_fields.py``)는 이 집합의 멤버십만
+# 본다. 어휘가 늘 때 "덮을 수 있는가"를 여기 한 줄로 결정하게 하려는 것이고, 빠뜨리면 기본이
+# 보수(fill-only)라 새 출처가 조용히 권위를 얻는 일이 없다.
+ESTIMATE_SOURCES_AUTHORITATIVE: frozenset[EstimatedAmountSource] = frozenset(
+    {ESTIMATE_SOURCE_NOTICE}
+)
 
 # ``PaperBidRun.mode`` 값 — 하나의 run 이 과거 개찰 재현(historical replay)인지
 # 진행 중 공고의 forward paper 생성인지 구분한다. 두 모드는 요청 스냅샷 키 집합과

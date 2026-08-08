@@ -87,8 +87,9 @@ class BackfillStats:
     # 이동 행 중 복구 추정치를 가진 수 — 라벨만 바뀌는 행과 구분한다(위 참조).
     reclassified_with_reserve_estimate: int = 0
     # 추정가격이 base 와 정확히 같은 행. 수집이 추정가격을 못 얻으면
-    # ``matching.resolve_budget_estimate`` 가 base_amount 를 그대로 추정가격으로 쓰므로
-    # 비율이 항상 1.0 이 되어 base 가 아무리 오염돼도 이 규칙에 걸리지 않는다. 규칙이
+    # ``matching.resolve_budget_estimate`` 가 base_amount 를 그대로 추정가격으로 쓰고, write
+    # 가드가 그 폴백을 **빈 자리일 때만** 저장한다(``koneps.budget_fields``). 그렇게 채워진
+    # 행은 비율이 항상 1.0 이라 base 가 아무리 오염돼도 이 규칙에 걸리지 않는다. 규칙이
     # 구조적으로 못 보는 코호트라 검증 커버리지로 함께 보고한다.
     est_equals_base: int = 0
     samples: list[dict[str, Any]] = field(default_factory=list)

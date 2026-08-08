@@ -124,8 +124,9 @@ _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
 # 이 순서가 base_amount 해석의 **단일 출처**다: openapi.build_openapi_notice_item 이
 # ``BASE_RESOLUTION_ORDER`` 를 import 해 base_amount 후보로 그대로 소비한다(더는 인라인
 # 리스트를 두지 않는다). 진짜 기초금액 3키가 먼저이고, 그중 어느 것도 양수로 실리지 않은
-# 공고에서만 예산 2키(asignBdgtAmt, bdgtAmt) -> 예정가 2키(presmptPrce, presmptAmt) 로
-# 폴백한다. 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
+# 공고에서만 예산 2키(asignBdgtAmt, bdgtAmt) -> 추정가격 2키(presmptPrce, presmptAmt) 로
+# 폴백한다(이 두 키는 예정가가 아니라 **추정가격**이다 — 예정가는 개찰 산물이라 공고 피드에
+# 없다. 아래 ``NOTICE_ESTIMATE_KEYS`` 가 이 두 키에 게시값 권위를 부여하므로 명칭이 중요하다). 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
 # ``first_openapi_amount(..., positive_only=True)``, 검증기는 같은 규칙을 모사) — 0 으로
 # 실린 기초금액 키가 양수 예산 폴백을 가리지 않게 하기 위함이다. 같은 상수를 공유하므로
 # 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 **순서 축에서는** 드리프트할 수
@@ -159,7 +160,8 @@ ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
     NOTICE_ESTIMATE_KEYS + BUDGET_FALLBACK_ESTIMATE_KEYS
 )
 # 검증기 전용 룩업: base 가 어느 키에서 해석됐는지를 basis 로 분류한다(해석 **순서**는 위
-# 두 상수가 소유하고 프로덕션이 그것을 소비한다 — 이 표는 판정에만 쓰인다).
+# ``BASE_RESOLUTION_ORDER``/``ESTIMATED_RESOLUTION_ORDER`` 두 상수가 소유하고 프로덕션이
+# 그것을 소비한다 — 이 표는 판정에만 쓰인다).
 KEY_BASIS: dict[str, Basis] = {
     **{key: Basis.BASE_AMOUNT for key in TRUE_BASE_KEYS},
     "presmptPrce": Basis.BUDGET_ESTIMATE,

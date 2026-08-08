@@ -25,8 +25,10 @@ KONEPS 는 정정공고·재공고로 추정가격을 **바꿔 게시**한다(�
 ``budget_cap`` 이 실제보다 느슨해진다. 그래서 값이 아니라 **출처**를 본다: 공고가 추정가격으로
 게시한 값(``notice``)만 정정으로 받아들이고, 나머지 셋(개찰 파생 ``derived``, 예산 키 폴백
 ``estimate-budget-fallback``, 기초금액 사본 ``estimate-base-fallback``)과 미신고(``None``)는
-**빈 자리(NULL/0)만** 채운다(``persistence`` 의
-``award_floor_rate``/``eligibility_raw`` anti-clobber 가드 미러).
+**빈 자리(NULL/0)만** 채운다. ``persistence`` 의
+``award_floor_rate``/``eligibility_raw`` 가드와 같은 축이되 **더 강하다**: 저쪽은 "유입이
+비었으면 지우지 않는다"(존재 가드)이고, 여기는 "이미 값이 있으면 권위 없는 유입으로 바꾸지
+않는다"(점유 가드)다. 이 자리가 판정의 분모라서 존재 가드만으로는 부족하다.
 
 라벨을 정하는 규칙은 ``app/domain/estimate_provenance.py`` 한 벌이고, 여기는 그 라벨을
 **해석만** 한다 — 어느 축이 권위인지에 대한 판정이 두 벌이 되지 않게(§4.5-8).
@@ -34,10 +36,12 @@ KONEPS 는 정정공고·재공고로 추정가격을 **바꿔 게시**한다(�
 스코프 밖(의도적)
 -----------------
 * ``budget_min``/``budget_max`` 는 종전 그대로 유입 금액 전부를 반영한다. 두 컬럼은 분모도
-  게이트 입력도 아니고, 좁히면 다른 소비자의 산출이 바뀐다.
-* ``matching.resolve_budget_estimate`` 의 ``base_amount`` 폴백도 유지한다 — 그 값은 min/max
-  가 함께 보고, 폴백을 없애면 이 PR 밖의 산출이 움직인다. 폴백은 남기고 **그 값이 무엇인지**
-  를 생산자가 신고하게 한 것이 이 PR 의 경계다.
+  게이트 입력도 아니라 가드의 대상이 아니다(아래 ``budget_values`` 는 item 의 두 원시 금액을
+  이미 포함하므로, 추정가격 폴백을 막아도 min/max 산출은 어차피 바뀌지 않는다).
+* ``matching.resolve_budget_estimate`` 의 ``base_amount`` 폴백도 유지한다 — 그 헬퍼의 다른
+  소비자(``persistence.find_matching_project`` 의 ``target_budget``: 공고 매칭 후보 점수)가
+  같은 값을 보므로, 폴백을 없애면 이 PR 밖의 산출이 움직인다. 폴백은 남기고 **그 값이
+  무엇인지**를 생산자가 신고하게 한 것이 이 PR 의 경계다.
 * 이미 저장된 ``est == base`` 행은 이 가드로 바뀌지 않는다(전망적 보호). 기존 값의 수리는
   원본 추정가격이 남아 있지 않아 별도 문제이고, 규모·잔여 코호트 실측은
   ``docs/operations/base-amount-basis-backfill.md`` §6/§7 이 갖는다.
@@ -45,7 +49,7 @@ KONEPS 는 정정공고·재공고로 추정가격을 **바꿔 게시**한다(�
 
 from __future__ import annotations
 
-from app.core.constants import ESTIMATE_SOURCE_NOTICE, EstimatedAmountSource
+from app.core.constants import ESTIMATE_SOURCES_AUTHORITATIVE, EstimatedAmountSource
 from app.models.models import Project
 from app.schemas.koneps_items import KonepsCollectedItem
 from app.services.koneps import matching
@@ -63,8 +67,10 @@ def should_write_budget_estimate(
 
     1. 유입이 값이 아니면(None/0/음수/비수치) 쓰지 않는다. 종전 ``or 이전값`` 과 같은
        결과이고, "값 없음"이 저장값을 지우지 않는다는 뜻이다.
-    2. 공고 게시값(``notice``)은 쓴다 — 정정공고·재공고의 갱신을 반영한다.
-    3. 나머지(파생 · 기초금액 폴백 · 미신고)는 **빈 자리일 때만** 쓴다.
+    2. 권위 있는 출처면 쓴다 — 어느 출처가 권위인지는 코드가 아니라
+       :data:`~app.core.constants.ESTIMATE_SOURCES_AUTHORITATIVE` 선언이 정한다(오늘은
+       ``notice`` 하나). 정정공고·재공고의 갱신을 반영하는 경로다.
+    3. 나머지(파생 · 예산 폴백 · 기초금액 폴백 · 미신고)는 **빈 자리일 때만** 쓴다.
 
     ``source`` 는 DTO 계약이 이미 정규화해 넘긴다(값이 없으면 ``None`` 으로 접힌다), 그래서
     여기서 "값 없이 notice 신고" 같은 모순을 다시 방어하지 않는다. 반면 ``current`` 는 ORM
@@ -73,7 +79,7 @@ def should_write_budget_estimate(
     incoming_amount = optional_float(incoming)
     if incoming_amount is None or incoming_amount <= 0:
         return False
-    if source == ESTIMATE_SOURCE_NOTICE:
+    if source in ESTIMATE_SOURCES_AUTHORITATIVE:
         return True
     current_amount = optional_float(current)
     return current_amount is None or current_amount <= 0

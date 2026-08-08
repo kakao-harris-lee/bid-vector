@@ -4,7 +4,8 @@
 ----------------
 ``CrawlNoticeItem`` 은 ``CrawlResponse`` 를 통해 ``POST /operations/crawl`` 의
 응답 스키마로 **공개**되어 있다(OpenAPI 표면). 수집 경로는 그보다 넓은 필드를 실어
-persistence 까지 운반한다(``award_floor_rate`` / ``eligibility_raw``). 공개 스키마에
+persistence 까지 운반한다(``award_floor_rate`` / ``eligibility_raw`` /
+``estimated_amount_source``). 공개 스키마에
 필드를 추가하면 OpenAPI 스펙과 프론트 타입이 함께 흔들리므로, 수집 내부 계약은
 ``CrawlNoticeItem`` 을 **확장**한 이 모델로 둔다. 어떤 라우터도 이 모델을 참조하지
 않으므로 OpenAPI 스펙은 불변이고, HTTP 경계에서는 부모 스키마로 좁혀 나간다.

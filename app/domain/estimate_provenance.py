@@ -9,7 +9,9 @@
 
 두 지점이 각자 판정을 들고 있으면 "무엇을 게시값으로 볼 것인가"가 갈린다(§4.5-8). 그래서
 판정은 이 순수 함수 한 벌이고, 수집 층이 ORM 도 dict 경계도 끌어오지 않게 ``app/domain``
-아일랜드에 둔다(``published_floor_rate`` 와 같은 모양 — I/O 0, 의존 0).
+아일랜드에 둔다(``published_floor_rate`` 와 같은 모양 — I/O 0, 서드파티 의존 0, mypy strict
+아일랜드 등록). 사내 의존은 ``app.core.constants`` 하나다: 어휘 값은 pydantic 필드
+annotation 으로도 쓰여야 해서 선언 hub 에 있고, 여기는 그 어휘를 **해석**한다.
 
 무엇을 판정하는가
 -----------------

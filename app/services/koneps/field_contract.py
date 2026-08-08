@@ -33,15 +33,18 @@ from app.domain.rate_normalization import to_bid_rate_fraction
 
 # 선언 표면 **전체**를 여기서 다시 노출한다: ``field_contract.X`` 로 참조하던 기존 호출부
 # (스크립트/테스트)가 분해 후에도 그대로 동작해야 한다. 검증기가 직접 쓰는 이름은 그 사용
-# 자체로 재수출되고, 이 모듈이 쓰지 않는 두 이름(``ESTIMATED_RESOLUTION_ORDER`` /
-# ``FieldContract``)은 PEP 484 의 명시적 재수출 형식(``X as X``)으로 남긴다 — 빠뜨리면
-# "참조 경로는 그대로"라는 위 주장이 그 이름에서만 거짓이 된다.
+# 자체로 재수출되고, 이 모듈이 쓰지 않는 이름(``ESTIMATED_RESOLUTION_ORDER`` /
+# ``FieldContract`` / 키 그룹 3종)은 PEP 484 의 명시적 재수출 형식(``X as X``)으로 남긴다 —
+# 빠뜨리면 "참조 경로는 그대로"라는 위 주장이 그 이름에서만 거짓이 된다.
 from app.services.koneps.field_contract_spec import (
     BASE_RESOLUTION_ORDER,
+    BUDGET_FALLBACK_ESTIMATE_KEYS as BUDGET_FALLBACK_ESTIMATE_KEYS,
     ESTIMATED_RESOLUTION_ORDER as ESTIMATED_RESOLUTION_ORDER,
     FIELD_CONTRACTS,
     KEY_BASIS,
     KNOWN_FIELDS,
+    LICENSE_TEXT_KEYS as LICENSE_TEXT_KEYS,
+    NOTICE_ESTIMATE_KEYS as NOTICE_ESTIMATE_KEYS,
     TRUE_BASE_KEYS,
     FieldContract as FieldContract,
     OperationFamily,
