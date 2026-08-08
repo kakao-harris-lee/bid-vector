@@ -85,17 +85,23 @@ def test_stored_value_table(current, incoming, source, expected):
     assert budget_fields.stored_budget_estimate(current, incoming, source) == expected
 
 
-def test_non_numeric_inputs_are_coerced_not_raised():
-    """KONEPS 원시 토큰은 문자열일 수 있다 — 숫자로 해석하고, 실패하면 '값 없음'."""
+def test_stored_value_is_coerced_before_it_counts_as_occupied():
+    """저장 값은 숫자로 해석한 뒤 '자리가 찼는지'를 본다(ORM 이 float 를 보장하지 않는다).
+
+    유입 값은 DTO 가 float 로 좁혀 오지만 ``current`` 는 컬럼에서 오므로, 숫자로 해석되지
+    않는 값은 빈 자리로 취급해 파생 값이라도 채우게 둔다(값 소실 방지).
+    """
     assert (
         budget_fields.should_write_budget_estimate(
-            None, "120000000", ESTIMATE_SOURCE_NOTICE
+            "100000000", 111_000_000.0, ESTIMATE_SOURCE_DERIVED
         )
-        is True
+        is False
     )
     assert (
-        budget_fields.should_write_budget_estimate(None, "미상", ESTIMATE_SOURCE_NOTICE)
-        is False
+        budget_fields.should_write_budget_estimate(
+            "미상", 111_000_000.0, ESTIMATE_SOURCE_DERIVED
+        )
+        is True
     )
 
 

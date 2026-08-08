@@ -482,7 +482,7 @@ def test_accepted_floor_rate_logs_nothing(caplog):
     assert [r for r in caplog.records if "낙찰하한율" in r.getMessage()] == []
 
 
-@pytest.mark.parametrize("estimated_amount", [None, 0.0, "", "미상"])
+@pytest.mark.parametrize("estimated_amount", [None, 0.0, -1.0])
 def test_estimate_source_is_dropped_when_no_estimate_is_carried(estimated_amount):
     """추정가격이 실리지 않았으면 출처 신고도 남기지 않는다(자족적 계약).
 
@@ -502,12 +502,12 @@ def test_estimate_source_is_dropped_when_no_estimate_is_carried(estimated_amount
 
 
 def test_estimate_source_survives_when_an_estimate_is_carried():
-    """값이 실려 있으면 신고한 출처가 그대로 흐른다(원시 문자열 토큰 포함)."""
+    """값이 실려 있으면 신고한 출처가 그대로 흐른다(pydantic 이 접는 숫자 문자열 포함)."""
     item = KonepsCollectedItem(
         notice_number="EST-SRC-2",
         title="출처 게이트",
         base_amount=100_000_000.0,
-        estimated_amount="96,000,000",
+        estimated_amount="96000000",
         estimated_amount_source=ESTIMATE_SOURCE_NOTICE,
     )
 

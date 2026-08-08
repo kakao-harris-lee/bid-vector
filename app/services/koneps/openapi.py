@@ -21,6 +21,11 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from app.core.config import settings
+from app.core.constants import (
+    ESTIMATE_SOURCE_BASE_FALLBACK,
+    ESTIMATE_SOURCE_NOTICE,
+    EstimatedAmountSource,
+)
 from app.core.time import utc_now
 from app.schemas.koneps_items import KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
@@ -28,6 +33,7 @@ from app.services.koneps import parsing
 from app.services.koneps.field_contract_spec import (
     BASE_RESOLUTION_ORDER,
     ESTIMATED_RESOLUTION_ORDER,
+    LICENSE_TEXT_KEYS,
 )
 from app.services.koneps.openapi_operations import (
     OPENAPI_CATEGORY_OPERATIONS,
@@ -362,6 +368,11 @@ def build_eligibility_raw(
     return result or None
 
 
+def _estimate_source(estimated_amount: float | None) -> EstimatedAmountSource:
+    """추정가격 축이 자기 키에서 값을 얻었으면 공고 게시값, 못 얻었으면 기초금액 사본."""
+    return ESTIMATE_SOURCE_NOTICE if estimated_amount else ESTIMATE_SOURCE_BASE_FALLBACK
+
+
 def build_openapi_notice_item(
     raw_item: dict[str, Any],
     *,
@@ -417,10 +428,7 @@ def build_openapi_notice_item(
         ).strip()
         or None
     )
-    license_text = " ".join(
-        str(raw_item.get(key) or "")
-        for key in ("indstrytyCd", "indstrytyNm", "lcnsLmtNm", "prtcptLmtRgnNm")
-    )
+    license_text = " ".join(str(raw_item.get(key) or "") for key in LICENSE_TEXT_KEYS)
     award_floor_rate = parsing.normalize_bid_rate_value(
         raw_item.get("sucsfbidLwltRate")
     )
@@ -430,6 +438,7 @@ def build_openapi_notice_item(
         title=title,
         base_amount=float(base_amount or 0.0),
         estimated_amount=float(estimated_amount or base_amount or 0.0),
+        estimated_amount_source=_estimate_source(estimated_amount),
         award_floor_rate=award_floor_rate,
         # eligibility_raw는 여기서 배출하지 않는다: 목록/표적조회 응답에 자격 상세가
         # 없고(실측 2026-07-19), 유일한 writer는 backfill 스크립트(표적조회 + license-

@@ -983,7 +983,13 @@ def test_notice_feed_still_applies_a_corrected_estimate(test_db):
 
 
 @pytest.mark.parametrize(
-    "source", [ESTIMATE_SOURCE_NOTICE, ESTIMATE_SOURCE_DERIVED, None]
+    "source",
+    [
+        ESTIMATE_SOURCE_NOTICE,
+        ESTIMATE_SOURCE_DERIVED,
+        ESTIMATE_SOURCE_BASE_FALLBACK,
+        None,
+    ],
 )
 def test_first_collection_fills_an_empty_estimate_from_any_source(test_db, source):
     """최초 수집은 출처와 무관하게 빈 자리를 채운다(신규 공고에서 값이 사라지지 않게)."""

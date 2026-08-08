@@ -156,6 +156,14 @@ KEY_BASIS: dict[str, Basis] = {
     "asignBdgtAmt": Basis.BUDGET_ESTIMATE,
     "bdgtAmt": Basis.BUDGET_ESTIMATE,
 }
+# 면허/지역 제한 텍스트를 실어 오는 원시 키 — 이어 붙인 문자열이 면허코드 추출의 입력이다.
+# 다른 키 목록과 같은 자리에 선언해 두어 아이템 빌더는 해석만 한다(§4.5-1).
+LICENSE_TEXT_KEYS: tuple[str, ...] = (
+    "indstrytyCd",
+    "indstrytyNm",
+    "lcnsLmtNm",
+    "prtcptLmtRgnNm",
+)
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@
       "closing_at": "2026-05-20T10:00:00+00:00",
       "eligibility_raw": null,
       "estimated_amount": 113636364.0,
+      "estimated_amount_source": "notice",
       "license_codes": [
         "SW001"
       ],
@@ -71,6 +72,7 @@
       "closing_at": "2026-05-20T10:00:00+00:00",
       "eligibility_raw": null,
       "estimated_amount": 113636364.0,
+      "estimated_amount_source": "notice",
       "license_codes": [
         "SW001"
       ],
@@ -132,6 +134,7 @@
       "closing_at": "2026-05-20T10:00:00+00:00",
       "eligibility_raw": null,
       "estimated_amount": 113636364.0,
+      "estimated_amount_source": "notice",
       "license_codes": [
         "SW001"
       ],

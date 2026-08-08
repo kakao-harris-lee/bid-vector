@@ -34,9 +34,11 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from app.core.constants import EstimatedAmountSource
 from app.domain.published_floor_rate import plausible_published_floor_rate
 from app.domain.rate_normalization import to_bid_rate_fraction
 from app.schemas.crawl import CrawlNoticeItem
+from app.utils.numeric import optional_float
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,15 @@ class KonepsCollectedItem(CrawlNoticeItem):
         default=None,
         description="참가자격 원문. 수집 피드는 배출하지 않고 backfill 스크립트만 채운다.",
     )
+    estimated_amount_source: EstimatedAmountSource | None = Field(
+        default=None,
+        description=(
+            "``estimated_amount`` 자리에 실린 값의 출처(어휘는"
+            " ``app.core.constants.EstimatedAmountSource``). ``None`` 은 '미신고' 이고,"
+            " write 가드는 이를 파생/폴백과 같은 보수 취급으로 다룬다 — 구 dict payload"
+            " 하위 호환을 위해 기본값이다."
+        ),
+    )
 
     @model_validator(mode="after")
     def _normalize_and_gate_award_floor_rate(self) -> "KonepsCollectedItem":
@@ -153,6 +164,25 @@ class KonepsCollectedItem(CrawlNoticeItem):
                 raw,
             )
         self.award_floor_rate = accepted
+        return self
+
+    @model_validator(mode="after")
+    def _gate_estimated_amount_source(self) -> "KonepsCollectedItem":
+        """추정가격이 실리지 않았으면 출처 신고를 남기지 않는다(자족적 계약).
+
+        ``award_floor_rate`` 게이트와 같은 축이다: 이 DTO 는 생산자 두 경로(openapi /
+        scsbid)와 dict payload 승격이 **모두 통과하는 유일한 지점**이라, "값 없이 출처만
+        신고" 같은 모순은 여기서 접는다. 그러지 않으면 write 가드
+        (``app/services/koneps/budget_fields.py``)가 존재하지 않는 값을 공고 게시값으로
+        신뢰해, 폴백으로 도착한 기초금액이 저장된 추정가격을 덮을 수 있다.
+
+        어휘 자체의 검증은 ``Literal`` 이 한다 — 오타는 여기 오기 전에 거부된다.
+        """
+        if self.estimated_amount_source is None:
+            return self
+        amount = optional_float(self.estimated_amount)
+        if amount is None or amount <= 0:
+            self.estimated_amount_source = None
         return self
 
     def opening_facts(self) -> CrawlItemMetadataFacts:
