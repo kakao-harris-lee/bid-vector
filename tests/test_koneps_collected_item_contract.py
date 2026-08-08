@@ -18,6 +18,11 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from app.core.constants import (
+    ESTIMATE_SOURCE_BASE_FALLBACK,
+    ESTIMATE_SOURCE_DERIVED,
+    ESTIMATE_SOURCE_NOTICE,
+)
 from app.models.models import CrawlJob
 from app.schemas.crawl import CrawlNoticeItem
 from app.schemas.koneps_items import (
@@ -58,6 +63,31 @@ def test_openapi_builder_returns_typed_item():
     assert item.base_amount == 125_000_000.0
     assert item.award_floor_rate == 0.87995
     assert item.closing_at == datetime(2026, 5, 20, 10, 0, tzinfo=UTC)
+    # 추정가격 축이 자기 키 순서(배정예산액 폴백 포함)에서 값을 얻었으므로 공고 게시값이다.
+    assert item.estimated_amount_source == ESTIMATE_SOURCE_NOTICE
+
+
+def test_openapi_builder_flags_a_base_fallback_estimate():
+    """추정가격 축 키가 하나도 없으면 기초금액 폴백임을 신고한다.
+
+    ``estimated_amount = est or base`` 폴백 자체는 유지된다(``budget_min``/``budget_max``
+    등 다른 소비자가 그 값을 본다). 유지하되 **그 값이 무엇인지**를 실어 보내, 저장된
+    추정가격을 이 사본으로 덮지 않게 하는 것이 이 필드의 목적이다.
+    """
+    item = openapi.build_openapi_notice_item(
+        {
+            "bidNtceNo": "R26BK01510408",
+            "bidNtceNm": "추정가격 미공급",
+            "bssAmt": "125,000,000",
+        },
+        request=_notice_request(),
+        operation="getBidPblancListInfoServc",
+    )
+
+    assert item is not None
+    assert item.base_amount == 125_000_000.0
+    assert item.estimated_amount == 125_000_000.0  # 폴백 값 자체는 종전대로 실린다
+    assert item.estimated_amount_source == ESTIMATE_SOURCE_BASE_FALLBACK
 
 
 def test_scsbid_builder_returns_typed_item():
@@ -77,6 +107,8 @@ def test_scsbid_builder_returns_typed_item():
     assert isinstance(item, KonepsCollectedItem)
     assert item.base_amount == 100_000_000.0
     assert item.metadata["bid_rate"] == pytest.approx(0.88)
+    # 개찰 피드의 추정가격 자리는 **예정가**(상세값 또는 낙찰가÷사정률 역산)라 파생이다.
+    assert item.estimated_amount_source == ESTIMATE_SOURCE_DERIVED
 
 
 def test_mock_builder_returns_typed_items_not_dicts():
@@ -450,6 +482,50 @@ def test_accepted_floor_rate_logs_nothing(caplog):
     assert [r for r in caplog.records if "낙찰하한율" in r.getMessage()] == []
 
 
+@pytest.mark.parametrize("estimated_amount", [None, 0.0, "", "미상"])
+def test_estimate_source_is_dropped_when_no_estimate_is_carried(estimated_amount):
+    """추정가격이 실리지 않았으면 출처 신고도 남기지 않는다(자족적 계약).
+
+    이 DTO 는 생산자 두 경로와 dict payload 승격이 **모두 통과하는 유일한 지점**이라,
+    "값 없이 출처만 신고" 같은 모순은 여기서 접는다 — 그러지 않으면 write 가드가 존재하지
+    않는 값을 공고 게시값으로 신뢰할 수 있다(``award_floor_rate`` 게이트와 같은 축).
+    """
+    item = KonepsCollectedItem(
+        notice_number="EST-SRC-1",
+        title="출처 게이트",
+        base_amount=100_000_000.0,
+        estimated_amount=estimated_amount,
+        estimated_amount_source=ESTIMATE_SOURCE_NOTICE,
+    )
+
+    assert item.estimated_amount_source is None
+
+
+def test_estimate_source_survives_when_an_estimate_is_carried():
+    """값이 실려 있으면 신고한 출처가 그대로 흐른다(원시 문자열 토큰 포함)."""
+    item = KonepsCollectedItem(
+        notice_number="EST-SRC-2",
+        title="출처 게이트",
+        base_amount=100_000_000.0,
+        estimated_amount="96,000,000",
+        estimated_amount_source=ESTIMATE_SOURCE_NOTICE,
+    )
+
+    assert item.estimated_amount_source == ESTIMATE_SOURCE_NOTICE
+
+
+def test_unknown_estimate_source_is_rejected():
+    """어휘 밖 문자열은 거부된다 — 오타가 조용히 '미신고'로 접히면 안 된다."""
+    with pytest.raises(ValidationError):
+        KonepsCollectedItem(
+            notice_number="EST-SRC-3",
+            title="출처 게이트",
+            base_amount=100_000_000.0,
+            estimated_amount=96_000_000.0,
+            estimated_amount_source="notice-ish",
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 5. 공개 표면(OpenAPI 스키마) 격리
 # --------------------------------------------------------------------------- #
@@ -458,7 +534,11 @@ def test_internal_fields_do_not_leak_into_public_crawl_notice_item():
     internal_only = set(KonepsCollectedItem.model_fields) - set(
         CrawlNoticeItem.model_fields
     )
-    assert internal_only == {"award_floor_rate", "eligibility_raw"}
+    assert internal_only == {
+        "award_floor_rate",
+        "eligibility_raw",
+        "estimated_amount_source",
+    }
 
 
 def test_boundary_serializer_narrows_items_to_json_values():
@@ -490,6 +570,7 @@ def test_boundary_serializer_narrows_items_to_json_values():
             "metadata": {},
             "award_floor_rate": None,
             "eligibility_raw": None,
+            "estimated_amount_source": None,
         }
     ]
     # 봉투의 나머지 키는 그대로 통과한다.

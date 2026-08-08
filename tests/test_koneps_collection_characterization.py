@@ -84,6 +84,7 @@ ITEM_FIELDS: tuple[str, ...] = (
     "source_url",
     "award_floor_rate",
     "eligibility_raw",
+    "estimated_amount_source",
     "metadata",
 )
 

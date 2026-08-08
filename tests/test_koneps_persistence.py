@@ -14,6 +14,11 @@ import json
 
 import pytest
 
+from app.core.constants import (
+    ESTIMATE_SOURCE_BASE_FALLBACK,
+    ESTIMATE_SOURCE_DERIVED,
+    ESTIMATE_SOURCE_NOTICE,
+)
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
@@ -410,9 +415,7 @@ def test_persist_tender_result_links_project_id_from_historical_record(test_db):
     test_db.flush()
 
     tender_result = (
-        test_db.query(TenderResult)
-        .filter(TenderResult.project_id == project.id)
-        .one()
+        test_db.query(TenderResult).filter(TenderResult.project_id == project.id).one()
     )
     assert tender_result.winning_company == "낙찰사"
 
@@ -841,10 +844,10 @@ def test_persist_crawl_item_feeds_the_notice_estimate_to_the_classifier(test_db)
 
 
 # --------------------------------------------------------------------------- #
-# 알려진 갭(known gap): 재태깅 지속은 **다음 패스가 실제 추정가격을 실은 공고 수집일
-# 때만** 성립한다. 아래 두 테스트는 그 조건이 깨지는 실제 프로덕션 시퀀스를 전체
-# persist 경로로 고정한다 — 지금은 되돌아가는 것이 **현재 동작**이고, 후속 PR(§ 아래
-# docstring)이 이 기대값을 뒤집는 것이 목표다.
+# 추정가격 출처 인지 덮어쓰기 가드(#358 후속). 재태깅 지속을 깨던 두 프로덕션 시퀀스를
+# 전체 persist 경로로 고정한다. #358 은 이 둘을 "되돌아가는 것이 현재 동작"인 알려진
+# 갭으로 고정했고, 이 PR 이 그 기대값을 뒤집는다 — 분류기가 읽는 분모
+# (``project.budget_estimate``)가 파생/폴백 값으로 덮이지 않기 때문이다.
 # --------------------------------------------------------------------------- #
 def _persist_one(test_db, item) -> None:
     persistence.persist_crawl_results(
@@ -864,34 +867,43 @@ def _basis_of(test_db, notice_number: str) -> str:
     )
 
 
-def test_scsbid_pass_reverts_the_tag_via_yega_denominator(test_db):
-    """scsbid 개찰 패스가 분모를 예정가로 바꿔 태그를 되돌린다 — **현재 동작**(알려진 갭).
+def _notice_item(notice: str, **overrides) -> KonepsCollectedItem:
+    """공고 피드가 배출하는 모양의 item(진짜 추정가격 + ``notice`` 출처)."""
+    fields = {
+        "title": "공고",
+        "notice_number": notice,
+        "base_amount": _POLLUTED_BASE,
+        "estimated_amount": 100_000_000.0,
+        "estimated_amount_source": ESTIMATE_SOURCE_NOTICE,
+        "source_url": f"http://ebid.example.com/detail/{notice}",
+    }
+    return KonepsCollectedItem(**{**fields, **overrides})
+
+
+def _project_of(test_db, notice: str) -> Project:
+    historical = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == notice)
+        .one()
+    )
+    return test_db.query(Project).filter(Project.id == historical.project_id).one()
+
+
+def test_scsbid_pass_no_longer_reverts_the_tag(test_db):
+    """scsbid 개찰 패스가 분모를 예정가로 바꾸지 못한다(#358 known gap 반전).
 
     시퀀스: 공고 수집(추정가격 실림) → 태그 ``suspect-ratio`` → 6시간 주기 scsbid 개찰
     패스. 그 패스의 item 은 ``base_amount=0.0`` + ``estimated_amount=예정가``
-    (``scsbid.py`` 의 ``planned_price`` 또는 ``winning ÷ success_rate``)를 싣는다.
-    ``update_project_from_item`` 이 태깅보다 **먼저** 그 예정가로
-    ``project.budget_estimate`` 를 덮으므로, 분류기가 보는 분모가 추정가격에서 예정가로
-    바뀐다(약 +10%). 비율이 그만큼 작아져 임계 바로 위 밴드가 clean 으로 복귀한다.
-
-    실측 밴드(리뷰어 프로브): base/추정가격 1.16·1.20·1.24 는 복귀, 1.28·1.408 은 생존.
-    settled 코호트가 곧 캘리브레이션 corpus 라 이 갭은 그냥 두면 안 된다.
-
-    후속 PR 이 뒤집을 목표 동작: scsbid/미공급 패스가 기존 **양수**
-    ``Project.budget_estimate`` 를 덮지 못하게 가드한다(``update_project_from_item`` 의
-    ``award_floor_rate``/``eligibility_raw`` 가드를 미러). 그 가드는 ``budget_cap``(#356
-    게이트 입력)도 함께 움직이므로 별도 실측이 선행돼야 한다.
+    (``scsbid.py`` 의 ``planned_price`` 또는 ``winning ÷ success_rate``)를 ``derived``
+    출처로 싣는다. 가드 이전에는 ``update_project_from_item`` 이 태깅보다 먼저 그 예정가로
+    ``project.budget_estimate`` 를 덮어 분모가 +10% 뜨고, 임계 바로 위 밴드
+    (실측 1.16·1.20·1.24)가 clean 으로 복귀했다. 이제 파생 출처는 저장된 양수 추정가격을
+    덮지 못하므로 분모가 보존되고 태그도 유지된다.
     """
     notice = "SCSBID-REVERT-1"
     _persist_one(
         test_db,
-        KonepsCollectedItem(
-            title="공고",
-            notice_number=notice,
-            base_amount=116_000_000.0,  # 추정가격의 1.16배
-            estimated_amount=100_000_000.0,
-            source_url=f"http://ebid.example.com/detail/{notice}",
-        ),
+        _notice_item(notice, base_amount=116_000_000.0),  # 추정가격의 1.16배
     )
     assert _basis_of(test_db, notice) == BASIS_SUSPECT_RATIO
 
@@ -903,6 +915,7 @@ def test_scsbid_pass_reverts_the_tag_via_yega_denominator(test_db):
             notice_number=notice,
             base_amount=0.0,
             estimated_amount=111_000_000.0,  # 예정가 ≈ 기초금액 × 사정률
+            estimated_amount_source=ESTIMATE_SOURCE_DERIVED,
         ),
     )
 
@@ -912,43 +925,34 @@ def test_scsbid_pass_reverts_the_tag_via_yega_denominator(test_db):
         .one()
     )
     assert historical.base_amount == 116_000_000.0  # 원본 금액은 그대로
-    # 116,000,000 ÷ 111,000,000 = 1.045 ≤ 1.15 ⇒ 되돌아간다(고쳐야 할 현재 동작).
-    assert historical.base_amount_basis == BASIS_CLEAN
+    assert historical.base_amount_basis == BASIS_SUSPECT_RATIO  # 재태깅 유지
+    # 분모가 보존됐다: 116,000,000 ÷ 100,000,000 = 1.16 > 1.15.
+    assert _project_of(test_db, notice).budget_estimate == 100_000_000.0
 
 
-def test_recollection_without_an_estimate_reverts_the_tag(test_db):
-    """추정가격을 싣지 않은 재수집도 태그를 되돌린다 — **현재 동작**(알려진 갭).
+def test_recollection_without_an_estimate_no_longer_reverts_the_tag(test_db):
+    """추정가격을 싣지 않은 재수집도 태그를 되돌리지 못한다(#358 known gap 반전).
 
-    ``matching.resolve_budget_estimate`` 는 ``estimated_amount`` 가 없으면
-    ``base_amount`` 로 폴백하고, ``update_project_from_item`` 은 그 값으로
-    ``project.budget_estimate`` 를 덮는다(``budget_estimate or 이전값`` 이라 양수면 무조건
-    덮는다). 그러면 두 금액이 같은 값의 두 사본이 되어 비율이 정확히 1.0 이 되고, 규칙이
-    구조적으로 볼 수 없는 코호트(``est_equals_base``)로 떨어진다.
+    ``matching.resolve_budget_estimate`` 의 ``base_amount`` 폴백 자체는 그대로 둔다
+    (``budget_min``/``budget_max`` 등 다른 소비자가 있다). 대신 그 값이 **기초금액 폴백**
+    이라는 사실을 item 이 신고하고, write 가드가 이미 저장된 양수 추정가격을 지키므로
+    비율이 1.0 으로 자기충족하는 ``est_equals_base`` 코호트로 떨어지지 않는다.
 
-    부수 피해가 하나 더 있다: 저장돼 있던 진짜 추정가격이 base 로 덮여 **복구 불가**하게
-    사라진다. 이는 이 PR 이 만든 동작이 아니라 선재 동작이지만, 재태깅 지속성 주장과
-    정면으로 충돌하므로 여기 함께 고정한다.
+    같이 사라지던 부수 피해도 함께 막힌다: 저장된 진짜 추정가격이 base 로 덮여
+    **복구 불가**하게 소실되던 경로가 이 가드의 반대편이다.
     """
     notice = "NOESTIMATE-REVERT-1"
-    _persist_one(
-        test_db,
-        KonepsCollectedItem(
-            title="공고",
-            notice_number=notice,
-            base_amount=_POLLUTED_BASE,
-            estimated_amount=100_000_000.0,
-            source_url=f"http://ebid.example.com/detail/{notice}",
-        ),
-    )
+    _persist_one(test_db, _notice_item(notice))
     assert _basis_of(test_db, notice) == BASIS_SUSPECT_RATIO
 
+    # 재수집이 추정가격을 못 얻으면 생산자는 기초금액을 폴백으로 실어 그 사실을 신고한다.
     _persist_one(
         test_db,
-        KonepsCollectedItem(
+        _notice_item(
+            notice,
             title="공고(추정가격 미공급)",
-            notice_number=notice,
-            base_amount=_POLLUTED_BASE,
-            estimated_amount=0.0,
+            estimated_amount=_POLLUTED_BASE,
+            estimated_amount_source=ESTIMATE_SOURCE_BASE_FALLBACK,
         ),
     )
 
@@ -957,7 +961,61 @@ def test_recollection_without_an_estimate_reverts_the_tag(test_db):
         .filter(HistoricalData.notice_number == notice)
         .one()
     )
-    project = test_db.query(Project).filter(Project.id == historical.project_id).one()
-    assert historical.base_amount_basis == BASIS_CLEAN  # 되돌아감(고쳐야 할 현재 동작)
-    # 저장된 추정가격이 base 로 덮여 사라졌다(선재 동작, 복구 불가).
-    assert project.budget_estimate == _POLLUTED_BASE
+    assert historical.base_amount_basis == BASIS_SUSPECT_RATIO  # 재태깅 유지
+    assert _project_of(test_db, notice).budget_estimate == 100_000_000.0  # 소실 없음
+
+
+def test_notice_feed_still_applies_a_corrected_estimate(test_db):
+    """정정공고/재공고의 **진짜 추정가격**은 그대로 반영된다(무차별 가드가 아니다).
+
+    무차별 "양수 불변" 가드를 채택하지 않은 이유가 이것이다: KONEPS 는 정정공고로
+    추정가격을 바꿔 게시하고, 그 갱신을 막으면 저장값이 첫 게시 시점에 얼어붙는다.
+    """
+    notice = "NOTICE-CORRECTION-1"
+    _persist_one(test_db, _notice_item(notice))
+    assert _project_of(test_db, notice).budget_estimate == 100_000_000.0
+
+    _persist_one(
+        test_db, _notice_item(notice, title="정정공고", estimated_amount=120_000_000.0)
+    )
+
+    assert _project_of(test_db, notice).budget_estimate == 120_000_000.0
+
+
+@pytest.mark.parametrize(
+    "source", [ESTIMATE_SOURCE_NOTICE, ESTIMATE_SOURCE_DERIVED, None]
+)
+def test_first_collection_fills_an_empty_estimate_from_any_source(test_db, source):
+    """최초 수집은 출처와 무관하게 빈 자리를 채운다(신규 공고에서 값이 사라지지 않게)."""
+    notice = f"FIRST-FILL-{source or 'none'}"
+    _persist_one(
+        test_db,
+        _notice_item(
+            notice, estimated_amount=90_000_000.0, estimated_amount_source=source
+        ),
+    )
+
+    assert _project_of(test_db, notice).budget_estimate == 90_000_000.0
+
+
+def test_legacy_dict_payload_without_the_flag_is_treated_conservatively(test_db):
+    """출처 필드를 모르는 구 dict payload 는 승격돼도 저장 추정가격을 덮지 못한다.
+
+    ``_promote_items`` 승격 경로의 하위 호환: 필드 부재는 ``None`` 이고, ``None`` 은
+    파생/폴백과 같은 '미신고' 취급이라 빈 자리만 채운다.
+    """
+    notice = "LEGACY-DICT-1"
+    _persist_one(test_db, _notice_item(notice))
+
+    _persist_one(
+        test_db,
+        {
+            "title": "구 payload(출처 필드 없음)",
+            "notice_number": notice,
+            "base_amount": _POLLUTED_BASE,
+            "estimated_amount": 111_000_000.0,
+        },
+    )
+
+    assert _project_of(test_db, notice).budget_estimate == 100_000_000.0
+    assert _basis_of(test_db, notice) == BASIS_SUSPECT_RATIO
