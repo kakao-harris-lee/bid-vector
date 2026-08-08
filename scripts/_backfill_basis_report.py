@@ -9,7 +9,11 @@ production DB — so they live next to the terminal report that renders them.
 ``--audit`` JSON 조립(``summarize``)은 **여기 없다**: 파일 형태는 스크립트의 출력 계약이라
 CLI 와 함께 움직인다.
 
-No DB access and no writes: every function takes already-loaded values.
+쓰기는 하지 않는다. 다만 "DB 를 전혀 만지지 않는다"고 말할 수는 없다:
+``record_reclassification`` 이 ``HistoricalData`` 인스턴스를 받아 속성을 읽으므로, 그
+인스턴스가 만료 상태면 SQLAlchemy 가 lazy refresh 쿼리를 낼 수 있다. 스윕이 청크 단위로
+로드한 직후 넘기기 때문에 실제로는 발생하지 않지만, 이 모듈이 쿼리를 **낼 수 없다**는
+보장은 아니다.
 """
 from __future__ import annotations
 
@@ -24,11 +28,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.models.models import HistoricalData  # noqa: E402
-from app.services.base_amount_basis import ALL_BASES  # noqa: E402
+from app.services.base_amount_basis import ALL_BASES, BASIS_CLEAN  # noqa: E402
 
 UNKNOWN_BUCKET = "unknown"  # Project 행이 없거나 값이 비어 분해 키를 못 얻은 경우
 
-MAX_SAMPLES = 12  # dry-run before/after evidence rows (per run)
+# dry-run before/after 증거 행 수(실행당). 분해 카운터는 전수라 승인 판단의 근거이고,
+# 이 샘플은 "왜 움직이는가"를 눈으로 확인하는 예시일 뿐이라 상한을 둔다 — 2,614행 풀에서
+# 표본 깊이가 낮다는 뜻이므로, 분포를 판단할 때 이 샘플을 대표값으로 읽지 말 것.
+MAX_SAMPLES = 12
+
+
+def _breakdown(counter: Counter) -> str:
+    """``key=count`` 나열(키 정렬). 비어 있으면 '없음'."""
+    return ", ".join(f"{key}={count}" for key, count in sorted(counter.items())) or "없음"
 
 
 @dataclass(frozen=True)
@@ -54,9 +66,14 @@ class BackfillStats:
     by_basis: Counter = field(default_factory=Counter)
     estimated_filled: int = 0  # non-clean rows that got an estimate
     estimated_missing: int = 0  # non-clean rows without recoverable reserves
-    # 추정치 채움을 공고 status 로 교차 분해한다. ``get_reliable_base`` 가 금액을 실제로
-    # 바꾸는 경로는 "non-clean basis + 양수 추정치" 하나뿐이라, 열린 공고 ∩ 추정치 = 0
-    # 이라는 사실이 곧 "이 백필은 라이브 투찰 base 금액을 바꾸지 않는다"의 증명이 된다.
+    # 추정치 채움을 공고 status 로 교차 분해한다(스캔 전체 기준 — 이동 여부와 무관).
+    #
+    # ``get_reliable_base`` 가 투찰 base 금액을 실제로 바꾸는 경로는 "non-clean basis +
+    # 양수 추정치" 하나뿐이다. 그래서 이 카운터는 **확인 항목**이다: 키 집합이
+    # ``ACTIVE_PROJECT_STATUSES`` 와 교집합이 없으면 그 실행은 투찰 가능 공고의 금액을
+    # 바꾸지 않는다. "증명"이라고 부르지 않는 이유는 실제로 교집합이 비지 않기 때문이다 —
+    # 운영 실측이 ``re_notice: 3`` 을 냈고, ``re_notice`` 는 open 과 마찬가지로 투찰 가능
+    # 상태다(그 3건은 예외로 공시). ``open`` 리터럴만 확인하면 이 3건을 놓친다.
     estimated_filled_by_status: Counter = field(default_factory=Counter)
     # 저장된 라벨과 **달라진** 행 수. ``basis_filter`` 패스뿐 아니라 ``--recheck`` 에서도
     # 센다 — 룰이 재정렬됐을 때 그것을 전 행에 반영하는 패스가 바로 --recheck 이므로, 그
@@ -80,6 +97,15 @@ class BackfillStats:
     def bucket_shrink_ratio(self) -> float:
         """선택한 버킷에서 빠져나가는 비율(이동 ÷ 스캔). 스캔 0 이면 0.0."""
         return round(self.reclassified / self.scanned, 4) if self.scanned else 0.0
+
+    @property
+    def clean_remaining(self) -> int:
+        """이 실행 뒤 clean 으로 남는 **절대 행수**.
+
+        비율(purity·축소율)만으로는 남는 표본이 몇 행인지 읽을 수 없다. 밴드 재캘리브레이션
+        게이트가 절대 표본 수를 요구하므로, 승인 자료에 비율과 함께 절대값을 낸다.
+        """
+        return int(self.by_basis.get(BASIS_CLEAN, 0))
 
     def basis_counts(self) -> dict[str, int]:
         """``ALL_BASES`` 전 라벨의 계수 — 관측되지 않은 라벨도 0 으로 함께 낸다."""
@@ -144,6 +170,12 @@ def print_impact_report(stats: BackfillStats) -> None:
     answerable from the terminal without piping through ``jq``. Nothing here writes — a
     dry-run prints exactly what an ``--apply`` would move.
     """
+    # 커버리지 라인은 이동 여부와 독립이다("규칙이 못 보는 행이 얼마나 되는가"). 이동이
+    # 없다고 함께 삼키면 정작 커버리지가 최악인 실행에서만 아무것도 보이지 않는다.
+    print(
+        f"[backfill-base-basis] 추정가격==base 라 비율 규칙이 못 보는 행: "
+        f"{stats.est_equals_base} / 스캔 {stats.scanned}"
+    )
     if stats.basis_filter is None and stats.reclassified == 0:
         return
     bucket = f"'{stats.basis_filter}' 버킷" if stats.basis_filter else "스캔"
@@ -156,17 +188,18 @@ def print_impact_report(stats: BackfillStats) -> None:
         f"  그중 복구 추정치 보유: {stats.reclassified_with_reserve_estimate}"
         " (이 축만 하류 금액이 바뀐다)"
     )
-    print(
-        f"  추정가격==base 라 비율 규칙이 못 보는 행: {stats.est_equals_base}"
-        f" / 스캔 {stats.scanned}"
-    )
+    print(f"  잔여 clean {stats.clean_remaining}행 (스캔 {stats.scanned} 기준)")
     for title, counter in (
         ("status", stats.reclassified_by_status),
         ("category", stats.reclassified_by_category),
-        ("추정치 채움 status", stats.estimated_filled_by_status),
     ):
-        breakdown = ", ".join(f"{key}={count}" for key, count in sorted(counter.items()))
-        print(f"  이동 {title}별: {breakdown or '없음'}")
+        print(f"  이동 {title}별: {_breakdown(counter)}")
+    # 추정치 채움은 이동 행의 분해가 아니라 **스캔 전체** 집계다 — 위 묶음에 끼워 넣으면
+    # "이동 …별"이라는 프리픽스가 그대로 붙어 이동 행의 내역으로 오독된다.
+    print(
+        "  스캔 중 추정치 채움(이동 무관): "
+        f"{_breakdown(stats.estimated_filled_by_status)}"
+    )
     for sample in stats.samples:
         print(
             f"  샘플 id={sample['id']} {sample['from_basis']} → {sample['to_basis']} "

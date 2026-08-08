@@ -150,7 +150,6 @@ def test_ratio_verdict_outranks_pattern_verdicts(
         (0.0, _BUDGET, False),
         (-1.0, _BUDGET, False),
         (None, _BUDGET, False),
-        ("x", _BUDGET, False),
     ],
 )
 def test_exceeds_base_trust_ratio_value_table(base, estimate, expected):
@@ -192,11 +191,15 @@ def test_suspect_ratio_is_registered_in_the_basis_vocabulary():
     assert all(len(basis) <= 30 for basis in ALL_BASES)
 
 
-def test_trust_ratio_constant_is_single_sourced():
-    """분류기와 #356 budget_cap 게이트가 같은 상수를 쓴다(§4.5-1 단일 출처)."""
+def test_trust_ratio_is_single_sourced_as_one_predicate():
+    """분류기와 #356 게이트가 상수뿐 아니라 **판정 함수 자체**를 공유한다(§4.5-8).
+
+    상수만 공유하고 비교식을 두 벌로 두면 경계에서 갈린다(이 PR 이전 상태). 게이트 모듈이
+    같은 술어 객체를 참조하는지 확인해, 한쪽이 조용히 자체 비교식으로 되돌아가는 것을 막는다.
+    """
     from app.services.opportunity_analysis import market
 
-    assert market.BID_BASE_TRUST_RATIO_MAX is BID_BASE_TRUST_RATIO_MAX
+    assert market.exceeds_base_trust_ratio is exceeds_base_trust_ratio
     assert BID_BASE_TRUST_RATIO_MAX == 1.15
 
 

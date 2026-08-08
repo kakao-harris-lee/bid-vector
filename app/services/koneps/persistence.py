@@ -37,11 +37,7 @@ from app.models.models import (
 )
 from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
-from app.services.base_amount_basis import (
-    classify_base_basis,
-    normalize_winning_rate,
-)
-from app.services.koneps import matching, parsing, scsbid
+from app.services.koneps import base_provenance, matching, parsing, scsbid
 from app.services.inference_outbox import InferenceOutboxService
 from app.services.realtime import realtime_event_manager
 from app.services.task_singleton import singleton_lock_id
@@ -613,6 +609,8 @@ def _persist_crawl_item(
         item=item,
         request=request,
         facts=facts,
+        # 공고 추정가격의 출처(백필과 같은 입력) — base_provenance 참조.
+        project=project,
     )
     _persist_tender_result_for_item(
         db,
@@ -666,17 +664,21 @@ def _update_historical_record_from_item(
     item: KonepsCollectedItem,
     request: CrawlRequest,
     facts: CrawlItemMetadataFacts | None = None,
+    project: Project | None = None,
 ) -> None:
     """Apply one collected item onto its ``HistoricalData`` row.
 
     ``facts`` 는 재사용을 위한 주입 지점이다(persist 루프는 item 당 한 번만 투영해
     넘긴다). 생략하면 ``item`` 에서 직접 투영한다.
+
+    ``project`` 는 provenance 분류에 필요한 공고 추정가격의 출처다. 생략하면 비율 규칙이
+    적용되지 않아 판정이 종전과 동일하다.
     """
     resolved_facts = facts if facts is not None else item.opening_facts()
     historical_record.agency_name = resolved_facts.resolved_agency_name()
     historical_record.category = matching.resolve_project_category(item, request)
     _update_historical_base_fields(
-        historical_record, item=item, facts=resolved_facts
+        historical_record, item=item, facts=resolved_facts, project=project
     )
     historical_record.bid_rate = (
         parsing.normalize_bid_rate_value(
@@ -695,6 +697,7 @@ def _update_historical_base_fields(
     *,
     item: KonepsCollectedItem,
     facts: CrawlItemMetadataFacts,
+    project: Project | None = None,
 ) -> None:
     """Persist base_amount / predicted_price with an anti-clobber guard + provenance tag.
 
@@ -712,6 +715,9 @@ def _update_historical_base_fields(
     carry correct provenance without a separate backfill pass. The original
     ``base_amount`` is NEVER overwritten with an estimate/예정가 (정직 명세 §2 — 원본
     불변, 추정은 ``base_amount_estimated`` 로만).
+
+    ``project`` supplies the notice 추정가격 for the provenance ratio rule; the time
+    source stays here so one seam freezes it (see ``base_provenance``).
     """
     incoming_base = parsing.coerce_amount(item.base_amount)
     if incoming_base is not None and incoming_base > 0:
@@ -727,15 +733,9 @@ def _update_historical_base_fields(
     if recovered is not None and recovered > 0:
         historical_record.base_amount_estimated = float(recovered)
 
-    # Provenance: classify the FINAL stored base with the row's winning result so a
-    # calibration/holdout loop filtering to ``base_amount_basis == 'clean'`` never
-    # picks up a 예정가-역산 / VAT-파생 / 미상 base.
-    winning_amount = parsing.coerce_amount(facts.winning_amount)
-    winning_rate = normalize_winning_rate(facts.winning_rate)
-    historical_record.base_amount_basis = classify_base_basis(
-        historical_record.base_amount, winning_amount, winning_rate
+    base_provenance.tag_base_provenance(
+        historical_record, facts=facts, project=project, stamp=utc_now()
     )
-    historical_record.basis_checked_at = utc_now()
 
 
 def _update_historical_reserve_fields(

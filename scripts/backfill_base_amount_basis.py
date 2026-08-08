@@ -336,6 +336,9 @@ def summarize(stats: BackfillStats) -> dict[str, Any]:
         "basis_filter": stats.basis_filter,
         "scanned": stats.scanned,
         "by_basis": stats.basis_counts(),
+        # 비율(축소율)과 함께 **절대 잔여 행수**를 낸다 — 재캘리 게이트가 절대 표본 수를
+        # 요구하므로 비율만으로는 승인 판단이 서지 않는다.
+        "clean_remaining": stats.clean_remaining,
         "estimated_filled": stats.estimated_filled,
         "estimated_filled_by_status": dict(stats.estimated_filled_by_status),
         "estimated_missing": stats.estimated_missing,

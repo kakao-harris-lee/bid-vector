@@ -17,9 +17,9 @@ import math
 from sqlalchemy.orm import Session
 
 from app.ai.price_prediction import get_price_insights
-from app.core.constants import BID_BASE_TRUST_RATIO_MAX
 from app.domain.aggregates import average
 from app.models.models import Bid, Project
+from app.services.base_amount_basis import exceeds_base_trust_ratio
 from app.utils.numeric import optional_float
 from app.services.opportunity_analysis.base import _OpportunityAnalysisBase
 
@@ -34,12 +34,28 @@ def enforceable_floor_price(
 
     상한 초과는 **하한을 믿을 수 있을 때만** 허용한다: ① 공고가 published 법정하한을
     실제로 보고했고(``legal_floor_bid_rate``) ② 기초금액이 추정가격의
-    :data:`BID_BASE_TRUST_RATIO_MAX` 배 이내일 것. 두 게이트의 실측 근거(미보고 하한
-    경로의 상승 12/12 악화, 오염 base 임계에서 실낙찰자 전원이 임계 미만 낙찰)는 PR #356
-    본문에 있다.
+    :data:`~app.core.constants.BID_BASE_TRUST_RATIO_MAX` 배 이내일 것(판정은 저장 행
+    분류기와 공유하는 ``exceeds_base_trust_ratio`` 한 벌). 두 게이트의 실측 근거(미보고
+    하한 경로의 상승 12/12 악화, 오염 base 임계에서 실낙찰자 전원이 임계 미만 낙찰)는
+    PR #356 본문에 있다.
 
     ``budget_cap`` 이 0 이면 넘을 상한이 없어 비율 검사를 건너뛰고, ``bid_base`` 를 못
     받으면 비율을 검증할 수 없어 **보수적으로 닫는다**(legacy bound 유지).
+
+    이 게이트와 저장 라벨의 관계 (코드리뷰 C2 정정)
+    ---------------------------------------------
+    이 함수는 ``base_amount_basis`` 를 **직접 읽지 않는다**. 그러나 여기 들어오는
+    ``bid_base`` 는 ``describe_notice_bid_base`` → ``get_reliable_base`` 를 거친 값이고, 그
+    선택은 저장 라벨을 본다. 그래서 어떤 행이 non-clean 으로 재태깅되고 **복구 추정치까지
+    갖고 있으면** 이 함수의 입력이 오염 base 에서 복수예비가격 복구 기초금액으로 바뀌고,
+    비율이 임계 아래로 내려가 게이트가 CLOSED → OPEN 으로 열릴 수 있다. "라벨과 무관하다"는
+    설명은 틀렸다.
+
+    그 방향은 의도된 것이다: 게이트가 막으려는 것은 *부풀린 base 위에서 계산된 하한*이
+    예산 상한을 넘는 것인데, 복구 추정치는 그 오염 base 보다 실제 기초금액에 가깝다. 즉
+    열리는 쪽이 더 개연적인 입력에 근거한 판정이다. 영향 코호트는 "재태깅 ∩ 추정치 보유 ∩
+    투찰 가능 상태"로 좁고(백필 dry-run 의 ``estimated_filled_by_status`` 로 실측·공시),
+    입력이 바뀌지 않는 행에서는 판정도 그대로다.
     """
     if legal_floor_bid_rate is None:
         return 0.0
@@ -49,13 +65,9 @@ def enforceable_floor_price(
     if budget_cap <= 0:
         return floor
     base = optional_float(bid_base) or 0.0
-    # 곱셈형(base > cap × 임계)이다. 같은 임계를 쓰는 분류기
-    # (``app/services/base_amount_basis.py::_is_suspect_ratio``)는 나눗셈형
-    # (base ÷ est > 임계)이라, 경계에 정확히 걸리는 값에서 부동소수 반올림이 갈릴 수 있다.
-    # 형태를 통일하지 않는 이유: 두 지점은 다른 질문에 답하고(라이브 게이트 vs 저장 라벨)
-    # 어느 쪽도 상대의 판정을 읽지 않으므로, 갈려도 한쪽이 다른 쪽을 틀리게 만들지 않는다.
-    # 통일은 두 경로의 수치를 동시에 움직이므로 별도 검증이 필요하다.
-    if base <= 0 or base > budget_cap * BID_BASE_TRUST_RATIO_MAX:
+    # 신뢰 비율 판정은 저장 행 분류기와 **같은 술어 한 벌**을 쓴다(§4.5-8). base 를 못
+    # 받았을 때 닫는 것은 이 게이트의 정책이라 술어 밖에 남긴다(술어는 "할 말 없음"=False).
+    if base <= 0 or exceeds_base_trust_ratio(base, budget_cap):
         return 0.0
     return floor
 

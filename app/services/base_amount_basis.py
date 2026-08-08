@@ -123,6 +123,32 @@ def _is_derived_vat(ctx: _BasisContext) -> bool:
     return abs(scaled - round(scaled)) < _VAT_TOLERANCE
 
 
+def exceeds_base_trust_ratio(
+    base_amount: float | None, budget_estimate: float | None
+) -> bool:
+    """기초금액 ÷ 추정가격 이 부가세로 설명할 수 없는 배수인가 (순수, 공유 술어).
+
+    같은 질문을 두 곳이 각자 답하던 것을 한 벌로 합친다(§4.5-8): 저장 행의 provenance
+    분류(:func:`classify_base_basis`)와 라이브 예산 상한 게이트
+    (``app/services/opportunity_analysis/market.py::enforceable_floor_price``)가 이 술어를
+    함께 쓴다. 종전에는 게이트가 곱셈형(``base > cap × 임계``), 분류기가 나눗셈형이라 경계
+    근처에서 판정이 갈릴 수 있었다 — 합치면서 **나눗셈형으로 통일**했다.
+
+    두 금액 중 하나라도 양수로 확보되지 않으면 ``False`` 다. 이는 "신뢰 범위 안"이라는
+    주장이 아니라 **이 술어가 할 말이 없다**는 뜻이므로, 확보 실패를 어떻게 다룰지는 호출부가
+    정한다: 게이트는 base 를 못 받으면 보수적으로 닫고, 분류기는 규칙을 적용하지 않는다.
+
+    입력은 이미 수치로 강제된 값이다(분류기는 ``_safe_float`` 로, 게이트는
+    ``optional_float`` 로 통과시킨 뒤 넘긴다). ``_safe_float`` 를 한 번 더 거치는 것은
+    NaN/inf 방어이며, 원시 문자열을 여기서 받는 계약이 아니다.
+    """
+    base = _safe_float(base_amount)
+    estimate = _safe_float(budget_estimate)
+    if base is None or estimate is None or base <= 0 or estimate <= 0:
+        return False
+    return base / estimate > BID_BASE_TRUST_RATIO_MAX
+
+
 def _is_suspect_ratio(ctx: _BasisContext) -> bool:
     """base ÷ 추정가격 이 부가세로 설명할 수 없는 배수 ⇒ 저장된 base 는 기초금액이 아니다.
 
@@ -154,17 +180,17 @@ def _is_suspect_ratio(ctx: _BasisContext) -> bool:
     버킷으로 밴드를 재캘리브레이션하면 앵커가 **위(안전측)** 로 편향된다 — 그 편향을 함께
     보고하지 않고 수치를 그대로 쓰지 말 것.
 
+    이 라벨은 라이브 게이트와도 이어진다(코드리뷰 C2): ``#356`` budget_cap 게이트가 라벨을
+    읽지는 않지만 게이트 입력 ``bid_base`` 가 ``get_reliable_base`` 를 거쳐 라벨에서
+    파생되므로, 재태깅 + 복구 추정치를 가진 행에서는 게이트 입력이 바뀐다(자세한 방향과
+    영향 코호트는 ``enforceable_floor_price`` docstring).
+
     추정가격을 확보하지 못하면(0.0) 비교 자체가 불가능하므로 규칙은 적용되지 않는다.
-    저측(base < 추정가격)은 이 규칙의 대상이 아니다 — 기존 suspect-fractional 이 그 계열의
-    98% 를 이미 잡는다(후속에서 별도 판정).
+    저측(base < 추정가격)은 이 규칙이 보는 축이 아니다. 그 계열을 suspect-fractional 이
+    구조적으로 잡는 것은 아니고(정수면 clean 으로 남는다) 운영 실측에서 98% 가 소수라 겹쳐
+    잡혔을 뿐이라, 저측 판정은 별도 후속이다.
     """
-    if ctx.base <= 0 or ctx.budget_estimate <= 0:
-        return False
-    # 나눗셈형이다. 같은 임계를 곱셈형으로 쓰는 라이브 게이트
-    # (``app/services/opportunity_analysis/market.py::enforceable_floor_price``)와
-    # 경계값에서 부동소수 반올림이 갈릴 수 있다 — 그쪽 주석에 두 형태를 함께 두는 이유가
-    # 적혀 있다(서로의 판정을 읽지 않으므로 갈림이 오염으로 번지지 않는다).
-    return ctx.base / ctx.budget_estimate > BID_BASE_TRUST_RATIO_MAX
+    return exceeds_base_trust_ratio(ctx.base, ctx.budget_estimate)
 
 
 # Declarative first-match rule table: the first predicate that matches wins,
