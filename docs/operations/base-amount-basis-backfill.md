@@ -22,15 +22,25 @@ docker exec bid_vector_api python scripts/backfill_base_amount_basis.py \
 
 ## 2. 출력 읽는 법
 
-| 출력 | 답하는 질문 |
-|---|---|
-| `scanned` / `reclassified` / `bucket_shrink_ratio` | 선택한 버킷이 얼마나 줄어드는가 |
-| `clean_remaining` | 실행 뒤 clean 으로 **몇 행**이 남는가(비율이 아니라 절대값 — 재캘리 게이트 입력) |
-| `reclassified_by_status` / `_by_category` | 투찰 가능 공고를 건드리는가, 어디에 몰렸는가 |
-| `reclassified_with_reserve_estimate` | 라벨만 바뀌는 행과 **하류 금액까지 바뀌는** 행의 구분 |
-| `estimated_filled_by_status` | 아래 §3 확인 항목의 입력 |
-| `est_equals_base` | 이 규칙이 **구조적으로 못 보는** 행 수(검증 커버리지) |
-| `samples` | 왜 움직이는가(두 금액 + 비율, 최대 12행 — 대표값이 아니라 예시다) |
+키 이름이 스코프를 말한다: `scan_*` 은 **스캔한 전체 행** 기준이고, `reclassified*` 는
+**이동한 행** 기준이다.
+
+| 출력 | 스코프 | 답하는 질문 |
+|---|---|---|
+| `scanned` / `reclassified` / `bucket_shrink_ratio` | — | 선택한 버킷이 얼마나 줄어드는가 |
+| `scan_clean_remaining` | 스캔 | 실행 뒤 clean 으로 **몇 행**이 남는가(비율이 아니라 절대값 — 재캘리 게이트 입력) |
+| `reclassified_by_status` / `_by_category` | 이동 | 투찰 가능 공고를 건드리는가, 어디에 몰렸는가 |
+| `reclassified_with_reserve_estimate` | 이동 | 라벨만 바뀌는 행과 **하류 금액까지 바뀌는** 행의 구분 |
+| `scan_estimated_filled_by_status` | 스캔 | 아래 §3 확인 항목의 입력 |
+| `scan_est_equals_base` | 스캔 | 이 규칙이 **구조적으로 못 보는** 행 수(검증 커버리지) |
+| `samples` | 이동 | 왜 움직이는가(두 금액 + 비율, 최대 12행 — 대표값이 아니라 예시다) |
+
+> **분모 caveat.** 백필도 수집 경로와 **같은** `Project.budget_estimate` 를 읽는다. §6 대로
+> settled 행은 그 값이 이미 예정가로 덮여 있을 수 있으므로, 그 코호트의 비율은 "base ÷
+> 추정가격"이 아니라 "base ÷ 예정가"일 수 있다. 즉 dry-run 수치는 settled 구간에서
+> **과소 계상** 쪽이다(분모가 크면 비율이 작아져 덜 잡힌다). 이는 PR 본문의 앵커 순환성
+> 공시와 같은 뿌리이며, 어느 쪽이 파생값인지 가리지 않는다는 이 규칙의 주장 범위와도
+> 일관된다.
 
 ## 3. apply 전 확인 항목 — 라이브 금액 영향
 
@@ -71,19 +81,44 @@ docker exec bid_vector_api python scripts/backfill_base_amount_basis.py \
 이동 증적(샘플·분해)은 세 패스 모두에서 나온다. 계수 기준은 "저장 라벨과 달라졌는가"이므로
 첫 태깅(`previous_basis` 없음)은 이동으로 세지 않는다.
 
-## 6. 지속성 — 수집이 되돌리지 않는가
+## 6. 지속성 — 어떤 패스가 재태깅을 되돌리는가
 
 수집 경로(`app/services/koneps/persistence.py::_update_historical_base_fields`)는 매 수집
-주기마다 기존 행의 라벨을 다시 계산한다. 그 경로에도 공고 추정가격이 배선돼 있으므로
-백필의 재태깅은 다음 수집에서 유지된다. 배선이 빠지면 `suspect-ratio` 가 `clean` 으로
-되돌아가므로, `tests/test_koneps_persistence.py::test_recollection_does_not_revert_a_suspect_ratio_tag`
-가 그 회귀를 잡는다.
+주기마다 기존 행의 라벨을 **다시 계산해 덮어쓴다**. 그 경로에도 공고 추정가격이 배선돼
+있지만 **지속성은 조건부다**: 다음 패스가 실제 추정가격을 실은 공고 수집일 때만 유지된다.
+
+`update_project_from_item` 이 태깅보다 **먼저** `project.budget_estimate` 를
+`matching.resolve_budget_estimate(item) or 이전값` 으로 덮기 때문에, 그 한 홉에서 분모가
+바뀌면 분류 결과도 함께 바뀐다.
+
+| 다음 패스 | 분모(`project.budget_estimate`) | 재태깅 |
+|---|---|---|
+| 공고 수집(추정가격 실림) | 추정가격 그대로 | **유지** |
+| **scsbid 개찰(6h)** | 예정가로 덮임(약 +10%) | **1.15 < 비 ≤ ~1.28 밴드 복귀** |
+| **추정가격 미공급 재수집** | `base_amount` 로 덮임(비율 1.0) | **복귀** + 저장 추정가격 소실 |
+
+scsbid 복귀 실측: base/추정가격 **1.16·1.20·1.24 복귀, 1.28·1.408 생존**. settled 코호트가
+곧 캘리브레이션 corpus 이므로 방치 대상이 아니다. 두 시퀀스는
+`tests/test_koneps_persistence.py` 의 `test_scsbid_pass_reverts_the_tag_via_yega_denominator`
+/ `test_recollection_without_an_estimate_reverts_the_tag` 가 **현재 동작**으로 고정한다.
+미공급 재수집 경로는 §7 의 `est_equals_base` 사각지대와 같은 뿌리다(폴백이 두 금액을 같은
+값으로 만든다).
+
+**보상 통제(후속 PR 전까지):** `--reclassify-clean` 을 **주기적으로 재실행**한다. 되돌아간
+행은 다시 `clean` 버킷에 있으므로 그 패스가 다시 잡아낸다. 주기는 scsbid 수집 주기(6h)보다
+길어도 되지만, 캘리브레이션·백테스트를 돌리기 **직전**에는 한 번 돌린다.
+
+**후속 PR(구조적 해결):** scsbid/미공급 패스가 기존 **양수** `Project.budget_estimate` 를
+덮지 못하게 가드한다 — `update_project_from_item` 의 `award_floor_rate` /
+`eligibility_raw` 가드를 미러하면 된다. 단 그 가드는 `budget_cap`(#356 게이트 입력)도 함께
+움직이므로 **별도 실측이 선행돼야 한다**.
 
 ## 7. 알려진 사각지대 / 후속
 
 - **`est_equals_base`**: 수집이 추정가격을 못 얻으면 `matching.resolve_budget_estimate` 가
   `base_amount` 를 그대로 추정가격으로 쓴다. 비율이 항상 1.0 이라 규칙이 볼 수 없다
-  (운영 실측 clean 의 30%). 수집 단계에서 추정가격을 확보하는 것이 유일한 해법이다.
+  (운영 실측 clean 의 30%). 수집 단계에서 추정가격을 확보하는 것이 유일한 해법이며,
+  §6 의 "미공급 재수집" 복귀와 같은 뿌리다.
 - **저측(base ÷ est < 0.85)**: 이 규칙의 축이 아니다. 별도 판정 후속.
 - **프론트 표시**: `suspect-ratio` 행은 화면 provenance 가 `clean-base` →
   `base-fallback`("저장된 기초금액(basis 미상)")으로 후퇴한다. 모순으로 적극 판정한 값을

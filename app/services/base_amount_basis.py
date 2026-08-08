@@ -230,7 +230,10 @@ def classify_base_basis(
 
     ``budget_estimate`` 는 같은 공고의 추정가격(``Project.budget_estimate``)이다. 넘기지
     않으면(또는 결측/0/비수치면) 비율 규칙이 적용되지 않아 판정이 기존과 바이트 동일하다 —
-    이 인자를 공급하는 것은 호출부의 선택이다(현재 백필만 공급한다).
+    이 인자를 공급하는 것은 호출부의 선택이다. 현재 공급자는 백필
+    (``scripts/backfill_base_amount_basis.py``)과 수집 write 경로
+    (``app/services/koneps/base_provenance.py``) 둘이고, 홀드아웃
+    (``scripts/backtest_latest_award_holdouts.py``)은 의도적으로 공급하지 않는다.
     """
     base = _safe_float(base_amount)
     if base is None:

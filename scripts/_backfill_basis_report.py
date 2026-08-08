@@ -100,10 +100,14 @@ class BackfillStats:
 
     @property
     def clean_remaining(self) -> int:
-        """이 실행 뒤 clean 으로 남는 **절대 행수**.
+        """clean 으로 남는 **절대 행수** — 스코프는 이 실행이 **스캔한 행**뿐이다.
 
         비율(purity·축소율)만으로는 남는 표본이 몇 행인지 읽을 수 없다. 밴드 재캘리브레이션
-        게이트가 절대 표본 수를 요구하므로, 승인 자료에 비율과 함께 절대값을 낸다.
+        게이트가 절대 표본 수를 요구하므로 비율과 함께 절대값을 낸다.
+
+        주의: 테이블 전체의 clean 행수가 아니다. ``--reclassify-clean`` 처럼 버킷을 좁힌
+        패스에서는 그 버킷 안의 잔여이고, ``--limit`` 을 쓰면 그 표본 안의 잔여다. JSON 은
+        ``scan_`` 프리픽스로 이 스코프를 표시한다(``scan_clean_remaining``).
         """
         return int(self.by_basis.get(BASIS_CLEAN, 0))
 

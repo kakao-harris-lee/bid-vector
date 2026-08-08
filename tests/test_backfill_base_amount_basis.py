@@ -410,7 +410,7 @@ def test_est_equals_base_counter_exposes_blind_cohort(test_db):
 
     summary = backfill.summarize(backfill.run_backfill(test_db, apply=False))
 
-    assert summary["est_equals_base"] == 1
+    assert summary["scan_est_equals_base"] == 1
     assert summary["by_basis"][BASIS_SUSPECT_RATIO] == 1  # 비율이 살아 있는 쪽만 이동
 
 
@@ -464,10 +464,10 @@ def test_reserve_estimate_and_status_cross_counters(test_db):
 
     assert summary["reclassified"] == 2
     assert summary["reclassified_with_reserve_estimate"] == 1
-    assert summary["estimated_filled_by_status"] == {"awarded": 1}
+    assert summary["scan_estimated_filled_by_status"] == {"awarded": 1}
     # 확인 항목은 "open 부재"가 아니라 **ACTIVE 집합 전체 부재**다: re_notice 도 투찰
     # 가능한 상태라 거기 추정치가 있으면 라이브 투찰 base 금액이 바뀐다.
-    assert not set(summary["estimated_filled_by_status"]) & ACTIVE_PROJECT_STATUSES
+    assert not set(summary["scan_estimated_filled_by_status"]) & ACTIVE_PROJECT_STATUSES
 
 
 def test_active_status_with_estimate_is_surfaced_not_hidden(test_db):
@@ -499,8 +499,8 @@ def test_active_status_with_estimate_is_surfaced_not_hidden(test_db):
         backfill.run_backfill(test_db, apply=False, basis_filter=BASIS_CLEAN)
     )
 
-    assert summary["estimated_filled_by_status"] == {"re_notice": 1}
-    assert set(summary["estimated_filled_by_status"]) & ACTIVE_PROJECT_STATUSES
+    assert summary["scan_estimated_filled_by_status"] == {"re_notice": 1}
+    assert set(summary["scan_estimated_filled_by_status"]) & ACTIVE_PROJECT_STATUSES
 
 
 def test_summary_reports_absolute_clean_remainder(ratio_db):
@@ -509,8 +509,8 @@ def test_summary_reports_absolute_clean_remainder(ratio_db):
         backfill.run_backfill(ratio_db, apply=False, basis_filter=BASIS_CLEAN)
     )
 
-    assert summary["clean_remaining"] == 3  # 스캔 4 - 이동 1
-    assert summary["clean_remaining"] == summary["by_basis"][BASIS_CLEAN]
+    assert summary["scan_clean_remaining"] == 3  # 스캔 4 - 이동 1
+    assert summary["scan_clean_remaining"] == summary["by_basis"][BASIS_CLEAN]
 
 
 def test_impact_report_prints_move_evidence(ratio_db, capsys):

@@ -182,6 +182,32 @@ def test_classifier_and_gate_agree_through_the_shared_predicate():
     assert enforceable_floor_price(0.88, 0.9 * trusted, trusted, estimate) > 0
 
 
+@pytest.mark.parametrize(
+    "bid_base, escapes",
+    [
+        (115_000_000.0, True),  # 십진으로 정확히 1.15 — 경계는 신뢰 쪽에 포함
+        (115_000_001.0, False),  # 경계 바로 위
+    ],
+)
+def test_gate_boundary_is_pinned_at_the_gate_itself(bid_base, escapes):
+    """경계 판정을 **게이트 함수 호출로** 고정한다 — 술어 값표만으로는 부족하다.
+
+    술어 값표는 ``exceeds_base_trust_ratio`` 의 동작만 잡는다. 누군가
+    ``enforceable_floor_price`` 안에 곱셈형 비교(``base > cap × 임계``)를 다시 인라인하면
+    술어 테스트는 그대로 통과하면서 게이트만 조용히 갈린다. 그 회귀는 경계값을 게이트
+    경로로 직접 통과시켜야 잡힌다.
+    """
+    from app.services.opportunity_analysis.market import enforceable_floor_price
+
+    budget_cap = 100_000_000.0
+    floor_price = 0.9 * bid_base
+    result = enforceable_floor_price(0.88, floor_price, bid_base, budget_cap)
+
+    assert (result > 0) is escapes
+    if escapes:
+        assert result == pytest.approx(floor_price)
+
+
 def test_suspect_ratio_is_registered_in_the_basis_vocabulary():
     """새 라벨은 ``ALL_BASES`` 에 들어야 clean-only 소비자가 자동으로 배제한다."""
     from app.services.base_amount_basis import ALL_BASES

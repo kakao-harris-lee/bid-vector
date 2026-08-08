@@ -838,3 +838,126 @@ def test_persist_crawl_item_feeds_the_notice_estimate_to_the_classifier(test_db)
     )
     assert historical.base_amount == _POLLUTED_BASE
     assert historical.base_amount_basis == BASIS_SUSPECT_RATIO
+
+
+# --------------------------------------------------------------------------- #
+# 알려진 갭(known gap): 재태깅 지속은 **다음 패스가 실제 추정가격을 실은 공고 수집일
+# 때만** 성립한다. 아래 두 테스트는 그 조건이 깨지는 실제 프로덕션 시퀀스를 전체
+# persist 경로로 고정한다 — 지금은 되돌아가는 것이 **현재 동작**이고, 후속 PR(§ 아래
+# docstring)이 이 기대값을 뒤집는 것이 목표다.
+# --------------------------------------------------------------------------- #
+def _persist_one(test_db, item) -> None:
+    persistence.persist_crawl_results(
+        test_db,
+        persistence.create_crawl_job(test_db, _request()),
+        _request(),
+        {"items": [item], "job_status": "completed", "collected_count": 1},
+    )
+
+
+def _basis_of(test_db, notice_number: str) -> str:
+    return (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == notice_number)
+        .one()
+        .base_amount_basis
+    )
+
+
+def test_scsbid_pass_reverts_the_tag_via_yega_denominator(test_db):
+    """scsbid 개찰 패스가 분모를 예정가로 바꿔 태그를 되돌린다 — **현재 동작**(알려진 갭).
+
+    시퀀스: 공고 수집(추정가격 실림) → 태그 ``suspect-ratio`` → 6시간 주기 scsbid 개찰
+    패스. 그 패스의 item 은 ``base_amount=0.0`` + ``estimated_amount=예정가``
+    (``scsbid.py`` 의 ``planned_price`` 또는 ``winning ÷ success_rate``)를 싣는다.
+    ``update_project_from_item`` 이 태깅보다 **먼저** 그 예정가로
+    ``project.budget_estimate`` 를 덮으므로, 분류기가 보는 분모가 추정가격에서 예정가로
+    바뀐다(약 +10%). 비율이 그만큼 작아져 임계 바로 위 밴드가 clean 으로 복귀한다.
+
+    실측 밴드(리뷰어 프로브): base/추정가격 1.16·1.20·1.24 는 복귀, 1.28·1.408 은 생존.
+    settled 코호트가 곧 캘리브레이션 corpus 라 이 갭은 그냥 두면 안 된다.
+
+    후속 PR 이 뒤집을 목표 동작: scsbid/미공급 패스가 기존 **양수**
+    ``Project.budget_estimate`` 를 덮지 못하게 가드한다(``update_project_from_item`` 의
+    ``award_floor_rate``/``eligibility_raw`` 가드를 미러). 그 가드는 ``budget_cap``(#356
+    게이트 입력)도 함께 움직이므로 별도 실측이 선행돼야 한다.
+    """
+    notice = "SCSBID-REVERT-1"
+    _persist_one(
+        test_db,
+        KonepsCollectedItem(
+            title="공고",
+            notice_number=notice,
+            base_amount=116_000_000.0,  # 추정가격의 1.16배
+            estimated_amount=100_000_000.0,
+            source_url=f"http://ebid.example.com/detail/{notice}",
+        ),
+    )
+    assert _basis_of(test_db, notice) == BASIS_SUSPECT_RATIO
+
+    # 개찰 패스: base 미상(0.0) + 예정가를 estimated_amount 로 싣는다.
+    _persist_one(
+        test_db,
+        KonepsCollectedItem(
+            title="개찰결과",
+            notice_number=notice,
+            base_amount=0.0,
+            estimated_amount=111_000_000.0,  # 예정가 ≈ 기초금액 × 사정률
+        ),
+    )
+
+    historical = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == notice)
+        .one()
+    )
+    assert historical.base_amount == 116_000_000.0  # 원본 금액은 그대로
+    # 116,000,000 ÷ 111,000,000 = 1.045 ≤ 1.15 ⇒ 되돌아간다(고쳐야 할 현재 동작).
+    assert historical.base_amount_basis == BASIS_CLEAN
+
+
+def test_recollection_without_an_estimate_reverts_the_tag(test_db):
+    """추정가격을 싣지 않은 재수집도 태그를 되돌린다 — **현재 동작**(알려진 갭).
+
+    ``matching.resolve_budget_estimate`` 는 ``estimated_amount`` 가 없으면
+    ``base_amount`` 로 폴백하고, ``update_project_from_item`` 은 그 값으로
+    ``project.budget_estimate`` 를 덮는다(``budget_estimate or 이전값`` 이라 양수면 무조건
+    덮는다). 그러면 두 금액이 같은 값의 두 사본이 되어 비율이 정확히 1.0 이 되고, 규칙이
+    구조적으로 볼 수 없는 코호트(``est_equals_base``)로 떨어진다.
+
+    부수 피해가 하나 더 있다: 저장돼 있던 진짜 추정가격이 base 로 덮여 **복구 불가**하게
+    사라진다. 이는 이 PR 이 만든 동작이 아니라 선재 동작이지만, 재태깅 지속성 주장과
+    정면으로 충돌하므로 여기 함께 고정한다.
+    """
+    notice = "NOESTIMATE-REVERT-1"
+    _persist_one(
+        test_db,
+        KonepsCollectedItem(
+            title="공고",
+            notice_number=notice,
+            base_amount=_POLLUTED_BASE,
+            estimated_amount=100_000_000.0,
+            source_url=f"http://ebid.example.com/detail/{notice}",
+        ),
+    )
+    assert _basis_of(test_db, notice) == BASIS_SUSPECT_RATIO
+
+    _persist_one(
+        test_db,
+        KonepsCollectedItem(
+            title="공고(추정가격 미공급)",
+            notice_number=notice,
+            base_amount=_POLLUTED_BASE,
+            estimated_amount=0.0,
+        ),
+    )
+
+    historical = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == notice)
+        .one()
+    )
+    project = test_db.query(Project).filter(Project.id == historical.project_id).one()
+    assert historical.base_amount_basis == BASIS_CLEAN  # 되돌아감(고쳐야 할 현재 동작)
+    # 저장된 추정가격이 base 로 덮여 사라졌다(선재 동작, 복구 불가).
+    assert project.budget_estimate == _POLLUTED_BASE

@@ -336,13 +336,22 @@ def summarize(stats: BackfillStats) -> dict[str, Any]:
         "basis_filter": stats.basis_filter,
         "scanned": stats.scanned,
         "by_basis": stats.basis_counts(),
-        # 비율(축소율)과 함께 **절대 잔여 행수**를 낸다 — 재캘리 게이트가 절대 표본 수를
-        # 요구하므로 비율만으로는 승인 판단이 서지 않는다.
-        "clean_remaining": stats.clean_remaining,
+        # --- 스캔한 전체 행 기준 (``scan_`` 프리픽스) ---------------------------
+        # 아래 ``reclassified*`` 는 **이동한 행** 기준이라 분모가 다르다. 프리픽스로
+        # 갈라 두지 않으면 "추정치 채움 3건"을 이동 3건의 내역으로 읽게 된다(터미널
+        # 리포트는 이미 두 묶음을 분리해 출력한다).
+        #
+        # 선재 키 ``estimated_filled``/``estimated_missing``(#199 계약)은 이름을 바꾸지
+        # 않는다 — 이 PR 이 만든 키가 아니라 되읽는 쪽의 계약이다. 둘도 스코프는 스캔이다.
+        #
+        # ``scan_clean_remaining`` 은 비율(축소율)과 짝이 되는 **절대 잔여 행수**다 —
+        # 재캘리 게이트가 절대 표본 수를 요구하므로 비율만으로는 판단이 서지 않는다.
+        "scan_clean_remaining": stats.clean_remaining,
+        "scan_estimated_filled_by_status": dict(stats.estimated_filled_by_status),
+        "scan_est_equals_base": stats.est_equals_base,
         "estimated_filled": stats.estimated_filled,
-        "estimated_filled_by_status": dict(stats.estimated_filled_by_status),
         "estimated_missing": stats.estimated_missing,
-        "est_equals_base": stats.est_equals_base,
+        # --- 이동한 행 기준 -----------------------------------------------------
         # 이동 증적은 어느 패스에서든 낸다(--recheck 포함) — ``BackfillStats.reclassified``
         # 주석 참조. 버킷 축소율만 ``basis_filter`` 가 있을 때 뜻이 서므로 그때만 낸다.
         "reclassified": stats.reclassified,
