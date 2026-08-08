@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from app.core.constants import (
     ESTIMATE_SOURCE_BASE_FALLBACK,
+    ESTIMATE_SOURCE_BUDGET_FALLBACK,
     ESTIMATE_SOURCE_DERIVED,
     ESTIMATE_SOURCE_NOTICE,
 )
@@ -63,31 +64,66 @@ def test_openapi_builder_returns_typed_item():
     assert item.base_amount == 125_000_000.0
     assert item.award_floor_rate == 0.87995
     assert item.closing_at == datetime(2026, 5, 20, 10, 0, tzinfo=UTC)
-    # 추정가격 축이 자기 키 순서(배정예산액 폴백 포함)에서 값을 얻었으므로 공고 게시값이다.
-    assert item.estimated_amount_source == ESTIMATE_SOURCE_NOTICE
+    # 배정예산액은 추정가격이 아니라 예산 폴백이다(권위 없음 — 아래 값표 참조).
+    assert item.estimated_amount_source == ESTIMATE_SOURCE_BUDGET_FALLBACK
 
 
-def test_openapi_builder_flags_a_base_fallback_estimate():
-    """추정가격 축 키가 하나도 없으면 기초금액 폴백임을 신고한다.
+@pytest.mark.parametrize(
+    ("amount_keys", "expected_amount", "expected_source"),
+    [
+        # 공고가 추정가격으로 게시한 두 키만 권위값이다.
+        ({"presmptPrce": "113,636,364"}, 113_636_364.0, ESTIMATE_SOURCE_NOTICE),
+        ({"presmptAmt": "113,636,364"}, 113_636_364.0, ESTIMATE_SOURCE_NOTICE),
+        # 예산 키는 추정가격 자리에 실리지만 개념이 다르다(배정예산 ≥ 추정가격).
+        (
+            {"asignBdgtAmt": "125,000,000"},
+            125_000_000.0,
+            ESTIMATE_SOURCE_BUDGET_FALLBACK,
+        ),
+        ({"bdgtAmt": "125,000,000"}, 125_000_000.0, ESTIMATE_SOURCE_BUDGET_FALLBACK),
+        # 추정가격 축 키가 하나도 없으면 기초금액 사본이 실린다.
+        ({"bssAmt": "125,000,000"}, 125_000_000.0, ESTIMATE_SOURCE_BASE_FALLBACK),
+        # 0/미상 후보는 없는 것으로 보고 다음 축으로 내려간다(positive_only 규칙과 동일).
+        (
+            {"presmptPrce": "0", "asignBdgtAmt": "125,000,000"},
+            125_000_000.0,
+            ESTIMATE_SOURCE_BUDGET_FALLBACK,
+        ),
+        (
+            {"presmptPrce": "0", "bssAmt": "125,000,000"},
+            125_000_000.0,
+            ESTIMATE_SOURCE_BASE_FALLBACK,
+        ),
+        # 추정가격 키가 있으면 예산 키가 함께 있어도 권위는 추정가격이다.
+        (
+            {"presmptPrce": "113,636,364", "asignBdgtAmt": "125,000,000"},
+            113_636_364.0,
+            ESTIMATE_SOURCE_NOTICE,
+        ),
+    ],
+)
+def test_openapi_builder_flags_the_estimate_axis_by_resolved_key(
+    amount_keys, expected_amount, expected_source
+):
+    """어느 키에서 값을 얻었는가로 출처가 갈린다 — 권위는 추정가격 키 두 개뿐.
 
-    ``estimated_amount = est or base`` 폴백 자체는 유지된다(``budget_min``/``budget_max``
-    등 다른 소비자가 그 값을 본다). 유지하되 **그 값이 무엇인지**를 실어 보내, 저장된
-    추정가격을 이 사본으로 덮지 않게 하는 것이 이 필드의 목적이다.
+    회귀 방지(리뷰 api-m1): 예산 키(배정예산액·예산금액)까지 ``notice`` 권위를 주면, 패스마다
+    해석 키가 달라질 때 분모가 위로 떠(예산 ≥ 추정가격) suspect-ratio 가 clean 으로 되돌아가는
+    — 이 가드가 막으려는 것과 같은 — 회귀가 남는다.
+
+    ``estimated_amount = est or base`` 폴백 **값 자체**는 종전대로 유지된다
+    (``budget_min``/``budget_max`` 등 다른 소비자가 그 값을 본다). 유지하되 그 값이 무엇인지를
+    실어 보내는 것이 이 필드의 목적이다.
     """
     item = openapi.build_openapi_notice_item(
-        {
-            "bidNtceNo": "R26BK01510408",
-            "bidNtceNm": "추정가격 미공급",
-            "bssAmt": "125,000,000",
-        },
+        {"bidNtceNo": "R26BK01510408", "bidNtceNm": "금액 축", **amount_keys},
         request=_notice_request(),
         operation="getBidPblancListInfoServc",
     )
 
     assert item is not None
-    assert item.base_amount == 125_000_000.0
-    assert item.estimated_amount == 125_000_000.0  # 폴백 값 자체는 종전대로 실린다
-    assert item.estimated_amount_source == ESTIMATE_SOURCE_BASE_FALLBACK
+    assert item.estimated_amount == expected_amount  # 폴백 값 자체는 종전대로 실린다
+    assert item.estimated_amount_source == expected_source
 
 
 def test_scsbid_builder_returns_typed_item():
@@ -109,6 +145,27 @@ def test_scsbid_builder_returns_typed_item():
     assert item.metadata["bid_rate"] == pytest.approx(0.88)
     # 개찰 피드의 추정가격 자리는 **예정가**(상세값 또는 낙찰가÷사정률 역산)라 파생이다.
     assert item.estimated_amount_source == ESTIMATE_SOURCE_DERIVED
+
+
+def test_scsbid_builder_drops_the_source_when_no_planned_price_exists():
+    """예정가를 못 구한 개찰 행은 값도 출처도 남기지 않는다(DTO 자족 게이트).
+
+    상세 ``planned_price`` 도 없고 낙찰가÷사정률 역산도 불가하면 빌더는
+    ``estimated_amount=0.0`` 을 배출한다. 그 자리에 ``derived`` 신고만 남으면 "값 없이 출처만"
+    이라는 모순이 되므로 DTO 가 접는다 — 가드 입장에서는 어느 쪽이든 fill-only 라 판정은
+    같지만, 계약이 모순을 통과시키지 않는다는 것이 이 테스트의 대상이다.
+    """
+    item = scsbid.build_scsbid_award_item(
+        {"bidNtceNo": "A-2", "bidNtceNm": "예정가 미상"},
+        detail=ScsbidReserveDetail(base_amount=100_000_000),
+        request=_award_request(),
+        operation="getScsbidListSttusCnstwk",
+        category="construction",
+    )
+
+    assert item is not None
+    assert item.estimated_amount == 0.0
+    assert item.estimated_amount_source is None
 
 
 def test_mock_builder_returns_typed_items_not_dicts():
@@ -322,7 +379,6 @@ def test_award_signal_gate_ignores_non_scalar_text(metadata, expected_signal):
     assert facts.has_award_signal() is expected_signal
 
 
-
 def test_metadata_facts_ignores_unknown_keys_and_keeps_bag_intact():
     metadata = {
         "opening_demand_agency": "서울특별시교육청",
@@ -383,7 +439,9 @@ def test_metadata_facts_demand_agency_prefers_opening_over_plain():
         == "개찰수요기관"
     )
     # 개찰수요기관이 비면(결측/빈 문자열) 공고 수요기관으로 폴백한다.
-    assert _facts(demand_agency="공고수요기관").resolved_demand_agency() == "공고수요기관"
+    assert (
+        _facts(demand_agency="공고수요기관").resolved_demand_agency() == "공고수요기관"
+    )
     assert (
         _facts(
             opening_demand_agency="", demand_agency="공고수요기관"

@@ -11,6 +11,7 @@ import pytest
 
 from app.core.constants import (
     ESTIMATE_SOURCE_BASE_FALLBACK,
+    ESTIMATE_SOURCE_BUDGET_FALLBACK,
     ESTIMATE_SOURCE_DERIVED,
     ESTIMATE_SOURCE_NOTICE,
     ESTIMATED_AMOUNT_SOURCES,
@@ -19,7 +20,19 @@ from app.models.models import Project
 from app.schemas.koneps_items import KonepsCollectedItem
 from app.services.koneps import budget_fields
 
-_UNTRUSTED = (ESTIMATE_SOURCE_DERIVED, ESTIMATE_SOURCE_BASE_FALLBACK, None)
+# 권위는 공고 게시 추정가격 하나뿐이고, 나머지는 전부 빈 자리만 채운다(fill-only).
+_UNTRUSTED = (
+    ESTIMATE_SOURCE_DERIVED,
+    ESTIMATE_SOURCE_BUDGET_FALLBACK,
+    ESTIMATE_SOURCE_BASE_FALLBACK,
+    None,
+)
+
+
+def test_untrusted_set_is_the_whole_vocabulary_minus_notice():
+    """어휘가 늘면 이 테스트가 먼저 깨진다 — 새 출처의 신뢰 판정을 명시적으로 결정하게 한다."""
+    expected = set(ESTIMATED_AMOUNT_SOURCES) - {ESTIMATE_SOURCE_NOTICE} | {None}
+    assert set(_UNTRUSTED) == expected
 
 
 # --------------------------------------------------------------------------- #

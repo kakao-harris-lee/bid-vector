@@ -18,6 +18,7 @@ from app.core.constants import (
     ESTIMATE_SOURCE_BASE_FALLBACK,
     ESTIMATE_SOURCE_DERIVED,
     ESTIMATE_SOURCE_NOTICE,
+    ESTIMATED_AMOUNT_SOURCES,
 )
 from app.models.models import CrawlJob, HistoricalData, Project, TenderResult
 from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
@@ -965,32 +966,29 @@ def test_recollection_without_an_estimate_no_longer_reverts_the_tag(test_db):
     assert _project_of(test_db, notice).budget_estimate == 100_000_000.0  # 소실 없음
 
 
-def test_notice_feed_still_applies_a_corrected_estimate(test_db):
-    """정정공고/재공고의 **진짜 추정가격**은 그대로 반영된다(무차별 가드가 아니다).
+@pytest.mark.parametrize("corrected", [120_000_000.0, 80_000_000.0])
+def test_notice_feed_still_applies_a_corrected_estimate(test_db, corrected):
+    """정정공고/재공고의 **진짜 추정가격**은 상향·하향 모두 그대로 반영된다.
 
     무차별 "양수 불변" 가드를 채택하지 않은 이유가 이것이다: KONEPS 는 정정공고로
     추정가격을 바꿔 게시하고, 그 갱신을 막으면 저장값이 첫 게시 시점에 얼어붙는다.
+
+    **하향** 정정을 함께 고정하는 이유(리뷰 api-n2): 이 컬럼은 #356 V3 게이트의
+    ``budget_cap`` 이라 하향 정정은 상한을 **조이는** 방향이다. 가드가 하향을 막으면 게이트가
+    실제보다 느슨한 상한 위에서 판정한다 — 상향을 막는 것보다 나쁜 실패 방향이다.
     """
-    notice = "NOTICE-CORRECTION-1"
+    notice = f"NOTICE-CORRECTION-{int(corrected)}"
     _persist_one(test_db, _notice_item(notice))
     assert _project_of(test_db, notice).budget_estimate == 100_000_000.0
 
     _persist_one(
-        test_db, _notice_item(notice, title="정정공고", estimated_amount=120_000_000.0)
+        test_db, _notice_item(notice, title="정정공고", estimated_amount=corrected)
     )
 
-    assert _project_of(test_db, notice).budget_estimate == 120_000_000.0
+    assert _project_of(test_db, notice).budget_estimate == corrected
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        ESTIMATE_SOURCE_NOTICE,
-        ESTIMATE_SOURCE_DERIVED,
-        ESTIMATE_SOURCE_BASE_FALLBACK,
-        None,
-    ],
-)
+@pytest.mark.parametrize("source", [*ESTIMATED_AMOUNT_SOURCES, None])
 def test_first_collection_fills_an_empty_estimate_from_any_source(test_db, source):
     """최초 수집은 출처와 무관하게 빈 자리를 채운다(신규 공고에서 값이 사라지지 않게)."""
     notice = f"FIRST-FILL-{source or 'none'}"
