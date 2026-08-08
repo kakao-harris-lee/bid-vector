@@ -12,17 +12,19 @@
 태깅보다 **먼저** 쓰는 ``project.budget_estimate`` (여기서 읽는 분모)에 달려 있다.
 
 한때 그 write 는 값이 양수이기만 하면 무조건 덮었고, 두 프로덕션 패스가 분모를 바꿔 재태깅을
-되돌렸다: **scsbid 개찰(6h)** 은 예정가(약 +10%)를, **추정가격 미공급 재수집**은 기초금액
-사본(비율 1.0)을 실어 왔다(실측 복귀 밴드 1.16·1.20·1.24). 지금은
-``budget_fields.apply_budget_amounts`` 의 출처 인지 가드가 그 자리를 지킨다 — 공고 피드가
-게시한 추정가격(``notice``)만 덮고, 파생·폴백·미신고는 빈 자리(NULL/0)만 채운다. 그래서 두
-패스에서 분모가 보존되고 재태깅도 유지된다(``tests/test_koneps_persistence.py`` 가 고정).
+되돌렸다: **scsbid 개찰(6h)** 은 예정가(약 +10%)를, **추정가격 미공급 재수집**은 예산 키·
+기초금액 사본을 실어 왔다(실측 복귀 밴드 1.16·1.20·1.24). 지금은
+``budget_fields.apply_budget_amounts`` 의 출처 인지 가드가 그 자리를 지킨다 — 공고가
+추정가격으로 게시한 값(``notice``)만 덮고, 파생·예산 폴백·기초금액 사본·미신고는 빈 자리
+(NULL/0)만 채운다. 그래서 두 패스에서 분모가 보존되고 재태깅도 유지된다
+(``tests/test_koneps_persistence.py`` 가 고정).
 
-남는 조건은 하나다: 애초에 추정가격을 한 번도 얻지 못한 공고는 첫 수집에서 기초금액 사본이
-자리를 채우므로 비율이 1.0 이라 규칙이 볼 수 없다(``est_equals_base`` 사각지대,
-``docs/operations/base-amount-basis-backfill.md`` §7). 가드는 전망적 보호라 그 이전에 이미
-사본이 저장된 행도 그대로 남는다 — ``--reclassify-clean`` 주기 재실행은 그 잔여분을 위한
-낮은 강도의 보상 통제로 유지한다(§6).
+가드는 **전망적 보호**다. 그 이전에 세탁된 분모 위에서 ``clean`` 으로 굳은 행은
+``--reclassify-clean`` 으로도 회복되지 않는다 — 백필이 같은 분모를 읽고, ``clean`` 규칙이
+``derived-yega`` 판정보다 앞서기 때문이다. 애초에 추정가격을 한 번도 얻지 못한 행도 사본이
+자리를 채운 채 남는다(``est_equals_base`` 사각지대). 잔여 규모·영구성·corpus leakage caveat 과
+가드가 지키는 전망 코호트 실측은 ``docs/operations/base-amount-basis-backfill.md`` §6/§7 이
+단일 출처로 갖는다.
 """
 
 from __future__ import annotations

@@ -141,11 +141,22 @@ BASE_RESOLUTION_ORDER: tuple[str, ...] = TRUE_BASE_KEYS + _YEGA_OR_BUDGET_KEYS
 # 라 base 와 달리 기초금액-우선 재정렬 대상이 아니다. 0/미상 후보를 건너뛰는 규칙은 base 와
 # 동일하게 적용한다: 그러지 않으면 0 으로 실린 추정가격이 선언된 예산 폴백을 건너뛰고
 # ``estimated_amount or base_amount`` 최종 폴백을 발동시켜 estimated 가 기초금액 값이 된다.
-ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
+#
+# 두 하위 그룹으로 나눠 선언하는 이유는 **권위**가 다르기 때문이다: 추정가격 키에서 얻은 값만
+# 공고가 게시한 추정가격이고, 예산 키에서 얻은 값은 같은 자리에 실리되 개념이 다르다
+# (배정예산 ≥ 추정가격). 수집 item 은 그 차이를 ``estimated_amount_source`` 로 신고하고
+# (``app/domain/estimate_provenance.py``), write 가드가 권위값만 저장값을 덮게 한다.
+# 해석 순서 자체는 두 그룹의 이어붙임 하나가 단일 출처로 남는다.
+NOTICE_ESTIMATE_KEYS: tuple[str, ...] = (
     "presmptPrce",  # 추정가격(부가세 포함)
     "presmptAmt",  # 추정금액
+)
+BUDGET_FALLBACK_ESTIMATE_KEYS: tuple[str, ...] = (
     "asignBdgtAmt",  # 배정예산액(폴백)
     "bdgtAmt",  # 예산금액(폴백)
+)
+ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
+    NOTICE_ESTIMATE_KEYS + BUDGET_FALLBACK_ESTIMATE_KEYS
 )
 # 검증기 전용 룩업: base 가 어느 키에서 해석됐는지를 basis 로 분류한다(해석 **순서**는 위
 # 두 상수가 소유하고 프로덕션이 그것을 소비한다 — 이 표는 판정에만 쓰인다).

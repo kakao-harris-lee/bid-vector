@@ -179,28 +179,40 @@ BID_BASE_TRUST_RATIO_MAX: float = 1.15
 # 수집 item 이 싣는 추정가격(``KonepsCollectedItem.estimated_amount``)의 **출처** 어휘.
 # 같은 자리에 서로 다른 성격의 금액이 실려 오는데, 저장 시점에는 값만 봐서는 구분할 수
 # 없다. 그래서 생산자가 무엇을 실었는지 신고하고, write 가드가 그 신고를 해석한다
-# (``app/services/koneps/budget_fields.py``).
+# (판정 규칙 = ``app/domain/estimate_provenance.py``,
+#  해석 = ``app/services/koneps/budget_fields.py``).
 #
-#   - ``notice``        공고 피드가 게시한 추정가격(정정공고로 바뀔 수 있는 권위값)
-#   - ``derived``       개찰 피드의 예정가(상세 planned_price 또는 낙찰가÷사정률 역산)
-#   - ``base-fallback`` 추정가격 미공급 시 기초금액을 그대로 복사한 폴백
+#   - ``notice``                   공고가 **추정가격으로 게시한** 값(``presmptPrce`` /
+#                                  ``presmptAmt``) — 정정공고로 바뀌는 유일한 권위값
+#   - ``derived``                  개찰 피드의 예정가(planned_price 또는 낙찰가÷사정률)
+#   - ``estimate-budget-fallback`` 추정가격 키가 없어 예산 키(``asignBdgtAmt`` /
+#                                  ``bdgtAmt``)에서 채운 값 — 게시값이지만 개념이 다르다
+#                                  (배정예산 ≥ 추정가격이라 분모로 쓰면 위로 뜬다)
+#   - ``estimate-base-fallback``   추정가격 축이 통째로 비어 기초금액을 복사한 폴백
 #
-# 왜 필요한가: ``Project.budget_estimate`` 는 base provenance 분류(#358 suspect-ratio)의
-# **분모**이자 #356 V3 게이트의 ``budget_cap`` 이다. 파생·폴백 값이 이 자리를 덮으면 분모가
-# 예정가(+10%)나 base 자기사본(비 1.0)으로 바뀌어 오염 판정이 조용히 뒤집힌다.
+# 권위는 ``notice`` 하나뿐이고 나머지 셋은 **빈 자리만** 채운다(fill-only). 왜 필요한가:
+# ``Project.budget_estimate`` 는 base provenance 분류(#358 suspect-ratio)의 **분모**이자
+# #356 V3 게이트의 ``budget_cap`` 이다. 권위 없는 값이 이 자리를 덮으면 분모가 예정가(+10%)·
+# 예산액(≥추정가격)·base 자기사본(비 1.0)으로 바뀌어 오염 판정이 조용히 뒤집힌다.
+#
+# 두 폴백의 ``estimate-`` 접두는 **추정가격 축 전용 · 수집 내부 전용**임을 드러낸다. 접두 없는
+# ``base-fallback`` 은 아래 이웃 어휘와 문자열이 정확히 겹쳐 혼동을 만든다.
 #
 # 이웃 어휘와 **다른 집합**이다 — 병합 금지:
-#   - ``app/domain/reliable_base.ReliableBaseSource`` — 표시 계층의 *기초금액* 축 출처
-#     (``base-fallback`` 문자열이 겹치지만 축이 다르다: 저쪽은 base, 여기는 추정가격).
+#   - ``app/domain/reliable_base.ReliableBaseSource`` — 표시 계층의 *기초금액* 축 출처.
+#     그쪽 ``base-fallback`` 은 저장 base 를 뜻하고 사용자 노출 문구로도 쓰인다.
 #   - ``app/services/base_amount_basis`` 의 ``base_amount_basis`` 라벨 — 저장된 base 의
 #     사후 분류이지 수집 item 의 신고가 아니다.
-EstimatedAmountSource = Literal["notice", "derived", "base-fallback"]
+EstimatedAmountSource = Literal[
+    "notice", "derived", "estimate-budget-fallback", "estimate-base-fallback"
+]
 ESTIMATED_AMOUNT_SOURCES: tuple[EstimatedAmountSource, ...] = get_args(
     EstimatedAmountSource
 )
 ESTIMATE_SOURCE_NOTICE: EstimatedAmountSource = "notice"
 ESTIMATE_SOURCE_DERIVED: EstimatedAmountSource = "derived"
-ESTIMATE_SOURCE_BASE_FALLBACK: EstimatedAmountSource = "base-fallback"
+ESTIMATE_SOURCE_BUDGET_FALLBACK: EstimatedAmountSource = "estimate-budget-fallback"
+ESTIMATE_SOURCE_BASE_FALLBACK: EstimatedAmountSource = "estimate-base-fallback"
 
 # ``PaperBidRun.mode`` 값 — 하나의 run 이 과거 개찰 재현(historical replay)인지
 # 진행 중 공고의 forward paper 생성인지 구분한다. 두 모드는 요청 스냅샷 키 집합과

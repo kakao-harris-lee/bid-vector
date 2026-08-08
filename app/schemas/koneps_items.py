@@ -177,6 +177,11 @@ class KonepsCollectedItem(CrawlNoticeItem):
         신뢰해, 폴백으로 도착한 기초금액이 저장된 추정가격을 덮을 수 있다.
 
         어휘 자체의 검증은 ``Literal`` 이 한다 — 오타는 여기 오기 전에 거부된다.
+
+        ``award_floor_rate`` 게이트와 달리 **로그를 남기지 않는다**(비대칭은 의도적): 저쪽이
+        거르는 값은 발주기관 게시값의 이상이라 조치 대상이지만, 여기서 접히는 조합(예정가를
+        못 구한 개찰 행 등)은 정상 상태에서 상시 발생한다. 매 수집마다 경고를 찍으면 조치
+        가능한 로그가 노이즈에 묻힌다.
         """
         if self.estimated_amount_source is None:
             return self

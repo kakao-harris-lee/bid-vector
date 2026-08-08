@@ -900,6 +900,9 @@ def test_scsbid_pass_no_longer_reverts_the_tag(test_db):
     ``project.budget_estimate`` 를 덮어 분모가 +10% 뜨고, 임계 바로 위 밴드
     (실측 1.16·1.20·1.24)가 clean 으로 복귀했다. 이제 파생 출처는 저장된 양수 추정가격을
     덮지 못하므로 분모가 보존되고 태그도 유지된다.
+
+    이 가드가 지키는 전망 코호트 실측(활성 14,840 / 비율>1.15 1,625 / published 하한 보고
+    1,444, scsbid 경로 618)은 ``docs/operations/base-amount-basis-backfill.md`` §6 참조.
     """
     notice = "SCSBID-REVERT-1"
     _persist_one(
@@ -940,7 +943,8 @@ def test_recollection_without_an_estimate_no_longer_reverts_the_tag(test_db):
     비율이 1.0 으로 자기충족하는 ``est_equals_base`` 코호트로 떨어지지 않는다.
 
     같이 사라지던 부수 피해도 함께 막힌다: 저장된 진짜 추정가격이 base 로 덮여
-    **복구 불가**하게 소실되던 경로가 이 가드의 반대편이다.
+    **복구 불가**하게 소실되던 경로가 이 가드의 반대편이다. 이미 그렇게 굳은 행은
+    ``--reclassify-clean`` 으로도 회복되지 않는다(실측 3,982건, 런북 §6).
     """
     notice = "NOESTIMATE-REVERT-1"
     _persist_one(test_db, _notice_item(notice))

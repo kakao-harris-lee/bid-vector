@@ -260,6 +260,10 @@ def build_notice_from_result_row(
         or f"LIVE-{(request.target_date or '').replace('-', '')}-{row_index + 1:03d}",
         title=detail_data.get("title") or title,
         base_amount=base_amount,
+        # 상세 표의 "추정가격" 라벨에서 온 값이지만 ``estimated_amount_source`` 는 신고하지
+        # 않는다(미신고 = fill-only). 라이브 HTML 은 OpenAPI 가 실패했을 때의 폴백 경로이고
+        # 라벨 파싱은 페이지 구조에 의존하므로, 저장된 게시 추정가격을 덮을 권위를 주지
+        # 않는 쪽이 보수적으로 안전하다. 필요해지면 신고를 켜는 것이 후속 결정이다.
         estimated_amount=estimated_amount,
         closing_at=closing_at,
         business_type=detail_data.get("business_type") or business_type,
@@ -534,6 +538,8 @@ def build_notice_from_cells(
         notice_number=notice_number,
         title=title,
         base_amount=amounts[0] if amounts else 0.0,
+        # 결과표 셀 **위치 휴리스틱**(두 번째 금액)으로 뽑은 값이라 어느 축인지 알 수 없다.
+        # ``estimated_amount_source`` 미신고 = fill-only 가 여기서는 특히 옳다.
         estimated_amount=amounts[1] if len(amounts) > 1 else None,
         closing_at=closing_at,
         business_type=request.category,

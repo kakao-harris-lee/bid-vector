@@ -90,25 +90,39 @@ docker exec bid_vector_api python scripts/backfill_base_amount_basis.py \
 
 가드 이전에는 값이 양수이기만 하면 무조건 덮었고, 두 패스가 분모를 바꿔 재태깅을 되돌렸다
 (scsbid 복귀 실측: base/추정가격 **1.16·1.20·1.24 복귀, 1.28·1.408 생존**). 지금은
-`app/services/koneps/budget_fields.py` 의 **출처 인지 가드**가 그 자리를 지킨다: 공고 피드가
-게시한 추정가격(`notice`)만 덮고, 개찰 파생 예정가(`derived`)·기초금액 폴백
-(`base-fallback`)·미신고(`None`)는 **빈 자리(NULL/0)만** 채운다.
+`app/services/koneps/budget_fields.py` 의 **출처 인지 가드**가 그 자리를 지킨다: 공고가
+추정가격으로 게시한 값(`notice` — `presmptPrce`/`presmptAmt`)만 덮고, 개찰 파생 예정가
+(`derived`)·예산 키 폴백(`estimate-budget-fallback`)·기초금액 사본
+(`estimate-base-fallback`)·미신고(`None`)는 **빈 자리(NULL/0)만** 채운다.
 
 | 다음 패스 | 분모(`project.budget_estimate`) | 재태깅 |
 |---|---|---|
-| 공고 수집(추정가격 실림) | 추정가격 그대로(정정공고는 갱신) | **유지** |
+| 공고 수집(추정가격 실림) | 추정가격 그대로(정정공고는 상향·하향 갱신) | **유지** |
 | scsbid 개찰(6h) | 파생 예정가라 **덮지 못함** | **유지** |
-| 추정가격 미공급 재수집 | 기초금액 폴백이라 **덮지 못함** | **유지** |
+| 추정가격 미공급 재수집 | 예산/기초금액 폴백이라 **덮지 못함** | **유지** |
 
 세 시퀀스는 `tests/test_koneps_persistence.py` 가 고정한다
 (`test_scsbid_pass_no_longer_reverts_the_tag` /
 `test_recollection_without_an_estimate_no_longer_reverts_the_tag` /
 `test_notice_feed_still_applies_a_corrected_estimate`).
 
-**남는 보상 통제:** `--reclassify-clean` 주기 재실행은 **낮은 강도로 유지**한다. 가드는
-전망적 보호라, 가드 이전에 이미 분모가 덮인 행과 애초에 추정가격을 못 얻어 기초금액 사본이
-저장된 행(§7 `est_equals_base`)은 그대로 남는다. 캘리브레이션·백테스트를 돌리기 **직전 한
-번**이면 충분하고, scsbid 주기(6h)에 맞춰 돌릴 필요는 더 이상 없다.
+전망 코호트 실측(2026-08-08, 활성 open/re_notice): 실 추정가격 보유(est≠base) **14,840건**이
+미공급 재수집 1회로 세탁될 수 있었고, 그중 비율>1.15 **1,625건**, 다시 그중 published 법정하한을
+보고한 **1,444건**이 이 가드가 지키는 OPEN→CLOSED 전환 코호트다(세탁되면 비 1.0 이 되어 #356
+V3 신뢰 검사를 통과했을 행 — 가드 후에는 실제 비율로 CLOSED 를 유지해 허수 하한에 예산 상한
+초과 권한을 주지 않는다). scsbid 예정가 경로의 활성 코호트는 open 10 + re_notice 608 이다.
+
+**보상 통제의 실제 범위(정정):** 이미 세탁된 분모 위에서 `clean` 으로 굳은 행은
+`--reclassify-clean` 으로 **구조적으로 회복되지 않는다** — 백필도 같은 분모
+(`project.budget_estimate`)를 읽고, `clean` 규칙이 `derived-yega` 판정보다 앞서기 때문이다.
+실측 잔여 **3,982건**(awarded 3,949 · re_notice 32 · cancelled 1)이 여기 해당하고, 그중
+awarded 는 공고 피드 재수집도 닿지 않아 **영구**다. 따라서 `--reclassify-clean` 의 실제 담당은
+"되돌아간 행 회수"가 아니라 **라벨 규칙이 바뀌었을 때의 재분류**이며, 캘리브레이션·백테스트
+직전 한 번이면 충분하다(scsbid 주기 6h 에 맞춰 돌릴 이유는 없다).
+
+> **corpus leakage 공시:** 위 3,982건은 개찰 파생 분모로 `clean` 판정된 채 clean 버킷 안에
+> 남아 있다. 재캘리브레이션·백테스트가 clean 버킷을 corpus 로 쓸 때 이 오염이 함께 들어온다 —
+> 소비자는 이 caveat 를 전제로 결과를 읽어야 한다(해소는 분모 재구성이 선행돼야 하는 별도 작업).
 
 ## 7. 알려진 사각지대 / 후속
 
@@ -116,7 +130,12 @@ docker exec bid_vector_api python scripts/backfill_base_amount_basis.py \
   `base_amount` 를 그대로 추정가격으로 쓴다. 비율이 항상 1.0 이라 규칙이 볼 수 없다
   (운영 실측 clean 의 30%). §6 의 가드는 그 사본이 **이미 저장된 추정가격을 덮는 것**만
   막는다 — 처음부터 사본이 자리를 채운 행은 그대로이므로, 수집 단계에서 추정가격을
-  확보하는 것이 여전히 유일한 해법이다(활성 공고 실측 991건: open 362 + re_notice 629).
+  확보하는 것이 여전히 유일한 해법이다. 활성 공고 실측 **991건**(open 362 + re_notice 629,
+  2026-08-08 오전) → 같은 날 재측정 **864건**: 활성 코호트는 마감·개찰로 계속 빠져나가므로
+  이 수치는 스냅숏이다(추세를 보려면 측정일과 함께 읽을 것).
+- **개찰 파생 분모로 굳은 clean 행**: §6 의 3,982건. 가드 이전에 세탁된 잔여이고
+  `--reclassify-clean` 으로 회복되지 않는다(awarded 3,949는 영구). clean 버킷을 corpus 로
+  쓰는 재캘리브레이션·백테스트의 leakage caveat.
 - **저측(base ÷ est < 0.85)**: 이 규칙의 축이 아니다. 별도 판정 후속.
 - **프론트 표시**: `suspect-ratio` 행은 화면 provenance 가 `clean-base` →
   `base-fallback`("저장된 기초금액(basis 미상)")으로 후퇴한다. 모순으로 적극 판정한 값을

@@ -439,9 +439,7 @@ def test_metadata_facts_demand_agency_prefers_opening_over_plain():
         == "개찰수요기관"
     )
     # 개찰수요기관이 비면(결측/빈 문자열) 공고 수요기관으로 폴백한다.
-    assert (
-        _facts(demand_agency="공고수요기관").resolved_demand_agency() == "공고수요기관"
-    )
+    assert _facts(demand_agency="공고수요기관").resolved_demand_agency() == "공고수요기관"
     assert (
         _facts(
             opening_demand_agency="", demand_agency="공고수요기관"

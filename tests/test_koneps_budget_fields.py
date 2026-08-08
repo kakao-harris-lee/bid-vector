@@ -154,9 +154,7 @@ def test_apply_keeps_prior_min_max_when_the_item_carries_no_amount():
     project = _project(
         budget_estimate=100_000_000.0, budget_min=90_000_000.0, budget_max=110_000_000.0
     )
-    item = KonepsCollectedItem(
-        notice_number="BUDGET-2", title="금액 없음", base_amount=0.0
-    )
+    item = KonepsCollectedItem(notice_number="BUDGET-2", title="금액 없음", base_amount=0.0)
 
     budget_fields.apply_budget_amounts(project, item=item)
 

@@ -20,11 +20,16 @@
 
 왜 "무차별 양수 불변" 이 아닌가
 --------------------------------
-KONEPS 는 정정공고·재공고로 추정가격을 **바꿔 게시**한다. 양수면 무조건 지키는 가드는 그
-정당한 갱신까지 막아 저장값을 첫 게시 시점에 얼린다. 그래서 값이 아니라 **출처**를 본다:
-공고 피드가 게시한 값(``notice``)은 정정으로 받아들이고, 파생(``derived``)·폴백
-(``base-fallback``)·미신고(``None``)는 **빈 자리(NULL/0)만** 채운다
-(``persistence`` 의 ``award_floor_rate``/``eligibility_raw`` anti-clobber 가드 미러).
+KONEPS 는 정정공고·재공고로 추정가격을 **바꿔 게시**한다(상향도 하향도). 양수면 무조건 지키는
+가드는 그 정당한 갱신까지 막아 저장값을 첫 게시 시점에 얼린다 — 특히 **하향** 정정을 막으면
+``budget_cap`` 이 실제보다 느슨해진다. 그래서 값이 아니라 **출처**를 본다: 공고가 추정가격으로
+게시한 값(``notice``)만 정정으로 받아들이고, 나머지 셋(개찰 파생 ``derived``, 예산 키 폴백
+``estimate-budget-fallback``, 기초금액 사본 ``estimate-base-fallback``)과 미신고(``None``)는
+**빈 자리(NULL/0)만** 채운다(``persistence`` 의
+``award_floor_rate``/``eligibility_raw`` anti-clobber 가드 미러).
+
+라벨을 정하는 규칙은 ``app/domain/estimate_provenance.py`` 한 벌이고, 여기는 그 라벨을
+**해석만** 한다 — 어느 축이 권위인지에 대한 판정이 두 벌이 되지 않게(§4.5-8).
 
 스코프 밖(의도적)
 -----------------
@@ -33,8 +38,9 @@ KONEPS 는 정정공고·재공고로 추정가격을 **바꿔 게시**한다. �
 * ``matching.resolve_budget_estimate`` 의 ``base_amount`` 폴백도 유지한다 — 그 값은 min/max
   가 함께 보고, 폴백을 없애면 이 PR 밖의 산출이 움직인다. 폴백은 남기고 **그 값이 무엇인지**
   를 생산자가 신고하게 한 것이 이 PR 의 경계다.
-* 이미 저장된 ``est == base`` 행(활성 991건)은 이 가드로 바뀌지 않는다. 가드는 전망적
-  보호이고, 기존 값의 수리는 원본 추정가격이 남아 있지 않아 별도 문제다.
+* 이미 저장된 ``est == base`` 행은 이 가드로 바뀌지 않는다(전망적 보호). 기존 값의 수리는
+  원본 추정가격이 남아 있지 않아 별도 문제이고, 규모·잔여 코호트 실측은
+  ``docs/operations/base-amount-basis-backfill.md`` §6/§7 이 갖는다.
 """
 
 from __future__ import annotations
