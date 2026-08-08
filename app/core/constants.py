@@ -155,6 +155,27 @@ OPEN_PROJECT_STATUS: str = "open"
 # the two.
 ACTIVE_PROJECT_STATUSES: frozenset[str] = frozenset({"open", "re_notice"})
 
+# 기초금액(``HistoricalData.base_amount``)을 "부가세로 설명되는 값"으로 신뢰할 상한 비
+# (기초금액 ÷ 추정가격). 부가세는 10% 이므로 정상 과세 공고는 1.10, 면세는 1.00 이고,
+# 나머지 0.05 는 수집 시점 차이·반올림을 흡수하는 측정 마진이다. 이 비를 넘는 base 는
+# 세금이 아니라 오염(다른 금액 필드 혼입)이며, 그 base 로 만든 하한 임계는 실낙찰
+# 데이터가 반증한다(#356: 그 코호트에서 실낙찰자 전원이 임계 미만으로 낙찰).
+#
+# 판정 알고리즘은 ``app/services/base_amount_basis.py::exceeds_base_trust_ratio`` 한 벌을
+# 공유한다(§4.5-8 — 상수만 나누고 비교식을 두 벌로 두면 경계에서 갈린다). 소비처:
+#   - app/services/opportunity_analysis/market.py (#356 budget_cap 초과 허용 게이트 —
+#     오염된 base 위에서 계산된 하한에 예산 상한을 넘을 권한을 주지 않는다)
+#   - app/services/base_amount_basis.py           (provenance 분류의 suspect-ratio 규칙 —
+#     같은 임계를 넘는 저장 base 를 clean 버킷에서 뺀다)
+#
+# 두 소비처는 같은 임계를 **다른 시점**에 적용한다: 게이트는 라이브 요청의 두 금액에,
+# 분류는 저장된 행에 라벨로. 다만 둘은 **독립이 아니다**(코드리뷰 C2 정정): 게이트가 라벨을
+# 직접 읽지는 않지만 게이트 입력 ``bid_base`` 가 ``get_reliable_base`` 를 거쳐 저장 라벨에서
+# 파생되므로, 어떤 행이 non-clean 으로 재태깅되고 복구 추정치까지 가지면 게이트 입력이
+# 오염 base → 복구 기초금액으로 바뀌어 판정이 CLOSED→OPEN 으로 열릴 수 있다. 그 방향은
+# 의도된 것이며(더 개연적인 입력), 근거·영향 코호트는 ``enforceable_floor_price`` docstring.
+BID_BASE_TRUST_RATIO_MAX: float = 1.15
+
 # ``PaperBidRun.mode`` 값 — 하나의 run 이 과거 개찰 재현(historical replay)인지
 # 진행 중 공고의 forward paper 생성인지 구분한다. 두 모드는 요청 스냅샷 키 집합과
 # 데이터 컷오프 정책이 다르므로, 저장된 payload 를 되읽는 쪽이 모드로 분기한다.
