@@ -67,6 +67,44 @@ def clamp_bid_rate(value: float) -> float:
     return max(0.7, min(1.4, float(value)))
 
 
+def extract_bid_rate_series(historical_records: tuple[object, ...]) -> list[float]:
+    """Extract a time-ordered bid-rate series from ORM rows or dictionaries.
+
+    Rows without a usable ``opened_at``/``created_at`` cannot be ordered, so a
+    partially dated batch falls back to insertion order rather than mixing the
+    two orderings.
+    """
+    sequence_points: list[tuple[str, int, float]] = []
+    fallback_sequence: list[float] = []
+    for index, record in enumerate(historical_records):
+        bid_rate = _resolve_bid_rate(record)
+        if bid_rate is None:
+            continue
+        fallback_sequence.append(bid_rate)
+        opened_at = read_record_value(record, "opened_at") or read_record_value(record, "created_at")
+        if opened_at is not None:
+            sortable_key = opened_at.isoformat() if hasattr(opened_at, "isoformat") else str(opened_at)
+            sequence_points.append((sortable_key, index, bid_rate))
+
+    if sequence_points and len(sequence_points) == len(fallback_sequence):
+        sequence_points.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in sequence_points]
+    return fallback_sequence
+
+
+def _resolve_bid_rate(record: object) -> float | None:
+    """Read a usable bid rate from a historical record payload."""
+    bid_rate = float(read_record_value(record, "bid_rate") or 0.0)
+    if bid_rate <= 0:
+        predicted_price = float(read_record_value(record, "predicted_price") or 0.0)
+        base_amount = float(read_record_value(record, "base_amount") or 0.0)
+        if predicted_price > 0 and base_amount > 0:
+            bid_rate = predicted_price / base_amount
+    if not 0.5 <= bid_rate <= 1.5:
+        return None
+    return round(float(bid_rate), 6)
+
+
 def get_t_critical(degrees_of_freedom: int) -> float:
     """Return an approximate 95% t critical value without requiring SciPy."""
     if degrees_of_freedom <= 1:
