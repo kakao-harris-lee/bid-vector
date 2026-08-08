@@ -112,9 +112,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Local embedding model snapshot directory.",
     )
     create_parser.add_argument(
-        "--lstm-artifact-path", default="", help="Persisted LSTM artifact JSON path."
-    )
-    create_parser.add_argument(
         "--ensemble-artifact-path",
         default="",
         help="Persisted ensemble artifact JSON path.",
@@ -303,7 +300,6 @@ def main() -> int:
             MLReleasePromotionRequest(
                 release_tag=args.release_tag,
                 embedding_model_path=_clean_optional(args.embedding_model_path),
-                lstm_artifact_path=_clean_optional(args.lstm_artifact_path),
                 ensemble_artifact_path=_clean_optional(args.ensemble_artifact_path),
                 predictor_backtest_report_path=_clean_optional(
                     args.predictor_backtest_report

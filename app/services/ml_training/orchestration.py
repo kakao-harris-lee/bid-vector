@@ -14,7 +14,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.ai.predictors.ensemble import load_ensemble_artifact
-from app.ai.predictors.lstm import load_lstm_artifact
 from app.core.time import utc_now
 from app.services.ml_release import MLReleasePromotionRequest, MLReleasePromotionService
 from app.services.prediction_dataset import PredictionDatasetService
@@ -62,7 +61,6 @@ class OrchestrationMixin:
                 paths=paths,
                 dataset=dataset,
                 dataset_quality=dataset_quality,
-                lstm_artifact=None,
                 ensemble_artifact=None,
             )
             return self._skipped_training_result(
@@ -73,7 +71,7 @@ class OrchestrationMixin:
                 comparison_report=comparison_report,
             )
 
-        lstm_artifact, ensemble_artifact = self._build_and_write_predictor_artifacts(
+        ensemble_artifact = self._build_and_write_predictor_artifacts(
             options=options,
             paths=paths,
             bid_rates=bid_rates,
@@ -84,7 +82,6 @@ class OrchestrationMixin:
             paths=paths,
             dataset=dataset,
             dataset_quality=dataset_quality,
-            lstm_artifact=lstm_artifact,
             ensemble_artifact=ensemble_artifact,
         )
         manifest, remote_storage = self._maybe_create_training_manifest(options=options, paths=paths)
@@ -115,24 +112,20 @@ class OrchestrationMixin:
 
     def _training_run_paths(self, release_tag: str) -> TrainingRunPaths:
         training_dir = self.repo_root / "models" / "training-runs" / release_tag
-        predictor_lstm_dir = self.repo_root / "models" / "predictors" / "lstm"
         predictor_ensemble_dir = self.repo_root / "models" / "predictors" / "ensemble"
         return TrainingRunPaths(
             training_dir=training_dir,
-            predictor_lstm_dir=predictor_lstm_dir,
             predictor_ensemble_dir=predictor_ensemble_dir,
             dataset_path=training_dir / "dataset.json",
             summary_path=training_dir / "training-summary.json",
             dataset_quality_path=training_dir / "dataset-quality.json",
             comparison_report_path=training_dir / "artifact-comparison.json",
-            lstm_artifact_path=predictor_lstm_dir / f"{release_tag}.json",
             ensemble_artifact_path=predictor_ensemble_dir / f"{release_tag}.json",
         )
 
     @staticmethod
     def _ensure_training_run_dirs(paths: TrainingRunPaths) -> None:
         paths.training_dir.mkdir(parents=True, exist_ok=True)
-        paths.predictor_lstm_dir.mkdir(parents=True, exist_ok=True)
         paths.predictor_ensemble_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_training_datasets(
@@ -165,15 +158,9 @@ class OrchestrationMixin:
         paths: TrainingRunPaths,
         bid_rates: list[float],
         summary: dict[str, Any],
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        lstm_artifact = self._build_lstm_artifact(
-            release_tag=options.release_tag,
-            bid_rates=bid_rates,
-        )
+    ) -> dict[str, Any]:
         ensemble_artifact = self._build_ensemble_artifact(
             release_tag=options.release_tag,
-            lstm_artifact_path=paths.lstm_artifact_path,
-            lstm_artifact=lstm_artifact,
             bid_rates=bid_rates,
         )
         self._inject_group_calibration(
@@ -185,11 +172,9 @@ class OrchestrationMixin:
             key="probability_calibration",
             block=summary.get("probability_calibration") or {},
         )
-        paths.lstm_artifact_path.write_text(self._dump_json(lstm_artifact), encoding="utf-8")
         paths.ensemble_artifact_path.write_text(self._dump_json(ensemble_artifact), encoding="utf-8")
-        load_lstm_artifact(paths.lstm_artifact_path)
         load_ensemble_artifact(paths.ensemble_artifact_path)
-        return lstm_artifact, ensemble_artifact
+        return ensemble_artifact
 
     def _write_artifact_comparison_report(
         self,
@@ -198,7 +183,6 @@ class OrchestrationMixin:
         paths: TrainingRunPaths,
         dataset: dict[str, Any],
         dataset_quality: dict[str, Any],
-        lstm_artifact: dict[str, Any] | None,
         ensemble_artifact: dict[str, Any] | None,
     ) -> dict[str, Any]:
         comparison_report = self._build_artifact_comparison_report(
@@ -207,7 +191,6 @@ class OrchestrationMixin:
             agency_name=options.agency_name,
             dataset=dataset,
             dataset_quality=dataset_quality,
-            lstm_artifact=lstm_artifact,
             ensemble_artifact=ensemble_artifact,
         )
         paths.comparison_report_path.write_text(self._dump_json(comparison_report), encoding="utf-8")
@@ -225,7 +208,6 @@ class OrchestrationMixin:
         manifest = release_service.create_release_manifest(
             MLReleasePromotionRequest(
                 release_tag=options.release_tag,
-                lstm_artifact_path=str(paths.lstm_artifact_path),
                 ensemble_artifact_path=str(paths.ensemble_artifact_path),
                 predictor_backtest_report_path=str(paths.comparison_report_path),
                 notes=options.notes or f"Queued price-predictor training run for {options.release_tag}",
@@ -278,7 +260,6 @@ class OrchestrationMixin:
             "summary_path": self._to_portable_path(paths.summary_path),
             "dataset_quality_path": self._to_portable_path(paths.dataset_quality_path),
             "comparison_report_path": self._to_portable_path(paths.comparison_report_path),
-            "lstm_artifact_path": self._to_portable_path(paths.lstm_artifact_path),
             "ensemble_artifact_path": self._to_portable_path(paths.ensemble_artifact_path),
             "summary": summary,
             "dataset_quality": dataset_quality,

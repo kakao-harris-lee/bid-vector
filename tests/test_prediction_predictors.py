@@ -49,52 +49,9 @@ def _build_bid_rate_history(count: int, *, base_rate: float = 0.914, step: float
     ]
 
 
-def _write_lstm_artifact(tmp_path) -> str:
-    artifact_path = tmp_path / "lstm_artifact.json"
-    artifact_path.write_text(
-        json.dumps(
-            {
-                "artifact_version": "1",
-                "model_version": "v2.0-lstm",
-                "sequence_length": 6,
-                "input_center": 0.9,
-                "input_scale": 0.05,
-                "output_scale": 0.03,
-                "output_bias": 0.9,
-                "scenario_spread_multiplier": 1.1,
-                "confidence_bias": 0.03,
-                "blend_weights": {
-                    "lstm": 0.72,
-                    "historical": 0.18,
-                    "trend": 0.10,
-                },
-                "weights": {
-                    "W_i": [[0.9]],
-                    "U_i": [[0.15]],
-                    "b_i": [3.0],
-                    "W_f": [[0.2]],
-                    "U_f": [[0.05]],
-                    "b_f": [2.8],
-                    "W_o": [[0.4]],
-                    "U_o": [[0.1]],
-                    "b_o": [2.5],
-                    "W_c": [[1.1]],
-                    "U_c": [[0.2]],
-                    "b_c": [0.0],
-                    "dense_W": [0.85],
-                    "dense_b": [0.0],
-                },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    return str(artifact_path)
-
 
 def _write_ensemble_artifact(tmp_path) -> str:
     artifact_path = tmp_path / "ensemble_artifact.json"
-    embedded_lstm_artifact = json.loads((tmp_path / "lstm_artifact.json").read_text(encoding="utf-8"))
     artifact_path.write_text(
         json.dumps(
             {
@@ -108,9 +65,7 @@ def _write_ensemble_artifact(tmp_path) -> str:
                     "historical": 0.5,
                     "momentum": 0.2,
                     "mean_reversion": 0.15,
-                    "lstm": 0.15,
                 },
-                "lstm_artifact": embedded_lstm_artifact,
             },
             ensure_ascii=False,
         ),
@@ -195,7 +150,6 @@ def test_normalize_predictor_registry_keeps_explicit_empty_mapping_sparse():
     registry = normalize_predictor_registry({})
 
     assert "historical" in registry
-    assert "lstm" not in registry
     assert "ensemble" not in registry
 
 
@@ -238,12 +192,8 @@ class _RecordingHistoricalPredictor(BasePricePredictor):
         )
 
 
-def test_build_ensemble_prediction_payload_consumes_injected_historical_predictor(monkeypatch):
+def test_build_ensemble_prediction_payload_consumes_injected_historical_predictor():
     from app.ai.predictors.ensemble import build_ensemble_prediction_payload, load_ensemble_artifact
-
-    # Keep the historical anchor the only injection point under test: no LSTM
-    # component (base artifact has none) and no configured LSTM path.
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MODEL_PATH", "")
 
     artifact = load_ensemble_artifact(
         {
@@ -273,44 +223,6 @@ def test_build_ensemble_prediction_payload_consumes_injected_historical_predicto
     assert "historical(0.8123" in payload["explanation"]
 
 
-def test_infer_lstm_sequence_signal_consumes_injected_historical_predictor():
-    from app.ai.predictors.lstm import infer_lstm_sequence_signal, load_lstm_artifact
-
-    artifact = load_lstm_artifact(
-        {
-            "artifact_version": "1",
-            "model_version": "v2.0-lstm",
-            "sequence_length": 6,
-            "input_center": 0.9,
-            "input_scale": 0.05,
-            "output_scale": 0.03,
-            "output_bias": 0.9,
-            "scenario_spread_multiplier": 1.1,
-            "confidence_bias": 0.03,
-            "blend_weights": {"lstm": 0.72, "historical": 0.18, "trend": 0.10},
-            "weights": {
-                "W_i": [[0.9]], "U_i": [[0.15]], "b_i": [3.0],
-                "W_f": [[0.2]], "U_f": [[0.05]], "b_f": [2.8],
-                "W_o": [[0.4]], "U_o": [[0.1]], "b_o": [2.5],
-                "W_c": [[1.1]], "U_c": [[0.2]], "b_c": [0.0],
-                "dense_W": [0.85], "dense_b": [0.0],
-            },
-        }
-    )
-    context = PricePredictionContext(
-        budget=100_000_000.0,
-        category="software",
-        description="lstm injection",
-        historical_records=tuple(_build_bid_rate_history(12)),
-    )
-    fake = _RecordingHistoricalPredictor(bid_rate=0.8123)
-
-    signal = infer_lstm_sequence_signal(context, artifact=artifact, historical_predictor=fake)
-
-    # The injected fake is the historical anchor blended into the sequence signal.
-    assert fake.calls == 1
-    assert signal["historical_rate"] == 0.8123
-
 
 def test_predict_price_reports_historical_predictor_metadata_by_default():
     """The baseline historical predictor should identify itself in the response payload."""
@@ -332,15 +244,15 @@ def test_predict_price_reports_historical_predictor_metadata_by_default():
     assert prediction["training_window_size"] == 4
 
 
-def test_predict_price_falls_back_to_historical_when_lstm_is_unavailable(monkeypatch):
+def test_predict_price_falls_back_to_historical_when_experimental_is_unavailable(monkeypatch):
     """Unavailable experimental predictors should fall back to the stable historical baseline."""
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "lstm")
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
     monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", False)
 
     prediction = predict_price(
         budget=100000000.0,
         category="software",
-        description="lstm fallback test",
+        description="ensemble fallback test",
         historical_records=[
             {"bid_rate": 0.914},
             {"bid_rate": 0.921},
@@ -353,39 +265,13 @@ def test_predict_price_falls_back_to_historical_when_lstm_is_unavailable(monkeyp
     assert prediction["predictor_family"] == "statistical"
     assert prediction["training_window_size"] == 4
     assert prediction["fallback_reason"] is not None
-    assert "lstm_sequence" in prediction["fallback_reason"]
+    assert "ensemble_blend" in prediction["fallback_reason"]
     assert "unavailable" in prediction["fallback_reason"].lower()
 
-
-def test_predict_price_uses_lstm_predictor_when_artifact_is_configured(monkeypatch, tmp_path):
-    """Configured LSTM artifacts should enable real sequence-model inference."""
-    lstm_artifact_path = _write_lstm_artifact(tmp_path)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "lstm")
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MIN_SAMPLES", 8)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MODEL_PATH", lstm_artifact_path)
-
-    prediction = predict_price(
-        budget=100000000.0,
-        category="software",
-        description="sequence predictor inference test",
-        historical_records=_build_bid_rate_history(10),
-    )
-
-    assert prediction["predictor_name"] == "lstm_sequence"
-    assert prediction["predictor_family"] == "sequence_model"
-    assert prediction["fallback_reason"] is None
-    assert prediction["model_version"] == "v2.0-lstm"
-    assert prediction["training_window_size"] == 10
-    assert prediction["pricing_mode"] == "historical_blend"
-    assert prediction["historical_sample_size"] == 10
-    assert 0.9 <= prediction["predicted_bid_rate"] <= 1.05
-    assert "LSTM artifact v1" in prediction["explanation"]
 
 
 def test_predict_price_uses_ensemble_predictor_when_artifact_is_configured(monkeypatch, tmp_path):
     """Configured ensemble artifacts should blend multiple components into one prediction."""
-    _write_lstm_artifact(tmp_path)
     ensemble_artifact_path = _write_ensemble_artifact(tmp_path)
     monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
     monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
@@ -409,46 +295,6 @@ def test_predict_price_uses_ensemble_predictor_when_artifact_is_configured(monke
     assert 0.9 <= prediction["predicted_bid_rate"] <= 1.05
     assert "ensemble이" in prediction["explanation"]
 
-
-def test_lstm_predictor_caches_unchanged_artifact_and_reloads_changed_identity(
-    monkeypatch, tmp_path
-):
-    """Availability + repeated inference normalize one immutable version once."""
-    from app.ai.predictors.artifact_contracts import VersionAwareArtifactProvider
-    from app.ai.predictors.lstm import LSTMBidRatePredictor, load_lstm_artifact
-    import app.ai.predictors.historical as historical
-
-    artifact_path = Path(_write_lstm_artifact(tmp_path))
-    load_calls: list[str] = []
-
-    def _load_from_file(source):
-        load_calls.append(str(source))
-        payload = json.loads(Path(source).read_text(encoding="utf-8"))
-        return load_lstm_artifact(payload)
-
-    provider = VersionAwareArtifactProvider(_load_from_file, max_entries=2)
-    predictor = LSTMBidRatePredictor(artifact_provider=provider)
-    context = PricePredictionContext(
-        budget=100_000_000.0,
-        category="software",
-        description="version-aware LSTM cache",
-        historical_records=tuple(_build_bid_rate_history(10)),
-    )
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MIN_SAMPLES", 8)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MODEL_PATH", str(artifact_path))
-    monkeypatch.setattr(historical, "load_group_calibration", lambda: {})
-    assert predictor.check_availability(context).available is True
-    assert predictor.predict(context).model_version == "v2.0-lstm"
-    assert predictor.predict(context).model_version == "v2.0-lstm"
-    assert load_calls == [str(artifact_path)]
-
-    changed = json.loads(artifact_path.read_text(encoding="utf-8"))
-    changed["model_version"] = "v2.0-lstm-released-2"
-    artifact_path.write_text(json.dumps(changed), encoding="utf-8")
-
-    assert predictor.predict(context).model_version == "v2.0-lstm-released-2"
-    assert load_calls == [str(artifact_path), str(artifact_path)]
 
 
 def test_artifact_provider_resets_pid_local_lock_and_cache_after_fork_boundary(
@@ -730,7 +576,6 @@ def test_ensemble_predictor_caches_unchanged_artifact_and_reloads_changed_identi
     from app.ai.predictors.ensemble import EnsembleBidRatePredictor, load_ensemble_artifact
     import app.ai.predictors.historical as historical
 
-    _write_lstm_artifact(tmp_path)
     artifact_path = Path(_write_ensemble_artifact(tmp_path))
     load_calls: list[str] = []
 
@@ -767,7 +612,6 @@ def test_ensemble_predictor_caches_unchanged_artifact_and_reloads_changed_identi
 
 def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch, tmp_path):
     """Ensemble output should share the same service subtype target bands as the baseline."""
-    _write_lstm_artifact(tmp_path)
     ensemble_artifact_path = _write_ensemble_artifact(tmp_path)
     monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
     monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
@@ -807,7 +651,6 @@ def test_ensemble_prediction_applies_service_procurement_rate_bands(monkeypatch,
 
 def test_ensemble_prediction_lifts_goods_recent_high_rate_tail(monkeypatch, tmp_path):
     """Goods outcomes clustered near 100% should lift the recommended/base scenario."""
-    _write_lstm_artifact(tmp_path)
     ensemble_artifact_path = _write_ensemble_artifact(tmp_path)
     monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
     monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
@@ -968,20 +811,20 @@ def test_price_prediction_endpoint_exposes_predictor_metadata(client, test_db):
     assert data["training_window_size"] == 3
 
 
-def test_price_prediction_endpoint_can_use_lstm_predictor(client, test_db, monkeypatch, tmp_path):
+def test_price_prediction_endpoint_can_use_experimental_predictor(client, test_db, monkeypatch, tmp_path):
     """The API should surface experimental predictor metadata when a real artifact is configured."""
-    lstm_artifact_path = _write_lstm_artifact(tmp_path)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "lstm")
+    ensemble_artifact_path = _write_ensemble_artifact(tmp_path)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
     monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MIN_SAMPLES", 6)
-    monkeypatch.setattr(settings, "PRICE_PREDICTION_LSTM_MODEL_PATH", lstm_artifact_path)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES", 6)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MODEL_PATH", ensemble_artifact_path)
 
     project_response = client.post(
         "/api/v1/projects/",
         json={
-            "title": "LSTM Predictor Project",
-            "description": "endpoint should expose lstm predictor metadata",
-            "requirements": "Need sequence model metadata",
+            "title": "Ensemble Predictor Project",
+            "description": "endpoint should expose ensemble predictor metadata",
+            "requirements": "Need blended predictor metadata",
             "budget_estimate": 125000000.0,
             "category": "software",
         },
@@ -991,7 +834,7 @@ def test_price_prediction_endpoint_can_use_lstm_predictor(client, test_db, monke
     now = datetime.now(UTC)
     test_db.add_all([
         HistoricalData(
-            notice_number=f"LSTM-PREDICTOR-{index}",
+            notice_number=f"ENSEMBLE-PREDICTOR-{index}",
             category="software",
             base_amount=125000000.0,
             predicted_price=125000000.0 * bid_rate,
@@ -1008,16 +851,16 @@ def test_price_prediction_endpoint_can_use_lstm_predictor(client, test_db, monke
             "project_id": project_id,
             "budget_estimate": 125000000.0,
             "category": "software",
-            "description": "endpoint should expose lstm predictor metadata",
+            "description": "endpoint should expose ensemble predictor metadata",
         },
     )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["predictor_name"] == "lstm_sequence"
-    assert data["predictor_family"] == "sequence_model"
+    assert data["predictor_name"] == "ensemble_blend"
+    assert data["predictor_family"] == "ensemble"
     assert data["fallback_reason"] is None
-    assert data["model_version"] == "v2.0-lstm"
+    assert data["model_version"] == "v2.0-ensemble"
     assert data["training_window_size"] == 7
 
 

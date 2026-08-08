@@ -100,9 +100,15 @@ def test_price_predictor_training_writes_quality_comparison_and_gate_reports(
     assert result["dataset_quality"]["status"] == "passed"
     assert result["comparison_report"]["status"] == "completed"
     assert result["comparison_report"]["sample_count"] == 3
-    assert result["comparison_report"]["best_predictor_key"] in {"historical", "lstm", "ensemble"}
+    assert result["comparison_report"]["best_predictor_key"] in {"historical", "ensemble"}
     assert result["comparison_report"]["results"][0]["average_error_delta_vs_historical"] == 0.0
-    assert result["manifest"]["artifacts"]["predictors"]["ensemble"]["has_embedded_lstm"] is True
+    # 은퇴한 sequence-model 은 훈련 산출·비교 리포트·manifest 어디에도 다시 나타나지 않는다.
+    assert "lstm" not in result["manifest"]["artifacts"]["predictors"]
+    assert not (repo_root / "models" / "predictors" / "lstm").exists()
+    assert {entry["predictor_key"] for entry in result["comparison_report"]["results"]} == {
+        "historical",
+        "ensemble",
+    }
 
     quality_path = repo_root / result["dataset_quality_path"]
     comparison_path = repo_root / result["comparison_report_path"]

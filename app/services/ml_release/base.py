@@ -23,6 +23,14 @@ from typing import Any, Iterator
 
 from app.core.config import settings
 
+# manifest 의 ``artifacts.predictors`` 에 나타날 수 있는 키(선언 데이터).
+#
+# ``lstm`` 은 2026-08-09 은퇴해 **더 이상 생성되지 않지만** 읽기 목록에는 남긴다. 이미
+# 서명된 과거 manifest 가 그대로 디스크에 있고, 그 키를 읽지 않으면 해당 릴리스가
+# "predictor 아티팩트 없음"으로 판정되어 promotion gate 가 조용히 not_applicable 로
+# 넘어간다. 은퇴시키느라 과거 릴리스의 게이트를 약화시키지 않는다.
+MANIFEST_PREDICTOR_KEYS: tuple[str, ...] = ("lstm", "ensemble")
+
 
 def build_preflight_check(
     name: str,
@@ -52,7 +60,6 @@ class MLReleasePromotionRequest:
 
     release_tag: str
     embedding_model_path: str | None = None
-    lstm_artifact_path: str | None = None
     ensemble_artifact_path: str | None = None
     predictor_backtest_report_path: str | None = None
     git_sha: str | None = None
@@ -164,7 +171,7 @@ class _MLReleaseBase:
             )
         predictors = artifacts.get("predictors") if isinstance(artifacts, dict) else {}
         if isinstance(predictors, dict):
-            for predictor_key in ("lstm", "ensemble"):
+            for predictor_key in MANIFEST_PREDICTOR_KEYS:
                 predictor = predictors.get(predictor_key)
                 if isinstance(predictor, dict) and predictor.get("path"):
                     results.append(
@@ -174,6 +181,7 @@ class _MLReleaseBase:
                             "integrity": predictor.get("integrity"),
                         }
                     )
+                # 은퇴 이전 manifest 의 ensemble → lstm 링크(신규 manifest 에는 없다).
                 if (
                     predictor_key == "ensemble"
                     and isinstance(predictor, dict)

@@ -37,11 +37,6 @@ from app.ai.predictors.historical import (
     build_heuristic_prediction,
     build_historical_prediction,
 )
-from app.ai.predictors.lstm import (
-    build_lstm_prediction_payload,
-    infer_lstm_sequence_signal,
-    load_lstm_artifact,
-)
 from app.ai.price_prediction import predict_price
 
 GOLDEN_DIR = Path(__file__).parent / "goldens" / "predictor"
@@ -321,27 +316,6 @@ def _rate_records(rates: list[float], *, base_amount: float = 100_000_000.0) -> 
     return [{"bid_rate": rate, "base_amount": base_amount} for rate in rates]
 
 
-_LSTM_ARTIFACT = {
-    "artifact_version": "1",
-    "model_version": "v2.0-lstm",
-    "sequence_length": 6,
-    "input_center": 0.9,
-    "input_scale": 0.05,
-    "output_scale": 0.03,
-    "output_bias": 0.9,
-    "scenario_spread_multiplier": 1.1,
-    "confidence_bias": 0.03,
-    "blend_weights": {"lstm": 0.72, "historical": 0.18, "trend": 0.10},
-    "weights": {
-        "W_i": [[0.9]], "U_i": [[0.15]], "b_i": [3.0],
-        "W_f": [[0.2]], "U_f": [[0.05]], "b_f": [2.8],
-        "W_o": [[0.4]], "U_o": [[0.1]], "b_o": [2.5],
-        "W_c": [[1.1]], "U_c": [[0.2]], "b_c": [0.0],
-        "dense_W": [0.85], "dense_b": [0.0],
-    },
-}
-
-
 def _ensemble_case(
     case_id: str,
     *,
@@ -373,10 +347,9 @@ _BASE_ENSEMBLE_ARTIFACT = {
     "momentum_window": 5,
     "scenario_spread_multiplier": 1.05,
     "confidence_bias": 0.02,
-    "component_weights": {"historical": 0.5, "momentum": 0.2, "mean_reversion": 0.15, "lstm": 0.15},
+    "component_weights": {"historical": 0.5, "momentum": 0.2, "mean_reversion": 0.15},
 }
 
-_ENSEMBLE_ARTIFACT_WITH_LSTM = {**_BASE_ENSEMBLE_ARTIFACT, "lstm_artifact": _LSTM_ARTIFACT}
 
 _ASCENDING = [round(0.90 + i * 0.001, 6) for i in range(16)]
 _DESCENDING = [round(0.96 - i * 0.001, 6) for i in range(16)]
@@ -414,19 +387,12 @@ ENSEMBLE_CASES: list[dict[str, Any]] = [
     _ensemble_case("ens_service_agency_match", budget=100_000_000.0, category="service",
                    description="OO 청소용역", business_group="service", rates=_FLAT,
                    artifact=_BASE_ENSEMBLE_ARTIFACT, agency_name="한국수산자원공단"),
-    # LSTM component exercised via an embedded (pure-python, file-free) artifact.
-    _ensemble_case("ens_construction_ascending_with_lstm", budget=800_000_000.0, category="construction",
-                   description="OO 토목공사", business_group="construction", rates=_ASCENDING,
-                   artifact=_ENSEMBLE_ARTIFACT_WITH_LSTM),
-    _ensemble_case("ens_service_flat_with_lstm", budget=100_000_000.0, category="service",
-                   description="OO 청소용역", business_group="service", rates=_FLAT,
-                   artifact=_ENSEMBLE_ARTIFACT_WITH_LSTM),
 ]
 
 
 # GAP D (P4.1): the two predictor payload shapes that had NO golden at all.
 #
-# ``build_heuristic_prediction`` and ``build_lstm_prediction_payload`` emit a
+# ``build_heuristic_prediction`` emits a
 # *narrower* key set than historical/ensemble — they carry no
 # ``competitive_target_bid_rate`` / ``procurement_rate_band`` /
 # ``high_rate_tail_adjustment``. That difference is precisely what the
@@ -458,39 +424,6 @@ HEURISTIC_CASES: list[dict[str, Any]] = [
     _heuristic_case(
         "heur_zero_budget", budget=0.0, category="other", description="예산 미상 공고",
     ),
-]
-
-
-def _lstm_case(
-    case_id: str,
-    *,
-    budget: float,
-    category: str,
-    description: str,
-    business_group: str | None,
-    rates: list[float],
-    agency_name: str | None = None,
-) -> dict[str, Any]:
-    return {
-        "id": case_id,
-        "kind": "lstm",
-        "budget": budget,
-        "category": category,
-        "description": description,
-        "business_group": business_group,
-        "records": _rate_records(rates),
-        "artifact": _LSTM_ARTIFACT,
-        "agency_name": agency_name,
-    }
-
-
-LSTM_CASES: list[dict[str, Any]] = [
-    _lstm_case("lstm_construction_ascending", budget=800_000_000.0, category="construction",
-               description="OO 토목공사", business_group="construction", rates=_ASCENDING),
-    _lstm_case("lstm_service_flat", budget=100_000_000.0, category="service",
-               description="OO 청소용역", business_group="service", rates=_FLAT),
-    _lstm_case("lstm_goods_descending", budget=100_000_000.0, category="goods",
-               description="OO 물품 구매", business_group="goods", rates=_DESCENDING),
 ]
 
 
@@ -622,20 +555,6 @@ def _run_heuristic(case: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _run_lstm(case: dict[str, Any]) -> dict[str, Any]:
-    artifact = load_lstm_artifact(case["artifact"])
-    context = PricePredictionContext(
-        budget=case["budget"],
-        category=case["category"],
-        description=case["description"],
-        historical_records=tuple(case["records"]),
-        agency_name=case.get("agency_name"),
-        business_group=case["business_group"],
-    )
-    signal = infer_lstm_sequence_signal(context, artifact=artifact)
-    return build_lstm_prediction_payload(context, artifact=artifact, signal=signal)
-
-
 def _run_ensemble(case: dict[str, Any]) -> dict[str, Any]:
     artifact = load_ensemble_artifact(case["artifact"])
     context = PricePredictionContext(
@@ -672,7 +591,6 @@ def _run_predict_price(case: dict[str, Any]) -> dict[str, Any]:
 _RUNNERS = {
     "historical": _run_historical,
     "heuristic": _run_heuristic,
-    "lstm": _run_lstm,
     "ensemble": _run_ensemble,
     "predict_price": _run_predict_price,
 }
@@ -711,7 +629,7 @@ def _assert_golden(case: dict[str, Any]) -> None:
 
 
 ALL_CASES = (
-    HISTORICAL_CASES + HEURISTIC_CASES + LSTM_CASES + ENSEMBLE_CASES + PREDICT_PRICE_CASES
+    HISTORICAL_CASES + HEURISTIC_CASES + ENSEMBLE_CASES + PREDICT_PRICE_CASES
 )
 
 
@@ -736,13 +654,13 @@ def test_case_ids_are_unique():
 def test_golden_case_count_is_pinned():
     # Lock the coverage size so a future edit can't silently drop cases.
     assert len(HISTORICAL_CASES) == 20
-    assert len(ENSEMBLE_CASES) == 12
-    # GAP D (P4.1): the two previously uncovered predictor payload SHAPES — the
-    # heuristic fallback and the standalone LSTM payload. Both emit a narrower key
-    # set than historical/ensemble, so they are the regression anchor for the
-    # PredictionResult key-presence contract.
+    # -2: the two ens_*_with_lstm cases retired with the sequence-model axis
+    # (2026-08-09); the remaining 10 are byte-identical to their pre-retirement goldens.
+    assert len(ENSEMBLE_CASES) == 10
+    # GAP D (P4.1): the heuristic fallback payload SHAPE, which emits a narrower key
+    # set than historical/ensemble — the regression anchor for the PredictionResult
+    # key-presence contract.
     assert len(HEURISTIC_CASES) == 3
-    assert len(LSTM_CASES) == 3
     # +1: predict_agency_band_assessment_marine locks the E[사정률] base-alignment path
     # (base 정합화 P0) — the first golden exercising the agency band THROUGH the guardrail.
     # +1: predict_construction_legal_floor_tier_new locks the 2026-01-30 construction
@@ -750,7 +668,8 @@ def test_golden_case_count_is_pinned():
     # +2 (P4.1): predict_heuristic_no_history pins the narrow heuristic payload through
     # the FULL pipeline, predict_feedback_calibration_applied pins the feedback stage.
     assert len(PREDICT_PRICE_CASES) == 6
-    assert len(ALL_CASES) == 44
+    # 44 -> 39: sequence-model 은퇴로 lstm_* 골든 3건 + ens_*_with_lstm 2건이 사라졌다.
+    assert len(ALL_CASES) == 39
 
 
 # ---------------------------------------------------------------------------
@@ -829,7 +748,7 @@ _HISTORICAL_ONLY_KEYS = (
 
 
 @pytest.mark.parametrize(
-    "case_id", [case["id"] for case in HEURISTIC_CASES + LSTM_CASES]
+    "case_id", [case["id"] for case in HEURISTIC_CASES]
 )
 def test_narrow_payload_omits_historical_only_keys(case_id):
     result = _run(_case_by_id(case_id))

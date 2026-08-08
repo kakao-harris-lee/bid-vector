@@ -22,13 +22,11 @@ from app.ai.llm_output_contracts import LLMDocumentAnalysisOutput
 from app.ai.predictors.artifact_contracts import (
     PersistedArtifactSummaryDocument,
     PersistedEnsembleArtifact,
-    PersistedLSTMArtifact,
     read_persisted_artifact,
 )
 from app.ai.predictors.ensemble import load_ensemble_artifact
 from app.ai.predictors.historical import load_group_calibration
 from app.ai.predictors.historical.calibration import load_probability_calibration
-from app.ai.predictors.lstm import load_lstm_artifact
 from app.core.config import settings
 from app.services.ml_release import MLReleasePromotionService
 from app.services.ml_release.contracts import (
@@ -37,37 +35,6 @@ from app.services.ml_release.contracts import (
     is_json_decode_error,
     json_document_error_detail,
 )
-
-_LSTM_WEIGHTS = {
-    "W_i": [[0.9]],
-    "U_i": [[0.15]],
-    "b_i": [3.0],
-    "W_f": [[0.2]],
-    "U_f": [[0.05]],
-    "b_f": [2.8],
-    "W_o": [[0.4]],
-    "U_o": [[0.1]],
-    "b_o": [2.5],
-    "W_c": [[1.1]],
-    "U_c": [[0.2]],
-    "b_c": [0.0],
-    "dense_W": [0.85],
-    "dense_b": [0.0],
-}
-
-_LSTM_ARTIFACT = {
-    "artifact_version": "1",
-    "model_version": "v2.0-lstm",
-    "sequence_length": 6,
-    "input_center": 0.9,
-    "input_scale": 0.05,
-    "output_scale": 0.03,
-    "output_bias": 0.9,
-    "scenario_spread_multiplier": 1.1,
-    "confidence_bias": 0.03,
-    "blend_weights": {"lstm": 0.72, "historical": 0.18, "trend": 0.10},
-    "weights": _LSTM_WEIGHTS,
-}
 
 _ENSEMBLE_ARTIFACT = {
     "artifact_version": "1",
@@ -80,8 +47,18 @@ _ENSEMBLE_ARTIFACT = {
         "historical": 0.5,
         "momentum": 0.2,
         "mean_reversion": 0.15,
-        "lstm": 0.15,
     },
+}
+
+# 은퇴(2026-08-09) 이전 학습이 실제로 써 두고 간 모양. 파일은 지우지 않으므로 읽기
+# 계약은 이 키들을 계속 **관용**해야 한다(거부하면 과거 아티팩트가 로딩 불가가 된다).
+_RETIRED_LSTM_BLOCK = {
+    "artifact_version": "1",
+    "model_version": "v2.0-lstm",
+    "sequence_length": 6,
+    "input_center": 0.9,
+    "blend_weights": {"lstm": 0.72, "historical": 0.18, "trend": 0.10},
+    "weights": {"W_i": [[0.9]], "b_i": [3.0], "dense_W": [0.85], "dense_b": [0.0]},
 }
 
 
@@ -94,96 +71,70 @@ def _write_json(path: Path, payload: object) -> Path:
 # ---------------------------------------------------------------------------
 # A. predictor 아티팩트 — happy
 # ---------------------------------------------------------------------------
-def test_lstm_artifact_file_and_embedded_mapping_normalize_identically(tmp_path):
+def test_artifact_file_and_embedded_mapping_normalize_identically(tmp_path):
     """같은 아티팩트는 파일로 읽어도 임베드 dict 로 읽어도 같은 정규화 산출을 준다."""
-    path = _write_json(tmp_path / "lstm.json", _LSTM_ARTIFACT)
+    path = _write_json(tmp_path / "ensemble.json", _ENSEMBLE_ARTIFACT)
 
-    from_file = load_lstm_artifact(str(path))
-    from_mapping = load_lstm_artifact(dict(_LSTM_ARTIFACT))
+    from_file = load_ensemble_artifact(str(path))
+    from_mapping = load_ensemble_artifact(dict(_ENSEMBLE_ARTIFACT))
 
-    assert from_file["model_version"] == from_mapping["model_version"] == "v2.0-lstm"
-    assert from_file["sequence_length"] == from_mapping["sequence_length"] == 6
-    assert from_file["blend_weights"] == from_mapping["blend_weights"]
-    assert from_file["weights"]["b_i"].tolist() == [3.0]
-
-
-def test_lstm_artifact_accepts_flat_weight_layout(tmp_path):
-    """게이트 텐서가 최상위에 있는 과거 배치도 계속 읽힌다(``weights`` 블록 부재)."""
-    flat_artifact = {
-        key: value for key, value in _LSTM_ARTIFACT.items() if key != "weights"
-    }
-    flat_artifact.update(_LSTM_WEIGHTS)
-    path = _write_json(tmp_path / "flat.json", flat_artifact)
-
-    artifact = load_lstm_artifact(str(path))
-
-    assert artifact["weights"]["dense_W"].tolist() == [[0.85]]
+    assert from_file["model_version"] == from_mapping["model_version"] == "v2.0-ensemble"
+    assert from_file["momentum_window"] == from_mapping["momentum_window"] == 5
+    assert from_file["component_weights"] == from_mapping["component_weights"]
 
 
-def test_lstm_artifact_accepts_dense_weight_aliases(tmp_path):
-    """``dense_weight``/``dense_bias`` 별칭 폴백이 계약에서도 유지된다."""
-    weights = {
-        key: value
-        for key, value in _LSTM_WEIGHTS.items()
-        if key not in {"dense_W", "dense_b"}
-    }
-    weights["dense_weight"] = [0.85]
-    weights["dense_bias"] = [0.0]
-    path = _write_json(
-        tmp_path / "alias.json", {**_LSTM_ARTIFACT, "weights": weights}
-    )
-
-    artifact = load_lstm_artifact(str(path))
-
-    assert artifact["weights"]["dense_W"].tolist() == [[0.85]]
-
-
-def test_lstm_artifact_tolerates_unknown_and_string_encoded_fields(tmp_path):
+def test_artifact_tolerates_unknown_and_string_encoded_fields(tmp_path):
     """학습이 덧붙이는 ``summary`` 블록과 문자열로 저장된 숫자를 모두 관용한다."""
     path = _write_json(
         tmp_path / "extra.json",
         {
-            **_LSTM_ARTIFACT,
+            **_ENSEMBLE_ARTIFACT,
             "sequence_length": "9",
             "summary": {"group_calibration": {"service": {"median_rate": 0.91}}},
             "trained_at": "2026-07-30T00:00:00+00:00",
         },
     )
 
-    artifact = load_lstm_artifact(str(path))
+    artifact = load_ensemble_artifact(str(path))
 
     assert artifact["sequence_length"] == 9
 
 
-def test_ensemble_artifact_keeps_embedded_lstm_as_mapping(tmp_path):
-    """임베드 LSTM 은 원문 매핑으로 남는다 — manifest 의 ``has_embedded_lstm`` 판정 보존."""
+def test_stale_lstm_block_is_ignored_not_rejected(tmp_path):
+    """은퇴한 lstm 블록을 들고 있는 과거 아티팩트도 계속 읽히고, 그 축만 사라진다."""
     path = _write_json(
-        tmp_path / "ensemble.json",
-        {**_ENSEMBLE_ARTIFACT, "lstm_artifact": _LSTM_ARTIFACT},
+        tmp_path / "stale.json",
+        {
+            **_ENSEMBLE_ARTIFACT,
+            "component_weights": {**_ENSEMBLE_ARTIFACT["component_weights"], "lstm": 0.15},
+            "lstm_artifact": _RETIRED_LSTM_BLOCK,
+            "lstm_artifact_path": "../lstm/price-predictor-20260802T090001Z.json",
+        },
     )
 
     artifact = load_ensemble_artifact(str(path))
 
-    assert isinstance(artifact["lstm_artifact"], dict)
-    assert artifact["lstm_artifact"]["model_version"] == "v2.0-lstm"
+    assert "lstm_artifact" not in artifact
+    assert "lstm" not in artifact["component_weights"]
+    assert artifact["component_weights"] == pytest.approx(
+        {"historical": 0.5 / 0.85, "momentum": 0.2 / 0.85, "mean_reversion": 0.15 / 0.85}
+    )
 
 
 def test_ensemble_artifact_non_mapping_blocks_fall_back_to_defaults(tmp_path):
-    """비매핑 ``component_weights``/``lstm_artifact`` 는 부재로 관용된다(종전 isinstance 검사)."""
+    """비매핑 ``component_weights`` 는 부재로 관용된다(종전 isinstance 검사)."""
     path = _write_json(
         tmp_path / "odd.json",
-        {**_ENSEMBLE_ARTIFACT, "component_weights": "nope", "lstm_artifact": "nope"},
+        {**_ENSEMBLE_ARTIFACT, "component_weights": "nope"},
     )
 
     artifact = load_ensemble_artifact(str(path))
 
-    assert artifact["lstm_artifact"] is None
     assert artifact["component_weights"] == pytest.approx(
         {
-            "historical": 0.52,
-            "momentum": 0.18,
-            "mean_reversion": 0.15,
-            "lstm": 0.15,
+            "historical": 0.52 / 0.85,
+            "momentum": 0.18 / 0.85,
+            "mean_reversion": 0.15 / 0.85,
         }
     )
 
@@ -192,8 +143,8 @@ def test_ensemble_artifact_non_mapping_blocks_fall_back_to_defaults(tmp_path):
 # B. predictor 아티팩트 — sad (손상 아티팩트는 ValueError 로 거부)
 # ---------------------------------------------------------------------------
 def test_missing_artifact_file_raises_not_found(tmp_path):
-    with pytest.raises(ValueError, match="LSTM model artifact was not found"):
-        load_lstm_artifact(str(tmp_path / "absent.json"))
+    with pytest.raises(ValueError, match="Ensemble model artifact was not found"):
+        load_ensemble_artifact(str(tmp_path / "absent.json"))
 
 
 def test_corrupt_artifact_file_raises_invalid_json(tmp_path):
@@ -201,42 +152,33 @@ def test_corrupt_artifact_file_raises_invalid_json(tmp_path):
     path.write_text("{not json", encoding="utf-8")
 
     with pytest.raises(ValueError, match="is not valid JSON"):
-        load_lstm_artifact(str(path))
+        load_ensemble_artifact(str(path))
 
 
 def test_non_object_artifact_file_is_rejected_as_contract_violation(tmp_path):
     path = _write_json(tmp_path / "list.json", [1, 2, 3])
 
     with pytest.raises(ValueError, match="does not match the artifact contract"):
-        load_lstm_artifact(str(path))
+        load_ensemble_artifact(str(path))
 
 
 def test_artifact_with_wrong_field_type_is_rejected(tmp_path):
     """스칼라 자리에 객체가 오면 계약 위반으로 거부한다(조용한 기본값 대체 금지)."""
     path = _write_json(
-        tmp_path / "typed.json", {**_LSTM_ARTIFACT, "sequence_length": {"n": 6}}
+        tmp_path / "typed.json", {**_ENSEMBLE_ARTIFACT, "sequence_length": {"n": 6}}
     )
 
     with pytest.raises(ValueError, match="does not match the artifact contract"):
-        load_lstm_artifact(str(path))
-
-
-def test_artifact_missing_required_weight_still_raises_missing_weight(tmp_path):
-    """텐서 누락은 종전과 같은 진단 문구로 실패한다(계약이 이 검사를 가리지 않는다)."""
-    weights = {key: value for key, value in _LSTM_WEIGHTS.items() if key != "W_i"}
-    path = _write_json(tmp_path / "partial.json", {**_LSTM_ARTIFACT, "weights": weights})
-
-    with pytest.raises(ValueError, match="Missing required LSTM weight 'W_i'"):
-        load_lstm_artifact(str(path))
+        load_ensemble_artifact(str(path))
 
 
 def test_embedded_mapping_contract_violation_is_reported_as_embedded(tmp_path):
-    with pytest.raises(ValueError, match="Embedded LSTM model artifact"):
-        load_lstm_artifact({**_LSTM_ARTIFACT, "input_center": {"bad": True}})
+    with pytest.raises(ValueError, match="Embedded Ensemble model artifact"):
+        load_ensemble_artifact({**_ENSEMBLE_ARTIFACT, "momentum_window": {"bad": True}})
 
 
-def test_read_persisted_artifact_is_shared_by_both_predictor_families(tmp_path):
-    """두 predictor 가 같은 읽기 경로를 쓴다(문구만 label 로 갈린다)."""
+def test_read_persisted_artifact_shares_one_read_path(tmp_path):
+    """모든 아티팩트가 같은 읽기 경로를 쓴다(문구만 label 로 갈린다)."""
     path = _write_json(tmp_path / "ens.json", _ENSEMBLE_ARTIFACT)
 
     artifact = read_persisted_artifact(
@@ -252,17 +194,6 @@ def test_read_persisted_artifact_is_shared_by_both_predictor_families(tmp_path):
             model=PersistedEnsembleArtifact,
             label="Ensemble model artifact",
         )
-
-
-def test_persisted_lstm_artifact_weight_block_prefers_nested_layout():
-    """``weight_block`` 은 nested 우선, 부재 시 flat — 종전 폴백의 타입 표현."""
-    nested = PersistedLSTMArtifact.model_validate(_LSTM_ARTIFACT)
-    flat = PersistedLSTMArtifact.model_validate(
-        {key: value for key, value in _LSTM_WEIGHTS.items()}
-    )
-
-    assert nested.weight_block() is nested.weights
-    assert flat.weight_block() is flat
 
 
 # ---------------------------------------------------------------------------

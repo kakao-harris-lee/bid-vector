@@ -1,9 +1,9 @@
 """Rolling-holdout artifact comparison for the price-predictor training service.
 
-Evaluates the generated LSTM/ensemble artifacts against the historical baseline on
-a rolling holdout and picks the best predictor for the comparison report. The
+Evaluates the generated ensemble artifact against the historical baseline on a
+rolling holdout and picks the best predictor for the comparison report. The
 holdout budget/bid-rate resolution (#261 alignment) is delegated to the shared
-helpers unchanged; evaluation bodies are moved verbatim from the original module.
+helpers unchanged.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from typing import Any
 from app.ai.predictors.base import PricePredictionContext, serialize_prediction_result
 from app.ai.predictors.ensemble import build_ensemble_prediction_payload, load_ensemble_artifact
 from app.ai.predictors.historical import HistoricalStatisticalPredictor
-from app.ai.predictors.lstm import build_lstm_prediction_payload, infer_lstm_sequence_signal, load_lstm_artifact
 from app.core.config import settings
 from app.core.time import utc_now
 
@@ -29,7 +28,6 @@ class ComparisonMixin:
         agency_name: str | None,
         dataset: dict[str, Any],
         dataset_quality: dict[str, Any],
-        lstm_artifact: dict[str, Any] | None,
         ensemble_artifact: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Compare generated artifacts against a rolling holdout and the historical baseline."""
@@ -67,14 +65,6 @@ class ComparisonMixin:
         holdout_records = series[-holdout_size:]
         predictor_results = [
             self._evaluate_historical_predictor(
-                training_prefix=training_prefix,
-                holdout_records=holdout_records,
-                category=category,
-                agency_name=agency_name,
-                min_training_size=min_training_size,
-            ),
-            self._evaluate_lstm_predictor(
-                artifact=lstm_artifact,
                 training_prefix=training_prefix,
                 holdout_records=holdout_records,
                 category=category,
@@ -155,41 +145,6 @@ class ComparisonMixin:
             # below is still dict-based (the artifact predictors feed it raw payload
             # builders), so demote at this adapter seam only.
             predict=lambda context: serialize_prediction_result(predictor.predict(context)),
-        )
-
-    def _evaluate_lstm_predictor(
-        self,
-        *,
-        artifact: dict[str, Any] | None,
-        training_prefix: list[dict[str, Any]],
-        holdout_records: list[dict[str, Any]],
-        category: str | None,
-        agency_name: str | None,
-        min_training_size: int,
-    ) -> dict[str, Any]:
-        """Evaluate the generated LSTM artifact on the training holdout."""
-        if artifact is None:
-            return self._skipped_predictor_result(
-                predictor_key="lstm",
-                predictor_name="lstm_sequence",
-                predictor_family="sequence_model",
-                reason="No LSTM artifact was generated.",
-            )
-        loaded_artifact = load_lstm_artifact(artifact)
-        return self._evaluate_predictor(
-            predictor_key="lstm",
-            predictor_name="lstm_sequence",
-            predictor_family="sequence_model",
-            training_prefix=training_prefix,
-            holdout_records=holdout_records,
-            category=category,
-            agency_name=agency_name,
-            min_training_size=min_training_size,
-            predict=lambda context: build_lstm_prediction_payload(
-                context,
-                artifact=loaded_artifact,
-                signal=infer_lstm_sequence_signal(context, artifact=loaded_artifact),
-            ),
         )
 
     def _evaluate_ensemble_predictor(

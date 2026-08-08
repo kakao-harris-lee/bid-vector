@@ -47,7 +47,6 @@ FROM projects;
 python scripts/promote_ml_release.py create-manifest \
     --release-tag <tag>                         \
     --embedding-model-path models/              \
-    --lstm-artifact-path models/lstm.json       \
     --ensemble-artifact-path models/ensemble.json \
     --predictor-backtest-report reports/predictor-backtest.json \
     --git-sha $(git rev-parse HEAD)             \
