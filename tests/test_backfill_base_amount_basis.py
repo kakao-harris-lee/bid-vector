@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.constants import ACTIVE_PROJECT_STATUSES
 from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
 from app.services.base_amount_basis import (
@@ -18,7 +19,9 @@ from app.services.base_amount_basis import (
     BASIS_SUSPECT_RATIO,
 )
 
-# Load the script module by path (scripts/ is not an importable package).
+# Load the CLI by path. ``scripts`` IS an importable package (it has __init__.py, and
+# the script itself imports ``scripts._backfill_basis_report``); the path load is kept
+# because the module name here must stay stable for the dataclass registration below.
 _SPEC = importlib.util.spec_from_file_location(
     "backfill_base_amount_basis",
     Path(__file__).resolve().parents[1] / "scripts" / "backfill_base_amount_basis.py",
@@ -462,7 +465,52 @@ def test_reserve_estimate_and_status_cross_counters(test_db):
     assert summary["reclassified"] == 2
     assert summary["reclassified_with_reserve_estimate"] == 1
     assert summary["estimated_filled_by_status"] == {"awarded": 1}
-    assert "open" not in summary["estimated_filled_by_status"]
+    # 확인 항목은 "open 부재"가 아니라 **ACTIVE 집합 전체 부재**다: re_notice 도 투찰
+    # 가능한 상태라 거기 추정치가 있으면 라이브 투찰 base 금액이 바뀐다.
+    assert not set(summary["estimated_filled_by_status"]) & ACTIVE_PROJECT_STATUSES
+
+
+def test_active_status_with_estimate_is_surfaced_not_hidden(test_db):
+    """re_notice(투찰 가능) 행의 추정치가 요약에 드러나야 한다 — open 만 보면 놓친다.
+
+    운영 실측에서 이 카운터가 ``re_notice: 3`` 을 냈다. open 리터럴만 확인하는 점검은 그
+    3건을 통과시키고 "라이브 금액 불변"이라는 잘못된 결론을 준다.
+    """
+    test_db.add(
+        Project(
+            id=1,
+            budget_estimate=100_000_000.0,
+            status="re_notice",
+            category="construction",
+        )
+    )
+    test_db.add(
+        HistoricalData(
+            id=1,
+            project_id=1,
+            base_amount=_POLLUTED_BASE,
+            base_amount_basis=BASIS_CLEAN,
+            reserve_prices=_reserves(_POLLUTED_BASE),
+        )
+    )
+    test_db.commit()
+
+    summary = backfill.summarize(
+        backfill.run_backfill(test_db, apply=False, basis_filter=BASIS_CLEAN)
+    )
+
+    assert summary["estimated_filled_by_status"] == {"re_notice": 1}
+    assert set(summary["estimated_filled_by_status"]) & ACTIVE_PROJECT_STATUSES
+
+
+def test_summary_reports_absolute_clean_remainder(ratio_db):
+    """잔여 clean **절대 행수**를 낸다 — purity 비율만으로는 표본 깊이를 못 읽는다."""
+    summary = backfill.summarize(
+        backfill.run_backfill(ratio_db, apply=False, basis_filter=BASIS_CLEAN)
+    )
+
+    assert summary["clean_remaining"] == 3  # 스캔 4 - 이동 1
+    assert summary["clean_remaining"] == summary["by_basis"][BASIS_CLEAN]
 
 
 def test_impact_report_prints_move_evidence(ratio_db, capsys):
@@ -476,6 +524,36 @@ def test_impact_report_prints_move_evidence(ratio_db, capsys):
     assert "open=1" in out
     assert "construction=1" in out
     assert "ratio=1.408" in out
+    assert "잔여 clean 3행" in out
+    # 추정치 채움은 **이동과 무관한** 스캔 전체 집계다 — "이동 …별" 묶음에 끼면
+    # 이동 행의 분해로 오독된다(이 fixture 에서 이동 1건 · 추정치 0건).
+    assert "이동 추정치" not in out
+    assert "스캔 중 추정치 채움(이동 무관)" in out
+
+
+def test_coverage_line_prints_even_when_nothing_moves(test_db, capsys):
+    """이동 0 인 기본 패스에서도 커버리지(est_equals_base) 는 출력된다.
+
+    이 라인은 "규칙이 못 보는 행이 얼마나 되는가"라 이동 여부와 독립이다. 이동이 없다고
+    조기 반환해 삼켜 버리면, 정작 커버리지가 최악인 실행에서만 아무것도 안 보인다.
+    """
+    test_db.add(
+        Project(
+            id=1,
+            budget_estimate=_POLLUTED_BASE,  # est == base ⇒ 규칙 사각
+            status="open",
+            category="construction",
+        )
+    )
+    test_db.add(HistoricalData(id=1, project_id=1, base_amount=_POLLUTED_BASE))
+    test_db.commit()
+
+    stats = backfill.run_backfill(test_db, apply=False)
+    backfill.print_impact_report(stats)
+
+    assert stats.reclassified == 0  # 첫 태깅이라 이동 아님
+    out = capsys.readouterr().out
+    assert "추정가격==base 라 비율 규칙이 못 보는 행: 1" in out
 
 
 def test_default_pass_also_consumes_budget_estimate(ratio_db):

@@ -21,6 +21,7 @@ from app.services.base_amount_basis import (
     BASIS_CLEAN,
     BASIS_DERIVED_YEGA,
     BASIS_SUSPECT_FRACTIONAL,
+    BASIS_SUSPECT_RATIO,
 )
 from app.services.koneps import persistence
 from app.services.koneps.collector import KonepsCollectorService
@@ -621,7 +622,9 @@ def test_persist_crawl_results_publishes_fallback_event(test_db, monkeypatch):
 # base 정합화(P1): 개찰 후 UPDATE 가 기존의 더 나은 base 를 0.0(미상)/예정가로 덮지
 # 않게 가드하고, base_amount_basis 를 최종 base 기준으로 태깅한다.
 # --------------------------------------------------------------------------- #
-def _update_base(historical, *, base_amount, estimated_amount=0.0, metadata=None):
+def _update_base(
+    historical, *, base_amount, estimated_amount=0.0, metadata=None, project=None
+):
     """Drive the private base-field updater with a scsbid-shaped item DTO."""
     item = KonepsCollectedItem(
         notice_number=historical.notice_number,
@@ -634,6 +637,7 @@ def _update_base(historical, *, base_amount, estimated_amount=0.0, metadata=None
         historical,
         item=item,
         request=_request(),
+        project=project,
     )
 
 
@@ -712,31 +716,125 @@ def test_base_guard_tags_yega_when_stored_base_is_yega_reversal(test_db):
     assert historical.base_amount_basis == BASIS_DERIVED_YEGA
 
 
-def test_collection_time_tagging_does_not_apply_the_ratio_rule(test_db):
-    """수집 시점 태깅은 base ÷ 추정가격 비율 규칙을 **아직** 적용하지 않는다(경계 고정).
+_POLLUTED_BASE = 140_800_000.0  # 추정가격 100,000,000 대비 1.408 (운영 실측 p50)
 
-    구조적 제약이 아니라 **선택**이다(리뷰 교정): 같은 함수가 이미
-    ``incoming_estimated = parsing.coerce_amount(item.estimated_amount)`` 로 공고 추정가격을
-    손에 쥐고 있으므로 넘길 값이 없어서 못 하는 것이 아니다. 배선하지 않은 이유는 라이브
-    표시가 함께 움직이기 때문이다 — 열린 공고가 ``suspect-ratio`` 로 태깅되면
-    ``get_reliable_base`` 가 ``clean-base`` 대신 ``base-fallback``("저장된 기초금액(basis
-    미상)")을 내보내, 금액은 그대로인데 화면 provenance 만 후퇴한다. 모순으로 **적극
-    판정한** 값을 "미상"으로 표시하는 것은 정직 명세의 역방향이라, 표시 어휘를 먼저 정한
-    뒤 배선하는 것이 순서다.
 
-    따라서 현재 교정은 백필(``scripts/backfill_base_amount_basis.py``)이 담당하고, 이 PR 의
-    재태깅은 **일회성**이다 — 새로 수집되는 행에는 같은 오염이 다시 들어온다.
+def _notice_project(test_db, *, budget_estimate: float) -> Project:
+    project = Project(
+        title="비율 게이트 공고",
+        budget_estimate=budget_estimate,
+        status="open",
+        category="construction",
+    )
+    test_db.add(project)
+    test_db.flush()
+    return project
 
-    후속 배선 시 주의: 반드시 ``item.estimated_amount`` 를 직접 쓸 것.
-    ``matching.resolve_budget_estimate`` 는 추정가격이 없으면 ``base_amount`` 로 폴백하므로
-    비율이 1.0 으로 자기충족해 규칙이 조용히 무력화된다.
+
+def test_recollection_does_not_revert_a_suspect_ratio_tag(test_db):
+    """재수집이 백필의 ``suspect-ratio`` 재태깅을 ``clean`` 으로 되돌리면 안 된다.
+
+    회귀 재현(코드리뷰 C1): 이 write 경로는 매 수집마다 **기존 행**의
+    ``base_amount_basis`` 를 최종 base 기준으로 다시 계산해 덮어쓴다. 공고 추정가격을
+    넘기지 않으면 비율 규칙이 꺼진 채 재분류되므로, 정수 오염 base 는 다시 ``clean`` 으로
+    승격된다 — 즉 백필의 재태깅이 다음 수집 주기(1h/6h)에 소멸한다. 열린 공고 전량과
+    scsbid 가 재방문하는 settled 행이 여기 해당하므로, 배선 없이는 재태깅이 지속되지 않는다.
     """
-    historical = HistoricalData(notice_number="GUARD-5")
+    project = _notice_project(test_db, budget_estimate=100_000_000.0)
+    historical = HistoricalData(
+        notice_number="GUARD-5",
+        project_id=project.id,
+        base_amount=_POLLUTED_BASE,
+        base_amount_basis=BASIS_SUSPECT_RATIO,
+    )
     test_db.add(historical)
     test_db.flush()
 
-    # 추정가격 100,000,000 인 공고에 1.408 배 base 가 들어와도 수집 태깅은 clean 이다.
-    _update_base(historical, base_amount=140_800_000.0, estimated_amount=100_000_000.0)
+    _update_base(
+        historical,
+        base_amount=_POLLUTED_BASE,
+        estimated_amount=100_000_000.0,
+        project=project,
+    )
 
-    assert historical.base_amount == 140_800_000.0
+    assert historical.base_amount == _POLLUTED_BASE  # 원본 금액 불변
+    assert historical.base_amount_basis == BASIS_SUSPECT_RATIO  # 재태깅 지속
+
+
+def test_collection_tags_a_newly_polluted_base_as_suspect_ratio(test_db):
+    """신규 수집 행도 수집 시점에 비율 규칙으로 태깅된다(백필을 기다리지 않는다)."""
+    project = _notice_project(test_db, budget_estimate=100_000_000.0)
+    historical = HistoricalData(notice_number="GUARD-6", project_id=project.id)
+    test_db.add(historical)
+    test_db.flush()
+
+    _update_base(
+        historical,
+        base_amount=_POLLUTED_BASE,
+        estimated_amount=100_000_000.0,
+        project=project,
+    )
+
+    assert historical.base_amount_basis == BASIS_SUSPECT_RATIO
+    assert historical.basis_checked_at is not None
+
+
+@pytest.mark.parametrize("budget_estimate", [0.0, None])
+def test_collection_without_a_notice_estimate_keeps_prior_behaviour(
+    test_db, budget_estimate
+):
+    """추정가격을 확보하지 못한 공고는 비율 규칙이 꺼진 채 기존 판정을 유지한다.
+
+    ``matching.resolve_budget_estimate`` 를 쓰지 않는 이유가 이것과 짝이다: 그 헬퍼는
+    추정가격이 없으면 ``base_amount`` 로 폴백하므로 비율이 1.0 으로 자기충족해 규칙이
+    조용히 무력화된다. 여기서는 확보 못 한 것을 확보 못 한 대로 둔다.
+    """
+    project = _notice_project(test_db, budget_estimate=budget_estimate)
+    historical = HistoricalData(notice_number="GUARD-7", project_id=project.id)
+    test_db.add(historical)
+    test_db.flush()
+
+    _update_base(historical, base_amount=_POLLUTED_BASE, project=project)
+
     assert historical.base_amount_basis == BASIS_CLEAN
+
+
+def test_collection_without_a_project_keeps_prior_behaviour(test_db):
+    """project 를 넘기지 않는 호출부(레거시 경로)는 판정이 바이트 동일하다."""
+    historical = HistoricalData(notice_number="GUARD-8")
+    test_db.add(historical)
+    test_db.flush()
+
+    _update_base(historical, base_amount=_POLLUTED_BASE, estimated_amount=100_000_000.0)
+
+    assert historical.base_amount_basis == BASIS_CLEAN
+
+
+def test_persist_crawl_item_feeds_the_notice_estimate_to_the_classifier(test_db):
+    """전체 persist 경로가 project 추정가격을 분류기까지 실어 나른다(배선 확인).
+
+    단위 테스트가 헬퍼를 직접 부르는 것과 달리, 여기서는 ``_persist_crawl_item`` 이
+    resolve 한 project 를 그대로 넘기는지 본다 — 그 배선이 빠지면 위 회귀가 그대로 살아난다.
+    """
+    item = KonepsCollectedItem(
+        title="비율 오염 공고",
+        notice_number="PERSIST-RATIO-1",
+        base_amount=_POLLUTED_BASE,
+        estimated_amount=100_000_000.0,
+        source_url="http://ebid.example.com/detail/PERSIST-RATIO-1",
+    )
+
+    persistence.persist_crawl_results(
+        test_db,
+        persistence.create_crawl_job(test_db, _request()),
+        _request(),
+        {"items": [item], "job_status": "completed", "collected_count": 1},
+    )
+
+    historical = (
+        test_db.query(HistoricalData)
+        .filter(HistoricalData.notice_number == "PERSIST-RATIO-1")
+        .one()
+    )
+    assert historical.base_amount == _POLLUTED_BASE
+    assert historical.base_amount_basis == BASIS_SUSPECT_RATIO

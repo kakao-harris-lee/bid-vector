@@ -15,6 +15,7 @@ from app.services.base_amount_basis import (
     RESERVE_PRICE_COUNT,
     classify_base_basis,
     estimate_base_amount_from_reserves,
+    exceeds_base_trust_ratio,
     normalize_winning_rate,
 )
 
@@ -80,7 +81,9 @@ def test_classify_defaults_missing_winning_args():
         # 추정가격 쪽 파싱이 깨진 극단(est 3,636원) 도 같은 버킷으로 떨어진다:
         # 어느 쪽이 깨졌는지 알 수 없으므로 그 base 를 clean 으로 신뢰하지 않는다.
         (_BUDGET, 3_636.0, BASIS_SUSPECT_RATIO),
-        # 저측(<1.0)은 이 규칙의 대상이 아니다(기존 suspect-fractional 이 커버)
+        # 저측(<1.0)은 이 규칙이 보는 축이 아니다. 그 계열을 suspect-fractional 이
+        # "구조적으로" 잡는 것은 아니고(정수면 clean 으로 남는다), 운영 실측에서 98% 가
+        # 소수라 겹쳐 잡혔을 뿐이다 — 저측 판정은 별도 후속이다.
         (_BUDGET * 0.5, _BUDGET, BASIS_CLEAN),
         # 추정가격 결측/0/음수/비수치 ⇒ 규칙 비적용 (기존 동작 완전 불변)
         (_BUDGET * 10, None, BASIS_CLEAN),
@@ -119,7 +122,9 @@ def test_ratio_verdict_outranks_pattern_verdicts(
     저장되는 settled 행에서 **자기충족**이고(tests/test_backtest_latest_award_holdouts.py
     참조), derived-vat(``base × 1.1`` 이 정수)은 모든 정수 base 에서 참이다. 둘 다 그
     base 가 진짜 기초금액인지에 대해서는 아무 말도 하지 않는다. 반면 추정가격 대비 비율은
-    같은 공고의 **독립적인 두 번째 금액**과의 모순이라 더 강한 증거다.
+    같은 공고의 **다른 금액 필드와의 모순**이라 더 강한 증거다(그 금액이 개찰 결과에서
+    파생됐을 수 있다는 한정은 ``_is_suspect_ratio`` docstring 참조 — "독립적"이라고
+    주장하지 않는다).
 
     라벨만 바뀌고 소비자 동작은 불변이다: 세 라벨 모두 non-clean 버킷이다.
     """
@@ -128,6 +133,54 @@ def test_ratio_verdict_outranks_pattern_verdicts(
         classify_base_basis(base, winning_amount, winning_rate, budget_estimate)
         == BASIS_SUSPECT_RATIO
     )
+
+
+@pytest.mark.parametrize(
+    "base, estimate, expected",
+    [
+        (_BUDGET, _BUDGET, False),  # 면세 1.00
+        (_BUDGET * 1.10, _BUDGET, False),  # 과세 1.10
+        (_BUDGET * BID_BASE_TRUST_RATIO_MAX, _BUDGET, False),  # 경계 — 포함
+        (round(_BUDGET * 1.1501), _BUDGET, True),  # 경계 바로 위
+        (_BUDGET * 0.5, _BUDGET, False),  # 저측은 이 축이 아니다
+        # 두 금액 중 하나라도 확보 못 하면 비교 자체가 불가능 ⇒ 판정 없음
+        (_BUDGET * 10, 0.0, False),
+        (_BUDGET * 10, -1.0, False),
+        (_BUDGET * 10, None, False),
+        (0.0, _BUDGET, False),
+        (-1.0, _BUDGET, False),
+        (None, _BUDGET, False),
+        ("x", _BUDGET, False),
+    ],
+)
+def test_exceeds_base_trust_ratio_value_table(base, estimate, expected):
+    """공유 술어의 경계 값표 — 분류기와 #356 게이트가 **같은 판정**을 쓴다.
+
+    종전에는 게이트가 곱셈형(``base > cap × 임계``), 분류기가 나눗셈형(``base ÷ est >
+    임계``)으로 같은 질문에 두 벌로 답했다. 알고리즘을 한 벌로 합치면서(§4.5-8) 판정을
+    나눗셈형으로 통일했으므로 경계 근처 동작을 여기서 고정한다.
+
+    두 금액 중 하나라도 없으면 ``False`` 다 — "신뢰 범위 안"이라는 뜻이 아니라 "이 술어가
+    할 말이 없다"는 뜻이다. 확보 실패를 어떻게 다룰지는 호출부가 정한다(게이트는 base 를
+    못 받으면 보수적으로 닫고, 분류기는 규칙을 적용하지 않는다).
+    """
+    assert exceeds_base_trust_ratio(base, estimate) is expected
+
+
+def test_classifier_and_gate_agree_through_the_shared_predicate():
+    """같은 두 금액에서 분류 판정과 게이트 판정이 갈리지 않는다(단일 알고리즘)."""
+    from app.services.opportunity_analysis.market import enforceable_floor_price
+
+    polluted, estimate = _BUDGET * 1.5, _BUDGET
+    assert exceeds_base_trust_ratio(polluted, estimate) is True
+    assert classify_base_basis(polluted, 0, 0, estimate) == BASIS_SUSPECT_RATIO
+    # 게이트는 그 base 위의 하한에 예산 상한을 넘을 권한을 주지 않는다.
+    assert enforceable_floor_price(0.88, 0.9 * polluted, polluted, estimate) == 0.0
+
+    trusted = _BUDGET * 1.10
+    assert exceeds_base_trust_ratio(trusted, estimate) is False
+    assert classify_base_basis(trusted, 0, 0, estimate) == BASIS_CLEAN
+    assert enforceable_floor_price(0.88, 0.9 * trusted, trusted, estimate) > 0
 
 
 def test_suspect_ratio_is_registered_in_the_basis_vocabulary():

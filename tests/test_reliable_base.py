@@ -134,12 +134,30 @@ def test_non_clean_zero_base_with_estimate_uses_estimate():
 # --------------------------------------------------------------------------- #
 
 
+def test_every_declared_basis_constant_is_registered_in_all_bases():
+    """모듈이 선언한 ``BASIS_*`` 상수 전수 == ``ALL_BASES`` — 등록 누락을 잡는 가드.
+
+    아래 값표 테스트는 ``ALL_BASES`` 를 순회하므로 **정의상 등록된 라벨만** 본다. 즉 새
+    ``BASIS_X`` 를 선언하고 튜플에 넣는 것을 잊는 실수는 거기서 영원히 잡히지 않는다.
+    그 라벨은 ``_NON_CLEAN_BASES`` 에도 빠져 ``get_reliable_base`` 가 오염 base 를
+    ``BASE_FALLBACK`` 으로 그대로 통과시키므로, 등록 자체를 여기서 단언한다.
+    """
+    import app.services.base_amount_basis as basis_module
+
+    declared = {
+        value
+        for name, value in vars(basis_module).items()
+        if name.startswith("BASIS_") and isinstance(value, str)
+    }
+    assert declared == set(ALL_BASES)
+
+
 def test_every_non_clean_label_is_rejected_as_a_trusted_base():
-    """clean 이 아닌 **모든** 라벨이 추정치로 대체된다 — 새 라벨이 조용히 새지 않는다.
+    """clean 이 아닌 **모든 등록 라벨**이 추정치로 대체된다(값표 고정).
 
     ``_NON_CLEAN_BASES`` 는 ``ALL_BASES`` 에서 clean 만 뺀 파생이라, 어휘에 라벨을 추가하면
-    이 접근자가 자동으로 non-clean 으로 취급한다. 그 파생 관계를 값표로 못박아, 새 라벨을
-    ``ALL_BASES`` 에 등록하지 않고 도입하면(=clean 처럼 취급되면) 여기서 실패하게 한다.
+    이 접근자가 자동으로 non-clean 으로 취급한다 — 그 파생 관계를 못박는다. 등록 누락
+    자체는 위 테스트가 잡는다.
     """
     for basis in ALL_BASES:
         result = get_reliable_base(
