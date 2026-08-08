@@ -81,44 +81,81 @@ docker exec bid_vector_api python scripts/backfill_base_amount_basis.py \
 이동 증적(샘플·분해)은 세 패스 모두에서 나온다. 계수 기준은 "저장 라벨과 달라졌는가"이므로
 첫 태깅(`previous_basis` 없음)은 이동으로 세지 않는다.
 
-## 6. 지속성 — 어떤 패스가 재태깅을 되돌리는가
+## 6. 지속성 — 어떤 패스가 분모를 바꿀 수 있는가 (출처 인지 가드 이후)
 
 수집 경로(`app/services/koneps/persistence.py::_update_historical_base_fields`)는 매 수집
-주기마다 기존 행의 라벨을 **다시 계산해 덮어쓴다**. 그 경로에도 공고 추정가격이 배선돼
-있지만 **지속성은 조건부다**: 다음 패스가 실제 추정가격을 실은 공고 수집일 때만 유지된다.
+주기마다 기존 행의 라벨을 **다시 계산해 덮어쓴다**. 그래서 지속성은 분류기가 읽는 분모
+(`project.budget_estimate`)를 누가 덮을 수 있는지에 달려 있다 — `update_project_from_item`
+이 태깅보다 **먼저** 그 분모를 쓰기 때문이다.
 
-`update_project_from_item` 이 태깅보다 **먼저** `project.budget_estimate` 를
-`matching.resolve_budget_estimate(item) or 이전값` 으로 덮기 때문에, 그 한 홉에서 분모가
-바뀌면 분류 결과도 함께 바뀐다.
+가드 이전에는 값이 양수이기만 하면 무조건 덮었고, 두 패스가 분모를 바꿔 재태깅을 되돌렸다
+(scsbid 복귀 실측: base/추정가격 **1.16·1.20·1.24 복귀, 1.28·1.408 생존**). 지금은
+`app/services/koneps/budget_fields.py` 의 **출처 인지 가드**가 그 자리를 지킨다: 공고가
+추정가격으로 게시한 값(`notice` — `presmptPrce`/`presmptAmt`)만 덮고, 개찰 파생 예정가
+(`derived`)·예산 키 폴백(`estimate-budget-fallback`)·기초금액 사본
+(`estimate-base-fallback`)·미신고(`None`)는 **빈 자리(NULL/0)만** 채운다.
 
 | 다음 패스 | 분모(`project.budget_estimate`) | 재태깅 |
 |---|---|---|
-| 공고 수집(추정가격 실림) | 추정가격 그대로 | **유지** |
-| **scsbid 개찰(6h)** | 예정가로 덮임(약 +10%) | **1.15 < 비 ≤ ~1.28 밴드 복귀** |
-| **추정가격 미공급 재수집** | `base_amount` 로 덮임(비율 1.0) | **복귀** + 저장 추정가격 소실 |
+| 공고 수집(`presmptPrce`/`presmptAmt` 실림) | 게시 추정가격으로 **갱신됨**(정정공고 상향·하향) | 같은 분모면 유지, 게시값이 바뀌면 판정도 **정당하게** 바뀜 |
+| scsbid 개찰(6h) | 파생 예정가라 **덮지 못함** | **유지** |
+| 추정가격 미공급 재수집 | 예산/기초금액 폴백이라 **덮지 못함** | **유지** |
+| live-HTML 공고 패스(폴백 경로) | 상세 표의 추정가격을 파싱하지만 **미신고 = 덮지 못함** | **유지**(아래 주) |
 
-scsbid 복귀 실측: base/추정가격 **1.16·1.20·1.24 복귀, 1.28·1.408 생존**. settled 코호트가
-곧 캘리브레이션 corpus 이므로 방치 대상이 아니다. 두 시퀀스는
-`tests/test_koneps_persistence.py` 의 `test_scsbid_pass_reverts_the_tag_via_yega_denominator`
-/ `test_recollection_without_an_estimate_reverts_the_tag` 가 **현재 동작**으로 고정한다.
-미공급 재수집 경로는 §7 의 `est_equals_base` 사각지대와 같은 뿌리다(폴백이 두 금액을 같은
-값으로 만든다).
+앞의 세 시퀀스는 `tests/test_koneps_persistence.py` 가 고정한다
+(`test_scsbid_pass_no_longer_reverts_the_tag` /
+`test_recollection_without_an_estimate_no_longer_reverts_the_tag` /
+`test_notice_feed_still_applies_a_corrected_estimate`).
 
-**보상 통제(후속 PR 전까지):** `--reclassify-clean` 을 **주기적으로 재실행**한다. 되돌아간
-행은 다시 `clean` 버킷에 있으므로 그 패스가 다시 잡아낸다. 주기는 scsbid 수집 주기(6h)보다
-길어도 되지만, 캘리브레이션·백테스트를 돌리기 **직전**에는 한 번 돌린다.
+> **live-HTML 행은 "사전 대비"가 아니라 실동작 변화다.** 그 경로는 상세 표의 "추정가격" 라벨에서
+> 진짜 값을 파싱하므로 가드 이전에는 저장값을 갱신할 수 있었고, 지금은 미신고(fill-only)라 갱신하지
+> 않는다. 라이브 HTML 은 OpenAPI 실패 시의 폴백이고 스케줄 수집 경로는 OpenAPI 이므로 **프로덕션
+> 노출은 없다**. 신고를 켜는 것은 후속 결정 사항이다(`app/services/koneps/html_parsing.py` 주석).
 
-**후속 PR(구조적 해결):** scsbid/미공급 패스가 기존 **양수** `Project.budget_estimate` 를
-덮지 못하게 가드한다 — `update_project_from_item` 의 `award_floor_rate` /
-`eligibility_raw` 가드를 미러하면 된다. 단 그 가드는 `budget_cap`(#356 게이트 입력)도 함께
-움직이므로 **별도 실측이 선행돼야 한다**.
+전망 코호트 실측(2026-08-08, 활성 open/re_notice): 실 추정가격 보유(est≠base) **14,840건**이
+미공급 재수집 1회로 세탁될 수 있었고, 그중 비율>1.15 **1,625건**, 다시 그중 published 법정하한을
+보고한 **1,444건**이 이 가드가 지키는 코호트다 — **가드가 없으면 세탁 1회로 CLOSED→OPEN 이 됐을
+행이고, 가드는 CLOSED 를 보존한다**(세탁되면 비 1.0 이 되어 #356 V3 신뢰 검사를 통과했을 것이다).
+1,444는 약간의 상한이다: 그중 소수(~3행)는 복구 추정치 치환 경로를 함께 타므로 실제 보존 효과가
+다르게 나타날 수 있다. scsbid 예정가 경로의 활성 코호트는 open 10 + re_notice 608 이다.
+
+**보상 통제의 실제 범위(정정):** 이미 세탁된 분모 위에서 `clean` 으로 굳은 행은
+`--reclassify-clean` 으로 **구조적으로 회복되지 않는다** — 백필도 같은 분모
+(`project.budget_estimate`)를 읽고, `clean` 규칙이 `derived-yega` 판정보다 앞서기 때문이다.
+실측 잔여 **3,982건**(awarded 3,949 · re_notice 32 · cancelled 1)이 여기 해당하고, 그중
+awarded 는 공고 피드 재수집도 닿지 않아 **영구**다. 따라서 `--reclassify-clean` 의 실제 담당은
+"되돌아간 행 회수"가 아니라 **라벨 규칙이 바뀌었을 때의 재분류**이며, 캘리브레이션·백테스트
+직전 한 번이면 충분하다(scsbid 주기 6h 에 맞춰 돌릴 이유는 없다).
+
+> **corpus leakage 공시:** 위 3,982건은 개찰 파생 분모로 `clean` 판정된 채 clean 버킷 안에
+> 남아 있다. 재캘리브레이션·백테스트가 clean 버킷을 corpus 로 쓸 때 이 오염이 함께 들어온다 —
+> 소비자는 이 caveat 를 전제로 결과를 읽어야 한다(해소는 분모 재구성이 선행돼야 하는 별도 작업).
 
 ## 7. 알려진 사각지대 / 후속
 
 - **`est_equals_base`**: 수집이 추정가격을 못 얻으면 `matching.resolve_budget_estimate` 가
   `base_amount` 를 그대로 추정가격으로 쓴다. 비율이 항상 1.0 이라 규칙이 볼 수 없다
-  (운영 실측 clean 의 30%). 수집 단계에서 추정가격을 확보하는 것이 유일한 해법이며,
-  §6 의 "미공급 재수집" 복귀와 같은 뿌리다.
+  (운영 실측 clean 의 30%). §6 의 가드는 그 사본이 **이미 저장된 추정가격을 덮는 것**만
+  막는다 — 처음부터 사본이 자리를 채운 행은 그대로이므로, 수집 단계에서 추정가격을
+  확보하는 것이 여전히 유일한 해법이다. 활성 공고 실측 **991건**(open 362 + re_notice 629,
+  2026-08-08 오전) → 같은 날 재측정 **864건**: 활성 코호트는 마감·개찰로 계속 빠져나가므로
+  이 수치는 스냅숏이다(추세를 보려면 측정일과 함께 읽을 것).
+- **개찰 파생 분모로 굳은 clean 행**: §6 의 3,982건. 가드 이전에 세탁된 잔여이고
+  `--reclassify-clean` 으로 회복되지 않는다(awarded 3,949는 영구). clean 버킷을 corpus 로
+  쓰는 재캘리브레이션·백테스트의 leakage caveat.
+- **예산 키 전용 공고의 동결(가드의 대가, 정직 공시)**: 추정가격 축에 `asignBdgtAmt`/`bdgtAmt`
+  만 싣는 공고(#228 실측 — 대다수 service 공고가 이 모양)는 첫 채움 뒤 **갱신되지 않는다**.
+  하향 정정도 반영되지 않으므로, "하향 정정을 막으면 `budget_cap` 이 실제보다 느슨해진다"는
+  이 PR 의 원칙이 **이 코호트에서는 그대로 남는다**. 그럼에도 fallback→fallback 갱신을 열지
+  않은 이유는, 저장값의 출처를 모르는 상태에서 그 문을 열면 예산 폴백이 **게시 추정가격을 다시
+  가리는** 경로가 함께 열리기 때문이다. 양쪽 다 불완전하며(사전 대비 est==base·budget churn),
+  동결은 **분모 안정성의 대가**로 선택한 쪽이다.
+- **후속(named): `estimated_amount_source` 영속화**(마이그레이션). 저장된 추정가격이 어느
+  출처에서 왔는지 컬럼으로 남기면 (a) fallback→fallback 갱신 규칙을 안전하게 열 수 있고
+  (동일 출처 갱신만 허용), (b) 위 동결 행이 **감사 가능**해진다(지금은 "왜 안 바뀌는가"를
+  행에서 알 수 없다 — 리뷰의 "frozen state not auditable" 지적과 같은 뿌리). (c) 같은 후속
+  범위에 **est/base 비대칭**도 포함한다: base 축에는 이런 가드가 없어, 발주기관이 배정예산을
+  정정하면 base 만 따라 움직여 오탐 `suspect-ratio` 를 만들 수 있다.
 - **저측(base ÷ est < 0.85)**: 이 규칙의 축이 아니다. 별도 판정 후속.
 - **프론트 표시**: `suspect-ratio` 행은 화면 provenance 가 `clean-base` →
   `base-fallback`("저장된 기초금액(basis 미상)")으로 후퇴한다. 모순으로 적극 판정한 값을

@@ -159,11 +159,15 @@ def _is_suspect_ratio(ctx: _BasisContext) -> bool:
 
     이 규칙이 주장하지 **않는** 것 (주장 범위 — 리뷰 교정)
     ---------------------------------------------------
-    - **"개찰 전 정보만 쓴다"고 주장하지 않는다.** ``Project.budget_estimate`` 는 개찰 후
-      갱신될 수 있다: reserve detail 에 예정가가 없으면 수집이 ``winning_amount ÷
+    - **"개찰 전 정보만 쓴다"고 주장하지 않는다.** ``Project.budget_estimate`` 자리에 개찰
+      파생값이 들어올 수 있다: reserve detail 에 예정가가 없으면 수집이 ``winning_amount ÷
       sucsfbidRate`` 로 예정가를 역산해(``app/services/koneps/scsbid.py``)
-      ``estimated_amount`` 로 배출하고, persistence 가 그 값으로 기존 추정가격을 덮는다.
-      즉 settled 행에서는 비교 대상 금액 자체가 **개찰 결과에서 파생된 값**일 수 있다.
+      ``estimated_amount`` 로 배출한다. 출처 인지 write 가드
+      (``app/services/koneps/budget_fields.py``) 이후 그 파생값은 **빈 자리(NULL/0)만**
+      채우므로, 게시 추정가격이 이미 있는 행은 보존된다. 그래서 이 제외 기준이 실제로 남는
+      범위는 둘이다: 게시 추정가격을 한 번도 얻지 못해 파생값이 빈 자리를 채운 행과, 가드
+      이전에 이미 덮인 행(실측 ~3,982 — ``docs/operations/base-amount-basis-backfill.md``
+      §6). 그 두 코호트에서는 비교 대상 금액 자체가 **개찰 결과에서 파생된 값**이다.
     - **"독립적인 두 번째 금액"이 항상 성립하지도 않는다.** 수집이 추정가격을 못 얻으면
       ``matching.resolve_budget_estimate`` 가 base_amount 를 그대로 추정가격으로 쓰므로 두
       금액이 같은 값의 두 사본이 되고, 비율이 항상 1.0 이라 이 규칙에 걸리지 않는다(실측

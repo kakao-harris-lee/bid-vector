@@ -9,6 +9,7 @@
       "closing_at": "2026-05-13T11:00:00+00:00",
       "eligibility_raw": null,
       "estimated_amount": 100000000.0,
+      "estimated_amount_source": "derived",
       "license_codes": [],
       "metadata": {
         "base_amount_estimated": null,
@@ -86,6 +87,7 @@
       "closing_at": "2026-05-13T11:00:00+00:00",
       "eligibility_raw": null,
       "estimated_amount": 51136363.63636363,
+      "estimated_amount_source": "derived",
       "license_codes": [],
       "metadata": {
         "base_amount_estimated": null,
@@ -143,6 +145,7 @@
       "closing_at": "2026-05-13T11:00:00+00:00",
       "eligibility_raw": null,
       "estimated_amount": 79545454.54545455,
+      "estimated_amount_source": "derived",
       "license_codes": [],
       "metadata": {
         "base_amount_estimated": null,

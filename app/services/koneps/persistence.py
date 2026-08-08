@@ -37,7 +37,13 @@ from app.models.models import (
 )
 from app.schemas.koneps_items import CrawlItemMetadataFacts, KonepsCollectedItem
 from app.schemas.schemas import CrawlRequest
-from app.services.koneps import base_provenance, matching, parsing, scsbid
+from app.services.koneps import (
+    base_provenance,
+    budget_fields,
+    matching,
+    parsing,
+    scsbid,
+)
 from app.services.inference_outbox import InferenceOutboxService
 from app.services.realtime import realtime_event_manager
 from app.services.task_singleton import singleton_lock_id
@@ -273,16 +279,6 @@ def update_project_from_item(
     previous_semantic_state = project_embedding_input_state(project)
     facts = item.opening_facts()
     resolved_category = matching.resolve_project_category(item, request)
-    budget_estimate = matching.resolve_budget_estimate(item)
-    budget_values = [
-        float(amount)
-        for amount in (
-            item.base_amount,
-            item.estimated_amount,
-            budget_estimate,
-        )
-        if amount not in (None, "", 0, 0.0)
-    ]
     description_lines = _project_description_lines(item, facts)
     requirement_lines = _project_requirement_lines(item, facts)
 
@@ -297,9 +293,13 @@ def update_project_from_item(
         project.requirements, requirement_lines
     )
     project.category = resolved_category or project.category
-    project.budget_estimate = budget_estimate or float(project.budget_estimate or 0.0)
-    project.budget_min = min(budget_values) if budget_values else project.budget_min
-    project.budget_max = max(budget_values) if budget_values else project.budget_max
+    # 추정가격은 출처 인지 가드를 거친다: 파생 예정가·예산/기초금액 폴백이 저장된 공고
+    # 추정가격을 덮으면 provenance 분모(#358)와 budget_cap(#356)이 함께 흔들린다.
+    # 결합 주의: 신고(``item.estimated_amount_source``)는 item 의 **추정가격 자리**를 서술하고
+    # 가드가 판정하는 값은 ``resolve_budget_estimate``(base 폴백 포함) 산출이다. 둘이 어긋나지
+    # 않는 근거는 DTO 게이트다 — 그 자리가 비면 출처도 ``None`` 으로 접혀, 폴백으로 도착한
+    # base 가 게시값 권위를 얻지 못한다(``app/schemas/koneps_items.py``).
+    budget_fields.apply_budget_amounts(project, item=item)
 
     closing_at = parsing.coerce_datetime(item.closing_at)
     if closing_at is not None:

@@ -27,6 +27,7 @@ from datetime import timedelta
 from typing import Any
 
 from app.core.config import settings
+from app.core.constants import ESTIMATE_SOURCE_DERIVED
 from app.core.time import kst_now
 from app.models.models import HistoricalData
 from app.schemas.koneps_items import KonepsCollectedItem, ScsbidReserveDetail
@@ -230,6 +231,9 @@ def build_scsbid_award_item(
         estimated_amount=(
             float(planned_price) if planned_price and planned_price > 0 else 0.0
         ),
+        # 이 자리는 공고 추정가격이 아니라 **예정가**(상세값 또는 낙찰가÷사정률 역산)다.
+        # 신고해 두면 write 가드가 저장된 공고 추정가격을 이 파생값으로 덮지 않는다.
+        estimated_amount_source=ESTIMATE_SOURCE_DERIVED,
         award_floor_rate=parsing.normalize_bid_rate_value(
             raw_item.get("sucsfbidLwltRate")
         ),

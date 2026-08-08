@@ -20,8 +20,12 @@ Usage:
     python scripts/backfill_base_amount_basis.py --apply
     python scripts/backfill_base_amount_basis.py --apply --chunk-size 2000
     python scripts/backfill_base_amount_basis.py --apply --recheck  # re-classify all
-    # Correct rows mislabeled 'clean' (예정가-역산 base stamped clean before the
-    # settled TenderResult join existed) -> re-tag to derived-yega, fill estimate.
+    # Re-classify rows stored as 'clean' under the CURRENT label rules (예정가-역산 base
+    # stamped clean before the settled TenderResult join existed -> derived-yega 등).
+    # 범위 주의: 분모(Project.budget_estimate)가 개찰 파생값으로 덮인 뒤 clean 으로 굳은 행은
+    # 이 패스로 **회복되지 않는다** — 백필도 같은 분모를 읽기 때문이다. 담당은 "라벨 규칙이
+    # 바뀌었을 때의 재분류"이지 세탁 코호트 회수가 아니다
+    # (docs/operations/base-amount-basis-backfill.md §6).
     python scripts/backfill_base_amount_basis.py --reclassify-clean --dry-run
     python scripts/backfill_base_amount_basis.py --reclassify-clean --apply
 """
@@ -149,8 +153,9 @@ def _est_equals_base(record: HistoricalData, notice: NoticeFacts) -> bool:
     """추정가격이 base 와 정확히 같은가 — 비율 규칙이 구조적으로 못 보는 코호트.
 
     수집이 공고 추정가격을 얻지 못하면 ``matching.resolve_budget_estimate`` 가
-    ``base_amount`` 를 그대로 ``Project.budget_estimate`` 로 쓴다. 그러면 두 금액이 같은
-    값의 두 사본이라 비율이 항상 1.0 이고, base 가 아무리 오염돼도 이 규칙에 걸리지 않는다.
+    ``base_amount`` 를 그대로 추정가격으로 쓰고, write 가드는 그 폴백 값을 **빈 자리일 때만**
+    ``Project.budget_estimate`` 에 채운다(``koneps.budget_fields``). 그렇게 채워진 행은 두
+    금액이 같은 값의 두 사본이라 비율이 항상 1.0 이고, base 가 아무리 오염돼도 걸리지 않는다.
     "독립적인 두 번째 금액과의 모순"이라는 이 규칙의 근거가 성립하지 않는 행이므로,
     승인 자료에 검증 커버리지로 함께 낸다(정정 대상이 아니라 사각지대 표시다).
     """
@@ -303,7 +308,11 @@ def build_parser() -> argparse.ArgumentParser:
             "correct any that are actually derived-yega/VAT/suspect (e.g. a 예정가-"
             "역산 base mislabeled 'clean' before the settled TenderResult join, or a "
             "base that is a non-VAT multiple of its notice's 추정가격 → suspect-ratio). "
-            "base_amount is never mutated; only the provenance tag/estimate move."
+            "base_amount is never mutated; only the provenance tag/estimate move. "
+            "SCOPE: rows whose notice 추정가격 was itself overwritten by an 개찰-derived "
+            "value are NOT recoverable here (this pass reads the same denominator); "
+            "its job is re-classification under updated label rules. See "
+            "docs/operations/base-amount-basis-backfill.md §6."
         ),
     )
     parser.add_argument("--chunk-size", type=int, default=1000)

@@ -4,7 +4,8 @@
 ----------------
 ``CrawlNoticeItem`` 은 ``CrawlResponse`` 를 통해 ``POST /operations/crawl`` 의
 응답 스키마로 **공개**되어 있다(OpenAPI 표면). 수집 경로는 그보다 넓은 필드를 실어
-persistence 까지 운반한다(``award_floor_rate`` / ``eligibility_raw``). 공개 스키마에
+persistence 까지 운반한다(``award_floor_rate`` / ``eligibility_raw`` /
+``estimated_amount_source``). 공개 스키마에
 필드를 추가하면 OpenAPI 스펙과 프론트 타입이 함께 흔들리므로, 수집 내부 계약은
 ``CrawlNoticeItem`` 을 **확장**한 이 모델로 둔다. 어떤 라우터도 이 모델을 참조하지
 않으므로 OpenAPI 스펙은 불변이고, HTTP 경계에서는 부모 스키마로 좁혀 나간다.
@@ -34,9 +35,11 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from app.core.constants import EstimatedAmountSource
 from app.domain.published_floor_rate import plausible_published_floor_rate
 from app.domain.rate_normalization import to_bid_rate_fraction
 from app.schemas.crawl import CrawlNoticeItem
+from app.utils.numeric import optional_float
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +115,15 @@ class KonepsCollectedItem(CrawlNoticeItem):
         default=None,
         description="참가자격 원문. 수집 피드는 배출하지 않고 backfill 스크립트만 채운다.",
     )
+    estimated_amount_source: EstimatedAmountSource | None = Field(
+        default=None,
+        description=(
+            "``estimated_amount`` 자리에 실린 값의 출처(어휘는"
+            " ``app.core.constants.EstimatedAmountSource``). ``None`` 은 '미신고' 이고,"
+            " write 가드는 이를 파생/폴백과 같은 보수 취급으로 다룬다 — 구 dict payload"
+            " 하위 호환을 위해 기본값이다."
+        ),
+    )
 
     @model_validator(mode="after")
     def _normalize_and_gate_award_floor_rate(self) -> "KonepsCollectedItem":
@@ -153,6 +165,30 @@ class KonepsCollectedItem(CrawlNoticeItem):
                 raw,
             )
         self.award_floor_rate = accepted
+        return self
+
+    @model_validator(mode="after")
+    def _gate_estimated_amount_source(self) -> "KonepsCollectedItem":
+        """추정가격이 실리지 않았으면 출처 신고를 남기지 않는다(자족적 계약).
+
+        ``award_floor_rate`` 게이트와 같은 축이다: 이 DTO 는 생산자 두 경로(openapi /
+        scsbid)와 dict payload 승격이 **모두 통과하는 유일한 지점**이라, "값 없이 출처만
+        신고" 같은 모순은 여기서 접는다. 그러지 않으면 write 가드
+        (``app/services/koneps/budget_fields.py``)가 존재하지 않는 값을 공고 게시값으로
+        신뢰해, 폴백으로 도착한 기초금액이 저장된 추정가격을 덮을 수 있다.
+
+        어휘 자체의 검증은 ``Literal`` 이 한다 — 오타는 여기 오기 전에 거부된다.
+
+        ``award_floor_rate`` 게이트와 달리 **로그를 남기지 않는다**(비대칭은 의도적): 저쪽이
+        거르는 값은 발주기관 게시값의 이상이라 조치 대상이지만, 여기서 접히는 조합(예정가를
+        못 구한 개찰 행 등)은 정상 상태에서 상시 발생한다. 매 수집마다 경고를 찍으면 조치
+        가능한 로그가 노이즈에 묻힌다.
+        """
+        if self.estimated_amount_source is None:
+            return self
+        amount = optional_float(self.estimated_amount)
+        if amount is None or amount <= 0:
+            self.estimated_amount_source = None
         return self
 
     def opening_facts(self) -> CrawlItemMetadataFacts:

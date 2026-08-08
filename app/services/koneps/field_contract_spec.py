@@ -124,8 +124,9 @@ _YEGA_OR_BUDGET_KEYS: tuple[str, ...] = (
 # 이 순서가 base_amount 해석의 **단일 출처**다: openapi.build_openapi_notice_item 이
 # ``BASE_RESOLUTION_ORDER`` 를 import 해 base_amount 후보로 그대로 소비한다(더는 인라인
 # 리스트를 두지 않는다). 진짜 기초금액 3키가 먼저이고, 그중 어느 것도 양수로 실리지 않은
-# 공고에서만 예산 2키(asignBdgtAmt, bdgtAmt) -> 예정가 2키(presmptPrce, presmptAmt) 로
-# 폴백한다. 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
+# 공고에서만 예산 2키(asignBdgtAmt, bdgtAmt) -> 추정가격 2키(presmptPrce, presmptAmt) 로
+# 폴백한다(이 두 키는 예정가가 아니라 **추정가격**이다 — 예정가는 개찰 산물이라 공고 피드에
+# 없다. 아래 ``NOTICE_ESTIMATE_KEYS`` 가 이 두 키에 게시값 권위를 부여하므로 명칭이 중요하다). 값이 0/미상인 후보는 없는 것으로 보고 다음 후보로 넘어간다(프로덕션은
 # ``first_openapi_amount(..., positive_only=True)``, 검증기는 같은 규칙을 모사) — 0 으로
 # 실린 기초금액 키가 양수 예산 폴백을 가리지 않게 하기 위함이다. 같은 상수를 공유하므로
 # 위반 detail 의 resolved_key·--dry-run 표시와 실제 해석은 **순서 축에서는** 드리프트할 수
@@ -141,14 +142,26 @@ BASE_RESOLUTION_ORDER: tuple[str, ...] = TRUE_BASE_KEYS + _YEGA_OR_BUDGET_KEYS
 # 라 base 와 달리 기초금액-우선 재정렬 대상이 아니다. 0/미상 후보를 건너뛰는 규칙은 base 와
 # 동일하게 적용한다: 그러지 않으면 0 으로 실린 추정가격이 선언된 예산 폴백을 건너뛰고
 # ``estimated_amount or base_amount`` 최종 폴백을 발동시켜 estimated 가 기초금액 값이 된다.
-ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
+#
+# 두 하위 그룹으로 나눠 선언하는 이유는 **권위**가 다르기 때문이다: 추정가격 키에서 얻은 값만
+# 공고가 게시한 추정가격이고, 예산 키에서 얻은 값은 같은 자리에 실리되 개념이 다르다
+# (배정예산 ≥ 추정가격). 수집 item 은 그 차이를 ``estimated_amount_source`` 로 신고하고
+# (``app/domain/estimate_provenance.py``), write 가드가 권위값만 저장값을 덮게 한다.
+# 해석 순서 자체는 두 그룹의 이어붙임 하나가 단일 출처로 남는다.
+NOTICE_ESTIMATE_KEYS: tuple[str, ...] = (
     "presmptPrce",  # 추정가격(부가세 포함)
     "presmptAmt",  # 추정금액
+)
+BUDGET_FALLBACK_ESTIMATE_KEYS: tuple[str, ...] = (
     "asignBdgtAmt",  # 배정예산액(폴백)
     "bdgtAmt",  # 예산금액(폴백)
 )
+ESTIMATED_RESOLUTION_ORDER: tuple[str, ...] = (
+    NOTICE_ESTIMATE_KEYS + BUDGET_FALLBACK_ESTIMATE_KEYS
+)
 # 검증기 전용 룩업: base 가 어느 키에서 해석됐는지를 basis 로 분류한다(해석 **순서**는 위
-# 두 상수가 소유하고 프로덕션이 그것을 소비한다 — 이 표는 판정에만 쓰인다).
+# ``BASE_RESOLUTION_ORDER``/``ESTIMATED_RESOLUTION_ORDER`` 두 상수가 소유하고 프로덕션이
+# 그것을 소비한다 — 이 표는 판정에만 쓰인다).
 KEY_BASIS: dict[str, Basis] = {
     **{key: Basis.BASE_AMOUNT for key in TRUE_BASE_KEYS},
     "presmptPrce": Basis.BUDGET_ESTIMATE,
@@ -156,6 +169,14 @@ KEY_BASIS: dict[str, Basis] = {
     "asignBdgtAmt": Basis.BUDGET_ESTIMATE,
     "bdgtAmt": Basis.BUDGET_ESTIMATE,
 }
+# 면허/지역 제한 텍스트를 실어 오는 원시 키 — 이어 붙인 문자열이 면허코드 추출의 입력이다.
+# 다른 키 목록과 같은 자리에 선언해 두어 아이템 빌더는 해석만 한다(§4.5-1).
+LICENSE_TEXT_KEYS: tuple[str, ...] = (
+    "indstrytyCd",
+    "indstrytyNm",
+    "lcnsLmtNm",
+    "prtcptLmtRgnNm",
+)
 
 
 # ---------------------------------------------------------------------------
