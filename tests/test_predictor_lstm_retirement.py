@@ -242,8 +242,14 @@ def test_stale_ensemble_artifact_with_embedded_lstm_still_loads_and_ignores_it(
     assert "lstm" not in prediction["explanation"].lower()
 
 
-def test_retirement_does_not_move_the_construction_legal_floor(monkeypatch):
-    """red line: 은퇴 뒤에도 법정 낙찰하한 미만 추천은 차단된다."""
+def test_retired_key_fallback_path_keeps_the_construction_legal_floor(monkeypatch):
+    """red line — **범위: 은퇴 폴백이 세우는 historical 경로**.
+
+    이름을 실제 범위에 맞춘다. 은퇴 키 선호는 historical 로 접히므로 이 테스트는
+    ``historical_statistical`` 만 덮는다. 즉 **이 PR 이 산출을 바꾸는 경로가 아니다**
+    (PR 본문이 0.0000%p 로 측정한 그 경로다). 실제로 바뀌는 ensemble 경로의 red line 은
+    아래 ``test_ensemble_path_never_recommends_below_the_construction_legal_floor`` 가 고정한다.
+    """
     from datetime import date
 
     monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "lstm")
@@ -258,8 +264,97 @@ def test_retirement_does_not_move_the_construction_legal_floor(monkeypatch):
         reference_date=date(2026, 2, 1),
     )
 
+    # 이 테스트가 덮는 경로를 명시적으로 고정한다(조용히 다른 predictor 를 재면 무의미).
+    assert prediction["predictor_name"] == "historical_statistical"
     floor_bid_rate = prediction["floor_bid_rate"]
     assert floor_bid_rate is not None
     assert prediction["predicted_bid_rate"] >= floor_bid_rate
     for candidate in prediction["bid_rate_candidates"]:
         assert candidate["bid_rate"] >= floor_bid_rate
+
+
+def test_ensemble_path_never_recommends_below_the_construction_legal_floor(
+    monkeypatch, tmp_path
+):
+    """red line (실질) — 은퇴 후 **실제로 산출이 바뀌는** ensemble 경로를 고정한다.
+
+    은퇴 라운드의 red line 가드는 은퇴 키 폴백(historical) 경로에만 걸려 있어서,
+    ensemble 의 base_rate 를 하한 밑으로 미는 뮤턴트를 하나도 잡지 못했다. 살아남은
+    ensemble 골든은 ``floor_bid_rate`` 가 전부 ``null`` 이라 골든도 하한을 단언하지 않는다.
+
+    여기서는 **라이브와 같은 모양의 아티팩트**(4키 + embedded lstm)를 물리고, 공사
+    era-correct 법정하한(2026-01-30 개정, <10억 → 0.89745)보다 한참 낮은 이력을 줘서
+    guardrail 이 실제로 물게 만든다.
+
+    단언 설계 (중요) — "결과가 하한 이상"만 보면 **이 테스트는 절대 실패할 수 없다**.
+    guardrail 이 무조건 하한으로 끌어올리기 때문이다(실측: base_rate 에 0.72 를 곱하는
+    뮤턴트를 넣어도 통과). 그래서 red line 의 실제 위험인 **guardrail 우회/무력화**를
+    잡도록, guardrail 이 *물어야만* 하는 상태를 만들고 그것이 실제로 물었는지를 단언한다:
+
+    1. guardrail 이전 ensemble 원출력이 하한 **아래**다(= guardrail 이 개입해야 한다)
+    2. 최종 결과는 하한 **이상**이다(= 개입했다)
+    3. ``guardrail_applied`` 가 True 다
+
+    predictor 자체의 수치 드리프트는 골든이 byte 단위로 고정한다(위 3종 뮤턴트를 골든이
+    모두 잡는다) — 여기서 중복으로 좁은 밴드를 걸지 않는다.
+    """
+    from datetime import date
+
+    import app.ai.predictors.historical as historical
+    from app.ai.predictors.base import PricePredictionContext
+    from app.ai.predictors.ensemble import (
+        build_ensemble_prediction_payload,
+        load_ensemble_artifact,
+    )
+
+    artifact_path = _write_retired_shape_ensemble_artifact(tmp_path)
+    monkeypatch.setattr(historical, "load_group_calibration", lambda: {})
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "ensemble")
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES", 8)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENSEMBLE_MODEL_PATH", artifact_path)
+
+    records = [
+        {"bid_rate": 0.80, "base_amount": 100_000_000.0, "predicted_price": 80_000_000.0}
+        for _ in range(40)
+    ]
+    prediction = predict_price(
+        budget=500_000_000.0,
+        category="construction",
+        description="OO 토목공사 법정하한 검증",
+        historical_records=records,
+        business_group="construction",
+        estimation_amount=500_000_000.0,
+        reference_date=date(2026, 2, 1),
+    )
+
+    # 폴백으로 조용히 historical 이 서면 이 테스트는 무의미해진다 — 경로부터 고정한다.
+    assert prediction["predictor_name"] == "ensemble_blend"
+    assert prediction["fallback_reason"] is None
+
+    floor_bid_rate = prediction["floor_bid_rate"]
+    assert floor_bid_rate is not None
+    assert float(floor_bid_rate) >= 0.89745  # era-correct 공사 하한(#197)
+
+    # (1) guardrail 이전 원출력이 하한 아래여야 이 케이스가 guardrail 을 실제로 시험한다.
+    raw = build_ensemble_prediction_payload(
+        PricePredictionContext(
+            budget=500_000_000.0,
+            category="construction",
+            description="OO 토목공사 법정하한 검증",
+            historical_records=tuple(records),
+            agency_name=None,
+            business_group="construction",
+        ),
+        artifact=load_ensemble_artifact(artifact_path),
+    )
+    assert raw["predicted_bid_rate"] < float(floor_bid_rate), (
+        "원출력이 이미 하한 위면 guardrail 이 무언지 시험하지 못한다 — 케이스를 다시 잡아야 한다"
+    )
+
+    # (2)(3) guardrail 이 개입했고, 최종 산출이 하한 이상이다.
+    assert prediction["guardrail_applied"] is True
+    assert prediction["predicted_bid_rate"] >= floor_bid_rate
+    for candidate in prediction["bid_rate_candidates"]:
+        assert candidate["bid_rate"] >= floor_bid_rate, candidate
+    assert prediction["predicted_price"] >= 500_000_000.0 * float(floor_bid_rate) - 1.0

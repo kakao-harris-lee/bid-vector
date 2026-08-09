@@ -39,8 +39,16 @@ there is none" and "the producer forgot" are different states.
    ensemble/predict_price)에서 나왔다. sequence-model 은퇴(2026-08-09)로 골든은
    39개가 됐고, **삭제된 5건 중 3건이 narrow-shape(LSTM) 였다** — 즉 "필수 17"의
    도출 근거 집합 자체가 바뀌었다. 남은 narrow-shape 생산자는 heuristic fallback
-   하나뿐이며, 그 payload 가 여전히 17 필드를 모두 싣기 때문에 필수 집합은 불변이다
-   (`test_narrow_payload_omits_historical_only_keys` 가 고정).
+   하나뿐이며, 그 payload 가 여전히 17 필드를 모두 싣기 때문에 필수 집합은 불변이다.
+
+   무엇이 이것을 고정하는가(정확히):
+
+   * **필드 존재**는 이 모델 자신이 강제한다 — 17 필드가 required 라 하나라도 빠지면
+     ``PredictionResult`` 복원이 ``ValidationError`` 로 실패한다.
+   * **narrow payload 의 실제 바이트**는 ``tests/goldens/predictor/heur_*.json`` 3건이
+     byte-for-byte 로 고정한다.
+   * ``test_narrow_payload_omits_historical_only_keys`` 는 그 **반대편**(historical 전용
+     키의 부재)만 단언한다 — 17 필드의 존재를 고정하지 **않는다**.
 
 정직 명세 (§2) is unchanged by this typing: ``predicted_bid_rate`` /
 ``competitive_target_bid_rate`` remain 가격 적합도 추정, never a literal

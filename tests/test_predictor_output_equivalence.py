@@ -735,8 +735,8 @@ def test_high_rate_tail_golden_actually_fires(case_id, reason):
 
 
 # ---------------------------------------------------------------------------
-# GAP D anchor (P4.1): the heuristic and standalone-LSTM payloads are NARROWER
-# than the historical/ensemble one. Made legible beyond the raw golden JSON so a
+# GAP D anchor (P4.1): the heuristic payload is NARROWER than the
+# historical/ensemble one. Made legible beyond the raw golden JSON so a
 # typed-output refactor cannot silently start emitting these keys as ``null`` —
 # key PRESENCE is part of the predictor contract, not only key values.
 # ---------------------------------------------------------------------------

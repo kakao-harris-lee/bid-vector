@@ -101,9 +101,6 @@ def test_create_release_manifest_writes_repo_relative_paths(tmp_path):
     ensemble_path = _write_ensemble_artifact(
         repo_root / "models" / "predictors" / "ensemble" / "release-1.json"
     )
-    ensemble_path = _write_ensemble_artifact(
-        repo_root / "models" / "predictors" / "ensemble" / "release-1.json"
-    )
     backtest_report_path = _write_predictor_backtest_report(
         repo_root / "models" / "reports" / "release-1-backtest.json"
     )

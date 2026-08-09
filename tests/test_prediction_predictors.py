@@ -156,7 +156,7 @@ def test_normalize_predictor_registry_keeps_explicit_empty_mapping_sparse():
 class _RecordingHistoricalPredictor(BasePricePredictor):
     """Fake historical anchor that records calls and returns a sentinel rate.
 
-    Injected into the ensemble/LSTM payload builders to prove the historical
+    Injected into the ensemble payload builder to prove the historical
     statistical anchor is consumed through the injection seam (not a hard-coded
     ``HistoricalStatisticalPredictor()`` inside the function body).
     """

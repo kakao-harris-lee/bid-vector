@@ -234,7 +234,8 @@ artifact_paths = [
   ("summary_path", repo_root / "models" / "training-runs" / release_tag / "training-summary.json"),
   ("dataset_quality_path", repo_root / "models" / "training-runs" / release_tag / "dataset-quality.json"),
   ("comparison_report_path", repo_root / "models" / "training-runs" / release_tag / "artifact-comparison.json"),
-  ("lstm_artifact_path", repo_root / "models" / "predictors" / "lstm" / f"{release_tag}.json"),
+  # sequence-model(lstm) 아티팩트는 2026-08-09 은퇴 — 훈련이 더 이상 만들지 않는다.
+  # 필수 목록에 남겨 두면 **성공한 훈련이 항상 검증 실패**한다.
   ("ensemble_artifact_path", repo_root / "models" / "predictors" / "ensemble" / f"{release_tag}.json"),
 ]
 
@@ -296,10 +297,8 @@ base_required_keys = [
 
 required_keys = list(base_required_keys)
 if result_status == 'completed':
-  required_keys.extend([
-    'lstm_artifact_path',
-    'ensemble_artifact_path',
-  ])
+  # lstm_artifact_path 는 은퇴(2026-08-09)로 결과 payload 에서 사라졌다.
+  required_keys.append('ensemble_artifact_path')
 
 artifact_paths: list[tuple[str, Path]] = []
 for key in required_keys:

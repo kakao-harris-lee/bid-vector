@@ -38,10 +38,20 @@ _ENSEMBLE_ARTIFACT_LABEL = "Ensemble model artifact"
 
 # sequence-model(lstm) 축은 은퇴했다(2026-08-09). 남은 세 축의 **상대 비율**은 종전과
 # 같으므로 그 비율을 그대로 선언하고(추적 가능성), 선언 상수는 합 1 의 확률 벡터로
-# 파생한다. 비율만 남기면 lstm 을 뺀 0.85 합이 그대로 상수가 되어 (a) 선언값이 확률
-# 벡터가 아니고 (b) 새 아티팩트에 0.85 합 가중치가 기록되어 손으로 읽는 운영자가
-# 오해한다. 나눗셈 결과는 float 상 정확히 합 1 이고 재정규화에 멱등이라, 호출부의
-# ``_normalize_*`` 를 한 번 더 통과해도 산출은 bit-identical 하다(골든이 고정).
+# 파생한다.
+#
+# 이 상수의 역할 범위: **서빙측 fallback 기본값**이다 — 아티팩트가 ``component_weights`` 를
+# 싣지 않았을 때만 쓰인다(아티팩트에 *기록*되는 값은 ``ml_training/constants.py`` 소관).
+# 비율(합 0.85)을 그대로 두면 선언값이 확률 벡터가 아니게 되어, 이 기본값을 읽는 사람이
+# "나머지 15%는 어디 갔나"로 오해한다.
+#
+# 산출 불변 근거: 나눗셈 결과가 float 상 정확히 합 1 이고 재정규화에 멱등이라, 호출부의
+# ``_normalize_*`` 를 한 번 더 통과해도 값이 움직이지 않는다. 이를 고정하는 것은 ensemble
+# 골든이 **아니다** — 골든 아티팩트는 명시 ``component_weights`` 를 실어 이 기본값 경로에
+# 도달하지 않는다. 실제 pin 은
+# ``test_ensemble_artifact_non_mapping_blocks_fall_back_to_defaults`` (비매핑 →
+# 기본값 폴백 시 0.52/0.18/0.15 ÷ 0.85 를 단언)와
+# ``test_declared_weights_are_idempotent_under_renormalization`` 이다.
 _COMPONENT_WEIGHT_RATIOS = {
     "historical": 0.52,
     "momentum": 0.18,

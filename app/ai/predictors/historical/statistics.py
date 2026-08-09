@@ -77,7 +77,8 @@ def extract_bid_rate_series(historical_records: tuple[object, ...]) -> list[floa
     sequence_points: list[tuple[str, int, float]] = []
     fallback_sequence: list[float] = []
     for index, record in enumerate(historical_records):
-        bid_rate = _resolve_bid_rate(record)
+        # 시퀀스는 6dp 로 양자화한다(summary 는 반올림하지 않는다 — 그 차이가 digits).
+        bid_rate = resolve_record_bid_rate(record, digits=6)
         if bid_rate is None:
             continue
         fallback_sequence.append(bid_rate)
@@ -92,8 +93,16 @@ def extract_bid_rate_series(historical_records: tuple[object, ...]) -> list[floa
     return fallback_sequence
 
 
-def _resolve_bid_rate(record: object) -> float | None:
-    """Read a usable bid rate from a historical record payload."""
+def resolve_record_bid_rate(record: object, *, digits: int | None = None) -> float | None:
+    """이력 행에서 쓸 수 있는 사정률을 읽는 **단일 출처** (§4.5-8).
+
+    규칙: ``bid_rate`` 를 읽고, 없거나 0 이하면 ``predicted_price / base_amount`` 로
+    역산하며, ``0.5~1.5`` 밴드를 벗어나면 사용 불가(``None``)로 본다.
+
+    이 규칙은 원래 두 벌이었다(``statistics`` 의 시퀀스 추출과 ``summary`` 의 인라인
+    루프). 상수도 분기도 같고 **6dp 반올림 유무만** 달랐는데, 두 벌이면 밴드 경계나
+    역산 조건을 한쪽만 고치는 사고가 난다. 그 차이는 ``digits`` 로 파라미터화한다.
+    """
     bid_rate = float(read_record_value(record, "bid_rate") or 0.0)
     if bid_rate <= 0:
         predicted_price = float(read_record_value(record, "predicted_price") or 0.0)
@@ -102,7 +111,7 @@ def _resolve_bid_rate(record: object) -> float | None:
             bid_rate = predicted_price / base_amount
     if not 0.5 <= bid_rate <= 1.5:
         return None
-    return round(float(bid_rate), 6)
+    return float(bid_rate) if digits is None else round(float(bid_rate), digits)
 
 
 def get_t_critical(degrees_of_freedom: int) -> float:

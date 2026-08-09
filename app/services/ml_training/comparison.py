@@ -4,6 +4,15 @@ Evaluates the generated ensemble artifact against the historical baseline on a
 rolling holdout and picks the best predictor for the comparison report. The
 holdout budget/bid-rate resolution (#261 alignment) is delegated to the shared
 helpers unchanged.
+
+report_version 2 — 비교 arm 집합 축소 (2026-08-09)
+-------------------------------------------------
+sequence-model 은퇴로 비교 arm 이 3종(historical / lstm / ensemble)에서 2종으로 줄었다.
+그래서 이 리포트의 ``best_predictor_key`` 는 **은퇴 이전 리포트와 apples-to-apples 가
+아니다** — 후보군이 줄어든 것이지 모델 품질이 바뀐 것이 아니다. 리포트가 자기
+``predictor_arms``/``retired_predictor_arms`` 를 직접 싣지 않으면 소비자(promotion gate,
+``recommended_env`` 의 ``PRICE_PREDICTION_PREFERRED_PREDICTOR`` 추천, 운영자)가 그 축소를
+품질 변화로 오독한다. ``report_version`` 도 2 로 올려 구분을 명시한다.
 """
 
 from __future__ import annotations
@@ -15,6 +24,11 @@ from app.ai.predictors.ensemble import build_ensemble_prediction_payload, load_e
 from app.ai.predictors.historical import HistoricalStatisticalPredictor
 from app.core.config import settings
 from app.core.time import utc_now
+
+# 이 리포트가 실제로 비교하는 arm 집합(선언 데이터). 은퇴로 arm 이 줄면 best_predictor_key
+# 의 의미가 달라지므로 리포트 자신이 이 집합을 싣는다 — 아래 ``report_version`` 주석 참조.
+_COMPARISON_PREDICTOR_ARMS = ("historical", "ensemble")
+_RETIRED_PREDICTOR_ARMS = ("lstm",)
 
 
 class ComparisonMixin:
@@ -41,7 +55,10 @@ class ComparisonMixin:
         holdout_size = min(configured_holdout_size, max(0, len(series) - min_training_size))
 
         base_report: dict[str, Any] = {
-            "report_version": "1",
+            # v2 = arm 집합 축소(모듈 docstring 참조). arm 을 리포트가 직접 싣는다.
+            "report_version": "2",
+            "predictor_arms": list(_COMPARISON_PREDICTOR_ARMS),
+            "retired_predictor_arms": list(_RETIRED_PREDICTOR_ARMS),
             "release_tag": release_tag,
             "created_at": utc_now().isoformat(),
             "status": "insufficient_data",
@@ -62,23 +79,18 @@ class ComparisonMixin:
             return base_report
 
         training_prefix = series[:-holdout_size]
-        holdout_records = series[-holdout_size:]
+        # 두 arm 이 받는 홀드아웃 인자는 동일하다 — 한 벌로 선언해 arm 이 늘거나 줄 때
+        # 한쪽만 고쳐지는 사고를 막는다(arm 집합은 _COMPARISON_PREDICTOR_ARMS 가 선언).
+        holdout_kwargs: dict[str, Any] = {
+            "training_prefix": training_prefix,
+            "holdout_records": series[-holdout_size:],
+            "category": category,
+            "agency_name": agency_name,
+            "min_training_size": min_training_size,
+        }
         predictor_results = [
-            self._evaluate_historical_predictor(
-                training_prefix=training_prefix,
-                holdout_records=holdout_records,
-                category=category,
-                agency_name=agency_name,
-                min_training_size=min_training_size,
-            ),
-            self._evaluate_ensemble_predictor(
-                artifact=ensemble_artifact,
-                training_prefix=training_prefix,
-                holdout_records=holdout_records,
-                category=category,
-                agency_name=agency_name,
-                min_training_size=min_training_size,
-            ),
+            self._evaluate_historical_predictor(**holdout_kwargs),
+            self._evaluate_ensemble_predictor(artifact=ensemble_artifact, **holdout_kwargs),
         ]
         eligible_results = [
             result
