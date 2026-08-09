@@ -31,17 +31,23 @@ _SEQUENCE_LENGTH_MAX = 12
 _MOMENTUM_WINDOW_MIN = 3
 _MOMENTUM_WINDOW_MAX = 6
 
-# Ensemble artifact. sequence-model(lstm) 축은 2026-08-09 은퇴했다 — 남은 세 축의
-# 상대 비율은 종전과 같고, 읽는 쪽이 합 1 로 재정규화한다.
+# Ensemble artifact. sequence-model(lstm) 축은 2026-08-09 은퇴했다.
 _SCENARIO_SPREAD_STD_THRESHOLD = 0.04
 _SCENARIO_SPREAD_MULTIPLIER_NARROW = 1.0
 _SCENARIO_SPREAD_MULTIPLIER_WIDE = 1.15
 _ENSEMBLE_CONFIDENCE_BIAS_CAP = 0.06
 _ENSEMBLE_CONFIDENCE_BIAS_SAMPLE_DIVISOR = 1200
-_ENSEMBLE_COMPONENT_WEIGHTS = {
+# 남은 세 축의 **상대 비율**은 은퇴 전과 같다. 아티팩트에 기록되는 값은 그 비율을 합 1 로
+# 정규화한 확률 벡터다 — 비율(합 0.85)을 그대로 적으면 아티팩트를 손으로 읽는 운영자가
+# "나머지 15%는 어디 갔나"로 오해한다. 읽는 쪽이 어차피 재정규화하므로 산출은 불변이다.
+_ENSEMBLE_COMPONENT_WEIGHT_RATIOS = {
     "historical": 0.5,
     "momentum": 0.2,
     "mean_reversion": 0.15,
+}
+_ENSEMBLE_COMPONENT_WEIGHTS = {
+    key: ratio / sum(_ENSEMBLE_COMPONENT_WEIGHT_RATIOS.values())
+    for key, ratio in _ENSEMBLE_COMPONENT_WEIGHT_RATIOS.items()
 }
 
 # Dataset-quality gate thresholds & scoring weights.

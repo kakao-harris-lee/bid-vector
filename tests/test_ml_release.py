@@ -473,6 +473,60 @@ def test_production_preflight_rejects_artifact_without_signed_checksum(
     assert "requires" in artifact_check["detail"]
 
 
+# ---------------------------------------------------------------------------
+# 은퇴 키(lstm) 레거시 매니페스트 — 게이트 약화 방지
+#
+# lstm predictor 는 2026-08-09 은퇴했지만 이미 서명된 과거 manifest 는 디스크에 남아
+# 있다. predictor 키 목록을 ``("ensemble",)`` 로 좁히면 그 릴리스들이 "predictor
+# 아티팩트 없음"으로 읽혀 promotion gate 와 production preflight 가 조용히
+# not_applicable 로 넘어간다 — 검사가 사라지는데 결과는 여전히 통과로 보인다.
+# ---------------------------------------------------------------------------
+def test_promotion_gate_still_recognizes_a_retired_key_legacy_manifest(tmp_path):
+    """gate.py: 은퇴 키만 가진 레거시 manifest 도 predictor 보유로 읽혀야 한다."""
+    service = MLReleasePromotionService(repo_root=tmp_path / "repo")
+
+    legacy_gate = service._resolve_manifest_promotion_gate(
+        {
+            "release_tag": "2026-05-11-legacy",
+            "artifacts": {"predictors": {"lstm": {"path": "models/predictors/lstm/x.json"}}},
+        }
+    )
+    no_predictor_gate = service._resolve_manifest_promotion_gate(
+        {"release_tag": "2026-05-11-none", "artifacts": {"predictors": {}}}
+    )
+
+    assert no_predictor_gate["status"] == "not_applicable"
+    # 은퇴 키를 읽지 않으면 이 값도 not_applicable 로 붕괴한다 — 그것이 조용한 약화다.
+    assert legacy_gate["status"] != "not_applicable"
+
+
+def test_production_preflight_still_gates_a_retired_key_legacy_manifest(
+    tmp_path, monkeypatch
+):
+    """preflight.py: 은퇴 키 릴리스의 production predictor 검사가 건너뛰어지지 않는다."""
+    repo_root = tmp_path / "repo"
+    manifest_path = _write_unsigned_artifact_manifest(
+        repo_root, release_tag="2026-08-09-retired-key-production"
+    )
+    monkeypatch.setattr(settings, "ML_RELEASE_OBJECT_STORAGE_URL", "")
+    service = MLReleasePromotionService(repo_root=repo_root)
+
+    result = service.preflight_release_rollout(
+        str(manifest_path),
+        require_signature=False,
+        probe_write=False,
+        production=True,
+    )
+
+    predictor_check = next(
+        check
+        for check in result["checks"]
+        if check["name"] == "production_predictor_backtest"
+    )
+    assert predictor_check["status"] != "not_applicable"
+    assert predictor_check["passed"] is False
+
+
 def test_preflight_reports_verified_artifact_checksum(tmp_path, monkeypatch):
     """서명된 체크섬을 실제로 재계산해 맞춘 아티팩트만 일치를 단언한다."""
     repo_root = tmp_path / "repo"

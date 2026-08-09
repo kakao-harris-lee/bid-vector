@@ -133,7 +133,6 @@ models/
 ├── embeddings/
 │   └── <embedding-model-version>/
 ├── predictors/
-│   │   └── <artifact-version>.json
 │   └── ensemble/
 │       └── <artifact-version>.json
 └── manifests/

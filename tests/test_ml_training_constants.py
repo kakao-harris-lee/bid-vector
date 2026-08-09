@@ -52,12 +52,42 @@ def test_ensemble_confidence_bias_caps_at_006():
 
 
 def test_ensemble_component_weights_are_fixed():
-    """sequence-model 축 은퇴 후 남은 세 축. 상대 비율은 은퇴 전과 같다."""
+    """sequence-model 축 은퇴 후 남은 세 축의 확률 벡터(상대 비율은 은퇴 전과 같다)."""
     assert _ensemble([0.9] * 5)["component_weights"] == {
-        "historical": 0.5,
-        "momentum": 0.2,
-        "mean_reversion": 0.15,
+        "historical": 0.5 / 0.85,
+        "momentum": 0.2 / 0.85,
+        "mean_reversion": 0.15 / 0.85,
     }
+
+
+def test_written_component_weights_are_a_probability_vector():
+    """아티팩트에 기록되는 가중치는 합 1 이어야 한다.
+
+    은퇴로 축 하나를 빼면서 비율(합 0.85)을 그대로 적으면, 아티팩트를 손으로 읽는
+    운영자에게 "나머지 15%가 어디론가 사라진" 표로 보인다. 읽는 쪽이 재정규화해서
+    산출은 같더라도 **기록되는 선언값**은 확률 벡터여야 한다.
+    """
+    weights = _ensemble([0.9] * 5)["component_weights"]
+
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert "lstm" not in weights
+
+
+def test_component_weight_ratios_are_unchanged_by_the_retirement():
+    """상대 비율 보존 — 재선언이 축들의 상대 세기를 바꾸지 않았다는 증거."""
+    weights = _ensemble([0.9] * 5)["component_weights"]
+
+    assert weights["historical"] / weights["momentum"] == pytest.approx(0.5 / 0.2)
+    assert weights["momentum"] / weights["mean_reversion"] == pytest.approx(0.2 / 0.15)
+
+
+def test_declared_weights_are_idempotent_under_renormalization():
+    """산출 불변의 근거: 소비자가 한 번 더 정규화해도 값이 움직이지 않는다."""
+    from app.ai.predictors.ensemble import _normalize_component_weights
+
+    weights = _ensemble([0.9] * 5)["component_weights"]
+
+    assert _normalize_component_weights(weights) == weights
 
 
 def test_training_no_longer_emits_a_retired_lstm_artifact():

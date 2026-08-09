@@ -36,13 +36,20 @@ from app.core.config import settings
 # 아티팩트 로딩 실패 문구의 주어(단일 출처 — 기존 오류 메시지를 그대로 유지한다).
 _ENSEMBLE_ARTIFACT_LABEL = "Ensemble model artifact"
 
-# sequence-model(lstm) 축은 은퇴했다(2026-08-09). 남은 세 축의 상대 비율은 종전과 같고,
-# 합이 1 이 되도록 재정규화만 한다 — 은퇴 전에도 lstm 아티팩트가 없는 아티팩트는
-# ``_normalize_available_weights`` 가 같은 재정규화를 했으므로 그 경로의 산출은 불변이다.
-_DEFAULT_COMPONENT_WEIGHTS = {
+# sequence-model(lstm) 축은 은퇴했다(2026-08-09). 남은 세 축의 **상대 비율**은 종전과
+# 같으므로 그 비율을 그대로 선언하고(추적 가능성), 선언 상수는 합 1 의 확률 벡터로
+# 파생한다. 비율만 남기면 lstm 을 뺀 0.85 합이 그대로 상수가 되어 (a) 선언값이 확률
+# 벡터가 아니고 (b) 새 아티팩트에 0.85 합 가중치가 기록되어 손으로 읽는 운영자가
+# 오해한다. 나눗셈 결과는 float 상 정확히 합 1 이고 재정규화에 멱등이라, 호출부의
+# ``_normalize_*`` 를 한 번 더 통과해도 산출은 bit-identical 하다(골든이 고정).
+_COMPONENT_WEIGHT_RATIOS = {
     "historical": 0.52,
     "momentum": 0.18,
     "mean_reversion": 0.15,
+}
+_DEFAULT_COMPONENT_WEIGHTS = {
+    key: ratio / sum(_COMPONENT_WEIGHT_RATIOS.values())
+    for key, ratio in _COMPONENT_WEIGHT_RATIOS.items()
 }
 
 # --- Scenario-spread / candidate constants (moved verbatim from the inline
