@@ -18,21 +18,29 @@ corrupt the previous one.
 
 Key PRESENCE is part of the contract, not only key values
 ---------------------------------------------------------
-The pipeline stages *add* keys progressively, and the narrow payloads (heuristic
-fallback, standalone LSTM) legitimately omit keys that the historical/ensemble
-payloads carry. Emitting those as ``null`` instead would change the operator-
-facing payload. So every stage-conditional field is declared optional and
+The pipeline stages *add* keys progressively, and the narrow heuristic-fallback
+payload legitimately omits keys that the historical/ensemble payloads carry.
+Emitting those as ``null`` instead would change the operator-facing payload. So
+every stage-conditional field is declared optional and
 ``serialize_prediction_result`` dumps with ``exclude_unset=True`` — a field that
 was never set stays ABSENT, exactly as before. ``tests/goldens/predictor/`` pins
 this byte-for-byte (see ``_HISTORICAL_ONLY_KEYS`` in
 ``tests/test_predictor_output_equivalence.py``).
 
 Required vs optional was derived by enumerating every golden payload rather than
-guessed: the 17 required fields are the ones present in *all* 44 goldens (i.e.
-every producer already emits them), and the rest are stage-conditional. Note
-that several required fields are *nullable* — ``reserve_price_context`` must be
+guessed: the 17 required fields are the ones present in *all* goldens (i.e. every
+producer already emits them), and the rest are stage-conditional. Note that
+several required fields are *nullable* — ``reserve_price_context`` must be
 supplied by the producer but may legitimately be ``None``; "the producer decided
 there is none" and "the producer forgot" are different states.
+
+.. note::
+   이 도출은 원래 44개 골든(heuristic 3 + **standalone LSTM 3** + historical/
+   ensemble/predict_price)에서 나왔다. sequence-model 은퇴(2026-08-09)로 골든은
+   39개가 됐고, **삭제된 5건 중 3건이 narrow-shape(LSTM) 였다** — 즉 "필수 17"의
+   도출 근거 집합 자체가 바뀌었다. 남은 narrow-shape 생산자는 heuristic fallback
+   하나뿐이며, 그 payload 가 여전히 17 필드를 모두 싣기 때문에 필수 집합은 불변이다
+   (`test_narrow_payload_omits_historical_only_keys` 가 고정).
 
 정직 명세 (§2) is unchanged by this typing: ``predicted_bid_rate`` /
 ``competitive_target_bid_rate`` remain 가격 적합도 추정, never a literal
@@ -93,7 +101,7 @@ class PredictionResult(FrozenStrictModel):
     """
 
     # --- predictor core: every predictor MUST produce these -------------------
-    # (present in all 44 goldens; the nullable ones still require an explicit
+    # (present in all goldens; the nullable ones still require an explicit
     # value, so "no reserve pattern" is distinguishable from "forgot the key")
     predicted_price: float
     price_range_min: float
@@ -113,7 +121,7 @@ class PredictionResult(FrozenStrictModel):
     floor_price: float | None
     explanation: str
 
-    # --- statistical predictors only (absent from heuristic / standalone LSTM)
+    # --- statistical predictors only (absent from the heuristic fallback)
     competitive_target_bid_rate: float | None = None
     procurement_rate_band: str | None = None
     high_rate_tail_adjustment: dict[str, Any] | None = None
@@ -159,7 +167,7 @@ def serialize_prediction_result(result: PredictionResult) -> dict[str, Any]:
 
     ``exclude_unset=True`` is load-bearing, not a micro-optimization: it keeps a
     field that no stage ever set ABSENT instead of ``null``, which is what makes
-    the narrow heuristic/LSTM payloads byte-identical to the pre-typing output.
+    the narrow heuristic payload byte-identical to the pre-typing output.
     Every demotion goes through this helper so the requirement is stated once and
     cannot be forgotten at an individual call site.
     """

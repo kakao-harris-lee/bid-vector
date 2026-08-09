@@ -500,6 +500,62 @@ def test_promotion_gate_still_recognizes_a_retired_key_legacy_manifest(tmp_path)
     assert legacy_gate["status"] != "not_applicable"
 
 
+def test_legacy_ensemble_to_lstm_link_is_still_integrity_checked(tmp_path):
+    """base.py: 은퇴 이전 manifest 의 ensemble → lstm 링크도 검사 대상에 남는다.
+
+    신규 manifest 는 ``resolved_lstm_artifact_path`` 를 더 이상 쓰지 않으므로 이
+    분기는 **레거시 문서로만 도달 가능**하다. 테스트가 없으면 "도달 불가 코드"로 보여
+    지우기 쉬운데, 지우면 과거 릴리스의 링크 아티팩트가 무결성 검사에서 조용히 빠진다
+    ("레거시를 계속 읽는다" 논거의 나머지 절반).
+    """
+    service = MLReleasePromotionService(repo_root=tmp_path / "repo")
+
+    targets = service._iter_manifest_artifact_paths(
+        {
+            "release_tag": "2026-05-16-legacy-linked",
+            "artifacts": {
+                "predictors": {
+                    "ensemble": {
+                        "path": "models/predictors/ensemble/2026-05-16-price-v1.json",
+                        "integrity": {"sha256": "e" * 64},
+                        "resolved_lstm_artifact_path": (
+                            "models/predictors/lstm/2026-05-16-price-v1.json"
+                        ),
+                        "resolved_lstm_artifact_integrity": {"sha256": "l" * 64},
+                    }
+                }
+            },
+        }
+    )
+
+    keys = {target["key"] for target in targets}
+    assert "ensemble" in keys
+    assert "linked_lstm" in keys
+
+    linked = next(target for target in targets if target["key"] == "linked_lstm")
+    assert linked["path"] == "models/predictors/lstm/2026-05-16-price-v1.json"
+    assert linked["integrity"] == {"sha256": "l" * 64}
+
+
+def test_new_manifests_no_longer_emit_a_linked_lstm_target(tmp_path):
+    """반대쪽 절반: 새로 만드는 manifest 는 그 링크를 더 이상 싣지 않는다."""
+    repo_root = tmp_path / "repo"
+    ensemble_path = _write_ensemble_artifact(
+        repo_root / "models" / "predictors" / "ensemble" / "fresh.json"
+    )
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-09-fresh",
+            ensemble_artifact_path=str(ensemble_path),
+        )
+    )
+
+    targets = service._iter_manifest_artifact_paths(manifest)
+
+    assert "linked_lstm" not in {target["key"] for target in targets}
+
+
 def test_production_preflight_still_gates_a_retired_key_legacy_manifest(
     tmp_path, monkeypatch
 ):
