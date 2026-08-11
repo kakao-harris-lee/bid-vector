@@ -1406,10 +1406,76 @@ def test_manifest_recommended_env_never_promotes_excluded_predictor(tmp_path):
         )
     )
 
-    # 승격 차단: 선호 키가 recommended_env 에 아예 실리지 않는다(침묵 변조 아님 —
-    # 증거는 promotion_gate 에 그대로 남는다).
+    # 승격 차단: 선호 키가 recommended_env 에 아예 실리지 않는다.
     assert "PRICE_PREDICTION_PREFERRED_PREDICTOR" not in manifest["recommended_env"]
+    gate = manifest["promotion_gate"]["predictor_backtest"]
+    # 게이트 metrics 도 제외 arm 에서 유도되면 안 된다(리뷰 K4): 이 리포트의 유일한
+    # 결과가 distribution 이므로 best 는 비고, 오차 결측으로 게이트는 실패한다 —
+    # 서빙되지 않을 엔진의 성적으로 pass 도장이 찍히지 않는다.
+    assert gate["best_predictor_key"] is None
+    assert gate["passed"] is False
+    assert gate["metrics"]["average_absolute_error_rate"] is None
+
+
+def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
+    """제외 arm 이 best 로 선언된 리포트에서 게이트는 비제외 completed arm 으로 재선정한다.
+
+    top-level best_* 스칼라(제외 arm 의 성적)도 함께 불신해야 한다 — 아니면 키만
+    바꾸고 오차는 distribution 것으로 pass/fail 을 내는 절반-방어가 된다.
+    """
+    repo_root = tmp_path / "repo"
+    ensemble_path = _write_ensemble_artifact(
+        repo_root / "models" / "predictors" / "ensemble" / "release-y.json"
+    )
+    report_path = repo_root / "models" / "reports" / "release-y-backtest.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "holdout_size": 6,
+                "best_predictor_key": "distribution",
+                "best_predictor_name": "reserve_draw_distribution",
+                "best_average_absolute_error_rate": 0.005,
+                "settings": {"base_amount_basis": "clean"},
+                "results": [
+                    {
+                        "predictor_key": "distribution",
+                        "predictor_name": "reserve_draw_distribution",
+                        "predictor_family": "distribution",
+                        "status": "completed",
+                        "sample_count": 6,
+                        "average_absolute_error_rate": 0.005,
+                    },
+                    {
+                        "predictor_key": "ensemble",
+                        "predictor_name": "ensemble_blend",
+                        "predictor_family": "ensemble",
+                        "status": "completed",
+                        "sample_count": 6,
+                        "average_absolute_error_rate": 0.02,
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-12-gate-fallback",
+            ensemble_artifact_path=str(ensemble_path),
+            predictor_backtest_report_path=str(report_path),
+        )
+    )
+
+    gate = manifest["promotion_gate"]["predictor_backtest"]
+    assert gate["best_predictor_key"] == "ensemble"
+    # 오차도 제외 arm(0.005)이 아니라 재선정 arm(0.02)의 값이어야 한다.
+    assert gate["metrics"]["average_absolute_error_rate"] == 0.02
     assert (
-        manifest["promotion_gate"]["predictor_backtest"]["best_predictor_key"]
-        == "distribution"
+        manifest["recommended_env"]["PRICE_PREDICTION_PREFERRED_PREDICTOR"]
+        == "ensemble"
     )

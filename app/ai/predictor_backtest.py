@@ -37,9 +37,11 @@ def build_predictor_backtest_report(
         max(0, len(chronological_records) - 1),
     )
     min_training_size = max(1, int(settings.PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES or 1))
+    methodology = _report_methodology(registry, use_record_context=use_record_context)
     if len(chronological_records) <= min_training_size:
         return {
             "status": "insufficient_data",
+            **methodology,
             "holdout_size": 0,
             "min_training_size": min_training_size,
             "sample_count": 0,
@@ -99,6 +101,7 @@ def build_predictor_backtest_report(
 
     return {
         "status": "completed" if best_result is not None else "no_eligible_predictor",
+        **methodology,
         "holdout_size": holdout_size,
         "min_training_size": min_training_size,
         "sample_count": int(best_result["sample_count"]) if best_result else 0,
@@ -109,6 +112,29 @@ def build_predictor_backtest_report(
         "best_predictor_name": best_result["predictor_name"] if best_result else None,
         "best_average_absolute_error_rate": best_result["average_absolute_error_rate"] if best_result else None,
         "by_group": by_group,
+    }
+
+
+def _report_methodology(
+    registry: dict[str, BasePricePredictor],
+    *,
+    use_record_context: bool,
+) -> dict[str, str | list[str] | bool]:
+    """리포트가 스스로 싣는 방법론 메타(§4.5 선언 데이터).
+
+    report_version "2": best_* 의 의미가 "평가된 전체 중 최선"에서 "자동 승격 제외
+    (excluded_predictor_arms) 를 뺀 최선"으로 바뀌었고, ``use_record_context`` 에
+    따라 홀드아웃 컨텍스트 방법론이 달라진다 — 리포트 자신이 그 사실을 실어야
+    형태만으로 두 실행을 구별할 수 있다(ml_training/comparison.py 의 #360 대응과
+    같은 패턴). 버전 키 부재 = v1(제외 이전 의미)이다.
+    """
+    return {
+        "report_version": "2",
+        "predictor_arms": sorted(registry),
+        "excluded_predictor_arms": sorted(
+            set(registry) & AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
+        ),
+        "use_record_context": bool(use_record_context),
     }
 
 

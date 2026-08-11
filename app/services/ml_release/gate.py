@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
 from app.services.ml_release.base import MANIFEST_PREDICTOR_KEYS, _MLReleaseBase
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
@@ -153,10 +154,21 @@ class _PromotionGateMixin(_MLReleaseBase):
     def _extract_predictor_gate_metrics(
         self, backtest_report: dict[str, Any]
     ) -> dict[str, Any]:
-        """Normalize supported backtest report shapes into promotion-gate metrics."""
+        """Normalize supported backtest report shapes into promotion-gate metrics.
+
+        자동 승격 제외 키(AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS)가 리포트의 best 로
+        선언돼 있으면 **그 arm 에서 유도되는 값 전부**(key·name·best 오차·top-level
+        guardrail/fallback rate)를 불신하고, 제외되지 않은 completed 결과에서 다시
+        고른다 — 서빙되지 않을 엔진의 성적으로 pass/fail 도장이 찍히는 것을 막는다
+        (리뷰 K4). fresh 리포트는 상류가 이미 거르므로 이 분기는 수제·스테일 리포트
+        전용 방어다.
+        """
         best_predictor_key = (
             str(backtest_report.get("best_predictor_key") or "").strip() or None
         )
+        best_key_excluded = best_predictor_key in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
+        if best_key_excluded:
+            best_predictor_key = None
         best_result = self._find_backtest_result(
             backtest_report, best_predictor_key=best_predictor_key
         )
@@ -170,7 +182,11 @@ class _PromotionGateMixin(_MLReleaseBase):
             or None
         )
         resolved_best_predictor_name = (
-            str(backtest_report.get("best_predictor_name") or "").strip()
+            (
+                ""
+                if best_key_excluded
+                else str(backtest_report.get("best_predictor_name") or "").strip()
+            )
             or (
                 str(best_result.get("predictor_name") or "").strip()
                 if best_result
@@ -179,17 +195,21 @@ class _PromotionGateMixin(_MLReleaseBase):
             or None
         )
         sample_count = self._first_int(
-            backtest_report.get("sample_count"),
+            None if best_key_excluded else backtest_report.get("sample_count"),
             best_result.get("sample_count") if best_result else None,
             backtest_report.get("holdout_size"),
         )
         average_error_rate = self._first_float(
-            backtest_report.get("average_absolute_error_rate"),
-            backtest_report.get("best_average_absolute_error_rate"),
+            None if best_key_excluded else backtest_report.get("average_absolute_error_rate"),
+            None if best_key_excluded else backtest_report.get("best_average_absolute_error_rate"),
             best_result.get("average_absolute_error_rate") if best_result else None,
         )
-        guardrail_rate = self._first_float(backtest_report.get("guardrail_rate"))
-        fallback_rate = self._first_float(backtest_report.get("fallback_rate"))
+        guardrail_rate = self._first_float(
+            None if best_key_excluded else backtest_report.get("guardrail_rate")
+        )
+        fallback_rate = self._first_float(
+            None if best_key_excluded else backtest_report.get("fallback_rate")
+        )
         dataset_quality = backtest_report.get("dataset_quality")
         dataset_quality = dataset_quality if isinstance(dataset_quality, dict) else {}
         report_settings = backtest_report.get("settings")
@@ -241,6 +261,10 @@ class _PromotionGateMixin(_MLReleaseBase):
             if isinstance(result, dict)
             and result.get("status") == "completed"
             and result.get("average_absolute_error_rate") is not None
+            # 자동 승격 제외 arm 은 results 에 남아 있어도(비교 증적) 폴백 best 후보로
+            # 승격되면 안 된다(리뷰 K4).
+            and str(result.get("predictor_key") or "")
+            not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
         ]
         if not completed_results:
             return None

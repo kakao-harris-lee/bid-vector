@@ -118,7 +118,11 @@ class ConsoleSummary(BaseModel):
     core_row_count: int
     prior_coverage: dict[str, CoverageLevelStat]
     mechanism_coverage: dict[str, CoverageLevelStat]
+    # best 는 "자동 승격 제외 arm 을 뺀 최선"이다 — 어떤 arm 이 제외된 채 뽑혔는지
+    # 콘솔에서도 보이게 리포트의 방법론 메타를 그대로 노출한다(리뷰 K5).
     best_predictor_key: str | None
+    excluded_predictor_arms: list[str]
+    report_version: str | None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -470,6 +474,10 @@ def main() -> int:
             prior_coverage=report.coverage.prior_predictive.coverage,
             mechanism_coverage=report.coverage.mechanism_exact_draw.coverage,
             best_predictor_key=report.point_error.get("best_predictor_key"),
+            excluded_predictor_arms=list(
+                report.point_error.get("excluded_predictor_arms") or []
+            ),
+            report_version=report.point_error.get("report_version"),
         ).model_dump_json()
     )
     return 0

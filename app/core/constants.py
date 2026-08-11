@@ -320,15 +320,20 @@ INTERNAL_TELEMETRY_EVENT_TYPES: frozenset[str] = frozenset(
 
 # Phase 1 예정가 분포 엔진(레지스트리 키 "distribution")은 아직 **자동 승격 후보가
 # 아니다**. 운영 .env 실측(2026-08-11)상 PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS
-# 가 이미 true 라 실험 플래그는 게이트가 아니고, 선호 설정을 자동으로 바꾸는 경로가
-# 둘 있다: (a) auto 선택·리포트의 best 후보 선정 — 동점 시 키 문자열 오름차순이라
-# "distribution" 이 "ensemble"/"historical" 보다 먼저 뽑힌다, (b) release manifest 가
-# best_predictor_key 를 recommended_env["PRICE_PREDICTION_PREFERRED_PREDICTOR"] 로 기록.
-# 여기 든 키는 두 경로 모두에서 제외된다(평가·results 리포트에는 그대로 나타난다 —
+# 가 이미 true 라 실험 플래그는 게이트가 아니고, 선호 설정이 자동으로 바뀌는 승격
+# 경로들이 있다: (a) auto 선택·리포트의 best 후보 선정 — 동점 시 키 문자열
+# 오름차순이라 "distribution" 이 "ensemble"/"historical" 보다 먼저 뽑힌다,
+# (b) release manifest 가 best_predictor_key 를
+# recommended_env["PRICE_PREDICTION_PREFERRED_PREDICTOR"] 로 기록, (c) promotion
+# gate 가 리포트 best arm 의 성적으로 pass/fail 을 판정 — 키 없는 리포트에서는
+# completed 최소 오차로 **폴백 선정**하므로 그 폴백에서도 걸러야 한다(리뷰 K4).
+# 여기 든 키는 아래 소비자 전부에서 제외된다(평가·results 리포트에는 그대로 나타난다 —
 # 비교 수치는 계속 쌓되 승격만 막는다). Phase 2 게이트를 통과하면 이 집합에서 빼는
-# 것이 승격 절차다.
+# 것이 승격 절차다. 새 승격 경로를 만들면 아래 목록에 소비자를 추가하라 — 이 목록의
+# 전수성은 주석이 아니라 리뷰가 지킨다.
 #
 # Shared by:
-#   - app/ai/predictor_backtest.py        (best 후보 eligibility 필터)
+#   - app/ai/predictor_backtest.py        (best 후보 eligibility 필터 + arm 메타 기재)
 #   - app/services/ml_release/manifest.py (recommended_env 기록 가드)
+#   - app/services/ml_release/gate.py     (게이트 metrics best arm 선정·폴백 필터)
 AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS: frozenset[str] = frozenset({"distribution"})
