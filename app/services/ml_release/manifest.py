@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from app.ai.predictors.ensemble import load_ensemble_artifact
 from app.core.config import settings
+from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
 from app.core.time import utc_now
 from app.services.ml_release.base import MLReleasePromotionRequest, _MLReleaseBase
 from app.services.ml_release.contracts import (
@@ -60,7 +61,13 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
         best_predictor_key = str(
             predictor_promotion_gate.get("best_predictor_key") or ""
         ).strip()
-        if best_predictor_key:
+        # 자동 승격 제외 키는 recommended_env 로 흘려보내지 않는다 — fresh 리포트는
+        # 상류(build_predictor_backtest_report)가 이미 거르지만, 파일로 들어오는
+        # 수제·스테일 리포트가 그 필터를 우회할 수 있어 여기가 두 번째 가드다.
+        if (
+            best_predictor_key
+            and best_predictor_key not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
+        ):
             recommended_env["PRICE_PREDICTION_PREFERRED_PREDICTOR"] = best_predictor_key
 
         manifest = {

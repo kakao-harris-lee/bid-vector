@@ -1379,3 +1379,37 @@ def test_build_preflight_check_extras_cannot_shadow_fixed_keys():
     """``status`` and friends are named parameters, so an extra cannot overwrite them."""
     with pytest.raises(TypeError):
         build_preflight_check("n", True, "passed", "d", **{"status": "spoofed"})
+
+
+def test_manifest_recommended_env_never_promotes_excluded_predictor(tmp_path):
+    """자동 승격 제외 키(distribution)는 수제·스테일 리포트로도 선호 env 에 실리지 않는다.
+
+    fresh 리포트는 build_predictor_backtest_report 가 best 후보에서 이미 거르지만,
+    manifest 는 **파일**로 리포트를 받으므로 그 필터를 우회한 best_predictor_key 가
+    들어올 수 있다 — recommended_env 기록 직전의 두 번째 가드를 고정한다.
+    """
+    repo_root = tmp_path / "repo"
+    ensemble_path = _write_ensemble_artifact(
+        repo_root / "models" / "predictors" / "ensemble" / "release-x.json"
+    )
+    backtest_report_path = _write_predictor_backtest_report(
+        repo_root / "models" / "reports" / "release-x-backtest.json",
+        best_predictor_key="distribution",
+    )
+
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-11-distribution-guard",
+            ensemble_artifact_path=str(ensemble_path),
+            predictor_backtest_report_path=str(backtest_report_path),
+        )
+    )
+
+    # 승격 차단: 선호 키가 recommended_env 에 아예 실리지 않는다(침묵 변조 아님 —
+    # 증거는 promotion_gate 에 그대로 남는다).
+    assert "PRICE_PREDICTION_PREFERRED_PREDICTOR" not in manifest["recommended_env"]
+    assert (
+        manifest["promotion_gate"]["predictor_backtest"]["best_predictor_key"]
+        == "distribution"
+    )

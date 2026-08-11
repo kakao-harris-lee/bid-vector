@@ -79,6 +79,13 @@ def load_records(
 
 
 def build_registry() -> dict[str, Any]:
+    """승격 게이트에 들어가는 리포트의 평가 대상 레지스트리.
+
+    ``distribution`` 을 **의도적으로 넣지 않는다** — 이 스크립트의 산출물은 release
+    manifest 의 promotion gate 입력이고, Phase 1 분포 엔진은 아직 승격 후보가
+    아니다(AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS). 분포 엔진의 비교·캘리브레이션은
+    ``scripts/backtest_yega_distribution.py`` 가 담당한다.
+    """
     return {
         "historical": HistoricalStatisticalPredictor(),
         "ensemble": EnsembleBidRatePredictor(),

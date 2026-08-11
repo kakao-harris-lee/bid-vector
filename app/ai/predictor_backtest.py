@@ -12,14 +12,25 @@ from app.ai.predictors.base import (
 )
 from app.ai.predictors.historical import read_record_value
 from app.core.config import settings
+from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
 from app.domain.aggregates import average
 
 
 def build_predictor_backtest_report(
     context: PricePredictionContext,
     registry: dict[str, BasePricePredictor],
+    *,
+    use_record_context: bool = False,
 ) -> dict[str, Any]:
-    """Compare runnable predictors against recent historical bid-rate holdouts."""
+    """Compare runnable predictors against recent historical bid-rate holdouts.
+
+    ``use_record_context=False`` (기본) 는 종전과 동일하게 **호출 공고의**
+    agency/category 를 전 홀드아웃 행에 전파한다 — 라이브 auto 선택("이 공고에서
+    어느 predictor 가 나은가")의 의미다. ``True`` 는 홀드아웃 행 **자신의**
+    agency/category 로 평가한다 — 오프라인 캘리브레이션("각 공고를 그 공고로서
+    예측했는가")의 의미로, 계층(agency/category) 의존 predictor 가 전역 평균으로
+    붕괴하지 않는다. 라이브 경로는 이 플래그를 켜지 않는다.
+    """
     chronological_records = _sort_historical_records(context.historical_records)
     holdout_size = min(
         max(1, int(settings.PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE or 1)),
@@ -51,13 +62,20 @@ def build_predictor_backtest_report(
             training_prefix=training_prefix,
             holdout_records=holdout_records,
             min_training_size=min_training_size,
+            use_record_context=use_record_context,
         )
         results.append(result)
 
+    # 자동 승격 제외 키는 results 에는 그대로 보고되지만 best 후보가 될 수 없다 —
+    # best_predictor_key 는 auto 선택과 manifest recommended_env 로 흘러가는 승격
+    # 경로다(선언·사유는 AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS 참조).
     eligible_results = [
         result
         for result in results
-        if result["status"] == "completed" and result["sample_count"] > 0 and result["average_absolute_error_rate"] is not None
+        if result["status"] == "completed"
+        and result["sample_count"] > 0
+        and result["average_absolute_error_rate"] is not None
+        and result["predictor_key"] not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
     ]
     best_result = min(
         eligible_results,
@@ -76,6 +94,7 @@ def build_predictor_backtest_report(
         best_result=best_result,
         base_context=context,
         min_training_size=min_training_size,
+        use_record_context=use_record_context,
     )
 
     return {
@@ -101,6 +120,7 @@ def _backtest_one_predictor(
     training_prefix: list[object],
     holdout_records: list[object],
     min_training_size: int,
+    use_record_context: bool = False,
 ) -> dict[str, Any]:
     """Evaluate one predictor across a rolling historical holdout."""
     absolute_errors: list[float] = []
@@ -121,12 +141,19 @@ def _backtest_one_predictor(
             rolling_training_records.append(holdout_record)
             continue
 
+        category = base_context.category
+        agency_name = base_context.agency_name
+        if use_record_context:
+            record_category = read_record_value(holdout_record, "category")
+            record_agency = read_record_value(holdout_record, "agency_name")
+            category = str(record_category) if record_category else category
+            agency_name = str(record_agency) if record_agency else agency_name
         evaluation_context = PricePredictionContext(
             budget=budget,
-            category=base_context.category,
+            category=category,
             description=base_context.description,
             historical_records=tuple(rolling_training_records),
-            agency_name=base_context.agency_name,
+            agency_name=agency_name,
         )
         availability = predictor.check_availability(evaluation_context)
         if not availability.available:
@@ -249,18 +276,17 @@ def _compute_by_group(
     best_result: dict[str, Any] | None,
     base_context: PricePredictionContext,
     min_training_size: int,
+    use_record_context: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    """Compute per-business-group backtest metrics using the best available predictor.
-
-    For each group, only holdout records belonging to that group are evaluated.
-    The training prefix is kept intact (all records) so predictor state is not
-    artificially impoverished. Records without a business_group are skipped.
+    """Compute per-business-group backtest metrics using the best available
+    predictor (falling back to any registry entry). Each group evaluates only its
+    own holdout records over the intact training prefix; records without a
+    business_group are skipped.
     """
     groups = _group_records_by_business_group(holdout_records)
     if not groups:
         return {}
 
-    # Prefer the best predictor; fall back to any available predictor.
     predictor_key: str | None = best_result["predictor_key"] if best_result else None
     predictor: BasePricePredictor | None = registry.get(predictor_key) if predictor_key else None
     if predictor is None and registry:
@@ -283,6 +309,7 @@ def _compute_by_group(
             training_prefix=training_prefix,
             holdout_records=group_holdout_records,
             min_training_size=min_training_size,
+            use_record_context=use_record_context,
         )
         by_group[group_name] = {
             "sample_count": result["sample_count"],
