@@ -57,6 +57,9 @@ ignore_errors = true
 # Phase 1g adds app.domain.estimate_provenance (수집 item 추정가격의 출처 판정 단일 출처 —
 # 어느 축에서 온 값인지가 곧 권위이고, 판정이 두 벌이 되면 생산자와 write 가드가 서로 다른
 # 값을 "공고 게시 추정가격"으로 본다).
+# Phase 1h adds app.domain.reserve_draw_distribution (복수예비가격 4/15 추첨 예정가 분포 —
+# 완전 열거 + seed 고정 몬테카를로 폴백) and app.domain.assessment_shrinkage (사정률 계층
+# 수축 사전분포 — 발주기관 84% 가 표본 <10 이라 pseudo-count 수축이 예측 정합성을 결정한다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -69,6 +72,8 @@ module = [
     "app.domain.floor_shortfall",
     "app.domain.published_floor_rate",
     "app.domain.estimate_provenance",
+    "app.domain.reserve_draw_distribution",
+    "app.domain.assessment_shrinkage",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
