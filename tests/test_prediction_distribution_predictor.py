@@ -106,7 +106,7 @@ def test_availability_passes_with_clean_tagged_and_untagged_rows(experimental_on
 
 
 def test_predict_maps_distribution_onto_contract_value_table(experimental_on):
-    # 중심 0.99 × 비 0.87 → 기준 사정률 ≈ 0.8613. 대칭 격자라 center == 평균.
+    # 사정률 중심 0.99 × 환산 비 0.87 → 기준 투찰율 ≈ 0.8613. 대칭 격자라 center == 평균.
     records = [_reserve_record(center=0.99, bid_to_assessment_ratio=0.87) for _ in range(12)]
     result = ReserveDrawDistributionPredictor().predict(_context(records))
 
@@ -210,7 +210,7 @@ def test_guardrail_red_line_with_bypass_mutant_proof(experimental_on, monkeypatc
 
 
 class _FixedRatePredictor(prediction_orchestration.BasePricePredictor):
-    """고정 사정률 fake — 백테스트 승격 경로 검증용 (컨텍스트 캡처 포함)."""
+    """고정 투찰율 fake — 백테스트 승격 경로 검증용 (컨텍스트 캡처 포함)."""
 
     family = "test"
 
@@ -358,3 +358,66 @@ def test_extractor_requires_exactly_fifteen_reserve_prices(experimental_on):
     )
     assert not availability.available
     assert "(got 0)" in availability.reason
+
+
+def _orm_reserve_row(*, basis: str | None, base_amount: float = 100_000_000.0):
+    """직렬화기 입력용 최소 ORM 행 — non-clean 이면 estimate(예비가 중점) 치환 대상."""
+    import json as _json
+
+    from app.models.models import HistoricalData
+
+    ratios = [0.97 + (0.04 * index / 14) for index in range(15)]
+    reserve_prices = [base_amount * ratio for ratio in ratios]
+    return HistoricalData(
+        id=1,
+        notice_number="SERIALIZER-BASIS-1",
+        category="construction",
+        agency_name="조달청",
+        base_amount=base_amount,
+        base_amount_basis=basis,
+        base_amount_estimated=(min(reserve_prices) + max(reserve_prices)) / 2,
+        predicted_price=base_amount * 0.9,
+        bid_rate=0.9,
+        reserve_prices=_json.dumps(reserve_prices),
+        selected_numbers=_json.dumps([1, 5, 10, 15]),
+    )
+
+
+def test_serializers_carry_base_amount_basis_and_filter_fires(experimental_on):
+    """K2 회귀: 두 프로덕션 직렬화기가 basis 태그를 실어야 clean 필터가 실동작한다.
+
+    태그가 빠지면 non-clean 행의 base 는 이미 base_amount_estimated(같은 예비가의
+    중점)로 치환돼 있어, 엔진이 예비가/중점(구성상 ≈1.0) 유사관측을 사정률로 소비
+    한다 — 필터가 프로덕션에서 한 번도 켜지지 않는 상태였다.
+    """
+    from app.services.backtest_cutoff import BacktestCutoffService
+    from app.services.prediction_dataset import PredictionDatasetService
+
+    non_clean = BacktestCutoffService().serialize_historical_record(
+        _orm_reserve_row(basis="derived-yega")
+    )
+    assert non_clean["base_amount_basis"] == "derived-yega"
+    # 자기참조 확인: 직렬화된 base 는 raw 가 아니라 예비가 중점 추정치다.
+    assert non_clean["base_amount"] != 100_000_000.0
+
+    dataset_row = PredictionDatasetService()._serialize_series_point(
+        _orm_reserve_row(basis="derived-yega"), tender_result=None
+    )
+    assert dataset_row is not None
+    assert dataset_row["base_amount_basis"] == "derived-yega"
+
+    # 직렬화된 non-clean 행만으로는 가용성 게이트가 거절해야 한다(필터 실동작).
+    unavailable = ReserveDrawDistributionPredictor().check_availability(
+        _context([dict(non_clean) for _ in range(10)])
+    )
+    assert not unavailable.available
+
+    # 대조군: clean 행 직렬화는 관측으로 수용된다.
+    clean = BacktestCutoffService().serialize_historical_record(
+        _orm_reserve_row(basis="clean")
+    )
+    assert clean["base_amount_basis"] == "clean"
+    available = ReserveDrawDistributionPredictor().check_availability(
+        _context([dict(clean) for _ in range(10)])
+    )
+    assert available.available

@@ -233,6 +233,11 @@ class BacktestCutoffService:
             "agency_name": record.agency_name,
             "base_amount": float(reliable_base.value or 0.0),
             "base_amount_source": reliable_base.source.value,
+            # raw 오염 태그(#199)도 함께 싣는다 — distribution predictor 의 clean 필터
+            # 입력. 안 실으면 non-clean 행의 base 가 위에서 이미 base_amount_estimated
+            # (같은 예비가의 중점)로 치환돼 있어, 엔진이 자기참조 비율(예비가/중점≈1.0)
+            # 을 사정률로 오인 소비한다(리뷰 K2).
+            "base_amount_basis": record.base_amount_basis,
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": float(record.bid_rate or 0.0),
             "reserve_prices": coerce_sequence(record.reserve_prices),

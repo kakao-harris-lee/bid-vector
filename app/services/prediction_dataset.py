@@ -481,6 +481,10 @@ class PredictionDatasetService:
             else None,
             "agency_name": record.agency_name,
             "base_amount": self._reliable_base_amount(record),
+            # raw 오염 태그(#199) — distribution predictor 의 clean 필터 입력. base 는
+            # 위에서 basis-aware 로 치환되므로, 태그 없이 실으면 non-clean 행의
+            # 자기참조 비율(예비가/중점)이 사정률 관측을 오염시킨다(리뷰 K2).
+            "base_amount_basis": record.base_amount_basis,
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": bid_rate,
             "bid_rate_source": bid_rate_source,
