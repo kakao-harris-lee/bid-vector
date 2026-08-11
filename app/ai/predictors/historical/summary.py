@@ -59,7 +59,10 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
                 estimated_price_rate = float(np.mean(picked_prices)) / base_amount
                 if 0.8 <= estimated_price_rate <= 1.2:
                     estimated_price_rates.append(estimated_price_rate)
-                    if 0.5 <= bid_rate <= 1.5:
+                    # resolve_record_bid_rate 가 0.5~1.5 밴드를 이미 강제한다 — 밴드
+                    # 밖(예: percent-스케일 오적재)은 None 이므로 여기서 비교하면
+                    # TypeError 로 죽는다(실데이터 회귀: 예비가+추첨번호가 있는 행).
+                    if bid_rate is not None:
                         bid_to_estimated_price_rates.append(bid_rate / estimated_price_rate)
 
         selected_numbers.extend(coerce_integer_list(read_record_value(record, "selected_numbers")))

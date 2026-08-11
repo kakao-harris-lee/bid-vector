@@ -452,3 +452,38 @@ def test_target_self_opening_not_implicitly_added():
     # The prefix-only reserve context strictly excludes the withheld target.
     assert prefix_summary["reserve_price_context"]["sample_count"] == 3
     assert full_summary["reserve_price_context"]["sample_count"] == 4
+
+
+def test_summarize_survives_out_of_band_bid_rate_with_reserve_pattern():
+    """회귀: 밴드 밖 bid_rate(None 해석) + 예비가·추첨번호 행에서 죽지 않아야 한다.
+
+    ``resolve_record_bid_rate`` 는 0.5~1.5 밴드 밖(percent-스케일 오적재 87.5 등)을
+    ``None`` 으로 돌려준다. 예비가격 패턴 블록이 그 ``None`` 을 float 밴드와 비교해
+    ``TypeError`` 로 죽던 실데이터 크래시의 재현이다(코어 clean 행에서 실측).
+    """
+    reserve_prices = [99_000_000.0 + (index * 200_000.0) for index in range(15)]
+    out_of_band = {
+        "bid_rate": 87.5,  # percent-스케일 오적재 → 사용 불가(None) 판정 대상
+        "base_amount": 100_000_000.0,
+        "reserve_prices": reserve_prices,
+        "selected_numbers": [1, 2, 3, 4],
+    }
+    valid = {
+        "bid_rate": 0.90,
+        "base_amount": 100_000_000.0,
+        "reserve_prices": reserve_prices,
+        "selected_numbers": [1, 2, 3, 4],
+    }
+
+    summary = summarize_historical_records((valid, out_of_band))
+
+    # 사용 불가 bid_rate 행은 표본·bid/예가 비에서 빠지고, 예비가 패턴만 남는다.
+    assert summary["sample_size"] == 1
+    reserve_context = summary["reserve_price_context"]
+    assert reserve_context["sample_count"] == 2
+    assert reserve_context["estimated_price_sample_count"] == 2
+    # bid/예가 비는 유효 행 한 건에서만 나온다: 0.90 / (선두 4개 평균 / base).
+    realized = (sum(reserve_prices[:4]) / 4) / 100_000_000.0
+    assert reserve_context["median_bid_to_estimated_price_rate"] == pytest.approx(
+        0.90 / realized, abs=1e-4
+    )
