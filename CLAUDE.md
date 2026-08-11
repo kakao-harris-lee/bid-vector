@@ -110,6 +110,8 @@ docker compose --profile tasks config --quiet
 - 도메인 로직은 `app/services/` 또는 `app/ai/`에 둡니다.
 - 모델 변경은 `app/models/models.py` + Alembic migration + 테스트를 함께 다룹니다.
 - 프론트 신규 화면은 `frontend/src/features/<area>/`에 둡니다.
+- Kotlin 전환 코드는 `service-api/`의 Gradle 도메인 모듈에 둡니다. Python ML과는
+  `contracts/`의 버전 계약으로만 연결하고 service table을 공동 write하지 않습니다.
 - UI 문구는 한국어로 작성하고 ko 단일 번들을 유지합니다.
 - 새 API는 OpenAPI/type drift를 확인합니다.
 
@@ -194,7 +196,7 @@ segments:
 - 라우터·컴포넌트는 얇게(§4). 도메인 로직은 `app/services/`·`app/ai/`(백엔드), `features/`·`shared/` 훅(프론트)으로 위임합니다.
 - 한 함수가 여러 일을 하면 단일 책임 단위로 분해해 위임합니다.
 - 무겁거나 시간제한이 있는 작업은 요청-응답 경로에서 직접 실행하지 않고 **celery task로 위임**합니다(예: defer→backfill).
-- 멀티파일·복합 작업은 적절한 빌더 서브에이전트(`backend-builder`/`frontend-builder`/`ml-builder`)로 위임합니다.
+- 멀티파일·복합 작업은 적절한 빌더 서브에이전트(`backend-builder`/`frontend-builder`/`ml-builder`/`kotlin-builder`)로 위임합니다.
 
 ### 6. 패턴 활용 (재사용 우선, 복붙 금지)
 
@@ -326,12 +328,13 @@ def _float_or_none(value):
 | `frontend-builder` | React 화면, 훅, UI 테스트 |
 | `backend-builder` | FastAPI route/schema/service/test |
 | `ml-builder` | predictor, ML training/release, 데이터셋 |
+| `kotlin-builder` | Kotlin service-api domain/application/adapter와 테스트 |
 | `api-reviewer` | API 일관성, OpenAPI drift, 테스트 누락 |
 | `ml-reviewer` | guardrail, pgvector, manifest, leakage |
 | `test-runner` | pytest/vitest/playwright 실행과 실패 triage |
 | `data-seed-runner` | synthetic seed/backtest 스크립트 실행 |
 
-ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend-builder는 ML을 노출하는 얇은 API 경계까지만 담당합니다.
+ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend-builder는 ML을 노출하는 얇은 Python API 경계까지만 담당합니다. Kotlin 전환 slice는 `kotlin-builder`가 구현하고 Codex review gate를 별도로 통과합니다.
 
 ## 6. 스킬
 
@@ -345,6 +348,7 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 - `check`: pytest + vitest + build
 - `release-preflight`: ML release preflight
 - `api-doc-pipeline`: API 문서 생성
+- `kotlin-service`: Claude 구현 → Gradle 검증 → Codex 독립 리뷰 루프
 
 ## 7. 자주 부딪히는 함정
 
@@ -384,6 +388,7 @@ ML/예측 파이프라인은 `ml-builder`/`ml-reviewer` 소유입니다. backend
 - [ ] 설계 규칙(§4.5): 매직값 없음(config/`constants.py`로 선언), 3단계+ 조건 분기 없음(룩업/FSM), 특수케이스는 데이터로 선언(config/YAML/DSL), 파일/함수 크기 한도 준수(초과 시 분해 또는 사유), 기존 패턴·헬퍼 재사용(복붙 없음), 무거운 작업은 task 경로·외부 호출은 throttle/멱등(파이프라인 유지)
 - [ ] 테스트 용이성(§4.7): 경계는 포트/인터페이스에 의존, 구현 선택은 팩토리/레지스트리, 협력자는 주입(전역 직접 호출 금지), 결정 로직은 순수 함수로 분리
 - [ ] 설계 래칫 통과: `python scripts/design_ratchet.py` 종료코드 0 (증가 시 위반을 없애는 것이 기본 대응, `--update-baseline` 은 사유를 PR 본문에 기재)
+- [ ] Kotlin 변경은 저장소 Gradle 검증과 `scripts/codex-review-kotlin.sh` 독립 리뷰 통과
 
 ## 10. 워크플로
 
@@ -403,6 +408,7 @@ main 최신화 -> 별도 worktree + feature branch 생성 -> 그 worktree에서 
 - 테스트 통과는 code review가 아니다. 머지 전에는 diff를 실제로 읽고, 발견 사항/잔여 리스크/검증 결과를 사용자에게 보고한다.
 - 사용자가 "리뷰 후 머지" 또는 "문제 없으면 머지"를 요청한 경우, 리뷰 결과를 먼저 보고하고 사용자가 머지를 승인한 뒤에만 머지한다.
 - 리뷰에서 수정이 발생하면 같은 브랜치에서 수정 커밋과 재검증을 끝낸 뒤, 다시 리뷰 결과를 보고하고 머지 승인을 받는다.
+- Kotlin service 변경은 Claude가 구현하되 Codex가 실제 Git diff를 읽기 전용으로 리뷰한다. `request_changes`면 수정·재검증·재리뷰하고, JSON 보고서를 임의 수정하지 않는다.
 - 예외는 문서 오타 1줄, 자명한 lint/format fix, 사용자의 명시적 직접 작업/직접 푸시 지시뿐입니다.
 
 권장 명령:

@@ -6,8 +6,9 @@ checklist conflicts with it, follow `CLAUDE.md`.
 
 ## Repository boundaries
 
-- Backend production code lives under `app/`, tests under `tests/`, and frontend
-  code under `frontend/src/`. Do not invent a `src/`-based Python layout.
+- Python backend production code lives under `app/`, tests under `tests/`, Kotlin
+  service code under `service-api/`, and frontend code under `frontend/src/`.
+  Do not invent a new Python layout or place Kotlin domain code under `app/`.
 - Keep FastAPI routes, Celery tasks, and React components thin. Put domain logic
   in services/domain modules and keep I/O at explicit boundaries.
 - Use typed Pydantic contracts at HTTP, task, external-response, and persisted
@@ -56,10 +57,15 @@ python scripts/design_ratchet.py
 npm --prefix frontend test
 npm --prefix frontend run build
 python scripts/sync_openapi_types.py --check
+# When service-api exists, use its committed Gradle wrapper; never global Gradle.
+./service-api/gradlew test
+scripts/codex-review-kotlin.sh --base origin/main
 ```
 
 - Run the serial full backend suite for broad or high-risk changes.
 - Run both base and server-overlay Compose config checks when task routing,
   workers, environment settings, or deployment files change.
+- Kotlin test success is not independent review. Preserve the JSON from the
+  read-only Codex review gate and address `request_changes` before merge review.
 - Never hide failures with skips, relaxed baselines, disabled signatures, or
   snapshot updates unless the behavioral change is explicitly reviewed.

@@ -502,6 +502,7 @@ G-2 exit 승인(2026-07-17)으로 이전 1~6번(G-2 증적 축적·blocking gap�
 - `docs/operations/floor-anchor-recalibration-verdict.md`: floor 앵커 base 정합 가설 검증(2026-07-27, 불지지 판정)과 candidate selector 후속 축
 - `docs/operations/candidate-selector-rederivation-verdict.md`: candidate selector 정책 재도출 판정(2026-07-28, 구 Option A 기각·P1' draft 보류)과 승격 전 잔여 게이트
 - `docs/operations/ml-ux-performance-improvement-plan.md`: ML-UX HTTP/queue/RSS 실측 기준선, 서버 재현 절차, 인라인 ML·큐 분리 개선 계획
+- `docs/design/python-kotlin-react-modularization-plan.md`: Python ML·Kotlin service·React web의 목표 경계, 적합성 판정, 단계적 전환과 rollback 게이트
 - `docs/operations/procurement-segment-improvement-notes.md`: 조달 세그먼트별 투찰가 예측 개선 축과 후속 과제
 - `docs/operations/ml-release-business-group.md`: business group별 ML release guardrail과 holdout 검증 절차
 - `docs/operations/development-notebook-tasks.md`: 개발 노트북에서 진행 가능한 남은 작업 목록
