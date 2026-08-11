@@ -400,24 +400,33 @@ def test_serializers_carry_base_amount_basis_and_filter_fires(experimental_on):
     # 자기참조 확인: 직렬화된 base 는 raw 가 아니라 예비가 중점 추정치다.
     assert non_clean["base_amount"] != 100_000_000.0
 
-    dataset_row = PredictionDatasetService()._serialize_series_point(
+    dataset_non_clean = PredictionDatasetService()._serialize_series_point(
         _orm_reserve_row(basis="derived-yega"), tender_result=None
     )
-    assert dataset_row is not None
-    assert dataset_row["base_amount_basis"] == "derived-yega"
+    assert dataset_non_clean is not None
+    assert dataset_non_clean["base_amount_basis"] == "derived-yega"
 
-    # 직렬화된 non-clean 행만으로는 가용성 게이트가 거절해야 한다(필터 실동작).
-    unavailable = ReserveDrawDistributionPredictor().check_availability(
-        _context([dict(non_clean) for _ in range(10)])
-    )
-    assert not unavailable.available
+    # 필터 발화 증명은 **두 직렬화기 출력 각각**에서 한다 — 한쪽만 증명하면 다른
+    # 경로의 키 누락 회귀를 다시 놓친다(이 버그의 원형).
+    predictor = ReserveDrawDistributionPredictor()
+    for non_clean_row in (non_clean, dataset_non_clean):
+        unavailable = predictor.check_availability(
+            _context([dict(non_clean_row) for _ in range(10)])
+        )
+        assert not unavailable.available
+        assert "(got 0)" in unavailable.reason  # 관측 0 = 필터가 전 행을 걸렀다
 
-    # 대조군: clean 행 직렬화는 관측으로 수용된다.
+    # 대조군: clean 행 직렬화는 두 경로 모두 관측으로 수용된다.
     clean = BacktestCutoffService().serialize_historical_record(
         _orm_reserve_row(basis="clean")
     )
-    assert clean["base_amount_basis"] == "clean"
-    available = ReserveDrawDistributionPredictor().check_availability(
-        _context([dict(clean) for _ in range(10)])
+    dataset_clean = PredictionDatasetService()._serialize_series_point(
+        _orm_reserve_row(basis="clean"), tender_result=None
     )
-    assert available.available
+    assert clean["base_amount_basis"] == "clean"
+    assert dataset_clean is not None and dataset_clean["base_amount_basis"] == "clean"
+    for clean_row in (clean, dataset_clean):
+        available = predictor.check_availability(
+            _context([dict(clean_row) for _ in range(10)])
+        )
+        assert available.available
