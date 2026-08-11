@@ -59,7 +59,8 @@ ignore_errors = true
 # 값을 "공고 게시 추정가격"으로 본다).
 # Phase 1h adds app.domain.reserve_draw_distribution (복수예비가격 4/15 추첨 예정가 분포 —
 # 완전 열거 + seed 고정 몬테카를로 폴백) and app.domain.assessment_shrinkage (사정률 계층
-# 수축 사전분포 — 발주기관 84% 가 표본 <10 이라 pseudo-count 수축이 예측 정합성을 결정한다).
+# 수축 사전분포 — 학습 코어 기관 91.9% 가 표본 <10 이라 pseudo-count 수축이 예측 정합성을
+# 결정한다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -75,6 +76,20 @@ module = [
     "app.domain.reserve_draw_distribution",
     "app.domain.assessment_shrinkage",
 ]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+
+# Phase 1i — app.ai.predictors.distribution_extraction (분포 predictor 의 record-free
+# 추출 산술 단일 출처: 실현 사정률·투찰율 환산 계수·계층 집계). "typed 순수 헬퍼"를
+# 선언하는 모듈이라 처음부터 strict 로 고정한다(#357·#359 에서 두 번 지적된 누락의
+# 재발 방지). app/domain 밖이지만 http_client(Phase 2a) 선례대로 별도 블록 —
+# 의존이 전부 typed(stdlib + app.domain.assessment_shrinkage)라 relaxation 없음.
+[[tool.mypy.overrides]]
+module = ["app.ai.predictors.distribution_extraction"]
 ignore_errors = false
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

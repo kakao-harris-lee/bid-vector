@@ -5,8 +5,8 @@
 
 1. 이력 행마다 게시된 복수예비가격/기초금액 비율에서 추첨 평균의 (중심, 분산)을
    닫힌식으로 얻는다 — :mod:`app.domain.reserve_draw_distribution`.
-2. 공고별 중심을 발주기관 → 공종 → 전역 3계층으로 수축한다(발주기관 84% 가 표본
-   <10 이라 점추정 불가) — :mod:`app.domain.assessment_shrinkage`.
+2. 공고별 중심을 발주기관 → 공종 → 전역 3계층으로 수축한다(학습 코어 기관 1,837곳
+   중 91.9% 가 표본 <10 이라 점추정 불가) — :mod:`app.domain.assessment_shrinkage`.
 3. 다음 공고의 예정가/기초금액 예측 분포 = 수축된 중심 분포 + 공고 내 추첨 분산.
    투찰율은 이력의 낙찰율/실현 사정률 비 중앙값을 분포 중심·구간 경계에 곱해 얻는다.
 
@@ -216,7 +216,10 @@ def _estimate_distribution(context: PricePredictionContext) -> _DistributionEsti
 
 
 def _scenario_rates(estimate: _DistributionEstimate) -> tuple[float, ...]:
-    """시나리오별 투찰율 — 분포 중심과 80% 중앙 구간 경계를 투찰율 축으로 환산."""
+    """시나리오별 투찰율 — 분포 중심과 정규근사 ±1.28σ 경계를 투찰율 축으로 환산.
+
+    실측 커버리지는 첨도 때문에 명목 80% 보다 넓다 — 캘리브레이션 리포트 참조.
+    """
     return tuple(
         clamp_bid_rate(
             estimate.bid_ratio
