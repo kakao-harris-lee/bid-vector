@@ -45,6 +45,7 @@ from app.domain.assessment_shrinkage import (
 )
 from app.domain.reserve_draw_distribution import (
     DEFAULT_DRAW_COUNT,
+    EXPECTED_RESERVE_PRICE_COUNT,
     draw_mean_moments,
 )
 from app.services.base_amount_basis import BASIS_CLEAN
@@ -61,7 +62,11 @@ from app.ai.predictors.distribution_extraction import (
 _MODEL_VERSION = "v1.0-distribution"
 _PRICING_MODE = "reserve_distribution"
 
-# 보수/공격 시나리오는 예측 분포의 80% 중앙 구간 경계(z = Φ⁻¹(0.9))에 앵커한다.
+# 보수/공격 시나리오는 예측 분포의 정규근사 ±1.28σ(z = Φ⁻¹(0.9)) 경계에 앵커한다.
+# 주의: 실측 사정률 잔차는 초과 첨도가 크다(뾰족한 중심 + 두꺼운 꼬리) — 이 구간의
+# 실측 커버리지는 명목 80% 보다 넓게 나오며, 실측값은 캘리브레이션 리포트가 단일
+# 출처다(scripts/backtest_yega_distribution.py). 두꺼운 꼬리 분포 도입은 Phase 2 로
+# 명명(사유는 PR 본문).
 _SCENARIO_INTERVAL_Z = 1.2816
 # 시나리오 라벨 → (구간 경계 부호, 후보 가중치). historical 의 배분과 동일 비율.
 _CANDIDATE_SCENARIOS: tuple[tuple[str, float, float], ...] = (
@@ -242,7 +247,10 @@ def _extract_reserve_observations(
             continue
         reserve_prices = coerce_numeric_list(read_record_value(record, "reserve_prices"))
         ratios = [price / base_amount for price in reserve_prices if price > 0]
-        if len(ratios) < DEFAULT_DRAW_COUNT:
+        # 정상 공고의 15개만 관측으로 쓴다 — 다회차 누적(30/60/100개)은 서로 다른
+        # 예비가 집합이 섞인 행이라 추첨 모형이 성립하지 않고, 부분 결측 행을 함께
+        # 버려 캘리브레이션 코어(정확히 15개)와 학습 모집단을 일치시킨다.
+        if len(ratios) != EXPECTED_RESERVE_PRICE_COUNT:
             continue
         center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
         if not ASSESSMENT_PLAUSIBLE_MIN <= center <= ASSESSMENT_PLAUSIBLE_MAX:
@@ -335,5 +343,5 @@ def _build_distribution_explanation(estimate: _DistributionEstimate) -> str:
         f"{posterior.effective_sample_count:.1f}건(기관 반영 비중 {agency_weight:.0%}). "
         f"투찰율은 과거 낙찰율/실현 사정률 비 중앙값 {estimate.bid_ratio:.4f}"
         f"({estimate.ratio_sample_count}건)를 분포 중심에 곱해 산출했고, "
-        f"보수/공격 시나리오는 80% 중앙 구간 경계입니다."
+        f"보수/공격 시나리오는 정규근사 ±1.28σ 경계입니다."
     )

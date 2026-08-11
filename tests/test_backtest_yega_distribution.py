@@ -90,3 +90,19 @@ def test_run_coverage_backtest_prior_axis_activates_after_prefix():
     assert report.prior_mean_absolute_center_error is not None
     assert report.agency_count == 1
     assert report.category_count == 1
+
+
+def test_standardized_shape_stats_value_table():
+    from scripts.backtest_yega_distribution import standardized_shape_stats
+
+    # 대칭 2점 분포: mean 0, std 1, 첨도 m4/m2²−3 = 1−3 = −2 (플랫한 꼬리).
+    assert standardized_shape_stats([-1.0, 1.0]) == (0.0, 1.0, -2.0)
+    assert standardized_shape_stats([0.5]) == (None, None, None)
+    assert standardized_shape_stats([]) == (None, None, None)
+
+
+def test_run_coverage_backtest_reports_standardized_residual_shape():
+    rows = [_Row(center=0.99 + ((index % 5) * 0.001)) for index in range(80)]
+    report = run_coverage_backtest(rows)
+    assert report.prior_standardized_residual_mean is not None
+    assert report.prior_standardized_residual_std is not None

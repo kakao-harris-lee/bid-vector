@@ -207,3 +207,154 @@ def test_guardrail_red_line_with_bypass_mutant_proof(experimental_on, monkeypatc
     mutant = predict_price(**kwargs)
     assert mutant["predicted_bid_rate"] < _LEGAL_FLOOR
     assert mutant["predicted_bid_rate"] == pytest.approx(raw.predicted_bid_rate, abs=0.005)
+
+
+class _FixedRatePredictor(prediction_orchestration.BasePricePredictor):
+    """고정 사정률 fake — 백테스트 승격 경로 검증용 (컨텍스트 캡처 포함)."""
+
+    family = "test"
+
+    def __init__(self, name: str, bid_rate: float) -> None:
+        self.name = name
+        self._bid_rate = bid_rate
+        self.contexts: list[PricePredictionContext] = []
+
+    def predict(self, context: PricePredictionContext) -> PredictionResult:
+        self.contexts.append(context)
+        rate = self._bid_rate
+        return PredictionResult(
+            predicted_price=context.budget * rate,
+            price_range_min=context.budget * (rate - 0.01),
+            price_range_max=context.budget * (rate + 0.01),
+            confidence_score=0.7,
+            model_version="fixed-v1",
+            pricing_mode="historical_blend",
+            historical_sample_size=context.historical_sample_size,
+            agency_match_sample_size=0,
+            predicted_bid_rate=rate,
+            bid_rate_candidates=[
+                {"label": "base", "bid_rate": rate, "predicted_price": context.budget * rate},
+            ],
+            reserve_price_context=None,
+            feedback_calibration=None,
+            guardrail_applied=False,
+            guardrail_reason=None,
+            floor_bid_rate=None,
+            floor_price=None,
+            explanation="fixed-rate probe",
+        )
+
+
+def _bid_rate_history(count: int) -> list[dict]:
+    return [
+        {
+            "bid_rate": 0.91,
+            "base_amount": _BASE_AMOUNT,
+            "predicted_price": _BASE_AMOUNT * 0.91,
+            "agency_name": f"기관{index}",
+            "category": "construction" if index % 2 == 0 else "service",
+        }
+        for index in range(count)
+    ]
+
+
+def test_distribution_is_excluded_from_backtest_best_candidate(monkeypatch):
+    """정확도가 더 좋아도 distribution 은 best 후보가 될 수 없다(자동 승격 차단).
+
+    best_predictor_key 는 auto 선택과 manifest recommended_env 로 흘러가는 승격
+    경로다. 결과(results)에는 그대로 평가·보고되어야 비교 수치는 계속 쌓인다.
+    """
+    from app.ai.predictor_backtest import build_predictor_backtest_report
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE", 5)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES", 5)
+    context = PricePredictionContext(
+        budget=_BASE_AMOUNT,
+        category="construction",
+        description="승격 제외 검증",
+        historical_records=tuple(_bid_rate_history(12)),
+    )
+
+    report = build_predictor_backtest_report(
+        context,
+        {
+            "distribution": _FixedRatePredictor("dist_probe", 0.91),
+            "historical": _FixedRatePredictor("hist_probe", 0.95),
+        },
+    )
+
+    by_key = {result["predictor_key"]: result for result in report["results"]}
+    assert by_key["distribution"]["status"] == "completed"
+    # 제외가 '우연히 진 것'이 아님을 증명: distribution 오차가 명백히 더 작다.
+    assert (
+        by_key["distribution"]["average_absolute_error_rate"]
+        < by_key["historical"]["average_absolute_error_rate"]
+    )
+    assert report["best_predictor_key"] == "historical"
+
+
+def test_auto_selector_never_promotes_distribution(monkeypatch):
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "auto")
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE", 5)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES", 5)
+
+    prediction = predict_price(
+        budget=_BASE_AMOUNT,
+        category="construction",
+        description="auto 승격 차단 검증",
+        historical_records=_bid_rate_history(12),
+        predictor_registry={
+            "distribution": _FixedRatePredictor("dist_probe", 0.91),
+            "historical": _FixedRatePredictor("hist_probe", 0.95),
+        },
+    )
+
+    assert prediction["predictor_name"] == "hist_probe"
+    assert prediction["backtest_report"]["best_predictor_key"] == "historical"
+
+
+def test_backtest_record_context_optin_carries_per_row_agency_category(monkeypatch):
+    """use_record_context=True 는 홀드아웃 행 자신의 기관·공종으로 평가한다.
+
+    기본(False)은 종전과 같이 호출 공고의 값을 전파한다 — 라이브 auto 경로 불변.
+    """
+    from app.ai.predictor_backtest import build_predictor_backtest_report
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE", 3)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES", 5)
+    records = _bid_rate_history(9)
+    context = PricePredictionContext(
+        budget=_BASE_AMOUNT,
+        category="all",
+        description="행별 컨텍스트 검증",
+        historical_records=tuple(records),
+        agency_name=None,
+    )
+
+    per_row = _FixedRatePredictor("per_row", 0.91)
+    build_predictor_backtest_report(context, {"probe": per_row}, use_record_context=True)
+    assert [captured.agency_name for captured in per_row.contexts] == [
+        record["agency_name"] for record in records[-3:]
+    ]
+    assert [captured.category for captured in per_row.contexts] == [
+        record["category"] for record in records[-3:]
+    ]
+
+    propagated = _FixedRatePredictor("propagated", 0.91)
+    build_predictor_backtest_report(context, {"probe": propagated})
+    assert {captured.agency_name for captured in propagated.contexts} == {None}
+    assert {captured.category for captured in propagated.contexts} == {"all"}
+
+
+def test_extractor_requires_exactly_fifteen_reserve_prices(experimental_on):
+    """다회차 누적(30개)·부분 결측(14개) 행은 관측에서 제외 — 캘리브레이션 코어와 정합."""
+    incomplete = _reserve_record()
+    incomplete["reserve_prices"] = incomplete["reserve_prices"][:14]
+    accumulated = _reserve_record()
+    accumulated["reserve_prices"] = accumulated["reserve_prices"] * 2  # 30개
+
+    availability = ReserveDrawDistributionPredictor().check_availability(
+        _context([incomplete, accumulated] * 5)
+    )
+    assert not availability.available
+    assert "(got 0)" in availability.reason

@@ -90,6 +90,12 @@ class PitSummary(BaseModel):
 class CoverageReport(BaseModel):
     prior_predictive: PitSummary
     prior_mean_absolute_center_error: float | None
+    # 표준화 잔차 z = (실현 − 사후중심)/예측std 의 모양 진단. 균등 PIT 이면
+    # mean 0 / std 1 / 초과 첨도 0 — mean ≠ 0 은 계통 편향, 첨도 ≫ 0 은 정규근사가
+    # 서술 못 하는 뾰족한 중심 + 두꺼운 꼬리(과커버의 실제 원인)다.
+    prior_standardized_residual_mean: float | None
+    prior_standardized_residual_std: float | None
+    prior_excess_kurtosis: float | None
     mechanism_exact_draw: PitSummary
     skipped_no_selected_numbers: int
     agency_count: int
@@ -122,7 +128,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--category", default="", help="Optional category filter.")
     parser.add_argument("--start-date", help="opened_at/created_at window start.")
     parser.add_argument("--end-date", help="opened_at/created_at window end.")
-    parser.add_argument("--limit", type=int, default=8000, help="Maximum core rows loaded.")
+    parser.add_argument(
+        "--limit", type=int, default=8000,
+        help=(
+            "Maximum core rows loaded. 정렬이 오래된 순이라 코어가 limit 보다 크면 "
+            "가장 오래된 행부터 잡힌다 — 최근 구간을 보려면 --start-date 를 함께 써라."
+        ),
+    )
     parser.add_argument(
         "--holdout-size", type=int, default=200,
         help="Rolling point-error holdout rows (build_predictor_backtest_report).",
@@ -260,6 +272,24 @@ def summarize_pit(pit_values: list[float]) -> PitSummary:
     )
 
 
+def standardized_shape_stats(
+    values: list[float],
+) -> tuple[float | None, float | None, float | None]:
+    """표준화 잔차의 (mean, std, 초과 첨도) — 정규근사 모양 진단(균등이면 0/1/0)."""
+    if len(values) < 2:
+        return None, None, None
+    mean_value = fmean(values)
+    second_moment = pvariance(values)
+    if second_moment <= 0:
+        return round(mean_value, 4), 0.0, None
+    fourth_moment = fmean([(value - mean_value) ** 4 for value in values])
+    return (
+        round(mean_value, 4),
+        round(sqrt(second_moment), 4),
+        round((fourth_moment / (second_moment**2)) - 3.0, 2),
+    )
+
+
 class _CoverageAccumulator:
     """시간순 단일 패스 상태 — 평가는 항상 프리픽스 편입 **전**(시간 누수 차단)."""
 
@@ -271,12 +301,17 @@ class _CoverageAccumulator:
         self.prior_pit: list[float] = []
         self.mechanism_pit: list[float] = []
         self.prior_absolute_errors: list[float] = []
+        self.prior_standardized_residuals: list[float] = []
         self.skipped_no_pick = 0
 
     def prior_pit_for(
-        self, *, realized: float, agency_key: str, category_key: str, draw_variance: float
+        self, *, realized: float, agency_key: str, category_key: str
     ) -> None:
-        """개찰 전 정보(선행 이력)만으로 만든 예측분포에서 실현 사정률의 PIT."""
+        """개찰 전 정보(선행 이력)만으로 만든 예측분포에서 실현 사정률의 PIT.
+
+        추첨 분산은 평가 대상 행 자신의 값이 아니라 **프리픽스 평균**
+        (``draw_variance_level.mean``)만 쓴다 — 자기 행 값을 쓰면 누수다.
+        """
         agency_level = self.agency_levels.get(agency_key)
         category_level = self.category_levels.get(category_key)
         global_observation = self.global_level.observation()
@@ -294,6 +329,10 @@ class _CoverageAccumulator:
             normal_cdf(realized, mean=posterior.mean, std=predictive_std)
         )
         self.prior_absolute_errors.append(abs(posterior.mean - realized))
+        if predictive_std > 0:
+            self.prior_standardized_residuals.append(
+                (realized - posterior.mean) / predictive_std
+            )
 
     def absorb(
         self, *, center: float, draw_variance: float, agency_key: str, category_key: str
@@ -330,7 +369,6 @@ def run_coverage_backtest(rows: list[HistoricalData]) -> CoverageReport:
                     realized=realized,
                     agency_key=agency_key,
                     category_key=category_key,
-                    draw_variance=draw_std**2,
                 )
         state.absorb(
             center=center,
@@ -339,6 +377,9 @@ def run_coverage_backtest(rows: list[HistoricalData]) -> CoverageReport:
             category_key=category_key,
         )
 
+    residual_mean, residual_std, excess_kurtosis = standardized_shape_stats(
+        state.prior_standardized_residuals
+    )
     return CoverageReport(
         prior_predictive=summarize_pit(state.prior_pit),
         prior_mean_absolute_center_error=(
@@ -346,6 +387,9 @@ def run_coverage_backtest(rows: list[HistoricalData]) -> CoverageReport:
             if state.prior_absolute_errors
             else None
         ),
+        prior_standardized_residual_mean=residual_mean,
+        prior_standardized_residual_std=residual_std,
+        prior_excess_kurtosis=excess_kurtosis,
         mechanism_exact_draw=summarize_pit(state.mechanism_pit),
         skipped_no_selected_numbers=state.skipped_no_pick,
         agency_count=len(state.agency_levels),
@@ -378,8 +422,11 @@ def build_report(rows: list[HistoricalData], *, category: str) -> HoldoutReport:
         min_training_samples=int(settings.PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES),
         min_prior_rows_for_coverage=MIN_PRIOR_ROWS_FOR_COVERAGE,
         coverage=run_coverage_backtest(rows),
+        # use_record_context=True: 홀드아웃 각 행을 **그 행의** 기관·공종으로 평가한다.
+        # 이것을 끄면 계층 predictor 의 agency/category 관측이 비어 사후분포가 전역
+        # 평균으로 붕괴하고, 비교는 "전역 평균 모델 vs historical"이 된다(리뷰 J2).
         point_error=build_predictor_backtest_report(
-            context, build_point_error_registry()
+            context, build_point_error_registry(), use_record_context=True
         ),
     )
 

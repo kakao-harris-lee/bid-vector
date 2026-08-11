@@ -169,7 +169,9 @@ def draw_mean_moments(
     validated = _validated_values(values, draw_count)
     population_size = len(validated)
     mean_value = fmean(validated)
-    if population_size == draw_count or population_size == 1:
+    # n == k(전부 추첨)면 분산 0. n == 1 단독 케이스는 k >= 1, n >= k 검증에 의해
+    # n == k 에 포섭되므로 별도 분기가 성립하지 않는다.
+    if population_size == draw_count:
         return mean_value, 0.0
     variance = (pvariance(validated) / draw_count) * (
         (population_size - draw_count) / (population_size - 1)

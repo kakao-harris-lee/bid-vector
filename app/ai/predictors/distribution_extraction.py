@@ -50,7 +50,18 @@ def realized_assessment_ratio(
 def bid_to_assessment_ratio(
     bid_rate: float | None, realized_assessment: float | None
 ) -> float | None:
-    """낙찰율/실현 사정률 비 — 예정가 분포를 투찰율 축으로 환산하는 계수."""
+    """저장 낙찰율/실현 사정률 비 — 예정가 분포를 투찰율 축으로 환산하는 계수.
+
+    basis 혼재 주의(summary.py 에서 상속한 선재 이슈): ``HistoricalData.bid_rate``
+    는 두 basis 로 저장돼 있다 — 기초금액 확보 행은 win/기초금액, 미확보 행은
+    KONEPS ``sucsfbidRate`` = win/예정가 (services/koneps/scsbid.py). 코어 실측
+    (2026-08-11, n=6,009): base-relative 48% / 예정가-relative 52%. 이 비는
+    base-relative 행에서만 "bid/예정가"로 차원이 정확하고, 예정가-relative 행에서는
+    win·base/예정가² 이 된다. 소비는 **중앙값**이라 혼재 영향은 실측 +0.021%p 로
+    미미하지만, 라벨 정합(재캘리브레이션 트랙) 전까지 이 계수는 근사다. 이 변환
+    축은 분포 캘리브레이션(PIT)으로는 검증되지 않고 점추정 오차 축으로만 커버된다
+    — 한계는 캘리브레이션 리포트·PR 본문에 공시한다.
+    """
     if bid_rate is None or realized_assessment is None:
         return None
     ratio = bid_rate / realized_assessment
