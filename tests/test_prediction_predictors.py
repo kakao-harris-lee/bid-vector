@@ -899,3 +899,65 @@ def test_backtest_report_includes_by_group_dimension(monkeypatch):
     assert "average_absolute_error_rate" in construction or "mae" in construction, (
         "group entry must have error metric"
     )
+
+
+def _distribution_reserve_rows(count: int, *, category: str = "software") -> list[HistoricalData]:
+    """distribution predictor 가용성(예비가 15개 + 추첨번호 + 낙찰율)을 만족하는 ORM 행."""
+    base_amount = 130_000_000.0
+    ratios = [0.97 + (0.04 * index / 14) for index in range(15)]
+    reserve_prices = [base_amount * ratio for ratio in ratios]
+    realized = (reserve_prices[0] + reserve_prices[4] + reserve_prices[9] + reserve_prices[14]) / (
+        4 * base_amount
+    )
+    return [
+        HistoricalData(
+            notice_number=f"DIST-ROUTE-{index}",
+            category=category,
+            base_amount=base_amount,
+            predicted_price=base_amount * 0.9,
+            bid_rate=round(0.87 * realized, 6),
+            reserve_prices=json.dumps(reserve_prices),
+            selected_numbers=json.dumps([1, 5, 10, 15]),
+        )
+        for index in range(count)
+    ]
+
+
+def test_price_prediction_endpoint_serves_distribution_payload(client, test_db, monkeypatch):
+    """K1 회귀: distribution 선호를 켰을 때 응답 모델(pricing_mode Literal)을 통과해야 한다.
+
+    predict_price() dict 계약 테스트만으로는 라우트의 ResponseValidationError(500)를
+    못 본다 — 실제 엔드포인트로 왕복해 라우트 경계를 고정한다.
+    """
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "distribution")
+
+    project_response = client.post(
+        "/api/v1/projects/",
+        json={
+            "title": "Distribution Route Project",
+            "description": "distribution route boundary test",
+            "requirements": "Need distribution payload",
+            "budget_estimate": 130000000.0,
+            "category": "software",
+        },
+    )
+    project_id = project_response.json()["id"]
+    test_db.add_all(_distribution_reserve_rows(10))
+    test_db.commit()
+
+    response = client.post(
+        "/api/v1/predictions/price",
+        json={
+            "project_id": project_id,
+            "budget_estimate": 130000000.0,
+            "category": "software",
+            "description": "distribution route boundary test",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pricing_mode"] == "reserve_distribution"
+    assert data["predictor_name"] == "reserve_draw_distribution"
+    assert data["predictor_family"] == "distribution"
