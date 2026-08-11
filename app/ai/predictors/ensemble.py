@@ -10,7 +10,6 @@ import numpy as np
 from app.ai.predictors.artifact_contracts import (
     ArtifactSource,
     ArtifactScalar,
-    NormalizedLSTMArtifact,
     PersistedEnsembleArtifact,
     VersionAwareArtifactProvider,
     read_persisted_artifact,
@@ -27,21 +26,40 @@ from app.ai.predictors.historical import (
     apply_procurement_candidate_band,
     apply_procurement_rate_band,
     clamp_bid_rate,
+    extract_bid_rate_series,
     resolve_procurement_rate_band,
     summarize_historical_records,
 )
-from app.ai.predictors.lstm import extract_bid_rate_series, infer_lstm_sequence_signal, load_lstm_artifact
 from app.ai.predictors.rate_band_spec import band_explanation_clause
 from app.core.config import settings
 
 # 아티팩트 로딩 실패 문구의 주어(단일 출처 — 기존 오류 메시지를 그대로 유지한다).
 _ENSEMBLE_ARTIFACT_LABEL = "Ensemble model artifact"
 
-_DEFAULT_COMPONENT_WEIGHTS = {
+# sequence-model(lstm) 축은 은퇴했다(2026-08-09). 남은 세 축의 **상대 비율**은 종전과
+# 같으므로 그 비율을 그대로 선언하고(추적 가능성), 선언 상수는 합 1 의 확률 벡터로
+# 파생한다.
+#
+# 이 상수의 역할 범위: **서빙측 fallback 기본값**이다 — 아티팩트가 ``component_weights`` 를
+# 싣지 않았을 때만 쓰인다(아티팩트에 *기록*되는 값은 ``ml_training/constants.py`` 소관).
+# 비율(합 0.85)을 그대로 두면 선언값이 확률 벡터가 아니게 되어, 이 기본값을 읽는 사람이
+# "나머지 15%는 어디 갔나"로 오해한다.
+#
+# 산출 불변 근거: 나눗셈 결과가 float 상 정확히 합 1 이고 재정규화에 멱등이라, 호출부의
+# ``_normalize_*`` 를 한 번 더 통과해도 값이 움직이지 않는다. 이를 고정하는 것은 ensemble
+# 골든이 **아니다** — 골든 아티팩트는 명시 ``component_weights`` 를 실어 이 기본값 경로에
+# 도달하지 않는다. 실제 pin 은
+# ``test_ensemble_artifact_non_mapping_blocks_fall_back_to_defaults`` (비매핑 →
+# 기본값 폴백 시 0.52/0.18/0.15 ÷ 0.85 를 단언)와
+# ``test_declared_weights_are_idempotent_under_renormalization`` 이다.
+_COMPONENT_WEIGHT_RATIOS = {
     "historical": 0.52,
     "momentum": 0.18,
     "mean_reversion": 0.15,
-    "lstm": 0.15,
+}
+_DEFAULT_COMPONENT_WEIGHTS = {
+    key: ratio / sum(_COMPONENT_WEIGHT_RATIOS.values())
+    for key, ratio in _COMPONENT_WEIGHT_RATIOS.items()
 }
 
 # --- Scenario-spread / candidate constants (moved verbatim from the inline
@@ -85,9 +103,6 @@ class NormalizedEnsembleArtifact(TypedDict):
     scenario_spread_multiplier: float
     confidence_bias: float
     component_weights: dict[str, float]
-    lstm_artifact: dict[str, Any] | None
-    _loaded_lstm_artifact: NormalizedLSTMArtifact | None
-    lstm_artifact_path: str | None
 
 
 class EnsembleBidRatePredictor(BasePricePredictor):
@@ -146,7 +161,6 @@ def _load_ensemble_artifact_uncached(
     raw_artifact = read_persisted_artifact(
         model_source, model=PersistedEnsembleArtifact, label=_ENSEMBLE_ARTIFACT_LABEL
     )
-    embedded_lstm_artifact = raw_artifact.lstm_artifact
 
     return {
         "artifact_version": str(raw_artifact.artifact_version or "1"),
@@ -156,15 +170,6 @@ def _load_ensemble_artifact_uncached(
         "scenario_spread_multiplier": max(float(raw_artifact.scenario_spread_multiplier or 1.0), 0.2),
         "confidence_bias": float(raw_artifact.confidence_bias or 0.0),
         "component_weights": _normalize_component_weights(raw_artifact.component_weights),
-        # Preserve the raw mapping for release-manifest metadata while also
-        # normalizing it once with the containing immutable ensemble version.
-        "lstm_artifact": embedded_lstm_artifact,
-        "_loaded_lstm_artifact": (
-            load_lstm_artifact(embedded_lstm_artifact)
-            if isinstance(embedded_lstm_artifact, dict)
-            else None
-        ),
-        "lstm_artifact_path": str(raw_artifact.lstm_artifact_path or "").strip() or None,
     }
 
 
@@ -212,10 +217,6 @@ def build_ensemble_prediction_payload(
             anchor=historical_rate,
         ),
     }
-    lstm_component = _load_optional_lstm_component(context, artifact=artifact)
-    if lstm_component is not None:
-        components["lstm"] = float(lstm_component["blended_rate"])
-
     component_weights = _normalize_available_weights(
         artifact["component_weights"],
         available_keys=components.keys(),
@@ -318,25 +319,6 @@ def build_ensemble_prediction_payload(
             high_rate_adjustment=high_rate_adjustment,
         ),
     }
-
-
-def _load_optional_lstm_component(context: PricePredictionContext, *, artifact: dict[str, Any]) -> dict[str, Any] | None:
-    """Load an optional embedded/configured LSTM artifact for the ensemble."""
-    loaded_lstm_artifact = artifact.get("_loaded_lstm_artifact")
-    raw_lstm_artifact = artifact.get("lstm_artifact")
-    configured_lstm_path = artifact.get("lstm_artifact_path") or str(settings.PRICE_PREDICTION_LSTM_MODEL_PATH or "").strip()
-
-    if isinstance(loaded_lstm_artifact, dict):
-        return infer_lstm_sequence_signal(context, artifact=loaded_lstm_artifact)
-
-    if isinstance(raw_lstm_artifact, dict):
-        lstm_artifact = load_lstm_artifact(raw_lstm_artifact)
-        return infer_lstm_sequence_signal(context, artifact=lstm_artifact)
-
-    if configured_lstm_path and Path(configured_lstm_path).exists():
-        lstm_artifact = load_lstm_artifact(configured_lstm_path)
-        return infer_lstm_sequence_signal(context, artifact=lstm_artifact)
-    return None
 
 
 def _estimate_momentum_rate(sequence_rates: list[float], *, window_size: int) -> float:

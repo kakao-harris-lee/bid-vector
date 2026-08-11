@@ -97,11 +97,9 @@ CLONE_ALLOWLIST: dict[str, str] = {
         "금액 basis 도메인 — 두 함수의 basis 의미가 동일함을 증명하기 전에 합치면"
         " 예정가/기초금액 혼동을 코드에 굳힌다."
     ),
-    "app/ai/predictors/registry.py:build_default_predictor_registry"
-    "|scripts/backtest_price_predictors.py:build_registry": (
-        "CLAUDE.md §4.7-2 팩토리/레지스트리 — 스크립트가 축소 레지스트리를 주입하는"
-        " 테스트 격리 seam 이라 통합하면 격리가 사라진다."
-    ),
+    # (은퇴) registry.build_default_predictor_registry | backtest_price_predictors.build_registry
+    # — lstm predictor 은퇴로 두 레지스트리가 2개 항목으로 줄어 클론 판정에서 벗어났다.
+    #   면제가 더 이상 필요 없으므로 등재를 지운다(죽은 항목은 게이트가 실패시킨다).
 }
 
 _FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef

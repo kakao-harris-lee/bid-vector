@@ -67,6 +67,53 @@ def clamp_bid_rate(value: float) -> float:
     return max(0.7, min(1.4, float(value)))
 
 
+def extract_bid_rate_series(historical_records: tuple[object, ...]) -> list[float]:
+    """Extract a time-ordered bid-rate series from ORM rows or dictionaries.
+
+    Rows without a usable ``opened_at``/``created_at`` cannot be ordered, so a
+    partially dated batch falls back to insertion order rather than mixing the
+    two orderings.
+    """
+    sequence_points: list[tuple[str, int, float]] = []
+    fallback_sequence: list[float] = []
+    for index, record in enumerate(historical_records):
+        # 시퀀스는 6dp 로 양자화한다(summary 는 반올림하지 않는다 — 그 차이가 digits).
+        bid_rate = resolve_record_bid_rate(record, digits=6)
+        if bid_rate is None:
+            continue
+        fallback_sequence.append(bid_rate)
+        opened_at = read_record_value(record, "opened_at") or read_record_value(record, "created_at")
+        if opened_at is not None:
+            sortable_key = opened_at.isoformat() if hasattr(opened_at, "isoformat") else str(opened_at)
+            sequence_points.append((sortable_key, index, bid_rate))
+
+    if sequence_points and len(sequence_points) == len(fallback_sequence):
+        sequence_points.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in sequence_points]
+    return fallback_sequence
+
+
+def resolve_record_bid_rate(record: object, *, digits: int | None = None) -> float | None:
+    """이력 행에서 쓸 수 있는 사정률을 읽는 **단일 출처** (§4.5-8).
+
+    규칙: ``bid_rate`` 를 읽고, 없거나 0 이하면 ``predicted_price / base_amount`` 로
+    역산하며, ``0.5~1.5`` 밴드를 벗어나면 사용 불가(``None``)로 본다.
+
+    이 규칙은 원래 두 벌이었다(``statistics`` 의 시퀀스 추출과 ``summary`` 의 인라인
+    루프). 상수도 분기도 같고 **6dp 반올림 유무만** 달랐는데, 두 벌이면 밴드 경계나
+    역산 조건을 한쪽만 고치는 사고가 난다. 그 차이는 ``digits`` 로 파라미터화한다.
+    """
+    bid_rate = float(read_record_value(record, "bid_rate") or 0.0)
+    if bid_rate <= 0:
+        predicted_price = float(read_record_value(record, "predicted_price") or 0.0)
+        base_amount = float(read_record_value(record, "base_amount") or 0.0)
+        if predicted_price > 0 and base_amount > 0:
+            bid_rate = predicted_price / base_amount
+    if not 0.5 <= bid_rate <= 1.5:
+        return None
+    return float(bid_rate) if digits is None else round(float(bid_rate), digits)
+
+
 def get_t_critical(degrees_of_freedom: int) -> float:
     """Return an approximate 95% t critical value without requiring SciPy."""
     if degrees_of_freedom <= 1:

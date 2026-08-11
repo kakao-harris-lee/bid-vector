@@ -12,7 +12,11 @@ from app.services.base_amount_basis import BASIS_CLEAN
 from app.services.ml_release.artifact_integrity import (
     resolve_artifact_integrity_verdict,
 )
-from app.services.ml_release.base import _MLReleaseBase, build_preflight_check
+from app.services.ml_release.base import (
+    MANIFEST_PREDICTOR_KEYS,
+    _MLReleaseBase,
+    build_preflight_check,
+)
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
     is_json_decode_error,
@@ -294,7 +298,7 @@ class _PreflightMixin(_MLReleaseBase):
         predictors = artifacts.get("predictors")
         predictors = predictors if isinstance(predictors, dict) else {}
         has_predictor = any(isinstance(predictors.get(key), dict)
-                            for key in ("lstm", "ensemble"))
+                            for key in MANIFEST_PREDICTOR_KEYS)
         if not has_predictor:
             return MLReleaseJsonDocument(root=build_preflight_check(
                 "production_predictor_backtest",

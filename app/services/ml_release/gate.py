@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.services.ml_release.base import _MLReleaseBase
+from app.services.ml_release.base import MANIFEST_PREDICTOR_KEYS, _MLReleaseBase
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
     is_json_decode_error,
@@ -367,7 +367,7 @@ class _PromotionGateMixin(_MLReleaseBase):
         has_predictor_artifact = False
         if isinstance(predictors, dict):
             has_predictor_artifact = any(
-                isinstance(predictors.get(key), dict) for key in ("lstm", "ensemble")
+                isinstance(predictors.get(key), dict) for key in MANIFEST_PREDICTOR_KEYS
             )
         return self._build_predictor_promotion_gate(
             None, has_predictor_artifact=has_predictor_artifact

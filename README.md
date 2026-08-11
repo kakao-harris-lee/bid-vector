@@ -10,7 +10,7 @@
 
 - KONEPS 공고/개찰 결과 수집: OpenAPI 우선, 라이브 크롤 fallback
 - 공고 분류/매칭: 업체 프로필, 면허, 지역, 예산, 시공능력, 임베딩 유사도 기반
-- 가격 예측: historical / LSTM artifact / ensemble predictor + guardrail
+- 가격 예측: historical / ensemble predictor + guardrail (sequence-model predictor 는 2026-08-09 은퇴)
 - 의사결정: `bid_now`, `review`, `skip` 판단과 근거 영속화
 - 알림: Telegram 버튼, `/strategy` 편집, 웹 알림, WebSocket realtime
 - 검증: paper bidding, synthetic operator backtest, synthetic experiment lab, 운영 smoke run 저장

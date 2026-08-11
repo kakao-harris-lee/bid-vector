@@ -305,7 +305,7 @@ def _float_or_none(value):
 ### 2. 팩토리·레지스트리 (생성은 한 곳, 선택은 데이터로)
 
 - 구현 선택은 `if/elif`가 아니라 **문자열 키 → 구현 레지스트리(팩토리)**로 합니다(§4.5의 1·2와 같은 축).
-- 실재: `app/ai/predictors/registry.py`의 `build_default_predictor_registry() -> dict[str, BasePricePredictor]`(키 `"historical"`/`"lstm"`/`"ensemble"`), `normalize_predictor_registry(registry)`는 **주입된 레지스트리**를 받아 fallback을 보강합니다.
+- 실재: `app/ai/predictors/registry.py`의 `build_default_predictor_registry() -> dict[str, BasePricePredictor]`(키 `"historical"`/`"ensemble"` — `"lstm"`은 2026-08-09 은퇴), `normalize_predictor_registry(registry)`는 **주입된 레지스트리**를 받아 fallback을 보강합니다.
 - 효과: 새 구현 추가 = 레지스트리에 한 줄. 테스트·백테스트는 축소된 레지스트리를 주입해 특정 구현만 격리 검증합니다.
 
 ### 3. 의존성 주입 (숨은 전역 대신 인자로)

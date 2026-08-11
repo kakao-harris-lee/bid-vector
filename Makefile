@@ -122,7 +122,7 @@ production-smoke:
 	python scripts/production_smoke_test.py --base-url "$(SMOKE_BASE_URL)" $(if $(filter true,$(SMOKE_WRITE)),--write) $(if $(SMOKE_EVIDENCE),--evidence-out "$(SMOKE_EVIDENCE)")
 
 ml-release-manifest:
-	python scripts/promote_ml_release.py create-manifest --release-tag "$(RELEASE_TAG)" --embedding-model-path "$(EMBEDDING_MODEL_PATH)" --lstm-artifact-path "$(LSTM_ARTIFACT_PATH)" --ensemble-artifact-path "$(ENSEMBLE_ARTIFACT_PATH)" --git-sha "$(GIT_SHA)" --notes "$(NOTES)" --rebuild-limit $(REBUILD_LIMIT) --rebuild-offset $(REBUILD_OFFSET) --category "$(REBUILD_CATEGORY)" --project-status "$(REBUILD_PROJECT_STATUS)" $(if $(filter true,$(PUBLISH_REMOTE)),--publish-remote)
+	python scripts/promote_ml_release.py create-manifest --release-tag "$(RELEASE_TAG)" --embedding-model-path "$(EMBEDDING_MODEL_PATH)" --ensemble-artifact-path "$(ENSEMBLE_ARTIFACT_PATH)" --git-sha "$(GIT_SHA)" --notes "$(NOTES)" --rebuild-limit $(REBUILD_LIMIT) --rebuild-offset $(REBUILD_OFFSET) --category "$(REBUILD_CATEGORY)" --project-status "$(REBUILD_PROJECT_STATUS)" $(if $(filter true,$(PUBLISH_REMOTE)),--publish-remote)
 
 ml-release-preflight:
 	python scripts/promote_ml_release.py preflight-rollout --manifest "$(MANIFEST_REF)" $(if $(filter true,$(REQUIRE_SIGNATURE)),--require-signature) $(if $(filter false,$(WRITE_PROBE)),--no-write-probe)

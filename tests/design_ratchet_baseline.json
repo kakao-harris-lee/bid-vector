@@ -42,7 +42,7 @@
     "app/ai/predictors/ensemble.py": {
       "functions_over_soft_limit": 1,
       "functions_over_hard_limit": 1,
-      "dict_boundary_functions": 3
+      "dict_boundary_functions": 2
     },
     "app/ai/predictors/historical/__init__.py": {
       "functions_over_soft_limit": 2,
@@ -62,15 +62,11 @@
       "dict_boundary_functions": 3
     },
     "app/ai/predictors/historical/statistics.py": {
-      "dict_boundary_functions": 3
+      "dict_boundary_functions": 5
     },
     "app/ai/predictors/historical/summary.py": {
       "functions_over_soft_limit": 1,
       "dict_boundary_functions": 1
-    },
-    "app/ai/predictors/lstm.py": {
-      "functions_over_soft_limit": 1,
-      "dict_boundary_functions": 8
     },
     "app/ai/price_prediction/feedback.py": {
       "dict_boundary_functions": 1
@@ -432,9 +428,8 @@
     },
     "app/services/ml_release/manifest.py": {
       "functions_over_soft_limit": 2,
-      "functions_over_hard_limit": 1,
       "json_direct_calls": 1,
-      "dict_boundary_functions": 9,
+      "dict_boundary_functions": 8,
       "env_test_sniff": 1
     },
     "app/services/ml_release/preflight.py": {
@@ -460,7 +455,7 @@
     },
     "app/services/ml_training/artifacts.py": {
       "json_direct_calls": 2,
-      "dict_boundary_functions": 4
+      "dict_boundary_functions": 3
     },
     "app/services/ml_training/calibration.py": {
       "functions_over_soft_limit": 2,
@@ -468,8 +463,7 @@
     },
     "app/services/ml_training/comparison.py": {
       "functions_over_soft_limit": 2,
-      "functions_over_hard_limit": 1,
-      "dict_boundary_functions": 6
+      "dict_boundary_functions": 5
     },
     "app/services/ml_training/dataset_quality.py": {
       "functions_over_soft_limit": 1,

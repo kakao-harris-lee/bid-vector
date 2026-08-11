@@ -14,11 +14,9 @@
   ``str(raw.get(k) or default)`` / ``int(... or default)`` / ``float(... or default)`` 로
   **문자열로 저장된 숫자까지 관용적으로 강제 변환**했기 때문이다. 그 강제 변환식은 호출부에
   그대로 남기고(산출 불변), 이 모델은 "필드가 스칼라다"까지만 보장한다.
-* 가중치/텐서는 :data:`~pydantic.JsonValue` 로 받는다. 종전처럼 ``np.asarray(..., float)``
-  가 모양·형변환을 판정하므로(1D→2D reshape 포함) 여기서 모양을 다시 규정하지 않는다.
-* ``weights``/``blend_weights``/``component_weights``/``lstm_artifact`` 는 종전
-  ``isinstance(x, dict)`` 검사를 그대로 옮긴 before-validator 로 **매핑이 아니면 부재로**
-  떨어뜨린다. 예외로 바꾸면 "flat 배치 아티팩트" 같은 과거 산출물이 거부된다.
+* ``component_weights`` 는 종전 ``isinstance(x, dict)`` 검사를 그대로 옮긴
+  before-validator 로 **매핑이 아니면 부재로** 떨어뜨린다. 예외로 바꾸면 과거 산출물이
+  거부된다.
 
 읽기 전용 계약이라 모두 ``frozen=True`` 다.
 """
@@ -28,9 +26,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypeVar, TypedDict
+from typing import TypeVar
 
-import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
 from app.ai.predictors.artifact_provider import (
@@ -42,13 +39,9 @@ __all__ = [
     "ArtifactSource",
     "ArtifactScalar",
     "CalibrationValue",
-    "LSTMWeightArrays",
-    "NormalizedLSTMArtifact",
     "PersistedArtifactCalibrationBlocks",
     "PersistedArtifactSummaryDocument",
     "PersistedEnsembleArtifact",
-    "PersistedLSTMArtifact",
-    "PersistedLSTMWeightBlock",
     "StrictArtifactCalibrationBlocks",
     "StrictArtifactSummaryDocument",
     "VersionAwareArtifactProvider",
@@ -63,40 +56,6 @@ logger = logging.getLogger(__name__)
 # 실제 형변환은 호출부의 기존 ``int()``/``float()``/``str()`` 식이 그대로 담당한다.
 ArtifactScalar = str | int | float | bool | None
 
-
-class LSTMWeightArrays(TypedDict):
-    """Normalized numpy tensors used by the lightweight LSTM cell."""
-
-    W_i: np.ndarray
-    U_i: np.ndarray
-    b_i: np.ndarray
-    W_f: np.ndarray
-    U_f: np.ndarray
-    b_f: np.ndarray
-    W_o: np.ndarray
-    U_o: np.ndarray
-    b_o: np.ndarray
-    W_c: np.ndarray
-    U_c: np.ndarray
-    b_c: np.ndarray
-    dense_W: np.ndarray
-    dense_b: np.ndarray
-
-
-class NormalizedLSTMArtifact(TypedDict):
-    """Validated, inference-ready representation of one LSTM release."""
-
-    artifact_version: str
-    model_version: str
-    sequence_length: int
-    input_center: float
-    input_scale: float
-    output_scale: float
-    output_bias: float
-    scenario_spread_multiplier: float
-    confidence_bias: float
-    blend_weights: dict[str, float]
-    weights: LSTMWeightArrays
 
 # calibration 표의 항목 값(중첩 컨테이너 없음). 학습이 숫자·문자열(``method``,
 # ``label_source``)·정수 카운트를 함께 넣는다.
@@ -185,68 +144,13 @@ def _calibration_table_or_empty(value: JsonValue) -> JsonValue:
     return kept
 
 
-class PersistedLSTMWeightBlock(_ArtifactReadModel):
-    """게이트 텐서 묶음. ``weights`` 하위에도, 아티팩트 최상위(flat)에도 올 수 있다."""
-
-    W_i: JsonValue = None
-    U_i: JsonValue = None
-    b_i: JsonValue = None
-    W_f: JsonValue = None
-    U_f: JsonValue = None
-    b_f: JsonValue = None
-    W_o: JsonValue = None
-    U_o: JsonValue = None
-    b_o: JsonValue = None
-    W_c: JsonValue = None
-    U_c: JsonValue = None
-    b_c: JsonValue = None
-    dense_W: JsonValue = None
-    dense_b: JsonValue = None
-    # 과거 산출물의 별칭. 종전 ``weights.get("dense_W") or weights.get("dense_weight")``
-    # 폴백을 유지하기 위해 계약에 명시한다.
-    dense_weight: JsonValue = None
-    dense_bias: JsonValue = None
-
-
-class PersistedLSTMArtifact(PersistedLSTMWeightBlock):
-    """LSTM 아티팩트. 게이트 텐서가 ``weights`` 안에 있어도, 최상위에 있어도 읽는다.
-
-    :class:`PersistedLSTMWeightBlock` 을 상속하는 이유가 그 flat 배치다. 종전
-    ``weights = raw["weights"] if isinstance(raw["weights"], dict) else raw`` 폴백을
-    타입 위에서 그대로 표현한다(:meth:`weight_block`).
-    """
-
-    artifact_version: ArtifactScalar = None
-    model_version: ArtifactScalar = None
-    sequence_length: ArtifactScalar = None
-    input_center: ArtifactScalar = None
-    input_scale: ArtifactScalar = None
-    output_scale: ArtifactScalar = None
-    output_bias: ArtifactScalar = None
-    scenario_spread_multiplier: ArtifactScalar = None
-    confidence_bias: ArtifactScalar = None
-    blend_weights: dict[str, ArtifactScalar] | None = None
-    weights: PersistedLSTMWeightBlock | None = None
-
-    @field_validator("weights", "blend_weights", mode="before")
-    @classmethod
-    def _tolerate_non_mapping(cls, value: JsonValue) -> JsonValue:
-        return _mapping_or_none(value)
-
-    def weight_block(self) -> PersistedLSTMWeightBlock:
-        """``weights`` 블록이 있으면 그것, 없으면 최상위(flat) 배치."""
-        return self.weights or self
-
-
 class PersistedEnsembleArtifact(_ArtifactReadModel):
-    """앙상블 아티팩트. 임베드된 LSTM 아티팩트는 **원문 매핑으로** 보존한다.
+    """앙상블 아티팩트.
 
-    ``lstm_artifact`` 를 :class:`PersistedLSTMArtifact` 로 파싱해 두지 않는 이유:
-    호출부(``ensemble._load_optional_lstm_component``,
-    ``ml_release.manifest._validate_ensemble_artifact`` 의 ``has_embedded_lstm``)가
-    ``isinstance(..., dict)`` 로 존재를 판정하고, 검증은 ``load_lstm_artifact`` 가 다시
-    수행한다. 모델 인스턴스로 바꾸면 그 판정이 조용히 False 가 되어 manifest 내용이
-    달라진다.
+    은퇴 이전 산출물은 ``lstm_artifact``/``lstm_artifact_path`` 를 함께 들고 있지만,
+    sequence-model 축이 2026-08-09 은퇴하면서 여기서 선언하지 않는다. 베이스가
+    ``extra="ignore"`` 라 그 키는 **읽을 때 조용히 버려질 뿐 로딩을 깨뜨리지 않는다** —
+    디스크의 과거 아티팩트를 지우지 않고도 계속 읽을 수 있게 하는 것이 이 관용의 목적이다.
     """
 
     artifact_version: ArtifactScalar = None
@@ -256,10 +160,8 @@ class PersistedEnsembleArtifact(_ArtifactReadModel):
     scenario_spread_multiplier: ArtifactScalar = None
     confidence_bias: ArtifactScalar = None
     component_weights: dict[str, ArtifactScalar] | None = None
-    lstm_artifact: dict[str, JsonValue] | None = None
-    lstm_artifact_path: ArtifactScalar = None
 
-    @field_validator("component_weights", "lstm_artifact", mode="before")
+    @field_validator("component_weights", mode="before")
     @classmethod
     def _tolerate_non_mapping(cls, value: JsonValue) -> JsonValue:
         return _mapping_or_none(value)
@@ -337,8 +239,8 @@ def read_persisted_artifact(
 ) -> _ArtifactModelT:
     """임베드된 매핑 또는 저장된 JSON 파일을 아티팩트 계약으로 복원한다.
 
-    LSTM/앙상블 로더가 같은 절차(경로면 읽고 복원, 매핑이면 그대로 복원)를 쓰므로 한 곳에
-    둔다. 실패는 모두 ``ValueError`` 로 통일한다 — predictor 의 ``check_availability`` 와
+    앙상블·summary 로더가 같은 절차(경로면 읽고 복원, 매핑이면 그대로 복원)를 쓰므로 한
+    곳에 둔다. 실패는 모두 ``ValueError`` 로 통일한다 — predictor 의 ``check_availability`` 와
     release manifest 검증이 이미 그 형태를 기대하고, 예외 종류가 바뀌면 predictor 가
     degrade 대신 폭발한다. 디코딩 실패("파일이 깨졌다")와 계약 위반("필드 타입이
     다르다")은 서로 다른 문구로 보고한다.

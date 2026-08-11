@@ -617,11 +617,12 @@ class Settings(InferenceOutboxSettings):
     PREDICTION_BID_PRICE_GRANULARITY: int = 10
     PREDICTION_BID_PRICE_GRANULARITY_MIN_BUDGET: float = 1_000_000.0
     PREDICTION_BID_PRICE_ROUNDING_MODE: str = "floor"
+    # sequence-model(lstm) predictor 는 2026-08-09 은퇴했다. 선호 설정이 아직 "lstm" 이면
+    # price_prediction.orchestration 이 historical 로 폴백한다(사유는 은퇴로 남는다).
+    # 남아 있는 .env 의 PRICE_PREDICTION_LSTM_* 키는 extra="ignore" 로 무시된다.
     PRICE_PREDICTION_PREFERRED_PREDICTOR: str = "historical"
     PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
-    PRICE_PREDICTION_LSTM_MODEL_PATH: str = ""
     PRICE_PREDICTION_ENSEMBLE_MODEL_PATH: str = ""
-    PRICE_PREDICTION_LSTM_MIN_SAMPLES: int = 24
     PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES: int = 32
     PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES: int = 5
     PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE: int = 5

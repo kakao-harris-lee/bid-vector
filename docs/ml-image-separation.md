@@ -14,7 +14,7 @@
 - FastAPI/DB/API 라우팅
 - Playwright 기반 라이브 크롤링
 - Telegram 알림
-- 통계 기반 가격예측 및 JSON artifact 기반 `LSTM`/`Ensemble` 추론
+- 통계 기반 가격예측 및 JSON artifact 기반 `Ensemble` 추론
 - sentence-transformer가 없을 때의 lexical/fallback embedding
 
 반면 아래 기능은 이미지 크기와 빌드 시간을 크게 늘립니다.
@@ -133,8 +133,6 @@ models/
 ├── embeddings/
 │   └── <embedding-model-version>/
 ├── predictors/
-│   ├── lstm/
-│   │   └── <artifact-version>.json
 │   └── ensemble/
 │       └── <artifact-version>.json
 └── manifests/
@@ -148,7 +146,6 @@ manifest에는 최소한 아래 정보가 있으면 좋습니다.
   "release_tag": "2026-05-11-embedding-v3",
   "git_sha": "<commit>",
   "embedding_model_path": "models/embeddings/ko-sbert-v3",
-  "lstm_artifact_path": "models/predictors/lstm/2026-05-11.json",
   "ensemble_artifact_path": "models/predictors/ensemble/2026-05-11.json",
   "validated_on": "2026-05-11T12:00:00Z"
 }
@@ -168,7 +165,7 @@ docker build --target api-training -t bid-vector-api:training .
 
 학습 산출물은 다음 둘 중 하나입니다.
 
-- **가격예측 artifact**: `LSTM` / `Ensemble` JSON
+- **가격예측 artifact**: `Ensemble` JSON
 - **임베딩 model snapshot**: fine-tuned sentence-transformer 디렉터리
 
 학습이 끝나면 결과를 `models/` 아래의 버전 경로에 저장합니다.
@@ -181,7 +178,6 @@ docker build --target api-training -t bid-vector-api:training .
 
 ```env
 PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS=true
-PRICE_PREDICTION_LSTM_MODEL_PATH=/app/models/predictors/lstm/<artifact-version>.json
 PRICE_PREDICTION_ENSEMBLE_MODEL_PATH=/app/models/predictors/ensemble/<artifact-version>.json
 ```
 
@@ -198,7 +194,6 @@ artifact를 runtime에 반영하기 전에 아래 CLI로 manifest를 남기면 �
 ```bash
 python scripts/promote_ml_release.py create-manifest \
   --release-tag 2026-05-11-runtime-v2 \
-  --lstm-artifact-path models/predictors/lstm/2026-05-11.json \
   --ensemble-artifact-path models/predictors/ensemble/2026-05-11.json
 ```
 
@@ -269,7 +264,7 @@ python scripts/promote_ml_release.py apply-manifest \
 스크립트는 다음을 보장합니다.
 
 - embedding snapshot / predictor artifact 경로 실존 여부 확인
-- ensemble artifact가 외부 LSTM artifact를 참조할 때 연결 경로까지 검증
+- ensemble artifact 경로와 sha256 무결성을 검증
 - `models/manifests/<release-tag>.json`에 추천 env, 기본 rebuild 파라미터, checksum, HMAC-SHA256 signature 저장
 - `ML_RELEASE_MANIFEST_RETENTION_LIMIT`에 따라 오래된 manifest를 archive 디렉터리로 이동
 - `ML_RELEASE_OBJECT_STORAGE_URL`이 설정되어 있으면 `--publish-remote`로 manifest와 artifact를 원격 object storage에 보관

@@ -10,7 +10,6 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.ai.predictors.ensemble import load_ensemble_artifact
-from app.ai.predictors.lstm import load_lstm_artifact
 from app.core.config import settings
 from app.core.time import utc_now
 from app.services.ml_release.base import MLReleasePromotionRequest, _MLReleaseBase
@@ -31,37 +30,22 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
         embedding_metadata = self._validate_embedding_model_path(
             request.embedding_model_path
         )
-        lstm_metadata = self._validate_lstm_artifact(request.lstm_artifact_path)
         ensemble_metadata = self._validate_ensemble_artifact(
             request.ensemble_artifact_path
         )
 
-        if (
-            embedding_metadata is None
-            and lstm_metadata is None
-            and ensemble_metadata is None
-        ):
+        if embedding_metadata is None and ensemble_metadata is None:
             raise ValueError(
                 "At least one embedding or predictor artifact path must be provided."
             )
-
-        auto_lstm_path = None
-        if lstm_metadata is None and ensemble_metadata is not None:
-            auto_lstm_path = ensemble_metadata.get("resolved_lstm_artifact_path")
 
         recommended_env: dict[str, Any] = {}
         if embedding_metadata is not None:
             recommended_env["CLASSIFIER_EMBEDDING_MODEL"] = embedding_metadata["path"]
             recommended_env["CLASSIFIER_EMBEDDING_LOCAL_FILES_ONLY"] = True
 
-        effective_lstm_path = (
-            lstm_metadata["path"] if lstm_metadata is not None else auto_lstm_path
-        )
-        if effective_lstm_path or ensemble_metadata is not None:
-            recommended_env["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"] = True
-        if effective_lstm_path:
-            recommended_env["PRICE_PREDICTION_LSTM_MODEL_PATH"] = effective_lstm_path
         if ensemble_metadata is not None:
+            recommended_env["PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS"] = True
             recommended_env["PRICE_PREDICTION_ENSEMBLE_MODEL_PATH"] = ensemble_metadata[
                 "path"
             ]
@@ -71,9 +55,7 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
         )
         predictor_promotion_gate = self._build_predictor_promotion_gate(
             predictor_backtest_report,
-            has_predictor_artifact=bool(
-                effective_lstm_path or ensemble_metadata is not None
-            ),
+            has_predictor_artifact=ensemble_metadata is not None,
         )
         best_predictor_key = str(
             predictor_promotion_gate.get("best_predictor_key") or ""
@@ -93,7 +75,6 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
             "artifacts": {
                 "embedding_model": embedding_metadata,
                 "predictors": {
-                    "lstm": lstm_metadata,
                     "ensemble": ensemble_metadata,
                 },
             },
@@ -303,7 +284,6 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
         for key in (
             "CLASSIFIER_EMBEDDING_MODEL",
             "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS",
-            "PRICE_PREDICTION_LSTM_MODEL_PATH",
             "PRICE_PREDICTION_ENSEMBLE_MODEL_PATH",
         ):
             if key in recommended_env:
@@ -335,45 +315,14 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
             "integrity": self._path_integrity_metadata(path),
         }
 
-    def _validate_lstm_artifact(self, raw_path: str | None) -> dict[str, Any] | None:
-        """Validate one persisted LSTM JSON artifact."""
-        if not raw_path:
-            return None
-        path = self._resolve_existing_path(raw_path, expect_directory=False)
-        artifact = load_lstm_artifact(path)
-        return {
-            "path": self._to_portable_path(path),
-            "path_kind": self._path_kind(path),
-            "artifact_version": artifact["artifact_version"],
-            "model_version": artifact["model_version"],
-            "sequence_length": int(artifact["sequence_length"]),
-            "integrity": self._path_integrity_metadata(path),
-        }
-
     def _validate_ensemble_artifact(
         self, raw_path: str | None
     ) -> dict[str, Any] | None:
-        """Validate one persisted ensemble JSON artifact and its optional LSTM linkage."""
+        """Validate one persisted ensemble JSON artifact."""
         if not raw_path:
             return None
         path = self._resolve_existing_path(raw_path, expect_directory=False)
         artifact = load_ensemble_artifact(path)
-        resolved_lstm_artifact_path = None
-        resolved_lstm_artifact_integrity = None
-        raw_lstm_artifact_path = (
-            str(artifact.get("lstm_artifact_path") or "").strip() or None
-        )
-
-        if raw_lstm_artifact_path:
-            dependent_path = self._resolve_dependency_path(
-                raw_lstm_artifact_path, base_path=path.parent
-            )
-            load_lstm_artifact(dependent_path)
-            resolved_lstm_artifact_path = self._to_portable_path(dependent_path)
-            resolved_lstm_artifact_integrity = self._path_integrity_metadata(
-                dependent_path
-            )
-
         return {
             "path": self._to_portable_path(path),
             "path_kind": self._path_kind(path),
@@ -381,8 +330,5 @@ class _ManifestLifecycleMixin(_MLReleaseBase):
             "model_version": artifact["model_version"],
             "sequence_length": int(artifact["sequence_length"]),
             "momentum_window": int(artifact["momentum_window"]),
-            "has_embedded_lstm": isinstance(artifact.get("lstm_artifact"), dict),
-            "resolved_lstm_artifact_path": resolved_lstm_artifact_path,
-            "resolved_lstm_artifact_integrity": resolved_lstm_artifact_integrity,
             "integrity": self._path_integrity_metadata(path),
         }

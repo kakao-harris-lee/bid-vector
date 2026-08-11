@@ -9,7 +9,6 @@ from app.ai.predictors.base import (
 )
 from app.ai.predictors.ensemble import EnsembleBidRatePredictor
 from app.ai.predictors.historical import HistoricalStatisticalPredictor
-from app.ai.predictors.lstm import LSTMBidRatePredictor
 
 __all__ = [
     "BasePricePredictor",
@@ -18,6 +17,5 @@ __all__ = [
     "PricePredictionContext",
     "serialize_prediction_result",
     "HistoricalStatisticalPredictor",
-    "LSTMBidRatePredictor",
     "EnsembleBidRatePredictor",
 ]

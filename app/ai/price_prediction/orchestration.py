@@ -60,6 +60,16 @@ _PREDICTOR_KEY_ALIASES = {
     "backtest": "auto",
 }
 
+# 은퇴한 predictor 키 → 은퇴 사유(선언 데이터). 운영 ``.env`` 의 선호 설정은 코드와 함께
+# 바뀌지 않으므로, 은퇴한 키를 계속 가리키는 상태가 정상 경로다. 그때 폴백 사유가 "알 수
+# 없는 키"로 나오면 운영자가 오타를 의심하게 되므로 은퇴 사실을 그대로 남긴다.
+_RETIRED_PREDICTOR_KEYS = {
+    "lstm": (
+        "예정가가 복수예비가격 추첨으로 정해져 사정률 시계열에 학습할 신호가 없다는 "
+        "판정에 따라 2026-08-09 은퇴했습니다"
+    ),
+}
+
 # Selector identities, declared once instead of repeated as inline literals at
 # every return site (§4.5-1).
 _SELECTOR_CONFIGURED_PREFERENCE = "configured_preference"
@@ -162,6 +172,16 @@ def _select_predictor(
 
     if preferred_key == "auto":
         return _select_predictor_by_backtest(context, registry=registry, historical_predictor=historical_predictor)
+
+    retirement_reason = _RETIRED_PREDICTOR_KEYS.get(preferred_key)
+    if requested_predictor is None and retirement_reason is not None:
+        return historical_predictor, (
+            f"Predictor '{preferred_key}' was retired: {retirement_reason}. "
+            "Falling back to the historical baseline."
+        ), PredictorSelection(
+            selector_name=_SELECTOR_CONFIGURED_PREFERENCE,
+            selection_reason=f"retired predictor preference '{preferred_key}'",
+        )
 
     if requested_predictor is None:
         return historical_predictor, (

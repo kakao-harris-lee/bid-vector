@@ -1,7 +1,7 @@
 """Characterization tests for training-time artifact hyperparameters.
 
 These lock the *observable effect* of the numeric constants baked into predictor
-artifacts (LSTM / ensemble) and the dataset-quality gates, so a follow-up refactor
+artifacts (ensemble) and the dataset-quality gates, so a follow-up refactor
 that lifts those inline literals into named module constants is provably
 behavior-preserving. Every assertion pins a produced output value or a gate
 passed/threshold at a boundary — not the literal source text — so it survives a
@@ -22,71 +22,12 @@ def _service() -> PricePredictionTrainingService:
     return PricePredictionTrainingService(repo_root="/tmp/ml-training-constants-char")
 
 
-def _lstm(bid_rates: list[float]) -> dict:
-    return _service()._build_lstm_artifact(release_tag="rel", bid_rates=bid_rates)
-
-
 def _ensemble(bid_rates: list[float]) -> dict:
-    svc = _service()
-    return svc._build_ensemble_artifact(
-        release_tag="rel",
-        lstm_artifact_path=svc.repo_root / "models" / "predictors" / "lstm" / "rel.json",
-        lstm_artifact=None,
-        bid_rates=bid_rates,
-    )
+    return _service()._build_ensemble_artifact(release_tag="rel", bid_rates=bid_rates)
 
 
 def _gate(report: dict, name: str) -> dict:
     return next(check for check in report["checks"] if check["name"] == name)
-
-
-# ---------------------------------------------------------------------------
-# LSTM artifact hyperparameters
-# ---------------------------------------------------------------------------
-
-
-def test_lstm_output_scale_is_input_scale_times_035_factor():
-    """output_scale is std × 0.35 (rounded 6dp). Floored-std input pins it cleanly."""
-    # pstdev == 0 -> std floored to 0.01 -> input_scale 0.01, output_scale 0.01*0.35.
-    art = _lstm([0.9] * 100)
-    assert art["input_scale"] == 0.01
-    assert art["output_scale"] == 0.0035
-    assert art["output_scale"] == round(art["input_scale"] * 0.35, 6)
-
-
-def test_lstm_default_std_when_single_sample_is_0025():
-    """A single sample has no variance -> the 0.025 default std feeds input/output scale."""
-    art = _lstm([0.9])
-    assert art["input_scale"] == 0.025
-    assert art["output_scale"] == 0.00875  # round(0.025 * 0.35, 6)
-
-
-def test_lstm_min_std_floor_is_001():
-    """Zero-variance multi-sample data floors std at 0.01 (not the 0.025 default)."""
-    art = _lstm([0.9, 0.9, 0.9])
-    assert art["input_scale"] == 0.01
-
-
-def test_lstm_scenario_spread_multiplier_is_fixed_10():
-    assert _lstm([0.85, 0.90, 0.95])["scenario_spread_multiplier"] == 1.0
-
-
-def test_lstm_confidence_bias_uses_1000_sample_divisor_below_cap():
-    """Below the cap, confidence_bias == sample_count / 1000."""
-    assert _lstm([0.9] * 5)["confidence_bias"] == 5 / 1000
-
-
-def test_lstm_confidence_bias_caps_at_008():
-    """80+ samples would exceed the cap, so it clamps to 0.08."""
-    assert _lstm([0.9] * 100)["confidence_bias"] == 0.08
-
-
-def test_lstm_blend_weights_are_fixed():
-    assert _lstm([0.9] * 5)["blend_weights"] == {
-        "lstm": 0.6,
-        "historical": 0.3,
-        "trend": 0.1,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +52,51 @@ def test_ensemble_confidence_bias_caps_at_006():
 
 
 def test_ensemble_component_weights_are_fixed():
+    """sequence-model 축 은퇴 후 남은 세 축의 확률 벡터(상대 비율은 은퇴 전과 같다)."""
     assert _ensemble([0.9] * 5)["component_weights"] == {
-        "historical": 0.5,
-        "momentum": 0.2,
-        "mean_reversion": 0.15,
-        "lstm": 0.15,
+        "historical": 0.5 / 0.85,
+        "momentum": 0.2 / 0.85,
+        "mean_reversion": 0.15 / 0.85,
     }
+
+
+def test_written_component_weights_are_a_probability_vector():
+    """아티팩트에 기록되는 가중치는 합 1 이어야 한다.
+
+    은퇴로 축 하나를 빼면서 비율(합 0.85)을 그대로 적으면, 아티팩트를 손으로 읽는
+    운영자에게 "나머지 15%가 어디론가 사라진" 표로 보인다. 읽는 쪽이 재정규화해서
+    산출은 같더라도 **기록되는 선언값**은 확률 벡터여야 한다.
+    """
+    weights = _ensemble([0.9] * 5)["component_weights"]
+
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert "lstm" not in weights
+
+
+def test_component_weight_ratios_are_unchanged_by_the_retirement():
+    """상대 비율 보존 — 재선언이 축들의 상대 세기를 바꾸지 않았다는 증거."""
+    weights = _ensemble([0.9] * 5)["component_weights"]
+
+    assert weights["historical"] / weights["momentum"] == pytest.approx(0.5 / 0.2)
+    assert weights["momentum"] / weights["mean_reversion"] == pytest.approx(0.2 / 0.15)
+
+
+def test_declared_weights_are_idempotent_under_renormalization():
+    """산출 불변의 근거: 소비자가 한 번 더 정규화해도 값이 움직이지 않는다."""
+    from app.ai.predictors.ensemble import _normalize_component_weights
+
+    weights = _ensemble([0.9] * 5)["component_weights"]
+
+    assert _normalize_component_weights(weights) == weights
+
+
+def test_training_no_longer_emits_a_retired_lstm_artifact():
+    """수동 훈련이 은퇴한 모델을 다시 만들어 두지 않는다(스케줄이 꺼져 있어도)."""
+    artifact = _ensemble([0.9] * 5)
+
+    assert "lstm_artifact" not in artifact
+    assert "lstm_artifact_path" not in artifact
+    assert not hasattr(_service(), "_build_lstm_artifact")
 
 
 # ---------------------------------------------------------------------------
@@ -125,10 +105,9 @@ def test_ensemble_component_weights_are_fixed():
 
 
 def test_sequence_length_bounds_min3_max12():
-    assert _lstm([0.9, 0.9])["sequence_length"] == 3  # floor
-    assert _lstm([0.9] * 5)["sequence_length"] == 5  # interior == len
-    assert _lstm([0.9] * 100)["sequence_length"] == 12  # cap
-    assert _ensemble([0.9] * 100)["sequence_length"] == 12
+    assert _ensemble([0.9, 0.9])["sequence_length"] == 3  # floor
+    assert _ensemble([0.9] * 5)["sequence_length"] == 5  # interior == len
+    assert _ensemble([0.9] * 100)["sequence_length"] == 12  # cap
 
 
 def test_momentum_window_bounds_min3_max6():

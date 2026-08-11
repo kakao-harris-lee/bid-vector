@@ -11,6 +11,7 @@ from app.ai.predictors.historical.statistics import (
     normalize_agency_name,
     rate_share_at_or_above,
     read_record_value,
+    resolve_record_bid_rate,
     resolve_record_weight,
     weighted_median,
     weighted_quantile,
@@ -34,15 +35,11 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
     normalized_target_agency = normalize_agency_name(agency_name)
 
     for record in historical_records:
-        raw_bid_rate = read_record_value(record, "bid_rate")
-        bid_rate = float(raw_bid_rate or 0.0)
-        if bid_rate <= 0:
-            predicted_price = float(read_record_value(record, "predicted_price") or 0.0)
-            base_amount = float(read_record_value(record, "base_amount") or 0.0)
-            if predicted_price > 0 and base_amount > 0:
-                bid_rate = predicted_price / base_amount
+        # 읽기 규칙은 statistics 의 단일 출처를 쓴다(§4.5-8). 여기서는 종전과 같이
+        # **반올림하지 않은** 값을 담는다 — digits=None 이 그 한 가지 차이를 표현한다.
+        bid_rate = resolve_record_bid_rate(record)
 
-        if 0.5 <= bid_rate <= 1.5:
+        if bid_rate is not None:
             bid_rates.append(bid_rate)
             weight, matched_agency = resolve_record_weight(record, normalized_target_agency)
             weights.append(weight)

@@ -22,7 +22,6 @@ from app.ai.predictor_backtest import build_predictor_backtest_report  # noqa: E
 from app.ai.predictors import (  # noqa: E402
     EnsembleBidRatePredictor,
     HistoricalStatisticalPredictor,
-    LSTMBidRatePredictor,
     PricePredictionContext,
 )
 from app.core.config import settings  # noqa: E402
@@ -82,7 +81,6 @@ def load_records(
 def build_registry() -> dict[str, Any]:
     return {
         "historical": HistoricalStatisticalPredictor(),
-        "lstm": LSTMBidRatePredictor(),
         "ensemble": EnsembleBidRatePredictor(),
     }
 
