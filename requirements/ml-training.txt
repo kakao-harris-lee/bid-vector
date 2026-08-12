@@ -1,2 +1,8 @@
 pandas==2.1.3
 scikit-learn==1.3.2
+# 낙찰률 GBM(Phase 2) 학습·추론. 런타임(requirements/runtime.txt)에는 넣지 않는다 —
+# API 프로세스가 ML 을 로드하면 상주 메모리가 다시 붙는다(#321 이 그 경로를 제거해
+# 1.07GiB → 172MiB 를 만들었다). 학습은 training-worker, 추론은 ML 큐 워커에서만 돈다.
+# 이 패키지가 없는 프로세스에서는 predictor 가 unavailable 로 떨어져 historical 로
+# 폴백하므로, 미설치는 장애가 아니라 선언된 상태다.
+lightgbm==4.7.0

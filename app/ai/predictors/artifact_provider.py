@@ -66,9 +66,9 @@ class VersionAwareArtifactProvider(Generic[_ArtifactValueT]):
     before application threads can run, avoiding deadlock on a lock held by a
     vanished parent thread. Where ``register_at_fork`` is unavailable, an atomic
     process-state publication elects one child-created lock without waiting on any
-    inherited synchronization object. The internal cached value is never returned
-    directly: callers receive detached copies so mutable dictionaries and numpy
-    arrays cannot poison later predictions. LRU eviction keeps the number of
+    inherited synchronization object. By default the internal cached value is never
+    returned directly: callers receive detached copies so mutable dictionaries and
+    numpy arrays cannot poison later predictions. LRU eviction keeps the number of
     cached releases bounded.
     """
 
@@ -77,9 +77,24 @@ class VersionAwareArtifactProvider(Generic[_ArtifactValueT]):
         loader: Callable[[ArtifactSource], _ArtifactValueT],
         *,
         max_entries: int = _DEFAULT_ARTIFACT_CACHE_ENTRIES,
+        detach_copies: bool = True,
     ) -> None:
+        """Build a provider around one loader.
+
+        Args:
+            loader: Normalizes one artifact source into the cached value.
+            max_entries: LRU bound on distinct cached releases.
+            detach_copies: Keep the default ``True`` whenever the loaded value has
+                any mutable surface — the copy is what stops a caller from poisoning
+                every later prediction served from the same cache entry. Pass
+                ``False`` **only** for a loader whose value is immutable and used
+                read-only, where copying would defeat the cache instead of
+                protecting it (a LightGBM booster copy re-parses the whole model
+                text, so a detached hit costs as much as a miss).
+        """
         self._loader = loader
         self._max_entries = max(1, int(max_entries))
+        self._detach_copies = bool(detach_copies)
         process_id = os.getpid()
         self._state = _ArtifactProcessState[_ArtifactValueT](process_id)
         self._fallback_states_by_pid = {process_id: self._state}
@@ -104,7 +119,7 @@ class VersionAwareArtifactProvider(Generic[_ArtifactValueT]):
             cached = state.entries.get(identity.resolved_path)
             if cached is not None and cached[0] == identity:
                 state.entries.move_to_end(identity.resolved_path)
-                return deepcopy(cached[1])
+                return self._published(cached[1])
 
             # Invalidate before loading so an invalid replacement cannot fall
             # back to stale normalized data.
@@ -117,7 +132,11 @@ class VersionAwareArtifactProvider(Generic[_ArtifactValueT]):
             state.entries.move_to_end(stable_identity.resolved_path)
             while len(state.entries) > self._max_entries:
                 state.entries.popitem(last=False)
-            return deepcopy(loaded)
+            return self._published(loaded)
+
+    def _published(self, value: _ArtifactValueT) -> _ArtifactValueT:
+        """Hand a cached value out under this provider's ownership policy."""
+        return deepcopy(value) if self._detach_copies else value
 
     def clear(self) -> None:
         """Drop cached values, primarily for explicit lifecycle/test control."""

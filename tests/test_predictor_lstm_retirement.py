@@ -131,8 +131,16 @@ def test_default_registry_has_no_retired_lstm_key():
     registry = build_default_predictor_registry()
 
     assert "lstm" not in registry
-    # Phase 1 예정가 분포 엔진(distribution)은 은퇴가 아니라 신규 등록이다.
-    assert set(registry) == {"historical", "ensemble", "distribution"}
+    # Phase 1 예정가 분포 엔진(distribution)과 Phase 2 낙찰률 GBM(award_rate_gbm)은
+    # 은퇴가 아니라 신규 등록이다. 집합을 **정확히** 고정하는 것이 이 단언의 목적이므로
+    # (은퇴 키가 조용히 되살아나거나 의도치 않은 키가 끼어드는 것을 잡는다) 새 축을
+    # 추가할 때는 여기에 명시적으로 싣는다 — 부분집합 비교로 완화하지 않는다.
+    assert set(registry) == {
+        "historical",
+        "ensemble",
+        "distribution",
+        "award_rate_gbm",
+    }
 
 
 def test_lstm_module_is_gone():

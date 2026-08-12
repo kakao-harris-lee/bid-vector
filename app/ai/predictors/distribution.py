@@ -30,7 +30,6 @@ from app.ai.predictors.base import (
     PricePredictionContext,
 )
 from app.ai.predictors.historical import (
-    clamp_bid_rate,
     normalize_agency_name,
     normalize_category_key,
     read_record_value,
@@ -51,22 +50,10 @@ from app.ai.predictors.distribution_extraction import (
     aggregate_level_observation,
     observe_reserve_draw,
 )
+from app.ai.predictors.scenario_spec import build_scenario_candidates
 
 _MODEL_VERSION = "v1.0-distribution"
 _PRICING_MODE = "reserve_distribution"
-
-# 보수/공격 시나리오는 예측 분포의 정규근사 ±1.28σ(z = Φ⁻¹(0.9)) 경계에 앵커한다.
-# 주의: 실측 사정률 잔차는 초과 첨도가 크다(뾰족한 중심 + 두꺼운 꼬리) — 이 구간의
-# 실측 커버리지는 명목 80% 보다 넓게 나오며, 실측값은 캘리브레이션 리포트가 단일
-# 출처다(scripts/backtest_yega_distribution.py). 두꺼운 꼬리 분포 도입은 Phase 2 로
-# 명명(사유는 PR 본문).
-_SCENARIO_INTERVAL_Z = 1.2816
-# 시나리오 라벨 → (구간 경계 부호, 후보 가중치). historical 의 배분과 동일 비율.
-_CANDIDATE_SCENARIOS: tuple[tuple[str, float, float], ...] = (
-    ("conservative", -1.0, 0.24),
-    ("base", 0.0, 0.52),
-    ("aggressive", 1.0, 0.24),
-)
 
 # 신뢰도: 유효 표본 깊이 + 예측 분포 폭. 예측 std 0.02(사정률 2%p)에서 tightness 0.
 _CONFIDENCE_BASE = 0.5
@@ -143,17 +130,15 @@ def build_distribution_prediction(context: PricePredictionContext) -> Prediction
     """분포 추정 → 시나리오 → 검증된 결과. 검증은 typed 생성자 단일 지점이다."""
     estimate = _estimate_distribution(context)
     budget = float(context.budget or 0.0)
-    candidates = [
-        {
-            "label": label,
-            "bid_rate": round(rate, 4),
-            "predicted_price": round(budget * rate, 2),
-            "confidence_weight": weight,
-        }
-        for (label, _sign, weight), rate in zip(
-            _CANDIDATE_SCENARIOS, _scenario_rates(estimate)
-        )
-    ]
+    # 시나리오 후보 조립은 scenario_spec 한 벌이다(§4.5-8). 분포 중심·예측 표준편차는
+    # 사정률 축이므로 낙찰율/실현 사정률 비를 ``scale`` 로 넘겨 투찰율 축으로 옮긴다.
+    # 실측 커버리지가 명목 80% 보다 넓은 이유(첨도)는 그 모듈이 설명한다.
+    candidates = build_scenario_candidates(
+        center=estimate.posterior.mean,
+        std=estimate.predictive_std,
+        budget=budget,
+        scale=estimate.bid_ratio,
+    )
     base_candidate = candidates[1]
     historical_summary = summarize_historical_records(
         context.historical_records, agency_name=context.agency_name
@@ -213,23 +198,6 @@ def _estimate_distribution(context: PricePredictionContext) -> _DistributionEsti
             if agency_key and observation.agency_key == agency_key
         ),
         ratio_sample_count=len(ratio_samples),
-    )
-
-
-def _scenario_rates(estimate: _DistributionEstimate) -> tuple[float, ...]:
-    """시나리오별 투찰율 — 분포 중심과 정규근사 ±1.28σ 경계를 투찰율 축으로 환산.
-
-    실측 커버리지는 첨도 때문에 명목 80% 보다 넓다 — 캘리브레이션 리포트 참조.
-    """
-    return tuple(
-        clamp_bid_rate(
-            estimate.bid_ratio
-            * (
-                estimate.posterior.mean
-                + (sign * _SCENARIO_INTERVAL_Z * estimate.predictive_std)
-            )
-        )
-        for _label, sign, _weight in _CANDIDATE_SCENARIOS
     )
 
 

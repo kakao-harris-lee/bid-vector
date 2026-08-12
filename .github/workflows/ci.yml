@@ -23,14 +23,19 @@ jobs:
           cache-dependency-path: |
             requirements/runtime.txt
             requirements/dev.txt
+            requirements/ml-training.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Unit tests are SQLite-isolated (root conftest.py) and never touch the
-          # ML stack at import time, so the heavy ml-embedding/ml-training wheels
-          # (torch/sklearn/pandas) are intentionally NOT installed here.
-          pip install -r requirements/runtime.txt -r requirements/dev.txt
+          # ml-embedding (torch) stays out: nothing here loads an embedding model.
+          # ml-training IS installed — the 낙찰률 GBM(Phase 2) guards are exactly the
+          # tests that must not silently skip. They fix the out-of-fold encoding
+          # scope, the holdout boundary-tie rule, and the guardrail red line; a
+          # refactor that undoes any of them fails only if these run. Skipping them
+          # for a lean install would leave CI green while the leak came back.
+          pip install -r requirements/runtime.txt -r requirements/dev.txt \
+            -r requirements/ml-training.txt
 
       - name: Ruff (lint)
         # 설계 래칫 스캐너는 자신이 검사하는 규율을 지켜야 하므로 lint 대상에 포함한다

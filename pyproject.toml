@@ -65,6 +65,9 @@ ignore_errors = true
 # 값과 함께 실어 나른다. 분모를 잘못 고르면 라벨이 통째로 다른 축의 수치가 되므로, 분모
 # 선택(reliable_base)과 유효 창(rate_normalization)을 타입으로 묶어 둔다).
 # (1i 는 아래 app.ai.predictors.distribution_extraction 이 #362 에서 이미 쓴 번호다.)
+# Phase 1k adds app.domain.award_rate_features (낙찰률 GBM 의 피처 조립 단일 출처 —
+# 학습기와 서빙 predictor 가 같은 함수를 부르게 해 train/serve skew 를 구조적으로 막는다.
+# 어긋나면 예외 없이 가격만 바뀌는 계산이라, 시그니처(=피처 계약)를 타입으로 고정한다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -80,6 +83,7 @@ module = [
     "app.domain.reserve_draw_distribution",
     "app.domain.assessment_shrinkage",
     "app.domain.award_rate_label",
+    "app.domain.award_rate_features",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
