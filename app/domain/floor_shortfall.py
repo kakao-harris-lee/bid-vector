@@ -48,6 +48,11 @@ MIN_ASSESSMENT_SAMPLES: Final[int] = 150
 # 사정률(예정가/기초금액)의 물리적 개연 범위. KONEPS 복수예비가격은 기초금액을
 # 대략 ±2~3% 로 둘러싸도록 생성되므로 실제 추첨 결과가 이 범위를 벗어날 수 없다.
 # 범위 밖 값은 추첨 결과가 아니라 수집/파싱 오류이므로 표본에서 제외한다.
+# ⚠ app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_*(0.8~1.2)와 이름이 비슷하지만
+# **다른 밴드·다른 목적**(그쪽=관측 필터)이다 — §4.5-8 근거 통합 금지(리뷰 N4):
+# 합치면 빈도가 왜곡된다 — 하단 꼬리(0.8~0.90)는 분모만 늘려 낙관, 상단 꼬리
+# ((1.10,1.20])는 임계(≈1.00125)도 넘어 분자에 들어가 비관, 순방향은 꼬리 분포에
+# 달린다(2026-08-12 실측 하단 76·상단 0 → 현재는 낙관 방향, 리뷰 O2).
 ASSESSMENT_RATE_MIN: Final[float] = 0.90
 ASSESSMENT_RATE_MAX: Final[float] = 1.10
 
@@ -86,6 +91,13 @@ def is_plausible_assessment_rate(value: float | None) -> bool:
 
     ``None`` 과 NaN 은 비교가 모두 False 로 떨어져 자연히 제외된다. 범위 밖 값은
     추첨 결과가 아니라 데이터 오류이므로 빈도 분모에서 뺀다.
+
+    ⚠ ``app/ai/predictors/distribution_extraction.is_observable_assessment_rate``
+    (0.8~1.2)와 이름이 비슷하지만 **다른 밴드·다른 목적**(그쪽=분포 엔진의 관측
+    편입 필터)이다 — §4.5-8 근거 통합 금지(리뷰 N4): 합치면 빈도가 왜곡된다 —
+    하단 꼬리는 분모만 늘려 낙관, 상단 꼬리((1.10,1.20])는 임계(≈1.00125)도 넘어
+    분자에 들어가 비관, 순방향은 꼬리 분포에 달린다(2026-08-12 실측 하단 76·상단
+    0 → 현재는 낙관 방향, 리뷰 O2).
     """
     if value is None:
         return False

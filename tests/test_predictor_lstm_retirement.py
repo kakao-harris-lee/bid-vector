@@ -131,7 +131,8 @@ def test_default_registry_has_no_retired_lstm_key():
     registry = build_default_predictor_registry()
 
     assert "lstm" not in registry
-    assert set(registry) == {"historical", "ensemble"}
+    # Phase 1 예정가 분포 엔진(distribution)은 은퇴가 아니라 신규 등록이다.
+    assert set(registry) == {"historical", "ensemble", "distribution"}
 
 
 def test_lstm_module_is_gone():

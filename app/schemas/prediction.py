@@ -191,7 +191,11 @@ class PricePredictionResponse(BaseModel):
     backtest_average_absolute_error_rate: Optional[float] = Field(default=None, ge=0.0)
     backtest_report: Optional[dict] = None
     training_window_size: int = Field(default=0, ge=0)
-    pricing_mode: Literal["historical_blend", "heuristic"] = "heuristic"
+    # "reserve_distribution" 은 Phase 1 예정가 분포 predictor 의 모드다 — Literal 에
+    # 없으면 그 predictor 를 선호로 켜는 순간 응답 검증이 500 을 낸다(리뷰 K1).
+    pricing_mode: Literal["historical_blend", "heuristic", "reserve_distribution"] = (
+        "heuristic"
+    )
     historical_sample_size: int = Field(default=0, ge=0)
     agency_match_sample_size: int = Field(default=0, ge=0)
     predicted_bid_rate: float = 0.0

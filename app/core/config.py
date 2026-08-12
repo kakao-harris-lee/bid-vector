@@ -624,6 +624,11 @@ class Settings(InferenceOutboxSettings):
     PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS: bool = False
     PRICE_PREDICTION_ENSEMBLE_MODEL_PATH: str = ""
     PRICE_PREDICTION_ENSEMBLE_MIN_SAMPLES: int = 32
+    # distribution predictor(예정가 추첨 분포 + 계층 수축) 가용성 게이트: 예비가격
+    # 비율을 추출할 수 있는 이력 행 최소 수와, 예정가 분포를 투찰율로 환산할
+    # 낙찰율/실현 사정률 비 표본 최소 수.
+    PRICE_PREDICTION_DISTRIBUTION_MIN_RESERVE_RECORDS: int = 8
+    PRICE_PREDICTION_DISTRIBUTION_MIN_BID_RATIO_SAMPLES: int = 3
     PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES: int = 5
     PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE: int = 5
     CLASSIFIER_EMBEDDING_MODEL: str = (

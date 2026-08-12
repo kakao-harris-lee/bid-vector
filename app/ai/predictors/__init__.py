@@ -7,6 +7,7 @@ from app.ai.predictors.base import (
     PricePredictionContext,
     serialize_prediction_result,
 )
+from app.ai.predictors.distribution import ReserveDrawDistributionPredictor
 from app.ai.predictors.ensemble import EnsembleBidRatePredictor
 from app.ai.predictors.historical import HistoricalStatisticalPredictor
 
@@ -18,4 +19,5 @@ __all__ = [
     "serialize_prediction_result",
     "HistoricalStatisticalPredictor",
     "EnsembleBidRatePredictor",
+    "ReserveDrawDistributionPredictor",
 ]

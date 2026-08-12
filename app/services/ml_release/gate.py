@@ -2,15 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
 from app.services.ml_release.base import MANIFEST_PREDICTOR_KEYS, _MLReleaseBase
 from app.services.ml_release.contracts import (
     MLReleaseJsonDocument,
     is_json_decode_error,
+)
+
+# 리포트 top-level 에서 best arm 으로부터 유도되는 **스칼라 키**(§4.5 선언 데이터) —
+# 성적(오차·rate)·표본 수와 식별자 name 까지다. ``best_predictor_key`` 자체는 이
+# 튜플에 없다: 제외 판정의 입력이라 벗기기 전에 읽어야 하고, 판정 직후 지역 변수로
+# 무효화된다(_extract_predictor_gate_metrics 첫 블록). 제외 arm 이 best 로 선언된
+# 리포트는 이 키들을 통째로 벗긴 사본으로 정규화하고, 이후 로직은 분기 없이 읽는다
+# — 필드마다 `None if excluded else ...` 복붙은 새 top-level metric 추가 시 가드
+# 누락이 기본값이 된다(리뷰 L1: guardrail/fallback 두 축이 그렇게 빠져, 소비부의
+# `is not None` 게이트와 결합해 검사 스킵(fail-open)이었다).
+BEST_DERIVED_REPORT_KEYS: Final[tuple[str, ...]] = (
+    "best_predictor_name",
+    "sample_count",
+    "average_absolute_error_rate",
+    "best_average_absolute_error_rate",
+    "guardrail_rate",
+    "fallback_rate",
 )
 
 
@@ -153,10 +171,29 @@ class _PromotionGateMixin(_MLReleaseBase):
     def _extract_predictor_gate_metrics(
         self, backtest_report: dict[str, Any]
     ) -> dict[str, Any]:
-        """Normalize supported backtest report shapes into promotion-gate metrics."""
+        """Normalize supported backtest report shapes into promotion-gate metrics.
+
+        자동 승격 제외 키(AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS)가 리포트의 best 로
+        선언돼 있으면 top-level 의 best-유도 스칼라(BEST_DERIVED_REPORT_KEYS)를
+        **한 번에 벗긴 사본**으로 정규화한 뒤, 제외되지 않은 completed 결과에서 다시
+        고른다 — 서빙되지 않을 엔진의 성적으로 pass/fail 도장이 찍히는 것을 막는다
+        (리뷰 K4/L1). guardrail/fallback rate 는 재선정 arm 의 result row 값으로
+        재유도된다 — **fresh 리포트의 row 는** ``_backtest_one_predictor`` 가 두
+        키를 항상 싣지만, 이 분기가 방어하는 수제·스테일 리포트의 row 에는 키가
+        없을 수 있고 그 경우 해당 축은 None 으로 남아 소비부의 `is not None`
+        게이트가 그 검사를 스킵한다(보장 불가 불변식을 단정하지 않는다 — 리뷰
+        M4-5). fresh 리포트는 상류가 이미 거르므로 이 분기 자체에 도달하지 않는다.
+        """
         best_predictor_key = (
             str(backtest_report.get("best_predictor_key") or "").strip() or None
         )
+        if best_predictor_key in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS:
+            best_predictor_key = None
+            backtest_report = {
+                key: value
+                for key, value in backtest_report.items()
+                if key not in BEST_DERIVED_REPORT_KEYS
+            }
         best_result = self._find_backtest_result(
             backtest_report, best_predictor_key=best_predictor_key
         )
@@ -188,8 +225,14 @@ class _PromotionGateMixin(_MLReleaseBase):
             backtest_report.get("best_average_absolute_error_rate"),
             best_result.get("average_absolute_error_rate") if best_result else None,
         )
-        guardrail_rate = self._first_float(backtest_report.get("guardrail_rate"))
-        fallback_rate = self._first_float(backtest_report.get("fallback_rate"))
+        guardrail_rate = self._first_float(
+            backtest_report.get("guardrail_rate"),
+            best_result.get("guardrail_rate") if best_result else None,
+        )
+        fallback_rate = self._first_float(
+            backtest_report.get("fallback_rate"),
+            best_result.get("fallback_rate") if best_result else None,
+        )
         dataset_quality = backtest_report.get("dataset_quality")
         dataset_quality = dataset_quality if isinstance(dataset_quality, dict) else {}
         report_settings = backtest_report.get("settings")
@@ -241,6 +284,10 @@ class _PromotionGateMixin(_MLReleaseBase):
             if isinstance(result, dict)
             and result.get("status") == "completed"
             and result.get("average_absolute_error_rate") is not None
+            # 자동 승격 제외 arm 은 results 에 남아 있어도(비교 증적) 폴백 best 후보로
+            # 승격되면 안 된다(리뷰 K4).
+            and str(result.get("predictor_key") or "")
+            not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
         ]
         if not completed_results:
             return None

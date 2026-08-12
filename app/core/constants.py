@@ -317,3 +317,65 @@ INTERNAL_TELEMETRY_EVENT_TYPES: frozenset[str] = frozenset(
         COLLECT_G2_EVIDENCE_EVENT_TYPE,
     }
 )
+
+# Phase 1 예정가 분포 엔진(레지스트리 키 "distribution")은 아직 **자동 승격 후보가
+# 아니다**. 운영 .env 실측(2026-08-11)상 PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS
+# 가 이미 true 라 실험 플래그는 게이트가 아니고, 선호 설정이 자동으로 바뀌는 승격
+# 경로들이 있다: (a) auto 선택·리포트의 best 후보 선정 — 동점 시 키 문자열
+# 오름차순이라 "distribution" 이 "ensemble"/"historical" 보다 먼저 뽑힌다,
+# (b) release manifest 가 best_predictor_key 를
+# recommended_env["PRICE_PREDICTION_PREFERRED_PREDICTOR"] 로 기록, (c) promotion
+# gate 가 리포트 best arm 의 성적으로 pass/fail 을 판정 — 키 없는 리포트에서는
+# completed 최소 오차로 **폴백 선정**하므로 그 폴백에서도 걸러야 한다(리뷰 K4).
+# 여기 든 키는 아래 소비자 전부에서 제외된다(평가·results 리포트에는 그대로 나타난다 —
+# 비교 수치는 계속 쌓되 승격만 막는다). Phase 2 게이트를 통과하면 이 집합에서 빼는
+# 것이 승격 절차다. 새 승격 경로를 만들면 아래 목록에 소비자를 추가하라 — 이 목록의
+# 전수성은 주석이 아니라 리뷰가 지킨다.
+#
+# Shared by:
+#   - app/ai/predictor_backtest.py        (best 후보 eligibility 필터 + arm 메타 기재
+#                                          + _resolve_group_predictor 의 by_group 폴백 필터)
+#   - app/services/ml_release/manifest.py (recommended_env 기록 가드)
+#   - app/services/ml_release/gate.py     (게이트 metrics best arm 선정·폴백 필터)
+AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS: frozenset[str] = frozenset({"distribution"})
+
+# 사정률(예정가/기초금액) 관측의 개연 밴드(경계 포함). 밖이면 오적재(스케일 혼입·
+# 오염 base)로 보고 값을 고치지 않은 채 관측에서만 배제한다(published_floor_rate 와
+# 같은 스탠스).
+#
+# 소유권을 app/core 로 올린 이유(리뷰 M3): 이 밴드는 distribution 엔진의 관측 관문
+# 이면서 동시에 **historical(프로덕션 기본 predictor)의 서빙 가격**에도 닿는다 —
+# summarize_historical_records 의 실현 사정률 판정 → reserve prior 블렌드 →
+# base_rate 전파 경로가 코드로 확인됐다. 승격 게이트(위
+# AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS)는 상수 공유 경로를 잡지 못하므로,
+# distribution 캘리브레이션 목적의 밴드 조정이 historical 가격을 움직인다는 사실이
+# 특정 엔진 모듈이 아니라 이 선언 위치에서 보여야 한다. 양끝 값
+# (0.79/0.80/1.20/1.21)은 세 값표가 고정한다: summarize 경유 경계 값표
+# (tests/test_reserve_base_rate.py) · 술어 단위 값표
+# (tests/test_prediction_distribution_predictor.py) · center 관문 경계
+# (tests/test_backtest_yega_distribution.py). 비교식은 distribution_extraction 의
+# is_observable_assessment_rate 술어 **한 벌**이다(리뷰 N1 — 상수만 나누고 비교식을
+# 두 벌로 두면 경계에서 갈린다. floor_shortfall 의 동명 술어와의 충돌로 개명 —
+# 리뷰 N-후속).
+#
+# Shared by (실소비자 전수 — 리뷰 N2 재작성. 교훈 두 갈래(리뷰 O4): ①이동 —
+# 소비자 목록을 쓰는 커밋과 소비자를 옮기는 커밋이 같은 라운드면 목록은 이동이
+# 끝난 뒤 마지막에 확정한다 ②열거 — 서빙 엔진 distribution.py 누락은 이동과 무관한
+# 작성 시점의 전수 실패였다(작성 시점에 이미 import 존재) — 목록은 grep 전수로만
+# 쓴다):
+#   - app/ai/predictors/distribution_extraction.py (술어·관문 산술의 단일 출처)
+#     ↳ app/ai/predictors/historical/summary.py (realized_assessment_ratio 경유 —
+#       historical 서빙 가격, L2 통합)
+#     ↳ app/ai/predictors/distribution.py (observe_reserve_draw 경유 — 서빙 엔진
+#       관측 관문)
+#     ↳ scripts/_yega_coverage.py (observe_reserve_draw 경유 — 캘리 커버리지 축,
+#       M 라운드 분해로 backtest_yega_distribution 에서 이동)
+#
+# ⚠ app/domain/floor_shortfall.ASSESSMENT_RATE_MIN/MAX(0.90~1.10)와 이름이 비슷하지만
+# **다른 밴드·다른 목적**이다: 이쪽=관측 필터(오적재 배제), 그쪽=하한 미달 판정의
+# 물리적 생성 범위. §4.5-8 근거로 통합하면 하한 미달 빈도가 왜곡된다 — 하단 꼬리
+# (0.8~0.90)는 분모만 늘려 낙관, 상단 꼬리((1.10,1.20])는 임계(≈1.00125)도 넘어
+# 분자에 들어가 비관, 순방향은 꼬리 분포에 달린다(2026-08-12 실측 하단 76·상단 0
+# → 현재는 낙관 방향, 리뷰 O2). 결론 불변: 통합 금지(리뷰 N4).
+ASSESSMENT_RATE_PLAUSIBLE_MIN: float = 0.8
+ASSESSMENT_RATE_PLAUSIBLE_MAX: float = 1.2

@@ -283,3 +283,67 @@ def test_resolve_scenario_anchor_rates_none_when_no_floor():
         )
         is None
     )
+
+
+def _distribution_reserve_records(count: int) -> list[dict]:
+    """distribution predictor 가용성을 만족하는 공사 이력 행(예비가 15개 격자)."""
+    base_amount = 500_000_000.0
+    ratios = [0.97 + (0.04 * index / 14) for index in range(15)]
+    reserve_prices = [base_amount * ratio for ratio in ratios]
+    realized = (
+        reserve_prices[0] + reserve_prices[4] + reserve_prices[9] + reserve_prices[14]
+    ) / (4 * base_amount)
+    return [
+        {
+            "base_amount": base_amount,
+            "base_amount_basis": "clean",  # basis 필터는 fail-closed(리뷰 L4-3)
+            "reserve_prices": reserve_prices,
+            "selected_numbers": [1, 5, 10, 15],
+            "category": "construction",
+            "bid_rate": round(0.9 * realized, 6),
+        }
+        for _ in range(count)
+    ]
+
+
+def test_anchor_replaces_distribution_candidates_identically(monkeypatch):
+    """K3 정직 공시 고정: 앵커 활성 공사 경로에서 분포 predictor 는 수치적 no-op 다.
+
+    ``_resolve_candidate_target_rate`` 가 앵커를 클램프가 아니라 **대체**로 적용하므로
+    (#200 정책 — 이 PR 스코프 밖), 세 후보 라벨이 세 stance 로 매핑되는 predictor 는
+    어떤 분포를 내든 후보가 ``floor + 고정 오프셋`` 으로 바뀐다. 이 테스트는 분포
+    predictor 가 실제 실행됐음에도 historical 과 후보가 동일함을 고정해, 그 사실이
+    조용히 바뀌지 않게 한다(바뀌면 공시도 갱신해야 한다).
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    records = _distribution_reserve_records(10)
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "distribution")
+    distribution_prediction = predict_price(
+        budget=500_000_000.0,
+        category="construction",
+        description="OO 토목공사 앵커 대체 검증",
+        historical_records=records,
+        estimation_amount=500_000_000.0,
+        reference_date=date(2026, 2, 1),
+    )
+    # 분포 predictor 가 실제로 실행됐다(폴백이면 이 검증은 무의미).
+    assert distribution_prediction["predictor_name"] == "reserve_draw_distribution"
+
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "historical")
+    historical_prediction = predict_price(
+        budget=500_000_000.0,
+        category="construction",
+        description="OO 토목공사 앵커 대체 검증",
+        historical_records=records,
+        estimation_amount=500_000_000.0,
+        reference_date=date(2026, 2, 1),
+    )
+
+    # 앵커가 후보를 전면 대체 → 두 predictor 의 가드된 후보·기준 투찰율이 동일하다.
+    assert _candidates(distribution_prediction) == _candidates(historical_prediction)
+    assert round(float(distribution_prediction["predicted_bid_rate"]), 5) == round(
+        float(historical_prediction["predicted_bid_rate"]), 5
+    )

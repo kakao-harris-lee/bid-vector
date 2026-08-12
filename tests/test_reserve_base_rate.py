@@ -500,3 +500,39 @@ def test_summarize_survives_out_of_band_bid_rate_with_reserve_pattern(unusable_b
     assert reserve_context["median_bid_to_estimated_price_rate"] == pytest.approx(
         0.90 / realized, abs=1e-4
     )
+
+
+def test_estimated_price_rate_band_endpoints_value_table():
+    """사정률 개연 밴드(0.8~1.2, 경계 포함) 양끝 값표 — #361 이 bid_rate 밴드에 남긴
+    것과 같은 형태의 고정.
+
+    이 밴드는 app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_* 선언이고, distribution
+    엔진만이 아니라 historical 서빙 가격(reserve prior 경유)까지 닿는다(리뷰 M3).
+    극단 변이(0.5/2.0)에도 울리는 테스트가 없던 구멍을 이 값표가 막는다 — 변이 시
+    0.79·1.21 행이 관측에 편입돼 아래 카운트가 4 가 되며 실패한다.
+    """
+    base_amount = 100_000_000.0
+
+    def _flat_reserve_record(rate: float) -> dict:
+        return {
+            "bid_rate": 0.9,
+            "base_amount": base_amount,
+            "reserve_prices": [base_amount * rate] * 15,
+            "selected_numbers": [1, 2, 3, 4],
+        }
+
+    summary = summarize_historical_records(
+        (
+            _flat_reserve_record(0.79),  # 하한 밖 — 제외
+            _flat_reserve_record(0.80),  # 하한 경계 — 포함
+            _flat_reserve_record(1.20),  # 상한 경계 — 포함
+            _flat_reserve_record(1.21),  # 상한 밖 — 제외
+        )
+    )
+
+    reserve_context = summary["reserve_price_context"]
+    assert reserve_context["estimated_price_sample_count"] == 2
+    # 경계 두 값(0.80·1.20)만 남으므로 중앙값 산술도 함께 닫힌다.
+    assert reserve_context["median_estimated_price_rate"] == pytest.approx(1.0)
+    # span 축은 밴드와 무관하게 4행 전부에서 계산된다(대조군).
+    assert reserve_context["sample_count"] == 4

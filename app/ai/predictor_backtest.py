@@ -12,23 +12,36 @@ from app.ai.predictors.base import (
 )
 from app.ai.predictors.historical import read_record_value
 from app.core.config import settings
+from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
 from app.domain.aggregates import average
 
 
 def build_predictor_backtest_report(
     context: PricePredictionContext,
     registry: dict[str, BasePricePredictor],
+    *,
+    use_record_context: bool = False,
 ) -> dict[str, Any]:
-    """Compare runnable predictors against recent historical bid-rate holdouts."""
+    """Compare runnable predictors against recent historical bid-rate holdouts.
+
+    ``use_record_context=False`` (기본) 는 종전과 동일하게 **호출 공고의**
+    agency/category 를 전 홀드아웃 행에 전파한다 — 라이브 auto 선택("이 공고에서
+    어느 predictor 가 나은가")의 의미다. ``True`` 는 홀드아웃 행 **자신의**
+    agency/category 로 평가한다 — 오프라인 캘리브레이션("각 공고를 그 공고로서
+    예측했는가")의 의미로, 계층(agency/category) 의존 predictor 가 전역 평균으로
+    붕괴하지 않는다. 라이브 경로는 이 플래그를 켜지 않는다.
+    """
     chronological_records = _sort_historical_records(context.historical_records)
     holdout_size = min(
         max(1, int(settings.PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE or 1)),
         max(0, len(chronological_records) - 1),
     )
     min_training_size = max(1, int(settings.PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES or 1))
+    methodology = _report_methodology(registry, use_record_context=use_record_context)
     if len(chronological_records) <= min_training_size:
         return {
             "status": "insufficient_data",
+            **methodology,
             "holdout_size": 0,
             "min_training_size": min_training_size,
             "sample_count": 0,
@@ -51,13 +64,20 @@ def build_predictor_backtest_report(
             training_prefix=training_prefix,
             holdout_records=holdout_records,
             min_training_size=min_training_size,
+            use_record_context=use_record_context,
         )
         results.append(result)
 
+    # 자동 승격 제외 키는 results 에는 그대로 보고되지만 best 후보가 될 수 없다 —
+    # best_predictor_key 는 auto 선택과 manifest recommended_env 로 흘러가는 승격
+    # 경로다(선언·사유는 AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS 참조).
     eligible_results = [
         result
         for result in results
-        if result["status"] == "completed" and result["sample_count"] > 0 and result["average_absolute_error_rate"] is not None
+        if result["status"] == "completed"
+        and result["sample_count"] > 0
+        and result["average_absolute_error_rate"] is not None
+        and result["predictor_key"] not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
     ]
     best_result = min(
         eligible_results,
@@ -76,10 +96,12 @@ def build_predictor_backtest_report(
         best_result=best_result,
         base_context=context,
         min_training_size=min_training_size,
+        use_record_context=use_record_context,
     )
 
     return {
         "status": "completed" if best_result is not None else "no_eligible_predictor",
+        **methodology,
         "holdout_size": holdout_size,
         "min_training_size": min_training_size,
         "sample_count": int(best_result["sample_count"]) if best_result else 0,
@@ -93,6 +115,29 @@ def build_predictor_backtest_report(
     }
 
 
+def _report_methodology(
+    registry: dict[str, BasePricePredictor],
+    *,
+    use_record_context: bool,
+) -> dict[str, str | list[str] | bool]:
+    """리포트가 스스로 싣는 방법론 메타(§4.5 선언 데이터).
+
+    report_version "2": best_* 의 의미가 "평가된 전체 중 최선"에서 "자동 승격 제외
+    (excluded_predictor_arms) 를 뺀 최선"으로 바뀌었고, ``use_record_context`` 에
+    따라 홀드아웃 컨텍스트 방법론이 달라진다 — 리포트 자신이 그 사실을 실어야
+    형태만으로 두 실행을 구별할 수 있다(ml_training/comparison.py 의 #360 대응과
+    같은 패턴). 버전 키 부재 = v1(제외 이전 의미)이다.
+    """
+    return {
+        "report_version": "2",
+        "predictor_arms": sorted(registry),
+        "excluded_predictor_arms": sorted(
+            set(registry) & AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
+        ),
+        "use_record_context": bool(use_record_context),
+    }
+
+
 def _backtest_one_predictor(
     *,
     predictor_key: str,
@@ -101,6 +146,7 @@ def _backtest_one_predictor(
     training_prefix: list[object],
     holdout_records: list[object],
     min_training_size: int,
+    use_record_context: bool = False,
 ) -> dict[str, Any]:
     """Evaluate one predictor across a rolling historical holdout."""
     absolute_errors: list[float] = []
@@ -121,12 +167,19 @@ def _backtest_one_predictor(
             rolling_training_records.append(holdout_record)
             continue
 
+        category = base_context.category
+        agency_name = base_context.agency_name
+        if use_record_context:
+            record_category = read_record_value(holdout_record, "category")
+            record_agency = read_record_value(holdout_record, "agency_name")
+            category = str(record_category) if record_category else category
+            agency_name = str(record_agency) if record_agency else agency_name
         evaluation_context = PricePredictionContext(
             budget=budget,
-            category=base_context.category,
+            category=category,
             description=base_context.description,
             historical_records=tuple(rolling_training_records),
-            agency_name=base_context.agency_name,
+            agency_name=agency_name,
         )
         availability = predictor.check_availability(evaluation_context)
         if not availability.available:
@@ -249,6 +302,7 @@ def _compute_by_group(
     best_result: dict[str, Any] | None,
     base_context: PricePredictionContext,
     min_training_size: int,
+    use_record_context: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Compute per-business-group backtest metrics using the best available predictor.
 
@@ -259,17 +313,14 @@ def _compute_by_group(
     groups = _group_records_by_business_group(holdout_records)
     if not groups:
         return {}
-
-    # Prefer the best predictor; fall back to any available predictor.
-    predictor_key: str | None = best_result["predictor_key"] if best_result else None
-    predictor: BasePricePredictor | None = registry.get(predictor_key) if predictor_key else None
-    if predictor is None and registry:
-        predictor_key, predictor = next(iter(registry.items()))
-
+    predictor_key, predictor = _resolve_group_predictor(
+        registry, best_result["predictor_key"] if best_result else None
+    )
     by_group: dict[str, dict[str, Any]] = {}
     for group_name, group_holdout_records in sorted(groups.items()):
         if predictor is None:
             by_group[group_name] = {
+                "predictor_key": None,
                 "sample_count": 0,
                 "average_absolute_error_rate": None,
                 "skipped_count": len(group_holdout_records),
@@ -283,11 +334,32 @@ def _compute_by_group(
             training_prefix=training_prefix,
             holdout_records=group_holdout_records,
             min_training_size=min_training_size,
+            use_record_context=use_record_context,
         )
         by_group[group_name] = {
+            "predictor_key": predictor_key,  # 수치를 만든 arm 추적(리뷰 L4-6)
             "sample_count": result["sample_count"],
             "average_absolute_error_rate": result["average_absolute_error_rate"],
             "skipped_count": result["skipped_count"],
         }
 
     return by_group
+
+
+def _resolve_group_predictor(
+    registry: dict[str, BasePricePredictor],
+    best_predictor_key: str | None,
+) -> tuple[str | None, BasePricePredictor | None]:
+    """Prefer the best predictor; fall back to the first non-excluded registry entry.
+
+    (원문 "fall back to any available predictor" 는 L4-6 이후 코드와 반대라 요약
+    줄만 현재 동작으로 정정 — §4.6 복원의 취지는 정보 보존이지 틀린 서술 보존이
+    아니다.) 폴백도 자동 승격 제외 키를 건너뛴다 — best 경로는 이미 제외를
+    통과했지만, registry 첫 항목 폴백은 미필터 경로였다(리뷰 L4-6).
+    """
+    if best_predictor_key and best_predictor_key in registry:
+        return best_predictor_key, registry[best_predictor_key]
+    for key, candidate in registry.items():
+        if key not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS:
+            return key, candidate
+    return None, None
