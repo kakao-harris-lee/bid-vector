@@ -1,4 +1,33 @@
-"""Cutoff-aware historical data loading for backtests."""
+"""Cutoff-aware historical data loading for backtests.
+
+창설 계약은 하나다: **백테스트 결정 시점에 존재했을 레코드만 싣는다.** 조회 경로가 cutoff
+필터를 지고, 직렬화기(:meth:`BacktestCutoffService.serialize_historical_record`)가 그 행을
+predictor 가 먹는 가벼운 dict 로 편다.
+
+형제 직렬화기와의 shape 비대칭 (공시)
+-------------------------------------
+``app/services/prediction_dataset.py`` 의 ``_serialize_series_point`` 와 **shape 이 다르다.**
+키 12개를 공유하고 12개가 갈린다 — prediction_dataset 전용 11개(``business_group`` ·
+``business_group_source`` · ``business_type_code`` · ``business_type_label`` ·
+``bid_rate_source`` · ``award_rate_label`` · ``tender_result_id`` · ``winning_amount`` ·
+``winning_rate`` · ``tender_result_status`` · ``tender_result_announced_at``), 이쪽 전용
+1개(``base_amount_source``). 두 shape 은 **호환이 아니고** 한쪽 소비자를 다른 쪽에 그대로
+물릴 수 없다.
+
+그중 ``award_rate_label``(basis 명시 낙찰률 라벨, #363)이 여기 없는 것은 게으름이 아니라
+입력이 없어서다: 그 라벨의 분자는 ``TenderResult.winning_amount`` 인데 이 직렬화기는
+``HistoricalData`` 한 행만 받고 조회 경로(``_query_history_scope``)도 개찰 결과를 join 하지
+않는다. 여기서 라벨을 만들면 분자가 항상 비어 ``no-winning-amount`` 만 찍히는데, 그것은
+"개찰 결과가 없다"가 아니라 "우리가 보지 않았다"라서 판정 불가를 결측으로 위장하는 셈이
+된다(정직 명세 §2). #199 ``base_amount_basis`` 때는 행 자체가 값을 들고 있어 두 직렬화기를
+맞출 수 있었고 실제로 맞췄다(#362 리뷰 K2) — 이번 비대칭은 그 경우와 성격이 다르다.
+
+Phase 2 가 이 경로(paper bidding 백테스트·smoke test)의 record 로 학습·평가하려면
+``TenderResult`` 배치 적재를 붙여야 하는데, **as-of 필터를 함께 붙여야 한다.** 형제 로더
+``prediction_dataset._load_latest_tender_results`` 는 ``is_current`` 만 보고 cutoff 를 보지
+않으므로, 그대로 이식하면 위의 창설 계약이 깨져 개찰 이후 확정된 낙찰 결과가 백테스트
+입력으로 샌다. 그때까지 이 경로의 라벨은 0건이다.
+"""
 
 from __future__ import annotations
 
@@ -221,19 +250,10 @@ class BacktestCutoffService:
     def serialize_historical_record(self, record: HistoricalData) -> dict[str, Any]:
         """Convert an ORM row into the predictor's lightweight record shape.
 
-        ⚠ ``prediction_dataset._serialize_series_point`` 와 **키가 하나 다르다**: 그쪽에는
-        basis 명시 낙찰률 라벨(``award_rate_label``)이 있고 여기에는 없다. 게으름이 아니라
-        입력이 없어서다 — 그 라벨의 분자는 ``TenderResult.winning_amount`` 인데 이
-        직렬화기는 ``HistoricalData`` 한 행만 받고 이 서비스의 조회 경로
-        (``_query_history_scope``)도 개찰 결과를 join 하지 않는다. 여기서 라벨을 만들면
-        분자가 항상 비어 ``no-winning-amount`` 만 찍히는데, 그것은 "개찰 결과가 없다"가
-        아니라 "우리가 보지 않았다"라서 판정 불가를 결측으로 위장하는 셈이 된다(§2).
-
-        #199 ``base_amount_basis`` 때는 행 자체가 값을 들고 있어 두 직렬화기를 맞출 수 있었고
-        실제로 맞췄다(#362 리뷰 K2). 이번 비대칭은 그 경우와 성격이 다르다.
-
-        Phase 2 가 이 경로(paper bidding 백테스트·smoke test)의 record 로 학습·평가하려면
-        ``TenderResult`` 배치 적재를 먼저 붙여야 한다. 그때까지 이 경로의 라벨은 0건이다.
+        ⚠ 형제 직렬화기 ``prediction_dataset._serialize_series_point`` 와 **shape 이 다르다**
+        (공유 12키 / 갈리는 12키). 특히 basis 명시 낙찰률 라벨 ``award_rate_label`` 이 여기
+        없는 것은 이 직렬화기가 개찰 결과를 받지 않기 때문이며, 이식하려면 as-of 필터가 먼저
+        필요하다 — 근거와 전수 목록은 모듈 docstring "형제 직렬화기와의 shape 비대칭".
         """
         reliable_base = get_reliable_base(
             record.base_amount,

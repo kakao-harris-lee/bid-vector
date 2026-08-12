@@ -196,9 +196,12 @@ def _report_coverage(rows: list[_Row]) -> None:
     print(f"  기존 tier 체인 합집합 (1|2|3)            : {tier_chain}")
     print(f"  새 라벨 값 성립 (낙찰가 ÷ 분모)          : {new_ok}")
     print(f"    └ 그중 분모에 근거 있음 (status=ok)    : {evidenced}")
-    print(f"  값 성립 ∩ 저장 라벨 공존                 : {both}")
-    print(f"    ├ 새 라벨만                            : {new_only}")
-    print(f"    └ 저장 라벨만                          : {stored_only}")
+    # 아래 셋은 계층이 아니다. 앞의 둘이 새 라벨을 **분할**하고(both + new_only = new_ok)
+    # 셋째는 저장 라벨 쪽 잔여다 — 들여쓰기로 부모/자식을 암시하지 않는다(이 출력이 PR
+    # 본문 표로 그대로 전사되므로 여기서 틀리면 본문도 틀린다).
+    print(f"  ├ 두 라벨 공존                           : {both}")
+    print(f"  └ 새 라벨만  (공존 + 이 값 = 값 성립)    : {new_only}")
+    print(f"  저장 라벨만 (새 라벨 없음 — 위와 서로소) : {stored_only}")
 
     print("\n  새 라벨 상태 분포(전 행 — ok 와 ok-unverified-base 를 가른다):")
     for status, count in Counter(row.new_status for row in rows).most_common():

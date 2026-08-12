@@ -237,6 +237,40 @@ def test_label_value_and_denominator_reconstruct_the_award_amount():
     )
 
 
+@pytest.mark.parametrize(
+    ("base_amount_basis", "expected_source"),
+    [
+        (BASIS_CLEAN, ReliableBaseSource.CLEAN_BASE),
+        (None, ReliableBaseSource.BASE_FALLBACK),
+        (BASIS_SUSPECT_RATIO, ReliableBaseSource.BASE_FALLBACK),
+    ],
+)
+def test_window_guard_runs_before_the_evidence_branch(
+    base_amount_basis, expected_source
+):
+    """창 밖 비율은 분모 근거와 **무관하게** 값을 내지 않는다 — 두 분기의 순서 계약.
+
+    ``_resolve_value`` 에서 유효 창 가드가 ``OK_UNVERIFIED_BASE`` 분기보다 **앞**에 서야
+    한다. 순서가 뒤집히면 근거 없는 분모(``base-fallback``)의 창 밖 비율이
+    ``out-of-range, value=None`` 이 아니라 ``ok-unverified-base, value=2.0`` 으로 나가
+    창 밖 값이 학습 payload 에 실린다.
+
+    clean 케이스만으로는 이 순서가 고정되지 않는다 — clean 은 새 분기를 아예 타지 않아
+    순서를 바꿔도 통과한다. ``base-fallback`` 두 갈래(미태깅·오염+복구실패)를 함께 세워야
+    변이가 잡힌다.
+    """
+    label = build_award_rate_label(
+        winning_amount=200_000_000.0,  # ÷ 1억 = 2.0 → 창 밖
+        base_amount=CLEAN_BASE,
+        base_amount_basis=base_amount_basis,
+        base_amount_estimated=None,
+    )
+
+    assert label.value is None
+    assert label.status is AwardRateLabelStatus.OUT_OF_RANGE
+    assert label.denominator_source is expected_source
+
+
 def test_payload_carries_both_basis_axes_as_plain_strings():
     """직렬화 블록은 값과 basis 를 한 덩어리로 싣는다 — 값만 떼어 곱할 수 없게."""
     payload = build_award_rate_label(

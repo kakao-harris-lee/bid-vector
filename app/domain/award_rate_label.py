@@ -45,6 +45,35 @@ detail 수집 성공 여부**이고 그 성공률이 카테고리와 상관된�
 승격**시켰기 때문에, 상수 단언을 그대로 옮기면 프로세스 밖 소비자에게는 hedge 가 사라진
 단언만 남는다. 그것이 여기서만 조건부로 낸 이유다.
 
+``ok`` 안의 두 티어 — 근거는 같지만 값의 성격이 다르다
+------------------------------------------------------
+``status == "ok"`` 는 **동질 집단이 아니다.** 운영 코퍼스 실측(2026-08-12) 34,859행 중
+16,843(48.3%)이 ``clean-base``, **18,016(51.7%)이 ``reserve-estimate``** 다.
+
+``reserve-estimate`` 를 근거 집합에 넣은 것은 **축(basis)에 대한 판단**이다: 복수예비가격
+midpoint 는 정의상 기초금액을 복원하므로 "이 분모가 기초금액 축인가"에는 확실히 그렇다고
+답한다. 그러나 **값의 정확도는 별개 질문**이고 거기서는 추정 티어다. clean base 를 ground
+truth 로 놓고 같은 midpoint 규칙을 재계산하면(n=6,022): mean ``-0.40%`` · sd ``3.30%`` ·
+``|err| > 5%`` 가 ``3.7%`` · 최악 ``-57%`` / ``+199%``. (이 벤치마크의 모집단은 clean 이면서
+예비가를 전량 보유한 행이라 실제로 이 티어로 들어오는 non-clean 행과 같지 않다 — 오차
+크기의 **대리 지표**로만 읽을 것.)
+
+그 오차는 작지 않다. 분모의 상대오차는 라벨로 거의 그대로 전파되므로 라벨 단위로 약
+``3.0pp`` 인데 이 코퍼스의 라벨 sd 가 약 ``5.1pp`` 다. 즉 타깃 산포의 절반을 넘는 잡음을
+얹는 대가로 표본을 두 배로 늘리는 **의도적 교환**이다.
+
+형제 소비자 ``app/services/floor_shortfall`` 은 같은 출처를 **거부**한다. 모순이 아니라
+결론이 분포의 다른 부분에 달려 있어서다: 그쪽은 하한 미달 **빈도**라 꼬리가 결론이고
+``|err| > 5%`` 3.7% 가 그 꼬리를 직접 만든다. 이 라벨은 회귀 타깃이라 중심이 결론이지만,
+그렇다고 잡음이 무해하다는 뜻은 아니다 — 아래 층화 요구가 그래서 붙는다.
+
+**두 티어는 교환 가능하지 않다.** 같은 실측에서 카테고리별 라벨 평균이 스트라텀 간에
+갈린다: service ``-8.11pp``(clean n=10,049 vs est n=4,130) · goods ``-5.93pp``(2,293 vs
+4,261) · construction ``-0.10pp``(4,493 vs 9,625). 이 모듈이 애초에 막으려던 "분모 종류가
+카테고리와 교락한다"는 패턴이 완화된 형태로 남아 있다는 뜻이다. 그래서 Phase 2 는
+``status == "ok"`` 로 거르는 것으로 **끝내면 안 되고**, ``denominator_source`` 를 층화 키
+또는 통제 변수로 **유지**해야 한다.
+
 이 모듈이 하지 않는 일
 ----------------------
 기존 라벨 해석 경로(``PredictionDatasetService._resolve_bid_rate`` 의 tier 우선순위)를
@@ -96,9 +125,15 @@ class AwardRateLabelStatus(str, Enum):
 
     ``OK`` 와 ``OK_UNVERIFIED_BASE`` 는 **둘 다 값이 난다**. 가르는 것은 값의 존재가 아니라
     분모의 근거이며, 학습 타깃 선택은 ``OK`` 만 받는 것이 기본값이어야 한다.
+
+    ⚠ ``OK`` 로 거르는 것은 **필요조건이지 충분조건이 아니다.** ``OK`` 안에 근거의 성격이
+    다른 두 티어가 섞여 있고(``clean-base`` 48.3% / ``reserve-estimate`` 51.7%, 후자는 복구
+    오차를 싣는 추정 티어), 그 비중이 카테고리와 상관된다 — 모듈 docstring "``ok`` 안의 두
+    티어" 참조. 소비자는 ``denominator_source`` 를 층화 키/통제 변수로 **함께 유지**해야
+    한다.
     """
 
-    OK = "ok"                                  # 값 성립 + 분모에 근거 있음
+    OK = "ok"                                  # 값 성립 + 분모 축에 근거 있음(정확도는 별개)
     OK_UNVERIFIED_BASE = "ok-unverified-base"  # 값은 났지만 분모가 base-fallback(근거 없음)
     NO_WINNING_AMOUNT = "no-winning-amount"    # 낙찰가 없음/비양수 — 라벨의 분자가 없다
     NO_RELIABLE_BASE = "no-reliable-base"      # 양수 기초금액을 못 고름
@@ -107,7 +142,12 @@ class AwardRateLabelStatus(str, Enum):
 
 @dataclass(frozen=True)
 class AwardRateLabel:
-    """낙찰가 ÷ 신뢰 기초금액 과 그 값을 만든 basis·출처.
+    """낙찰가 ÷ 분모, 그리고 그 분모가 무엇이며 어디서 왔는가.
+
+    분모는 :func:`~app.domain.reliable_base.get_reliable_base` 가 고른 값이지만 **항상
+    기초금액이라고 단언하지 않는다** — ``base-fallback`` 경로에서는 그 값이 예정가-basis
+    오염일 수 있다(운영 코퍼스에서 값이 나는 라벨의 44.3%). 축을 주장할 수 있는지는
+    ``denominator_basis`` 가, 어느 경로였는지는 ``denominator_source`` 가 진다.
 
     ``value`` 는 ``status`` 가 ``OK`` 또는 ``OK_UNVERIFIED_BASE`` 일 때 채워진다. 나머지
     필드는 성립 여부와 무관하게 관측된 만큼 채워지므로, 실패한 라벨도 왜 실패했는지 집계할
@@ -121,7 +161,10 @@ class AwardRateLabel:
     """성립 여부, 분모 근거 유무, 실패 사유."""
 
     denominator_value: float | None
-    """실제로 분모에 쓰인 기초금액. 값이 있으면 ``value × 이 값 = 낙찰가`` 로 재현된다."""
+    """실제로 분모에 쓰인 금액. 값이 있으면 ``value × 이 값 = 낙찰가`` 로 재현된다.
+
+    이 값이 기초금액인지는 ``denominator_source`` 가 정한다 — ``base-fallback`` 이면 근거가
+    없고, 그 경우 실제로는 예정가-basis 오염일 수 있다."""
 
     denominator_source: ReliableBaseSource
     """분모를 어느 경로로 골랐는가 (clean-base / reserve-estimate / base-fallback /
@@ -164,6 +207,18 @@ class AwardRateLabel:
         이다. 두 축이 그 일을 한다: ``status == "ok"``(근거 없는 분모는 다른 상태)와
         ``denominator_basis is not None``. 둘은 같은 선언
         (:data:`EVIDENCED_DENOMINATOR_SOURCES`)에서 나오므로 서로 어긋날 수 없다.
+
+        두 필터가 동치인 것은 **근거 축에서만**이다. 값 존재는 별개라서 실 코퍼스에
+        ``denominator_basis == "base_amount"`` 이면서 ``status != "ok"`` 인 행이 16,574건
+        있다(실측 2026-08-12 — ``no-winning-amount`` 16,478 + ``out-of-range`` 96, **전부**
+        ``value is None``). basis 축만 보고 고르는 소비자는 값 가드(``value is not None``)를
+        따로 걸어야 한다.
+
+        그리고 ``status == "ok"`` 로 거르는 것은 **근거 없는 분모를 뺄 뿐, 이질적 분모를
+        빼지 않는다** — ``ok`` 안에 ``clean-base`` 와 추정 티어 ``reserve-estimate`` 가 약
+        반반으로 섞여 있고 그 비중이 카테고리와 상관된다(모듈 docstring "``ok`` 안의 두
+        티어"). 그래서 이 블록은 ``denominator_source`` 를 **항상 함께** 싣는다: 버리라고
+        둔 필드가 아니라 층화/통제에 쓰라고 둔 필드다.
         """
         basis = self.denominator_basis
         return {

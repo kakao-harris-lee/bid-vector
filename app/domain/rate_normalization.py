@@ -17,12 +17,35 @@ SQL-level CASE(`bid_target_signals`)는 파이썬 함수를 못 부르므로 임
 다른 규칙이지만(전자는 값을 바꾸고 후자는 값을 버린다) 둘 다 "정규화된 율을 어떻게 읽는가"
 라 같은 모듈에 둔다 — ``PERCENT_SCALE_THRESHOLD`` 가 이미 그렇게 살고 있다.
 
-**#256 의 판단을 뒤집은 것이다.** 그때 이 모듈은 유효범위 게이트를 "콜사이트마다 정당하게
-다른 것"으로 분류해 병합 제외 대상으로 **명시 선언**했다. 뒤집는 근거는 그 사이 확인된
-사실 하나다: 당시 다르다고 본 콜사이트들이 실제로는 전부 같은 상수(``VALID_BID_RATE_MIN/
-MAX``)를 참조하는 **같은 닫힌 구간**이었고, 다른 것은 그 앞뒤의 입력 coercion 뿐이었다.
-coercion 은 여전히 콜사이트에 남기고(원래 판단 유지) 창 판정만 가져온다. 창을 새 콜사이트
-(``award_rate_label``)가 또 인라인으로 적으면 경계가 갈릴 수 있다는 것이 직접 계기다.
+**#256 의 판단을 부분적으로 뒤집은 것이다.** 그때 이 모듈은 유효범위 게이트를 "콜사이트마다
+정당하게 다른 것"으로 분류해 병합 제외 대상으로 **명시 선언**했고, **그 분류는 대체로
+옳았다.** 위임 콜사이트 전수(grep ``to_bid_rate_fraction``)를 다시 세면 게이트가 실제로
+갈린다:
+
+- **닫힌 창 ``[0.5, 1.5]`` — 2곳**: ``prediction_dataset._normalize_bid_rate_value``(파이썬),
+  ``bid_target_signals``(SQL WHERE 절, 상수만 참조).
+- **양수 게이트(``<= 0 → None``)만 — 5곳**: ``koneps/parsing.normalize_bid_rate_value`` ·
+  ``ai/price_prediction/guardrails_context`` · ``award_verification._rate_to_fraction`` ·
+  ``base_amount_basis.normalize_winning_rate`` · ``koneps/field_contract._as_fraction``.
+- **게이트 없음 — 1곳**: ``paper_bidding_backtest/scoring``.
+- **다른 밴드 — 1곳**: ``schemas/koneps_items``(게시 낙찰하한율 밴드).
+
+즉 닫힌 창을 쓰는 곳은 소수다. 그럼에도 이 창을 상수+술어로 올린 근거는 "여러 곳이 같아서"가
+아니라 **이 창이 이미 모듈 경계를 넘어 공유되고 있었다**는 사실이다: 값이
+``PredictionDatasetService.VALID_BID_RATE_MIN/MAX`` 라는 **service 클래스 속성**으로 살면서
+``bid_target_signals`` · ``floor_shortfall`` · ``scripts/measure_stored_bidrate_basis`` 가 그
+속성을 참조했다. 새 커널(``award_rate_label``)이 같은 창을 쓰려면 service 를 import 해야
+하는데 그러면 순환이 된다. 그래서 **이미 교차 모듈이던 상수의 거처를 중립 지점으로 옮기고**,
+닫힌 창을 쓰는 쪽에 비교식 한 벌을 준다. 입력 coercion 은 여전히 콜사이트에 남긴다(#256 의
+원래 판단 유지).
+
+⚠ **위 5곳의 양수 게이트는 수렴 대상이 아니다.** 특히
+``base_amount_basis.normalize_winning_rate`` 는 게이트의 **부재가 load-bearing** 이라고 자기
+docstring 에 적혀 있다("No validity-range gate is applied, so a genuinely low award rate
+stays usable for the derived-yega match"). 거기에 이 창을 씌우면 낙찰률 < 0.5 인 행이
+``None`` 이 되어 derived-yega 매칭이 스킵되고 ``suspect-fractional`` 로 오분류된다 — #199
+provenance 판정이 조용히 틀어진다. 아래 "콜사이트 수렴" 항목이 세는 넷은 **닫힌 창을 쓰는
+곳만**이다.
 
 창의 값 ``[0.5, 1.5]`` 는 새로 정한 것이 아니라 ``PredictionDatasetService`` 의
 ``VALID_BID_RATE_MIN/MAX`` 에 있던 것을 옮긴 것이다(값 동일). 그 클래스 상수는 참조 이름을
