@@ -1,4 +1,4 @@
-"""복수예비가격 추첨(4/15) 예정가 분포 커널 — 완전 열거 + 몬테카를로 폴백.
+"""복수예비가격 추첨(4/15) 예정가 분포 커널 — 완전 열거.
 
 왜 이 모듈인가
 --------------
@@ -6,9 +6,12 @@ KONEPS 예정가는 시계열이 아니라 **복권형 생성 메커니즘**이�
 복수예비가격 15개 중 4개를 추첨해 평균낸 값이 예정가가 된다. 추첨 조합은
 C(15, 4) = 1,365 가지**뿐**이므로, 몬테카를로 샘플링 없이 전체 조합을 **완전
 열거(exact enumeration)** 하면 샘플링 오차 0 의 결정적·재현 가능한 분포를 얻는다.
-몬테카를로는 조합 수가 열거 한도(10⁵)를 넘는 비정상 누적 — C(45,4)=148,995 부터,
-즉 45개 이상(예: 60/100개 다회차 행) — 에서만 폴백으로 남긴다(30개는 C(30,4)=27,405
-라 여전히 열거된다). 그때도 고정 seed 로 결정적이다.
+
+두 실소비자(distribution predictor 의 :func:`draw_mean_moments`, 캘리브레이션
+스크립트의 :func:`exact_draw_mean_distribution`)가 모두 상류에서 예비가격을
+**정확히 15개**로 강제하므로, 조합 수가 열거를 넘는 입력은 이 커널에 도달하지
+않는다. 몬테카를로 폴백은 그래서 두지 않는다 — 도달 불가 죽은 코드였고(리뷰 L3),
+Phase 3 가 실제로 필요로 하면 그때 실소비자와 함께 되살린다.
 
 순수 함수(I/O 0), stdlib 전용. ``app.domain.rate_normalization`` 등과 같은
 mypy strict 아일랜드다. 값 검증은 이 커널이 소유한다(잘못된 입력은 조용히
@@ -20,8 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import combinations
-from math import comb, isfinite, sqrt
-from random import Random
+from math import isfinite, sqrt
 from statistics import fmean, pvariance
 from typing import Final
 
@@ -30,32 +32,18 @@ DEFAULT_DRAW_COUNT: Final[int] = 4
 # 정상 공고의 복수예비가격 개수. 30/60/100개 행은 다회차 공고 누적으로 관측됐다
 # (운영 DB 실측: 15개 = 27,397건/비어있지 않은 27,444건의 99.8%).
 EXPECTED_RESERVE_PRICE_COUNT: Final[int] = 15
-# 완전 열거 상한. C(15,4)=1,365 · C(30,4)=27,405 · C(45,4)=148,995 이므로 이 상한은
-# 정상(15개)과 2회차 누적(30개)까지 열거로 처리하고, 그 밖의 비정상 누적만
-# 몬테카를로로 떨어뜨린다.
-EXACT_ENUMERATION_MAX_COMBINATIONS: Final[int] = 100_000
-# 몬테카를로 폴백 표본 수. 8,192 표본이면 분위수 격자 간격이 ~0.012% 라 시나리오
-# 경계(10/90 분위) 추정에 충분하고, seed 고정과 함께 결정적 재현이 유지된다.
-MONTE_CARLO_SAMPLE_COUNT: Final[int] = 8_192
-# 폴백도 결정적이어야 한다(재현 가능한 백테스트 증적). 호출부가 공고 단위 seed 를
-# 넘기지 않으면 이 고정값을 쓴다.
-MONTE_CARLO_DEFAULT_SEED: Final[int] = 0
-
-METHOD_EXACT: Final[str] = "exact_enumeration"
-METHOD_MONTE_CARLO: Final[str] = "monte_carlo"
 
 
 @dataclass(frozen=True)
 class DrawMeanDistribution:
     """추첨 평균(예정가)의 이산 분포 — 지지집합의 각 원소는 등확률이다.
 
-    ``support`` 는 오름차순 정렬된 추첨 평균들이다. 완전 열거면 조합당 1개
-    (C(n, k)개 전부), 몬테카를로면 표본당 1개다. 등확률이므로 분위수·구간·
-    누적확률이 전부 순서통계량으로 닫힌다.
+    ``support`` 는 오름차순 정렬된 추첨 평균들로, 완전 열거 조합당 1개
+    (C(n, k)개 전부)다. 등확률이므로 분위수·구간·누적확률이 전부
+    순서통계량으로 닫힌다.
     """
 
     support: tuple[float, ...]
-    method: str
     draw_count: int
     source_count: int
 
@@ -97,23 +85,6 @@ class DrawMeanDistribution:
         return (below + (equal / 2.0)) / len(self.support)
 
 
-def draw_mean_distribution(
-    values: Sequence[float],
-    draw_count: int = DEFAULT_DRAW_COUNT,
-    *,
-    max_exact_combinations: int = EXACT_ENUMERATION_MAX_COMBINATIONS,
-    sample_count: int = MONTE_CARLO_SAMPLE_COUNT,
-    seed: int = MONTE_CARLO_DEFAULT_SEED,
-) -> DrawMeanDistribution:
-    """조합 수가 한도 안이면 완전 열거, 넘으면 seed 고정 몬테카를로로 디스패치."""
-    validated = _validated_values(values, draw_count)
-    if comb(len(validated), draw_count) <= max_exact_combinations:
-        return exact_draw_mean_distribution(validated, draw_count)
-    return monte_carlo_draw_mean_distribution(
-        validated, draw_count, sample_count=sample_count, seed=seed
-    )
-
-
 def exact_draw_mean_distribution(
     values: Sequence[float], draw_count: int = DEFAULT_DRAW_COUNT
 ) -> DrawMeanDistribution:
@@ -124,30 +95,6 @@ def exact_draw_mean_distribution(
     )
     return DrawMeanDistribution(
         support=tuple(support),
-        method=METHOD_EXACT,
-        draw_count=draw_count,
-        source_count=len(validated),
-    )
-
-
-def monte_carlo_draw_mean_distribution(
-    values: Sequence[float],
-    draw_count: int = DEFAULT_DRAW_COUNT,
-    *,
-    sample_count: int = MONTE_CARLO_SAMPLE_COUNT,
-    seed: int = MONTE_CARLO_DEFAULT_SEED,
-) -> DrawMeanDistribution:
-    """비복원 추첨을 반복 표집한 근사 분포. 같은 ``seed`` 면 결과가 항상 같다."""
-    validated = _validated_values(values, draw_count)
-    if sample_count < 1:
-        raise ValueError("sample_count must be a positive integer")
-    rng = Random(seed)
-    support = sorted(
-        fmean(rng.sample(validated, draw_count)) for _ in range(sample_count)
-    )
-    return DrawMeanDistribution(
-        support=tuple(support),
-        method=METHOD_MONTE_CARLO,
         draw_count=draw_count,
         source_count=len(validated),
     )

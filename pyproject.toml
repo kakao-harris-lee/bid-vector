@@ -58,9 +58,9 @@ ignore_errors = true
 # 어느 축에서 온 값인지가 곧 권위이고, 판정이 두 벌이 되면 생산자와 write 가드가 서로 다른
 # 값을 "공고 게시 추정가격"으로 본다).
 # Phase 1h adds app.domain.reserve_draw_distribution (복수예비가격 4/15 추첨 예정가 분포 —
-# 완전 열거 + seed 고정 몬테카를로 폴백) and app.domain.assessment_shrinkage (사정률 계층
-# 수축 사전분포 — 학습 코어 기관 91.9% 가 표본 <10 이라 pseudo-count 수축이 예측 정합성을
-# 결정한다).
+# 완전 열거 전용, MC 폴백은 도달 불가 죽은 코드라 제거/리뷰 L3) and
+# app.domain.assessment_shrinkage (사정률 계층 수축 사전분포 — 학습 코어 기관 91.9% 가
+# 표본 <10 이라 pseudo-count 수축이 예측 정합성을 결정한다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
