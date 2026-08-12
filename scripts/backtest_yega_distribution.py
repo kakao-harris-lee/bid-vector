@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """예정가 분포 엔진(Phase 1) 캘리브레이션 홀드아웃 — 커버리지 검정 + 점추정 비교.
 
-코어 표본(15개 복수예비가격 ∩ base_amount_basis='clean' ∩ 정산완료)에 대해 두 축을
-검증한다. 어느 축도 개선을 강제하는 게이트가 아니다 — 수치는 그대로 보고한다.
-
-1. **점추정 비교**: 기존 rolling holdout(`build_predictor_backtest_report`)에
-   historical 과 distribution predictor 를 나란히 태워 |예측 사정률 − 실측| 을 비교.
-2. **커버리지 검정(PIT)**: 시간순으로, 각 홀드아웃 공고 **이전** 행만으로 계층 수축
-   사후분포를 만들고(시간 누수 차단), 실현 사정률(추첨된 4개 평균/기초금액)의 PIT 가
-   균등한지·중앙 50/80/90% 구간이 명목 커버리지를 덮는지 측정한다.
-   메커니즘 축도 따로 검증한다: 공고 자신의 15개로 완전 열거한 추첨 분포에서 실현
-   추첨 평균의 PIT — 4/15 추첨이 균등 복권이라는 모형 가정 자체의 검정이다.
+코어 표본(15개 복수예비가격 ∩ clean ∩ 정산완료)에 두 축을 검증한다(개선 강제 게이트
+아님 — 수치는 그대로 보고): ①점추정 — rolling holdout 에 historical/distribution 을
+나란히 태워 |예측 사정률 − 실측| 비교, ②커버리지(PIT) — 각 홀드아웃 공고 **이전**
+행만으로 수축 사후분포를 만들고(시간 누수 차단) 실현 사정률의 PIT 균등성과 중앙
+50/80/90% 커버리지를 측정. 메커니즘 축(공고 자신의 완전 열거 분포에서 실현 추첨
+평균의 PIT — 4/15 균등 복권 가정 자체의 검정)도 따로 잰다.
 
 읽기 전용(SELECT)이며 DB 에 아무것도 쓰지 않는다.
 """
@@ -41,7 +37,8 @@ from app.ai.predictors import (  # noqa: E402
     ReserveDrawDistributionPredictor,
 )
 from app.ai.predictors.distribution_extraction import (  # noqa: E402
-    realized_assessment_ratio,
+    ReserveDrawObservation,
+    observe_reserve_draw,
 )
 from app.ai.predictors.historical import (  # noqa: E402
     normalize_agency_name,
@@ -50,13 +47,14 @@ from app.ai.predictors.historical import (  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.domain.assessment_shrinkage import (  # noqa: E402
+    AGENCY_PRIOR_STRENGTH,
+    CATEGORY_PRIOR_STRENGTH,
+    MIN_PREDICTIVE_STD,
     LevelObservation,
     resolve_assessment_posterior,
 )
 from app.domain.reserve_draw_distribution import (  # noqa: E402
-    DEFAULT_DRAW_COUNT,
     EXPECTED_RESERVE_PRICE_COUNT,
-    draw_mean_moments,
     exact_draw_mean_distribution,
 )
 from app.models.models import HistoricalData, TenderResult  # noqa: E402
@@ -67,9 +65,8 @@ from app.utils.sequence_coercion import (  # noqa: E402
 )
 from scripts._common import parse_datetime  # noqa: E402
 
-# 명목 커버리지 수준과 대응 PIT 중앙 구간 — 선언 데이터(§4.5).
+# 명목 커버리지 수준(선언 데이터 §4.5)과, prior 축 평가를 시작할 최소 선행 이력.
 COVERAGE_LEVELS = (0.5, 0.8, 0.9)
-# 커버리지 루프의 최소 선행 이력 — 이보다 얕은 프리픽스로 만든 사후분포는 평가하지 않는다.
 MIN_PRIOR_ROWS_FOR_COVERAGE = 50
 
 
@@ -90,14 +87,15 @@ class PitSummary(BaseModel):
 class CoverageReport(BaseModel):
     prior_predictive: PitSummary
     prior_mean_absolute_center_error: float | None
-    # 표준화 잔차 z = (실현 − 사후중심)/예측std 의 모양 진단. 균등 PIT 이면
-    # mean 0 / std 1 / 초과 첨도 0 — mean ≠ 0 은 계통 편향, 첨도 ≫ 0 은 정규근사가
-    # 서술 못 하는 뾰족한 중심 + 두꺼운 꼬리(과커버의 실제 원인)다.
+    # 표준화 잔차 z 모양 진단(균등이면 0/1/0): mean≠0=계통 편향, 첨도≫0=정규근사가
+    # 못 잡는 뾰족한 중심+두꺼운 꼬리(과커버의 실제 원인).
     prior_standardized_residual_mean: float | None
     prior_standardized_residual_std: float | None
     prior_excess_kurtosis: float | None
     mechanism_exact_draw: PitSummary
     skipped_no_selected_numbers: int
+    # 엔진과 같은 관측 관문(15개·center 밴드)에서 걸러진 행 수 — 침묵 스킵 금지(L4-1).
+    skipped_unobservable: int
     agency_count: int
     category_count: int
 
@@ -109,6 +107,10 @@ class HoldoutReport(BaseModel):
     holdout_size: int
     min_training_samples: int
     min_prior_rows_for_coverage: int
+    # 수축 모수 프로버넌스(L4-4) — Phase 2 κ 재추정 후 아티팩트를 형태로 구별한다(#357 축).
+    prior_strength_agency: float
+    prior_strength_category: float
+    min_predictive_std: float
     coverage: CoverageReport
     point_error: dict[str, Any]
 
@@ -118,8 +120,7 @@ class ConsoleSummary(BaseModel):
     core_row_count: int
     prior_coverage: dict[str, CoverageLevelStat]
     mechanism_coverage: dict[str, CoverageLevelStat]
-    # best 는 "자동 승격 제외 arm 을 뺀 최선"이다 — 어떤 arm 이 제외된 채 뽑혔는지
-    # 콘솔에서도 보이게 리포트의 방법론 메타를 그대로 노출한다(리뷰 K5).
+    # best = "자동 승격 제외 arm 을 뺀 최선" — 방법론 메타를 콘솔에도 노출(K5).
     best_predictor_key: str | None
     excluded_predictor_arms: list[str]
     report_version: str | None
@@ -134,10 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", help="opened_at/created_at window end.")
     parser.add_argument(
         "--limit", type=int, default=8000,
-        help=(
-            "Maximum core rows loaded. 정렬이 오래된 순이라 코어가 limit 보다 크면 "
-            "가장 오래된 행부터 잡힌다 — 최근 구간을 보려면 --start-date 를 함께 써라."
-        ),
+        # 정렬이 오래된 순이라 코어가 limit 초과면 최신 구간은 --start-date 로 잡아라.
+        help="Maximum core rows loaded (oldest-first; use --start-date for recent windows).",
     )
     parser.add_argument(
         "--holdout-size", type=int, default=200,
@@ -154,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _window_filtered(
     query: Query, start_at: datetime | None, end_at: datetime | None
 ) -> Query:
-    """opened_at 우선(없으면 created_at) 시간창 필터 — 기존 백테스트 스크립트와 동일 규칙."""
+    """opened_at 우선(폴백 created_at) 시간창 — 기존 백테스트 스크립트와 동일 규칙."""
     if start_at is not None:
         query = query.filter(
             (HistoricalData.opened_at >= start_at)
@@ -176,10 +175,7 @@ def load_core_rows(
     end_at: datetime | None,
     limit: int,
 ) -> list[HistoricalData]:
-    """코어 표본: clean base ∩ 정산완료(TenderResult.winning_amount>0) ∩ 예비가 15개.
-
-    15개 여부는 Text JSON 이라 SQL 로 못 거르므로 적재 후 파이썬에서 확정한다.
-    """
+    """코어: clean ∩ 정산완료 ∩ 예비가 15개(Text JSON 이라 15개는 적재 후 확정)."""
     settled = exists().where(
         and_(
             TenderResult.project_id == HistoricalData.project_id,
@@ -246,15 +242,6 @@ def normal_cdf(value: float, *, mean: float, std: float) -> float:
     return 0.5 * (1.0 + erf((value - mean) / (std * sqrt(2.0))))
 
 
-def realized_assessment(row: HistoricalData) -> float | None:
-    """실현 사정률 — predictor 와 같은 단일 정의(distribution_extraction)를 쓴다."""
-    return realized_assessment_ratio(
-        reserve_prices=coerce_numeric_list(row.reserve_prices),
-        picked_numbers=coerce_integer_list(row.selected_numbers),
-        base_amount=float(row.base_amount or 0.0),
-    )
-
-
 def summarize_pit(pit_values: list[float]) -> PitSummary:
     """PIT 균등성 요약 — 명목 vs 실측 중앙 구간 커버리지."""
     if not pit_values:
@@ -307,14 +294,14 @@ class _CoverageAccumulator:
         self.prior_absolute_errors: list[float] = []
         self.prior_standardized_residuals: list[float] = []
         self.skipped_no_pick = 0
+        self.skipped_unobservable = 0
 
     def prior_pit_for(
         self, *, realized: float, agency_key: str, category_key: str
     ) -> None:
-        """개찰 전 정보(선행 이력)만으로 만든 예측분포에서 실현 사정률의 PIT.
+        """선행 이력만으로 만든 예측분포에서 실현 사정률의 PIT.
 
-        추첨 분산은 평가 대상 행 자신의 값이 아니라 **프리픽스 평균**
-        (``draw_variance_level.mean``)만 쓴다 — 자기 행 값을 쓰면 누수다.
+        추첨 분산은 프리픽스 평균만 쓴다 — 평가 행 자신의 값을 쓰면 누수다.
         """
         agency_level = self.agency_levels.get(agency_key)
         category_level = self.category_levels.get(category_key)
@@ -338,6 +325,37 @@ class _CoverageAccumulator:
                 (realized - posterior.mean) / predictive_std
             )
 
+    def evaluate_and_absorb(
+        self,
+        observed: ReserveDrawObservation,
+        *,
+        agency_key: str,
+        category_key: str,
+    ) -> None:
+        """평가(선행 프리픽스만 사용) 후에야 관측을 집계에 편입한다(누수 차단)."""
+        realized = observed.realized_assessment
+        if realized is None:
+            self.skipped_no_pick += 1
+        else:
+            # 메커니즘 축: 공고 자신의 15개 완전 열거 분포에서 실현 추첨 평균의 PIT.
+            self.mechanism_pit.append(
+                exact_draw_mean_distribution(
+                    list(observed.ratios)
+                ).cumulative_probability(realized)
+            )
+            if self.global_level.count >= MIN_PRIOR_ROWS_FOR_COVERAGE:
+                self.prior_pit_for(
+                    realized=realized,
+                    agency_key=agency_key,
+                    category_key=category_key,
+                )
+        self.absorb(
+            center=observed.center,
+            draw_variance=observed.draw_variance,
+            agency_key=agency_key,
+            category_key=category_key,
+        )
+
     def absorb(
         self, *, center: float, draw_variance: float, agency_key: str, category_key: str
     ) -> None:
@@ -350,35 +368,26 @@ class _CoverageAccumulator:
 
 
 def run_coverage_backtest(rows: list[HistoricalData]) -> CoverageReport:
-    """시간순 단일 패스: 선행 행만으로 사후분포를 만들고 실현 사정률의 PIT 를 잰다."""
+    """시간순 단일 패스: 선행 행만으로 사후분포를 만들고 실현 사정률의 PIT 를 잰다.
+
+    행→관측 추출은 엔진과 **같은 함수**(``observe_reserve_draw``, 리뷰 L4-1)를
+    쓴다 — 관문 밖 행은 크래시 대신 관측 불가로 계수·skip 된다.
+    """
     state = _CoverageAccumulator()
     for row in rows:
-        reserve_prices = coerce_numeric_list(row.reserve_prices)
-        base_amount = float(row.base_amount or 0.0)
-        ratios = [price / base_amount for price in reserve_prices if price > 0]
-        center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
-        agency_key = normalize_agency_name(row.agency_name)
-        category_key = normalize_category_key(row.category)
-        realized = realized_assessment(row)
-
-        if realized is None:
-            state.skipped_no_pick += 1
-        else:
-            # 메커니즘 축: 공고 자신의 15개 완전 열거 분포에서 실현 추첨 평균의 PIT.
-            state.mechanism_pit.append(
-                exact_draw_mean_distribution(ratios).cumulative_probability(realized)
-            )
-            if state.global_level.count >= MIN_PRIOR_ROWS_FOR_COVERAGE:
-                state.prior_pit_for(
-                    realized=realized,
-                    agency_key=agency_key,
-                    category_key=category_key,
-                )
-        state.absorb(
-            center=center,
-            draw_variance=draw_std**2,
-            agency_key=agency_key,
-            category_key=category_key,
+        observed = observe_reserve_draw(
+            reserve_prices=coerce_numeric_list(row.reserve_prices),
+            base_amount=float(row.base_amount or 0.0),
+            picked_numbers=coerce_integer_list(row.selected_numbers),
+            bid_rate=None,
+        )
+        if observed is None:
+            state.skipped_unobservable += 1
+            continue
+        state.evaluate_and_absorb(
+            observed,
+            agency_key=normalize_agency_name(row.agency_name),
+            category_key=normalize_category_key(row.category),
         )
 
     residual_mean, residual_std, excess_kurtosis = standardized_shape_stats(
@@ -396,6 +405,7 @@ def run_coverage_backtest(rows: list[HistoricalData]) -> CoverageReport:
         prior_excess_kurtosis=excess_kurtosis,
         mechanism_exact_draw=summarize_pit(state.mechanism_pit),
         skipped_no_selected_numbers=state.skipped_no_pick,
+        skipped_unobservable=state.skipped_unobservable,
         agency_count=len(state.agency_levels),
         category_count=len(state.category_levels),
     )
@@ -425,6 +435,9 @@ def build_report(rows: list[HistoricalData], *, category: str) -> HoldoutReport:
         holdout_size=int(settings.PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE),
         min_training_samples=int(settings.PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES),
         min_prior_rows_for_coverage=MIN_PRIOR_ROWS_FOR_COVERAGE,
+        prior_strength_agency=AGENCY_PRIOR_STRENGTH,
+        prior_strength_category=CATEGORY_PRIOR_STRENGTH,
+        min_predictive_std=MIN_PREDICTIVE_STD,
         coverage=run_coverage_backtest(rows),
         # use_record_context=True: 홀드아웃 각 행을 **그 행의** 기관·공종으로 평가한다.
         # 이것을 끄면 계층 predictor 의 agency/category 관측이 비어 사후분포가 전역

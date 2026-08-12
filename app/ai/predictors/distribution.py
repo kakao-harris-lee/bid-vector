@@ -43,20 +43,13 @@ from app.domain.assessment_shrinkage import (
     AssessmentPosterior,
     resolve_assessment_posterior,
 )
-from app.domain.reserve_draw_distribution import (
-    DEFAULT_DRAW_COUNT,
-    EXPECTED_RESERVE_PRICE_COUNT,
-    draw_mean_moments,
-)
+from app.domain.reserve_draw_distribution import DEFAULT_DRAW_COUNT
 from app.services.base_amount_basis import BASIS_CLEAN
 from app.utils.sequence_coercion import coerce_integer_list, coerce_numeric_list
 
 from app.ai.predictors.distribution_extraction import (
-    ASSESSMENT_PLAUSIBLE_MAX,
-    ASSESSMENT_PLAUSIBLE_MIN,
     aggregate_level_observation,
-    bid_to_assessment_ratio,
-    realized_assessment_ratio,
+    observe_reserve_draw,
 )
 
 _MODEL_VERSION = "v1.0-distribution"
@@ -104,6 +97,7 @@ class _DistributionEstimate:
     predictive_std: float
     bid_ratio: float
     observation_count: int
+    agency_observation_count: int
     ratio_sample_count: int
 
 
@@ -171,10 +165,11 @@ def build_distribution_prediction(context: PricePredictionContext) -> Prediction
         confidence_score=_estimate_distribution_confidence(estimate),
         model_version=_MODEL_VERSION,
         pricing_mode=_PRICING_MODE,
-        historical_sample_size=int(historical_summary.get("sample_size", 0) or 0),
-        agency_match_sample_size=int(
-            historical_summary.get("agency_match_sample_size", 0) or 0
-        ),
+        # 이 predictor 가 **실제로 소비한** 관측 수다 — summarize 의 전체 행 수를
+        # 실으면 explanation 의 관측 수와 한 응답이 두 숫자를 보고하고, 그 값이
+        # PricePrediction 으로 영속화돼 정확도 리포트까지 간다(리뷰 L4-2).
+        historical_sample_size=estimate.observation_count,
+        agency_match_sample_size=estimate.agency_observation_count,
         predicted_bid_rate=float(base_candidate["bid_rate"]),
         bid_rate_candidates=candidates,
         reserve_price_context=historical_summary.get("reserve_price_context"),
@@ -197,9 +192,10 @@ def _estimate_distribution(context: PricePredictionContext) -> _DistributionEsti
     if not ratio_samples:
         raise ValueError("No historical rows could link a realized 사정률 to a bid rate.")
 
+    agency_key = normalize_agency_name(context.agency_name)
     posterior = _resolve_posterior(
         observations,
-        agency_key=normalize_agency_name(context.agency_name),
+        agency_key=agency_key,
         category_key=normalize_category_key(context.category),
     )
     # 예측 분포 = 공고 중심의 수축 사후분포 + 공고 내 추첨 분산(메커니즘 고유 노이즈).
@@ -211,6 +207,11 @@ def _estimate_distribution(context: PricePredictionContext) -> _DistributionEsti
         predictive_std=sqrt((posterior.std**2) + within_draw_variance),
         bid_ratio=float(median(ratio_samples)),
         observation_count=len(observations),
+        agency_observation_count=sum(
+            1
+            for observation in observations
+            if agency_key and observation.agency_key == agency_key
+        ),
         ratio_sample_count=len(ratio_samples),
     )
 
@@ -237,43 +238,36 @@ def _extract_reserve_observations(
 ) -> list[_ReserveObservation]:
     """이력 행에서 추첨 분포 관측치를 추출한다.
 
-    basis 태그가 있고 clean 이 아닌 행은 제외한다(#199: 오염 base 로 나눈 비율은
-    사정률이 아니다). 태그가 없는 행(미분류 신규·테스트 dict)은 사용한다.
+    basis 는 **fail-closed** 다: ``clean`` 태그 행만 쓴다(#199 — models.py 가
+    "clean 행만 소비"를 강제하고, 태그 없는 행을 통과시키면 분류기가 거절했을
+    비정수 base 행이 바로 그 구멍으로 들어온다. 리뷰 L4-3). 행→관측 산술(정확히
+    15개·center 개연 밴드·실현 사정률·환산 비)은 ``observe_reserve_draw`` 가 단일
+    출처다 — 캘리 스크립트도 같은 함수를 쓴다(리뷰 L4-1).
     """
     observations: list[_ReserveObservation] = []
     for record in context.historical_records:
         basis = read_record_value(record, "base_amount_basis")
-        if basis is not None and str(basis) != BASIS_CLEAN:
+        if str(basis or "") != BASIS_CLEAN:
             continue
-        base_amount = float(read_record_value(record, "base_amount") or 0.0)
-        if base_amount <= 0:
-            continue
-        reserve_prices = coerce_numeric_list(read_record_value(record, "reserve_prices"))
-        ratios = [price / base_amount for price in reserve_prices if price > 0]
-        # 정상 공고의 15개만 관측으로 쓴다 — 다회차 누적(30/60/100개)은 서로 다른
-        # 예비가 집합이 섞인 행이라 추첨 모형이 성립하지 않고, 부분 결측 행을 함께
-        # 버려 캘리브레이션 코어(정확히 15개)와 학습 모집단을 일치시킨다.
-        if len(ratios) != EXPECTED_RESERVE_PRICE_COUNT:
-            continue
-        center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
-        if not ASSESSMENT_PLAUSIBLE_MIN <= center <= ASSESSMENT_PLAUSIBLE_MAX:
-            continue
-        realized = realized_assessment_ratio(
-            reserve_prices=reserve_prices,
+        observed = observe_reserve_draw(
+            reserve_prices=coerce_numeric_list(
+                read_record_value(record, "reserve_prices")
+            ),
+            base_amount=float(read_record_value(record, "base_amount") or 0.0),
             picked_numbers=coerce_integer_list(
                 read_record_value(record, "selected_numbers")
             ),
-            base_amount=base_amount,
+            bid_rate=resolve_record_bid_rate(record),
         )
+        if observed is None:
+            continue
         observations.append(
             _ReserveObservation(
-                center=center,
-                draw_variance=draw_std**2,
+                center=observed.center,
+                draw_variance=observed.draw_variance,
                 agency_key=normalize_agency_name(read_record_value(record, "agency_name")),
                 category_key=normalize_category_key(read_record_value(record, "category")),
-                bid_to_assessment_ratio=bid_to_assessment_ratio(
-                    resolve_record_bid_rate(record), realized
-                ),
+                bid_to_assessment_ratio=observed.bid_to_assessment_ratio,
             )
         )
     return observations

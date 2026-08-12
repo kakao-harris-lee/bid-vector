@@ -296,6 +296,7 @@ def _distribution_reserve_records(count: int) -> list[dict]:
     return [
         {
             "base_amount": base_amount,
+            "base_amount_basis": "clean",  # basis 필터는 fail-closed(리뷰 L4-3)
             "reserve_prices": reserve_prices,
             "selected_numbers": [1, 5, 10, 15],
             "category": "construction",

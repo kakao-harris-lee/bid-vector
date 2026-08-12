@@ -28,7 +28,9 @@ def _reserve_record(
     agency_name: str | None = None,
     category: str = "construction",
     base_amount: float = _BASE_AMOUNT,
-    base_amount_basis: str | None = None,
+    # basis 필터는 fail-closed(L4-3) — 픽스처 기본값을 clean 으로 태깅하고,
+    # 미태깅 거절은 base_amount_basis=None 케이스가 명시적으로 검증한다.
+    base_amount_basis: str | None = "clean",
 ) -> dict:
     """15개 예비가격이 [center−spread, center+spread] 균등 격자인 이력 행."""
     ratios = [center - spread + ((2 * spread) * index / 14) for index in range(15)]
@@ -98,11 +100,17 @@ def test_availability_excludes_non_clean_base_rows(experimental_on):
     assert not availability.available
 
 
-def test_availability_passes_with_clean_tagged_and_untagged_rows(experimental_on):
-    records = [_reserve_record(base_amount_basis="clean") for _ in range(5)]
-    records += [_reserve_record() for _ in range(5)]
-    availability = ReserveDrawDistributionPredictor().check_availability(_context(records))
-    assert availability.available
+def test_untagged_basis_rows_are_rejected_fail_closed(experimental_on):
+    """basis 미태깅 행은 거절(fail-closed) — models.py 의 clean-only 강제(L4-3).
+
+    태그 없는 행을 통과시키면 classify_base_basis 가 suspect-fractional 로 거절했을
+    비정수 기초금액 행(실측 노출 3행 전부)이 바로 그 구멍으로 들어온다.
+    """
+    availability = ReserveDrawDistributionPredictor().check_availability(
+        _context([_reserve_record(base_amount_basis=None) for _ in range(10)])
+    )
+    assert not availability.available
+    assert "(got 0)" in availability.reason
 
 
 def test_predict_maps_distribution_onto_contract_value_table(experimental_on):

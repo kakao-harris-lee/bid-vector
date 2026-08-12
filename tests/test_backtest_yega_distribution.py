@@ -4,10 +4,10 @@ from statistics import fmean, pvariance
 
 import pytest
 
+from app.ai.predictors.distribution_extraction import observe_reserve_draw
 from scripts.backtest_yega_distribution import (
     _RunningLevel,
     normal_cdf,
-    realized_assessment,
     run_coverage_backtest,
     summarize_pit,
 )
@@ -59,11 +59,65 @@ def test_normal_cdf_value_table():
     assert normal_cdf(5.0, mean=0.0, std=0.0) == 0.5  # 퇴화 분포는 중립 PIT
 
 
-def test_realized_assessment_uses_picked_reserve_mean():
+def test_observe_reserve_draw_is_the_shared_row_gateway():
+    """엔진·스크립트 공용 관측 관문(L4-1) — 실현값·15개·개연 밴드 값표."""
     row = _Row(center=1.0, spread=0.014, selected=(1, 15))
-    # 대칭 격자에서 양 끝 평균 == 중심.
-    assert realized_assessment(row) == pytest.approx(1.0)
-    assert realized_assessment(_Row(selected=())) is None
+    observed = observe_reserve_draw(
+        reserve_prices=row.reserve_prices,
+        base_amount=row.base_amount,
+        picked_numbers=row.selected_numbers,
+        bid_rate=None,
+    )
+    # 대칭 격자에서 양 끝 평균 == 중심 == 비율 평균.
+    assert observed is not None
+    assert observed.realized_assessment == pytest.approx(1.0)
+    assert observed.center == pytest.approx(1.0)
+    # 추첨번호 미보고면 관측은 성립하되 실현값만 None.
+    no_pick = _Row(selected=())
+    observed_no_pick = observe_reserve_draw(
+        reserve_prices=no_pick.reserve_prices,
+        base_amount=no_pick.base_amount,
+        picked_numbers=no_pick.selected_numbers,
+        bid_rate=None,
+    )
+    assert observed_no_pick is not None
+    assert observed_no_pick.realized_assessment is None
+    # 15개 미만·center 밴드 밖은 관측 불가(None).
+    short = _Row()
+    assert (
+        observe_reserve_draw(
+            reserve_prices=short.reserve_prices[:14],
+            base_amount=short.base_amount,
+            picked_numbers=[1, 2],
+            bid_rate=None,
+        )
+        is None
+    )
+    out_of_band = _Row(center=1.5)
+    assert (
+        observe_reserve_draw(
+            reserve_prices=out_of_band.reserve_prices,
+            base_amount=out_of_band.base_amount,
+            picked_numbers=[1, 2],
+            bid_rate=None,
+        )
+        is None
+    )
+
+
+def test_run_coverage_backtest_skips_unobservable_rows_instead_of_crashing():
+    """엔진 관문 밖 행(밴드 밖·15개 미만)은 계수하고 skip — 리포트 중단 금지(L4-1)."""
+    rows = [_Row() for _ in range(10)]
+    bad_band = _Row(center=1.5)
+    short = _Row()
+    short.reserve_prices = short.reserve_prices[:3]  # 유효 비율 4개 미만이던 크래시 경로
+    rows += [bad_band, short]
+
+    report = run_coverage_backtest(rows)
+
+    assert report.skipped_unobservable == 2
+    # 관측 불가 행은 프리픽스 집계에도 들어가지 않는다.
+    assert report.mechanism_exact_draw.sample_count == 10
 
 
 def test_summarize_pit_uniform_grid_hits_nominal_coverage():

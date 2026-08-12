@@ -914,6 +914,7 @@ def _distribution_reserve_rows(count: int, *, category: str = "software") -> lis
             notice_number=f"DIST-ROUTE-{index}",
             category=category,
             base_amount=base_amount,
+            base_amount_basis="clean",  # basis 필터는 fail-closed(리뷰 L4-3)
             predicted_price=base_amount * 0.9,
             bid_rate=round(0.87 * realized, 6),
             reserve_prices=json.dumps(reserve_prices),

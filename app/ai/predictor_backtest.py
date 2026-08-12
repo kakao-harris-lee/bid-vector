@@ -304,24 +304,23 @@ def _compute_by_group(
     min_training_size: int,
     use_record_context: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    """Compute per-business-group backtest metrics using the best available
-    predictor (falling back to any registry entry). Each group evaluates only its
-    own holdout records over the intact training prefix; records without a
-    business_group are skipped.
+    """Compute per-business-group backtest metrics using the best available predictor.
+
+    For each group, only holdout records belonging to that group are evaluated.
+    The training prefix is kept intact (all records) so predictor state is not
+    artificially impoverished. Records without a business_group are skipped.
     """
     groups = _group_records_by_business_group(holdout_records)
     if not groups:
         return {}
-
-    predictor_key: str | None = best_result["predictor_key"] if best_result else None
-    predictor: BasePricePredictor | None = registry.get(predictor_key) if predictor_key else None
-    if predictor is None and registry:
-        predictor_key, predictor = next(iter(registry.items()))
-
+    predictor_key, predictor = _resolve_group_predictor(
+        registry, best_result["predictor_key"] if best_result else None
+    )
     by_group: dict[str, dict[str, Any]] = {}
     for group_name, group_holdout_records in sorted(groups.items()):
         if predictor is None:
             by_group[group_name] = {
+                "predictor_key": None,
                 "sample_count": 0,
                 "average_absolute_error_rate": None,
                 "skipped_count": len(group_holdout_records),
@@ -338,9 +337,28 @@ def _compute_by_group(
             use_record_context=use_record_context,
         )
         by_group[group_name] = {
+            "predictor_key": predictor_key,  # 수치를 만든 arm 추적(리뷰 L4-6)
             "sample_count": result["sample_count"],
             "average_absolute_error_rate": result["average_absolute_error_rate"],
             "skipped_count": result["skipped_count"],
         }
 
     return by_group
+
+
+def _resolve_group_predictor(
+    registry: dict[str, BasePricePredictor],
+    best_predictor_key: str | None,
+) -> tuple[str | None, BasePricePredictor | None]:
+    """Prefer the best predictor; fall back to any available predictor.
+
+    폴백도 자동 승격 제외 키를 건너뛴다 — best 경로는 이미 제외를 통과했지만,
+    registry 첫 항목 폴백은 미필터 경로였다(리뷰 L4-6: constants.py 가 선언한
+    소비자 전수성의 잠복 구멍).
+    """
+    if best_predictor_key and best_predictor_key in registry:
+        return best_predictor_key, registry[best_predictor_key]
+    for key, candidate in registry.items():
+        if key not in AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS:
+            return key, candidate
+    return None, None
