@@ -635,6 +635,15 @@ class Settings(InferenceOutboxSettings):
     # 하이퍼파라미터는 app/services/ml_training/award_rate_gbm.py 의 선언 블록에 둔다.
     PRICE_PREDICTION_AWARD_RATE_GBM_MODEL_PATH: str = ""
     PRICE_PREDICTION_AWARD_RATE_GBM_MIN_TRAINING_ROWS: int = 500
+    # 학습 표본을 **공고 피드에서 본 공고**(``Project.issuing_agency IS NOT NULL``)로
+    # 제한할지. 메커니즘 필터가 아니라 **서빙 분포 정합**이다: 서빙이 마주하는 열린
+    # 공고는 사실상 전부 피드 출처인데(실측 99.93%), 학습 코퍼스는 31%만 그렇다.
+    # 나머지 69%는 개찰결과 피드로만 들어온 행(``koneps/scsbid`` 는 issuing_agency ·
+    # source_url · contract_method 없이 item 을 만든다)이라 서빙이 결코 마주치지 않는
+    # 모집단이다. 기본 ``True`` 인 이유가 그것이다 — 서빙하지 않을 모집단으로 학습해
+    # 좋아 보이는 수치를 얻는 것은 측정이 아니다. ``False`` 로 두면 필터 이전 표본
+    # 정의가 그대로 복원되므로 전후 비교가 가능하다(그것이 플래그의 목적).
+    PRICE_PREDICTION_AWARD_RATE_GBM_FEED_ORIGIN_ONLY: bool = True
     PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES: int = 5
     PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE: int = 5
     CLASSIFIER_EMBEDDING_MODEL: str = (

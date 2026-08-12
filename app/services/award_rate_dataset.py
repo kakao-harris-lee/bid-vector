@@ -5,7 +5,7 @@
 ``HistoricalData`` / ``TenderResult`` 에서 스칼라를 꺼내 값 행으로 펴는 얇은 경계다
 (§4.7 순수 코어 / 얇은 경계).
 
-세 가지 필터가 **학습 표본의 정의**다.
+네 가지 필터가 **학습 표본의 정의**다.
 
 1. ``status == "ok"`` — 분모에 근거가 있는 라벨만 받는다. ``ok-unverified-base`` 는 값이
    나지만 분모가 기초금액이라는 증거가 없고(저장값을 그대로 쓴 경로), 그 오염이
@@ -16,6 +16,28 @@
 3. ``cutoff_at`` — 백테스트에서 "그 시점에 존재했을 행"만 싣는다. 경계는 형제 로더
    ``app/services/backtest_cutoff._query_history_scope`` 와 같은 규칙(``opened_at <
    cutoff``)이다.
+4. **피드 출처**(``Project.issuing_agency IS NOT NULL``) — 아래 절. 네 개 중 유일하게 끌 수
+   있는 필터다(``PRICE_PREDICTION_AWARD_RATE_GBM_FEED_ORIGIN_ONLY``).
+
+피드 출처 필터는 메커니즘 필터가 아니라 **서빙 분포 정합**이다
+--------------------------------------------------------------
+``Project.issuing_agency`` 는 "공고 피드에서 본 공고"의 축이다. 값이 없는 행은 계약방법이
+없는 공고가 아니라 **개찰결과 피드로만 본 공고**다 — ``app/services/koneps/scsbid`` 가
+issuing_agency · source_url · contract_method 없이 item 을 만들기 때문이고, 그래서 이 축은
+계약방법 텍스트 축과 34,859/34,859 로 완전히 일치한다(읽기 전용 실측).
+
+문제는 두 모집단의 구성비다. 서빙이 마주하는 열린 공고는 사실상 전부 피드 출처인데(실측
+99.93%) 학습 코퍼스는 31% 만 그렇다. 즉 학습의 69% 는 **서빙이 결코 마주치지 않는 모집단**
+이고, 그 층에는 하한이 게시되지 않는 계열이 섞여 낙찰률 분포 자체가 다르다. 그 위에서 잰
+홀드아웃 수치는 라이브에서 나올 수치가 아니다.
+
+필터를 켜면 표본이 줄고 유효 이력이 짧아진다. 그 대가는 실재하지만, 서빙하지 않을 모집단을
+섞어 표본을 불리는 것은 측정이 아니다. 필터를 끌 수 있게 둔 것은 완화 장치가 아니라 **전후
+비교 장치**이며(끄면 이전 표본 정의가 그대로 복원된다), 수치는 PR 본문에 남긴다.
+
+``Project`` 는 **left outer join** 이다. inner join 이면 필터를 꺼도 Project 행이 없는
+이력이 조용히 빠져 "필터 off = 이전 정의"가 성립하지 않는다(라이브 코퍼스의 조인 커버리지는
+100% 지만, 그 사실에 표본 정의를 기대게 두지 않는다).
 
 ⚠ cutoff 규칙의 알려진 낙관 (공시)
 -----------------------------------
@@ -33,9 +55,12 @@ from typing import Any
 
 from sqlalchemy.orm import Query, Session
 
+from app.core.config import settings
 from app.core.time import ensure_utc, utc_now
 from app.domain.award_rate_label import AwardRateLabelStatus, build_award_rate_label
-from app.models.models import HistoricalData
+from app.domain.published_floor_rate import plausible_published_floor_rate
+from app.domain.rate_normalization import to_bid_rate_fraction
+from app.models.models import HistoricalData, Project
 from app.models.pipeline import TenderResult
 from app.services.ml_training.award_rate_gbm import AwardRateTrainingRow
 
@@ -43,9 +68,13 @@ __all__ = ["load_award_rate_rows"]
 
 
 def _candidate_query(
-    db: Session, *, cutoff_at: datetime | None, reference_now: datetime
+    db: Session,
+    *,
+    cutoff_at: datetime | None,
+    reference_now: datetime,
+    feed_origin_only: bool,
 ) -> Query[Any]:
-    """라벨 후보 행을 고르는 읽기 쿼리 — 시간 필터 세 개가 여기 한 곳에 있다.
+    """라벨 후보 행을 고르는 읽기 쿼리 — 표본 필터 네 개가 여기 한 곳에 있다.
 
     ``Query[Any]`` 는 형제 로더(``app/services/floor_shortfall._sample_query``)와 같은
     계약이다: old-style ``Column(...)`` 모델의 컬럼 튜플 선택은 행 shape 을 정적으로
@@ -61,21 +90,45 @@ def _candidate_query(
             HistoricalData.base_amount_estimated,
             HistoricalData.opened_at,
             TenderResult.winning_amount,
+            Project.award_floor_rate,
         )
         .join(
             TenderResult,
             (TenderResult.project_id == HistoricalData.project_id)
             & (TenderResult.is_current.is_(True)),
         )
+        .outerjoin(Project, Project.id == HistoricalData.project_id)
         .filter(
             HistoricalData.project_id.isnot(None),
             HistoricalData.opened_at.isnot(None),
             HistoricalData.opened_at <= reference_now,
         )
     )
+    if feed_origin_only:
+        query = query.filter(Project.issuing_agency.isnot(None))
     if cutoff_at is not None:
         query = query.filter(HistoricalData.opened_at < cutoff_at)
     return query.order_by(HistoricalData.opened_at.asc(), HistoricalData.id.asc())
+
+
+def _published_floor_rate(raw: float | None) -> float | None:
+    """저장된 공시 낙찰하한율 → 피처로 실을 fraction (개연 밴드 밖은 ``None``).
+
+    스케일 정규화(percent 88 ↔ fraction 0.88)와 개연 밴드는 **라이브 가격 경로가 쓰는
+    것과 같은 두 벌**이다(``app/services/bid_base.resolve_notice_legal_floor_bid_rate``
+    → ``to_bid_rate_fraction`` + ``plausible_published_floor_rate``). 두 경로가 다른 규칙을
+    쓰면 학습이 본 값과 서빙이 넘기는 값이 갈리는데, 그 어긋남은 예외를 내지 않고 가격만
+    바꾼다 — 이 함수가 그 규칙을 학습 쪽에서 재선언하지 않고 위임만 하는 이유다.
+    """
+    if raw is None:
+        return None
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    return plausible_published_floor_rate(to_bid_rate_fraction(numeric))
 
 
 def _training_row(
@@ -87,6 +140,7 @@ def _training_row(
     category: str | None,
     agency_name: str | None,
     opened_at: datetime,
+    award_floor_rate: float | None,
 ) -> AwardRateTrainingRow | None:
     """스칼라 한 벌을 학습 행으로 편다. 근거 없는 라벨(``ok`` 아님)은 ``None`` 이다.
 
@@ -113,6 +167,7 @@ def _training_row(
         # SQLite 는 naive, Postgres 는 aware 를 낸다. 홀드아웃 분할이 두 종류를
         # 섞어 비교하면 TypeError 로 죽으므로 dialect 차이를 여기서 흡수한다.
         opened_at=ensure_utc(opened_at),
+        published_floor_rate=_published_floor_rate(award_floor_rate),
     )
 
 
@@ -121,6 +176,7 @@ def load_award_rate_rows(
     *,
     cutoff_at: datetime | None = None,
     now: datetime | None = None,
+    feed_origin_only: bool | None = None,
 ) -> list[AwardRateTrainingRow]:
     """근거 있는 낙찰률 라벨이 성립하는 학습 행을 개찰 시각 오름차순으로 싣는다.
 
@@ -129,6 +185,9 @@ def load_award_rate_rows(
         cutoff_at: 이 시각 **미만**의 개찰만 싣는다(백테스트 as-of). ``None`` 이면
             전체 구간.
         now: "미래 개찰" 판정의 기준 시각(주입 seam — 테스트가 시계를 고정한다).
+        feed_origin_only: 공고 피드 출처 행만 실을지(모듈 docstring 참조). ``None``
+            이면 ``PRICE_PREDICTION_AWARD_RATE_GBM_FEED_ORIGIN_ONLY`` 설정을 따른다 —
+            인자는 전역 설정을 monkeypatch 하지 않고 두 표본 정의를 나란히 재는 seam이다.
 
     Returns:
         :class:`~app.services.ml_training.award_rate_gbm.AwardRateTrainingRow` 목록.
@@ -136,7 +195,14 @@ def load_award_rate_rows(
         경계가 실행마다 흔들리면 비교 수치가 재현되지 않는다.
     """
     records = _candidate_query(
-        db, cutoff_at=cutoff_at, reference_now=now or utc_now()
+        db,
+        cutoff_at=cutoff_at,
+        reference_now=now or utc_now(),
+        feed_origin_only=(
+            bool(settings.PRICE_PREDICTION_AWARD_RATE_GBM_FEED_ORIGIN_ONLY)
+            if feed_origin_only is None
+            else feed_origin_only
+        ),
     ).all()
     rows = (
         _training_row(
@@ -147,6 +213,7 @@ def load_award_rate_rows(
             category=record.category,
             agency_name=record.agency_name,
             opened_at=record.opened_at,
+            award_floor_rate=record.award_floor_rate,
         )
         for record in records
     )

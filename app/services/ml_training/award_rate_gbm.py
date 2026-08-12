@@ -71,10 +71,12 @@ __all__ = [
 
 # 아티팩트 계약 버전. 피처 목록·인코딩 모양이 바뀌면 올린다 — predictor 는 이 값이
 # 다르면 모델을 쓰지 않는다(다른 피처 공간으로 학습된 부스터를 태우면 조용히 틀린다).
-AWARD_RATE_GBM_ARTIFACT_VERSION: Final[str] = "award-rate-gbm-v1"
-AWARD_RATE_GBM_MODEL_VERSION: Final[str] = "v1.0-award-rate-gbm"
+# v2: 공시 낙찰하한율 두 축(``published_floor_rate`` · ``has_published_floor``) 추가.
+# v1 아티팩트는 피처 목록이 달라 로드 시 거부된다(``different feature set``).
+AWARD_RATE_GBM_ARTIFACT_VERSION: Final[str] = "award-rate-gbm-v2"
+AWARD_RATE_GBM_MODEL_VERSION: Final[str] = "v2.0-award-rate-gbm"
 
-# LightGBM 하이퍼파라미터 — 선언 데이터(§4.5-1). 표본 수만 행 · 피처 5개 규모의 얕은
+# LightGBM 하이퍼파라미터 — 선언 데이터(§4.5-1). 표본 수만 행 · 피처 일곱 개 규모의 얕은
 # 표 형태 회귀라, 트리를 깊게 키우기보다 낮은 학습률로 많은 라운드를 도는 쪽이 안정적이다.
 #
 # ``deterministic`` + ``force_row_wise`` + 고정 seed 로 같은 입력이 같은 아티팩트를 낸다.
@@ -117,6 +119,10 @@ class AwardRateTrainingRow:
 
     ``opened_at`` 은 피처가 아니다. 호출부의 cutoff 필터와 홀드아웃 분할에만 쓰이며,
     피처 조립기(``AwardRateFeatureSpace.build_row``)는 시각을 받지 않는다.
+
+    ``published_floor_rate`` 는 **공고가 게시한** 낙찰하한율(개연 밴드 통과분)이다.
+    공고문에 있는 값이라 개찰 후 정보가 아니고, 유일한 백필러가 열린 공고만 대상으로
+    하므로(``scripts/backfill_award_floor_rate.py``) 정산 행에 사후 주입되지 않는다.
     """
 
     value: float
@@ -125,6 +131,9 @@ class AwardRateTrainingRow:
     agency: str
     denominator_source: str
     opened_at: datetime
+    # 기본값을 주지 않는다: "안 넘겼다"와 "미공시"는 다른 상태이고, 새 행 생산자가
+    # 조용히 전자를 후자로 보고하면 그 축이 통째로 결측으로 학습된다.
+    published_floor_rate: float | None
 
 
 def build_feature_space(
@@ -167,6 +176,7 @@ def _feature_matrix(
                 category=row.category,
                 agency=row.agency,
                 denominator_source=row.denominator_source,
+                published_floor_rate=row.published_floor_rate,
             )
             for row in rows
         ],

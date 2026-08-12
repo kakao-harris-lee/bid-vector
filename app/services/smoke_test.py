@@ -574,6 +574,7 @@ class KonepsTelegramSmokeTestService:
                 legal_floor_bid_rate=inputs.legal_floor_bid_rate,
                 estimation_amount=inputs.estimation_amount,
                 reference_date=inputs.reference_date,
+                published_floor_bid_rate=inputs.published_floor_bid_rate,
             )
             rate = float(pred.get("predicted_bid_rate") or 0)
             result.data["predicted_bid_rate"] = rate

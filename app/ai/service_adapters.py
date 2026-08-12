@@ -37,6 +37,7 @@ class FunctionPricePredictionPort(PricePredictionPort):
         legal_floor_bid_rate: float | None = None,
         estimation_amount: float | None = None,
         reference_date: date | datetime | None = None,
+        published_floor_bid_rate: float | None = None,
     ) -> dict[str, Any]:
         return predict_price(
             budget=budget,
@@ -50,6 +51,7 @@ class FunctionPricePredictionPort(PricePredictionPort):
             legal_floor_bid_rate=legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
+            published_floor_bid_rate=published_floor_bid_rate,
         )
 
 

@@ -620,6 +620,41 @@ def test_prepare_prediction_inputs_respects_request_floor_override(test_db):
     assert inputs.legal_floor_bid_rate == pytest.approx(0.91)
 
 
+def test_request_override_does_not_move_the_model_feature_axis(test_db):
+    """운영자 override 는 guardrail 값만 바꾸고 **피처 축**(게시값)은 그대로 둔다.
+
+    낙찰률 모델은 ``Project.award_floor_rate`` 로 라벨된 코퍼스에서 학습한다. override
+    를 피처로 실으면 그 축이 "이 공고에 게시된 하한"에서 "운영자가 이번에 지시한 하한"
+    으로 조용히 바뀌고, 학습과 서빙이 다른 질문에 답하게 된다.
+    """
+    project = _make_project(test_db)
+    project.award_floor_rate = 0.88
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(
+        test_db, project, request_legal_floor_bid_rate=0.91
+    )
+
+    assert inputs.legal_floor_bid_rate == pytest.approx(0.91)
+    assert inputs.published_floor_bid_rate == pytest.approx(0.88)
+
+
+def test_implausible_published_floor_is_absent_from_the_feature_axis(test_db):
+    """하한으로 성립하지 않는 게시값(1.0)은 피처 축에서도 미공시와 같은 자리다.
+
+    학습 로더가 같은 개연 밴드를 통과시키므로(``award_rate_dataset``), 서빙에서만
+    1.0 이 실리면 학습이 본 적 없는 좌표가 된다.
+    """
+    project = _make_project(test_db)
+    project.award_floor_rate = 1.0
+    test_db.commit()
+
+    inputs = prepare_prediction_inputs(test_db, project)
+
+    assert inputs.published_floor_bid_rate is None
+    assert inputs.legal_floor_bid_rate is None
+
+
 def test_prepare_prediction_inputs_falls_back_to_budget_estimate(test_db):
     """No collected 기초금액 row → base falls back to 추정가격; no published 하한 →
     legal floor is None (config floor preserved downstream)."""

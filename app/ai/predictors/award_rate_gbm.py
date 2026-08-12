@@ -9,7 +9,13 @@
 피처는 :class:`~app.domain.award_rate_features.AwardRateFeatureSpace` 가 조립한다 —
 학습기(:mod:`app.services.ml_training.award_rate_gbm`)와 **같은 함수**다. 그래서 이
 predictor 는 서빙 시점에 존재하는 것만 넘길 수 있다: 기초금액(``context.budget``) ·
-공종 · 발주기관. 대상 공고의 예비가격 파생값은 시그니처상 넘길 자리가 없다.
+공종 · 발주기관 · 공고가 **게시한** 낙찰하한율(``context.published_floor_bid_rate``).
+대상 공고의 예비가격 파생값은 시그니처상 넘길 자리가 없다.
+
+공시 하한은 여기서 **피처로만** 쓴다. 가격 하한으로 접히는 경로는 종전대로 guardrail
+단계의 ``legal_floor_bid_rate`` 하나뿐이고, 이 predictor 는 어떤 하한도 선점하지 않는다.
+운영자 override 가 아니라 공고 게시값을 받는 이유는 학습 코퍼스가 저장하는 수가 그것이기
+때문이다 — override 를 넣으면 학습 축과 서빙 축이 갈린다.
 
 분모 출처는 :data:`~app.domain.award_rate_features.SERVING_DENOMINATOR_SOURCE`
 (``clean-base``)로 **고정**한다. 라이브 공고의 기초금액은 수집된 관측값이지 복수예비가격
@@ -29,6 +35,7 @@ recommended_env, 승격 게이트의 best arm)는 ``AUTO_PROMOTION_EXCLUDED_PRED
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -53,6 +60,7 @@ from app.domain.award_rate_features import (
     SERVING_DENOMINATOR_SOURCE,
     AgencyTargetEncoding,
     AwardRateFeatureSpace,
+    AwardRatePredictionInput,
     normalize_feature_key,
 )
 
@@ -111,23 +119,24 @@ class LoadedAwardRateGbmModel:
     model_version: str
     training_row_count: int
 
-    def predict_rates(
-        self, rows: list[tuple[float, str | None, str | None]]
-    ) -> list[float]:
-        """(금액, 공종, 기관) 목록의 낙찰률 예측 — 배치 경로(홀드아웃 평가가 쓴다).
+    def predict_rates(self, rows: Sequence[AwardRatePredictionInput]) -> list[float]:
+        """예측 입력 목록의 낙찰률 — 배치 경로(홀드아웃 평가가 쓴다).
 
-        서빙 단건도 이 함수를 지나므로 배치와 단건이 갈리지 않는다.
+        서빙 단건도 이 함수를 지나므로 배치와 단건이 갈리지 않는다. 입력이 위치 튜플이
+        아니라 타입인 이유는 :class:`~app.domain.award_rate_features.AwardRatePredictionInput`
+        docstring 참조 — 축이 늘 때 조용히 어긋나는 표면을 없앤다.
         """
         if not rows:
             return []
         matrix = [
             self.feature_space.build_row(
-                amount=amount,
-                category=category,
-                agency=agency,
+                amount=row.amount,
+                category=row.category,
+                agency=row.agency,
                 denominator_source=SERVING_DENOMINATOR_SOURCE.value,
+                published_floor_rate=row.published_floor_rate,
             )
-            for amount, category, agency in rows
+            for row in rows
         ]
         return [float(value) for value in self.booster.predict(matrix)]
 
@@ -252,7 +261,7 @@ def build_award_rate_gbm_prediction(
 ) -> PredictionResult:
     """예측 → 시나리오 → 검증된 결과. 검증은 typed 생성자 단일 지점이다."""
     budget = float(context.budget or 0.0)
-    rates = model.predict_rates([(budget, context.category, context.agency_name)])
+    rates = model.predict_rates([_serving_input(context)])
     if not rates:
         raise ValueError("Award-rate GBM produced no prediction for the context.")
     center = clamp_bid_rate(rates[0])
@@ -290,6 +299,22 @@ def build_award_rate_gbm_prediction(
     )
 
 
+def _serving_input(context: PricePredictionContext) -> AwardRatePredictionInput:
+    """서빙 컨텍스트 → 피처 입력. 이 매핑의 **유일한** 지점이다.
+
+    무엇을 넘기고 무엇을 넘기지 않는지가 한 함수에 모여 있어야, 컨텍스트에 새 필드가
+    생겼을 때 "그것이 피처인가"를 여기서 한 번만 답하게 된다. 하한은 운영자 override 가
+    아니라 **공고 게시값**(``published_floor_bid_rate``)이다 — 학습 코퍼스가 저장하는
+    수가 그것이고, 없으면 ``None`` 이 그대로 결측 축이 된다.
+    """
+    return AwardRatePredictionInput(
+        amount=float(context.budget or 0.0),
+        category=context.category,
+        agency=context.agency_name,
+        published_floor_rate=context.published_floor_bid_rate,
+    )
+
+
 def _estimate_confidence(model: LoadedAwardRateGbmModel, agency_samples: int) -> float:
     """기관 표본 깊이와 잔차 폭에서 신뢰도를 추정한다(선언 상수 §4.5)."""
     sample_score = min(agency_samples / _CONFIDENCE_SAMPLE_SATURATION, 1.0)
@@ -320,7 +345,7 @@ def _build_explanation(
         else "이 발주기관은 학습 표본에 없어 공종 평균으로 수축했습니다"
     )
     return (
-        f"공종·금액대·발주기관을 입력으로 학습한 낙찰률 모델(학습 "
+        f"공종·금액대·발주기관·공시 낙찰하한율을 입력으로 학습한 낙찰률 모델(학습 "
         f"{model.training_row_count}건)이 기초금액 대비 낙찰률 {center:.4f}를 "
         f"추정했습니다. {agency_clause}. 보수/공격 시나리오는 교차검증 잔차 "
         f"표준편차 {model.residual_std:.4f}의 정규근사 ±1.28σ 경계입니다. "

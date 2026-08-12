@@ -336,8 +336,15 @@ class NoticePredictionInputs:
       collected 기초금액 and a 추정가격 substitute as the same thing.
     - ``text``: title+description+requirements predictor input (``build_prediction_text``).
     - ``legal_floor_bid_rate``: the notice's OWN published 낙찰하한율 (award_floor_rate,
-      #201), folded into the guardrail floor with ``max()`` only downstream — it can
-      only RAISE the floor (RED LINE). ``None`` when nothing is published/requested.
+      #201) OR the caller's explicit override, folded into the guardrail floor with
+      ``max()`` only downstream — it can only RAISE the floor (RED LINE). ``None``
+      when nothing is published/requested.
+    - ``published_floor_bid_rate``: the same published 하한 WITHOUT the request
+      override — a predictor FEATURE input (the award-rate model's training corpus
+      stores exactly this quantity). Kept separate from ``legal_floor_bid_rate``
+      because an operator override is an instruction about THIS bid, not a fact
+      about the notice; feeding it to the model would move the feature axis off the
+      axis the corpus was labelled on. It reaches no floor arithmetic.
     - ``estimation_amount`` / ``reference_date``: construction legal 낙찰하한 tier inputs
       (구간=추정가격, 기준일=공고 시점, leakage-safe — the notice's own date).
     """
@@ -346,6 +353,7 @@ class NoticePredictionInputs:
     bid_base_source: str
     text: str
     legal_floor_bid_rate: float | None
+    published_floor_bid_rate: float | None
     estimation_amount: float | None
     reference_date: date | None
 
@@ -377,6 +385,10 @@ def prepare_prediction_inputs(
         text=build_prediction_text(project),
         legal_floor_bid_rate=resolve_notice_legal_floor_bid_rate(
             project, request_legal_floor_bid_rate=request_legal_floor_bid_rate
+        ),
+        # Override-free published value — the model feature axis (see the dataclass).
+        published_floor_bid_rate=plausible_published_floor_rate(
+            resolve_notice_published_floor_bid_rate(project)
         ),
         estimation_amount=estimation_amount,
         reference_date=reference_date,

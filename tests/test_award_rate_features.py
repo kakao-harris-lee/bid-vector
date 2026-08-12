@@ -5,6 +5,7 @@
 """
 
 import inspect
+import math
 from dataclasses import fields
 
 import pytest
@@ -17,7 +18,9 @@ from app.domain.award_rate_features import (
     CATEGORICAL_AWARD_RATE_FEATURES,
     CATEGORY_FEATURE,
     DENOMINATOR_SOURCE_FEATURE,
+    HAS_PUBLISHED_FLOOR_FEATURE,
     LOG_AMOUNT_FEATURE,
+    PUBLISHED_FLOOR_RATE_FEATURE,
     SERVING_DENOMINATOR_SOURCE,
     UNKNOWN_CATEGORY_CODE,
     AwardRateFeatureSpace,
@@ -50,6 +53,8 @@ def test_feature_names_are_the_declared_order():
         AGENCY_ENCODING_FEATURE,
         AGENCY_SAMPLE_FEATURE,
         DENOMINATOR_SOURCE_FEATURE,
+        PUBLISHED_FLOOR_RATE_FEATURE,
+        HAS_PUBLISHED_FLOOR_FEATURE,
     )
     assert CATEGORICAL_AWARD_RATE_FEATURES == {
         CATEGORY_FEATURE,
@@ -58,11 +63,13 @@ def test_feature_names_are_the_declared_order():
 
 
 def test_feature_builder_cannot_accept_reserve_derived_inputs():
-    """조립기는 금액·공종·기관·분모출처 넷만 받는다 (train/serve skew red line).
+    """조립기는 투찰 시점에 **존재하는** 입력만 받는다 (train/serve skew red line).
 
     대상 공고의 예비가격·추첨번호·실현 사정률은 투찰 시점에 존재하지 않으므로 피처가
     될 수 없다. "쓰지 말자"는 규율 대신 **넘길 자리가 없다**로 강제하고, 이 단언이 그
-    시그니처를 고정한다. 인자가 하나라도 늘면 여기서 실패한다.
+    시그니처를 고정한다. 인자가 하나라도 늘면 여기서 실패하므로, 새 축을 들이려면
+    "투찰 시점에 있는가"를 여기서 한 번 더 답해야 한다 — ``published_floor_rate`` 는
+    공고문에 게시된 값이라 그 답이 예다.
     """
     parameters = inspect.signature(AwardRateFeatureSpace.build_row).parameters
     assert set(parameters) == {
@@ -71,11 +78,18 @@ def test_feature_builder_cannot_accept_reserve_derived_inputs():
         "category",
         "agency",
         "denominator_source",
+        "published_floor_rate",
     }
     # 키워드 전용이라 호출부가 위치로 잘못 밀어 넣을 수 없다.
     assert all(
         parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-        for name in ("amount", "category", "agency", "denominator_source")
+        for name in (
+            "amount",
+            "category",
+            "agency",
+            "denominator_source",
+            "published_floor_rate",
+        )
     )
 
 
@@ -89,6 +103,7 @@ def test_training_row_carries_no_reserve_or_price_disclosure_fields():
         "agency",
         "denominator_source",
         "opened_at",
+        "published_floor_rate",
     }
     forbidden = ("reserve", "selected_number", "assessment", "yega", "predicted")
     assert not [name for name in field_names for token in forbidden if token in name]
@@ -179,6 +194,7 @@ def test_build_row_maps_vocabulary_positions_and_log_amount():
         category="service",
         agency="시청",
         denominator_source="reserve-estimate",
+        published_floor_rate=0.88,
     )
     assert len(row) == len(AWARD_RATE_FEATURE_NAMES)
     assert row[0] == 1.0  # categories=("construction", "service")
@@ -189,7 +205,11 @@ def test_build_row_maps_vocabulary_positions_and_log_amount():
 def test_unseen_category_and_source_use_the_missing_code():
     space = _space([AwardRateObservation(agency="시청", category="service", value=0.95)])
     row = space.build_row(
-        amount=1.0, category="처음보는공종", agency="시청", denominator_source="없음"
+        amount=1.0,
+        category="처음보는공종",
+        agency="시청",
+        denominator_source="없음",
+        published_floor_rate=None,
     )
     assert row[0] == UNKNOWN_CATEGORY_CODE
     assert row[4] == UNKNOWN_CATEGORY_CODE
@@ -204,7 +224,47 @@ def test_non_positive_amount_is_floored_instead_of_raising():
             category="service",
             agency="시청",
             denominator_source="clean-base",
+            published_floor_rate=None,
         )[1] == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# 공시 낙찰하한율 축 — 결측을 0 으로 접지 않는다 (메커니즘 혼합 분리)
+# --------------------------------------------------------------------------
+
+
+def _floor_axes(space: AwardRateFeatureSpace, rate: float | None) -> tuple[float, float]:
+    """(값 축, 게시 여부 축) — 두 축의 위치를 이름으로 뽑는다."""
+    row = space.build_row(
+        amount=1_000_000.0,
+        category="service",
+        agency="시청",
+        denominator_source="clean-base",
+        published_floor_rate=rate,
+    )
+    return (
+        row[AWARD_RATE_FEATURE_NAMES.index(PUBLISHED_FLOOR_RATE_FEATURE)],
+        row[AWARD_RATE_FEATURE_NAMES.index(HAS_PUBLISHED_FLOOR_FEATURE)],
+    )
+
+
+def test_published_floor_is_carried_on_both_axes_when_present():
+    space = _space([AwardRateObservation(agency="시청", category="service", value=0.95)])
+    value, present = _floor_axes(space, 0.87745)
+    assert value == pytest.approx(0.87745)
+    assert present == 1.0
+
+
+def test_missing_published_floor_is_nan_not_zero():
+    """0 은 "하한 0%"라는 다른 주장이다 — 결측은 NaN 으로 두고 여부를 따로 싣는다.
+
+    이 단언이 sentinel 접지(0.0)를 막는 회귀 가드다: 0 으로 접으면 미공시 공고가 하한이
+    극단적으로 낮은 공고와 같은 좌표에 놓여, 분할 임계가 실제 하한 분포 밖으로 끌려간다.
+    """
+    space = _space([AwardRateObservation(agency="시청", category="service", value=0.95)])
+    value, present = _floor_axes(space, None)
+    assert math.isnan(value)
+    assert present == 0.0
 
 
 def test_key_normalization_is_shared_by_aggregation_and_lookup():
@@ -225,10 +285,20 @@ def test_build_row_normalizes_before_lookup():
         [AwardRateObservation(agency="시청", category="service", value=0.90)],
         categories=("service",),
     )
+    # 하한은 실값으로 둔다 — 결측(NaN)은 자기 자신과도 같지 않아 동등성 단언이 성립하지
+    # 않고, 이 테스트가 재는 것은 키 정규화이지 결측 표현이 아니다.
     lowered = space.build_row(
-        amount=1.0, category="service", agency="시청", denominator_source="clean-base"
+        amount=1.0,
+        category="service",
+        agency="시청",
+        denominator_source="clean-base",
+        published_floor_rate=0.88,
     )
     spaced = space.build_row(
-        amount=1.0, category=" Service ", agency=" 시청 ", denominator_source="clean-base"
+        amount=1.0,
+        category=" Service ",
+        agency=" 시청 ",
+        denominator_source="clean-base",
+        published_floor_rate=0.88,
     )
     assert lowered == spaced

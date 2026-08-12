@@ -50,6 +50,10 @@ def _training_rows(count: int = 400) -> list[AwardRateTrainingRow]:
                 agency="저가기관" if low else "고가기관",
                 denominator_source="clean-base",
                 opened_at=start + timedelta(hours=index),
+                # 공시 하한 축은 기관 축과 **직교**하게 섞는다. 여기서 두 축을 겹쳐 두면
+                # 아래 기관 축 단언들이 실제로는 하한 축을 재게 된다. 하한 축이 예측을
+                # 실제로 움직이는지는 전용 픽스처(_floor_signal_rows)가 따로 본다.
+                published_floor_rate=0.88 if index % 3 else None,
             )
         )
     return rows
@@ -77,7 +81,10 @@ def gbm_enabled(monkeypatch, artifact_path):
 
 
 def _context(
-    *, category: str = "construction", agency_name: str | None = "저가기관"
+    *,
+    category: str = "construction",
+    agency_name: str | None = "저가기관",
+    published_floor_bid_rate: float | None = None,
 ) -> PricePredictionContext:
     return PricePredictionContext(
         budget=_BASE_AMOUNT,
@@ -85,6 +92,7 @@ def _context(
         description="항만 준설 공사",
         historical_records=(),
         agency_name=agency_name,
+        published_floor_bid_rate=published_floor_bid_rate,
     )
 
 
@@ -143,6 +151,28 @@ def test_artifact_with_a_different_feature_set_is_rejected(tmp_path):
         load_award_rate_gbm_model(str(path))
 
 
+def test_previous_generation_artifact_is_rejected(tmp_path):
+    """공시 하한 축 이전(v1, 5피처)에 학습된 아티팩트는 로드되지 않는다.
+
+    피처가 늘면 **기존 산출물은 다른 피처 공간**이다. 그것을 부스터만 보고 태우면
+    새 두 축의 자리에 아무 값도 없는 채 예측이 나오고, 실패는 예외가 아니라 가격으로만
+    드러난다. 계약 검사가 그 경로를 닫아 두는지 여기서 고정한다.
+    """
+    artifact = train_award_rate_gbm(_training_rows(), folds=3)
+    artifact["artifact_version"] = "award-rate-gbm-v1"
+    artifact["feature_names"] = [
+        "category",
+        "log_amount",
+        "agency_encoding",
+        "agency_sample_count",
+        "denominator_source",
+    ]
+    path = tmp_path / "v1.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    with pytest.raises(ValueError, match="different feature set"):
+        load_award_rate_gbm_model(str(path))
+
+
 def test_artifact_missing_a_required_field_is_rejected(tmp_path):
     artifact = train_award_rate_gbm(_training_rows(), folds=3)
     del artifact["global_mean"]
@@ -162,7 +192,7 @@ def test_predict_maps_the_model_onto_the_contract(gbm_enabled):
 
     assert isinstance(result, PredictionResult)
     assert result.pricing_mode == "award_rate_gbm"
-    assert result.model_version == "v1.0-award-rate-gbm"
+    assert result.model_version == "v2.0-award-rate-gbm"
     assert result.predicted_bid_rate == pytest.approx(_HIGH_RATE, abs=0.02)
     labels = [candidate["label"] for candidate in result.bid_rate_candidates]
     assert labels == ["conservative", "base", "aggressive"]
@@ -210,6 +240,58 @@ def test_agency_axis_separates_predictions(gbm_enabled):
     low = predictor.predict(_context(agency_name="저가기관", category="construction"))
     high = predictor.predict(_context(agency_name="고가기관", category="service"))
     assert low.predicted_bid_rate < high.predicted_bid_rate
+
+
+def _floor_signal_rows(count: int = 400) -> list[AwardRateTrainingRow]:
+    """공시 하한 **유무만** 신호인 코퍼스 — 기관·공종·금액이 모두 같다.
+
+    실제 코퍼스에서 두 층의 평균이 0.8905 대 0.9562 로 갈리는 것을 축소해 재현한다.
+    다른 축을 전부 상수로 두었으므로, 예측이 갈리면 그것은 하한 축이 모델에 도달했다는
+    뜻 외에 다른 해석이 없다.
+    """
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    return [
+        AwardRateTrainingRow(
+            value=(_LOW_RATE if index % 2 == 0 else _HIGH_RATE) + (0.001 * (index % 5)),
+            amount=_BASE_AMOUNT,
+            category="construction",
+            agency="한기관",
+            denominator_source="clean-base",
+            opened_at=start + timedelta(hours=index),
+            published_floor_rate=0.88 if index % 2 == 0 else None,
+        )
+        for index in range(count)
+    ]
+
+
+def test_published_floor_axis_reaches_the_model(tmp_path, monkeypatch):
+    """공고 게시 하한이 서빙 컨텍스트 → 피처 → 예측까지 실제로 이어진다.
+
+    이 단언이 없으면 컨텍스트 필드를 추가하고도 predictor 가 그 값을 넘기지 않는 상태를
+    아무 테스트도 잡지 못한다 — 그 실패는 예외가 아니라 "결측으로 학습된 층의 값으로
+    모든 공고를 예측"으로만 나타난다(train/serve skew).
+    """
+    artifact = train_award_rate_gbm(_floor_signal_rows(), folds=3)
+    path = tmp_path / "floor-signal.json"
+    path.write_text(
+        PersistedAwardRateGbmArtifact.model_validate(artifact).model_dump_json(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(
+        settings, "PRICE_PREDICTION_AWARD_RATE_GBM_MODEL_PATH", str(path)
+    )
+    predictor = AwardRateGbmPredictor()
+
+    with_floor = predictor.predict(
+        _context(agency_name="한기관", published_floor_bid_rate=0.88)
+    )
+    without_floor = predictor.predict(
+        _context(agency_name="한기관", published_floor_bid_rate=None)
+    )
+
+    assert with_floor.predicted_bid_rate == pytest.approx(_LOW_RATE, abs=0.02)
+    assert without_floor.predicted_bid_rate == pytest.approx(_HIGH_RATE, abs=0.02)
 
 
 def test_cached_model_is_shared_instead_of_deep_copied(gbm_enabled):

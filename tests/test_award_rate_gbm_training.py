@@ -48,6 +48,7 @@ def _rows(count: int = 120) -> list[AwardRateTrainingRow]:
             agency=agencies[index % len(agencies)],
             denominator_source="clean-base",
             opened_at=_START + timedelta(hours=index),
+            published_floor_rate=0.88 if index % 3 else None,
         )
         for index in range(count)
     ]
@@ -59,6 +60,7 @@ def _rows(count: int = 120) -> list[AwardRateTrainingRow]:
         agency=last.agency,
         denominator_source=last.denominator_source,
         opened_at=last.opened_at,
+        published_floor_rate=last.published_floor_rate,
     )
     return rows
 

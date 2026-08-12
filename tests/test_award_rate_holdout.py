@@ -50,6 +50,9 @@ def _rows(
                     else "reserve-estimate"
                 ),
                 opened_at=_START + timedelta(hours=index),
+                # 공시 하한 축도 섞는다 — 게이트 픽스처가 실제 코퍼스처럼 두 층을
+                # 갖게 해서, 축이 늘어난 뒤에도 판정식이 같은 것을 재는지 본다.
+                published_floor_rate=0.88 if index % 3 else None,
             )
         )
     return rows
@@ -128,6 +131,7 @@ def _boundary_tie_rows(
             agency=agencies[index % len(agencies)],
             denominator_source=GATE_STRATUM,
             opened_at=_START + timedelta(hours=_hour(index)),
+            published_floor_rate=None,
         )
         for index in range(count)
     ]
@@ -173,6 +177,52 @@ def _unbias(report) -> float:
     return (n - 1) / n
 
 
+def test_segment_breakdown_covers_the_holdout_exactly_once_per_axis():
+    """축마다 세그먼트 행 수의 합이 홀드아웃 전체다 — 쪼갠 것이지 다시 학습한 게 아니다.
+
+    이 단언이 지키는 성질: 세그먼트 수치가 "실제로 나간 예측의 부분집합"이라는 것.
+    세그먼트별 재학습으로 바꾸면 합은 그대로여도 그 성질이 깨지고, 공종별 편향이
+    승격 판단의 근거가 되지 못한다.
+    """
+    report = evaluate_award_rate_holdout(_rows(), folds=3)
+    axes = {score.axis for score in report.segments}
+    assert axes == {"category", "published_floor"}
+    for axis in axes:
+        in_axis = [score for score in report.segments if score.axis == axis]
+        assert sum(score.row_count for score in in_axis) == report.gate_test_row_count
+    assert {score.segment for score in report.segments if score.axis == "category"} == {
+        "construction",
+        "service",
+    }
+    assert {
+        score.segment for score in report.segments if score.axis == "published_floor"
+    } == {"present", "absent"}
+
+
+def test_segment_score_equals_the_whole_holdout_when_one_segment_holds_everything():
+    """세그먼트가 하나뿐이면 그 성적은 전체 성적과 같다(자르기의 항등성)."""
+    agencies = list(_AGENCY_RATES)
+    rows = [
+        AwardRateTrainingRow(
+            value=_AGENCY_RATES[agencies[index % len(agencies)]]
+            + (0.002 * ((index % 7) - 3)),
+            amount=100_000_000.0 * (1 + (index % 4)),
+            category="construction",
+            agency=agencies[index % len(agencies)],
+            denominator_source=GATE_STRATUM,
+            opened_at=_START + timedelta(hours=index),
+            published_floor_rate=0.88,
+        )
+        for index in range(300)
+    ]
+    report = evaluate_award_rate_holdout(rows, folds=3)
+    category = next(score for score in report.segments if score.axis == "category")
+    assert category.segment == "construction"
+    assert category.row_count == report.gate_test_row_count
+    assert category.baseline_rmse == pytest.approx(report.gate_baseline_rmse)
+    assert category.model_rmse == pytest.approx(report.gate_model_rmse)
+
+
 def test_agency_baseline_falls_back_for_shallow_groups():
     """얕은 기관을 자기 평균으로 점추정하면 베이스라인이 부당하게 나빠진다."""
     report = evaluate_award_rate_holdout(_rows(), folds=3)
@@ -198,6 +248,7 @@ def test_no_evaluation_stratum_rows_fails_loudly():
             agency="가기관",
             denominator_source="reserve-estimate",
             opened_at=_START + timedelta(hours=index),
+            published_floor_rate=None,
         )
         for index in range(50)
     ]

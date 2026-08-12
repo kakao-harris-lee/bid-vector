@@ -35,6 +35,7 @@ from typing import Final
 import numpy as np
 from pydantic import Field
 
+from app.domain.award_rate_features import AwardRatePredictionInput
 from app.schemas._base import StrictModel
 from app.services.ml_training.award_rate_gbm import (
     AwardRateTrainingRow,
@@ -49,6 +50,7 @@ __all__ = [
     "GATE_MODEL_NAME",
     "AwardRateHoldoutReport",
     "ModelScore",
+    "SegmentScore",
     "evaluate_award_rate_holdout",
 ]
 
@@ -98,6 +100,17 @@ _BASELINE_SPECS: Final[tuple[_BaselineSpec, ...]] = (
 )
 
 
+# 홀드아웃을 쪼개 볼 축 표(§4.5-2 선언). 새 축은 코드 분기가 아니라 여기 한 줄이다.
+# 공종이 첫 줄인 이유: 승격을 막은 지표가 전체 RMSE 가 아니라 **공종별 편향**이었다.
+_SEGMENT_SPECS: Final[tuple[tuple[str, Callable[[AwardRateTrainingRow], str]], ...]] = (
+    ("category", lambda row: row.category or "unknown"),
+    (
+        "published_floor",
+        lambda row: "present" if row.published_floor_rate is not None else "absent",
+    ),
+)
+
+
 class ModelScore(StrictModel):
     """한 모델의 홀드아웃 성적. RMSE 만 보면 편향과 모양이 구별되지 않는다."""
 
@@ -107,6 +120,25 @@ class ModelScore(StrictModel):
     residual_std: float
     test_coverage: float = 1.0
     """그룹 평균이 자기 그룹으로 예측한 홀드아웃 비율(나머지는 전역 평균 폴백)."""
+
+
+class SegmentScore(StrictModel):
+    """홀드아웃 한 세그먼트에서 베이스라인과 게이트 모델을 나란히 잰 성적.
+
+    전체 RMSE 하나로는 "어디가 나빠서 못 쓰는가"에 답할 수 없다. 승격 판단을 막은 신호가
+    바로 공종별 **편향**이었으므로(전체 개선과 공존한다), 그 축을 리포트가 직접 싣는다.
+    세그먼트 예측은 전체 예측 벡터를 **자르기만** 한 것이다 — 세그먼트별로 다시 학습하지
+    않으므로 여기 수치는 실제로 나간 예측의 부분집합이다.
+    """
+
+    axis: str
+    segment: str
+    row_count: int
+    baseline_rmse: float
+    baseline_bias: float
+    model_rmse: float
+    model_bias: float
+    model_residual_std: float
 
 
 class AwardRateHoldoutReport(StrictModel):
@@ -123,6 +155,8 @@ class AwardRateHoldoutReport(StrictModel):
     test_std: float
     baselines: list[ModelScore] = Field(default_factory=list)
     models: list[ModelScore] = Field(default_factory=list)
+    segments: list[SegmentScore] = Field(default_factory=list)
+    """게이트 베이스라인 vs 게이트 모델을 축별로 쪼갠 성적(:data:`_SEGMENT_SPECS`)."""
     gate_baseline_rmse: float
     gate_model_rmse: float
     gate_improvement_ratio: float
@@ -194,7 +228,15 @@ def _gbm_predictions(
     model = load_award_rate_gbm_model(artifact)
     return np.array(
         model.predict_rates(
-            [(row.amount, row.category, row.agency) for row in test_rows]
+            [
+                AwardRatePredictionInput(
+                    amount=row.amount,
+                    category=row.category,
+                    agency=row.agency,
+                    published_floor_rate=row.published_floor_rate,
+                )
+                for row in test_rows
+            ]
         ),
         dtype=float,
     )
@@ -315,6 +357,43 @@ def _model_scores(
     return scores, gate_predictions
 
 
+def _segment_scores(
+    rows: Sequence[AwardRateTrainingRow],
+    targets: np.ndarray,
+    *,
+    baseline_predictions: np.ndarray,
+    model_predictions: np.ndarray,
+) -> list[SegmentScore]:
+    """선언된 축마다 홀드아웃을 쪼개 두 예측을 나란히 채점한다(재학습 없음)."""
+    scores: list[SegmentScore] = []
+    for axis, key in _SEGMENT_SPECS:
+        groups: dict[str, list[int]] = {}
+        for index, row in enumerate(rows):
+            groups.setdefault(key(row), []).append(index)
+        for segment, indices in sorted(groups.items()):
+            selector = np.array(indices, dtype=int)
+            segment_targets = targets[selector]
+            baseline_rmse, baseline_bias, _ = _rmse_bias_std(
+                baseline_predictions[selector], segment_targets
+            )
+            model_rmse, model_bias, model_std = _rmse_bias_std(
+                model_predictions[selector], segment_targets
+            )
+            scores.append(
+                SegmentScore(
+                    axis=axis,
+                    segment=segment,
+                    row_count=len(indices),
+                    baseline_rmse=baseline_rmse,
+                    baseline_bias=baseline_bias,
+                    model_rmse=model_rmse,
+                    model_bias=model_bias,
+                    model_residual_std=model_std,
+                )
+            )
+    return scores
+
+
 def _named_rmse(scores: Sequence[ModelScore], name: str) -> float:
     """채점 표에서 이름으로 RMSE 를 꺼낸다 — 게이트의 두 항이 같은 식을 쓰게 한다."""
     return float(next(score.rmse for score in scores if score.name == name))
@@ -346,6 +425,12 @@ def _build_report(
         test_std=float(np.std(targets, ddof=1)) if targets.size > 1 else 0.0,
         baselines=baselines,
         models=models,
+        segments=_segment_scores(
+            split.gate_test,
+            targets,
+            baseline_predictions=gate_baseline_predictions,
+            model_predictions=gate_model_predictions,
+        ),
         gate_baseline_rmse=gate_baseline_rmse,
         gate_model_rmse=gate_model_rmse,
         gate_improvement_ratio=(

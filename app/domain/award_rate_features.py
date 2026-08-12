@@ -42,6 +42,25 @@
 그 편이 특정 홀드아웃에서 더 좋아 보일 수 있지만(층 간 평균 차이가 그 구간의 시간 드리프트와
 우연히 같은 방향이면), 그것은 신호가 아니라 상쇄다 — 수치와 판단 근거는 PR 본문.
 
+공시 낙찰하한율(``published_floor_rate``)을 왜 두 축으로 싣는가
+---------------------------------------------------------------
+낙찰률 ``ok`` 층은 낙찰 **메커니즘**도 섞여 있다. 공고가 낙찰하한율을 게시했다는 것은
+그 공고가 가격경쟁(적격심사) 계열이라는 뜻이고, 그 층의 낙찰률은 하한 근처에 몰린다.
+게시가 없는 층은 협상·수의 계열이 섞여 낙찰률이 1.0 근처로 붙는다. 실측(운영 코퍼스)에서
+두 층의 평균은 0.8905 대 0.9562 로 갈리고, ≥0.995 비율은 0.63% 대 52.11% 다. 이 축을
+빼면 모델은 두 메커니즘의 혼합 평균을 학습하고, 그 혼합비가 바뀌기만 해도 예측이 움직인다.
+
+**결측을 sentinel 0 으로 접지 않는다.** 열린 공고의 절반가량은 하한이 공시되지 않고,
+``0`` 은 "하한 0%"라는 다른 주장이다. LightGBM 은 NaN 을 네이티브로 다루므로 값 축은
+:data:`MISSING_PUBLISHED_FLOOR_RATE`(NaN)로 두고, **결측 여부 자체가 신호**이므로
+``has_published_floor`` 를 별도 축으로 명시한다. 두 축은 결측 차원에서 공선이지만 트리에는
+문제가 되지 않고, 이득은 "게시 여부"가 어느 노드에서든 한 번의 분할로 잡힌다는 것이다 —
+NaN 기본 방향에 의존하면 그 판정이 임계값 선택과 얽혀 읽기 어려워진다.
+
+서빙은 이 값을 **공고가 게시한 값**(``Project.award_floor_rate``, 개연 밴드 통과분)으로만
+채운다. 운영자 override(``legal_floor_bid_rate``)를 여기에 넣으면 학습 축(게시값)과 서빙
+축(운영자 지시)이 갈린다 — guardrail 이 쓰는 값과 피처가 쓰는 값은 다른 질문이다.
+
 순수 함수(값 입력 → 값 출력, I/O 0). stdlib + 기존 strict 아일랜드만 의존. mypy strict.
 """
 
@@ -64,6 +83,8 @@ LOG_AMOUNT_FEATURE: Final[str] = "log_amount"
 AGENCY_ENCODING_FEATURE: Final[str] = "agency_encoding"
 AGENCY_SAMPLE_FEATURE: Final[str] = "agency_sample_count"
 DENOMINATOR_SOURCE_FEATURE: Final[str] = "denominator_source"
+PUBLISHED_FLOOR_RATE_FEATURE: Final[str] = "published_floor_rate"
+HAS_PUBLISHED_FLOOR_FEATURE: Final[str] = "has_published_floor"
 
 AWARD_RATE_FEATURE_NAMES: Final[tuple[str, ...]] = (
     CATEGORY_FEATURE,
@@ -71,6 +92,8 @@ AWARD_RATE_FEATURE_NAMES: Final[tuple[str, ...]] = (
     AGENCY_ENCODING_FEATURE,
     AGENCY_SAMPLE_FEATURE,
     DENOMINATOR_SOURCE_FEATURE,
+    PUBLISHED_FLOOR_RATE_FEATURE,
+    HAS_PUBLISHED_FLOOR_FEATURE,
 )
 
 # 어휘 인덱스로 실리는(=LightGBM 이 범주로 다루는) 피처. 나머지는 연속값이다.
@@ -86,6 +109,11 @@ UNKNOWN_CATEGORY_CODE: Final[float] = -1.0
 # 서빙 시 고정하는 분모 출처. 라이브 공고의 기초금액은 수집된 관측값이라 복구 추정
 # 층이 아니다 — 모듈 docstring "분모 출처를 왜 피처로 싣는가" 참조.
 SERVING_DENOMINATOR_SOURCE: Final[ReliableBaseSource] = ReliableBaseSource.CLEAN_BASE
+
+# 공시 낙찰하한율이 없을 때의 값 축 코드. LightGBM 은 NaN 을 결측으로 네이티브 처리한다
+# (분할마다 결측의 기본 방향을 학습한다). 0.0 으로 접으면 "하한 0%"라는 다른 주장이 되고,
+# 그 값이 다른 하한들과 같은 수직선 위에 놓여 분할 임계가 왜곡된다.
+MISSING_PUBLISHED_FLOOR_RATE: Final[float] = float("nan")
 
 # 낙찰률 축의 pseudo-count 수축 강도(κ, 등가 표본 수). ``assessment_shrinkage`` 의
 # κ(기관 12 / 공종 40)는 **사정률 축**에서 도출된 값이라 그대로 가져오지 않고, 같은
@@ -128,6 +156,26 @@ class AwardRateObservation:
     agency: str
     category: str
     value: float
+
+
+@dataclass(frozen=True)
+class AwardRatePredictionInput:
+    """예측 한 건의 입력 — **라벨이 없는** 값 묶음.
+
+    배치 예측 경로(:meth:`~app.ai.predictors.award_rate_gbm.LoadedAwardRateGbmModel.predict_rates`)
+    가 위치 튜플 대신 이 타입을 받는다. 이유가 둘이다:
+
+    * 축이 늘 때(``published_floor_rate`` 가 그랬다) 위치 튜플은 **조용히** 어긋난다 —
+      호출부가 옛 arity 로 넘겨도 타입이 맞으면 통과하고, 어긋난 좌표로 예측만 바뀐다.
+    * 학습 행(:class:`~app.services.ml_training.award_rate_gbm.AwardRateTrainingRow`)을
+      그대로 넘길 수 없게 만든다. 그 타입에는 라벨(``value``)이 있고, 서빙 경로가 라벨을
+      받을 수 있는 표면 자체를 두지 않는 편이 안전하다.
+    """
+
+    amount: float
+    category: str | None
+    agency: str | None
+    published_floor_rate: float | None
 
 
 @dataclass(frozen=True)
@@ -190,6 +238,7 @@ class AwardRateFeatureSpace:
         category: str | None,
         agency: str | None,
         denominator_source: str,
+        published_floor_rate: float | None,
     ) -> tuple[float, ...]:
         """한 공고의 피처 행. 학습·서빙이 공유하는 **유일한** 조립 지점이다.
 
@@ -201,6 +250,10 @@ class AwardRateFeatureSpace:
             agency: 발주기관 원문(없으면 미관측으로 떨어진다).
             denominator_source: 분모 출처. 서빙은
                 :data:`SERVING_DENOMINATOR_SOURCE` 를 넘긴다.
+            published_floor_rate: 공고가 게시한 낙찰하한율(fraction, 개연 밴드 통과분).
+                미공시는 ``None`` — 값 축은 NaN 으로, 게시 여부는 별도 축으로 실린다
+                (모듈 docstring "공시 낙찰하한율을 왜 두 축으로 싣는가" 참조).
+                **투찰 시점에 공고문에 있는 값**이므로 미래 정보가 아니다.
 
         Returns:
             :data:`AWARD_RATE_FEATURE_NAMES` 와 같은 순서의 값 튜플.
@@ -216,6 +269,10 @@ class AwardRateFeatureSpace:
             encoded,
             log1p(float(sample_count)),
             _vocabulary_code(self.denominator_sources, denominator_source),
+            MISSING_PUBLISHED_FLOOR_RATE
+            if published_floor_rate is None
+            else float(published_floor_rate),
+            0.0 if published_floor_rate is None else 1.0,
         )
 
 
