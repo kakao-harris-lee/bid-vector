@@ -61,6 +61,10 @@ ignore_errors = true
 # 완전 열거 전용, MC 폴백은 도달 불가 죽은 코드라 제거/리뷰 L3) and
 # app.domain.assessment_shrinkage (사정률 계층 수축 사전분포 — 학습 코어 기관 91.9% 가
 # 표본 <10 이라 pseudo-count 수축이 예측 정합성을 결정한다).
+# Phase 1j adds app.domain.award_rate_label (basis 명시 낙찰률 라벨 — 분자·분모의 basis 를
+# 값과 함께 실어 나른다. 분모를 잘못 고르면 라벨이 통째로 다른 축의 수치가 되므로, 분모
+# 선택(reliable_base)과 유효 창(rate_normalization)을 타입으로 묶어 둔다).
+# (1i 는 아래 app.ai.predictors.distribution_extraction 이 #362 에서 이미 쓴 번호다.)
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -75,6 +79,7 @@ module = [
     "app.domain.estimate_provenance",
     "app.domain.reserve_draw_distribution",
     "app.domain.assessment_shrinkage",
+    "app.domain.award_rate_label",
 ]
 ignore_errors = false
 disallow_untyped_defs = true

@@ -71,19 +71,19 @@ from app.ai.holdout_quality import (
     is_rate_basis_independent,
 )
 from app.domain.aggregates import error_rate
+from app.domain.award_rate_label import build_award_rate_label
 from app.domain.floor_shortfall import (
     MIN_ASSESSMENT_SAMPLES,
     floor_shortfall_frequency,
     is_plausible_assessment_rate,
     resolve_critical_assessment_rate,
 )
-from app.domain.reliable_base import ReliableBaseSource, get_reliable_base
+from app.domain.reliable_base import ReliableBaseSource
 from app.models.models import HistoricalData, TenderResult
 from app.schemas.prediction import FloorShortfallEstimate
 from app.services.base_amount_basis import BASIS_CLEAN
 from app.services.prediction_dataset import PredictionDatasetService
 from app.services.query_predicates import settled_with_amount
-from app.utils.numeric import optional_float
 from app.utils.sequence_coercion import coerce_numeric_list
 
 # 한 번에 훑는 최대 (HistoricalData × TenderResult) 행 수. 개찰일 최신순이라 이
@@ -158,30 +158,29 @@ def assessment_rate_from_opening(
     비가 1 로 붕괴해 "위험 없음"이라는 거짓 표본이 되므로 버린다(모듈 docstring).
     ORM 행이 아니라 스칼라만 받으므로 DB 없이 값 테이블로 검증할 수 있다(§4.7.4).
     """
-    reliable = get_reliable_base(
+    # 낙찰가/기초금액 — 우리가 가진 금액비. 분모 선택·금액 coercion·유효 창을
+    # ``build_award_rate_label`` 한 벌로 위임한다(§4.5-8): 학습 라벨과 이 표본이 같은
+    # 비를 각자 계산하면 경계에서 갈린다.
+    label = build_award_rate_label(
+        winning_amount=winning_amount,
         base_amount=base_amount,
-        basis=base_amount_basis,
+        base_amount_basis=base_amount_basis,
         base_amount_estimated=base_amount_estimated,
     )
-    if reliable.source is not ReliableBaseSource.CLEAN_BASE or reliable.value is None:
+    # 여기서는 ``clean`` 만 받는다. 복구 추정치(reserve-estimate)는 그 자체가 추정 오차를
+    # 실어 분포의 꼬리를 오염시키므로 이 용도에서 제외한다(모듈 docstring 1번).
+    # **이 제외는 위임 이전과 같다** — 종전 코드도 ``reliable.source`` 가 CLEAN_BASE 가
+    # 아니면 그 자리에서 None 을 냈다. 학습 라벨(reserve-estimate 를 분모로 받는다)과
+    # 갈리는 지점이지만, 그 갈림도 이 변경으로 생긴 것이 아니다.
+    if label.denominator_source is not ReliableBaseSource.CLEAN_BASE:
         return None
-    base = float(reliable.value)
+    amount_derived_rate = label.value
+    if amount_derived_rate is None:
+        return None
 
     # 낙찰가/예정가 — KONEPS 가 보고한 성공사정률(예정가-basis 독립 관측).
     reported_rate = _DATASET._normalize_bid_rate_value(winning_rate)
     if reported_rate is None:
-        return None
-
-    amount = optional_float(winning_amount) or 0.0
-    if amount <= 0:
-        return None
-    # 낙찰가/기초금액 — 우리가 가진 금액비. 유효범위 게이트는 학습 데이터셋과 동일.
-    amount_derived_rate = amount / base
-    if not (
-        _DATASET.VALID_BID_RATE_MIN
-        <= amount_derived_rate
-        <= _DATASET.VALID_BID_RATE_MAX
-    ):
         return None
 
     if not is_rate_basis_independent(
