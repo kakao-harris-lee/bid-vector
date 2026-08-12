@@ -7,6 +7,10 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 backups/
+# 증적 산출물. 이미지에 들어갈 이유가 없고, 빌드 컨텍스트에 남겨두면 빌드를 **깨뜨린다**:
+# reports/ 아래에는 접근이 제한된 증적 디렉터리가 있어 컨텍스트 전송이 lstat 권한
+# 오류로 실패한다(2026-08-13 실측 — `permission denied` 로 모든 이미지 빌드가 막혔다).
+reports/
 smoke-read.json
 *.dump
 __pycache__/
