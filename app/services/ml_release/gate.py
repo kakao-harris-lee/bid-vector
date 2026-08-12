@@ -14,12 +14,14 @@ from app.services.ml_release.contracts import (
     is_json_decode_error,
 )
 
-# 리포트 top-level 에서 **best arm 의 성적으로부터 유도되는** 키 전부(§4.5 선언 데이터).
-# 제외 arm 이 best 로 선언된 리포트는 이 키들을 통째로 벗긴 사본으로 정규화하고,
-# 이후 로직은 분기 없이 그대로 읽는다 — 필드마다 `None if excluded else ...` 를
-# 복붙하는 방식은 새 top-level metric 이 추가될 때 가드 누락이 기본값이 된다
-# (리뷰 L1: guardrail/fallback 두 축이 그렇게 빠져, 소비부의 `is not None` 게이트와
-# 결합해 검사 스킵(fail-open)이었다).
+# 리포트 top-level 에서 best arm 으로부터 유도되는 **스칼라 키**(§4.5 선언 데이터) —
+# 성적(오차·rate)·표본 수와 식별자 name 까지다. ``best_predictor_key`` 자체는 이
+# 튜플에 없다: 제외 판정의 입력이라 벗기기 전에 읽어야 하고, 판정 직후 지역 변수로
+# 무효화된다(_extract_predictor_gate_metrics 첫 블록). 제외 arm 이 best 로 선언된
+# 리포트는 이 키들을 통째로 벗긴 사본으로 정규화하고, 이후 로직은 분기 없이 읽는다
+# — 필드마다 `None if excluded else ...` 복붙은 새 top-level metric 추가 시 가드
+# 누락이 기본값이 된다(리뷰 L1: guardrail/fallback 두 축이 그렇게 빠져, 소비부의
+# `is not None` 게이트와 결합해 검사 스킵(fail-open)이었다).
 BEST_DERIVED_REPORT_KEYS: Final[tuple[str, ...]] = (
     "best_predictor_name",
     "sample_count",
@@ -176,9 +178,11 @@ class _PromotionGateMixin(_MLReleaseBase):
         **한 번에 벗긴 사본**으로 정규화한 뒤, 제외되지 않은 completed 결과에서 다시
         고른다 — 서빙되지 않을 엔진의 성적으로 pass/fail 도장이 찍히는 것을 막는다
         (리뷰 K4/L1). guardrail/fallback rate 는 재선정 arm 의 result row 값으로
-        재유도된다(모든 row 가 두 키를 싣는다) — 비워 두면 소비부의 `is not None`
-        게이트가 검사를 스킵해 fail-open 이 된다. fresh 리포트는 상류가 이미
-        거르므로 이 분기는 수제·스테일 리포트 전용 방어다.
+        재유도된다 — **fresh 리포트의 row 는** ``_backtest_one_predictor`` 가 두
+        키를 항상 싣지만, 이 분기가 방어하는 수제·스테일 리포트의 row 에는 키가
+        없을 수 있고 그 경우 해당 축은 None 으로 남아 소비부의 `is not None`
+        게이트가 그 검사를 스킵한다(보장 불가 불변식을 단정하지 않는다 — 리뷰
+        M4-5). fresh 리포트는 상류가 이미 거르므로 이 분기 자체에 도달하지 않는다.
         """
         best_predictor_key = (
             str(backtest_report.get("best_predictor_key") or "").strip() or None

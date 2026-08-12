@@ -56,6 +56,8 @@ def test_draw_mean_moments_zero_variance_when_drawing_all_values():
 
 
 def test_quantile_endpoints_and_monotonicity():
+    # 5값·draw_count=2 는 손계산 값표용 형태다 — 프로덕션은 항상 15/4 이고,
+    # quantile/central_interval 은 현재 Phase 3 표면(프로덕션 소비 0)이다(M4-8).
     distribution = exact_draw_mean_distribution([1.0, 2.0, 3.0, 4.0, 5.0], 2)
 
     assert distribution.quantile(0.0) == pytest.approx(1.5)

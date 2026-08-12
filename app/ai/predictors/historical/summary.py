@@ -51,9 +51,10 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
         base_amount = float(read_record_value(record, "base_amount") or 0.0)
         if len(reserve_prices) >= 2 and base_amount > 0:
             reserve_span_rates.append((max(reserve_prices) - min(reserve_prices)) / base_amount)
-            # 실현 사정률 산술(1-기반 추첨분 선택 · 최소 2개 · 평균/base · 0.8~1.2 개연
-            # 밴드)은 distribution_extraction 이 단일 출처다(§4.5-8) — 두 벌이면 밴드
-            # 경계를 한쪽만 고치는 사고가 난다(#360 통합 사유, #361 이 실제 그 사고).
+            # 실현 사정률 산술(1-기반 추첨분·최소 2개·평균/base·0.8~1.2 밴드)의 단일
+            # 출처는 distribution_extraction 이다(§4.5-8, #360 원칙: 두 벌이면 밴드
+            # 경계를 한쪽만 고친다). #361 은 같은 원칙이 **다른 밴드**(bid_rate
+            # 0.5~1.5)에서 깨진 사례고, 이 0.8~1.2 복사본은 리뷰 L2 가 통합했다.
             estimated_price_rate = realized_assessment_ratio(
                 reserve_prices=reserve_prices,
                 picked_numbers=coerce_integer_list(
@@ -63,11 +64,10 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
             )
             if estimated_price_rate is not None:
                 estimated_price_rates.append(estimated_price_rate)
-                # resolve_record_bid_rate 가 0.5~1.5 밴드를 이미 강제한다 — 밴드
-                # 밖은 None 이라 여기서 float 밴드와 비교하면 TypeError 로 죽는다
-                # (실데이터 회귀: 예비가+추첨번호가 있는 행). 운영 실측에서 실제로
-                # 도달하는 것은 **하단 이탈**(0 < rate < 0.5) 69행뿐이다 — 상단
-                # (percent-스케일)은 수집의 to_bid_rate_fraction 이 /100 으로 접는다.
+                # resolve_record_bid_rate 가 0.5~1.5 밴드를 이미 강제한다(밖=None
+                # — float 비교 시 TypeError 실데이터 회귀). 운영 실측 도달분은
+                # **하단 이탈**(0<rate<0.5) 69행뿐이다(상단 percent-스케일은 수집의
+                # to_bid_rate_fraction 이 /100 으로 접는다).
                 if bid_rate is not None:
                     bid_to_estimated_price_rates.append(bid_rate / estimated_price_rate)
 

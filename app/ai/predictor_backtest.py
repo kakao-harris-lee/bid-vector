@@ -350,11 +350,12 @@ def _resolve_group_predictor(
     registry: dict[str, BasePricePredictor],
     best_predictor_key: str | None,
 ) -> tuple[str | None, BasePricePredictor | None]:
-    """Prefer the best predictor; fall back to any available predictor.
+    """Prefer the best predictor; fall back to the first non-excluded registry entry.
 
-    폴백도 자동 승격 제외 키를 건너뛴다 — best 경로는 이미 제외를 통과했지만,
-    registry 첫 항목 폴백은 미필터 경로였다(리뷰 L4-6: constants.py 가 선언한
-    소비자 전수성의 잠복 구멍).
+    (원문 "fall back to any available predictor" 는 L4-6 이후 코드와 반대라 요약
+    줄만 현재 동작으로 정정 — §4.6 복원의 취지는 정보 보존이지 틀린 서술 보존이
+    아니다.) 폴백도 자동 승격 제외 키를 건너뛴다 — best 경로는 이미 제외를
+    통과했지만, registry 첫 항목 폴백은 미필터 경로였다(리뷰 L4-6).
     """
     if best_predictor_key and best_predictor_key in registry:
         return best_predictor_key, registry[best_predictor_key]

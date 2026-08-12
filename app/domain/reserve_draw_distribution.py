@@ -7,10 +7,12 @@ KONEPS 예정가는 시계열이 아니라 **복권형 생성 메커니즘**이�
 C(15, 4) = 1,365 가지**뿐**이므로, 몬테카를로 샘플링 없이 전체 조합을 **완전
 열거(exact enumeration)** 하면 샘플링 오차 0 의 결정적·재현 가능한 분포를 얻는다.
 
-두 실소비자(distribution predictor 의 :func:`draw_mean_moments`, 캘리브레이션
-스크립트의 :func:`exact_draw_mean_distribution`)가 모두 상류에서 예비가격을
-**정확히 15개**로 강제하므로, 조합 수가 열거를 넘는 입력은 이 커널에 도달하지
-않는다. 몬테카를로 폴백은 그래서 두지 않는다 — 도달 불가 죽은 코드였고(리뷰 L3),
+프로덕션 소비는 두 경로다: :func:`draw_mean_moments` 는
+``distribution_extraction.observe_reserve_draw``(엔진·캘리 스크립트 공용 관측
+관문 — **정확히 15개** 강제도 그 함수 안이다)가 유일하게 호출하고,
+:func:`exact_draw_mean_distribution` 은 캘리 스크립트가 그 관문을 통과한 행의
+메커니즘 PIT 에 쓴다. 조합 수가 열거를 넘는 입력은 그래서 이 커널에 도달하지
+않는다. 몬테카를로 폴백은 두지 않는다 — 도달 불가 죽은 코드였고(리뷰 L3),
 Phase 3 가 실제로 필요로 하면 그때 실소비자와 함께 되살린다.
 
 순수 함수(I/O 0), stdlib 전용. ``app.domain.rate_normalization`` 등과 같은
@@ -41,6 +43,11 @@ class DrawMeanDistribution:
     ``support`` 는 오름차순 정렬된 추첨 평균들로, 완전 열거 조합당 1개
     (C(n, k)개 전부)다. 등확률이므로 분위수·구간·누적확률이 전부
     순서통계량으로 닫힌다.
+
+    소비 현황을 정직하게: ``cumulative_probability`` 는 캘리 스크립트의 메커니즘
+    PIT 가 쓰고, ``quantile``/``central_interval`` 은 **현재 프로덕션 소비자가
+    없다** — ``support`` 와 함께 PR 본문이 예고한 Phase 3(KDE·기대가치) 표면으로
+    유지한다(리뷰 M4-8; MC 폴백과 달리 존재 근거 서술이 거짓이 아니다).
     """
 
     support: tuple[float, ...]

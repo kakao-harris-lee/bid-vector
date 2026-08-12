@@ -87,7 +87,9 @@ strict_equality = true
 # 추출 산술 단일 출처: 실현 사정률·투찰율 환산 계수·계층 집계). "typed 순수 헬퍼"를
 # 선언하는 모듈이라 처음부터 strict 로 고정한다(#357·#359 에서 두 번 지적된 누락의
 # 재발 방지). app/domain 밖이지만 http_client(Phase 2a) 선례대로 별도 블록 —
-# 의존이 전부 typed(stdlib + app.domain.assessment_shrinkage)라 relaxation 없음.
+# 의존이 전부 typed(stdlib + app.domain.assessment_shrinkage +
+# app.domain.reserve_draw_distribution + app.core.constants 의 주석 달린 스칼라)라
+# relaxation 없음.
 [[tool.mypy.overrides]]
 module = ["app.ai.predictors.distribution_extraction"]
 ignore_errors = false
