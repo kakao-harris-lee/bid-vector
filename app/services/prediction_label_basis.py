@@ -14,6 +14,14 @@
 이 PR 에서 한 줄도 바뀌지 않았다.** 새 라벨은 그 옆에 나란히 실릴 뿐이고, 두 값은 축이
 다를 수 있다. 같이 환산하지 않는 이유는 #195 가 발주처 밴드에 이미 E[사정률]을 곱하기
 때문이다(``app/domain/basis_conversion``) — 라벨까지 환산하면 사정률이 두 번 반영된다.
+
+직렬화기 비대칭 (공시)
+----------------------
+형제 직렬화기 ``app/services/backtest_cutoff.serialize_historical_record`` (paper bidding
+백테스트·smoke test 의 record 공급원)에는 이 라벨이 **없다**. 그쪽은 ``HistoricalData`` 한
+행만 받아 라벨의 분자(``TenderResult.winning_amount``)를 얻을 수 없고, 비어 있는 라벨을
+찍으면 "개찰 결과 없음"과 "우리가 보지 않음"이 구분되지 않기 때문이다. 사유와 Phase 2 의
+선행 조건(개찰 결과 배치 적재)은 그 함수 docstring 에 적어 뒀다.
 """
 
 from __future__ import annotations
@@ -34,9 +42,10 @@ def award_rate_label_for(
             ``no-winning-amount`` 상태로 난다(값 없음, 사유 있음).
 
     Returns:
-        ``AwardRateLabel.as_payload()`` — 값과 basis 를 한 블록에 묶은 평문 dict. 소비자가
-        ``value`` 만 떼어 곱하면 분모 출처(``denominator_source``)를 잃는데, 그중
-        ``base-fallback`` 은 그 값이 기초금액이라는 증거가 없는 경로다.
+        ``AwardRateLabel.as_payload()`` — 값과 basis 를 한 블록에 묶은 평문 dict. 분모에
+        근거가 없는 행(``base-fallback``)은 ``status`` 가 ``ok`` 가 아니라
+        ``ok-unverified-base`` 이고 ``denominator_basis`` 가 ``None`` 이므로, 학습 타깃을
+        ``status == "ok"`` 로 고르면 자동으로 빠진다.
     """
     return build_award_rate_label(
         winning_amount=(

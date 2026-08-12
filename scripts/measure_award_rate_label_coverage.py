@@ -14,9 +14,12 @@
    성공한 행으로 치우친다. 그 성공률이 카테고리와 상관되므로 카테고리 구성을 전체
    코퍼스와 나란히 출력한다 — 부분모집단 수치를 전체로 일반화하지 말라는 뜻이다.
 
-판정 프리미티브는 프로덕션과 동일한 것을 쓴다(드리프트 방지):
+판정 프리미티브·임계는 전부 프로덕션 단일 출처를 그대로 쓴다(드리프트 방지):
 ``build_award_rate_label`` · ``PredictionDatasetService._normalize_bid_rate_value`` ·
-``is_plausible_rate_label`` · ``PredictionDatasetService._load_latest_tender_results``.
+``is_plausible_rate_label`` · ``PredictionDatasetService._load_latest_tender_results`` ·
+격차 계산 ``app.domain.aggregates.error_rate`` · 구별 임계
+``app.ai.holdout_quality.RATE_BASIS_INDEPENDENCE_TOLERANCE``. 이 리포트의 수치가 PR 근거로
+쓰이므로, 값을 여기 복제하면 프로덕션이 움직일 때 근거만 옛 경계로 남는다.
 
 DB read-only(write/commit 없음). 외부 API 호출 없음. 시각은 KST.
 
@@ -36,8 +39,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.ai.holdout_quality import RATE_BASIS_INDEPENDENCE_TOLERANCE
 from app.core.database import SessionLocal
 from app.core.time import kst_now
+from app.domain.aggregates import error_rate
 from app.domain.award_rate_label import AwardRateLabelStatus, build_award_rate_label
 from app.domain.rate_normalization import is_plausible_rate_label
 from app.domain.reliable_base import ReliableBaseSource
@@ -52,9 +57,13 @@ _PROJECT_ID_CHUNK = 5_000
 # 두 basis 가설의 예측값이 이 상대오차 안에서 겹치면 저장 라벨이 어느 축인지 **구별할 수
 # 없다**(사정률 ≈ 1 인 행). 그런 행을 세면 두 가설 모두 "맞는" 것으로 계상돼 비율이
 # 무의미해지므로 분모에서 뺀다.
-_DISTINGUISHABLE_TOLERANCE = 1e-3
-# 저장 라벨이 어느 가설과 "같다"고 볼 상대오차. 저장 시 6자리 반올림을 거치므로 완전
-# 일치는 요구하지 않는다.
+#
+# 프로덕션이 같은 질문("보고율이 금액비와 구별되는가")에 쓰는 임계를 그대로 쓴다 — 홀드아웃
+# 품질 판정과 사정률 표본 수집이 공유하는 단일 출처다. 값을 여기 다시 적으면 프로덕션 경계가
+# 조정될 때 이 계측만 옛 경계로 남아, 리포트 수치가 코드와 조용히 갈린다.
+_DISTINGUISHABLE_TOLERANCE = RATE_BASIS_INDEPENDENCE_TOLERANCE
+# 저장 라벨이 어느 가설과 "같다"고 볼 상대오차. 저장·전송 과정의 반올림을 흡수할 여유이고
+# 프로덕션 경계가 아니라 이 계측만의 판정 여유다(민감도는 측정하지 않았다).
 _MATCH_TOLERANCE = 1e-4
 
 _DATASET = PredictionDatasetService()
@@ -73,11 +82,17 @@ class _Row:
     base_basis: str | None
 
 
-def _relative_gap(left: float, right: float) -> float:
-    """두 값의 상대 격차 |a-b| / |b| (분모가 0 이면 무한대로 본다)."""
-    if right == 0:
-        return float("inf")
-    return abs(left - right) / abs(right)
+def _relative_gap(value: float | None, reference: float | None) -> float:
+    """두 율의 상대 격차 — 계산은 허브 :func:`~app.domain.aggregates.error_rate` 한 벌.
+
+    허브는 ``value is None`` 이나 ``reference <= 0`` 에서 ``None`` 을 낸다("비교할 말이
+    없다"). 이 계측이 넘기는 율은 전부 유효 창 ``[0.5, 1.5]`` 를 통과한 양수라 그 분기는
+    실제로 발생하지 않지만, ``None`` 을 어느 한쪽으로 접으면 판정이 조용히 기운다. 그래서
+    ``NaN`` 으로 바꾼다 — NaN 은 ``<`` 도 ``>=`` 도 False 라, 비교 불가가 "일치"로도
+    "구별됨"으로도 읽히지 않는다(두 방향 판정이 이 한 함수를 공유할 수 있는 이유다).
+    """
+    gap = error_rate(value, reference) if reference is not None else None
+    return float("nan") if gap is None else gap
 
 
 def _quantiles(values: list[float]) -> tuple[float, float, float]:
@@ -161,6 +176,9 @@ def _report_coverage(rows: list[_Row]) -> None:
         or row.new_label is not None
     )
     new_ok = sum(1 for row in rows if row.new_label is not None)
+    evidenced = sum(
+        1 for row in rows if row.new_status == AwardRateLabelStatus.OK.value
+    )
     both = sum(
         1 for row in rows if row.new_label is not None and row.stored_label is not None
     )
@@ -176,18 +194,17 @@ def _report_coverage(rows: list[_Row]) -> None:
     print(f"  tier-1 저장 라벨 (HistoricalData.bid_rate): {stored}")
     print(f"  tier-2 보고 낙찰률 (winning_rate)        : {reported}")
     print(f"  기존 tier 체인 합집합 (1|2|3)            : {tier_chain}")
-    print(f"  새 라벨 (낙찰가 ÷ 신뢰 기초금액)          : {new_ok}")
-    print(f"    ├ 저장 라벨과 공존                     : {both}")
+    print(f"  새 라벨 값 성립 (낙찰가 ÷ 분모)          : {new_ok}")
+    print(f"    └ 그중 분모에 근거 있음 (status=ok)    : {evidenced}")
+    print(f"  값 성립 ∩ 저장 라벨 공존                 : {both}")
     print(f"    ├ 새 라벨만                            : {new_only}")
     print(f"    └ 저장 라벨만                          : {stored_only}")
 
-    print("\n  새 라벨 불성립 사유:")
-    for status, count in Counter(
-        row.new_status for row in rows if row.new_status != AwardRateLabelStatus.OK.value
-    ).most_common():
+    print("\n  새 라벨 상태 분포(전 행 — ok 와 ok-unverified-base 를 가른다):")
+    for status, count in Counter(row.new_status for row in rows).most_common():
         print(f"    {status:24s} {count}")
 
-    print("\n  새 라벨의 분모 출처(성립 행만 — 신뢰 축):")
+    print("\n  새 라벨의 분모 출처(값 성립 행만 — 신뢰 축):")
     for source, count in Counter(
         row.denominator_source for row in rows if row.new_label is not None
     ).most_common():
@@ -211,7 +228,7 @@ def _report_distributions(rows: list[_Row]) -> None:
     identical = sum(
         1
         for row in paired
-        if _relative_gap(row.new_label, row.stored_label) < _MATCH_TOLERANCE  # type: ignore[arg-type]
+        if _relative_gap(row.new_label, row.stored_label) < _MATCH_TOLERANCE
     )
     if paired:
         print(
@@ -241,8 +258,8 @@ def _decidable_rows(rows: list[_Row]) -> list[_Row]:
 
 def _basis_verdict(row: _Row) -> str:
     """이 행의 저장 라벨이 어느 축에 붙는가."""
-    base_match = _relative_gap(row.stored_label, row.new_label) < _MATCH_TOLERANCE  # type: ignore[arg-type]
-    yega_match = _relative_gap(row.stored_label, row.reported_rate) < _MATCH_TOLERANCE  # type: ignore[arg-type]
+    base_match = _relative_gap(row.stored_label, row.new_label) < _MATCH_TOLERANCE
+    yega_match = _relative_gap(row.stored_label, row.reported_rate) < _MATCH_TOLERANCE
     if base_match and yega_match:
         return "양쪽 일치(구별 실패)"
     if base_match:

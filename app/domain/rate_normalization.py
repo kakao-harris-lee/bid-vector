@@ -17,16 +17,25 @@ SQL-level CASE(`bid_target_signals`)는 파이썬 함수를 못 부르므로 임
 다른 규칙이지만(전자는 값을 바꾸고 후자는 값을 버린다) 둘 다 "정규화된 율을 어떻게 읽는가"
 라 같은 모듈에 둔다 — ``PERCENT_SCALE_THRESHOLD`` 가 이미 그렇게 살고 있다.
 
+**#256 의 판단을 뒤집은 것이다.** 그때 이 모듈은 유효범위 게이트를 "콜사이트마다 정당하게
+다른 것"으로 분류해 병합 제외 대상으로 **명시 선언**했다. 뒤집는 근거는 그 사이 확인된
+사실 하나다: 당시 다르다고 본 콜사이트들이 실제로는 전부 같은 상수(``VALID_BID_RATE_MIN/
+MAX``)를 참조하는 **같은 닫힌 구간**이었고, 다른 것은 그 앞뒤의 입력 coercion 뿐이었다.
+coercion 은 여전히 콜사이트에 남기고(원래 판단 유지) 창 판정만 가져온다. 창을 새 콜사이트
+(``award_rate_label``)가 또 인라인으로 적으면 경계가 갈릴 수 있다는 것이 직접 계기다.
+
 창의 값 ``[0.5, 1.5]`` 는 새로 정한 것이 아니라 ``PredictionDatasetService`` 의
 ``VALID_BID_RATE_MIN/MAX`` 에 있던 것을 옮긴 것이다(값 동일). 그 클래스 상수는 참조 이름을
-보존하기 위해 남아 이 두 상수를 재노출하고, SQL ``CASE``(``bid_target_signals``)는 파이썬
-술어를 못 부르므로 종전대로 상수만 본다.
+보존하기 위해 남아 이 두 상수를 재노출한다. ``bid_target_signals`` 는 파이썬 술어를 못
+부르므로 종전대로 상수만 보는데, **창 상수가 쓰이는 자리는 ``case(...)`` 가 아니라
+``.filter(...)`` WHERE 절**이다(``case`` 가 참조하는 것은 ``PERCENT_SCALE_THRESHOLD`` 뿐).
 
-⚠ **콜사이트 수렴은 아직 끝나지 않았다.** ``prediction_dataset._resolve_bid_rate`` 의 tier
-게이트 셋 · ``_normalize_bid_rate_value`` 는 같은 닫힌 구간을 여전히 인라인 비교로 쓴다.
-이 PR 이 그 경로를 의도적으로 손대지 않았기 때문이고(학습 라벨 해석 경로 동결), 후속에서
-이 술어로 수렴시킨다. 그때까지 창을 바꾸려면 이 상수만 고치면 되지만(값은 재노출로 전파),
-비교식이 두 모양으로 존재한다는 사실은 그대로다.
+⚠ **콜사이트 수렴은 아직 끝나지 않았다.** 아래 넷은 같은 닫힌 구간을 여전히 인라인 비교로
+쓴다 — ``prediction_dataset._resolve_bid_rate`` 의 tier 게이트 셋 ·
+``prediction_dataset._normalize_bid_rate_value`` · ``bid_target_signals`` 의 SQL WHERE ·
+``scripts/measure_stored_bidrate_basis.py::_gate``. 앞 둘은 이 PR 이 학습 라벨 해석 경로를
+의도적으로 동결했기 때문이고, SQL 은 술어를 부를 수 없어 구조적으로 남는다. 창을 바꾸려면
+이 상수만 고치면 값은 전파되지만(재노출), 비교식이 여러 모양으로 존재한다는 사실은 그대로다.
 
 순수 함수(I/O 0). ``app.domain.money`` 등과 같은 strict 타이핑 아일랜드다.
 """
@@ -43,9 +52,25 @@ PERCENT_SCALE_THRESHOLD: Final[float] = 1.5
 # 율 라벨(낙찰가 ÷ 어떤 금액)의 유효 창 — **닫힌 구간**. 스케일 정규화를 마친 율이 이 창을
 # 벗어나면 추첨 결과가 아니라 적재 사고다(스케일 이중 적용, 다른 금액 필드 혼입, 0/누락).
 #
-# 상단 1.5 가 ``PERCENT_SCALE_THRESHOLD`` 와 값이 같은 것은 별개의 규칙이 같은 숫자를 쓰는
-# 것이다(그쪽=percent/fraction 판별, 이쪽=정규화 후 유효성). 한쪽을 다른 쪽으로 대체하지
-# 않는다 — 우연한 일치에 기대면 한쪽만 바뀔 때 조용히 갈린다.
+# 상단 1.5 가 ``PERCENT_SCALE_THRESHOLD`` 와 같은 것은 **우연이 아니라 유도 결과**다.
+# 스케일 판별이 ``numeric > threshold → /100`` 이므로, 이 창이 성립하려면 threshold 가 두
+# 조건을 동시에 만족해야 한다:
+#
+#   * 정당한 fraction ``[MIN, MAX]`` 가 나눠지지 않고 살아남을 것 → ``threshold >= MAX``
+#   * 정당한 percent ``[MIN×100, MAX×100]`` 이 전부 나눠질 것    → ``threshold < MIN×100``
+#
+# 즉 ``threshold ∈ [1.5, 50)`` 이고, 현재 값 1.5 는 그 구간의 **하단 끝 = 창 상한 자체**다.
+# 경계 처리도 맞물린다: 판별은 ``> 1.5`` 라 1.5 를 나누지 않고 창은 ``<= 1.5`` 라 1.5 를
+# 받는다 — ``f = 1.5`` 가 살아남는 것은 이 조합일 때뿐이다.
+#
+# 그래서 독립 조정이 안 된다. **MAX 를 올리면 threshold 도 같이 올려야** 한다(안 그러면 새
+# 상한 부근의 fraction 이 /100 되어 창 아래로 떨어진다). 반대로 threshold 를 창 상한 아래로
+# 내리면 상한 부근 fraction 이 통째로 탈락한다 — threshold 를 1.4 로 낮추면 ``f = 1.5`` 가
+# 0.015 로 오해석돼 창 밖이 된다(실측 확인).
+#
+# 제약 방향은 한쪽이다: 창이 threshold 의 정의역을 정하고, threshold 는 창을 정하지 않는다.
+# 그래서 두 상수를 하나로 합치지도 않는다 — threshold 는 ``[1.5, 50)`` 안 어디든 될 수 있고
+# 지금 값이 같은 것은 그 구간의 끝을 택했기 때문이다.
 #
 # ⚠ 사정률 밴드들(``app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_*`` 0.8~1.2 ·
 # ``app/domain/floor_shortfall.ASSESSMENT_RATE_MIN/MAX`` 0.90~1.10)과 **다른 축**이다:

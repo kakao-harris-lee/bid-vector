@@ -67,11 +67,12 @@ def test_polluted_base_falls_back_to_reserve_recovered_estimate():
     assert label.base_amount_basis == BASIS_DERIVED_YEGA
 
 
-def test_unclassified_row_reports_base_fallback_source():
-    """오염 태그가 없는 행은 저장 base 를 쓰되 그 사실을 ``base-fallback`` 으로 신고한다.
+def test_unclassified_row_is_not_plain_ok_and_declares_no_basis():
+    """오염 태그가 없는 행은 값이 나도 ``ok`` 가 아니다 — 분모에 근거가 없기 때문이다.
 
-    값이 나온다는 것과 그 값이 진짜 기초금액이라는 것은 다른 주장이다. 태그가 ``None``
-    인 것은 clean 이라는 뜻이 아니라 판정된 적이 없다는 뜻이므로 구분해 싣는다.
+    값이 나온다는 것과 그 값이 진짜 기초금액이라는 것은 다른 주장이다. 태그가 ``None`` 인
+    것은 clean 이라는 뜻이 아니라 판정된 적이 없다는 뜻이므로, 상태를 갈라 싣고 축(basis)은
+    말하지 않는다.
     """
     label = build_award_rate_label(
         winning_amount=87_500_000.0,
@@ -80,13 +81,20 @@ def test_unclassified_row_reports_base_fallback_source():
         base_amount_estimated=None,
     )
 
-    assert label.status is AwardRateLabelStatus.OK
+    assert label.value == 0.875  # 값 자체는 난다
+    assert label.status is AwardRateLabelStatus.OK_UNVERIFIED_BASE
+    assert label.denominator_basis is None  # 축을 주장할 근거가 없다
     assert label.denominator_source is ReliableBaseSource.BASE_FALLBACK
     assert label.base_amount_basis is None
 
 
-def test_polluted_base_without_recovery_still_falls_back():
-    """non-clean 인데 복구 추정치가 없으면 저장 base 폴백 — 기존 접근자 계약 그대로."""
+def test_polluted_base_without_recovery_is_not_plain_ok():
+    """non-clean 인데 복구 추정치가 없으면 저장 base 폴백 — 여기도 ``ok`` 가 아니다.
+
+    태그가 없어 모르는 것(``None``)과 오염이라고 판정됐는데 복구를 못한 것은 사정이 다르지만
+    **분모를 믿을 근거가 없다**는 결론은 같다. 두 경우를 같은 상태로 접고, 구분은
+    ``base_amount_basis`` 원문이 진다.
+    """
     label = build_award_rate_label(
         winning_amount=87_500_000.0,
         base_amount=CLEAN_BASE,
@@ -94,9 +102,49 @@ def test_polluted_base_without_recovery_still_falls_back():
         base_amount_estimated=None,
     )
 
-    assert label.status is AwardRateLabelStatus.OK
+    assert label.value == 0.875
+    assert label.status is AwardRateLabelStatus.OK_UNVERIFIED_BASE
+    assert label.denominator_basis is None
     assert label.denominator_source is ReliableBaseSource.BASE_FALLBACK
     assert label.base_amount_basis == BASIS_SUSPECT_RATIO
+
+
+def test_status_ok_alone_selects_only_evidenced_denominators():
+    """**payload 만** 보고 ``status == "ok"`` 로 고르면 근거 없는 분모가 자동으로 빠진다.
+
+    R1 의 핵심 계약이다. Phase 2 학습기가 가장 자연스러운 필터를 썼을 때 오염 행이 타깃에
+    섞이면, 이 모듈이 기존 ``bid_rate`` 의 결함으로 진단한 혼재를 새 라벨이 그대로
+    재생산한다. 네 분모 출처를 한 표로 세워 그 필터의 결과를 고정한다.
+    """
+    cases = {
+        # 이름 → (base_amount, basis, estimated)
+        "clean-base": (CLEAN_BASE, BASIS_CLEAN, None),
+        "reserve-estimate": (113_636_363.6, BASIS_DERIVED_YEGA, CLEAN_BASE),
+        "base-fallback (미태깅)": (CLEAN_BASE, None, None),
+        "base-fallback (오염·복구실패)": (CLEAN_BASE, BASIS_SUSPECT_RATIO, None),
+    }
+    selected = {}
+    for name, (base_amount, basis, estimated) in cases.items():
+        payload = build_award_rate_label(
+            winning_amount=87_500_000.0,
+            base_amount=base_amount,
+            base_amount_basis=basis,
+            base_amount_estimated=estimated,
+        ).as_payload()
+        # 소비자가 가진 정보는 payload 뿐이다 — 객체 속성을 보지 않는다.
+        selected[name] = (
+            payload["status"] == "ok",
+            payload["denominator_basis"],
+            payload["value"],
+        )
+
+    assert selected == {
+        # 값은 넷 다 0.875 로 같다. 갈리는 것은 그 값을 믿을 근거뿐이다.
+        "clean-base": (True, "base_amount", 0.875),
+        "reserve-estimate": (True, "base_amount", 0.875),
+        "base-fallback (미태깅)": (False, None, 0.875),
+        "base-fallback (오염·복구실패)": (False, None, 0.875),
+    }
 
 
 @pytest.mark.parametrize("winning_amount", [None, 0.0, -1.0, "", "abc"])
@@ -205,5 +253,51 @@ def test_payload_carries_both_basis_axes_as_plain_strings():
         "denominator_basis": "base_amount",
         "denominator_value": CLEAN_BASE,
         "denominator_source": "clean-base",
+        "base_amount_basis": BASIS_CLEAN,
+    }
+
+
+def test_base_fallback_payload_is_frozen():
+    """근거 없는 분모의 payload 전문 고정 — 이 경로가 프로세스 밖으로 나가는 모양.
+
+    운영 코퍼스에서 값이 나는 라벨의 절반 가까이가 이 경로라, 여기가 조용히 ``ok`` /
+    ``"base_amount"`` 로 바뀌면 오염 행이 학습 타깃에 통째로 들어간다. 세 필드가 서로
+    모순되지 않는다는 것까지 한 덩어리로 얼린다: ``status`` 가 ``ok`` 가 아니고
+    ``denominator_basis`` 가 ``None`` 이며 ``denominator_source`` 가 ``base-fallback`` 이다.
+    """
+    payload = build_award_rate_label(
+        winning_amount=87_500_000.0,
+        base_amount=CLEAN_BASE,
+        base_amount_basis=None,
+        base_amount_estimated=None,
+    ).as_payload()
+
+    assert payload == {
+        "value": 0.875,
+        "status": "ok-unverified-base",
+        "numerator_basis": "winning_amount",
+        "denominator_basis": None,
+        "denominator_value": CLEAN_BASE,
+        "denominator_source": "base-fallback",
+        "base_amount_basis": None,
+    }
+
+
+def test_failed_label_payload_declares_no_basis_either():
+    """분모를 못 고른 라벨도 축을 주장하지 않는다(``denominator_basis`` = ``None``)."""
+    payload = build_award_rate_label(
+        winning_amount=87_500_000.0,
+        base_amount=None,
+        base_amount_basis=BASIS_CLEAN,
+        base_amount_estimated=None,
+    ).as_payload()
+
+    assert payload == {
+        "value": None,
+        "status": "no-reliable-base",
+        "numerator_basis": "winning_amount",
+        "denominator_basis": None,
+        "denominator_value": None,
+        "denominator_source": "unavailable",
         "base_amount_basis": BASIS_CLEAN,
     }

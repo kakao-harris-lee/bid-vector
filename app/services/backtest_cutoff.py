@@ -219,7 +219,22 @@ class BacktestCutoffService:
         return terms[:3]
 
     def serialize_historical_record(self, record: HistoricalData) -> dict[str, Any]:
-        """Convert an ORM row into the predictor's lightweight record shape."""
+        """Convert an ORM row into the predictor's lightweight record shape.
+
+        ⚠ ``prediction_dataset._serialize_series_point`` 와 **키가 하나 다르다**: 그쪽에는
+        basis 명시 낙찰률 라벨(``award_rate_label``)이 있고 여기에는 없다. 게으름이 아니라
+        입력이 없어서다 — 그 라벨의 분자는 ``TenderResult.winning_amount`` 인데 이
+        직렬화기는 ``HistoricalData`` 한 행만 받고 이 서비스의 조회 경로
+        (``_query_history_scope``)도 개찰 결과를 join 하지 않는다. 여기서 라벨을 만들면
+        분자가 항상 비어 ``no-winning-amount`` 만 찍히는데, 그것은 "개찰 결과가 없다"가
+        아니라 "우리가 보지 않았다"라서 판정 불가를 결측으로 위장하는 셈이 된다(§2).
+
+        #199 ``base_amount_basis`` 때는 행 자체가 값을 들고 있어 두 직렬화기를 맞출 수 있었고
+        실제로 맞췄다(#362 리뷰 K2). 이번 비대칭은 그 경우와 성격이 다르다.
+
+        Phase 2 가 이 경로(paper bidding 백테스트·smoke test)의 record 로 학습·평가하려면
+        ``TenderResult`` 배치 적재를 먼저 붙여야 한다. 그때까지 이 경로의 라벨은 0건이다.
+        """
         reliable_base = get_reliable_base(
             record.base_amount,
             record.base_amount_basis,

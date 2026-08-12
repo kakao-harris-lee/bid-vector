@@ -24,7 +24,11 @@ import pytest
 
 from app.core.time import utc_now
 from app.models.models import HistoricalData, Project, TenderResult
-from app.services.base_amount_basis import BASIS_CLEAN, BASIS_DERIVED_YEGA
+from app.services.base_amount_basis import (
+    BASIS_CLEAN,
+    BASIS_DERIVED_YEGA,
+    BASIS_SUSPECT_RATIO,
+)
 from app.services.floor_shortfall import assessment_rate_from_opening
 from app.services.prediction_dataset import PredictionDatasetService
 
@@ -216,11 +220,37 @@ def test_normalize_bid_rate_value_window_is_frozen(raw, expected):
 
 
 # ---------------------------------------------------------------------------
-# 사정률 표본 수집(app/services/floor_shortfall)도 같은 금액비를 도출한다. 그 계산을
-# 라벨 커널로 위임했으므로, 위임 전후로 산출이 같은지를 값 표로 얼려 둔다. 커널은 학습
-# 라벨과 달리 ``clean`` 만 받고 복구 추정치를 거부하는데(꼬리 오염), 그 차이도 표에 있다.
+# ``assessment_rate_from_opening`` 특성화 값표 — **라이브 표시 경로의 회귀 가드**.
+#
+# 이 함수가 만든 사정률 표본이 투찰서에 뜨는 하한 미달 빈도의 분모가 된다
+# (``bid_summary`` → ``notice_floor_shortfall`` → ``build_floor_shortfall_estimate``).
+# 이 PR 이 금액비 계산을 라벨 커널로 위임했으므로 위임 **이전 구현의 귀결**을 여기 얼린다.
+# 실 코퍼스 대조는 일회성이라 사라지지만 이 표는 남아, 이 함수가 나중에 바뀌면 잡힌다.
+#
+# 표가 덮는 경계(팀리드 지정 + 리뷰어 관찰):
+#   · 분자   None / 0 / 음수 / NaN / +inf / 문자열
+#   · 분모   clean / 미태깅(None) / non-clean+복구추정치 / non-clean+복구실패 / 0 / None
+#            / NaN / ±inf
+#   · 보고율 없음 / fraction / percent 스케일 / 창 밖
+#   · 독립성 복수예비가격 0개 / 4개(경계 아래) / 5개(경계) / 15개
+#
+# 이 함수는 **clean 분모만** 받는다. 커널이 값을 내주는 ``reserve-estimate``·
+# ``base-fallback`` 도 여기서는 버려지는데, 그 거부는 위임 이전과 동일하다(구 구현도
+# ``reliable.source is not CLEAN_BASE`` 에서 None 을 냈다). 학습 라벨과 갈리는 지점이지만
+# 이 PR 이 만든 갈림이 아니다.
 # ---------------------------------------------------------------------------
 _RESERVES_15 = json.dumps([100_000_000.0 + index for index in range(15)])
+# 독립 예정가 증거로 인정하는 최소 개수는 5(``MIN_RESERVE_PRICES_FOR_INDEPENDENT_RATE``).
+_RESERVES_5 = json.dumps([100_000_000.0 + index for index in range(5)])
+_RESERVES_4 = json.dumps([100_000_000.0 + index for index in range(4)])
+
+# 분모 쪽을 고정한 기본 행 — 분자·보고율만 흔드는 케이스가 이것을 펼쳐 쓴다.
+_CLEAN = dict(
+    base_amount=100_000_000.0,
+    base_amount_basis=BASIS_CLEAN,
+    base_amount_estimated=None,
+    reserve_prices=None,
+)
 
 # (설명, kwargs, 기대값)
 _ASSESSMENT_RATE_TABLE = [
@@ -331,6 +361,143 @@ _ASSESSMENT_RATE_TABLE = [
             winning_rate=0.87,
         ),
         None,
+    ),
+    # ── 분자 경계 ────────────────────────────────────────────────────────────
+    (
+        "낙찰 금액 None",
+        dict(**_CLEAN, winning_amount=None, winning_rate=0.87),
+        None,
+    ),
+    (
+        "낙찰 금액 음수",
+        dict(**_CLEAN, winning_amount=-1.0, winning_rate=0.87),
+        None,
+    ),
+    (
+        "낙찰 금액 NaN — <=0 은 통과하지만 유효 창에서 탈락",
+        dict(**_CLEAN, winning_amount=float("nan"), winning_rate=0.87),
+        None,
+    ),
+    (
+        "낙찰 금액 +inf — 비가 inf 라 유효 창 밖",
+        dict(**_CLEAN, winning_amount=float("inf"), winning_rate=0.87),
+        None,
+    ),
+    (
+        "낙찰 금액 숫자 문자열 — optional_float 이 받는다",
+        dict(**_CLEAN, winning_amount="87500000", winning_rate=0.87),
+        0.875 / 0.87,
+    ),
+    (
+        "낙찰 금액 비수치 문자열",
+        dict(**_CLEAN, winning_amount="abc", winning_rate=0.87),
+        None,
+    ),
+    # ── 분모 경계 ────────────────────────────────────────────────────────────
+    (
+        "base 0 — 양수 분모 없음",
+        dict(
+            base_amount=0.0,
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=None,
+            winning_amount=87_500_000.0,
+            winning_rate=0.87,
+        ),
+        None,
+    ),
+    (
+        "base None",
+        dict(
+            base_amount=None,
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=None,
+            winning_amount=87_500_000.0,
+            winning_rate=0.87,
+        ),
+        None,
+    ),
+    (
+        "base NaN — _positive_or_none 이 막는다",
+        dict(
+            base_amount=float("nan"),
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=None,
+            winning_amount=87_500_000.0,
+            winning_rate=0.87,
+        ),
+        None,
+    ),
+    (
+        # 리뷰어 관찰: ``_positive_or_none`` 은 NaN 만 막고 ``+inf`` 는 통과시킨다
+        # (``inf > 0`` 이 참). 그 값이 분모가 되면 비가 0.0 이라 유효 창에서 탈락하므로
+        # 라벨로 새지 않는다 — 고치는 대신 그 거동을 여기서 고정한다.
+        "base +inf — 분모로 통과하지만 비가 0.0 이라 창 밖",
+        dict(
+            base_amount=float("inf"),
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=None,
+            winning_amount=87_500_000.0,
+            winning_rate=0.87,
+        ),
+        None,
+    ),
+    (
+        "base -inf — 양수가 아니라 분모 없음",
+        dict(
+            base_amount=float("-inf"),
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=None,
+            winning_amount=87_500_000.0,
+            winning_rate=0.87,
+        ),
+        None,
+    ),
+    (
+        "non-clean + 복구 추정치 없음 → base 폴백도 거부",
+        dict(
+            base_amount=100_000_000.0,
+            base_amount_basis=BASIS_SUSPECT_RATIO,
+            base_amount_estimated=None,
+            reserve_prices=None,
+            winning_amount=87_500_000.0,
+            winning_rate=0.87,
+        ),
+        None,
+    ),
+    # ── 보고율·독립성 경계 ───────────────────────────────────────────────────
+    (
+        "보고율이 창 밖(200%) → 정규화 후에도 2.0",
+        dict(**_CLEAN, winning_amount=87_500_000.0, winning_rate=200.0),
+        None,
+    ),
+    (
+        "보고율=금액비 + 복수예비가격 4개(경계 아래) → 독립 증거 부족",
+        dict(
+            base_amount=100_000_000.0,
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=_RESERVES_4,
+            winning_amount=87_500_000.0,
+            winning_rate=0.875,
+        ),
+        None,
+    ),
+    (
+        "보고율=금액비 + 복수예비가격 5개(경계) → 독립 인정",
+        dict(
+            base_amount=100_000_000.0,
+            base_amount_basis=BASIS_CLEAN,
+            base_amount_estimated=None,
+            reserve_prices=_RESERVES_5,
+            winning_amount=87_500_000.0,
+            winning_rate=0.875,
+        ),
+        1.0,
     ),
 ]
 
@@ -487,12 +654,12 @@ def test_label_reports_reason_when_award_amount_is_missing(test_db):
     assert label["denominator_source"] == "clean-base"
 
 
-def test_unclassified_base_row_reports_base_fallback_denominator(test_db):
-    """오염 태그가 없는 행의 라벨은 값이 나와도 ``base-fallback`` 으로 신고된다.
+def test_unclassified_base_row_is_excluded_by_status_ok_filter(test_db):
+    """시계열에 실린 상태로도 ``status == "ok"`` 필터가 근거 없는 분모를 걸러낸다.
 
-    이 PR 이 요약 카운터를 싣지 않으므로(설계 래칫의 파일 LOC 밴드 — 상세는 PR 본문),
-    분모의 신뢰 축은 행 단위 블록으로만 노출된다. 소비자가 그 필드를 봐야 한다는 계약을
-    여기서 고정한다.
+    커널 단위 계약(``tests/test_award_rate_label.py``)이 실제 직렬화 경로를 타고 나온
+    payload 에서도 성립하는지를 확인한다. 이 PR 이 요약 카운터를 싣지 않으므로(설계 래칫의
+    파일 LOC 밴드 — 상세는 PR 본문) 분모의 신뢰 축은 이 행 단위 블록으로만 노출된다.
     """
     _seed_award_row(
         test_db,
@@ -509,7 +676,8 @@ def test_unclassified_base_row_reports_base_fallback_denominator(test_db):
     )
     label = series[0]["award_rate_label"]
 
-    assert label["status"] == "ok"
-    assert label["value"] == 0.9
+    assert label["value"] == 0.9  # 값 자체는 난다
+    assert label["status"] == "ok-unverified-base"  # 그러나 ``ok`` 필터에는 안 걸린다
+    assert label["denominator_basis"] is None  # 축을 주장하지 않는다
     assert label["denominator_source"] == "base-fallback"
     assert label["base_amount_basis"] is None
