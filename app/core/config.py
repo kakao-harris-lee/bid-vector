@@ -629,6 +629,12 @@ class Settings(InferenceOutboxSettings):
     # 낙찰율/실현 사정률 비 표본 최소 수.
     PRICE_PREDICTION_DISTRIBUTION_MIN_RESERVE_RECORDS: int = 8
     PRICE_PREDICTION_DISTRIBUTION_MIN_BID_RATIO_SAMPLES: int = 3
+    # 낙찰률 GBM(Phase 2) 아티팩트 경로. 비어 있으면 predictor 가 unavailable 로 떨어져
+    # historical 로 폴백한다 — 학습 산출물 없이 선호만 켜도 라이브가 깨지지 않게 하는
+    # 게이트다. 최소 학습 표본은 "학습을 시작할 자격"이라 여기 두고, 모델 내부
+    # 하이퍼파라미터는 app/services/ml_training/award_rate_gbm.py 의 선언 블록에 둔다.
+    PRICE_PREDICTION_AWARD_RATE_GBM_MODEL_PATH: str = ""
+    PRICE_PREDICTION_AWARD_RATE_GBM_MIN_TRAINING_ROWS: int = 500
     PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES: int = 5
     PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE: int = 5
     CLASSIFIER_EMBEDDING_MODEL: str = (

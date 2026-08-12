@@ -39,8 +39,10 @@ __all__ = [
     "ArtifactSource",
     "ArtifactScalar",
     "CalibrationValue",
+    "PersistedAgencyEncodingEntry",
     "PersistedArtifactCalibrationBlocks",
     "PersistedArtifactSummaryDocument",
+    "PersistedAwardRateGbmArtifact",
     "PersistedEnsembleArtifact",
     "StrictArtifactCalibrationBlocks",
     "StrictArtifactSummaryDocument",
@@ -165,6 +167,50 @@ class PersistedEnsembleArtifact(_ArtifactReadModel):
     @classmethod
     def _tolerate_non_mapping(cls, value: JsonValue) -> JsonValue:
         return _mapping_or_none(value)
+
+
+class PersistedAgencyEncodingEntry(_ArtifactReadModel):
+    """낙찰률 GBM 아티팩트의 발주기관 인코딩 한 줄.
+
+    dict 키가 (기관, 공종) 튜플이라 JSON 으로 그대로 나가지 않아 배열로 편다. 네 필드가
+    **모두 필수**인 이유는 하나라도 기본값으로 조용히 접히면 그 기관의 인코딩이 다른
+    값이 되고, 그 차이는 예외 없이 가격에만 나타나기 때문이다.
+    """
+
+    agency: str
+    category: str
+    mean: float
+    count: int
+
+
+class PersistedAwardRateGbmArtifact(_ArtifactReadModel):
+    """낙찰률 GBM(Phase 2) 릴리스 아티팩트.
+
+    형제 계약 :class:`PersistedEnsembleArtifact` 와 달리 **관용이 없다**: 실을 필드가
+    전부 필수이고 기본값이 없다. 그쪽의 관용은 은퇴 이전 산출물이 디스크에 남아 있어
+    생긴 하위호환 요구였지만, 이 계약은 이 PR 에서 처음 생기므로 과거 산출물이 없다.
+    빠진 필드를 기본값으로 접으면 **다른 피처 공간으로 학습된 부스터를 태우게 되고**
+    그 결과는 예외가 아니라 조용히 틀린 가격이다. 복원 실패는 ``ValueError`` 로 나가고
+    predictor 는 unavailable 로 떨어져 historical 로 폴백한다(fail-closed).
+
+    ``booster_model`` 은 LightGBM ``model_to_string()`` 텍스트다. 바이너리 pickle 대신
+    텍스트를 싣는 이유는 (a) 릴리스 아티팩트가 JSON 한 파일로 유지되고 (b) pickle 복원이
+    임의 코드 실행 표면이기 때문이다.
+    """
+
+    artifact_version: str
+    model_version: str
+    feature_names: list[str]
+    categories: list[str]
+    denominator_sources: list[str]
+    agency_encoding: list[PersistedAgencyEncodingEntry]
+    category_means: dict[str, float]
+    global_mean: float
+    residual_std: float
+    booster_model: str
+    # 진단·표시용. 없어도 예측은 성립하므로 여기만 선택적이다.
+    training_row_count: int = 0
+    training_through: str | None = None
 
 
 class PersistedArtifactCalibrationBlocks(_ArtifactReadModel):

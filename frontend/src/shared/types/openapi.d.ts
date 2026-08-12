@@ -8865,7 +8865,7 @@ export interface components {
              * @default heuristic
              * @enum {string}
              */
-            pricing_mode: "historical_blend" | "heuristic" | "reserve_distribution";
+            pricing_mode: "historical_blend" | "heuristic" | "reserve_distribution" | "award_rate_gbm";
             /**
              * Historical Sample Size
              * @default 0
