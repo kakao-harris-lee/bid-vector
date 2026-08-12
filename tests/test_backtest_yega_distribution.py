@@ -5,7 +5,7 @@ from statistics import fmean, pvariance
 import pytest
 
 from app.ai.predictors.distribution_extraction import observe_reserve_draw
-from scripts.backtest_yega_distribution import (
+from scripts._yega_coverage import (
     _RunningLevel,
     normal_cdf,
     run_coverage_backtest,
@@ -147,7 +147,7 @@ def test_run_coverage_backtest_prior_axis_activates_after_prefix():
 
 
 def test_standardized_shape_stats_value_table():
-    from scripts.backtest_yega_distribution import standardized_shape_stats
+    from scripts._yega_coverage import standardized_shape_stats
 
     # 대칭 2점 분포: mean 0, std 1, 첨도 m4/m2²−3 = 1−3 = −2 (플랫한 꼬리).
     assert standardized_shape_stats([-1.0, 1.0]) == (0.0, 1.0, -2.0)
