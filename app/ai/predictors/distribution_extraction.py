@@ -27,11 +27,26 @@ from app.domain.reserve_draw_distribution import (
 # statistics.resolve_record_bid_rate 의 사용가능 밴드와 같지만 이 비의 **축은
 # 행마다 다르다**: 분자 bid_rate 가 basis 혼재(base-relative/예정가-relative
 # 48/52 — bid_to_assessment_ratio docstring 참조)이고, resolve 의 bid_rate<=0
-# 폴백(추천가/기초금액)이라는 세 번째 provenance 도 있다. base-relative 행에서만
-# bid/예정가로 차원이 정확하고, 나머지는 근사다 — 단일 축 단정은 하지 않는다
-# (리뷰 M4-1, L4-8 재정정).
+# 폴백은 세 번째 provenance 다 — HistoricalData.predicted_price 의 write 경로는
+# app/services/koneps/persistence.py:728-730 한 곳뿐이며 **공고 추정가격**, 없으면
+# **기초금액 그 자체**를 적는다(모델 추천가는 PricePrediction.predicted_price,
+# 다른 테이블). 즉 그 폴백 비는 추정가격/기초금액이고 추정가격 부재면 정확히 1.0
+# — 투찰 정보가 0 인 예산 축 자기참조 값이 이 밴드를 그대로 통과한다. 단일 축
+# 단정은 하지 않는다(리뷰 N3 — L4-8·M4-1 의 '추천가' 라벨은 축을 반대로 가렸다).
 BID_RATIO_PLAUSIBLE_MIN = 0.5
 BID_RATIO_PLAUSIBLE_MAX = 1.5
+
+
+def is_plausible_assessment_rate(value: float) -> bool:
+    """사정률 관측값이 개연 밴드(0.8~1.2, **경계 포함**) 안인가 — 판정 술어 한 벌.
+
+    상수(app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_*)만 나누고 비교식을 두 벌로
+    두면 경계 포함성이 한쪽만 바뀌는 사고가 난다(§4.5-8 — BID_BASE_TRUST_RATIO_MAX
+    ↔ exceeds_base_trust_ratio 선례와 같은 배치: 상수는 constants.py, 술어는 유일한
+    소비 지점들이 있는 이 모듈. 리뷰 N1). realized 판정과 center 관문이 이 술어만
+    쓴다 — 경계 포함성은 술어 단위 값표 테스트가 고정한다.
+    """
+    return ASSESSMENT_RATE_PLAUSIBLE_MIN <= value <= ASSESSMENT_RATE_PLAUSIBLE_MAX
 
 
 def realized_assessment_ratio(
@@ -58,7 +73,7 @@ def realized_assessment_ratio(
     if len(picked_prices) < 2:
         return None
     realized = fmean(picked_prices) / base_amount
-    if not ASSESSMENT_RATE_PLAUSIBLE_MIN <= realized <= ASSESSMENT_RATE_PLAUSIBLE_MAX:
+    if not is_plausible_assessment_rate(realized):
         return None
     return realized
 
@@ -129,7 +144,7 @@ def observe_reserve_draw(
     if len(ratios) != EXPECTED_RESERVE_PRICE_COUNT:
         return None
     center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
-    if not ASSESSMENT_RATE_PLAUSIBLE_MIN <= center <= ASSESSMENT_RATE_PLAUSIBLE_MAX:
+    if not is_plausible_assessment_rate(center):
         return None
     realized = realized_assessment_ratio(
         reserve_prices=reserve_prices,

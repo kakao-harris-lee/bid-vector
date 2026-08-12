@@ -48,6 +48,9 @@ MIN_ASSESSMENT_SAMPLES: Final[int] = 150
 # 사정률(예정가/기초금액)의 물리적 개연 범위. KONEPS 복수예비가격은 기초금액을
 # 대략 ±2~3% 로 둘러싸도록 생성되므로 실제 추첨 결과가 이 범위를 벗어날 수 없다.
 # 범위 밖 값은 추첨 결과가 아니라 수집/파싱 오류이므로 표본에서 제외한다.
+# ⚠ app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_*(0.8~1.2)와 이름이 비슷하지만
+# **다른 밴드·다른 목적**(그쪽=관측 필터)이다 — §4.5-8 근거 통합 금지(리뷰 N4):
+# 합치면 shortfall 분모가 넓어져 투찰서의 하한 미달 빈도가 낙관적으로 표시된다.
 ASSESSMENT_RATE_MIN: Final[float] = 0.90
 ASSESSMENT_RATE_MAX: Final[float] = 1.10
 

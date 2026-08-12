@@ -160,3 +160,17 @@ def test_run_coverage_backtest_reports_standardized_residual_shape():
     report = run_coverage_backtest(rows)
     assert report.prior_standardized_residual_mean is not None
     assert report.prior_standardized_residual_std is not None
+
+
+def test_observe_center_gate_includes_band_boundaries():
+    """center 관문도 같은 술어를 타므로 경계(0.8·1.2)가 관측에 포함된다(리뷰 N1)."""
+    for boundary in (0.8, 1.2):
+        row = _Row(center=boundary, spread=0.0)
+        observed = observe_reserve_draw(
+            reserve_prices=row.reserve_prices,
+            base_amount=row.base_amount,
+            picked_numbers=row.selected_numbers,
+            bid_rate=None,
+        )
+        assert observed is not None
+        assert observed.center == pytest.approx(boundary)

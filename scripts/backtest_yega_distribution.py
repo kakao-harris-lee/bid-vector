@@ -57,6 +57,7 @@ from scripts._yega_coverage import (  # noqa: E402
     run_coverage_backtest,
 )
 
+
 class HoldoutReport(BaseModel):
     generated_at: str
     category: str | None

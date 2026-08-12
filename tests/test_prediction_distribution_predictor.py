@@ -438,3 +438,17 @@ def test_serializers_carry_base_amount_basis_and_filter_fires(experimental_on):
             _context([dict(clean_row) for _ in range(10)])
         )
         assert available.available
+
+
+def test_assessment_band_predicate_boundary_value_table():
+    """개연 밴드 술어(0.8~1.2, 경계 포함)의 값표 — 비교식 단일화의 고정점(리뷰 N1).
+
+    realized 판정과 center 관문이 이 술어 한 벌을 공유하므로, `<=`→`<` 변이는
+    이 값표(경계 True)와 아래 center 경계 테스트에서 함께 실패한다.
+    """
+    from app.ai.predictors.distribution_extraction import is_plausible_assessment_rate
+
+    assert not is_plausible_assessment_rate(0.79)
+    assert is_plausible_assessment_rate(0.8)  # 하한 경계 포함
+    assert is_plausible_assessment_rate(1.2)  # 상한 경계 포함
+    assert not is_plausible_assessment_rate(1.21)
