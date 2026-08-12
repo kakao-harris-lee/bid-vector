@@ -333,7 +333,28 @@ INTERNAL_TELEMETRY_EVENT_TYPES: frozenset[str] = frozenset(
 # 전수성은 주석이 아니라 리뷰가 지킨다.
 #
 # Shared by:
-#   - app/ai/predictor_backtest.py        (best 후보 eligibility 필터 + arm 메타 기재)
+#   - app/ai/predictor_backtest.py        (best 후보 eligibility 필터 + arm 메타 기재
+#                                          + _resolve_group_predictor 의 by_group 폴백 필터)
 #   - app/services/ml_release/manifest.py (recommended_env 기록 가드)
 #   - app/services/ml_release/gate.py     (게이트 metrics best arm 선정·폴백 필터)
 AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS: frozenset[str] = frozenset({"distribution"})
+
+# 사정률(예정가/기초금액) 관측의 개연 밴드(경계 포함). 밖이면 오적재(스케일 혼입·
+# 오염 base)로 보고 값을 고치지 않은 채 관측에서만 배제한다(published_floor_rate 와
+# 같은 스탠스).
+#
+# 소유권을 app/core 로 올린 이유(리뷰 M3): 이 밴드는 distribution 엔진의 관측 관문
+# 이면서 동시에 **historical(프로덕션 기본 predictor)의 서빙 가격**에도 닿는다 —
+# summarize_historical_records 의 실현 사정률 판정 → reserve prior 블렌드 →
+# base_rate 전파 경로가 코드로 확인됐다. 승격 게이트(위
+# AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS)는 상수 공유 경로를 잡지 못하므로,
+# distribution 캘리브레이션 목적의 밴드 조정이 historical 가격을 움직인다는 사실이
+# 특정 엔진 모듈이 아니라 이 선언 위치에서 보여야 한다. 양끝 값은
+# tests/test_reserve_base_rate.py 의 경계 값표가 고정한다(0.79/0.80/1.20/1.21).
+#
+# Shared by:
+#   - app/ai/predictors/distribution_extraction.py (realized/center 관측 관문 산술)
+#     ↳ app/ai/predictors/historical/summary.py (실현 사정률 판정 — L2 통합 소비)
+#     ↳ scripts/backtest_yega_distribution.py (캘리브레이션, observe_reserve_draw 경유)
+ASSESSMENT_RATE_PLAUSIBLE_MIN: float = 0.8
+ASSESSMENT_RATE_PLAUSIBLE_MAX: float = 1.2

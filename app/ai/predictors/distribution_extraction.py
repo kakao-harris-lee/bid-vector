@@ -13,22 +13,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import fmean, pvariance
 
+from app.core.constants import (
+    ASSESSMENT_RATE_PLAUSIBLE_MAX,
+    ASSESSMENT_RATE_PLAUSIBLE_MIN,
+)
 from app.domain.assessment_shrinkage import LevelObservation
 from app.domain.reserve_draw_distribution import (
     DEFAULT_DRAW_COUNT,
     EXPECTED_RESERVE_PRICE_COUNT,
     draw_mean_moments,
 )
-
-# 사정률(예정가/기초금액) 개연 밴드 — summary 의 estimated_price_rate 판정도 이
-# 상수를 (realized_assessment_ratio 경유로) 소비한다. 밖이면 오적재(스케일·오염)로
-# 보고 관측에서 제외한다.
-ASSESSMENT_PLAUSIBLE_MIN = 0.8
-ASSESSMENT_PLAUSIBLE_MAX = 1.2
 # 낙찰율/실현 사정률 비(투찰율 환산 계수)의 개연 밴드. 수치(0.5~1.5)는
-# statistics.resolve_record_bid_rate 의 사용가능 밴드와 같지만 **축이 다르다**:
-# 그쪽은 bid/기초금액, 이 비는 bid/예정가 축이다 — 같은 축이라는 서술은 오류였다
-# (리뷰 L4-8 정정).
+# statistics.resolve_record_bid_rate 의 사용가능 밴드와 같지만 이 비의 **축은
+# 행마다 다르다**: 분자 bid_rate 가 basis 혼재(base-relative/예정가-relative
+# 48/52 — bid_to_assessment_ratio docstring 참조)이고, resolve 의 bid_rate<=0
+# 폴백(추천가/기초금액)이라는 세 번째 provenance 도 있다. base-relative 행에서만
+# bid/예정가로 차원이 정확하고, 나머지는 근사다 — 단일 축 단정은 하지 않는다
+# (리뷰 M4-1, L4-8 재정정).
 BID_RATIO_PLAUSIBLE_MIN = 0.5
 BID_RATIO_PLAUSIBLE_MAX = 1.5
 
@@ -57,7 +58,7 @@ def realized_assessment_ratio(
     if len(picked_prices) < 2:
         return None
     realized = fmean(picked_prices) / base_amount
-    if not ASSESSMENT_PLAUSIBLE_MIN <= realized <= ASSESSMENT_PLAUSIBLE_MAX:
+    if not ASSESSMENT_RATE_PLAUSIBLE_MIN <= realized <= ASSESSMENT_RATE_PLAUSIBLE_MAX:
         return None
     return realized
 
@@ -70,7 +71,8 @@ def bid_to_assessment_ratio(
     basis 혼재 주의(summary.py 에서 상속한 선재 이슈): ``HistoricalData.bid_rate``
     는 두 basis 로 저장돼 있다 — 기초금액 확보 행은 win/기초금액, 미확보 행은
     KONEPS ``sucsfbidRate`` = win/예정가 (services/koneps/scsbid.py). 코어 실측
-    (2026-08-11, n=6,009): base-relative 48% / 예정가-relative 52%. 이 비는
+    (2026-08-11 스냅샷, 당시 코어 n=6,009 — 현 코어는 6,010): base-relative 48% /
+    예정가-relative 52%. 이 비는
     base-relative 행에서만 "bid/예정가"로 차원이 정확하고, 예정가-relative 행에서는
     win·base/예정가² 이 된다. 소비는 **중앙값**이라 혼재 영향은 실측 +0.021%p 로
     미미하지만, 라벨 정합(재캘리브레이션 트랙) 전까지 이 계수는 근사다. 이 변환
@@ -127,7 +129,7 @@ def observe_reserve_draw(
     if len(ratios) != EXPECTED_RESERVE_PRICE_COUNT:
         return None
     center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
-    if not ASSESSMENT_PLAUSIBLE_MIN <= center <= ASSESSMENT_PLAUSIBLE_MAX:
+    if not ASSESSMENT_RATE_PLAUSIBLE_MIN <= center <= ASSESSMENT_RATE_PLAUSIBLE_MAX:
         return None
     realized = realized_assessment_ratio(
         reserve_prices=reserve_prices,
