@@ -1417,19 +1417,12 @@ def test_manifest_recommended_env_never_promotes_excluded_predictor(tmp_path):
     assert gate["metrics"]["average_absolute_error_rate"] is None
 
 
-def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
-    """제외 arm 이 best 로 선언된 리포트에서 게이트는 비제외 completed arm 으로 재선정한다.
-
-    top-level best_* 스칼라(제외 arm 의 성적)도 함께 불신해야 한다 — 아니면 키만
-    바꾸고 오차는 distribution 것으로 pass/fail 을 내는 절반-방어가 된다.
-    """
-    repo_root = tmp_path / "repo"
-    ensemble_path = _write_ensemble_artifact(
-        repo_root / "models" / "predictors" / "ensemble" / "release-y.json"
-    )
-    report_path = repo_root / "models" / "reports" / "release-y-backtest.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
+def _write_two_arm_excluded_best_report(
+    path: Path, *, ensemble_guardrail_rate: float, ensemble_fallback_rate: float
+) -> Path:
+    """best=distribution(제외 arm)이고 top-level 성적이 전부 그 arm 것인 수제 리포트."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(
             {
                 "status": "completed",
@@ -1437,6 +1430,11 @@ def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
                 "best_predictor_key": "distribution",
                 "best_predictor_name": "reserve_draw_distribution",
                 "best_average_absolute_error_rate": 0.005,
+                # top-level rate 는 제외 arm 의 나쁜 성적 — 게이트가 이 값을 쓰거나
+                # (누출) 비워 두거나(fail-open 스킵) 하면 안 되고 재선정 arm 값이어야
+                # 한다(리뷰 L1).
+                "guardrail_rate": 0.99,
+                "fallback_rate": 0.99,
                 "settings": {"base_amount_basis": "clean"},
                 "results": [
                     {
@@ -1446,6 +1444,8 @@ def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
                         "status": "completed",
                         "sample_count": 6,
                         "average_absolute_error_rate": 0.005,
+                        "guardrail_rate": 0.99,
+                        "fallback_rate": 0.99,
                     },
                     {
                         "predictor_key": "ensemble",
@@ -1454,12 +1454,34 @@ def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
                         "status": "completed",
                         "sample_count": 6,
                         "average_absolute_error_rate": 0.02,
+                        "guardrail_rate": ensemble_guardrail_rate,
+                        "fallback_rate": ensemble_fallback_rate,
                     },
                 ],
             },
             ensure_ascii=False,
         ),
         encoding="utf-8",
+    )
+    return path
+
+
+def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
+    """제외 arm 이 best 로 선언된 리포트에서 게이트는 비제외 completed arm 으로 재선정한다.
+
+    top-level best_* 스칼라(제외 arm 의 성적)도 함께 불신해야 한다 — 오차만 재유도
+    하고 guardrail/fallback rate 를 비워 두면 소비부의 `is not None` 게이트가 두
+    검사를 **스킵**한다(리뷰 L1 fail-open). 두 축이 재선정 arm 의 값으로 채워짐을
+    단언한다(None 아님 = 스킵 아님, 0.99 아님 = 제외 arm 누출 아님).
+    """
+    repo_root = tmp_path / "repo"
+    ensemble_path = _write_ensemble_artifact(
+        repo_root / "models" / "predictors" / "ensemble" / "release-y.json"
+    )
+    report_path = _write_two_arm_excluded_best_report(
+        repo_root / "models" / "reports" / "release-y-backtest.json",
+        ensemble_guardrail_rate=0.0,
+        ensemble_fallback_rate=0.0,
     )
 
     service = MLReleasePromotionService(repo_root=repo_root)
@@ -1475,7 +1497,44 @@ def test_promotion_gate_metrics_fall_back_to_non_excluded_arm(tmp_path):
     assert gate["best_predictor_key"] == "ensemble"
     # 오차도 제외 arm(0.005)이 아니라 재선정 arm(0.02)의 값이어야 한다.
     assert gate["metrics"]["average_absolute_error_rate"] == 0.02
+    # L1 두 축: None(검사 스킵)도 0.99(제외 arm 누출)도 아닌 재선정 arm 의 값.
+    assert gate["metrics"]["guardrail_rate"] == 0.0
+    assert gate["metrics"]["fallback_rate"] == 0.0
+    assert gate["passed"] is True
     assert (
         manifest["recommended_env"]["PRICE_PREDICTION_PREFERRED_PREDICTOR"]
         == "ensemble"
     )
+
+
+def test_promotion_gate_judges_reselected_arm_rates(tmp_path):
+    """재선정 arm 의 rate 가 임계를 넘으면 게이트가 실제로 **실패**해야 한다.
+
+    이 방향 단언이 없으면 위 테스트는 'rate 가 우연히 0 이라 통과'와 구별되지
+    않는다 — 리포트에 제외 키를 적는 것만으로 두 임계를 우회하던 fail-open 의
+    반증(리뷰어 재현 시나리오의 역방향)이다.
+    """
+    repo_root = tmp_path / "repo"
+    ensemble_path = _write_ensemble_artifact(
+        repo_root / "models" / "predictors" / "ensemble" / "release-z.json"
+    )
+    report_path = _write_two_arm_excluded_best_report(
+        repo_root / "models" / "reports" / "release-z-backtest.json",
+        ensemble_guardrail_rate=0.9,
+        ensemble_fallback_rate=0.9,
+    )
+
+    service = MLReleasePromotionService(repo_root=repo_root)
+    manifest = service.create_release_manifest(
+        MLReleasePromotionRequest(
+            release_tag="2026-08-12-gate-judged",
+            ensemble_artifact_path=str(ensemble_path),
+            predictor_backtest_report_path=str(report_path),
+        )
+    )
+
+    gate = manifest["promotion_gate"]["predictor_backtest"]
+    assert gate["passed"] is False
+    reasons = " ".join(gate["reasons"])
+    assert "Guardrail rate" in reasons
+    assert "Fallback rate" in reasons
