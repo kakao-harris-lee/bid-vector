@@ -2,21 +2,33 @@
 
 ORM 행/dict 를 읽는 약한 경계(``read_record_value``)는 predictor 의 추출 루프
 한 곳에만 남기고, 실제 판정 산술은 여기의 **typed 원시값 함수**로 내린다.
-캘리브레이션 스크립트(``scripts/backtest_yega_distribution.py``)도 같은 실현
-사정률 정의를 써야 하므로(§4.5-8 중복 금지), 정의는 이 모듈이 단일 출처다.
+실현 사정률 정의(추첨분 선택·평균/base·개연 밴드)는 이 모듈이 **단일 출처**다
+(§4.5-8): ``app/ai/predictors/historical/summary.py`` (historical 핫패스)와
+캘리브레이션 스크립트(``scripts/backtest_yega_distribution.py``)가 여기서
+import 해 쓴다 — 리뷰 L2 로 summary 의 인라인 복사본을 이쪽으로 통합했다.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from statistics import fmean, pvariance
 
 from app.domain.assessment_shrinkage import LevelObservation
+from app.domain.reserve_draw_distribution import (
+    DEFAULT_DRAW_COUNT,
+    EXPECTED_RESERVE_PRICE_COUNT,
+    draw_mean_moments,
+)
 
-# 사정률(예정가/기초금액) 개연 밴드 — historical summary 의 estimated_price_rate
-# 밴드와 동일 축. 밖이면 오적재(스케일·오염)로 보고 관측에서 제외한다.
+# 사정률(예정가/기초금액) 개연 밴드 — summary 의 estimated_price_rate 판정도 이
+# 상수를 (realized_assessment_ratio 경유로) 소비한다. 밖이면 오적재(스케일·오염)로
+# 보고 관측에서 제외한다.
 ASSESSMENT_PLAUSIBLE_MIN = 0.8
 ASSESSMENT_PLAUSIBLE_MAX = 1.2
-# 낙찰율/실현 사정률 비(투찰율 환산 계수)의 개연 밴드 — reserve prior 와 동일 축.
+# 낙찰율/실현 사정률 비(투찰율 환산 계수)의 개연 밴드. 수치(0.5~1.5)는
+# statistics.resolve_record_bid_rate 의 사용가능 밴드와 같지만 **축이 다르다**:
+# 그쪽은 bid/기초금액, 이 비는 bid/예정가 축이다 — 같은 축이라는 서술은 오류였다
+# (리뷰 L4-8 정정).
 BID_RATIO_PLAUSIBLE_MIN = 0.5
 BID_RATIO_PLAUSIBLE_MAX = 1.5
 
@@ -30,7 +42,10 @@ def realized_assessment_ratio(
     """실현 사정률 = 추첨된 예비가 평균 / 기초금액. 추첨번호 미보고 행은 ``None``.
 
     ``picked_numbers`` 는 1-기반 추첨번호다. 최소 2개는 있어야 평균을 실현값으로
-    신뢰한다(historical summary 와 같은 규칙).
+    신뢰한다. 이 규칙의 **단일 출처**이며 historical summary 가 이 함수를 호출한다
+    — 평균은 ``fmean`` 이다(구 인라인 ``np.mean`` 대비 코어 실측 26/6,010행에서
+    마지막 1ulp 차이가 있으나, 모든 소비 경로가 4dp 반올림 집계라 특성화 골든
+    byte-diff 0 으로 동치가 증명됐다. 리뷰 L2).
     """
     if base_amount <= 0:
         return None
@@ -78,4 +93,51 @@ def aggregate_level_observation(centers: list[float]) -> LevelObservation | None
         sample_count=len(centers),
         mean=fmean(centers),
         variance=pvariance(centers) if len(centers) >= 2 else 0.0,
+    )
+
+
+@dataclass(frozen=True)
+class ReserveDrawObservation:
+    """한 공고의 예비가에서 유도한 추첨 분포 관측(순수 값)."""
+
+    ratios: tuple[float, ...]
+    center: float
+    draw_variance: float
+    realized_assessment: float | None
+    bid_to_assessment_ratio: float | None
+
+
+def observe_reserve_draw(
+    *,
+    reserve_prices: list[float],
+    base_amount: float,
+    picked_numbers: list[int],
+    bid_rate: float | None,
+) -> ReserveDrawObservation | None:
+    """엔진·캘리 스크립트 공용 행→관측 추출(§4.5-8 단일 출처).
+
+    predictor 의 두 관문 — **정확히 15개** 양수 비율(다회차 누적·부분 결측 제외)과
+    center 개연 밴드 — 를 여기서 적용한다. 캘리 스크립트가 이를 재구현하며
+    빠뜨렸던 것이 리뷰 L4-1 이고, 검증 선행 덕에 ``draw_mean_moments`` 의
+    ``ValueError`` 도 이 경로에서는 발생하지 않는다. ``None`` = 관측 불가(행 skip).
+    """
+    if base_amount <= 0:
+        return None
+    ratios = [price / base_amount for price in reserve_prices if price > 0]
+    if len(ratios) != EXPECTED_RESERVE_PRICE_COUNT:
+        return None
+    center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
+    if not ASSESSMENT_PLAUSIBLE_MIN <= center <= ASSESSMENT_PLAUSIBLE_MAX:
+        return None
+    realized = realized_assessment_ratio(
+        reserve_prices=reserve_prices,
+        picked_numbers=picked_numbers,
+        base_amount=base_amount,
+    )
+    return ReserveDrawObservation(
+        ratios=tuple(ratios),
+        center=center,
+        draw_variance=draw_std**2,
+        realized_assessment=realized,
+        bid_to_assessment_ratio=bid_to_assessment_ratio(bid_rate, realized),
     )

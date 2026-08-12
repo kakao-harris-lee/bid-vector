@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from app.ai.predictors.distribution_extraction import realized_assessment_ratio
 from app.ai.predictors.historical.reserve import build_reserve_pattern_context
 from app.ai.predictors.historical.statistics import (
     normalize_agency_name,
@@ -50,22 +51,25 @@ def summarize_historical_records(historical_records: tuple[object, ...], *, agen
         base_amount = float(read_record_value(record, "base_amount") or 0.0)
         if len(reserve_prices) >= 2 and base_amount > 0:
             reserve_span_rates.append((max(reserve_prices) - min(reserve_prices)) / base_amount)
-            picked_prices = [
-                reserve_prices[number - 1]
-                for number in coerce_integer_list(read_record_value(record, "selected_numbers"))
-                if 1 <= number <= len(reserve_prices)
-            ]
-            if len(picked_prices) >= 2:
-                estimated_price_rate = float(np.mean(picked_prices)) / base_amount
-                if 0.8 <= estimated_price_rate <= 1.2:
-                    estimated_price_rates.append(estimated_price_rate)
-                    # resolve_record_bid_rate 가 0.5~1.5 밴드를 이미 강제한다 — 밴드
-                    # 밖은 None 이라 여기서 float 밴드와 비교하면 TypeError 로 죽는다
-                    # (실데이터 회귀: 예비가+추첨번호가 있는 행). 운영 실측에서 실제로
-                    # 도달하는 것은 **하단 이탈**(0 < rate < 0.5) 69행뿐이다 — 상단
-                    # (percent-스케일)은 수집의 to_bid_rate_fraction 이 /100 으로 접는다.
-                    if bid_rate is not None:
-                        bid_to_estimated_price_rates.append(bid_rate / estimated_price_rate)
+            # 실현 사정률 산술(1-기반 추첨분 선택 · 최소 2개 · 평균/base · 0.8~1.2 개연
+            # 밴드)은 distribution_extraction 이 단일 출처다(§4.5-8) — 두 벌이면 밴드
+            # 경계를 한쪽만 고치는 사고가 난다(#360 통합 사유, #361 이 실제 그 사고).
+            estimated_price_rate = realized_assessment_ratio(
+                reserve_prices=reserve_prices,
+                picked_numbers=coerce_integer_list(
+                    read_record_value(record, "selected_numbers")
+                ),
+                base_amount=base_amount,
+            )
+            if estimated_price_rate is not None:
+                estimated_price_rates.append(estimated_price_rate)
+                # resolve_record_bid_rate 가 0.5~1.5 밴드를 이미 강제한다 — 밴드
+                # 밖은 None 이라 여기서 float 밴드와 비교하면 TypeError 로 죽는다
+                # (실데이터 회귀: 예비가+추첨번호가 있는 행). 운영 실측에서 실제로
+                # 도달하는 것은 **하단 이탈**(0 < rate < 0.5) 69행뿐이다 — 상단
+                # (percent-스케일)은 수집의 to_bid_rate_fraction 이 /100 으로 접는다.
+                if bid_rate is not None:
+                    bid_to_estimated_price_rates.append(bid_rate / estimated_price_rate)
 
         selected_numbers.extend(coerce_integer_list(read_record_value(record, "selected_numbers")))
 
