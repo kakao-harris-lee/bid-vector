@@ -350,11 +350,24 @@ AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS: frozenset[str] = frozenset({"distributio
 # AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS)는 상수 공유 경로를 잡지 못하므로,
 # distribution 캘리브레이션 목적의 밴드 조정이 historical 가격을 움직인다는 사실이
 # 특정 엔진 모듈이 아니라 이 선언 위치에서 보여야 한다. 양끝 값은
-# tests/test_reserve_base_rate.py 의 경계 값표가 고정한다(0.79/0.80/1.20/1.21).
+# tests/test_reserve_base_rate.py 의 경계 값표와 술어 단위 값표가 고정한다
+# (0.79/0.80/1.20/1.21). 비교식은 distribution_extraction 의
+# is_plausible_assessment_rate 술어 **한 벌**이다(리뷰 N1 — 상수만 나누고 비교식을
+# 두 벌로 두면 경계에서 갈린다).
 #
-# Shared by:
-#   - app/ai/predictors/distribution_extraction.py (realized/center 관측 관문 산술)
-#     ↳ app/ai/predictors/historical/summary.py (실현 사정률 판정 — L2 통합 소비)
-#     ↳ scripts/backtest_yega_distribution.py (캘리브레이션, observe_reserve_draw 경유)
+# Shared by (실소비자 전수 — 리뷰 N2 재작성; 교훈: 소비자 목록을 쓰는 커밋과
+# 소비자를 옮기는 커밋이 같은 라운드면 목록은 이동이 끝난 뒤 마지막에 확정한다):
+#   - app/ai/predictors/distribution_extraction.py (술어·관문 산술의 단일 출처)
+#     ↳ app/ai/predictors/historical/summary.py (realized_assessment_ratio 경유 —
+#       historical 서빙 가격, L2 통합)
+#     ↳ app/ai/predictors/distribution.py (observe_reserve_draw 경유 — 서빙 엔진
+#       관측 관문)
+#     ↳ scripts/_yega_coverage.py (observe_reserve_draw 경유 — 캘리 커버리지 축,
+#       M 라운드 분해로 backtest_yega_distribution 에서 이동)
+#
+# ⚠ app/domain/floor_shortfall.ASSESSMENT_RATE_MIN/MAX(0.90~1.10)와 이름이 비슷하지만
+# **다른 밴드·다른 목적**이다: 이쪽=관측 필터(오적재 배제), 그쪽=하한 미달 판정의
+# 물리적 생성 범위. §4.5-8 근거로 통합하면 shortfall 분모가 넓어져 투찰서의 하한
+# 미달 빈도가 낙관적으로 표시된다 — 통합 금지(리뷰 N4).
 ASSESSMENT_RATE_PLAUSIBLE_MIN: float = 0.8
 ASSESSMENT_RATE_PLAUSIBLE_MAX: float = 1.2

@@ -2,10 +2,12 @@
 
 ORM 행/dict 를 읽는 약한 경계(``read_record_value``)는 predictor 의 추출 루프
 한 곳에만 남기고, 실제 판정 산술은 여기의 **typed 원시값 함수**로 내린다.
-실현 사정률 정의(추첨분 선택·평균/base·개연 밴드)는 이 모듈이 **단일 출처**다
-(§4.5-8): ``app/ai/predictors/historical/summary.py`` (historical 핫패스)와
-캘리브레이션 스크립트(``scripts/backtest_yega_distribution.py``)가 여기서
-import 해 쓴다 — 리뷰 L2 로 summary 의 인라인 복사본을 이쪽으로 통합했다.
+실현 사정률 정의(추첨분 선택·평균/base·개연 밴드 술어)는 이 모듈이 **단일
+출처**다(§4.5-8). importer 는 세 곳이다: ``app/ai/predictors/historical/summary.py``
+(realized_assessment_ratio — historical 핫패스, 리뷰 L2 통합),
+``app/ai/predictors/distribution.py`` (observe_reserve_draw — 서빙 엔진 관측 관문),
+``scripts/_yega_coverage.py`` (observe_reserve_draw — 캘리 커버리지 축, M 라운드
+분해로 backtest_yega_distribution 에서 이동).
 """
 
 from __future__ import annotations
