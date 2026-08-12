@@ -446,9 +446,9 @@ def test_assessment_band_predicate_boundary_value_table():
     realized 판정과 center 관문이 이 술어 한 벌을 공유하므로, `<=`→`<` 변이는
     이 값표(경계 True)와 아래 center 경계 테스트에서 함께 실패한다.
     """
-    from app.ai.predictors.distribution_extraction import is_plausible_assessment_rate
+    from app.ai.predictors.distribution_extraction import is_observable_assessment_rate
 
-    assert not is_plausible_assessment_rate(0.79)
-    assert is_plausible_assessment_rate(0.8)  # 하한 경계 포함
-    assert is_plausible_assessment_rate(1.2)  # 상한 경계 포함
-    assert not is_plausible_assessment_rate(1.21)
+    assert not is_observable_assessment_rate(0.79)
+    assert is_observable_assessment_rate(0.8)  # 하한 경계 포함
+    assert is_observable_assessment_rate(1.2)  # 상한 경계 포함
+    assert not is_observable_assessment_rate(1.21)

@@ -39,14 +39,20 @@ BID_RATIO_PLAUSIBLE_MIN = 0.5
 BID_RATIO_PLAUSIBLE_MAX = 1.5
 
 
-def is_plausible_assessment_rate(value: float) -> bool:
-    """사정률 관측값이 개연 밴드(0.8~1.2, **경계 포함**) 안인가 — 판정 술어 한 벌.
+def is_observable_assessment_rate(value: float) -> bool:
+    """사정률 값이 **관측 편입** 밴드(0.8~1.2, 경계 포함) 안인가 — 판정 술어 한 벌.
 
     상수(app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_*)만 나누고 비교식을 두 벌로
     두면 경계 포함성이 한쪽만 바뀌는 사고가 난다(§4.5-8 — BID_BASE_TRUST_RATIO_MAX
     ↔ exceeds_base_trust_ratio 선례와 같은 배치: 상수는 constants.py, 술어는 유일한
     소비 지점들이 있는 이 모듈. 리뷰 N1). realized 판정과 center 관문이 이 술어만
     쓴다 — 경계 포함성은 술어 단위 값표 테스트가 고정한다.
+
+    ⚠ ``app/domain/floor_shortfall.is_plausible_assessment_rate``(0.90~1.10)와
+    이름이 비슷하지만 **다른 밴드·다른 목적**이다: 이 술어는 분포 엔진의 관측
+    편입 필터, 그쪽은 하한 미달 판정의 물리적 개연 범위다. §4.5-8 근거로 통합하면
+    shortfall 분모가 넓어져 **투찰서의 하한 미달 빈도가 낙관적으로 표시**된다 —
+    통합 금지(리뷰 N4, 개명 사유는 리뷰 N-후속: 동명 술어 충돌 제거).
     """
     return ASSESSMENT_RATE_PLAUSIBLE_MIN <= value <= ASSESSMENT_RATE_PLAUSIBLE_MAX
 
@@ -75,7 +81,7 @@ def realized_assessment_ratio(
     if len(picked_prices) < 2:
         return None
     realized = fmean(picked_prices) / base_amount
-    if not is_plausible_assessment_rate(realized):
+    if not is_observable_assessment_rate(realized):
         return None
     return realized
 
@@ -146,7 +152,7 @@ def observe_reserve_draw(
     if len(ratios) != EXPECTED_RESERVE_PRICE_COUNT:
         return None
     center, draw_std = draw_mean_moments(ratios, DEFAULT_DRAW_COUNT)
-    if not is_plausible_assessment_rate(center):
+    if not is_observable_assessment_rate(center):
         return None
     realized = realized_assessment_ratio(
         reserve_prices=reserve_prices,

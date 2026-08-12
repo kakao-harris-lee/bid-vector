@@ -352,8 +352,9 @@ AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS: frozenset[str] = frozenset({"distributio
 # 특정 엔진 모듈이 아니라 이 선언 위치에서 보여야 한다. 양끝 값은
 # tests/test_reserve_base_rate.py 의 경계 값표와 술어 단위 값표가 고정한다
 # (0.79/0.80/1.20/1.21). 비교식은 distribution_extraction 의
-# is_plausible_assessment_rate 술어 **한 벌**이다(리뷰 N1 — 상수만 나누고 비교식을
-# 두 벌로 두면 경계에서 갈린다).
+# is_observable_assessment_rate 술어 **한 벌**이다(리뷰 N1 — 상수만 나누고 비교식을
+# 두 벌로 두면 경계에서 갈린다. floor_shortfall 의 동명 술어와의 충돌로 개명 —
+# 리뷰 N-후속).
 #
 # Shared by (실소비자 전수 — 리뷰 N2 재작성; 교훈: 소비자 목록을 쓰는 커밋과
 # 소비자를 옮기는 커밋이 같은 라운드면 목록은 이동이 끝난 뒤 마지막에 확정한다):

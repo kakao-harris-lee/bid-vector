@@ -89,6 +89,11 @@ def is_plausible_assessment_rate(value: float | None) -> bool:
 
     ``None`` 과 NaN 은 비교가 모두 False 로 떨어져 자연히 제외된다. 범위 밖 값은
     추첨 결과가 아니라 데이터 오류이므로 빈도 분모에서 뺀다.
+
+    ⚠ ``app/ai/predictors/distribution_extraction.is_observable_assessment_rate``
+    (0.8~1.2)와 이름이 비슷하지만 **다른 밴드·다른 목적**(그쪽=분포 엔진의 관측
+    편입 필터)이다 — §4.5-8 근거 통합 금지(리뷰 N4): 합치면 이 분모가 넓어져
+    투찰서의 하한 미달 빈도가 낙관적으로 표시된다.
     """
     if value is None:
         return False
