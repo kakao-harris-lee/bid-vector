@@ -3,7 +3,8 @@
 ORM 행/dict 를 읽는 약한 경계(``read_record_value``)는 predictor 의 추출 루프
 한 곳에만 남기고, 실제 판정 산술은 여기의 **typed 원시값 함수**로 내린다.
 실현 사정률 정의(추첨분 선택·평균/base·개연 밴드 술어)는 이 모듈이 **단일
-출처**다(§4.5-8). importer 는 세 곳이다: ``app/ai/predictors/historical/summary.py``
+출처**다(§4.5-8). **프로덕션** importer 는 세 곳이다(테스트 2본은 별도):
+``app/ai/predictors/historical/summary.py``
 (realized_assessment_ratio — historical 핫패스, 리뷰 L2 통합),
 ``app/ai/predictors/distribution.py`` (observe_reserve_draw — 서빙 엔진 관측 관문),
 ``scripts/_yega_coverage.py`` (observe_reserve_draw — 캘리 커버리지 축, M 라운드
@@ -26,15 +27,23 @@ from app.domain.reserve_draw_distribution import (
     draw_mean_moments,
 )
 # 낙찰율/실현 사정률 비(투찰율 환산 계수)의 개연 밴드. 수치(0.5~1.5)는
-# statistics.resolve_record_bid_rate 의 사용가능 밴드와 같지만 이 비의 **축은
-# 행마다 다르다**: 분자 bid_rate 가 basis 혼재(base-relative/예정가-relative
-# 48/52 — bid_to_assessment_ratio docstring 참조)이고, resolve 의 bid_rate<=0
-# 폴백은 세 번째 provenance 다 — HistoricalData.predicted_price 의 write 경로는
-# app/services/koneps/persistence.py:728-730 한 곳뿐이며 **공고 추정가격**, 없으면
-# **기초금액 그 자체**를 적는다(모델 추천가는 PricePrediction.predicted_price,
-# 다른 테이블). 즉 그 폴백 비는 추정가격/기초금액이고 추정가격 부재면 정확히 1.0
-# — 투찰 정보가 0 인 예산 축 자기참조 값이 이 밴드를 그대로 통과한다. 단일 축
-# 단정은 하지 않는다(리뷰 N3 — L4-8·M4-1 의 '추천가' 라벨은 축을 반대로 가렸다).
+# statistics.resolve_record_bid_rate 의 사용가능 밴드와 같지만 이 비의 축은 행마다
+# 다르다: 분자 bid_rate 가 basis 혼재(base-relative/예정가-relative 48/52 —
+# bid_to_assessment_ratio docstring 참조)이고, resolve 의 bid_rate<=0 폴백
+# (predicted_price/base)은 **한 단어로 라벨링할 수 없는 혼합 출처**다 — 그 라벨링
+# 시도가 L4-8·M4-1·N3 세 라운드 연속 오기의 원인이었다(리뷰 O1).
+#   * 구조: HistoricalData.predicted_price 의 write 는
+#     app/services/koneps/persistence.py:727-730 한 곳이지만 **출처 가드가 없다**
+#     (#359 가드는 Project.budget_estimate 만 보호). 실리는 item.estimated_amount
+#     는 EstimatedAmountSource(app/core/constants.py) 네 종 — notice 추정가격 /
+#     scsbid 개찰 피드의 **예정가**(derived, app/services/koneps/scsbid.py:229-237)
+#     / 배정예산 / 기초금액 사본 — 을 혼합 수송한다(모델 추천가는
+#     PricePrediction.predicted_price, 다른 테이블 — 여기 안 실린다).
+#   * 실측(운영 DB SELECT, 2026-08-12): 폴백 발화 모집단(bid_rate<=0) n=19,200 중
+#     정확히 1.0 은 659(3.4%)뿐이고 18,932행이 이 밴드를 통과해 소비된다
+#     (max 1.1628 — 예정가-relative 영역). 전체(predicted_price>0 & base>0,
+#     n=81,418): 정확히 1.0=55,097 / >1.02=18 / (1.0,1.02]=2,911 / <1.0=23,387.
+# 단일 축 단정은 하지 않는다 — 출처 표와 실측 분포가 서술의 단위다.
 BID_RATIO_PLAUSIBLE_MIN = 0.5
 BID_RATIO_PLAUSIBLE_MAX = 1.5
 
@@ -45,14 +54,19 @@ def is_observable_assessment_rate(value: float) -> bool:
     상수(app/core/constants.ASSESSMENT_RATE_PLAUSIBLE_*)만 나누고 비교식을 두 벌로
     두면 경계 포함성이 한쪽만 바뀌는 사고가 난다(§4.5-8 — BID_BASE_TRUST_RATIO_MAX
     ↔ exceeds_base_trust_ratio 선례와 같은 배치: 상수는 constants.py, 술어는 유일한
-    소비 지점들이 있는 이 모듈. 리뷰 N1). realized 판정과 center 관문이 이 술어만
-    쓴다 — 경계 포함성은 술어 단위 값표 테스트가 고정한다.
+    **비교** 지점들이 있는 이 모듈. 리뷰 N1/O3 — 그 선례의 소비처는 두 모듈이다).
+    realized 판정과 center 관문이 이 술어만 쓴다 — 경계 포함성은 술어 단위 값표
+    테스트가 고정한다. 소비자가 app/ai 밖(예: 수집 층이 같은 밴드를 쓰게 되면)으로
+    나가면 이 술어는 app/domain 으로 내린다 — 수집→ML 은 #357 이 명시적으로 없앤
+    역방향 의존이라 그때는 이사가 맞다(리뷰 O3).
 
     ⚠ ``app/domain/floor_shortfall.is_plausible_assessment_rate``(0.90~1.10)와
     이름이 비슷하지만 **다른 밴드·다른 목적**이다: 이 술어는 분포 엔진의 관측
     편입 필터, 그쪽은 하한 미달 판정의 물리적 개연 범위다. §4.5-8 근거로 통합하면
-    shortfall 분모가 넓어져 **투찰서의 하한 미달 빈도가 낙관적으로 표시**된다 —
-    통합 금지(리뷰 N4, 개명 사유는 리뷰 N-후속: 동명 술어 충돌 제거).
+    투찰서의 하한 미달 빈도가 왜곡된다 — 하단 꼬리(0.8~0.90)는 분모만 늘려 낙관,
+    상단 꼬리((1.10,1.20])는 임계(≈1.00125)도 넘어 분자에 들어가 비관이며 순방향은
+    꼬리 분포에 달린다(2026-08-12 실측 하단 76·상단 0 → 현재는 낙관 방향, 리뷰
+    O2). 결론 불변: 통합 금지(리뷰 N4, 개명 사유는 N-후속: 동명 술어 충돌 제거).
     """
     return ASSESSMENT_RATE_PLAUSIBLE_MIN <= value <= ASSESSMENT_RATE_PLAUSIBLE_MAX
 
