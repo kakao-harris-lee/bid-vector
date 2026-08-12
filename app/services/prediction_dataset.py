@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.ai.business_group import resolve_business_group
 from app.core.time import utc_now
-from app.domain.rate_normalization import to_bid_rate_fraction
+from app.domain.rate_normalization import BID_RATE_PLAUSIBLE_MAX, BID_RATE_PLAUSIBLE_MIN, to_bid_rate_fraction
 from app.domain.reliable_base import get_reliable_base
 from app.models.models import (
     HistoricalData,
@@ -18,6 +18,7 @@ from app.models.models import (
     PaperBidSettlement,
     TenderResult,
 )
+from app.services.prediction_label_basis import award_rate_label_for
 from app.services.query_predicates import settled_any_signal
 from app.utils.sequence_coercion import (
     coerce_integer_list,
@@ -50,8 +51,8 @@ _RELATED_PRICE_HISTORY_CATEGORIES = {
 class PredictionDatasetService:
     """Build normalized historical bid-rate series for prediction logic."""
 
-    VALID_BID_RATE_MIN = 0.5
-    VALID_BID_RATE_MAX = 1.5
+    VALID_BID_RATE_MIN = BID_RATE_PLAUSIBLE_MIN  # 창의 단일 출처는 rate_normalization
+    VALID_BID_RATE_MAX = BID_RATE_PLAUSIBLE_MAX  # (값 동일 — 이 두 줄은 이름 재노출)
     RESERVE_CONTEXT_BACKFILL_LIMIT = 60
 
     def load_historical_series(
@@ -488,6 +489,7 @@ class PredictionDatasetService:
             "predicted_price": float(record.predicted_price or 0.0),
             "bid_rate": bid_rate,
             "bid_rate_source": bid_rate_source,
+            "award_rate_label": award_rate_label_for(record, tender_result),
             "reserve_prices": coerce_numeric_list(record.reserve_prices),
             "selected_numbers": coerce_integer_list(record.selected_numbers),
             "opened_at": record.opened_at or record.created_at,
