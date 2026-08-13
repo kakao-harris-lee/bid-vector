@@ -21,6 +21,15 @@ midpoint 로 복구한 추정치가 아니므로, 복구 추정 층의 수준으
 캘리브레이션을 검증 가능하게 남기는 것이 이 Phase 의 목적이고, 법정하한은 guardrail
 단계가 보장한다).
 
+배우지 않은 공종에는 답하지 않는다
+-----------------------------------
+어휘에 없는 공종은 예외를 내지 않는다 — ``build_row`` 가 미지 코드를 내고 LightGBM 은
+그것을 결측으로 다뤄, 모델이 **다른 공종의 행으로 학습한 잎**을 태워 그럴듯한 투찰율을
+낸다. 배운 적 없는 공종에 자신 있게 답하는 셈이라 정직 명세(§2) 위반이고 가격 사고다.
+그래서 학습 행 수가 임계 미만인 공종은 unavailable 로 떨어뜨려 historical 로 폴백한다
+(:func:`unlearned_category_reason` — 판정 단일 지점). 실측 동기: 서빙 분포 정합 필터가
+goods 를 학습 코퍼스에서 전량 제거했고(0행), general 은 6행뿐이다.
+
 라이브 노출 게이트는 셋이다: 실험 플래그 · ``.env`` 선호 설정 · 아티팩트 경로. 셋 다
 기본값이 "꺼짐"이고, 선호를 **자동으로** 바꾸는 경로(auto 선택의 best 후보, manifest
 recommended_env, 승격 게이트의 best arm)는 ``AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS``
@@ -63,6 +72,7 @@ __all__ = [
     "AwardRateGbmPredictor",
     "LoadedAwardRateGbmModel",
     "load_award_rate_gbm_model",
+    "unlearned_category_reason",
 ]
 
 _ARTIFACT_LABEL = "Award-rate GBM model artifact"
@@ -139,6 +149,44 @@ class LoadedAwardRateGbmModel:
         )
         return count
 
+    def category_training_rows(self, category: str | None) -> int:
+        """이 공종을 배운 학습 행 수(도메인 커널 위임) — 공종 가드의 단일 근거."""
+        return self.feature_space.category_training_rows(category)
+
+
+def unlearned_category_reason(
+    model: LoadedAwardRateGbmModel, category: str | None
+) -> str | None:
+    """이 공종으로 예측하면 안 되는 사유(없으면 ``None``) — **판정 단일 지점**.
+
+    가용성 게이트(:meth:`AwardRateGbmPredictor.check_availability`)와 예측 경로
+    (:func:`build_award_rate_gbm_prediction`)가 같은 이 함수를 부른다. 두 곳에 규칙을
+    복사하면 임계가 갈릴 수 있고, 한쪽만 고치면 다른 쪽이 조용히 열린다.
+
+    문구는 두 상태를 구분한다 — "배운 적 없는 공종"과 "표본이 얕은 공종"은 운영자에게
+    다른 사실이고(전자는 수집·필터 문제, 후자는 시간 문제), 폴백 사유가 그것을 뭉개면
+    무엇을 고쳐야 하는지 알 수 없다. 판정 규칙 자체는 한 수(학습 행 수) 하나다.
+    """
+    # 1 로 클램프한다: 설정을 0(또는 음수)으로 두면 ``rows >= minimum`` 이 항상 참이 되어
+    # **어휘에 아예 없는 공종(0행)까지 통과**한다. 이 가드는 모듈 docstring 이 정직 명세
+    # (§2) 보호로 선언한 것이고, 다른 red line(법정하한)이 env 한 값으로 꺼지지 않는 것과
+    # 같은 대우여야 한다. 임계를 낮추는 것은 운영 재량이되 **끄는 것은 재량이 아니다.**
+    minimum = max(1, int(settings.PRICE_PREDICTION_AWARD_RATE_GBM_MIN_CATEGORY_ROWS))
+    rows = model.category_training_rows(category)
+    if rows >= minimum:
+        return None
+    label = str(category or "").strip() or "(unset)"
+    if rows <= 0:
+        return (
+            f"Award-rate GBM was never trained on category {label!r}; "
+            "the model would answer it from other categories' rows."
+        )
+    return (
+        f"Award-rate GBM has only {rows} training row(s) for category {label!r} "
+        f"(minimum {minimum}); that is below one LightGBM leaf, so the category "
+        "was not actually learned."
+    )
+
 
 def _load_award_rate_gbm_model_uncached(
     model_source: ArtifactSource,
@@ -208,7 +256,10 @@ class AwardRateGbmPredictor(BasePricePredictor):
         self._artifact_provider = artifact_provider or _ARTIFACT_PROVIDER
 
     def check_availability(self, context: PricePredictionContext) -> PredictorAvailability:
-        """실험 플래그 · 기초금액 · lightgbm 설치 · 아티팩트를 순서대로 점검한다."""
+        """실험 플래그 · 기초금액 · lightgbm 설치 · 아티팩트 · **공종**을 순서대로 점검한다.
+
+        공종 점검이 마지막인 것은 아티팩트를 복원해야 어휘를 볼 수 있기 때문이다.
+        """
         if not settings.PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS:
             return PredictorAvailability(False, "Experimental predictors are disabled.")
         if float(context.budget or 0.0) <= 0:
@@ -228,13 +279,16 @@ class AwardRateGbmPredictor(BasePricePredictor):
                 f"Configured award-rate GBM model artifact was not found: {model_path}",
             )
         try:
-            self._artifact_provider.load(model_path)
+            model = self._artifact_provider.load(model_path)
         except Exception as exc:
             # lightgbm 미설치(ImportError)도 여기로 떨어진다 — 런타임 이미지에는 그
             # 패키지가 없으므로 "설치되지 않음"은 장애가 아니라 정상적인 unavailable 이다.
             return PredictorAvailability(
                 False, f"Award-rate GBM model artifact is unusable: {exc}"
             )
+        unlearned = unlearned_category_reason(model, context.category)
+        if unlearned is not None:
+            return PredictorAvailability(False, unlearned)
         return PredictorAvailability(True)
 
     def predict(self, context: PricePredictionContext) -> PredictionResult:
@@ -247,15 +301,37 @@ class AwardRateGbmPredictor(BasePricePredictor):
         )
 
 
+def _guarded_center_rate(
+    context: PricePredictionContext, model: LoadedAwardRateGbmModel
+) -> float:
+    """공종 가드를 통과한 뒤 중심 낙찰률 한 건을 낸다.
+
+    가드가 가용성 게이트와 여기 둘 다 있는 것은 중복이 아니다 — 예측 경로는 게이트를 지나지
+    않는 직접 호출부에도 열려 있고, 여기서 올린 예외는 orchestration 의 ``_run_predictor``
+    가 받아 historical 로 복구하므로 실패 모드가 게이트와 같다(fail-closed). 판정 자체는
+    :func:`unlearned_category_reason` 한 곳이라 두 경계의 임계가 갈릴 수 없다.
+
+    Raises:
+        ValueError: 학습되지 않은(또는 표본이 임계 미만인) 공종일 때, 그리고 부스터가
+            아무 값도 내지 않았을 때.
+    """
+    unlearned = unlearned_category_reason(model, context.category)
+    if unlearned is not None:
+        raise ValueError(unlearned)
+    rates = model.predict_rates(
+        [(float(context.budget or 0.0), context.category, context.agency_name)]
+    )
+    if not rates:
+        raise ValueError("Award-rate GBM produced no prediction for the context.")
+    return clamp_bid_rate(rates[0])
+
+
 def build_award_rate_gbm_prediction(
     context: PricePredictionContext, *, model: LoadedAwardRateGbmModel
 ) -> PredictionResult:
     """예측 → 시나리오 → 검증된 결과. 검증은 typed 생성자 단일 지점이다."""
     budget = float(context.budget or 0.0)
-    rates = model.predict_rates([(budget, context.category, context.agency_name)])
-    if not rates:
-        raise ValueError("Award-rate GBM produced no prediction for the context.")
-    center = clamp_bid_rate(rates[0])
+    center = _guarded_center_rate(context, model)
     candidates = build_scenario_candidates(
         center=center, std=model.residual_std, budget=budget
     )

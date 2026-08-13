@@ -13,6 +13,15 @@ sequence-model 은퇴로 비교 arm 이 3종(historical / lstm / ensemble)에서
 ``predictor_arms``/``retired_predictor_arms`` 를 직접 싣지 않으면 소비자(promotion gate,
 ``recommended_env`` 의 ``PRICE_PREDICTION_PREFERRED_PREDICTOR`` 추천, 운영자)가 그 축소를
 품질 변화로 오독한다. ``report_version`` 도 2 로 올려 구분을 명시한다.
+
+``history_sample_scope`` — 이 하네스가 채점한 모집단
+----------------------------------------------------
+이력은 ``PredictionDatasetService`` 에서 오고 그쪽에는 피드 출처 필터가 없으므로 **전 출처**
+(``all-sources``)다. 반면 ``award_rate_gbm`` 은 서빙 분포 정합을 위해 피드 출처 모집단으로만
+학습한다. 즉 이 리포트는 그 predictor 를 **일부러 학습에서 뺀 행 위에서도** 채점한다. 리포트가
+그 사실을 직접 싣지 않으면 수치만 보고 "GBM 이 나쁘다 → 필터를 되돌리자"는 잘못된 결론이
+난다. 하네스의 표본을 바꾸는 것은 별도 트랙이고, 지금 필요한 것은 **무엇 위에서 잰 수치인지
+리포트가 스스로 말하는 것**이다.
 """
 
 from __future__ import annotations
@@ -23,6 +32,7 @@ from app.ai.predictors.base import PricePredictionContext, serialize_prediction_
 from app.ai.predictors.ensemble import build_ensemble_prediction_payload, load_ensemble_artifact
 from app.ai.predictors.historical import HistoricalStatisticalPredictor
 from app.core.config import settings
+from app.core.constants import AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES
 from app.core.time import utc_now
 
 # 이 리포트가 실제로 비교하는 arm 집합(선언 데이터). 은퇴로 arm 이 줄면 best_predictor_key
@@ -59,6 +69,7 @@ class ComparisonMixin:
             "report_version": "2",
             "predictor_arms": list(_COMPARISON_PREDICTOR_ARMS),
             "retired_predictor_arms": list(_RETIRED_PREDICTOR_ARMS),
+            "history_sample_scope": AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES,
             "release_tag": release_tag,
             "created_at": utc_now().isoformat(),
             "status": "insufficient_data",

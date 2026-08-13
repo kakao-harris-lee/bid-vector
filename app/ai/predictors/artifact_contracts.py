@@ -196,10 +196,21 @@ class PersistedAwardRateGbmArtifact(_ArtifactReadModel):
     ``booster_model`` 은 LightGBM ``model_to_string()`` 텍스트다. 바이너리 pickle 대신
     텍스트를 싣는 이유는 (a) 릴리스 아티팩트가 JSON 한 파일로 유지되고 (b) pickle 복원이
     임의 코드 실행 표면이기 때문이다.
+
+    ``sample_scope`` 가 **필수**인 이유 (기본값을 주면 안 되는 이유)
+    ----------------------------------------------------------------
+    이 필드는 피처 공간과 **직교하는 축**이다: 같은 5개 피처로 학습해도 코퍼스가 서빙
+    모집단이냐 혼합 모집단이냐에 따라 다른 모델이 된다. 그래서 ``artifact_version`` 은
+    안 바뀌고(계약이 안 바뀌었으므로 옳다) 옛 산출물이 그대로 로드된다 — 그 산출물의
+    ``agency_encoding`` 에는 지금 학습에서 빠진 공종(goods)이 수천 건 들어 있어 미학습
+    공종 가드가 **조용히 열린다**. 기본값을 주면 그 산출물이 "선언했다"고 위장하게 되므로,
+    선언 없는 산출물은 계약 위반으로 거부한다(``ValueError`` → predictor unavailable →
+    historical 폴백). 어휘는 ``app/core/constants.py`` 가 소유한다.
     """
 
     artifact_version: str
     model_version: str
+    sample_scope: str
     feature_names: list[str]
     categories: list[str]
     denominator_sources: list[str]

@@ -635,6 +635,16 @@ class Settings(InferenceOutboxSettings):
     # 하이퍼파라미터는 app/services/ml_training/award_rate_gbm.py 의 선언 블록에 둔다.
     PRICE_PREDICTION_AWARD_RATE_GBM_MODEL_PATH: str = ""
     PRICE_PREDICTION_AWARD_RATE_GBM_MIN_TRAINING_ROWS: int = 500
+    # 학습 표본을 공고 피드 출처(``Project.issuing_agency IS NOT NULL``)로 제한할지.
+    # 메커니즘 필터가 아니라 **서빙 분포 정합**이고, ``False`` 는 필터 이전 표본 정의를
+    # 복원하는 전후 비교 장치다. 근거·실측은 app/services/award_rate_dataset.py docstring.
+    PRICE_PREDICTION_AWARD_RATE_GBM_FEED_ORIGIN_ONLY: bool = True
+    # 공종별 학습 행이 이 수 미만이면 predictor 가 unavailable 로 떨어진다(0행=어휘 부재도
+    # 같은 규칙). 40 은 학습기 ``min_data_in_leaf`` 와 같은 값이되 **필요조건이지 충분조건이
+    # 아니다** — 자기 잎을 얻으려면 분할 양쪽이 각각 그 수를 넘어야 해 실질 ~80행이 필요하고
+    # ``bagging_fraction`` 이 더 깎는다. 즉 "이 아래는 확실히 못 배웠다"는 하한선이지 "이
+    # 위면 배웠다"는 보증이 아니다. 코드는 1 로 클램프해 0(=가드 해제)을 막는다.
+    PRICE_PREDICTION_AWARD_RATE_GBM_MIN_CATEGORY_ROWS: int = 40
     PRICE_PREDICTION_BACKTEST_MIN_TRAINING_SAMPLES: int = 5
     PRICE_PREDICTION_BACKTEST_HOLDOUT_SIZE: int = 5
     CLASSIFIER_EMBEDDING_MODEL: str = (

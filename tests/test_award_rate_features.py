@@ -79,6 +79,27 @@ def test_feature_builder_cannot_accept_reserve_derived_inputs():
     )
 
 
+def test_published_floor_is_carried_for_diagnosis_but_is_not_a_feature():
+    """공시 하한은 학습 행에 실리되 **조립기에 넘길 자리가 없다**.
+
+    이 두 단언이 함께 있어야 의미가 있다: 행에는 있으니 리포트가 두 층의 학습/홀드아웃
+    평균을 비교할 수 있고(재도입 조건 확인), 조립기 시그니처에는 없으니 그 값이 피처로
+    새지 않는다. 백필 커버리지가 시간에 기울어 학습의 "미공시"와 서빙의 "미공시"가 다른
+    것을 뜻하는 동안은 후자가 red line 이다 — 사유는 그 필드 docstring.
+    """
+    assert "published_floor_rate" in {
+        field.name for field in fields(AwardRateTrainingRow)
+    }
+    assert "published_floor_rate" not in inspect.signature(
+        AwardRateFeatureSpace.build_row
+    ).parameters
+    assert not [
+        name
+        for name in AWARD_RATE_FEATURE_NAMES
+        if "floor" in name
+    ]
+
+
 def test_training_row_carries_no_reserve_or_price_disclosure_fields():
     """학습 행에도 예비가격 계열 필드가 없다 — 로더가 그 컬럼을 읽지 않는다는 계약."""
     field_names = {field.name for field in fields(AwardRateTrainingRow)}
@@ -89,6 +110,7 @@ def test_training_row_carries_no_reserve_or_price_disclosure_fields():
         "agency",
         "denominator_source",
         "opened_at",
+        "published_floor_rate",
     }
     forbidden = ("reserve", "selected_number", "assessment", "yega", "predicted")
     assert not [name for name in field_names for token in forbidden if token in name]
