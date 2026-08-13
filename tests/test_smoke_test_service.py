@@ -55,6 +55,8 @@ def test_smoke_service_reports_phases_with_full_chain(monkeypatch):
     monkeypatch.setattr(svc, "_phase_sbert_embedding", lambda db: _mk_phase("sbert_embedding", True, "id=99", project={"id": 99, "title": "t", "budget_estimate": 100.0}))
     monkeypatch.setattr(svc, "_phase_predict_price", lambda db, p: _mk_phase("predict_price", True, "rate=0.9"))
     monkeypatch.setattr(svc, "_phase_candidate_generation", lambda db: _mk_phase("candidate_generation", True, "run_id=10 selected=1"))
+    # Stubbed so this chain assertion never depends on reaching a live broker.
+    monkeypatch.setattr(svc, "_phase_inference_queue_depth", lambda: _mk_phase("inference_queue_depth", True, "depth 0"))
     monkeypatch.setattr(svc, "_phase_telegram_ping", lambda **kw: _mk_phase("telegram_ping", True, "sent"))
 
     report = svc.run(db=MagicMock())
@@ -64,6 +66,7 @@ def test_smoke_service_reports_phases_with_full_chain(monkeypatch):
         "sbert_embedding",
         "predict_price",
         "candidate_generation",
+        "inference_queue_depth",
         "telegram_ping",
     ]
 
@@ -73,6 +76,7 @@ def test_smoke_service_skips_downstream_when_collect_fails(monkeypatch):
 
     svc = KonepsTelegramSmokeTestService()
     monkeypatch.setattr(svc, "_phase_koneps_collect", lambda db: _mk_phase("koneps_collect", False, "exception"))
+    monkeypatch.setattr(svc, "_phase_inference_queue_depth", lambda: _mk_phase("inference_queue_depth", True, "depth 0"))
     monkeypatch.setattr(svc, "_phase_telegram_ping", lambda **kw: _mk_phase("telegram_ping", True, "sent"))
 
     report = svc.run(db=MagicMock())
