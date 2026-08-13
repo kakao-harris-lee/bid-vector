@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.time import utc_now
+from app.core.time import ensure_utc, utc_now
+from app.domain.projection_freshness import projection_is_fresh
 from app.models.models import (
     Project,
     ProjectSimilarityEdge,
@@ -374,15 +375,29 @@ class ProjectSimilarityReadModelService:
         project: Project,
         snapshot: ProjectSimilaritySnapshot,
     ) -> bool:
+        """Serve a snapshot while it still describes its corpus (freshness policy).
+
+        This must be the *same* rule the backfill uses to decide what to recompute
+        (:mod:`app.domain.projection_freshness`). If reading were stricter, targets
+        the backfill considers fresh would render as ``stale`` — an empty result no
+        pipeline ever repairs.
+        """
         watermark = self._scoped_watermark(
             db,
             project,
             str(snapshot.embedding_model),
             bool(snapshot.same_category_only),
         )
-        return (
-            int(snapshot.corpus_embedding_count) == watermark.embedding_count
-            and snapshot.corpus_embedding_updated_at == watermark.embedding_updated_at
+        computed_at = snapshot.computed_at
+        age_seconds = (
+            (utc_now() - ensure_utc(computed_at)).total_seconds()
+            if computed_at is not None
+            else float("inf")
+        )
+        return projection_is_fresh(
+            snapshot_corpus_count=int(snapshot.corpus_embedding_count),
+            corpus_count=watermark.embedding_count,
+            snapshot_age_seconds=age_seconds,
         )
 
     def _new_snapshot(

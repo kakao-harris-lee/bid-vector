@@ -68,6 +68,10 @@ ignore_errors = true
 # Phase 1k adds app.domain.award_rate_features (낙찰률 GBM 의 피처 조립 단일 출처 —
 # 학습기와 서빙 predictor 가 같은 함수를 부르게 해 train/serve skew 를 구조적으로 막는다.
 # 어긋나면 예외 없이 가격만 바뀌는 계산이라, 시그니처(=피처 계약)를 타입으로 고정한다).
+# Phase 1l adds app.domain.projection_freshness (유사공고 투영 스냅샷의 신선도 판정 —
+# 백필의 SQL 술어와 read model 의 Python 판정이 반드시 같은 답을 내야 하는 규칙이다.
+# 두 렌더링이 갈리면 백필은 "신선하다"며 두고 읽기는 "낡았다"며 비워, 어떤 경로로도
+# 고쳐지지 않는 빈 화면이 남는다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -84,6 +88,7 @@ module = [
     "app.domain.assessment_shrinkage",
     "app.domain.award_rate_label",
     "app.domain.award_rate_features",
+    "app.domain.projection_freshness",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
