@@ -22,8 +22,9 @@ GBM 이 그것을 못 넘으면 부스팅은 값을 더하지 못한 것이다.
 것을 구별할 수 있어야 판단이 흔들리지 않는다.
 
 유의성은 제곱오차 차이의 대응 t 통계량이다(음수면 앞 모델이 낫다). 같은 홀드아웃 행을 두
-모델이 공유하므로 대응 검정이 맞고, 정규근사가 성립할 만큼의 표본은 창 선택 정책
-(:data:`~app.services.ml_training.award_rate_windows.GATE_MIN_EVALUATION_ROWS`)이 보장한다.
+모델이 공유하므로 대응 검정이 맞다. **통계량이 성립하는 것과 검정력이 있는 것은 다르다** —
+표본 하한(창 선택 정책)은 앞의 것만 지키므로, 뒤의 것은 창마다 리포트가 말한다(MDE·필요
+표본 수·seed 안정성 — :mod:`app.services.ml_training.award_rate_diagnostics`).
 
 평가 구간은 **선언된 창**이다 (Phase 2c)
 ----------------------------------------
@@ -46,6 +47,16 @@ from pydantic import Field
 
 from app.domain.settlement_maturity import MaturityWindow
 from app.schemas._base import StrictModel
+from app.services.ml_training.award_rate_diagnostics import (
+    CategoryCount,
+    CoverageSplit,
+    HoldoutDiagnostics,
+    UnlearnedCell,
+    Verdict,
+    build_diagnostics,
+    build_verdict,
+    category_counts,
+)
 from app.services.ml_training.award_rate_gbm import (
     AwardRateTrainingRow,
     DEFAULT_ENCODING_FOLDS,
@@ -58,17 +69,17 @@ from app.services.ml_training.award_rate_scoring import (
     ModelScore,
     SegmentScore,
     group_mean_predictions,
-    paired_t,
     rmse_bias_std,
-    segment_scores,
 )
 from app.services.ml_training.award_rate_windows import GATE_STRATUM, rows_in_window
 
 __all__ = [
     "GATE_BASELINE_NAME",
     "GATE_MODEL_NAME",
+    "GATE_PAIRED_T_THRESHOLD",
     "GATE_STRATUM",
     "AwardRateHoldoutReport",
+    "CategoryCount",
     "ModelScore",
     "SegmentScore",
     "evaluate_award_rate_holdout",
@@ -90,6 +101,9 @@ class AwardRateHoldoutReport(StrictModel):
     창의 경계와 성숙도를 함께 싣는 이유: 이 수치를 나중에 다시 읽는 사람이 **무엇 위에서
     나온 수치인지**를 리포트만으로 알 수 있어야 한다. 이번 트랙 전체가 그게 없어서 생긴
     문제다(비율 origin 다섯이 같은 5일 구간으로 붕괴한 것을 리포트가 드러내지 못했다).
+
+    판정 옆에는 **그 판정을 믿어도 되는가**가 함께 실린다(:mod:`.award_rate_diagnostics`):
+    검출 가능했던 최소 개선(MDE)·필요 표본 수·베이스라인 커버리지 분해·미학습 셀 목록.
     """
 
     window_start: str
@@ -111,16 +125,29 @@ class AwardRateHoldoutReport(StrictModel):
     train_mean: float
     test_mean: float
     test_std: float
+    train_categories: list[CategoryCount] = Field(default_factory=list)
+    """학습 구간(전 층)의 공종 구성 — 레짐 단절 공시."""
+    test_categories: list[CategoryCount] = Field(default_factory=list)
+    """홀드아웃의 공종 구성. 학습측과 갈리면 시간 분할이 곧 레짐 분할이다."""
     baselines: list[ModelScore] = Field(default_factory=list)
     models: list[ModelScore] = Field(default_factory=list)
     segments: list[SegmentScore] = Field(default_factory=list)
     """게이트 베이스라인 vs 게이트 모델을 축별로 쪼갠 성적(:data:`~app.services.ml_training.award_rate_scoring.SEGMENT_SPECS`)."""
+    coverage: list[CoverageSplit] = Field(default_factory=list)
+    """베이스라인이 자기 셀로 예측한 행 / 전역 평균으로 떨어진 행의 분해."""
+    unlearned_baseline_cells: list[UnlearnedCell] = Field(default_factory=list)
+    """홀드아웃에는 있는데 학습 구간에 없던 베이스라인 셀 — 비교 대상의 구멍."""
     gate_baseline_rmse: float
     gate_model_rmse: float
     gate_improvement_ratio: float
     """(베이스라인 − 모델) ÷ 베이스라인. 양수면 모델이 낫다."""
     gate_paired_t: float
     """제곱오차 차이(모델 − 베이스라인)의 대응 t. 음수면 모델이 낫다."""
+    gate_min_detectable_improvement: float = 0.0
+    """이 창이 유의하게 검출할 수 있었던 최소 개선률(MDE). 관측 개선이 이보다 작으면
+    "못 이겼다"가 아니라 **"못 쟀다"** 이다."""
+    gate_required_row_count: int | None = None
+    """관측된 행당 효과가 유지될 때 유의성에 필요한 행 수(모델이 더 나쁘면 ``None``)."""
     gate_passed: bool
 
 
@@ -141,16 +168,30 @@ def _gbm_predictions(
     ----------------------------------------
     이 함수는 ``predict_rates`` 를 직접 부르므로 predictor 의 **미학습 공종 가드**
     (:func:`~app.ai.predictors.award_rate_gbm.unlearned_category_reason`)를 지나지 않는다.
-    즉 서빙이라면 거부했을 공종의 행도 리포트 수치에 들어갈 수 있다. 현재 영향은 0 이다 —
-    실측상 임계 미만 공종(general 6행)은 전부 학습측에 있고 게이트 홀드아웃은
-    construction/service 뿐이다. 얕은 공종이 홀드아웃에 들어오는 시점에는 "서빙은 거부하고
-    측정은 포함"이 되므로 그때 가드를 이 경로에도 태워야 한다(동작 변경이라 별도 트랙).
+    즉 서빙이라면 거부했을 공종의 행도 리포트 수치에 들어갈 수 있다. **영향은 더 이상 0이
+    아니다**: 창 기반 분할로 학습 구간이 짧아지면서 얕은 공종이 홀드아웃에 들어온다(실측
+    2026-08-13, 2026-06-28 창에 ``general`` 1행 · RMSE 0.176). 리포트의 공종 구성
+    (``test_categories``)이 그 사실을 드러내며, 가드를 이 경로에도 태우는 것은 동작 변경이라
+    별도 트랙이다.
+
+    소표본에서 부스터가 죽으면 ``LightGBMError`` 를 **도메인 예외로 바꿔** 던진다. 선언된 창
+    정책에서는 도달하지 않지만(:data:`~app.services.ml_training.award_rate_windows.GATE_MIN_EVALUATION_ROWS`
+    가 앞에서 거른다) ``WindowPolicy`` 를 주입하면 도달하고, 그때 라이브러리 내부 오류가
+    그대로 새면 "이 창은 학습이 불가능하다"는 사실이 버그처럼 보인다.
     """
+    from lightgbm.basic import LightGBMError
+
     from app.ai.predictors.award_rate_gbm import load_award_rate_gbm_model
 
-    artifact = train_award_rate_gbm(
-        list(train_rows), sample_scope=sample_scope, folds=folds, seed=seed
-    )
+    try:
+        artifact = train_award_rate_gbm(
+            list(train_rows), sample_scope=sample_scope, folds=folds, seed=seed
+        )
+    except LightGBMError as error:
+        raise ValueError(
+            f"Award-rate holdout could not fit a booster on {len(train_rows)} "
+            f"training rows (folds={folds}): {error}"
+        ) from error
     model = load_award_rate_gbm_model(artifact)
     return np.array(
         model.predict_rates(
@@ -221,9 +262,21 @@ def _split_at_window(
     )
 
 
+@dataclass(frozen=True)
+class _GateBaseline:
+    """게이트 비교 대상의 예측과 **행별 커버리지 마스크**.
+
+    마스크를 함께 들고 다니는 이유: 통과가 폴백 소수 행에 걸려 있는지 분해하려면 "어느 행이
+    자기 셀을 못 찾았는가"를 알아야 한다. 그 구별이 이 트랙에서 결정적이었다.
+    """
+
+    predictions: np.ndarray
+    covered: np.ndarray
+
+
 def _baseline_scores(
     split: _HoldoutSplit, targets: np.ndarray, *, global_mean: float
-) -> tuple[list[ModelScore], np.ndarray]:
+) -> tuple[list[ModelScore], _GateBaseline]:
     """선언된 베이스라인 표를 순서대로 채점하고 게이트 비교용 예측을 함께 낸다.
 
     그룹 평균 베이스라인은 **평가 층의 학습 구간**으로만 만든다. 사전 선언된 베이스라인
@@ -231,9 +284,9 @@ def _baseline_scores(
     비교 가능하다.
     """
     scores: list[ModelScore] = []
-    gate_predictions: np.ndarray | None = None
+    gate: _GateBaseline | None = None
     for spec in BASELINE_SPECS:
-        predictions, coverage = group_mean_predictions(
+        predictions, covered = group_mean_predictions(
             spec, split.gate_train, split.gate_test, global_mean=global_mean
         )
         rmse, bias, residual_std = rmse_bias_std(predictions, targets)
@@ -243,14 +296,14 @@ def _baseline_scores(
                 rmse=rmse,
                 bias=bias,
                 residual_std=residual_std,
-                test_coverage=coverage,
+                test_coverage=float(np.mean(covered)) if covered.size else 0.0,
             )
         )
         if spec.name == GATE_BASELINE_NAME:
-            gate_predictions = predictions
-    if gate_predictions is None:  # pragma: no cover - 표 선언이 보장한다
+            gate = _GateBaseline(predictions=predictions, covered=covered)
+    if gate is None:  # pragma: no cover - 표 선언이 보장한다
         raise ValueError(f"Baseline table has no {GATE_BASELINE_NAME!r} entry.")
-    return scores, gate_predictions
+    return scores, gate
 
 
 def _model_scores(
@@ -296,24 +349,61 @@ def _named_rmse(scores: Sequence[ModelScore], name: str) -> float:
     return float(next(score.rmse for score in scores if score.name == name))
 
 
+def _gate_baseline_spec():
+    """게이트 비교 대상의 선언을 표에서 꺼낸다 — 미학습 셀 목록이 같은 키를 쓰게 한다."""
+    return next(spec for spec in BASELINE_SPECS if spec.name == GATE_BASELINE_NAME)
+
+
 def _build_report(
     split: _HoldoutSplit, *, folds: int, seed: int, sample_scope: str
 ) -> AwardRateHoldoutReport:
     """분할 한 벌에서 베이스라인·모델을 채점하고 게이트 판정까지 조립한다."""
     targets = np.array([row.value for row in split.gate_test], dtype=float)
     gate_train_mean = float(np.mean([row.value for row in split.gate_train]))
-    baselines, gate_baseline_predictions = _baseline_scores(
+    baselines, gate_baseline = _baseline_scores(
         split, targets, global_mean=gate_train_mean
     )
-    models, gate_model_predictions = _model_scores(
+    models, model_predictions = _model_scores(
         split, targets, folds=folds, seed=seed, sample_scope=sample_scope
     )
-
-    gate_baseline_rmse = _named_rmse(baselines, GATE_BASELINE_NAME)
-    gate_model_rmse = _named_rmse(models, GATE_MODEL_NAME)
-    gate_paired_t = paired_t(
-        gate_model_predictions, gate_baseline_predictions, targets
+    diagnostics = build_diagnostics(
+        split.gate_train,
+        split.gate_test,
+        targets,
+        model_predictions=model_predictions,
+        baseline_predictions=gate_baseline.predictions,
+        covered=gate_baseline.covered,
+        baseline_spec=_gate_baseline_spec(),
     )
+    return _assemble(
+        split,
+        targets,
+        train_mean=gate_train_mean,
+        baselines=baselines,
+        models=models,
+        diagnostics=diagnostics,
+        verdict=build_verdict(
+            baseline_rmse=_named_rmse(baselines, GATE_BASELINE_NAME),
+            model_rmse=_named_rmse(models, GATE_MODEL_NAME),
+            model_predictions=model_predictions,
+            baseline_predictions=gate_baseline.predictions,
+            targets=targets,
+            threshold=GATE_PAIRED_T_THRESHOLD,
+        ),
+    )
+
+
+def _assemble(
+    split: _HoldoutSplit,
+    targets: np.ndarray,
+    *,
+    train_mean: float,
+    baselines: list[ModelScore],
+    models: list[ModelScore],
+    diagnostics: HoldoutDiagnostics,
+    verdict: Verdict,
+) -> AwardRateHoldoutReport:
+    """채점 결과를 리포트로 편다 — 여기서 계산하지 않는다(공시만 한다)."""
     return AwardRateHoldoutReport(
         window_start=split.window.start.isoformat(),
         window_end=split.window.end.isoformat(),
@@ -324,27 +414,23 @@ def _build_report(
         train_row_count=len(split.train_rows),
         gate_train_row_count=len(split.gate_train),
         gate_test_row_count=len(split.gate_test),
-        train_mean=gate_train_mean,
+        train_mean=train_mean,
         test_mean=float(np.mean(targets)),
         test_std=float(np.std(targets, ddof=1)) if targets.size > 1 else 0.0,
+        train_categories=category_counts(split.train_rows),
+        test_categories=category_counts(split.gate_test),
         baselines=baselines,
         models=models,
-        segments=segment_scores(
-            split.gate_test,
-            targets,
-            baseline_predictions=gate_baseline_predictions,
-            model_predictions=gate_model_predictions,
-        ),
-        gate_baseline_rmse=gate_baseline_rmse,
-        gate_model_rmse=gate_model_rmse,
-        gate_improvement_ratio=(
-            (gate_baseline_rmse - gate_model_rmse) / gate_baseline_rmse
-            if gate_baseline_rmse > 0
-            else 0.0
-        ),
-        gate_paired_t=gate_paired_t,
-        gate_passed=gate_model_rmse < gate_baseline_rmse
-        and gate_paired_t < -GATE_PAIRED_T_THRESHOLD,
+        segments=diagnostics.segments,
+        coverage=diagnostics.coverage,
+        unlearned_baseline_cells=diagnostics.unlearned_cells,
+        gate_baseline_rmse=verdict.baseline_rmse,
+        gate_model_rmse=verdict.model_rmse,
+        gate_improvement_ratio=verdict.improvement_ratio,
+        gate_paired_t=verdict.paired_t,
+        gate_min_detectable_improvement=verdict.min_detectable_improvement,
+        gate_required_row_count=verdict.required_row_count,
+        gate_passed=verdict.passed,
     )
 
 

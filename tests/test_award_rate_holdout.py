@@ -314,6 +314,87 @@ def test_agency_baseline_falls_back_for_shallow_groups():
     assert 0.0 <= agency.test_coverage <= 1.0
 
 
+def test_report_carries_the_coverage_split_and_the_unlearned_cells():
+    """게이트가 **무엇 위에서** 통과했는지 — 셀이 찬 행인가 폴백 행인가.
+
+    이 분해가 없으면 "357행 중 21행이 유의성을 지고 있다"가 리포트에서 보이지 않는다.
+    """
+    report = evaluate_award_rate_holdout(
+        _rows(), window=_GATE_WINDOW, sample_scope=_SCOPE, folds=3
+    )
+
+    assert sum(split.row_count for split in report.coverage) == (
+        report.gate_test_row_count
+    )
+    assert {split.segment for split in report.coverage} <= {
+        "baseline-covered",
+        "baseline-fallback",
+    }
+    fallback_rows = sum(
+        split.row_count
+        for split in report.coverage
+        if split.segment == "baseline-fallback"
+    )
+    assert sum(cell.row_count for cell in report.unlearned_baseline_cells) == (
+        fallback_rows
+    )
+
+
+def test_report_carries_the_category_composition_of_both_sides():
+    """시간 분할이 곧 레짐 분할인지는 학습/평가 구성을 나란히 봐야 안다."""
+    report = evaluate_award_rate_holdout(
+        _rows(), window=_GATE_WINDOW, sample_scope=_SCOPE, folds=3
+    )
+
+    assert sum(item.row_count for item in report.test_categories) == (
+        report.gate_test_row_count
+    )
+    assert sum(item.row_count for item in report.train_categories) == (
+        report.train_row_count
+    )
+
+
+def test_segment_scores_carry_their_own_improvement_and_t():
+    """전체 개선만 인용되면 "홀드아웃의 59% 에서 더 나쁘다"가 보이지 않는다."""
+    report = evaluate_award_rate_holdout(
+        _rows(), window=_GATE_WINDOW, sample_scope=_SCOPE, folds=3
+    )
+
+    for score in report.segments:
+        expected = (score.baseline_rmse - score.model_rmse) / score.baseline_rmse
+        assert score.improvement_ratio == pytest.approx(expected)
+    assert any(score.paired_t != 0.0 for score in report.segments)
+
+
+def test_power_travels_with_the_verdict():
+    """MDE 와 필요 표본 수가 판정 옆에 없으면 "못 이겼다"와 "못 쟀다"가 구별되지 않는다."""
+    report = evaluate_award_rate_holdout(
+        _rows(), window=_GATE_WINDOW, sample_scope=_SCOPE, folds=3
+    )
+
+    assert report.gate_min_detectable_improvement > 0
+    assert report.gate_passed is (
+        report.gate_improvement_ratio >= report.gate_min_detectable_improvement
+    )
+    assert report.gate_required_row_count is not None
+    assert report.gate_required_row_count <= report.gate_test_row_count
+
+
+def test_tiny_training_side_fails_as_a_domain_error_not_a_library_error():
+    """선언된 창 정책에서는 도달하지 않지만 ``WindowPolicy`` 주입 경로에서는 도달한다.
+
+    ``LightGBMError`` 가 그대로 새면 "이 창은 학습이 불가능하다"는 사실이 라이브러리 내부
+    버그처럼 보인다.
+    """
+    with pytest.raises(ValueError, match="could not fit a booster"):
+        evaluate_award_rate_holdout(
+            _rows(count=12, stratum_share=1.0),
+            window=_window(2, 12),
+            sample_scope=_SCOPE,
+            folds=2,
+        )
+
+
 @pytest.mark.parametrize(
     "window",
     [

@@ -32,6 +32,7 @@ __all__ = [
     "ModelScore",
     "SegmentScore",
     "group_mean_predictions",
+    "improvement_ratio",
     "paired_t",
     "rmse_bias_std",
     "segment_scores",
@@ -117,6 +118,11 @@ class SegmentScore(StrictModel):
     model_rmse: float
     model_bias: float
     model_residual_std: float
+    improvement_ratio: float = 0.0
+    """(베이스라인 − 모델) ÷ 베이스라인. **음수면 이 세그먼트에서 모델이 더 나쁘다.**"""
+    paired_t: float = 0.0
+    """세그먼트 안의 대응 t. 전체 개선만 인용되면 "홀드아웃의 59% 에서 더 나쁘다"가
+    보이지 않는다 — 그 사실을 세그먼트 행이 스스로 말하게 한다."""
 
 
 def rmse_bias_std(
@@ -146,23 +152,26 @@ def group_mean_predictions(
     test_rows: Sequence[AwardRateTrainingRow],
     *,
     global_mean: float,
-) -> tuple[np.ndarray, float]:
-    """그룹 평균 예측과 그 그룹으로 실제 예측된 홀드아웃 비율."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """그룹 평균 예측과 **행별 커버리지 마스크**.
+
+    비율이 아니라 마스크를 내는 이유: 커버리지가 낮을 때 "어느 행이 폴백이었는가"를 알아야
+    게이트의 유의성이 폴백 소수 행에 걸려 있는지 분해할 수 있다(:mod:`.award_rate_diagnostics`).
+    비율 하나만 남기면 그 분해가 불가능하고, 그 구별이 이 트랙에서 결정적이었다.
+    """
     totals: dict[str, tuple[float, int]] = {}
     for row in train_rows:
         total, count = totals.get(spec.key(row), (0.0, 0))
         totals[spec.key(row)] = (total + row.value, count + 1)
 
     predictions: list[float] = []
-    covered = 0
+    covered: list[bool] = []
     for row in test_rows:
         total, count = totals.get(spec.key(row), (0.0, 0))
-        if count >= spec.min_count:
-            predictions.append(total / count)
-            covered += 1
-        else:
-            predictions.append(global_mean)
-    return np.array(predictions, dtype=float), covered / len(test_rows)
+        is_covered = count >= spec.min_count
+        predictions.append(total / count if is_covered else global_mean)
+        covered.append(is_covered)
+    return np.array(predictions, dtype=float), np.array(covered, dtype=bool)
 
 
 def segment_scores(
@@ -184,6 +193,13 @@ def segment_scores(
             for segment, indices in sorted(groups.items())
         )
     return scores
+
+
+def improvement_ratio(baseline_rmse: float, model_rmse: float) -> float:
+    """(베이스라인 − 모델) ÷ 베이스라인 — 개선률의 단일 정의. 양수면 모델이 낫다."""
+    if baseline_rmse <= 0:
+        return 0.0
+    return (baseline_rmse - model_rmse) / baseline_rmse
 
 
 def _one_segment_score(
@@ -211,4 +227,8 @@ def _one_segment_score(
         model_rmse=model_rmse,
         model_bias=model_bias,
         model_residual_std=model_std,
+        improvement_ratio=improvement_ratio(baseline_rmse, model_rmse),
+        paired_t=paired_t(
+            model_predictions[selector], baseline_predictions[selector], segment_targets
+        ),
     )
