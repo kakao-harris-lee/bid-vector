@@ -167,7 +167,11 @@ def unlearned_category_reason(
     다른 사실이고(전자는 수집·필터 문제, 후자는 시간 문제), 폴백 사유가 그것을 뭉개면
     무엇을 고쳐야 하는지 알 수 없다. 판정 규칙 자체는 한 수(학습 행 수) 하나다.
     """
-    minimum = int(settings.PRICE_PREDICTION_AWARD_RATE_GBM_MIN_CATEGORY_ROWS)
+    # 1 로 클램프한다: 설정을 0(또는 음수)으로 두면 ``rows >= minimum`` 이 항상 참이 되어
+    # **어휘에 아예 없는 공종(0행)까지 통과**한다. 이 가드는 모듈 docstring 이 정직 명세
+    # (§2) 보호로 선언한 것이고, 다른 red line(법정하한)이 env 한 값으로 꺼지지 않는 것과
+    # 같은 대우여야 한다. 임계를 낮추는 것은 운영 재량이되 **끄는 것은 재량이 아니다.**
+    minimum = max(1, int(settings.PRICE_PREDICTION_AWARD_RATE_GBM_MIN_CATEGORY_ROWS))
     rows = model.category_training_rows(category)
     if rows >= minimum:
         return None

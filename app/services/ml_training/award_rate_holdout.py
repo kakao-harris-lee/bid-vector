@@ -221,15 +221,27 @@ def _gbm_predictions(
     *,
     folds: int,
     seed: int,
+    sample_scope: str,
 ) -> np.ndarray:
     """학습 → 아티팩트 → 복원 → 예측. **서빙과 같은 경로**로 홀드아웃을 예측한다.
 
     학습기의 부스터를 그대로 쓰지 않고 아티팩트를 거치는 것은 의도된 우회다: 직렬화·
     복원·피처 재조립까지 포함해야 이 수치가 서빙에서 나올 수치와 같다고 말할 수 있다.
+
+    ⚠ "같은 경로"의 알려진 예외 하나 (공시)
+    ----------------------------------------
+    이 함수는 ``predict_rates`` 를 직접 부르므로 predictor 의 **미학습 공종 가드**
+    (:func:`~app.ai.predictors.award_rate_gbm.unlearned_category_reason`)를 지나지 않는다.
+    즉 서빙이라면 거부했을 공종의 행도 리포트 수치에 들어갈 수 있다. 현재 영향은 0 이다 —
+    실측상 임계 미만 공종(general 6행)은 전부 학습측에 있고 게이트 홀드아웃은
+    construction/service 뿐이다. 얕은 공종이 홀드아웃에 들어오는 시점에는 "서빙은 거부하고
+    측정은 포함"이 되므로 그때 가드를 이 경로에도 태워야 한다(동작 변경이라 별도 트랙).
     """
     from app.ai.predictors.award_rate_gbm import load_award_rate_gbm_model
 
-    artifact = train_award_rate_gbm(list(train_rows), folds=folds, seed=seed)
+    artifact = train_award_rate_gbm(
+        list(train_rows), sample_scope=sample_scope, folds=folds, seed=seed
+    )
     model = load_award_rate_gbm_model(artifact)
     return np.array(
         model.predict_rates(
@@ -327,7 +339,12 @@ def _baseline_scores(
 
 
 def _model_scores(
-    split: _HoldoutSplit, targets: np.ndarray, *, folds: int, seed: int
+    split: _HoldoutSplit,
+    targets: np.ndarray,
+    *,
+    folds: int,
+    seed: int,
+    sample_scope: str,
 ) -> tuple[list[ModelScore], np.ndarray]:
     """GBM 두 변형을 채점하고 게이트 후보(``gbm_all_strata``) 예측을 함께 낸다.
 
@@ -341,7 +358,11 @@ def _model_scores(
         ("gbm_gate_stratum_only", split.gate_train),
     ):
         predictions = _gbm_predictions(
-            fit_rows, split.gate_test, folds=folds, seed=seed
+            fit_rows,
+            split.gate_test,
+            folds=folds,
+            seed=seed,
+            sample_scope=sample_scope,
         )
         rmse, bias, residual_std = _rmse_bias_std(predictions, targets)
         scores.append(
@@ -397,7 +418,7 @@ def _named_rmse(scores: Sequence[ModelScore], name: str) -> float:
 
 
 def _build_report(
-    split: _HoldoutSplit, *, folds: int, seed: int
+    split: _HoldoutSplit, *, folds: int, seed: int, sample_scope: str
 ) -> AwardRateHoldoutReport:
     """분할 한 벌에서 베이스라인·모델을 채점하고 게이트 판정까지 조립한다."""
     targets = np.array([row.value for row in split.gate_test], dtype=float)
@@ -406,7 +427,7 @@ def _build_report(
         split, targets, global_mean=gate_train_mean
     )
     models, gate_model_predictions = _model_scores(
-        split, targets, folds=folds, seed=seed
+        split, targets, folds=folds, seed=seed, sample_scope=sample_scope
     )
 
     gate_baseline_rmse = _named_rmse(baselines, GATE_BASELINE_NAME)
@@ -444,6 +465,7 @@ def _build_report(
 def evaluate_award_rate_holdout(
     rows: Sequence[AwardRateTrainingRow],
     *,
+    sample_scope: str,
     train_fraction: float = 0.70,
     folds: int = DEFAULT_ENCODING_FOLDS,
     seed: int = DEFAULT_TRAINING_SEED,
@@ -457,6 +479,9 @@ def evaluate_award_rate_holdout(
 
     Args:
         rows: 개찰 시각 오름차순 학습 행(로더가 이미 정렬해 준다).
+        sample_scope: 이 행들의 표본 정의. 중간 아티팩트가 자기 코퍼스를 정직하게 신고하게
+            하려고 받는다 — 이 경로의 아티팩트는 디스크에 남지 않지만, 계약을 통과해야
+            하는 것은 서빙과 같으므로 여기서만 예외를 두면 그 round-trip 이 느슨해진다.
         train_fraction: 평가 층에서 학습 구간이 차지할 비율.
         folds: out-of-fold 인코딩·잔차의 분할 수.
         seed: 재현성 seed.
@@ -468,5 +493,8 @@ def evaluate_award_rate_holdout(
         ValueError: 평가 층의 학습/홀드아웃 어느 한쪽이라도 비었을 때.
     """
     return _build_report(
-        _split_out_of_time(rows, train_fraction=train_fraction), folds=folds, seed=seed
+        _split_out_of_time(rows, train_fraction=train_fraction),
+        folds=folds,
+        seed=seed,
+        sample_scope=sample_scope,
     )

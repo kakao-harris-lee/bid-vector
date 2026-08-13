@@ -69,11 +69,18 @@ __all__ = [
     "train_award_rate_gbm",
 ]
 
-# 아티팩트 계약 버전. 피처 목록·인코딩 모양이 바뀌면 올린다 — predictor 는 이 값이
-# 다르면 모델을 쓰지 않는다(다른 피처 공간으로 학습된 부스터를 태우면 조용히 틀린다).
-# 피처 공간은 #364 와 같다(공시 하한 축은 도입하지 않았다 — 아래 학습 행 참조).
+# 두 버전 문자열은 **다른 질문에 답한다.**
+#
+# ``ARTIFACT_VERSION`` 은 피처 공간 계약이다. 피처 목록·인코딩 모양이 바뀌면 올리고,
+# predictor 는 이 값이 다르면 모델을 쓰지 않는다(다른 피처 공간의 부스터를 태우면 조용히
+# 틀린다). 이번 변경으로 피처 공간은 바뀌지 않았으므로 v1 그대로다 — #364 와 같다.
+#
+# ``MODEL_VERSION`` 은 "이것이 어떤 모델인가"이고 **코퍼스 regime 을 포함한다.** 서빙 분포
+# 정합 필터가 학습 모집단을 34,859행 혼합에서 9,266행 피드 출처로 바꿨으므로 두 산출물은
+# 같은 피처 공간의 **다른 모델**이다. 이 값이 ``PricePrediction.model_version`` 으로
+# 영속화되므로, 올리지 않으면 감사 기록이 두 코퍼스를 구별하지 못한다.
 AWARD_RATE_GBM_ARTIFACT_VERSION: Final[str] = "award-rate-gbm-v1"
-AWARD_RATE_GBM_MODEL_VERSION: Final[str] = "v1.0-award-rate-gbm"
+AWARD_RATE_GBM_MODEL_VERSION: Final[str] = "v1.1-award-rate-gbm"
 
 # LightGBM 하이퍼파라미터 — 선언 데이터(§4.5-1). 표본 수만 행 · 피처 5개 규모의 얕은
 # 표 형태 회귀라, 트리를 깊게 키우기보다 낮은 학습률로 많은 라운드를 도는 쪽이 안정적이다.
@@ -303,12 +310,14 @@ def _assemble_artifact(
     space: AwardRateFeatureSpace,
     booster: "lgb.Booster",
     residuals: np.ndarray,
+    sample_scope: str,
 ) -> PersistedAwardRateGbmArtifact:
     """학습 산출물을 아티팩트 계약으로 조립한다 — 계약 위반은 여기서 예외가 된다."""
     encoding = space.agency_encoding
     return PersistedAwardRateGbmArtifact(
         artifact_version=AWARD_RATE_GBM_ARTIFACT_VERSION,
         model_version=AWARD_RATE_GBM_MODEL_VERSION,
+        sample_scope=sample_scope,
         feature_names=list(AWARD_RATE_FEATURE_NAMES),
         categories=list(space.categories),
         denominator_sources=list(space.denominator_sources),
@@ -325,6 +334,7 @@ def _assemble_artifact(
 def train_award_rate_gbm(
     rows: Sequence[AwardRateTrainingRow],
     *,
+    sample_scope: str,
     folds: int = DEFAULT_ENCODING_FOLDS,
     seed: int = DEFAULT_TRAINING_SEED,
 ) -> dict[str, JsonValue]:
@@ -342,6 +352,10 @@ def train_award_rate_gbm(
     Args:
         rows: 학습 행. **cutoff 필터는 호출부 책임**이다 — 이 함수는 시각을 보지 않고,
             ``opened_at`` 은 아티팩트의 학습 구간 표기에만 쓴다.
+        sample_scope: 이 행들이 어떤 표본 정의에서 왔는지
+            (``app.core.constants.award_rate_sample_scope``). **기본값을 주지 않는다** —
+            행만 보고는 알 수 없는 사실이라 호출부가 말해야 하고, 기본값이 있으면 잘못된
+            신고가 조용히 통과한다. 이 값이 아티팩트에 실려 옛 코퍼스 산출물을 구별한다.
         folds: 인코딩·잔차의 out-of-fold 분할 수.
         seed: 폴드 순열과 부스팅의 난수 seed(재현성).
 
@@ -364,5 +378,6 @@ def train_award_rate_gbm(
         space=build_feature_space(rows),
         booster=booster,
         residuals=residuals,
+        sample_scope=sample_scope,
     )
     return artifact.model_dump(mode="json")

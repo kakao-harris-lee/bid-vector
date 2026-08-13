@@ -12,7 +12,10 @@ from app.ai.predictors.base import (
 )
 from app.ai.predictors.historical import read_record_value
 from app.core.config import settings
-from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
+from app.core.constants import (
+    AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS,
+    AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES,
+)
 from app.domain.aggregates import average
 
 
@@ -131,6 +134,11 @@ def _report_methodology(
     return {
         "report_version": "2",
         "predictor_arms": sorted(registry),
+        # 이 하네스가 채점한 모집단. 요청 컨텍스트의 이력 행은 피드 출처 필터를 거치지
+        # 않으므로 전 출처다 — award_rate_gbm 은 그 중 피드 출처만으로 학습하므로(서빙
+        # 분포 정합), 여기 수치는 그 predictor 가 일부러 학습에서 뺀 행 위에서도 채점된
+        # 값이다. 리포트가 그 사실을 직접 싣지 않으면 수치만 보고 필터를 되돌리게 된다.
+        "history_sample_scope": AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES,
         "excluded_predictor_arms": sorted(
             set(registry) & AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
         ),

@@ -21,7 +21,11 @@ from app.ai.predictors.registry import build_default_predictor_registry
 from app.ai.price_prediction import orchestration as prediction_orchestration
 from app.ai.price_prediction import predict_price
 from app.core.config import settings
-from app.core.constants import AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS
+from app.core.constants import (
+    AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS,
+    AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES,
+    AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN,
+)
 from app.models.models import HistoricalData
 from app.services.ml_training.award_rate_gbm import (
     AwardRateTrainingRow,
@@ -61,7 +65,9 @@ def _training_rows(count: int = 400) -> list[AwardRateTrainingRow]:
 @pytest.fixture
 def artifact_path(tmp_path):
     """실제로 학습한 아티팩트를 디스크에 남기고 그 경로를 준다."""
-    artifact = train_award_rate_gbm(_training_rows(), folds=3)
+    artifact = train_award_rate_gbm(
+        _training_rows(), sample_scope=AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN, folds=3
+    )
     path = tmp_path / "award-rate-gbm.json"
     path.write_text(
         PersistedAwardRateGbmArtifact.model_validate(artifact).model_dump_json(),
@@ -174,7 +180,9 @@ def _thin_category_artifact(tmp_path):
     path = tmp_path / "thin-category.json"
     path.write_text(
         PersistedAwardRateGbmArtifact.model_validate(
-            train_award_rate_gbm(rows, folds=3)
+            train_award_rate_gbm(
+                rows, sample_scope=AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN, folds=3
+            )
         ).model_dump_json(),
         encoding="utf-8",
     )
@@ -244,6 +252,102 @@ def test_unseen_category_falls_back_to_historical_through_predict_price(
     assert "never trained on category 'goods'" in str(prediction["fallback_reason"])
 
 
+def _legacy_mixed_corpus_artifact(tmp_path, *, declare_scope: bool):
+    """#364 형태의 산출물 — **goods 어휘가 두꺼운** 혼합 모집단 코퍼스.
+
+    ``declare_scope=False`` 는 표본 정의 필드가 없던 그 시절의 payload 를 그대로 재현한다.
+    """
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [
+        AwardRateTrainingRow(
+            value=(_LOW_RATE if index % 2 else _HIGH_RATE) + (0.001 * (index % 5)),
+            amount=_BASE_AMOUNT,
+            category="goods" if index % 2 else "construction",
+            agency="물품기관" if index % 2 else "저가기관",
+            denominator_source="clean-base",
+            opened_at=start + timedelta(hours=index),
+            published_floor_rate=None,
+        )
+        for index in range(400)
+    ]
+    artifact = train_award_rate_gbm(
+        rows, sample_scope=AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES, folds=3
+    )
+    if not declare_scope:
+        del artifact["sample_scope"]
+    path = tmp_path / f"legacy-{declare_scope}.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    return path
+
+
+def test_legacy_artifact_without_a_declared_sample_scope_is_rejected(tmp_path):
+    """표본 정의를 신고하지 않은 옛 산출물은 로드되지 않는다 (N1 회귀 가드).
+
+    피처 공간이 그대로라 ``artifact_version`` 만으로는 이 산출물을 걸러낼 수 없다 —
+    그래서 표본 정의를 **직교 축**으로 따로 신고하게 하고, 신고가 없으면 거부한다.
+    """
+    path = _legacy_mixed_corpus_artifact(tmp_path, declare_scope=False)
+    with pytest.raises(ValueError, match="artifact contract"):
+        load_award_rate_gbm_model(str(path))
+
+
+def test_legacy_artifact_would_have_opened_the_category_guard(tmp_path, monkeypatch):
+    """**왜 거부해야 하는지의 증명**: 그 산출물이 로드되면 goods 가드가 열린다.
+
+    표본 정의 신고만 붙여(=계약은 통과시키고) 나머지는 옛 코퍼스 그대로 두면, 그 인코딩에
+    goods 가 200행 들어 있어 미학습 공종 가드가 **통과**하고 predictor 가 goods 에 투찰율을
+    낸다. 위 거부 테스트가 막는 것이 바로 이 상태다 — 코드는 새 버전인데 거동은 옛 버전.
+    """
+    path = _legacy_mixed_corpus_artifact(tmp_path, declare_scope=True)
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(
+        settings, "PRICE_PREDICTION_AWARD_RATE_GBM_MODEL_PATH", str(path)
+    )
+    model = load_award_rate_gbm_model(str(path))
+    assert model.category_training_rows("goods") == 200
+
+    availability = AwardRateGbmPredictor().check_availability(_context(category="goods"))
+    assert availability.available
+    leaked = AwardRateGbmPredictor().predict(_context(category="goods"))
+    assert 0.5 < leaked.predicted_bid_rate < 1.0
+    print(
+        f"\n[MUTANT N1] legacy mixed-corpus artifact accepted -> goods "
+        f"available={availability.available} "
+        f"training_rows={model.category_training_rows('goods')} "
+        f"predicted_bid_rate={leaked.predicted_bid_rate:.5f}"
+    )
+
+
+def test_current_artifact_declares_its_sample_scope(tmp_path):
+    """새 산출물은 자기 코퍼스를 신고한다 — 감사에서 두 코퍼스가 구분된다."""
+    artifact = train_award_rate_gbm(
+        _training_rows(), sample_scope=AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN, folds=3
+    )
+    assert artifact["sample_scope"] == AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN
+    assert artifact["model_version"] == "v1.1-award-rate-gbm"
+    # 피처 공간은 안 바뀌었으므로 계약 버전은 그대로다(두 버전 문자열의 역할이 다르다).
+    assert artifact["artifact_version"] == "award-rate-gbm-v1"
+
+
+def test_zero_threshold_cannot_disable_the_category_guard(gbm_enabled, monkeypatch):
+    """``MIN_CATEGORY_ROWS=0`` 으로도 가드가 꺼지지 않는다 (N2 — env red line).
+
+    클램프가 없으면 ``rows >= 0`` 이 항상 참이라 **어휘에 없는 공종까지 통과**한다.
+    이 가드는 정직 명세(§2) 보호로 선언된 것이라, 임계를 낮추는 것은 운영 재량이되
+    끄는 것은 재량이 아니다. 이 단언이 그 의도를 못 박는다(사고인지 의도인지 테스트가 말한다).
+    """
+    monkeypatch.setattr(
+        settings, "PRICE_PREDICTION_AWARD_RATE_GBM_MIN_CATEGORY_ROWS", 0
+    )
+    availability = AwardRateGbmPredictor().check_availability(_context(category="goods"))
+    assert not availability.available
+    assert "never trained on category 'goods'" in availability.reason
+    # 학습된 공종은 임계가 낮아진 만큼 그대로 통과한다(클램프가 과잉 차단하지 않는다).
+    assert AwardRateGbmPredictor().check_availability(
+        _context(category="construction")
+    ).available
+
+
 def test_unlearned_category_guard_mutant_proof(gbm_enabled, monkeypatch):
     """가드를 무력화하면 모델이 **본 적 없는 goods 에 투찰율을 낸다** — 가드가 실체다.
 
@@ -271,7 +375,9 @@ def test_unlearned_category_guard_mutant_proof(gbm_enabled, monkeypatch):
 
 def test_artifact_with_a_different_feature_set_is_rejected(tmp_path):
     """다른 피처 공간으로 학습된 부스터는 예외 없이 좌표만 어긋난다 — fail-closed."""
-    artifact = train_award_rate_gbm(_training_rows(), folds=3)
+    artifact = train_award_rate_gbm(
+        _training_rows(), sample_scope=AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN, folds=3
+    )
     artifact["feature_names"] = ["category", "log_amount"]
     path = tmp_path / "drifted.json"
     path.write_text(json.dumps(artifact), encoding="utf-8")
@@ -280,7 +386,9 @@ def test_artifact_with_a_different_feature_set_is_rejected(tmp_path):
 
 
 def test_artifact_missing_a_required_field_is_rejected(tmp_path):
-    artifact = train_award_rate_gbm(_training_rows(), folds=3)
+    artifact = train_award_rate_gbm(
+        _training_rows(), sample_scope=AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN, folds=3
+    )
     del artifact["global_mean"]
     path = tmp_path / "incomplete.json"
     path.write_text(json.dumps(artifact), encoding="utf-8")
@@ -298,7 +406,9 @@ def test_predict_maps_the_model_onto_the_contract(gbm_enabled):
 
     assert isinstance(result, PredictionResult)
     assert result.pricing_mode == "award_rate_gbm"
-    assert result.model_version == "v1.0-award-rate-gbm"
+    # 코퍼스 regime 이 바뀌면 이 값이 오른다 — PricePrediction 감사 기록이 두 코퍼스를
+    # 구별하는 표시다(피처 공간은 그대로라 artifact_version 은 v1 이다).
+    assert result.model_version == "v1.1-award-rate-gbm"
     assert result.predicted_bid_rate == pytest.approx(_HIGH_RATE, abs=0.02)
     labels = [candidate["label"] for candidate in result.bid_rate_candidates]
     assert labels == ["conservative", "base", "aggressive"]

@@ -44,6 +44,7 @@ if str(REPO_ROOT) not in sys.path:
 from pydantic import Field
 
 from app.core.config import settings
+from app.core.constants import award_rate_sample_scope
 from app.core.database import SessionLocal
 from app.schemas._base import StrictModel
 from app.services.award_rate_dataset import load_award_rate_rows
@@ -193,6 +194,25 @@ def _category_counts(rows: list[AwardRateTrainingRow]) -> list[CategoryCount]:
     ]
 
 
+def _strata_counts(rows: list[AwardRateTrainingRow]) -> list[StratumCount]:
+    """분모 출처 층별 행 수 — 평가 층이 코퍼스의 얼마인지."""
+    totals: dict[str, int] = {}
+    for row in rows:
+        totals[row.denominator_source] = totals.get(row.denominator_source, 0) + 1
+    return [
+        StratumCount(denominator_source=source, row_count=count)
+        for source, count in sorted(totals.items())
+    ]
+
+
+def _opened_at_span(rows: list[AwardRateTrainingRow]) -> tuple[str | None, str | None]:
+    """코퍼스의 (첫, 마지막) 개찰 시각. 표본 필터가 구간을 얼마나 좁혔는지 드러난다."""
+    if not rows:
+        return None, None
+    times = [row.opened_at for row in rows]
+    return min(times).isoformat(), max(times).isoformat()
+
+
 def build_report(
     rows: list[AwardRateTrainingRow],
     *,
@@ -202,31 +222,29 @@ def build_report(
     feed_origin_only: bool,
 ) -> BacktestReport:
     """rolling origin 을 훑어 홀드아웃 결과를 모은다."""
-    counts: dict[str, int] = {}
-    for row in rows:
-        counts[row.denominator_source] = counts.get(row.denominator_source, 0) + 1
+    sample_scope = award_rate_sample_scope(feed_origin_only=feed_origin_only)
     evaluations = [
-        evaluate_award_rate_holdout(rows, train_fraction=origin, folds=folds, seed=seed)
+        evaluate_award_rate_holdout(
+            rows,
+            sample_scope=sample_scope,
+            train_fraction=origin,
+            folds=folds,
+            seed=seed,
+        )
         for origin in origins
     ]
     gate_index = origins.index(_GATE_ORIGIN)
+    first_opened, last_opened = _opened_at_span(rows)
     return BacktestReport(
         generated_at=datetime.now(UTC).isoformat(),
         corpus_row_count=len(rows),
         feed_origin_only=feed_origin_only,
-        corpus_first_opened_at=(
-            min(row.opened_at for row in rows).isoformat() if rows else None
-        ),
-        corpus_last_opened_at=(
-            max(row.opened_at for row in rows).isoformat() if rows else None
-        ),
+        corpus_first_opened_at=first_opened,
+        corpus_last_opened_at=last_opened,
         corpus_published_floor_row_count=sum(
             1 for row in rows if row.published_floor_rate is not None
         ),
-        strata=[
-            StratumCount(denominator_source=source, row_count=count)
-            for source, count in sorted(counts.items())
-        ],
+        strata=_strata_counts(rows),
         categories=_category_counts(rows),
         gate_stratum=GATE_STRATUM,
         gate_baseline_name=GATE_BASELINE_NAME,
@@ -243,7 +261,12 @@ def build_report(
 
 
 def write_artifact(
-    rows: list[AwardRateTrainingRow], path: Path, *, folds: int, seed: int
+    rows: list[AwardRateTrainingRow],
+    path: Path,
+    *,
+    folds: int,
+    seed: int,
+    feed_origin_only: bool,
 ) -> int:
     """전 구간으로 학습한 서빙 아티팩트를 저장하고 학습 행 수를 돌려준다.
 
@@ -252,7 +275,12 @@ def write_artifact(
     """
     from app.ai.predictors.artifact_contracts import PersistedAwardRateGbmArtifact
 
-    artifact = train_award_rate_gbm(rows, folds=folds, seed=seed)
+    artifact = train_award_rate_gbm(
+        rows,
+        sample_scope=award_rate_sample_scope(feed_origin_only=feed_origin_only),
+        folds=folds,
+        seed=seed,
+    )
     validated = PersistedAwardRateGbmArtifact.model_validate(artifact)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(validated.model_dump_json(), encoding="utf-8")
@@ -302,7 +330,11 @@ def main() -> int:
             update={
                 "artifact_out": str(artifact_path),
                 "artifact_training_row_count": write_artifact(
-                    rows, artifact_path, folds=args.folds, seed=args.seed
+                    rows,
+                    artifact_path,
+                    folds=args.folds,
+                    seed=args.seed,
+                    feed_origin_only=feed_origin_only,
                 ),
             }
         )

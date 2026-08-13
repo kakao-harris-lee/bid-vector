@@ -343,6 +343,36 @@ AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS: frozenset[str] = frozenset(
     {"distribution", "award_rate_gbm"}
 )
 
+# 낙찰률 GBM 학습 코퍼스의 **표본 정의** 어휘. 아티팩트가 자기 코퍼스가 무엇이었는지를
+# 스스로 밝히게 하는 값이다.
+#
+# 왜 아티팩트가 이것을 실어야 하는가: 피처 공간이 그대로면 ``artifact_version`` 은 바뀌지
+# 않는데(그게 맞다 — 계약이 안 바뀌었다), 그러면 **다른 모집단으로 학습된 옛 산출물이 새
+# 코드에서 그대로 로드된다.** 그 산출물의 인코딩에는 지금 학습에서 빠진 공종(goods)이
+# 수천 건 들어 있어 미학습 공종 가드가 조용히 열리고, 그 상태의 서빙은 사후에 구별되지
+# 않는다. 표본 정의는 피처 공간과 **직교하는 축**이므로 별도 필드로 선언하고, 선언이 없는
+# 산출물은 로드에서 거부한다(fail-closed).
+#
+# Shared by (grep 전수, 2026-08-13):
+#   - app/services/ml_training/award_rate_gbm.py  (학습 산출물에 기록)
+#   - app/ai/predictors/artifact_contracts.py     (읽기 계약 — 필수 필드)
+#   - scripts/backtest_award_rate_gbm.py          (로더 플래그 → 어휘)
+AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN: str = "feed-origin"
+AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES: str = "all-sources"
+
+
+def award_rate_sample_scope(*, feed_origin_only: bool) -> str:
+    """로더 플래그를 표본 정의 어휘로 (bool → 문자열 단일 변환 지점).
+
+    호출부마다 삼항 연산을 반복하면 두 곳이 다른 문자열을 쓰게 되고, 그 어긋남은 예외가
+    아니라 "아티팩트가 자기 코퍼스를 틀리게 신고"로만 나타난다.
+    """
+    return (
+        AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN
+        if feed_origin_only
+        else AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES
+    )
+
 # 사정률(예정가/기초금액) 관측의 개연 밴드(경계 포함). 밖이면 오적재(스케일 혼입·
 # 오염 base)로 보고 값을 고치지 않은 채 관측에서만 배제한다(published_floor_rate 와
 # 같은 스탠스).
