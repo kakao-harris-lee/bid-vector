@@ -9,8 +9,19 @@
 (:mod:`app.services.ml_training.award_rate_holdout`). 게이트를 사후에 느슨하게 만들지
 않기 위해 임계와 비교 대상이 코드의 선언 상수이고 이 스크립트에는 없다.
 
-``--rolling-origins`` 로 여러 cutoff 를 훑을 수 있다. 한 분할의 우연을 배제하려는
-것이므로, 한 지점만 좋고 나머지가 나쁘면 그것도 결과다.
+평가 구간은 **성숙도로 고른 겹치지 않는 주 단위 창**이다 (Phase 2c)
+----------------------------------------------------------------
+이전에는 rolling origin 이 평가 층 행 수의 **비율**이었다. 이 코퍼스는 행이 3주에 몰려 있어
+다섯 비율이 같은 5일 구간으로 붕괴했고(겹침 100%), "모든 origin 통과"는 안정성이 아니라
+**같은 행을 다섯 번 잰 것**이었다. 지금은 정산 성숙도가 임계 이상인 KST 주가 곧 평가 창이고
+(:mod:`app.services.ml_training.award_rate_windows`), 창끼리 겹치지 않는다.
+
+리포트는 창마다 경계·성숙도·행 수를, 그리고 창 사이 **홀드아웃 겹침 행 수**(설계상 0)와
+embargo 로 뺀 구간을 함께 싣는다. 수치를 나중에 다시 읽는 사람이 "이것이 무엇 위에서 나온
+수치인지"를 리포트만으로 알 수 있어야 하기 때문이다.
+
+성숙한 창이 하나도 없으면 ``gate_evaluable=false`` 로 끝난다. **그것도 결과다** — "지금
+데이터로는 정직하게 평가할 수 없다"는 판정이지, 임계를 낮춰 통과를 만들 사유가 아니다.
 
 표본 정의는 ``--feed-origin-only`` / ``--no-feed-origin-only`` 로 바꿔 나란히 잴 수 있다
 (기본은 설정값). 리포트에 그 값과 코퍼스 구성(기간·공종·공시 하한 보유 수)이 함께 실리므로
@@ -26,7 +37,6 @@ DB read-only(SELECT 전용, write/commit 없음). 외부 API 호출 없음.
 
     docker compose exec -T training-worker python scripts/backtest_award_rate_gbm.py
     docker compose exec -T training-worker python scripts/backtest_award_rate_gbm.py \\
-        --rolling-origins 0.60,0.65,0.70,0.75,0.80 \\
         --artifact-out models/award-rate-gbm.json
 """
 # ruff: noqa: E402 - imports follow the sys.path bootstrap below.
@@ -46,8 +56,13 @@ from pydantic import Field
 from app.core.config import settings
 from app.core.constants import award_rate_sample_scope
 from app.core.database import SessionLocal
+from app.domain.settlement_maturity import MaturityWindow, build_weekly_maturity
 from app.schemas._base import StrictModel
 from app.services.award_rate_dataset import load_award_rate_rows
+from app.services.ml_training.award_rate_backtest_report import (
+    BacktestReport,
+    build_backtest_report,
+)
 from app.services.ml_training.award_rate_gbm import (
     DEFAULT_ENCODING_FOLDS,
     DEFAULT_TRAINING_SEED,
@@ -56,70 +71,59 @@ from app.services.ml_training.award_rate_gbm import (
 )
 from app.services.ml_training.award_rate_holdout import (
     GATE_BASELINE_NAME,
-    GATE_PAIRED_T_THRESHOLD,
-    GATE_STRATUM,
     AwardRateHoldoutReport,
-    evaluate_award_rate_holdout,
 )
-
-# 기본 rolling origin. 사전 선언된 베이스라인 표가 0.70 에서 측정됐으므로 그 지점이
-# 반드시 포함된다.
-_DEFAULT_ORIGINS = "0.60,0.65,0.70,0.75,0.80"
-_GATE_ORIGIN = 0.70
-
-
-class StratumCount(StrictModel):
-    """코퍼스의 분모 출처 층 구성 — 평가 층이 전체의 얼마인지 공시한다."""
-
-    denominator_source: str
-    row_count: int
-
-
-class CategoryCount(StrictModel):
-    """코퍼스의 공종 구성. 표본 필터가 어느 공종을 통째로 지웠는지 여기서 드러난다."""
-
-    category: str
-    row_count: int
-    published_floor_row_count: int
-
-
-class BacktestReport(StrictModel):
-    """rolling origin 전체의 홀드아웃 결과 + 게이트 요약."""
-
-    generated_at: str
-    corpus_row_count: int
-    feed_origin_only: bool
-    """이 실행의 표본 정의(공고 피드 출처만 실었는가). 수치는 이 값과 함께 읽어야 한다."""
-    corpus_first_opened_at: str | None = None
-    corpus_last_opened_at: str | None = None
-    corpus_published_floor_row_count: int = 0
-    strata: list[StratumCount] = Field(default_factory=list)
-    categories: list[CategoryCount] = Field(default_factory=list)
-    gate_stratum: str
-    gate_baseline_name: str
-    gate_paired_t_threshold: float
-    encoding_folds: int
-    training_seed: int
-    origins: list[AwardRateHoldoutReport] = Field(default_factory=list)
-    gate_origin: float
-    gate_passed: bool
-    """사전 선언 지점(0.70)의 판정. 다른 origin 은 견고성 확인용이다."""
-    gate_passed_at_all_origins: bool
-    artifact_out: str | None = None
-    artifact_training_row_count: int | None = None
+from app.services.ml_training.award_rate_windows import (
+    GATE_MAX_ORIGINS,
+    WindowPolicy,
+    plan_evaluation_windows,
+)
+from app.services.settlement_maturity import load_settlement_observations
 
 
 class ConsoleSummary(StrictModel):
-    """콘솔 한 줄 요약(리포트 파일 경로 + 게이트 결론)."""
+    """콘솔 한 줄 요약(리포트 파일 경로 + 게이트 결론).
+
+    **JSON 이 정직해도 인용되는 것은 이 줄이다.** 그래서 "모델이 못 이겼다"와 "이 창은
+    아무것도 재지 못했다"를 가르는 두 신호가 여기에도 실려야 한다 — 그러지 않으면
+    ``gate_passed_at_all_origins=false`` 한 줄이 전자로만 읽힌다(이 요약이 실제로 그
+    오독을 생산한 적이 있다).
+    """
 
     out: str
     corpus_row_count: int
     feed_origin_only: bool
-    gate_baseline_rmse: float
-    gate_model_rmse: float
-    gate_improvement_ratio: float
-    gate_paired_t: float
-    gate_passed: bool
+    evaluation_window_count: int
+    holdout_overlap_pair_count: int
+    holdout_overlap_row_count: int
+    unaccounted_row_count: int
+    stability_seed_count: int = 0
+    """안정성을 잰 seed 수. 0이면 아래 두 목록의 빈 값은 "없다"가 아니라 **"재지
+    않았다"** 이다 — 두 상태가 같은 ``[]`` 로 보이면 안 된다."""
+    gate_evaluable: bool
+    gate_window_start: str | None = None
+    gate_test_row_count: int | None = None
+    gate_baseline_rmse: float | None = None
+    gate_model_rmse: float | None = None
+    gate_improvement_ratio: float | None = None
+    gate_paired_t: float | None = None
+    gate_min_detectable_improvement: float | None = None
+    gate_baseline_coverage: float | None = None
+    gate_regressed_segments: list[str] = Field(default_factory=list)
+    """게이트 창에서 **모델이 베이스라인보다 나쁜** 세그먼트(행 수 내림차순). 전체 개선만
+    인용되는 것을 막으려고 요약 줄에 올린다."""
+    seed_unstable_windows: list[str] = Field(default_factory=list)
+    """판정이나 **개선률 부호**가 seed 에 흔들린 창.
+
+    부호만 뒤집히고 판정은 일관된 창(5회 전부 실패)이 실재하므로 ``verdict_consistent``
+    하나로 거르면 그 창이 목록에서 사라진다 — 검정력 없는 창은 뒤집힐 힘이 없어 판정
+    일관성을 **공짜로** 만족하기 때문이다. 두 축을 함께 봐야 "재지 못했다"가 드러난다."""
+    underpowered_windows: list[str] = Field(default_factory=list)
+    """관측 개선이 그 창의 검출 한계(MDE)보다 작은 창 — **"못 이겼다"가 아니라 "못 쟀다"**.
+
+    게이트 창의 MDE 만 실으면 실패한 창의 검정력은 콘솔에서 볼 수 없고, 그러면 이 요약만
+    읽고는 "못 쟀다"에 도달할 경로가 없다."""
+    gate_passed_at_latest_window: bool
     gate_passed_at_all_origins: bool
 
 
@@ -128,11 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Out-of-time holdout gate for the award-rate GBM predictor."
     )
     parser.add_argument(
-        "--rolling-origins",
-        default=_DEFAULT_ORIGINS,
+        "--max-origins",
+        type=int,
+        default=GATE_MAX_ORIGINS,
         help=(
-            "Comma-separated train fractions of the evaluation stratum. "
-            f"The declared gate origin ({_GATE_ORIGIN}) is always evaluated."
+            "How many of the most recent mature evaluation windows to score. "
+            "The maturity threshold itself is a declared constant, not a flag — "
+            "lowering it to manufacture a pass would defeat the embargo."
         ),
     )
     parser.add_argument(
@@ -142,6 +148,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--seed", type=int, default=DEFAULT_TRAINING_SEED,
         help="Training seed (fold permutation + boosting).",
+    )
+    parser.add_argument(
+        "--stability",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Re-score every window across the declared seeds so the report can say "
+            "whether a verdict survives a seed change. Costs one extra pass per seed."
+        ),
     )
     parser.add_argument(
         "--artifact-out", default="",
@@ -160,104 +175,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", default="", help="Optional JSON report path.")
     return parser
-
-
-def parse_origins(raw: str) -> list[float]:
-    """쉼표 목록 → 정렬된 분할 비율. 게이트 지점은 빠질 수 없다."""
-    origins = {
-        value
-        for value in (float(part) for part in raw.split(",") if part.strip())
-        if 0.0 < value < 1.0
-    }
-    origins.add(_GATE_ORIGIN)
-    return sorted(origins)
-
-
-def _category_counts(rows: list[AwardRateTrainingRow]) -> list[CategoryCount]:
-    """공종별 (행 수, 공시 하한 보유 행 수). 필터가 지운 공종이 0 행으로 사라지므로,
-    구성은 **리포트에 남는 것**이라야 나중에 수치를 다시 읽을 때 오해가 없다."""
-    totals: dict[str, tuple[int, int]] = {}
-    for row in rows:
-        key = row.category or "unknown"
-        count, with_floor = totals.get(key, (0, 0))
-        totals[key] = (
-            count + 1,
-            with_floor + (1 if row.published_floor_rate is not None else 0),
-        )
-    return [
-        CategoryCount(
-            category=category, row_count=count, published_floor_row_count=with_floor
-        )
-        for category, (count, with_floor) in sorted(
-            totals.items(), key=lambda item: (-item[1][0], item[0])
-        )
-    ]
-
-
-def _strata_counts(rows: list[AwardRateTrainingRow]) -> list[StratumCount]:
-    """분모 출처 층별 행 수 — 평가 층이 코퍼스의 얼마인지."""
-    totals: dict[str, int] = {}
-    for row in rows:
-        totals[row.denominator_source] = totals.get(row.denominator_source, 0) + 1
-    return [
-        StratumCount(denominator_source=source, row_count=count)
-        for source, count in sorted(totals.items())
-    ]
-
-
-def _opened_at_span(rows: list[AwardRateTrainingRow]) -> tuple[str | None, str | None]:
-    """코퍼스의 (첫, 마지막) 개찰 시각. 표본 필터가 구간을 얼마나 좁혔는지 드러난다."""
-    if not rows:
-        return None, None
-    times = [row.opened_at for row in rows]
-    return min(times).isoformat(), max(times).isoformat()
-
-
-def build_report(
-    rows: list[AwardRateTrainingRow],
-    *,
-    origins: list[float],
-    folds: int,
-    seed: int,
-    feed_origin_only: bool,
-) -> BacktestReport:
-    """rolling origin 을 훑어 홀드아웃 결과를 모은다."""
-    sample_scope = award_rate_sample_scope(feed_origin_only=feed_origin_only)
-    evaluations = [
-        evaluate_award_rate_holdout(
-            rows,
-            sample_scope=sample_scope,
-            train_fraction=origin,
-            folds=folds,
-            seed=seed,
-        )
-        for origin in origins
-    ]
-    gate_index = origins.index(_GATE_ORIGIN)
-    first_opened, last_opened = _opened_at_span(rows)
-    return BacktestReport(
-        generated_at=datetime.now(UTC).isoformat(),
-        corpus_row_count=len(rows),
-        feed_origin_only=feed_origin_only,
-        corpus_first_opened_at=first_opened,
-        corpus_last_opened_at=last_opened,
-        corpus_published_floor_row_count=sum(
-            1 for row in rows if row.published_floor_rate is not None
-        ),
-        strata=_strata_counts(rows),
-        categories=_category_counts(rows),
-        gate_stratum=GATE_STRATUM,
-        gate_baseline_name=GATE_BASELINE_NAME,
-        gate_paired_t_threshold=GATE_PAIRED_T_THRESHOLD,
-        encoding_folds=folds,
-        training_seed=seed,
-        origins=evaluations,
-        gate_origin=_GATE_ORIGIN,
-        gate_passed=evaluations[gate_index].gate_passed,
-        gate_passed_at_all_origins=all(
-            evaluation.gate_passed for evaluation in evaluations
-        ),
-    )
 
 
 def write_artifact(
@@ -287,13 +204,24 @@ def write_artifact(
     return len(rows)
 
 
-def load_corpus(*, feed_origin_only: bool) -> list[AwardRateTrainingRow]:
-    """표본 정의 한 벌로 코퍼스를 싣는다(SELECT 전용 — write/commit 없음)."""
+def load_corpus(
+    *, feed_origin_only: bool
+) -> tuple[list[AwardRateTrainingRow], tuple[MaturityWindow, ...], int]:
+    """코퍼스와 성숙도 구간 표를 한 세션에서 싣는다(SELECT 전용 — write/commit 없음).
+
+    두 로더가 **같은 시점**을 봐야 성숙도와 평가 대상이 어긋나지 않는다. 성숙도의 모집단은
+    표본 정의와 무관하게 피드 공고다(``app/services/settlement_maturity`` 모듈 docstring).
+
+    Returns:
+        (학습 행, 성숙도 구간 표, 성숙도 관측 수).
+    """
     db = SessionLocal()
     try:
-        return load_award_rate_rows(db, feed_origin_only=feed_origin_only)
+        rows = load_award_rate_rows(db, feed_origin_only=feed_origin_only)
+        observations = load_settlement_observations(db)
     finally:
         db.close()
+    return rows, build_weekly_maturity(observations), len(observations)
 
 
 def resolve_report_path(raw: str) -> Path:
@@ -307,19 +235,116 @@ def resolve_report_path(raw: str) -> Path:
     return path
 
 
+def _regressed_segments(gate: AwardRateHoldoutReport | None) -> list[str]:
+    """게이트 창에서 모델이 베이스라인보다 나쁜 세그먼트("축/세그먼트 n=… −x.x%").
+
+    1행 세그먼트는 뺀다. 대응 t 는 차이의 표본 표준편차를 나누므로 **한 행에서는 존재할 수
+    없고**(계산상 0으로 떨어진다), 그런 줄이 헤드라인에 오르면 진짜 신호를 희석한다. 행 수
+    내림차순으로 실어 큰 세그먼트가 먼저 읽히게 한다.
+    """
+    if gate is None:
+        return []
+    return [
+        f"{score.axis}/{score.segment} n={score.row_count} "
+        f"{score.improvement_ratio * 100:+.1f}%"
+        for score in sorted(gate.segments, key=lambda item: -item.row_count)
+        if score.improvement_ratio < 0 and score.row_count > 1
+    ]
+
+
+def _seed_unstable_windows(report: BacktestReport) -> list[str]:
+    """판정이나 개선률 **부호**가 seed 에 흔들린 창.
+
+    ``verdict_consistent`` 만 보면 안 되는 이유: 검정력 없는 창은 애초에 뒤집힐 힘이 없어
+    판정 일관성을 공짜로 만족한다(실측 2026-06-28 창 — 5회 전부 실패인데 개선률은
+    −3.77% ~ +7.12%).
+    """
+    return [
+        f"{item.window_start[:10]} sign {item.min_improvement_ratio * 100:+.2f}%.."
+        f"{item.max_improvement_ratio * 100:+.2f}% passed={item.passed_count}"
+        f"/{item.trial_count}"
+        for item in report.window_stability
+        if not (item.verdict_consistent and item.sign_consistent)
+    ]
+
+
+def _underpowered_windows(report: BacktestReport) -> list[str]:
+    """관측 개선이 그 창의 검출 한계(MDE)보다 작은 창 — "못 이겼다"가 아니라 "못 쟀다"."""
+    return [
+        f"{origin.window_start[:10]} n={origin.gate_test_row_count} "
+        f"impr={origin.gate_improvement_ratio * 100:+.2f}% "
+        f"< MDE={origin.gate_min_detectable_improvement * 100:.2f}%"
+        for origin in report.origins
+        if origin.gate_improvement_ratio < origin.gate_min_detectable_improvement
+    ]
+
+
+def _baseline_coverage(gate: AwardRateHoldoutReport | None) -> float | None:
+    """게이트 창에서 베이스라인이 자기 셀로 예측한 비율. 낮으면 비교 대상에 구멍이 있다."""
+    if gate is None:
+        return None
+    return next(
+        (
+            score.test_coverage
+            for score in gate.baselines
+            if score.name == GATE_BASELINE_NAME
+        ),
+        None,
+    )
+
+
+def _console_summary(report: BacktestReport, output_path: Path) -> ConsoleSummary:
+    """콘솔 요약. 평가 창이 하나도 없으면 성적 칸은 ``null`` 로 남는다 — 잴 수 없었던
+    것을 0.0 으로 채우면 "베이스라인과 동률"처럼 읽힌다."""
+    gate = report.origins[-1] if report.origins else None
+    return ConsoleSummary(
+        out=str(output_path),
+        corpus_row_count=report.corpus_row_count,
+        feed_origin_only=report.feed_origin_only,
+        evaluation_window_count=len(report.evaluation_windows),
+        holdout_overlap_pair_count=report.holdout_overlap_pair_count,
+        holdout_overlap_row_count=report.holdout_overlap_row_count,
+        unaccounted_row_count=report.unaccounted_row_count,
+        stability_seed_count=len(report.stability_seeds),
+        gate_evaluable=report.gate_evaluable,
+        gate_window_start=report.gate_window_start,
+        gate_test_row_count=gate.gate_test_row_count if gate else None,
+        gate_baseline_rmse=gate.gate_baseline_rmse if gate else None,
+        gate_model_rmse=gate.gate_model_rmse if gate else None,
+        gate_improvement_ratio=gate.gate_improvement_ratio if gate else None,
+        gate_paired_t=gate.gate_paired_t if gate else None,
+        gate_min_detectable_improvement=(
+            gate.gate_min_detectable_improvement if gate else None
+        ),
+        gate_baseline_coverage=_baseline_coverage(gate),
+        gate_regressed_segments=_regressed_segments(gate),
+        seed_unstable_windows=_seed_unstable_windows(report),
+        underpowered_windows=_underpowered_windows(report),
+        gate_passed_at_latest_window=report.gate_passed_at_latest_window,
+        gate_passed_at_all_origins=report.gate_passed_at_all_origins,
+    )
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    origins = parse_origins(args.rolling_origins)
     output_path = resolve_report_path(args.out)
     feed_origin_only = (
         bool(settings.PRICE_PREDICTION_AWARD_RATE_GBM_FEED_ORIGIN_ONLY)
         if args.feed_origin_only is None
         else bool(args.feed_origin_only)
     )
-    rows = load_corpus(feed_origin_only=feed_origin_only)
-    report = build_report(
+    rows, maturity_windows, observation_count = load_corpus(
+        feed_origin_only=feed_origin_only
+    )
+    report = build_backtest_report(
         rows,
-        origins=origins,
+        plan_evaluation_windows(
+            rows,
+            maturity_windows,
+            policy=WindowPolicy(max_origins=args.max_origins),
+        ),
+        maturity_observation_count=observation_count,
+        stability=bool(args.stability),
         folds=args.folds,
         seed=args.seed,
         feed_origin_only=feed_origin_only,
@@ -340,20 +365,7 @@ def main() -> int:
         )
 
     output_path.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    gate = report.origins[origins.index(_GATE_ORIGIN)]
-    print(
-        ConsoleSummary(
-            out=str(output_path),
-            corpus_row_count=report.corpus_row_count,
-            feed_origin_only=report.feed_origin_only,
-            gate_baseline_rmse=gate.gate_baseline_rmse,
-            gate_model_rmse=gate.gate_model_rmse,
-            gate_improvement_ratio=gate.gate_improvement_ratio,
-            gate_paired_t=gate.gate_paired_t,
-            gate_passed=report.gate_passed,
-            gate_passed_at_all_origins=report.gate_passed_at_all_origins,
-        ).model_dump_json()
-    )
+    print(_console_summary(report, output_path).model_dump_json())
     return 0
 
 
