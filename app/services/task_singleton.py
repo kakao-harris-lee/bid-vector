@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -69,3 +71,26 @@ class AdvisorySingletonLease:
     def __exit__(self, exc_type, exc, traceback) -> None:
         del exc_type, exc, traceback
         self.release()
+
+
+@contextmanager
+def singleton_lease(bind: Engine | Connection, key: str) -> Iterator[bool]:
+    """Yield whether this caller holds ``key``; release it on the way out.
+
+    The overlap guard for a periodic task. A tick that finds the lease taken must
+    skip its own body rather than run concurrently — a schedule whose interval is
+    shorter than its own runtime otherwise pins a worker permanently (the
+    2026-08-13 similarity backfill runaway: 193 consecutive overlapping runs).
+
+    There is no expiry to tune because none is needed: this is a PostgreSQL
+    *session* advisory lock held on its own pooled connection, so a worker that
+    dies (OOM kill, SIGKILL at the hard time limit) drops the connection and
+    PostgreSQL releases the lock immediately. A dead holder cannot wedge the
+    schedule the way a row flag or a TTL key would.
+    """
+    lease = AdvisorySingletonLease(bind, key)
+    acquired = lease.acquire()
+    try:
+        yield acquired
+    finally:
+        lease.release()

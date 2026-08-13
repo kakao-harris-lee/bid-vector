@@ -91,6 +91,9 @@ class SimilarityProjectionBackfillResult(BaseModel):
     limit: int = Field(ge=1)
     project_ids: list[int] = Field(default_factory=list)
     event_ids: list[int] = Field(default_factory=list)
+    # A tick that found the previous run still in flight. Reported rather than
+    # silent, so a schedule that is chronically too fast stays visible.
+    duplicate_suppressed: bool = False
 
 
 class EmbeddingRebuildDispatchInput(BaseModel):
