@@ -82,7 +82,13 @@ from app.services.settlement_maturity import load_settlement_observations
 
 
 class ConsoleSummary(StrictModel):
-    """콘솔 한 줄 요약(리포트 파일 경로 + 게이트 결론)."""
+    """콘솔 한 줄 요약(리포트 파일 경로 + 게이트 결론).
+
+    **JSON 이 정직해도 인용되는 것은 이 줄이다.** 그래서 "모델이 못 이겼다"와 "이 창은
+    아무것도 재지 못했다"를 가르는 두 신호가 여기에도 실려야 한다 — 그러지 않으면
+    ``gate_passed_at_all_origins=false`` 한 줄이 전자로만 읽힌다(이 요약이 실제로 그
+    오독을 생산한 적이 있다).
+    """
 
     out: str
     corpus_row_count: int
@@ -91,6 +97,9 @@ class ConsoleSummary(StrictModel):
     holdout_overlap_pair_count: int
     holdout_overlap_row_count: int
     unaccounted_row_count: int
+    stability_seed_count: int = 0
+    """안정성을 잰 seed 수. 0이면 아래 두 목록의 빈 값은 "없다"가 아니라 **"재지
+    않았다"** 이다 — 두 상태가 같은 ``[]`` 로 보이면 안 된다."""
     gate_evaluable: bool
     gate_window_start: str | None = None
     gate_test_row_count: int | None = None
@@ -101,10 +110,19 @@ class ConsoleSummary(StrictModel):
     gate_min_detectable_improvement: float | None = None
     gate_baseline_coverage: float | None = None
     gate_regressed_segments: list[str] = Field(default_factory=list)
-    """게이트 창에서 **모델이 베이스라인보다 나쁜** 세그먼트. 전체 개선만 인용되는 것을
-    막으려고 요약 줄에 올린다."""
-    unstable_windows: list[str] = Field(default_factory=list)
-    """seed 로 판정이 뒤집히는 창(있으면 그 창은 아무것도 재지 못한 것이다)."""
+    """게이트 창에서 **모델이 베이스라인보다 나쁜** 세그먼트(행 수 내림차순). 전체 개선만
+    인용되는 것을 막으려고 요약 줄에 올린다."""
+    seed_unstable_windows: list[str] = Field(default_factory=list)
+    """판정이나 **개선률 부호**가 seed 에 흔들린 창.
+
+    부호만 뒤집히고 판정은 일관된 창(5회 전부 실패)이 실재하므로 ``verdict_consistent``
+    하나로 거르면 그 창이 목록에서 사라진다 — 검정력 없는 창은 뒤집힐 힘이 없어 판정
+    일관성을 **공짜로** 만족하기 때문이다. 두 축을 함께 봐야 "재지 못했다"가 드러난다."""
+    underpowered_windows: list[str] = Field(default_factory=list)
+    """관측 개선이 그 창의 검출 한계(MDE)보다 작은 창 — **"못 이겼다"가 아니라 "못 쟀다"**.
+
+    게이트 창의 MDE 만 실으면 실패한 창의 검정력은 콘솔에서 볼 수 없고, 그러면 이 요약만
+    읽고는 "못 쟀다"에 도달할 경로가 없다."""
     gate_passed_at_latest_window: bool
     gate_passed_at_all_origins: bool
 
@@ -218,14 +236,46 @@ def resolve_report_path(raw: str) -> Path:
 
 
 def _regressed_segments(gate: AwardRateHoldoutReport | None) -> list[str]:
-    """게이트 창에서 모델이 베이스라인보다 나쁜 세그먼트("축/세그먼트 n=… −x.x%")."""
+    """게이트 창에서 모델이 베이스라인보다 나쁜 세그먼트("축/세그먼트 n=… −x.x%").
+
+    1행 세그먼트는 뺀다. 대응 t 는 차이의 표본 표준편차를 나누므로 **한 행에서는 존재할 수
+    없고**(계산상 0으로 떨어진다), 그런 줄이 헤드라인에 오르면 진짜 신호를 희석한다. 행 수
+    내림차순으로 실어 큰 세그먼트가 먼저 읽히게 한다.
+    """
     if gate is None:
         return []
     return [
         f"{score.axis}/{score.segment} n={score.row_count} "
         f"{score.improvement_ratio * 100:+.1f}%"
-        for score in gate.segments
-        if score.improvement_ratio < 0
+        for score in sorted(gate.segments, key=lambda item: -item.row_count)
+        if score.improvement_ratio < 0 and score.row_count > 1
+    ]
+
+
+def _seed_unstable_windows(report: BacktestReport) -> list[str]:
+    """판정이나 개선률 **부호**가 seed 에 흔들린 창.
+
+    ``verdict_consistent`` 만 보면 안 되는 이유: 검정력 없는 창은 애초에 뒤집힐 힘이 없어
+    판정 일관성을 공짜로 만족한다(실측 2026-06-28 창 — 5회 전부 실패인데 개선률은
+    −3.77% ~ +7.12%).
+    """
+    return [
+        f"{item.window_start[:10]} sign {item.min_improvement_ratio * 100:+.2f}%.."
+        f"{item.max_improvement_ratio * 100:+.2f}% passed={item.passed_count}"
+        f"/{item.trial_count}"
+        for item in report.window_stability
+        if not (item.verdict_consistent and item.sign_consistent)
+    ]
+
+
+def _underpowered_windows(report: BacktestReport) -> list[str]:
+    """관측 개선이 그 창의 검출 한계(MDE)보다 작은 창 — "못 이겼다"가 아니라 "못 쟀다"."""
+    return [
+        f"{origin.window_start[:10]} n={origin.gate_test_row_count} "
+        f"impr={origin.gate_improvement_ratio * 100:+.2f}% "
+        f"< MDE={origin.gate_min_detectable_improvement * 100:.2f}%"
+        for origin in report.origins
+        if origin.gate_improvement_ratio < origin.gate_min_detectable_improvement
     ]
 
 
@@ -255,6 +305,7 @@ def _console_summary(report: BacktestReport, output_path: Path) -> ConsoleSummar
         holdout_overlap_pair_count=report.holdout_overlap_pair_count,
         holdout_overlap_row_count=report.holdout_overlap_row_count,
         unaccounted_row_count=report.unaccounted_row_count,
+        stability_seed_count=len(report.stability_seeds),
         gate_evaluable=report.gate_evaluable,
         gate_window_start=report.gate_window_start,
         gate_test_row_count=gate.gate_test_row_count if gate else None,
@@ -267,11 +318,8 @@ def _console_summary(report: BacktestReport, output_path: Path) -> ConsoleSummar
         ),
         gate_baseline_coverage=_baseline_coverage(gate),
         gate_regressed_segments=_regressed_segments(gate),
-        unstable_windows=[
-            item.window_start
-            for item in report.window_stability
-            if not item.verdict_consistent
-        ],
+        seed_unstable_windows=_seed_unstable_windows(report),
+        underpowered_windows=_underpowered_windows(report),
         gate_passed_at_latest_window=report.gate_passed_at_latest_window,
         gate_passed_at_all_origins=report.gate_passed_at_all_origins,
     )

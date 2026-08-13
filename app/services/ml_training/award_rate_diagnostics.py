@@ -108,7 +108,11 @@ class StabilitySummary(StrictModel):
     sign_consistent: bool
     """모든 seed 에서 개선률 부호가 같은가. False 면 이 창은 방향조차 재지 못했다."""
     verdict_consistent: bool
-    """모든 seed 에서 통과/실패가 같은가."""
+    """모든 seed 에서 통과/실패가 같은가.
+
+    **이 값은 :attr:`sign_consistent` 와 함께 읽어야 한다.** 검정력 없는 창은 애초에
+    뒤집힐 힘이 없어 이 값을 **공짜로** 만족한다 — 5회 전부 실패한 창의
+    ``verdict_consistent=true`` 는 안정성의 증거가 아니라 무력함의 증상일 수 있다."""
     min_improvement_ratio: float
     max_improvement_ratio: float
     min_abs_paired_t: float
@@ -158,6 +162,16 @@ def minimum_detectable_improvement(
 
     관측된 개선이 이 값보다 작으면 그 창은 "모델이 못 이겼다"가 아니라 "이만큼 작은 차이는
     애초에 못 잰다"이다. 잔차 산포와 표본 수가 함께 들어가므로 행 수만 보는 것보다 정직하다.
+
+    두 가지 읽기 주의 (공시)
+    ------------------------
+    - **관측된 산포를 고정한 값**이다. 제곱오차 차이의 표준편차를 이번 실행에서 관측한
+      그대로 쓰므로, 다른 효과 크기에서는 그 산포도 달라질 수 있다.
+    - **검정력 50% 기준**이다. ``|t|`` 가 정확히 임계가 되는 개선률이므로, 실제로 그만큼의
+      효과가 있어도 검출될 확률은 약 절반이다. 통상 쓰는 80% 기준으로 보려면 약 1.33배로
+      읽는다(실측 2026-06-28 창: 8.60% → 약 11.4%, 필요 표본 483 → 약 850). 이 함수는
+      **50% 기준을 그대로** 낸다 — 보수적으로 부풀린 수를 리포트에 싣기 시작하면 그 배수가
+      어디서 왔는지가 다음 사람에게 또 하나의 미신이 된다.
     """
     differences = ((model_predictions - targets) ** 2) - (
         (baseline_predictions - targets) ** 2

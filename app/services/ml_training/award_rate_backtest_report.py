@@ -115,7 +115,12 @@ class BacktestReport(StrictModel):
     stability_seeds: list[int] = Field(default_factory=list)
     """판정 안정성을 잰 seed 목록(비었으면 안정성을 재지 않은 실행)."""
     window_stability: list[WindowStabilitySummary] = Field(default_factory=list)
-    """창별 seed 민감도. 부호가 뒤집히는 창의 "판정"은 판정이 아니다."""
+    """창별 seed 민감도 — **아무것도 재지 못한 창**을 드러내는 축이다.
+
+    "판정이 뒤집히는 창"만 찾으면 놓친다. 검정력 없는 창은 뒤집힐 힘이 없어 판정 일관성을
+    공짜로 만족하면서 개선률 **부호만** 흔들린다(실측 2026-06-28 창 — 5회 전부 실패,
+    개선률 −3.77% ~ +7.12%). ``verdict_consistent`` 와 ``sign_consistent`` 는 **함께**
+    읽어야 한다."""
     encoding_folds: int
     training_seed: int
     origins: list[AwardRateHoldoutReport] = Field(default_factory=list)
@@ -189,7 +194,13 @@ def _evaluate_windows(
     seed: int,
     feed_origin_only: bool,
 ) -> list[AwardRateHoldoutReport]:
-    """평가 창마다 홀드아웃 커널을 돌린다 — 창끼리 겹치지 않으므로 서로 독립이다."""
+    """평가 창마다 홀드아웃 커널을 돌린다.
+
+    홀드아웃끼리는 **배타적**이지만(창이 겹치지 않는다) 판정끼리 독립은 아니다: 뒤 창의
+    학습 구간이 앞 창의 홀드아웃을 통째로 포함하고(실측 07-05 창 학습 332행 ⊇ 06-28 창
+    홀드아웃 145행), 인접 주라 모집단도 이어져 있다. 여러 창의 판정이 같은 방향으로 틀릴
+    수 있다는 뜻이므로 "모든 창 통과"를 독립 시행의 곱처럼 읽지 않는다.
+    """
     sample_scope = award_rate_sample_scope(feed_origin_only=feed_origin_only)
     return [
         evaluate_award_rate_holdout(
