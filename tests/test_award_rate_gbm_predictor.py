@@ -136,6 +136,139 @@ def test_availability_requires_a_positive_budget(gbm_enabled):
     assert "positive budget" in availability.reason
 
 
+# --------------------------------------------------------------------------
+# 배우지 않은 공종 가드 — 어휘 부재 + 얕은 표본
+# --------------------------------------------------------------------------
+
+
+_THIN_CATEGORY = "general"
+_THIN_CATEGORY_ROWS = 6
+
+
+def _thin_category_artifact(tmp_path):
+    """construction 은 두텁고 ``general`` 은 6행뿐인 아티팩트(라이브 구성의 축소판)."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [
+        AwardRateTrainingRow(
+            value=_LOW_RATE + (0.001 * (index % 5)),
+            amount=_BASE_AMOUNT,
+            category="construction",
+            agency="저가기관",
+            denominator_source="clean-base",
+            opened_at=start + timedelta(hours=index),
+            published_floor_rate=None,
+        )
+        for index in range(200)
+    ] + [
+        AwardRateTrainingRow(
+            value=_HIGH_RATE,
+            amount=_BASE_AMOUNT,
+            category=_THIN_CATEGORY,
+            agency="얕은기관",
+            denominator_source="clean-base",
+            opened_at=start + timedelta(hours=500 + index),
+            published_floor_rate=None,
+        )
+        for index in range(_THIN_CATEGORY_ROWS)
+    ]
+    path = tmp_path / "thin-category.json"
+    path.write_text(
+        PersistedAwardRateGbmArtifact.model_validate(
+            train_award_rate_gbm(rows, folds=3)
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_category_training_rows_counts_the_artifact_vocabulary(tmp_path):
+    """판정 근거는 아티팩트에서 유도된다 — 새 계약 필드 없이 정확한 행 수가 나온다."""
+    model = load_award_rate_gbm_model(str(_thin_category_artifact(tmp_path)))
+    assert model.category_training_rows("construction") == 200
+    assert model.category_training_rows(_THIN_CATEGORY) == _THIN_CATEGORY_ROWS
+    assert model.category_training_rows("goods") == 0
+    assert model.category_training_rows(None) == 0
+
+
+def test_unseen_category_makes_the_predictor_unavailable(gbm_enabled):
+    """학습 코퍼스에 없던 공종(goods)에는 답하지 않는다 — historical 로 폴백한다."""
+    availability = AwardRateGbmPredictor().check_availability(_context(category="goods"))
+    assert not availability.available
+    assert "never trained on category 'goods'" in availability.reason
+    # 무엇이 없어서 못 냈는지가 사유에 남는다(운영자 정직성).
+    assert "other categories' rows" in availability.reason
+
+
+def test_learned_category_stays_available(gbm_enabled):
+    """가드가 정상 공종까지 막지 않는다 — 대조군이 없으면 위 단언은 무의미하다."""
+    availability = AwardRateGbmPredictor().check_availability(
+        _context(category="construction")
+    )
+    assert availability.available
+    assert availability.reason is None
+
+
+def test_thin_category_is_refused_with_its_own_reason(tmp_path, monkeypatch):
+    """표본이 임계 미만인 공종(general 6행)도 막고, 사유가 미학습과 구분된다."""
+    monkeypatch.setattr(settings, "PRICE_PREDICTION_ENABLE_EXPERIMENTAL_PREDICTORS", True)
+    monkeypatch.setattr(
+        settings,
+        "PRICE_PREDICTION_AWARD_RATE_GBM_MODEL_PATH",
+        str(_thin_category_artifact(tmp_path)),
+    )
+    availability = AwardRateGbmPredictor().check_availability(
+        _context(category=_THIN_CATEGORY, agency_name="얕은기관")
+    )
+    assert not availability.available
+    assert f"only {_THIN_CATEGORY_ROWS} training row(s)" in availability.reason
+    assert "never trained" not in availability.reason
+
+
+def test_unlearned_category_refuses_on_the_direct_predict_path_too(gbm_enabled):
+    """게이트를 지나지 않는 직접 호출도 막힌다 — 판정이 한 지점이라 둘이 갈리지 않는다."""
+    with pytest.raises(ValueError, match="never trained on category 'goods'"):
+        AwardRateGbmPredictor().predict(_context(category="goods"))
+
+
+def test_unseen_category_falls_back_to_historical_through_predict_price(
+    gbm_enabled, monkeypatch
+):
+    """파이프라인 통합: 선호를 켜도 goods 공고는 historical 이 답하고 사유가 남는다."""
+    monkeypatch.setattr(
+        settings, "PRICE_PREDICTION_PREFERRED_PREDICTOR", "award_rate_gbm"
+    )
+    prediction = predict_price(
+        budget=_BASE_AMOUNT, category="goods", description="물품 구매", agency_name="시청"
+    )
+    assert prediction["predictor_name"] != "award_rate_gbm"
+    assert "never trained on category 'goods'" in str(prediction["fallback_reason"])
+
+
+def test_unlearned_category_guard_mutant_proof(gbm_enabled, monkeypatch):
+    """가드를 무력화하면 모델이 **본 적 없는 goods 에 투찰율을 낸다** — 가드가 실체다.
+
+    이 단언이 없으면 위 거부 테스트들은 "원래 못 내는 것"을 재는 것일 수도 있다. 여기서
+    판정 근거만 뒤집어(공종 행 수를 크게) 예측이 실제로 나온다는 것을 보이면, 거부가
+    가드 때문이었음이 증명된다.
+    """
+    from app.domain.award_rate_features import AwardRateFeatureSpace
+
+    monkeypatch.setattr(
+        AwardRateFeatureSpace, "category_training_rows", lambda self, category: 10_000
+    )
+    availability = AwardRateGbmPredictor().check_availability(_context(category="goods"))
+    assert availability.available
+
+    mutant = AwardRateGbmPredictor().predict(_context(category="goods"))
+    # 배운 적 없는 공종인데 그럴듯한 투찰율이 나온다 — 이것이 가드가 막는 사고다.
+    assert 0.5 < mutant.predicted_bid_rate < 1.0
+    print(
+        f"\n[MUTANT] guard disabled -> goods available={availability.available} "
+        f"predicted_bid_rate={mutant.predicted_bid_rate:.5f} "
+        f"pricing_mode={mutant.pricing_mode}"
+    )
+
+
 def test_artifact_with_a_different_feature_set_is_rejected(tmp_path):
     """다른 피처 공간으로 학습된 부스터는 예외 없이 좌표만 어긋난다 — fail-closed."""
     artifact = train_award_rate_gbm(_training_rows(), folds=3)

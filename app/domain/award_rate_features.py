@@ -157,6 +157,21 @@ class AgencyTargetEncoding:
             self, "category_means", MappingProxyType(dict(self.category_means))
         )
 
+    def category_sample_count(self, category: str) -> int:
+        """이 공종을 뒷받침한 학습 표본 수. 어휘에 없으면 ``0``.
+
+        아티팩트에 이미 실려 있는 것에서 **유도**한다 — ``agency_means`` 의 키가
+        (기관, 공종)이고 값이 (수축 평균, 관측 수)라, 한 공종에 대해 기관을 가로질러
+        더하면 그 공종의 관측 수가 정확히 나온다(집계 시 모든 관측이 기관 키를 갖는다 —
+        기관이 비어 있어도 빈 문자열 키로 계수된다). 새 아티팩트 필드를 만들지 않은
+        이유가 이것이다: 계약을 늘리지 않으면 기존 산출물도 그대로 판정할 수 있다.
+        """
+        return sum(
+            count
+            for (_agency, entry_category), (_mean, count) in self.agency_means.items()
+            if entry_category == category
+        )
+
     def encode(self, *, agency: str, category: str) -> tuple[float, int]:
         """(수축된 평균, 그 평균을 뒷받침한 기관 표본 수).
 
@@ -182,6 +197,22 @@ class AwardRateFeatureSpace:
     categories: tuple[str, ...]
     denominator_sources: tuple[str, ...]
     agency_encoding: AgencyTargetEncoding
+
+    def category_training_rows(self, category: str | None) -> int:
+        """이 공종을 배운 학습 행 수 — 서빙 가용성 판정의 **단일 근거**.
+
+        "본 적 없다"(0)와 "너무 얕다"(작은 양수)를 **한 수**로 답한다. 두 상태는 운영자에게
+        는 다른 사실이지만(호출부가 문구를 나눈다) 판정 규칙은 하나여야 한다 — 규칙을 둘로
+        나누면 임계가 두 곳에서 갈릴 수 있다.
+
+        어휘에 없는 공종이 위험한 이유는 예외가 나지 않기 때문이다: ``build_row`` 가
+        :data:`UNKNOWN_CATEGORY_CODE` 를 내고 LightGBM 은 그것을 결측으로 다뤄, 모델은
+        **다른 공종의 행으로 학습한 잎**을 태워 그럴듯한 투찰율을 낸다. 배운 적 없는
+        공종에 대해 자신 있게 답하는 셈이라 정직 명세(§2) 위반이고 가격 사고다.
+        """
+        return self.agency_encoding.category_sample_count(
+            normalize_feature_key(category)
+        )
 
     def build_row(
         self,
