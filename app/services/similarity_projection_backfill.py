@@ -170,6 +170,29 @@ def _needs_projection(
     )
 
 
+def _staleness_first_order(snapshot) -> tuple[ColumnElement, ColumnElement]:
+    """Oldest projection first, so a bounded batch rate bounds staleness.
+
+    Ordering by ``Project.id`` starves instead. The candidate set is larger than
+    one refresh cycle's throughput, and a target that was just refreshed becomes a
+    candidate again long before the pointer would reach the end — so an id-ordered
+    scan keeps re-serving the same low-id head and never reaches the tail. Those
+    tail rows are the *newest* notices: they get one projection when their
+    embedding lands, go stale at the max age, and no pipeline ever returns to
+    them. That is the permanently-empty panel this policy exists to prevent, and
+    the operator hits it on exactly the notices they are still able to bid on.
+
+    Oldest-first turns the batch rate into a rotation: every target is revisited
+    every ``active_targets / staging_rate`` hours, which is what makes the maximum
+    snapshot age a bound rather than an aspiration.
+
+    Targets with no current projection sort first (``NULLS FIRST``) — they have no
+    projection at all, so they are strictly more urgent than any stale one.
+    PostgreSQL orders NULLs last in ``ASC`` by default, so this must be explicit.
+    """
+    return (snapshot.computed_at.asc().nullsfirst(), Project.id.asc())
+
+
 def _backfill_candidates(
     db,
     read_model,
@@ -198,7 +221,7 @@ def _backfill_candidates(
                 snapshot, edge_counts, corpus_embedding_count, policy
             ),
         )
-        .order_by(Project.id.asc())
+        .order_by(*_staleness_first_order(snapshot))
         .limit(limit)
         .all()
     )
