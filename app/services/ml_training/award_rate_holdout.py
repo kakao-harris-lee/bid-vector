@@ -21,13 +21,22 @@ GBM 이 그것을 못 넘으면 부스팅은 값을 더하지 못한 것이다.
 **편향과 잔차 표준편차를 나눠** 보고한다: 편향이 줄어 좋아 보이는 것과 모양이 좋아진
 것을 구별할 수 있어야 판단이 흔들리지 않는다.
 
-유의성은 제곱오차 차이의 대응 t 통계량이다(음수면 앞 모델이 낫다). 표본이 수천이라
-정규근사가 성립하고, 같은 홀드아웃 행을 두 모델이 공유하므로 대응 검정이 맞다.
+유의성은 제곱오차 차이의 대응 t 통계량이다(음수면 앞 모델이 낫다). 같은 홀드아웃 행을 두
+모델이 공유하므로 대응 검정이 맞고, 정규근사가 성립할 만큼의 표본은 창 선택 정책
+(:data:`~app.services.ml_training.award_rate_windows.GATE_MIN_EVALUATION_ROWS`)이 보장한다.
+
+평가 구간은 **선언된 창**이다 (Phase 2c)
+----------------------------------------
+이 커널은 창 하나(``[start, end)``)를 받아 그 안에서만 잰다. 창을 어떻게 고르는지는
+:mod:`app.services.ml_training.award_rate_windows` 의 정책이고(성숙도 embargo + 표본 하한),
+여기서는 **그 창이 곧 cutoff** 다: 학습은 ``opened_at < window.start``, 평가는 창 안.
+비율 분할이 시간에 몰린 코퍼스에서 같은 구간으로 붕괴하던 문제와, 경계 동시각 행이 GBM
+학습에만 새던 문제가 이 규칙 하나로 함께 닫힌다.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
@@ -35,6 +44,7 @@ from typing import Final
 import numpy as np
 from pydantic import Field
 
+from app.domain.settlement_maturity import MaturityWindow
 from app.schemas._base import StrictModel
 from app.services.ml_training.award_rate_gbm import (
     AwardRateTrainingRow,
@@ -42,116 +52,59 @@ from app.services.ml_training.award_rate_gbm import (
     DEFAULT_TRAINING_SEED,
     train_award_rate_gbm,
 )
-from app.services.synthetic_experiment import _budget_band_key
+from app.services.ml_training.award_rate_scoring import (
+    BASELINE_SPECS,
+    GATE_BASELINE_NAME,
+    ModelScore,
+    SegmentScore,
+    group_mean_predictions,
+    paired_t,
+    rmse_bias_std,
+    segment_scores,
+)
+from app.services.ml_training.award_rate_windows import GATE_STRATUM, rows_in_window
 
 __all__ = [
     "GATE_BASELINE_NAME",
     "GATE_MODEL_NAME",
+    "GATE_STRATUM",
     "AwardRateHoldoutReport",
     "ModelScore",
     "SegmentScore",
     "evaluate_award_rate_holdout",
 ]
 
-# 게이트의 비교 대상 베이스라인 이름(선언 — 리포트와 판정이 같은 문자열을 본다).
-GATE_BASELINE_NAME: Final[str] = "category_x_band"
 
 # 게이트에 오르는 GBM 변형 이름. 나란히 재는 보수 변형(``gbm_gate_stratum_only``)은
 # 참고용이고, 판정은 이 이름의 성적으로만 한다.
 GATE_MODEL_NAME: Final[str] = "gbm_all_strata"
 
-# 평가 층. 서빙이 마주하는 축이며, 사전 선언된 베이스라인 표도 이 층에서 측정됐다.
-GATE_STRATUM: Final[str] = "clean-base"
-
-# 발주기관 그룹 평균 베이스라인의 최소 표본. 이보다 얕은 기관은 전역 평균으로 떨어진다
-# — 얕은 기관을 자기 평균으로 점추정하면 베이스라인이 부당하게 나빠져 GBM 이 이기기
-# 쉬워진다(비교를 유리하게 만들지 않기 위한 값).
-AGENCY_BASELINE_MIN_COUNT: Final[int] = 10
-
-# 게이트의 유의성 임계(대응 t 의 절대값). 홀드아웃이 수천 행이라 정규근사가 성립하고,
-# 2.58 은 양측 1% 수준이다. 사후에 느슨하게 만들지 않는다.
+# 게이트의 유의성 임계(대응 t 의 절대값). 2.58 은 양측 1% 수준이다. 사후에 느슨하게
+# 만들지 않는다.
 GATE_PAIRED_T_THRESHOLD: Final[float] = 2.58
 
 
-@dataclass(frozen=True)
-class _BaselineSpec:
-    """그룹 평균 베이스라인 하나 — 이름, 그룹 키, 최소 표본(§4.5-2 룩업 선언)."""
+class AwardRateHoldoutReport(StrictModel):
+    """한 평가 창에서의 전체 비교 + 게이트 판정.
 
-    name: str
-    key: Callable[[AwardRateTrainingRow], str]
-    min_count: int = 1
-
-
-# 베이스라인 표. 새 축을 비교하려면 코드 분기가 아니라 여기 한 줄을 추가한다.
-_BASELINE_SPECS: Final[tuple[_BaselineSpec, ...]] = (
-    _BaselineSpec(name="global_mean", key=lambda row: ""),
-    _BaselineSpec(name="category", key=lambda row: row.category),
-    _BaselineSpec(name="amount_band", key=lambda row: _budget_band_key(row.amount)),
-    _BaselineSpec(
-        name=GATE_BASELINE_NAME,
-        key=lambda row: f"{row.category}|{_budget_band_key(row.amount)}",
-    ),
-    _BaselineSpec(
-        name="agency",
-        key=lambda row: row.agency,
-        min_count=AGENCY_BASELINE_MIN_COUNT,
-    ),
-)
-
-
-# 홀드아웃을 쪼개 볼 축 표(§4.5-2 선언). 새 축은 코드 분기가 아니라 여기 한 줄이다.
-# 공종이 첫 줄인 이유: 승격을 막은 지표가 전체 RMSE 가 아니라 **공종별 편향**이었다.
-#
-# ``published_floor`` 은 피처가 아니라 **진단 축**이다. 이 축을 리포트에 싣는 목적은 두
-# 층(하한 공시/미공시)의 학습·홀드아웃 평균이 같은 것을 가리키는지 보는 것이고, 지금은
-# 어긋나 있다(미공시 층 학습 0.9089 vs 홀드아웃 0.9310 — 백필 커버리지가 시간에 기울어
-# 있기 때문이다. 상세는 ``AwardRateTrainingRow.published_floor_rate`` docstring).
-# 이 계측이 그 어긋남을 잡아냈고, 평평해졌는지 확인하는 것도 같은 계측이다.
-_SEGMENT_SPECS: Final[tuple[tuple[str, Callable[[AwardRateTrainingRow], str]], ...]] = (
-    ("category", lambda row: row.category or "unknown"),
-    (
-        "published_floor",
-        lambda row: "present" if row.published_floor_rate is not None else "absent",
-    ),
-)
-
-
-class ModelScore(StrictModel):
-    """한 모델의 홀드아웃 성적. RMSE 만 보면 편향과 모양이 구별되지 않는다."""
-
-    name: str
-    rmse: float
-    bias: float
-    residual_std: float
-    test_coverage: float = 1.0
-    """그룹 평균이 자기 그룹으로 예측한 홀드아웃 비율(나머지는 전역 평균 폴백)."""
-
-
-class SegmentScore(StrictModel):
-    """홀드아웃 한 세그먼트에서 베이스라인과 게이트 모델을 나란히 잰 성적.
-
-    전체 RMSE 하나로는 "어디가 나빠서 못 쓰는가"에 답할 수 없다. 승격 판단을 막은 신호가
-    바로 공종별 **편향**이었으므로(전체 개선과 공존한다), 그 축을 리포트가 직접 싣는다.
-    세그먼트 예측은 전체 예측 벡터를 **자르기만** 한 것이다 — 세그먼트별로 다시 학습하지
-    않으므로 여기 수치는 실제로 나간 예측의 부분집합이다.
+    창의 경계와 성숙도를 함께 싣는 이유: 이 수치를 나중에 다시 읽는 사람이 **무엇 위에서
+    나온 수치인지**를 리포트만으로 알 수 있어야 한다. 이번 트랙 전체가 그게 없어서 생긴
+    문제다(비율 origin 다섯이 같은 5일 구간으로 붕괴한 것을 리포트가 드러내지 못했다).
     """
 
-    axis: str
-    segment: str
-    row_count: int
-    baseline_rmse: float
-    baseline_bias: float
-    model_rmse: float
-    model_bias: float
-    model_residual_std: float
-
-
-class AwardRateHoldoutReport(StrictModel):
-    """한 cutoff 에서의 전체 비교 + 게이트 판정."""
-
+    window_start: str
+    """평가 창의 시작(포함). 학습 범위의 상한이기도 하다."""
+    window_end: str
+    """평가 창의 끝(제외)."""
+    window_maturity: float
+    """이 창의 정산 비율 — 그 구간에 개찰된 공고 중 결과를 아는 비율."""
+    window_opened_count: int
+    """창의 성숙도 분모(개찰된 공고 수). 비율만으로는 4건과 4,000건이 구별되지 않는다."""
+    window_settled_count: int
+    """창의 성숙도 분자(결과를 아는 공고 수)."""
     cutoff_at: str
-    """홀드아웃 **첫 행**의 개찰 시각. 학습 범위는 이 시각 미만이고, 같은 시각의 행은
-    학습측이라도 제외된다(경계 동시각 누수 차단 — :func:`_split_out_of_time`)."""
+    """학습 범위의 상한 = ``window_start``. 학습은 이 시각 **미만**이고 평가는 이 시각
+    이상이라, 경계 동시각 행이 양쪽에 동시에 들어가지 않는다."""
     train_row_count: int
     gate_train_row_count: int
     gate_test_row_count: int
@@ -161,7 +114,7 @@ class AwardRateHoldoutReport(StrictModel):
     baselines: list[ModelScore] = Field(default_factory=list)
     models: list[ModelScore] = Field(default_factory=list)
     segments: list[SegmentScore] = Field(default_factory=list)
-    """게이트 베이스라인 vs 게이트 모델을 축별로 쪼갠 성적(:data:`_SEGMENT_SPECS`)."""
+    """게이트 베이스라인 vs 게이트 모델을 축별로 쪼갠 성적(:data:`~app.services.ml_training.award_rate_scoring.SEGMENT_SPECS`)."""
     gate_baseline_rmse: float
     gate_model_rmse: float
     gate_improvement_ratio: float
@@ -169,50 +122,6 @@ class AwardRateHoldoutReport(StrictModel):
     gate_paired_t: float
     """제곱오차 차이(모델 − 베이스라인)의 대응 t. 음수면 모델이 낫다."""
     gate_passed: bool
-
-
-def _rmse_bias_std(predictions: np.ndarray, targets: np.ndarray) -> tuple[float, float, float]:
-    """(RMSE, 편향, 잔차 표준편차) 한 벌 — 세 지표가 같은 잔차에서 나오게 한다."""
-    residuals = predictions - targets
-    return (
-        float(np.sqrt(np.mean(residuals**2))),
-        float(np.mean(residuals)),
-        float(np.std(residuals, ddof=1)) if residuals.size > 1 else 0.0,
-    )
-
-
-def _paired_t(a: np.ndarray, b: np.ndarray, targets: np.ndarray) -> float:
-    """제곱오차 차이(a − b)의 대응 t. 음수면 a 가 낫다. 차이가 0이면 0."""
-    differences = ((a - targets) ** 2) - ((b - targets) ** 2)
-    deviation = float(np.std(differences, ddof=1)) if differences.size > 1 else 0.0
-    if deviation <= 0.0:
-        return 0.0
-    return float(np.mean(differences) / (deviation / np.sqrt(differences.size)))
-
-
-def _group_mean_predictions(
-    spec: _BaselineSpec,
-    train_rows: Sequence[AwardRateTrainingRow],
-    test_rows: Sequence[AwardRateTrainingRow],
-    *,
-    global_mean: float,
-) -> tuple[np.ndarray, float]:
-    """그룹 평균 예측과 그 그룹으로 실제 예측된 홀드아웃 비율."""
-    totals: dict[str, tuple[float, int]] = {}
-    for row in train_rows:
-        total, count = totals.get(spec.key(row), (0.0, 0))
-        totals[spec.key(row)] = (total + row.value, count + 1)
-
-    predictions: list[float] = []
-    covered = 0
-    for row in test_rows:
-        total, count = totals.get(spec.key(row), (0.0, 0))
-        if count >= spec.min_count:
-            predictions.append(total / count)
-            covered += 1
-        else:
-            predictions.append(global_mean)
-    return np.array(predictions, dtype=float), covered / len(test_rows)
 
 
 def _gbm_predictions(
@@ -253,56 +162,62 @@ def _gbm_predictions(
 
 @dataclass(frozen=True)
 class _HoldoutSplit:
-    """평가 층 기준 out-of-time 분할 한 벌.
+    """평가 창 하나에 대한 out-of-time 분할 한 벌.
 
     ``gate_train``/``gate_test`` 는 평가 층(``clean-base``)만이고, ``train_rows`` 는
-    ``cutoff_at`` **미만**의 모든 층이다. 두 범위를 한 값으로 묶어 두면 이후 단계가 어느
+    ``window.start`` **미만**의 모든 층이다. 두 범위를 한 값으로 묶어 두면 이후 단계가 어느
     범위를 쓰는지 인자에서 드러나고, 베이스라인이 실수로 전 층 학습 구간을 보는 일이 없다.
-
-    ``cutoff_at`` 은 **홀드아웃 첫 행의 개찰 시각**이다(학습 마지막 행의 시각이 아니다) —
-    :func:`_split_out_of_time` 의 "경계 동시각" 절 참조.
     """
 
+    window: MaturityWindow
     gate_train: list[AwardRateTrainingRow]
     gate_test: list[AwardRateTrainingRow]
     train_rows: list[AwardRateTrainingRow]
-    cutoff_at: datetime
+
+    @property
+    def cutoff_at(self) -> datetime:
+        """학습 범위의 상한 = 평가 창의 시작. **선언된 시각이지 관측값이 아니다.**"""
+        return self.window.start
 
 
-def _split_out_of_time(
-    rows: Sequence[AwardRateTrainingRow], *, train_fraction: float
+def _split_at_window(
+    rows: Sequence[AwardRateTrainingRow], window: MaturityWindow
 ) -> _HoldoutSplit:
-    """평가 층의 ``train_fraction`` 지점에서 잘라 out-of-time 분할을 만든다.
+    """평가 창 ``[start, end)`` 를 경계로 out-of-time 분할을 만든다.
 
     경계 동시각(tie) 규칙
     ---------------------
-    분할 자체는 **인덱스**인데 학습 범위는 **시각**으로 거른다. 이 둘이 어긋나면 경계와
-    같은 ``opened_at`` 을 가진 홀드아웃 행이 GBM 학습에도 들어간다(``<= gate_train[-1]``
-    규칙의 결함). 베이스라인은 ``gate_train`` 만 보므로 그 누수는 **GBM 에만 붙는 비대칭
-    이득**이 되어 게이트가 재는 것이 실력인지 누수인지 구별되지 않는다.
+    학습은 ``opened_at < window.start``, 평가는 ``window.start <= opened_at < window.end``
+    다. 두 범위가 같은 시각을 공유하지 않으므로 경계와 같은 ``opened_at`` 을 가진 홀드아웃
+    행이 학습에 새지 않는다. 이 누수가 위험한 이유는 크기가 아니라 **비대칭**이다:
+    베이스라인은 ``gate_train`` 만 보므로 누수는 GBM 에만 붙는 이득이 되고, 그러면 게이트가
+    재는 것이 실력인지 누수인지 구별되지 않는다.
 
-    그래서 학습 범위를 **홀드아웃 첫 행의 시각 미만**으로 자른다. 같은 시각의 학습측 행도
-    함께 빠지는데, 그 방향이 안전하다: 후보에게 불리한 쪽이지 유리한 쪽이 아니다.
+    이전 구현은 분할을 **인덱스**로 하고 학습 범위만 시각으로 걸렀기 때문에 이 성질을
+    별도 규칙으로 지켜야 했다. 창 경계에서는 두 범위가 같은 축(시각)이라 규칙이 곧 정의다.
 
     Raises:
         ValueError: 평가 층의 학습/홀드아웃 어느 한쪽이라도 비었을 때. 조용히 0건을
             평가하면 게이트가 "통과"로 보일 수 있으므로 크게 실패한다.
     """
     ordered = sorted(rows, key=lambda row: row.opened_at)
-    stratum = [row for row in ordered if row.denominator_source == GATE_STRATUM]
-    split_index = int(len(stratum) * train_fraction)
-    gate_train, gate_test = stratum[:split_index], stratum[split_index:]
+    gate_test = rows_in_window(ordered, window)
+    gate_train = [
+        row
+        for row in ordered
+        if row.denominator_source == GATE_STRATUM and row.opened_at < window.start
+    ]
     if not gate_train or not gate_test:
         raise ValueError(
             f"Award-rate holdout needs rows on both sides of the split "
-            f"(stratum={len(stratum)}, fraction={train_fraction})."
+            f"(window={window.start.isoformat()}, train={len(gate_train)}, "
+            f"test={len(gate_test)})."
         )
-    cutoff_at = gate_test[0].opened_at
     return _HoldoutSplit(
+        window=window,
         gate_train=gate_train,
         gate_test=gate_test,
-        train_rows=[row for row in ordered if row.opened_at < cutoff_at],
-        cutoff_at=cutoff_at,
+        train_rows=[row for row in ordered if row.opened_at < window.start],
     )
 
 
@@ -317,11 +232,11 @@ def _baseline_scores(
     """
     scores: list[ModelScore] = []
     gate_predictions: np.ndarray | None = None
-    for spec in _BASELINE_SPECS:
-        predictions, coverage = _group_mean_predictions(
+    for spec in BASELINE_SPECS:
+        predictions, coverage = group_mean_predictions(
             spec, split.gate_train, split.gate_test, global_mean=global_mean
         )
-        rmse, bias, residual_std = _rmse_bias_std(predictions, targets)
+        rmse, bias, residual_std = rmse_bias_std(predictions, targets)
         scores.append(
             ModelScore(
                 name=spec.name,
@@ -364,7 +279,7 @@ def _model_scores(
             seed=seed,
             sample_scope=sample_scope,
         )
-        rmse, bias, residual_std = _rmse_bias_std(predictions, targets)
+        rmse, bias, residual_std = rmse_bias_std(predictions, targets)
         scores.append(
             ModelScore(name=name, rmse=rmse, bias=bias, residual_std=residual_std)
         )
@@ -374,42 +289,6 @@ def _model_scores(
         raise ValueError("Gate model produced no predictions.")
     return scores, gate_predictions
 
-
-def _segment_scores(
-    rows: Sequence[AwardRateTrainingRow],
-    targets: np.ndarray,
-    *,
-    baseline_predictions: np.ndarray,
-    model_predictions: np.ndarray,
-) -> list[SegmentScore]:
-    """선언된 축마다 홀드아웃을 쪼개 두 예측을 나란히 채점한다(재학습 없음)."""
-    scores: list[SegmentScore] = []
-    for axis, key in _SEGMENT_SPECS:
-        groups: dict[str, list[int]] = {}
-        for index, row in enumerate(rows):
-            groups.setdefault(key(row), []).append(index)
-        for segment, indices in sorted(groups.items()):
-            selector = np.array(indices, dtype=int)
-            segment_targets = targets[selector]
-            baseline_rmse, baseline_bias, _ = _rmse_bias_std(
-                baseline_predictions[selector], segment_targets
-            )
-            model_rmse, model_bias, model_std = _rmse_bias_std(
-                model_predictions[selector], segment_targets
-            )
-            scores.append(
-                SegmentScore(
-                    axis=axis,
-                    segment=segment,
-                    row_count=len(indices),
-                    baseline_rmse=baseline_rmse,
-                    baseline_bias=baseline_bias,
-                    model_rmse=model_rmse,
-                    model_bias=model_bias,
-                    model_residual_std=model_std,
-                )
-            )
-    return scores
 
 
 def _named_rmse(scores: Sequence[ModelScore], name: str) -> float:
@@ -432,8 +311,15 @@ def _build_report(
 
     gate_baseline_rmse = _named_rmse(baselines, GATE_BASELINE_NAME)
     gate_model_rmse = _named_rmse(models, GATE_MODEL_NAME)
-    paired_t = _paired_t(gate_model_predictions, gate_baseline_predictions, targets)
+    gate_paired_t = paired_t(
+        gate_model_predictions, gate_baseline_predictions, targets
+    )
     return AwardRateHoldoutReport(
+        window_start=split.window.start.isoformat(),
+        window_end=split.window.end.isoformat(),
+        window_maturity=split.window.maturity,
+        window_opened_count=split.window.opened_count,
+        window_settled_count=split.window.settled_count,
         cutoff_at=split.cutoff_at.isoformat(),
         train_row_count=len(split.train_rows),
         gate_train_row_count=len(split.gate_train),
@@ -443,7 +329,7 @@ def _build_report(
         test_std=float(np.std(targets, ddof=1)) if targets.size > 1 else 0.0,
         baselines=baselines,
         models=models,
-        segments=_segment_scores(
+        segments=segment_scores(
             split.gate_test,
             targets,
             baseline_predictions=gate_baseline_predictions,
@@ -456,33 +342,34 @@ def _build_report(
             if gate_baseline_rmse > 0
             else 0.0
         ),
-        gate_paired_t=paired_t,
+        gate_paired_t=gate_paired_t,
         gate_passed=gate_model_rmse < gate_baseline_rmse
-        and paired_t < -GATE_PAIRED_T_THRESHOLD,
+        and gate_paired_t < -GATE_PAIRED_T_THRESHOLD,
     )
 
 
 def evaluate_award_rate_holdout(
     rows: Sequence[AwardRateTrainingRow],
     *,
+    window: MaturityWindow,
     sample_scope: str,
-    train_fraction: float = 0.70,
     folds: int = DEFAULT_ENCODING_FOLDS,
     seed: int = DEFAULT_TRAINING_SEED,
 ) -> AwardRateHoldoutReport:
-    """out-of-time 홀드아웃에서 베이스라인들과 GBM 두 변형을 비교한다.
+    """선언된 평가 창에서 베이스라인들과 GBM 두 변형을 비교한다.
 
-    분할은 **평가 층**(``clean-base``)의 행 수 기준이다. 그 층의 ``train_fraction``
-    지점에서 자르고, 학습에는 **홀드아웃 첫 행의 개찰 시각 미만**인 모든 ``ok`` 행을
-    쓴다(두 층 모두 — 층 구분은 통제 변수로 들어간다). 경계와 같은 시각의 행은 학습측
-    이라도 제외된다(:func:`_split_out_of_time` 의 tie 규칙).
+    홀드아웃은 **평가 층**(``clean-base``)의 행 중 창 안에 개찰된 것이고, 학습에는 창 시작
+    **미만**인 모든 ``ok`` 행을 쓴다(두 층 모두 — 층 구분은 통제 변수로 들어간다).
 
     Args:
         rows: 개찰 시각 오름차순 학습 행(로더가 이미 정렬해 준다).
+        window: 평가 창과 그 성숙도. 창 선택은 이 커널의 책임이 아니라 정책이다
+            (:func:`~app.services.ml_training.award_rate_windows.plan_evaluation_windows`)
+            — 여기서 고르면 "무엇을 재는가"와 "어디서 재는가"가 한 함수에 섞여, 창을
+            바꾸면 판정식도 같이 흔들린다.
         sample_scope: 이 행들의 표본 정의. 중간 아티팩트가 자기 코퍼스를 정직하게 신고하게
             하려고 받는다 — 이 경로의 아티팩트는 디스크에 남지 않지만, 계약을 통과해야
             하는 것은 서빙과 같으므로 여기서만 예외를 두면 그 round-trip 이 느슨해진다.
-        train_fraction: 평가 층에서 학습 구간이 차지할 비율.
         folds: out-of-fold 인코딩·잔차의 분할 수.
         seed: 재현성 seed.
 
@@ -493,7 +380,7 @@ def evaluate_award_rate_holdout(
         ValueError: 평가 층의 학습/홀드아웃 어느 한쪽이라도 비었을 때.
     """
     return _build_report(
-        _split_out_of_time(rows, train_fraction=train_fraction),
+        _split_at_window(rows, window),
         folds=folds,
         seed=seed,
         sample_scope=sample_scope,
