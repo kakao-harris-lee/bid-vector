@@ -82,6 +82,17 @@ class AssessmentPosterior:
     level_weights: dict[str, float]
 
 
+def pseudo_count_weight(sample_count: int, prior_strength: float) -> float:
+    """자기 가중치 ``n/(n+κ)`` — pseudo-count 수축 강도의 단일 출처.
+
+    수축 대상이 **평균**이면 :func:`shrink_toward` 가, **분포**(CDF 혼합)면
+    :func:`app.domain.award_margin_distribution.shrink_margin_distribution` 이 이
+    가중치를 쓴다. 섞는 대상이 달라도 "표본이 κ 만큼 쌓여야 자기 주장이 절반"이라는
+    규칙은 하나여야 하므로 여기서만 정의한다(§4.5-8).
+    """
+    return sample_count / (sample_count + prior_strength)
+
+
 def shrink_toward(
     observed_mean: float,
     sample_count: int,
@@ -90,7 +101,7 @@ def shrink_toward(
     prior_strength: float,
 ) -> tuple[float, float]:
     """pseudo-count 수축 한 단계: ``(n·x̄ + κ·μ)/(n + κ)`` 와 자기 가중치 ``n/(n+κ)``."""
-    weight = sample_count / (sample_count + prior_strength)
+    weight = pseudo_count_weight(sample_count, prior_strength)
     return (observed_mean * weight) + (prior_mean * (1.0 - weight)), weight
 
 

@@ -144,7 +144,7 @@ WW_emp(b) = (1/N) Σ_i 1[ φ_i ≤ b ≤ ω_i ]        (셀 내, b·B 는 rate �
 
 ### 5.3 §4.5/§4.7 배치
 
-- 순수 커널은 **2모듈 분할**(각 500줄 한도, PR1 슬라이스): `app/domain/award_margin_distribution.py`(Δ축 — 마진 추출·ECDF/경계KDE·수축)와 `app/domain/award_landing_distribution.py`(합성축 — Phase 1 `F_a` 와 `WW(b)`·`survival_at_least` 합성). **I/O 0 순수 함수**, stdlib+numpy, 값표 테스트, Phase 1 커널(`reserve_draw_distribution`/`assessment_shrinkage`)과 같은 mypy strict 아일랜드(pyproject override 등재 — n1).
+- 순수 커널은 **4모듈 분할**(각 500줄 한도, PR1 슬라이스): `app/domain/award_margin_distribution.py`(Δ축 — 마진 추출·ECDF/경계KDE·수축), `app/domain/award_landing_distribution.py`(합성축 — Phase 1 `F_a` 와 `WW(b)`·`survival_at_least` 합성·실격확률·f-재기준), `app/domain/award_landing_curve.py`(판정축 — 격자·동률 규칙·α-제약 argmax·평탄/다봉 진단), `app/domain/award_landing_curve_builders.py`(조립 — 세 층의 곡선 빌더). 의존은 **Δ축 → 합성축 → 조립 단방향**이고, 판정축은 점 추정량에 의존하지 않는 **곡선 대수**라 조립이 판정축과 합성축을 함께 소비한다. 초안은 2모듈이었으나 α-제약(§7)·f-재기준(식 3)·동률 규칙이 들어가며 합성축이, 이어서 비단조 계약 검증·seam 선언이 들어가며 판정축이 각각 500줄 한도를 넘어 두 번 분리했다. EV 층(옵션 B)은 판정축 확장이 아니라 별도 모듈(`award_landing_ev.py`)로 간다 — 목적함수 교체이지 격자·동률·진단 기계의 확장이 아니다. **I/O 0 순수 함수**, **stdlib-only**(numpy 미사용 — 그 덕에 strict 아일랜드에 untyped import 가 없다), 값표 테스트, Phase 1 커널(`reserve_draw_distribution`/`assessment_shrinkage`)과 같은 mypy strict 아일랜드(pyproject override 등재 — n1).
 - 매직값(κ, 대역폭, 스파이크 ε, 셀 경계, MDE 임계)은 Settings/constants 선언. 셀 정책은 선언 데이터.
 - 원가율 `c` 등 운영자 튜닝값은 `OperatorStrategy` 필드류 선언 데이터(§4.5-3).
 
@@ -196,6 +196,8 @@ WW_fallback(b; f_tgt) = (1/N) Σ_i 1[ a_i ≤ b/f_tgt ] · 1[ Δ_i ≥ b/a_i −
 
 **α-제약이 필요한 이유(M2)**: `WW` 는 실격(하한 미달)과 패찰을 **등가로 취급**하지만 운영자는 아니다(3번째 실투찰이 사정률 추첨 실격 사고). 층 A 실측 — 소박한 `argmax WW_emp` 지점의 실격확률 `P(φ>b)` 는 **공사 32.5%**(argmax 0.89775, n=1,405) / **용역 52.6%**(argmax 0.87825, n=743) 다. 그래서 `b* = argmax_{b: P(φ>b) ≤ α} WW(b)`. **α 조달 절차(NEW-3, 자가당착 해소)**: ① `α` 는 채점 코퍼스가 아니라 **운영자 리스크 허용치**(사업 수치)로 선언한다 — 코퍼스에서 고르면 `GATE_MIN_EVALUATION_ROWS` 사후-산물 교훈을 반복하고, OOS 창 위에서 훑으면 argmin 표 금지(다중비교) 위반이다. ② PR2 는 값을 추천하지 않고 **α↔WW 트레이드오프 곡선만** 보고한다. ③ **PR4 의 OOS 채점 전에 α 를 동결**한다(G8 과 함께 판정). α-제약은 옵션 A 를 깨지 않는 **호환 수정**이다(옵션 B 는 실격 비용을 EV 에 명시적으로 넣는 후속 층).
 
+**α 제약의 방향(PR1 구현 확인)**: `P(φ>b)` 는 `b` 에 **비증가**이므로 실행가능 집합은 상향폐집합 `[b_min(α), ∞)` 이고, α-제약은 착지점을 **위로** 민다(제약이 걸리면 통상 `b* = b_min(α)` — 실측 93%). "보수적 = 낮은 가격"이라는 통상 직관과 **반대**다.
+
 **자기 캘리브레이션 주장 삭제(M3)**: "`argmax` 가 낙찰자 밀집을 재현하므로 내부 검증"은 성립하지 않는다 — 실측 `argmax − median(ω)` 는 공사 **−15.4bp** / 용역 **−36.2bp** 계통 편차이고, 마진이 좁아(median Δ=47bp) 거의 항등식이라 **판별력이 없다**.
 
 **옵션 B 는 `c` 선언 필드 신설 + A 게이트 통과 후 후속.** EV 는 승률×**운영자 선언** 마진의 **조건부 추정**임을 표면에 새긴다(이윤 보장 아님).
@@ -208,7 +210,7 @@ WW_fallback(b; f_tgt) = (1/N) Σ_i 1[ a_i ≤ b/f_tgt ] · 1[ Δ_i ≥ b/a_i −
 
 두 판정문이 지목한 **candidate selector** 가 자연 통합점. 계층적으로 셋 다:
 
-1. **순수 도메인 커널 2모듈**(`award_margin_distribution.py` + `award_landing_distribution.py`): `WW(b)` 곡선·`b*` 계산.
+1. **순수 도메인 커널 4모듈**(`award_margin_distribution.py` + `award_landing_distribution.py` + `award_landing_curve.py` + `award_landing_curve_builders.py`): `WW(b)` 곡선·α-제약 `b*` 계산.
 2. **predictor 키**(`award_landing` 제안) 또는 selector 메타데이터: 곡선을 payload 로 노출하되 **가격을 움직이지 않음**. `AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS` 에 등재 + `.env` 명시 선호로만 실행.
 3. **연속 selector**: 게이트 통과 후에만 `_select_recommended_candidate`(현행 = 항상 base)를 곡선 기반 `b*` 로 대체. 이산 base/conservative/aggressive → 연속 곡선 위 한 점.
 
@@ -250,7 +252,7 @@ Phase 2c 인프라 **재사용**(`award_rate_windows`·`settlement_maturity`·`a
 
 | PR | 내용 | 유형 | 게이트 의존 |
 |---|---|---|---|
-| **PR1** | 순수 커널 **2모듈**(`award_margin_distribution.py` Δ축 / `award_landing_distribution.py` 합성축, 각 500줄 한도) — 마진 추출·ECDF/경계KDE·수축·`F_a` 합성·`survival_at_least`(≥). mypy strict 아일랜드(pyproject). 값표 테스트. **배선 0**. 구현 범위 = 커널 2모듈 + α-제약 argmax API + f-재기준 fallback(식 3) | 코드-only | 없음 |
+| **PR1** | 순수 커널 **4모듈**(`award_margin_distribution.py` Δ축 / `award_landing_distribution.py` 합성축 / `award_landing_curve.py` 판정축 / `award_landing_curve_builders.py` 조립, 각 500줄 한도) — 마진 추출·ECDF/경계KDE·수축·`F_a` 합성·`survival_at_least`(≥)·실격확률·격자·진단. mypy strict 아일랜드(pyproject). 값표 테스트. **배선 0**. 구현 범위 = 커널 4모듈 + α-제약 argmax API + f-재기준 fallback(식 3) | 코드-only | 없음 |
 | **PR2** | 백테스트/리포트: 층 A `WW_emp` + 층 C 합성 셀별 산출. **게시 `f` 로 술어 재계산해 채점**(저장 `_final` 라벨과 직접 대조 금지 — M4 하한 불일치 100%). 품질 사다리 재사용 + `f==1.0` 오염 필터(m1)·`winning_amount/B` 재계산(n5). `corr(a,Δ)`·**`corr(f,Δ)`**(NEW-4)·실격측 `P(φ>b)` 진단 + **α↔WW 트레이드오프 곡선**(값 추천 없음 — NEW-3). reports gitignored | 코드-only | 없음(측정) |
 | **PR3** | predictor 키 `award_landing`(AUTO_PROMOTION_EXCLUDED 등재) + `.env` 선호. 곡선 payload 노출, **recommended=base 불변** | 코드-only | 없음 |
 | **PR4** | 게이트(G1~G8) 통과 부분셀에 한해 연속 `b*` 를 selector 에 배선. group-scoped | **게이트 의존** | §9 전부 — **데이터 성숙 대기**(Phase 2c 처럼 며칠~2주) |
