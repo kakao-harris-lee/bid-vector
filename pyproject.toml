@@ -72,6 +72,15 @@ ignore_errors = true
 # 백필의 SQL 술어와 read model 의 Python 판정이 반드시 같은 답을 내야 하는 규칙이다.
 # 두 렌더링이 갈리면 백필은 "신선하다"며 두고 읽기는 "낡았다"며 비워, 어떤 경로로도
 # 고쳐지지 않는 빈 화면이 남는다).
+# Phase 3 PR1 adds the win-proxy kernels — Δ축(award_margin_distribution: 0 경계 안전
+# 분포 추정, ECDF · 반사 KDE · 계층 수축) · 합성축(award_landing_distribution: Phase 1
+# 사정률 지지집합과 합성한 반사실 WW(b)·실격확률 추정량) · 판정축(award_landing_curve:
+# 격자 · α-제약 argmax · 평탄/다봉 진단) · 조립(award_landing_curve_builders: 세 층의
+# 곡선 빌더). basis 두 축(예정가-basis 마진 / 기초-basis 투찰률)이 한 계산 안에 공존
+# 하고, 섞이면 예외 없이 추천 가격만 조용히 틀리는 계산이라 처음부터 strict 아일랜드로
+# 고정한다. 네 모듈로 나눈 것은 각 500줄 한도(§4.5-4) 때문이며, 의존 방향은
+# Δ축 → 합성축 → 조립 단방향이다(판정축은 점 추정량에 의존하지 않는 곡선 대수라
+# 조립이 판정축과 합성축을 함께 소비한다).
 # These pure-domain modules import no untyped third-party deps, so they get the
 # strict flags with NO error-code relaxation.
 [[tool.mypy.overrides]]
@@ -89,6 +98,10 @@ module = [
     "app.domain.award_rate_label",
     "app.domain.award_rate_features",
     "app.domain.projection_freshness",
+    "app.domain.award_margin_distribution",
+    "app.domain.award_landing_distribution",
+    "app.domain.award_landing_curve",
+    "app.domain.award_landing_curve_builders",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
