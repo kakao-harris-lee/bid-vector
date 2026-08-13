@@ -152,6 +152,16 @@ class ConstrainedOptimum:
     feasible_point_count: int
     disqualification_probability: float | None
     feasible_diagnostics: CurveDiagnostics | None
+    feasible_lower_rate: float | None = None
+    """실행가능 집합의 **하단 좌표** ``b_min(α)`` — 제약이 허용하는 가장 낮은 투찰률.
+
+    소비자는 ``b*`` 와 이 값을 비교해 "제약이 선택을 결정했는가"(binding)를 판정한다.
+    그 좌표를 격자 길이와 ``feasible_point_count`` 로 **역산하게 두면** 실행가능 집합이
+    상향폐집합이라는 성질을 호출부가 다시 가정해야 하는데, 그것은 이 클래스가 이미
+    알고 있는 사실이다. 그래서 좌표를 그대로 실어 보낸다(§4.5-8).
+
+    실행가능 점이 없으면(``BUDGET_INFEASIBLE``) ``None`` 이다.
+    """
 
     @property
     def is_feasible(self) -> bool:
@@ -295,6 +305,7 @@ class WinProxyCurve:
                 alpha,
                 ConstrainedOptimumStatus.DEGENERATE_WIN_PROXY,
                 len(feasible),
+                feasible_lower_rate=self.bid_rates[feasible[0]],
             )
         return ConstrainedOptimum(
             alpha=alpha,
@@ -302,6 +313,7 @@ class WinProxyCurve:
             feasible_point_count=len(feasible),
             disqualification_probability=budget[feasible[chosen]],
             feasible_diagnostics=diagnostics,
+            feasible_lower_rate=self.bid_rates[feasible[0]],
         )
 
     def _restricted_to(self, indices: Sequence[int]) -> WinProxyCurve:
@@ -354,15 +366,26 @@ def _choose_index(indices: Sequence[int], plateau_choice: PlateauChoice) -> int:
 
 
 def _failed_optimum(
-    alpha: float, status: ConstrainedOptimumStatus, feasible_point_count: int
+    alpha: float,
+    status: ConstrainedOptimumStatus,
+    feasible_point_count: int,
+    *,
+    feasible_lower_rate: float | None = None,
 ) -> ConstrainedOptimum:
-    """판정 실패 — 좌표도 진단도 남기지 않는다(부분 결과가 곧 조용한 fallback 이다)."""
+    """판정 실패 — **b\\* 좌표와 진단**은 남기지 않는다(부분 결과가 곧 조용한 fallback).
+
+    ``feasible_lower_rate`` 는 예외다: 그것은 판정 결과가 아니라 **제약이 그린 경계**라,
+    ``DEGENERATE_WIN_PROXY`` 에서 "α 는 만족했는데 그 구간이 어디였나"를 소비자가 볼 수
+    있어야 격자를 넓힐지 α 를 재선언할지 결정할 수 있다. ``BUDGET_INFEASIBLE`` 은
+    실행가능 점 자체가 없으므로 ``None`` 이다.
+    """
     return ConstrainedOptimum(
         alpha=alpha,
         status=status,
         feasible_point_count=feasible_point_count,
         disqualification_probability=None,
         feasible_diagnostics=None,
+        feasible_lower_rate=feasible_lower_rate,
     )
 
 
