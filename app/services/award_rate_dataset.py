@@ -112,13 +112,18 @@ def _candidate_query(
 
 
 def _published_floor_rate(raw: float | None) -> float | None:
-    """저장된 공시 낙찰하한율 → 피처로 실을 fraction (개연 밴드 밖은 ``None``).
+    """저장된 공시 낙찰하한율 → fraction (개연 밴드 밖은 ``None``). **진단 전용이다.**
+
+    이 값은 학습 행에 실리지만 피처가 되지 않는다 — 커버리지가 도메인이 아니라 백필 진행
+    상태라서 학습의 "미공시"와 서빙의 "미공시"가 다른 것을 뜻하기 때문이다. 사유와 재도입
+    조건은 :class:`~app.services.ml_training.award_rate_gbm.AwardRateTrainingRow` 의 그
+    필드 docstring 한 곳에 있다(여기서 되풀이하지 않는다).
 
     스케일 정규화(percent 88 ↔ fraction 0.88)와 개연 밴드는 **라이브 가격 경로가 쓰는
     것과 같은 두 벌**이다(``app/services/bid_base.resolve_notice_legal_floor_bid_rate``
-    → ``to_bid_rate_fraction`` + ``plausible_published_floor_rate``). 두 경로가 다른 규칙을
-    쓰면 학습이 본 값과 서빙이 넘기는 값이 갈리는데, 그 어긋남은 예외를 내지 않고 가격만
-    바꾼다 — 이 함수가 그 규칙을 학습 쪽에서 재선언하지 않고 위임만 하는 이유다.
+    → ``to_bid_rate_fraction`` + ``plausible_published_floor_rate``). 진단값이라도 규칙을
+    재선언하지 않는 이유는, 두 경로가 다른 밴드를 쓰면 재도입 조건을 확인할 때 비교하는
+    두 수가 애초에 같은 정의가 아니게 되기 때문이다.
     """
     if raw is None:
         return None

@@ -112,7 +112,6 @@ def predict_price(
     *,
     estimation_amount: float | None = None,
     reference_date: date | datetime | None = None,
-    published_floor_bid_rate: float | None = None,
     predictor_registry: Mapping[str, BasePricePredictor] | None = None,
 ) -> Dict[str, Any]:
     """Predict project price using the configured predictor stack with safe fallback.
@@ -122,11 +121,6 @@ def predict_price(
     non-construction / date-less callers are unaffected (tier not applied — the
     existing flat floor is preserved). ``estimation_amount`` is the notice 추정가격,
     NOT the 기초금액 ``budget`` used for pricing (#162).
-
-    ``published_floor_bid_rate`` is a predictor INPUT (a feature of the award-rate
-    model), not a guardrail input: it travels on the context and never touches the
-    floor arithmetic. ``legal_floor_bid_rate`` remains the only value the guardrail
-    stage folds into the floor, and it still does so with ``max()`` only.
     """
     context = PricePredictionContext(
         budget=float(budget or 0.0),
@@ -136,7 +130,6 @@ def predict_price(
         agency_name=agency_name,
         business_type_code=business_type_code,
         business_group=business_group,
-        published_floor_bid_rate=published_floor_bid_rate,
     )
 
     registry = normalize_predictor_registry(predictor_registry)

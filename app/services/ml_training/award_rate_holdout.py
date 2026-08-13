@@ -35,7 +35,6 @@ from typing import Final
 import numpy as np
 from pydantic import Field
 
-from app.domain.award_rate_features import AwardRatePredictionInput
 from app.schemas._base import StrictModel
 from app.services.ml_training.award_rate_gbm import (
     AwardRateTrainingRow,
@@ -102,6 +101,12 @@ _BASELINE_SPECS: Final[tuple[_BaselineSpec, ...]] = (
 
 # 홀드아웃을 쪼개 볼 축 표(§4.5-2 선언). 새 축은 코드 분기가 아니라 여기 한 줄이다.
 # 공종이 첫 줄인 이유: 승격을 막은 지표가 전체 RMSE 가 아니라 **공종별 편향**이었다.
+#
+# ``published_floor`` 은 피처가 아니라 **진단 축**이다. 이 축을 리포트에 싣는 목적은 두
+# 층(하한 공시/미공시)의 학습·홀드아웃 평균이 같은 것을 가리키는지 보는 것이고, 지금은
+# 어긋나 있다(미공시 층 학습 0.9089 vs 홀드아웃 0.9310 — 백필 커버리지가 시간에 기울어
+# 있기 때문이다. 상세는 ``AwardRateTrainingRow.published_floor_rate`` docstring).
+# 이 계측이 그 어긋남을 잡아냈고, 평평해졌는지 확인하는 것도 같은 계측이다.
 _SEGMENT_SPECS: Final[tuple[tuple[str, Callable[[AwardRateTrainingRow], str]], ...]] = (
     ("category", lambda row: row.category or "unknown"),
     (
@@ -228,15 +233,7 @@ def _gbm_predictions(
     model = load_award_rate_gbm_model(artifact)
     return np.array(
         model.predict_rates(
-            [
-                AwardRatePredictionInput(
-                    amount=row.amount,
-                    category=row.category,
-                    agency=row.agency,
-                    published_floor_rate=row.published_floor_rate,
-                )
-                for row in test_rows
-            ]
+            [(row.amount, row.category, row.agency) for row in test_rows]
         ),
         dtype=float,
     )

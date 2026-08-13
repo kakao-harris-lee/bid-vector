@@ -71,12 +71,11 @@ __all__ = [
 
 # 아티팩트 계약 버전. 피처 목록·인코딩 모양이 바뀌면 올린다 — predictor 는 이 값이
 # 다르면 모델을 쓰지 않는다(다른 피처 공간으로 학습된 부스터를 태우면 조용히 틀린다).
-# v2: 공시 낙찰하한율 두 축(``published_floor_rate`` · ``has_published_floor``) 추가.
-# v1 아티팩트는 피처 목록이 달라 로드 시 거부된다(``different feature set``).
-AWARD_RATE_GBM_ARTIFACT_VERSION: Final[str] = "award-rate-gbm-v2"
-AWARD_RATE_GBM_MODEL_VERSION: Final[str] = "v2.0-award-rate-gbm"
+# 피처 공간은 #364 와 같다(공시 하한 축은 도입하지 않았다 — 아래 학습 행 참조).
+AWARD_RATE_GBM_ARTIFACT_VERSION: Final[str] = "award-rate-gbm-v1"
+AWARD_RATE_GBM_MODEL_VERSION: Final[str] = "v1.0-award-rate-gbm"
 
-# LightGBM 하이퍼파라미터 — 선언 데이터(§4.5-1). 표본 수만 행 · 피처 일곱 개 규모의 얕은
+# LightGBM 하이퍼파라미터 — 선언 데이터(§4.5-1). 표본 수만 행 · 피처 5개 규모의 얕은
 # 표 형태 회귀라, 트리를 깊게 키우기보다 낮은 학습률로 많은 라운드를 도는 쪽이 안정적이다.
 #
 # ``deterministic`` + ``force_row_wise`` + 고정 seed 로 같은 입력이 같은 아티팩트를 낸다.
@@ -120,9 +119,31 @@ class AwardRateTrainingRow:
     ``opened_at`` 은 피처가 아니다. 호출부의 cutoff 필터와 홀드아웃 분할에만 쓰이며,
     피처 조립기(``AwardRateFeatureSpace.build_row``)는 시각을 받지 않는다.
 
-    ``published_floor_rate`` 는 **공고가 게시한** 낙찰하한율(개연 밴드 통과분)이다.
-    공고문에 있는 값이라 개찰 후 정보가 아니고, 유일한 백필러가 열린 공고만 대상으로
-    하므로(``scripts/backfill_award_floor_rate.py``) 정산 행에 사후 주입되지 않는다.
+    ``published_floor_rate`` 는 **피처가 아니다 — 진단 전용이다.** 이유를 여기 남기는
+    것은 다음 사람이 "왜 이 좋은 축을 안 쓰지"에 스스로 답하지 못하고 다시 넣는 것을
+    막기 위해서다.
+
+    공고 게시 낙찰하한율은 낙찰 메커니즘을 잘 가른다(홀드아웃 실측: 보유 층 평균 0.8928 ·
+    ≥0.995 가 1.03%, 미보유 층 0.9310 · 15.15%). 그런데 이 컬럼의 **커버리지가 도메인이
+    아니라 백필 진행 상태**다: ``scripts/backfill_award_floor_rate.py`` 가 열린 공고만
+    훑기 때문에 2026-07 이전 개찰 행은 보유율이 일률적으로 0.0% 이고(피드 출처 코퍼스
+    2026-06 은 321행 전부 0%), 최근일수록 채워져 있다. 그 결과 학습에서 "미보유"는
+    **"미공시"와 "백필이 아직 안 닿음"을 뒤섞고**, 서빙에서는 전자만 뜻한다.
+
+    그 비대칭은 측정된다. 같은 홀드아웃 분할에서 "보유" 층은 학습·홀드아웃이 같은 것을
+    가리키지만(0.8917 vs 0.8928), "미보유" 층은 학습 0.9089 / 홀드아웃 0.9310 으로
+    2.2%p 어긋나고, 학습측 "미보유" 를 백필 커버리지가 낮은 구간과 높은 구간으로 나누면
+    0.9068 → 0.9192 로 커버리지에 따라 움직인다(dose-response). 즉 이 축을 피처로 실으면
+    모델은 미공시 공고의 낙찰률을 **체계적으로 낮게** 배우고, 그 대상은 하한이 공시되지
+    않아 guardrail 이 공고별로 보호해 줄 수 없는 바로 그 집단이다.
+
+    재도입 조건: 백필이 완료돼 **커버리지가 시간에 평평해진 뒤**, 위 두 층의 학습/홀드아웃
+    평균이 일치하는지 먼저 확인한다. 그 확인은 홀드아웃 리포트의 ``published_floor``
+    세그먼트와 백테스트 리포트의 공종별 하한 보유 수로 그대로 할 수 있다 — 이 필드를
+    지우지 않고 진단으로 남겨 둔 이유가 그것이다.
+
+    피처로 새는 것은 조립기 시그니처가 막는다: ``AwardRateFeatureSpace.build_row`` 는 이
+    값을 받지 않고, 그 인자 집합은 ``tests/test_award_rate_features.py`` 가 고정한다.
     """
 
     value: float
@@ -131,8 +152,8 @@ class AwardRateTrainingRow:
     agency: str
     denominator_source: str
     opened_at: datetime
-    # 기본값을 주지 않는다: "안 넘겼다"와 "미공시"는 다른 상태이고, 새 행 생산자가
-    # 조용히 전자를 후자로 보고하면 그 축이 통째로 결측으로 학습된다.
+    # 기본값을 주지 않는다: "안 넘겼다"와 "미공시"는 다른 상태이고, 진단 축이 조용히
+    # 결측으로 채워지면 위 재도입 조건을 확인하는 그 계측기가 먼저 거짓말을 한다.
     published_floor_rate: float | None
 
 
@@ -176,7 +197,6 @@ def _feature_matrix(
                 category=row.category,
                 agency=row.agency,
                 denominator_source=row.denominator_source,
-                published_floor_rate=row.published_floor_rate,
             )
             for row in rows
         ],

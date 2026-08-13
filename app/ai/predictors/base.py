@@ -75,18 +75,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class PricePredictionContext:
-    """Immutable input payload shared across predictor implementations.
-
-    ``published_floor_bid_rate`` is the notice's OWN published 낙찰하한율
-    (``Project.award_floor_rate``, scale-normalized and plausibility-gated). It is
-    a **feature** input and is deliberately NOT the same value as the
-    ``legal_floor_bid_rate`` argument that reaches the guardrail stage: that one
-    honours the operator's per-request override, while the award-rate model must
-    see the same quantity its training corpus stores, or the two ends of that
-    feature axis quietly diverge. Leakage-safe (published on the notice itself,
-    not post-opening information) and defaults to ``None`` so existing
-    construction sites are unchanged.
-    """
+    """Immutable input payload shared across predictor implementations."""
 
     budget: float
     category: str
@@ -95,7 +84,6 @@ class PricePredictionContext:
     agency_name: str | None = None
     business_type_code: str | None = None
     business_group: str | None = None
-    published_floor_bid_rate: float | None = None
 
     @property
     def historical_sample_size(self) -> int:

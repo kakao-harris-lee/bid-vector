@@ -217,9 +217,6 @@ class _CandidateMixin(_PaperBiddingBase):
             legal_floor_bid_rate=inputs.legal_floor_bid_rate,
             estimation_amount=inputs.estimation_amount,
             reference_date=inputs.reference_date,
-            # 같은 공시 하한을 피처 축으로도 태운다 — 라이브가 predictor 에 넘기는 입력과
-            # 정확도 측정의 입력이 갈리면 그 측정은 다른 파이프라인을 잰 것이 된다.
-            published_floor_bid_rate=inputs.published_floor_bid_rate,
         )
         return CandidatePredictionContext(
             budget=budget,

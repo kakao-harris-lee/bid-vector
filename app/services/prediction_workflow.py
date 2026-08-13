@@ -92,9 +92,6 @@ class PredictionWorkflowService:
             legal_floor_bid_rate=inputs.legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
-            # 피처 축의 공시 하한(요청 override 를 타지 않는 공고 게시값). guardrail 로
-            # 가는 값은 위의 legal_floor_bid_rate 뿐이고 이 값은 가격 산술에 닿지 않는다.
-            published_floor_bid_rate=inputs.published_floor_bid_rate,
         )
 
         # 3종 투찰가 메뉴(추천/공격/안전)를 additive 레이어로 첨부한다. 두 경로가 한

@@ -23,16 +23,11 @@ class PricePredictionPort(ABC):
         legal_floor_bid_rate: float | None = None,
         estimation_amount: float | None = None,
         reference_date: date | datetime | None = None,
-        published_floor_bid_rate: float | None = None,
     ) -> dict[str, Any]:
         """Return a normalized price prediction payload.
 
         ``estimation_amount`` (추정가격) and ``reference_date`` (공고 기준일) drive the
         construction legal 낙찰하한 tier; both default to ``None`` (tier not applied).
-
-        ``published_floor_bid_rate`` (공고 게시 낙찰하한율) is a predictor FEATURE input,
-        not a guardrail input — only ``legal_floor_bid_rate`` reaches the floor
-        arithmetic. Defaults to ``None`` (그 축이 결측인 공고).
         """
 
 

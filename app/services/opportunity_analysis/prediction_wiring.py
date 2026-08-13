@@ -70,9 +70,6 @@ class _PredictionWiringMixin(_OpportunityAnalysisBase):
             legal_floor_bid_rate=inputs.legal_floor_bid_rate,
             estimation_amount=estimation_amount,
             reference_date=reference_date,
-            # 같은 공시 하한을 **피처**로도 넘긴다(override 없는 공고 게시값). 가격
-            # 산술에는 닿지 않고, 낙찰률 모델이 학습 코퍼스와 같은 축을 보게 한다.
-            published_floor_bid_rate=inputs.published_floor_bid_rate,
         )
         # 3종 투찰가 메뉴(추천/공격/안전)를 additive 레이어로 첨부한다. 우선순위를
         # 선언적으로 고정한다: (1) 발주처(agency) 밴드가 있으면 공고별 신호로 밴드 내
