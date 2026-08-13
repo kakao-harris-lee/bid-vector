@@ -34,6 +34,19 @@ class InferenceOutboxSettings(BaseSettings):
     # 0.22초 + 준비 판정 0.02초)라 180초는 그 750배다.
     SIMILARITY_PROJECTION_BACKFILL_INTERVAL_SECONDS: int = 180
     SIMILARITY_PROJECTION_BACKFILL_BATCH_LIMIT: int = 100
+    # 단일 소비자 큐(bid_vector_ml_inference)의 깊이 경보선. 이 관측이 없어서
+    # 21,321건이 며칠 쌓이는 동안 아무 신호도 없었다(2026-08-13). 기존 점검은 전부
+    # 파이프라인이 **만든 행**을 보는데, 소비자가 막히면 볼 행 자체가 생기지 않는다.
+    #
+    # 500인 근거:
+    #   정상 깊이 ≈ 0 — beat 가 넣는 것은 outbox 30초 + 백필 180초 = 2건/분이고
+    #   메시지 1건 처리가 ~2초(outbox 배치 50 × 투영 ~30ms)라 큐가 비어 있는 것이
+    #   정상 상태다. 500은 그보다 두 자릿수 위라 정상 운영에서는 울릴 수 없다.
+    #   동시에 소비자 용량으로 500건은 약 5주기(180초) 분량이라, 잠깐의 수집 버스트가
+    #   아니라 "소비자가 따라잡지 못하고 있다"에만 걸린다.
+    #   사고 실측(21,321건) 대비 2.3% 지점이므로 같은 사고가 재발하면 며칠이 아니라
+    #   한 시간 안에 드러난다.
+    ML_INFERENCE_QUEUE_DEPTH_WARN_THRESHOLD: int = 500
     NOTIFICATION_DELIVERY_OUTBOX_SCHEDULE_ENABLED: bool = False
     NOTIFICATION_DELIVERY_OUTBOX_INTERVAL_SECONDS: int = 30
     NOTIFICATION_DELIVERY_OUTBOX_BATCH_LIMIT: int = 50

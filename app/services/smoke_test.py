@@ -22,6 +22,11 @@ from app.services.smoke_failure_taxonomy import (
     classify_failure,
     guidance_for,
 )
+from app.services.smoke_evidence import (
+    trim_phase_evidence,
+    with_phase_scope_evidence,
+)
+from app.services.task_queue_depth import BrokerConnectionFactory, assess_queue_depth
 
 if TYPE_CHECKING:
     from app.models.models import SmokeTestRun
@@ -58,12 +63,6 @@ class SmokeTestReport:
 class KonepsTelegramSmokeTestService:
     """Run the smoke test phases and notify the operator via Telegram."""
 
-    SCHEDULED_SMOKE_EVIDENCE_SCOPE = "g0_scheduled_smoke"
-    SCHEDULED_SMOKE_CANONICAL_ONLY_REASON = (
-        "G-0 scheduled smoke validates the canonical shared pipeline; "
-        "G-2 per-operator evidence is recorded on operator-scoped monitor and experiment runs."
-    )
-
     # Canonical guidance + classifier now live in
     # ``app.services.smoke_failure_taxonomy`` (shared with the operations
     # dashboard). The class alias preserves the historical
@@ -78,6 +77,7 @@ class KonepsTelegramSmokeTestService:
         backtest_cutoff_service: BacktestCutoffService | None = None,
         strategy_monitoring_service: StrategyMonitoringService | None = None,
         telegram_service: TelegramNotificationService | None = None,
+        queue_connection_factory: BrokerConnectionFactory | None = None,
     ) -> None:
         self.price_prediction_port = price_prediction_port or build_price_prediction_port()
         # Injectable phase collaborators. Stored as the injected value (or
@@ -88,6 +88,8 @@ class KonepsTelegramSmokeTestService:
         self._backtest_cutoff_service = backtest_cutoff_service
         self._strategy_monitoring_service = strategy_monitoring_service
         self._telegram_service = telegram_service
+        # ``None`` keeps the default broker connection; tests inject a fake.
+        self._queue_connection_factory = queue_connection_factory
 
     def run(self, db: Session) -> SmokeTestReport:
         report = SmokeTestReport(started_at=datetime.now(timezone.utc).isoformat())
@@ -140,7 +142,12 @@ class KonepsTelegramSmokeTestService:
                 )
             )
 
-        # Phase 5: Telegram ping (always attempted — that's the point)
+        # Phase 5: single-consumer queue depth. Independent of every phase above
+        # on purpose — a blocked consumer produces no rows, so the row-based
+        # phases stay green while work piles up behind it.
+        phases.append(self._phase_inference_queue_depth())
+
+        # Phase 6: Telegram ping (always attempted — that's the point)
         p5 = self._phase_telegram_ping(report=report, prior_phases=phases)
         phases.append(p5)
 
@@ -171,7 +178,7 @@ class KonepsTelegramSmokeTestService:
             action_required = str(phase.get("action_required") or "")
             retry_method = str(phase.get("retry_method") or "")
             skip_reason = str(phase.get("skip_reason") or "")
-            evidence = self._trim_phase_evidence(phase)
+            evidence = trim_phase_evidence(phase)
             if failure_category:
                 trimmed["failure_category"] = failure_category
             if action_required:
@@ -206,6 +213,26 @@ class KonepsTelegramSmokeTestService:
         except ValueError:
             return None
 
+    def _phase_inference_queue_depth(self) -> PhaseResult:
+        """Fail when the single-consumer ML inference queue is backing up."""
+        from app.core.config import settings
+
+        verdict = assess_queue_depth(
+            str(settings.CELERY_ML_INFERENCE_QUEUE),
+            int(settings.ML_INFERENCE_QUEUE_DEPTH_WARN_THRESHOLD),
+            connection_factory=self._queue_connection_factory,
+        )
+        return self._finalize_phase(
+            PhaseResult(
+                name="inference_queue_depth",
+                passed=verdict.healthy,
+                detail=verdict.detail,
+                skip_reason=verdict.unmeasured_reason,
+                failure_category="" if verdict.healthy else "task_broker",
+                data=dict(verdict.evidence),
+            )
+        )
+
     def _skipped_phase(self, name: str, *, reason: str, upstream: str) -> PhaseResult:
         failure_category = ""
         if reason == "Phase 1 failed":
@@ -222,7 +249,7 @@ class KonepsTelegramSmokeTestService:
         return self._finalize_phase(result)
 
     def _finalize_phase(self, result: PhaseResult) -> PhaseResult:
-        result.data = self._with_phase_scope_evidence(result.name, result.data)
+        result.data = with_phase_scope_evidence(result.name, result.data)
         return result if result.passed else self._annotate_failure(result)
 
     def _annotate_failure(self, result: PhaseResult) -> PhaseResult:
@@ -242,74 +269,6 @@ class KonepsTelegramSmokeTestService:
     def _classify_failure(name: str, detail: str) -> str:
         """Delegate to the shared smoke failure taxonomy classifier."""
         return classify_failure(name, detail)
-
-    @classmethod
-    def _trim_phase_evidence(cls, phase: dict[str, Any]) -> dict[str, Any]:
-        phase_name = str(phase.get("name") or "")
-        evidence = phase.get("evidence")
-        if isinstance(evidence, dict):
-            return cls._with_phase_scope_evidence(phase_name, evidence)
-        data = phase.get("data")
-        if not isinstance(data, dict):
-            return cls._with_phase_scope_evidence(phase_name, {})
-        allowed_keys = {
-            "evidence_scope",
-            "operator_scope",
-            "operator_id",
-            "current_operator_id",
-            "current_operator_username",
-            "canonical_only_reason",
-            "source_run_type",
-            "source_run_id",
-            "collected_count",
-            "recent_collection_jobs",
-            "recent_collection_count",
-            "recent_collection_last_at",
-            "project_id",
-            "project_title",
-            "predicted_bid_rate",
-            "predictor_name",
-            "monitor_run_id",
-            "evaluated_project_count",
-            "selected_candidate_count",
-            "persisted_candidate_count",
-            "notification_count",
-            "new_candidate_count",
-            "skip_reason",
-            "telegram_status",
-            "telegram_message_id",
-        }
-        compact = {key: value for key, value in data.items() if key in allowed_keys and value is not None}
-        return cls._with_phase_scope_evidence(phase_name, compact)
-
-    @classmethod
-    def _with_phase_scope_evidence(cls, phase_name: str, evidence: dict[str, Any]) -> dict[str, Any]:
-        scoped = dict(evidence or {})
-        scoped.setdefault("evidence_scope", cls.SCHEDULED_SMOKE_EVIDENCE_SCOPE)
-
-        source_run_id = cls._optional_int(scoped.get("source_run_id") or scoped.get("monitor_run_id"))
-        if phase_name == "candidate_generation" and source_run_id is not None:
-            scoped.setdefault("source_run_type", "operator_strategy_monitor")
-            scoped.setdefault("source_run_id", source_run_id)
-
-        operator_id = cls._optional_int(scoped.get("operator_id") or scoped.get("current_operator_id"))
-        if operator_id is not None:
-            scoped["operator_id"] = operator_id
-            scoped.setdefault("operator_scope", "operator")
-            return scoped
-
-        scoped.setdefault("operator_scope", "canonical_only")
-        scoped.setdefault("canonical_only_reason", cls.SCHEDULED_SMOKE_CANONICAL_ONLY_REASON)
-        return scoped
-
-    @staticmethod
-    def _optional_int(value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
 
     # Recency window for the collection-pipeline health cross-check used when
     # the live re-fetch legitimately returns zero notices. The KONEPS
