@@ -66,7 +66,7 @@ Phase 3 는 이 selector 트랙의 **원리적 후계자**다: 휴리스틱 스�
 ```
 WW(b) = P( φ ≤ b ≤ ω )                                   (식 1)
 ```
-이 사건은 개찰당 **낙찰자 `ω` 와 하한 `φ` 두 값만** 필요하다. 참가자 전체 분포가 필요 없다 — winner-only 데이터가 이 estimand 를 **정확히 식별**한다. 그리고 식 1 은 문자 그대로 저장 라벨 `would_have_won_final=="eligible_favorable"` 의 정의다: `app/services/paper_bidding_backtest/settlement.py` 의 `_settle_verdict` 가 `floor_price ≤ our_amount ≤ winning_amount` 를 그 라벨로 판정한다(식 1 과 동일). **`would_have_won_price_only` 가 아니다**(B1) — 후자는 `|b_rate − w_rate| ≤ 0.003/0.01` 의 **양측 근접 밴드**라 모양조차 다르다(±0.3%p 봉우리 vs `WW` 의 고원). Phase 3 의 산출 필드·설명은 `_final` 계열 의미론에 못박는다.
+이 사건은 개찰당 **낙찰자 `ω` 와 하한 `φ` 두 값만** 필요하다. 참가자 전체 분포가 필요 없다 — winner-only 데이터가 이 estimand 를 **정확히 식별**한다. 그리고 식 1 은 문자 그대로 저장 라벨 `would_have_won_final=="eligible_favorable"` 의 정의다: `app/services/paper_bidding_backtest/settlement.py` 의 `_score_eligibility_gate`(`:146`, `_build_settlement_item` 에서 호출)가 `floor_price ≤ our_amount ≤ winning_amount`(술어 `:182-189`)를 그 라벨로 판정한다(식 1 과 동일). **`would_have_won_price_only` 가 아니다**(B1) — 후자는 `|b_rate − w_rate| ≤ 0.003/0.01` 의 **양측 근접 밴드**라 모양조차 다르다(±0.3%p 봉우리 vs `WW` 의 고원). Phase 3 의 산출 필드·설명은 `_final` 계열 의미론에 못박는다.
 
 | 정직 명세 축 | Phase 3 매핑 |
 |---|---|
@@ -81,7 +81,7 @@ WW(b) = P( φ ≤ b ≤ ω )                                   (식 1)
 - **P(랜덤 참가자 이김)**: 낙찰자는 참가자의 최소 순서통계량이지 무작위 표본이 아니다. `1 − G(δ)` 는 "낙찰 마진이 δ 초과" = "실현 최저 생존자가 내 마진 위" 이지 "임의 경쟁자를 이김"이 아니다.
 - **승리 마진 / runner-up 거리**: 2등 이하 투찰액 미관측(참가자수 `opening_participant_count` = 3/91,364, 실측 2026-08-13).
 - **균형 효과**: 내 진입이 타 참가자 투찰을 바꾸는 게임이론적 반응. 반사실은 "타 투찰 고정" 가정이다 — 이 가정을 설명에 공시.
-- **`_final` 의 가격 외 적격심사(자격·서류·PQ)** (B1): 코드 `_settle_verdict` 는 `floor_price ≤ our ≤ winning` **가격 조건만** 판정한다. 관측 낙찰자는 **정의상** 적격 통과자이므로, `WW` 는 "적격 통과 조건 하의 가격 경쟁 승리"만 추정하고 **적격 통과 확률 자체는 모형화하지 않는다**.
+- **`_final` 의 가격 외 적격심사(자격·서류·PQ)** (B1): 코드 `_score_eligibility_gate` 는 `floor_price ≤ our ≤ winning` **가격 조건만** 판정한다. 관측 낙찰자는 **정의상** 적격 통과자이므로, `WW` 는 "적격 통과 조건 하의 가격 경쟁 승리"만 추정하고 **적격 통과 확률 자체는 모형화하지 않는다**.
 
 ---
 
@@ -130,7 +130,7 @@ WW_emp(b) = (1/N) Σ_i 1[ φ_i ≤ b ≤ ω_i ]        (셀 내, b·B 는 rate �
 
 **층 C — Serving(어려운 부분)**: 열린 공고는 `φ, ω` 둘 다 미관측. 모형화:
 - **생존 `φ`**: Phase 1 사정률 예측분포 `F_a`(distribution predictor 의 계층 수축 사후 + 추첨 분산; 대상 공고 예비가 미사용 → train/serve skew 안전) → `P(a ≤ b/f)`.
-- **낙찰자 마진 `Δ`**: 셀 단위 **경계보정 KDE/ECDF** `G_cell(δ)`(예정가-basis, `a`-free 라 공고 간 전이 가능).
+- **낙찰자 마진 `Δ`**: 셀 단위 **경계보정 KDE/ECDF** `G_cell(δ)`(예정가-basis, `a` 소거로 추첨 교란 없음. 단 `f`-이질 셀 간 pool 은 `Δ⊥f` 를 새로 가정 — §6·NEW-4).
 - 합성은 §6.
 
 ### 5.2 낙찰자 마진 분포 `G` — 경계 보정
@@ -139,12 +139,12 @@ WW_emp(b) = (1/N) Σ_i 1[ φ_i ≤ b ≤ ω_i ]        (셀 내, b·B 는 rate �
 
 - **기본 추정기 = 경험 CDF(ECDF)**: 단조·경계 안전·가정 최소. 스파이크를 왜곡 없이 표현한다.
 - **평활 = 경계보정 KDE**(반사법 reflection 또는 `log(Δ+ε)`·Beta 변환): 희소 셀·서빙 전이에서만 사용. **소박한 가우시안 KDE 금지**(0 아래로 질량 누출 → 스파이크 과소·마진 과대 → 낙관 편향).
-- **셀 스코프**: `floor_bound 레짐`(하드 필터) → `공종 × 금액대`. 조달방식(near_100/수의)은 마진 정의 자체가 성립 안 하므로 **레짐이 셀 키가 아니라 게이트**다.
+- **셀 스코프**: `floor_bound 레짐`(하드 필터) → `공종 × era tier × 금액대`. **era tier 를 셀 키에 포함**하는 이유(NEW-4): 식 3 의 f-재기준이 f-이질 행을 가로질러 pool 하면 era tier(#197/#198 구율/신율)·레짐(0.79995) 교란이 마진에 섞인다 — era tier 로 쪼개 `f`-동질 행만 pool 하도록 제약한다. 조달방식(near_100/수의)은 마진 정의 자체가 성립 안 하므로 **레짐이 셀 키가 아니라 게이트**다.
 - **계층 수축(Phase 1 κ *패턴* 재사용, *값* 재사용 금지)**: 얕은 셀의 마진 표본을 상위(공종→전역)로 수축. κ 는 사정률 중심 축(`AGENCY_PRIOR_STRENGTH`=12·`CATEGORY_PRIOR_STRENGTH`=40, `app/domain/assessment_shrinkage.py` — n3)과 **다른 축**이므로 이 데이터에서 재도출 — 분포 수축은 `n/(n+κ)` 가중으로 셀 표본과 부모 표본을 blend 하거나 대역폭을 계층 pool. **κ 값은 릴리스 단위 재추정, 상수 하드코딩은 사후 산물 금지**(`award_rate_windows` 의 `GATE_MIN_EVALUATION_ROWS` 교훈).
 
 ### 5.3 §4.5/§4.7 배치
 
-- 순수 커널은 **2모듈 분할**(각 500줄 한도, PR1 에서 이미 구현): `app/domain/award_margin_distribution.py`(Δ축 — 마진 추출·ECDF/경계KDE·수축)와 `app/domain/award_landing_distribution.py`(합성축 — Phase 1 `F_a` 와 `WW(b)`·`survival_at_least` 합성). **I/O 0 순수 함수**, stdlib+numpy, 값표 테스트, Phase 1 커널(`reserve_draw_distribution`/`assessment_shrinkage`)과 같은 mypy strict 아일랜드(pyproject override 등재 — n1).
+- 순수 커널은 **2모듈 분할**(각 500줄 한도, PR1 슬라이스): `app/domain/award_margin_distribution.py`(Δ축 — 마진 추출·ECDF/경계KDE·수축)와 `app/domain/award_landing_distribution.py`(합성축 — Phase 1 `F_a` 와 `WW(b)`·`survival_at_least` 합성). **I/O 0 순수 함수**, stdlib+numpy, 값표 테스트, Phase 1 커널(`reserve_draw_distribution`/`assessment_shrinkage`)과 같은 mypy strict 아일랜드(pyproject override 등재 — n1).
 - 매직값(κ, 대역폭, 스파이크 ε, 셀 경계, MDE 임계)은 Settings/constants 선언. 셀 정책은 선언 데이터.
 - 원가율 `c` 등 운영자 튜닝값은 `OperatorStrategy` 필드류 선언 데이터(§4.5-3).
 
@@ -160,7 +160,7 @@ WW(b) = ∫_{a ≤ b/f}  P( Δ ≥ b/a − f )  dF_a(a)          (식 2)
 
 유도: 생존 `φ=f·a ≤ b ⟺ a ≤ b/f`. 이김 `b ≤ ω = a(f+Δ) ⟺ Δ ≥ b/a − f`. `a ≤ b/f` 영역에선 `b/a − f ≥ 0` 이라 항상 `Δ` 의 지지집합 안(무모순).
 
-**표기 주의(m2)**: `P(Δ ≥ δ)` 는 **inclusive** 다 — ECDF 원자(같은 마진 다수)에서 `1 − G(δ)`(strict)와 실제로 갈리므로 커널은 `survival_at_least`(≥)로 구현한다(PR1 이미 그렇게 수렴).
+**표기 주의(m2)**: `P(Δ ≥ δ)` 는 **inclusive** 다 — ECDF 원자(같은 마진 다수)에서 `1 − G(δ)`(strict)와 실제로 갈리므로 커널은 `survival_at_least`(≥)로 구현한다.
 
 **각 항의 불확실성 출처 (요구된 구별)**:
 
@@ -175,6 +175,8 @@ WW(b) = ∫_{a ≤ b/f}  P( Δ ≥ b/a − f )  dF_a(a)          (식 2)
 WW_fallback(b; f_tgt) = (1/N) Σ_i 1[ a_i ≤ b/f_tgt ] · 1[ Δ_i ≥ b/a_i − f_tgt ]     (식 3)
 ```
 이는 식 2 가 가정으로 지우는 `(a, Δ)` 결합 의존을 보존하면서 대상 공고의 `f_tgt` 로 옮긴다. 자기 `f_i` 를 담는 층 A 원형(`WW_emp`)은 **자기 모집단 백테스트 접지 진리로만** 유지한다.
+
+**식 3 의 숨은 가정(NEW-4)**: 식 3 은 원 공고 `f_i` 기준으로 잰 `Δ_i` 를 `f_tgt` 에 그대로 써서 **`Δ ⊥ f`(f-전이 가능성)를 새로 가정**한다 — `corr(a,Δ)=−0.0045` 대비 **훨씬 약한** 가정이다. 실측 `corr(f, Δ)`: 공사 **−0.155**(n=1,409) / 용역 **−0.595**(n=743), `f` 별 median Δ 도 이질(공사 `0.89745`→54.4bp vs `0.87745`→185.4bp; 용역 `0.88`→14.8bp·`0.90`→12.1bp·`0.87745`→9.7bp·`0.79995`→33.6bp). 상당 부분은 era tier(#197/#198 구율/신율)·레짐(0.79995) 교란일 것이라 §5.2 는 **era tier 를 셀 키에 넣어** 식 3 이 `f`-동질 행만 pool 하도록 제약한다. PR2 진단은 `corr(a,Δ)` 옆에 **`corr(f,Δ)` 를 병기**한다.
 
 **Phase 1 이 point-estimate 를 대체**: distribution predictor 는 현재 `낙찰율/실현 사정률 비 중앙값`(`bid_ratio`)으로 사정률 축→투찰율 축을 **점 환산**한다. Phase 3 은 그 median-ratio 한 점을 **낙찰자 착지 분포 `G` 전체**로 승격한다(같은 신호의 분포 버전).
 
@@ -192,7 +194,7 @@ WW_fallback(b; f_tgt) = (1/N) Σ_i 1[ a_i ≤ b/f_tgt ] · 1[ Δ_i ≥ b/a_i −
 
 **권고: 1차 슬라이스 = 옵션 A(α-제약).** 근거: ①원가 부재에서 `WW(b)` 는 정직한 원시량, EV 는 그 위 얇은 곱. ②이산 3점(∓1.28σ)을 연속 곡선의 3표본으로 포섭.
 
-**α-제약이 필요한 이유(M2)**: `WW` 는 실격(하한 미달)과 패찰을 **등가로 취급**하지만 운영자는 아니다(3번째 실투찰이 사정률 추첨 실격 사고). 층 A 실측 — 소박한 `argmax WW_emp` 지점의 실격확률 `P(φ>b)` 는 **공사 32.5%**(argmax 0.89775, n=1,405) / **용역 52.6%**(argmax 0.87825, n=743) 다. 그래서 `b* = argmax_{b: P(φ>b) ≤ α} WW(b)`, `α` 는 사후 튜닝 방지를 위해 **Settings 에 릴리스 단위로 선언**하고 G8 과 함께 판정한다. α-제약은 옵션 A 를 깨지 않는 **호환 수정**이다(옵션 B 는 실격 비용을 EV 에 명시적으로 넣는 후속 층).
+**α-제약이 필요한 이유(M2)**: `WW` 는 실격(하한 미달)과 패찰을 **등가로 취급**하지만 운영자는 아니다(3번째 실투찰이 사정률 추첨 실격 사고). 층 A 실측 — 소박한 `argmax WW_emp` 지점의 실격확률 `P(φ>b)` 는 **공사 32.5%**(argmax 0.89775, n=1,405) / **용역 52.6%**(argmax 0.87825, n=743) 다. 그래서 `b* = argmax_{b: P(φ>b) ≤ α} WW(b)`. **α 조달 절차(NEW-3, 자가당착 해소)**: ① `α` 는 채점 코퍼스가 아니라 **운영자 리스크 허용치**(사업 수치)로 선언한다 — 코퍼스에서 고르면 `GATE_MIN_EVALUATION_ROWS` 사후-산물 교훈을 반복하고, OOS 창 위에서 훑으면 argmin 표 금지(다중비교) 위반이다. ② PR2 는 값을 추천하지 않고 **α↔WW 트레이드오프 곡선만** 보고한다. ③ **PR4 의 OOS 채점 전에 α 를 동결**한다(G8 과 함께 판정). α-제약은 옵션 A 를 깨지 않는 **호환 수정**이다(옵션 B 는 실격 비용을 EV 에 명시적으로 넣는 후속 층).
 
 **자기 캘리브레이션 주장 삭제(M3)**: "`argmax` 가 낙찰자 밀집을 재현하므로 내부 검증"은 성립하지 않는다 — 실측 `argmax − median(ω)` 는 공사 **−15.4bp** / 용역 **−36.2bp** 계통 편차이고, 마진이 좁아(median Δ=47bp) 거의 항등식이라 **판별력이 없다**.
 
@@ -206,7 +208,7 @@ WW_fallback(b; f_tgt) = (1/N) Σ_i 1[ a_i ≤ b/f_tgt ] · 1[ Δ_i ≥ b/a_i −
 
 두 판정문이 지목한 **candidate selector** 가 자연 통합점. 계층적으로 셋 다:
 
-1. **순수 도메인 커널**(`award_landing_distribution.py`): `WW(b)` 곡선·`b*` 계산.
+1. **순수 도메인 커널 2모듈**(`award_margin_distribution.py` + `award_landing_distribution.py`): `WW(b)` 곡선·`b*` 계산.
 2. **predictor 키**(`award_landing` 제안) 또는 selector 메타데이터: 곡선을 payload 로 노출하되 **가격을 움직이지 않음**. `AUTO_PROMOTION_EXCLUDED_PREDICTOR_KEYS` 에 등재 + `.env` 명시 선호로만 실행.
 3. **연속 selector**: 게이트 통과 후에만 `_select_recommended_candidate`(현행 = 항상 base)를 곡선 기반 `b*` 로 대체. 이산 base/conservative/aggressive → 연속 곡선 위 한 점.
 
@@ -221,7 +223,7 @@ WW_fallback(b; f_tgt) = (1/N) Σ_i 1[ a_i ≤ b/f_tgt ] · 1[ Δ_i ≥ b/a_i −
 
 ### 8.3 아티팩트·서빙 비용 (요청당 적합 금지 — M6)
 
-셀별 `G`·`κ`·수축표는 **버전·계약을 가진 릴리스 아티팩트로 영속화**한다(Phase 2 패턴: `app/ai/predictors/artifact_contracts.py` 의 `read_persisted_artifact` + manifest). 서빙은 그 아티팩트를 로드해 `F_a` 와 합성(식 2)만 하고, **요청 경로에서 KDE/수축을 적합하지 않는다** — API 인라인 ML 은 금지다(api 8.4GiB OOM→좀비 리스너 17h 행 사고, `--reload` 제거·`mem_limit` 도입의 원인). 아티팩트는 표본 정의(코퍼스·era·품질 사다리 버전)를 스스로 신고해, 다른 모집단으로 학습된 옛 산출물이 새 코드에 조용히 로드되는 것을 막는다(Phase 2 `AWARD_RATE_SAMPLE_SCOPE` 선례, fail-closed).
+셀별 `G`·`κ`·수축표는 **버전·계약을 가진 릴리스 아티팩트로 영속화**한다(Phase 2 패턴: `app/ai/predictors/artifact_contracts.py` 의 `read_persisted_artifact` + manifest). 서빙은 그 아티팩트를 로드해 `F_a` 와 합성(식 2)만 하고, **요청 경로에서 KDE/수축을 적합하지 않는다** — API 인라인 ML 은 금지다(api 8.4GiB OOM→좀비 리스너 17h 행 사고, `--reload` 제거·`mem_limit` 도입의 원인). 아티팩트는 표본 정의(코퍼스·era·품질 사다리 버전)를 스스로 신고해, 다른 모집단으로 학습된 옛 산출물이 새 코드에 조용히 로드되는 것을 막는다(Phase 2 `AWARD_RATE_SAMPLE_SCOPE_FEED_ORIGIN`/`AWARD_RATE_SAMPLE_SCOPE_ALL_SOURCES`, `app/core/constants.py:360-361` 선례, fail-closed — NEW-7).
 
 ---
 
@@ -248,8 +250,8 @@ Phase 2c 인프라 **재사용**(`award_rate_windows`·`settlement_maturity`·`a
 
 | PR | 내용 | 유형 | 게이트 의존 |
 |---|---|---|---|
-| **PR1** | 순수 커널 **2모듈**(`award_margin_distribution.py` Δ축 / `award_landing_distribution.py` 합성축, 각 500줄 한도) — 마진 추출·ECDF/경계KDE·수축·`F_a` 합성·`survival_at_least`(≥). mypy strict 아일랜드(pyproject). 값표 테스트. **배선 0**. **이미 구현** — 후속으로 α-제약 argmax API·f-재기준 fallback(식 3) 추가 예정 | 코드-only | 없음 |
-| **PR2** | 백테스트/리포트: 층 A `WW_emp` + 층 C 합성 셀별 산출. **게시 `f` 로 술어 재계산해 채점**(저장 `_final` 라벨과 직접 대조 금지 — M4 하한 불일치 100%). 품질 사다리 재사용 + `f==1.0` 오염 필터(m1)·`winning_amount/B` 재계산(n5). `corr(a,Δ)`·실격측 `P(φ>b)` 진단. reports gitignored | 코드-only | 없음(측정) |
+| **PR1** | 순수 커널 **2모듈**(`award_margin_distribution.py` Δ축 / `award_landing_distribution.py` 합성축, 각 500줄 한도) — 마진 추출·ECDF/경계KDE·수축·`F_a` 합성·`survival_at_least`(≥). mypy strict 아일랜드(pyproject). 값표 테스트. **배선 0**. 구현 범위 = 커널 2모듈 + α-제약 argmax API + f-재기준 fallback(식 3) | 코드-only | 없음 |
+| **PR2** | 백테스트/리포트: 층 A `WW_emp` + 층 C 합성 셀별 산출. **게시 `f` 로 술어 재계산해 채점**(저장 `_final` 라벨과 직접 대조 금지 — M4 하한 불일치 100%). 품질 사다리 재사용 + `f==1.0` 오염 필터(m1)·`winning_amount/B` 재계산(n5). `corr(a,Δ)`·**`corr(f,Δ)`**(NEW-4)·실격측 `P(φ>b)` 진단 + **α↔WW 트레이드오프 곡선**(값 추천 없음 — NEW-3). reports gitignored | 코드-only | 없음(측정) |
 | **PR3** | predictor 키 `award_landing`(AUTO_PROMOTION_EXCLUDED 등재) + `.env` 선호. 곡선 payload 노출, **recommended=base 불변** | 코드-only | 없음 |
 | **PR4** | 게이트(G1~G8) 통과 부분셀에 한해 연속 `b*` 를 selector 에 배선. group-scoped | **게이트 의존** | §9 전부 — **데이터 성숙 대기**(Phase 2c 처럼 며칠~2주) |
 | PR-opt | (옵션 B) `OperatorStrategy.cost_rate` 선언 필드 + `EV(b)` 층 | 코드-only(스키마+마이그레이션) | PR4 이후 |
@@ -262,7 +264,7 @@ Phase 2c 인프라 **재사용**(`award_rate_windows`·`settlement_maturity`·`a
 ## 11. 알려진 한계 (정직 명세 §2)
 
 1. **winner-only 근본 제약**: 균형·마진·랜덤참가자 승률 불가. 반사실은 "타 투찰 고정" 가정(공시).
-2. **`a ⊥ Δ` 가정**: 부분 검증만 가능. 강상관 시 층 A 결합추정으로 후퇴.
+2. **`a ⊥ Δ` 가정**: 부분 검증만 가능. 강상관 시 식 3(f-재기준 결합추정)으로 후퇴(NEW-5).
 3. **BID_RATIO/basis 혼재 유산**: `winning_rate` 는 예정가-basis(검증됨)지만 `HistoricalData.bid_rate` 는 base/예정가 혼재(48/52 — **리뷰 미검증 표기, `distribution_extraction` docstring 인용값**, n4) — Phase 3 은 `winning_amount/B` 직접 사용으로 이 혼재를 우회하되, 마진 정의는 예정가-basis 로 통일해 축 혼입 차단. `settlement.py:49-52` 의 base-relative 주석은 실측 예정가-basis 와 어긋나므로(n5) PR2 는 그 폴백을 쓰지 않는다.
 4. **era 편중**: 07월 집중·공사 2026-06-30 개시. 성숙도/날짜창이 정직하게 처리하나, era 간 비교는 불성립(floor-anchor 한계와 동일).
 5. **셀 희소**: 용역 부분셀 n<150 개연 → "판정 불가" 결론 가능. 임계 조정이 아니라 **시간**이 해법.
@@ -280,14 +282,16 @@ Phase 2c 인프라 **재사용**(`award_rate_windows`·`settlement_maturity`·`a
    `OperatorStrategy` 선언 필드로 둘지 재질의한다. 선언 전까지 EV 층 보류.
 3. **참가자수 백필(옵션 C) = 하지 않음 확정.** winner-only 유지 — 반사실 estimand 가
    참가자수 없이 정확 식별되고, "우리가 낙찰인가" 최소수집 원칙과 정합.
-4. **셀 스코프**: `공종 × 금액대` 시작 + 발주기관은 수축 상위 계층으로만(권고안 채택,
-   Phase 1 실측 91.9%가 n<10 인 표본 구조 근거). 이견 시 재론.
+4. **셀 스코프**: `공종 × era tier × 금액대` 시작(era tier 는 식 3 f-동질 pool 제약 —
+   NEW-4) + 발주기관은 수축 상위 계층으로만(권고안 채택, Phase 1 실측 91.9%가 n<10 인
+   표본 구조 근거). 이견 시 재론.
 5. **판정 불가 수용**: PR2 캘리브레이션이 "아직 잴 수 있는 셀 없음"으로 나오면 PR4 는
    Phase 2c 선례대로 데이터 성숙 대기(임계 조정 금지) — 설계 승인에 포함.
-6. **실격 예산 `α` 초기값(신규 미결 — M2)**: `b* = argmax_{b: P(φ>b)≤α} WW(b)` 의 `α` 를
-   Settings 에 릴리스 단위로 선언해야 한다. 소박한 argmax 실측 실격률(공사 32.5%·용역
-   52.6%)을 감안한 초기값 후보와 판정 근거는 PR2 리포트가 제시하고, 값 확정은 운영자
-   결정이다(사후 튜닝 방지 위해 데이터를 보고 정하지 않고 사전 선언).
+6. **실격 예산 `α`(신규 미결 — M2/NEW-3)**: `b* = argmax_{b: P(φ>b)≤α} WW(b)` 의 `α` 는
+   채점 코퍼스가 아니라 **운영자 리스크 허용치**(사업 수치)로 선언한다. PR2 는 값을
+   추천하지 않고 **α↔WW 트레이드오프 곡선만** 보고하며(소박한 argmax 실격률 공사
+   32.5%·용역 52.6%가 그 곡선의 한 점), **PR4 의 OOS 채점 전에 `α` 를 동결**한다 —
+   코퍼스에서 고르거나 OOS 창을 훑는 것은 사후-산물·다중비교라 금지.
 
 ---
 
