@@ -91,6 +91,10 @@ class SimilarityProjectionBackfillResult(BaseModel):
     limit: int = Field(ge=1)
     project_ids: list[int] = Field(default_factory=list)
     event_ids: list[int] = Field(default_factory=list)
+    # Selected but not stageable. Under oldest-first ordering these keep their
+    # ``computed_at`` and so come back at the head of the next batch — enough of
+    # them and the rotation stalls, which is why they are named, not just counted.
+    blocked_project_ids: list[int] = Field(default_factory=list)
     # A tick that found the previous run still in flight. Reported rather than
     # silent, so a schedule that is chronically too fast stays visible.
     duplicate_suppressed: bool = False

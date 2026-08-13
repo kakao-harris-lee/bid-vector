@@ -234,13 +234,19 @@ def stage_active_similarity_projection_backfill(
     projects = _backfill_candidates(db, read_model, resolved_limit)
     project_ids: list[int] = []
     event_ids: list[int] = []
+    blocked_project_ids: list[int] = []
     for project in projects:
+        # A target that cannot be staged keeps its ``computed_at``, so under
+        # oldest-first ordering it stays at the head of the next batch too. Record
+        # it: enough of these and the rotation stops advancing at all.
         if read_model.embedding_state(project).status != "ready":
+            blocked_project_ids.append(int(project.id))
             continue
         event = outbox.append_embedding_ready_event(
             db, project, reactivate_completed=True
         )
         if event is None:
+            blocked_project_ids.append(int(project.id))
             continue
         project_ids.append(int(project.id))
         event_ids.append(int(event.id))
@@ -251,4 +257,5 @@ def stage_active_similarity_projection_backfill(
         limit=resolved_limit,
         project_ids=project_ids,
         event_ids=event_ids,
+        blocked_project_ids=blocked_project_ids,
     )

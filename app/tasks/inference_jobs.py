@@ -43,6 +43,29 @@ def process_inference_outbox(limit: int = 50) -> InferenceOutboxTaskPayload:
             raise
 
 
+def _warn_if_rotation_stalled(result: SimilarityProjectionBackfillResult) -> None:
+    """Surface a batch that selected work and staged none of it.
+
+    Oldest-first selection turns the batch rate into a rotation, but it also
+    concentrates failures: a target that cannot be staged keeps its ``computed_at``
+    and therefore returns to the head of the next batch. Under the previous id
+    ordering such a target cost one slot; now enough of them fill every batch and
+    the rotation stops advancing — every other projection then ages out silently.
+
+    The counts already existed in the task result, but a Celery result payload is
+    neither persisted nor alerted on, so the stall had no signal at all. Partial
+    blockage stays in ``blocked_project_ids`` for diagnosis; only a fully blocked
+    batch is loud, because that is the one that halts the rotation.
+    """
+    if result.selected_count <= 0 or result.staged_count > 0:
+        return
+    logger.warning(
+        "similarity projection rotation stalled: selected=%d staged=0 blocked=%s",
+        result.selected_count,
+        result.blocked_project_ids[:20],
+    )
+
+
 @celery_app.task(name=SIMILARITY_PROJECTION_BACKFILL_TASK_NAME)
 def stage_active_similarity_projection_backfill(
     limit: int = 100,
@@ -75,6 +98,7 @@ def stage_active_similarity_projection_backfill(
                     db, limit=resolved_limit
                 )
                 db.commit()
+                _warn_if_rotation_stalled(result)
                 return InferenceOutboxTaskPayload(result.model_dump(mode="python"))
             except Exception:
                 db.rollback()

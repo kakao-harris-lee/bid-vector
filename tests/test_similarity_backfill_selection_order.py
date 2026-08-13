@@ -16,11 +16,18 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
+from types import SimpleNamespace
 
 from app.core.time import utc_now
 from app.models.models import ProjectSimilaritySnapshot
-from app.services.similarity_projection_backfill import _backfill_candidates
+from app.schemas.similarity_runtime import SimilarityProjectionBackfillResult
+from app.services.similarity_projection_backfill import (
+    _backfill_candidates,
+    stage_active_similarity_projection_backfill,
+)
+from app.tasks import inference_jobs
 
 from tests.test_similarity_projection_backfill_scope import (
     _StubReadModel,
@@ -122,3 +129,84 @@ def test_refreshing_a_target_moves_it_to_the_back_of_the_rotation(test_db):
     test_db.flush()
 
     assert _candidate_ids(test_db, limit=1) == [second.id]
+
+
+# ── 노후도 우선 정렬이 만든 새 위험: 재계산 불가 대상의 머리 응집 ──────────────
+#
+# 스테이징되지 못한 대상은 computed_at 이 그대로라 다음 배치에서도 최선두다. id
+# 순서에서는 그런 대상이 id 공간에 흩어져 슬롯 1개씩만 잠식했지만, 노후도 우선에서는
+# 머리에 뭉쳐 배치를 통째로 채우고 **회전을 멈춘다**. 라이브 실측은 현재 0건이지만
+# (활성 전원 embedding_state=ready) 그 상태에 신호가 없다는 것이 위험이었다.
+
+
+def _backfill_result(*, selected: int, staged: int, blocked: list[int] | None = None):
+    return SimilarityProjectionBackfillResult(
+        selected_count=selected,
+        staged_count=staged,
+        limit=100,
+        blocked_project_ids=blocked or [],
+    )
+
+
+def test_targets_that_cannot_be_staged_are_named_in_the_result(test_db):
+    """무엇이 막혔는지 결과에 남아야 진단이 된다 — 개수만으로는 찾아갈 수 없다."""
+    project = _make_project(test_db, title="투영 불가 대상")
+
+    class _NeverReady(_StubReadModel):
+        def embedding_state(self, _project):
+            return SimpleNamespace(status="pending")
+
+    class _UnusedOutbox:
+        def append_embedding_ready_event(self, *args, **kwargs):
+            raise AssertionError("준비되지 않은 대상을 스테이징하면 안 된다")
+
+    result = stage_active_similarity_projection_backfill(
+        test_db, read_model=_NeverReady(), outbox=_UnusedOutbox(), limit=10
+    )
+
+    assert result.selected_count == 1
+    assert result.staged_count == 0
+    assert result.blocked_project_ids == [int(project.id)]
+
+
+def test_a_blocked_target_stays_at_the_head_of_the_next_batch(test_db):
+    """정렬이 만든 위험 자체를 고정한다: 막힌 대상은 전진하지 않아 계속 최선두다."""
+    blocked = _make_project(test_db, title="영원히 최선두")
+    other = _make_project(test_db, title="정상 대상")
+    _aged_snapshot(test_db, blocked, hours_ago=9)
+    _aged_snapshot(test_db, other, hours_ago=5)
+
+    assert _candidate_ids(test_db, limit=1) == [blocked.id]
+    # 스테이징에 실패하면 computed_at 이 그대로이므로 다음 배치도 같은 대상이다.
+    assert _candidate_ids(test_db, limit=1) == [blocked.id]
+
+
+def test_a_fully_blocked_batch_is_reported_as_a_stalled_rotation(caplog):
+    with caplog.at_level(logging.WARNING, logger=inference_jobs.__name__):
+        inference_jobs._warn_if_rotation_stalled(
+            _backfill_result(selected=100, staged=0, blocked=[7, 8, 9])
+        )
+
+    assert "rotation stalled" in caplog.text
+    assert "selected=100" in caplog.text
+    assert "[7, 8, 9]" in caplog.text
+
+
+def test_a_batch_that_staged_anything_is_not_reported(caplog):
+    """부분 차단은 회전을 멈추지 않는다 — 매 배치 경고하면 신호가 죽는다."""
+    with caplog.at_level(logging.WARNING, logger=inference_jobs.__name__):
+        inference_jobs._warn_if_rotation_stalled(
+            _backfill_result(selected=100, staged=1, blocked=list(range(99)))
+        )
+
+    assert "rotation stalled" not in caplog.text
+
+
+def test_an_empty_candidate_set_is_not_a_stall(caplog):
+    """후보가 없어 0건인 것은 드레인 완료지 정지가 아니다."""
+    with caplog.at_level(logging.WARNING, logger=inference_jobs.__name__):
+        inference_jobs._warn_if_rotation_stalled(
+            _backfill_result(selected=0, staged=0)
+        )
+
+    assert "rotation stalled" not in caplog.text
