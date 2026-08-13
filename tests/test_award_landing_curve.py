@@ -278,6 +278,39 @@ def test_constrained_plateau_never_reports_infeasible_coordinates():
     assert optimum.plateau_upper_rate == 0.91
 
 
+def test_constrained_optimum_exposes_the_feasible_lower_coordinate():
+    """``b_min(α)`` 를 결과에 실어 소비자가 격자 길이로 **역산하지 않게** 한다(§4.5-8).
+
+    역산(``bid_rates[len − feasible_point_count]``)은 "실행가능 집합은 상향폐집합"이라는
+    성질을 호출부가 다시 가정하는 일이다 — 이 클래스가 이미 아는 사실이므로 좌표를 그대로
+    준다. 소비자는 이 값과 ``b*`` 를 비교해 binding 을 판정한다.
+    """
+    values = (0.5, 0.5, 0.5, 0.5, 0.1)
+    disqualification = (0.9, 0.9, 0.1, 0.1, 0.0)
+    curve = _curve(values, disqualification=disqualification)
+
+    optimum = curve.constrained_optimum(alpha=0.1)
+
+    assert optimum.feasible_lower_rate == 0.90
+    assert optimum.feasible_point_count == 3
+    assert optimum.optimal_bid_rate == 0.91  # 하단이 아니라 동률 상단을 골랐다
+
+    # 실행가능 점이 하나도 없으면 좌표도 없다.
+    infeasible = _curve(
+        CONSTRAINED_VALUES, disqualification=(0.9, 0.9, 0.9, 0.9, 0.9)
+    ).constrained_optimum(alpha=0.1)
+    assert infeasible.status is ConstrainedOptimumStatus.BUDGET_INFEASIBLE
+    assert infeasible.feasible_lower_rate is None
+
+    # 퇴화(WW 전부 0)에서는 **경계는 남긴다** — 격자를 넓힐지 α 를 고칠지 가르려면
+    # "α 는 만족했는데 그 구간이 어디였나"가 필요하다.
+    degenerate = _curve(
+        (0.5, 0.0, 0.0, 0.0, 0.0), disqualification=(0.9, 0.0, 0.0, 0.0, 0.0)
+    ).constrained_optimum(alpha=0.1)
+    assert degenerate.status is ConstrainedOptimumStatus.DEGENERATE_WIN_PROXY
+    assert degenerate.feasible_lower_rate == 0.89
+
+
 def test_constrained_optimum_requires_a_budget_curve_and_a_valid_alpha():
     with pytest.raises(ValueError):
         _curve(CONSTRAINED_VALUES).constrained_optimum(alpha=0.2)
