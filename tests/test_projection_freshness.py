@@ -50,9 +50,17 @@ FRESHNESS_CASES = [
     (35310, 35133, 60.0, False),  # 177 rows drift clears the threshold
     (35310, 35487, 60.0, False),  # growth is material in either direction
     # Small corpora: the ratio floors at one row, so any change is material.
+    # That floor governs everything up to N=200 (0.005 × 200 = 1.0 exactly); the
+    # ratio only starts absorbing a single row from N=201 up. The live embedding
+    # model sits well past that (corpus ~3,593 → 18 rows), the retired one further
+    # still (68,827 → 344 rows).
     (10, 11, 60.0, False),
     (10, 10, 60.0, True),
     (199, 200, 60.0, False),
+    (200, 201, 60.0, False),  # last point where the one-row floor governs
+    (201, 202, 60.0, True),  # first point where the ratio absorbs one row
+    (3593, 3594, 60.0, True),  # live model: +1 of ~18 rows is not material
+    (3593, 3611, 60.0, False),  # live model: 18 rows clears the threshold
     # An unchanged corpus still expires at the maximum age.
     (35310, 35310, float(SIMILARITY_PROJECTION_MAX_SNAPSHOT_AGE_SECONDS) - 1, True),
     (35310, 35310, float(SIMILARITY_PROJECTION_MAX_SNAPSHOT_AGE_SECONDS) + 1, False),

@@ -71,16 +71,21 @@ def _snapshot(session, project: Project, *, corpus_count: int, age_seconds: floa
     return snapshot
 
 
+# 임계는 ``max(1행, 0.005 × N)`` 이라 **N ≤ 200 에서는 바닥(1행)이 지배**한다.
+# 즉 작은 코퍼스에서는 한 행만 바뀌어도 material 이고, 비율이 1행을 넘어서는
+# **N ≥ 201 부터** 비로소 한 행이 흡수된다(실측: N=200 → +1 material, N=201 → 아님).
+# 이 방향을 거꾸로 적어두면 값표는 SQL==Python 만 단언하므로 통과한 채 거짓말이 남는다.
+#
 # (snapshot_corpus_count, live corpus rows to create, age_seconds)
 CASES = [
-    (50, 50, 60.0),
-    (50, 51, 60.0),  # +1 row: must NOT be material
-    (50, 49, 60.0),
+    (50, 50, 60.0),  # 변화 없음 → fresh
+    (50, 51, 60.0),  # 바닥 1행 구간: +1 도 material
+    (50, 49, 60.0),  # 감소도 센다
     (200, 200, 60.0),
-    # N=200 is where the ratio overtakes the one-row floor (0.005 × 200 = 1.0),
-    # so a single row is already material here but not at N=50 above.
-    (200, 201, 60.0),
-    (200, 202, 60.0),
+    (200, 201, 60.0),  # 바닥이 지배하는 마지막 지점 → material
+    (201, 202, 60.0),  # 비율이 1행을 넘어선 첫 지점 → +1 은 흡수된다
+    (400, 401, 60.0),  # 임계 2행 → +1 은 흡수
+    (400, 402, 60.0),  # 임계 2행 → +2 는 material
     (1, 1, 60.0),
     (50, 50, float(SIMILARITY_PROJECTION_MAX_SNAPSHOT_AGE_SECONDS) + 60),
     (50, 50, float(SIMILARITY_PROJECTION_MAX_SNAPSHOT_AGE_SECONDS) - 60),
