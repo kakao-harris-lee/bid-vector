@@ -578,6 +578,10 @@ def _apply_crawl_response_summary(
         else None
     )
     crawl_job.truncated = bool(metadata.get("truncated"))
+    # 수집원이 실효 상한을 신고하면(scsbid sweep 은 요청이 아니라 설정·예산에서 얻는다)
+    # 요청값 대신 그 값을 기록한다. 신고 없는 수집원은 생성 시점 요청값을 유지한다.
+    if metadata.get("item_cap") is not None:
+        crawl_job.max_items = int(metadata["item_cap"])
     crawl_job.drop_reasons = dict(metadata.get("drop_reasons") or {})
     crawl_job.error_message = parsing.format_crawl_error_message(metadata)
     crawl_job.completed_at = utc_now()

@@ -11,18 +11,24 @@ module-level ``settings`` (scsbid collection config) -- so they live here as
 module-level pure functions to keep the collector class focused on
 orchestration, DB persistence, and IO.
 
-Behavior is intentionally identical to the original methods; this module is a
-pure relocation, not a rewrite (including the KST-anchored date window used by
-the forward-coverage / timezone tests). To avoid an import cycle, this module
-must never import ``collector``: the collector imports ``scsbid`` (and the
-sibling ``parsing`` / ``openapi`` / ``html_parsing`` / ``matching`` /
-``live_failure`` modules), not the other way around. The collector keeps thin
-delegator methods (``_scsbid_date_window`` / ``_has_persisted_reserve_prices``)
-for external callers (tests and ``app/tasks/jobs.py``) that invoke them as
-instance methods.
+Behavior is intentionally identical to the original methods; the relocated
+helpers are a pure move, not a rewrite (including the KST-anchored date window
+used by the forward-coverage / timezone tests). The sweep-budget resolvers
+(``item_cap`` / ``request_item_cap`` / ``inline_reserve_detail_allowed`` /
+``inline_reserve_detail_max_fetches``) are the exception: they are newly
+authored policy added when the sweep stopped reading ``request.max_items``, so
+they have no pre-existing collector counterpart to be identical to.
+
+To avoid an import cycle, this module must never import ``collector``: the
+collector imports ``scsbid`` (and the sibling ``parsing`` / ``openapi`` /
+``html_parsing`` / ``matching`` / ``live_failure`` modules), not the other way
+around. The collector keeps thin delegator methods (``_scsbid_date_window`` /
+``_has_persisted_reserve_prices``) for external callers (tests and
+``app/tasks/jobs.py``) that invoke them as instance methods.
 """
 
 import json
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -145,6 +151,84 @@ def max_pages(request: CrawlRequest) -> int:
     """Resolve the per-category page ceiling for a scsbid sweep (default 30)."""
     configured = request.max_pages or settings.KONEPS_SCSBID_COLLECTION_MAX_PAGES
     return max(1, int(configured or 30))
+
+
+def item_cap(
+    *,
+    configured_max_items: int | None,
+    page_size: int,
+    max_pages: int,
+    category_count: int,
+) -> int:
+    """Resolve the normalized-item ceiling for one scsbid award sweep.
+
+    The cap is declared by configuration, not by the crawl request: a positive
+    ``configured_max_items`` is the operator's explicit ceiling, while 0/None
+    means "no explicit cap" and falls back to the page budget the sweep can
+    fetch anyway (``page_size`` x ``max_pages`` x category count). Pure
+    arithmetic so the decision is testable without settings or IO (§4.7-4).
+
+    Args:
+        configured_max_items: Operator-declared ceiling; 0 or None = unset.
+        page_size: Resolved numOfRows per page for this sweep.
+        max_pages: Resolved per-category page ceiling for this sweep.
+        category_count: Number of categories the sweep visits (0 reads as 1).
+
+    Returns:
+        The maximum number of normalized items this sweep may keep.
+    """
+    if configured_max_items is not None and int(configured_max_items) > 0:
+        return int(configured_max_items)
+    return int(page_size) * int(max_pages) * max(1, int(category_count))
+
+
+def request_item_cap(request: CrawlRequest, categories: Sequence[str]) -> int:
+    """Resolve the item cap for a concrete sweep request.
+
+    Thin settings/request reader over :func:`item_cap` — it is the only place
+    the sweep learns its ceiling, so ``request.max_items`` (a schema-bounded
+    field meant for the notice-collection path) can no longer truncate an award
+    sweep.
+
+    Args:
+        request: The normalized crawl request driving this sweep.
+        categories: The resolved category list for this sweep.
+
+    Returns:
+        The maximum number of normalized items this sweep may keep.
+    """
+    return item_cap(
+        configured_max_items=settings.KONEPS_SCSBID_COLLECTION_MAX_ITEMS,
+        page_size=page_size(request),
+        max_pages=max_pages(request),
+        category_count=len(categories),
+    )
+
+
+def inline_reserve_detail_allowed(fetched: int, cap: int) -> bool:
+    """Whether one more INLINE reserve-detail fetch fits this sweep's budget.
+
+    The inline branch (non-deferred callers: the synchronous crawl route and the
+    backfill script) pays an HTTP call plus a throttle sleep per notice, so an
+    uncapped sweep can spend tens of minutes inside one request and trip the
+    ScsbidInfoService rate limit. The deferred Celery path never fetches inline
+    and is unaffected. Pure arithmetic so the decision is testable without IO.
+
+    Args:
+        fetched: Inline reserve-detail fetches already spent this sweep.
+        cap: Per-sweep ceiling; 0 or negative means unbounded.
+
+    Returns:
+        True when the fetch may proceed, False when the budget is spent.
+    """
+    if cap <= 0:
+        return True
+    return int(fetched) < int(cap)
+
+
+def inline_reserve_detail_max_fetches() -> int:
+    """Read the per-sweep inline reserve-detail budget (never negative)."""
+    return max(0, int(settings.KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES or 0))
 
 
 def request_delay_seconds() -> float:

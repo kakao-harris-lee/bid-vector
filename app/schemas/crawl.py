@@ -11,7 +11,15 @@ class CrawlRequest(BaseModel):
     target_date: Optional[str] = None
     keyword: Optional[str] = None
     execution_mode: Literal["mock", "live", "auto"] = "mock"
-    max_items: int = Field(default=10, ge=1, le=500)
+    max_items: int = Field(
+        default=10,
+        ge=1,
+        le=500,
+        description=(
+            "공고 수집 경로(1회 최대 수집 수)에만 적용된다. scsbid 개찰 sweep 은 이 값을 "
+            "읽지 않고 page_size/max_pages/KONEPS_SCSBID_COLLECTION_MAX_ITEMS 로 정해진다."
+        ),
+    )
     # scsbid award coverage — all optional, fully backward compatible.
     categories: Optional[List[str]] = Field(
         default=None,
