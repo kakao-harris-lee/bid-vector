@@ -29,7 +29,6 @@ def test_scsbid_schedule_builds_when_enabled(monkeypatch):
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_INTERVAL_MINUTES", 360)
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SOURCE", "scsbid-openapi")
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_CATEGORY", "")
-    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 50)
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_EXECUTION_MODE", "auto")
 
     schedule = build_scsbid_collection_beat_schedule()
@@ -42,8 +41,10 @@ def test_scsbid_schedule_builds_when_enabled(monkeypatch):
     payload = entry["kwargs"]["request_payload"]
     assert payload["source"] == "scsbid-openapi"
     assert payload["category"] is None  # empty string normalized to None
-    assert payload["max_items"] == 50
     assert payload["execution_mode"] == "auto"
+    # sweep 상한은 요청이 아니라 설정에서 읽는다 — payload 에 실으면 스키마 상한
+    # (le=500)에 눌려 sweep 이 잘린다(2026-08-04 회귀).
+    assert "max_items" not in payload
 
 
 def test_scsbid_schedule_passes_forward_coverage_payload(monkeypatch):
@@ -115,15 +116,20 @@ def test_scsbid_schedule_minimum_interval_floor(monkeypatch):
     assert entry["schedule"] == 60
 
 
-def test_scsbid_schedule_max_items_clamped_to_crawl_request_limit(monkeypatch):
-    """max_items >100 is clamped to 100 to satisfy CrawlRequest.max_items le=100."""
+def test_scsbid_schedule_never_carries_max_items_in_the_payload(monkeypatch):
+    """설정값이 무엇이든 beat payload 는 max_items 를 싣지 않는다.
+
+    sweep 은 ``KONEPS_SCSBID_COLLECTION_MAX_ITEMS`` 를 직접 읽는다. payload 로
+    실어 보내면 ``CrawlRequest.max_items`` 스키마 상한에 눌린 값이 sweep 상한이
+    되어 카테고리 전체를 돌지 못한다(2026-08-04 회귀).
+    """
     from app.core.config import settings
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED", True)
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 500)
     payload = build_scsbid_collection_beat_schedule()[
         "koneps_scsbid_collection_periodic"
     ]["kwargs"]["request_payload"]
-    assert payload["max_items"] == 100
+    assert "max_items" not in payload
 
 
 def test_scsbid_schedule_invalid_execution_mode_falls_back_to_auto(monkeypatch):

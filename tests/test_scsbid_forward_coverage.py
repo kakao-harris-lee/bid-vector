@@ -204,10 +204,12 @@ def test_scsbid_sweep_visits_each_category_operation(monkeypatch):
 
 
 def test_scsbid_sweep_honors_global_max_items_and_accounts_for_cap(monkeypatch):
+    """운영자가 선언한 양수 상한(설정)은 그대로 sweep 을 자르고 그 사실을 회계한다."""
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0
     )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 3)
 
     def fake_get(url, params, timeout):
         del params, timeout
@@ -226,7 +228,6 @@ def test_scsbid_sweep_honors_global_max_items_and_accounts_for_cap(monkeypatch):
         end_date="20260507",
         execution_mode="auto",
         page_size=5,
-        max_items=3,
     )
     result = service._collect_scsbid_openapi_items(
         service._normalize_request(request)
@@ -242,6 +243,80 @@ def test_scsbid_sweep_honors_global_max_items_and_accounts_for_cap(monkeypatch):
     assert result["metadata"]["dropped_count"] == 2
     assert result["metadata"]["drop_reasons"]["max_items_cap"] == 2
     assert result["metadata"]["truncated"] is True
+    assert result["metadata"]["item_cap"] == 3
+
+
+def test_scsbid_sweep_default_cap_is_page_budget_and_sweeps_all_categories(
+    monkeypatch,
+):
+    """기본값(설정 0)에서는 요청의 max_items 가 sweep 을 자르지 못한다.
+
+    2026-08-04 회귀 재발 방지: request.max_items 가 sweep 상한이 되면서 6시간
+    주기 sweep 이 1페이지 50건에서 끊기고 service/goods 카테고리에는 아예
+    도달하지 못했다(개찰 관측 주당 ~5,000 -> ~150). 상한은 요청이 아니라
+    설정(0 = 페이지 예산 전량)에서 나와야 한다.
+    """
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 0)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_PAGES", 30)
+
+    operation_prefixes = {
+        "getScsbidListSttusCnstwk": "C",
+        "getScsbidListSttusServc": "S",
+        "getScsbidListSttusThng": "G",
+    }
+
+    def fake_get(url, params, timeout):
+        del timeout
+        if "PreparPcDetail" in url:
+            return FakeOpenApiResponse(_empty_reserve_body())
+        prefix = next(
+            (
+                value
+                for key, value in operation_prefixes.items()
+                if key in url
+            ),
+            None,
+        )
+        assert prefix is not None, f"unexpected URL: {url}"
+        page_no = int(params["pageNo"])
+        # totalCount 8, page_size 5 -> 1페이지 5건 + 2페이지 3건(짧은 페이지에서 종료)
+        count = 5 if page_no == 1 else 3
+        items = [
+            _award_item(f"{prefix}-{page_no}-{index}") for index in range(count)
+        ]
+        return FakeOpenApiResponse(
+            _award_body(items, total_count=8, num_of_rows=5, page_no=page_no)
+        )
+
+    service = KonepsCollectorService(http_get=fake_get)
+    request = CrawlRequest(
+        source="scsbid-openapi",
+        categories=["construction", "service", "goods"],
+        start_date="20260501",
+        end_date="20260507",
+        execution_mode="auto",
+        page_size=5,
+        # 스키마 최소값 — sweep 이 요청값을 읽지 않음을 증명하는 자리다.
+        max_items=1,
+    )
+
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(request)
+    )
+
+    metadata = result["metadata"]
+    assert len(result["items"]) == 24  # 3 카테고리 x (5 + 3)
+    assert metadata["scsbid_categories"] == ["construction", "service", "goods"]
+    assert [
+        entry["pages_fetched"] for entry in metadata["scsbid_category_breakdown"]
+    ] == [2, 2, 2]
+    assert metadata["truncated"] is False
+    assert metadata["drop_reasons"]["max_items_cap"] == 0
+    assert metadata["item_cap"] == 5 * 30 * 3  # page_size x max_pages x 카테고리 수
 
 
 def test_scsbid_sweep_paginates_until_total_count(monkeypatch):
@@ -463,3 +538,50 @@ def test_scsbid_legacy_single_day_single_category_regression(monkeypatch):
     assert result["items"][0].notice_number == "LEG-1"
     # Reserve detail still fetched by default in the legacy path.
     assert any("PreparPcDetail" in entry["url"] for entry in captured)
+
+
+def test_collection_job_records_effective_sweep_cap_on_the_crawl_job(
+    test_db, monkeypatch
+):
+    """crawl_jobs.max_items 는 요청값이 아니라 sweep 의 실효 상한을 기록한다.
+
+    이 컬럼이 2026-08-04 회귀를 관측한 자리다. sweep 이 요청값을 더 이상 읽지
+    않으므로, 요청 기본값(10)을 그대로 적으면 관측 컬럼이 거짓말을 한다.
+    """
+    from app.tasks.collection_jobs import run_koneps_collection_job
+
+    monkeypatch.setattr(
+        KonepsCollectorService,
+        "collect_notices",
+        lambda self, req, db=None, defer_reserve_detail=False: {
+            "job_status": "completed",
+            "collected_count": 0,
+            "items": [],
+            "metadata": {
+                "received_count": 0,
+                "normalized_count": 0,
+                "item_cap": 9000,
+            },
+        },
+    )
+
+    request = CrawlRequest(
+        source="scsbid-openapi",
+        categories=["construction", "service", "goods"],
+        lookback_days=3,
+        execution_mode="auto",
+    )
+
+    result = run_koneps_collection_job(
+        object(),
+        request=request,
+        crawl_job_id=None,
+        notify_inference_outbox_committed=lambda ids: None,
+        enqueue_deferred_reserve_detail_backfill=lambda notices: 0,
+        session_factory=lambda: test_db,
+    )
+
+    crawl_job_id = result["metadata"]["crawl_job_id"]
+    row = test_db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).one()
+    assert row.max_items == 9000
+    assert request.max_items == 10  # 요청 기본값은 그대로 — 기록만 실효값이다

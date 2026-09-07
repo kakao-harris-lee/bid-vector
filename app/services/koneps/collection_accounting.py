@@ -52,6 +52,12 @@ def scsbid_accounting(state, config) -> dict[
         "pages_fetched": sum(
             int(row["pages_fetched"] or 0) for row in categories
         ),
+        # 이 회차에 실제로 적용된 상한. ``drop_reasons.max_items_cap`` 이 왜 그 값인지
+        # 설명하는 짝이고, 수집 job 행이 요청값 대신 실효값을 기록하게 하는 출처다.
+        "item_cap": config.max_items,
+        # sweep 은 ``request.max_items`` 를 읽지 않으므로 ``collect_notices`` 의 요청
+        # 에코를 실효 상한으로 덮는다. 두 키가 어긋나면(10 vs 9000) 관측이 갈린다.
+        "max_items": config.max_items,
         "truncated": state.truncated_by_max_items
         or any(
             int(row["total_count"] or 0)

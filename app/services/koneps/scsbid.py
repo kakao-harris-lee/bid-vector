@@ -23,6 +23,7 @@ instance methods.
 """
 
 import json
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -145,6 +146,58 @@ def max_pages(request: CrawlRequest) -> int:
     """Resolve the per-category page ceiling for a scsbid sweep (default 30)."""
     configured = request.max_pages or settings.KONEPS_SCSBID_COLLECTION_MAX_PAGES
     return max(1, int(configured or 30))
+
+
+def item_cap(
+    *,
+    configured_max_items: int | None,
+    page_size: int,
+    max_pages: int,
+    category_count: int,
+) -> int:
+    """Resolve the normalized-item ceiling for one scsbid award sweep.
+
+    The cap is declared by configuration, not by the crawl request: a positive
+    ``configured_max_items`` is the operator's explicit ceiling, while 0/None
+    means "no explicit cap" and falls back to the page budget the sweep can
+    fetch anyway (``page_size`` x ``max_pages`` x category count). Pure
+    arithmetic so the decision is testable without settings or IO (§4.7-4).
+
+    Args:
+        configured_max_items: Operator-declared ceiling; 0 or None = unset.
+        page_size: Resolved numOfRows per page for this sweep.
+        max_pages: Resolved per-category page ceiling for this sweep.
+        category_count: Number of categories the sweep visits (0 reads as 1).
+
+    Returns:
+        The maximum number of normalized items this sweep may keep.
+    """
+    if configured_max_items is not None and int(configured_max_items) > 0:
+        return int(configured_max_items)
+    return int(page_size) * int(max_pages) * max(1, int(category_count))
+
+
+def request_item_cap(request: CrawlRequest, categories: Sequence[str]) -> int:
+    """Resolve the item cap for a concrete sweep request.
+
+    Thin settings/request reader over :func:`item_cap` — it is the only place
+    the sweep learns its ceiling, so ``request.max_items`` (a schema-bounded
+    field meant for the notice-collection path) can no longer truncate an award
+    sweep.
+
+    Args:
+        request: The normalized crawl request driving this sweep.
+        categories: The resolved category list for this sweep.
+
+    Returns:
+        The maximum number of normalized items this sweep may keep.
+    """
+    return item_cap(
+        configured_max_items=settings.KONEPS_SCSBID_COLLECTION_MAX_ITEMS,
+        page_size=page_size(request),
+        max_pages=max_pages(request),
+        category_count=len(categories),
+    )
 
 
 def request_delay_seconds() -> float:

@@ -205,6 +205,8 @@
     },
     "dropped_count": 0,
     "duplicate_count": 0,
+    "item_cap": 3000,
+    "max_items": 3000,
     "normalized_count": 3,
     "openapi_endpoint": "https://apis.data.go.kr/1230000/as/ScsbidInfoService",
     "openapi_operation": "getScsbidListSttusCnstwk",

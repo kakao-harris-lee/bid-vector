@@ -90,6 +90,66 @@ def test_max_pages_request_override(monkeypatch):
     assert scsbid.max_pages(req) == 7
 
 
+# --------------------------------------------------------------------------- #
+# item_cap / request_item_cap
+# --------------------------------------------------------------------------- #
+def test_item_cap_zero_setting_falls_back_to_page_budget():
+    """0 = 명시적 상한 없음 → 페이지 예산(page_size x max_pages x 카테고리 수)."""
+    assert (
+        scsbid.item_cap(
+            configured_max_items=0, page_size=100, max_pages=30, category_count=3
+        )
+        == 9000
+    )
+
+
+def test_item_cap_none_setting_falls_back_to_page_budget():
+    """설정 미지정(None)도 상한 없음으로 읽는다."""
+    assert (
+        scsbid.item_cap(
+            configured_max_items=None, page_size=5, max_pages=2, category_count=2
+        )
+        == 20
+    )
+
+
+def test_item_cap_positive_setting_is_the_explicit_operator_cap():
+    """양수는 운영자가 선언한 명시적 상한이므로 페이지 예산보다 우선한다."""
+    assert (
+        scsbid.item_cap(
+            configured_max_items=50, page_size=100, max_pages=30, category_count=3
+        )
+        == 50
+    )
+
+
+def test_item_cap_treats_zero_categories_as_one():
+    """카테고리 수 0 에서 예산이 0 으로 붕괴하면 첫 항목부터 잘린다 — 1 로 읽는다."""
+    assert (
+        scsbid.item_cap(
+            configured_max_items=0, page_size=10, max_pages=3, category_count=0
+        )
+        == 30
+    )
+
+
+def test_request_item_cap_reads_the_setting_not_the_request(monkeypatch):
+    """sweep 상한은 요청이 아니라 설정·페이지 예산에서 나온다(2026-08-04 회귀)."""
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 0)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_PAGES", 30)
+    req = CrawlRequest(source="scsbid-openapi", page_size=100, max_items=1)
+
+    assert scsbid.request_item_cap(req, ["construction", "service", "goods"]) == 9000
+
+
+def test_request_item_cap_honors_positive_operator_cap(monkeypatch):
+    """운영자가 양수 상한을 선언하면 그 값이 그대로 sweep 상한이 된다."""
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 25)
+    req = CrawlRequest(source="scsbid-openapi", page_size=100, max_pages=30)
+
+    assert scsbid.request_item_cap(req, ["construction"]) == 25
+
+
 def test_request_delay_never_negative(monkeypatch):
     monkeypatch.setattr(
         settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", -3.0

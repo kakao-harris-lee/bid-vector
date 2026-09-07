@@ -439,7 +439,7 @@ class KonepsCollectorService:
             service_key=service_key,
             page_size=scsbid.page_size(request),
             max_pages=scsbid.max_pages(request),
-            max_items=max(1, int(request.max_items or 100)),
+            max_items=scsbid.request_item_cap(request, categories),
             delay_seconds=scsbid.request_delay_seconds(),
             begin_token=begin_token,
             end_token=end_token,

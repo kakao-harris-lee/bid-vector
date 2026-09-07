@@ -404,7 +404,7 @@
     "app/services/koneps/persistence.py": {
       "functions_over_soft_limit": 3,
       "functions_over_hard_limit": 1,
-      "file_loc_band": 33,
+      "file_loc_band": 34,
       "json_direct_calls": 2,
       "dict_boundary_functions": 3
     },
@@ -633,9 +633,9 @@
     },
     "app/services/smoke_test.py": {
       "functions_over_soft_limit": 5,
-      "file_loc_band": 27,
+      "file_loc_band": 26,
       "json_direct_calls": 1,
-      "dict_boundary_functions": 5
+      "dict_boundary_functions": 2
     },
     "app/services/stale_task_reconciler.py": {
       "dict_boundary_functions": 1
