@@ -4,8 +4,14 @@ These lock the date-window resolution (incl. the KST-anchored rolling window),
 the page-size / max-pages / request-delay config clamps, the reserve-price
 persistence check, and the award-item payload shape of
 ``app.services.koneps.scsbid`` after the pure relocation out of
-``KonepsCollectorService``. Behavior must stay byte-identical to the original
-collector methods.
+``KonepsCollectorService``. Those relocated helpers must stay byte-identical to
+the original collector methods.
+
+The sweep-budget resolvers (``item_cap`` / ``request_item_cap`` /
+``inline_reserve_detail_allowed`` / ``inline_reserve_detail_max_fetches``) are
+newly authored policy, not relocations: they replaced the sweep's read of
+``request.max_items`` and bound the inline reserve-detail fetch, so the tests
+below pin the intended contract rather than a prior implementation.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -148,6 +154,32 @@ def test_request_item_cap_honors_positive_operator_cap(monkeypatch):
     req = CrawlRequest(source="scsbid-openapi", page_size=100, max_pages=30)
 
     assert scsbid.request_item_cap(req, ["construction"]) == 25
+
+
+def test_inline_reserve_detail_allowed_until_the_budget_is_spent():
+    """양수 예산은 fetched < cap 인 동안만 인라인 fetch 를 허용한다."""
+    assert scsbid.inline_reserve_detail_allowed(0, 2) is True
+    assert scsbid.inline_reserve_detail_allowed(1, 2) is True
+    assert scsbid.inline_reserve_detail_allowed(2, 2) is False
+    assert scsbid.inline_reserve_detail_allowed(9, 2) is False
+
+
+def test_inline_reserve_detail_allowed_treats_non_positive_cap_as_unbounded():
+    """0(과 음수)은 무제한 — 상한을 도입하기 전 동작을 그대로 남긴다."""
+    assert scsbid.inline_reserve_detail_allowed(10_000, 0) is True
+    assert scsbid.inline_reserve_detail_allowed(10_000, -1) is True
+
+
+def test_inline_reserve_detail_max_fetches_never_negative(monkeypatch):
+    """음수 설정은 0(무제한)으로 읽는다 — 음수 예산은 의미가 없다."""
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES", -5
+    )
+    assert scsbid.inline_reserve_detail_max_fetches() == 0
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES", 50
+    )
+    assert scsbid.inline_reserve_detail_max_fetches() == 50
 
 
 def test_request_delay_never_negative(monkeypatch):

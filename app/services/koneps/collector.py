@@ -1,7 +1,6 @@
 """KONEPS collector service skeleton."""
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import timedelta
 from time import sleep
 from typing import Any
 
@@ -29,6 +28,7 @@ from app.services.koneps import (
     scsbid,
 )
 from app.services.koneps.live_failure import KonepsLiveCollectionError
+from app.services.koneps.scsbid_sweep import ScsbidSweepConfig, ScsbidSweepState
 
 
 # ``format_crawl_error_message`` now lives in ``parsing`` (a pure, no-IO helper)
@@ -37,62 +37,6 @@ from app.services.koneps.live_failure import KonepsLiveCollectionError
 # its original name because external callers still import it from this module
 # (``app/api/operations.py``).
 format_crawl_error_message = parsing.format_crawl_error_message
-
-
-@dataclass(frozen=True)
-class _ScsbidSweepConfig:
-    """Immutable per-run configuration for a ScsbidInfoService award sweep.
-
-    Bundles the values resolved once in ``_collect_scsbid_openapi_items``'s setup
-    so the extracted sweep/page/item helpers receive an explicit, read-only
-    config instead of closing over a dozen locals. Pure data; no behaviour.
-    """
-
-    service_key: str
-    page_size: int
-    max_pages: int
-    max_items: int
-    delay_seconds: float
-    begin_token: str
-    end_token: str
-    collect_reserve_detail: bool
-    defer_reserve_detail: bool
-    already_have_reserve: frozenset[str]
-    reserve_detail_age_cutoff: datetime | None
-    checked_recently: frozenset[str]
-
-
-@dataclass
-class _ScsbidSweepState:
-    """Mutable accumulators shared across the categories of one award sweep.
-
-    Holds exactly the running collections, counters, and last-seen header fields
-    that ``_collect_scsbid_openapi_items`` previously kept as method locals. The
-    extracted helpers mutate this in place so dedup sets, counters, and ordering
-    are preserved bit-for-bit (no copying, no re-ordering).
-    """
-
-    parsed_items: list[KonepsCollectedItem] = field(default_factory=list)
-    seen_notice_numbers: set[str] = field(default_factory=set)
-    deferred_reserve_detail: list[dict[str, str]] = field(default_factory=list)
-    deferred_reserve_seen: set[tuple[str, str]] = field(default_factory=set)
-    reserve_detail_count: int = 0
-    reserve_detail_error_count: int = 0
-    reserve_detail_reused_count: int = 0
-    reserve_detail_deferred_count: int = 0
-    reserve_detail_backoff_skipped_count: int = 0
-    reserve_detail_recheck_skipped_count: int = 0
-    api_call_count: int = 0
-    key_variant: str = ""
-    last_result_code: str = ""
-    last_result_message: str = ""
-    category_metadata: list[dict[str, Any]] = field(default_factory=list)
-    received_count: int = 0
-    missing_notice_count: int = 0
-    parse_drop_count: int = 0
-    duplicate_count: int = 0
-    cap_skipped_count: int = 0
-    truncated_by_max_items: bool = False
 
 
 class KonepsCollectorService:
@@ -435,7 +379,7 @@ class KonepsCollectorService:
             else set()
         )
 
-        config = _ScsbidSweepConfig(
+        config = ScsbidSweepConfig(
             service_key=service_key,
             page_size=scsbid.page_size(request),
             max_pages=scsbid.max_pages(request),
@@ -445,11 +389,12 @@ class KonepsCollectorService:
             end_token=end_token,
             collect_reserve_detail=collect_reserve_detail,
             defer_reserve_detail=defer_reserve_detail,
+            inline_reserve_detail_max_fetches=scsbid.inline_reserve_detail_max_fetches(),
             already_have_reserve=frozenset(already_have_reserve),
             reserve_detail_age_cutoff=reserve_detail_age_cutoff,
             checked_recently=frozenset(checked_recently),
         )
-        state = _ScsbidSweepState()
+        state = ScsbidSweepState()
 
         for category in categories:
             if collection_accounting.scsbid_cap_reached(state, config, source_has_more=True):
@@ -461,13 +406,13 @@ class KonepsCollectorService:
         return self._build_scsbid_result(state, config)
 
     def _build_scsbid_result(
-        self, state: "_ScsbidSweepState", config: "_ScsbidSweepConfig"
+        self, state: ScsbidSweepState, config: ScsbidSweepConfig
     ) -> dict[str, Any]:
         """Assemble the final collect result dict from the accumulated sweep state.
 
-        Pure read-only projection of ``state``/``config`` into the exact ``items``
-        + ``metadata`` shape ``_collect_scsbid_openapi_items`` returned before the
-        decomposition (every counter key/value preserved).
+        Pure read-only projection of ``state``/``config`` into the ``items`` +
+        ``metadata`` shape. The decomposition preserved every counter; the sweep-cap
+        work added ``item_cap``/``max_items``/``reserve_detail_inline_cap_skipped_count``.
         """
         category_metadata = state.category_metadata
         return {
@@ -500,6 +445,9 @@ class KonepsCollectorService:
                 "reserve_detail_recheck_skipped_count": (
                     state.reserve_detail_recheck_skipped_count
                 ),
+                "reserve_detail_inline_cap_skipped_count": (
+                    state.reserve_detail_inline_cap_skipped_count
+                ),
                 "deferred_reserve_detail_notices": state.deferred_reserve_detail,
                 "query_date_begin": config.begin_token,
                 "query_date_end": config.end_token,
@@ -512,8 +460,8 @@ class KonepsCollectorService:
         self,
         category: str,
         *,
-        state: "_ScsbidSweepState",
-        config: "_ScsbidSweepConfig",
+        state: ScsbidSweepState,
+        config: ScsbidSweepConfig,
         request: CrawlRequest,
     ) -> None:
         """Paginate one ScsbidInfoService category, mutating ``state`` in place.
@@ -582,8 +530,8 @@ class KonepsCollectorService:
         *,
         page_no: int,
         operation: str,
-        config: "_ScsbidSweepConfig",
-        state: "_ScsbidSweepState",
+        config: ScsbidSweepConfig,
+        state: ScsbidSweepState,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Fetch and validate one award-list page, returning ``(raw_items, body)``.
 
@@ -630,8 +578,8 @@ class KonepsCollectorService:
         self,
         raw_item: dict[str, Any],
         *,
-        state: "_ScsbidSweepState",
-        config: "_ScsbidSweepConfig",
+        state: ScsbidSweepState,
+        config: ScsbidSweepConfig,
         category: str,
         operation: str,
         request: CrawlRequest,
@@ -707,10 +655,17 @@ class KonepsCollectorService:
                             }
                         )
                         state.reserve_detail_deferred_count += 1
+            elif not scsbid.inline_reserve_detail_allowed(
+                state.reserve_detail_inline_fetch_count,
+                config.inline_reserve_detail_max_fetches,
+            ):
+                # 인라인 상세 예산 소진 — 상세만 건너뛰고 낙찰 관측(주 목적)은 계속한다.
+                state.reserve_detail_inline_cap_skipped_count += 1
             else:
                 try:
                     if config.delay_seconds > 0:
                         sleep(config.delay_seconds)
+                    state.reserve_detail_inline_fetch_count += 1
                     fetched = self._fetch_scsbid_reserve_detail(
                         raw_item,
                         category=category,

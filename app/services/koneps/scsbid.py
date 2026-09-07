@@ -11,15 +11,20 @@ module-level ``settings`` (scsbid collection config) -- so they live here as
 module-level pure functions to keep the collector class focused on
 orchestration, DB persistence, and IO.
 
-Behavior is intentionally identical to the original methods; this module is a
-pure relocation, not a rewrite (including the KST-anchored date window used by
-the forward-coverage / timezone tests). To avoid an import cycle, this module
-must never import ``collector``: the collector imports ``scsbid`` (and the
-sibling ``parsing`` / ``openapi`` / ``html_parsing`` / ``matching`` /
-``live_failure`` modules), not the other way around. The collector keeps thin
-delegator methods (``_scsbid_date_window`` / ``_has_persisted_reserve_prices``)
-for external callers (tests and ``app/tasks/jobs.py``) that invoke them as
-instance methods.
+Behavior is intentionally identical to the original methods; the relocated
+helpers are a pure move, not a rewrite (including the KST-anchored date window
+used by the forward-coverage / timezone tests). The sweep-budget resolvers
+(``item_cap`` / ``request_item_cap`` / ``inline_reserve_detail_allowed`` /
+``inline_reserve_detail_max_fetches``) are the exception: they are newly
+authored policy added when the sweep stopped reading ``request.max_items``, so
+they have no pre-existing collector counterpart to be identical to.
+
+To avoid an import cycle, this module must never import ``collector``: the
+collector imports ``scsbid`` (and the sibling ``parsing`` / ``openapi`` /
+``html_parsing`` / ``matching`` / ``live_failure`` modules), not the other way
+around. The collector keeps thin delegator methods (``_scsbid_date_window`` /
+``_has_persisted_reserve_prices``) for external callers (tests and
+``app/tasks/jobs.py``) that invoke them as instance methods.
 """
 
 import json
@@ -198,6 +203,32 @@ def request_item_cap(request: CrawlRequest, categories: Sequence[str]) -> int:
         max_pages=max_pages(request),
         category_count=len(categories),
     )
+
+
+def inline_reserve_detail_allowed(fetched: int, cap: int) -> bool:
+    """Whether one more INLINE reserve-detail fetch fits this sweep's budget.
+
+    The inline branch (non-deferred callers: the synchronous crawl route and the
+    backfill script) pays an HTTP call plus a throttle sleep per notice, so an
+    uncapped sweep can spend tens of minutes inside one request and trip the
+    ScsbidInfoService rate limit. The deferred Celery path never fetches inline
+    and is unaffected. Pure arithmetic so the decision is testable without IO.
+
+    Args:
+        fetched: Inline reserve-detail fetches already spent this sweep.
+        cap: Per-sweep ceiling; 0 or negative means unbounded.
+
+    Returns:
+        True when the fetch may proceed, False when the budget is spent.
+    """
+    if cap <= 0:
+        return True
+    return int(fetched) < int(cap)
+
+
+def inline_reserve_detail_max_fetches() -> int:
+    """Read the per-sweep inline reserve-detail budget (never negative)."""
+    return max(0, int(settings.KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES or 0))
 
 
 def request_delay_seconds() -> float:

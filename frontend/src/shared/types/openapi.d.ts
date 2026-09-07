@@ -4024,6 +4024,7 @@ export interface components {
             execution_mode: "mock" | "live" | "auto";
             /**
              * Max Items
+             * @description 공고 수집 경로(1회 최대 수집 수)에만 적용된다. scsbid 개찰 sweep 은 이 값을 읽지 않고 page_size/max_pages/KONEPS_SCSBID_COLLECTION_MAX_ITEMS 로 정해진다.
              * @default 10
              */
             max_items: number;

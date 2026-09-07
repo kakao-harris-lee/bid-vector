@@ -42,8 +42,8 @@ def test_scsbid_schedule_builds_when_enabled(monkeypatch):
     assert payload["source"] == "scsbid-openapi"
     assert payload["category"] is None  # empty string normalized to None
     assert payload["execution_mode"] == "auto"
-    # sweep 상한은 요청이 아니라 설정에서 읽는다 — payload 에 실으면 스키마 상한
-    # (le=500)에 눌려 sweep 이 잘린다(2026-08-04 회귀).
+    # sweep 상한은 요청이 아니라 설정에서 읽는다 — payload 에 실으면 요청 수준 값이
+    # sweep 상한이 된다(2026-08-04 회귀).
     assert "max_items" not in payload
 
 
@@ -120,8 +120,8 @@ def test_scsbid_schedule_never_carries_max_items_in_the_payload(monkeypatch):
     """설정값이 무엇이든 beat payload 는 max_items 를 싣지 않는다.
 
     sweep 은 ``KONEPS_SCSBID_COLLECTION_MAX_ITEMS`` 를 직접 읽는다. payload 로
-    실어 보내면 ``CrawlRequest.max_items`` 스키마 상한에 눌린 값이 sweep 상한이
-    되어 카테고리 전체를 돌지 못한다(2026-08-04 회귀).
+    실어 보내면 요청 수준 값이 sweep 상한이 되어 카테고리 전체를 돌지 못한다
+    (2026-08-04 회귀).
     """
     from app.core.config import settings
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_SCHEDULE_ENABLED", True)

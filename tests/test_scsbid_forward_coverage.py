@@ -585,3 +585,70 @@ def test_collection_job_records_effective_sweep_cap_on_the_crawl_job(
     row = test_db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).one()
     assert row.max_items == 9000
     assert request.max_items == 10  # 요청 기본값은 그대로 — 기록만 실효값이다
+
+
+def _inline_reserve_detail_sweep(monkeypatch, *, cap, defer=False):
+    """5건짜리 개찰 페이지를 인라인/deferred 경로로 쓸고 (결과, 상세호출수) 를 준다."""
+    monkeypatch.setattr(settings, "KONEPS_OPENAPI_SERVICE_KEY", "test-service-key")
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0
+    )
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 0)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES", cap
+    )
+    detail_calls: list[str] = []
+
+    def fake_get(url, params, timeout):
+        del timeout
+        if "PreparPcDetail" in url:
+            detail_calls.append(str(params.get("bidNtceNo")))
+            return FakeOpenApiResponse(_empty_reserve_body())
+        items = [_award_item(f"INL-{index}") for index in range(5)]
+        return FakeOpenApiResponse(
+            _award_body(items, total_count=5, num_of_rows=5)
+        )
+
+    service = KonepsCollectorService(http_get=fake_get)
+    request = CrawlRequest(
+        source="scsbid-openapi",
+        categories=["construction"],
+        start_date="20260501",
+        end_date="20260507",
+        execution_mode="auto",
+        page_size=5,
+    )
+    result = service._collect_scsbid_openapi_items(
+        service._normalize_request(request), defer_reserve_detail=defer
+    )
+    return result, detail_calls
+
+
+def test_inline_reserve_detail_stops_at_the_budget_but_keeps_collecting(monkeypatch):
+    """인라인 상세 예산을 넘기면 상세만 건너뛰고 낙찰 관측은 전부 유지한다.
+
+    상한 해제로 sweep 이 커지면서 인라인 경로(동기 /crawl·백필 스크립트)가 공고당
+    HTTP 호출 + throttle sleep 을 무제한 지불하게 된 회귀를 막는다.
+    """
+    result, detail_calls = _inline_reserve_detail_sweep(monkeypatch, cap=2)
+
+    assert len(detail_calls) == 2
+    assert len(result["items"]) == 5  # 상세를 못 받아도 낙찰 관측은 남는다
+    assert result["metadata"]["reserve_detail_inline_cap_skipped_count"] == 3
+
+
+def test_inline_reserve_detail_zero_budget_means_unbounded(monkeypatch):
+    """0 은 무제한 — 기존(상한 없음) 동작을 그대로 남긴다."""
+    result, detail_calls = _inline_reserve_detail_sweep(monkeypatch, cap=0)
+
+    assert len(detail_calls) == 5
+    assert result["metadata"]["reserve_detail_inline_cap_skipped_count"] == 0
+
+
+def test_inline_budget_does_not_touch_the_deferred_path(monkeypatch):
+    """deferred(celery) 경로는 인라인 fetch 자체가 없어 예산과 무관하다."""
+    result, detail_calls = _inline_reserve_detail_sweep(monkeypatch, cap=1, defer=True)
+
+    assert detail_calls == []
+    assert result["metadata"]["reserve_detail_inline_cap_skipped_count"] == 0
+    assert result["metadata"]["reserve_detail_deferred_count"] == 5

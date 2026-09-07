@@ -252,6 +252,14 @@ def _pin_openapi_settings(monkeypatch) -> None:
     monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_REQUEST_DELAY_SECONDS", 0.0)
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_COLLECTION_PAGE_SIZE", 2)
     monkeypatch.setattr(settings, "KONEPS_OPENAPI_MAX_ITEMS", 500)
+    # scsbid sweep 상한은 설정에서 나온다(요청이 아니라). 골든의 item_cap/max_items 가
+    # 배포 .env 값에 따라 흔들리지 않도록 예산을 정하는 세 키를 함께 고정한다.
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_ITEMS", 0)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_PAGE_SIZE", 100)
+    monkeypatch.setattr(settings, "KONEPS_SCSBID_COLLECTION_MAX_PAGES", 30)
+    monkeypatch.setattr(
+        settings, "KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES", 50
+    )
     # 계약 관찰기는 관찰 전용이지만 metadata 요약을 싣는다 — 골든 결정성을 위해 고정.
     monkeypatch.setattr(settings, "KONEPS_FIELD_CONTRACT_LIVE_CHECK", True)
 

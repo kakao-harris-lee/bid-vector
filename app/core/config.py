@@ -247,9 +247,9 @@ class Settings(InferenceOutboxSettings):
     KONEPS_SCSBID_COLLECTION_INTERVAL_MINUTES: int = 360
     KONEPS_SCSBID_COLLECTION_SOURCE: str = "scsbid-openapi"
     KONEPS_SCSBID_COLLECTION_CATEGORY: str = ""
-    # 0 = 상한 없음(page_size x max_pages x 카테고리 수 예산 전량), 양수 = 운영자 상한.
-    # 2026-08-04 회귀: 이 값이 request.max_items 로 흘러 sweep 이 1페이지에서 끊겼다.
+    # 0 = 상한 없음. 양수는 카테고리 순서로 소진되는 전역 예산이라 첫 카테고리가 다 쓸 수 있다(§.env.example).
     KONEPS_SCSBID_COLLECTION_MAX_ITEMS: int = 0
+    KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES: int = 50  # 인라인 상세 fetch/sweep, 0=무제한
     KONEPS_SCSBID_COLLECTION_EXECUTION_MODE: str = "auto"
     # scsbid award forward-coverage — multi-category date-window sweep params.
     KONEPS_SCSBID_COLLECTION_CATEGORIES: str = "construction,service,goods"
