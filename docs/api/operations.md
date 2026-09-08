@@ -30,6 +30,8 @@
 
 KONEPS 공고를 동기적으로 즉시 수집하고 결과를 crawl 이력(`CrawlJob`)으로 영속화합니다. 운영자가 "지금 수집"으로 소량 공고를 바로 가져올 때 사용합니다. `execution_mode`가 `mock`이면 mock 응답, `live`/`auto`는 실제 KONEPS 경로이며 `max_items`로 1회 수집량을 제한합니다.
 
+`source=scsbid-openapi`(개찰/낙찰 sweep)는 예외입니다. sweep 크기는 요청의 `max_items`가 아니라 `page_size` × `max_pages` × 카테고리 수의 페이지 예산과 `KONEPS_SCSBID_COLLECTION_MAX_ITEMS`(0 = 상한 없음)로 정해지며, 요청의 `max_items`는 읽지 않습니다. 이 동기 경로는 공고별 복수예비가격 상세를 인라인으로 조회하므로(호출 + throttle sleep) 그 횟수는 `KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES`(0 = 무제한)로 제한됩니다. 예산을 넘긴 공고는 상세 없이 낙찰 관측만 수집되고 `reserve_detail_inline_cap_skipped_count`로 보고됩니다.
+
 **파라미터**
 | 위치 | 이름 | 타입 | 필수 | 설명 |
 |---|---|---|---|---|
@@ -38,7 +40,7 @@ KONEPS 공고를 동기적으로 즉시 수집하고 결과를 crawl 이력(`Cra
 | body | target_date | string\|null | 아니오 | 대상 날짜(ISO) |
 | body | keyword | string\|null | 아니오 | 검색 키워드 |
 | body | execution_mode | enum(mock,live,auto) | 아니오 | 실행 모드. 기본 `mock` |
-| body | max_items | int(1..100) | 아니오 | 1회 최대 수집 수. 기본 10 |
+| body | max_items | int(1..500) | 아니오 | 1회 최대 수집 수. 기본 10. `source=scsbid-openapi` sweep 은 이 값을 읽지 않습니다(위 설명 참조) |
 
 **요청 예시**
 ```bash

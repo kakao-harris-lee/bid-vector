@@ -373,10 +373,9 @@ def build_scsbid_collection_beat_schedule() -> dict[str, dict[str, object]]:
                     "category": category,
                     "categories": categories,
                     "execution_mode": execution_mode,
-                    "max_items": min(
-                        100,
-                        max(1, int(settings.KONEPS_SCSBID_COLLECTION_MAX_ITEMS)),
-                    ),
+                    # max_items 는 싣지 않는다: sweep 상한은
+                    # ``KONEPS_SCSBID_COLLECTION_MAX_ITEMS`` 를 sweep 이 직접 읽는다.
+                    # payload 로 실으면 요청 수준 값이 sweep 상한이 된다(2026-08-04 회귀).
                     "lookback_days": max(
                         1, int(settings.KONEPS_SCSBID_COLLECTION_LOOKBACK_DAYS)
                     ),

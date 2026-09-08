@@ -622,6 +622,50 @@ def test_persist_crawl_results_publishes_fallback_event(test_db, monkeypatch):
     assert "crawl.failed" not in events
 
 
+def test_persist_crawl_results_records_effective_item_cap(test_db):
+    """수집원이 신고한 실효 상한이 요청값 대신 crawl_jobs.max_items 에 남는다.
+
+    scsbid sweep 은 ``request.max_items`` 를 읽지 않고 설정·페이지 예산에서 상한을
+    얻으므로(2026-08-04 회귀), 행에 요청 기본값을 적으면 sweep 이 어디서 잘렸는지
+    판독할 수 없다. 이 복사는 celery 경로와 동기 POST /crawl 경로가 공유한다.
+    """
+    request = _request()
+    crawl_job = persistence.create_crawl_job(test_db, request)
+    assert crawl_job.max_items == request.max_items  # 생성 시점은 요청값
+
+    persistence.persist_crawl_results(
+        test_db,
+        crawl_job,
+        request,
+        {
+            "items": [],
+            "job_status": "completed",
+            "collected_count": 0,
+            "metadata": {"item_cap": 9000},
+        },
+    )
+
+    assert crawl_job.max_items == 9000
+    test_db.expire_all()
+    reloaded = test_db.query(CrawlJob).filter(CrawlJob.id == crawl_job.id).one()
+    assert reloaded.max_items == 9000
+
+
+def test_persist_crawl_results_keeps_request_max_items_without_item_cap(test_db):
+    """실효 상한을 신고하지 않는 수집원은 생성 시점의 요청값을 그대로 유지한다."""
+    request = _request()
+    crawl_job = persistence.create_crawl_job(test_db, request)
+
+    persistence.persist_crawl_results(
+        test_db,
+        crawl_job,
+        request,
+        {"items": [], "job_status": "completed", "collected_count": 0},
+    )
+
+    assert crawl_job.max_items == request.max_items
+
+
 # --------------------------------------------------------------------------- #
 # base 정합화(P1): 개찰 후 UPDATE 가 기존의 더 나은 base 를 0.0(미상)/예정가로 덮지
 # 않게 가드하고, base_amount_basis 를 최종 base 기준으로 태깅한다.

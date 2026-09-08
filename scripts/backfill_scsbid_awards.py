@@ -10,6 +10,12 @@ next sweep); unmatched awards seed new corpus projects.
 This issues many external calls — run only after explicit approval. Validate
 small first (e.g. 1 category, 2 days) before a full window.
 
+Reserve detail here is fetched INLINE (this script has no Celery defer path), so
+``KONEPS_SCSBID_INLINE_RESERVE_DETAIL_MAX_FETCHES`` bounds how many notices per
+category sweep pay that HTTP call + throttle sleep; 0 lifts the bound. Awards are
+still collected past the bound, only their reserve detail is skipped. Pass
+``--no-reserve-detail`` when the run only needs award rows.
+
 Usage:
     python scripts/backfill_scsbid_awards.py --start 20260501 --end 20260507 --dry-run
     python scripts/backfill_scsbid_awards.py --start 20260501 --end 20260507 \
